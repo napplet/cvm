@@ -1,20 +1,31 @@
 const argumentsAfterBun = process.argv.slice(2);
-if (argumentsAfterBun.some((argument) => argument !== "--assert-hermetic")) {
-  throw new Error("usage: bun run test:promotion --assert-hermetic");
+const fixtureIndex = argumentsAfterBun.indexOf("--fixture");
+const fixture = fixtureIndex === -1 ? undefined : argumentsAfterBun[fixtureIndex + 1];
+const assertHermetic = argumentsAfterBun.includes("--assert-hermetic");
+if (argumentsAfterBun.some((argument, index) => argument !== "--assert-hermetic" && argument !== "--fixture" && index !== fixtureIndex + 1) || (fixtureIndex !== -1 && fixture !== "minimal")) {
+  throw new Error("usage: bun run test:promotion [--assert-hermetic] [--fixture minimal]");
 }
 
-if (argumentsAfterBun.includes("--assert-hermetic")) {
+if (assertHermetic) {
   const runner = await Bun.file("src/promotion/run-promotion.ts").text();
   if (!runner.includes("runSealedToolchain") || runner.includes("runHermeticCommand")) {
     throw new Error("promotion runner must reach commands only through runSealedToolchain");
   }
 }
 
-const tests = Bun.spawn(["bun", "test", "tests/tracer.test.ts", "tests/runner/sealed-toolchain.test.ts"], {
+let verificationExitCode = 0;
+if (fixture) {
+  const verifyInputs = Bun.spawn(["bun", "run", "toolchain:image-build", "--", "--candidate", "toolchains/candidates/cli-0.5.2-release-set.json", "--verify-only"], {
+    cwd: process.cwd(), env: { PATH: process.env.PATH ?? "" }, stdin: "ignore", stdout: "inherit", stderr: "inherit",
+  });
+  verificationExitCode = await verifyInputs.exited;
+}
+
+const tests = Bun.spawn(["bun", "test", "tests/tracer.test.ts", "tests/runner/sealed-toolchain.test.ts", ...(fixture ? ["tests/fixtures/minimal.test.ts"] : [])], {
   cwd: process.cwd(),
   env: { PATH: process.env.PATH ?? "" },
   stdin: "ignore",
   stdout: "inherit",
   stderr: "inherit",
 });
-process.exitCode = await tests.exited;
+process.exitCode = verificationExitCode === 0 ? await tests.exited : verificationExitCode;

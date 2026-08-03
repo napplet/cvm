@@ -45,6 +45,8 @@ export async function verifyToolchainImageInputs(inputs: ToolchainImageInputs): 
   if (reviewed.status !== "review_ready") throw new Error("candidate is not approved for sealed intake");
   const parsedPolicy = parseToolchainImagePolicy(policy);
   if (parsedPolicy.candidateId !== reviewed.candidateId) throw new Error("policy candidate ID does not match the reviewed candidate");
+  const cli = reviewed.record.cli as { readonly distribution?: unknown; readonly releaseAssetSha256?: unknown };
+  if (typeof cli.distribution !== "string" || typeof cli.releaseAssetSha256 !== "string") throw new Error("reviewed candidate CLI release data is incomplete");
   const packages = reviewed.record.packages.map((pkg) => ({ name: String(pkg.name), version: String(pkg.version), integrity: String(pkg.integrity) }));
   for (const pkg of packages) {
     if (!lockfile.includes(`specifier: ${pkg.version}`) || packageIntegrity(lockfile, pkg.name) !== pkg.integrity) {
@@ -60,8 +62,8 @@ export async function verifyToolchainImageInputs(inputs: ToolchainImageInputs): 
     "COPY --from=intake --chown=65532:65532 /toolchain/node_modules /toolchain/node_modules",
     "/toolchain/bin/napplet-conformance",
     "infra/toolchain/denial-probe.ts /toolchain/bin/denial-probe",
-    reviewed.record.cli.distribution,
-    reviewed.record.cli.releaseAssetSha256,
+    cli.distribution,
+    cli.releaseAssetSha256,
   ]) if (!dockerfile.includes(required)) throw new Error(`Dockerfile is missing required sealed input: ${required}`);
   if (/\bnpx\b/.test(dockerfile)) throw new Error("Dockerfile must not expose an npx resolver fallback");
   return { candidateId: reviewed.candidateId, lockfileSha256: await sha256File(inputs.lockfilePath), packages, dockerfile };

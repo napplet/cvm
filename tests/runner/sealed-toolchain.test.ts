@@ -21,7 +21,8 @@ describe("sealed toolchain image and policy", () => {
       expect.objectContaining({ name: "@napplet/skills", version: "0.3.1" }),
       expect.objectContaining({ name: "@napplet/conformance-cli", version: "0.2.18" }),
     ]));
-    expect(result.dockerfile).toContain("--offline");
+    expect(result.dockerfile).toContain("pnpm fetch --frozen-lockfile --ignore-scripts");
+    expect(result.dockerfile).toContain("COPY --from=intake --chown=65532:65532 /toolchain/node_modules /toolchain/node_modules");
     expect(result.dockerfile).toContain("/toolchain/bin/napplet-conformance");
     expect(result.dockerfile).not.toMatch(/\bnpx\b/);
   });

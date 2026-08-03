@@ -89,5 +89,15 @@ describe("runSealedToolchain", () => {
         startedAtMs: 1, finishedAtMs: 2, exitCode: 0, stdout: "connected", stderr: "", stdoutSha256: "c".repeat(64), stderrSha256: "d".repeat(64), disposition: "passed", evidenceSha256: "e".repeat(64),
       }),
     })).rejects.toThrow("denial probe dns");
+    await expect(runSealedDenialProbes({
+      policyPath,
+      imageDigest: "a".repeat(64),
+      inputDirectory: root,
+      toolchainId: "toolchain-test",
+      execute: async (command) => ({
+        id: command.id, argv: [command.executable, ...command.argv], cwd: command.cwd, cwdSha256: "b".repeat(64), toolchainId: command.toolchainId, imageDigest: command.imageDigest,
+        startedAtMs: 1, finishedAtMs: 2, exitCode: 1, stdout: "", stderr: "missing probe evidence", stdoutSha256: "c".repeat(64), stderrSha256: "d".repeat(64), disposition: "non-zero-exit", evidenceSha256: "e".repeat(64),
+      }),
+    })).rejects.toThrow("denial probe dns");
   });
 });

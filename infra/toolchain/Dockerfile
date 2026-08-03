@@ -35,9 +35,11 @@ COPY --from=intake --chown=65532:65532 /root/.local/share/pnpm/store /root/.loca
 COPY --from=intake --chown=65532:65532 /toolchain/package.json /toolchain/pnpm-lock.yaml /toolchain/
 COPY --from=intake --chown=65532:65532 /toolchain/node_modules /toolchain/node_modules
 COPY --from=intake --chown=65532:65532 /toolchain/napplet /toolchain/bin/napplet
+COPY --chown=65532:65532 infra/toolchain/denial-probe.ts /toolchain/bin/denial-probe
 RUN ln -s /usr/local/bin/bun /usr/local/bin/node \
     && ln -s /usr/local/bin/bun /toolchain/bin/bun \
     && ln -s /toolchain/node_modules/.bin/napplet-conformance /toolchain/bin/napplet-conformance \
+    && chmod 0555 /toolchain/bin/denial-probe \
     && mkdir -p /home/napplet /work /tmp \
     && chmod -R go-w /toolchain
 USER 65532:65532

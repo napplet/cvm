@@ -144,7 +144,12 @@ export async function runSealedDenialProbes(request: Omit<SealedToolchainRequest
   const results: CommandEvidence[] = [];
   for (const probe of DENIAL_PROBES) {
     const result = await runSealedToolchain({ ...request, id: `deny-${probe}`, script: "/toolchain/bin/denial-probe", args: [`--probe=${probe}`, "--assert-secret-absent"] });
-    if (result.disposition === "passed" || result.stdout.includes("CVM_CANARY_SECRET") || result.stderr.includes("CVM_CANARY_SECRET")) throw new Error(`denial probe ${probe} did not fail closed`);
+    if (
+      result.disposition === "passed" ||
+      !result.stderr.includes(`CVM_DENIAL_PROBE:${probe}:denied`) ||
+      result.stdout.includes("CVM_CANARY_SECRET") ||
+      result.stderr.includes("CVM_CANARY_SECRET")
+    ) throw new Error(`denial probe ${probe} did not fail closed`);
     results.push(result);
   }
   return results;

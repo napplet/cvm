@@ -59,6 +59,7 @@ export async function verifyToolchainImageInputs(inputs: ToolchainImageInputs): 
     "pnpm install --frozen-lockfile --ignore-scripts",
     "COPY --from=intake --chown=65532:65532 /toolchain/node_modules /toolchain/node_modules",
     "/toolchain/bin/napplet-conformance",
+    "infra/toolchain/denial-probe.ts /toolchain/bin/denial-probe",
   ]) if (!dockerfile.includes(required)) throw new Error(`Dockerfile is missing required sealed input: ${required}`);
   if (/\bnpx\b/.test(dockerfile)) throw new Error("Dockerfile must not expose an npx resolver fallback");
   return { candidateId: reviewed.candidateId, lockfileSha256: await sha256File(inputs.lockfilePath), packages, dockerfile };

@@ -25,8 +25,8 @@ promoted and no trusted pointer was changed.
 - Merge: PR #200 merged as `b17e9447985f7290a76f184142cfcaa92d2627f0`.
 - Release follow-up: Publish run `30832804324` exposed an npm-wildcard-to-JSR
   synchronization bug. The fixture-backed fix is in
-  https://github.com/napplet/web/pull/201; main CI and AI-slop checks pass, with
-  conformance still running at this handoff.
+  https://github.com/napplet/web/pull/201; CI, conformance, and AI-slop checks
+  pass.
 
 ## Safe resume criteria
 

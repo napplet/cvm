@@ -84,7 +84,7 @@ if (import.meta.main) {
     if (args.verifyOnly) console.log(JSON.stringify({ ...verified, dockerfile: basename("infra/toolchain/Dockerfile") }));
     else {
       const tag = `napplet-cvm/toolchain:${verified.candidateId}`;
-      const child = Bun.spawn(["docker", "build", "--pull=false", "--file", "infra/toolchain/Dockerfile", "--tag", tag, "."], { stdout: "inherit", stderr: "inherit", stdin: "ignore", env: { PATH: process.env.PATH ?? "" } });
+      const child = Bun.spawn(["docker", "build", "--pull=false", "--provenance=false", "--file", "infra/toolchain/Dockerfile", "--tag", tag, "."], { stdout: "inherit", stderr: "inherit", stdin: "ignore", env: { PATH: process.env.PATH ?? "" } });
       if (await child.exited !== 0) throw new Error("sealed toolchain image build failed");
       const inspect = Bun.spawn(["docker", "image", "inspect", tag, "--format", "{{index .RepoDigests 0}}"], { stdout: "pipe", stderr: "pipe", stdin: "ignore", env: { PATH: process.env.PATH ?? "" } });
       if (await inspect.exited !== 0) throw new Error("could not record immutable image digest");

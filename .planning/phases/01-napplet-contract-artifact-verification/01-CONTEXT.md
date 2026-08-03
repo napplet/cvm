@@ -34,10 +34,9 @@ This phase does not build the production agent service, worker isolation platfor
 
 ### Reproducibility Standard
 
-- **D-10:** Identical source plus the same immutable promotion manifest must emit byte-identical unsigned `dist` content and the same aggregate hash. Behaviorally equivalent but byte-different output is a failure. — **Reversibility:** costly — Artifact identity, reviewed goldens, and downstream attestations will depend on this byte-level contract.
 - **D-11:** Timestamps, signatures, relay receipts, and deployment metadata remain outside the sealed artifact and reference its aggregate hash; they never mutate promoted `dist` bytes.
-- **D-12:** A clean candidate build is compared against a stored content-addressed golden artifact and expected aggregate hash.
-- **D-13:** A legitimate golden change requires an explicit reviewed artifact diff and promotion update. Passing package suites cannot regenerate or replace goldens automatically.
+
+The byte-reproducibility and reviewed-golden certification targets discussed here are launch-hardening notes, not Phase 1 implementation decisions; they are retained under Deferred Ideas for Phase 7.
 
 ### Failure and Evidence Contract
 
@@ -123,6 +122,8 @@ This phase does not build the production agent service, worker isolation platfor
 ## Deferred Ideas
 
 - Launch-grade trust certification: exhaustive provenance verification, repeated/cross-environment reproducibility, full hostile and mutation matrices, formal golden approval, waiver drills, SBOM/provenance enforcement, and production promotion gates. These belong to Phase 7 and must not block the design-stage vertical slice.
+- Phase 7 reproducibility target: identical source plus the same immutable promotion manifest emits byte-identical unsigned `dist` content and the same aggregate hash; behaviorally equivalent but byte-different output fails launch certification.
+- Phase 7 golden target: compare a clean candidate build with a stored content-addressed golden and expected aggregate hash; any legitimate golden change requires explicit reviewed artifact diff and promotion update, never automatic replacement by a passing suite.
 
 </deferred>
 

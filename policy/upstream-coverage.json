@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "upstream": {
+    "package": "@napplet/conformance-cli@0.2.18",
+    "assertions": [
+      { "checkId": "upstream:scan:fetch", "source": "scanForbiddenGlobals", "covers": ["fetch"] },
+      { "checkId": "upstream:scan:xhr", "source": "scanForbiddenGlobals", "covers": ["XMLHttpRequest"] },
+      { "checkId": "upstream:scan:websocket", "source": "scanForbiddenGlobals", "covers": ["WebSocket"] },
+      { "checkId": "upstream:scan:browser-storage", "source": "scanForbiddenGlobals", "covers": ["localStorage", "sessionStorage"] },
+      { "checkId": "upstream:scan:cookie", "source": "scanForbiddenGlobals", "covers": ["document.cookie"] },
+      { "checkId": "upstream:scan:window-nostr", "source": "scanForbiddenGlobals", "covers": ["window.nostr"] },
+      { "checkId": "upstream:scan:external-asset", "source": "scanForbiddenGlobals", "covers": ["external image", "external script", "external stylesheet"] },
+      { "checkId": "upstream:scan:window-napplet-invocation", "source": "reference-shell/conformance", "covers": ["direct window.napplet authority invocation"] }
+    ]
+  },
+  "cvmGaps": [
+    { "checkId": "cvm:scope:focused-only", "covers": ["arbitrary website", "second independent purpose", "backend", "full-stack shape"] },
+    { "checkId": "cvm:gap:service-worker", "covers": ["service worker registration"] },
+    { "checkId": "cvm:gap:signer-relay", "covers": ["app-owned signer", "app-owned relay or protocol client"] },
+    { "checkId": "cvm:gap:dynamic-authority", "covers": ["uninspectable dynamic authority construction"] },
+    { "checkId": "cvm:capability:necessary-hard", "covers": ["unused or undeclared hard capability"] },
+    { "checkId": "cvm:capability:optional-intent-sdk", "covers": ["optional intent must use public SDK after presence-only read"] }
+  ],
+  "exception": {
+    "expression": "window.napplet?.intent",
+    "allowedOnlyFor": "post-injection optional-domain presence observation in the declared capability harness fallback",
+    "neverAllows": ["method invocation through window.napplet", "other direct window authority", "use outside optional fallback"]
+  }
+}

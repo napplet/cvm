@@ -1,0 +1,8 @@
+[
+  { "name": "full-stack-backend", "expectedCheckId": "cvm:scope:focused-only", "owner": "cvm-gap" },
+  { "name": "direct-window-napplet-invocation", "expectedCheckId": "upstream:scan:window-napplet-invocation", "owner": "upstream" },
+  { "name": "external-asset", "expectedCheckId": "upstream:scan:external-asset", "owner": "upstream" },
+  { "name": "service-worker", "expectedCheckId": "cvm:gap:service-worker", "owner": "cvm-gap" },
+  { "name": "app-owned-signer-relay", "expectedCheckId": "cvm:gap:signer-relay", "owner": "cvm-gap" },
+  { "name": "unused-hard-capability", "expectedCheckId": "cvm:capability:necessary-hard", "owner": "cvm-gap" }
+]

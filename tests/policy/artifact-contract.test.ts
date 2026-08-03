@@ -48,4 +48,12 @@ describe("artifact contract policy", () => {
       expect((await evaluateArtifactContract(input)).verdict).toBe("block");
     }
   });
+
+  test("produces the same immutable evidence serially and in parallel", async () => {
+    const inputs = [focused, { ...focused, surface: { ...focused.surface, serviceWorker: true } }];
+    const serial = [];
+    for (const input of inputs) serial.push(await evaluateArtifactContract(input));
+    const parallel = await Promise.all(inputs.map((input) => evaluateArtifactContract(input)));
+    expect(parallel).toEqual(serial);
+  });
 });

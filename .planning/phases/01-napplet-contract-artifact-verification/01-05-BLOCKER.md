@@ -22,18 +22,26 @@ promoted and no trusted pointer was changed.
 - Verification: CI, conformance, link-check, and AI-slop checks all pass. The CLI
   suite passes 118 tests, including a relocated compiled-binary run with an empty
   `PATH` and disabled proxy.
+- Merge: PR #200 merged as `b17e9447985f7290a76f184142cfcaa92d2627f0`.
+- Release follow-up: Publish run `30832804324` exposed an npm-wildcard-to-JSR
+  synchronization bug. The fixture-backed fix is in
+  https://github.com/napplet/web/pull/201; main CI and AI-slop checks pass, with
+  conformance still running at this handoff.
 
 ## Safe resume criteria
 
-1. Merge PR #200 through the upstream repository's normal review policy.
-2. Publish a successor official `@napplet/cli` release and checksum-addressed
-   standalone assets, including the architecture required by the sealed builder.
-3. Detect that official release as a new candidate; do not reuse the old candidate ID
+1. Merge release-tooling follow-up PR #201 through the upstream repository's
+   normal review policy.
+2. Allow the Publish workflow to create/update the Version Packages PR, merge
+   that release PR, and publish the successor official `@napplet/cli` release.
+3. Confirm checksum-addressed standalone assets are attached, including the
+   architecture required by the sealed builder.
+4. Detect that official release as a new candidate; do not reuse the old candidate ID
    or approval.
-4. Repeat provenance review and explicit approval for the new content-derived
+5. Repeat provenance review and explicit approval for the new content-derived
    candidate ID.
-5. Rebuild and verify the deterministic sealed image from the newly approved official
+6. Rebuild and verify the deterministic sealed image from the newly approved official
    asset.
-6. Resume Plan 01-05 and turn the committed RED fixture contract green.
+7. Resume Plan 01-05 and turn the committed RED fixture contract green.
 
-Until all six conditions hold, Phase 1 remains correctly blocked rather than weakened.
+Until all seven conditions hold, Phase 1 remains correctly blocked rather than weakened.

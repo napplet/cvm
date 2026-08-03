@@ -6,9 +6,9 @@ current_phase: 01
 current_phase_name: Napplet Contract & Artifact Verification
 status: blocked
 stopped_at: Plan 01-05 blocked on trusted upstream CLI release
-last_updated: "2026-08-03T10:49:02Z"
+last_updated: "2026-08-03T16:54:13Z"
 last_activity: 2026-08-03
-last_activity_desc: Resolver-free upstream CLI fix is green and awaiting merge/release
+last_activity_desc: Resolver-free CLI merged; release synchronizer follow-up is open as napplet/web#201
 progress:
   total_phases: 1
   completed_phases: 0
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-08-03)
 Phase: 01 (Napplet Contract & Artifact Verification) — BLOCKED
 Plan: 5 of 11
 Status: Blocked on trusted upstream release
-Last activity: 2026-08-03 — Resolver-free upstream CLI fix completed and opened as napplet/web#200; all PR checks pass
+Last activity: 2026-08-03 — PR #200 merged; fixed its release-pipeline wildcard failure in follow-up PR #201
 
 Progress: [████░░░░░░] 36%
 
@@ -90,7 +90,7 @@ None yet.
 
 ### Blockers/Concerns
 
-- Plan 01-05 cannot use official `@napplet/cli@0.5.1`: its standalone binary shells out through `npx` for `@napplet/boilerplate` and `@napplet/skills`, which the sealed runtime correctly denies. The package-owned resolver-free fix is ready in https://github.com/napplet/web/pull/200 with CI, conformance, link-check, and AI-slop gates passing. Resume only after that fix is merged and a successor official CLI release plus matching architecture asset is published. Then rerun candidate detection, provenance approval, and sealed image materialization before returning to Plan 01-05; do not trust a branch-built substitute.
+- Plan 01-05 cannot use official `@napplet/cli@0.5.1`: its standalone binary shells out through `npx` for `@napplet/boilerplate` and `@napplet/skills`, which the sealed runtime correctly denies. The package-owned resolver-free fix merged as https://github.com/napplet/web/pull/200. Its first Publish run exposed a release-synchronizer bug for npm-only wildcard skill assets; the tested fix is open as https://github.com/napplet/web/pull/201. Resume only after PR #201 merges and the upstream changesets flow publishes a successor official CLI release plus matching architecture asset. Then rerun candidate detection, provenance approval, and sealed image materialization before returning to Plan 01-05; do not trust a branch-built substitute.
 - Future phases must contract-test evolving ContextVM/CEP-8 wire details, model exact-usage receipts, signing-runtime behavior, and the five-second SLO under load.
 
 ## Deferred Items

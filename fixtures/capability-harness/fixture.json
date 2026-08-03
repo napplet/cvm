@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "name": "capability-harness",
+  "purpose": "Persist one user-controlled value through storage and optionally compose with intent.",
+  "requires": ["storage"],
+  "optionalDomains": ["intent"],
+  "publish": "dry-run-only"
+}

@@ -2,8 +2,8 @@ const argumentsAfterBun = process.argv.slice(2);
 const fixtureIndex = argumentsAfterBun.indexOf("--fixture");
 const fixture = fixtureIndex === -1 ? undefined : argumentsAfterBun[fixtureIndex + 1];
 const assertHermetic = argumentsAfterBun.includes("--assert-hermetic");
-if (argumentsAfterBun.some((argument, index) => argument !== "--assert-hermetic" && argument !== "--fixture" && index !== fixtureIndex + 1) || (fixtureIndex !== -1 && fixture !== "minimal")) {
-  throw new Error("usage: bun run test:promotion [--assert-hermetic] [--fixture minimal]");
+if (argumentsAfterBun.some((argument, index) => argument !== "--assert-hermetic" && argument !== "--fixture" && index !== fixtureIndex + 1) || (fixtureIndex !== -1 && fixture !== "minimal" && fixture !== "capability-harness")) {
+  throw new Error("usage: bun run test:promotion [--assert-hermetic] [--fixture minimal|capability-harness]");
 }
 
 if (assertHermetic) {
@@ -21,7 +21,8 @@ if (fixture) {
   verificationExitCode = await verifyInputs.exited;
 }
 
-const tests = Bun.spawn(["bun", "test", "tests/tracer.test.ts", "tests/runner/sealed-toolchain.test.ts", ...(fixture ? ["tests/fixtures/minimal.test.ts"] : [])], {
+const fixtureTest = fixture === "capability-harness" ? "tests/fixtures/capability-harness.test.ts" : "tests/fixtures/minimal.test.ts";
+const tests = Bun.spawn(["bun", "test", "tests/tracer.test.ts", "tests/runner/sealed-toolchain.test.ts", ...(fixture ? [fixtureTest] : [])], {
   cwd: process.cwd(),
   env: { PATH: process.env.PATH ?? "" },
   stdin: "ignore",

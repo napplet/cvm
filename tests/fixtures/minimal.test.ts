@@ -6,6 +6,7 @@ const digest = (value: string) => value.repeat(64).slice(0, 64);
 function runnerOutput(stages: readonly string[], status: "passed" | "blocked" = "passed") {
   return {
     fixture: "minimal",
+    mode: "primary",
     status,
     candidateId: "a19fc7d283a4482c53728f4a931743576564fb3826d7f8fa1383d02578b69024",
     imageDigest: "a".repeat(64),
@@ -13,6 +14,10 @@ function runnerOutput(stages: readonly string[], status: "passed" | "blocked" = 
     installedSkillsSha256: digest("e"),
     distSha256: digest("f"),
     aggregateHash: digest("1"),
+    observedDomains: [],
+    optionalIntentPresenceRead: false,
+    intentUsedThroughSdk: false,
+    gracefulDegradation: false,
   };
 }
 

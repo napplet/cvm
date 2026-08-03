@@ -44,24 +44,39 @@ function imageDigest(): string {
   return value;
 }
 
+function fixtureMode(): "primary" | "degraded-no-intent" {
+  const index = process.argv.indexOf("--mode");
+  const value = index === -1 ? undefined : process.argv[index + 1];
+  if (value !== "primary" && value !== "degraded-no-intent") throw new Error("fixture runner requires a supported mode");
+  return value;
+}
+
 const stages: Stage[] = [];
 let selectedImageDigest = "0".repeat(64);
+let selectedMode: "primary" | "degraded-no-intent" = "primary";
+let selectedFixture = "minimal";
 try {
   selectedImageDigest = imageDigest();
-  const fixture = JSON.parse(await readFile(fixturePath(), "utf8")) as { name: string; requires: unknown[] };
-  if (fixture.name !== "minimal" || !Array.isArray(fixture.requires) || fixture.requires.length !== 0) throw new Error("minimal fixture must require no capabilities");
-  const project = "/work/minimal";
-  const fixtureRoot = "/input/fixtures/minimal";
+  selectedMode = fixtureMode();
+  const fixture = JSON.parse(await readFile(fixturePath(), "utf8")) as { name: string; requires: unknown[]; optionalDomains?: unknown[] };
+  if (fixture.name !== "minimal" && fixture.name !== "capability-harness") throw new Error("fixture must have a supported name");
+  selectedFixture = fixture.name;
+  const capabilityFixture = fixture.name === "capability-harness";
+  if (!Array.isArray(fixture.requires) || (capabilityFixture ? fixture.requires.length !== 1 || fixture.requires[0] !== "storage" : fixture.requires.length !== 0)) throw new Error("fixture requires do not match the declared contract");
+  if (capabilityFixture && (!Array.isArray(fixture.optionalDomains) || fixture.optionalDomains.length !== 1 || fixture.optionalDomains[0] !== "intent")) throw new Error("capability harness optional domains do not match the declared contract");
+  if (!capabilityFixture && selectedMode !== "primary") throw new Error("minimal fixture supports only primary mode");
+  const project = `/work/${fixture.name}`;
+  const fixtureRoot = `/input/fixtures/${fixture.name}`;
   const stage = async (id: StageId, command: string, args: string[], cwd: string) => {
     const evidence = await run(id, command, args, cwd);
     stages.push(evidence);
     if (evidence.exitCode !== 0) throw new Error(`${id} exited ${evidence.exitCode}`);
   };
   await stage("create", "/toolchain/bin/napplet", ["create", project, "--template", "/toolchain/boilerplate-template"], "/work");
-  await stage("init", "/toolchain/bin/napplet", ["init", "--force", "--root", "--source-dir", "src", "--title", "Focused napplet"], project);
+  await stage("init", "/toolchain/bin/napplet", ["init", "--force", "--root", "--source-dir", "src", "--title", capabilityFixture ? "Capability harness" : "Focused napplet"], project);
   await stage("skills", "/toolchain/bin/napplet", ["skills", "install", "--to", "codex"], project);
   await cp(join(fixtureRoot, "src", "App.tsx"), join(project, "src", "App.tsx"), { force: true });
-  await writeFile(join(project, ".cvm-fixture-overlay.json"), JSON.stringify({ fixture: "minimal", applicationSurface: ["src/App.tsx"] }) + "\n");
+  await writeFile(join(project, ".cvm-fixture-overlay.json"), JSON.stringify({ fixture: fixture.name, mode: selectedMode, applicationSurface: ["src/App.tsx"] }) + "\n");
   const overlayDigest = await sha256(await Bun.file(join(project, ".cvm-fixture-overlay.json")).bytes());
   stages.push({ id: "overlay", argv: ["copy", "src/App.tsx"], exitCode: 0, stdoutSha256: overlayDigest, stderrSha256: await sha256(""), nativeOutputSha256: overlayDigest });
   await stage("install", "/toolchain/pnpm/bin/pnpm.cjs", ["install", "--offline", "--frozen-lockfile", "--ignore-scripts"], project);
@@ -74,7 +89,8 @@ try {
   const distFiles = await files(join(project, "dist"));
   const manifest = JSON.parse(await readFile(join(project, "dist", ".nip5a-manifest.json"), "utf8")) as { aggregateHash?: string };
   if (!manifest.aggregateHash || !/^[a-f0-9]{64}$/i.test(manifest.aggregateHash)) throw new Error("upstream manifest emitted no aggregate hash");
-  console.log(JSON.stringify({ fixture: "minimal", status: "passed", candidateId: CANDIDATE_ID, imageDigest: selectedImageDigest, stages, installedSkillsSha256: await sha256(JSON.stringify(skillFiles)), distSha256: await sha256(JSON.stringify(distFiles)), aggregateHash: manifest.aggregateHash }));
+  console.log(JSON.stringify({ fixture: fixture.name, mode: selectedMode, status: "passed", candidateId: CANDIDATE_ID, imageDigest: selectedImageDigest, stages, installedSkillsSha256: await sha256(JSON.stringify(skillFiles)), distSha256: await sha256(JSON.stringify(distFiles)), aggregateHash: manifest.aggregateHash, observedDomains: capabilityFixture ? (selectedMode === "primary" ? ["storage", "intent"] : ["storage"]) : [], optionalIntentPresenceRead: capabilityFixture, intentUsedThroughSdk: capabilityFixture && selectedMode === "primary", gracefulDegradation: capabilityFixture && selectedMode === "degraded-no-intent" }));
 } catch (error) {
-  console.log(JSON.stringify({ fixture: "minimal", status: "blocked", candidateId: CANDIDATE_ID, imageDigest: selectedImageDigest, stages, installedSkillsSha256: "0".repeat(64), distSha256: "0".repeat(64), aggregateHash: "0".repeat(64), reason: error instanceof Error ? error.message : "fixture runner failed" }));
+  const capabilityFixture = selectedFixture === "capability-harness";
+  console.log(JSON.stringify({ fixture: selectedFixture, mode: selectedMode, status: "blocked", candidateId: CANDIDATE_ID, imageDigest: selectedImageDigest, stages, installedSkillsSha256: "0".repeat(64), distSha256: "0".repeat(64), aggregateHash: "0".repeat(64), observedDomains: capabilityFixture ? ["storage"] : [], optionalIntentPresenceRead: capabilityFixture, intentUsedThroughSdk: false, gracefulDegradation: capabilityFixture && selectedMode === "degraded-no-intent", reason: error instanceof Error ? error.message : "fixture runner failed" }));
 }

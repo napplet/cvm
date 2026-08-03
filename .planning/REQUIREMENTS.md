@@ -43,10 +43,10 @@ Requirements for the initial release. Each maps to exactly one roadmap phase.
 
 ### Napplet Generation and Verification
 
-- [ ] **GEN-01**: The agent scaffolds every new napplet through the promoted authoritative napplet CLI/boilerplate compatibility set and follows the installed `@napplet/skills` workflow.
+- [x] **GEN-01**: The agent scaffolds every new napplet through the promoted authoritative napplet CLI/boilerplate compatibility set and follows the installed `@napplet/skills` workflow.
 - [ ] **GEN-02**: The agent generates only a small, single-purpose NIP-5D napplet/nsite and rejects or narrows requests for arbitrary websites, full-stack applications, or generated backends.
 - [ ] **GEN-03**: Generated application code uses promoted `@napplet/sdk`/NAP interfaces and declares only the hard capabilities required for the focused napplet to function.
-- [ ] **GEN-04**: Each artifact is built reproducibly with pinned dependencies and passes the maintained verification command, forbidden-authority checks, and real-Chromium conformance suite.
+- [x] **GEN-04**: Each artifact is built reproducibly with pinned dependencies and passes the maintained verification command, forbidden-authority checks, and real-Chromium conformance suite.
 - [ ] **GEN-05**: The agent may repair a failing artifact only while the next repair action remains within the funded balance, approved cap, and permanent napplet policy.
 - [ ] **GEN-06**: A failed or incomplete artifact is returned only with diagnostics and evidence; it is never labeled previewable or publishable.
 
@@ -56,7 +56,7 @@ Requirements for the initial release. Each maps to exactly one roadmap phase.
 - [ ] **SAFE-02**: The service detects and records prompt-injection and jailbreak signals while enforcing deterministic policy independently of classifier output.
 - [ ] **SAFE-03**: The agent can use only typed, allowlisted tools scoped to the current session and cannot alter billing, session authority, publication intent, or system policy.
 - [ ] **SAFE-04**: Each worker is isolated from other sessions, has no user/control-plane credentials or durable authority, and uses default-deny network egress through scoped gateways.
-- [ ] **SAFE-05**: Dependency resolution and build scripts are pinned, policy-checked, resource-bounded, and prevented from accessing control-plane secrets or unrestricted networks.
+- [x] **SAFE-05**: Dependency resolution and build scripts are pinned, policy-checked, resource-bounded, and prevented from accessing control-plane secrets or unrestricted networks.
 - [ ] **SAFE-06**: Static and runtime checks reject direct `fetch`, XHR, WebSocket, browser storage, cookies, `window.nostr`, external asset loading, service workers, app-owned signing/relay code, or any bypass of shell-mediated NAP authority.
 
 ### Funding Interruption and Resume
@@ -158,17 +158,17 @@ Which phases cover which requirements. Populated during roadmap creation.
 | SESS-03 | Phase 4 | Pending |
 | SESS-04 | Phase 4 | Pending |
 | SESS-05 | Phase 2 | Pending |
-| GEN-01 | Phase 1 | Pending |
+| GEN-01 | Phase 1 | Complete |
 | GEN-02 | Phase 1 | Pending |
 | GEN-03 | Phase 1 | Pending |
-| GEN-04 | Phase 1 | Pending |
+| GEN-04 | Phase 1 | Complete |
 | GEN-05 | Phase 4 | Pending |
 | GEN-06 | Phase 4 | Pending |
 | SAFE-01 | Phase 2 | Pending |
 | SAFE-02 | Phase 2 | Pending |
 | SAFE-03 | Phase 2 | Pending |
 | SAFE-04 | Phase 2 | Pending |
-| SAFE-05 | Phase 1 | Pending |
+| SAFE-05 | Phase 1 | Complete |
 | SAFE-06 | Phase 1 | Pending |
 | CONT-01 | Phase 5 | Pending |
 | CONT-02 | Phase 5 | Pending |
@@ -192,6 +192,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | OPS-04 | Phase 7 | Pending |
 
 **Coverage:**
+
 - v1 requirements: 54 total
 - Mapped to phases: 54
 - Unmapped: 0 ✓

@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 01
 current_phase_name: Napplet Contract & Artifact Verification
 status: executing
-stopped_at: Phase 1 context gathered
-last_updated: "2026-08-03T01:37:53.476Z"
+stopped_at: Completed 01-01-PLAN.md
+last_updated: "2026-08-03T07:00:27.165Z"
 last_activity: 2026-08-03
 last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 11
-  completed_plans: 0
+  completed_plans: 1
 ---
 
 # Project State
@@ -28,11 +28,11 @@ See: .planning/PROJECT.md (updated 2026-08-03)
 ## Current Position
 
 Phase: 01 (Napplet Contract & Artifact Verification) — EXECUTING
-Plan: 1 of 11
-Status: Executing Phase 01
+Plan: 2 of 11
+Status: Ready to execute
 Last activity: 2026-08-03 — Phase 01 execution started
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█░░░░░░░░░] 9%
 
 ## Performance Metrics
 
@@ -53,6 +53,12 @@ Progress: [░░░░░░░░░░] 0%
 - Last 5 plans: -
 - Trend: Not enough data
 
+**Per-Plan Metrics:**
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 01-napplet-contract-artifact-verification P01 | 5 min | 2 tasks | 10 files |
+
 ## Accumulated Context
 
 ### Decisions
@@ -63,6 +69,8 @@ Recent decisions affecting current work:
 - ContextVM is the sole v1 public adapter; x402/L402 remain v2 ports only.
 - Publication is user-owned manifest signing plus separate CVM attestation; the CVM never holds user private keys.
 - Five-second admission and worker-vendor choice are validation gates, not assumptions.
+- [Phase ?]: Promotion tracer successes are review-ready only; no promoted-pointer mutation path exists.
+- [Phase ?]: Hermetic runner uses manifest-pinned absolute argv with explicit minimal environment and content-addressed evidence.
 
 ### Pending Todos
 
@@ -83,6 +91,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-02T23:56:31.379Z
-Stopped at: Phase 1 context gathered
-Resume file: .planning/phases/01-napplet-contract-artifact-verification/01-CONTEXT.md
+Last session: 2026-08-03T07:00:27.159Z
+Stopped at: Completed 01-01-PLAN.md
+Resume file: None

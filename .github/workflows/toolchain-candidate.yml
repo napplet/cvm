@@ -1,0 +1,42 @@
+name: Toolchain candidate evidence
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    name: Detect immutable candidate evidence
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      candidate_id: ${{ steps.candidate.outputs.candidate_id }}
+      evidence_sha256: ${{ steps.candidate.outputs.evidence_sha256 }}
+      candidate_status: ${{ steps.candidate.outputs.candidate_status }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      - id: candidate
+        name: Detect and verify candidate metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate="$(bun run candidate:detect -- toolchains/candidates/initial.json)"
+          verified="$(bun run candidate:verify -- toolchains/candidates/initial.json)"
+          test "$candidate" = "$verified"
+          candidate_id="$(printf '%s' "$candidate" | bun -e 'const data = await Bun.stdin.text(); console.log(JSON.parse(data).candidateId)')"
+          evidence_sha256="$(printf '%s' "$candidate" | bun -e 'const data = await Bun.stdin.text(); console.log(JSON.parse(data).evidenceSha256)')"
+          candidate_status="$(printf '%s' "$candidate" | bun -e 'const data = await Bun.stdin.text(); console.log(JSON.parse(data).status)')"
+          printf 'candidate_id=%s\n' "$candidate_id" >> "$GITHUB_OUTPUT"
+          printf 'evidence_sha256=%s\n' "$evidence_sha256" >> "$GITHUB_OUTPUT"
+          printf 'candidate_status=%s\n' "$candidate_status" >> "$GITHUB_OUTPUT"
+          printf 'candidate=%s evidence_sha256=%s status=%s\n' "$candidate_id" "$evidence_sha256" "$candidate_status"

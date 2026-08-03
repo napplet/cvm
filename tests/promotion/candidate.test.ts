@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import { detectCandidate, verifyCandidateReviewReadiness } from "../../src/promotion/candidate";
 
 const sha256 = (character: string) => character.repeat(64);
@@ -127,4 +128,28 @@ describe("candidate detection", () => {
     expect(newerNip.candidateId).not.toBe(current.candidateId);
     expect(newerNap.candidateId).not.toBe(current.candidateId);
   });
+});
+
+test("candidate workflow has read-only candidate evidence authority", async () => {
+  const repositoryRoot = join(import.meta.dir, "..", "..");
+  const workflow = await Bun.file(join(repositoryRoot, ".github", "workflows", "toolchain-candidate.yml")).text();
+  const packageJson = await Bun.file(join(repositoryRoot, "package.json")).json() as { scripts: Record<string, string> };
+
+  expect(workflow).toMatch(/workflow_dispatch:/);
+  expect(workflow).toMatch(/schedule:/);
+  expect(workflow).toMatch(/permissions:\s*\n\s*contents: read/);
+  expect(workflow).toContain("candidate:detect");
+  expect(workflow).toContain("candidate:verify");
+  expect(workflow).toContain("candidate_id=");
+  expect(workflow).toContain("evidence_sha256=");
+  expect(packageJson.scripts["candidate:workflow-check"]).toContain("candidate workflow");
+  expect(packageJson.scripts["candidate:detect"]).toBe("bun run src/promotion/candidate.ts");
+  expect(packageJson.scripts["candidate:verify"]).toBe("bun run src/promotion/candidate.ts");
+
+  for (const forbidden of [
+    "npm install", "pnpm install", "bun install", "npx", "postinstall", "preinstall", "prepare", "toolchains/current.json", "goldens/", "git push", "gh pr", "promotion",
+  ]) {
+    expect(workflow.toLowerCase()).not.toContain(forbidden);
+    expect(`${packageJson.scripts["candidate:detect"]}\n${packageJson.scripts["candidate:verify"]}`.toLowerCase()).not.toContain(forbidden);
+  }
 });

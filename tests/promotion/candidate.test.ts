@@ -146,10 +146,13 @@ test("candidate workflow has read-only candidate evidence authority", async () =
   expect(packageJson.scripts["candidate:detect"]).toBe("bun run src/promotion/candidate.ts");
   expect(packageJson.scripts["candidate:verify"]).toBe("bun run src/promotion/candidate.ts");
 
+  const invokedScripts = `${packageJson.scripts["candidate:detect"]}\n${packageJson.scripts["candidate:verify"]}`.toLowerCase();
   for (const forbidden of [
     "npm install", "pnpm install", "bun install", "npx", "postinstall", "preinstall", "prepare", "toolchains/current.json", "goldens/", "git push", "gh pr", "promotion",
   ]) {
     expect(workflow.toLowerCase()).not.toContain(forbidden);
-    expect(`${packageJson.scripts["candidate:detect"]}\n${packageJson.scripts["candidate:verify"]}`.toLowerCase()).not.toContain(forbidden);
+  }
+  for (const forbidden of ["npm install", "pnpm install", "bun install", "npx", "postinstall", "preinstall", "prepare", "toolchains/current.json", "goldens/", "run-promotion"]) {
+    expect(invokedScripts).not.toContain(forbidden);
   }
 });

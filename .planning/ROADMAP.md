@@ -35,7 +35,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. A request or generated bundle that attempts an arbitrary/full-stack app or direct browser, network, storage, signer, relay, external-asset, or service-worker authority is rejected rather than being treated as a conformant artifact.
   4. Dependency installation and build scripts stay resource-bounded and policy-checked, with no route to control-plane secrets or unrestricted network access.
 
-**Validation gate**: Resolve one coherent `@napplet/cli` candidate and prove one pinned `create → skills install → build → verify → test:conformance` fixture against the authoritative napplet packages and NIP-5D/NAP boundary. Phase 1 establishes the contract and evidence shape; exhaustive provenance, reproducibility, hostile-matrix, golden, waiver, and production-promotion certification is deferred to Phase 7.
+**Validation gate**: Resolve one coherent `@napplet/cli` candidate and prove one pinned `create → init → skills install → frozen install → build → verify → test:conformance` fixture against the authoritative napplet packages and NIP-5D/NAP boundary. Phase 1 establishes the contract and evidence shape; exhaustive provenance, reproducibility, hostile-matrix, golden, waiver, and production-promotion certification is deferred to Phase 7.
 **Plans:** 4/6 plans executed
 
 Plans:

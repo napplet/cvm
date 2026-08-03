@@ -26,6 +26,8 @@ async function command(argv: string[], overrides: Record<string, unknown> = {}) 
     cwd,
     timeoutMs: 200,
     outputLimitBytes: 512,
+    toolchainId: "toolchain-test",
+    imageDigest: "a".repeat(64),
     ...overrides,
   };
 }

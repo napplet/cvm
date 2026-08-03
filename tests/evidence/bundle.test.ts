@@ -43,6 +43,7 @@ describe("writeEvidenceBundle", () => {
     await expect(writeEvidenceBundle("/tmp/unused", evidence({ artifacts: undefined }))).rejects.toThrow("artifacts");
     await expect(writeEvidenceBundle("/tmp/unused", evidence({ integrationResults: [{ id: "tracer", reportDigests: ["0".repeat(64)] }] }))).rejects.toThrow("report digest");
     const bundle = await writeEvidenceBundle(await mkdtemp(join(tmpdir(), "napplet-cvm-evidence-")), evidence());
-    expect(() => validateEvidenceBundle({ ...bundle, evidenceSha256: "0".repeat(64) })).toThrow("digest");
+    await expect(validateEvidenceBundle({ ...bundle, evidenceSha256: "0".repeat(64) })).rejects.toThrow("digest");
+    await expect(validateEvidenceBundle({ ...bundle, artifacts: { ...bundle.artifacts, sha256: "0".repeat(64) } })).rejects.toThrow("digest");
   });
 });

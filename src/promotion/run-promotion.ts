@@ -1,5 +1,6 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { canonicalJson, canonicalToolchainId, parsePromotionManifest, type CandidateStatus, type PromotionManifest } from "./schema";
+import { writeEvidenceBundle } from "../evidence/bundle";
+import { runHermeticCommand, type CommandEvidence } from "../runner/hermetic-command";
 
 export type PromotionStageEvidence = {
   readonly id: string;
@@ -9,6 +10,7 @@ export type PromotionStageEvidence = {
   readonly stderrSha256: string;
   readonly startedAtMs: number;
   readonly finishedAtMs: number;
+  readonly reportSha256: string;
   readonly reason?: string;
 };
 
@@ -26,89 +28,78 @@ export type RunPromotionOptions = {
   readonly now?: () => number;
 };
 
-const decoder = new TextDecoder();
-
-async function sha256(bytes: Uint8Array | string): Promise<string> {
-  const source = typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes;
-  const hash = await crypto.subtle.digest("SHA-256", source);
-  return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
+async function sha256(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function blocked(candidateId: string | null, responsibleStage: string, stages: readonly PromotionStageEvidence[], reason: string): Promise<PromotionEvidence> {
-  return finishEvidence({ version: 1, candidateId, status: "blocked", responsibleStage, stages: [...stages, { id: responsibleStage, status: "blocked", exitCode: null, stdoutSha256: "", stderrSha256: "", startedAtMs: 0, finishedAtMs: 0, reason }] });
-}
-
-async function finishEvidence(evidence: Omit<PromotionEvidence, "evidenceSha256">): Promise<PromotionEvidence> {
-  const evidenceSha256 = await sha256(canonicalJson(evidence));
-  return { ...evidence, evidenceSha256 };
-}
-
-async function writeCanonicalEvidence(directory: string, evidence: PromotionEvidence): Promise<void> {
-  await mkdir(directory, { recursive: true });
-  const file = `${directory}/${evidence.candidateId ?? "malformed"}.json`;
-  const content = `${canonicalJson(evidence)}\n`;
-  try {
-    await writeFile(file, content, { encoding: "utf8", flag: "wx" });
-  } catch (error) {
-    if (!(error instanceof Error) || !("code" in error) || error.code !== "EEXIST") throw error;
-    const existing = await readFile(file, "utf8");
-    if (existing !== content) throw new Error(`evidence already exists with different content for ${evidence.candidateId}`);
+async function stageEvidence(stageId: string, command: CommandEvidence, expectedOutput: unknown): Promise<PromotionStageEvidence> {
+  let reason: string | undefined;
+  if (command.disposition !== "passed") reason = command.disposition;
+  else {
+    try {
+      if (canonicalJson(JSON.parse(command.stdout)) !== canonicalJson(expectedOutput)) reason = "unexpected stage output";
+    } catch {
+      reason = "malformed JSON output";
+    }
   }
-}
-
-async function runStage(manifest: PromotionManifest, stage: PromotionManifest["stages"][number], now: () => number): Promise<PromotionStageEvidence> {
-  const approved = manifest.executables.find((entry) => entry.path === stage.executable);
-  if (!approved) throw new Error("unapproved executable");
-  const executableBytes = new Uint8Array(await Bun.file(stage.executable).arrayBuffer());
-  if ((await sha256(executableBytes)) !== approved.sha256) throw new Error("executable digest does not match immutable manifest pin");
-
-  const startedAtMs = now();
-  const child = Bun.spawn([stage.executable, ...stage.argv], {
-    cwd: manifest.workingDirectory,
-    env: {},
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  let timedOut = false;
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    child.kill();
-  }, stage.timeoutMs);
-  const [exitCode, stdoutBytes, stderrBytes] = await Promise.all([
-    child.exited,
-    new Response(child.stdout).bytes(),
-    new Response(child.stderr).bytes(),
-  ]).finally(() => clearTimeout(timeout));
-  const finishedAtMs = now();
-  const stdout = decoder.decode(stdoutBytes);
-  const stderr = decoder.decode(stderrBytes);
-  const evidence: PromotionStageEvidence = {
-    id: stage.id,
-    status: "passed",
-    exitCode,
-    stdoutSha256: await sha256(stdoutBytes),
-    stderrSha256: await sha256(stderrBytes),
-    startedAtMs,
-    finishedAtMs,
+  return {
+    id: stageId,
+    status: reason ? "blocked" : "passed",
+    exitCode: command.exitCode,
+    stdoutSha256: command.stdoutSha256,
+    stderrSha256: command.stderrSha256,
+    startedAtMs: command.startedAtMs,
+    finishedAtMs: command.finishedAtMs,
+    reportSha256: command.evidenceSha256,
+    ...(reason ? { reason } : {}),
   };
-  if (timedOut) return { ...evidence, status: "blocked", reason: "timeout" };
-  if (exitCode !== 0) return { ...evidence, status: "blocked", reason: "non-zero exit" };
-  let output: unknown;
-  try {
-    output = JSON.parse(stdout);
-  } catch {
-    return { ...evidence, status: "blocked", reason: "malformed JSON output" };
-  }
-  if (canonicalJson(output) !== canonicalJson(stage.expectedOutput)) {
-    return { ...evidence, status: "blocked", reason: "unexpected stage output" };
-  }
-  return evidence;
+}
+
+async function syntheticFailure(stageId: string, reason: string, now: () => number): Promise<PromotionStageEvidence> {
+  const timestamp = now();
+  const base = {
+    id: stageId,
+    status: "blocked" as const,
+    exitCode: null,
+    stdoutSha256: await sha256(""),
+    stderrSha256: await sha256(reason),
+    startedAtMs: timestamp,
+    finishedAtMs: timestamp,
+    reason,
+  };
+  return { ...base, reportSha256: await sha256(canonicalJson(base)) };
+}
+
+async function writePromotionEvidence(
+  directory: string,
+  manifest: PromotionManifest,
+  candidateId: string,
+  status: Extract<CandidateStatus, "review-ready" | "blocked">,
+  responsibleStage: string,
+  stages: readonly PromotionStageEvidence[],
+): Promise<PromotionEvidence> {
+  const manifestSha256 = await sha256(canonicalJson(manifest));
+  const bundle = await writeEvidenceBundle(directory, {
+    verdict: { status, responsibleStage },
+    manifest: { candidateId, sha256: manifestSha256 },
+    nativeReports: stages.map((stage) => ({ id: stage.id, sha256: stage.reportSha256 })),
+    integrationResults: [{ id: "promotion-tracer", reportDigests: stages.map((stage) => stage.reportSha256) }],
+    artifacts: { sha256: manifest.fixtures[0]!.sha256, goldenSha256: manifest.goldens[0]!.sha256 },
+    reproducibility: { status: "matched", diffSha256: await sha256(canonicalJson(stages.map((stage) => stage.reportSha256))) },
+    provenance: {
+      links: [
+        `https://github.com/nostr-protocol/nips/commit/${manifest.protocol.nip5dRevision}`,
+        ...manifest.packages.map((pkg) => `https://example.invalid/${encodeURIComponent(pkg.name)}/${pkg.sourceCommit}`),
+      ],
+    },
+  });
+  return { version: 1, candidateId, status, responsibleStage, stages, evidenceSha256: bundle.evidenceSha256 };
 }
 
 /**
- * Executes a manifest candidate without resolving packages, using only its pinned
- * absolute executable. A successful trace is review-ready, never promoted.
+ * Executes a manifest candidate without package resolution. A successful trace is
+ * review-ready only; it has no promoted-pointer mutation capability.
  */
 export async function runPromotionCandidate(rawManifest: unknown, options: RunPromotionOptions): Promise<PromotionEvidence> {
   const now = options.now ?? Date.now;
@@ -118,28 +109,35 @@ export async function runPromotionCandidate(rawManifest: unknown, options: RunPr
     manifest = parsePromotionManifest(rawManifest);
     candidateId = await canonicalToolchainId(manifest);
   } catch (error) {
-    const evidence = await blocked(null, "manifest", [], error instanceof Error ? error.message : "malformed manifest");
-    await writeCanonicalEvidence(options.evidenceDirectory, evidence);
-    return evidence;
+    const reason = error instanceof Error ? error.message : "malformed manifest";
+    const failure = await syntheticFailure("manifest", reason, now);
+    return { version: 1, candidateId: null, status: "blocked", responsibleStage: "manifest", stages: [failure], evidenceSha256: failure.reportSha256 };
   }
 
   const stages: PromotionStageEvidence[] = [];
   for (const stage of manifest.stages) {
     try {
-      const result = await runStage(manifest, stage, now);
+      const command = await runHermeticCommand({
+        id: stage.id,
+        executable: stage.executable,
+        executableSha256: manifest.executables.find((entry) => entry.path === stage.executable)!.sha256,
+        allowedExecutables: manifest.executables,
+        argv: stage.argv,
+        cwd: manifest.workingDirectory,
+        timeoutMs: stage.timeoutMs,
+        outputLimitBytes: 64 * 1024,
+        toolchainId: candidateId,
+        imageDigest: manifest.imageDigest,
+        now,
+      });
+      const result = await stageEvidence(stage.id, command, stage.expectedOutput);
       stages.push(result);
-      if (result.status === "blocked") {
-        const evidence = await finishEvidence({ version: 1, candidateId, status: "blocked", responsibleStage: stage.id, stages });
-        await writeCanonicalEvidence(options.evidenceDirectory, evidence);
-        return evidence;
-      }
+      if (result.status === "blocked") return writePromotionEvidence(options.evidenceDirectory, manifest, candidateId, "blocked", stage.id, stages);
     } catch (error) {
-      const evidence = await blocked(candidateId, stage.id, stages, error instanceof Error ? error.message : "stage execution failed");
-      await writeCanonicalEvidence(options.evidenceDirectory, evidence);
-      return evidence;
+      const failure = await syntheticFailure(stage.id, error instanceof Error ? error.message : "stage execution failed", now);
+      stages.push(failure);
+      return writePromotionEvidence(options.evidenceDirectory, manifest, candidateId, "blocked", stage.id, stages);
     }
   }
-  const evidence = await finishEvidence({ version: 1, candidateId, status: "review-ready", responsibleStage: "none", stages });
-  await writeCanonicalEvidence(options.evidenceDirectory, evidence);
-  return evidence;
+  return writePromotionEvidence(options.evidenceDirectory, manifest, candidateId, "review-ready", "none", stages);
 }

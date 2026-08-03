@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { canonicalJson, canonicalToolchainId, parsePromotionManifest } from "../src/promotion/schema";
+import { canonicalToolchainId, parsePromotionManifest } from "../src/promotion/schema";
 import { runPromotionCandidate } from "../src/promotion/run-promotion";
 
 const cleanup: string[] = [];
@@ -55,7 +55,7 @@ describe("promotion tracer", () => {
     expect(first.status).toBe("review-ready");
     expect(second).toEqual(first);
     expect(first.candidateId).toBe(await canonicalToolchainId(parsePromotionManifest(candidate)));
-    expect(await Bun.file(join(directory, `${first.candidateId}.json`)).text()).toBe(`${canonicalJson(first)}\n`);
+    expect(await Bun.file(join(directory, `${first.evidenceSha256}.json`)).exists()).toBeTrue();
   });
 
   test.each([

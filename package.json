@@ -1,0 +1,11 @@
+{
+  "name": "napplet-cvm",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "bun": ">=1.2.0"
+  },
+  "scripts": {
+    "test": "bun test"
+  }
+}

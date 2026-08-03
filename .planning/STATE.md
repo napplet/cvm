@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 01
 current_phase_name: Napplet Contract & Artifact Verification
 status: executing
-stopped_at: Compact Phase 1 tail replanned; ready for Plan 01-05
-last_updated: "2026-08-03T20:07:39Z"
+stopped_at: Completed 01-05-PLAN.md; execute compact Plan 01-06
+last_updated: "2026-08-03T20:32:26.316Z"
 last_activity: 2026-08-03
-last_activity_desc: Replanned Phase 1 design tail around approved coherent CLI 0.5.2 candidate
+last_activity_desc: Approved coherent CLI 0.5.2 candidate incorporated; launch certification moved to Phase 7
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 6
-  completed_plans: 4
+  completed_plans: 5
 ---
 
 # Project State
@@ -28,11 +28,11 @@ See: .planning/PROJECT.md (updated 2026-08-03)
 ## Current Position
 
 Phase: 01 (Napplet Contract & Artifact Verification) — EXECUTING
-Plan: 5 of 6
+Plan: 6 of 6
 Status: Ready to execute compact design-stage tail
 Last activity: 2026-08-03 — Approved coherent CLI 0.5.2 candidate incorporated; launch certification moved to Phase 7
 
-Progress: [███████░░░] 67%
+Progress: [████████░░] 83%
 
 ## Performance Metrics
 
@@ -61,6 +61,7 @@ Progress: [███████░░░] 67%
 | Phase 01 P02 | 5 min | 2 tasks | 5 files |
 | Phase 01 P03 | 7 min | 1 tasks | 5 files |
 | Phase 01 P04 | 99 min | 2 tasks | 12 files |
+| Phase 01 P05 | 25m | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -83,6 +84,7 @@ Recent decisions affecting current work:
 - [Phase ?]: Sealed image receives only integrity-checked intake artifacts; final runtime has no package resolver or npx fallback.
 - [Phase ?]: Every promotion runs explicit DNS, HTTP, HTTPS, and TCP denial probes through runSealedToolchain before stages.
 - [Phase ?]: BuildKit provenance is disabled for deterministic local image digest identity.
+- [Phase ?]: Phase 01 fixture treats unavailable sealed native scaffold execution as structured blocked evidence; compatible self-contained scaffold closure is deferred to Phase 7.
 
 ### Pending Todos
 
@@ -104,6 +106,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-03T20:07:39Z
-Stopped at: Compact Phase 1 tail planned; execute 01-05 then 01-06 autonomously
-Resume file: .planning/phases/01-napplet-contract-artifact-verification/01-05-PLAN.md
+Last session: 2026-08-03T20:32:26.311Z
+Stopped at: Completed 01-05-PLAN.md; execute compact Plan 01-06
+Resume file: .planning/phases/01-napplet-contract-artifact-verification/01-06-PLAN.md

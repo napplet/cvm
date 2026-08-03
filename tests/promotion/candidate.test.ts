@@ -75,6 +75,12 @@ describe("candidate detection", () => {
 
     const changed = await detectCandidate(candidateInput({ runtimeVersion: "bun-1.3.15" }));
     expect(changed.candidateId).not.toBe(first.candidateId);
+
+    const duplicate = await verifyCandidateReviewReadiness(candidateInput({
+      packages: [...(candidateInput().packages as unknown[]), (candidateInput().packages as unknown[])[0]!],
+    }));
+    expect(duplicate.status).toBe("unverified");
+    expect(duplicate.blockers.some((blocker) => blocker.includes("duplicate package"))).toBeTrue();
   });
 
   test("keeps incomplete provenance machine-readable and rejects empty identity facts", async () => {

@@ -4,6 +4,11 @@ import {
   parseToolchainImagePolicy,
   verifyToolchainImageInputs,
 } from "../../scripts/build-toolchain-image";
+import {
+  parseSealedToolchainPolicy,
+  runSealedDenialProbes,
+  runSealedToolchain,
+} from "../../src/runner/sealed-toolchain";
 
 const root = process.cwd();
 const candidatePath = join(root, "toolchains/candidates/initial.json");
@@ -39,5 +44,50 @@ describe("sealed toolchain image and policy", () => {
     expect(policy.environment).toEqual({ CI: "1", HOME: "/home/napplet" });
     expect(() => parseToolchainImagePolicy({ ...policy, network: "bridge" })).toThrow("network");
     expect(() => parseToolchainImagePolicy({ ...policy, unexpected: true })).toThrow("unknown");
+  });
+});
+
+describe("runSealedToolchain", () => {
+  test("constructs one literal default-deny Docker argv with no caller security override", async () => {
+    let captured: Record<string, unknown> | undefined;
+    const result = await runSealedToolchain({
+      id: "native",
+      policyPath,
+      imageDigest: "a".repeat(64),
+      inputDirectory: root,
+      script: "/toolchain/bin/napplet-conformance",
+      args: ["--json", "$(must stay literal)"],
+      toolchainId: "toolchain-test",
+      execute: async (command) => {
+        captured = command as unknown as Record<string, unknown>;
+        return {
+          id: command.id, argv: [command.executable, ...command.argv], cwd: command.cwd, cwdSha256: "b".repeat(64), toolchainId: command.toolchainId, imageDigest: command.imageDigest,
+          startedAtMs: 1, finishedAtMs: 2, exitCode: 0, stdout: "{}", stderr: "", stdoutSha256: "c".repeat(64), stderrSha256: "d".repeat(64), disposition: "passed", evidenceSha256: "e".repeat(64),
+        };
+      },
+    });
+
+    expect(result.disposition).toBe("passed");
+    expect(captured?.argv).toEqual(expect.arrayContaining([
+      "run", "--rm", "--pull=never", "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--user=65532:65532",
+      "--pids-limit=64", "--memory=2g", "--cpus=2", "--entrypoint=/toolchain/bin/bun", `napplet-cvm/toolchain@sha256:${"a".repeat(64)}`, "/toolchain/bin/napplet-conformance", "$(must stay literal)",
+    ]));
+    await expect(runSealedToolchain({ id: "bad", policyPath, imageDigest: "not-a-digest", inputDirectory: root, script: "/toolchain/bin/napplet-conformance", args: [], toolchainId: "toolchain-test" })).rejects.toThrow("image digest");
+  });
+
+  test("fails closed when a policy control is relaxed or a denial probe succeeds", async () => {
+    const policy = await Bun.file(policyPath).json();
+    expect(parseSealedToolchainPolicy(policy).network).toBe("none");
+    expect(() => parseSealedToolchainPolicy({ ...policy, capDrop: [] })).toThrow("capDrop");
+    await expect(runSealedDenialProbes({
+      policyPath,
+      imageDigest: "a".repeat(64),
+      inputDirectory: root,
+      toolchainId: "toolchain-test",
+      execute: async (command) => ({
+        id: command.id, argv: [command.executable, ...command.argv], cwd: command.cwd, cwdSha256: "b".repeat(64), toolchainId: command.toolchainId, imageDigest: command.imageDigest,
+        startedAtMs: 1, finishedAtMs: 2, exitCode: 0, stdout: "connected", stderr: "", stdoutSha256: "c".repeat(64), stderrSha256: "d".repeat(64), disposition: "passed", evidenceSha256: "e".repeat(64),
+      }),
+    })).rejects.toThrow("denial probe dns");
   });
 });

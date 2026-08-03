@@ -36,7 +36,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. Dependency installation and build scripts stay resource-bounded and policy-checked, with no route to control-plane secrets or unrestricted network access.
 
 **Validation gate**: Resolve one coherent `@napplet/cli` candidate and prove one pinned `create → init → skills install → frozen install → build → verify → test:conformance` fixture against the authoritative napplet packages and NIP-5D/NAP boundary. Phase 1 establishes the contract and evidence shape; exhaustive provenance, reproducibility, hostile-matrix, golden, waiver, and production-promotion certification is deferred to Phase 7.
-**Plans:** 5/6 plans executed
+**Plans:** 6/6 plans executed
 
 Plans:
 **Wave 1**
@@ -61,7 +61,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 01-06-PLAN.md — Prove representative SDK capability composition, fail-closed napplet-only policy, rejection evidence, and one aggregate design record.
+- [x] 01-06-PLAN.md — Prove representative SDK capability composition, fail-closed napplet-only policy, rejection evidence, and one aggregate design record.
 
 **Cross-cutting constraints:**
 
@@ -172,7 +172,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Napplet Contract & Artifact Verification | 5/6 | In Progress|  |
+| 1. Napplet Contract & Artifact Verification | 6/6 | In Progress|  |
 | 2. Trusted Core & Isolated Agent Execution | 0/TBD | Not started | - |
 | 3. ContextVM Funding & Funded Admission | 0/TBD | Not started | - |
 | 4. Metered Generation & Revision Loop | 0/TBD | Not started | - |

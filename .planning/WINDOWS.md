@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 2
+open_count: 3
 waived_count: 0
 fixed_count: 0
-total_count: 2
-last_updated: 2026-08-03T20:32:25.966Z
+total_count: 3
+last_updated: 2026-08-03T20:44:38.817Z
 ---
 
 # Broken Windows Ledger
@@ -17,6 +17,7 @@ last_updated: 2026-08-03T20:32:25.966Z
 |----|-------|------|------|------|-------------|--------|--------|-------------|-------------|
 | 1 | 01 | deviation | tests/promotion/candidate.test.ts |  | Corrected invalid hexadecimal test pins and workflow-guard false positive. | open |  | 2026-08-03T07:10:01.403Z |  |
 | 2 | 01 | stub | infra/toolchain/fixture-runner.ts |  | Sealed native fixture blocks until an upstream-compatible content-addressed boilerplate scaffold and browser dependencies are materialized. | open |  | 2026-08-03T20:32:25.966Z |  |
+| 3 | 01 | stub | infra/toolchain/fixture-runner.ts |  | Native fixture scaffold is not self-contained under sealed --network=none; compatible scaffold and real Chromium closure deferred to Phase 7. | open |  | 2026-08-03T20:44:38.817Z |  |
 
 ````json
 [
@@ -42,6 +43,18 @@ last_updated: 2026-08-03T20:32:25.966Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-03T20:32:25.966Z",
+    "resolved_at": null
+  },
+  {
+    "id": 3,
+    "kind": "stub",
+    "phase": "01",
+    "file": "infra/toolchain/fixture-runner.ts",
+    "line": null,
+    "description": "Native fixture scaffold is not self-contained under sealed --network=none; compatible scaffold and real Chromium closure deferred to Phase 7.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-03T20:44:38.817Z",
     "resolved_at": null
   }
 ]

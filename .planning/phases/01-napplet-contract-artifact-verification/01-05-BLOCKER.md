@@ -1,5 +1,12 @@
 # Plan 01-05 Blocker: Official Resolver-Free CLI Release
 
+**Status:** Resolved on 2026-08-03. Official `@napplet/cli@0.5.2` and matching
+`@napplet/skills`/`@napplet/boilerplate@0.3.2` were published. Candidate
+`a19fc7d283a4482c53728f4a931743576564fb3826d7f8fa1383d02578b69024`
+is review-ready and was explicitly approved for Phase 1 design execution. The
+history below is retained as the upstream-repair record; the revised 01-05 plan
+continues without another approval checkpoint per D-19.
+
 ## Why execution stopped
 
 The approved `@napplet/cli@0.5.1` standalone binary delegates `napplet create` and

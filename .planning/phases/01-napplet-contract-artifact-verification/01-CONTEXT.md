@@ -6,7 +6,9 @@
 <domain>
 ## Phase Boundary
 
-Phase 1 defines and proves the contract that distinguishes a conformant napplet from arbitrary generated web code. It promotes one immutable, revision-pinned napplet toolchain set; composes the package-native verification and conformance suites into a thin end-to-end fixture; proves byte-stable artifact output against reviewed goldens; and emits promotion evidence.
+Phase 1 defines the contract that distinguishes a conformant napplet from arbitrary generated web code and proves one representative vertical path through it. It records a promoted, revision-pinned napplet toolchain set, composes package-native verification into a thin end-to-end fixture, and establishes the artifact/evidence interfaces that downstream phases consume.
+
+This is a design-stage boundary, not production certification. Representative evidence is sufficient while the product architecture is being built. Exhaustive provenance validation, repeated reproducibility campaigns, comprehensive hostile matrices, golden-signoff ceremony, waiver drills, and supply-chain certification are launch-hardening work for Phase 7.
 
 This phase does not build the production agent service, worker isolation platform, billing, ContextVM adapter, preview product, user signing flow, or live publication system. Its publication work is limited to a non-production dry-run proving that the promoted package set composes correctly.
 
@@ -42,6 +44,12 @@ This phase does not build the production agent service, worker isolation platfor
 - **D-14:** Every NIP-5D/NAP normative violation, package-native suite failure, integration-fixture failure, forbidden-authority finding, golden mismatch, aggregate-hash mismatch, or unverifiable provenance blocks promotion by default.
 - **D-15:** Every promotion run produces a layered evidence bundle: concise human verdict, machine-readable results, immutable promotion manifest, package-native reports, integration results, artifact and golden hashes, reproducibility diff, and provenance links.
 - **D-16:** An emergency owner waiver may override a hard blocker. The authorization identity, non-waivable failure classes, expiry, evidence, rollback trigger, and enforcement mechanism are delegated to Phase 1 research and planning. — **Reversibility:** costly — Waiver records can permit a nonconforming set into production and therefore must remain auditable for the lifetime of any affected artifact.
+
+### Design-Stage Execution Boundary
+
+- **D-17:** During Phases 1–6, trust machinery is an executable architecture contract: preserve fail-closed boundaries and evidence shapes, but accept representative fixtures and evidence instead of demanding production-certification depth.
+- **D-18:** Defer exhaustive provenance/reproducibility verification, comprehensive hostile coverage, formal golden approval, waiver exercises, and supply-chain certification to Phase 7 launch safety. Earlier phases may retain scaffolding for these checks without blocking product design on perfect validation.
+- **D-19:** The explicitly approved coherent `@napplet/cli` 0.5.2 candidate is sufficient for Phase 1 design execution. Do not repeat human provenance or promotion approval rituals unless an irreversible production decision is actually being made.
 
 ### the agent's Discretion
 
@@ -114,7 +122,7 @@ This phase does not build the production agent service, worker isolation platfor
 <deferred>
 ## Deferred Ideas
 
-None — discussion stayed within phase scope.
+- Launch-grade trust certification: exhaustive provenance verification, repeated/cross-environment reproducibility, full hostile and mutation matrices, formal golden approval, waiver drills, SBOM/provenance enforcement, and production promotion gates. These belong to Phase 7 and must not block the design-stage vertical slice.
 
 </deferred>
 

@@ -4,15 +4,15 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 01
 current_phase_name: Napplet Contract & Artifact Verification
-status: blocked
-stopped_at: Plan 01-05 blocked on trusted upstream CLI release
-last_updated: "2026-08-03T16:54:13Z"
+status: executing
+stopped_at: Compact Phase 1 tail replanned; ready for Plan 01-05
+last_updated: "2026-08-03T20:07:39Z"
 last_activity: 2026-08-03
-last_activity_desc: Resolver-free CLI merged; release synchronizer follow-up is open as napplet/web#201
+last_activity_desc: Replanned Phase 1 design tail around approved coherent CLI 0.5.2 candidate
 progress:
   total_phases: 1
   completed_phases: 0
-  total_plans: 11
+  total_plans: 6
   completed_plans: 4
 ---
 
@@ -27,18 +27,18 @@ See: .planning/PROJECT.md (updated 2026-08-03)
 
 ## Current Position
 
-Phase: 01 (Napplet Contract & Artifact Verification) — BLOCKED
-Plan: 5 of 11
-Status: Blocked on trusted upstream release
-Last activity: 2026-08-03 — PR #200 merged; fixed its release-pipeline wildcard failure in follow-up PR #201
+Phase: 01 (Napplet Contract & Artifact Verification) — EXECUTING
+Plan: 5 of 6
+Status: Ready to execute compact design-stage tail
+Last activity: 2026-08-03 — Approved coherent CLI 0.5.2 candidate incorporated; launch certification moved to Phase 7
 
-Progress: [████░░░░░░] 36%
+Progress: [███████░░░] 67%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 0
+- Total plans completed: 4
 - Average duration: -
 - Total execution time: 0 hours
 
@@ -90,7 +90,8 @@ None yet.
 
 ### Blockers/Concerns
 
-- Plan 01-05 cannot use official `@napplet/cli@0.5.1`: its standalone binary shells out through `npx` for `@napplet/boilerplate` and `@napplet/skills`, which the sealed runtime correctly denies. The package-owned resolver-free fix merged as https://github.com/napplet/web/pull/200. Its first Publish run exposed a release-synchronizer bug for npm-only wildcard skill assets; the tested fix is open as https://github.com/napplet/web/pull/201. Resume only after PR #201 merges and the upstream changesets flow publishes a successor official CLI release plus matching architecture asset. Then rerun candidate detection, provenance approval, and sealed image materialization before returning to Plan 01-05; do not trust a branch-built substitute.
+- No active Phase 1 blocker. Official `@napplet/cli@0.5.2` plus matching `@napplet/skills`/`@napplet/boilerplate@0.3.2` is recorded as review-ready candidate `a19fc7d283a4482c53728f4a931743576564fb3826d7f8fa1383d02578b69024` and was explicitly approved for design execution.
+- Exhaustive toolchain provenance, cross-environment reproducibility, full hostile/mutation coverage, formal golden approval, waiver exercises, SBOM/provenance enforcement, and production promotion are intentionally deferred to Phase 7.
 - Future phases must contract-test evolving ContextVM/CEP-8 wire details, model exact-usage receipts, signing-runtime behavior, and the five-second SLO under load.
 
 ## Deferred Items
@@ -103,6 +104,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-03T10:49:02Z
-Stopped at: Plan 01-05 RED tests committed; trusted upstream fix is green and awaiting merge/release
-Resume file: .planning/phases/01-napplet-contract-artifact-verification/01-05-BLOCKER.md
+Last session: 2026-08-03T20:07:39Z
+Stopped at: Compact Phase 1 tail planned; execute 01-05 then 01-06 autonomously
+Resume file: .planning/phases/01-napplet-contract-artifact-verification/01-05-PLAN.md

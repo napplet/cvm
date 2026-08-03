@@ -25,18 +25,18 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 ### Phase 1: Napplet Contract & Artifact Verification
 
-**Goal**: A verified artifact can only be a small, single-purpose NIP-5D napplet created and validated by one promoted, reproducible toolchain.
+**Goal**: Establish an executable napplet-only artifact contract and prove one representative NIP-5D creation/verification path that downstream product phases can build on.
 **Depends on**: Nothing (first phase)
 **Requirements**: GEN-01, GEN-02, GEN-03, GEN-04, SAFE-05, SAFE-06
 **Success Criteria** (what must be TRUE):
 
   1. A tester can create a focused napplet only from the promoted authoritative scaffold/CLI compatibility set, following the installed `@napplet/skills` workflow and declaring only its necessary NAP capabilities.
-  2. A tester receives a reproducible, aggregate-hash artifact and evidence only after its pinned dependency build passes the maintained verification command and real-Chromium conformance suite.
+  2. A tester receives an aggregate-hash artifact and representative evidence only after its pinned dependency build passes the maintained verification command and a real-Chromium conformance path.
   3. A request or generated bundle that attempts an arbitrary/full-stack app or direct browser, network, storage, signer, relay, external-asset, or service-worker authority is rejected rather than being treated as a conformant artifact.
   4. Dependency installation and build scripts stay resource-bounded and policy-checked, with no route to control-plane secrets or unrestricted network access.
 
-**Validation gate**: Resolve `@napplet/cli` provenance and prove one pinned `create → init → skills install → build → verify → test:conformance → dry-run publish` fixture against the authoritative scaffold, SDK, NIP-5D/NAP contract, and Chromium suite. Until this gate passes, automated publication is not claimed.
-**Plans:** 4/11 plans executed
+**Validation gate**: Resolve one coherent `@napplet/cli` candidate and prove one pinned `create → skills install → build → verify → test:conformance` fixture against the authoritative napplet packages and NIP-5D/NAP boundary. Phase 1 establishes the contract and evidence shape; exhaustive provenance, reproducibility, hostile-matrix, golden, waiver, and production-promotion certification is deferred to Phase 7.
+**Plans:** 4/6 plans executed
 
 Plans:
 **Wave 1**
@@ -57,32 +57,16 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 01-05-PLAN.md — Prove the focused fixture and select compatible NAP paths from the same exact passing candidate.
+- [ ] 01-05-PLAN.md — Materialize the approved coherent CLI 0.5.2 set and prove one focused package-native/Chromium fixture.
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 01-06-PLAN.md — Implement focused-scope, dependency, authority-gap, and capability-necessity policy.
-- [ ] 01-07-PLAN.md — Prove two-clean-build byte identity and stage immutable pending golden review inputs.
-
-**Wave 7** *(blocked on Wave 6 completion)*
-
-- [ ] 01-08-PLAN.md — Run hostile source and mutation cases through the sealed native-first gate.
-
-**Wave 8** *(blocked on Wave 7 completion)*
-
-- [ ] 01-09-PLAN.md — Enforce promotion state, hard blockers, narrow waivers, and layered evidence.
-
-**Wave 9** *(blocked on Wave 8 completion)*
-
-- [ ] 01-10-PLAN.md — Review the exact candidate evidence and pending golden bytes.
-
-**Wave 10** *(blocked on Wave 9 completion)*
-
-- [ ] 01-11-PLAN.md — Materialize approved goldens and atomically promote the reviewed immutable toolchain.
+- [ ] 01-06-PLAN.md — Prove representative SDK capability composition, fail-closed napplet-only policy, rejection evidence, and one aggregate design record.
 
 **Cross-cutting constraints:**
 
-- Candidate identity includes every protocol, package, executable, lockfile, scaffold, image, runtime, browser, fixture, golden, and policy pin required by D-04.
+- Candidate, image, native report, artifact, aggregate, and policy identities remain explicit and fail closed.
+- Phase 1 produces design-verification evidence only; it does not create a production promoted pointer or claim the launch-hardening gates deferred to Phase 7.
 
 ### Phase 2: Trusted Core & Isolated Agent Execution
 
@@ -177,6 +161,8 @@ Plans:
   4. A production promotion is blocked until pinned images and packages, SBOM/provenance, adversarial prompt/escape/exfiltration tests, payment/publication reconciliation tests, and five-second-p95 load evidence are available.
 
 **Validation gate**: Benchmark Modal and at least one non-AWS fallback with the production-like image, target regions, relay delay, pool misses, database contention, reclaim/failure behavior, and step load. Select a worker vendor only after receipt-to-isolated-worker-ready p95 is at most five seconds with zero durable backlog; establish the database/failover claim to match the chosen deployment scope.
+
+Phase 7 also closes the launch-hardening work intentionally deferred from Phase 1: exhaustive toolchain provenance, repeated/cross-environment reproducibility, full hostile and mutation coverage, formal golden approval, waiver drills, SBOM/provenance enforcement, and the final production promotion gate.
 **Plans**: TBD
 
 ## Progress
@@ -186,7 +172,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Napplet Contract & Artifact Verification | 4/11 | In Progress|  |
+| 1. Napplet Contract & Artifact Verification | 4/6 | In Progress|  |
 | 2. Trusted Core & Isolated Agent Execution | 0/TBD | Not started | - |
 | 3. ContextVM Funding & Funded Admission | 0/TBD | Not started | - |
 | 4. Metered Generation & Revision Loop | 0/TBD | Not started | - |

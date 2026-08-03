@@ -76,6 +76,8 @@ status: complete
 
 ## Approved Provenance Subject
 
+approved: 2dbf448be962e289c962fd5b3659bf526232ded9de163c485925618cead1f23e
+
 | Subject | Exact identity | Source binding |
 | --- | --- | --- |
 | NIP-5D | `eb45dfd7335b7f88cb53781984c553581d2b4c34` | Official `nostr-protocol/nips` commit evidence |

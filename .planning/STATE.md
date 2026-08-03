@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 01
 current_phase_name: Napplet Contract & Artifact Verification
 status: executing
-stopped_at: Completed 01-03-PLAN.md
-last_updated: "2026-08-03T08:03:23.223Z"
+stopped_at: Completed 01-04-PLAN.md
+last_updated: "2026-08-03T09:48:38.281Z"
 last_activity: 2026-08-03
 last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 11
-  completed_plans: 3
+  completed_plans: 4
 ---
 
 # Project State
@@ -28,11 +28,11 @@ See: .planning/PROJECT.md (updated 2026-08-03)
 ## Current Position
 
 Phase: 01 (Napplet Contract & Artifact Verification) — EXECUTING
-Plan: 4 of 11
+Plan: 5 of 11
 Status: Ready to execute
 Last activity: 2026-08-03 — Phase 01 execution started
 
-Progress: [███░░░░░░░] 27%
+Progress: [████░░░░░░] 36%
 
 ## Performance Metrics
 
@@ -60,6 +60,7 @@ Progress: [███░░░░░░░] 27%
 | Phase 01-napplet-contract-artifact-verification P01 | 5 min | 2 tasks | 10 files |
 | Phase 01 P02 | 5 min | 2 tasks | 5 files |
 | Phase 01 P03 | 7 min | 1 tasks | 5 files |
+| Phase 01 P04 | 99 min | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -79,6 +80,9 @@ Recent decisions affecting current work:
 - [Phase ?]: Pre-install approval authorizes only sealed candidate intake/testing; it cannot promote or mutate the current pointer.
 - [Phase ?]: D-04 PromotionManifest pins remain mandatory at promotion while the intake review records only source provenance.
 - [Phase ?]: @napplet/sdk@0.27.2 uses an explicit official release-commit mapping because no matching Git tag exists.
+- [Phase ?]: Sealed image receives only integrity-checked intake artifacts; final runtime has no package resolver or npx fallback.
+- [Phase ?]: Every promotion runs explicit DNS, HTTP, HTTPS, and TCP denial probes through runSealedToolchain before stages.
+- [Phase ?]: BuildKit provenance is disabled for deterministic local image digest identity.
 
 ### Pending Todos
 
@@ -99,6 +103,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-03T08:03:23.216Z
-Stopped at: Completed 01-03-PLAN.md
+Last session: 2026-08-03T09:48:38.276Z
+Stopped at: Completed 01-04-PLAN.md
 Resume file: None

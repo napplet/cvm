@@ -32,7 +32,20 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. A request or generated bundle that attempts an arbitrary/full-stack app or direct browser, network, storage, signer, relay, external-asset, or service-worker authority is rejected rather than being treated as a conformant artifact.
   4. Dependency installation and build scripts stay resource-bounded and policy-checked, with no route to control-plane secrets or unrestricted network access.
 **Validation gate**: Resolve `@napplet/cli` provenance and prove one pinned `create → init → skills install → build → verify → test:conformance → dry-run publish` fixture against the authoritative scaffold, SDK, NIP-5D/NAP contract, and Chromium suite. Until this gate passes, automated publication is not claimed.
-**Plans**: TBD
+**Plans:** 11 plans
+
+Plans:
+- [ ] 01-01-PLAN.md — Prove the candidate-manifest-to-bounded-command-to-canonical-evidence tracer.
+- [ ] 01-02-PLAN.md — Detect immutable candidates and assemble evidence-bound review input without install or promotion authority.
+- [ ] 01-03-PLAN.md — Review the exact CLI/package/source provenance before candidate image intake.
+- [ ] 01-04-PLAN.md — Materialize the reviewed image and enforce the sealed default-deny Docker promotion path.
+- [ ] 01-05-PLAN.md — Prove the focused fixture and select compatible NAP paths from the same exact passing candidate.
+- [ ] 01-06-PLAN.md — Implement focused-scope, dependency, authority-gap, and capability-necessity policy.
+- [ ] 01-07-PLAN.md — Prove two-clean-build byte identity and stage immutable pending golden review inputs.
+- [ ] 01-08-PLAN.md — Run hostile source and mutation cases through the sealed native-first gate.
+- [ ] 01-09-PLAN.md — Enforce promotion state, hard blockers, narrow waivers, and layered evidence.
+- [ ] 01-10-PLAN.md — Review the exact candidate evidence and pending golden bytes.
+- [ ] 01-11-PLAN.md — Materialize approved goldens and atomically promote the reviewed immutable toolchain.
 
 ### Phase 2: Trusted Core & Isolated Agent Execution
 **Goal**: Untrusted text and agent activity are contained by a transport-neutral authority that serializes valid actions and never grants the worker control over money, session authority, or publication.
@@ -118,7 +131,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Napplet Contract & Artifact Verification | 0/TBD | Not started | - |
+| 1. Napplet Contract & Artifact Verification | 0/11 | Not started | - |
 | 2. Trusted Core & Isolated Agent Execution | 0/TBD | Not started | - |
 | 3. ContextVM Funding & Funded Admission | 0/TBD | Not started | - |
 | 4. Metered Generation & Revision Loop | 0/TBD | Not started | - |

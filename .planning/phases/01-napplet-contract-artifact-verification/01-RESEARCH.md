@@ -85,7 +85,7 @@ The immediate risk is supply-chain/provenance drift. The installed upstream repo
 |---|---|
 | Hard contract | NIP-5D/NIP-5A revision, opaque sandbox, NAP-only authority, native package suites unchanged, reproducible unsigned bytes, aggregate hash, pinned provenance, default blocking. [CITED: https://github.com/nostr-protocol/nips/pull/2303] |
 | Recommended implementation | A TypeScript/Bun promotion runner, JSON schemas, content-addressed evidence/goldens, and a repository-local `current` pointer to the reviewed manifest. [ASSUMED] |
-| Open question | Which exact upstream release/commit combination passes a complete local `create → init → skills → build → verify → Chromium → dry-run` fixture; the present registry/source split prevents preselecting one. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source; VERIFIED: npm registry] |
+| Promotion-time decision rule | No exact upstream release/commit combination is preselected. Promotion may name a set only after automated provenance evidence establishes the exact CLI distribution/source/executable mapping, the set passes the complete `create → init → skills → build → verify → Chromium → dry-run` fixture, and the exact evidence is reviewed. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source; VERIFIED: npm registry] |
 | Deferred concern | Production signing, deployment side effects, preview shell, worker isolation and secret delivery belong to later phases; Phase 1 permits only dry-run manifest construction. [VERIFIED: 01-CONTEXT.md] |
 
 ## Architectural Responsibility Map
@@ -328,22 +328,21 @@ This deliberately consumes native reports rather than importing private upstream
 
 **Deprecated/outdated:** Treating NIP-5D as stable is incorrect; the official PR is open and has active security/terminology discussion, so every promoted set must name an exact revision. [CITED: https://github.com/nostr-protocol/nips/pull/2303]
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Which upstream CLI distribution is authoritative for the first promoted set?**
-   - What we know: Official source describes a `0.5.0` CLI, while npm exposes `@napplet/cli@0.0.0`; the official installer documents SHA256SUMS verification. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source; VERIFIED: npm registry]
-   - What's unclear: The reviewed release asset/source commit/tarball mapping that composes with the npm package set.
-   - Recommendation: Make this the first `checkpoint:human-verify`; do not plan a claimed production CLI version before the full fixture passes.
+These facts cannot be selected honestly during research because they depend on the exact candidate that survives provenance and execution checks. They are resolved by the following promotion-time decision rules, not by assuming candidate facts in advance:
 
-2. **What exact NAP revisions/domains should the synthetic harness cover?**
-   - What we know: NIP-5D delegates domain messages to NAPs, and capabilities are manifest requirements. [CITED: https://github.com/nostr-protocol/nips/pull/2303]
-   - What's unclear: Which NAP commits coexist with the first passing package set.
-   - Recommendation: Pin at least one state/resource path and one intent/social path from the same reviewed NAP revision set; keep each hard requirement demonstrably necessary. [ASSUMED]
+1. **Authoritative CLI distribution/source mapping**
+   - Known evidence: official source describes a `0.5.0` CLI, npm exposes `@napplet/cli@0.0.0`, and the official installer documents SHA256SUMS verification. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source; VERIFIED: npm registry]
+   - Resolution rule: automated candidate provenance must establish one exact release asset or distribution, authoritative source commit, package/tarball mapping, published checksum, and executable digest. The blocking Plan 03 provenance review must approve that exact evidence-bound candidate ID before image intake. Missing or inconsistent mapping quarantines the candidate; no version or source relationship is inferred.
 
-3. **Can the promoted scaffold yield byte-identical unsigned output without a toolchain patch?**
-   - What we know: The Vite/CLI path computes aggregate hashes and manifests can carry time/signature data. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source]
-   - What's unclear: Whether bundle contents contain timestamp/build-path nondeterminism under the frozen image.
-   - Recommendation: Treat the two-clean-build test as a promotion blocker; upstream fixes, not CVM shims, resolve any toolchain nondeterminism.
+2. **Compatible NAP revisions and synthetic-harness domains**
+   - Known evidence: NIP-5D delegates domain messages to NAPs, and capabilities are manifest requirements. [CITED: https://github.com/nostr-protocol/nips/pull/2303]
+   - Resolution rule: select at least one state/resource path and one intent/social path only from the same exact candidate set that passes provenance, scaffold, SDK, reference-shell, Chromium, and degraded-capability checks. Record the selected NAP commits and bare domains in that candidate's immutable promotion manifest, and require each hard capability to be demonstrably necessary. An unknown, mismatched, or separately sourced revision/domain blocks review; the harness never substitutes a privately imported or guessed domain.
+
+3. **Byte reproducibility of the promoted scaffold**
+   - Known evidence: the Vite/CLI path computes aggregate hashes, while manifests can carry time/signature data outside unsigned `dist`. [VERIFIED: sibling `/Users/sandwich/Develop/napplet` source]
+   - Resolution rule: two isolated clean builds from identical source and the same immutable manifest must produce byte-identical complete unsigned trees and the same upstream aggregate hash. Any difference is a non-waivable promotion blocker and requires an upstream toolchain correction followed by a new candidate run; CVM normalization, patching, compatibility shims, or golden replacement cannot resolve it.
 
 ## Environment Availability
 
@@ -425,7 +424,7 @@ OWASP ASVS is the appropriate verification catalogue for application security; t
 |---|---|---|---|
 | A1 | Bun test is the smallest suitable CVM harness for this greenfield TypeScript phase. | Standard Stack / Validation | Planner may need to adopt existing project tooling once created. |
 | A2 | An offline image-local pnpm store is feasible for every promoted fixture. | Standard Stack / SAFE-05 | Candidate setup must use an alternative hermetic package-cache strategy. |
-| A3 | The selected capability harness can safely combine one state/resource path with one intent/social NAP path. | Fixtures | Harness may need a different pair based on accepted NAP revisions. |
+| A3 | No specific capability pair is assumed; eligibility requires one state/resource path and one intent/social path from the same exact candidate to pass primary and degraded checks and be recorded in the manifest. | Fixtures | If no pair passes, the candidate is blocked for upstream remediation rather than changing domains or revisions silently. |
 | A4 | The recommended waiver mechanics are sufficient for Phase 1 governance. | Pattern 4 | Owner authorization/retention requirements may need product/security approval. |
 | A5 | CVM policy gaps should reject dynamic code construction rather than attempt full static deobfuscation. | Pitfall 4 | Could reject otherwise valid generated output; safe fail-closed behavior must be accepted. |
 

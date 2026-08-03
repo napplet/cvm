@@ -38,13 +38,16 @@ created: 2026-08-03
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 01-W0-01 | TBD | 0 | GEN-01..04, SAFE-05..06 | T-01-01 / T-01-02 | Harness, schemas, fixtures, and sealed runner exist before feature tasks | infrastructure | `bun test` | ❌ W0 | ⬜ pending |
-| 01-GEN-01 | TBD | TBD | GEN-01 | T-01-01 | Only the promoted CLI, scaffold, and installed skills create fixture sources | integration | `bun run test:promotion --fixture minimal --stage scaffold` | ❌ W0 | ⬜ pending |
-| 01-GEN-02 | TBD | TBD | GEN-02 | — | Focused napplets pass; arbitrary-site, backend, and full-stack shapes reject | unit + fixture | `bun test tests/policy/scope.test.ts` | ❌ W0 | ⬜ pending |
-| 01-GEN-03 | TBD | TBD | GEN-03 | T-01-03 | SDK/NAP envelopes and minimal hard `requires` pass primary and degraded shell paths | Chromium integration | `bun run test:promotion --fixture capability-harness --stage conformance` | ❌ W0 | ⬜ pending |
-| 01-GEN-04 | TBD | TBD | GEN-04 | T-01-02 | Native suites pass and two clean unsigned builds match each other and the reviewed golden byte-for-byte | integration | `bun run test:promotion --fixture all` | ❌ W0 | ⬜ pending |
-| 01-SAFE-05 | TBD | TBD | SAFE-05 | T-01-01 | Frozen dependencies execute without secrets, egress, floating resolution, or unbounded subprocesses | isolation integration | `bun run test:promotion --assert-hermetic` | ❌ W0 | ⬜ pending |
-| 01-SAFE-06 | TBD | TBD | SAFE-06 | Direct browser/service/signer/relay authority and shell bypasses reject at source or artifact verification | unit + hostile fixture | `bun test tests/policy && bun run test:promotion --fixture hostile` | ❌ W0 | ⬜ pending |
+| 01-01-T1 | 01-01 | 1 | GEN-01, GEN-04, SAFE-05 | T-01-01 / T-01-02 | Candidate manifest reaches bounded argv execution and canonical fail-closed evidence | tracer | `bun test tests/tracer.test.ts` | ❌ W0 | ⬜ pending |
+| 01-02-T1 | 01-02 | 2 | GEN-01, GEN-04, SAFE-05 | T-01-01 / T-01-15 | Candidate facts are canonical, evidence-bound, and unable to install/promote | unit + workflow | `bun test tests/promotion/candidate.test.ts && bun run candidate:verify -- toolchains/candidates/initial.json` | ❌ W0 | ⬜ pending |
+| 01-04-T2 | 01-04 | 4 | GEN-04, SAFE-05 | T-01-02 / T-01-10 | Exact promotion container runs with no network/capabilities/secrets and bounded resources; DNS/HTTP/HTTPS/raw TCP probes deny | isolation integration | `bun test tests/runner/sealed-toolchain.test.ts && bun run test:promotion --assert-hermetic` | ❌ W0 | ⬜ pending |
+| 01-05-T1 | 01-05 | 5 | GEN-01 | T-01-02 / T-01-09 | Only promoted CLI, scaffold, installed skills, and sealed stage order create fixture sources | integration | `bun run test:promotion --fixture minimal --stage scaffold` | ❌ W0 | ⬜ pending |
+| 01-05-T2 | 01-05 | 5 | GEN-03 | T-01-03 / T-01-10 | Same-candidate NAP revisions/domains and minimal hard requirements pass primary and degraded shell paths | Chromium integration | `bun run test:promotion --fixture capability-harness --stage conformance` | ❌ W0 | ⬜ pending |
+| 01-06-T1 | 01-06 | 6 | GEN-02, SAFE-05 | T-01-11 / T-01-12 | Focused napplets pass; arbitrary-site, backend, full-stack, and unknown dependency/build shapes block | unit | `bun test tests/policy/scope.test.ts tests/policy/dependency.test.ts` | ❌ W0 | ⬜ pending |
+| 01-07-T1 | 01-07 | 6 | GEN-04 | T-01-04 / T-01-14 | Two clean unsigned builds match each other and reviewed/pending golden identity byte-for-byte or block for upstream remediation | integration | `bun test tests/evidence/golden.test.ts && bun run test:promotion --fixture all --stage reproducibility` | ❌ W0 | ⬜ pending |
+| 01-08-T1 | 01-08 | 7 | GEN-02, GEN-03, GEN-04, SAFE-05, SAFE-06 | T-01-03 / T-01-10 / T-01-12 | Native-first hostile and mutation cases block under serial/concurrent sealed execution | unit + hostile fixture | `bun test tests/policy tests/evidence/golden.test.ts tests/fixtures/hostile.test.ts && bun run test:promotion --fixture hostile` | ❌ W0 | ⬜ pending |
+| 01-09-T1 | 01-09 | 8 | GEN-04, SAFE-05, SAFE-06 | T-01-05 / T-01-15 | State transitions and waivers retain every hard blocker and preserve last-known-good | unit | `bun test tests/promotion/state.test.ts tests/policy/waiver.test.ts` | ❌ W0 | ⬜ pending |
+| 01-11-T2 | 01-11 | 10 | GEN-01..04, SAFE-05..06 | T-01-15 / T-01-18 | Exact approved manifest/golden/evidence tuple reproduces from current pointer | full integration | `bun test && bun run test:promotion --from-current` | ❌ W0 | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -55,8 +58,8 @@ created: 2026-08-03
 - [ ] `package.json` and `tsconfig.json` — pinned Bun/TypeScript test and command surface.
 - [ ] `tests/` — schema, promotion-state, evidence, policy, hermetic-runner, and fixture orchestration tests.
 - [ ] `fixtures/minimal/`, `fixtures/capability-harness/`, and `fixtures/hostile/` — reviewed fixture sources and expected results.
-- [ ] Sealed image definition — image-local napplet CLI/packages/Chromium, frozen offline material, no runtime registry access.
-- [ ] Human-verified CLI/source/package mapping — publisher, tarball/executable integrity, source commit, and release mapping captured before candidate intake.
+- [ ] Sealed image definition and wrapper — image-local napplet CLI/packages/Chromium, frozen offline material, parsed Docker isolation policy, and no runtime registry/egress path.
+- [ ] Human-verified CLI/source/package mapping in Plan 03 — publisher, tarball/executable integrity, source commit, and release mapping captured before candidate image intake.
 
 ---
 
@@ -64,9 +67,9 @@ created: 2026-08-03
 
 | Behavior | Requirement | Why Manual | Test Instructions |
 |----------|-------------|------------|-------------------|
-| First toolchain provenance approval | GEN-01, GEN-04, SAFE-05 | Registry package age and CLI release/source mapping require human trust confirmation | Review publisher identity, source commit, release asset or tarball integrity, lockfile, image digest, and captured evidence; approve the exact immutable candidate only. |
-| Legitimate golden update | GEN-04 | A changed golden is a product/protocol review decision, never an automatically accepted snapshot | Inspect the complete byte/content diff, link the normative or upstream change, approve a new content-addressed golden, and verify the old promoted set remains available for rollback. |
-| Emergency waiver authorization | GEN-04, SAFE-05, SAFE-06 | Only an accountable owner may accept a narrowly waivable operational failure | Confirm the failure class is waivable, candidate and report digests match, expiry and rollback trigger are present, and immutable authorization evidence names the owner. |
+| Plan 03 exact toolchain provenance approval | GEN-01, GEN-04, SAFE-05 | Registry package age and CLI distribution/source mapping require human trust confirmation | Review publisher identity, authoritative source commit, release asset/tarball and executable integrity, lock/image/runtime pins, and captured evidence; approve the exact immutable candidate ID only. |
+| Plan 10 exact evidence and golden approval | GEN-04 | Candidate evidence, selected NAP revisions/domains, and changed/initial golden bytes are product/protocol review facts, never automatically accepted snapshots | Inspect the complete bundle and byte/content diff, confirm the same-candidate NAP/domain evidence and every aggregate/object digest, approve the exact tuple, and verify the old promoted set remains available for rollback. |
+| Plan 10 waiver evidence approval (only when present) | GEN-04, SAFE-05, SAFE-06 | Only an accountable owner may accept a narrowly waivable operational failure within the exact evidence/golden decision | Confirm the failure class is waivable, candidate/check/report digests match, expiry and rollback trigger are present, and immutable authorization evidence names the owner; reject every non-waivable class. |
 
 ---
 

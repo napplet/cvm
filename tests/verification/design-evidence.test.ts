@@ -9,15 +9,15 @@ const candidateId = "a19fc7d283a4482c53728f4a931743576564fb3826d7f8fa1383d02578b
 function fixture(fixture: "minimal" | "capability-harness", mode: "primary" | "degraded-no-intent", status: "passed" | "blocked" = "passed") {
   return {
     fixture, mode, status, candidateId, imageDigest: digest("a"), stages: status === "passed" ? [{ id: "conformance", argv: ["pnpm", "test:conformance"], exitCode: 0, stdoutSha256: digest("b"), stderrSha256: digest("c"), nativeOutputSha256: digest(fixture === "minimal" ? "d" : mode === "primary" ? "e" : "f") }] : [],
-    installedSkillsSha256: digest("g"), distSha256: digest(fixture === "minimal" ? "h" : mode === "primary" ? "i" : "j"), aggregateHash: digest(fixture === "minimal" ? "k" : mode === "primary" ? "l" : "m"), sealedEvidenceSha256: digest(fixture === "minimal" ? "n" : mode === "primary" ? "o" : "p"),
+    installedSkillsSha256: digest("1"), distSha256: digest(fixture === "minimal" ? "2" : mode === "primary" ? "3" : "4"), aggregateHash: digest(fixture === "minimal" ? "5" : mode === "primary" ? "6" : "7"), sealedEvidenceSha256: digest(fixture === "minimal" ? "8" : mode === "primary" ? "9" : "a"),
     observedDomains: fixture === "minimal" ? [] : mode === "primary" ? ["storage", "intent"] : ["storage"], optionalIntentPresenceRead: fixture === "capability-harness", intentUsedThroughSdk: fixture === "capability-harness" && mode === "primary", gracefulDegradation: fixture === "capability-harness" && mode === "degraded-no-intent",
     ...(status === "blocked" ? { reason: "offline template unavailable" } : {}),
   } as const;
 }
 
 const input: DesignVerificationInput = {
-  candidateId, imageDigest: digest("a"), policySha256: digest("q"), fixtures: [fixture("minimal", "primary"), fixture("capability-harness", "primary"), fixture("capability-harness", "degraded-no-intent")],
-  policyResults: [{ name: "focused-minimal", verdict: "pass", evidenceSha256: digest("r") }, { name: "capability-harness", verdict: "pass", evidenceSha256: digest("s") }, { name: "service-worker", verdict: "block", evidenceSha256: digest("t") }],
+  candidateId, imageDigest: digest("a"), policySha256: digest("b"), fixtures: [fixture("minimal", "primary"), fixture("capability-harness", "primary"), fixture("capability-harness", "degraded-no-intent")],
+  policyResults: [{ name: "focused-minimal", verdict: "pass", expectedVerdict: "pass", evidenceSha256: digest("c") }, { name: "capability-harness", verdict: "pass", expectedVerdict: "pass", evidenceSha256: digest("d") }, { name: "service-worker", verdict: "block", expectedVerdict: "block", evidenceSha256: digest("e") }],
   provenanceLinks: ["toolchains/candidates/cli-0.5.2-release-set.json"], waiver: null,
 };
 
@@ -39,9 +39,9 @@ describe("design verification evidence", () => {
 
   test.each([
     ["missing positive", { ...input, fixtures: input.fixtures.slice(1) }],
-    ["unknown policy", { ...input, policyResults: [{ name: "unknown", verdict: "manual_review", evidenceSha256: digest("r") }] }],
-    ["waiver", { ...input, waiver: { candidateId, checkId: "cvm:gap:service-worker", reportSha256: digest("u"), owner: "operator", rationale: "no", compensatingEvidenceSha256: digest("v"), expiresAt: "2026-08-04T00:00:00Z", rollbackTrigger: "any regression" } }],
-    ["tampered identity", { ...input, candidateId: digest("z") }],
+    ["unknown policy", { ...input, policyResults: [{ name: "unknown", verdict: "manual_review", expectedVerdict: "block", evidenceSha256: digest("c") }] }],
+    ["waiver", { ...input, waiver: { candidateId, checkId: "cvm:gap:service-worker", reportSha256: digest("d"), owner: "operator", rationale: "no", compensatingEvidenceSha256: digest("e"), expiresAt: "2026-08-04T00:00:00Z", rollbackTrigger: "any regression" } }],
+    ["tampered identity", { ...input, candidateId: digest("f") }],
   ])("blocks %s inputs", async (_name, value) => {
     expect((await evaluateDesignVerification(value)).verdict).toBe("blocked");
   });

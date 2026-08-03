@@ -127,7 +127,7 @@ function parseRunnerOutput(value: unknown, definition: FixtureDefinition, mode: 
   if (definition.name === "minimal" && (observedDomains.length !== 0 || result.optionalIntentPresenceRead || result.intentUsedThroughSdk || result.gracefulDegradation)) {
     throw new Error("minimal fixture cannot report capability-harness evidence");
   }
-  if (definition.name === "capability-harness") {
+  if (definition.name === "capability-harness" && result.status === "passed") {
     if (!observedDomains.includes("storage")) throw new Error("capability harness must observe storage through the public SDK");
     if (!result.optionalIntentPresenceRead) throw new Error("capability harness must record the sanctioned optional intent presence read");
     if (mode === "primary" && (!observedDomains.includes("intent") || !result.intentUsedThroughSdk || result.gracefulDegradation)) {

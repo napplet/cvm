@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "name": "minimal",
+  "purpose": "A single focused napplet with no required capabilities.",
+  "requires": [],
+  "publish": "dry-run-only"
+}

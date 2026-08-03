@@ -24,10 +24,10 @@ key-files:
     - tests/promotion/candidate.test.ts
 key-decisions:
   - "Candidate identity is computed from canonical package metadata while stage order remains a strict execution contract."
-  - "The first candidate remains unverified until exact CLI distribution, source, release-asset, executable, package, image, fixture, and golden evidence exists."
+  - "Pre-install provenance review and the complete D-04 PromotionManifest are separate gates: later image, lock, NAP, fixture, golden, and image-local execution pins remain mandatory only at promotion."
   - "Candidate automation may report IDs and evidence digests but has no install, lifecycle, golden, review, promotion, or current-pointer authority."
 patterns-established:
-  - "Candidate readiness is a pure validation boundary that parses through the existing promotion schema only after every required fact is complete."
+  - "Candidate readiness is a pure pre-install provenance boundary; only the later promotion path parses the complete D-04 manifest."
   - "Workflow capability is guarded by a repository test that treats package-install and promotion paths as forbidden."
 requirements-completed: [GEN-01, GEN-04, SAFE-05]
 coverage:
@@ -114,6 +114,10 @@ status: complete
 
 **Total deviations:** 1 auto-fixed (Rule 1)
 **Impact on plan:** The correction strengthened the required fail-closed guard without expanding the candidate or promotion surface.
+
+### Execution-Discovered Correction
+
+Plan 03 review exposed that the first implementation incorrectly made pre-install provenance review depend on D-04 evidence that later Plans 04-11 can only produce. The continuation separates the two contracts: review now requires the exact NIP-5D, package, and standalone CLI provenance facts, while the final parser continues to require the lockfile, materialized scaffold, image, browser, NAP, fixture, golden, and image-local stage pins before promotion. Approval remains intake/testing-only and cannot mutate a promoted pointer.
 
 ## Issues Encountered
 

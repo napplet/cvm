@@ -31,7 +31,7 @@ jobs:
         run: |
           set -euo pipefail
           candidate="$(bun run candidate:detect -- toolchains/candidates/initial.json)"
-          verified="$(bun run candidate:verify -- toolchains/candidates/initial.json)"
+          verified="$(bun run candidate:verify -- toolchains/candidates/initial.json --review-ready)"
           test "$candidate" = "$verified"
           candidate_id="$(printf '%s' "$candidate" | bun -e 'const data = await Bun.stdin.text(); console.log(JSON.parse(data).candidateId)')"
           evidence_sha256="$(printf '%s' "$candidate" | bun -e 'const data = await Bun.stdin.text(); console.log(JSON.parse(data).evidenceSha256)')"

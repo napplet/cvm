@@ -1,4 +1,4 @@
-import { canonicalJson, parsePromotionManifest } from "./schema";
+import { canonicalJson } from "./schema";
 
 export type CandidateReadinessStatus = "unverified" | "review_ready" | "quarantined";
 
@@ -15,9 +15,11 @@ export type CandidateStage = {
 export type CandidateRecord = JsonRecord & {
   readonly schemaVersion: unknown;
   readonly status: CandidateReadinessStatus;
+  readonly reviewScope: unknown;
   readonly protocol: unknown;
   readonly packages: readonly JsonRecord[];
   readonly cli: unknown;
+  readonly deferredPromotionPins: readonly unknown[];
   readonly stages: readonly CandidateStage[];
   readonly evidence: readonly JsonRecord[];
   readonly unresolved: readonly JsonRecord[];
@@ -31,9 +33,33 @@ export type CandidateDetection = {
   readonly record: CandidateRecord;
 };
 
-const REQUIRED_STAGES = ["create", "init", "skills-install", "build", "verify", "conformance", "dry-run"] as const;
 const SHA256 = /^[a-f0-9]{64}$/i;
 const REVISION = /^[a-f0-9]{40,64}$/i;
+const INTEGRITY = /^sha512-[A-Za-z0-9+/]+={0,2}$/;
+const REVIEW_SCOPE = "provenance-intake";
+
+/**
+ * These are D-04 promotion-manifest pins, not pre-install provenance facts.
+ * Plans 04-11 must materialize and verify them before parsePromotionManifest
+ * can admit a final candidate for promotion.
+ */
+export const DEFERRED_PROMOTION_PINS = [
+  "protocol.napRevisions",
+  "lockfileSha256",
+  "scaffoldRevision",
+  "imageDigest",
+  "runtimeVersion",
+  "pnpmVersion",
+  "browserVersion",
+  "conformanceVersion",
+  "fixtures",
+  "goldens",
+  "policyVersion",
+  "workingDirectory",
+  "cli.executablePath",
+  "cli.executableSha256",
+  "stages",
+] as const;
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -78,9 +104,11 @@ function normalizeCandidate(value: unknown): CandidateRecord {
     ...copyRecord(input),
     schemaVersion: input.schemaVersion,
     status: input.status === "quarantined" ? "quarantined" : input.status === "review_ready" ? "review_ready" : "unverified",
+    reviewScope: input.reviewScope,
     protocol: copyValue(input.protocol),
     packages,
     cli: copyValue(input.cli),
+    deferredPromotionPins: Array.isArray(input.deferredPromotionPins) ? input.deferredPromotionPins.map(copyValue) : [],
     stages,
     evidence,
     unresolved,
@@ -104,103 +132,89 @@ function requireRecord(value: unknown, field: string, blockers: string[]): JsonR
   return object(value);
 }
 
-function validateStages(stages: readonly CandidateStage[], blockers: string[]): void {
-  const ids = stages.map((stage) => stage.id);
-  if (ids.length !== REQUIRED_STAGES.length || ids.some((id, index) => id !== REQUIRED_STAGES[index])) {
-    blockers.push(`stage sequence must be exactly ${REQUIRED_STAGES.join(" → ")}`);
+function requiredUrl(value: unknown, field: string, blockers: string[]): void {
+  const url = requiredString(value, field, blockers);
+  if (url && !url.startsWith("https://")) blockers.push(`${field} must be an https origin`);
+}
+
+function requireDeferredNull(record: CandidateRecord, path: string, value: unknown, blockers: string[]): void {
+  if (value !== null && !(Array.isArray(value) && value.length === 0)) blockers.push(`${path} must remain deferred until Plans 04-11`);
+}
+
+function validateDeferredPromotionPins(record: CandidateRecord, cli: JsonRecord, protocol: JsonRecord, blockers: string[]): void {
+  const supplied = record.deferredPromotionPins;
+  if (supplied.length !== DEFERRED_PROMOTION_PINS.length || supplied.some((pin, index) => pin !== DEFERRED_PROMOTION_PINS[index])) {
+    blockers.push(`deferredPromotionPins must be exactly ${DEFERRED_PROMOTION_PINS.join(", ")}`);
   }
-  for (const [index, stage] of stages.entries()) {
-    const label = `stages[${index}]`;
-    requiredString(stage.id, `${label}.id`, blockers);
-    requiredString(stage.executable, `${label}.executable`, blockers);
-    if (!Array.isArray(stage.argv) || !stage.argv.every((argument) => typeof argument === "string")) blockers.push(`${label}.argv must be a literal argv array`);
-    if (!Number.isInteger(stage.timeoutMs) || (stage.timeoutMs as number) < 1) blockers.push(`${label}.timeoutMs must be a positive integer`);
-    if (!isRecord(stage.expectedOutput)) blockers.push(`${label}.expectedOutput must be an object`);
-  }
+  requireDeferredNull(record, "protocol.napRevisions", protocol.napRevisions, blockers);
+  requireDeferredNull(record, "lockfileSha256", record.lockfileSha256, blockers);
+  requireDeferredNull(record, "scaffoldRevision", record.scaffoldRevision, blockers);
+  requireDeferredNull(record, "imageDigest", record.imageDigest, blockers);
+  requireDeferredNull(record, "runtimeVersion", record.runtimeVersion, blockers);
+  requireDeferredNull(record, "pnpmVersion", record.pnpmVersion, blockers);
+  requireDeferredNull(record, "browserVersion", record.browserVersion, blockers);
+  requireDeferredNull(record, "conformanceVersion", record.conformanceVersion, blockers);
+  requireDeferredNull(record, "fixtures", record.fixtures, blockers);
+  requireDeferredNull(record, "goldens", record.goldens, blockers);
+  requireDeferredNull(record, "policyVersion", record.policyVersion, blockers);
+  requireDeferredNull(record, "workingDirectory", record.workingDirectory, blockers);
+  requireDeferredNull(record, "cli.executablePath", cli.executablePath, blockers);
+  requireDeferredNull(record, "cli.executableSha256", cli.executableSha256, blockers);
+  requireDeferredNull(record, "stages", record.stages, blockers);
 }
 
 function validateCandidate(record: CandidateRecord): string[] {
   const blockers: string[] = [];
   if (record.schemaVersion !== 1) blockers.push("schemaVersion must be 1");
+  requiredString(record.reviewScope, "reviewScope", blockers);
+  if (record.reviewScope !== REVIEW_SCOPE) blockers.push(`reviewScope must be ${REVIEW_SCOPE}`);
+
   const protocol = requireRecord(record.protocol, "protocol", blockers);
   requiredString(protocol.nip5dRevision, "protocol.nip5dRevision", blockers, REVISION);
-  if (!Array.isArray(protocol.napRevisions) || protocol.napRevisions.length === 0) blockers.push("protocol.napRevisions must contain exact revision pins");
-  else protocol.napRevisions.forEach((revision, index) => requiredString(revision, `protocol.napRevisions[${index}]`, blockers, REVISION));
+  requiredUrl(protocol.nip5dEvidenceOrigin, "protocol.nip5dEvidenceOrigin", blockers);
 
-  if (record.packages.length === 0) blockers.push("packages must contain immutable package records");
+  if (record.packages.length === 0) blockers.push("packages must contain immutable package provenance records");
   const packageNames = new Set<string>();
   record.packages.forEach((pkg, index) => {
     const name = requiredString(pkg.name, `packages[${index}].name`, blockers);
     if (name && packageNames.has(name)) blockers.push(`duplicate package ${name}`);
     if (name) packageNames.add(name);
-    requiredString(pkg.version, `packages[${index}].version`, blockers);
-    requiredString(pkg.integrity, `packages[${index}].integrity`, blockers);
+    const version = requiredString(pkg.version, `packages[${index}].version`, blockers);
+    if (version === "latest" || (version && /[~^*]/.test(version))) blockers.push(`packages[${index}].version must be an exact pin`);
+    requiredString(pkg.integrity, `packages[${index}].integrity`, blockers, INTEGRITY);
+    requiredString(pkg.publisher, `packages[${index}].publisher`, blockers);
+    requiredUrl(pkg.registryOrigin, `packages[${index}].registryOrigin`, blockers);
+    requiredUrl(pkg.authoritativeRepository, `packages[${index}].authoritativeRepository`, blockers);
     requiredString(pkg.sourceCommit, `packages[${index}].sourceCommit`, blockers, REVISION);
+    requiredString(pkg.sourceMapping, `packages[${index}].sourceMapping`, blockers);
+    requiredUrl(pkg.sourceEvidenceOrigin, `packages[${index}].sourceEvidenceOrigin`, blockers);
   });
 
   const cli = requireRecord(record.cli, "cli", blockers);
   requiredString(cli.packageName, "cli.packageName", blockers);
-  requiredString(cli.distribution, "cli.distribution", blockers);
+  requiredString(cli.version, "cli.version", blockers);
+  requiredString(cli.distributionType, "cli.distributionType", blockers);
+  if (cli.distributionType !== "github-release-asset") blockers.push("cli.distributionType must be github-release-asset");
+  requiredUrl(cli.distribution, "cli.distribution", blockers);
+  requiredUrl(cli.authoritativeRepository, "cli.authoritativeRepository", blockers);
+  requiredString(cli.releaseTag, "cli.releaseTag", blockers);
+  requiredString(cli.releaseAsset, "cli.releaseAsset", blockers);
   requiredString(cli.releaseAssetSha256, "cli.releaseAssetSha256", blockers, SHA256);
-  requiredString(cli.executablePath, "cli.executablePath", blockers);
-  requiredString(cli.executableSha256, "cli.executableSha256", blockers, SHA256);
   requiredString(cli.sourceCommit, "cli.sourceCommit", blockers, REVISION);
-  requiredString(record.lockfileSha256, "lockfileSha256", blockers, SHA256);
-  requiredString(record.scaffoldRevision, "scaffoldRevision", blockers, REVISION);
-  requiredString(record.imageDigest, "imageDigest", blockers, SHA256);
-  requiredString(record.runtimeVersion, "runtimeVersion", blockers);
-  requiredString(record.pnpmVersion, "pnpmVersion", blockers);
-  requiredString(record.browserVersion, "browserVersion", blockers);
-  requiredString(record.conformanceVersion, "conformanceVersion", blockers);
-  requiredString(record.policyVersion, "policyVersion", blockers);
-  requiredString(record.workingDirectory, "workingDirectory", blockers);
+  requiredString(cli.sourceMapping, "cli.sourceMapping", blockers);
+  requiredUrl(cli.releaseEvidenceOrigin, "cli.releaseEvidenceOrigin", blockers);
+  requiredUrl(cli.sourceEvidenceOrigin, "cli.sourceEvidenceOrigin", blockers);
 
-  for (const kind of ["fixtures", "goldens"] as const) {
-    const entries = record[kind];
-    if (!Array.isArray(entries) || entries.length === 0) {
-      blockers.push(`${kind} must contain immutable revision records`);
-      continue;
-    }
-    entries.forEach((entry, index) => {
-      const item = object(entry);
-      requiredString(item.name, `${kind}[${index}].name`, blockers);
-      requiredString(item.revision, `${kind}[${index}].revision`, blockers, REVISION);
-      requiredString(item.sha256, `${kind}[${index}].sha256`, blockers, SHA256);
-    });
-  }
-  validateStages(record.stages, blockers);
+  validateDeferredPromotionPins(record, cli, protocol, blockers);
   if (record.evidence.length === 0) blockers.push("evidence must retain at least one queried origin and digest");
   record.evidence.forEach((entry, index) => {
-    requiredString(entry.origin, `evidence[${index}].origin`, blockers);
+    requiredUrl(entry.origin, `evidence[${index}].origin`, blockers);
     requiredString(entry.sha256, `evidence[${index}].sha256`, blockers, SHA256);
   });
   for (const unresolved of record.unresolved) {
     const field = requiredString(unresolved.field, "unresolved.field", blockers);
     const reason = requiredString(unresolved.reason, "unresolved.reason", blockers);
     if (field && reason) blockers.push(`${field}: ${reason}`);
-  }
-  if (blockers.length === 0) {
-    try {
-      parsePromotionManifest({
-        schemaVersion: 1,
-        status: "candidate",
-        protocol: record.protocol,
-        packages: record.packages,
-        executables: [{ path: cli.executablePath, sha256: cli.executableSha256 }],
-        lockfileSha256: record.lockfileSha256,
-        scaffoldRevision: record.scaffoldRevision,
-        imageDigest: record.imageDigest,
-        runtimeVersion: record.runtimeVersion,
-        browserVersion: record.browserVersion,
-        fixtures: record.fixtures,
-        goldens: record.goldens,
-        policyVersion: record.policyVersion,
-        workingDirectory: record.workingDirectory,
-        stages: record.stages,
-      });
-    } catch (error) {
-      blockers.push(error instanceof Error ? error.message : "candidate does not parse as a promotion manifest");
-    }
   }
   return [...new Set(blockers)];
 }
@@ -211,9 +225,9 @@ async function sha256Text(value: string): Promise<string> {
 }
 
 /**
- * Detects one immutable review subject from already-collected public metadata.
- * It is deliberately pure: it cannot install packages, run lifecycle scripts, or
- * mutate promotion pointers or goldens.
+ * Detects one immutable pre-install provenance subject from already-collected public metadata.
+ * It is deliberately pure: it cannot install packages, run lifecycle scripts, materialize an
+ * image, write goldens, or mutate promotion pointers.
  */
 export async function detectCandidate(value: unknown): Promise<CandidateDetection> {
   const record = normalizeCandidate(value);
@@ -233,20 +247,28 @@ export async function detectCandidate(value: unknown): Promise<CandidateDetectio
   };
 }
 
-/** Evaluates whether a candidate can be sent to human review; it never promotes it. */
+/** Evaluates only pre-install provenance review readiness; it never promotes a toolchain. */
 export async function verifyCandidateReviewReadiness(value: unknown): Promise<CandidateDetection> {
   return detectCandidate(value);
 }
 
+function parseCliArguments(args: readonly string[]): { readonly path: string; readonly reviewReady: boolean } | null {
+  const reviewReady = args.includes("--review-ready");
+  const paths = args.filter((argument) => argument !== "--review-ready");
+  if (paths.length !== 1 || paths[0]!.startsWith("-")) return null;
+  return { path: paths[0]!, reviewReady };
+}
+
 if (import.meta.main) {
-  const path = process.argv.at(-1);
-  if (!path || path.startsWith("-")) {
-    console.error("usage: bun run src/promotion/candidate.ts -- <candidate.json>");
+  const parsed = parseCliArguments(process.argv.slice(2));
+  if (!parsed) {
+    console.error("usage: bun run candidate:verify -- <candidate.json> --review-ready");
     process.exitCode = 2;
   } else {
     try {
-      const candidate = await verifyCandidateReviewReadiness(await Bun.file(path).json());
+      const candidate = await verifyCandidateReviewReadiness(await Bun.file(parsed.path).json());
       console.log(JSON.stringify(candidate));
+      if (parsed.reviewReady && candidate.status !== "review_ready") process.exitCode = 1;
     } catch (error) {
       console.error(error instanceof Error ? error.message : "candidate verification failed");
       process.exitCode = 1;

@@ -1,80 +1,116 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { detectCandidate, verifyCandidateReviewReadiness } from "../../src/promotion/candidate";
+import { DEFERRED_PROMOTION_PINS, detectCandidate, verifyCandidateReviewReadiness } from "../../src/promotion/candidate";
+import { parsePromotionManifest } from "../../src/promotion/schema";
 
 const sha256 = (character: string) => character.repeat(64);
 const commit = (character: string) => character.repeat(40);
+const origin = "https://example.invalid/evidence";
+
+function packageRecord(name: string, version: string, sourceCommit: string) {
+  return {
+    name,
+    version,
+    integrity: "sha512-c2FmZS1pbnRlZ3JpdHk=",
+    publisher: "official-publisher",
+    registryOrigin: origin,
+    authoritativeRepository: "https://example.invalid/upstream",
+    sourceCommit,
+    sourceMapping: "official source release commit",
+    sourceEvidenceOrigin: "https://example.invalid/upstream/commit",
+  };
+}
 
 function candidateInput(overrides: Record<string, unknown> = {}) {
   return {
     schemaVersion: 1,
-    status: "unverified",
+    status: "review_ready",
+    reviewScope: "provenance-intake",
     protocol: {
       nip5dRevision: commit("a"),
-      napRevisions: [commit("b"), commit("c")],
+      nip5dEvidenceOrigin: "https://example.invalid/nip-5d",
+      napRevisions: [],
     },
     packages: [
-      { name: "@napplet/sdk", version: "0.27.2", integrity: "sha512-sdk", sourceCommit: commit("d") },
-      { name: "@napplet/skills", version: "0.3.1", integrity: "sha512-skills", sourceCommit: commit("e") },
+      packageRecord("@napplet/sdk", "0.27.2", commit("d")),
+      packageRecord("@napplet/skills", "0.3.1", commit("e")),
     ],
     cli: {
-      packageName: "@napplet/cli",
-      distribution: "https://github.com/napplet/napplet/releases/download/v0.5.0/napplet",
+      packageName: "napplet",
+      version: "0.5.1",
+      distributionType: "github-release-asset",
+      distribution: "https://example.invalid/releases/napplet-linux-x86_64",
+      authoritativeRepository: "https://example.invalid/upstream",
+      releaseTag: "@napplet/cli@0.5.1",
+      releaseAsset: "napplet-linux-x86_64",
       releaseAssetSha256: sha256("f"),
-      executablePath: "/opt/napplet/bin/napplet",
-      executableSha256: sha256("1"),
       sourceCommit: commit("2"),
+      sourceMapping: "official release tag resolves to source commit",
+      releaseEvidenceOrigin: "https://example.invalid/releases/tag",
+      sourceEvidenceOrigin: "https://example.invalid/source/tag",
+      executablePath: null,
+      executableSha256: null,
     },
-    lockfileSha256: sha256("3"),
-    scaffoldRevision: commit("4"),
-    imageDigest: sha256("5"),
-    runtimeVersion: "bun-1.3.14",
-    pnpmVersion: "10.24.0",
-    browserVersion: "chromium-140.0.7339.127",
-    conformanceVersion: "0.2.18",
-    fixtures: [{ name: "minimal", revision: commit("6"), sha256: sha256("7") }],
-    goldens: [{ name: "minimal", revision: commit("8"), sha256: sha256("9") }],
-    policyVersion: "policy-1",
-    workingDirectory: "/workspace/napplet",
-    stages: [
-      { id: "create", executable: "/opt/napplet/bin/napplet", argv: ["create"], timeoutMs: 1_000, expectedOutput: {} },
-      { id: "init", executable: "/opt/napplet/bin/napplet", argv: ["init"], timeoutMs: 1_000, expectedOutput: {} },
-      { id: "skills-install", executable: "/opt/napplet/bin/napplet", argv: ["skills", "install"], timeoutMs: 1_000, expectedOutput: {} },
-      { id: "build", executable: "/opt/napplet/bin/napplet", argv: ["build"], timeoutMs: 1_000, expectedOutput: {} },
-      { id: "verify", executable: "/opt/napplet/bin/napplet", argv: ["verify"], timeoutMs: 1_000, expectedOutput: {} },
-      { id: "conformance", executable: "/opt/napplet/bin/napplet", argv: ["conformance"], timeoutMs: 1_000, expectedOutput: {} },
-      { id: "dry-run", executable: "/opt/napplet/bin/napplet", argv: ["deploy", "--dry-run"], timeoutMs: 1_000, expectedOutput: {} },
-    ],
-    evidence: [{ origin: "https://example.invalid/provenance.json", sha256: sha256("a") }],
+    deferredPromotionPins: [...DEFERRED_PROMOTION_PINS],
+    lockfileSha256: null,
+    scaffoldRevision: null,
+    imageDigest: null,
+    runtimeVersion: null,
+    pnpmVersion: null,
+    browserVersion: null,
+    conformanceVersion: null,
+    fixtures: [],
+    goldens: [],
+    policyVersion: null,
+    workingDirectory: null,
+    stages: [],
+    evidence: [{ origin, sha256: sha256("a") }],
     unresolved: [],
     ...overrides,
   };
 }
 
-describe("candidate detection", () => {
-  test("accepts only the contiguous public workflow sequence", async () => {
-    const exact = await verifyCandidateReviewReadiness(candidateInput({ status: "review_ready" }));
+describe("pre-install provenance candidates", () => {
+  test("accepts exactly complete provenance while deferring D-04 materialization", async () => {
+    const exact = await verifyCandidateReviewReadiness(candidateInput());
     expect(exact.status).toBe("review_ready");
+    expect(exact.blockers).toEqual([]);
+    expect(exact.record.deferredPromotionPins).toEqual(DEFERRED_PROMOTION_PINS);
 
-    for (const stages of [
-      [...(candidateInput().stages as unknown[]), { id: "extra", executable: "/opt/napplet/bin/napplet", argv: [], timeoutMs: 1, expectedOutput: {} }],
-      (candidateInput().stages as unknown[]).filter((stage) => (stage as { id: string }).id !== "build"),
-      [...(candidateInput().stages as unknown[]), (candidateInput().stages as unknown[])[0]!],
-      [...(candidateInput().stages as unknown[])].reverse(),
+    const prematureNap = await verifyCandidateReviewReadiness(candidateInput({
+      protocol: { ...candidateInput().protocol as Record<string, unknown>, napRevisions: [commit("b")] },
+    }));
+    expect(prematureNap.status).toBe("unverified");
+    expect(prematureNap.blockers).toContain("protocol.napRevisions must remain deferred until Plans 04-11");
+
+    const prematureImage = await verifyCandidateReviewReadiness(candidateInput({ imageDigest: sha256("1") }));
+    expect(prematureImage.status).toBe("unverified");
+    expect(prematureImage.blockers).toContain("imageDigest must remain deferred until Plans 04-11");
+  });
+
+  test("requires package and standalone CLI provenance facts instead of guessed identity", async () => {
+    for (const overrides of [
+      { packages: [{ ...packageRecord("@napplet/sdk", "0.27.2", commit("d")), publisher: "" }] },
+      { packages: [{ ...packageRecord("@napplet/sdk", "latest", commit("d")) }] },
+      { packages: [{ ...packageRecord("@napplet/sdk", "0.27.2", commit("d")), sourceEvidenceOrigin: "" }] },
+      { cli: { ...candidateInput().cli as Record<string, unknown>, distributionType: "npm" } },
+      { cli: { ...candidateInput().cli as Record<string, unknown>, releaseAssetSha256: "" } },
+      { cli: { ...candidateInput().cli as Record<string, unknown>, sourceCommit: null } },
     ]) {
-      const result = await verifyCandidateReviewReadiness(candidateInput({ stages }));
+      const result = await verifyCandidateReviewReadiness(candidateInput(overrides));
       expect(result.status).toBe("unverified");
-      expect(result.blockers.some((blocker) => blocker.includes("stage"))).toBeTrue();
+      expect(result.blockers.length).toBeGreaterThan(0);
     }
   });
 
-  test("canonicalizes unordered package records without reordering execution", async () => {
+  test("canonicalizes unordered package provenance but changes identity with any reviewed fact", async () => {
     const first = await detectCandidate(candidateInput());
     const reversed = await detectCandidate(candidateInput({ packages: [...(candidateInput().packages as unknown[])].reverse() }));
     expect(reversed.candidateId).toBe(first.candidateId);
-    expect(reversed.record.stages.map((stage) => stage.id)).toEqual(["create", "init", "skills-install", "build", "verify", "conformance", "dry-run"]);
 
-    const changed = await detectCandidate(candidateInput({ runtimeVersion: "bun-1.3.15" }));
+    const changed = await detectCandidate(candidateInput({
+      packages: [packageRecord("@napplet/sdk", "0.27.2", commit("f")), packageRecord("@napplet/skills", "0.3.1", commit("e"))],
+    }));
     expect(changed.candidateId).not.toBe(first.candidateId);
 
     const duplicate = await verifyCandidateReviewReadiness(candidateInput({
@@ -84,50 +120,38 @@ describe("candidate detection", () => {
     expect(duplicate.blockers.some((blocker) => blocker.includes("duplicate package"))).toBeTrue();
   });
 
-  test("keeps incomplete provenance machine-readable and rejects empty identity facts", async () => {
-    const unresolved = await verifyCandidateReviewReadiness(candidateInput({
-      cli: { ...candidateInput().cli as Record<string, unknown>, sourceCommit: null },
-      unresolved: [{ field: "cli.sourceCommit", reason: "exact release/source mapping has not been verified" }],
-    }));
-    expect(unresolved.status).toBe("unverified");
-    expect(unresolved.blockers).toContain("cli.sourceCommit: exact release/source mapping has not been verified");
-
-    for (const overrides of [
-      { packages: [{ ...((candidateInput().packages as unknown[])[0] as Record<string, unknown>), name: "" }] },
-      { cli: { ...candidateInput().cli as Record<string, unknown>, executablePath: "" } },
-      { cli: { ...candidateInput().cli as Record<string, unknown>, executableSha256: "" } },
-      { protocol: { nip5dRevision: "", napRevisions: [commit("b")] } },
-      { imageDigest: "" },
-      { runtimeVersion: "" },
-    ]) {
-      const result = await verifyCandidateReviewReadiness(candidateInput(overrides));
-      expect(result.status).toBe("unverified");
-      expect(result.blockers.length).toBeGreaterThan(0);
-    }
+  test("keeps the complete D-04 PromotionManifest parser strict", () => {
+    expect(() => parsePromotionManifest({
+      schemaVersion: 1,
+      status: "candidate",
+      protocol: { nip5dRevision: commit("a"), napRevisions: [commit("b")] },
+      packages: [{ name: "@napplet/sdk", version: "0.27.2", integrity: "sha512-c2FmZS1pbnRlZ3JpdHk=", sourceCommit: commit("c") }],
+      executables: [{ path: "/opt/napplet/bin/napplet", sha256: sha256("d") }],
+      lockfileSha256: sha256("e"),
+      scaffoldRevision: commit("f"),
+      imageDigest: "",
+      runtimeVersion: "bun-1.3.14",
+      browserVersion: "chromium-140",
+      fixtures: [{ name: "minimal", revision: commit("1"), sha256: sha256("2") }],
+      goldens: [{ name: "minimal", revision: commit("3"), sha256: sha256("4") }],
+      policyVersion: "policy-1",
+      workingDirectory: "/workspace/napplet",
+      stages: [{ id: "verify", executable: "/opt/napplet/bin/napplet", argv: ["verify"], timeoutMs: 1_000, expectedOutput: {} }],
+    })).toThrow("manifest.imageDigest must be a non-empty string");
   });
+});
 
-  test("treats every NIP-5D or NAP revision as an independent unverified review subject", async () => {
-    const current = await detectCandidate(candidateInput({
-      unresolved: [{ field: "cli.sourceCommit", reason: "pending provenance review" }],
-      cli: { ...candidateInput().cli as Record<string, unknown>, sourceCommit: null },
-    }));
-    const newerNip = await detectCandidate(candidateInput({
-      protocol: { nip5dRevision: commit("d"), napRevisions: [commit("b"), commit("c")] },
-      unresolved: [{ field: "cli.sourceCommit", reason: "pending provenance review" }],
-      cli: { ...candidateInput().cli as Record<string, unknown>, sourceCommit: null },
-    }));
-    const newerNap = await detectCandidate(candidateInput({
-      protocol: { nip5dRevision: commit("a"), napRevisions: [commit("b"), commit("e")] },
-      unresolved: [{ field: "cli.sourceCommit", reason: "pending provenance review" }],
-      cli: { ...candidateInput().cli as Record<string, unknown>, sourceCommit: null },
-    }));
-
-    expect(current.status).toBe("unverified");
-    expect(newerNip.status).toBe("unverified");
-    expect(newerNap.status).toBe("unverified");
-    expect(newerNip.candidateId).not.toBe(current.candidateId);
-    expect(newerNap.candidateId).not.toBe(current.candidateId);
+test("candidate CLI accepts --review-ready after the candidate path", async () => {
+  const repositoryRoot = join(import.meta.dir, "..", "..");
+  const process = Bun.spawn([Bun.which("bun")!, "run", "candidate:verify", "--", "toolchains/candidates/initial.json", "--review-ready"], {
+    cwd: repositoryRoot,
+    stdout: "pipe",
+    stderr: "pipe",
   });
+  expect(await process.exited).toBe(0);
+  const result = JSON.parse(await new Response(process.stdout).text()) as { status: string; blockers: string[] };
+  expect(result.status).toBe("review_ready");
+  expect(result.blockers).toEqual([]);
 });
 
 test("candidate workflow has read-only candidate evidence authority", async () => {

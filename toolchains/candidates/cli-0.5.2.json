@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "status": "review_ready",
+  "status": "quarantined",
   "reviewScope": "provenance-intake",
   "protocol": {
     "nip5dRevision": "eb45dfd7335b7f88cb53781984c553581d2b4c34",
@@ -126,5 +126,10 @@
     { "origin": "https://api.github.com/repos/napplet/web/commits/1a38b9150f3a3da148091c11bce4d0365f7298e5", "sha256": "c546f61ad99c3e8a4f8dc021e69d31b6a88c4a367ff81cf6d8596158b8da73c2" },
     { "origin": "https://github.com/napplet/web/releases/download/%40napplet/cli%400.5.2/SHA256SUMS", "sha256": "16f67683f20af77c513e92b068409ff6c0f34bfbdb030df7ebf9441f269e676e" }
   ],
-  "unresolved": []
+  "unresolved": [
+    {
+      "field": "candidate",
+      "reason": "Superseded: CLI @0.5.2 requires the matching @napplet/skills and @napplet/boilerplate 0.3.2 Version Packages release set."
+    }
+  ]
 }

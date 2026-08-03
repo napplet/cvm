@@ -4,11 +4,11 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 01
 current_phase_name: Napplet Contract & Artifact Verification
-status: executing
-stopped_at: Completed 01-04-PLAN.md
-last_updated: "2026-08-03T09:48:38.281Z"
+status: blocked
+stopped_at: Plan 01-05 blocked on trusted upstream CLI release
+last_updated: "2026-08-03T10:49:02Z"
 last_activity: 2026-08-03
-last_activity_desc: Phase 01 execution started
+last_activity_desc: Resolver-free upstream CLI fix is green and awaiting merge/release
 progress:
   total_phases: 1
   completed_phases: 0
@@ -27,10 +27,10 @@ See: .planning/PROJECT.md (updated 2026-08-03)
 
 ## Current Position
 
-Phase: 01 (Napplet Contract & Artifact Verification) — EXECUTING
+Phase: 01 (Napplet Contract & Artifact Verification) — BLOCKED
 Plan: 5 of 11
-Status: Ready to execute
-Last activity: 2026-08-03 — Phase 01 execution started
+Status: Blocked on trusted upstream release
+Last activity: 2026-08-03 — Resolver-free upstream CLI fix completed and opened as napplet/web#200; all PR checks pass
 
 Progress: [████░░░░░░] 36%
 
@@ -90,7 +90,7 @@ None yet.
 
 ### Blockers/Concerns
 
-- Phase 1 must prove the `@napplet/cli` provenance and pinned scaffold/skills/SDK/conformance compatibility set before publication can be promised.
+- Plan 01-05 cannot use official `@napplet/cli@0.5.1`: its standalone binary shells out through `npx` for `@napplet/boilerplate` and `@napplet/skills`, which the sealed runtime correctly denies. The package-owned resolver-free fix is ready in https://github.com/napplet/web/pull/200 with CI, conformance, link-check, and AI-slop gates passing. Resume only after that fix is merged and a successor official CLI release plus matching architecture asset is published. Then rerun candidate detection, provenance approval, and sealed image materialization before returning to Plan 01-05; do not trust a branch-built substitute.
 - Future phases must contract-test evolving ContextVM/CEP-8 wire details, model exact-usage receipts, signing-runtime behavior, and the five-second SLO under load.
 
 ## Deferred Items
@@ -103,6 +103,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-03T09:48:38.276Z
-Stopped at: Completed 01-04-PLAN.md
-Resume file: None
+Last session: 2026-08-03T10:49:02Z
+Stopped at: Plan 01-05 RED tests committed; trusted upstream fix is green and awaiting merge/release
+Resume file: .planning/phases/01-napplet-contract-artifact-verification/01-05-BLOCKER.md

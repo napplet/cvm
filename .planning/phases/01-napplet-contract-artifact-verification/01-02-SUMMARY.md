@@ -118,6 +118,7 @@ status: complete
 ## Issues Encountered
 
 - The initial candidate correctly remains `unverified`; its returned blockers enumerate missing exact provenance and candidate-image facts for Plan 03 review rather than claiming support.
+- An exploratory TypeScript compiler invocation exposed pre-existing Bun/Node type-configuration gaps outside this plan's verified Bun test surface; the finding is recorded in `deferred-items.md`.
 
 ## Known Stubs
 

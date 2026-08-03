@@ -1,6 +1,6 @@
 import { canonicalJson, canonicalToolchainId, parsePromotionManifest, type CandidateStatus, type PromotionManifest } from "./schema";
 import { writeEvidenceBundle } from "../evidence/bundle";
-import { runHermeticCommand, type CommandEvidence } from "../runner/hermetic-command";
+import { runSealedDenialProbes, runSealedToolchain, type CommandEvidence, type SealedToolchainRequest } from "../runner/sealed-toolchain";
 
 export type PromotionStageEvidence = {
   readonly id: string;
@@ -25,6 +25,10 @@ export type PromotionEvidence = {
 
 export type RunPromotionOptions = {
   readonly evidenceDirectory: string;
+  readonly policyPath?: string;
+  readonly inputDirectory?: string;
+  readonly runSealed?: (request: SealedToolchainRequest) => Promise<CommandEvidence>;
+  readonly runDenialProbes?: (request: Omit<SealedToolchainRequest, "id" | "script" | "args">) => Promise<readonly CommandEvidence[]>;
   readonly now?: () => number;
 };
 
@@ -114,20 +118,32 @@ export async function runPromotionCandidate(rawManifest: unknown, options: RunPr
     return { version: 1, candidateId: null, status: "blocked", responsibleStage: "manifest", stages: [failure], evidenceSha256: failure.reportSha256 };
   }
 
+  const sealedInputs = {
+    policyPath: options.policyPath ?? "infra/toolchain/egress-policy.json",
+    inputDirectory: options.inputDirectory ?? manifest.workingDirectory,
+    toolchainId: candidateId,
+    imageDigest: manifest.imageDigest,
+    now,
+  };
+  try {
+    await (options.runDenialProbes ?? runSealedDenialProbes)(sealedInputs);
+  } catch (error) {
+    const failure = await syntheticFailure("egress-denial", error instanceof Error ? error.message : "denial probes failed", now);
+    return writePromotionEvidence(options.evidenceDirectory, manifest, candidateId, "blocked", "egress-denial", [failure]);
+  }
+
   const stages: PromotionStageEvidence[] = [];
   for (const stage of manifest.stages) {
     try {
-      const command = await runHermeticCommand({
+      const command = await (options.runSealed ?? runSealedToolchain)({
         id: stage.id,
-        executable: stage.executable,
+        ...sealedInputs,
+        script: stage.executable,
         executableSha256: manifest.executables.find((entry) => entry.path === stage.executable)!.sha256,
-        allowedExecutables: manifest.executables,
-        argv: stage.argv,
-        cwd: manifest.workingDirectory,
-        timeoutMs: stage.timeoutMs,
-        outputLimitBytes: 64 * 1024,
+        args: stage.argv,
         toolchainId: candidateId,
         imageDigest: manifest.imageDigest,
+        timeoutMs: stage.timeoutMs,
         now,
       });
       const result = await stageEvidence(stage.id, command, stage.expectedOutput);

@@ -1,23 +1,9 @@
 import { basename, resolve } from "node:path";
 import { verifyCandidateReviewReadiness } from "../src/promotion/candidate";
+import { parseSealedToolchainPolicy, type SealedToolchainPolicy } from "../src/runner/sealed-toolchain";
 
-type JsonRecord = Record<string, unknown>;
-
-export type ToolchainImagePolicy = {
-  readonly schemaVersion: 1;
-  readonly candidateId: string;
-  readonly runtime: "docker";
-  readonly network: "none";
-  readonly readOnlyRootFilesystem: true;
-  readonly capDrop: readonly ["ALL"];
-  readonly securityOpt: readonly ["no-new-privileges"];
-  readonly user: "65532:65532";
-  readonly tmpfs: readonly [string, string];
-  readonly resources: { readonly pids: 64; readonly memory: "2g"; readonly cpus: "2"; readonly timeoutMs: 60000; readonly outputLimitBytes: 65536 };
-  readonly environment: { readonly CI: "1"; readonly HOME: "/home/napplet" };
-  readonly inputMount: { readonly destination: "/input"; readonly readOnly: true };
-  readonly entrypoint: "/toolchain/bin/bun";
-};
+export type ToolchainImagePolicy = SealedToolchainPolicy;
+export const parseToolchainImagePolicy = parseSealedToolchainPolicy;
 
 export type ToolchainImageInputs = {
   readonly candidatePath: string;
@@ -32,60 +18,6 @@ export type VerifiedToolchainImageInputs = {
   readonly packages: readonly { readonly name: string; readonly version: string; readonly integrity: string }[];
   readonly dockerfile: string;
 };
-
-const SHA256 = /^[a-f0-9]{64}$/;
-const POLICY_KEYS = new Set([
-  "schemaVersion", "candidateId", "runtime", "network", "readOnlyRootFilesystem", "capDrop", "securityOpt", "user", "tmpfs", "resources", "environment", "inputMount", "entrypoint",
-]);
-
-function isRecord(value: unknown): value is JsonRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function requireExact<T>(actual: unknown, expected: T, label: string): T {
-  if (actual !== expected) throw new Error(`${label} must be ${String(expected)}`);
-  return expected;
-}
-
-function requireExactArray<T>(actual: unknown, expected: readonly T[], label: string): readonly T[] {
-  if (!Array.isArray(actual) || actual.length !== expected.length || actual.some((item, index) => item !== expected[index])) {
-    throw new Error(`${label} must be exactly ${expected.join(", ")}`);
-  }
-  return expected;
-}
-
-function requireRecord(value: unknown, label: string): JsonRecord {
-  if (!isRecord(value)) throw new Error(`${label} must be an object`);
-  return value;
-}
-
-/** Parses the static image policy before any image materialization can begin. */
-export function parseToolchainImagePolicy(value: unknown): ToolchainImagePolicy {
-  const policy = requireRecord(value, "policy");
-  for (const key of Object.keys(policy)) if (!POLICY_KEYS.has(key)) throw new Error(`policy has unknown control ${key}`);
-  requireExact(policy.schemaVersion, 1, "policy.schemaVersion");
-  if (typeof policy.candidateId !== "string" || !SHA256.test(policy.candidateId)) throw new Error("policy.candidateId must be a SHA-256 candidate ID");
-  requireExact(policy.runtime, "docker", "policy.runtime");
-  requireExact(policy.network, "none", "policy.network");
-  requireExact(policy.readOnlyRootFilesystem, true, "policy.readOnlyRootFilesystem");
-  requireExactArray(policy.capDrop, ["ALL"], "policy.capDrop");
-  requireExactArray(policy.securityOpt, ["no-new-privileges"], "policy.securityOpt");
-  requireExact(policy.user, "65532:65532", "policy.user");
-  requireExactArray(policy.tmpfs, ["/work:rw,nosuid,nodev,size=512m", "/tmp:rw,nosuid,nodev,noexec,size=128m"], "policy.tmpfs");
-  const resources = requireRecord(policy.resources, "policy.resources");
-  requireExact(resources.pids, 64, "policy.resources.pids");
-  requireExact(resources.memory, "2g", "policy.resources.memory");
-  requireExact(resources.cpus, "2", "policy.resources.cpus");
-  requireExact(resources.timeoutMs, 60_000, "policy.resources.timeoutMs");
-  requireExact(resources.outputLimitBytes, 65_536, "policy.resources.outputLimitBytes");
-  const environment = requireRecord(policy.environment, "policy.environment");
-  if (Object.keys(environment).length !== 2 || environment.CI !== "1" || environment.HOME !== "/home/napplet") throw new Error("policy.environment must be the exact scrubbed allowlist");
-  const inputMount = requireRecord(policy.inputMount, "policy.inputMount");
-  requireExact(inputMount.destination, "/input", "policy.inputMount.destination");
-  requireExact(inputMount.readOnly, true, "policy.inputMount.readOnly");
-  requireExact(policy.entrypoint, "/toolchain/bin/bun", "policy.entrypoint");
-  return policy as ToolchainImagePolicy;
-}
 
 async function sha256File(path: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", await Bun.file(path).arrayBuffer());

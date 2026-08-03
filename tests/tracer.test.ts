@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalToolchainId, parsePromotionManifest } from "../src/promotion/schema";
 import { runPromotionCandidate } from "../src/promotion/run-promotion";
+import { runHermeticCommand } from "../src/runner/hermetic-command";
 
 const cleanup: string[] = [];
 afterEach(async () => {
@@ -44,11 +45,32 @@ async function evidenceDirectory(): Promise<string> {
   return directory;
 }
 
+async function sealedTestRunner(request: { id: string; args: readonly string[]; executableSha256?: string; timeoutMs?: number; toolchainId: string; imageDigest: string; now?: () => number }) {
+  const executable = process.execPath;
+  return runHermeticCommand({
+    id: request.id,
+    executable,
+    executableSha256: request.executableSha256 ?? await sha256File(executable),
+    allowedExecutables: [{ path: executable, sha256: request.executableSha256 ?? await sha256File(executable) }],
+    argv: request.args,
+    cwd: process.cwd(),
+    timeoutMs: request.timeoutMs ?? 200,
+    outputLimitBytes: 64 * 1024,
+    toolchainId: request.toolchainId,
+    imageDigest: request.imageDigest,
+    now: request.now,
+  });
+}
+
+async function sealedDenialTestRunner() {
+  return [];
+}
+
 describe("promotion tracer", () => {
   test("runs a fully pinned candidate through command evidence deterministically", async () => {
     const candidate = await manifest();
     const directory = await evidenceDirectory();
-    const options = { evidenceDirectory: directory, now: () => 1_000 };
+    const options = { evidenceDirectory: directory, now: () => 1_000, runSealed: sealedTestRunner, runDenialProbes: sealedDenialTestRunner };
     const first = await runPromotionCandidate(candidate, options);
     const second = await runPromotionCandidate(candidate, options);
 
@@ -65,7 +87,7 @@ describe("promotion tracer", () => {
     ["timeout", async () => ({ ...(await manifest("timeout")), stages: [{ ...(await manifest("timeout")).stages[0] as Record<string, unknown>, timeoutMs: 5, argv: [join(import.meta.dir, "fixtures", "fake-toolchain.ts"), "--mode=timeout", "--delay", "100"] } ] }), "native"],
     ["malformed output", async () => manifest("malformed"), "native"],
   ])("blocks %s", async (_name, candidate, responsibleStage) => {
-    const result = await runPromotionCandidate(await candidate(), { evidenceDirectory: await evidenceDirectory(), now: () => 1_000 });
+    const result = await runPromotionCandidate(await candidate(), { evidenceDirectory: await evidenceDirectory(), now: () => 1_000, runSealed: sealedTestRunner, runDenialProbes: sealedDenialTestRunner });
     expect(result.status).toBe("blocked");
     expect(result.responsibleStage).toBe(responsibleStage);
   });
@@ -75,7 +97,7 @@ describe("promotion tracer", () => {
     const candidate = await manifest("echo");
     const stage = candidate.stages as Record<string, unknown>[];
     stage[0] = { ...stage[0], argv: [join(import.meta.dir, "fixtures", "fake-toolchain.ts"), "--mode=echo", "--literal", literal], expectedOutput: { outcome: "ok", literal } };
-    const result = await runPromotionCandidate(candidate, { evidenceDirectory: await evidenceDirectory(), now: () => 1_000 });
+    const result = await runPromotionCandidate(candidate, { evidenceDirectory: await evidenceDirectory(), now: () => 1_000, runSealed: sealedTestRunner, runDenialProbes: sealedDenialTestRunner });
     expect(result.status).toBe("review-ready");
     expect(await Bun.file(join(process.cwd(), "should-not-exist")).exists()).toBeFalse();
   });

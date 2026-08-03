@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 01
 current_phase_name: Napplet Contract & Artifact Verification
 status: executing
-stopped_at: Completed 01-02-PLAN.md
-last_updated: "2026-08-03T07:09:40.260Z"
+stopped_at: Completed 01-03-PLAN.md
+last_updated: "2026-08-03T08:03:23.223Z"
 last_activity: 2026-08-03
 last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 11
-  completed_plans: 2
+  completed_plans: 3
 ---
 
 # Project State
@@ -28,11 +28,11 @@ See: .planning/PROJECT.md (updated 2026-08-03)
 ## Current Position
 
 Phase: 01 (Napplet Contract & Artifact Verification) — EXECUTING
-Plan: 3 of 11
+Plan: 4 of 11
 Status: Ready to execute
 Last activity: 2026-08-03 — Phase 01 execution started
 
-Progress: [██░░░░░░░░] 18%
+Progress: [███░░░░░░░] 27%
 
 ## Performance Metrics
 
@@ -59,6 +59,7 @@ Progress: [██░░░░░░░░] 18%
 |------|----------|-------|-------|
 | Phase 01-napplet-contract-artifact-verification P01 | 5 min | 2 tasks | 10 files |
 | Phase 01 P02 | 5 min | 2 tasks | 5 files |
+| Phase 01 P03 | 7 min | 1 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -75,6 +76,9 @@ Recent decisions affecting current work:
 - [Phase ?]: Candidate identity canonicalizes package metadata while preserving strict stage order.
 - [Phase ?]: Initial candidate remains unverified until exact CLI, package, image, fixture, and NAP evidence is proven.
 - [Phase ?]: Candidate CI is read-only and emits only immutable candidate/evidence outputs.
+- [Phase ?]: Pre-install approval authorizes only sealed candidate intake/testing; it cannot promote or mutate the current pointer.
+- [Phase ?]: D-04 PromotionManifest pins remain mandatory at promotion while the intake review records only source provenance.
+- [Phase ?]: @napplet/sdk@0.27.2 uses an explicit official release-commit mapping because no matching Git tag exists.
 
 ### Pending Todos
 
@@ -95,6 +99,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-03T07:09:40.254Z
-Stopped at: Completed 01-02-PLAN.md
+Last session: 2026-08-03T08:03:23.216Z
+Stopped at: Completed 01-03-PLAN.md
 Resume file: None

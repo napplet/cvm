@@ -6,6 +6,8 @@
     "bun": ">=1.2.0"
   },
   "scripts": {
-    "test": "bun test"
+    "test": "bun test",
+    "candidate:detect": "bun run src/promotion/candidate.ts",
+    "candidate:verify": "bun run src/promotion/candidate.ts"
   }
 }

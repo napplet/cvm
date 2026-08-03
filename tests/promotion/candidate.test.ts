@@ -21,18 +21,18 @@ function candidateInput(overrides: Record<string, unknown> = {}) {
       distribution: "https://github.com/napplet/napplet/releases/download/v0.5.0/napplet",
       releaseAssetSha256: sha256("f"),
       executablePath: "/opt/napplet/bin/napplet",
-      executableSha256: sha256("g"),
-      sourceCommit: commit("h"),
+      executableSha256: sha256("1"),
+      sourceCommit: commit("2"),
     },
-    lockfileSha256: sha256("i"),
-    scaffoldRevision: commit("j"),
-    imageDigest: sha256("k"),
+    lockfileSha256: sha256("3"),
+    scaffoldRevision: commit("4"),
+    imageDigest: sha256("5"),
     runtimeVersion: "bun-1.3.14",
     pnpmVersion: "10.24.0",
     browserVersion: "chromium-140.0.7339.127",
     conformanceVersion: "0.2.18",
-    fixtures: [{ name: "minimal", revision: commit("l"), sha256: sha256("m") }],
-    goldens: [{ name: "minimal", revision: commit("n"), sha256: sha256("o") }],
+    fixtures: [{ name: "minimal", revision: commit("6"), sha256: sha256("7") }],
+    goldens: [{ name: "minimal", revision: commit("8"), sha256: sha256("9") }],
     policyVersion: "policy-1",
     workingDirectory: "/workspace/napplet",
     stages: [
@@ -44,7 +44,7 @@ function candidateInput(overrides: Record<string, unknown> = {}) {
       { id: "conformance", executable: "/opt/napplet/bin/napplet", argv: ["conformance"], timeoutMs: 1_000, expectedOutput: {} },
       { id: "dry-run", executable: "/opt/napplet/bin/napplet", argv: ["deploy", "--dry-run"], timeoutMs: 1_000, expectedOutput: {} },
     ],
-    evidence: [{ origin: "https://example.invalid/provenance.json", sha256: sha256("p") }],
+    evidence: [{ origin: "https://example.invalid/provenance.json", sha256: sha256("a") }],
     unresolved: [],
     ...overrides,
   };
@@ -111,12 +111,12 @@ describe("candidate detection", () => {
       cli: { ...candidateInput().cli as Record<string, unknown>, sourceCommit: null },
     }));
     const newerNip = await detectCandidate(candidateInput({
-      protocol: { nip5dRevision: commit("q"), napRevisions: [commit("b"), commit("c")] },
+      protocol: { nip5dRevision: commit("d"), napRevisions: [commit("b"), commit("c")] },
       unresolved: [{ field: "cli.sourceCommit", reason: "pending provenance review" }],
       cli: { ...candidateInput().cli as Record<string, unknown>, sourceCommit: null },
     }));
     const newerNap = await detectCandidate(candidateInput({
-      protocol: { nip5dRevision: commit("a"), napRevisions: [commit("b"), commit("r")] },
+      protocol: { nip5dRevision: commit("a"), napRevisions: [commit("b"), commit("e")] },
       unresolved: [{ field: "cli.sourceCommit", reason: "pending provenance review" }],
       cli: { ...candidateInput().cli as Record<string, unknown>, sourceCommit: null },
     }));

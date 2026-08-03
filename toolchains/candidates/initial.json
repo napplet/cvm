@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "status": "unverified",
+  "protocol": {
+    "nip5dRevision": "eb45dfd7335b7f88cb53781984c553581d2b4c34",
+    "napRevisions": []
+  },
+  "packages": [
+    { "name": "@napplet/boilerplate", "version": "0.3.1", "integrity": null, "sourceCommit": null },
+    { "name": "@napplet/skills", "version": "0.3.1", "integrity": null, "sourceCommit": null },
+    { "name": "@napplet/sdk", "version": "0.27.2", "integrity": null, "sourceCommit": null },
+    { "name": "@napplet/vite-plugin", "version": "0.14.1", "integrity": null, "sourceCommit": null },
+    { "name": "@napplet/conformance-cli", "version": "0.2.18", "integrity": null, "sourceCommit": null }
+  ],
+  "cli": {
+    "packageName": "@napplet/cli",
+    "distribution": null,
+    "releaseAssetSha256": null,
+    "executablePath": null,
+    "executableSha256": null,
+    "sourceCommit": null
+  },
+  "lockfileSha256": null,
+  "scaffoldRevision": null,
+  "imageDigest": null,
+  "runtimeVersion": "bun-1.3.14",
+  "pnpmVersion": "10.24.0",
+  "browserVersion": null,
+  "conformanceVersion": "0.2.18",
+  "fixtures": [{ "name": "minimal", "revision": null, "sha256": null }],
+  "goldens": [{ "name": "initial", "revision": null, "sha256": null }],
+  "policyVersion": "policy-1",
+  "workingDirectory": "/workspace/napplet",
+  "stages": [
+    { "id": "create", "executable": null, "argv": [], "timeoutMs": null, "expectedOutput": {} },
+    { "id": "init", "executable": null, "argv": [], "timeoutMs": null, "expectedOutput": {} },
+    { "id": "skills-install", "executable": null, "argv": [], "timeoutMs": null, "expectedOutput": {} },
+    { "id": "build", "executable": null, "argv": [], "timeoutMs": null, "expectedOutput": {} },
+    { "id": "verify", "executable": null, "argv": [], "timeoutMs": null, "expectedOutput": {} },
+    { "id": "conformance", "executable": null, "argv": [], "timeoutMs": null, "expectedOutput": {} },
+    { "id": "dry-run", "executable": null, "argv": [], "timeoutMs": null, "expectedOutput": {} }
+  ],
+  "evidence": [{
+    "origin": "https://github.com/nostr-protocol/nips/pull/2303",
+    "sha256": null
+  }],
+  "unresolved": [
+    { "field": "protocol.napRevisions", "reason": "No candidate NAP revision or compatible bare harness domain is claimed before same-set provenance and conformance evidence." },
+    { "field": "packages", "reason": "Registry integrities and authoritative source commits remain unverified pending exact provenance evidence." },
+    { "field": "cli", "reason": "The exact standalone CLI distribution, release asset, source mapping, and executable digest remain unverified." },
+    { "field": "lockfileSha256", "reason": "A frozen candidate lockfile has not been produced." },
+    { "field": "scaffoldRevision", "reason": "The scaffold source revision has not been proven against an exact candidate." },
+    { "field": "imageDigest", "reason": "No sealed candidate image has been built." },
+    { "field": "browserVersion", "reason": "The image-local Chromium revision is not established." },
+    { "field": "fixtures", "reason": "Fixture revision and digest require the exact candidate build." },
+    { "field": "goldens", "reason": "Golden revision and digest require review after reproducible builds." },
+    { "field": "stages", "reason": "Exact image-local executable paths, argv, and bounds remain blocked on CLI provenance." },
+    { "field": "evidence[0].sha256", "reason": "The queried-origin result digest has not yet been retained." }
+  ]
+}

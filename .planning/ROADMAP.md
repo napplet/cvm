@@ -36,7 +36,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. Dependency installation and build scripts stay resource-bounded and policy-checked, with no route to control-plane secrets or unrestricted network access.
 
 **Validation gate**: Resolve `@napplet/cli` provenance and prove one pinned `create → init → skills install → build → verify → test:conformance → dry-run publish` fixture against the authoritative scaffold, SDK, NIP-5D/NAP contract, and Chromium suite. Until this gate passes, automated publication is not claimed.
-**Plans:** 1/11 plans executed
+**Plans:** 2/11 plans executed
 
 Plans:
 **Wave 1**
@@ -45,7 +45,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 01-02-PLAN.md — Detect immutable candidates and assemble evidence-bound review input without install or promotion authority.
+- [x] 01-02-PLAN.md — Detect immutable candidates and assemble evidence-bound review input without install or promotion authority.
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -186,7 +186,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Napplet Contract & Artifact Verification | 1/11 | In Progress|  |
+| 1. Napplet Contract & Artifact Verification | 2/11 | In Progress|  |
 | 2. Trusted Core & Isolated Agent Execution | 0/TBD | Not started | - |
 | 3. ContextVM Funding & Funded Admission | 0/TBD | Not started | - |
 | 4. Metered Generation & Revision Loop | 0/TBD | Not started | - |

@@ -3,10 +3,10 @@
   "private": true,
   "packageManager": "pnpm@10.24.0",
   "dependencies": {
-    "@napplet/boilerplate": "0.3.1",
+    "@napplet/boilerplate": "0.3.2",
     "@napplet/conformance-cli": "0.2.18",
     "@napplet/sdk": "0.27.2",
-    "@napplet/skills": "0.3.1",
+    "@napplet/skills": "0.3.2",
     "@napplet/vite-plugin": "0.14.1"
   }
 }

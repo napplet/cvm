@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@napplet/boilerplate':
-        specifier: 0.3.1
-        version: 0.3.1
+        specifier: 0.3.2
+        version: 0.3.2
       '@napplet/conformance-cli':
         specifier: 0.2.18
         version: 0.2.18
@@ -18,8 +18,8 @@ importers:
         specifier: 0.27.2
         version: 0.27.2
       '@napplet/skills':
-        specifier: 0.3.1
-        version: 0.3.1
+        specifier: 0.3.2
+        version: 0.3.2
       '@napplet/vite-plugin':
         specifier: 0.14.1
         version: 0.14.1(vite@8.2.0)
@@ -42,8 +42,8 @@ packages:
       '@emnapi/core': ^1.7.1 || ^2.0.0-alpha.3
       '@emnapi/runtime': ^1.7.1 || ^2.0.0-alpha.3
 
-  '@napplet/boilerplate@0.3.1':
-    resolution: {integrity: sha512-Xh7Ik9HM7j8G/w7/bCFJY080h2t6DgQPTGCiRwOYqc1oU2TUFUaSsmmzR6WOXoBA0vjpcgnCr8Wg143hAMB/cA==}
+  '@napplet/boilerplate@0.3.2':
+    resolution: {integrity: sha512-0PiV8WjTQz9xOymVbcTVW1deD45E72wATndvzjK6wNKEF506PBcgLxdp0W/wMYSpsy+uBmXBHWQVerIZuZDPhQ==}
     hasBin: true
 
   '@napplet/conformance-cli@0.2.18':
@@ -67,8 +67,8 @@ packages:
   '@napplet/sdk@0.27.2':
     resolution: {integrity: sha512-/5j2SrAc+mNoEFCGeRE+vZtCmzCZE6tvcWCXi2sokVKedvcl8Pj+2/+xwlJY5qWrkYwK/v7d49jThyr2xypH4w==}
 
-  '@napplet/skills@0.3.1':
-    resolution: {integrity: sha512-jL1pvjKV8wd1H+BHWWpKhzK5xxpKS946gr1gdzQRux16oVpgWFIXrHfd3eqC14oLRFmsaYsGub+056G+4PMoDQ==}
+  '@napplet/skills@0.3.2':
+    resolution: {integrity: sha512-MZcOdd1XrPIgda1+tg+xUsuDoaR/DbsENLZHxr2g6+xrd5MMmKwDHeGGTFq5hWwqp5rsGcob6guVUtTIHcdj8g==}
     hasBin: true
 
   '@napplet/vite-plugin@0.14.1':
@@ -408,7 +408,7 @@ snapshots:
       '@tybys/wasm-util': 0.10.3
     optional: true
 
-  '@napplet/boilerplate@0.3.1': {}
+  '@napplet/boilerplate@0.3.2': {}
 
   '@napplet/conformance-cli@0.2.18':
     dependencies:
@@ -437,7 +437,7 @@ snapshots:
     transitivePeerDependencies:
       - json-schema-to-ts
 
-  '@napplet/skills@0.3.1': {}
+  '@napplet/skills@0.3.2': {}
 
   '@napplet/vite-plugin@0.14.1(vite@8.2.0)':
     dependencies:

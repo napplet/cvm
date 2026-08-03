@@ -11,7 +11,7 @@ import {
 } from "../../src/runner/sealed-toolchain";
 
 const root = process.cwd();
-const candidatePath = join(root, "toolchains/candidates/initial.json");
+const candidatePath = join(root, "toolchains/candidates/cli-0.5.2-release-set.json");
 const policyPath = join(root, "infra/toolchain/egress-policy.json");
 const dockerfilePath = join(root, "infra/toolchain/Dockerfile");
 const lockfilePath = join(root, "toolchains/locks/initial/pnpm-lock.yaml");
@@ -20,10 +20,11 @@ describe("sealed toolchain image and policy", () => {
   test("image inputs bind the reviewed candidate to a frozen offline lock", async () => {
     const result = await verifyToolchainImageInputs({ candidatePath, policyPath, dockerfilePath, lockfilePath });
 
-    expect(result.candidateId).toBe("2dbf448be962e289c962fd5b3659bf526232ded9de163c485925618cead1f23e");
+    expect(result.candidateId).toBe("a19fc7d283a4482c53728f4a931743576564fb3826d7f8fa1383d02578b69024");
     expect(result.lockfileSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(result.packages).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: "@napplet/skills", version: "0.3.1" }),
+      expect.objectContaining({ name: "@napplet/skills", version: "0.3.2" }),
+      expect.objectContaining({ name: "@napplet/boilerplate", version: "0.3.2" }),
       expect.objectContaining({ name: "@napplet/conformance-cli", version: "0.2.18" }),
     ]));
     expect(result.dockerfile).toContain("pnpm fetch --frozen-lockfile --ignore-scripts");
@@ -44,6 +45,22 @@ describe("sealed toolchain image and policy", () => {
     expect(policy.environment).toEqual({ CI: "1", HOME: "/home/napplet" });
     expect(() => parseToolchainImagePolicy({ ...policy, network: "bridge" })).toThrow("network");
     expect(() => parseToolchainImagePolicy({ ...policy, unexpected: true })).toThrow("unknown");
+  });
+
+  test("rejects the quarantined mixed release set and stale candidate identity", async () => {
+    await expect(verifyToolchainImageInputs({
+      candidatePath: join(root, "toolchains/candidates/cli-0.5.2.json"),
+      policyPath,
+      dockerfilePath,
+      lockfilePath,
+    })).rejects.toThrow("candidate is not approved");
+
+    await expect(verifyToolchainImageInputs({
+      candidatePath: join(root, "toolchains/candidates/initial.json"),
+      policyPath,
+      dockerfilePath,
+      lockfilePath,
+    })).rejects.toThrow("policy candidate ID");
   });
 });
 

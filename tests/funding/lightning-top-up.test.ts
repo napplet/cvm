@@ -80,11 +80,11 @@ describe("Lightning top-up initiation and protected material", () => {
   });
 
   test("bounds receiver calls and durably reconciles without blind invoice reissue", async () => {
-    let creates = 0; let queries = 0;
+    let creates = 0; let queries = 0; const signals: AbortSignal[] = [];
     const never = () => new Promise<never>(() => undefined);
     const receiver = {
-      createInvoice: async () => { creates += 1; return never(); },
-      queryInvoice: async () => { queries += 1; return never(); },
+      createInvoice: async (input: { signal: AbortSignal }) => { creates += 1; signals.push(input.signal); return never(); },
+      queryInvoice: async (input: { signal: AbortSignal }) => { queries += 1; signals.push(input.signal); return never(); },
     };
     const fundingStore = new TransactionalMemoryFundingStore();
     const topUps = new InMemoryLightningTopUpRepository();
@@ -100,6 +100,8 @@ describe("Lightning top-up initiation and protected material", () => {
     expect(replay).toMatchObject({ status: "reconciliation_pending", state: "reconciliation_pending" });
     expect(creates).toBe(1);
     expect(queries).toBe(1);
+    expect(signals).toHaveLength(2);
+    expect(signals.every((signal) => signal.aborted)).toBeTrue();
   });
 });
 

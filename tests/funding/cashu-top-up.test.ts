@@ -143,11 +143,11 @@ describe("Cashu credit and treasury", () => {
   });
 
   test("bounds swap and observation calls while retaining one durable reconciliation intent", async () => {
-    let settles = 0; let observations = 0;
+    let settles = 0; let observations = 0; const signals: AbortSignal[] = [];
     const never = () => new Promise<never>(() => undefined);
     const provider = {
-      settle: async () => { settles += 1; return never(); },
-      observe: async () => { observations += 1; return never(); },
+      settle: async (input: { signal: AbortSignal }) => { settles += 1; signals.push(input.signal); return never(); },
+      observe: async (input: { signal: AbortSignal }) => { observations += 1; signals.push(input.signal); return never(); },
       reconcileTreasury: async () => never(),
     };
     const { policies, vault, store, funding, repository } = harness();
@@ -160,6 +160,8 @@ describe("Cashu credit and treasury", () => {
     expect(reconciled).toMatchObject({ state: "reconciliation_pending" });
     expect(settles).toBe(1);
     expect(observations).toBe(1);
+    expect(signals).toHaveLength(2);
+    expect(signals.every((signal) => signal.aborted)).toBeTrue();
     expect(store.postings).toHaveLength(0);
   });
 

@@ -92,7 +92,7 @@ export class LightningTopUpCoordinator {
     if (claim.mode === "replay") return publicResult(claim.topUp);
     if (claim.mode === "reconcile") return this.reconcileRecord(claim.topUp);
     try {
-      const observed = await this.boundedProvider(this.options.receiver.createInvoice({ topUpId: claim.topUp.topUpId, idempotencyLabel: claim.topUp.topUpId, amount: claim.topUp.amount, unit: "sat" }));
+      const observed = await this.boundedProvider((signal) => this.options.receiver.createInvoice({ topUpId: claim.topUp.topUpId, idempotencyLabel: claim.topUp.topUpId, amount: claim.topUp.amount, unit: "sat", signal }));
       return this.recordObservation(claim.topUp.topUpId, observed);
     } catch { return this.markUnknown(claim.topUp.topUpId); }
   }
@@ -111,7 +111,7 @@ export class LightningTopUpCoordinator {
 
   private async reconcileRecord(topUp: LightningPrivateTopUp): Promise<LightningTopUpResult> {
     if (topUp.state === "credited" || topUp.state === "failed") return publicResult(topUp);
-    try { return this.recordObservation(topUp.topUpId, await this.boundedProvider(this.options.receiver.queryInvoice({ topUpId: topUp.topUpId, serviceReference: topUp.providerReference }))); }
+    try { return this.recordObservation(topUp.topUpId, await this.boundedProvider((signal) => this.options.receiver.queryInvoice({ topUpId: topUp.topUpId, serviceReference: topUp.providerReference, signal }))); }
     catch { return this.markUnknown(topUp.topUpId); }
   }
 
@@ -161,10 +161,11 @@ export class LightningTopUpCoordinator {
   private async markUnknown(topUpId: string): Promise<LightningTopUpResult> {
     return this.options.repository.transact((state) => { const topUp = this.topUp(state, topUpId); if (topUp.state === "credited" || topUp.state === "failed") return publicResult(topUp); const next = frozen({ ...topUp, state: "reconciliation_pending" as const, providerIntent: "uncertain" as const }); state.topUps.set(topUpId, next); return publicResult(next); });
   }
-  private async boundedProvider<T>(operation: Promise<T>): Promise<T> {
+  private async boundedProvider<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      return await Promise.race([operation, new Promise<T>((_, reject) => { timer = setTimeout(() => reject(new Error("RAIL_PROVIDER_DEADLINE_EXCEEDED")), this.#providerTimeoutMs); })]);
+      return await Promise.race([operation(controller.signal), new Promise<T>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error("RAIL_PROVIDER_DEADLINE_EXCEEDED")); }, this.#providerTimeoutMs); })]);
     } finally {
       if (timer) clearTimeout(timer);
     }

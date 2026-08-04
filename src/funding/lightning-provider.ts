@@ -21,8 +21,8 @@ const UnknownInvoiceObservationSchema = z.object({ status: z.literal("unknown"),
 
 export const LightningInvoiceObservationSchema = z.discriminatedUnion("status", [CreatedInvoiceObservationSchema, SettledInvoiceObservationSchema, FailedInvoiceObservationSchema, UnknownInvoiceObservationSchema]);
 export type LightningInvoiceObservation = z.infer<typeof LightningInvoiceObservationSchema>;
-export type LightningCreateInvoiceRequest = Readonly<{ topUpId: string; idempotencyLabel: string; amount: string; unit: "sat" }>;
-export type LightningQueryInvoiceRequest = Readonly<{ topUpId: string; serviceReference: string }>;
+export type LightningCreateInvoiceRequest = Readonly<{ topUpId: string; idempotencyLabel: string; amount: string; unit: "sat"; signal: AbortSignal }>;
+export type LightningQueryInvoiceRequest = Readonly<{ topUpId: string; serviceReference: string; signal: AbortSignal }>;
 
 /** Rail adapter boundary: it returns receiver observations and has no funding/ledger dependency. */
 export interface LightningReceiptPort {

@@ -84,7 +84,7 @@ export class CashuTopUpCoordinator {
     }
     const record = claimed.record;
     let observed: CashuSettlementObservation;
-    try { observed = await this.#boundedProvider(this.options.provider.settle({ topUpId: submitted.topUpId, policy, amount: submitted.amount, commitment, token: submitted.token })); }
+    try { observed = await this.#boundedProvider((signal) => this.options.provider.settle({ topUpId: submitted.topUpId, policy, amount: submitted.amount, commitment, token: submitted.token, signal })); }
     catch { observed = { status: "unknown", operationReference: `cashu:${commitment}` }; }
     return this.#recordObservation(record, submitted, observed);
   }
@@ -92,11 +92,11 @@ export class CashuTopUpCoordinator {
   async reconcile(topUpId: string): Promise<CashuTopUpResult> {
     const record = await this.options.repository.find(topUpId); if (!record) throw asError("CASHU_TOP_UP_UNKNOWN");
     if (record.result.state !== "reconciliation_pending") return record.result;
-    const request: CashuObserveRequest = { topUpId, policy: record.policy, commitment: record.result.commitment, amount: record.amount };
+    const request = (signal: AbortSignal): CashuObserveRequest => ({ topUpId, policy: record.policy, commitment: record.result.commitment, amount: record.amount, signal });
     // Reconciliation is query-only.  Bearer material is deliberately not supplied
     // to a provider observation because it could be re-submitted as a swap.
     let observed: CashuSettlementObservation;
-    try { observed = await this.#boundedProvider(this.options.provider.observe(request)); }
+    try { observed = await this.#boundedProvider((signal) => this.options.provider.observe(request(signal))); }
     catch { observed = { status: "unknown", operationReference: `cashu:${record.result.commitment}` }; }
     return this.#recordObservation(record, { principal: record.principal, idempotencyKey: record.idempotencyKey, topUpId, amount: record.amount, unit: "sat", pmi: CashuPmi, token: new Uint8Array() }, observed);
   }
@@ -105,7 +105,7 @@ export class CashuTopUpCoordinator {
     const prior = await this.options.repository.findTreasury(topUpId); if (prior) return prior;
     const record = await this.options.repository.find(topUpId); if (!record || record.result.state !== "credited") throw asError("CASHU_TREASURY_REQUIRES_CREDITED_TOP_UP");
     let treasury: Readonly<{ state: CashuTreasuryState }>;
-    try { treasury = await this.#boundedProvider(this.options.provider.reconcileTreasury({ topUpId, commitment: record.result.commitment })); }
+    try { treasury = await this.#boundedProvider((signal) => this.options.provider.reconcileTreasury({ topUpId, commitment: record.result.commitment, signal })); }
     catch { treasury = { state: "unknown" }; }
     const result = frozen({ ...record.result, treasuryState: treasury.state });
     await this.options.repository.update({ ...record, result }); await this.options.repository.recordTreasury(topUpId, result);
@@ -129,10 +129,11 @@ export class CashuTopUpCoordinator {
     return result;
   }
 
-  async #boundedProvider<T>(operation: Promise<T>): Promise<T> {
+  async #boundedProvider<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      return await Promise.race([operation, new Promise<T>((_, reject) => { timer = setTimeout(() => reject(asError("RAIL_PROVIDER_DEADLINE_EXCEEDED")), this.#providerTimeoutMs); })]);
+      return await Promise.race([operation(controller.signal), new Promise<T>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(asError("RAIL_PROVIDER_DEADLINE_EXCEEDED")); }, this.#providerTimeoutMs); })]);
     } finally {
       if (timer) clearTimeout(timer);
     }

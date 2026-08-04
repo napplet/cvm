@@ -14,15 +14,15 @@ const FailedCashuObservationSchema = z.object({
 const UnknownCashuObservationSchema = z.object({ status: z.literal("unknown"), operationReference: z.string().min(1) }).strict();
 export const CashuSettlementObservationSchema = z.discriminatedUnion("status", [VerifiedCashuObservationSchema, FailedCashuObservationSchema, UnknownCashuObservationSchema]);
 export type CashuSettlementObservation = z.infer<typeof CashuSettlementObservationSchema>;
-export type CashuSettlementRequest = Readonly<{ topUpId: string; policy: CashuMintPolicy; amount: string; commitment: string; token: Uint8Array }>;
-export type CashuObserveRequest = Readonly<{ topUpId: string; policy: CashuMintPolicy; commitment: string; amount: string; token?: Uint8Array }>;
+export type CashuSettlementRequest = Readonly<{ topUpId: string; policy: CashuMintPolicy; amount: string; commitment: string; token: Uint8Array; signal: AbortSignal }>;
+export type CashuObserveRequest = Readonly<{ topUpId: string; policy: CashuMintPolicy; commitment: string; amount: string; token?: Uint8Array; signal: AbortSignal }>;
 export type CashuTreasuryState = "held_at_trusted_mint" | "melted_settled" | "failed" | "unknown";
 
 /** Adapter-only port. Its normalized observations have no access to funding or ledger authority. */
 export interface CashuSettlementPort {
   settle(request: CashuSettlementRequest): Promise<CashuSettlementObservation>;
   observe(request: CashuObserveRequest): Promise<CashuSettlementObservation>;
-  reconcileTreasury(input: Readonly<{ topUpId: string; commitment: string }>): Promise<Readonly<{ state: CashuTreasuryState }>>;
+  reconcileTreasury(input: Readonly<{ topUpId: string; commitment: string; signal: AbortSignal }>): Promise<Readonly<{ state: CashuTreasuryState }>>;
 }
 
 function failed(code: Extract<CashuSettlementObservation, { status: "failed" }>["code"]): CashuSettlementObservation { return { status: "failed", code }; }
@@ -41,6 +41,7 @@ function codeOf(error: unknown): Extract<CashuSettlementObservation, { status: "
 export class CashuTsSettlementAdapter implements CashuSettlementPort {
   async settle(request: CashuSettlementRequest): Promise<CashuSettlementObservation> {
     try {
+      request.signal.throwIfAborted();
       if (request.token.byteLength === 0 || request.token.byteLength > 8_192) return failed("malformed");
       const decoded = getDecodedToken(new TextDecoder().decode(request.token), []);
       const mint = mintPolicy(request.policy, decoded.mint);
@@ -58,8 +59,11 @@ export class CashuTsSettlementAdapter implements CashuSettlementPort {
       const keysetId = [...proofIds][0]!;
       const wallet = new Wallet(mint.url, { unit: "sat", keysetId, requireSigDleq: mint.requireDleq });
       await wallet.loadMint();
+      request.signal.throwIfAborted();
       const preview = await wallet.ops.receive(decoded).keyset(keysetId).requireDleq(mint.requireDleq).prepare();
+      request.signal.throwIfAborted();
       await wallet.completeSwap(preview);
+      request.signal.throwIfAborted();
       return { status: "verified", externalReference: `cashu:${request.commitment}`, settlementReference: `cashu-swap:${request.commitment}`, verifiedAt: new Date().toISOString() };
     } catch (error) { return failed(codeOf(error)); }
   }
@@ -79,7 +83,7 @@ export class CashuTsSettlementAdapter implements CashuSettlementPort {
 /** Deterministic test adapter: it returns observations only and cannot credit accounts. */
 export class FakeCashuSettlementPort implements CashuSettlementPort {
   settleCalls = 0; observeCalls = 0; treasuryCalls = 0;
-  requests: CashuSettlementRequest[] = [];
+  requests: Omit<CashuSettlementRequest, "signal">[] = [];
   #settlements: CashuSettlementObservation[] = [];
   #observations: CashuSettlementObservation[] = [];
   #treasury: Readonly<{ state: CashuTreasuryState }>[] = [];
@@ -89,7 +93,9 @@ export class FakeCashuSettlementPort implements CashuSettlementPort {
   nextTreasury(value: Readonly<{ state: CashuTreasuryState }>): void { this.#treasury.push(value); }
   effectThenThrowOnce(value: CashuSettlementObservation): void { this.#effectThenThrow = CashuSettlementObservationSchema.parse(value); }
   async settle(request: CashuSettlementRequest): Promise<CashuSettlementObservation> {
-    this.settleCalls += 1; this.requests.push(structuredClone(request));
+    request.signal.throwIfAborted();
+    const { signal: _, ...recorded } = request;
+    this.settleCalls += 1; this.requests.push(structuredClone(recorded));
     if (this.#effectThenThrow) {
       const observed = this.#effectThenThrow; this.#effectThenThrow = undefined;
       this.#observations.push(observed);

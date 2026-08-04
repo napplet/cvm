@@ -4,16 +4,17 @@ milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
 current_phase: 2
 current_phase_name: Trusted Core & Isolated Agent Execution
-status: planning
-stopped_at: Phase 2 plan revision 2 present on disk; independent plan recheck pending
-last_updated: "2026-08-04T10:25:30.000Z"
+status: executing
+stopped_at: Phase 2 plans verified; ready to execute 02-01-PLAN.md
+last_updated: "2026-08-04T10:35:10.125Z"
 last_activity: 2026-08-04
-last_activity_desc: Repaired v1.0 milestone hierarchy; Phase 2 remains in planning at plan recheck
+last_activity_desc: Phase 2 planned and independently verified under v1.0
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 12
   completed_plans: 6
+  percent: 14
 ---
 
 # Project State
@@ -29,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 2 — Trusted Core & Isolated Agent Execution
-Plan: 6 plans drafted, 0 executed; revision 2 is on disk and awaits independent plan recheck
-Status: Planning
-Last activity: 2026-08-04 — v1.0 hierarchy repaired without changing Phase 2 execution state
+Plan: 01 of 6 — ready to execute
+Status: Ready to execute
+Last activity: 2026-08-04 — Phase 2 plans passed independent verification and deterministic coverage gates
 
 Progress: [█░░░░░░░░░] 14% of milestone phases complete; Phase 2 execution 0/6
 
@@ -39,10 +40,10 @@ Progress: [█░░░░░░░░░] 14% of milestone phases complete; Pha
 
 **v1.0 — Safe Napplet Generation MVP**
 
-- Phases: 1 complete, Phase 2 active in planning, Phases 3–7 remaining.
+- Phases: 1 complete, Phase 2 active and ready to execute, Phases 3–7 remaining.
 - Plans: 6/12 known plans executed; Phase 1 accounts for all completed plans.
 - Requirements: 54/54 v1 requirements assigned; 6 complete, 48 pending.
-- Next checkpoint: rerun the Phase 2 plan checker against the six revised on-disk plans before execution.
+- Next checkpoint: execute Phase 2 Wave 1 (`02-01-PLAN.md`).
 
 ## Performance Metrics
 
@@ -100,7 +101,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Rerun the independent Phase 2 plan checker; do not execute until the revised single-authority `WorkerPort` wiring passes.
+- Execute Phase 2 Wave 1 (`02-01-PLAN.md`) before the parallel Wave 2 expansions.
 
 ### Blockers/Concerns
 
@@ -119,5 +120,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-08-03T20:44:39.095Z
-Stopped at: Phase 2 plan revision 2 present on disk; independent plan recheck pending
+Stopped at: Phase 2 plans verified; ready to execute 02-01-PLAN.md
 Resume file: None

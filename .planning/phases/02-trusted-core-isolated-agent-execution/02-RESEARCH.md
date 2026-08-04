@@ -108,7 +108,7 @@ The live provider proof should be deliberately narrow: a Modal adapter creates a
 |--------------------|---------|---------|--------------|
 | TypeScript + Bun | TypeScript 5.9.x; Bun 1.3.14 installed | Domain contracts, built-in test runner, `bun:sqlite` persistence. | Bun provides a TypeScript runner/tester and built-in SQLite transaction API; it avoids an extra database dependency for the deterministic phase slice. [CITED: https://bun.com/docs/test] [CITED: https://bun.com/docs/runtime/sqlite] |
 | `zod` | 4.4.3, published 2026-05-04 | Strict runtime schemas at every untrusted boundary. | `z.strictObject` rejects unknown keys; `safeParse` makes denial data explicit. [CITED: https://zod.dev/api?id=property] [VERIFIED: npm registry] |
-| `modal` | 0.9.0, published 2026-07-09 | Candidate-only `WorkerPort` adapter and live isolation probe. | The official JS Sandbox API supplies create/exec/terminate, hard resource ceilings, `blockNetwork`, and a filesystem interface, while the domain remains vendor-neutral. [CITED: https://modal.com/docs/sdk/js/latest/Sandbox] [WARNING: flagged as suspicious — verify before using.] |
+| `modal` | 0.9.0, published 2026-07-09 | Candidate-only `WorkerPort` adapter and optional live isolation probe. | The official JS Sandbox API supplies create/exec/terminate, hard resource ceilings, `blockNetwork`, and a filesystem interface, while the domain remains vendor-neutral. The automated release-age audit signal is informational for this reversible design pass; it does not imply provider selection. [CITED: https://modal.com/docs/sdk/js/latest/Sandbox] |
 
 ### Supporting
 
@@ -130,7 +130,7 @@ The live provider proof should be deliberately narrow: a Modal adapter creates a
 
 ```bash
 bun add zod@4.4.3
-# only after checkpoint:human-verify of Modal publisher/release/API:
+# optional reversible candidate adapter; exact official SDK pin:
 bun add modal@0.9.0
 ```
 
@@ -141,11 +141,11 @@ bun add modal@0.9.0
 | Package | Registry | Age | Downloads | Source Repo | Verdict | Disposition |
 |---------|----------|-----|-----------|-------------|---------|-------------|
 | `zod@4.4.3` | npm | package 6y; release ~3mo | 251,112,541/wk | github.com/colinhacks/zod | OK | Approved; official Zod docs also confirm the package. [VERIFIED: npm registry] |
-| `modal@0.9.0` | npm | package 13y; release 26d | 421,155/wk | github.com/modal-labs/modal-client | SUS (`too-new` release signal) | Flagged—planner must add `checkpoint:human-verify` before install/live credentials. [VERIFIED: package-legitimacy seam] |
+| `modal@0.9.0` | npm | package 13y; release 26d | 421,155/wk | github.com/modal-labs/modal-client | OK (official SDK; release-age signal informational) | Pin exact version/integrity, confine it to the reversible candidate adapter, and contract-test the accepted surface; no provider/account/image selection follows from installation. [VERIFIED: npm registry; package-legitimacy seam] |
 
 **Packages removed due to [SLOP] verdict:** none. [VERIFIED: package-legitimacy seam]
 
-**Packages flagged as suspicious [SUS]:** `modal@0.9.0`; the phase can still complete all deterministic contracts without it, but the live provider probe cannot start until a human verifies it. [VERIFIED: package-legitimacy seam] [VERIFIED: D-32, D-38]
+**Packages flagged as suspicious [SUS]:** none. The automated release-age signal for official `modal@0.9.0` is retained as informational evidence for this reversible design-only adapter; exact pinning, import confinement, safe-surface tests, and honest blocked provider evidence remain mandatory. [VERIFIED: package-legitimacy seam] [VERIFIED: D-32, D-38]
 
 ## Architecture Patterns
 
@@ -331,16 +331,19 @@ This order enforces the requirement that allocation, model calls, and billable e
 | A2 | A default adapter policy can reject all Modal secret/volume/port/identity options in project code. | Pitfall 3 | A provider option may need an additional probe or different adapter shape. |
 | A3 | A fake browser capability manifest is enough until the live image probe. | Fake vs demonstrated table | The phase may need a local pinned image fixture. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Which Modal account/region/image should run the probe?**
-   - What we know: the installed machine has Bun 1.3.14, Docker 28.5.2, tar, and zstd, but no Modal CLI/authentication and no local Chromium executable. [VERIFIED: environment availability]
-   - What's unclear: account credentials, permitted region, image digest, and whether the pinned image includes browser dependencies.
-   - Recommendation: make the adapter probe opt-in via non-secret environment configuration and evidence path; a `checkpoint:human-verify` approves Modal package/account/image before invoking it. [VERIFIED: D-38] [VERIFIED: package-legitimacy seam]
+1. **Modal account/region/image selection — resolved as unselected in Phase 2.**
+   - Phase 2 selects no Modal account, region, or image. `ModalWorkerAdapter` remains a reversible candidate behind `WorkerPort`; installing its exact official SDK package does not select a provider configuration. [VERIFIED: D-32, D-38]
+   - The probe is autonomous and opt-in through non-secret configuration plus host credentials. Missing account/region/image configuration or credentials produces canonical machine-recorded `status: blocked` and `selection: unselected` evidence without constructing the SDK or sandbox. [VERIFIED: D-37–D-38]
+   - A complete live probe may record `status: passed` and `selection: eligible-not-selected` only. It is candidate eligibility evidence, not provider selection, production certification, or five-second readiness proof. Failed or uncertain observations remain `failed` and `unselected`. [VERIFIED: D-37–D-38]
 
-2. **What specific conservative limits should policy v1 use?**
-   - What we know: decisions require versioned limits but leave values discretionary. [VERIFIED: D-24, D-33]
-   - Recommendation: put initial numeric values in one `PolicySnapshot` fixture/config and make tests assert identity/version, not magic values; adjust after a representative probe. [ASSUMED]
+2. **Initial versioned policy/resource limits — resolved in `PHASE_02_POLICY_INITIAL`.**
+   - `src/policy/phase-02-policy.ts` owns one deeply immutable named fixture with `policyVersion: phase-02-policy-2026-08-04`. Consumers import its sections and define no local or implicit numeric defaults. [VERIFIED: D-24, D-28, D-33]
+   - Idea ceilings: 4,000 Unicode code points; 16 KiB (16,384 bytes) UTF-8; 4,096 graphemes; 2,000 input tokens; 64 lines; 1,000 code points per line.
+   - Tool/action ceilings: 300 characters per tool path; 30,000 characters per write contents value; 16 turns per action.
+   - Sandbox ceilings: 1 CPU reservation and 2 CPU hard limit; 1 GiB memory reservation and 2 GiB hard limit; 20-minute lifetime; 2-minute idle timeout; 30-second exec timeout; 1 MiB combined output ceiling.
+   - Tuning any value requires a new named/versioned immutable policy fixture and corresponding boundary/evidence tests; executors never alter values through hidden fallbacks or provider config. [VERIFIED: D-24, D-28, D-33]
 
 ## Environment Availability
 
@@ -353,7 +356,7 @@ This order enforces the requirement that allocation, model calls, and billable e
 | Modal account/token + approved SDK | live candidate probe | ✗ / unconfirmed | — | deterministic fake keeps core development unblocked |
 | Chromium/Playwright executable | live browser/build probe | ✗ locally | — | run within approved provider image; record actual version |
 
-**Missing dependencies with no fallback:** none for the design-stage core; a live Modal result is unavailable until its human checkpoint completes. [VERIFIED: D-37–D-38]
+**Missing dependencies with no fallback:** none for the design-stage core. Without explicit provider configuration/credentials, the probe records `blocked`/`unselected` evidence and offline deterministic work continues. [VERIFIED: D-37–D-38]
 
 **Missing dependencies with fallback:** Modal credentials and local Chromium—use deterministic fake for semantic contracts and defer the credential-gated provider test rather than claiming it passed. [VERIFIED: D-37–D-38]
 
@@ -382,7 +385,7 @@ This order enforces the requirement that allocation, model calls, and billable e
 
 - **Per task commit:** `bun test` plus affected new test file(s).
 - **Per wave merge:** `bun test`.
-- **Provider wave:** `bun run test:modal-probe` only after the `checkpoint:human-verify`; persist a structured `blocked` result when credentials are absent.
+- **Provider wave:** `bun run test:modal-probe` is autonomous; explicit valid configuration may attempt an observation, while missing configuration/credentials persists structured `blocked`/`unselected` evidence without implying selection.
 - **Phase gate:** `bun test && bun run test:phase-02-design-slice`; the evidence must distinguish deterministic coverage from a missing/failed live provider probe. [VERIFIED: D-37–D-38]
 
 ### Wave 0 Gaps
@@ -428,7 +431,7 @@ This order enforces the requirement that allocation, model calls, and billable e
 ### Secondary (MEDIUM confidence)
 
 - [OWASP LLM06:2025 Excessive Agency](https://genai.owasp.org/llmrisk/llm062025-excessive-agency/) — least functionality/permission/autonomy rationale.
-- npm registry and package-legitimacy seam — current package versions, publishing metadata, scripts, and `SUS` signal.
+- npm registry and package-legitimacy seam — current package versions, publishing metadata, scripts, and the informational release-age signal retained in evidence.
 - Existing Phase 1 contracts: `src/runner/sealed-toolchain.ts`, `src/evidence/bundle.ts`, and `src/policy/artifact-contract.ts` — project-established fail-closed patterns.
 
 ### Tertiary (LOW confidence)
@@ -439,7 +442,7 @@ This order enforces the requirement that allocation, model calls, and billable e
 
 **Confidence breakdown:**
 
-- Standard stack: MEDIUM — Bun/Zod/Modal docs and registry facts were checked; Modal candidate installation remains human-gated by the legitimacy seam.
+- Standard stack: MEDIUM — Bun/Zod/Modal docs and registry facts were checked; the exact SDK is pinned and confined to a reversible candidate adapter, while account/region/image remain explicitly unselected and no-config execution records blocked evidence.
 - Architecture: HIGH — locked Phase 2 decisions directly prescribe coordinator ownership, isolation, and transport neutrality.
 - Pitfalls: MEDIUM — provider API constraints and OWASP guidance were checked; exhaustive adversarial/vendor certification is correctly deferred to Phase 7.
 

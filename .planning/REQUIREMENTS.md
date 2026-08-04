@@ -140,7 +140,7 @@ Milestone v1.0 owns every row in this table. Existing requirement IDs and phase 
 | Phase | v1.0 requirement groups | Count | Current status |
 |-------|--------------------------|------:|----------------|
 | Phase 1 | GEN-01–GEN-04, SAFE-05–SAFE-06 | 6 | Complete |
-| Phase 2 | SESS-05, SAFE-01–SAFE-04 | 5 | Pending — planning/recheck |
+| Phase 2 | SESS-05, SAFE-01–SAFE-04 | 5 | Pending — planned/ready to execute |
 | Phase 3 | CTX-01–CTX-04, PAY-01–PAY-07, BILL-01–BILL-02, BILL-06 | 14 | Pending |
 | Phase 4 | BILL-03–BILL-05, SESS-01, SESS-03–SESS-04, GEN-05–GEN-06 | 8 | Pending |
 | Phase 5 | CONT-01–CONT-07 | 7 | Pending |

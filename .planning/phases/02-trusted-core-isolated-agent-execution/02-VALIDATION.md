@@ -39,12 +39,18 @@ created: 2026-08-04
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 02-01-01 | 01 | 1 | SAFE-01, SAFE-02 | T-02-01 | Invalid input cannot allocate/invoke; classifier cannot expand policy | unit/table | `bun test tests/admission/admission-policy.test.ts tests/admission/risk-policy.test.ts` | ❌ W0 | ⬜ pending |
-| 02-01-02 | 01 | 1 | SESS-05 | T-02-02 | Replay is exact and stale/concurrent actions cannot double-advance | unit/integration | `bun test tests/domain/session-service.test.ts tests/persistence/session-store.test.ts` | ❌ W0 | ⬜ pending |
-| 02-02-01 | 02 | 2 | SAFE-03 | T-02-03 | Unknown, stale, expired, cross-session, or escaping tool calls have zero side effects | unit/contract | `bun test tests/capabilities/scoped-tool-gateway.test.ts tests/worker-port/contracts.test.ts` | ❌ W0 | ⬜ pending |
-| 02-02-02 | 02 | 2 | SAFE-04 | T-02-04 | WorkerPort fake proves semantic confinement and portable checkpoint contract | unit/contract | `bun test tests/worker-port/fake-worker.test.ts` | ❌ W0 | ⬜ pending |
-| 02-03-01 | 03 | 3 | SAFE-04 | T-02-05 | Provider probe records isolation, egress, gateway, browser/build, and checkpoint observations without false selection | opt-in integration | `bun run test:modal-probe` | ❌ W0 | ⬜ pending |
-| 02-03-02 | 03 | 3 | SESS-05, SAFE-01, SAFE-02, SAFE-03, SAFE-04 | T-02-01–05 | Design-slice evidence distinguishes deterministic pass, provider pass, provider block, and Phase 7 deferral | integration | `bun run test:phase-02-design-slice` | ❌ W0 | ⬜ pending |
+| 02-01-01 | 01 | 1 | SESS-05, SAFE-01, SAFE-02, SAFE-03, SAFE-04 | T-02-01–03 | Tracer/policy fixture proves one admitted, mediated, atomically recorded action; exact replay/denials have zero repeated/forbidden effects and every numeric limit has one immutable identity | end-to-end tracer | `bun test tests/phase-02/tracer.test.ts` | ❌ W0 | ⬜ pending |
+| 02-02-01 | 02 | 2 | SAFE-01 | T-02-04, T-02-06 | Canonical Unicode/byte/code-point/grapheme/token/structure boundaries reject before allocation and retain redacted evidence | unit/table | `bun test tests/admission/admission-policy.test.ts` | ❌ W0 | ⬜ pending |
+| 02-02-02 | 02 | 2 | SAFE-02 | T-02-05–06 | Classifier faults deny and every signal result can only preserve/reduce the fixed base grant | unit/table | `bun test tests/admission/risk-policy.test.ts` | ❌ W0 | ⬜ pending |
+| 02-03-01 | 03 | 2 | SESS-05 | T-02-07–10 | Memory double satisfies the port contract; file-backed SQLite atomically persists session/version, fingerprint/result, and evidence identity through rollback, concurrency, and close/reopen | persistence integration | `bun test tests/persistence/session-store.test.ts tests/persistence/sqlite-session-store.test.ts` | ❌ W0 | ⬜ pending |
+| 02-03-02 | 03 | 2 | SESS-05 | T-02-07–10 | SessionService exposes exact replay/conflict/stale/interruption semantics over the durable store without automatic mutation retry | domain + persistence | `bun test tests/domain/session-service.test.ts tests/persistence/session-store.test.ts tests/persistence/sqlite-session-store.test.ts` | ❌ W0 | ⬜ pending |
+| 02-04-01 | 04 | 2 | SAFE-03 | T-02-11–12 | Unknown, conflicting, stale, expired, cross-session, authority-bearing, or escaping tool calls are denied before dispatcher effects | unit/contract | `bun test tests/capabilities/scoped-tool-gateway.test.ts tests/worker-port/contracts.test.ts` | ❌ W0 | ⬜ pending |
+| 02-04-02 | 04 | 2 | SAFE-04 | T-02-12–14 | Deterministic fake proves workspace/credential/network confinement, terminal-event fencing, gateway-only authority, 16-turn cap, and portable checkpoint binding | unit/contract | `bun test tests/worker-port/fake-worker.test.ts` | ❌ W0 | ⬜ pending |
+| 02-05-01 | 05 | 3 | SAFE-04 | T-02-15–18, T-02-05-SC | Modal adapter maps only the strict project config/policy into default-deny SDK calls and terminates on success/failure/abort/overflow | adapter contract | `bun test tests/integration/modal-probe.test.ts --test-name-pattern='adapter contract'` | ❌ W0 | ⬜ pending |
+| 02-05-02 | 05 | 3 | SAFE-04 | T-02-15–18 | Provider probe records passed/failed/blocked isolation, egress, gateway, browser/build, checkpoint, and termination evidence without false selection | opt-in integration | `env -u MODAL_TOKEN_ID -u MODAL_TOKEN_SECRET -u NAPPLET_CVM_MODAL_PROBE_CONFIG bun run test:modal-probe && bun test tests/integration/modal-probe.test.ts` | ❌ W0 | ⬜ pending |
+| 02-06-01 | 06 | 4 | SESS-05, SAFE-01, SAFE-02, SAFE-03, SAFE-04 | T-02-19 | Final SQLite-backed composition preserves boundary order, Phase 1 output gating, durable replay, and zero later effects after any denial | end-to-end composition | `bun test tests/phase-02/tracer.test.ts` | ❌ W0 | ⬜ pending |
+| 02-06-02 | 06 | 4 | SESS-05, SAFE-01, SAFE-02, SAFE-03, SAFE-04 | T-02-21–22 | Exactly 16 deterministic fixtures enforce result/state/effect/evidence oracles with zero tolerance and no LLM security judgment | deterministic eval | `bun run eval:phase-02` | ❌ W0 | ⬜ pending |
+| 02-06-03 | 06 | 4 | SESS-05, SAFE-01, SAFE-02, SAFE-03, SAFE-04 | T-02-20–22 | Immutable design evidence binds SQLite/policy/check identities and preserves provider blocked/failed/passed status separately from offline readiness | integration/evidence | `bun run test:phase-02-design-slice` | ❌ W0 | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -52,11 +58,12 @@ created: 2026-08-04
 
 ## Wave 0 Requirements
 
-- [ ] `tests/admission/admission-policy.test.ts` and `tests/admission/risk-policy.test.ts` — SAFE-01/SAFE-02 validation and classifier-independence matrix.
-- [ ] `tests/domain/session-service.test.ts` and `tests/persistence/session-store.test.ts` — SESS-05 replay/conflict/concurrency matrix.
-- [ ] `tests/capabilities/scoped-tool-gateway.test.ts` and `tests/worker-port/contracts.test.ts` — SAFE-03 typed authority and denial matrix.
-- [ ] `tests/worker-port/fake-worker.test.ts` and `tests/integration/modal-probe.test.ts` — SAFE-04 deterministic port plus opt-in provider evidence.
-- [ ] `tests/verification/phase-02-design-slice.test.ts` and `test:phase-02-design-slice` — immutable phase evidence with truthful provider status.
+- [ ] **Plan 01 — tracer/policy:** `tests/phase-02/tracer.test.ts` owns the end-to-end tracer, exact policy-fixture identity/immutability, replay, stale/conflict, and representative zero-effect denials.
+- [ ] **Plan 02 — admission/risk:** `tests/admission/admission-policy.test.ts` and `tests/admission/risk-policy.test.ts` own SAFE-01 numeric/Unicode/structure boundaries and SAFE-02 restrictive-only/fault semantics.
+- [ ] **Plan 03 — memory + durable SQLite/session service:** `tests/persistence/session-store.test.ts`, `tests/persistence/sqlite-session-store.test.ts`, and `tests/domain/session-service.test.ts` own the port double, atomic file-backed persistence, close/reopen, rollback, replay, conflict, stale, interruption, and controlled concurrency.
+- [ ] **Plan 04 — capability/fake/checkpoint:** `tests/capabilities/scoped-tool-gateway.test.ts`, `tests/worker-port/contracts.test.ts`, and `tests/worker-port/fake-worker.test.ts` own grants, complete mediation, strict WorkerPort schemas, deterministic isolation, action limits, and checkpoint binding.
+- [ ] **Plan 05 — Modal adapter/provider evidence:** `tests/integration/modal-probe.test.ts` plus `test:modal-probe` own safe SDK mapping and canonical passed/failed/blocked provider observation; the no-config command must emit blocked/unselected evidence autonomously.
+- [ ] **Plan 06 — final composition/reference/design evidence:** the updated `tests/phase-02/tracer.test.ts`, `tests/evals/phase-02-reference-set.test.ts` through `eval:phase-02`, and `tests/verification/phase-02-design-slice.test.ts` through `test:phase-02-design-slice` own final SQLite-backed composition, the 16-case reference set, and immutable provider-separated evidence.
 
 ---
 

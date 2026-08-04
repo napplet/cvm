@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { GrantRegistry, ScopedToolGateway, type CapabilityGrant } from "../../src/capabilities/scoped-tool-gateway";
 import { PHASE_02_POLICY_INITIAL } from "../../src/policy/phase-02-policy";
-import { DeterministicFakeWorker, FakeWorkspaceHarness } from "../../src/worker-port/fake-worker";
+import { DeterministicFakeWorker, FakeWorkspaceHarness, validateCheckpointProposal } from "../../src/worker-port/fake-worker";
 
 function binding(sessionId = "session-a", workspaceId = `workspace-${sessionId}`) {
   return { sessionId, actionId: `action-${sessionId}`, expectedVersion: 0, policyVersion: PHASE_02_POLICY_INITIAL.policyVersion, capabilityGrant: `grant-${sessionId}`, workspaceId, idea: "Create one focused applet." };
@@ -66,6 +66,27 @@ describe("DeterministicFakeWorker", () => {
     const worker = new DeterministicFakeWorker({ gateway: validGateway, script: [{ kind: "write", path: "src/App.tsx", content: "export {};" }, { kind: "checkpoint", archive: "archive", inventory: ["src/App.tsx"] }] });
     const result = await worker.run(validRequest, new AbortController().signal);
     expect(result).toMatchObject({ status: "completed", checkpoint: { sessionId: validRequest.sessionId, actionId: validRequest.actionId, workspaceId: validRequest.workspaceId, formatVersion: "portable-checkpoint-v1" } });
-    if (result.status === "completed") expect(result.checkpoint?.archiveSha256).toMatch(/^[a-f0-9]{64}$/);
+    if (result.status === "completed") {
+      expect(result.checkpoint?.archiveSha256).toMatch(/^[a-f0-9]{64}$/);
+      expect(await validateCheckpointProposal(result.checkpoint, validRequest)).toEqual(result.checkpoint);
+      expect(await validateCheckpointProposal({ ...result.checkpoint!, sessionId: "session-other" }, validRequest)).toBeUndefined();
+      expect(await validateCheckpointProposal({ ...result.checkpoint!, archiveBase64: "dGFtcGVyZWQ=" }, validRequest)).toBeUndefined();
+    }
+  });
+
+  test("keeps concurrent adjacent sessions and equal turn scripts isolated", async () => {
+    const left = setup("session-a");
+    const right = setup("session-a-1");
+    const leftWorker = new DeterministicFakeWorker({ gateway: left.gateway, workspace: left.workspace, script: [{ kind: "write", path: "out.txt", content: "left" }] });
+    const rightWorker = new DeterministicFakeWorker({ gateway: right.gateway, workspace: right.workspace, script: [{ kind: "write", path: "out.txt", content: "right" }] });
+    const [leftResult, rightResult] = await Promise.all([
+      leftWorker.run(left.request, new AbortController().signal),
+      rightWorker.run(right.request, new AbortController().signal),
+    ]);
+    expect(leftResult.status).toBe("completed");
+    expect(rightResult.status).toBe("completed");
+    expect(left.workspace.read("out.txt")).toBe("left");
+    expect(right.workspace.read("out.txt")).toBe("right");
+    expect(left.workspace.read("../session-a-1/out.txt")).toBeUndefined();
   });
 });

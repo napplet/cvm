@@ -108,7 +108,7 @@ export const WorkerRunResultSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("unavailable"), code: z.literal("WORKER_UNAVAILABLE") }).strict(),
   z.object({ status: z.literal("interrupted"), code: z.literal("WORKER_INTERRUPTED") }).strict(),
   z.object({ status: z.literal("limited"), code: z.literal("WORKER_TURN_LIMIT") }).strict(),
-  z.object({ status: z.literal("blocked"), code: z.literal("WORKER_STALE_EVENT") }).strict(),
+  z.object({ status: z.literal("blocked"), code: z.enum(["WORKER_STALE_EVENT", "WORKER_GATEWAY_DENIED", "CHECKPOINT_BOUNDARY_REQUIRED"]) }).strict(),
 ]);
 export const ResultSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("completed"), code: z.literal("ACTION_COMMITTED"), version: z.number().int().positive(), evidenceDigest: DigestSchema }).strict(),

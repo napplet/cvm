@@ -10,6 +10,7 @@ import { evaluateArtifactContract } from "../policy/artifact-contract";
 import { type ArtifactVerifier } from "../phase-02/trusted-core";
 import { PrincipalSchema } from "../phase-03/contracts";
 import { canonicalJson } from "../promotion/schema";
+import { evaluateAutomaticRepair } from "./repair-policy";
 
 const DecimalSchema = z.string().regex(/^[1-9][0-9]*$/u);
 export const StartSessionCommandSchema = z.object({
@@ -21,6 +22,11 @@ export const ReviseSessionCommandSchema = z.object({
   principal: PrincipalSchema, sessionId: z.string().min(1), admissionReference: z.string().min(1), idempotencyKey: z.string().min(1),
   expectedVersion: z.number().int().nonnegative(), maximum: DecimalSchema, policyVersion: z.string().min(1), revision: z.string(),
 }).strict();
+/** Internal coordinator command. A client cannot select repair as a worker tool. */
+export const TriggerValidationRepairCommandSchema = z.object({
+  principal: PrincipalSchema, sessionId: z.string().min(1), admissionReference: z.string().min(1), idempotencyKey: z.string().min(1), expectedVersion: z.number().int().nonnegative(), maximum: DecimalSchema, policyVersion: z.string().min(1),
+  originatingActionId: z.string().min(1), originatingIdempotencyKey: z.string().min(1), workspaceLineage: z.string().min(1), snapshotReference: z.string().min(1), failedArtifactId: z.string().min(1), validationReportReference: z.string().min(1),
+}).strict();
 export const SessionActionResultSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("completed"), code: z.literal("ACTION_COMMITTED"), accountId: z.string().min(1), sessionId: z.string().min(1), sessionVersion: z.number().int().positive(), artifactVersion: z.number().int().positive(), confirmedSpend: z.string(), remainingCap: z.string(), remainingBalance: z.string(), nextAction: z.literal("revise_session"), operationId: z.string().min(1) }).strict(),
   z.object({ status: z.literal("failed"), code: z.literal("WORKER_OR_ARTIFACT_FAILED"), accountId: z.string().min(1), sessionId: z.string().min(1), sessionVersion: z.number().int().nonnegative(), artifactVersion: z.number().int().nonnegative(), confirmedSpend: z.string(), remainingCap: z.string(), remainingBalance: z.string(), nextAction: z.literal("revise_session"), operationId: z.string().min(1) }).strict(),
@@ -30,6 +36,7 @@ export const SessionActionResultSchema = z.discriminatedUnion("status", [
 ]);
 export type StartSessionCommand = z.infer<typeof StartSessionCommandSchema>;
 export type ReviseSessionCommand = z.infer<typeof ReviseSessionCommandSchema>;
+export type TriggerValidationRepairCommand = z.infer<typeof TriggerValidationRepairCommandSchema>;
 export type SessionActionResult = z.infer<typeof SessionActionResultSchema>;
 
 const TOKEN_COUNTER = Object.freeze({ version: "phase-02-whitespace-token-counter-v1", count: (idea: string) => idea.trim().split(/\s+/u).filter(Boolean).length });
@@ -41,6 +48,7 @@ async function hash(value: unknown): Promise<string> { const digest = await cryp
 export class MeteredGenerationService {
   #inFlight = new Map<string, Promise<SessionActionResult>>();
   #sessionTails = new Map<string, Promise<void>>();
+  #repairOrigins = new Set<string>();
   constructor(private readonly options: Readonly<{ fundedAdmission: FundedAdmissionService; store: MeteredFundingStore; gateway: ModelGateway; worker: WorkerPort; artifactVerifier: ArtifactVerifier; riskDetector?: RiskSignalDetector }>) {}
 
   async startSession(input: unknown): Promise<SessionActionResult> {
@@ -89,17 +97,44 @@ export class MeteredGenerationService {
     return run;
   }
 
+  /** Creates at most one coordinator-authorized repair action for a failed validation candidate. */
+  async triggerValidationRepair(input: unknown): Promise<SessionActionResult> {
+    const command = TriggerValidationRepairCommandSchema.parse(input);
+    const accountId = await accountIdForPrincipal(command.principal);
+    const fingerprint = await hash({ accountId, command });
+    const key = `${accountId}\u0000${command.idempotencyKey}`;
+    const recorded = await this.options.store.findMeteredAction(accountId, command.idempotencyKey);
+    if (recorded?.fingerprint !== undefined && recorded.fingerprint !== fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
+    if (recorded?.result) return SessionActionResultSchema.parse(recorded.result);
+    const active = this.#inFlight.get(key); if (active) return active;
+    const run = this.#serializeSession(accountId, command.sessionId, async () => {
+      const origin = await this.options.store.findMeteredAction(accountId, command.originatingIdempotencyKey);
+      const session = await this.options.store.sessionStatus(accountId, command.sessionId);
+      const originKey = `${accountId}\u0000${command.sessionId}\u0000${command.originatingActionId}`;
+      const decision = evaluateAutomaticRepair({
+        principalId: accountId, sessionId: command.sessionId, expectedVersion: command.expectedVersion, currentVersion: session?.version ?? -1,
+        workspaceLineage: command.workspaceLineage, snapshotReference: command.snapshotReference, originatingActionId: command.originatingActionId, failedArtifactId: command.failedArtifactId, validationReportReference: command.validationReportReference,
+        priorAutomaticRepairs: this.#repairOrigins.has(originKey) ? 1 : 0, permanentNappletPolicy: origin?.actionId === command.originatingActionId && origin.status === "failed" ? "pass" : "deny", actionAuthorized: true,
+      });
+      if (decision.status === "denied") return SessionActionResultSchema.parse({ status: "denied", code: decision.code });
+      this.#repairOrigins.add(originKey);
+      return this.execute({ ...command, repair: true }, accountId, fingerprint);
+    }).finally(() => this.#inFlight.delete(key));
+    this.#inFlight.set(key, run);
+    return run;
+  }
+
   async sessionStatus(input: Readonly<{ accountId: string; idempotencyKey: string }>): Promise<SessionActionResult | undefined> {
     const action = await this.options.store.findMeteredAction(input.accountId, input.idempotencyKey);
     return action?.result ? SessionActionResultSchema.parse(action.result) : undefined;
   }
 
-  private async execute(command: StartSessionCommand | ReviseSessionCommand, accountId: string, fingerprint: string): Promise<SessionActionResult> {
+  private async execute(command: StartSessionCommand | ReviseSessionCommand | (TriggerValidationRepairCommand & Readonly<{ repair: true }>), accountId: string, fingerprint: string): Promise<SessionActionResult> {
     const profile = PHASE_04_MODEL_PROFILES["code-proposal"];
     const budget = await this.options.fundedAdmission.authorizeActionBudget({ principal: command.principal, admissionReference: command.admissionReference, idempotencyKey: `phase-04:${command.idempotencyKey}`, maximum: command.maximum, unit: "sat" });
     const sessionId = "sessionId" in command ? command.sessionId : `session:${(await hash({ accountId, key: command.idempotencyKey })).slice(0, 24)}`;
     const operationId = `operation:${(await hash({ accountId, key: command.idempotencyKey, profile: profile.id })).slice(0, 24)}`;
-    const actionId = "revision" in command ? `revision:${command.idempotencyKey}` : `start:${command.idempotencyKey}`;
+    const actionId = "repair" in command ? `repair:${command.idempotencyKey}` : "revision" in command ? `revision:${command.idempotencyKey}` : `start:${command.idempotencyKey}`;
     const prepared = await this.options.store.transact(accountId, (transaction) => transaction.prepareMeteredAction({ accountId, idempotencyKey: command.idempotencyKey, fingerprint, sessionId, actionId, expectedVersion: command.expectedVersion, admissionReference: command.admissionReference, actionBudgetReference: budget.reference, maximum: BigInt(command.maximum), operationId, profileId: profile.id, priceCardId: PHASE_04_DETERMINISTIC_PRICE_CARD.id }));
     if (prepared.result) return SessionActionResultSchema.parse(prepared.result);
     const claim = await this.options.store.transact(accountId, (transaction) => transaction.claimProviderOperation(operationId));
@@ -124,7 +159,7 @@ export class MeteredGenerationService {
     await this.options.store.transact(accountId, (transaction) => transaction.recordUsageReceipt({ operationId, protectedEvidenceReference: observation.receipt.provenance.protectedEvidenceReference }));
     let completed = observation.status === "completed";
     try {
-      const idea = "revision" in command ? command.revision : command.idea;
+      const idea = "repair" in command ? "Repair only the server-validated failed candidate within the existing focused napplet boundary." : "revision" in command ? command.revision : command.idea;
       const request = WorkerRunRequestSchema.parse({ sessionId, actionId, expectedVersion: command.expectedVersion, policyVersion: command.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId: `workspace:${sessionId}`, idea: riskSafeIdea(idea) });
       const workerResult = WorkerRunResultSchema.parse(await this.options.worker.run(request, new AbortController().signal));
       if (workerResult.status !== "completed") completed = false;

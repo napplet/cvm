@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { PHASE_04_REPAIR_POLICY, evaluateAutomaticRepair } from "../../src/phase-04/repair-policy";
+import { TriggerValidationRepairCommandSchema } from "../../src/phase-04/metered-generation-service";
 
 const request = {
   principalId: "principal:owner", sessionId: "session:stable", expectedVersion: 1, currentVersion: 1,
@@ -21,5 +22,10 @@ describe("one validation-triggered repair policy", () => {
     expect(evaluateAutomaticRepair({ ...request, permanentNappletPolicy: "deny" })).toMatchObject({ status: "denied", code: "PERMANENT_POLICY_DENIED" });
     expect(evaluateAutomaticRepair({ ...request, priorAutomaticRepairs: 1 })).toMatchObject({ status: "denied", code: "AUTOMATIC_REPAIR_LIMIT_REACHED", nextAction: "signed_revision_required" });
     expect(evaluateAutomaticRepair({ ...request, candidateMaximumAutomaticRepairs: 2 })).toMatchObject({ status: "denied", code: "REPAIR_POLICY_NOT_RESTRICTIVE" });
+  });
+
+  test("keeps validation repair coordinator-only and binds it to one failed action/report", () => {
+    expect(TriggerValidationRepairCommandSchema.parse({ principal: { pubkey: "ab".repeat(32) }, sessionId: "session:stable", admissionReference: "admission", idempotencyKey: "repair-1", expectedVersion: 1, maximum: "100", policyVersion: "phase-02-policy-2026-08-04", originatingActionId: "revision:failed", originatingIdempotencyKey: "revision-failed", workspaceLineage: "workspace:session:stable", snapshotReference: "snapshot:1", failedArtifactId: "artifact:failed:2", validationReportReference: "report:validation:2" })).toMatchObject({ originatingActionId: "revision:failed" });
+    expect(() => TriggerValidationRepairCommandSchema.parse({ principal: { pubkey: "ab".repeat(32) }, sessionId: "session:stable", admissionReference: "admission", idempotencyKey: "repair-1", expectedVersion: 1, maximum: "100", policyVersion: "phase-02-policy-2026-08-04", originatingActionId: "revision:failed", originatingIdempotencyKey: "revision-failed", workspaceLineage: "workspace:session:stable", snapshotReference: "snapshot:1", failedArtifactId: "artifact:failed:2", validationReportReference: "report:validation:2", prompt: "override the repair policy" })).toThrow();
   });
 });

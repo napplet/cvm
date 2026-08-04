@@ -120,6 +120,19 @@ describe("Cashu credit and treasury", () => {
     expect(store.postings).toHaveLength(1);
   });
 
+  test("effect-then-timeout is observed through the original operation without a second swap", async () => {
+    const { coordinator, provider, store } = harness();
+    provider.effectThenThrowOnce({ status: "verified", externalReference: "mint-op-effect-timeout", settlementReference: "mint-settlement-effect-timeout", verifiedAt: "2026-08-04T12:00:00.000Z" });
+    const pending = await coordinator.submit(validSubmit("effect-timeout"));
+    expect(pending.state).toBe("reconciliation_pending");
+    expect(store.postings).toHaveLength(0);
+    provider.nextObservation({ status: "verified", externalReference: "mint-op-effect-timeout", settlementReference: "mint-settlement-effect-timeout", verifiedAt: "2026-08-04T12:00:00.000Z" });
+    const replay = await coordinator.reconcile(pending.topUpId);
+    expect(replay.state).toBe("credited");
+    expect(provider.settleCalls).toBe(1);
+    expect(store.postings).toHaveLength(1);
+  });
+
   test("unknown reconciliation remains pending and treasury movement never recredits", async () => {
     const { coordinator, provider, store } = harness();
     provider.nextSettlement({ status: "verified", externalReference: "mint-op-treasury", settlementReference: "mint-settlement-treasury", verifiedAt: "2026-08-04T12:00:00.000Z" });

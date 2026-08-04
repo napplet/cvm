@@ -3,8 +3,10 @@ import fixture from "../fixtures/cashu-phase-03.json";
 import { FundingService } from "../../src/funding/funding-service";
 import { CashuMintPolicyRegistry } from "../../src/funding/cashu-mint-policy";
 import { FakeCashuSettlementPort } from "../../src/funding/cashu-provider";
+import { CashuTsSettlementAdapter } from "../../src/funding/cashu-provider";
 import { CashuTopUpCoordinator, InMemoryCashuTopUpRepository } from "../../src/funding/cashu-top-up";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
+import { getEncodedToken } from "@cashu/cashu-ts";
 
 const principal = { pubkey: "a".repeat(64) };
 const token = new TextEncoder().encode("cashuB-safe-fixture-token");
@@ -14,12 +16,15 @@ const secondPolicy = fixture.policies[1]!;
 class FakeCashuVault {
   sealed: readonly { id: string; payloadDigest: string }[] = [];
   expired: string[] = [];
+  contents = new Map<string, Uint8Array>();
   async seal(_: { accountId: string; topUpId: string; rail: "cashu" }, bytes: Uint8Array) {
     const record = { id: `protected:${this.sealed.length + 1}`, payloadDigest: `digest:${bytes.byteLength}` };
     this.sealed = [...this.sealed, record];
+    this.contents.set(record.id, bytes.slice());
     return record;
   }
   async expire(id: string) { this.expired.push(id); }
+  async open(request: { id: string }) { return this.contents.get(request.id)!.slice(); }
 }
 
 function harness() {
@@ -35,6 +40,11 @@ function harness() {
 function validSubmit(topUpId = "cashu-top-up-1") {
   return { principal, idempotencyKey: `submit:${topUpId}`, topUpId, amount: "21", unit: "sat" as const, pmi: fixture.pmi, token };
 }
+
+const adapterToken = new TextEncoder().encode(getEncodedToken({
+  mint: "https://mint-a.example", unit: "sat",
+  proofs: [{ amount: 21n, id: "009a1b2c3d4e5f60", secret: "adapter-secret", C: `02${"11".repeat(32)}`, dleq: { e: "11".repeat(32), s: "22".repeat(32), r: "33".repeat(32) } }],
+}));
 
 describe("Cashu policy", () => {
   test("policy rotation preserves policy-pinned historical mints", () => {
@@ -163,6 +173,38 @@ describe("Cashu credit and treasury", () => {
     expect(signals).toHaveLength(2);
     expect(signals.every((signal) => signal.aborted)).toBeTrue();
     expect(store.postings).toHaveLength(0);
+  });
+
+  test("default Cashu adapter aborts side effects and query-reconciles consumed proofs by the original operation", async () => {
+    let swaps = 0; let observations = 0; const signals: AbortSignal[] = [];
+    const operations = {
+      settle: async (input: { signal: AbortSignal }) => {
+        swaps += 1; signals.push(input.signal);
+        await new Promise<never>((_, reject) => input.signal.addEventListener("abort", () => reject(new Error("SWAP_ABORTED_AFTER_CONSUMPTION")), { once: true }));
+      },
+      observe: async (input: { signal: AbortSignal }) => { observations += 1; signals.push(input.signal); return "spent" as const; },
+    };
+    const policies = new CashuMintPolicyRegistry(firstPolicy);
+    const vault = new FakeCashuVault();
+    const store = new TransactionalMemoryFundingStore();
+    const coordinator = new CashuTopUpCoordinator({
+      policies, vault,
+      provider: new CashuTsSettlementAdapter({ operations, now: () => "2026-08-04T12:00:00.000Z" } as never),
+      funding: new FundingService(store), repository: new InMemoryCashuTopUpRepository(), providerTimeoutMs: 5,
+    } as never);
+    const command = { ...validSubmit("adapter-timeout"), token: adapterToken };
+    const nativeFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Promise<never>(() => undefined)) as typeof fetch;
+    try {
+      expect(await coordinator.submit(command)).toMatchObject({ state: "reconciliation_pending" });
+      expect(await coordinator.reconcile(command.topUpId)).toMatchObject({ state: "credited", settlementReference: expect.stringContaining("adapter-timeout") });
+      expect({ swaps, observations }).toEqual({ swaps: 1, observations: 1 });
+      expect(signals).toHaveLength(2);
+      expect(signals[0]?.aborted).toBeTrue();
+      expect(store.postings).toHaveLength(1);
+    } finally {
+      globalThis.fetch = nativeFetch;
+    }
   });
 
   test("unknown reconciliation remains pending and treasury movement never recredits", async () => {

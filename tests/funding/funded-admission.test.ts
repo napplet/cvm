@@ -32,6 +32,28 @@ class FailOnceFundingStore implements FundingStore {
   }
 }
 
+class FailReleaseFinalizationStore implements FundingStore {
+  acceptAttempts = 0; releaseFinalizations = 0;
+  constructor(readonly inner: FundingStore) {}
+  findRecordedResult(accountId: string, idempotencyKey: string) { return this.inner.findRecordedResult(accountId, idempotencyKey); }
+  status(accountId: string) { return this.inner.status(accountId); }
+  transact<T>(accountId: string, operation: (transaction: FundingTransaction) => Promise<T> | T): Promise<T> {
+    return this.inner.transact(accountId, (transaction) => operation({
+      ...transaction,
+      acceptFundedAdmission: async (input) => {
+        this.acceptAttempts += 1;
+        if (this.acceptAttempts === 1) throw new Error("FAIL_CAP_HOLD_AFTER_CAPACITY");
+        return transaction.acceptFundedAdmission(input);
+      },
+      releaseCapacityIntent: async (intentReference) => {
+        this.releaseFinalizations += 1;
+        if (this.releaseFinalizations === 1) throw new Error("FAIL_5_RELEASE_INTENT_PERSISTENCE");
+        return transaction.releaseCapacityIntent(intentReference);
+      },
+    }));
+  }
+}
+
 describe("FundedAdmissionService", () => {
   test("requires immediately usable capacity before taking a bounded cap hold", async () => {
     const store = new TransactionalMemoryFundingStore();
@@ -220,6 +242,26 @@ describe("FundedAdmissionService", () => {
     expect(await admission.admit(command)).toMatchObject({ status: "reconciliation_pending" });
     expect(await admission.admit(command)).toMatchObject({ status: "reconciliation_pending" });
     expect({ reserves, releases, observations }).toEqual({ reserves: 1, releases: 1, observations: 1 });
+    expect(inner.activeHolds).toHaveLength(0);
+  });
+
+  test("FAIL_5 fences retry when external release succeeds but released-state persistence fails", async () => {
+    const inner = new TransactionalMemoryFundingStore();
+    await new FundingService(inner).execute({ ...creditCommand(), idempotencyKey: "credit-fail-5", payload: { settlement: { ...settlement, topUpId: "topup-fail-5", externalReference: "external-fail-5", settlementReference: "settlement-fail-5" } } });
+    const store = new FailReleaseFinalizationStore(inner);
+    let reserves = 0; let releases = 0; let observations = 0;
+    const capacity = {
+      reserveNow: async () => { reserves += 1; return { status: "available" as const, reference: "capacity:fail-5", expiresAt: "2026-08-05T00:00:00.000Z" }; },
+      release: async () => { releases += 1; },
+      observe: async () => { observations += 1; return { status: "refused" as const, reason: "already-released" }; },
+    };
+    const admission = new FundedAdmissionService({ funding: new FundingService(store), store, capacity, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
+    const command = { principal, idempotencyKey: "fail-5", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "20", unit: "sat" as const } };
+
+    expect(await admission.admit(command)).toMatchObject({ status: "reconciliation_pending" });
+    expect(await admission.admit(command)).toMatchObject({ status: "refused" });
+    expect({ reserves, releases, observations }).toEqual({ reserves: 1, releases: 1, observations: 1 });
+    expect(store.acceptAttempts).toBe(1);
     expect(inner.activeHolds).toHaveLength(0);
   });
 });

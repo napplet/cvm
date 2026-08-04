@@ -41,11 +41,11 @@ files_reviewed_list:
   - toolchains/candidates/cli-0.5.2.json
   - toolchains/candidates/initial.json
 findings:
-  critical: 4
-  warning: 1
+  critical: 0
+  warning: 0
   info: 0
-  total: 5
-status: issues_found
+  total: 0
+status: clean
 ---
 
 # Phase 01: Code Review Report
@@ -53,57 +53,23 @@ status: issues_found
 **Reviewed:** 2026-08-04T00:00:00Z  
 **Depth:** standard  
 **Files Reviewed:** 36  
-**Status:** issues_found
+**Status:** clean
 
 ## Summary
 
-Phase 1 has useful argv-only and default-deny building blocks, and `bun test` passes (52 tests). However, the production-facing seams currently allow a policy for one candidate to run another candidate and manufacture positive-looking evidence that was never measured. These are correctness/security defects, not the explicitly deferred Phase 7 certification work.
+Re-reviewed the original 36-file scope through `915bcf1`. The five prior findings are resolved:
+
+- The sealed runner now rejects a policy/request candidate-ID mismatch before Docker argv construction.
+- Promotion evidence records artifact, golden, reproducibility, and provenance layers as `not-evaluated`; successful tracing remains `blocked` at `certification-deferred`.
+- The fixture parser preserves a final failing native stage in a structured blocked result.
+- The capability fixture deterministically invokes the SDK path, while the runner reads capability observations from its runtime report.
+- Dist-tree hashing retains complete relative paths.
+
+The known native scaffold/network-none incompatibility is accurately represented as `blocked` in the design-slice output; it does not manufacture a successful native or certification verdict. The standard suite passed (56 tests), as did the design slice, sealed-image input verification, and hermetic promotion checks.
 
 ## Narrative Findings (AI reviewer)
 
-## Critical Issues
-
-### CR-01: Sealed execution does not bind the policy candidate to the requested candidate
-
-**Classification:** BLOCKER  
-**File:** `src/runner/sealed-toolchain.ts:119`  
-**Issue:** `runSealedToolchain` parses a policy containing an immutable `candidateId`, but never compares it with `request.toolchainId`. `runPromotionCandidate` supplies the manifest-derived ID at `src/promotion/run-promotion.ts:121-145`, so a fully shaped but different manifest can be run through the policy that was approved for `a19fc7d…`. The Docker image reference is then derived from the unbound request digest. The input-builder verifies this relationship, but the actual execution boundary does not.
-
-**Fix:** Reject before constructing Docker argv unless `policy.candidateId === request.toolchainId`; add a regression test that attempts a different well-formed toolchain ID with the committed policy and expects rejection.
-
-### CR-02: Review-ready promotion bundles claim artifact, golden, reproducibility, and provenance evidence that was not produced
-
-**Classification:** BLOCKER  
-**File:** `src/promotion/run-promotion.ts:87-100`  
-**Issue:** The tracer uses the first pinned fixture digest as the built-artifact digest, the first pinned golden digest as a verified golden, unconditionally records reproducibility as `matched` after one run, and emits `example.invalid` package provenance URLs. Consequently, a successful tracer returns `review-ready` with evidence that looks verified but was neither built, compared, nor sourced from the candidate. This is a false positive evidence claim, distinct from deferring exhaustive Phase 7 reproducibility/golden certification.
-
-**Fix:** Make the tracer/design path record these layers as explicitly unmeasured/deferred (and never `review-ready` on their basis), or require actual fixture output, two-build comparison, approved golden data, and candidate-provided provenance origins before permitting those positive values. Extend the evidence schema so “not evaluated” cannot be represented as `matched`.
-
-### CR-03: A real failed fixture stage is rejected instead of preserved as the promised structured blocked result
-
-**Classification:** BLOCKER  
-**File:** `infra/toolchain/fixture-runner.ts:70-75` and `src/fixtures/registry.ts:87-115`  
-**Issue:** The image-local runner appends a stage result before throwing when its exit code is non-zero. Its catch block then emits `status: "blocked"` with that partial stage array. `parseRunnerOutput` nevertheless routes every blocked stage through `parseStage`, which requires `exitCode === 0`. Any native failure after a stage begins therefore throws `fixture <stage> stage evidence is invalid` instead of returning the structured blocked result described in the Phase 1 summary. Current tests cover only an empty blocked stage list, and the design script fakes that empty list, so they miss the actual runner behavior.
-
-**Fix:** Parse a blocked run separately: permit one final failed stage with valid digests and a non-zero exit code (and reject later stages), while retaining the failure reason. Add an integration-style parser test using a blocked `create` stage with `exitCode: 1`.
-
-### CR-04: Capability-harness evidence is hard-coded, while the app never executes the claimed storage/intent flow
-
-**Classification:** BLOCKER  
-**File:** `fixtures/capability-harness/src/App.tsx:6-17` and `infra/toolchain/fixture-runner.ts:92`  
-**Issue:** `saveValue` contains the storage and optional-intent calls but `App` never calls it or offers an interaction that does. Independently, the runner reports `storage` and (in primary mode) `intent` as observed and sets `intentUsedThroughSdk: true` solely from fixture name/mode. A successful native fixture would therefore claim public-SDK intent composition without exercising it. The mocked tests assert the same static fields and cannot detect this false positive.
-
-**Fix:** Make the fixture run a deterministic interaction that invokes `saveValue` in both modes, and derive observed-domain evidence from the runtime/instrumented SDK report rather than fixture-mode constants. Add a test that fails when the primary path never invokes the SDK intent operation.
-
-## Warnings
-
-### WR-01: Dist-tree identity loses directory structure during recursion
-
-**Classification:** WARNING  
-**File:** `infra/toolchain/fixture-runner.ts:22-30`  
-**Issue:** Recursive calls reset `root`, so nested files are recorded relative only to their immediate parent. Moving an unchanged file between similarly named nested directories can leave the recorded identities indistinguishable, despite `distSha256` being described as a complete dist-tree identity.
-
-**Fix:** Pass the original root through recursion and always use `relative(originalRoot, path)`. Add a nested-directory fixture test that verifies the hash changes when a file’s parent path changes.
+No Critical or Warning findings in the reviewed scope.
 
 ---
 

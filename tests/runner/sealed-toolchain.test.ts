@@ -15,6 +15,7 @@ const candidatePath = join(root, "toolchains/candidates/cli-0.5.2-release-set.js
 const policyPath = join(root, "infra/toolchain/egress-policy.json");
 const dockerfilePath = join(root, "infra/toolchain/Dockerfile");
 const lockfilePath = join(root, "toolchains/locks/initial/pnpm-lock.yaml");
+const approvedCandidateId = "a19fc7d283a4482c53728f4a931743576564fb3826d7f8fa1383d02578b69024";
 
 describe("sealed toolchain image and policy", () => {
   test("image inputs bind the reviewed candidate to a frozen offline lock", async () => {
@@ -74,7 +75,7 @@ describe("runSealedToolchain", () => {
       inputDirectory: root,
       script: "/toolchain/bin/napplet-conformance",
       args: ["--json", "$(must stay literal)"],
-      toolchainId: "toolchain-test",
+      toolchainId: approvedCandidateId,
       execute: async (command) => {
         captured = command as unknown as Record<string, unknown>;
         return {
@@ -89,7 +90,18 @@ describe("runSealedToolchain", () => {
       "run", "--rm", "--pull=never", "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--user=65532:65532",
       "--pids-limit=64", "--memory=2g", "--cpus=2", "--entrypoint=/toolchain/bin/bun", `napplet-cvm/toolchain@sha256:${"a".repeat(64)}`, "/toolchain/bin/napplet-conformance", "$(must stay literal)",
     ]));
-    await expect(runSealedToolchain({ id: "bad", policyPath, imageDigest: "not-a-digest", inputDirectory: root, script: "/toolchain/bin/napplet-conformance", args: [], toolchainId: "toolchain-test" })).rejects.toThrow("image digest");
+    await expect(runSealedToolchain({ id: "bad", policyPath, imageDigest: "not-a-digest", inputDirectory: root, script: "/toolchain/bin/napplet-conformance", args: [], toolchainId: approvedCandidateId })).rejects.toThrow("image digest");
+
+    await expect(runSealedToolchain({
+      id: "candidate-mismatch",
+      policyPath,
+      imageDigest: "a".repeat(64),
+      inputDirectory: root,
+      script: "/toolchain/bin/napplet-conformance",
+      args: [],
+      toolchainId: "b".repeat(64),
+      execute: async () => { throw new Error("must not execute"); },
+    })).rejects.toThrow("candidate ID does not match");
   });
 
   test("fails closed when a policy control is relaxed or a denial probe succeeds", async () => {
@@ -100,7 +112,7 @@ describe("runSealedToolchain", () => {
       policyPath,
       imageDigest: "a".repeat(64),
       inputDirectory: root,
-      toolchainId: "toolchain-test",
+      toolchainId: approvedCandidateId,
       execute: async (command) => ({
         id: command.id, argv: [command.executable, ...command.argv], cwd: command.cwd, cwdSha256: "b".repeat(64), toolchainId: command.toolchainId, imageDigest: command.imageDigest,
         startedAtMs: 1, finishedAtMs: 2, exitCode: 0, stdout: "connected", stderr: "", stdoutSha256: "c".repeat(64), stderrSha256: "d".repeat(64), disposition: "passed", evidenceSha256: "e".repeat(64),
@@ -110,7 +122,7 @@ describe("runSealedToolchain", () => {
       policyPath,
       imageDigest: "a".repeat(64),
       inputDirectory: root,
-      toolchainId: "toolchain-test",
+      toolchainId: approvedCandidateId,
       execute: async (command) => ({
         id: command.id, argv: [command.executable, ...command.argv], cwd: command.cwd, cwdSha256: "b".repeat(64), toolchainId: command.toolchainId, imageDigest: command.imageDigest,
         startedAtMs: 1, finishedAtMs: 2, exitCode: 1, stdout: "", stderr: "missing probe evidence", stdoutSha256: "c".repeat(64), stderrSha256: "d".repeat(64), disposition: "non-zero-exit", evidenceSha256: "e".repeat(64),

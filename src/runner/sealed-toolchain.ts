@@ -118,6 +118,7 @@ function dockerArgv(policy: SealedToolchainPolicy, request: SealedToolchainReque
 /** Runs the only allowed host-to-container adapter for a promotion command. */
 export async function runSealedToolchain(request: SealedToolchainRequest): Promise<CommandEvidence> {
   const policy = parseSealedToolchainPolicy(await Bun.file(request.policyPath).json());
+  if (policy.candidateId !== request.toolchainId) throw new Error("sealed policy candidate ID does not match the requested toolchain");
   const timeoutMs = request.timeoutMs ?? policy.resources.timeoutMs;
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > policy.resources.timeoutMs) throw new Error("sealed timeout must be within the policy ceiling");
   const command: HermeticCommand = {

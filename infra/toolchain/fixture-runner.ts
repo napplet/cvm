@@ -25,15 +25,19 @@ async function run(id: StageId, command: string, args: string[], cwd: string): P
   return { id, argv: [command, ...args], exitCode, stdoutSha256: await sha256(stdout), stderrSha256: await sha256(stderr), nativeOutputSha256: await sha256(`${stdout}\n${stderr}`) };
 }
 
-async function files(root: string): Promise<{ path: string; sha256: string }[]> {
+async function files(root: string, originalRoot = root): Promise<{ path: string; sha256: string }[]> {
   const entries = await readdir(root, { withFileTypes: true });
   const output: { path: string; sha256: string }[] = [];
   for (const entry of entries) {
     const path = join(root, entry.name);
-    if (entry.isDirectory()) output.push(...await files(path));
-    else if (entry.isFile()) output.push({ path: relative(root, path), sha256: await sha256(await Bun.file(path).bytes()) });
+    if (entry.isDirectory()) output.push(...await files(path, originalRoot));
+    else if (entry.isFile()) output.push({ path: relative(originalRoot, path), sha256: await sha256(await Bun.file(path).bytes()) });
   }
   return output.sort((left, right) => left.path.localeCompare(right.path));
+}
+
+export async function distTreeDigest(root: string): Promise<string> {
+  return sha256(JSON.stringify(await files(root)));
 }
 
 /** Reads the runtime-instrumented SDK observation emitted by the fixture's browser harness. */
@@ -73,11 +77,12 @@ function fixtureMode(): "primary" | "degraded-no-intent" {
   return value;
 }
 
-const stages: Stage[] = [];
-let selectedImageDigest = "0".repeat(64);
-let selectedMode: "primary" | "degraded-no-intent" = "primary";
-let selectedFixture = "minimal";
-try {
+if (import.meta.main) {
+  const stages: Stage[] = [];
+  let selectedImageDigest = "0".repeat(64);
+  let selectedMode: "primary" | "degraded-no-intent" = "primary";
+  let selectedFixture = "minimal";
+  try {
   selectedImageDigest = imageDigest();
   selectedMode = fixtureMode();
   const fixture = JSON.parse(await readFile(fixturePath(), "utf8")) as { name: string; requires: unknown[]; optionalDomains?: unknown[] };
@@ -108,13 +113,13 @@ try {
   await stage("dry-run", "/toolchain/bin/napplet", ["deploy", "--dry-run", "--json", "--root"], project);
   const skillFiles = await files(join(project, ".codex", "skills"));
   if (skillFiles.length === 0) throw new Error("skills installation emitted no managed skill files");
-  const distFiles = await files(join(project, "dist"));
   const manifest = JSON.parse(await readFile(join(project, "dist", ".nip5a-manifest.json"), "utf8")) as { aggregateHash?: string };
   if (!manifest.aggregateHash || !/^[a-f0-9]{64}$/i.test(manifest.aggregateHash)) throw new Error("upstream manifest emitted no aggregate hash");
   const observation = capabilityFixture
     ? await capabilityObservation(project)
     : { observedDomains: [], optionalIntentPresenceRead: false, intentUsedThroughSdk: false, gracefulDegradation: false };
-  console.log(JSON.stringify({ fixture: fixture.name, mode: selectedMode, status: "passed", candidateId: CANDIDATE_ID, imageDigest: selectedImageDigest, stages, installedSkillsSha256: await sha256(JSON.stringify(skillFiles)), distSha256: await sha256(JSON.stringify(distFiles)), aggregateHash: manifest.aggregateHash, ...observation }));
-} catch (error) {
-  console.log(JSON.stringify({ fixture: selectedFixture, mode: selectedMode, status: "blocked", candidateId: CANDIDATE_ID, imageDigest: selectedImageDigest, stages, installedSkillsSha256: "0".repeat(64), distSha256: "0".repeat(64), aggregateHash: "0".repeat(64), observedDomains: [], optionalIntentPresenceRead: false, intentUsedThroughSdk: false, gracefulDegradation: false, reason: error instanceof Error ? error.message : "fixture runner failed" }));
+  console.log(JSON.stringify({ fixture: fixture.name, mode: selectedMode, status: "passed", candidateId: CANDIDATE_ID, imageDigest: selectedImageDigest, stages, installedSkillsSha256: await sha256(JSON.stringify(skillFiles)), distSha256: await distTreeDigest(join(project, "dist")), aggregateHash: manifest.aggregateHash, ...observation }));
+  } catch (error) {
+    console.log(JSON.stringify({ fixture: selectedFixture, mode: selectedMode, status: "blocked", candidateId: CANDIDATE_ID, imageDigest: selectedImageDigest, stages, installedSkillsSha256: "0".repeat(64), distSha256: "0".repeat(64), aggregateHash: "0".repeat(64), observedDomains: [], optionalIntentPresenceRead: false, intentUsedThroughSdk: false, gracefulDegradation: false, reason: error instanceof Error ? error.message : "fixture runner failed" }));
+  }
 }

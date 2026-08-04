@@ -82,6 +82,37 @@ describe("ContextVM v1 announcement", () => {
 });
 
 describe("verified ContextVM funding adapter", () => {
+  test("exposes exactly the locked start, revise, and owner-safe status tools without registering repair", async () => {
+    const service = new FundingService(new TransactionalMemoryFundingStore());
+    const transport = new FakeContextVmTransport();
+    const calls: Record<string, unknown[]> = { start: [], revise: [], status: [] };
+    const adapter = new ContextVmFundingAdapter({
+      service, transport,
+      generation: {
+        startSession: async (input) => { calls.start.push(input); return { status: "completed", code: "ACTION_COMMITTED", accountId: "account:internal", sessionId: "session:one", sessionVersion: 1, artifactVersion: 1, confirmedSpend: "7", remainingCap: "93", remainingBalance: "493", nextAction: "revise_session", operationId: "operation:one" }; },
+        reviseSession: async (input) => { calls.revise.push(input); return { status: "denied", code: "STALE_SESSION_VERSION" }; },
+      },
+      sessionStatus: { read: async (input) => { calls.status.push(input); return { status: "not_found_or_denied" }; } },
+    });
+
+    await adapter.handle(envelope({ request: { id: "start-1", method: "tools/call", params: { name: "start_session", arguments: { admissionReference: "admission:one", idempotencyKey: "start-one", maximum: "100", idea: "A tiny focused napplet" } } } }));
+    expect(calls.start).toHaveLength(1);
+    expect(transport.responses.at(-1)?.response).toMatchObject({ result: { status: "completed", sessionId: "session:one", confirmedSpend: "7" } });
+    expect(JSON.stringify(transport.responses.at(-1)?.response)).not.toMatch(/account:internal|provider|prompt|repair/i);
+
+    await adapter.handle(envelope({ request: { id: "revise-1", method: "tools/call", params: { name: "revise_session", arguments: { sessionId: "session:one", admissionReference: "admission:one", idempotencyKey: "revise-one", expectedVersion: 1, maximum: "100", revision: "Change only the title" } } } }));
+    expect(calls.revise).toHaveLength(1);
+    expect(transport.responses.at(-1)?.response).toMatchObject({ result: { status: "denied", code: "STALE_SESSION_VERSION" } });
+
+    await adapter.handle(envelope({ request: { id: "status-1", method: "tools/call", params: { name: "session_status", arguments: { sessionId: "session:one", billing: { limit: 1 } } } } }));
+    expect(calls.status).toHaveLength(1);
+    expect(transport.responses.at(-1)?.response).toMatchObject({ result: { status: "not_found_or_denied" } });
+
+    await adapter.handle(envelope({ request: { id: "repair-1", method: "tools/call", params: { name: "trigger_validation_repair", arguments: {} } } }));
+    expect(transport.responses.at(-1)?.response).toMatchObject({ error: { code: -32602 } });
+    expect(calls).toEqual({ start: expect.any(Array), revise: expect.any(Array), status: expect.any(Array) });
+  });
+
   test("forwards only an SDK-correlated signed event and preserves the SDK-verified sender", async () => {
     let inbound: ((message: unknown, context: { clientPubkey: string }) => Promise<void> | void) | undefined;
     let event: { id: string; tags: string[][] } | undefined = {

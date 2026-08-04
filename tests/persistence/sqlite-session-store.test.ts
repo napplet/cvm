@@ -46,6 +46,18 @@ describe("SqliteSessionStore", () => {
     reopened.close();
   });
 
+  test("checks key conflict before version and exact session ownership before mutation", async () => {
+    const { store } = open();
+    await store.apply(action(), () => undefined);
+    await expect(store.apply(action({ payload: { idea: "different" } }), () => undefined)).resolves.toMatchObject({ code: "IDEMPOTENCY_KEY_CONFLICT" });
+    await expect(store.apply(action({ principal: { id: "principal-ab" }, idempotencyKey: "scope" }), () => undefined)).resolves.toMatchObject({ code: "SESSION_SCOPE_MISMATCH" });
+    await expect(store.apply(action({ sessionId: "missing", idempotencyKey: "missing" }), () => undefined)).resolves.toMatchObject({ code: "SESSION_NOT_FOUND" });
+    await expect(store.apply(action({ idempotencyKey: "stale" }), () => undefined)).resolves.toMatchObject({ code: "STALE_SESSION_VERSION", currentVersion: 1 });
+    expect(store.getSessionVersion("session-a")).toBe(1);
+    expect(store.evidence).toHaveLength(1);
+    store.close();
+  });
+
   test("serializes competing keys and exact duplicates in the file-backed authority", async () => {
     const { store } = open();
     const [left, right] = await Promise.all([

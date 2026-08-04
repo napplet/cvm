@@ -30,4 +30,28 @@ describe("FundedAdmissionService", () => {
     expect(budget).toMatchObject({ status: "authorized", reservedAmount: "200", unit: "sat" });
     expect(store.postings).toHaveLength(1);
   });
+
+  test("refuses unavailable capacity without a hold and reconciles ambiguity without a second reserve", async () => {
+    const store = new TransactionalMemoryFundingStore();
+    const funding = new FundingService(store);
+    await funding.execute(creditCommand());
+    let reserves = 0;
+    let observations = 0;
+    const capacity = {
+      reserveNow: async () => { reserves += 1; throw new Error("timeout after effect"); },
+      observe: async () => {
+        observations += 1;
+        return observations === 1 ? { status: "unknown" as const, reference: "capacity:ambiguous" } : { status: "available" as const, reference: "capacity:ambiguous", expiresAt: "2026-08-05T00:00:00.000Z" };
+      },
+      release: async () => undefined,
+    };
+    const admission = new FundedAdmissionService({ funding, store, capacity });
+    const request = { principal, idempotencyKey: "ambiguous-admission", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "200", unit: "sat" as const } };
+    expect(await admission.admit(request)).toMatchObject({ status: "reconciliation_pending" });
+    expect(store.activeHolds).toHaveLength(0);
+    expect(await admission.admit(request)).toMatchObject({ status: "accepted", heldAmount: "200" });
+    expect(reserves).toBe(1);
+    expect(observations).toBe(2);
+    await expect(admission.authorizeActionBudget({ principal, admissionReference: "capacity:ambiguous", idempotencyKey: "too-large", maximum: "201", unit: "sat" })).rejects.toThrow("ACTION_BUDGET_EXCEEDS_APPROVED_CAP");
+  });
 });

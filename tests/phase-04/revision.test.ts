@@ -67,12 +67,18 @@ describe("same-lineage revisions", () => {
 
   test("denies foreign, stale, and simultaneous writers before duplicate provider effects", async () => {
     const { admission, effects, initial, service, store } = await setup();
+    const empty = await service.reviseSession({ principal, sessionId: initial.sessionId, admissionReference: admission.reference, idempotencyKey: "empty", expectedVersion: 1, maximum: "100", policyVersion: "phase-02-policy-2026-08-04", revision: "" });
+    const malformed = await service.reviseSession({ principal, sessionId: initial.sessionId, admissionReference: admission.reference, idempotencyKey: "malformed", expectedVersion: 1, maximum: "100", policyVersion: "phase-02-policy-2026-08-04", revision: "\ud800" });
+    const repository = await service.reviseSession({ principal, sessionId: initial.sessionId, admissionReference: admission.reference, idempotencyKey: "repository", expectedVersion: 1, maximum: "100", policyVersion: "phase-02-policy-2026-08-04", revision: "Use https://github.com/example/private-app.git as the source." });
     const stale = await service.reviseSession({ principal, sessionId: initial.sessionId, admissionReference: admission.reference, idempotencyKey: "stale", expectedVersion: 0, maximum: "100", policyVersion: "phase-02-policy-2026-08-04", revision: "A bounded update." });
     const foreign = await service.reviseSession({ principal, sessionId: "session:wrong-lineage", admissionReference: admission.reference, idempotencyKey: "foreign", expectedVersion: 1, maximum: "100", policyVersion: "phase-02-policy-2026-08-04", revision: "A bounded update." });
     const left = { principal, sessionId: initial.sessionId, admissionReference: admission.reference, idempotencyKey: "left", expectedVersion: 1, maximum: "100", policyVersion: "phase-02-policy-2026-08-04", revision: "First contender." };
     const right = { ...left, idempotencyKey: "right", revision: "Second contender." };
     const concurrent = await Promise.all([service.reviseSession(left), service.reviseSession(right)]);
 
+    expect(empty).toMatchObject({ status: "denied", code: "INPUT_REQUIRED" });
+    expect(malformed).toMatchObject({ status: "denied", code: "INPUT_MALFORMED_UNICODE" });
+    expect(repository).toMatchObject({ status: "denied", code: "INPUT_REPOSITORY_OR_CODE" });
     expect(stale).toMatchObject({ status: "denied", code: "STALE_SESSION_VERSION" });
     expect(foreign).toMatchObject({ status: "denied", code: "SESSION_LINEAGE_MISMATCH" });
     expect(concurrent.filter((result) => result.status === "completed")).toHaveLength(1);

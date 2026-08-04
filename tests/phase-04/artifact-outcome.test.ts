@@ -14,7 +14,7 @@ const manifest = parsePromotionManifest({
 
 async function request() {
   return {
-    sessionId: "session:stable", actionId: "revision:1", expectedVersion: 1, policyVersion: "phase-02-policy-2026-08-04", capabilityGrant: "coordinator-grant", workspaceId: "workspace:session:stable", idea: "Make the counter support reset.", actionKind: "revision" as const,
+    principalId: "principal:owner", sessionId: "session:stable", actionId: "revision:1", expectedVersion: 1, policyVersion: "phase-02-policy-2026-08-04", capabilityGrant: "coordinator-grant", workspaceId: "workspace:session:stable", idea: "Make the counter support reset.", actionKind: "revision" as const,
     workspaceLineage: "workspace:session:stable", snapshotReference: "snapshot:1", priorArtifactId: "artifact:verified:1", approvedApplicationSurfaces: ["src/app.ts"],
     toolchain: { toolchainId: await canonicalToolchainId(manifest), manifest, evidence: { build: "evidence:build", forbiddenAuthority: "evidence:forbidden", verify: "evidence:verify", conformance: "evidence:browser" } },
   };

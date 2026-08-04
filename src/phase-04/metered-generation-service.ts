@@ -194,7 +194,7 @@ export class MeteredGenerationService {
     return SessionActionResultSchema.parse({ ...result, ...(result.status === "completed" || result.status === "failed" ? { remainingCap: finalized.remainingCap!, remainingBalance: finalized.remainingBalance! } : {}) });
   }
 
-  private async #serializeSession<T>(accountId: string, sessionId: string, operation: () => Promise<T>): Promise<T> {
+  async #serializeSession<T>(accountId: string, sessionId: string, operation: () => Promise<T>): Promise<T> {
     const key = `${accountId}\u0000${sessionId}`;
     let release!: () => void;
     const prior = this.#sessionTails.get(key) ?? Promise.resolve();

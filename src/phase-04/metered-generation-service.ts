@@ -143,7 +143,15 @@ export class MeteredGenerationService {
     // must surface reconciliation rather than issue a second billable request.
     if (!claim.claimed) return SessionActionResultSchema.parse({ status: "usage_unknown", code: "USAGE_UNKNOWN", accountId, sessionId, nextAction: "billing_reconciliation", operationId });
     const intent = ProviderOperationIntentSchema.parse({ operationId, accountId, sessionId, actionId, expectedVersion: command.expectedVersion, actionBudgetReference: budget.reference, profileId: profile.id, priceCardId: PHASE_04_DETERMINISTIC_PRICE_CARD.id, requestFingerprint: fingerprint, maximumUnits: profile.maximumUnits, selection: "unselected" });
-    const observation = ModelObservationSchema.parse(await this.options.gateway.dispatch(intent, new AbortController().signal));
+    let observation: z.infer<typeof ModelObservationSchema>;
+    try {
+      observation = ModelObservationSchema.parse(await this.options.gateway.dispatch(intent, new AbortController().signal));
+    } catch {
+      // A transport exception cannot prove the provider rejected the request.
+      // Preserve the original operation for lookup-only recovery.
+      await this.options.store.transact(accountId, (transaction) => transaction.recordUsageUnknown({ operationId, providerRequestId: operationId, protectedEvidenceReference: `dispatch-error:${operationId}`, reason: "uncertain_acceptance" }));
+      return SessionActionResultSchema.parse({ status: "usage_unknown", code: "USAGE_UNKNOWN", accountId, sessionId, nextAction: "billing_reconciliation", operationId });
+    }
     if (observation.status === "usage_unknown") {
       await this.options.store.transact(accountId, (transaction) => transaction.recordUsageUnknown({ operationId, providerRequestId: observation.providerRequestId, protectedEvidenceReference: observation.provenance.protectedEvidenceReference, reason: observation.reason }));
       return SessionActionResultSchema.parse({ status: "usage_unknown", code: "USAGE_UNKNOWN", accountId, sessionId, nextAction: "billing_reconciliation", operationId });

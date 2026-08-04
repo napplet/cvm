@@ -44,7 +44,7 @@ async function setup() {
   const service = new MeteredGenerationService({ fundedAdmission: admissions, store, gateway, worker: completedWorker(effects), artifactVerifier: verifier });
   const initial = await service.startSession({ principal, admissionReference: admission.reference, idempotencyKey: "start", expectedVersion: 0, maximum: "100", policyVersion: "phase-02-policy-2026-08-04", idea: "Build one focused counter napplet." });
   if (initial.status !== "completed") throw new Error("test start must be completed");
-  return { admission, effects, initial, service, store };
+  return { admission, effects, gateway, initial, service, store };
 }
 
 describe("same-lineage revisions", () => {
@@ -66,6 +66,18 @@ describe("same-lineage revisions", () => {
     expect(recovered).toMatchObject({ status: "usage_unknown", code: "USAGE_UNKNOWN" });
     expect(dispatches).toBe(1);
     void first;
+  });
+
+  test("persists ambiguous provider acceptance when dispatch throws", async () => {
+    const { admission, effects, gateway, initial, service, store } = await setup();
+    gateway.dispatch = async () => {
+      effects.dispatches += 1;
+      throw new Error("response lost after provider acceptance");
+    };
+    const result = await service.reviseSession({ principal, sessionId: initial.sessionId, admissionReference: admission.reference, idempotencyKey: "dispatch-throws", expectedVersion: 1, maximum: "100", policyVersion: "phase-02-policy-2026-08-04", revision: "A bounded update." });
+    expect(result).toMatchObject({ status: "usage_unknown", code: "USAGE_UNKNOWN" });
+    expect(store.meteredActions.at(-1)).toMatchObject({ status: "usage_unknown", providerReceiptReference: expect.stringContaining("dispatch-error:") });
+    expect(effects.dispatches).toBe(2);
   });
 
   test("parses exactly one bounded revision field", () => {

@@ -10,6 +10,7 @@ import { evaluateArtifactContract } from "../policy/artifact-contract";
 import { type ArtifactVerifier } from "../phase-02/trusted-core";
 import { PrincipalSchema } from "../phase-03/contracts";
 import { canonicalJson } from "../promotion/schema";
+import { type NappletHarness, type NappletHarnessRequest } from "./napplet-harness";
 import { evaluateAutomaticRepair } from "./repair-policy";
 
 const DecimalSchema = z.string().regex(/^[1-9][0-9]*$/u);
@@ -49,7 +50,7 @@ export class MeteredGenerationService {
   #inFlight = new Map<string, Promise<SessionActionResult>>();
   #sessionTails = new Map<string, Promise<void>>();
   #repairOrigins = new Set<string>();
-  constructor(private readonly options: Readonly<{ fundedAdmission: FundedAdmissionService; store: MeteredFundingStore; gateway: ModelGateway; worker: WorkerPort; artifactVerifier: ArtifactVerifier; riskDetector?: RiskSignalDetector }>) {}
+  constructor(private readonly options: Readonly<{ fundedAdmission: FundedAdmissionService; store: MeteredFundingStore; gateway: ModelGateway; worker: WorkerPort; artifactVerifier: ArtifactVerifier; riskDetector?: RiskSignalDetector; harness?: Readonly<{ runner: NappletHarness; toolchain: NappletHarnessRequest["toolchain"]; snapshotReference: string; priorArtifactId: string; approvedApplicationSurfaces: readonly string[] }> }>) {}
 
   async startSession(input: unknown): Promise<SessionActionResult> {
     const command = StartSessionCommandSchema.parse(input);
@@ -160,12 +161,19 @@ export class MeteredGenerationService {
     let completed = observation.status === "completed";
     try {
       const idea = "repair" in command ? "Repair only the server-validated failed candidate within the existing focused napplet boundary." : "revision" in command ? command.revision : command.idea;
-      const request = WorkerRunRequestSchema.parse({ sessionId, actionId, expectedVersion: command.expectedVersion, policyVersion: command.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId: `workspace:${sessionId}`, idea: riskSafeIdea(idea) });
-      const workerResult = WorkerRunResultSchema.parse(await this.options.worker.run(request, new AbortController().signal));
-      if (workerResult.status !== "completed") completed = false;
-      else {
-        const verified = await this.options.artifactVerifier.verify({ action: { principal: { id: accountId }, sessionId, actionId, kind: "design", idempotencyKey: command.idempotencyKey, expectedVersion: command.expectedVersion, policyVersion: command.policyVersion, idea }, request, result: workerResult, events: workerResult.events });
-        completed = Boolean(verified && (await evaluateArtifactContract(verified.contractInput)).verdict === "pass");
+      const workspaceId = `workspace:${sessionId}`;
+      if (this.options.harness) {
+        const harness = this.options.harness.runner;
+        const outcome = await harness.run({ principalId: accountId, sessionId, actionId, expectedVersion: command.expectedVersion, policyVersion: command.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId, idea: riskSafeIdea(idea), actionKind: "repair" in command ? "repair" : "revision" in command ? "revision" : "generation", workspaceLineage: workspaceId, snapshotReference: this.options.harness.snapshotReference, priorArtifactId: this.options.harness.priorArtifactId, approvedApplicationSurfaces: this.options.harness.approvedApplicationSurfaces, toolchain: this.options.harness.toolchain });
+        completed = outcome.status === "verified";
+      } else {
+        const request = WorkerRunRequestSchema.parse({ sessionId, actionId, expectedVersion: command.expectedVersion, policyVersion: command.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId, idea: riskSafeIdea(idea) });
+        const workerResult = WorkerRunResultSchema.parse(await this.options.worker.run(request, new AbortController().signal));
+        if (workerResult.status !== "completed") completed = false;
+        else {
+          const verified = await this.options.artifactVerifier.verify({ action: { principal: { id: accountId }, sessionId, actionId, kind: "design", idempotencyKey: command.idempotencyKey, expectedVersion: command.expectedVersion, policyVersion: command.policyVersion, idea }, request, result: workerResult, events: workerResult.events });
+          completed = Boolean(verified && (await evaluateArtifactContract(verified.contractInput)).verdict === "pass");
+        }
       }
     } catch { completed = false; }
     const status = completed ? "completed" as const : "failed" as const;

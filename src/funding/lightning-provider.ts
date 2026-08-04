@@ -36,6 +36,7 @@ export class FakeLightningReceiptPort implements LightningReceiptPort {
   createCalls = 0; queryCalls = 0;
   createMode: "created" | "fail_before_effect" | "effect_then_throw" = "created";
   queryMode: "created" | "settled" | "failed" | "unknown" = "created";
+  queryObservation?: LightningInvoiceObservation;
   #created: Extract<LightningInvoiceObservation, { status: "created" }>;
   constructor(options: FakeOptions) { this.#created = LightningInvoiceObservationSchema.parse(options.create) as Extract<LightningInvoiceObservation, { status: "created" }>; }
   async createInvoice(request: LightningCreateInvoiceRequest): Promise<LightningInvoiceObservation> {
@@ -46,6 +47,7 @@ export class FakeLightningReceiptPort implements LightningReceiptPort {
   }
   async queryInvoice(request: LightningQueryInvoiceRequest): Promise<LightningInvoiceObservation> {
     this.queryCalls += 1;
+    if (this.queryObservation) return LightningInvoiceObservationSchema.parse({ ...this.queryObservation, topUpId: request.topUpId, serviceReference: request.serviceReference });
     const created = this.created(request.topUpId);
     if (this.queryMode === "created") return created;
     if (this.queryMode === "unknown") return { status: "unknown", topUpId: request.topUpId, serviceReference: request.serviceReference };

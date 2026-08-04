@@ -79,3 +79,63 @@ describe("Lightning top-up initiation and protected material", () => {
     expect(receiver.queryCalls).toBe(1);
   });
 });
+
+describe("Lightning settlement receipt matrix", () => {
+  test("credits one authoritative fully matched settled receipt exactly once across coordinator instances", async () => {
+    const { coordinator, receiver, fundingStore, topUps, material } = fixture();
+    const payment = await coordinator.begin(request());
+    receiver.queryMode = "settled";
+    const other = new LightningTopUpCoordinator({
+      funding: new FundingService(fundingStore), receiver, repository: topUps,
+      vault: new ProtectedRailMaterialVault({ key, repository: material }), now: () => "2026-08-05T00:00:00.000Z",
+    });
+
+    const [first, duplicate] = await Promise.all([
+      coordinator.observeSettlement({ principal, topUpId: payment.topUpId }),
+      other.observeSettlement({ principal, topUpId: payment.topUpId }),
+    ]);
+    expect(first).toMatchObject({ status: "credited", state: "credited" });
+    expect(duplicate).toMatchObject({ status: "credited", state: "credited" });
+    expect(fundingStore.postings).toHaveLength(1);
+    expect(fundingStore.projection((await new FundingService(fundingStore).status(principal)).accountId)).toEqual({ settledAvailable: "250", held: "0", unit: "sat" });
+    expect(JSON.stringify(topUps.snapshot())).not.toMatch(/lnbc|preimage|credential|secret/i);
+  });
+
+  test("wrong or non-final receipt fields never credit and unknown is retained for query-only reconciliation", async () => {
+    const { coordinator, receiver, fundingStore } = fixture();
+    const payment = await coordinator.begin(request());
+    receiver.queryObservation = {
+      status: "settled", topUpId: payment.topUpId, serviceReference: "ignored", invoiceIdentity: "invoice-identity-001",
+      paymentHash: "payment-hash-001", amount: "251", unit: "sat", expiresAt: "2026-08-05T00:10:00.000Z",
+      settledAt: "2026-08-05T00:01:00.000Z", final: true, settlementReference: "settlement-wrong-amount", receiverAuthenticated: true,
+    };
+    const pending = await coordinator.observeSettlement({ principal, topUpId: payment.topUpId });
+    expect(pending).toMatchObject({ status: "reconciliation_pending", state: "reconciliation_pending" });
+    expect(fundingStore.postings).toHaveLength(0);
+
+    receiver.queryObservation = { status: "unknown", topUpId: payment.topUpId, serviceReference: "ignored" };
+    const replay = await coordinator.observeSettlement({ principal, topUpId: payment.topUpId });
+    expect(replay).toEqual(pending);
+    expect(fundingStore.postings).toHaveLength(0);
+  });
+
+  test("failed authoritative observation remains failed with no credit", async () => {
+    const { coordinator, receiver, fundingStore } = fixture();
+    const payment = await coordinator.begin(request());
+    receiver.queryMode = "failed";
+    expect(await coordinator.observeSettlement({ principal, topUpId: payment.topUpId })).toMatchObject({ status: "failed", state: "failed" });
+    expect(fundingStore.postings).toHaveLength(0);
+  });
+
+  test("does not credit a receipt observed after the service-created invoice expiry", async () => {
+    const { coordinator, receiver, fundingStore, topUps, material } = fixture();
+    const payment = await coordinator.begin(request());
+    receiver.queryMode = "settled";
+    const afterExpiry = new LightningTopUpCoordinator({
+      funding: new FundingService(fundingStore), receiver, repository: topUps,
+      vault: new ProtectedRailMaterialVault({ key, repository: material }), now: () => "2026-08-05T00:20:00.000Z",
+    });
+    expect(await afterExpiry.observeSettlement({ principal, topUpId: payment.topUpId })).toMatchObject({ status: "reconciliation_pending" });
+    expect(fundingStore.postings).toHaveLength(0);
+  });
+});

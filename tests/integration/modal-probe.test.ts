@@ -52,8 +52,8 @@ function fakeSdk(options: { output?: string; exitCode?: number; execError?: Erro
     calls,
     sdk: {
       apps: { async fromName(name, input) { calls.app.push([name, input]); return { name }; } },
-      images: { async fromRegistry(image) { calls.image.push([image]); return { image }; } },
-      sandboxes: { async create(input) { calls.create.push([input]); return sandbox; } },
+      images: { fromRegistry(image) { calls.image.push([image]); return { image }; } },
+      sandboxes: { async create(...input) { calls.create.push(input); return sandbox; } },
     },
   };
 }
@@ -72,7 +72,7 @@ describe("Modal adapter contract", () => {
     });
     expect(calls.app).toEqual([["napplet-cvm-modal-probe", { createIfMissing: false }]]);
     expect(calls.image).toEqual([[config().image]]);
-    expect(calls.create).toEqual([[
+    expect(calls.create).toEqual([[{ name: "napplet-cvm-modal-probe" }, { image: config().image },
       expect.objectContaining({
         blockNetwork: true,
         cpu: 1,
@@ -85,8 +85,7 @@ describe("Modal adapter contract", () => {
         command: ["/bin/sh", "-c", "while true; do sleep 60; done"],
         env: { NAPPLET_CVM_POLICY_VERSION: PHASE_02_POLICY_INITIAL.policyVersion },
         tags: { correlation: "test-correlation" },
-      }),
-    ]]);
+      })],]);
     expect(calls.exec).toEqual([[["/usr/local/bin/napplet-cvm-worker", "run-proposal"], { timeoutMs: 30_000 }]]);
     expect(calls.terminate).toHaveLength(1);
   });
@@ -97,7 +96,7 @@ describe("Modal adapter contract", () => {
 
     const invalid = fakeSdk();
     const invalidAdapter = new ModalWorkerAdapter(config(), invalid.sdk);
-    await expect(invalidAdapter.run({ ...request, unexpected: true }, new AbortController().signal)).resolves.toEqual({ status: "unavailable", code: "WORKER_UNAVAILABLE" });
+    await expect(invalidAdapter.run({ ...request, unexpected: true } as unknown as typeof request, new AbortController().signal)).resolves.toEqual({ status: "unavailable", code: "WORKER_UNAVAILABLE" });
     expect(invalid.calls.create).toHaveLength(0);
 
     const overflow = fakeSdk({ output: "x".repeat(PHASE_02_POLICY_INITIAL.sandbox.maxOutputBytes + 1) });
@@ -109,6 +108,11 @@ describe("Modal adapter contract", () => {
     const failureAdapter = new ModalWorkerAdapter(config(), failure.sdk);
     await expect(failureAdapter.run(request, new AbortController().signal)).resolves.toEqual({ status: "unavailable", code: "WORKER_UNAVAILABLE" });
     expect(failure.calls.terminate).toHaveLength(1);
+
+    const termination = fakeSdk({ terminateError: new Error("termination uncertain") });
+    const terminationAdapter = new ModalWorkerAdapter(config(), termination.sdk);
+    await expect(terminationAdapter.run(request, new AbortController().signal)).resolves.toEqual({ status: "unavailable", code: "WORKER_UNAVAILABLE" });
+    expect(termination.calls.terminate).toHaveLength(1);
   });
 
   test("adapter contract keeps WorkerPort declarations canonical and Modal imports outside trusted modules", async () => {

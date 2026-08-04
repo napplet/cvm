@@ -76,7 +76,7 @@ status: complete
 - **Fix:** Added transactional capacity-intent observation/release and action-budget reservation operations to the FundingStore contract, both deterministic store implementations, and the PostgreSQL migration. External capacity calls remain outside retryable store transactions.
 - **Files modified:** `src/persistence/funding-store.ts`, `src/persistence/postgres-funding-store.ts`, `migrations/phase-03/001_funding.sql`, `tests/persistence/postgres-funding-store.test.ts`, `src/funding/funded-admission.ts`.
 - **Verification:** Fresh PostgresFundingStore/FundedAdmissionService instances resume the original ambiguity with `observe`, never issue a second reserve, and replay the one durable action budget.
-- **Commit:** Pending final Plan 06 durability commit.
+- **Commit:** `df4fcaa`.
 
 ## Deferred Items
 

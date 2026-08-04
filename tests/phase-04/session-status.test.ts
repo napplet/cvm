@@ -3,6 +3,7 @@ import { accountIdForPrincipal } from "../../src/domain/account-command";
 import { FundingService } from "../../src/funding/funding-service";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
 import { BillingHistoryPageSchema, readSessionStatus, SessionStatusQuerySchema } from "../../src/phase-04/session-status";
+import { runForeignSessionProbe, runOwnerStatusProbe } from "../support/phase-04/session-artifact-probes";
 
 const owner = { pubkey: "ab".repeat(32) };
 const stranger = { pubkey: "cd".repeat(32) };
@@ -58,6 +59,10 @@ describe("owner-safe session status", () => {
   });
 
   test("uses a closed bounded query and collapses unknown or foreign sessions without financial disclosure", async () => {
+    const probe = await runForeignSessionProbe();
+    expect(probe.missing).toEqual({ status: "not_found_or_denied" });
+    expect(probe.foreign).toEqual(probe.missing);
+    expect(probe.serialized).not.toMatch(/9007199254740991|balance|receipt|provider|prompt|reasoning/i);
     const store = await creditedStore();
     const query = SessionStatusQuerySchema.parse({ principal: owner, sessionId: "missing-session" });
     const missing = await readSessionStatus({ store, query, cursorSecret: "test-status-secret" });
@@ -91,6 +96,9 @@ describe("owner-safe session status", () => {
   });
 
   test("projects canonical lifecycle facts and all immutable owner history through signed stable pages", async () => {
+    const probe = await runOwnerStatusProbe();
+    expect(probe.first).toMatchObject({ status: "ok", session: { version: 1, state: "verified", latestVerifiedArtifact: { version: 1 }, nextAction: "revise_session" } });
+    expect(probe.serialized).not.toMatch(/protected-provider-payload|protected-receipt-evidence|must-not-leak|prompt|providerPayload/i);
     const { store, sessionId } = await seededSession();
     const first = await readSessionStatus({ store, cursorSecret: "test-status-secret", query: { principal: owner, sessionId, billing: { limit: 1 } } });
     expect(first).toMatchObject({

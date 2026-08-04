@@ -3,6 +3,7 @@ import { canonicalToolchainId, parsePromotionManifest } from "../../src/promotio
 import { ProjectNappletHarness } from "../../src/phase-04/napplet-harness";
 import type { WorkerPort } from "../../src/phase-02/contracts";
 import type { ArtifactVerifier } from "../../src/phase-02/trusted-core";
+import { runFailedArtifactProbe, runVerifiedArtifactProbe } from "../support/phase-04/session-artifact-probes";
 
 const manifest = parsePromotionManifest({
   schemaVersion: 1, status: "candidate", protocol: { nip5dRevision: "a".repeat(40), napRevisions: ["b".repeat(40)] },
@@ -33,6 +34,8 @@ const passingVerifier: ArtifactVerifier = { async verify(facts) {
 
 describe("project napplet harness artifact truth", () => {
   test("executes the fixed promoted workflow and only returns a verified candidate after all server gates", async () => {
+    const probe = await runVerifiedArtifactProbe();
+    expect(probe).toMatchObject({ workerCalls: 1, result: { status: "verified", artifactId: "artifact:candidate:2", workflow: ["make-napplet", "design-napplet", "build-napplet", "test-napplet"] } });
     const harness = new ProjectNappletHarness({ worker: completedWorker(), artifactVerifier: passingVerifier });
     const result = await harness.run(await request());
     expect(result).toMatchObject({ status: "verified", artifactId: "artifact:candidate:2", workflow: ["make-napplet", "design-napplet", "build-napplet", "test-napplet"] });
@@ -41,6 +44,8 @@ describe("project napplet harness artifact truth", () => {
   });
 
   test("retains the prior artifact with redacted diagnostics for incomplete or validation failures", async () => {
+    const probe = await runFailedArtifactProbe();
+    expect(probe).toMatchObject({ workerCalls: 1, result: { status: "validation_failed", priorArtifactId: "artifact:verified:1", diagnostic: { code: "ARTIFACT_CONTRACT_BLOCKED" } } });
     const unavailable: WorkerPort = { async run() { return { status: "unavailable", code: "WORKER_UNAVAILABLE" }; } };
     const blockedHarness = new ProjectNappletHarness({ worker: unavailable, artifactVerifier: passingVerifier });
     const blocked = await blockedHarness.run(await request());

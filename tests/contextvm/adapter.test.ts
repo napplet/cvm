@@ -7,6 +7,7 @@ import { FundingService } from "../../src/funding/funding-service";
 import { AccountStatusService } from "../../src/funding/account-status";
 import { accountIdForPrincipal } from "../../src/domain/account-command";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
+import { runContextVmAllowlistProbe } from "../support/phase-04/session-artifact-probes";
 
 class FakeContextVmTransport implements ContextVmTransportPort {
   inbound?: (input: ContextVmInboundEnvelope) => Promise<void>;
@@ -84,6 +85,12 @@ describe("ContextVM v1 announcement", () => {
 
 describe("verified ContextVM funding adapter", () => {
   test("exposes exactly the locked start, revise, and owner-safe status tools without registering repair", async () => {
+    const probe = await runContextVmAllowlistProbe();
+    expect(probe.calls).toEqual({ start: expect.any(Array), revise: expect.any(Array), status: expect.any(Array) });
+    expect(probe.calls.start).toHaveLength(1);
+    expect(probe.calls.revise).toHaveLength(1);
+    expect(probe.calls.status).toHaveLength(1);
+    expect(probe.responses.at(-1)?.response).toMatchObject({ error: { code: -32602 } });
     const service = new FundingService(new TransactionalMemoryFundingStore());
     const transport = new FakeContextVmTransport();
     const calls: Record<string, unknown[]> = { start: [], revise: [], status: [] };

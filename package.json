@@ -13,7 +13,8 @@
     "candidate:detect": "bun run src/promotion/candidate.ts",
     "candidate:verify": "bun run src/promotion/candidate.ts",
     "candidate:workflow-check": "bun test tests/promotion/candidate.test.ts --test-name-pattern='candidate workflow'",
-    "test:modal-probe": "bun run scripts/probe-modal-worker.ts"
+    "test:modal-probe": "bun run scripts/probe-modal-worker.ts",
+    "eval:phase-02": "bun test tests/evals/phase-02-reference-set.test.ts"
   },
   "dependencies": {
     "modal": "0.9.0",

@@ -21,7 +21,9 @@ A user can describe one focused applet and receive a safe, conformant napplet th
 
 ### Validated
 
-(None yet — ship to validate)
+- [x] The executable artifact contract accepts only small, single-purpose sandboxed napplets and rejects arbitrary web, backend, and multi-purpose application shapes. — Validated in Phase 1: Napplet Contract & Artifact Verification.
+- [x] Direct network, browser storage, signer, relay, service-worker, external-asset, and undeclared/unnecessary capability paths fail closed behind the shell-mediated NIP-5D/NAP boundary. — Validated in Phase 1.
+- [x] The approved napplet compatibility set is identity-bound to a resource-bounded, secret-free, default-deny sealed runner with canonical blocked evidence. — Validated in Phase 1.
 
 ### Active
 
@@ -30,8 +32,6 @@ A user can describe one focused applet and receive a safe, conformant napplet th
 - [ ] A user can approve a maximum spend for a generation session while being charged only for actual API usage.
 - [ ] A bounded text prompt starts an isolated generation session within five seconds at p95 without waiting in a request queue.
 - [ ] The agent uses `@napplet/skills` and the authoritative napplet scaffold to design, build, repair, and test a napplet.
-- [ ] Generated output is always a small, single-purpose sandboxed napplet and never an arbitrary web or backend application.
-- [ ] Generated code respects the NIP-5D authority boundary: no direct network, browser storage, signer, relay, or shell access outside supported NAP capabilities.
 - [ ] Every generated napplet passes required build, forbidden-authority, and real-browser conformance checks before preview or publication.
 - [ ] A user can preview the exact verified build in a compatible sandboxed napplet runtime before publishing it.
 - [ ] A user can iteratively request revisions in the same session, with each billable action metered and visible.
@@ -117,4 +117,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-08-03 after initialization*
+*Last updated: 2026-08-04 after Phase 1 completion*

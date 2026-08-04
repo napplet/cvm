@@ -30,9 +30,10 @@ describe("Phase 3 funded-account tracer", () => {
     const service = new FundingService(store);
 
     const credit = await service.execute(command("credit_settlement", "credit-0001", { settlement }));
+    const accountId = credit.accountId;
     expect(credit).toMatchObject({ status: "credited", accountId: expect.any(String), creditedAmount: "300", unit: "sat" });
     expect(store.postings).toHaveLength(1);
-    expect(store.projection(credit.accountId!)).toEqual({ settledAvailable: "300", held: "0", unit: "sat" });
+    expect(store.projection(accountId)).toEqual({ settledAvailable: "300", held: "0", unit: "sat" });
 
     const admissionCommand = command("funded_admission", "admission-0001", {
       requestedCap: "500",
@@ -42,7 +43,7 @@ describe("Phase 3 funded-account tracer", () => {
     const admission = await service.execute(admissionCommand);
     expect(admission).toMatchObject({ status: "accepted", approvedCap: "300", heldAmount: "300", unit: "sat" });
     expect(store.postings).toHaveLength(1);
-    expect(store.projection(credit.accountId!)).toEqual({ settledAvailable: "300", held: "300", unit: "sat" });
+    expect(store.projection(accountId)).toEqual({ settledAvailable: "300", held: "300", unit: "sat" });
 
     const replay = await service.execute(admissionCommand);
     expect(replay).toEqual(admission);

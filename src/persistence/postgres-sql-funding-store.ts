@@ -10,6 +10,7 @@ export interface PostgresSqlClient {
   release(): void;
 }
 export interface PostgresSqlPool { connect(): Promise<PostgresSqlClient>; }
+export type PostgresSqlStoreOptions = Readonly<{ maxAttempts?: number; deadlineMs?: number; now?: () => number }>;
 
 const commandKind = "funding";
 const asText = (value: unknown): string => String(value);
@@ -17,6 +18,23 @@ const asBigInt = (value: unknown): bigint => BigInt(asText(value));
 const first = <T extends SqlRow>(result: SqlResult<T>, code: string): T => { const value = result.rows[0]; if (!value) throw new Error(code); return value; };
 const frozen = <T>(value: T): T => Object.freeze(structuredClone(value));
 const id = (prefix: string, reference: string) => `${prefix}:${reference}`;
+const deadlineError = () => new Error("POSTGRES_OPERATION_DEADLINE_EXCEEDED");
+async function beforeDeadline<T>(promise: Promise<T>, deadline: number, now: () => number): Promise<T> {
+  const remaining = deadline - now();
+  if (remaining <= 0) throw deadlineError();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([promise, new Promise<T>((_, reject) => { timer = setTimeout(() => reject(deadlineError()), remaining); })]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+class DeadlineSqlClient implements PostgresSqlClient {
+  constructor(private readonly client: PostgresSqlClient, private readonly deadline: number, private readonly now: () => number) {}
+  query<Row extends SqlRow = SqlRow>(text: string, values?: readonly unknown[]): Promise<SqlResult<Row>> { return beforeDeadline(this.client.query<Row>(text, values), this.deadline, this.now); }
+  release(): void { this.client.release(); }
+}
 
 /**
  * Real PostgreSQL-wire funding authority.  Every mutating callback executes on
@@ -25,10 +43,19 @@ const id = (prefix: string, reference: string) => `${prefix}:${reference}`;
  */
 export class PostgresSqlFundingStore implements FundingStore {
   readonly production = true as const;
-  constructor(private readonly pool: PostgresSqlPool, private readonly options: Readonly<{ maxAttempts?: number; now?: () => number }> = {}) {}
+  readonly #maxAttempts: number;
+  readonly #deadlineMs: number;
+  readonly #now: () => number;
+  constructor(private readonly pool: PostgresSqlPool, options: PostgresSqlStoreOptions = {}) {
+    this.#maxAttempts = options.maxAttempts ?? 3;
+    this.#deadlineMs = options.deadlineMs ?? 250;
+    this.#now = options.now ?? Date.now;
+    if (this.#maxAttempts < 1 || this.#deadlineMs < 1) throw new Error("INVALID_SERIALIZATION_RETRY_POLICY");
+  }
 
   async findRecordedResult(accountId: string, idempotencyKey: string): Promise<StoredFundingCommand | undefined> {
-    const client = await this.pool.connect();
+    const deadline = this.#now() + this.#deadlineMs;
+    const client = new DeadlineSqlClient(await beforeDeadline(this.pool.connect(), deadline, this.#now), deadline, this.#now);
     try {
       const result = await client.query<{ fingerprint_sha256: string; result_json: FundingResult }>("SELECT fingerprint_sha256, result_json FROM funding_commands WHERE account_id = $1 AND idempotency_key = $2 ORDER BY created_at DESC LIMIT 1", [accountId, idempotencyKey]);
       const row = result.rows[0];
@@ -37,36 +64,38 @@ export class PostgresSqlFundingStore implements FundingStore {
   }
 
   async transact<T>(accountId: string, operation: (transaction: FundingTransaction) => Promise<T> | T): Promise<T> {
-    const attempts = this.options.maxAttempts ?? 3;
+    const deadline = this.#now() + this.#deadlineMs;
     let last: unknown;
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      const client = await this.pool.connect();
+    for (let attempt = 0; attempt < this.#maxAttempts && this.#now() < deadline; attempt += 1) {
+      const raw = await beforeDeadline(this.pool.connect(), deadline, this.#now);
+      const client = new DeadlineSqlClient(raw, deadline, this.#now);
       try {
         await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
         const result = await operation(new PgFundingTransaction(client, accountId));
         await client.query("COMMIT");
         return frozen(result);
       } catch (error) {
-        await client.query("ROLLBACK").catch(() => undefined);
+        await beforeDeadline(raw.query("ROLLBACK"), this.#now() + Math.min(50, this.#deadlineMs), this.#now).catch(() => undefined);
         last = error;
-        if ((error as { code?: unknown }).code !== "40001" || attempt + 1 === attempts) {
+        if ((error as { code?: unknown }).code !== "40001" || attempt + 1 === this.#maxAttempts || this.#now() >= deadline) {
           if ((error as { code?: unknown }).code === "40001") throw new SerializationFailure();
           throw error;
         }
-      } finally { client.release(); }
+      } finally { raw.release(); }
     }
     throw last ?? new Error("SERIALIZATION_RETRY_EXHAUSTED");
   }
 
   async status(accountId: string): Promise<AccountStatus | undefined> {
-    const client = await this.pool.connect();
+    const deadline = this.#now() + this.#deadlineMs;
+    const client = new DeadlineSqlClient(await beforeDeadline(this.pool.connect(), deadline, this.#now), deadline, this.#now);
     try {
       const balance = await client.query<{ settled_available: string; held: string }>("SELECT settled_available, held FROM account_balance_projection WHERE account_id = $1", [accountId]);
       if (!balance.rows[0]) return undefined;
       const topUps = await client.query<{ top_up_id: string; state: "pending" | "verifying" | "settled" | "credited" | "failed" | "reconciliation_pending"; amount: string; unit: "sat"; rail: "lightning" | "cashu"; created_at: string; settlement_reference: string }>("SELECT top_up_id, state, amount, unit, rail, created_at, settlement_reference FROM top_ups WHERE account_id = $1 ORDER BY created_at", [accountId]);
       const admissions = await client.query<{ reference: string; requested_cap: string; held_amount: string }>("SELECT reference, requested_cap, held_amount FROM session_cap_holds WHERE account_id = $1 AND state = 'active' ORDER BY created_at", [accountId]);
       const row = first(balance, "ACCOUNT_BALANCE_NOT_FOUND");
-      return AccountStatusSchema.parse({ accountId, unit: "sat", available: (asBigInt(row.settled_available) - asBigInt(row.held)).toString(), held: asText(row.held), topUps: topUps.rows.map((topUp) => ({ topUpId: topUp.top_up_id, state: topUp.state, amount: asText(topUp.amount), unit: topUp.unit, rail: topUp.rail, verifiedAt: new Date(topUp.created_at).toISOString(), settlementReference: topUp.settlement_reference })), admissions: admissions.rows.map((hold) => ({ reference: hold.reference, approvedCap: asText(hold.held_amount), heldAmount: asText(hold.held_amount), unit: "sat" })) });
+      return AccountStatusSchema.parse({ accountId, unit: "sat", available: (asBigInt(row.settled_available) - asBigInt(row.held)).toString(), held: asText(row.held), topUps: topUps.rows.map((topUp) => ({ topUpId: topUp.top_up_id, state: topUp.state, amount: asText(topUp.amount), unit: topUp.unit, rail: topUp.rail, createdAt: new Date(topUp.created_at).toISOString(), verifiedAt: new Date(topUp.created_at).toISOString(), settlementReference: topUp.settlement_reference })), admissions: admissions.rows.map((hold) => ({ reference: hold.reference, approvedCap: asText(hold.held_amount), heldAmount: asText(hold.held_amount), unit: "sat" })) });
     } finally { client.release(); }
   }
 }

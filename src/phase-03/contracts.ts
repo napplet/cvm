@@ -56,15 +56,18 @@ export const AuthenticatedFundingCommandSchema = z.discriminatedUnion("kind", [
   FundedAdmissionCommandSchema,
 ]);
 
+export const AccountTopUpStatusSchema = z.object({
+  topUpId: z.string().min(1), state: z.enum(["pending", "verifying", "settled", "credited", "failed", "reconciliation_pending"]),
+  amount: DecimalSatSchema, unit: z.literal("sat"), rail: z.enum(["lightning", "cashu"]), createdAt: z.iso.datetime(),
+  safeDisplayReference: z.string().min(1).optional(), expiresAt: z.iso.datetime().optional(), verifiedAt: z.iso.datetime().optional(), settlementReference: z.string().min(1).optional(),
+}).strict();
+
 export const AccountStatusSchema = z.object({
   accountId: z.string().min(1),
   unit: z.literal("sat"),
   available: NonNegativeDecimalSatSchema,
   held: NonNegativeDecimalSatSchema,
-  topUps: z.array(z.object({
-    topUpId: z.string().min(1), state: z.enum(["pending", "verifying", "settled", "credited", "failed", "reconciliation_pending"]),
-    amount: DecimalSatSchema, unit: z.literal("sat"), rail: z.enum(["lightning", "cashu"]), verifiedAt: z.iso.datetime(), settlementReference: z.string().min(1),
-  }).strict()),
+  topUps: z.array(AccountTopUpStatusSchema),
   admissions: z.array(z.object({ reference: z.string().min(1), approvedCap: DecimalSatSchema, heldAmount: DecimalSatSchema, unit: z.literal("sat") }).strict()),
 }).strict();
 
@@ -82,5 +85,6 @@ export type Principal = z.infer<typeof PrincipalSchema>;
 export type VerifiedSettlement = z.infer<typeof VerifiedSettlementSchema>;
 export type AuthenticatedFundingCommand = z.infer<typeof AuthenticatedFundingCommandSchema>;
 export type AccountStatus = z.infer<typeof AccountStatusSchema>;
+export type AccountTopUpStatus = z.infer<typeof AccountTopUpStatusSchema>;
 export type FundedAdmission = z.infer<typeof FundedAdmissionSchema>;
 export type FundingResult = z.infer<typeof FundingResultSchema>;

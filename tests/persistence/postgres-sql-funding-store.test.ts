@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { PostgresSqlFundingStore, type PostgresSqlClient } from "../../src/persistence/postgres-sql-funding-store";
 import { SerializationFailure } from "../../src/persistence/postgres-funding-store";
+import { PostgresFundingDatabase } from "../../src/persistence/postgres-funding-database";
 
 class ScriptedClient implements PostgresSqlClient {
   readonly sql: string[] = []; released = 0;
@@ -48,4 +49,23 @@ test("durable protected material schema stores AES-GCM metadata rather than plai
   expect(migration).toMatch(/protected_rail_material[\s\S]*nonce bytea NOT NULL/);
   expect(migration).toMatch(/protected_rail_material[\s\S]*payload_digest char\(64\) NOT NULL/);
   expect(migration).not.toMatch(/protected_rail_material[\s\S]*plaintext/);
+});
+
+test("database-owned rail status projection filters Lightning and Cashu lifecycle rows by owner", async () => {
+  const client: PostgresSqlClient = {
+    query: async (text: string) => {
+      if (text.includes("FROM lightning_top_up_state")) return { rows: [{ state_json: { topUps: [
+        ["lightning:own", { topUpId: "lightning:own", accountId: "account:one", rail: "lightning", state: "pending", amount: "20", unit: "sat", createdAt: "2026-08-04T00:00:00.000Z" }],
+        ["lightning:other", { topUpId: "lightning:other", accountId: "account:two", rail: "lightning", state: "failed", amount: "20", unit: "sat", createdAt: "2026-08-04T00:00:00.000Z" }],
+      ] } }] };
+      if (text.includes("FROM cashu_top_up_state")) return { rows: [{ state_json: { result: { topUpId: "cashu:own", state: "reconciliation_pending", policyVersion: "cashu-v1", commitment: "c".repeat(64) }, accountId: "account:one", policy: { version: "cashu-v1", activeFrom: "2026-08-04T00:00:00.000Z", activeUntil: null, mints: [] }, protectedId: "railmat:one", idempotencyKey: "cashu:own", principal: { pubkey: "a".repeat(64) }, amount: "21", createdAt: "2026-08-04T00:01:00.000Z" } }] };
+      return { rows: [] };
+    },
+    release: () => undefined,
+  } as PostgresSqlClient;
+  const database = new PostgresFundingDatabase({ connect: async () => client });
+  expect(await database.railStatuses.list({ accountId: "account:one" })).toEqual([
+    { topUpId: "lightning:own", rail: "lightning", state: "pending", amount: "20", unit: "sat", createdAt: "2026-08-04T00:00:00.000Z" },
+    { topUpId: "cashu:own", rail: "cashu", state: "reconciliation_pending", amount: "21", unit: "sat", createdAt: "2026-08-04T00:01:00.000Z" },
+  ]);
 });

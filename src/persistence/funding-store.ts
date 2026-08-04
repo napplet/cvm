@@ -160,7 +160,7 @@ export class TransactionalMemoryFundingStore implements FundingStore {
     if (!account) return undefined;
     return freeze({
       accountId, unit: "sat", available: decimal(account.settledAvailable - account.held), held: decimal(account.held),
-      topUps: account.topUps.map((topUp) => ({ topUpId: topUp.topUpId, state: topUp.state, amount: decimal(topUp.amount), unit: topUp.unit, rail: topUp.rail, verifiedAt: topUp.verifiedAt, settlementReference: topUp.settlementReference })),
+      topUps: account.topUps.map((topUp) => ({ topUpId: topUp.topUpId, state: topUp.state, amount: decimal(topUp.amount), unit: topUp.unit, rail: topUp.rail, createdAt: topUp.verifiedAt, verifiedAt: topUp.verifiedAt, settlementReference: topUp.settlementReference })),
       admissions: account.holds.map((hold) => ({ reference: hold.reference, approvedCap: decimal(hold.approvedCap), heldAmount: decimal(hold.heldAmount), unit: "sat" as const })),
     });
   }

@@ -4,6 +4,8 @@ import { buildContextVmAnnouncement } from "../../src/contextvm/announcement";
 import { ContextVmFundingAdapter } from "../../src/contextvm/adapter";
 import { ContextVmSdkBridge, type ContextVmInboundEnvelope, type ContextVmTransportPort, type ContextVmWireNotification, type ContextVmWireResponse } from "../../src/contextvm/sdk-bridge";
 import { FundingService } from "../../src/funding/funding-service";
+import { AccountStatusService } from "../../src/funding/account-status";
+import { accountIdForPrincipal } from "../../src/domain/account-command";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
 
 class FakeContextVmTransport implements ContextVmTransportPort {
@@ -152,6 +154,28 @@ describe("verified ContextVM funding adapter", () => {
     await adapter.handle(envelope({ requestEventId: "wrong-event" }));
     expect(transport.responses.slice(-3).every((entry) => "error" in entry.response)).toBe(true);
     expect(cashuCalls).toHaveLength(1);
+  });
+
+  test("account_status returns owner-scoped durable rail lifecycle states through ContextVM", async () => {
+    const store = new TransactionalMemoryFundingStore();
+    const service = new FundingService(store);
+    const transport = new FakeContextVmTransport();
+    const ownerAccountId = await accountIdForPrincipal({ pubkey: fixture.requests.verifiedPubkey });
+    const accountStatus = new AccountStatusService({
+      store,
+      sessions: { list: async () => ({ active: [], resumable: [], pendingActions: [] }) },
+      rails: { list: async ({ accountId }) => accountId === ownerAccountId ? [
+        { topUpId: "lightning:pending", rail: "lightning", state: "pending", amount: "20", unit: "sat", createdAt: "2026-08-04T00:00:00.000Z", safeDisplayReference: "lightning:…pending" },
+        { topUpId: "cashu:failed", rail: "cashu", state: "failed", amount: "21", unit: "sat", createdAt: "2026-08-04T00:01:00.000Z" },
+        { topUpId: "cashu:unknown", rail: "cashu", state: "reconciliation_pending", amount: "22", unit: "sat", createdAt: "2026-08-04T00:02:00.000Z" },
+      ] : [] },
+    });
+    const adapter = new ContextVmFundingAdapter({ service, transport, accountStatus });
+    await adapter.handle(envelope({ request: { id: "status-1", method: "tools/call", params: { name: "account_status", arguments: {} } }, rawEvent: { id: "status-event", tags: [] }, requestEventId: "status-event" }));
+    expect(transport.responses.at(-1)?.response).toMatchObject({ result: { topUps: [
+      { topUpId: "lightning:pending", state: "pending" }, { topUpId: "cashu:failed", state: "failed" }, { topUpId: "cashu:unknown", state: "reconciliation_pending" },
+    ] } });
+    expect(JSON.stringify(transport.responses.at(-1))).not.toMatch(/token|proof|preimage|invoice|secret|private/iu);
   });
 
   test("keeps ContextVM and CEP-8 imports out of financial core modules", async () => {

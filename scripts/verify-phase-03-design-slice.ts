@@ -62,7 +62,7 @@ const evidence = await writePhase03DesignEvidence("evidence/design", {
   checks,
   requirementMappings: Object.freeze({ "CTX-01": ["contextvm", "reference-set"], "CTX-02": ["contextvm", "reference-set"], "CTX-03": ["contextvm", "ledger", "reference-set"], "CTX-04": ["contextvm", "funded-admission", "reference-set"], "PAY-01": ["contextvm", "lightning", "cashu", "reference-set"], "PAY-02": ["lightning", "reference-set"], "PAY-03": ["cashu", "reference-set"], "PAY-04": ["lightning", "cashu", "reference-set"], "PAY-05": ["ledger", "lightning", "cashu", "reference-set"], "PAY-06": ["cashu", "reference-set"], "PAY-07": ["cashu", "reference-set"], "BILL-01": ["ledger", "funded-admission", "reference-set"], "BILL-02": ["funded-admission", "reference-set"], "BILL-06": ["funded-admission", "reference-set"] }),
   decisionMappings: Array.from({ length: 19 }, (_, index) => `D-${index + 40}`), observations,
-  threatMappings: ["T-03-09", "T-03-10", "T-03-11", "T-03-12", "T-03-05", "T-03-06", "T-03-13", "T-03-14", "T-03-15", "T-03-16", "T-03-17", "T-03-18", "T-03-19", "T-03-21", "T-03-22", "T-03-23", "T-03-24", "T-03-25", "T-03-28"],
+  threatMappings: ["T-03-01", "T-03-02", "T-03-03", "T-03-04", "T-03-02-SC", "T-03-05", "T-03-06", "T-03-07", "T-03-08", "T-03-09", "T-03-10", "T-03-11", "T-03-12", "T-03-03-SC", "T-03-13", "T-03-14", "T-03-15", "T-03-16", "T-03-17", "T-03-18", "T-03-19", "T-03-20", "T-03-05-SC", "T-03-21", "T-03-22", "T-03-23", "T-03-24", "T-03-25", "T-03-26", "T-03-27", "T-03-28", "T-03-29"],
 });
 const recordPath = `evidence/design/${evidence.evidenceSha256}.json`;
 const recordText = await readFile(recordPath, "utf8");

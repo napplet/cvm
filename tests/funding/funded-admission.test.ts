@@ -4,6 +4,10 @@ import { AccountStatusService } from "../../src/funding/account-status";
 import { FundingService } from "../../src/funding/funding-service";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
 import { createFundedCore } from "../../src/phase-03/funded-core";
+import cashuFixture from "../fixtures/cashu-phase-03.json";
+import { CashuMintPolicyRegistry } from "../../src/funding/cashu-mint-policy";
+import { FakeCashuSettlementPort } from "../../src/funding/cashu-provider";
+import { FakeLightningReceiptPort } from "../../src/funding/lightning-provider";
 
 const principal = { pubkey: "b".repeat(64) };
 const settlement = {
@@ -141,5 +145,29 @@ describe("FundedAdmissionService", () => {
     const forgedLightning = { durable: true, begin: async () => ({ topUpId: "forged", state: "pending" }) };
     const forgedCashu = { durable: true, submit: async () => ({ topUpId: "forged", state: "verifying" }) };
     expect(() => createFundedCore({ postgresPool: pool, transport, capacity, lightning: forgedLightning, cashu: forgedCashu } as never)).toThrow("PRODUCTION_RAIL_COMPOSITION_REQUIRED");
+  });
+
+  test("production composition builds both durable rails around one database-owned AES-GCM vault", () => {
+    const pool = { connect: async () => { throw new Error("unused"); } };
+    const transport = { configureAnnouncement: () => undefined, onInbound: () => undefined, canonicalInvocation: () => ({ invocationHash: "f".repeat(64) }), sendResponse: async () => undefined, sendNotification: async () => undefined };
+    const capacity = { reserveNow: async () => ({ status: "refused" as const }), observe: async () => ({ status: "unknown" as const }), release: async () => undefined };
+    const lightningReceiver = new FakeLightningReceiptPort({ create: { status: "created", serviceReference: "receiver:compose", invoice: "lnbc-compose", invoiceIdentity: "compose", paymentHash: "compose", amount: "20", unit: "sat", expiresAt: "2026-08-05T00:00:00.000Z", safeDisplayReference: "lightning:…compose" } });
+    const railOptions = { postgresPool: pool, transport, capacity, lightningReceiver, cashuProvider: new FakeCashuSettlementPort(), cashuPolicies: new CashuMintPolicyRegistry(cashuFixture.policies[0]!) };
+    expect(createFundedCore({ ...railOptions, protectedMaterialKey: new Uint8Array(32).fill(8) }).mode).toBe("configured");
+    expect(() => createFundedCore({ ...railOptions, protectedMaterialKey: new Uint8Array(31) })).toThrow("PROTECTED_MATERIAL_KEY_INVALID");
+  });
+
+  test("bounds capacity-provider waits and persists an ambiguous outcome", async () => {
+    const store = new TransactionalMemoryFundingStore();
+    const funding = new FundingService(store);
+    await funding.execute(creditCommand());
+    const never = () => new Promise<never>(() => undefined);
+    const admission = new FundedAdmissionService({ funding, store, capacity: { reserveNow: never, observe: never, release: never }, capacityTimeoutMs: 5 });
+    const observed = await Promise.race([
+      admission.admit({ principal, idempotencyKey: "bounded-capacity", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "20", unit: "sat" } }),
+      Bun.sleep(50).then(() => ({ status: "unbounded" as const })),
+    ]);
+    expect(observed).toMatchObject({ status: "reconciliation_pending" });
+    expect(store.activeHolds).toHaveLength(0);
   });
 });

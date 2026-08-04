@@ -65,7 +65,7 @@ export class PostgresFundingStore implements FundingStore {
   async status(accountId: string): Promise<AccountStatus | undefined> {
     return this.executor.read((state) => {
       const value = state.accounts.get(accountId); if (!value) return undefined;
-      return frozen({ accountId, unit: "sat", available: (value.settled - value.held).toString(), held: value.held.toString(), topUps: value.topUps.map((topUp) => ({ topUpId: topUp.topUpId, state: "credited" as const, amount: topUp.amount.toString(), unit: "sat" as const, rail: topUp.rail, verifiedAt: topUp.verifiedAt, settlementReference: topUp.settlementReference })), admissions: value.holds.map((hold) => ({ reference: hold.reference, approvedCap: hold.approvedCap.toString(), heldAmount: hold.heldAmount.toString(), unit: "sat" as const })) });
+      return frozen({ accountId, unit: "sat", available: (value.settled - value.held).toString(), held: value.held.toString(), topUps: value.topUps.map((topUp) => ({ topUpId: topUp.topUpId, state: "credited" as const, amount: topUp.amount.toString(), unit: "sat" as const, rail: topUp.rail, createdAt: topUp.verifiedAt, verifiedAt: topUp.verifiedAt, settlementReference: topUp.settlementReference })), admissions: value.holds.map((hold) => ({ reference: hold.reference, approvedCap: hold.approvedCap.toString(), heldAmount: hold.heldAmount.toString(), unit: "sat" as const })) });
     });
   }
   private credit(state: State, accountId: string, input: CreditInput): FundingResult {

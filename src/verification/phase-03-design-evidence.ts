@@ -5,7 +5,7 @@ const SHA256 = /^[a-f0-9]{64}$/iu;
 const REQUIRED_CHECK_IDS = ["contextvm", "ledger", "lightning", "cashu", "funded-admission", "reference-set", "package-intake", "api-coverage"] as const;
 const REQUIRED_REQUIREMENTS = ["CTX-01", "CTX-02", "CTX-03", "CTX-04", "PAY-01", "PAY-02", "PAY-03", "PAY-04", "PAY-05", "PAY-06", "PAY-07", "BILL-01", "BILL-02", "BILL-06"] as const;
 const REQUIRED_DECISIONS = Array.from({ length: 19 }, (_, index) => `D-${index + 40}`) as readonly string[];
-const REQUIRED_THREATS = ["T-03-09", "T-03-10", "T-03-11", "T-03-12", "T-03-05", "T-03-06", "T-03-13", "T-03-14", "T-03-15", "T-03-16", "T-03-17", "T-03-18", "T-03-19", "T-03-21", "T-03-22", "T-03-23", "T-03-24", "T-03-25", "T-03-28"] as const;
+const REQUIRED_THREATS = ["T-03-01", "T-03-02", "T-03-03", "T-03-04", "T-03-02-SC", "T-03-05", "T-03-06", "T-03-07", "T-03-08", "T-03-09", "T-03-10", "T-03-11", "T-03-12", "T-03-03-SC", "T-03-13", "T-03-14", "T-03-15", "T-03-16", "T-03-17", "T-03-18", "T-03-19", "T-03-20", "T-03-05-SC", "T-03-21", "T-03-22", "T-03-23", "T-03-24", "T-03-25", "T-03-26", "T-03-27", "T-03-28", "T-03-29"] as const;
 const REQUIRED_OBSERVATIONS = ["contextvm", "lightning", "cashu", "postgres", "capacity", "modal"] as const;
 const DEFERRALS = ["phase-04-exact-usage-debit", "phase-05-interruption-resume", "phase-06-preview-publication", "phase-07-live-slo-provider-provenance-certification", "v2-x402-l402"] as const;
 

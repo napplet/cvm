@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { FundedAdmissionService } from "../../src/funding/funded-admission";
+import { AccountStatusService } from "../../src/funding/account-status";
 import { FundingService } from "../../src/funding/funding-service";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
+import { createFundedCore } from "../../src/phase-03/funded-core";
 
 const principal = { pubkey: "b".repeat(64) };
 const settlement = {
@@ -53,5 +55,22 @@ describe("FundedAdmissionService", () => {
     expect(reserves).toBe(1);
     expect(observations).toBe(2);
     await expect(admission.authorizeActionBudget({ principal, admissionReference: "capacity:ambiguous", idempotencyKey: "too-large", maximum: "201", unit: "sat" })).rejects.toThrow("ACTION_BUDGET_EXCEEDS_APPROVED_CAP");
+  });
+
+  test("projects only the authenticated account and declares offline provider surfaces", async () => {
+    const store = new TransactionalMemoryFundingStore();
+    const funding = new FundingService(store);
+    await funding.execute(creditCommand());
+    const status = new AccountStatusService({
+      store,
+      sessions: { list: async () => ({ active: [{ id: "session:active" }], resumable: [{ id: "session:resume" }], pendingActions: [{ id: "action:pending", state: "authorized" }] }) },
+    });
+    const own = await status.status(principal);
+    expect(own).toMatchObject({ available: "300", held: "0", activeSessions: [{ id: "session:active" }], resumableSessions: [{ id: "session:resume" }], pendingActions: [{ id: "action:pending", state: "authorized" }] });
+    expect(JSON.stringify(own)).not.toMatch(/token|proof|preimage|invoice|secret|private/i);
+    expect((await status.status({ pubkey: "c".repeat(64) })).available).toBe("0");
+    const offline = createFundedCore({ testOnly: true, store, capacity: { reserveNow: async () => ({ status: "refused" as const }), observe: async () => ({ status: "unknown" as const }), release: async () => undefined } });
+    expect(offline.mode).toBe("offline_design_ready");
+    expect(offline.externalSurfaces).toEqual(expect.objectContaining({ modal: "unselected", contextvm: "blocked", lightning: "blocked", cashu: "blocked", postgres: "blocked" }));
   });
 });

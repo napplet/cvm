@@ -63,6 +63,7 @@ export type FundedCore = Readonly<{
  * Phase 4 alone may consume action-budget reservations for exact usage.
  */
 export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
+  if (!options.testOnly && options.meteredService && !options.statusCursorSecret) throw new Error("PRODUCTION_STATUS_CURSOR_SECRET_REQUIRED");
   if (options.database && !(options.database instanceof PostgresFundingDatabase)) throw new Error("PRODUCTION_POSTGRES_DATABASE_ADAPTER_REQUIRED");
   if (options.store && !(options.store instanceof PostgresFundingStore) && !(options.store instanceof PostgresSqlFundingStore) && !options.testOnly) throw new Error("PRODUCTION_POSTGRES_FUNDING_STORE_REQUIRED");
   if (options.store && (options.postgresExecutor || options.postgresPool || options.database)) throw new Error("CONFLICTING_FUNDING_STORE_CONFIGURATION");

@@ -73,6 +73,10 @@ class FailAvailableAndPreFenceStore implements FundingStore {
 }
 
 describe("FundedAdmissionService", () => {
+  test("requires a stable status cursor secret for a production generation composition", () => {
+    expect(() => createFundedCore({ meteredService: {} as never })).toThrow("PRODUCTION_STATUS_CURSOR_SECRET_REQUIRED");
+  });
+
   test("requires immediately usable capacity before taking a bounded cap hold", async () => {
     const store = new TransactionalMemoryFundingStore();
     const funding = new FundingService(store);

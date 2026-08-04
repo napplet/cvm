@@ -25,7 +25,7 @@ function finding(owner: ArtifactContractFinding["owner"], checkId: string, reaso
 }
 
 function upstreamFinding(source: "scanner" | "conformance", result: ArtifactContractInput["upstream"]["scanner"]): ArtifactContractFinding | undefined {
-  if (result.verdict === "pass" && typeof result.checkId === "string" && result.checkId.startsWith("upstream:")) return undefined;
+  if (result.verdict === "pass") return undefined;
   if (result.verdict === "block" && typeof result.checkId === "string" && result.checkId.startsWith("upstream:")) return finding("upstream", result.checkId, `${source} reported a blocking native finding`);
   return finding("cvm-gap", "cvm:evidence:upstream-unknown", `${source} report is malformed, unknown, or requires manual review`);
 }

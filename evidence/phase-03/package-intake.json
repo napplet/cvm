@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-08-04T16:02:00.766Z",
+  "disposition": "design-stage",
+  "packages": [
+    {
+      "name": "@contextvm/sdk",
+      "version": "0.13.10",
+      "registryIntegrity": "sha512-2g0WrkqZxaI47PkwwD0tgMGYZ4tuU9pVmdF85FZykImCGn11pXrsfRACGnfXQPCbwFEF1sP/CAOkGpoeGqt4EQ==",
+      "tarballSha256": "3794c77e73c7ae997936420db89905aaff0af949decac65bd34108c0d21aa895",
+      "tarball": "https://registry.npmjs.org/@contextvm/sdk/-/sdk-0.13.10.tgz",
+      "repository": "https://github.com/ContextVM/sdk",
+      "gitHead": null,
+      "license": "LGPL-3.0-1",
+      "lifecycleScripts": [],
+      "deprecated": false,
+      "disposition": "design-stage"
+    },
+    {
+      "name": "@cashu/cashu-ts",
+      "version": "4.7.2",
+      "registryIntegrity": "sha512-rNfArnXhaoUCi7crcLFwayHFQ9ek9VUI0EemBbleC9dNEhrJDGBdyqkFH7b6ubmA2Pej0DskUfiLRx0fCp0ebQ==",
+      "tarballSha256": "3ae1e0e3a94078b4d3b2ad5d77ef8534062cb61c96b8703cc05f1e8b76b54bdd",
+      "tarball": "https://registry.npmjs.org/@cashu/cashu-ts/-/cashu-ts-4.7.2.tgz",
+      "repository": "https://github.com/cashubtc/cashu-ts",
+      "gitHead": "6fe07755dcb771072f9e245e2bf4c5ee2d4b7c9d",
+      "license": "MIT",
+      "lifecycleScripts": [],
+      "deprecated": false,
+      "disposition": "design-stage"
+    },
+    {
+      "name": "kysely",
+      "version": "0.29.4",
+      "registryIntegrity": "sha512-y5mVgQNkMbs1eK9Xyc0pmNdabN2wHhRYY/5r4W5HrUT1rYCEPeVNSj1RUJeSDKT3U0p+mXCvLgkrFuIafYI6BA==",
+      "tarballSha256": "c05bc2d556323ffe4fa70308df217d0e2b57b47f02426d3ddbc25939620a61bf",
+      "tarball": "https://registry.npmjs.org/kysely/-/kysely-0.29.4.tgz",
+      "repository": "https://github.com/kysely-org/kysely",
+      "gitHead": null,
+      "license": "MIT",
+      "lifecycleScripts": [],
+      "deprecated": false,
+      "disposition": "design-stage"
+    },
+    {
+      "name": "pg",
+      "version": "8.22.0",
+      "registryIntegrity": "sha512-8wih1vVIBMxoUM2oB4soJsD9tDnDpLv4OXBJ+EJzFsvycD+lfyIreC2gGHq78f8jbLLt+bvlPTFdFZfJkOuzAA==",
+      "tarballSha256": "2f8b273b9b93b8712251cbe2b0f05378f4da2187eab5348c3c6c34d02622a55e",
+      "tarball": "https://registry.npmjs.org/pg/-/pg-8.22.0.tgz",
+      "repository": "https://github.com/brianc/node-postgres",
+      "gitHead": "b617619f9fb6fbd231731823e2732a2927ded4be",
+      "license": "MIT",
+      "lifecycleScripts": [],
+      "deprecated": false,
+      "disposition": "design-stage"
+    }
+  ],
+  "limitations": [
+    "This is not exhaustive provenance.",
+    "This is not production promotion.",
+    "This is not compatibility certification; Phase 7 owns those gates."
+  ]
+}

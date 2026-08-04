@@ -66,7 +66,31 @@ function cashuHarness() {
 }
 
 const cashuSubmit = (suffix: string) => ({ principal, idempotencyKey: `cashu:${suffix}`, topUpId: `cashu:${suffix}`, amount: "21", unit: "sat" as const, pmi: cashuFixture.pmi, token: new TextEncoder().encode(`cashuB-${suffix}`) });
-const observation = (item: Reference, result: string, stateDelta: Record<string, number>, effects: Record<string, number>, evidence = item.expected.evidence): Expected => ({ result, stateDelta, effects, evidence });
+const scenarioEvidence: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  "signed-announcement": ["announcementDigest", "noFutureTransport"],
+  "verified-sender": ["verifiedPubkey", "transportFirewall"],
+  "relay-replay": ["commandFingerprint", "correlation"],
+  "account-status": ["accountId", "redactedStatus"],
+  "ledger-credit-race": ["settlementReference", "balancedPosting", "projection"],
+  "idempotency-conflict": ["payloadFingerprint", "idempotencyKey"],
+  "cep8-top-up": ["pmi", "paymentInteraction"],
+  "settlement-lifecycle": ["topUpState", "verifiedAt"],
+  "lightning-receipt": ["invoiceIdentity", "settlementReference"],
+  "redaction-canary": ["safeDisplayReference", "protectedMaterialReference"],
+  "cashu-policy-rotation": ["policyVersion", "mintAllowlist"],
+  "cashu-settlement": ["proofCommitment", "settlementReference"],
+  "cashu-reconciliation": ["operationReference", "treasuryState"],
+  "cap-hold": ["approvedCap", "heldAmount"],
+  "action-budget": ["budgetReference", "remainingCap"],
+  "capacity-intent": ["intentReference", "capacityReference"],
+  "at-least-once-delivery": ["externalReference", "replayEvidence"],
+  "opaque-effect": ["intentReference", "reconciliationState"],
+  "combined-status": ["statusProjection", "redactionDigest"],
+});
+const observation = (item: Reference, result: string, stateDelta: Record<string, number>, effects: Record<string, number>, evidence = scenarioEvidence[item.input]): Expected => {
+  if (!evidence) throw new Error(`REFERENCE_EVIDENCE_ORACLE_MISSING:${item.input}`);
+  return { result, stateDelta, effects, evidence };
+};
 const zero = { commands: 0, postings: 0, holds: 0, outbox: 0 };
 
 type Oracle = (item: Reference) => Promise<Expected>;
@@ -171,6 +195,7 @@ describe("Phase 03 deterministic reference set", () => {
     expect(referenceSet.deferrals).toEqual(["phase-04-exact-usage-debit", "phase-05-interruption-resume", "phase-06-preview-publication", "phase-07-live-slo-provider-provenance-certification", "v2-x402-l402"]);
     expect(new Set(referenceSet.cases.map((item) => item.input)).size).toBe(referenceSet.cases.length);
     expect(Object.keys(oracles).sort()).toEqual(referenceSet.cases.map((item) => item.input).sort());
+    expect(Object.keys(scenarioEvidence).sort()).toEqual(referenceSet.cases.map((item) => item.input).sort());
   });
 
   test.each(referenceSet.cases)("$id executes its exact fixture-bound scenario and oracle", async (item) => {

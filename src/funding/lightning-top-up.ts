@@ -59,13 +59,18 @@ export class InMemoryLightningTopUpRepository implements LightningTopUpRepositor
 }
 
 export type LightningTopUpCoordinatorOptions = Readonly<{
-  funding: FundingService; receiver: LightningReceiptPort; repository: LightningTopUpRepository; vault: ProtectedRailMaterialVault; now?: () => string;
+  funding: FundingService; receiver: LightningReceiptPort; repository: LightningTopUpRepository; vault: ProtectedRailMaterialVault; now?: () => string; providerTimeoutMs?: number;
 }>;
 
 /** Service-owned BOLT11 coordinator: receiver observations never receive ledger authority. */
 export class LightningTopUpCoordinator {
   readonly #now: () => string;
-  constructor(private readonly options: LightningTopUpCoordinatorOptions) { this.#now = options.now ?? (() => new Date().toISOString()); }
+  readonly #providerTimeoutMs: number;
+  constructor(private readonly options: LightningTopUpCoordinatorOptions) {
+    this.#now = options.now ?? (() => new Date().toISOString());
+    this.#providerTimeoutMs = options.providerTimeoutMs ?? 5_000;
+    if (this.#providerTimeoutMs < 1) throw new Error("INVALID_PROVIDER_TIMEOUT");
+  }
 
   async begin(input: unknown): Promise<LightningTopUpResult> {
     const command = this.parseBegin(input); const accountId = await accountIdForPrincipal(command.principal); const fingerprint = await this.fingerprint(command, accountId); const key = commandKey(accountId, command.idempotencyKey);
@@ -87,7 +92,7 @@ export class LightningTopUpCoordinator {
     if (claim.mode === "replay") return publicResult(claim.topUp);
     if (claim.mode === "reconcile") return this.reconcileRecord(claim.topUp);
     try {
-      const observed = await this.options.receiver.createInvoice({ topUpId: claim.topUp.topUpId, idempotencyLabel: claim.topUp.topUpId, amount: claim.topUp.amount, unit: "sat" });
+      const observed = await this.boundedProvider(this.options.receiver.createInvoice({ topUpId: claim.topUp.topUpId, idempotencyLabel: claim.topUp.topUpId, amount: claim.topUp.amount, unit: "sat" }));
       return this.recordObservation(claim.topUp.topUpId, observed);
     } catch { return this.markUnknown(claim.topUp.topUpId); }
   }
@@ -106,7 +111,7 @@ export class LightningTopUpCoordinator {
 
   private async reconcileRecord(topUp: LightningPrivateTopUp): Promise<LightningTopUpResult> {
     if (topUp.state === "credited" || topUp.state === "failed") return publicResult(topUp);
-    try { return this.recordObservation(topUp.topUpId, await this.options.receiver.queryInvoice({ topUpId: topUp.topUpId, serviceReference: topUp.providerReference })); }
+    try { return this.recordObservation(topUp.topUpId, await this.boundedProvider(this.options.receiver.queryInvoice({ topUpId: topUp.topUpId, serviceReference: topUp.providerReference }))); }
     catch { return this.markUnknown(topUp.topUpId); }
   }
 
@@ -155,6 +160,14 @@ export class LightningTopUpCoordinator {
 
   private async markUnknown(topUpId: string): Promise<LightningTopUpResult> {
     return this.options.repository.transact((state) => { const topUp = this.topUp(state, topUpId); if (topUp.state === "credited" || topUp.state === "failed") return publicResult(topUp); const next = frozen({ ...topUp, state: "reconciliation_pending" as const, providerIntent: "uncertain" as const }); state.topUps.set(topUpId, next); return publicResult(next); });
+  }
+  private async boundedProvider<T>(operation: Promise<T>): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([operation, new Promise<T>((_, reject) => { timer = setTimeout(() => reject(new Error("RAIL_PROVIDER_DEADLINE_EXCEEDED")), this.#providerTimeoutMs); })]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
   private topUp(state: LightningTopUpState, topUpId: string): LightningPrivateTopUp { const topUp = state.topUps.get(topUpId); if (!topUp) throw new Error("LIGHTNING_TOPUP_NOT_FOUND"); return topUp; }
   private assertObservationTarget(topUp: LightningPrivateTopUp, observed: LightningInvoiceObservation): void { if (observed.topUpId && observed.topUpId !== topUp.topUpId) throw new Error("LIGHTNING_RECEIPT_TOPUP_MISMATCH"); if (observed.serviceReference !== topUp.providerReference && topUp.providerReference !== `invoice-create:${topUp.topUpId}`) throw new Error("LIGHTNING_RECEIPT_REFERENCE_MISMATCH"); }

@@ -46,7 +46,12 @@ function asError(code: string): Error { return new Error(code); }
 /** Coordinates protected bearer material, adapter observations, and the sole credit authority. */
 export class CashuTopUpCoordinator {
   readonly #now: () => string;
-  constructor(private readonly options: Readonly<{ policies: CashuMintPolicyRegistry; provider: CashuSettlementPort; vault: Vault; funding: FundingService; repository: CashuTopUpRepository; now?: () => string }>) { this.#now = options.now ?? (() => new Date().toISOString()); }
+  readonly #providerTimeoutMs: number;
+  constructor(private readonly options: Readonly<{ policies: CashuMintPolicyRegistry; provider: CashuSettlementPort; vault: Vault; funding: FundingService; repository: CashuTopUpRepository; now?: () => string; providerTimeoutMs?: number }>) {
+    this.#now = options.now ?? (() => new Date().toISOString());
+    this.#providerTimeoutMs = options.providerTimeoutMs ?? 5_000;
+    if (this.#providerTimeoutMs < 1) throw asError("INVALID_PROVIDER_TIMEOUT");
+  }
 
   async prepare(input: unknown): Promise<CashuTopUpResult> { return this.submit(input); }
 
@@ -79,7 +84,7 @@ export class CashuTopUpCoordinator {
     }
     const record = claimed.record;
     let observed: CashuSettlementObservation;
-    try { observed = await this.options.provider.settle({ topUpId: submitted.topUpId, policy, amount: submitted.amount, commitment, token: submitted.token }); }
+    try { observed = await this.#boundedProvider(this.options.provider.settle({ topUpId: submitted.topUpId, policy, amount: submitted.amount, commitment, token: submitted.token })); }
     catch { observed = { status: "unknown", operationReference: `cashu:${commitment}` }; }
     return this.#recordObservation(record, submitted, observed);
   }
@@ -90,14 +95,18 @@ export class CashuTopUpCoordinator {
     const request: CashuObserveRequest = { topUpId, policy: record.policy, commitment: record.result.commitment, amount: record.amount };
     // Reconciliation is query-only.  Bearer material is deliberately not supplied
     // to a provider observation because it could be re-submitted as a swap.
-    const observed = await this.options.provider.observe(request);
+    let observed: CashuSettlementObservation;
+    try { observed = await this.#boundedProvider(this.options.provider.observe(request)); }
+    catch { observed = { status: "unknown", operationReference: `cashu:${record.result.commitment}` }; }
     return this.#recordObservation(record, { principal: record.principal, idempotencyKey: record.idempotencyKey, topUpId, amount: record.amount, unit: "sat", pmi: CashuPmi, token: new Uint8Array() }, observed);
   }
 
   async reconcileTreasury(topUpId: string): Promise<CashuTopUpResult> {
     const prior = await this.options.repository.findTreasury(topUpId); if (prior) return prior;
     const record = await this.options.repository.find(topUpId); if (!record || record.result.state !== "credited") throw asError("CASHU_TREASURY_REQUIRES_CREDITED_TOP_UP");
-    const treasury = await this.options.provider.reconcileTreasury({ topUpId, commitment: record.result.commitment });
+    let treasury: Readonly<{ state: CashuTreasuryState }>;
+    try { treasury = await this.#boundedProvider(this.options.provider.reconcileTreasury({ topUpId, commitment: record.result.commitment })); }
+    catch { treasury = { state: "unknown" }; }
     const result = frozen({ ...record.result, treasuryState: treasury.state });
     await this.options.repository.update({ ...record, result }); await this.options.repository.recordTreasury(topUpId, result);
     return result;
@@ -118,5 +127,14 @@ export class CashuTopUpCoordinator {
     const result = frozen({ ...record.result, state: "credited" as const, settlementReference: credited.settlementReference }); await this.options.repository.update({ ...record, result });
     await this.options.vault.expire(record.protectedId);
     return result;
+  }
+
+  async #boundedProvider<T>(operation: Promise<T>): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([operation, new Promise<T>((_, reject) => { timer = setTimeout(() => reject(asError("RAIL_PROVIDER_DEADLINE_EXCEEDED")), this.#providerTimeoutMs); })]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 }

@@ -112,20 +112,15 @@ export class FundedAdmissionService {
     }
 
     if (!this.isUsableLease(observation.expiresAt)) {
-      await this.bounded(this.options.capacity.release({ intentReference, reference: observation.reference })).catch(() => undefined);
-      await this.options.store.transact(accountId, (transaction) => transaction.recordCapacityObservation({ intentReference, state: "refused" }));
-      return freeze({ status: "refused" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
+      return this.compensateReservation(accountId, intentReference, observation.reference);
     }
-    intent = await this.options.store.transact(accountId, (transaction) => transaction.recordCapacityObservation({ intentReference, state: "available", capacityReference: observation.reference, expiresAt: observation.expiresAt }));
     try {
+      intent = await this.options.store.transact(accountId, (transaction) => transaction.recordCapacityObservation({ intentReference, state: "available", capacityReference: observation.reference, expiresAt: observation.expiresAt }));
       const accepted = await this.options.funding.execute(this.fundingCommand(command, intent.capacityReference!));
       if (accepted.status !== "accepted") throw new Error("FUNDED_ADMISSION_NOT_ACCEPTED");
       return freeze(structuredClone(accepted));
-    } catch (error) {
-      await this.bounded(this.options.capacity.release({ intentReference, reference: intent.capacityReference! })).catch(() => undefined);
-      await this.options.store.transact(accountId, (transaction) => transaction.releaseCapacityIntent(intentReference));
-      const outcome = freeze({ status: "refused" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
-      return outcome;
+    } catch {
+      return this.compensateReservation(accountId, intentReference, observation.reference);
     }
   }
 
@@ -161,6 +156,18 @@ export class FundedAdmissionService {
   private async observeCapacity(input: Readonly<{ intentReference: string; reference?: string }>): Promise<CapacityObservation> {
     try { return await this.bounded(this.options.capacity.observe(input)); }
     catch { return freeze({ status: "unknown" as const, ...(input.reference ? { reference: input.reference } : {}) }); }
+  }
+
+  private async compensateReservation(accountId: string, intentReference: string, reference: string): Promise<FundedAdmissionOutcome> {
+    let released = false;
+    try { await this.bounded(this.options.capacity.release({ intentReference, reference })); released = true; }
+    catch { released = false; }
+    if (released) {
+      await this.options.store.transact(accountId, (transaction) => transaction.releaseCapacityIntent(intentReference));
+      return freeze({ status: "refused" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
+    }
+    await this.options.store.transact(accountId, (transaction) => transaction.recordCapacityObservation({ intentReference, state: "reconciliation_pending", capacityReference: reference }));
+    return freeze({ status: "reconciliation_pending" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
   }
 
   private async bounded<T>(operation: Promise<T>): Promise<T> {

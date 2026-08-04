@@ -134,6 +134,7 @@ function sessionResult(result: SessionActionResult): TrustedCoreResult {
  */
 export class TrustedCore {
   readonly #service: SessionService;
+  #tails = new Map<string, Promise<void>>();
 
   constructor(private readonly dependencies: InternalDependencies) {
     this.#service = new SessionService(dependencies.store);
@@ -142,6 +143,21 @@ export class TrustedCore {
   get store(): SessionStore { return this.dependencies.store; }
 
   async execute(input: unknown, signal: AbortSignal = new AbortController().signal): Promise<TrustedCoreResult> {
+    const sessionId = input !== null && typeof input === "object" && typeof (input as Record<string, unknown>).sessionId === "string"
+      ? (input as Record<string, string>).sessionId : "__invalid_session__";
+    let release!: () => void;
+    const previous = this.#tails.get(sessionId) ?? Promise.resolve();
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    this.#tails.set(sessionId, current);
+    await previous;
+    try { return await this.#executeBounded(input, signal); }
+    finally {
+      release();
+      if (this.#tails.get(sessionId) === current) this.#tails.delete(sessionId);
+    }
+  }
+
+  async #executeBounded(input: unknown, signal: AbortSignal): Promise<TrustedCoreResult> {
     const parsedAction = ActionEnvelopeSchema.safeParse(input);
     if (!parsedAction.success || parsedAction.data.policyVersion !== PHASE_02_POLICY_INITIAL.policyVersion) {
       return asFailure("ADMISSION_DENIED", { reason: "action envelope or policy identity invalid" });
@@ -165,6 +181,10 @@ export class TrustedCore {
 
     const risk = await evaluateRisk({ idea: admission.idea }, this.dependencies.tokenCounter, this.dependencies.riskDetector, ["workspace_write"]);
     if (risk.status !== "accepted") return asFailure("RISK_DENIED", risk.evidence);
+    const currentVersion = this.dependencies.store.getSessionVersion(action.sessionId);
+    if (currentVersion !== undefined && currentVersion !== action.expectedVersion) {
+      return freeze({ status: "denied", code: "STALE_SESSION_VERSION", currentVersion });
+    }
     if (signal.aborted) return asFailure("WORKER_UNCERTAIN", { reason: "aborted before worker allocation" });
 
     const capabilityGrant = await digest({

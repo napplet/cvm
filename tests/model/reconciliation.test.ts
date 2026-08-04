@@ -117,8 +117,8 @@ describe("reconciliation", () => {
 
     const [first, duplicate] = await Promise.all([reconciliation.reconcile(command), reconciliation.reconcile(command)]);
 
-    expect(first).toMatchObject({ status: "completed", operationId: action.operationId });
-    expect(duplicate).toMatchObject({ status: "completed", operationId: action.operationId });
+    expect(first).toMatchObject({ status: "failed", code: "RECONCILED_RECEIPT_FOUND", operationId: action.operationId });
+    expect(duplicate).toMatchObject({ status: "failed", code: "RECONCILED_RECEIPT_FOUND", operationId: action.operationId });
     expect(gateway.dispatchCount(action.operationId)).toBe(1);
     expect(gateway.lookupCount(action.operationId)).toBe(1);
     expect(store.postings.filter((posting) => posting.reference === action.operationId)).toHaveLength(1);

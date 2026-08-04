@@ -68,7 +68,15 @@ export class MeteredGenerationService {
     if (!claim.claimed && claim.action.result) return SessionActionResultSchema.parse(claim.action.result);
     const intent = ProviderOperationIntentSchema.parse({ operationId, accountId, sessionId, actionId, expectedVersion: command.expectedVersion, actionBudgetReference: budget.reference, profileId: profile.id, priceCardId: PHASE_04_DETERMINISTIC_PRICE_CARD.id, requestFingerprint: fingerprint, maximumUnits: profile.maximumUnits, selection: "unselected" });
     const observation = ModelObservationSchema.parse(await this.options.gateway.dispatch(intent, new AbortController().signal));
-    if (observation.status === "usage_unknown") return SessionActionResultSchema.parse({ status: "usage_unknown", code: "USAGE_UNKNOWN", accountId, sessionId, nextAction: "billing_reconciliation", operationId });
+    if (observation.status === "usage_unknown") {
+      await this.options.store.transact(accountId, (transaction) => transaction.recordUsageUnknown({ operationId, providerRequestId: observation.providerRequestId, protectedEvidenceReference: observation.provenance.protectedEvidenceReference, reason: observation.reason }));
+      return SessionActionResultSchema.parse({ status: "usage_unknown", code: "USAGE_UNKNOWN", accountId, sessionId, nextAction: "billing_reconciliation", operationId });
+    }
+    if (observation.status === "definitive_not_accepted") {
+      const result = SessionActionResultSchema.parse({ status: "failed", code: "WORKER_OR_ARTIFACT_FAILED", accountId, sessionId, sessionVersion: 0, artifactVersion: 0, confirmedSpend: "0", remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId });
+      const finalized = await this.options.store.transact(accountId, (transaction) => transaction.finalizeMeteredAction({ idempotencyKey: command.idempotencyKey, operationId, receiptCharge: "0", providerReceiptReference: observation.provenance.protectedEvidenceReference, status: "failed", result, sessionVersion: 0, artifactVersion: 0 }));
+      return SessionActionResultSchema.parse({ ...result, remainingCap: finalized.remainingCap!, remainingBalance: finalized.remainingBalance! });
+    }
     const priced = priceReceipt({ receipt: observation.receipt, card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile, reservation: command.maximum });
     if (priced.status !== "priced") {
       const result = SessionActionResultSchema.parse({ status: "billing_invariant_failed", code: priced.code, accountId, sessionId, nextAction: "billing_reconciliation", operationId });

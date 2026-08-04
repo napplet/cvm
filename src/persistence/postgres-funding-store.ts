@@ -1,7 +1,7 @@
 import type { Kysely } from "kysely";
 import type { Pool } from "pg";
 import type { AccountStatus, FundedAdmission, FundingResult } from "../phase-03/contracts";
-import type { ActionBudget, ActionBudgetInput, AdmissionInput, BillingLineItem, BillingLineItemPage, BillingLineItemPageRequest, CapacityIntent, CapacityIntentInput, CapacityObservationInput, CreditInput, MeteredAction, MeteredFinalizeInput, MeteredFundingStore, MeteredFundingTransaction, MeteredOperationClaim, MeteredSessionRecord, PrepareMeteredActionInput, StoredFundingCommand } from "./funding-store";
+import type { ActionBudget, ActionBudgetInput, AdmissionInput, BillingLineItem, BillingLineItemPage, BillingLineItemPageRequest, CapacityIntent, CapacityIntentInput, CapacityObservationInput, CreditInput, MeteredAction, MeteredFinalizeInput, MeteredFundingStore, MeteredFundingTransaction, MeteredOperationClaim, MeteredSessionRecord, PrepareMeteredActionInput, ReconciliationClaim, StoredFundingCommand, UsageUnknownInput } from "./funding-store";
 
 type Hold = Readonly<{ reference: string; approvedCap: bigint; heldAmount: bigint }>;
 type TopUp = Readonly<{ topUpId: string; rail: "lightning" | "cashu"; amount: bigint; settlementReference: string; externalReference: string; verifiedAt: string }>;
@@ -36,6 +36,7 @@ export class PostgresFundingStore implements MeteredFundingStore {
     return this.executor.read((state) => { const found = state.commands.get(key(accountId, idempotencyKey)); return found && frozen(found); });
   }
   async findMeteredAction(accountId: string, idempotencyKey: string): Promise<MeteredAction | undefined> { return this.executor.read((state) => { const value = state.meteredActions.get(key(accountId, idempotencyKey)); return value && frozen(value); }); }
+  async findMeteredActionByOperation(accountId: string, operationId: string): Promise<MeteredAction | undefined> { return this.executor.read((state) => { const value = [...state.meteredActions.values()].find((action) => action.accountId === accountId && action.operationId === operationId); return value && frozen(value); }); }
   async listBillingLineItems(accountId: string, request: BillingLineItemPageRequest = {}): Promise<BillingLineItemPage> {
     const limit = request.limit ?? 50; if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error("BILLING_LINE_ITEM_PAGE_LIMIT_INVALID");
     return this.executor.read((state) => {
@@ -67,6 +68,8 @@ export class PostgresFundingStore implements MeteredFundingStore {
             reserveActionBudget: async (input) => this.reserveActionBudget(state, accountId, input),
             prepareMeteredAction: async (input) => this.prepareMeteredAction(state, accountId, input),
             claimProviderOperation: async (operationId) => this.claimProviderOperation(state, accountId, operationId),
+            recordUsageUnknown: async (input) => this.recordUsageUnknown(state, accountId, input),
+            claimReconciliation: async (operationId) => this.claimReconciliation(state, accountId, operationId),
             recordUsageReceipt: async (input) => this.recordUsageReceipt(state, accountId, input),
             finalizeMeteredAction: async (input) => this.finalizeMeteredAction(state, accountId, input),
           };
@@ -139,14 +142,26 @@ export class PostgresFundingStore implements MeteredFundingStore {
     const action = [...state.meteredActions.values()].find((item) => item.accountId === accountId && item.operationId === operationId); if (!action) throw new Error("METERED_OPERATION_NOT_FOUND");
     if (action.status !== "prepared") return frozen({ action, claimed: false }); const next = frozen({ ...action, status: "dispatching" as const }); state.meteredActions.set(key(accountId, action.idempotencyKey), next); return frozen({ action: next, claimed: true });
   }
+  private recordUsageUnknown(state: State, accountId: string, input: UsageUnknownInput): MeteredAction {
+    const action = [...state.meteredActions.values()].find((item) => item.accountId === accountId && item.operationId === input.operationId); if (!action) throw new Error("METERED_OPERATION_NOT_FOUND");
+    if (action.status === "usage_unknown") return action;
+    if (action.status !== "dispatching") throw new Error("METERED_UNKNOWN_STATE_INVALID");
+    const next = frozen({ ...action, status: "usage_unknown" as const, providerReceiptReference: input.protectedEvidenceReference, providerRequestId: input.providerRequestId, reconciliationReason: input.reason }); state.meteredActions.set(key(accountId, action.idempotencyKey), next);
+    line(state, { accountId, sessionId: action.sessionId, actionId: action.actionId, operationId: action.operationId, sourceIdentity: `reconciliation:${action.operationId}`, kind: "reconciliation", unit: "sat", amount: "0", settledAvailable: account(state, accountId).settled.toString(), held: account(state, accountId).held.toString(), sessionSpend: "0" }); return next;
+  }
+  private claimReconciliation(state: State, accountId: string, operationId: string): ReconciliationClaim {
+    const action = [...state.meteredActions.values()].find((item) => item.accountId === accountId && item.operationId === operationId); if (!action) throw new Error("METERED_OPERATION_NOT_FOUND");
+    if (action.status !== "usage_unknown" || action.reconciliationClaimed) return frozen({ action, claimed: false });
+    const next = frozen({ ...action, reconciliationClaimed: true }); state.meteredActions.set(key(accountId, action.idempotencyKey), next); return frozen({ action: next, claimed: true });
+  }
   private recordUsageReceipt(state: State, accountId: string, input: Readonly<{ operationId: string; protectedEvidenceReference: string }>): MeteredAction {
-    const action = [...state.meteredActions.values()].find((item) => item.accountId === accountId && item.operationId === input.operationId); if (!action || action.status !== "dispatching") throw new Error("METERED_RECEIPT_STATE_INVALID");
+    const action = [...state.meteredActions.values()].find((item) => item.accountId === accountId && item.operationId === input.operationId); if (!action || (action.status !== "dispatching" && action.status !== "usage_unknown")) throw new Error("METERED_RECEIPT_STATE_INVALID");
     const next = frozen({ ...action, providerReceiptReference: input.protectedEvidenceReference }); state.meteredActions.set(key(accountId, action.idempotencyKey), next); return next;
   }
   private finalizeMeteredAction(state: State, accountId: string, input: MeteredFinalizeInput): MeteredAction {
     const action = state.meteredActions.get(key(accountId, input.idempotencyKey)); if (!action || action.operationId !== input.operationId) throw new Error("METERED_FINALIZATION_STATE_INVALID");
     if (action.result) { if (action.receiptCharge !== input.receiptCharge || action.providerReceiptReference !== input.providerReceiptReference) throw new Error("METERED_FINALIZATION_IDENTITY_CONFLICT"); return action; }
-    if (action.status !== "dispatching") throw new Error("METERED_FINALIZATION_STATE_INVALID"); const charge = BigInt(input.receiptCharge); if (charge < 0n || charge > action.maximum) throw new Error("METERED_RECEIPT_EXCEEDS_RESERVATION");
+    if (action.status !== "dispatching" && action.status !== "usage_unknown") throw new Error("METERED_FINALIZATION_STATE_INVALID"); const charge = BigInt(input.receiptCharge); if (charge < 0n || charge > action.maximum) throw new Error("METERED_RECEIPT_EXCEEDS_RESERVATION");
     const current = account(state, accountId); const hold = current.holds.find((item) => item.reference === action.admissionReference); if (!hold || charge > hold.heldAmount || charge > current.settled) throw new Error("METERED_SETTLEMENT_EXCEEDS_HOLD");
     current.settled -= charge; current.held -= charge; current.holds = current.holds.map((item) => item.reference === hold.reference ? { ...item, heldAmount: item.heldAmount - charge } : item); state.accounts.set(accountId, current);
     const next = frozen({ ...action, status: input.status, receiptCharge: input.receiptCharge, providerReceiptReference: input.providerReceiptReference, result: structuredClone(input.result), sessionVersion: input.sessionVersion, artifactVersion: input.artifactVersion, remainingCap: (hold.heldAmount - charge).toString(), remainingBalance: current.settled.toString() }); state.meteredActions.set(key(accountId, action.idempotencyKey), next);

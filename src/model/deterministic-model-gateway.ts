@@ -105,13 +105,13 @@ export class DeterministicModelGateway implements ModelGateway {
       operationId: intent.operationId,
       providerRequestId: this.providerRequestId(intent),
       provider: "deterministic_fixture",
-      model: "deterministic-fixture-v1",
+      model: "phase-04-fixture-model",
       profileId: intent.profileId,
       priceCardId: intent.priceCardId,
       selection: "unselected",
       completedAt: this.#now(),
       provenance: await this.provenance(intent, stage),
-      usage: intent.maximumUnits.map(({ dimension, units }) => ({ dimension, units })),
+      usage: intent.maximumUnits.map(({ dimension, units }) => ({ dimension, units: (BigInt(units) > 1n ? "1" : units) })),
     });
   }
 }

@@ -13,10 +13,12 @@ export type CapacityDispatchClaim = Readonly<{ intent: CapacityIntent; claimed: 
 export type CapacityObservationInput = Readonly<{ intentReference: string; state: "available" | "refused" | "reconciliation_pending"; capacityReference?: string; expiresAt?: string }>;
 export type ActionBudget = Readonly<{ accountId: string; admissionReference: string; idempotencyKey: string; fingerprint: string; reference: string; amount: bigint }>;
 export type ActionBudgetInput = Readonly<{ accountId: string; admissionReference: string; idempotencyKey: string; fingerprint: string; reference: string; amount: bigint }>;
-export type MeteredActionStatus = "prepared" | "dispatching" | "completed" | "failed" | "billing_invariant_failed";
-export type MeteredAction = Readonly<{ accountId: string; idempotencyKey: string; fingerprint: string; sessionId: string; actionId: string; expectedVersion: number; admissionReference: string; actionBudgetReference: string; maximum: bigint; operationId: string; profileId: string; priceCardId: string; status: MeteredActionStatus; receiptCharge?: string; providerReceiptReference?: string; result?: unknown; sessionVersion?: number; artifactVersion?: number; remainingCap?: string; remainingBalance?: string }>;
+export type MeteredActionStatus = "prepared" | "dispatching" | "usage_unknown" | "completed" | "failed" | "billing_invariant_failed";
+export type MeteredAction = Readonly<{ accountId: string; idempotencyKey: string; fingerprint: string; sessionId: string; actionId: string; expectedVersion: number; admissionReference: string; actionBudgetReference: string; maximum: bigint; operationId: string; profileId: string; priceCardId: string; status: MeteredActionStatus; receiptCharge?: string; providerReceiptReference?: string; providerRequestId?: string; reconciliationReason?: string; reconciliationClaimed?: boolean; result?: unknown; sessionVersion?: number; artifactVersion?: number; remainingCap?: string; remainingBalance?: string }>;
 export type PrepareMeteredActionInput = Omit<MeteredAction, "status" | "receiptCharge" | "providerReceiptReference" | "result" | "sessionVersion" | "artifactVersion">;
 export type MeteredOperationClaim = Readonly<{ action: MeteredAction; claimed: boolean }>;
+export type ReconciliationClaim = Readonly<{ action: MeteredAction; claimed: boolean }>;
+export type UsageUnknownInput = Readonly<{ operationId: string; providerRequestId: string; protectedEvidenceReference: string; reason: string }>;
 export type MeteredFinalizeInput = Readonly<{ idempotencyKey: string; operationId: string; receiptCharge: string; providerReceiptReference: string; status: Extract<MeteredActionStatus, "completed" | "failed" | "billing_invariant_failed">; result: unknown; sessionVersion: number; artifactVersion: number }>;
 export type BillingLineItemKind = "credit" | "cap_hold" | "action_reservation" | "receipt" | "debit" | "release" | "reconciliation";
 /** Immutable owner-scoped financial projection. Amounts and projections are canonical decimal strings. */
@@ -48,6 +50,10 @@ export interface MeteredFundingTransaction extends FundingTransaction {
   prepareMeteredAction(input: PrepareMeteredActionInput): Promise<MeteredAction>;
   /** Atomically fences the sole billable provider dispatch for an operation ID. */
   claimProviderOperation(operationId: string): Promise<MeteredOperationClaim>;
+  /** Persists ambiguity without releasing authorization or creating a terminal receipt. */
+  recordUsageUnknown(input: UsageUnknownInput): Promise<MeteredAction>;
+  /** Claims the single lookup-only recovery attempt for an ambiguous original operation. */
+  claimReconciliation(operationId: string): Promise<ReconciliationClaim>;
   recordUsageReceipt(input: Readonly<{ operationId: string; protectedEvidenceReference: string }>): Promise<MeteredAction>;
   finalizeMeteredAction(input: MeteredFinalizeInput): Promise<MeteredAction>;
 }
@@ -62,6 +68,7 @@ export interface FundingStore {
 /** Phase 4's explicit metered extension. Production SQL composition is added in the following plan. */
 export interface MeteredFundingStore extends FundingStore {
   findMeteredAction(accountId: string, idempotencyKey: string): Promise<MeteredAction | undefined>;
+  findMeteredActionByOperation(accountId: string, operationId: string): Promise<MeteredAction | undefined>;
   listBillingLineItems(accountId: string, request?: BillingLineItemPageRequest): Promise<BillingLineItemPage>;
   sessionStatus(accountId: string, sessionId: string): Promise<MeteredSessionRecord | undefined>;
   transact<T>(accountId: string, operation: (transaction: MeteredFundingTransaction) => Promise<T> | T): Promise<T>;
@@ -127,6 +134,10 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore {
   }
   async findMeteredAction(accountId: string, idempotencyKey: string): Promise<MeteredAction | undefined> {
     const found = this.#state.meteredActions.get(commandKey(accountId, idempotencyKey));
+    return found ? freeze(clone(found)) : undefined;
+  }
+  async findMeteredActionByOperation(accountId: string, operationId: string): Promise<MeteredAction | undefined> {
+    const found = [...this.#state.meteredActions.values()].find((action) => action.accountId === accountId && action.operationId === operationId);
     return found ? freeze(clone(found)) : undefined;
   }
   async listBillingLineItems(accountId: string, request: BillingLineItemPageRequest = {}): Promise<BillingLineItemPage> {
@@ -234,9 +245,28 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore {
           if (found.status !== "prepared") return freeze({ action: found, claimed: false });
           const next = freeze({ ...found, status: "dispatching" as const }); state.meteredActions.set(commandKey(accountId, found.idempotencyKey), next); return freeze({ action: next, claimed: true });
         },
+        recordUsageUnknown: async (input) => {
+          const found = [...state.meteredActions.values()].find((action) => action.accountId === accountId && action.operationId === input.operationId);
+          if (!found) throw new Error("METERED_OPERATION_NOT_FOUND");
+          if (found.status === "usage_unknown") return found;
+          if (found.status !== "dispatching") throw new Error("METERED_UNKNOWN_STATE_INVALID");
+          const next = freeze({ ...found, status: "usage_unknown" as const, providerReceiptReference: input.protectedEvidenceReference, providerRequestId: input.providerRequestId, reconciliationReason: input.reason });
+          state.meteredActions.set(commandKey(accountId, found.idempotencyKey), next);
+          state.evidence.push(freeze({ id: `evidence:${input.operationId}:ambiguity`, accountId, kind: "metered_receipt" as const, reference: input.protectedEvidenceReference }));
+          appendLineItem(state, { accountId, sessionId: found.sessionId, actionId: found.actionId, operationId: found.operationId, sourceIdentity: `reconciliation:${input.operationId}`, kind: "reconciliation", unit: "sat", amount: "0", settledAvailable: decimal(accountFor(state, accountId).settledAvailable), held: decimal(accountFor(state, accountId).held), sessionSpend: "0" });
+          return next;
+        },
+        claimReconciliation: async (operationId) => {
+          const found = [...state.meteredActions.values()].find((action) => action.accountId === accountId && action.operationId === operationId);
+          if (!found) throw new Error("METERED_OPERATION_NOT_FOUND");
+          if (found.status !== "usage_unknown" || found.reconciliationClaimed) return freeze({ action: found, claimed: false });
+          const next = freeze({ ...found, reconciliationClaimed: true });
+          state.meteredActions.set(commandKey(accountId, found.idempotencyKey), next);
+          return freeze({ action: next, claimed: true });
+        },
         recordUsageReceipt: async (input) => {
           const found = [...state.meteredActions.values()].find((action) => action.accountId === accountId && action.operationId === input.operationId);
-          if (!found || found.status !== "dispatching") throw new Error("METERED_RECEIPT_STATE_INVALID");
+          if (!found || (found.status !== "dispatching" && found.status !== "usage_unknown")) throw new Error("METERED_RECEIPT_STATE_INVALID");
           const next = freeze({ ...found, providerReceiptReference: input.protectedEvidenceReference }); state.meteredActions.set(commandKey(accountId, found.idempotencyKey), next);
           state.evidence.push(freeze({ id: `evidence:${input.operationId}:receipt`, accountId, kind: "metered_receipt" as const, reference: input.protectedEvidenceReference })); return next;
         },
@@ -247,7 +277,7 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore {
             if (found.receiptCharge !== input.receiptCharge || found.providerReceiptReference !== input.providerReceiptReference) throw new Error("METERED_FINALIZATION_IDENTITY_CONFLICT");
             return found;
           }
-          if (found.status !== "dispatching") throw new Error("METERED_FINALIZATION_STATE_INVALID");
+          if (found.status !== "dispatching" && found.status !== "usage_unknown") throw new Error("METERED_FINALIZATION_STATE_INVALID");
           const receiptCharge = BigInt(input.receiptCharge); if (receiptCharge < 0n || receiptCharge > found.maximum) throw new Error("METERED_RECEIPT_EXCEEDS_RESERVATION");
           const account = accountFor(state, accountId); const hold = account.holds.find((candidate) => candidate.reference === found.admissionReference);
           if (!hold || receiptCharge > hold.heldAmount || receiptCharge > account.settledAvailable) throw new Error("METERED_SETTLEMENT_EXCEEDS_HOLD");

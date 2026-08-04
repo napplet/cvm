@@ -4,7 +4,7 @@ export const UsageDimensionSchema = z.enum(["input_tokens", "output_tokens", "ca
 const DecimalSchema = z.string().regex(/^(?:0|[1-9][0-9]*)$/u);
 const ProtectedEvidenceSchema = z.object({
   protectedEvidenceReference: z.string().min(1),
-  protectedEvidenceDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+  protectedEvidenceDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
 }).strict();
 const ObservationCorrelationSchema = z.object({
   operationId: z.string().min(1),

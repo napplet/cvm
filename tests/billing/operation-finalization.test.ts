@@ -56,6 +56,9 @@ describe("metered operation finalization", () => {
     }));
 
     expect(replay).toMatchObject({ status: "completed", receiptCharge: "4" });
+    await expect(store.transact(accountId, (tx) => tx.reserveActionBudget({
+      accountId, admissionReference: "admission:one", idempotencyKey: "budget:two", fingerprint: "budget:fingerprint:two", reference: "budget:two", amount: 6n,
+    }))).resolves.toMatchObject({ state: "authorized", amount: 6n });
     expect(store.meteredActions).toHaveLength(1);
     expect(store.postings.filter((posting) => posting.reference === "operation:one")).toHaveLength(1);
   });

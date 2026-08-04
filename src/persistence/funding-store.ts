@@ -11,7 +11,7 @@ export type CapacityIntent = Readonly<{ accountId: string; idempotencyKey: strin
 export type CapacityIntentInput = Readonly<{ accountId: string; idempotencyKey: string; fingerprint: string; intentReference: string }>;
 export type CapacityDispatchClaim = Readonly<{ intent: CapacityIntent; claimed: boolean }>;
 export type CapacityObservationInput = Readonly<{ intentReference: string; state: "available" | "refused" | "reconciliation_pending"; capacityReference?: string; expiresAt?: string }>;
-export type ActionBudget = Readonly<{ accountId: string; admissionReference: string; idempotencyKey: string; fingerprint: string; reference: string; amount: bigint }>;
+export type ActionBudget = Readonly<{ accountId: string; admissionReference: string; idempotencyKey: string; fingerprint: string; reference: string; amount: bigint; state: "authorized" | "released" }>;
 export type ActionBudgetInput = Readonly<{ accountId: string; admissionReference: string; idempotencyKey: string; fingerprint: string; reference: string; amount: bigint }>;
 export type MeteredActionStatus = "prepared" | "dispatching" | "usage_unknown" | "completed" | "failed" | "billing_invariant_failed";
 export type MeteredAction = Readonly<{ accountId: string; idempotencyKey: string; fingerprint: string; sessionId: string; actionId: string; expectedVersion: number; admissionReference: string; actionBudgetReference: string; maximum: bigint; operationId: string; profileId: string; priceCardId: string; status: MeteredActionStatus; receiptCharge?: string; providerReceiptReference?: string; providerRequestId?: string; reconciliationReason?: string; reconciliationClaimed?: boolean; result?: unknown; sessionVersion?: number; artifactVersion?: number; remainingCap?: string; remainingBalance?: string }>;
@@ -233,8 +233,8 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore {
         reserveActionBudget: async (input) => {
           if (input.accountId !== accountId) throw new Error("ACCOUNT_SCOPE_MISMATCH"); const key = commandKey(accountId, input.idempotencyKey); const existing = state.actionBudgets.get(key); if (existing) { if (existing.fingerprint !== input.fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT"); return existing; }
           const account = accountFor(state, accountId); const hold = account.holds.find((candidate) => candidate.reference === input.admissionReference); if (!hold) throw new Error("ACTIVE_ADMISSION_REQUIRED");
-          const reserved = [...state.actionBudgets.values()].filter((budget) => budget.accountId === accountId && budget.admissionReference === input.admissionReference).reduce((total, budget) => total + budget.amount, 0n);
-          if (input.amount <= 0n || input.amount > hold.approvedCap - reserved) throw new Error("ACTION_BUDGET_EXCEEDS_APPROVED_CAP"); const next = freeze(input); state.actionBudgets.set(key, next);
+          const reserved = [...state.actionBudgets.values()].filter((budget) => budget.accountId === accountId && budget.admissionReference === input.admissionReference && budget.state === "authorized").reduce((total, budget) => total + budget.amount, 0n);
+          if (input.amount <= 0n || input.amount > hold.heldAmount - reserved) throw new Error("ACTION_BUDGET_EXCEEDS_APPROVED_CAP"); const next = freeze({ ...input, state: "authorized" as const }); state.actionBudgets.set(key, next);
           appendLineItem(state, { accountId, sourceIdentity: `action_reservation:${input.reference}`, kind: "action_reservation", unit: "sat", amount: decimal(input.amount), settledAvailable: decimal(account.settledAvailable), held: decimal(account.held), sessionSpend: "0" });
           return next;
         },
@@ -299,6 +299,9 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore {
           const nextHold = freeze({ ...hold, heldAmount: hold.heldAmount - receiptCharge });
           const nextAccount = freeze({ ...account, settledAvailable: account.settledAvailable - receiptCharge, held: account.held - receiptCharge, holds: account.holds.map((candidate) => candidate.reference === hold.reference ? nextHold : candidate) });
           state.accounts.set(accountId, nextAccount);
+          const budget = [...state.actionBudgets.values()].find((item) => item.accountId === accountId && item.reference === found.actionBudgetReference);
+          if (!budget || budget.state !== "authorized") throw new Error("METERED_ACTION_BUDGET_STATE_INVALID");
+          state.actionBudgets.set(commandKey(accountId, budget.idempotencyKey), freeze({ ...budget, state: "released" as const }));
           const next = freeze({ ...found, status: input.status, receiptCharge: input.receiptCharge, providerReceiptReference: input.providerReceiptReference, result: clone(input.result), sessionVersion: input.sessionVersion, artifactVersion: input.artifactVersion, remainingCap: nextHold.heldAmount.toString(), remainingBalance: nextAccount.settledAvailable.toString() });
           state.meteredActions.set(commandKey(accountId, found.idempotencyKey), next);
           state.postings.push(freeze({ id: `posting:${found.operationId}:debit`, accountId, reference: found.operationId, unit: "sat" as const, amount: `-${input.receiptCharge}`, balanced: true as const }));

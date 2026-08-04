@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { evaluatePhase04Design, validatePhase04DesignEvidence, writePhase04DesignEvidence } from "../../src/verification/phase-04-design-evidence";
+import { comparePhase04Case, executePhase04ReferenceGate, observePhase04Case } from "./phase-04-runtime-observation";
 
 const fixturePath = "tests/fixtures/phase-04-reference-set.json";
 
@@ -71,6 +72,40 @@ async function evidenceInput() {
 }
 
 describe("Phase 04 deterministic reference set", () => {
+  test("funded-start runtime observation derives P04-ACCT-03 from actual effects", async () => {
+    const cases = await referenceSet();
+    const fundedStart = cases.find((item) => item.id === "P04-ACCT-03");
+    if (!fundedStart) throw new Error("missing funded-start reference case");
+
+    const observation = await observePhase04Case({
+      id: fundedStart.id,
+      boundedInput: fundedStart.boundedInput,
+      initialState: fundedStart.initialState,
+      schedule: fundedStart.schedule,
+    });
+
+    expect(Object.keys(observation).sort()).toEqual([
+      "actionState", "artifactVersion", "creditPostings", "debitPostings", "evidence",
+      "nextAction", "providerDispatches", "providerLookups", "providerSelection", "receiptWrites",
+      "releases", "sessionState", "status", "workerCalls",
+    ]);
+    expect(comparePhase04Case(fundedStart.id, fundedStart.expected, observation)).toEqual({ id: fundedStart.id, status: "passed", mismatches: [] });
+  });
+
+  test("recomputed wrong oracle still blocks funded-start evidence", async () => {
+    const fixture = JSON.parse(await readFile(fixturePath, "utf8")) as { cases: ReferenceCase[] };
+    const altered = structuredClone(fixture);
+    const fundedStart = altered.cases.find((item) => item.id === "P04-ACCT-03");
+    if (!fundedStart) throw new Error("missing funded-start reference case");
+    fundedStart.expected.providerDispatches += 1;
+    fundedStart.expected.oracle = oracleFor(fundedStart.expected);
+
+    const gate = await executePhase04ReferenceGate(altered);
+    expect(gate.verdict).toBe("blocked");
+    expect(gate.comparisons).toContainEqual(expect.objectContaining({ id: "P04-ACCT-03", status: "failed", mismatches: ["providerDispatches"] }));
+    expect(gate.aggregateEffects).toBeUndefined();
+  });
+
   test("requires twenty complete, uniquely mapped actual-service cases", async () => {
     const cases = await referenceSet();
     expect(cases).toHaveLength(20);

@@ -17,7 +17,7 @@ const input: Phase02DesignInput = {
   policy: { identity: "phase-02-policy-2026-08-04", sha256: digest("b") },
   sqlite: { identity: "phase-02-sqlite-session-store-v1", schemaSha256: digest("c") },
   identities: { trustedCore: "src/phase-02/trusted-core.ts", workerContracts: "src/phase-02/contracts.ts", artifactGate: "src/policy/artifact-contract.ts" },
-  checks: deterministicChecks.map((id) => ({ id, severity: id === "reference-set" ? "critical" as const : "high" as const, status: "passed" as const, evidenceSha256: digest(id.slice(0, 1)) })),
+  checks: deterministicChecks.map((id, index) => ({ id, severity: id === "reference-set" ? "critical" as const : "high" as const, status: "passed" as const, evidenceSha256: digest(String(index + 1)) })),
   providerObservation: provider,
 };
 

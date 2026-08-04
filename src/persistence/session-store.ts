@@ -64,7 +64,7 @@ type State = {
   actions: Map<string, StoredActionResult>;
   evidence: SessionEvidence[];
   leases: Map<string, Readonly<{ idempotencyKey: string; token: string; expiresAtMs: number }>>;
-  effectIntents: Map<string, Readonly<{ sessionId: string; expectedVersion: number; actionId: string; callId: string; requestFingerprint: string; operationId: string; status: "claimed" | "completed" | "uncertain" }>>;
+  effectIntents: Map<string, Readonly<{ sessionId: string; expectedVersion: number; actionId: string; callId: string; requestFingerprint: string; attemptToken: string; operationId: string; status: "claimed" | "completed" | "uncertain" }>>;
 };
 
 function leaseKey(sessionId: string, version: number): string { return `${sessionId.length}:${sessionId}:${version}`; }
@@ -177,6 +177,9 @@ export class TransactionalMemorySessionStore implements SessionStore {
     const key = `${versionKey}:${callId}`;
     const existing = this.#state.effectIntents.get(key);
     if (existing) {
+      // A replacement lease is a new execution attempt. It cannot reuse a
+      // prior recipient operation, even when that operation completed.
+      if (existing.attemptToken !== lease.token) return freeze({ status: "blocked" });
       if (existing.actionId !== action.actionId || existing.requestFingerprint !== requestFingerprint) return freeze({ status: "blocked" });
       // A matching claimed row is evidence that a previous owner might already
       // have reached the recipient. A retry is never that original dispatch.
@@ -188,13 +191,13 @@ export class TransactionalMemorySessionStore implements SessionStore {
     }
     for (const intent of this.#state.effectIntents.values()) {
       if (intent.sessionId === action.sessionId && intent.expectedVersion === action.expectedVersion
-        && (intent.actionId !== action.actionId || intent.status !== "completed")) {
+        && (intent.actionId !== action.actionId || intent.attemptToken !== lease.token || intent.status !== "completed")) {
         if (intent.status === "claimed") this.#state.effectIntents.set(`${leaseKey(intent.sessionId, intent.expectedVersion)}:${intent.callId}`, freeze({ ...intent, status: "uncertain" as const }));
         return freeze({ status: "blocked" });
       }
     }
     const operationId = crypto.randomUUID();
-    this.#state.effectIntents.set(key, freeze({ sessionId: action.sessionId, expectedVersion: action.expectedVersion, actionId: action.actionId, callId, requestFingerprint, operationId, status: "claimed" as const }));
+    this.#state.effectIntents.set(key, freeze({ sessionId: action.sessionId, expectedVersion: action.expectedVersion, actionId: action.actionId, callId, requestFingerprint, attemptToken: lease.token, operationId, status: "claimed" as const }));
     return freeze({ status: "created", operationId });
   }
 

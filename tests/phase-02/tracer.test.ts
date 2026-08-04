@@ -292,6 +292,58 @@ describe("phase 02 final trusted-core tracer", () => {
     left.close(); right.close();
   });
 
+  test("blocks a fresh-call exact retry after a completed effect when the original final commit becomes stale", async () => {
+    const databasePath = temporaryDatabase();
+    const effects = { calls: 0 }; const aRuns = { runs: 0 }; const bRuns = { runs: 0 };
+    let aClockCalls = 0;
+    const left = createTrustedCore({
+      databasePath, worker: completingWorker(aRuns), sessions: [{ sessionId: "session-0001", principalId: principal.id, version: 0 }],
+      dispatcher: { dispatch: async () => { effects.calls += 1; return { output: "original recipient" }; } },
+      artifactVerifier: testArtifactVerifier(),
+      // call-1 is durably completed at 1,000; only the final lease fence is
+      // stale at 30,001, so no action result is available to replay.
+      now: () => ++aClockCalls === 1 ? 0 : aClockCalls >= 6 ? 30_001 : 1_000,
+    });
+    const original = await left.core.execute(action());
+    expect(original.status).not.toBe("completed");
+    expect(effects.calls).toBe(1);
+    const callTwoWorker = completingWorker(bRuns, (request) => ({
+      kind: "tool_proposal", turn: 1,
+      request: { sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion,
+        capabilityGrant: request.capabilityGrant, workspaceId: request.workspaceId, callId: "call-2", evidenceId: "evidence-2", tool: "capture_evidence", label: "exact-retry-new-call" },
+    }));
+    const right = createTrustedCore({
+      databasePath, worker: callTwoWorker, sessions: [{ sessionId: "session-0001", principalId: principal.id, version: 0 }],
+      dispatcher: { dispatch: async () => { effects.calls += 1; return { output: "retry recipient" }; } }, artifactVerifier: testArtifactVerifier(), now: () => 30_001,
+    });
+    const retry = await right.core.execute(action());
+
+    expect(retry.status).not.toBe("completed");
+    expect(effects.calls).toBe(1);
+    expect(left.store.getSessionVersion("session-0001")).toBe(0);
+    left.close(); right.close();
+  });
+
+  test("allows multiple completed tool calls within one unchanged execution attempt", async () => {
+    const databasePath = temporaryDatabase();
+    const effects = { calls: 0 }; const runs = { runs: 0 };
+    const worker: WorkerPort = { async run(request) {
+      runs.runs += 1;
+      const tool = (callId: string, evidenceId: string, turn: number) => ({ kind: "tool_proposal" as const, turn,
+        request: { sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion,
+          capabilityGrant: request.capabilityGrant, workspaceId: request.workspaceId, callId, evidenceId, tool: "capture_evidence" as const, label: callId },
+      });
+      return WorkerRunResultSchema.parse({ status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events: [tool("call-1", "evidence-1", 1), tool("call-2", "evidence-2", 2)], artifact: verifiedArtifact(request) });
+    } };
+    const composition = core(databasePath, worker, effects);
+    const result = await composition.core.execute(action());
+
+    expect(result).toMatchObject({ status: "completed", code: "ACTION_COMMITTED", version: 1 });
+    expect(runs.runs).toBe(1);
+    expect(effects.calls).toBe(2);
+    composition.close();
+  });
+
   test("retains an unknown effect intent after effect-then-throw so an exact retry cannot dispatch twice", async () => {
     const databasePath = temporaryDatabase();
     const effects = { calls: 0 }; const firstRuns = { runs: 0 }; const retryRuns = { runs: 0 };

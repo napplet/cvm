@@ -65,6 +65,7 @@ export class SqliteSessionStore implements SessionStore {
         action_id TEXT NOT NULL,
         call_id TEXT NOT NULL,
         request_fingerprint TEXT NOT NULL,
+        attempt_token TEXT NOT NULL,
         operation_id TEXT NOT NULL UNIQUE,
         status TEXT NOT NULL CHECK (status IN ('claimed', 'completed', 'uncertain')),
         PRIMARY KEY (session_id, expected_version, call_id)
@@ -78,6 +79,12 @@ export class SqliteSessionStore implements SessionStore {
     const leaseColumns = this.#database.query("PRAGMA table_info(worker_leases)").all() as readonly { name: string }[];
     if (!leaseColumns.some((column) => column.name === "lease_token")) {
       this.#database.exec("ALTER TABLE worker_leases ADD COLUMN lease_token TEXT;");
+    }
+    const effectIntentColumns = this.#database.query("PRAGMA table_info(effect_intents)").all() as readonly { name: string }[];
+    if (!effectIntentColumns.some((column) => column.name === "attempt_token")) {
+      // Existing rows cannot prove which lease began their recipient call, so
+      // NULL deliberately fences all later attempts rather than guessing.
+      this.#database.exec("ALTER TABLE effect_intents ADD COLUMN attempt_token TEXT;");
     }
   }
 
@@ -140,8 +147,9 @@ export class SqliteSessionStore implements SessionStore {
       return this.#database.transaction(() => {
         const row = this.#database.query("SELECT idempotency_key, lease_token, expires_at_ms FROM worker_leases WHERE session_id = ? AND expected_version = ?").get(action.sessionId, action.expectedVersion) as { idempotency_key: string; lease_token: string | null; expires_at_ms: number } | null;
         if (row?.idempotency_key !== action.idempotencyKey || row.lease_token !== lease.token || row.expires_at_ms <= nowMs) return freeze({ status: "blocked" });
-        const existing = this.#database.query("SELECT action_id, request_fingerprint, operation_id, status FROM effect_intents WHERE session_id = ? AND expected_version = ? AND call_id = ?").get(action.sessionId, action.expectedVersion, callId) as { action_id: string; request_fingerprint: string; operation_id: string; status: "claimed" | "completed" | "uncertain" } | null;
+        const existing = this.#database.query("SELECT action_id, request_fingerprint, attempt_token, operation_id, status FROM effect_intents WHERE session_id = ? AND expected_version = ? AND call_id = ?").get(action.sessionId, action.expectedVersion, callId) as { action_id: string; request_fingerprint: string; attempt_token: string | null; operation_id: string; status: "claimed" | "completed" | "uncertain" } | null;
         if (existing) {
+          if (existing.attempt_token !== lease.token) return freeze({ status: "blocked" });
           if (existing.action_id !== action.actionId || existing.request_fingerprint !== requestFingerprint) return freeze({ status: "blocked" });
           if (existing.status === "claimed") {
             this.#database.query("UPDATE effect_intents SET status = 'uncertain' WHERE operation_id = ? AND status = 'claimed'").run(existing.operation_id);
@@ -149,12 +157,12 @@ export class SqliteSessionStore implements SessionStore {
           }
           return freeze({ status: existing.status, operationId: existing.operation_id });
         }
-        const conflict = this.#database.query("SELECT operation_id, action_id, status FROM effect_intents WHERE session_id = ? AND expected_version = ? AND (action_id <> ? OR status <> 'completed') LIMIT 1").get(action.sessionId, action.expectedVersion, action.actionId) as { operation_id: string; action_id: string; status: "claimed" | "completed" | "uncertain" } | null;
+        const conflict = this.#database.query("SELECT operation_id, action_id, attempt_token, status FROM effect_intents WHERE session_id = ? AND expected_version = ? AND (action_id <> ? OR attempt_token IS NOT ? OR status <> 'completed') LIMIT 1").get(action.sessionId, action.expectedVersion, action.actionId, lease.token) as { operation_id: string; action_id: string; attempt_token: string | null; status: "claimed" | "completed" | "uncertain" } | null;
         if (conflict) {
           if (conflict.status === "claimed") this.#database.query("UPDATE effect_intents SET status = 'uncertain' WHERE operation_id = ? AND status = 'claimed'").run(conflict.operation_id);
           return freeze({ status: "blocked" });
         }
-        this.#database.query("INSERT INTO effect_intents (session_id, expected_version, action_id, call_id, request_fingerprint, operation_id, status) VALUES (?, ?, ?, ?, ?, ?, 'claimed')").run(action.sessionId, action.expectedVersion, action.actionId, callId, requestFingerprint, operationId);
+        this.#database.query("INSERT INTO effect_intents (session_id, expected_version, action_id, call_id, request_fingerprint, attempt_token, operation_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'claimed')").run(action.sessionId, action.expectedVersion, action.actionId, callId, requestFingerprint, lease.token, operationId);
         return freeze({ status: "created", operationId });
       })();
     } catch (error) {

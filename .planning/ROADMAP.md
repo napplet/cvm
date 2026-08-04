@@ -13,7 +13,7 @@ napplet-cvm moves from proving the permanent napplet contract to a safe, prepaid
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Napplet Contract & Artifact Verification** - Prove a pinned toolchain can produce only conformant, independently verifiable napplets.
+- [x] **Phase 1: Napplet Contract & Artifact Verification** - Prove a pinned toolchain can produce only conformant, independently verifiable napplets. (completed 2026-08-04)
 - [ ] **Phase 2: Trusted Core & Isolated Agent Execution** - Establish deterministic policy, serialized state, and a fenced worker boundary.
 - [ ] **Phase 3: ContextVM Funding & Funded Admission** - Provide Nostr-linked accounts, CEP-8 top-ups, and safe prepaid authorization.
 - [ ] **Phase 4: Metered Generation & Revision Loop** - Turn approved funds into exact-usage, constrained generation and repair actions.
@@ -36,7 +36,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. Dependency installation and build scripts stay resource-bounded and policy-checked, with no route to control-plane secrets or unrestricted network access.
 
 **Validation gate**: Resolve one coherent `@napplet/cli` candidate and prove one pinned `create → init → skills install → frozen install → build → verify → test:conformance` fixture against the authoritative napplet packages and NIP-5D/NAP boundary. Phase 1 establishes the contract and evidence shape; exhaustive provenance, reproducibility, hostile-matrix, golden, waiver, and production-promotion certification is deferred to Phase 7.
-**Plans:** 6/6 plans executed
+**Plans:** 6/6 plans complete
 
 Plans:
 **Wave 1**
@@ -172,7 +172,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Napplet Contract & Artifact Verification | 6/6 | In Progress|  |
+| 1. Napplet Contract & Artifact Verification | 6/6 | Complete    | 2026-08-04 |
 | 2. Trusted Core & Isolated Agent Execution | 0/TBD | Not started | - |
 | 3. ContextVM Funding & Funded Admission | 0/TBD | Not started | - |
 | 4. Metered Generation & Revision Loop | 0/TBD | Not started | - |

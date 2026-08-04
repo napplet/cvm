@@ -9,6 +9,38 @@ CREATE TABLE IF NOT EXISTS price_card_versions (
   id text PRIMARY KEY, card_hash text NOT NULL UNIQUE, profile_id text NOT NULL REFERENCES model_profile_versions(id),
   unit text NOT NULL CHECK (unit = 'sat'), normalized_card jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
 );
+-- Admission must never depend on an operator having seeded the pinned
+-- deterministic fixture by hand.  The IDs, normalized JSON and content hashes
+-- below are the promoted Phase 04 profile/card contract (canonical JSON with
+-- lexicographically sorted object keys).  Upsert makes a fresh database and a
+-- repeated migration converge on the same immutable version records.
+INSERT INTO model_profile_versions (id, profile_hash, provider, model, normalized_profile)
+VALUES (
+  'code-proposal',
+  '3fae53a6a94c9f3b1f79d59c668b74a24220cba1a636a6e0f51685b0ae7bb82c',
+  'deterministic_fixture',
+  'phase-04-fixture-model',
+  '{"deadlineMs":30000,"id":"code-proposal","maximumUnits":[{"dimension":"input_tokens","units":"1000"},{"dimension":"output_tokens","units":"1000"},{"dimension":"cached_tokens","units":"500"},{"dimension":"reasoning_tokens","units":"500"}],"model":"phase-04-fixture-model","priceCardId":"phase-04-deterministic-card-2026-08-04","provider":"deterministic_fixture","selection":"unselected"}'::jsonb
+)
+ON CONFLICT (id) DO UPDATE SET
+  profile_hash = EXCLUDED.profile_hash,
+  provider = EXCLUDED.provider,
+  model = EXCLUDED.model,
+  normalized_profile = EXCLUDED.normalized_profile;
+
+INSERT INTO price_card_versions (id, card_hash, profile_id, unit, normalized_card)
+VALUES (
+  'phase-04-deterministic-card-2026-08-04',
+  '098800e4e6b9290215f97f1319650de8569965c50e1d5c3063c710182433f117',
+  'code-proposal',
+  'sat',
+  '{"ceilings":{"inputTokens":"1000","outputTokens":"1000"},"currency":"sat","id":"phase-04-deterministic-card-2026-08-04","kind":"deterministic_fixture","provider":"deterministic_fixture","rates":{"cached_tokens":{"denominator":"2","numerator":"1"},"input_tokens":{"denominator":"1","numerator":"1"},"output_tokens":{"denominator":"1","numerator":"1"},"reasoning_tokens":{"denominator":"1","numerator":"2"}},"rounding":"ceil","supportedDimensions":["input_tokens","output_tokens","cached_tokens","reasoning_tokens"],"validity":{"notAfter":"2027-08-04T00:00:00.000Z","notBefore":"2026-08-04T00:00:00.000Z"},"version":"phase-04-deterministic-card-2026-08-04"}'::jsonb
+)
+ON CONFLICT (id) DO UPDATE SET
+  card_hash = EXCLUDED.card_hash,
+  profile_id = EXCLUDED.profile_id,
+  unit = EXCLUDED.unit,
+  normalized_card = EXCLUDED.normalized_card;
 CREATE TABLE IF NOT EXISTS metered_sessions (
   id text PRIMARY KEY, account_id text NOT NULL REFERENCES funding_accounts(account_id), admission_reference text NOT NULL,
   profile_id text NOT NULL REFERENCES model_profile_versions(id), price_card_id text NOT NULL REFERENCES price_card_versions(id),

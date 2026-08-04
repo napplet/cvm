@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 2
 current_phase_name: Trusted Core & Isolated Agent Execution
 status: executing
-stopped_at: Completed 02-04-PLAN.md
-last_updated: "2026-08-04T10:55:13.958Z"
+stopped_at: Completed 02-05-PLAN.md
+last_updated: "2026-08-04T11:05:37.151Z"
 last_activity: 2026-08-04
 last_activity_desc: Phase 2 plans passed independent verification and deterministic coverage gates
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 12
-  completed_plans: 10
+  completed_plans: 11
   percent: 14
 ---
 
@@ -30,11 +30,11 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 2 — Trusted Core & Isolated Agent Execution
-Plan: 3 of 6 — ready to execute
+Plan: 4 of 6 — ready to execute
 Status: Ready to execute
 Last activity: 2026-08-04 — Phase 2 plans passed independent verification and deterministic coverage gates
 
-Progress: [████████░░] 83% of milestone phases complete; Phase 2 execution 0/6
+Progress: [█████████░] 92% of milestone phases complete; Phase 2 execution 0/6
 
 ## Milestone Progress
 
@@ -76,6 +76,7 @@ Progress: [████████░░] 83% of milestone phases complete; Pha
 | Phase 01 P06 | 45m | 3 tasks | 14 files |
 | Phase 02 P01 | 6m 15s | 1 tasks | 7 files |
 | Phase 02-trusted-core-isolated-agent-execution P04 | 5m 11s | 2 tasks | 6 files |
+| Phase 02 P05 | 6m 19s | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -105,6 +106,9 @@ Recent decisions affecting current work:
 - [Phase ?]: The serialized in-memory store is explicitly a copy-then-commit tracer double; Plan 03 replaces it with durable SQLite composition.
 - [Phase ?]: Worker tool authority is a closed grant-bound union with validation-before-effect mediation and replay-safe results.
 - [Phase ?]: The deterministic WorkerPort fake proves isolated proposal and checkpoint boundaries without claiming Bun Worker security isolation.
+- [Phase ?]: Modal passes establish candidate eligibility only; provider selection, production certification, and SLO claims remain deferred.
+- [Phase ?]: Modal SDK loading is deferred until strict provider configuration validation, preserving offline blocked evidence without provider construction.
+- [Phase ?]: Modal sandbox resource and timeout ceilings derive exclusively from PHASE_02_POLICY_INITIAL.
 
 ### Pending Todos
 
@@ -126,6 +130,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-04T10:55:13.951Z
-Stopped at: Completed 02-04-PLAN.md
+Last session: 2026-08-04T11:05:37.145Z
+Stopped at: Completed 02-05-PLAN.md
 Resume file: None

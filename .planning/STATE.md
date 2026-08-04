@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 4
 current_phase_name: Metered Generation & Revision Loop
 status: planning
-stopped_at: Phase 3 complete; ready to discuss Phase 4
-last_updated: "2026-08-04T17:58:46.771Z"
+stopped_at: Phase 4 context complete; ready for research and AI specification
+last_updated: "2026-08-04T18:09:59.611Z"
 last_activity: 2026-08-04
-last_activity_desc: Phase 3 complete, transitioned to Phase 4
+last_activity_desc: Phase 4 context captured; ready for research and AI specification
 progress:
   total_phases: 7
   completed_phases: 3
@@ -25,16 +25,16 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 **Core value:** A user can describe one focused applet and receive a safe, conformant napplet that can be previewed and placed directly into a compatible napplet runtime.
 **Active milestone:** v1.0 — Safe Napplet Generation MVP
-**Current focus:** Phase 03 — ContextVM Funding & Funded Admission
+**Current focus:** Phase 04 — Metered Generation & Revision Loop
 
 ## Current Position
 
 Phase: 4 — Metered Generation & Revision Loop
 Plan: Not started
-Status: Ready to plan
-Last activity: 2026-08-04 — Phase 3 complete, transitioned to Phase 4
+Status: Context complete; research and AI specification next
+Last activity: 2026-08-04 — captured Phase 4 metering, session, repair, and provider-ambiguity decisions
 
-Progress: [███░░░░░░░] 43% of milestone phases complete; Phases 1–3 verified, Phase 4 ready for discussion
+Progress: [███░░░░░░░] 43% of milestone phases complete; Phases 1–3 verified, Phase 4 context complete
 
 ## Milestone Progress
 
@@ -43,7 +43,7 @@ Progress: [███░░░░░░░] 43% of milestone phases complete; Pha
 - Phases: Phases 1–3 complete; Phase 4 is active and ready for discussion; Phases 5–7 remain.
 - Plans: 19/19 currently known milestone plans executed; Phase 4 plans have not yet been created.
 - Requirements: 54/54 v1 requirements assigned; 25 verified complete and 29 pending.
-- Next checkpoint: discuss Phase 4 Metered Generation & Revision Loop, then research, specify, plan, and execute it without revisiting completed Phases 1–3.
+- Next checkpoint: research Phase 4 provider/metering contracts and generate its AI specification, then plan and execute it without revisiting completed Phases 1–3.
 
 ## Performance Metrics
 
@@ -120,7 +120,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Discuss and plan Phase 4 Metered Generation & Revision Loop from the completed Phase 3 funding authority.
+- Research Phase 4 provider/metering contracts and generate its AI specification before planning.
 
 ### Blockers/Concerns
 
@@ -138,6 +138,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-04T16:31:20.587Z
-Stopped at: Completed 03-07-PLAN.md
+Last session: 2026-08-04T18:09:59.602Z
+Stopped at: Phase 4 context complete; ready for research and AI specification
 Resume file: None

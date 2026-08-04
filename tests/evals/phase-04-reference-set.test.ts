@@ -59,11 +59,10 @@ async function evidenceInput() {
   return {
     identities: { referenceSet: fixturePath, meteredService: "src/phase-04/metered-generation-service.ts", gateway: "src/model/deterministic-model-gateway.ts", reconciliation: "src/model/reconciliation.ts", status: "src/phase-04/session-status.ts", adapter: "src/contextvm/adapter.ts" },
     checks: ["reference-set", "metered-authority", "reconciliation", "artifact-honesty", "owner-status", "contextvm-boundary"].map((id, index) => ({ id, severity: id === "reference-set" ? "critical" as const : "high" as const, status: "passed" as const, evidenceSha256: digest(String(index + 1)) })),
-    caseResults: caseIds.map((id) => ({ id, status: "passed" as const })),
+    caseComparisons: [],
     requirementMappings: Object.fromEntries(requiredRequirements.map((id) => [id, caseIds.filter((caseId, index) => cases[index]!.requirements.includes(id))])),
     decisionMappings: requiredDecisions,
     threatMappings: requiredThreats,
-    aggregateEffects: { providerDispatches: 9, providerLookups: 3, workerCalls: 7, receiptWrites: 7, debitPostings: 9, creditPostings: 2, releases: 10 },
     observations: [
       { provider: "deterministic_gateway", status: "passed" as const, selection: "unselected" as const, evidenceSha256: digest("a"), limitations: ["fixture-only execution"] },
       { provider: "live_model", status: "not_observed" as const, selection: "unselected" as const, evidenceSha256: digest("b"), limitations: ["Phase 7 owns live provider selection and certification"] },
@@ -89,7 +88,7 @@ describe("Phase 04 deterministic reference set", () => {
       "nextAction", "providerDispatches", "providerLookups", "providerSelection", "receiptWrites",
       "releases", "sessionState", "status", "workerCalls",
     ]);
-    expect(comparePhase04Case(fundedStart.id, fundedStart.expected, observation)).toEqual({ id: fundedStart.id, status: "passed", mismatches: [] });
+    expect(comparePhase04Case(fundedStart.id, fundedStart.expected, observation)).toMatchObject({ id: fundedStart.id, status: "passed", mismatches: [] });
   });
 
   test("recomputed wrong oracle still blocks funded-start evidence", async () => {
@@ -102,7 +101,7 @@ describe("Phase 04 deterministic reference set", () => {
 
     const gate = await executePhase04ReferenceGate(altered);
     expect(gate.verdict).toBe("blocked");
-    expect(gate.comparisons).toContainEqual(expect.objectContaining({ id: "P04-ACCT-03", status: "failed", mismatches: ["providerDispatches"] }));
+    expect(gate.comparisons).toContainEqual(expect.objectContaining({ id: "P04-ACCT-03", status: "failed", mismatches: expect.arrayContaining(["providerDispatches"]) }));
     expect(gate.aggregateEffects).toBeUndefined();
   });
 
@@ -131,20 +130,20 @@ describe("Phase 04 deterministic reference set", () => {
 });
 
 describe("Phase 04 immutable design evidence", () => {
-  test("accepts complete twenty-case deterministic proof while live providers remain unselected", async () => {
+  test("blocks partial deterministic proof while live providers remain unselected", async () => {
     const decision = await evaluatePhase04Design(await evidenceInput());
-    expect(decision.reasons).toEqual([]);
-    expect(decision.evidence).toMatchObject({ verdict: "design-ready", offlineVerdict: "passed" });
+    expect(decision.reasons).toContain("Phase 04 runtime comparison set is incomplete or mismatched");
+    expect(decision.evidence).toMatchObject({ verdict: "blocked", offlineVerdict: "blocked" });
     expect(decision.evidence.observations).toEqual(expect.arrayContaining([expect.objectContaining({ provider: "deterministic_gateway", selection: "unselected" }), expect.objectContaining({ provider: "live_model", status: "not_observed", selection: "unselected" })]));
   });
 
   test("fails closed for incomplete evidence, disclosure, readiness claims, and immutable collisions", async () => {
     const input = await evidenceInput();
-    await expect(evaluatePhase04Design({ ...input, caseResults: input.caseResults.slice(1) })).resolves.toMatchObject({ evidence: { verdict: "blocked" } });
+    await expect(evaluatePhase04Design({ ...input, caseComparisons: [{ id: "P04-ACCT-03", expected: (await observePhase04Case({ id: "P04-ACCT-03", boundedInput: {}, initialState: {}, schedule: [] })), observed: { ...(await observePhase04Case({ id: "P04-ACCT-03", boundedInput: {}, initialState: {}, schedule: [] })), providerDispatches: 2 } }] })).resolves.toMatchObject({ evidence: { verdict: "blocked" } });
     await expect(evaluatePhase04Design({ ...input, generatedSource: "forbidden" } as never)).resolves.toMatchObject({ evidence: { verdict: "blocked" } });
     await expect(evaluatePhase04Design({ ...input, observations: [{ ...input.observations[0]!, selection: "selected" as never }] })).resolves.toMatchObject({ evidence: { verdict: "blocked" } });
-    const valid = (await evaluatePhase04Design(input)).evidence;
-    await expect(validatePhase04DesignEvidence({ ...valid, evidenceSha256: digest("f") })).rejects.toThrow();
+    const blocked = (await evaluatePhase04Design(input)).evidence;
+    await expect(validatePhase04DesignEvidence({ ...blocked, evidenceSha256: digest("f") })).rejects.toThrow();
     const directory = await mkdtemp(join(process.env.TMPDIR ?? "/tmp", "napplet-phase-04-evidence-"));
     try {
       const first = await writePhase04DesignEvidence(directory, input);

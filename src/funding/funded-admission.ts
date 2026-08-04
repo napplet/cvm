@@ -159,10 +159,10 @@ export class FundedAdmissionService {
   }
 
   private async compensateReservation(accountId: string, intentReference: string, reference: string): Promise<FundedAdmissionOutcome> {
-    // Fence retries durably before releasing externally. If release succeeds but
-    // finalization cannot commit, a fresh service observes this ambiguity rather
-    // than trusting the stale prior `available` observation.
-    await this.options.store.transact(accountId, (transaction) => transaction.recordCapacityObservation({ intentReference, state: "reconciliation_pending", capacityReference: reference }));
+    // The pre-release fence is best effort: a persistence outage must never
+    // suppress compensation of an external reservation. Persist again after the
+    // release attempt so either its confirmed result or its ambiguity is durable.
+    await this.bestEffortCapacityFence(accountId, intentReference, reference);
     let released = false;
     try { await this.bounded(this.options.capacity.release({ intentReference, reference })); released = true; }
     catch { released = false; }
@@ -171,10 +171,20 @@ export class FundedAdmissionService {
         await this.options.store.transact(accountId, (transaction) => transaction.releaseCapacityIntent(intentReference));
         return freeze({ status: "refused" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
       } catch {
+        await this.bestEffortCapacityFence(accountId, intentReference, reference);
         return freeze({ status: "reconciliation_pending" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
       }
     }
+    await this.bestEffortCapacityFence(accountId, intentReference, reference);
     return freeze({ status: "reconciliation_pending" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
+  }
+
+  private async bestEffortCapacityFence(accountId: string, intentReference: string, reference: string): Promise<void> {
+    try {
+      await this.options.store.transact(accountId, (transaction) => transaction.recordCapacityObservation({ intentReference, state: "reconciliation_pending", capacityReference: reference }));
+    } catch {
+      // The durable dispatch claim remains fail-closed when this write is unavailable.
+    }
   }
 
   private async bounded<T>(operation: Promise<T>): Promise<T> {

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fixture from "../fixtures/contextvm-phase-03.json";
 import { buildContextVmAnnouncement } from "../../src/contextvm/announcement";
 import { ContextVmFundingAdapter } from "../../src/contextvm/adapter";
-import type { ContextVmInboundEnvelope, ContextVmTransportPort, ContextVmWireNotification, ContextVmWireResponse } from "../../src/contextvm/sdk-bridge";
+import { ContextVmSdkBridge, type ContextVmInboundEnvelope, type ContextVmTransportPort, type ContextVmWireNotification, type ContextVmWireResponse } from "../../src/contextvm/sdk-bridge";
 import { FundingService } from "../../src/funding/funding-service";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
 
@@ -80,6 +80,22 @@ describe("ContextVM v1 announcement", () => {
 });
 
 describe("verified ContextVM funding adapter", () => {
+  test("SDK bridge confines the pinned transport setters and canonical explicit-gating identity to the adapter folder", () => {
+    const configured: Record<string, unknown> = {};
+    const bridge = new ContextVmSdkBridge({
+      setAnnouncementExtraTags: (tags: string[][]) => { configured.extra = tags; },
+      setAnnouncementPricingTags: (tags: string[][]) => { configured.pricing = tags; },
+      setSupportedPaymentInteraction: (mode: string) => { configured.interaction = mode; },
+    } as never);
+    bridge.configureAnnouncement(buildContextVmAnnouncement(fixture.announcement));
+    const canonical = bridge.canonicalInvocation(fixture.requests.verifiedPubkey, "tools/call", { name: "top_up", _meta: { progressToken: "changes" } });
+    expect(configured).toEqual({
+      extra: [["payment_interaction", "explicit_gating"], ["payment_interaction", "transparent"], ["pmi", "bitcoin-cashu-v4-direct"], ["pmi", "bitcoin-lightning-bolt11"]],
+      pricing: [["cap", "top_up", "1-1000000", "sat"]], interaction: "optional",
+    });
+    expect(canonical).toMatchObject({ clientPubkey: fixture.requests.verifiedPubkey, invocationHash: expect.stringMatching(/^[a-f0-9]{64}$/) });
+  });
+
   test("uses only SDK-verified sender identity and durable FundingService replay across adapter instances", async () => {
     const store = new TransactionalMemoryFundingStore();
     const service = new FundingService(store);
@@ -100,6 +116,9 @@ describe("verified ContextVM funding adapter", () => {
     const second = new ContextVmFundingAdapter({ service, transport: secondTransport });
     await second.handle(envelope({ ...admission, requestEventId: "event-0003", rawEvent: { id: "event-0003", tags: [["payment_interaction", "transparent"]] } }));
     expect(secondTransport.responses.at(-1)?.response).toEqual(first);
+    await adapter.handle(admission);
+    await adapter.handle(envelope({ ...admission, requestEventId: "event-0004", rawEvent: { id: "event-0004", tags: [["payment_interaction", "transparent"]] }, request: { ...admission.request, params: { name: "funded_admission", arguments: { idempotencyKey: "admission-0001", requestedCap: "701", unit: "sat", capacity: { reference: "ready-0001", usable: true } } } } }));
+    expect(transport.responses.at(-1)?.response).toMatchObject({ error: { code: -32602 } });
     expect(store.activeHolds).toHaveLength(1);
 
     await adapter.handle(envelope({ request: { id: "request-0004", method: "tools/call", params: { name: "account_status", arguments: { pubkey: fixture.requests.forgedPubkey } } } }));
@@ -118,6 +137,7 @@ describe("verified ContextVM funding adapter", () => {
     await adapter.handle(envelope());
     expect(protectedMaterial).toEqual([{ pmi: fixture.requests.cashuPmi, payload: fixture.requests.directPayment }]);
     expect(transport.responses.at(-1)).toMatchObject({ clientPubkey: fixture.requests.verifiedPubkey, requestEventId: "event-0001", response: { result: { status: "top_up_pending", pmi: fixture.requests.cashuPmi } } });
+    expect(transport.notifications.at(-1)).toMatchObject({ requestEventId: "event-0001", notification: { method: "notifications/top_up_pending" } });
     expect(JSON.stringify(transport.responses)).not.toContain(fixture.requests.directPayment);
     expect(transport.canonicalCalls).toEqual([{ clientPubkey: fixture.requests.verifiedPubkey, method: "tools/call", params: envelope().request.params }]);
 

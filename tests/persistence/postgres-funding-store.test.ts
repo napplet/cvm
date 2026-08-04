@@ -14,6 +14,12 @@ const admission = (idempotencyKey = "admit-1", cap = "60") => ({
 } as const);
 
 describe("PostgresFundingStore", () => {
+  test("exposes the same metered store authority as the SQL adapter", async () => {
+    const store = new PostgresFundingStore(new DeterministicPostgresFundingExecutor());
+    expect(typeof (store as unknown as { findMeteredAction?: unknown }).findMeteredAction).toBe("function");
+    expect(typeof (store as unknown as { listBillingLineItems?: unknown }).listBillingLineItems).toBe("function");
+  });
+
   test("replays across a fresh store instance and rejects changed fingerprints", async () => {
     const executor = new DeterministicPostgresFundingExecutor();
     const first = new FundingService(new PostgresFundingStore(executor));

@@ -32,6 +32,12 @@ test("PostgreSQL-wire waits and serialization retries have a bounded deadline", 
   expect(observed).toBe("POSTGRES_OPERATION_DEADLINE_EXCEEDED");
 });
 
+test("PostgresSqlFundingStore exposes one metered funding authority", async () => {
+  const store = new PostgresSqlFundingStore({ connect: async () => new ScriptedClient() });
+  expect(typeof (store as unknown as { findMeteredAction?: unknown }).findMeteredAction).toBe("function");
+  expect(typeof (store as unknown as { listBillingLineItems?: unknown }).listBillingLineItems).toBe("function");
+});
+
 test("rail repositories expose narrow ports and leave SQL ownership to the database adapter", async () => {
   const lightning = await Bun.file("src/funding/lightning-top-up.ts").text();
   const cashu = await Bun.file("src/funding/cashu-top-up.ts").text();

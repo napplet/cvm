@@ -48,4 +48,10 @@ describe("Phase 03 deterministic reference set", () => {
     expect(item.expected.effects.forbidden).toBeGreaterThanOrEqual(1);
     expect(item.expected.evidence).toEqual(expect.arrayContaining([expect.any(String)]));
   });
+
+  test("executes fixtures in-process without broad-group test spawning", () => {
+    const source = readFileSync("tests/evals/phase-03-reference-set.test.ts", "utf8");
+    expect(source).not.toContain("Bun.spawnSync");
+    expect(new Set(referenceSet.cases.map((item) => item.input)).size).toBe(referenceSet.cases.length);
+  });
 });

@@ -105,4 +105,41 @@ describe("FundedAdmissionService", () => {
     expect(offline.mode).toBe("offline_design_ready");
     expect(offline.externalSurfaces).toEqual(expect.objectContaining({ modal: "unselected", contextvm: "blocked", lightning: "blocked", cashu: "blocked", postgres: "blocked" }));
   });
+
+  test("aggregates owner-scoped pending, failed, reconciliation, and credited rail lifecycle state", async () => {
+    const store = new TransactionalMemoryFundingStore();
+    const funding = new FundingService(store);
+    await funding.execute(creditCommand());
+    const status = new AccountStatusService({
+      store,
+      sessions: { list: async () => ({ active: [], resumable: [], pendingActions: [] }) },
+      rails: {
+        list: async ({ accountId }) => accountId === (await funding.status(principal)).accountId ? [
+          { topUpId: "lightning-pending", rail: "lightning", state: "pending", amount: "20", unit: "sat", createdAt: "2026-08-04T00:01:00.000Z", safeDisplayReference: "lightning:…pending" },
+          { topUpId: "lightning-failed", rail: "lightning", state: "failed", amount: "30", unit: "sat", createdAt: "2026-08-04T00:02:00.000Z" },
+          { topUpId: "cashu-reconcile", rail: "cashu", state: "reconciliation_pending", amount: "40", unit: "sat", createdAt: "2026-08-04T00:03:00.000Z" },
+          { topUpId: settlement.topUpId, rail: "lightning", state: "credited", amount: settlement.amount, unit: "sat", createdAt: settlement.verifiedAt, verifiedAt: settlement.verifiedAt, settlementReference: settlement.settlementReference },
+        ] : [],
+      },
+    } as never);
+
+    const own = await status.status(principal);
+    expect(own.topUps.map(({ topUpId, state }) => ({ topUpId, state }))).toEqual([
+      { topUpId: settlement.topUpId, state: "credited" },
+      { topUpId: "lightning-pending", state: "pending" },
+      { topUpId: "lightning-failed", state: "failed" },
+      { topUpId: "cashu-reconcile", state: "reconciliation_pending" },
+    ]);
+    expect(JSON.stringify(own)).not.toMatch(/token|proof|preimage|invoice|secret|private/i);
+    expect((await status.status({ pubkey: "c".repeat(64) })).topUps).toEqual([]);
+  });
+
+  test("production composition rejects structural durability claims without a database-owned encrypted vault", () => {
+    const pool = { connect: async () => { throw new Error("unused"); } };
+    const transport = { configureAnnouncement: () => undefined, onInbound: () => undefined, canonicalInvocation: () => ({ invocationHash: "f".repeat(64) }), sendResponse: async () => undefined, sendNotification: async () => undefined };
+    const capacity = { reserveNow: async () => ({ status: "refused" as const }), observe: async () => ({ status: "unknown" as const }), release: async () => undefined };
+    const forgedLightning = { durable: true, begin: async () => ({ topUpId: "forged", state: "pending" }) };
+    const forgedCashu = { durable: true, submit: async () => ({ topUpId: "forged", state: "verifying" }) };
+    expect(() => createFundedCore({ postgresPool: pool, transport, capacity, lightning: forgedLightning, cashu: forgedCashu } as never)).toThrow("PRODUCTION_RAIL_COMPOSITION_REQUIRED");
+  });
 });

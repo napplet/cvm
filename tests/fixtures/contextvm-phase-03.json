@@ -12,5 +12,12 @@
       { "name": "preview", "available": false, "planned": true },
       { "name": "publication", "available": false, "planned": true }
     ]
+  },
+  "requests": {
+    "verifiedPubkey": "abababababababababababababababababababababababababababababababab",
+    "forgedPubkey": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "cashuPmi": "bitcoin-cashu-v4-direct",
+    "lightningPmi": "bitcoin-lightning-bolt11",
+    "directPayment": "cashuAsecret-that-must-not-escape"
   }
 }

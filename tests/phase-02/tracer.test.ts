@@ -10,6 +10,7 @@ import {
 } from "../../src/phase-02/contracts";
 import {
   createPhase02Tracer,
+  createTrustedCore,
   type ActionEnvelope,
   type WorkerPort,
   type WorkerRunRequest,
@@ -55,6 +56,10 @@ function successfulWorker(counter: { runs: number }): WorkerPort {
 }
 
 describe("phase 02 trusted-core tracer", () => {
+  test("requires an explicit durable database path for final reference composition", () => {
+    // The final/reference constructor must not silently select volatile state.
+    expect(() => createTrustedCore({ worker: successfulWorker({ runs: 0 }) } as never)).toThrow("databasePath");
+  });
   test("exports strict transport-neutral boundary schemas for downstream phases", () => {
     expect(AdmissionRequestSchema.safeParse({ idea: "One focused napplet." }).success).toBeTrue();
     expect(AdmissionRequestSchema.safeParse({ idea: "One focused napplet.", transport: "nostr" }).success).toBeFalse();

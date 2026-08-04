@@ -46,6 +46,16 @@ async function seededSession(): Promise<Readonly<{ store: TransactionalMemoryFun
 }
 
 describe("owner-safe session status", () => {
+  test("reports durable read failures as unavailable rather than an invalid client cursor", async () => {
+    const seeded = await seededSession();
+    const store = new Proxy(seeded.store, { get(target, property) {
+      if (property === "status") return async () => { throw new Error("database unavailable"); };
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    } });
+    await expect(readSessionStatus({ store: store as never, cursorSecret: "test-status-secret", query: { principal: owner, sessionId: seeded.sessionId } })).resolves.toEqual({ status: "service_unavailable" });
+  });
+
   test("uses a closed bounded query and collapses unknown or foreign sessions without financial disclosure", async () => {
     const store = await creditedStore();
     const query = SessionStatusQuerySchema.parse({ principal: owner, sessionId: "missing-session" });

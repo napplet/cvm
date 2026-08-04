@@ -72,6 +72,7 @@ export const SessionStatusSchema = z.discriminatedUnion("status", [
   StatusOkSchema,
   z.object({ status: z.literal("not_found_or_denied") }).strict(),
   z.object({ status: z.literal("invalid_cursor") }).strict(),
+  z.object({ status: z.literal("service_unavailable") }).strict(),
 ]);
 
 export type SessionStatusQuery = z.infer<typeof SessionStatusQuerySchema>;
@@ -164,5 +165,5 @@ export async function readSessionStatus(input: Readonly<{ store: MeteredFundingS
       billing: { items: page.items.map(historyItem), nextCursor },
     });
     return freeze(result);
-  } catch { return freeze(SessionStatusSchema.parse({ status: "invalid_cursor" })); }
+  } catch { return freeze(SessionStatusSchema.parse({ status: "service_unavailable" })); }
 }

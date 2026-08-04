@@ -4,6 +4,20 @@ import { readFileSync } from "node:fs";
 type Reference = Readonly<{ id: string; requirement: string; decision: string; threat: string; scenario: string; input: string; execution: string; expected: Readonly<{ result: string; stateDelta: Readonly<Record<string, number>>; effects: Readonly<Record<string, number>>; evidence: readonly string[] }> }>;
 const referenceSet = JSON.parse(readFileSync("tests/fixtures/phase-03-reference-set.json", "utf8")) as { version: number; cases: Reference[]; deferrals: string[] };
 const requirements = ["CTX-01", "CTX-02", "CTX-03", "CTX-04", "PAY-01", "PAY-02", "PAY-03", "PAY-04", "PAY-05", "PAY-06", "PAY-07", "BILL-01", "BILL-02", "BILL-06"];
+const executionFiles = {
+  contextvm: ["tests/contextvm/adapter.test.ts"],
+  ledger: ["tests/persistence/postgres-funding-store.test.ts"],
+  lightning: ["tests/funding/lightning-top-up.test.ts"],
+  cashu: ["tests/funding/cashu-top-up.test.ts"],
+  admission: ["tests/funding/funded-admission.test.ts", "tests/phase-03/tracer.test.ts"],
+} as const;
+const executionFor = (id: string): keyof typeof executionFiles => {
+  if (["P03-R40", "P03-R41", "P03-R42", "P03-R46"].includes(id)) return "contextvm";
+  if (["P03-R44", "P03-R45", "P03-R56"].includes(id)) return "ledger";
+  if (["P03-R48", "P03-R57"].includes(id)) return "lightning";
+  if (["P03-R47", "P03-R50", "P03-R51", "P03-R52"].includes(id)) return "cashu";
+  return "admission";
+};
 
 describe("Phase 03 deterministic reference set", () => {
   test("maps every requirement and D-40 through D-58 to an executable deterministic oracle", () => {
@@ -22,5 +36,17 @@ describe("Phase 03 deterministic reference set", () => {
     expect(item.expected.effects).toEqual({ allowed: expect.any(Number), forbidden: expect.any(Number) });
     expect(item.expected.evidence.length).toBeGreaterThan(0);
     expect(item.execution).toBe("deterministic");
+    expect(executionFiles[executionFor(item.id)].length).toBeGreaterThan(0);
+  });
+
+  test.each(Object.entries(executionFiles))("executes deterministic authority oracle group %s", (group, files) => {
+    const mapped = referenceSet.cases.filter((item) => executionFor(item.id) === group);
+    expect(mapped.length).toBeGreaterThan(0);
+    const result = Bun.spawnSync(["bun", "test", ...files], { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" });
+    expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
+    for (const item of mapped) {
+      expect(item.expected.effects.forbidden).toBeGreaterThanOrEqual(1);
+      expect(item.expected.evidence).toEqual(expect.arrayContaining([expect.any(String)]));
+    }
   });
 });

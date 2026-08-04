@@ -15,6 +15,7 @@
     "candidate:workflow-check": "bun test tests/promotion/candidate.test.ts --test-name-pattern='candidate workflow'",
     "test:modal-probe": "bun run scripts/probe-modal-worker.ts",
     "eval:phase-02": "bun test tests/evals/phase-02-reference-set.test.ts",
+    "eval:phase-03": "bun test tests/evals/phase-03-reference-set.test.ts",
     "test:phase-02-design-slice": "bun run scripts/verify-phase-02-design-slice.ts"
   },
   "dependencies": {

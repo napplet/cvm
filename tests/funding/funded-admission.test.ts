@@ -54,6 +54,24 @@ class FailReleaseFinalizationStore implements FundingStore {
   }
 }
 
+class FailAvailableAndPreFenceStore implements FundingStore {
+  transactions = 0; acceptAttempts = 0;
+  constructor(readonly inner: FundingStore) {}
+  findRecordedResult(accountId: string, idempotencyKey: string) { return this.inner.findRecordedResult(accountId, idempotencyKey); }
+  status(accountId: string) { return this.inner.status(accountId); }
+  async transact<T>(accountId: string, operation: (transaction: FundingTransaction) => Promise<T> | T): Promise<T> {
+    this.transactions += 1;
+    if (this.transactions === 3 || this.transactions === 4) throw new Error(`FAIL_${this.transactions}`);
+    return this.inner.transact(accountId, (transaction) => operation({
+      ...transaction,
+      acceptFundedAdmission: async (input) => {
+        this.acceptAttempts += 1;
+        return transaction.acceptFundedAdmission(input);
+      },
+    }));
+  }
+}
+
 describe("FundedAdmissionService", () => {
   test("requires immediately usable capacity before taking a bounded cap hold", async () => {
     const store = new TransactionalMemoryFundingStore();
@@ -242,6 +260,26 @@ describe("FundedAdmissionService", () => {
     expect(await admission.admit(command)).toMatchObject({ status: "reconciliation_pending" });
     expect(await admission.admit(command)).toMatchObject({ status: "reconciliation_pending" });
     expect({ reserves, releases, observations }).toEqual({ reserves: 1, releases: 1, observations: 1 });
+    expect(inner.activeHolds).toHaveLength(0);
+  });
+
+  test("FAIL_4 cannot suppress external release after the available-state write fails", async () => {
+    const inner = new TransactionalMemoryFundingStore();
+    await new FundingService(inner).execute({ ...creditCommand(), idempotencyKey: "credit-fail-4", payload: { settlement: { ...settlement, topUpId: "topup-fail-4", externalReference: "external-fail-4", settlementReference: "settlement-fail-4" } } });
+    const store = new FailAvailableAndPreFenceStore(inner);
+    let reserves = 0; let releases = 0; let observations = 0;
+    const capacity = {
+      reserveNow: async () => { reserves += 1; return { status: "available" as const, reference: "capacity:fail-4", expiresAt: "2026-08-05T00:00:00.000Z" }; },
+      release: async () => { releases += 1; },
+      observe: async () => { observations += 1; return { status: "refused" as const, reason: "already-released" }; },
+    };
+    const admission = new FundedAdmissionService({ funding: new FundingService(store), store, capacity, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
+    const command = { principal, idempotencyKey: "fail-4", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "20", unit: "sat" as const } };
+
+    expect(await admission.admit(command)).toMatchObject({ status: "refused" });
+    expect(await admission.admit(command)).toMatchObject({ status: "refused" });
+    expect({ reserves, releases, observations }).toEqual({ reserves: 1, releases: 1, observations: 0 });
+    expect(store.acceptAttempts).toBe(0);
     expect(inner.activeHolds).toHaveLength(0);
   });
 

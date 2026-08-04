@@ -37,6 +37,7 @@ export class PostgresFundingStore implements MeteredFundingStore {
   }
   async findMeteredAction(accountId: string, idempotencyKey: string): Promise<MeteredAction | undefined> { return this.executor.read((state) => { const value = state.meteredActions.get(key(accountId, idempotencyKey)); return value && frozen(value); }); }
   async findMeteredActionByOperation(accountId: string, operationId: string): Promise<MeteredAction | undefined> { return this.executor.read((state) => { const value = [...state.meteredActions.values()].find((action) => action.accountId === accountId && action.operationId === operationId); return value && frozen(value); }); }
+  async listMeteredActionsForSession(accountId: string, sessionId: string): Promise<readonly MeteredAction[]> { return this.executor.read((state) => frozen([...state.meteredActions.values()].filter((action) => action.accountId === accountId && action.sessionId === sessionId))); }
   async listBillingLineItems(accountId: string, request: BillingLineItemPageRequest = {}): Promise<BillingLineItemPage> {
     const limit = request.limit ?? 50; if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error("BILLING_LINE_ITEM_PAGE_LIMIT_INVALID");
     return this.executor.read((state) => {

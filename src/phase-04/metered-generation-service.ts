@@ -49,7 +49,6 @@ async function hash(value: unknown): Promise<string> { const digest = await cryp
 export class MeteredGenerationService {
   #inFlight = new Map<string, Promise<SessionActionResult>>();
   #sessionTails = new Map<string, Promise<void>>();
-  #repairOrigins = new Set<string>();
   constructor(private readonly options: Readonly<{ fundedAdmission: FundedAdmissionService; store: MeteredFundingStore; gateway: ModelGateway; worker: WorkerPort; artifactVerifier: ArtifactVerifier; riskDetector?: RiskSignalDetector; harness?: Readonly<{ runner: NappletHarness; toolchain: NappletHarnessRequest["toolchain"]; snapshotReference: string; priorArtifactId: string; approvedApplicationSurfaces: readonly string[] }> }>) {}
 
   async startSession(input: unknown): Promise<SessionActionResult> {
@@ -111,14 +110,13 @@ export class MeteredGenerationService {
     const run = this.#serializeSession(accountId, command.sessionId, async () => {
       const origin = await this.options.store.findMeteredAction(accountId, command.originatingIdempotencyKey);
       const session = await this.options.store.sessionStatus(accountId, command.sessionId);
-      const originKey = `${accountId}\u0000${command.sessionId}\u0000${command.originatingActionId}`;
+      const sessionActions = await this.options.store.listMeteredActionsForSession(accountId, command.sessionId);
       const decision = evaluateAutomaticRepair({
         principalId: accountId, sessionId: command.sessionId, expectedVersion: command.expectedVersion, currentVersion: session?.version ?? -1,
         workspaceLineage: command.workspaceLineage, snapshotReference: command.snapshotReference, originatingActionId: command.originatingActionId, failedArtifactId: command.failedArtifactId, validationReportReference: command.validationReportReference,
-        priorAutomaticRepairs: this.#repairOrigins.has(originKey) ? 1 : 0, permanentNappletPolicy: origin?.actionId === command.originatingActionId && origin.status === "failed" ? "pass" : "deny", actionAuthorized: true,
+        priorAutomaticRepairs: sessionActions.filter((action) => action.actionId.startsWith(`repair:${command.originatingActionId}:`)).length, permanentNappletPolicy: origin?.actionId === command.originatingActionId && origin.status === "failed" ? "pass" : "deny", actionAuthorized: true,
       });
       if (decision.status === "denied") return SessionActionResultSchema.parse({ status: "denied", code: decision.code });
-      this.#repairOrigins.add(originKey);
       return this.execute({ ...command, repair: true }, accountId, fingerprint);
     }).finally(() => this.#inFlight.delete(key));
     this.#inFlight.set(key, run);
@@ -135,7 +133,7 @@ export class MeteredGenerationService {
     const budget = await this.options.fundedAdmission.authorizeActionBudget({ principal: command.principal, admissionReference: command.admissionReference, idempotencyKey: `phase-04:${command.idempotencyKey}`, maximum: command.maximum, unit: "sat" });
     const sessionId = "sessionId" in command ? command.sessionId : `session:${(await hash({ accountId, key: command.idempotencyKey })).slice(0, 24)}`;
     const operationId = `operation:${(await hash({ accountId, key: command.idempotencyKey, profile: profile.id })).slice(0, 24)}`;
-    const actionId = "repair" in command ? `repair:${command.idempotencyKey}` : "revision" in command ? `revision:${command.idempotencyKey}` : `start:${command.idempotencyKey}`;
+    const actionId = "repair" in command ? `repair:${command.originatingActionId}:${command.idempotencyKey}` : "revision" in command ? `revision:${command.idempotencyKey}` : `start:${command.idempotencyKey}`;
     const prepared = await this.options.store.transact(accountId, (transaction) => transaction.prepareMeteredAction({ accountId, idempotencyKey: command.idempotencyKey, fingerprint, sessionId, actionId, expectedVersion: command.expectedVersion, admissionReference: command.admissionReference, actionBudgetReference: budget.reference, maximum: BigInt(command.maximum), operationId, profileId: profile.id, priceCardId: PHASE_04_DETERMINISTIC_PRICE_CARD.id }));
     if (prepared.result) return SessionActionResultSchema.parse(prepared.result);
     const claim = await this.options.store.transact(accountId, (transaction) => transaction.claimProviderOperation(operationId));

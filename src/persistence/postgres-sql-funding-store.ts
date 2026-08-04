@@ -77,6 +77,10 @@ export class PostgresSqlFundingStore implements MeteredFundingStore {
     const client = await this.pool.connect();
     try { const row = (await client.query("SELECT a.account_id,a.idempotency_key,a.fingerprint,a.session_id,a.id,a.expected_session_version,a.admission_reference,a.budget_reference,a.reservation_sat,a.operation_id,a.profile_id,a.price_card_id,a.state,a.receipt_charge,a.provider_receipt_reference,a.terminal_result,a.session_version,a.artifact_version,a.remaining_cap_sat,a.remaining_balance_sat,o.provider_request_id FROM metered_actions a JOIN provider_operations o ON o.id=a.operation_id WHERE a.account_id=$1 AND a.operation_id=$2", [accountId, operationId])).rows[0]; return row && actionFromRow(row); } finally { client.release(); }
   }
+  async listMeteredActionsForSession(accountId: string, sessionId: string): Promise<readonly MeteredAction[]> {
+    const client = await this.pool.connect();
+    try { return frozen((await client.query("SELECT account_id,idempotency_key,fingerprint,session_id,id,expected_session_version,admission_reference,budget_reference,reservation_sat,operation_id,profile_id,price_card_id,state,receipt_charge,provider_receipt_reference,terminal_result,session_version,artifact_version,remaining_cap_sat,remaining_balance_sat FROM metered_actions WHERE account_id=$1 AND session_id=$2 ORDER BY id", [accountId, sessionId])).rows.map(actionFromRow)); } finally { client.release(); }
+  }
   async listBillingLineItems(accountId: string, request: BillingLineItemPageRequest = {}): Promise<BillingLineItemPage> {
     const limit = request.limit ?? 50; if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error("BILLING_LINE_ITEM_PAGE_LIMIT_INVALID");
     let after = 0n;

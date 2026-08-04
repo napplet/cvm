@@ -69,6 +69,8 @@ export interface FundingStore {
 export interface MeteredFundingStore extends FundingStore {
   findMeteredAction(accountId: string, idempotencyKey: string): Promise<MeteredAction | undefined>;
   findMeteredActionByOperation(accountId: string, operationId: string): Promise<MeteredAction | undefined>;
+  /** Owner-scoped history used to bind one automatic repair to its failed action. */
+  listMeteredActionsForSession(accountId: string, sessionId: string): Promise<readonly MeteredAction[]>;
   listBillingLineItems(accountId: string, request?: BillingLineItemPageRequest): Promise<BillingLineItemPage>;
   sessionStatus(accountId: string, sessionId: string): Promise<MeteredSessionRecord | undefined>;
   transact<T>(accountId: string, operation: (transaction: MeteredFundingTransaction) => Promise<T> | T): Promise<T>;
@@ -139,6 +141,9 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore {
   async findMeteredActionByOperation(accountId: string, operationId: string): Promise<MeteredAction | undefined> {
     const found = [...this.#state.meteredActions.values()].find((action) => action.accountId === accountId && action.operationId === operationId);
     return found ? freeze(clone(found)) : undefined;
+  }
+  async listMeteredActionsForSession(accountId: string, sessionId: string): Promise<readonly MeteredAction[]> {
+    return freeze(clone([...this.#state.meteredActions.values()].filter((action) => action.accountId === accountId && action.sessionId === sessionId)));
   }
   async listBillingLineItems(accountId: string, request: BillingLineItemPageRequest = {}): Promise<BillingLineItemPage> {
     const limit = request.limit ?? 50;

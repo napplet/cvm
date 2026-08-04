@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { fingerprintSessionAction, type SessionAction, type SessionActionResult } from "../domain/session-action";
 import { canonicalJson } from "../promotion/schema";
-import type { SessionEvaluation, SessionEvidence, SessionRecord, SessionStore } from "./session-store";
+import type { SessionEvaluation, SessionEvidence, SessionPreflight, SessionRecord, SessionStore } from "./session-store";
 
 type ActionRow = { fingerprint: string; result_json: string; evidence_json: string };
 type SessionRow = { session_id: string; principal_id: string; version: number };
@@ -67,6 +67,16 @@ export class SqliteSessionStore implements SessionStore {
     if (!existing) return undefined;
     const fingerprint = await fingerprintSessionAction(action);
     return existing.fingerprint === fingerprint ? freeze(copy(JSON.parse(existing.result_json) as SessionActionResult)) : denial("IDEMPOTENCY_KEY_CONFLICT");
+  }
+
+  async preflight(action: SessionAction): Promise<SessionPreflight> {
+    // One SQLite statement supplies a single committed snapshot for the
+    // pre-effect fence. apply() repeats the fence transactionally at commit.
+    const row = this.#database.query("SELECT principal_id, version FROM sessions WHERE session_id = ?").get(action.sessionId) as Pick<SessionRow, "principal_id" | "version"> | null;
+    if (!row) return freeze({ authorized: false, result: denial("SESSION_NOT_FOUND") });
+    if (row.principal_id !== action.principal.id) return freeze({ authorized: false, result: denial("SESSION_SCOPE_MISMATCH") });
+    if (row.version !== action.expectedVersion) return freeze({ authorized: false, result: denial("STALE_SESSION_VERSION", row.version) });
+    return freeze({ authorized: true });
   }
 
   get evidence(): readonly SessionEvidence[] {

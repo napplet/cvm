@@ -181,10 +181,12 @@ export class TrustedCore {
 
     const risk = await evaluateRisk({ idea: admission.idea }, this.dependencies.tokenCounter, this.dependencies.riskDetector, ["workspace_write"]);
     if (risk.status !== "accepted") return asFailure("RISK_DENIED", risk.evidence);
-    const currentVersion = this.dependencies.store.getSessionVersion(action.sessionId);
-    if (currentVersion !== undefined && currentVersion !== action.expectedVersion) {
-      return freeze({ status: "denied", code: "STALE_SESSION_VERSION", currentVersion });
-    }
+    // This pre-effect authorization fence prevents a caller from consuming a
+    // target session's worker/gateway authority. apply() repeats it at commit
+    // time so a concurrent action can only produce a stale result, never a
+    // cross-session effect.
+    const preflight = await this.dependencies.store.preflight(replayAction);
+    if (!preflight.authorized) return sessionResult(preflight.result);
     if (signal.aborted) return asFailure("WORKER_UNCERTAIN", { reason: "aborted before worker allocation" });
 
     const capabilityGrant = await digest({

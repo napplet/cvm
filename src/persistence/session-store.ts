@@ -24,11 +24,16 @@ export type SessionTransaction = Readonly<{
 
 export type SessionEvaluation = (transaction: SessionTransaction) => void;
 
+/** The pre-effect fence is advisory only; apply() remains the commit-time authority. */
+export type SessionPreflight = Readonly<{ authorized: true }> | Readonly<{ authorized: false; result: SessionActionResult }>;
+
 /** One authoritative commit decision: replay, fence, result, evidence, and version. */
 export interface SessionStore {
   createSession(session: SessionRecord): void;
   /** Read-only idempotency lookup used before any worker allocation/effect. */
   findRecordedResult(action: SessionAction): Promise<SessionActionResult | undefined>;
+  /** Atomically checks the target session's principal and version before worker allocation/effects. */
+  preflight(action: SessionAction): Promise<SessionPreflight>;
   apply(action: SessionAction, evaluate: SessionEvaluation): Promise<SessionActionResult>;
   getSessionVersion(sessionId: string): number | undefined;
   readonly evidence: readonly SessionEvidence[];
@@ -109,6 +114,14 @@ export class TransactionalMemorySessionStore implements SessionStore {
     if (!stored) return undefined;
     const fingerprint = await fingerprintSessionAction(action);
     return stored.fingerprint === fingerprint ? freeze(clone(stored.result)) : denial("IDEMPOTENCY_KEY_CONFLICT");
+  }
+
+  async preflight(action: SessionAction): Promise<SessionPreflight> {
+    const session = this.#state.sessions.get(action.sessionId);
+    if (!session) return freeze({ authorized: false, result: denial("SESSION_NOT_FOUND") });
+    if (session.principalId !== action.principal.id) return freeze({ authorized: false, result: denial("SESSION_SCOPE_MISMATCH") });
+    if (session.version !== action.expectedVersion) return freeze({ authorized: false, result: denial("STALE_SESSION_VERSION", session.version) });
+    return freeze({ authorized: true });
   }
 
   async apply(action: SessionAction, evaluate: SessionEvaluation): Promise<SessionActionResult> {

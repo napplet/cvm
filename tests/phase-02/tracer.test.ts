@@ -119,6 +119,20 @@ describe("phase 02 final trusted-core tracer", () => {
     composition.close();
   });
 
+  test("rejects a cross-principal session before allocating the worker or dispatching a tool", async () => {
+    const databasePath = temporaryDatabase();
+    const runs = { runs: 0 }; const effects = { calls: 0 };
+    const composition = core(databasePath, completingWorker(runs), effects);
+
+    const result = await composition.core.execute(action({ principal: { id: "principal:mallory" } }));
+
+    expect(result).toMatchObject({ status: "denied", code: "SESSION_SCOPE_MISMATCH" });
+    expect(runs.runs).toBe(0);
+    expect(effects.calls).toBe(0);
+    expect(composition.store.getSessionVersion("session-0001")).toBe(0);
+    composition.close();
+  });
+
   test.each([
     ["malformed worker event", () => ({ kind: "tool_proposal", turn: 1, request: { tool: "unknown" } })],
     ["wrong worker correlation", (request: ReturnType<typeof WorkerRunRequestSchema.parse>) => ({ kind: "tool_proposal", turn: 1, request: { sessionId: "other", actionId: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion, capabilityGrant: request.capabilityGrant, workspaceId: request.workspaceId, callId: "call-1", evidenceId: "evidence-1", tool: "capture_evidence", label: "bad" } })],

@@ -13,5 +13,8 @@
     "candidate:detect": "bun run src/promotion/candidate.ts",
     "candidate:verify": "bun run src/promotion/candidate.ts",
     "candidate:workflow-check": "bun test tests/promotion/candidate.test.ts --test-name-pattern='candidate workflow'"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
   }
 }

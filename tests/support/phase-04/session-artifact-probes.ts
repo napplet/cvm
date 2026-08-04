@@ -116,7 +116,7 @@ export async function runForeignSessionProbe() {
 }
 
 /** Seeds immutable owner history, then reads its signed page through the public status projection. */
-export async function runOwnerStatusProbe() {
+export async function runOwnerStatusProbe(pageLimit = 1) {
   const store = await creditedStatusStore();
   const accountId = await accountIdForPrincipal(phase04Owner);
   const sessionId = "session-status-001";
@@ -128,6 +128,6 @@ export async function runOwnerStatusProbe() {
     await transaction.recordUsageReceipt({ operationId: "operation:status-001", protectedEvidenceReference: "protected-receipt-evidence" });
     await transaction.finalizeMeteredAction({ idempotencyKey: "status-action", operationId: "operation:status-001", receiptCharge: "7", providerReceiptReference: "protected-provider-payload", status: "completed", result: { providerPayload: "must-not-leak", prompt: "must-not-leak" }, sessionVersion: 1, artifactVersion: 1, artifact: { artifactId: "verified:status-001", workspaceLineage: "workspace:session-status-001", checkpointReference: "checkpoint:session-status-001:start", snapshotReference: "snapshot:session-status-001:start", validationEvidenceReference: "validation:status-001" } });
   });
-  const first = await readSessionStatus({ store, cursorSecret: "test-status-secret", query: { principal: phase04Owner, sessionId, billing: { limit: 1 } } });
+  const first = await readSessionStatus({ store, cursorSecret: "test-status-secret", query: { principal: phase04Owner, sessionId, billing: { limit: pageLimit } } });
   return Object.freeze({ store, accountId, sessionId, first, serialized: JSON.stringify(first) });
 }

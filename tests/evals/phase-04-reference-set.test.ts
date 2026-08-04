@@ -72,6 +72,21 @@ async function evidenceInput() {
 }
 
 describe("Phase 04 deterministic reference set", () => {
+  test("observer and probe source stays fact-only and cannot embed a static observation registry", async () => {
+    const sources = await Promise.all([
+      "tests/evals/phase-04-runtime-observation.ts",
+      "tests/evals/phase-04-runtime-financial.ts",
+      "tests/evals/phase-04-runtime-session-artifact.ts",
+    ].map((path) => readFile(path, "utf8")));
+    for (const source of sources) {
+      expect(source).not.toMatch(/phase-04-reference-set\.json/);
+      expect(source).not.toMatch(/Record\s*<\s*string\s*,\s*Phase04RuntimeObservation\s*>/);
+      expect(source).not.toMatch(/(?:function|async function)\s+(?:observe\w*|run\w*Probe)\s*\([^)]*\b(?:expected|oracle|status)\b/);
+    }
+    expect(sources[1]).not.toMatch(/const\s+cases\s*=/);
+    expect(sources[0]).toMatch(/observeFinancialCase\(input\).*observeSessionArtifactCase\(input\)/s);
+  });
+
   test("observes all twenty registered runtime cases and requires child assertions", async () => {
     const gate = await executePhase04ReferenceGate(JSON.parse(await readFile(fixturePath, "utf8")));
     expect(gate.verdict).toBe("passed");
@@ -129,6 +144,28 @@ describe("Phase 04 deterministic reference set", () => {
     expect(gate.aggregateEffects).toBeUndefined();
   });
 
+  test("numeric, state, evidence, and next-action mismatches across cases block recomputed-oracle evidence", async () => {
+    const fixture = JSON.parse(await readFile(fixturePath, "utf8")) as { cases: ReferenceCase[] };
+    const altered = structuredClone(fixture);
+    const changes: readonly [string, keyof ReferenceCase["expected"]][] = [
+      ["P04-ACCT-03", "providerDispatches"],
+      ["P04-ART-02", "sessionState"],
+      ["P04-AMB-01", "evidence"],
+      ["P04-STATUS-01", "nextAction"],
+    ];
+    for (const [id, field] of changes) {
+      const target = altered.cases.find((item) => item.id === id);
+      if (!target) throw new Error(`missing ${id}`);
+      const value = target.expected[field];
+      (target.expected as Record<string, unknown>)[field] = typeof value === "number" ? value + 1 : `${value}:wrong`;
+      target.expected.oracle = oracleFor(target.expected);
+    }
+    const gate = await executePhase04ReferenceGate(altered);
+    expect(gate.verdict).toBe("blocked");
+    expect(gate.aggregateEffects).toBeUndefined();
+    for (const [id, field] of changes) expect(gate.comparisons.find((item) => item.id === id)?.mismatches).toContain(field);
+  }, 60_000);
+
   test("requires twenty complete, uniquely mapped actual-service cases", async () => {
     const cases = await referenceSet();
     expect(cases).toHaveLength(20);
@@ -163,7 +200,10 @@ describe("Phase 04 immutable design evidence", () => {
 
   test("fails closed for incomplete evidence, disclosure, readiness claims, and immutable collisions", async () => {
     const input = await evidenceInput();
-    await expect(evaluatePhase04Design({ ...input, caseComparisons: [{ id: "P04-ACCT-03", expected: (await observePhase04Case({ id: "P04-ACCT-03", boundedInput: {}, initialState: {}, schedule: [] })), observed: { ...(await observePhase04Case({ id: "P04-ACCT-03", boundedInput: {}, initialState: {}, schedule: [] })), providerDispatches: 2 } }] })).resolves.toMatchObject({ evidence: { verdict: "blocked" } });
+    const fundedStart = (await referenceSet()).find((item) => item.id === "P04-ACCT-03");
+    if (!fundedStart) throw new Error("missing funded-start reference case");
+    const observed = await observePhase04Case(fundedStart);
+    await expect(evaluatePhase04Design({ ...input, caseComparisons: [{ id: "P04-ACCT-03", expected: observed, observed: { ...observed, providerDispatches: 2 } }] })).resolves.toMatchObject({ evidence: { verdict: "blocked" } });
     await expect(evaluatePhase04Design({ ...input, generatedSource: "forbidden" } as never)).resolves.toMatchObject({ evidence: { verdict: "blocked" } });
     await expect(evaluatePhase04Design({ ...input, observations: [{ ...input.observations[0]!, selection: "selected" as never }] })).resolves.toMatchObject({ evidence: { verdict: "blocked" } });
     const blocked = (await evaluatePhase04Design(input)).evidence;
@@ -195,5 +235,15 @@ describe("Phase 04 immutable design evidence", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  }, 60_000);
+
+  test("loaded design evidence re-derives results and aggregates from observations", async () => {
+    const gate = await executePhase04ReferenceGate(JSON.parse(await readFile(fixturePath, "utf8")));
+    const input = await evidenceInput();
+    const decision = await evaluatePhase04Design({ ...input, caseComparisons: gate.comparisons.map(({ id, expected, observed }) => ({ id: id as never, expected, observed })) });
+    expect(decision.evidence.caseResults).toEqual(gate.comparisons.map(({ id, status }) => ({ id, status })));
+    expect(decision.evidence.aggregateEffects).toEqual(gate.aggregateEffects);
+    await expect(validatePhase04DesignEvidence({ ...decision.evidence, aggregateEffects: { ...decision.evidence.aggregateEffects!, providerDispatches: 999 } })).rejects.toThrow();
+    await expect(validatePhase04DesignEvidence({ ...decision.evidence, caseResults: decision.evidence.caseResults.map((item) => ({ ...item, status: "failed" as const })) })).rejects.toThrow();
   }, 60_000);
 });

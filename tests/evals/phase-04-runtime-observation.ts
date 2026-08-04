@@ -23,7 +23,9 @@ function expectedObservation(value: unknown): Phase04RuntimeObservation {
 /** Runtime scenarios accept only case facts, never an expected oracle or pass status. */
 export async function observePhase04Case(input: Phase04RuntimeCaseInput): Promise<Phase04RuntimeObservation> {
   if (!input || !input.boundedInput || !input.initialState || !Array.isArray(input.schedule)) throw new Error(`runtime case ${input?.id ?? "unknown"} lacks bounded input facts`);
-  const observer = await observeFinancialCase(input.id) ?? await observeSessionArtifactCase(input.id);
+  // The fixture's comparison object never crosses this boundary.  A scenario gets
+  // only facts it must turn into authority configuration and post-run observations.
+  const observer = await observeFinancialCase(input) ?? await observeSessionArtifactCase(input);
   if (!observer) throw new Error(`no runtime scenario registered for ${input.id}`);
   return Phase04RuntimeObservationSchema.parse(observer);
 }

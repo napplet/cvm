@@ -14,14 +14,14 @@ async function fundedDependencies() {
   const funding = new FundingService(store);
   await funding.execute({
     principal, kind: "credit_settlement", idempotencyKey: "credit-1", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1",
-    payload: { settlement: { topUpId: "topup-1", rail: "lightning", unit: "sat", amount: "300", externalReference: "lightning-1", settlementReference: "settlement-1", verifiedAt: "2026-08-04T00:00:00.000Z" } },
+    payload: { settlement: { topUpId: "topup-1", rail: "lightning", unit: "sat", amount: "10000", externalReference: "lightning-1", settlementReference: "settlement-1", verifiedAt: "2026-08-04T00:00:00.000Z" } },
   });
   const admissions = new FundedAdmissionService({
     funding, store,
     capacity: { reserveNow: async () => ({ status: "available" as const, reference: "capacity-1", expiresAt: "2026-08-05T00:00:00.000Z" }), observe: async () => ({ status: "available" as const, reference: "capacity-1", expiresAt: "2026-08-05T00:00:00.000Z" }), release: async () => {} },
     now: () => Date.parse("2026-08-04T00:00:00.000Z"),
   });
-  const admission = await admissions.admit({ principal, idempotencyKey: "admission-1", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "200", unit: "sat" } });
+  const admission = await admissions.admit({ principal, idempotencyKey: "admission-1", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "6500", unit: "sat" } });
   if (admission.status !== "accepted") throw new Error("test funding admission did not succeed");
   return { store, admissions, admission };
 }
@@ -51,16 +51,16 @@ describe("Phase 04 funded start tracer", () => {
       async lookup() { return { status: "not_found" }; },
     };
     const service = new MeteredGenerationService({ fundedAdmission: admissions, store, gateway, worker: completedWorker(effects), artifactVerifier: verifier });
-    const command = { principal, admissionReference: admission.reference, idempotencyKey: "start-1", expectedVersion: 0, maximum: "100", policyVersion: "phase-02-policy-2026-08-04", idea: "Build one focused counter napplet." };
+    const command = { principal, admissionReference: admission.reference, idempotencyKey: "start-1", expectedVersion: 0, maximum: "3250", policyVersion: "phase-02-policy-2026-08-04", idea: "Build one focused counter napplet." };
 
     const [first, duplicate] = await Promise.all([service.startSession(command), service.startSession(command)]);
 
     expect(first).toEqual(duplicate);
-    expect(first).toMatchObject({ status: "completed", sessionId: expect.any(String), sessionVersion: 1, artifactVersion: 1, confirmedSpend: "15", remainingCap: "185", nextAction: "revise_session" });
+    expect(first).toMatchObject({ status: "completed", sessionId: expect.any(String), sessionVersion: 1, artifactVersion: 1, confirmedSpend: "15", remainingCap: "6485", nextAction: "revise_session" });
     expect(effects).toEqual({ dispatches: 1, workers: 1 });
     expect(store.meteredActions).toHaveLength(1);
     expect(store.meteredActions[0]).toMatchObject({ status: "completed", receiptCharge: "15" });
-    expect(store.projection(first.accountId)).toEqual({ settledAvailable: "285", held: "185", unit: "sat" });
+    expect(store.projection(first.accountId)).toEqual({ settledAvailable: "9985", held: "6485", unit: "sat" });
   });
 
   test("denies invalid text before budget, provider, worker, ledger, or artifact effects", async () => {
@@ -75,5 +75,18 @@ describe("Phase 04 funded start tracer", () => {
     expect(effects).toEqual({ dispatches: 0, workers: 0 });
     expect(store.meteredActions).toEqual([]);
     expect(store.activeHolds).toHaveLength(1);
+  });
+
+  test("rejects a one-sat approval before creating or dispatching provider work", async () => {
+    const { store, admissions, admission } = await fundedDependencies();
+    const effects = { dispatches: 0, workers: 0 };
+    const gateway: ModelGateway = { async dispatch() { effects.dispatches += 1; throw new Error("must not dispatch"); }, async lookup() { return { status: "not_found" }; } };
+    const service = new MeteredGenerationService({ fundedAdmission: admissions, store, gateway, worker: completedWorker(effects), artifactVerifier: verifier });
+
+    const result = await service.startSession({ principal, admissionReference: admission.reference, idempotencyKey: "one-sat", expectedVersion: 0, maximum: "1", policyVersion: "phase-02-policy-2026-08-04", idea: "Build one focused napplet." });
+
+    expect(result).toMatchObject({ status: "denied", code: "ACTION_MAXIMUM_BELOW_PROFILE_CEILING" });
+    expect(effects).toEqual({ dispatches: 0, workers: 0 });
+    expect(store.meteredActions).toEqual([]);
   });
 });

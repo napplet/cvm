@@ -135,7 +135,7 @@ describe("verified ContextVM funding adapter", () => {
     const cashuCalls: unknown[] = [];
     const adapter = new ContextVmFundingAdapter({
       service, transport,
-      topUps: { lightning: { begin: async () => ({ state: "pending" }) }, cashu: { submit: async (input) => { cashuCalls.push(input); return { state: "credited", topUpId: "cashu:one" }; } } },
+      topUps: { lightning: { begin: async () => ({ state: "pending" }) }, cashu: { submit: async (input) => { cashuCalls.push(input); return { state: "credited", topUpId: "cashu:one", token: "must-not-leak", invoice: "must-not-leak", proof: "must-not-leak" }; } } },
     });
     await adapter.handle(envelope());
     expect(cashuCalls).toHaveLength(0);
@@ -144,6 +144,7 @@ describe("verified ContextVM funding adapter", () => {
     expect(transport.responses.at(-1)).toMatchObject({ clientPubkey: fixture.requests.verifiedPubkey, requestEventId: "event-0001", response: { result: { state: "credited", topUpId: "cashu:one" } } });
     expect(transport.notifications.at(-1)).toMatchObject({ requestEventId: "event-0001", notification: { method: "notifications/top_up" } });
     expect(JSON.stringify(transport.responses)).not.toContain(fixture.requests.directPayment);
+    expect(JSON.stringify(transport.responses)).not.toMatch(/must-not-leak|token|proof|invoice/i);
     expect(transport.canonicalCalls).toEqual([{ clientPubkey: fixture.requests.verifiedPubkey, method: "tools/call", params: { name: "top_up", arguments: { idempotencyKey: "topup-0001b", pmi: fixture.requests.cashuPmi, mode: "explicit_gating", amount: "21", topUpId: "cashu:one" } } }]);
 
     await adapter.handle(envelope({ rawEvent: { id: "event-0001", tags: [["pmi", fixture.requests.cashuPmi], ["direct_payment", fixture.requests.cashuPmi, "one"], ["direct_payment", fixture.requests.cashuPmi, "two"]] } }));

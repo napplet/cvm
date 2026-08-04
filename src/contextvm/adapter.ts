@@ -40,6 +40,17 @@ const FundedAdmissionArgumentsSchema = z.object({
   requestedCap: z.string().regex(/^[1-9][0-9]*$/u),
   unit: z.literal("sat"),
 }).strict();
+const RailTopUpResultSchema = z.object({
+  topUpId: z.string().min(1),
+  state: z.enum(["pending", "settled", "credited", "failed", "reconciliation_pending", "verifying"]),
+  status: z.enum(["payment_required", "reconciliation_pending", "failed", "credited"]).optional(),
+  rail: z.enum(["lightning", "cashu"]).optional(),
+  amount: z.string().regex(/^[1-9][0-9]*$/u).optional(),
+  unit: z.literal("sat").optional(),
+  safeDisplayReference: z.string().min(1).optional(),
+  expiresAt: z.iso.datetime().optional(),
+  settlementReference: z.string().min(1).optional(),
+}).passthrough();
 
 export interface ProtectedMaterialPort {
   protect(input: Readonly<{ pmi: "bitcoin-cashu-v4-direct"; payload: string }>): Promise<Readonly<{ reference: string }>>;
@@ -147,7 +158,16 @@ export class ContextVmFundingAdapter {
       ? await this.options.topUps?.lightning.begin({ principal: { pubkey: verifiedPubkey }, idempotencyKey: args.idempotencyKey, amount: args.amount, unit: "sat", policyVersion: this.policyVersion, protocolVersion: this.protocolVersion })
       : await this.options.topUps?.cashu.submit({ principal: { pubkey: verifiedPubkey }, idempotencyKey: args.idempotencyKey, topUpId: args.topUpId ?? `cashu:${canonical.invocationHash}`, amount: args.amount, unit: "sat", pmi: args.pmi, token: new TextEncoder().encode(tags.directPayment!.payload) });
     if (!result) throw new Error("TOP_UP_UNAVAILABLE");
-    const wireResult = freeze({ ...z.object({}).passthrough().parse(result), paymentInteraction: args.mode, explicitGatingIdentity: args.mode === "explicit_gating" ? canonical.invocationHash : undefined });
+    const railResult = RailTopUpResultSchema.parse(result);
+    // This is an explicit response allowlist: coordinator/provider additions do
+    // not become ContextVM wire fields by accident (bearers, proofs, invoices,
+    // tokens, and protected material references are never serialized here).
+    const wireResult = freeze({ topUpId: railResult.topUpId, state: railResult.state,
+      ...(railResult.status ? { status: railResult.status } : {}), ...(railResult.rail ? { rail: railResult.rail } : {}),
+      ...(railResult.amount ? { amount: railResult.amount } : {}), ...(railResult.unit ? { unit: railResult.unit } : {}),
+      ...(railResult.safeDisplayReference ? { safeDisplayReference: railResult.safeDisplayReference } : {}),
+      ...(railResult.expiresAt ? { expiresAt: railResult.expiresAt } : {}), ...(railResult.settlementReference ? { settlementReference: railResult.settlementReference } : {}),
+      paymentInteraction: args.mode, ...(args.mode === "explicit_gating" ? { explicitGatingIdentity: canonical.invocationHash } : {}) });
     await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({
       jsonrpc: "2.0", method: "notifications/top_up", params: wireResult,
     }), requestEventId);

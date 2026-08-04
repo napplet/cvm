@@ -55,7 +55,7 @@ export class FakeLightningReceiptPort implements LightningReceiptPort {
     return {
       status: "settled", topUpId: request.topUpId, serviceReference: request.serviceReference,
       invoiceIdentity: created.invoiceIdentity, paymentHash: created.paymentHash, amount: created.amount, unit: "sat",
-      expiresAt: created.expiresAt, settledAt: "2026-08-05T00:01:00.000Z", final: true,
+      expiresAt: created.expiresAt, settledAt: "2026-08-05T00:00:00.000Z", final: true,
       settlementReference: `settlement:${request.topUpId}`, receiverAuthenticated: true,
     };
   }

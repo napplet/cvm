@@ -60,7 +60,7 @@ export class CashuTopUpCoordinator {
   async reconcile(topUpId: string): Promise<CashuTopUpResult> {
     const record = this.#journal.records.get(topUpId); if (!record) throw asError("CASHU_TOP_UP_UNKNOWN");
     if (record.result.state !== "reconciliation_pending") return record.result;
-    const request: CashuObserveRequest = { topUpId, policy: record.policy, commitment: record.result.commitment };
+    const request: CashuObserveRequest = { topUpId, policy: record.policy, commitment: record.result.commitment, amount: record.amount };
     if (this.options.vault.open) request.token = await this.options.vault.open({ id: record.protectedId, accountId: record.accountId, topUpId, rail: "cashu" });
     const observed = await this.options.provider.observe(request);
     return this.#recordObservation(record, { principal: record.principal, idempotencyKey: record.idempotencyKey, topUpId, amount: record.amount, unit: "sat", pmi: CashuPmi, token: record.token ?? new Uint8Array() }, observed);

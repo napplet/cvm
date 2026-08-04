@@ -15,7 +15,7 @@ const UnknownCashuObservationSchema = z.object({ status: z.literal("unknown"), o
 export const CashuSettlementObservationSchema = z.discriminatedUnion("status", [VerifiedCashuObservationSchema, FailedCashuObservationSchema, UnknownCashuObservationSchema]);
 export type CashuSettlementObservation = z.infer<typeof CashuSettlementObservationSchema>;
 export type CashuSettlementRequest = Readonly<{ topUpId: string; policy: CashuMintPolicy; amount: string; commitment: string; token: Uint8Array }>;
-export type CashuObserveRequest = Readonly<{ topUpId: string; policy: CashuMintPolicy; commitment: string; token?: Uint8Array }>;
+export type CashuObserveRequest = Readonly<{ topUpId: string; policy: CashuMintPolicy; commitment: string; amount: string; token?: Uint8Array }>;
 export type CashuTreasuryState = "held_at_trusted_mint" | "melted_settled" | "failed" | "unknown";
 
 /** Adapter-only port. Its normalized observations have no access to funding or ledger authority. */
@@ -68,7 +68,7 @@ export class CashuTsSettlementAdapter implements CashuSettlementPort {
     // A mint observation needs original protected proofs. Absence is explicit rather
     // than inferred success; the coordinator supplies them only after vault access.
     if (!request.token) return { status: "unknown", operationReference: `cashu:${request.commitment}` };
-    return this.settle({ ...request, amount: "1", token: request.token });
+    return this.settle({ ...request, token: request.token });
   }
 
   async reconcileTreasury(): Promise<Readonly<{ state: CashuTreasuryState }>> { return { state: "unknown" }; }
@@ -81,11 +81,18 @@ export class FakeCashuSettlementPort implements CashuSettlementPort {
   #settlements: CashuSettlementObservation[] = [];
   #observations: CashuSettlementObservation[] = [];
   #treasury: Readonly<{ state: CashuTreasuryState }>[] = [];
+  #effectThenThrow?: CashuSettlementObservation;
   nextSettlement(value: CashuSettlementObservation): void { this.#settlements.push(CashuSettlementObservationSchema.parse(value)); }
   nextObservation(value: CashuSettlementObservation): void { this.#observations.push(CashuSettlementObservationSchema.parse(value)); }
   nextTreasury(value: Readonly<{ state: CashuTreasuryState }>): void { this.#treasury.push(value); }
+  effectThenThrowOnce(value: CashuSettlementObservation): void { this.#effectThenThrow = CashuSettlementObservationSchema.parse(value); }
   async settle(request: CashuSettlementRequest): Promise<CashuSettlementObservation> {
     this.settleCalls += 1; this.requests.push(structuredClone(request));
+    if (this.#effectThenThrow) {
+      const observed = this.#effectThenThrow; this.#effectThenThrow = undefined;
+      this.#observations.push(observed);
+      throw new Error("CASHU_SETTLEMENT_UNKNOWN");
+    }
     return this.#settlements.shift() ?? { status: "unknown", operationReference: `cashu:${request.commitment}` };
   }
   async observe(request: CashuObserveRequest): Promise<CashuSettlementObservation> {

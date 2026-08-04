@@ -12,7 +12,8 @@
     "toolchain:image-build": "bun run scripts/build-toolchain-image.ts",
     "candidate:detect": "bun run src/promotion/candidate.ts",
     "candidate:verify": "bun run src/promotion/candidate.ts",
-    "candidate:workflow-check": "bun test tests/promotion/candidate.test.ts --test-name-pattern='candidate workflow'"
+    "candidate:workflow-check": "bun test tests/promotion/candidate.test.ts --test-name-pattern='candidate workflow'",
+    "test:modal-probe": "bun run scripts/probe-modal-worker.ts"
   },
   "dependencies": {
     "modal": "0.9.0",

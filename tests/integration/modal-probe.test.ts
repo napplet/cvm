@@ -135,13 +135,13 @@ describe("Modal adapter contract", () => {
 
 describe("Modal probe evidence", () => {
   test("writes blocked, unselected evidence without provider configuration", async () => {
-    const process = Bun.spawn(["bun", "run", "scripts/probe-modal-worker.ts"], {
+    const child = Bun.spawn(["bun", "run", "scripts/probe-modal-worker.ts"], {
       cwd: process.cwd(),
       env: { ...process.env, MODAL_TOKEN_ID: "", MODAL_TOKEN_SECRET: "", NAPPLET_CVM_MODAL_PROBE_CONFIG: "" },
       stdout: "pipe",
       stderr: "pipe",
     });
-    expect(await process.exited).toBe(0);
+    expect(await child.exited).toBe(0);
     const pointer = await Bun.file("evidence/phase-02/modal-probe.json").json();
     expect(pointer).toMatchObject({ status: "blocked", selection: "unselected", reasonCode: "PROVIDER_UNSELECTED" });
     expect(pointer.evidenceSha256).toMatch(/^[a-f0-9]{64}$/);

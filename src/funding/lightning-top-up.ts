@@ -74,7 +74,10 @@ export class LightningTopUpCoordinator {
       if (recorded) {
         if (recorded.fingerprint !== fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
         const topUp = state.topUps.get(recorded.topUpId); if (!topUp) throw new Error("LIGHTNING_TOPUP_CORRUPT");
-        return frozen({ mode: topUp.providerIntent === "uncertain" ? "reconcile" as const : "replay" as const, topUp });
+        // A process can disappear after the durable intent but before recording a
+        // receiver response.  Treat any non-terminal intent as opaque and query
+        // its immutable reference; it is never a permit to create again.
+        return frozen({ mode: topUp.providerIntent !== "completed" ? "reconcile" as const : "replay" as const, topUp });
       }
       const topUpId = `lightning:${(await sha256(`${accountId}:${command.idempotencyKey}`)).slice(0, 32)}`;
       const topUp: PrivateTopUp = frozen({ topUpId, accountId, principal: command.principal, commandFingerprint: fingerprint, commandKey: key, rail: "lightning", state: "pending", amount: command.amount, unit: "sat", createdAt: this.#now(), providerIntent: "created", providerReference: `invoice-create:${topUpId}` });

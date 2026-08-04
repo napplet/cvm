@@ -109,6 +109,13 @@ describe("Cashu credit and treasury", () => {
     expect(store.postings).toHaveLength(1);
   });
 
+  test("never returns a prior Cashu lifecycle result to a different owner", async () => {
+    const { coordinator, provider } = harness();
+    provider.nextSettlement({ status: "unknown", operationReference: "owner-scope" });
+    await coordinator.submit(validSubmit("owner-scope"));
+    await expect(coordinator.submit({ ...validSubmit("owner-scope"), principal: { pubkey: "b".repeat(64) } })).rejects.toThrow("CASHU_TOP_UP_NOT_OWNER");
+  });
+
   test("ambiguous swap is reconciliation-pending and queries without resubmission", async () => {
     const { coordinator, provider, store } = harness();
     provider.nextSettlement({ status: "unknown", operationReference: "mint-op-unknown" });

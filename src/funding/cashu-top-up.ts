@@ -78,9 +78,9 @@ export class CashuTopUpCoordinator {
     // Pin synchronously at accepted-command time, before any await can allow a
     // policy rotation to change the meaning of this bearer.
     const policy = this.options.policies.pinActive();
-    const existing = await this.options.repository.find(submitted.topUpId);
-    if (existing) { if (existing.idempotencyKey !== submitted.idempotencyKey) throw asError("CASHU_TOP_UP_CONFLICT"); return existing.result; }
     const accountId = await accountIdForPrincipal(submitted.principal as Principal);
+    const existing = await this.options.repository.find(submitted.topUpId);
+    if (existing) { if (existing.accountId !== accountId) throw asError("CASHU_TOP_UP_NOT_OWNER"); if (existing.idempotencyKey !== submitted.idempotencyKey) throw asError("CASHU_TOP_UP_CONFLICT"); return existing.result; }
     const commitment = await sha256(submitted.token);
     const protectedReference = await this.options.vault.seal({ accountId, topUpId: submitted.topUpId, rail: "cashu" }, submitted.token);
     const result = frozen({ topUpId: submitted.topUpId, state: "verifying" as const, policyVersion: policy.version, commitment });

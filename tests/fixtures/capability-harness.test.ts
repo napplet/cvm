@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import { FIXTURES, runFixture } from "../../src/fixtures/registry";
 
 const digest = (value: string) => value.repeat(64).slice(0, 64);
@@ -30,6 +31,18 @@ function runnerOutput(mode: "primary" | "degraded-no-intent") {
 }
 
 describe("capability harness", () => {
+  test("executes its deterministic interaction and consumes runtime SDK observations", async () => {
+    const root = join(import.meta.dir, "..", "..");
+    const app = await Bun.file(join(root, "fixtures/capability-harness/src/App.tsx")).text();
+    const runner = await Bun.file(join(root, "infra/toolchain/fixture-runner.ts")).text();
+
+    expect(app).toMatch(/useEffect\(\(\) =>\s*\{\s*void saveValue\(/s);
+    expect(app).toMatch(/await intent\.open\(/);
+    expect(runner).toContain("await capabilityObservation(project)");
+    expect(runner).not.toContain('capabilityFixture ? (selectedMode === "primary" ? ["storage", "intent"] : ["storage"])');
+    expect(runner).toContain("observedDomains: []");
+  });
+
   test("declares storage as its only hard capability and records SDK-only optional intent use", async () => {
     expect(FIXTURES["capability-harness"].requires).toEqual(["storage"]);
     expect(FIXTURES["capability-harness"].optionalDomains).toEqual(["intent"]);

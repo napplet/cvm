@@ -1,4 +1,5 @@
 import { requireDomain } from "@napplet/sdk";
+import { useEffect, useState } from "react";
 
 const storage = requireDomain("storage");
 
@@ -14,5 +15,13 @@ export async function saveValue(value: string) {
 }
 
 export function App() {
-  return <main><h1>Capability harness</h1><p>Storage is required; intent is optional.</p></main>;
+  const [status, setStatus] = useState("Saving the fixture value…");
+
+  useEffect(() => {
+    void saveValue("capability-harness-fixture").then((result) => setStatus(
+      result.mode === "primary" ? "Saved and opened intent." : result.message,
+    ));
+  }, []);
+
+  return <main><h1>Capability harness</h1><p>Storage is required; intent is optional.</p><output>{status}</output></main>;
 }

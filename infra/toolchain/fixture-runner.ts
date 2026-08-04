@@ -6,6 +6,12 @@ const STAGES = ["create", "init", "skills", "overlay", "install", "build", "veri
 type StageId = typeof STAGES[number];
 
 type Stage = { id: StageId; argv: string[]; exitCode: number; stdoutSha256: string; stderrSha256: string; nativeOutputSha256: string };
+type CapabilityObservation = {
+  observedDomains: string[];
+  optionalIntentPresenceRead: boolean;
+  intentUsedThroughSdk: boolean;
+  gracefulDegradation: boolean;
+};
 
 async function sha256(value: Uint8Array | string): Promise<string> {
   const bytes = typeof value === "string" ? new TextEncoder().encode(value) : value;
@@ -28,6 +34,22 @@ async function files(root: string): Promise<{ path: string; sha256: string }[]> 
     else if (entry.isFile()) output.push({ path: relative(root, path), sha256: await sha256(await Bun.file(path).bytes()) });
   }
   return output.sort((left, right) => left.path.localeCompare(right.path));
+}
+
+/** Reads the runtime-instrumented SDK observation emitted by the fixture's browser harness. */
+async function capabilityObservation(project: string): Promise<CapabilityObservation> {
+  const reportPath = join(project, ".cvm-capability-observations.json");
+  const value = JSON.parse(await readFile(reportPath, "utf8")) as Partial<CapabilityObservation>;
+  if (!Array.isArray(value.observedDomains) || value.observedDomains.some((domain) => typeof domain !== "string") ||
+    typeof value.optionalIntentPresenceRead !== "boolean" || typeof value.intentUsedThroughSdk !== "boolean" || typeof value.gracefulDegradation !== "boolean") {
+    throw new Error("runtime capability observation is malformed");
+  }
+  return {
+    observedDomains: value.observedDomains,
+    optionalIntentPresenceRead: value.optionalIntentPresenceRead,
+    intentUsedThroughSdk: value.intentUsedThroughSdk,
+    gracefulDegradation: value.gracefulDegradation,
+  };
 }
 
 function fixturePath(): string {
@@ -89,8 +111,10 @@ try {
   const distFiles = await files(join(project, "dist"));
   const manifest = JSON.parse(await readFile(join(project, "dist", ".nip5a-manifest.json"), "utf8")) as { aggregateHash?: string };
   if (!manifest.aggregateHash || !/^[a-f0-9]{64}$/i.test(manifest.aggregateHash)) throw new Error("upstream manifest emitted no aggregate hash");
-  console.log(JSON.stringify({ fixture: fixture.name, mode: selectedMode, status: "passed", candidateId: CANDIDATE_ID, imageDigest: selectedImageDigest, stages, installedSkillsSha256: await sha256(JSON.stringify(skillFiles)), distSha256: await sha256(JSON.stringify(distFiles)), aggregateHash: manifest.aggregateHash, observedDomains: capabilityFixture ? (selectedMode === "primary" ? ["storage", "intent"] : ["storage"]) : [], optionalIntentPresenceRead: capabilityFixture, intentUsedThroughSdk: capabilityFixture && selectedMode === "primary", gracefulDegradation: capabilityFixture && selectedMode === "degraded-no-intent" }));
+  const observation = capabilityFixture
+    ? await capabilityObservation(project)
+    : { observedDomains: [], optionalIntentPresenceRead: false, intentUsedThroughSdk: false, gracefulDegradation: false };
+  console.log(JSON.stringify({ fixture: fixture.name, mode: selectedMode, status: "passed", candidateId: CANDIDATE_ID, imageDigest: selectedImageDigest, stages, installedSkillsSha256: await sha256(JSON.stringify(skillFiles)), distSha256: await sha256(JSON.stringify(distFiles)), aggregateHash: manifest.aggregateHash, ...observation }));
 } catch (error) {
-  const capabilityFixture = selectedFixture === "capability-harness";
-  console.log(JSON.stringify({ fixture: selectedFixture, mode: selectedMode, status: "blocked", candidateId: CANDIDATE_ID, imageDigest: selectedImageDigest, stages, installedSkillsSha256: "0".repeat(64), distSha256: "0".repeat(64), aggregateHash: "0".repeat(64), observedDomains: capabilityFixture ? ["storage"] : [], optionalIntentPresenceRead: capabilityFixture, intentUsedThroughSdk: false, gracefulDegradation: capabilityFixture && selectedMode === "degraded-no-intent", reason: error instanceof Error ? error.message : "fixture runner failed" }));
+  console.log(JSON.stringify({ fixture: selectedFixture, mode: selectedMode, status: "blocked", candidateId: CANDIDATE_ID, imageDigest: selectedImageDigest, stages, installedSkillsSha256: "0".repeat(64), distSha256: "0".repeat(64), aggregateHash: "0".repeat(64), observedDomains: [], optionalIntentPresenceRead: false, intentUsedThroughSdk: false, gracefulDegradation: false, reason: error instanceof Error ? error.message : "fixture runner failed" }));
 }

@@ -11,8 +11,11 @@ function receipt(usage: readonly { dimension: "input_tokens" | "output_tokens" |
 
 describe("Phase 04 deterministic price card", () => {
   test("discloses deterministic identity, unit ceilings, and ceil rounding without a floating point boundary", () => {
-    expect(PHASE_04_DETERMINISTIC_PRICE_CARD).toMatchObject({ kind: "deterministic_fixture", currency: "sat", rounding: "ceil", ceilings: { inputTokens: expect.any(String), outputTokens: expect.any(String) } });
-    expect(maximumOperationCharge({ card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile: PHASE_04_MODEL_PROFILES["code-proposal"] })).toBe("3000");
+    expect(PHASE_04_DETERMINISTIC_PRICE_CARD.kind).toBe("deterministic_fixture");
+    expect(PHASE_04_DETERMINISTIC_PRICE_CARD.currency).toBe("sat");
+    expect(PHASE_04_DETERMINISTIC_PRICE_CARD.rounding).toBe("ceil");
+    expect(PHASE_04_DETERMINISTIC_PRICE_CARD.ceilings).toEqual({ inputTokens: "1000", outputTokens: "1000" });
+    expect(maximumOperationCharge({ card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile: PHASE_04_MODEL_PROFILES["code-proposal"] })).toBe("3250");
   });
 
   test("prices every dimension in canonical order and retains quotient/remainder evidence", () => {

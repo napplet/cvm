@@ -6,8 +6,9 @@ export { UsageDimensionSchema } from "./model-gateway";
 
 export const RationalRateSchema = z.object({ numerator: DecimalSchema.refine((value) => BigInt(value) > 0n), denominator: DecimalSchema.refine((value) => BigInt(value) > 0n) }).strict();
 export const PriceCardSchema = z.object({
-  id: z.string().min(1), version: z.string().min(1), provider: z.literal("deterministic_fixture"), currency: z.literal("sat"),
+  id: z.string().min(1), version: z.string().min(1), kind: z.literal("deterministic_fixture"), provider: z.literal("deterministic_fixture"), currency: z.literal("sat"),
   supportedDimensions: z.array(UsageDimensionSchema).min(1), rates: z.record(UsageDimensionSchema, RationalRateSchema), rounding: z.literal("ceil"),
+  ceilings: z.object({ inputTokens: DecimalSchema.refine((value) => BigInt(value) > 0n), outputTokens: DecimalSchema.refine((value) => BigInt(value) > 0n) }).strict(),
   validity: z.object({ notBefore: z.iso.datetime(), notAfter: z.iso.datetime() }).strict(),
 }).strict().superRefine((card, ctx) => {
   if (new Set(card.supportedDimensions).size !== card.supportedDimensions.length) ctx.addIssue({ code: "custom", message: "supported dimensions must be unique" });
@@ -18,13 +19,21 @@ export const ModelProfileSchema = z.object({
   selection: z.literal("unselected"), maximumUnits: z.array(z.object({ dimension: UsageDimensionSchema, units: DecimalSchema.refine((value) => BigInt(value) > 0n) }).strict()).min(1), deadlineMs: z.number().int().positive(),
 }).strict();
 
-export const PHASE_04_DETERMINISTIC_PRICE_CARD = Object.freeze(PriceCardSchema.parse({
-  id: "phase-04-deterministic-card-2026-08-04", version: "phase-04-deterministic-card-2026-08-04", provider: "deterministic_fixture", currency: "sat", rounding: "ceil",
+function immutable<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const child of Object.values(value as Record<string, unknown>)) immutable(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+export const PHASE_04_DETERMINISTIC_PRICE_CARD = immutable(PriceCardSchema.parse({
+  id: "phase-04-deterministic-card-2026-08-04", version: "phase-04-deterministic-card-2026-08-04", kind: "deterministic_fixture", provider: "deterministic_fixture", currency: "sat", rounding: "ceil", ceilings: { inputTokens: "1000", outputTokens: "1000" },
   supportedDimensions: ["input_tokens", "output_tokens", "cached_tokens", "reasoning_tokens"],
   rates: { input_tokens: { numerator: "1", denominator: "1" }, output_tokens: { numerator: "1", denominator: "1" }, cached_tokens: { numerator: "1", denominator: "2" }, reasoning_tokens: { numerator: "2", denominator: "1" } },
   validity: { notBefore: "2026-08-04T00:00:00.000Z", notAfter: "2027-08-04T00:00:00.000Z" },
 }));
-export const PHASE_04_MODEL_PROFILES = Object.freeze({
+export const PHASE_04_MODEL_PROFILES = immutable({
   "plan-classify": ModelProfileSchema.parse({ id: "plan-classify", provider: "deterministic_fixture", model: "phase-04-fixture-model", priceCardId: PHASE_04_DETERMINISTIC_PRICE_CARD.id, selection: "unselected", maximumUnits: [{ dimension: "input_tokens", units: "200" }, { dimension: "output_tokens", units: "100" }], deadlineMs: 5_000 }),
   "code-proposal": ModelProfileSchema.parse({ id: "code-proposal", provider: "deterministic_fixture", model: "phase-04-fixture-model", priceCardId: PHASE_04_DETERMINISTIC_PRICE_CARD.id, selection: "unselected", maximumUnits: [{ dimension: "input_tokens", units: "1000" }, { dimension: "output_tokens", units: "1000" }, { dimension: "cached_tokens", units: "500" }, { dimension: "reasoning_tokens", units: "500" }], deadlineMs: 30_000 }),
   "repair-proposal": ModelProfileSchema.parse({ id: "repair-proposal", provider: "deterministic_fixture", model: "phase-04-fixture-model", priceCardId: PHASE_04_DETERMINISTIC_PRICE_CARD.id, selection: "unselected", maximumUnits: [{ dimension: "input_tokens", units: "500" }, { dimension: "output_tokens", units: "500" }], deadlineMs: 20_000 }),

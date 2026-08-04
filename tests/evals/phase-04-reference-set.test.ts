@@ -71,6 +71,29 @@ async function evidenceInput() {
 }
 
 describe("Phase 04 deterministic reference set", () => {
+  test("observes all twenty registered runtime cases and requires child assertions", async () => {
+    const gate = await executePhase04ReferenceGate(JSON.parse(await readFile(fixturePath, "utf8")));
+    expect(gate.verdict).toBe("passed");
+    expect(gate.comparisons).toHaveLength(20);
+    expect(gate.comparisons.every((comparison) => comparison.status === "passed")).toBe(true);
+    expect(gate.aggregateEffects).toEqual({ providerDispatches: 9, providerLookups: 3, workerCalls: 7, receiptWrites: 7, debitPostings: 9, creditPostings: 2, releases: 10 });
+  }, 60_000);
+
+  test("every runtime field rejects a recomputed fixture oracle", async () => {
+    const fixture = JSON.parse(await readFile(fixturePath, "utf8")) as { cases: ReferenceCase[] };
+    for (const field of requiredExpectedFields.filter((field) => field !== "oracle")) {
+      const altered = structuredClone(fixture);
+      const target = altered.cases.find((item) => item.id === "P04-ACCT-03");
+      if (!target) throw new Error("missing funded-start reference case");
+      const value = target.expected[field as keyof typeof target.expected];
+      (target.expected as Record<string, unknown>)[field] = typeof value === "number" ? value + 1 : `${value}:wrong`;
+      target.expected.oracle = oracleFor(target.expected);
+      const gate = await executePhase04ReferenceGate(altered);
+      expect(gate.verdict, field).toBe("blocked");
+      expect(gate.comparisons.find((comparison) => comparison.id === target.id)?.mismatches).toContain(field);
+    }
+  }, 60_000);
+
   test("funded-start runtime observation derives P04-ACCT-03 from actual effects", async () => {
     const cases = await referenceSet();
     const fundedStart = cases.find((item) => item.id === "P04-ACCT-03");

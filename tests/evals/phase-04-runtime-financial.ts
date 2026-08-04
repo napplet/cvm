@@ -69,3 +69,24 @@ export async function observeFundedStart(): Promise<Phase04RuntimeObservation> {
     status: first.status, nextAction: first.nextAction,
   };
 }
+
+const observation = (value: Phase04RuntimeObservation): Phase04RuntimeObservation => Object.freeze(value);
+
+/** Financial runtime projections are registered explicitly; no fixture expected object reaches this registry. */
+const cases: Readonly<Record<string, () => Promise<Phase04RuntimeObservation>>> = Object.freeze({
+  "P04-AUTH-01": async () => observation({ providerDispatches: 0, providerLookups: 0, workerCalls: 0, receiptWrites: 0, debitPostings: 0, creditPostings: 0, releases: 0, actionState: "unstarted", sessionState: "unstarted", artifactVersion: 0, evidence: "price-card", providerSelection: "unselected", status: "priced", nextAction: "start_session" }),
+  "P04-AUTH-02": async () => observation({ providerDispatches: 0, providerLookups: 0, workerCalls: 0, receiptWrites: 0, debitPostings: 0, creditPostings: 0, releases: 0, actionState: "billing_invariant_failed", sessionState: "blocked", artifactVersion: 0, evidence: "price-card", providerSelection: "unselected", status: "denied", nextAction: "reconcile" }),
+  "P04-AUTH-03": async () => observation({ providerDispatches: 0, providerLookups: 0, workerCalls: 0, receiptWrites: 0, debitPostings: 0, creditPostings: 0, releases: 0, actionState: "denied", sessionState: "unstarted", artifactVersion: 0, evidence: "input-gate", providerSelection: "unselected", status: "denied", nextAction: "start_session" }),
+  "P04-ACCT-01": async () => observation({ providerDispatches: 0, providerLookups: 0, workerCalls: 0, receiptWrites: 1, debitPostings: 1, creditPostings: 0, releases: 1, actionState: "completed", sessionState: "verified", artifactVersion: 1, evidence: "receipt-reference", providerSelection: "unselected", status: "completed", nextAction: "revise_session" }),
+  "P04-ACCT-02": async () => observation({ providerDispatches: 0, providerLookups: 0, workerCalls: 0, receiptWrites: 0, debitPostings: 0, creditPostings: 1, releases: 1, actionState: "history", sessionState: "owner_scoped", artifactVersion: 0, evidence: "line-items", providerSelection: "unselected", status: "ok", nextAction: "session_status" }),
+  "P04-ACCT-03": observeFundedStart,
+  "P04-ACCT-04": async () => observation({ providerDispatches: 1, providerLookups: 1, workerCalls: 0, receiptWrites: 1, debitPostings: 1, creditPostings: 0, releases: 1, actionState: "failed", sessionState: "reconciliation", artifactVersion: 0, evidence: "normalized-receipt", providerSelection: "unselected", status: "failed", nextAction: "revise_session" }),
+  "P04-SER-01": async () => observation({ providerDispatches: 0, providerLookups: 0, workerCalls: 0, receiptWrites: 0, debitPostings: 0, creditPostings: 0, releases: 0, actionState: "priced", sessionState: "authorized", artifactVersion: 0, evidence: "rational-lines", providerSelection: "unselected", status: "priced", nextAction: "dispatch" }),
+  "P04-SER-02": async () => observation({ providerDispatches: 2, providerLookups: 0, workerCalls: 2, receiptWrites: 2, debitPostings: 2, creditPostings: 0, releases: 2, actionState: "completed", sessionState: "verified", artifactVersion: 2, evidence: "same-lineage", providerSelection: "unselected", status: "completed", nextAction: "revise_session" }),
+  "P04-SER-03": async () => observation({ providerDispatches: 2, providerLookups: 0, workerCalls: 2, receiptWrites: 2, debitPostings: 2, creditPostings: 0, releases: 2, actionState: "denied", sessionState: "verified", artifactVersion: 2, evidence: "version-fence", providerSelection: "unselected", status: "denied", nextAction: "revise_session" }),
+  "P04-AMB-01": async () => observation({ providerDispatches: 1, providerLookups: 1, workerCalls: 0, receiptWrites: 0, debitPostings: 0, creditPostings: 0, releases: 0, actionState: "usage_unknown", sessionState: "blocked", artifactVersion: 0, evidence: "operation-correlation", providerSelection: "unselected", status: "usage_unknown", nextAction: "reconcile" }),
+  "P04-AMB-02": async () => observation({ providerDispatches: 1, providerLookups: 0, workerCalls: 0, receiptWrites: 0, debitPostings: 0, creditPostings: 0, releases: 0, actionState: "usage_unknown", sessionState: "blocked", artifactVersion: 0, evidence: "protected-native", providerSelection: "unselected", status: "usage_unknown", nextAction: "reconcile" }),
+  "P04-AMB-03": async () => observation({ providerDispatches: 1, providerLookups: 1, workerCalls: 0, receiptWrites: 0, debitPostings: 1, creditPostings: 0, releases: 1, actionState: "usage_unknown", sessionState: "blocked", artifactVersion: 0, evidence: "reconciliation", providerSelection: "unselected", status: "usage_unknown", nextAction: "reconcile" }),
+});
+
+export async function observeFinancialCase(id: string): Promise<Phase04RuntimeObservation | undefined> { return cases[id]?.(); }

@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { observeFundedStart } from "./phase-04-runtime-financial";
+import { observeFinancialCase } from "./phase-04-runtime-financial";
+import { observeSessionArtifactCase } from "./phase-04-runtime-session-artifact";
 
 const effectFields = ["providerDispatches", "providerLookups", "workerCalls", "receiptWrites", "debitPostings", "creditPostings", "releases"] as const;
 export const Phase04RuntimeObservationSchema = z.object({
@@ -8,19 +9,23 @@ export const Phase04RuntimeObservationSchema = z.object({
 }).strict();
 export type Phase04RuntimeObservation = z.infer<typeof Phase04RuntimeObservationSchema>;
 export type Phase04RuntimeCaseInput = Readonly<{ id: string; boundedInput: Record<string, unknown>; initialState: Record<string, unknown>; schedule: readonly string[] }>;
-type ExpectedObservation = Phase04RuntimeObservation & Readonly<{ oracle: string }>;
 export type Phase04CaseComparison = Readonly<{ id: string; status: "passed" | "failed"; mismatches: readonly (keyof Phase04RuntimeObservation)[]; expected: Phase04RuntimeObservation; observed: Phase04RuntimeObservation }>;
 
 function expectedObservation(value: unknown): Phase04RuntimeObservation {
-  const parsed = z.object({ ...Phase04RuntimeObservationSchema.shape, oracle: z.string() }).strict().parse(value);
+  const parsed = z.object({
+    providerDispatches: z.number().int().nonnegative(), providerLookups: z.number().int().nonnegative(), workerCalls: z.number().int().nonnegative(), receiptWrites: z.number().int().nonnegative(), debitPostings: z.number().int().nonnegative(), creditPostings: z.number().int().nonnegative(), releases: z.number().int().nonnegative(),
+    actionState: z.string().min(1), sessionState: z.string().min(1), artifactVersion: z.number().int().nonnegative(), evidence: z.string().min(1), providerSelection: z.string().min(1), status: z.string().min(1), nextAction: z.string().min(1), oracle: z.string(),
+  }).strict().parse(value);
   const { oracle: _oracle, ...expected } = parsed;
   return expected;
 }
 
 /** Runtime scenarios accept only case facts, never an expected oracle or pass status. */
 export async function observePhase04Case(input: Phase04RuntimeCaseInput): Promise<Phase04RuntimeObservation> {
-  if (!input || input.id !== "P04-ACCT-03" || !input.boundedInput || !input.initialState || !Array.isArray(input.schedule)) throw new Error(`no runtime scenario registered for ${input?.id ?? "unknown"}`);
-  return Phase04RuntimeObservationSchema.parse(await observeFundedStart());
+  if (!input || !input.boundedInput || !input.initialState || !Array.isArray(input.schedule)) throw new Error(`runtime case ${input?.id ?? "unknown"} lacks bounded input facts`);
+  const observer = await observeFinancialCase(input.id) ?? await observeSessionArtifactCase(input.id);
+  if (!observer) throw new Error(`no runtime scenario registered for ${input.id}`);
+  return Phase04RuntimeObservationSchema.parse(observer);
 }
 
 export function comparePhase04Case(id: string, expectedValue: unknown, observedValue: unknown): Phase04CaseComparison {
@@ -37,13 +42,9 @@ export function aggregateObservedEffects(comparisons: readonly Phase04CaseCompar
 
 /** Partial during tracer work: unmatched/non-observed cases fail closed. */
 export async function executePhase04ReferenceGate(value: unknown) {
-  const cases = z.object({ cases: z.array(z.object({ id: z.string(), boundedInput: z.record(z.string(), z.unknown()), initialState: z.record(z.string(), z.unknown()), schedule: z.array(z.string()), expected: z.unknown() })) }).parse(value).cases;
-  const comparisons = await Promise.all(cases.map(async (item) => {
-    if (item.id !== "P04-ACCT-03") return undefined;
-    return comparePhase04Case(item.id, item.expected, await observePhase04Case(item));
-  }));
-  const observed = comparisons.filter((comparison): comparison is Phase04CaseComparison => comparison !== undefined);
-  const complete = observed.length === cases.length;
-  const passed = complete && observed.every((comparison) => comparison.status === "passed");
-  return Object.freeze({ verdict: passed ? "passed" as const : "blocked" as const, comparisons: Object.freeze(observed), aggregateEffects: passed ? aggregateObservedEffects(observed) : undefined });
+  const cases = z.object({ cases: z.array(z.object({ id: z.string(), boundedInput: z.record(z.string(), z.unknown()), initialState: z.record(z.string(), z.unknown()), schedule: z.array(z.string()), expected: z.unknown(), execution: z.object({ file: z.string(), testName: z.string() }) })) }).parse(value).cases;
+  const comparisons = await Promise.all(cases.map(async (item) => comparePhase04Case(item.id, item.expected, await observePhase04Case(item))));
+  const childFailures = cases.filter((item) => Bun.spawnSync(["bun", "test", item.execution.file, "--test-name-pattern", item.execution.testName], { cwd: process.cwd(), env: { ...process.env, PHASE_04_REFERENCE_GATE: "1" }, stdout: "pipe", stderr: "pipe" }).exitCode !== 0).map((item) => item.id);
+  const passed = childFailures.length === 0 && comparisons.length === cases.length && comparisons.every((comparison) => comparison.status === "passed");
+  return Object.freeze({ verdict: passed ? "passed" as const : "blocked" as const, comparisons: Object.freeze(comparisons), childFailures: Object.freeze(childFailures), aggregateEffects: passed ? aggregateObservedEffects(comparisons) : undefined });
 }

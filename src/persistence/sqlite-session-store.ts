@@ -141,12 +141,21 @@ export class SqliteSessionStore implements SessionStore {
         const row = this.#database.query("SELECT idempotency_key, lease_token, expires_at_ms FROM worker_leases WHERE session_id = ? AND expected_version = ?").get(action.sessionId, action.expectedVersion) as { idempotency_key: string; lease_token: string | null; expires_at_ms: number } | null;
         if (row?.idempotency_key !== action.idempotencyKey || row.lease_token !== lease.token || row.expires_at_ms <= nowMs) return freeze({ status: "blocked" });
         const existing = this.#database.query("SELECT action_id, request_fingerprint, operation_id, status FROM effect_intents WHERE session_id = ? AND expected_version = ? AND call_id = ?").get(action.sessionId, action.expectedVersion, callId) as { action_id: string; request_fingerprint: string; operation_id: string; status: "claimed" | "completed" | "uncertain" } | null;
-        if (existing) return existing.action_id === action.actionId && existing.request_fingerprint === requestFingerprint
-          ? freeze({ status: existing.status, operationId: existing.operation_id }) : freeze({ status: "blocked" });
-        const conflict = this.#database.query("SELECT action_id, status FROM effect_intents WHERE session_id = ? AND expected_version = ? AND (action_id <> ? OR status <> 'completed') LIMIT 1").get(action.sessionId, action.expectedVersion, action.actionId) as { action_id: string; status: string } | null;
-        if (conflict) return freeze({ status: "blocked" });
+        if (existing) {
+          if (existing.action_id !== action.actionId || existing.request_fingerprint !== requestFingerprint) return freeze({ status: "blocked" });
+          if (existing.status === "claimed") {
+            this.#database.query("UPDATE effect_intents SET status = 'uncertain' WHERE operation_id = ? AND status = 'claimed'").run(existing.operation_id);
+            return freeze({ status: "uncertain", operationId: existing.operation_id });
+          }
+          return freeze({ status: existing.status, operationId: existing.operation_id });
+        }
+        const conflict = this.#database.query("SELECT operation_id, action_id, status FROM effect_intents WHERE session_id = ? AND expected_version = ? AND (action_id <> ? OR status <> 'completed') LIMIT 1").get(action.sessionId, action.expectedVersion, action.actionId) as { operation_id: string; action_id: string; status: "claimed" | "completed" | "uncertain" } | null;
+        if (conflict) {
+          if (conflict.status === "claimed") this.#database.query("UPDATE effect_intents SET status = 'uncertain' WHERE operation_id = ? AND status = 'claimed'").run(conflict.operation_id);
+          return freeze({ status: "blocked" });
+        }
         this.#database.query("INSERT INTO effect_intents (session_id, expected_version, action_id, call_id, request_fingerprint, operation_id, status) VALUES (?, ?, ?, ?, ?, ?, 'claimed')").run(action.sessionId, action.expectedVersion, action.actionId, callId, requestFingerprint, operationId);
-        return freeze({ status: "claimed", operationId });
+        return freeze({ status: "created", operationId });
       })();
     } catch (error) {
       if (error instanceof Error && /(?:SQLITE_BUSY|database is locked)/iu.test(error.message)) return freeze({ status: "blocked" });

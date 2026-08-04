@@ -253,6 +253,45 @@ describe("phase 02 final trusted-core tracer", () => {
     left.close(); right.close();
   });
 
+  test("does not redispatch an existing claimed intent when an exact retry reclaims an expired lease", async () => {
+    const databasePath = temporaryDatabase();
+    const effects = { calls: 0 }; const aRuns = { runs: 0 }; const bRuns = { runs: 0 };
+    let releaseA!: () => void; let aDispatchStarted!: () => void;
+    const aBlocked = new Promise<void>((resolve) => { releaseA = resolve; });
+    const aStarted = new Promise<void>((resolve) => { aDispatchStarted = resolve; });
+    let aClockCalls = 0;
+    // A's worker lease starts at 0, while its durable effect intent is claimed
+    // at 1,000. B reclaims the expired lease at 30,001 with the exact request.
+    const left = createTrustedCore({
+      databasePath, worker: completingWorker(aRuns), sessions: [{ sessionId: "session-0001", principalId: principal.id, version: 0 }],
+      dispatcher: { dispatch: async () => {
+        aDispatchStarted();
+        await aBlocked;
+        effects.calls += 1;
+        return { output: "original recipient" };
+      } },
+      artifactVerifier: testArtifactVerifier(), now: () => aClockCalls++ === 0 ? 0 : 1_000,
+    });
+    const leftRun = left.core.execute(action());
+    await aStarted;
+
+    const right = createTrustedCore({
+      databasePath, worker: completingWorker(bRuns), sessions: [{ sessionId: "session-0001", principalId: principal.id, version: 0 }],
+      dispatcher: { dispatch: async () => { effects.calls += 1; return { output: "retry recipient" }; } },
+      artifactVerifier: testArtifactVerifier(), now: () => 30_001,
+    });
+    const retry = await right.core.execute(action());
+    expect(retry.status).not.toBe("completed");
+    expect(effects.calls).toBe(0);
+
+    releaseA();
+    const original = await leftRun;
+    expect(original.status).not.toBe("completed");
+    expect(effects.calls).toBe(1);
+    expect(left.store.getSessionVersion("session-0001")).toBe(0);
+    left.close(); right.close();
+  });
+
   test("retains an unknown effect intent after effect-then-throw so an exact retry cannot dispatch twice", async () => {
     const databasePath = temporaryDatabase();
     const effects = { calls: 0 }; const firstRuns = { runs: 0 }; const retryRuns = { runs: 0 };

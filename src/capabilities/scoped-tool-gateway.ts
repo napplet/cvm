@@ -34,7 +34,7 @@ export const APPROVED_COMMANDS = Object.freeze({
 } as const);
 
 export type EffectIntentAuthority = Readonly<{
-  claim: (callId: string, requestFingerprint: string) => Promise<Readonly<{ status: "claimed" | "completed" | "uncertain" | "blocked"; operationId?: string }>>;
+  claim: (callId: string, requestFingerprint: string) => Promise<Readonly<{ status: "created" | "completed" | "uncertain" | "blocked"; operationId?: string }>>;
   complete: (operationId: string) => Promise<boolean>;
   markUnknown: (operationId: string) => Promise<void>;
 }>;
@@ -132,7 +132,9 @@ export class ScopedToolGateway {
         this.record(result.code, true, request);
         return result;
       }
-      if (intent.status !== "claimed" || !intent.operationId) return this.deny("TOOL_EFFECT_UNCERTAIN", request);
+      // An existing intent is never a dispatch permit: the original owner may
+      // already be inside the external recipient. Only its creation is safe.
+      if (intent.status !== "created" || !intent.operationId) return this.deny("TOOL_EFFECT_UNCERTAIN", request);
       operationId = intent.operationId;
     }
     try {

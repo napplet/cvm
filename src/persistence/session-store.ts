@@ -31,7 +31,8 @@ export type SessionPreflight = Readonly<{ authorized: true }> | Readonly<{ autho
 export type WorkerLease = Readonly<{ token: string; expiresAtMs: number }>;
 export type WorkerLeaseClaim = Readonly<{ authorized: true; lease: WorkerLease }> | Readonly<{ authorized: false; result: SessionActionResult }>;
 export type EffectIntentClaim = Readonly<
-  | { status: "claimed"; operationId: string }
+  // Only this transaction inserted the intent, so only it may dispatch.
+  | { status: "created"; operationId: string }
   | { status: "completed"; operationId: string }
   | { status: "uncertain"; operationId: string }
   | { status: "blocked" }
@@ -175,14 +176,26 @@ export class TransactionalMemorySessionStore implements SessionStore {
     const versionKey = leaseKey(action.sessionId, action.expectedVersion);
     const key = `${versionKey}:${callId}`;
     const existing = this.#state.effectIntents.get(key);
-    if (existing) return freeze({ status: existing.status, operationId: existing.operationId });
+    if (existing) {
+      if (existing.actionId !== action.actionId || existing.requestFingerprint !== requestFingerprint) return freeze({ status: "blocked" });
+      // A matching claimed row is evidence that a previous owner might already
+      // have reached the recipient. A retry is never that original dispatch.
+      if (existing.status === "claimed") {
+        this.#state.effectIntents.set(key, freeze({ ...existing, status: "uncertain" as const }));
+        return freeze({ status: "uncertain", operationId: existing.operationId });
+      }
+      return freeze({ status: existing.status, operationId: existing.operationId });
+    }
     for (const intent of this.#state.effectIntents.values()) {
       if (intent.sessionId === action.sessionId && intent.expectedVersion === action.expectedVersion
-        && (intent.actionId !== action.actionId || intent.status !== "completed")) return freeze({ status: "blocked" });
+        && (intent.actionId !== action.actionId || intent.status !== "completed")) {
+        if (intent.status === "claimed") this.#state.effectIntents.set(`${leaseKey(intent.sessionId, intent.expectedVersion)}:${intent.callId}`, freeze({ ...intent, status: "uncertain" as const }));
+        return freeze({ status: "blocked" });
+      }
     }
     const operationId = crypto.randomUUID();
     this.#state.effectIntents.set(key, freeze({ sessionId: action.sessionId, expectedVersion: action.expectedVersion, actionId: action.actionId, callId, requestFingerprint, operationId, status: "claimed" as const }));
-    return freeze({ status: "claimed", operationId });
+    return freeze({ status: "created", operationId });
   }
 
   async completeEffectIntent(operationId: string): Promise<boolean> {

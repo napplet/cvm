@@ -147,6 +147,28 @@ describe("phase 02 final trusted-core tracer", () => {
     composition.close();
   });
 
+  test("rejects a seventeenth well-formed tool event before any dispatcher effect", async () => {
+    const databasePath = temporaryDatabase(); const effects = { calls: 0 };
+    const worker: WorkerPort = {
+      async run(request) {
+        return WorkerRunResultSchema.parse({
+          status: "completed", code: "WORKER_PROPOSALS_VALIDATED",
+          events: Array.from({ length: PHASE_02_POLICY_INITIAL.action.maxTurns + 1 }, (_, index) => ({
+            kind: "tool_proposal", turn: index + 1,
+            request: { sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion,
+              capabilityGrant: request.capabilityGrant, workspaceId: request.workspaceId, callId: `call-${index}`, evidenceId: `evidence-${index}`, tool: "capture_evidence", label: `turn-${index}` },
+          })),
+        });
+      },
+    };
+    const composition = core(databasePath, worker, effects);
+    const result = await composition.core.execute(action());
+    expect(result).toMatchObject({ status: "recoverable_failure", code: "WORKER_UNCERTAIN" });
+    expect(effects.calls).toBe(0);
+    expect(composition.store.getSessionVersion("session-0001")).toBe(0);
+    composition.close();
+  });
+
   test("keeps prior state when the composed Phase 1 artifact contract blocks output", async () => {
     const databasePath = temporaryDatabase(); const runs = { runs: 0 }; const effects = { calls: 0 };
     const composition = createTrustedCore({ databasePath, worker: completingWorker(runs), sessions: [{ sessionId: "session-0001", principalId: principal.id, version: 0 }], dispatcher: { dispatch: async () => { effects.calls += 1; return {}; } },
@@ -160,7 +182,7 @@ describe("phase 02 final trusted-core tracer", () => {
   test("canonical worker boundary", () => {
     expect(WorkerRunRequestSchema.safeParse({ sessionId: "s", actionId: "a", expectedVersion: 0, policyVersion: "p", capabilityGrant: "g", workspaceId: "w", idea: "one" }).success).toBeTrue();
     expect(WorkerEventSchema.safeParse({ kind: "progress", turn: 1, detail: "ok" }).success).toBeTrue();
-    expect(WorkerRunResultSchema.safeParse({ status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events: [] }).success).toBeTrue();
+    expect(WorkerRunResultSchema.safeParse({ status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events: [] }).success).toBeFalse();
     const source = readFileSync("src/phase-02/trusted-core.ts", "utf8");
     for (const name of ["WorkerPort", "WorkerRunRequestSchema", "WorkerEventSchema", "WorkerRunResultSchema"]) expect(source).toContain(name);
   });

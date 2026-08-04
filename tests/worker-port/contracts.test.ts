@@ -28,6 +28,9 @@ test("canonical WorkerPort schemas are strict and exclude durable authority", ()
   expect(event.kind).toBe("progress");
   const result: WorkerRunResult = WorkerRunResultSchema.parse({ status: "unavailable", code: "WORKER_UNAVAILABLE" });
   expect(result.code).toBe("WORKER_UNAVAILABLE");
+  expect(WorkerRunResultSchema.safeParse({ status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events: [] }).success).toBeFalse();
+  expect(WorkerRunResultSchema.safeParse({ status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events: Array.from({ length: PHASE_02_POLICY_INITIAL.action.maxTurns + 1 }, (_, index) => ({ kind: "progress", turn: index + 1, detail: "too many" })) }).success).toBeFalse();
+  expect(WorkerRunResultSchema.safeParse({ status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events: [{ kind: "progress", turn: 1, detail: "first" }, { kind: "progress", turn: 1, detail: "duplicate" }] }).success).toBeFalse();
   expect(CheckpointProposalSchema.safeParse({ ...binding, formatVersion: "portable-checkpoint-v1", inventory: ["src/App.tsx"], archiveBase64: "YQ==", archiveSha256: "a".repeat(64), evidenceSha256: "b".repeat(64) }).success).toBeTrue();
   expect(CheckpointProposalSchema.safeParse({ ...binding, formatVersion: "portable-checkpoint-v1", inventory: ["../secret"], archiveBase64: "YQ==", archiveSha256: "a".repeat(64), evidenceSha256: "b".repeat(64) }).success).toBeFalse();
   const port: WorkerPort = { async run() { return { status: "unavailable", code: "WORKER_UNAVAILABLE" }; } };

@@ -83,14 +83,21 @@ export const WorkerProposalSchema = z.object({
   evidence: z.array(WorkerEvidenceSchema).max(16),
 }).strict();
 
-export const WorkerEventSchema = z.union([
-  WorkerProposalSchema,
-  z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("progress"), turn: z.number().int().positive(), detail: z.string().min(1).max(PHASE_02_POLICY_INITIAL.tools.maxPathCharacters) }).strict(),
-    z.object({ kind: z.literal("tool_proposal"), turn: z.number().int().positive(), request: ToolRequestSchema }).strict(),
-    z.object({ kind: z.literal("checkpoint_proposal"), turn: z.number().int().positive(), proposal: z.object({ checkpointId: z.string().min(1) }).strict() }).strict(),
-  ]),
+const WorkerTurnSchema = z.number().int().min(1).max(PHASE_02_POLICY_INITIAL.action.maxTurns);
+const WorkerExecutionEventSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("progress"), turn: WorkerTurnSchema, detail: z.string().min(1).max(PHASE_02_POLICY_INITIAL.tools.maxPathCharacters) }).strict(),
+  z.object({ kind: z.literal("tool_proposal"), turn: WorkerTurnSchema, request: ToolRequestSchema }).strict(),
+  z.object({ kind: z.literal("checkpoint_proposal"), turn: WorkerTurnSchema, proposal: z.object({ checkpointId: z.string().min(1) }).strict() }).strict(),
 ]);
+export const WorkerEventSchema = z.union([WorkerProposalSchema, WorkerExecutionEventSchema]);
+
+const CompletedWorkerEventsSchema = z.array(WorkerExecutionEventSchema).min(1).max(PHASE_02_POLICY_INITIAL.action.maxTurns).superRefine((events, ctx) => {
+  let previousTurn = 0;
+  for (const [index, event] of events.entries()) {
+    if (event.turn <= previousTurn) ctx.addIssue({ code: "custom", path: [index, "turn"], message: "completed worker events must have strictly increasing turns" });
+    previousTurn = event.turn;
+  }
+});
 
 export const CheckpointProposalSchema = CorrelationSchema.extend({
   formatVersion: z.literal("portable-checkpoint-v1"),
@@ -104,7 +111,7 @@ export const CheckpointProposalSchema = CorrelationSchema.extend({
 
 export const WorkerRunResultSchema = z.discriminatedUnion("status", [
   WorkerProposalSchema,
-  z.object({ status: z.literal("completed"), code: z.literal("WORKER_PROPOSALS_VALIDATED"), events: z.array(WorkerEventSchema), checkpoint: CheckpointProposalSchema.optional() }).strict(),
+  z.object({ status: z.literal("completed"), code: z.literal("WORKER_PROPOSALS_VALIDATED"), events: CompletedWorkerEventsSchema, checkpoint: CheckpointProposalSchema.optional() }).strict(),
   z.object({ status: z.literal("unavailable"), code: z.literal("WORKER_UNAVAILABLE") }).strict(),
   z.object({ status: z.literal("interrupted"), code: z.literal("WORKER_INTERRUPTED") }).strict(),
   z.object({ status: z.literal("limited"), code: z.literal("WORKER_TURN_LIMIT") }).strict(),

@@ -1,10 +1,10 @@
 ---
 phase: 03-contextvm-funding-funded-admission
-fixed_at: 2026-08-04T18:47:13+01:00
+fixed_at: 2026-08-04T18:51:51+01:00
 review_path: .planning/phases/03-contextvm-funding-funded-admission/03-REVIEW.md
-iteration: 4
-findings_in_scope: 11
-fixed: 11
+iteration: 5
+findings_in_scope: 12
+fixed: 12
 skipped: 0
 status: all_fixed
 ---
@@ -61,6 +61,12 @@ Capacity compensation now persists `reconciliation_pending` before calling the e
 
 The exact `FAIL_5_RELEASE_INTENT_PERSISTENCE` regression proves one external reserve, one external release, one retry observation, one acceptance attempt, zero cap holds, and zero accepted admissions.
 
+### Persistence failures cannot suppress capacity release
+
+The pre-release reconciliation fence is now best effort: failure to persist it cannot prevent the already-reserved external capacity from being released. After the bounded release attempt, compensation persists the confirmed `released` result when possible and otherwise retries the `reconciliation_pending` fence. In the reproduced initial-write failure, the durable dispatch claim remains fail-closed until one of those later states can be recorded.
+
+The exact dual-failure regression rejects both the initial available-state write and the pre-release fence with `FAIL_3` and `FAIL_4`. It proves the first call still completes as refused and an exact retry remains refused with one reserve, one release, zero observations, zero acceptance attempts, and zero holds.
+
 ## Regression and Implementation Commits
 
 - `5d85e19` — RED regressions exposing the remaining architecture gaps.
@@ -70,12 +76,14 @@ The exact `FAIL_5_RELEASE_INTENT_PERSISTENCE` regression proves one external res
 - `0bf4694` — abort-signal propagation for deadline-bound rail adapters.
 - `e4494a3` — RED regressions for default-wallet Cashu reconciliation and failed capacity-release finalization.
 - `a23596b` — GREEN query-reconcilable Cashu settlement and durable capacity-release ambiguity fencing.
+- `1f938f3` — RED regression proving a failed pre-release fence suppressed external compensation.
+- `490768c` — GREEN best-effort pre-fencing with post-release result persistence and ambiguity fallback.
 
 ## Verification
 
-- `bun test` — pass: 265 tests, 0 failures, 1,167 expectations.
+- `bun test` — pass: 266 tests, 0 failures, 1,172 expectations.
 - `bun run eval:phase-03` — pass: 22 tests, 0 failures, 102 expectations; 19 fixture-bound scenario/oracle cases plus evidence-mutation regression.
-- `bun run test:phase-03-design-slice` — pass: `design-ready`, offline verdict `passed`, evidence `6a905dfa70c2d0db903b4f6347f8ddff9ced2f37ffd0d1a3204f4cf0fca1c79e`.
+- `bun run test:phase-03-design-slice` — pass: `design-ready`, offline verdict `passed`, evidence `7beb4957b2bc3ff79ba9207f8d91ed1f86b3e06eabf2d7a64e8b9681192f2f08`.
 - `git diff --check` — pass.
 
 All live ContextVM, Lightning, Cashu, PostgreSQL, capacity, and Modal observations remain honestly `blocked` / `unselected`; Phase 7 still owns live provider and SLO certification.

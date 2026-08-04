@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 4
+open_count: 6
 waived_count: 0
 fixed_count: 0
-total_count: 4
-last_updated: 2026-08-04T10:44:56.898Z
+total_count: 6
+last_updated: 2026-08-04T11:25:33.387Z
 ---
 
 # Broken Windows Ledger
@@ -19,6 +19,8 @@ last_updated: 2026-08-04T10:44:56.898Z
 | 2 | 01 | stub | infra/toolchain/fixture-runner.ts |  | Sealed native fixture blocks until an upstream-compatible content-addressed boilerplate scaffold and browser dependencies are materialized. | open |  | 2026-08-03T20:32:25.966Z |  |
 | 3 | 01 | stub | infra/toolchain/fixture-runner.ts |  | Native fixture scaffold is not self-contained under sealed --network=none; compatible scaffold and real Chromium closure deferred to Phase 7. | open |  | 2026-08-03T20:44:38.817Z |  |
 | 4 | 02 | deviation | src/phase-02/contracts.ts |  | Completed named strict shared-contract exports required by the Phase 2 integration seam. | open |  | 2026-08-04T10:44:56.898Z |  |
+| 5 | 02 | deviation | src/persistence/session-store.ts |  | Replay-before-effect lookup added so exact retries cannot repeat worker or gateway effects | open |  | 2026-08-04T11:25:33.325Z |  |
+| 6 | 02 | deviation | src/phase-02/trusted-core.ts |  | Per-session serialization added so competing actions cannot repeat scoped worker effects | open |  | 2026-08-04T11:25:33.387Z |  |
 
 ````json
 [
@@ -68,6 +70,30 @@ last_updated: 2026-08-04T10:44:56.898Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-04T10:44:56.898Z",
+    "resolved_at": null
+  },
+  {
+    "id": 5,
+    "kind": "deviation",
+    "phase": "02",
+    "file": "src/persistence/session-store.ts",
+    "line": null,
+    "description": "Replay-before-effect lookup added so exact retries cannot repeat worker or gateway effects",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-04T11:25:33.325Z",
+    "resolved_at": null
+  },
+  {
+    "id": 6,
+    "kind": "deviation",
+    "phase": "02",
+    "file": "src/phase-02/trusted-core.ts",
+    "line": null,
+    "description": "Per-session serialization added so competing actions cannot repeat scoped worker effects",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-04T11:25:33.387Z",
     "resolved_at": null
   }
 ]

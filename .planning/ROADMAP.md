@@ -102,7 +102,7 @@ Plans:
   5. Simultaneous or duplicate session actions leave the user with one durable valid next state and artifact version, never competing mutations.
 
 **Validation gate**: Select the worker implementation only after a production-like sandbox demonstrates per-session isolation, default-deny egress, scoped gateway behavior, browser/build support, and checkpoint export semantics. Modal is an initial candidate behind `WorkerPort`, not an assumed decision.
-**Plans:** 5/6 plans executed
+**Plans:** 6/6 plans executed
 
 Plans:
 **Wave 1**
@@ -121,7 +121,7 @@ Plans:
 
 **Wave 4** *(after all deterministic expansions and provider observation)*
 
-- [ ] 02-06-PLAN.md — Compose the hardened core, run the 16-case eval, and emit provider-separated design evidence.
+- [x] 02-06-PLAN.md — Compose the hardened core, run the 16-case eval, and emit provider-separated design evidence.
 
 ### Phase 3: ContextVM Funding & Funded Admission
 
@@ -212,7 +212,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Napplet Contract & Artifact Verification | 6/6 | Complete    | 2026-08-04 |
-| 2. Trusted Core & Isolated Agent Execution | 5/6 | In Progress|  |
+| 2. Trusted Core & Isolated Agent Execution | 6/6 | In Progress|  |
 | 3. ContextVM Funding & Funded Admission | 0/TBD | Not started | - |
 | 4. Metered Generation & Revision Loop | 0/TBD | Not started | - |
 | 5. Funding Interruption & Durable Resume | 0/TBD | Not started | - |

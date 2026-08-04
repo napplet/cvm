@@ -68,9 +68,11 @@ describe("DeterministicFakeWorker", () => {
     expect(result).toMatchObject({ status: "completed", checkpoint: { sessionId: validRequest.sessionId, actionId: validRequest.actionId, workspaceId: validRequest.workspaceId, formatVersion: "portable-checkpoint-v1" } });
     if (result.status === "completed") {
       expect(result.checkpoint?.archiveSha256).toMatch(/^[a-f0-9]{64}$/);
-      expect(await validateCheckpointProposal(result.checkpoint, validRequest)).toEqual(result.checkpoint);
-      expect(await validateCheckpointProposal({ ...result.checkpoint!, sessionId: "session-other" }, validRequest)).toBeUndefined();
-      expect(await validateCheckpointProposal({ ...result.checkpoint!, archiveBase64: "dGFtcGVyZWQ=" }, validRequest)).toBeUndefined();
+      expect(await validateCheckpointProposal(result.checkpoint, validRequest, result.events)).toEqual(result.checkpoint);
+      expect(await validateCheckpointProposal({ ...result.checkpoint!, sessionId: "session-other" }, validRequest, result.events)).toBeUndefined();
+      expect(await validateCheckpointProposal({ ...result.checkpoint!, archiveBase64: "dGFtcGVyZWQ=" }, validRequest, result.events)).toBeUndefined();
+      expect(await validateCheckpointProposal({ ...result.checkpoint!, evidenceSha256: "a".repeat(64) }, validRequest, result.events)).toBeUndefined();
+      expect(await validateCheckpointProposal(result.checkpoint, validRequest, result.events.filter((event) => event.kind !== "checkpoint_proposal"))).toBeUndefined();
     }
   });
 

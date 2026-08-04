@@ -1,4 +1,5 @@
 import { canonicalJson } from "../promotion/schema";
+import { z } from "zod";
 import {
   CheckpointProposalSchema,
   ToolRequestSchema,
@@ -77,14 +78,43 @@ function fromBase64(value: string): Uint8Array | undefined {
   try { return Uint8Array.from(atob(value), (item) => item.charCodeAt(0)); } catch { return undefined; }
 }
 
+const PortableArchiveSchema = z.object({
+  formatVersion: z.literal("portable-checkpoint-v1"),
+  inventory: z.array(z.string().min(1)).min(1).max(1_000),
+  payloadBase64: z.string().min(1),
+}).strict();
+
+async function canonicalDigest(value: unknown): Promise<string> {
+  return sha256(new TextEncoder().encode(canonicalJson(value)));
+}
+
+function canonicalArchive(value: Uint8Array): { archiveBase64: string; inventory: readonly string[]; payloadBase64: string } | undefined {
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(value);
+    const parsed = PortableArchiveSchema.safeParse(JSON.parse(text));
+    if (!parsed.success || canonicalJson(parsed.data) !== text || !fromBase64(parsed.data.payloadBase64) || base64(fromBase64(parsed.data.payloadBase64)!) !== parsed.data.payloadBase64) return undefined;
+    return { archiveBase64: base64(value), inventory: parsed.data.inventory, payloadBase64: parsed.data.payloadBase64 };
+  } catch { return undefined; }
+}
+
 /** Re-validates a portable proposal against the coordinator's exact action binding. */
-export async function validateCheckpointProposal(proposal: unknown, request: WorkerRunRequest): Promise<CheckpointProposal | undefined> {
+export async function validateCheckpointProposal(proposal: unknown, request: WorkerRunRequest, events: readonly WorkerEvent[]): Promise<CheckpointProposal | undefined> {
   const parsed = CheckpointProposalSchema.safeParse(proposal);
   if (!parsed.success) return undefined;
   const checkpoint = parsed.data;
   if (checkpoint.sessionId !== request.sessionId || checkpoint.actionId !== request.actionId || checkpoint.expectedVersion !== request.expectedVersion || checkpoint.policyVersion !== request.policyVersion || checkpoint.capabilityGrant !== request.capabilityGrant || checkpoint.workspaceId !== request.workspaceId) return undefined;
   const archive = fromBase64(checkpoint.archiveBase64);
   if (!archive || base64(archive) !== checkpoint.archiveBase64 || await sha256(archive) !== checkpoint.archiveSha256) return undefined;
+  const embedded = canonicalArchive(archive);
+  if (!embedded || embedded.archiveBase64 !== checkpoint.archiveBase64 || canonicalJson(embedded.inventory) !== canonicalJson(checkpoint.inventory) || await canonicalDigest(checkpoint.inventory) !== checkpoint.inventorySha256) return undefined;
+  const checkpoints = events.filter((event): event is Extract<WorkerEvent, { kind: "checkpoint_proposal" }> => "kind" in event && event.kind === "checkpoint_proposal");
+  if (checkpoints.length !== 1) return undefined;
+  const checkpointEvent = checkpoints[0]!;
+  if (checkpointEvent.proposal.checkpointId !== checkpoint.checkpointId || checkpointEvent.proposal.archiveSha256 !== checkpoint.archiveSha256 || checkpointEvent.proposal.evidenceSha256 !== checkpoint.evidenceSha256 || checkpointEvent.proposal.inventorySha256 !== checkpoint.inventorySha256) return undefined;
+  const exports = events.filter((event): event is Extract<WorkerEvent, { kind: "tool_proposal" }> => "kind" in event && event.kind === "tool_proposal" && event.request.tool === "export_checkpoint" && event.request.checkpointId === checkpoint.checkpointId);
+  if (exports.length !== 1) return undefined;
+  const evidenceEvents = events.filter((event) => !("kind" in event && event.kind === "checkpoint_proposal"));
+  if (await canonicalDigest(evidenceEvents) !== checkpoint.evidenceSha256) return undefined;
   return checkpoint;
 }
 
@@ -127,13 +157,15 @@ export class DeterministicFakeWorker implements WorkerPort {
       const events: WorkerEvent[] = [];
       let validatedBoundary = false;
       let checkpoint: CheckpointProposal | undefined;
+      let turn = 0;
       for (let index = 0; index < script.length; index += 1) {
-        if (index >= PHASE_02_POLICY_INITIAL.action.maxTurns) return this.finish(identity, { status: "limited", code: "WORKER_TURN_LIMIT" });
         if (signal.aborted) return this.finish(identity, { status: "interrupted", code: "WORKER_INTERRUPTED" });
         if (this.options.faultAtTurn === index + 1) return this.finish(identity, { status: "interrupted", code: "WORKER_INTERRUPTED" });
         const step = script[index]!;
-        const turn = index + 1;
         if (step.kind === "checkpoint" && !validatedBoundary) return this.finish(identity, { status: "blocked", code: "CHECKPOINT_BOUNDARY_REQUIRED" });
+        const requiredEvents = step.kind === "checkpoint" ? 2 : 1;
+        if (turn + requiredEvents > PHASE_02_POLICY_INITIAL.action.maxTurns) return this.finish(identity, { status: "limited", code: "WORKER_TURN_LIMIT" });
+        turn += 1;
         const proposal = this.toolFor(step, request, turn);
         const parsedProposal = ToolRequestSchema.parse(proposal);
         events.push(WorkerEventSchema.parse({ kind: "tool_proposal", turn, request: parsedProposal }));
@@ -141,14 +173,15 @@ export class DeterministicFakeWorker implements WorkerPort {
         if (decision.status !== "allowed") return this.finish(identity, { status: "blocked", code: "WORKER_GATEWAY_DENIED" });
         if (step.kind === "checkpoint") {
           checkpoint = await this.checkpoint(request, step, events);
-          events.push(WorkerEventSchema.parse({ kind: "checkpoint_proposal", turn, proposal: { checkpointId: proposal.checkpointId } }));
+          turn += 1;
+          events.push(WorkerEventSchema.parse({ kind: "checkpoint_proposal", turn, proposal: { checkpointId: proposal.checkpointId, archiveSha256: checkpoint.archiveSha256, evidenceSha256: checkpoint.evidenceSha256, inventorySha256: checkpoint.inventorySha256 } }));
         } else {
           validatedBoundary = true;
-          events.push(WorkerEventSchema.parse({ kind: "progress", turn, detail: `validated ${step.kind} boundary at ${this.#clock()}` }));
         }
       }
       if (signal.aborted) return this.finish(identity, { status: "interrupted", code: "WORKER_INTERRUPTED" });
-      return this.finish(identity, { status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events, ...(checkpoint ? { checkpoint } : {}) });
+      if (events.length === 0) return this.finish(identity, { status: "blocked", code: "CHECKPOINT_BOUNDARY_REQUIRED" });
+      return this.finish(identity, { status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events, artifact: this.artifact(request), ...(checkpoint ? { checkpoint } : {}) });
     } finally {
       this.#active.delete(identity);
     }
@@ -163,12 +196,25 @@ export class DeterministicFakeWorker implements WorkerPort {
   }
 
   private async checkpoint(request: WorkerRunRequest, step: Extract<FakeWorkerStep, { kind: "checkpoint" }>, events: readonly WorkerEvent[]): Promise<CheckpointProposal> {
-    const archive = bytes(step.archive);
+    const payload = bytes(step.archive);
+    const archive = new TextEncoder().encode(canonicalJson({ formatVersion: "portable-checkpoint-v1", inventory: [...step.inventory], payloadBase64: base64(payload) }));
     const evidence = new TextEncoder().encode(canonicalJson(events));
     return CheckpointProposalSchema.parse({
       sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion, capabilityGrant: request.capabilityGrant, workspaceId: request.workspaceId,
-      formatVersion: "portable-checkpoint-v1", inventory: [...step.inventory], archiveBase64: base64(archive), archiveSha256: await sha256(archive), evidenceSha256: await sha256(evidence),
+      checkpointId: `${request.actionId}:checkpoint:${events.length}`, formatVersion: "portable-checkpoint-v1", inventory: [...step.inventory], archiveBase64: base64(archive), archiveSha256: await sha256(archive), evidenceSha256: await sha256(evidence), inventorySha256: await canonicalDigest(step.inventory),
     });
+  }
+
+  /** Explicit synthetic artifact fixture for the deterministic test worker only. */
+  private artifact(request: WorkerRunRequest) {
+    return {
+      sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion, capabilityGrant: request.capabilityGrant, workspaceId: request.workspaceId, artifactId: `${request.actionId}:fake-artifact`,
+      purpose: { kind: "focused" as const, statements: ["one focused napplet"] },
+      surface: { hasBackend: false as const, hasSecondPurpose: false as const, serviceWorker: false as const, dynamicAuthority: false as const },
+      dependencies: { appOwnedSignerOrRelay: false as const, privateNappletImport: false as const },
+      capabilities: { declaredHard: ["storage"] as const, observedDomains: ["storage"] as const, optionalIntentPresenceRead: false, intentUsedThroughSdk: false },
+      upstream: { scanner: { verdict: "pass" as const, checkId: "upstream:fake-scanner" }, conformance: { verdict: "pass" as const, checkId: "upstream:fake-conformance" } },
+    };
   }
 
   private finish(identity: string, result: WorkerRunResult): WorkerRunResult {

@@ -250,13 +250,16 @@ export class TrustedCore {
       const parsedEvent = WorkerEventSchema.safeParse(event);
       if (!parsedEvent.success) return asFailure("WORKER_UNCERTAIN", { reason: "worker event malformed" });
       events.push(parsedEvent.data);
-      if (parsedEvent.data.kind === "tool_proposal") {
-        const decision = await gateway.authorizeAndDispatch(parsedEvent.data.request);
+    }
+    if (workerResult.checkpoint && !await validateCheckpointProposal(workerResult.checkpoint, request, events)) {
+      return asFailure("WORKER_UNCERTAIN", { reason: "checkpoint binding invalid" });
+    }
+    for (const event of events) {
+      if (!("kind" in event)) return asFailure("WORKER_UNCERTAIN", { reason: "legacy worker event cannot carry effects" });
+      if (event.kind === "tool_proposal") {
+        const decision = await gateway.authorizeAndDispatch(event.request);
         if (decision.status !== "allowed") return asFailure("TOOL_AUTHORIZATION_DENIED", { code: decision.code });
       }
-    }
-    if (workerResult.checkpoint && !await validateCheckpointProposal(workerResult.checkpoint, request)) {
-      return asFailure("WORKER_UNCERTAIN", { reason: "checkpoint binding invalid" });
     }
 
     const facts = freeze({ action, request, result: workerResult, events: freeze(events) });

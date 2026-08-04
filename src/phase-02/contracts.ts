@@ -87,7 +87,7 @@ const WorkerTurnSchema = z.number().int().min(1).max(PHASE_02_POLICY_INITIAL.act
 const WorkerExecutionEventSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("progress"), turn: WorkerTurnSchema, detail: z.string().min(1).max(PHASE_02_POLICY_INITIAL.tools.maxPathCharacters) }).strict(),
   z.object({ kind: z.literal("tool_proposal"), turn: WorkerTurnSchema, request: ToolRequestSchema }).strict(),
-  z.object({ kind: z.literal("checkpoint_proposal"), turn: WorkerTurnSchema, proposal: z.object({ checkpointId: z.string().min(1) }).strict() }).strict(),
+  z.object({ kind: z.literal("checkpoint_proposal"), turn: WorkerTurnSchema, proposal: z.object({ checkpointId: z.string().min(1), archiveSha256: DigestSchema, evidenceSha256: DigestSchema, inventorySha256: DigestSchema }).strict() }).strict(),
 ]);
 export const WorkerEventSchema = z.union([WorkerProposalSchema, WorkerExecutionEventSchema]);
 
@@ -110,11 +110,13 @@ export const WorkerArtifactSchema = CorrelationSchema.extend({
 }).strict();
 
 export const CheckpointProposalSchema = CorrelationSchema.extend({
+  checkpointId: z.string().min(1),
   formatVersion: z.literal("portable-checkpoint-v1"),
   inventory: z.array(RelativePathSchema).min(1).max(1_000),
   archiveBase64: z.string().min(1),
   archiveSha256: DigestSchema,
   evidenceSha256: DigestSchema,
+  inventorySha256: DigestSchema,
 }).strict().superRefine((value, ctx) => {
   if (new Set(value.inventory).size !== value.inventory.length) ctx.addIssue({ code: "custom", message: "inventory entries must be unique" });
 });

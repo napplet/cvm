@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
 current_phase: 04
 current_phase_name: Metered Generation & Revision Loop
-status: executing
-stopped_at: Completed 04-05-PLAN.md
-last_updated: "2026-08-04T20:19:39.812Z"
+status: verifying
+stopped_at: Completed 04-06-PLAN.md; Phase 04 awaits formal post-execution review, validation, and verification
+last_updated: "2026-08-04T21:02:02.601Z"
 last_activity: 2026-08-04
 last_activity_desc: Phase 04 execution started
 progress:
   total_phases: 7
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 25
-  completed_plans: 24
-  percent: 43
+  completed_plans: 25
+  percent: 57
 ---
 
 # Project State
@@ -31,10 +31,10 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 Phase: 04 (Metered Generation & Revision Loop) — EXECUTING
 Plan: 6 of 6
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-08-04 — Phase 04 execution started
 
-Progress: [██████████] 96% of milestone phases complete; Phases 1–3 verified, Phase 4 planned 0/6
+Progress: [██████████] 100% of milestone phases complete; Phases 1–3 verified, Phase 4 planned 0/6
 
 ## Milestone Progress
 
@@ -86,6 +86,7 @@ Progress: [██████████] 96% of milestone phases complete; Pha
 | Phase 04-metered-generation-revision-loop P03 | 8m 21s | 2 tasks | 8 files |
 | Phase 04 P04 | 14m | 3 tasks | 9 files |
 | Phase 04 P05 | 8m | 2 tasks | 8 files |
+| Phase 04 P06 | 34m 37s | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -134,6 +135,8 @@ Recent decisions affecting current work:
 - [Phase ?]: Status cursors are versioned HMAC envelopes bound to account, session, page size, and underlying resume position.
 - [Phase ?]: ContextVM returns only explicitly allowlisted metered action fields; account identity and protected provider material never cross the adapter boundary.
 - [Phase ?]: Repair remains coordinator-internal; the public generation surface is exactly start_session, revise_session, and session_status.
+- [Phase ?]: Phase 4 evidence gate keeps deterministic gateway unselected and live model not observed pending Phase 7 certification.
+- [Phase ?]: Twenty actual authority cases with exact effect signatures are the Phase 4 design evidence release gate.
 
 ### Pending Todos
 
@@ -155,6 +158,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-04T20:19:39.806Z
-Stopped at: Completed 04-05-PLAN.md
+Last session: 2026-08-04T21:02:02.594Z
+Stopped at: Completed 04-06-PLAN.md; Phase 04 awaits formal post-execution review, validation, and verification
 Resume file: None

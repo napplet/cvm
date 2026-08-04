@@ -16,7 +16,7 @@ napplet-cvm moves from proving the permanent napplet contract to a safe, prepaid
 |-------|----------------------|-----------------------|-------------------------------------|
 | 1. Napplet Contract & Artifact Verification | Establishes the permanent conformant-napplet boundary and representative fail-closed evidence consumed by every later artifact path. | GEN-01–GEN-04, SAFE-05–SAFE-06 | `.planning/phases/01-napplet-contract-artifact-verification/` — context, discussion log, research, patterns, 6 plans, 6 summaries, blocker record, coverage, validation, review/fix, security audit, verification, and deferred-items record. |
 | 2. Trusted Core & Isolated Agent Execution | Establishes bounded admission, serialized durable session authority, typed worker capabilities, isolation, checkpoint shape, and provider-separated evidence. | SESS-05, SAFE-01–SAFE-04 | `.planning/phases/02-trusted-core-isolated-agent-execution/` — context, research, AI spec, validation, coverage, source audit, 6 plans, 6 summaries, review/fix, security audit, and goal verification. |
-| 3. ContextVM Funding & Funded Admission | Connects signed ContextVM identity and CEP-8 Lightning/Cashu settlement to one idempotent prepaid account and capped funded admission. | CTX-01–CTX-04, PAY-01–PAY-07, BILL-01–BILL-02, BILL-06 | Phase directory and phase artifacts not yet created. |
+| 3. ContextVM Funding & Funded Admission | Connects signed ContextVM identity and CEP-8 Lightning/Cashu settlement to one idempotent prepaid account and capped funded admission. | CTX-01–CTX-04, PAY-01–PAY-07, BILL-01–BILL-02, BILL-06 | `.planning/phases/03-contextvm-funding-funded-admission/` — context, discussion log, research, patterns, detailed and canonical API coverage, validation, source audit, and 7 executable plans. |
 | 4. Metered Generation & Revision Loop | Turns approved funds into exact-usage, serialized napplet creation, revision, repair, progress, and diagnostic actions. | BILL-03–BILL-05, SESS-01, SESS-03–SESS-04, GEN-05–GEN-06 | Phase directory and phase artifacts not yet created. |
 | 5. Funding Interruption & Durable Resume | Preserves paid work across insufficient funds, the ten-minute live-worker window, explicit resume, and 30-day checkpoint retention. | CONT-01–CONT-07 | Phase directory and phase artifacts not yet created. |
 | 6. Sealed Preview & User-Owned Publication | Lets the user preview the exact verified artifact, retain signing custody, and explicitly deploy a manifest plus CVM attestation. | PREV-01–PREV-04, PUB-01–PUB-05 | Phase directory and phase artifacts not yet created. |
@@ -137,7 +137,30 @@ Plans:
   5. An operator can rotate the multi-mint Cashu allowlist while historical settlement records remain intact and reconciled treasury value cannot produce a duplicate credit.
 
 **Validation gate**: Pin and contract-test current ContextVM/CEP-8 announcement, signed-event, replay, PMI, Lightning receipt, and Cashu settlement wire details against maintained fixtures before exposing the public adapter.
-**Plans**: TBD
+**Plans**: 7 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 03-01-PLAN.md — Prove the transport-neutral verified-account, exactly-once credit, cap-hold, admission, status, and replay tracer.
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 03-02-PLAN.md — Admit exact integration packages automatically and implement the serializable PostgreSQL-wire monetary authority.
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 03-03-PLAN.md — Publish truthful signed discovery and translate verified ContextVM/CEP-8 requests into durable funding commands.
+- [ ] 03-04-PLAN.md — Create service-owned Lightning top-ups and credit authoritative settled receipts exactly once.
+- [ ] 03-05-PLAN.md — Enforce versioned trusted-mint Cashu policy, online settlement, proof uniqueness, and non-crediting treasury reconciliation.
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 03-06-PLAN.md — Couple approved cap holds to immediately usable capacity and expose the final redacted funded-account composition.
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 03-07-PLAN.md — Execute the complete deterministic reference set and emit immutable provider-separated Phase 3 design evidence.
 
 ### Phase 4: Metered Generation & Revision Loop
 
@@ -213,7 +236,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 |-------|----------------|--------|-----------|
 | 1. Napplet Contract & Artifact Verification | 6/6 | Complete    | 2026-08-04 |
 | 2. Trusted Core & Isolated Agent Execution | 6/6 | Complete    | 2026-08-04 |
-| 3. ContextVM Funding & Funded Admission | 0/TBD | Not started | - |
+| 3. ContextVM Funding & Funded Admission | 0/7 | Planned; ready to execute | - |
 | 4. Metered Generation & Revision Loop | 0/TBD | Not started | - |
 | 5. Funding Interruption & Durable Resume | 0/TBD | Not started | - |
 | 6. Sealed Preview & User-Owned Publication | 0/TBD | Not started | - |
@@ -221,10 +244,10 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 ### Milestone Progress Roll-up
 
-- **Phases:** Phases 1–2 complete, Phase 3 active and ready for discussion/planning, Phases 4–7 remaining; 2/7 complete (29%).
-- **Known plans:** 12/12 executed across the two completed phases; later-phase plan counts remain TBD until their planning checkpoints.
+- **Phases:** Phases 1–2 complete, Phase 3 active and ready to execute, Phases 4–7 remaining; 2/7 complete (29%).
+- **Known plans:** 12/19 executed; Phase 3 contributes 7 plans across 5 waves and has 0/7 complete.
 - **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 11 complete and 43 pending.
-- **Current checkpoint:** Begin Phase 3 discussion/research/planning for ContextVM funding and funded admission; do not revisit or replan completed Phase 1 or Phase 2 work.
+- **Current checkpoint:** Execute Phase 3 Wave 1 Plan 03-01; do not revisit or replan completed Phase 1 or Phase 2 work.
 - **Phase 1 preservation:** Phase 1 remains complete with its review, security, validation, verification evidence, and Phase 7 deferrals unchanged.
 
 ### Completion Reporting Contract

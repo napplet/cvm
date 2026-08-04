@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
 import { evaluatePhase03Design, validatePhase03DesignEvidence, writePhase03DesignEvidence } from "../../src/verification/phase-03-design-evidence";
 
 const digest = (character: string) => character.repeat(64);
@@ -29,10 +31,14 @@ describe("Phase 03 immutable design evidence", () => {
   });
 
   test("writes content-addressed immutable bytes and detects collisions", async () => {
-    const directory = `${import.meta.dir}/../../.tmp-phase-03-evidence-${crypto.randomUUID()}`;
-    const first = await writePhase03DesignEvidence(directory, input());
-    const second = await writePhase03DesignEvidence(directory, input());
-    expect(second).toEqual(first);
-    await validatePhase03DesignEvidence(first);
+    const directory = await mkdtemp(join(process.env.TMPDIR ?? "/tmp", "napplet-phase-03-evidence-"));
+    try {
+      const first = await writePhase03DesignEvidence(directory, input());
+      const second = await writePhase03DesignEvidence(directory, input());
+      expect(second).toEqual(first);
+      await validatePhase03DesignEvidence(first);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

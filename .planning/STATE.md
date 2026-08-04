@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 04
 current_phase_name: Metered Generation & Revision Loop
 status: executing
-stopped_at: Completed 04-04-PLAN.md
-last_updated: "2026-08-04T20:09:35.366Z"
+stopped_at: Completed 04-05-PLAN.md
+last_updated: "2026-08-04T20:19:39.812Z"
 last_activity: 2026-08-04
 last_activity_desc: Phase 04 execution started
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 25
-  completed_plans: 23
+  completed_plans: 24
   percent: 43
 ---
 
@@ -30,11 +30,11 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 04 (Metered Generation & Revision Loop) — EXECUTING
-Plan: 5 of 6
+Plan: 6 of 6
 Status: Ready to execute
 Last activity: 2026-08-04 — Phase 04 execution started
 
-Progress: [█████████░] 92% of milestone phases complete; Phases 1–3 verified, Phase 4 planned 0/6
+Progress: [██████████] 96% of milestone phases complete; Phases 1–3 verified, Phase 4 planned 0/6
 
 ## Milestone Progress
 
@@ -85,6 +85,7 @@ Progress: [█████████░] 92% of milestone phases complete; Pha
 | Phase 04-metered-generation-revision-loop P02 | 24m | 2 tasks | 9 files |
 | Phase 04-metered-generation-revision-loop P03 | 8m 21s | 2 tasks | 8 files |
 | Phase 04 P04 | 14m | 3 tasks | 9 files |
+| Phase 04 P05 | 8m | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -130,6 +131,9 @@ Recent decisions affecting current work:
 - [Phase ?]: Revisions serialize per account/session before new provider or worker work and reuse the established action receipt lifecycle.
 - [Phase ?]: Only the ProjectNappletHarness verified branch may advance an artifact; non-passing outcomes retain the prior artifact and return redacted diagnostics.
 - [Phase ?]: Automatic repair is one owner-scoped, persisted action per originating failed action; subsequent recovery requires a signed revision.
+- [Phase ?]: Status cursors are versioned HMAC envelopes bound to account, session, page size, and underlying resume position.
+- [Phase ?]: ContextVM returns only explicitly allowlisted metered action fields; account identity and protected provider material never cross the adapter boundary.
+- [Phase ?]: Repair remains coordinator-internal; the public generation surface is exactly start_session, revise_session, and session_status.
 
 ### Pending Todos
 
@@ -151,6 +155,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-04T20:09:35.360Z
-Stopped at: Completed 04-04-PLAN.md
+Last session: 2026-08-04T20:19:39.806Z
+Stopped at: Completed 04-05-PLAN.md
 Resume file: None

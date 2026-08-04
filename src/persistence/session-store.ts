@@ -30,7 +30,12 @@ export type SessionEvaluation = (transaction: SessionTransaction) => void;
 export type SessionPreflight = Readonly<{ authorized: true }> | Readonly<{ authorized: false; result: SessionActionResult }>;
 export type WorkerLease = Readonly<{ token: string; expiresAtMs: number }>;
 export type WorkerLeaseClaim = Readonly<{ authorized: true; lease: WorkerLease }> | Readonly<{ authorized: false; result: SessionActionResult }>;
-export type FencedEffectResult = Readonly<{ accepted: true; output?: unknown }> | Readonly<{ accepted: false }>;
+export type EffectIntentClaim = Readonly<
+  | { status: "claimed"; operationId: string }
+  | { status: "completed"; operationId: string }
+  | { status: "uncertain"; operationId: string }
+  | { status: "blocked" }
+>;
 
 /** One authoritative commit decision: replay, fence, result, evidence, and version. */
 export interface SessionStore {
@@ -43,8 +48,10 @@ export interface SessionStore {
   claimWorkerLease(action: SessionAction, nowMs: number, expiresAtMs: number): Promise<WorkerLeaseClaim>;
   /** Re-check at a coordinator effect boundary; a successor lease fences the stale holder. */
   assertWorkerLease(action: SessionAction, lease: WorkerLease, nowMs: number): Promise<SessionPreflight>;
-  /** Atomically fences a synchronous recipient acceptance with the active lease. */
-  acceptWorkerLeaseEffect(action: SessionAction, lease: WorkerLease, nowMs: number, accept: () => { output?: unknown }): Promise<FencedEffectResult>;
+  /** Persist a lease-fenced operation before an external recipient can begin it. */
+  claimEffectIntent(action: SessionAction, lease: WorkerLease, callId: string, requestFingerprint: string, nowMs: number): Promise<EffectIntentClaim>;
+  completeEffectIntent(operationId: string): Promise<boolean>;
+  markEffectIntentUnknown(operationId: string): Promise<void>;
   releaseWorkerLease(action: SessionAction, lease: WorkerLease): Promise<void>;
   apply(action: SessionAction, evaluate: SessionEvaluation, lease?: WorkerLease, nowMs?: number): Promise<SessionActionResult>;
   getSessionVersion(sessionId: string): number | undefined;
@@ -56,6 +63,7 @@ type State = {
   actions: Map<string, StoredActionResult>;
   evidence: SessionEvidence[];
   leases: Map<string, Readonly<{ idempotencyKey: string; token: string; expiresAtMs: number }>>;
+  effectIntents: Map<string, Readonly<{ sessionId: string; expectedVersion: number; actionId: string; callId: string; requestFingerprint: string; operationId: string; status: "claimed" | "completed" | "uncertain" }>>;
 };
 
 function leaseKey(sessionId: string, version: number): string { return `${sessionId.length}:${sessionId}:${version}`; }
@@ -106,7 +114,7 @@ async function committed(action: SessionAction, fingerprint: string, requestFing
  * not the durable reference composition; SqliteSessionStore is that authority.
  */
 export class TransactionalMemorySessionStore implements SessionStore {
-  #state: State = { sessions: new Map(), actions: new Map(), evidence: [], leases: new Map() };
+  #state: State = { sessions: new Map(), actions: new Map(), evidence: [], leases: new Map(), effectIntents: new Map() };
   #tail: Promise<void> = Promise.resolve();
 
   constructor(sessions: readonly SessionRecord[] = []) {
@@ -161,9 +169,36 @@ export class TransactionalMemorySessionStore implements SessionStore {
       : freeze({ authorized: false, result: denial("STALE_SESSION_VERSION", this.#state.sessions.get(action.sessionId)?.version) });
   }
 
-  async acceptWorkerLeaseEffect(action: SessionAction, lease: WorkerLease, nowMs: number, accept: () => { output?: unknown }): Promise<FencedEffectResult> {
+  async claimEffectIntent(action: SessionAction, lease: WorkerLease, callId: string, requestFingerprint: string, nowMs: number): Promise<EffectIntentClaim> {
     const active = await this.assertWorkerLease(action, lease, nowMs);
-    return active.authorized ? freeze({ accepted: true, ...accept() }) : freeze({ accepted: false });
+    if (!active.authorized) return freeze({ status: "blocked" });
+    const versionKey = leaseKey(action.sessionId, action.expectedVersion);
+    const key = `${versionKey}:${callId}`;
+    const existing = this.#state.effectIntents.get(key);
+    if (existing) return freeze({ status: existing.status, operationId: existing.operationId });
+    for (const intent of this.#state.effectIntents.values()) {
+      if (intent.sessionId === action.sessionId && intent.expectedVersion === action.expectedVersion
+        && (intent.actionId !== action.actionId || intent.status !== "completed")) return freeze({ status: "blocked" });
+    }
+    const operationId = crypto.randomUUID();
+    this.#state.effectIntents.set(key, freeze({ sessionId: action.sessionId, expectedVersion: action.expectedVersion, actionId: action.actionId, callId, requestFingerprint, operationId, status: "claimed" as const }));
+    return freeze({ status: "claimed", operationId });
+  }
+
+  async completeEffectIntent(operationId: string): Promise<boolean> {
+    for (const [key, intent] of this.#state.effectIntents) {
+      if (intent.operationId === operationId && intent.status === "claimed") {
+        this.#state.effectIntents.set(key, freeze({ ...intent, status: "completed" as const }));
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async markEffectIntentUnknown(operationId: string): Promise<void> {
+    for (const [key, intent] of this.#state.effectIntents) {
+      if (intent.operationId === operationId && intent.status === "claimed") this.#state.effectIntents.set(key, freeze({ ...intent, status: "uncertain" as const }));
+    }
   }
 
   async releaseWorkerLease(action: SessionAction, lease: WorkerLease): Promise<void> {
@@ -183,6 +218,7 @@ export class TransactionalMemorySessionStore implements SessionStore {
         actions: new Map([...this.#state.actions].map(([id, stored]) => [id, clone(stored)])),
         evidence: clone(this.#state.evidence),
         leases: new Map([...this.#state.leases].map(([id, lease]) => [id, clone(lease)])),
+        effectIntents: new Map([...this.#state.effectIntents].map(([id, intent]) => [id, clone(intent)])),
       };
       const [fingerprint, requestFingerprint] = await Promise.all([fingerprintSessionAction(action), fingerprintSessionRequest(action)]);
       const existing = state.actions.get(actionKey(action.sessionId, action.idempotencyKey));

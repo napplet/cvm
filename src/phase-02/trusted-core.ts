@@ -234,13 +234,12 @@ export class TrustedCore {
     });
     const gateway = new ScopedToolGateway(grants, this.dependencies.dispatcher, {
       now: this.dependencies.now,
-      // The worker never receives this token. The trusted recipient must call
-      // accept() to atomically fence the durable lease with effect acceptance.
-      effectFence: Object.freeze({
-        accept: async (accept) => {
-          const result = await this.dependencies.store.acceptWorkerLeaseEffect(replayAction, lease.lease, this.dependencies.now(), accept);
-          return result.accepted ? Object.freeze({ ...result, effectFenceAccepted: true as const }) : undefined;
-        },
+      // The worker never receives this authority. The gateway first persists
+      // an operation intent, then gives only the recipient its stable ID.
+      effectIntents: Object.freeze({
+        claim: (callId, requestFingerprint) => this.dependencies.store.claimEffectIntent(replayAction, lease.lease, callId, requestFingerprint, this.dependencies.now()),
+        complete: (operationId) => this.dependencies.store.completeEffectIntent(operationId),
+        markUnknown: (operationId) => this.dependencies.store.markEffectIntentUnknown(operationId),
       }),
     });
 

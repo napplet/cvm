@@ -33,12 +33,14 @@ export const APPROVED_COMMANDS = Object.freeze({
   verify_workspace: Object.freeze(["pnpm", "verify"]),
 } as const);
 
-export type FencedEffectAcceptance = Readonly<{
-  /** Opaque coordinator authority: only a trusted recipient can spend it. */
-  accept: (effect: () => { output?: unknown }) => Promise<Readonly<{ output?: unknown; effectFenceAccepted: true }> | undefined>;
+export type EffectIntentAuthority = Readonly<{
+  claim: (callId: string, requestFingerprint: string) => Promise<Readonly<{ status: "claimed" | "completed" | "uncertain" | "blocked"; operationId?: string }>>;
+  complete: (operationId: string) => Promise<boolean>;
+  markUnknown: (operationId: string) => Promise<void>;
 }>;
-export type ToolDispatchContext = Readonly<{ workspacePath?: string; argv?: readonly string[]; effectFence?: FencedEffectAcceptance }>;
-export type ToolDispatchResult = Readonly<{ output?: unknown; effectFenceAccepted?: true }>;
+/** Operation identity is coordinator-to-recipient only; workers never receive it. */
+export type ToolDispatchContext = Readonly<{ workspacePath?: string; argv?: readonly string[]; operationId?: string }>;
+export type ToolDispatchResult = Readonly<{ output?: unknown }>;
 export interface ToolDispatcher {
   dispatch(request: ToolRequest, context: ToolDispatchContext): Promise<ToolDispatchResult> | ToolDispatchResult;
 }
@@ -79,11 +81,11 @@ export class ScopedToolGateway {
   #evidence: ToolDecisionEvidence[] = [];
   #now: () => number;
 
-  constructor(private readonly grants: GrantRegistry, private readonly dispatcher: ToolDispatcher, options: { now?: () => number; effectFence?: FencedEffectAcceptance } = {}) {
+  constructor(private readonly grants: GrantRegistry, private readonly dispatcher: ToolDispatcher, options: { now?: () => number; effectIntents?: EffectIntentAuthority } = {}) {
     this.#now = options.now ?? Date.now;
-    this.#effectFence = options.effectFence;
+    this.#effectIntents = options.effectIntents;
   }
-  #effectFence?: FencedEffectAcceptance;
+  #effectIntents?: EffectIntentAuthority;
 
   get evidence(): readonly ToolDecisionEvidence[] { return Object.freeze(this.#evidence.map((item) => Object.freeze({ ...item }))); }
 
@@ -121,15 +123,31 @@ export class ScopedToolGateway {
     const workspacePath = "path" in request ? pathFor(grant.workspaceRoot, request.path) : undefined;
     if ("path" in request && workspacePath === undefined) return this.deny("TOOL_PATH_ESCAPE", request);
     const argv = request.tool === "approved_command" ? APPROVED_COMMANDS[request.commandId] : undefined;
+    let operationId: string | undefined;
+    if (this.#effectIntents) {
+      const intent = await this.#effectIntents.claim(request.callId, requestFingerprint);
+      if (intent.status === "completed" && intent.operationId) {
+        const result = Object.freeze(ToolResultSchema.parse({ status: "allowed", code: "TOOL_ALLOWED", callId: request.callId, evidenceId: request.evidenceId }));
+        this.#records.set(request.callId, { fingerprint: requestFingerprint, result });
+        this.record(result.code, true, request);
+        return result;
+      }
+      if (intent.status !== "claimed" || !intent.operationId) return this.deny("TOOL_EFFECT_UNCERTAIN", request);
+      operationId = intent.operationId;
+    }
     try {
-      const effect = await this.dispatcher.dispatch(request, Object.freeze({ workspacePath, argv, ...(this.#effectFence ? { effectFence: this.#effectFence } : {}) }));
-      if (this.#effectFence && effect.effectFenceAccepted !== true) throw new Error("recipient did not accept the fenced effect");
+      const effect = await this.dispatcher.dispatch(request, Object.freeze({ workspacePath, argv, ...(operationId ? { operationId } : {}) }));
+      if (operationId && !await this.#effectIntents!.complete(operationId)) {
+        await this.#effectIntents!.markUnknown(operationId);
+        return this.deny("TOOL_EFFECT_UNCERTAIN", request);
+      }
       const result = Object.freeze(ToolResultSchema.parse({ status: "allowed", code: "TOOL_ALLOWED", callId: request.callId, evidenceId: request.evidenceId, output: effect.output }));
       this.#records.set(request.callId, { fingerprint: requestFingerprint, result });
       this.record(result.code, true, request);
       return result;
     } catch {
-      return this.deny("TOOL_DISPATCH_FAILED", request);
+      if (operationId) await this.#effectIntents!.markUnknown(operationId);
+      return this.deny(operationId ? "TOOL_EFFECT_UNCERTAIN" : "TOOL_DISPATCH_FAILED", request);
     }
   }
 

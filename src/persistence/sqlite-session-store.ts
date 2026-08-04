@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { fingerprintSessionAction, fingerprintSessionRequest, type SessionAction, type SessionActionResult } from "../domain/session-action";
 import { canonicalJson } from "../promotion/schema";
-import type { FencedEffectResult, SessionEvaluation, SessionEvidence, SessionPreflight, SessionRecord, SessionStore, WorkerLease, WorkerLeaseClaim } from "./session-store";
+import type { EffectIntentClaim, SessionEvaluation, SessionEvidence, SessionPreflight, SessionRecord, SessionStore, WorkerLease, WorkerLeaseClaim } from "./session-store";
 
 type ActionRow = { fingerprint: string; request_fingerprint: string; result_json: string; evidence_json: string };
 type SessionRow = { session_id: string; principal_id: string; version: number };
@@ -58,6 +58,16 @@ export class SqliteSessionStore implements SessionStore {
         lease_token TEXT NOT NULL,
         expires_at_ms INTEGER NOT NULL,
         PRIMARY KEY (session_id, expected_version)
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS effect_intents (
+        session_id TEXT NOT NULL REFERENCES sessions(session_id),
+        expected_version INTEGER NOT NULL CHECK (expected_version >= 0),
+        action_id TEXT NOT NULL,
+        call_id TEXT NOT NULL,
+        request_fingerprint TEXT NOT NULL,
+        operation_id TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL CHECK (status IN ('claimed', 'completed', 'uncertain')),
+        PRIMARY KEY (session_id, expected_version, call_id)
       ) STRICT;
     `);
     const actionColumns = this.#database.query("PRAGMA table_info(action_results)").all() as readonly { name: string }[];
@@ -124,17 +134,33 @@ export class SqliteSessionStore implements SessionStore {
       : freeze({ authorized: false, result: denial("STALE_SESSION_VERSION", this.getSessionVersion(action.sessionId)) });
   }
 
-  async acceptWorkerLeaseEffect(action: SessionAction, lease: WorkerLease, nowMs: number, accept: () => { output?: unknown }): Promise<FencedEffectResult> {
+  async claimEffectIntent(action: SessionAction, lease: WorkerLease, callId: string, requestFingerprint: string, nowMs: number): Promise<EffectIntentClaim> {
+    const operationId = crypto.randomUUID();
     try {
       return this.#database.transaction(() => {
         const row = this.#database.query("SELECT idempotency_key, lease_token, expires_at_ms FROM worker_leases WHERE session_id = ? AND expected_version = ?").get(action.sessionId, action.expectedVersion) as { idempotency_key: string; lease_token: string | null; expires_at_ms: number } | null;
-        if (row?.idempotency_key !== action.idempotencyKey || row.lease_token !== lease.token || row.expires_at_ms <= nowMs) return freeze({ accepted: false });
-        return freeze({ accepted: true, ...accept() });
+        if (row?.idempotency_key !== action.idempotencyKey || row.lease_token !== lease.token || row.expires_at_ms <= nowMs) return freeze({ status: "blocked" });
+        const existing = this.#database.query("SELECT action_id, request_fingerprint, operation_id, status FROM effect_intents WHERE session_id = ? AND expected_version = ? AND call_id = ?").get(action.sessionId, action.expectedVersion, callId) as { action_id: string; request_fingerprint: string; operation_id: string; status: "claimed" | "completed" | "uncertain" } | null;
+        if (existing) return existing.action_id === action.actionId && existing.request_fingerprint === requestFingerprint
+          ? freeze({ status: existing.status, operationId: existing.operation_id }) : freeze({ status: "blocked" });
+        const conflict = this.#database.query("SELECT action_id, status FROM effect_intents WHERE session_id = ? AND expected_version = ? AND (action_id <> ? OR status <> 'completed') LIMIT 1").get(action.sessionId, action.expectedVersion, action.actionId) as { action_id: string; status: string } | null;
+        if (conflict) return freeze({ status: "blocked" });
+        this.#database.query("INSERT INTO effect_intents (session_id, expected_version, action_id, call_id, request_fingerprint, operation_id, status) VALUES (?, ?, ?, ?, ?, ?, 'claimed')").run(action.sessionId, action.expectedVersion, action.actionId, callId, requestFingerprint, operationId);
+        return freeze({ status: "claimed", operationId });
       })();
     } catch (error) {
-      if (error instanceof Error && /(?:SQLITE_BUSY|database is locked)/iu.test(error.message)) return freeze({ accepted: false });
+      if (error instanceof Error && /(?:SQLITE_BUSY|database is locked)/iu.test(error.message)) return freeze({ status: "blocked" });
       throw error;
     }
+  }
+
+  async completeEffectIntent(operationId: string): Promise<boolean> {
+    const updated = this.#database.query("UPDATE effect_intents SET status = 'completed' WHERE operation_id = ? AND status = 'claimed'").run(operationId);
+    return updated.changes === 1;
+  }
+
+  async markEffectIntentUnknown(operationId: string): Promise<void> {
+    this.#database.query("UPDATE effect_intents SET status = 'uncertain' WHERE operation_id = ? AND status = 'claimed'").run(operationId);
   }
 
   async releaseWorkerLease(action: SessionAction, lease: WorkerLease): Promise<void> {

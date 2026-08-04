@@ -66,7 +66,7 @@ function core(databasePath: string, worker: WorkerPort, effects: { calls: number
     databasePath,
     worker,
     sessions: [{ sessionId: "session-0001", principalId: principal.id, version: 0 }],
-    dispatcher: { dispatch: async (_request, context) => context.effectFence?.accept(() => { effects.calls += 1; return { output: "captured" }; }) ?? { output: "captured" } },
+    dispatcher: { dispatch: async () => { effects.calls += 1; return { output: "captured" }; } },
     artifactVerifier: testArtifactVerifier(),
     now,
   });
@@ -217,12 +217,11 @@ describe("phase 02 final trusted-core tracer", () => {
     left.close(); right.close();
   });
 
-  test("fences effect acceptance when a successor replaces the lease after A enters its dispatcher", async () => {
+  test("ignores a forged fence marker and blocks a successor behind A's durable intent", async () => {
     const databasePath = temporaryDatabase();
     const effects = { calls: 0 }; const aRuns = { runs: 0 }; const bRuns = { runs: 0 };
     let rightRun!: Promise<TrustedCoreResult>;
-    const acceptedRecipient = async (_request: unknown, context: { effectFence?: { accept: (effect: () => { output?: unknown }) => Promise<{ output?: unknown; effectFenceAccepted: true } | undefined> } }) => {
-      if (context.effectFence) return (await context.effectFence.accept(() => { effects.calls += 1; return { output: "successor" }; })) ?? {};
+    const acceptedRecipient = async () => {
       effects.calls += 1;
       return { output: "successor" };
     };
@@ -239,9 +238,8 @@ describe("phase 02 final trusted-core tracer", () => {
           rightRun = right.core.execute(action({ actionId: "action-0002", idempotencyKey: "request-0002" }));
           await rightRun;
         }
-        if (context.effectFence) return (await context.effectFence.accept(() => { effects.calls += 1; return { output: "stale" }; })) ?? {};
         effects.calls += 1;
-        return { output: "stale" };
+        return { output: "stale", effectFenceAccepted: true };
       } },
       artifactVerifier: testArtifactVerifier(), now: () => aClockCalls++ === 0 ? 0 : 1_000,
     });
@@ -249,10 +247,29 @@ describe("phase 02 final trusted-core tracer", () => {
     const rightResult = await rightRun;
 
     expect(leftResult.status).not.toBe("completed");
-    expect(rightResult).toMatchObject({ status: "completed", code: "ACTION_COMMITTED" });
+    expect(rightResult.status).not.toBe("completed");
     expect(effects.calls).toBe(1);
-    expect(left.store.getSessionVersion("session-0001")).toBe(1);
+    expect(left.store.getSessionVersion("session-0001")).toBe(0);
     left.close(); right.close();
+  });
+
+  test("retains an unknown effect intent after effect-then-throw so an exact retry cannot dispatch twice", async () => {
+    const databasePath = temporaryDatabase();
+    const effects = { calls: 0 }; const firstRuns = { runs: 0 }; const retryRuns = { runs: 0 };
+    const first = createTrustedCore({
+      databasePath, worker: completingWorker(firstRuns), sessions: [{ sessionId: "session-0001", principalId: principal.id, version: 0 }],
+      dispatcher: { dispatch: async () => { effects.calls += 1; throw new Error("recipient outcome unknown after effect"); } }, artifactVerifier: testArtifactVerifier(),
+    });
+    const uncertain = await first.core.execute(action());
+    first.close();
+    const retry = core(databasePath, completingWorker(retryRuns), effects);
+    const retried = await retry.core.execute(action());
+
+    expect(uncertain.status).not.toBe("completed");
+    expect(retried.status).not.toBe("completed");
+    expect(effects.calls).toBe(1);
+    expect(retry.store.getSessionVersion("session-0001")).toBe(0);
+    retry.close();
   });
 
   test("fails closed on a worker-forged all-pass artifact before any effect or commit", async () => {

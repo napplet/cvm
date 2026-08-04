@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 2
 current_phase_name: Trusted Core & Isolated Agent Execution
 status: executing
-stopped_at: Completed 02-01-PLAN.md
-last_updated: "2026-08-04T10:44:57.404Z"
+stopped_at: Completed 02-04-PLAN.md
+last_updated: "2026-08-04T10:55:13.958Z"
 last_activity: 2026-08-04
 last_activity_desc: Phase 2 plans passed independent verification and deterministic coverage gates
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 12
-  completed_plans: 7
+  completed_plans: 10
   percent: 14
 ---
 
@@ -30,11 +30,11 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 2 — Trusted Core & Isolated Agent Execution
-Plan: 2 of 6 — ready to execute
+Plan: 3 of 6 — ready to execute
 Status: Ready to execute
 Last activity: 2026-08-04 — Phase 2 plans passed independent verification and deterministic coverage gates
 
-Progress: [██████░░░░] 58% of milestone phases complete; Phase 2 execution 0/6
+Progress: [████████░░] 83% of milestone phases complete; Phase 2 execution 0/6
 
 ## Milestone Progress
 
@@ -75,6 +75,7 @@ Progress: [██████░░░░] 58% of milestone phases complete; Pha
 | Phase 01 P05 | 25m | 2 tasks | 12 files |
 | Phase 01 P06 | 45m | 3 tasks | 14 files |
 | Phase 02 P01 | 6m 15s | 1 tasks | 7 files |
+| Phase 02-trusted-core-isolated-agent-execution P04 | 5m 11s | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -102,6 +103,8 @@ Recent decisions affecting current work:
 - [Phase ?]: All initial Phase 2 ceilings reside in the deeply immutable phase-02-policy-2026-08-04 fixture.
 - [Phase ?]: Workers return strict proposals only; the coordinator derives grants, mediates the single workspace write, and owns results, versioning, and evidence.
 - [Phase ?]: The serialized in-memory store is explicitly a copy-then-commit tracer double; Plan 03 replaces it with durable SQLite composition.
+- [Phase ?]: Worker tool authority is a closed grant-bound union with validation-before-effect mediation and replay-safe results.
+- [Phase ?]: The deterministic WorkerPort fake proves isolated proposal and checkpoint boundaries without claiming Bun Worker security isolation.
 
 ### Pending Todos
 
@@ -123,6 +126,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-04T10:44:57.397Z
-Stopped at: Completed 02-01-PLAN.md
+Last session: 2026-08-04T10:55:13.951Z
+Stopped at: Completed 02-04-PLAN.md
 Resume file: None

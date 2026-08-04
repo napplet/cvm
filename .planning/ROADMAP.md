@@ -102,7 +102,7 @@ Plans:
   5. Simultaneous or duplicate session actions leave the user with one durable valid next state and artifact version, never competing mutations.
 
 **Validation gate**: Select the worker implementation only after a production-like sandbox demonstrates per-session isolation, default-deny egress, scoped gateway behavior, browser/build support, and checkpoint export semantics. Modal is an initial candidate behind `WorkerPort`, not an assumed decision.
-**Plans:** 1/6 plans executed
+**Plans:** 4/6 plans executed
 
 Plans:
 **Wave 1**
@@ -111,9 +111,9 @@ Plans:
 
 **Wave 2** *(after Wave 1; plans execute in parallel)*
 
-- [ ] 02-02-PLAN.md — Lock canonical text limits and restrictive-only classifier semantics.
-- [ ] 02-03-PLAN.md — Lock exact replay, conflict, stale, interruption, and concurrent transaction semantics.
-- [ ] 02-04-PLAN.md — Prove the closed tool gateway and deterministic isolated WorkerPort fake.
+- [x] 02-02-PLAN.md — Lock canonical text limits and restrictive-only classifier semantics.
+- [x] 02-03-PLAN.md — Lock exact replay, conflict, stale, interruption, and concurrent transaction semantics.
+- [x] 02-04-PLAN.md — Prove the closed tool gateway and deterministic isolated WorkerPort fake.
 
 **Wave 3** *(after scoped WorkerPort contracts)*
 
@@ -212,7 +212,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Napplet Contract & Artifact Verification | 6/6 | Complete    | 2026-08-04 |
-| 2. Trusted Core & Isolated Agent Execution | 1/6 | In Progress|  |
+| 2. Trusted Core & Isolated Agent Execution | 4/6 | In Progress|  |
 | 3. ContextVM Funding & Funded Admission | 0/TBD | Not started | - |
 | 4. Metered Generation & Revision Loop | 0/TBD | Not started | - |
 | 5. Funding Interruption & Durable Resume | 0/TBD | Not started | - |

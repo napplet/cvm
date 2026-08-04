@@ -141,7 +141,7 @@ Milestone v1.0 owns every row in this table. Existing requirement IDs and phase 
 |-------|--------------------------|------:|----------------|
 | Phase 1 | GEN-01–GEN-04, SAFE-05–SAFE-06 | 6 | Complete |
 | Phase 2 | SESS-05, SAFE-01–SAFE-04 | 5 | Complete |
-| Phase 3 | CTX-01–CTX-04, PAY-01–PAY-07, BILL-01–BILL-02, BILL-06 | 14 | Pending |
+| Phase 3 | CTX-01–CTX-04, PAY-01–PAY-07, BILL-01–BILL-02, BILL-06 | 14 | Execution complete; verification pending |
 | Phase 4 | BILL-03–BILL-05, SESS-01, SESS-03–SESS-04, GEN-05–GEN-06 | 8 | Pending |
 | Phase 5 | CONT-01–CONT-07 | 7 | Pending |
 | Phase 6 | PREV-01–PREV-04, PUB-01–PUB-05 | 9 | Pending |
@@ -149,23 +149,23 @@ Milestone v1.0 owns every row in this table. Existing requirement IDs and phase 
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CTX-01 | Phase 3 | Pending |
-| CTX-02 | Phase 3 | Pending |
-| CTX-03 | Phase 3 | Pending |
-| CTX-04 | Phase 3 | Pending |
-| PAY-01 | Phase 3 | Pending |
-| PAY-02 | Phase 3 | Pending |
-| PAY-03 | Phase 3 | Pending |
-| PAY-04 | Phase 3 | Pending |
-| PAY-05 | Phase 3 | Pending |
-| PAY-06 | Phase 3 | Pending |
-| PAY-07 | Phase 3 | Pending |
-| BILL-01 | Phase 3 | Pending |
-| BILL-02 | Phase 3 | Pending |
+| CTX-01 | Phase 3 | Execution complete; verification pending |
+| CTX-02 | Phase 3 | Execution complete; verification pending |
+| CTX-03 | Phase 3 | Execution complete; verification pending |
+| CTX-04 | Phase 3 | Execution complete; verification pending |
+| PAY-01 | Phase 3 | Execution complete; verification pending |
+| PAY-02 | Phase 3 | Execution complete; verification pending |
+| PAY-03 | Phase 3 | Execution complete; verification pending |
+| PAY-04 | Phase 3 | Execution complete; verification pending |
+| PAY-05 | Phase 3 | Execution complete; verification pending |
+| PAY-06 | Phase 3 | Execution complete; verification pending |
+| PAY-07 | Phase 3 | Execution complete; verification pending |
+| BILL-01 | Phase 3 | Execution complete; verification pending |
+| BILL-02 | Phase 3 | Execution complete; verification pending |
 | BILL-03 | Phase 4 | Pending |
 | BILL-04 | Phase 4 | Pending |
 | BILL-05 | Phase 4 | Pending |
-| BILL-06 | Phase 3 | Pending |
+| BILL-06 | Phase 3 | Execution complete; verification pending |
 | SESS-01 | Phase 4 | Pending |
 | SESS-02 | Phase 7 | Pending |
 | SESS-03 | Phase 4 | Pending |
@@ -211,8 +211,9 @@ Milestone v1.0 owns every row in this table. Existing requirement IDs and phase 
 - Mapped to phases: 54
 - Unmapped: 0 ✓
 - Complete: 11
-- Pending: 43
+- Execution complete; verification pending: 14
+- Pending: 29
 
 ---
 *Requirements defined: 2026-08-03*
-*Last updated: 2026-08-04 after verified Phase 2 completion; requirement IDs and phase assignments unchanged*
+*Last updated: 2026-08-04 after Phase 3 execution; requirement IDs and phase assignments unchanged*

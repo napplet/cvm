@@ -137,30 +137,30 @@ Plans:
   5. An operator can rotate the multi-mint Cashu allowlist while historical settlement records remain intact and reconciled treasury value cannot produce a duplicate credit.
 
 **Validation gate**: Pin and contract-test current ContextVM/CEP-8 announcement, signed-event, replay, PMI, Lightning receipt, and Cashu settlement wire details against maintained fixtures before exposing the public adapter.
-**Plans**: 7 plans
+**Plans**: 7/7 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 03-01-PLAN.md — Prove the transport-neutral verified-account, exactly-once credit, cap-hold, admission, status, and replay tracer.
+- [x] 03-01-PLAN.md — Prove the transport-neutral verified-account, exactly-once credit, cap-hold, admission, status, and replay tracer.
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 03-02-PLAN.md — Admit exact integration packages automatically and implement the serializable PostgreSQL-wire monetary authority.
+- [x] 03-02-PLAN.md — Admit exact integration packages automatically and implement the serializable PostgreSQL-wire monetary authority.
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 03-03-PLAN.md — Publish truthful signed discovery and translate verified ContextVM/CEP-8 requests into durable funding commands.
-- [ ] 03-04-PLAN.md — Create service-owned Lightning top-ups and credit authoritative settled receipts exactly once.
-- [ ] 03-05-PLAN.md — Enforce versioned trusted-mint Cashu policy, online settlement, proof uniqueness, and non-crediting treasury reconciliation.
+- [x] 03-03-PLAN.md — Publish truthful signed discovery and translate verified ContextVM/CEP-8 requests into durable funding commands.
+- [x] 03-04-PLAN.md — Create service-owned Lightning top-ups and credit authoritative settled receipts exactly once.
+- [x] 03-05-PLAN.md — Enforce versioned trusted-mint Cashu policy, online settlement, proof uniqueness, and non-crediting treasury reconciliation.
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 03-06-PLAN.md — Couple approved cap holds to immediately usable capacity and expose the final redacted funded-account composition.
+- [x] 03-06-PLAN.md — Couple approved cap holds to immediately usable capacity and expose the final redacted funded-account composition.
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 03-07-PLAN.md — Execute the complete deterministic reference set and emit immutable provider-separated Phase 3 design evidence.
+- [x] 03-07-PLAN.md — Execute the complete deterministic reference set and emit immutable provider-separated Phase 3 design evidence.
 
 ### Phase 4: Metered Generation & Revision Loop
 
@@ -236,7 +236,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 |-------|----------------|--------|-----------|
 | 1. Napplet Contract & Artifact Verification | 6/6 | Complete    | 2026-08-04 |
 | 2. Trusted Core & Isolated Agent Execution | 6/6 | Complete    | 2026-08-04 |
-| 3. ContextVM Funding & Funded Admission | 0/7 | Planned; ready to execute | - |
+| 3. ContextVM Funding & Funded Admission | 7/7 | Execution complete; verification pending |  |
 | 4. Metered Generation & Revision Loop | 0/TBD | Not started | - |
 | 5. Funding Interruption & Durable Resume | 0/TBD | Not started | - |
 | 6. Sealed Preview & User-Owned Publication | 0/TBD | Not started | - |
@@ -244,10 +244,10 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 ### Milestone Progress Roll-up
 
-- **Phases:** Phases 1–2 complete, Phase 3 active and ready to execute, Phases 4–7 remaining; 2/7 complete (29%).
-- **Known plans:** 12/19 executed; Phase 3 contributes 7 plans across 5 waves and has 0/7 complete.
-- **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 11 complete and 43 pending.
-- **Current checkpoint:** Execute Phase 3 Wave 1 Plan 03-01; do not revisit or replan completed Phase 1 or Phase 2 work.
+- **Phases:** Phases 1–2 complete; Phase 3 execution is complete and awaiting goal verification; Phases 4–7 remain; 2/7 phases verified complete (29%), 3/7 execution-complete (43%).
+- **Known plans:** 19/19 executed; Phase 3 contributes 7 completed plans across 5 waves.
+- **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 11 verified complete, 14 execution-complete awaiting verification, and 29 pending.
+- **Current checkpoint:** Verify Phase 3, including validation, review, and security gates; do not revisit or replan completed Phase 1, Phase 2, or valid Phase 3 plans.
 - **Phase 1 preservation:** Phase 1 remains complete with its review, security, validation, verification evidence, and Phase 7 deferrals unchanged.
 
 ### Completion Reporting Contract

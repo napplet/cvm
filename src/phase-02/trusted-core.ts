@@ -16,6 +16,7 @@ import {
   WorkerRunResultSchema,
   type ActionEnvelope,
   type WorkerEvent,
+  type WorkerArtifact,
   type WorkerPort,
   type WorkerRunRequest,
   type WorkerRunResult,
@@ -96,16 +97,25 @@ async function digestText(value: string): Promise<string> {
   return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function defaultArtifactInput(_facts: TrustedCoreArtifactFacts): ArtifactContractInput {
-  // This is deliberately only a narrow Phase 1 contract input. It does not
-  // inspect or reinterpret a manifest, NIP/NAP rules, or generated source.
+function artifactInputFromWorker(facts: TrustedCoreArtifactFacts): ArtifactContractInput {
+  if (facts.result.status !== "completed") throw new Error("artifact binding requires a completed worker result");
+  const artifact = facts.result.artifact;
   return {
-    purpose: { kind: "focused", statements: ["one focused napplet"] },
-    surface: { hasBackend: false, hasSecondPurpose: false, serviceWorker: false, dynamicAuthority: false },
-    dependencies: { appOwnedSignerOrRelay: false, privateNappletImport: false },
-    capabilities: { declaredHard: ["storage"], observedDomains: ["storage"], optionalIntentPresenceRead: false, intentUsedThroughSdk: false },
-    upstream: { scanner: { verdict: "pass", checkId: "upstream:worker-output-scanner" }, conformance: { verdict: "pass", checkId: "upstream:worker-output-conformance" } },
+    purpose: artifact.purpose,
+    surface: artifact.surface,
+    dependencies: artifact.dependencies,
+    capabilities: artifact.capabilities,
+    upstream: artifact.upstream,
   };
+}
+
+function artifactMatchesRequest(artifact: WorkerArtifact, request: WorkerRunRequest): boolean {
+  return artifact.sessionId === request.sessionId
+    && artifact.actionId === request.actionId
+    && artifact.expectedVersion === request.expectedVersion
+    && artifact.policyVersion === request.policyVersion
+    && artifact.capabilityGrant === request.capabilityGrant
+    && artifact.workspaceId === request.workspaceId;
 }
 
 function asFailure(code: string, details: unknown): Promise<TrustedCoreResult> {
@@ -231,6 +241,9 @@ export class TrustedCore {
     if (workerResult.status !== "completed" || workerResult.code !== "WORKER_PROPOSALS_VALIDATED") {
       return asFailure("WORKER_UNCERTAIN", { status: workerResult.status, code: workerResult.code });
     }
+    if (!artifactMatchesRequest(workerResult.artifact, request)) {
+      return asFailure("WORKER_UNCERTAIN", { reason: "worker artifact binding invalid" });
+    }
 
     const events: WorkerEvent[] = [];
     for (const event of workerResult.events) {
@@ -292,7 +305,7 @@ export function createTrustedCore(options: TrustedCoreOptions): TrustedCoreCompo
     tokenCounter: options.tokenCounter ?? DEFAULT_COUNTER,
     riskDetector: options.riskDetector ?? DEFAULT_RISK_DETECTOR,
     dispatcher: options.dispatcher ?? DEFAULT_DISPATCHER,
-    artifactInput: options.artifactInput ?? defaultArtifactInput,
+    artifactInput: options.artifactInput ?? artifactInputFromWorker,
     now: options.now ?? Date.now,
   });
   return freeze({ core, store, close: () => { if (store instanceof SqliteSessionStore) store.close(); } });

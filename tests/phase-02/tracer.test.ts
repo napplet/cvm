@@ -27,6 +27,17 @@ function temporaryDatabase(): string {
   temporaryDirectories.push(directory);
   return join(directory, "trusted-core.sqlite");
 }
+function verifiedArtifact(request: ReturnType<typeof WorkerRunRequestSchema.parse>) {
+  return {
+    sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion,
+    capabilityGrant: request.capabilityGrant, workspaceId: request.workspaceId, artifactId: `${request.actionId}:artifact`,
+    purpose: { kind: "focused", statements: ["one focused napplet"] },
+    surface: { hasBackend: false, hasSecondPurpose: false, serviceWorker: false, dynamicAuthority: false },
+    dependencies: { appOwnedSignerOrRelay: false, privateNappletImport: false },
+    capabilities: { declaredHard: ["storage"], observedDomains: ["storage"], optionalIntentPresenceRead: false, intentUsedThroughSdk: false },
+    upstream: { scanner: { verdict: "pass", checkId: "upstream:test-scanner" }, conformance: { verdict: "pass", checkId: "upstream:test-conformance" } },
+  } as const;
+}
 function completingWorker(counter: { runs: number }, mutate?: (request: ReturnType<typeof WorkerRunRequestSchema.parse>) => unknown): WorkerPort {
   return {
     async run(request) {
@@ -36,7 +47,7 @@ function completingWorker(counter: { runs: number }, mutate?: (request: ReturnTy
         request: { sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion,
           capabilityGrant: request.capabilityGrant, workspaceId: request.workspaceId, callId: "call-1", evidenceId: "evidence-1", tool: "capture_evidence", label: "worker-completed" },
       };
-      return WorkerRunResultSchema.parse({ status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events: [event] });
+      return WorkerRunResultSchema.parse({ status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events: [event], artifact: verifiedArtifact(request) });
     },
   };
 }
@@ -157,10 +168,23 @@ describe("phase 02 final trusted-core tracer", () => {
             kind: "tool_proposal", turn: index + 1,
             request: { sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion,
               capabilityGrant: request.capabilityGrant, workspaceId: request.workspaceId, callId: `call-${index}`, evidenceId: `evidence-${index}`, tool: "capture_evidence", label: `turn-${index}` },
-          })),
+          })), artifact: verifiedArtifact(request),
         });
       },
     };
+    const composition = core(databasePath, worker, effects);
+    const result = await composition.core.execute(action());
+    expect(result).toMatchObject({ status: "recoverable_failure", code: "WORKER_UNCERTAIN" });
+    expect(effects.calls).toBe(0);
+    expect(composition.store.getSessionVersion("session-0001")).toBe(0);
+    composition.close();
+  });
+
+  test("rejects progress-only completion without a correlated verified artifact", async () => {
+    const databasePath = temporaryDatabase(); const effects = { calls: 0 };
+    const worker: WorkerPort = { async run() {
+      return WorkerRunResultSchema.parse({ status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events: [{ kind: "progress", turn: 1, detail: "finished" }] });
+    } };
     const composition = core(databasePath, worker, effects);
     const result = await composition.core.execute(action());
     expect(result).toMatchObject({ status: "recoverable_failure", code: "WORKER_UNCERTAIN" });

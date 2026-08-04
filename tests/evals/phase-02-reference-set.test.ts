@@ -34,8 +34,19 @@ function database(): string {
 function worker(mutate?: (request: Record<string, unknown>) => unknown): WorkerPort {
   return { async run(request) {
     const event = mutate?.(request) ?? { kind: "tool_proposal", turn: 1, request: toolCorrelation(request, { tool: "capture_evidence", label: "synthetic-canary" }) };
-    return WorkerRunResultSchema.parse({ status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events: [event] });
+    return WorkerRunResultSchema.parse({ status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events: [event], artifact: verifiedArtifact(request) });
   } };
+}
+function verifiedArtifact(request: Record<string, unknown>) {
+  const { sessionId, actionId, expectedVersion, policyVersion, capabilityGrant, workspaceId } = request;
+  return {
+    sessionId, actionId, expectedVersion, policyVersion, capabilityGrant, workspaceId, artifactId: `${request.actionId}:artifact`,
+    purpose: { kind: "focused", statements: ["one focused napplet"] },
+    surface: { hasBackend: false, hasSecondPurpose: false, serviceWorker: false, dynamicAuthority: false },
+    dependencies: { appOwnedSignerOrRelay: false, privateNappletImport: false },
+    capabilities: { declaredHard: ["storage"], observedDomains: ["storage"], optionalIntentPresenceRead: false, intentUsedThroughSdk: false },
+    upstream: { scanner: { verdict: "pass", checkId: "upstream:reference-scanner" }, conformance: { verdict: "pass", checkId: "upstream:reference-conformance" } },
+  };
 }
 function toolCorrelation(request: Record<string, unknown>, tool: Record<string, unknown>) {
   const { sessionId, actionId, expectedVersion, policyVersion, capabilityGrant, workspaceId } = request;

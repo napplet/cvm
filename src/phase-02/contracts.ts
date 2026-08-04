@@ -99,6 +99,16 @@ const CompletedWorkerEventsSchema = z.array(WorkerExecutionEventSchema).min(1).m
   }
 });
 
+const UpstreamPassSchema = z.object({ verdict: z.literal("pass"), checkId: z.string().regex(/^upstream:/u) }).strict();
+export const WorkerArtifactSchema = CorrelationSchema.extend({
+  artifactId: z.string().min(1),
+  purpose: z.object({ kind: z.literal("focused"), statements: z.array(z.string().min(1)).length(1) }).strict(),
+  surface: z.object({ hasBackend: z.literal(false), hasSecondPurpose: z.literal(false), serviceWorker: z.literal(false), dynamicAuthority: z.literal(false) }).strict(),
+  dependencies: z.object({ appOwnedSignerOrRelay: z.literal(false), privateNappletImport: z.literal(false) }).strict(),
+  capabilities: z.object({ declaredHard: z.array(z.enum(["storage", "intent"])), observedDomains: z.array(z.enum(["storage", "intent"])), optionalIntentPresenceRead: z.boolean(), intentUsedThroughSdk: z.boolean() }).strict(),
+  upstream: z.object({ scanner: UpstreamPassSchema, conformance: UpstreamPassSchema }).strict(),
+}).strict();
+
 export const CheckpointProposalSchema = CorrelationSchema.extend({
   formatVersion: z.literal("portable-checkpoint-v1"),
   inventory: z.array(RelativePathSchema).min(1).max(1_000),
@@ -111,7 +121,7 @@ export const CheckpointProposalSchema = CorrelationSchema.extend({
 
 export const WorkerRunResultSchema = z.discriminatedUnion("status", [
   WorkerProposalSchema,
-  z.object({ status: z.literal("completed"), code: z.literal("WORKER_PROPOSALS_VALIDATED"), events: CompletedWorkerEventsSchema, checkpoint: CheckpointProposalSchema.optional() }).strict(),
+  z.object({ status: z.literal("completed"), code: z.literal("WORKER_PROPOSALS_VALIDATED"), events: CompletedWorkerEventsSchema, artifact: WorkerArtifactSchema, checkpoint: CheckpointProposalSchema.optional() }).strict(),
   z.object({ status: z.literal("unavailable"), code: z.literal("WORKER_UNAVAILABLE") }).strict(),
   z.object({ status: z.literal("interrupted"), code: z.literal("WORKER_INTERRUPTED") }).strict(),
   z.object({ status: z.literal("limited"), code: z.literal("WORKER_TURN_LIMIT") }).strict(),
@@ -137,6 +147,7 @@ export type ToolResult = z.infer<typeof ToolResultSchema>;
 export type WorkerToolRequest = z.infer<typeof WorkerToolRequestSchema>;
 export type WorkerProposal = z.infer<typeof WorkerProposalSchema>;
 export type WorkerEvent = z.infer<typeof WorkerEventSchema>;
+export type WorkerArtifact = z.infer<typeof WorkerArtifactSchema>;
 export type WorkerRunResult = z.infer<typeof WorkerRunResultSchema>;
 export type CheckpointProposal = z.infer<typeof CheckpointProposalSchema>;
 

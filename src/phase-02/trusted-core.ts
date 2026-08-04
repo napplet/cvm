@@ -1,7 +1,7 @@
 import { evaluateAdmission, type TokenCounter } from "../admission/admission-policy";
 import { evaluateRisk, type RiskSignalDetector } from "../admission/risk-policy";
 import { GrantRegistry, ScopedToolGateway, type ToolDispatcher } from "../capabilities/scoped-tool-gateway";
-import { type SessionAction, type SessionActionResult } from "../domain/session-action";
+import { type AcceptedArtifact, type SessionAction, type SessionActionResult } from "../domain/session-action";
 import { SessionService } from "../domain/session-service";
 import { SqliteSessionStore } from "../persistence/sqlite-session-store";
 import { TransactionalMemorySessionStore, type SessionRecord, type SessionStore } from "../persistence/session-store";
@@ -31,6 +31,8 @@ export type TrustedCoreResult = Readonly<{
   currentVersion?: number;
   evidenceDigest?: string;
   evidenceId?: string;
+  artifactId?: string;
+  artifactDigest?: string;
 }>;
 
 export type TrustedCoreArtifactFacts = Readonly<{
@@ -38,6 +40,11 @@ export type TrustedCoreArtifactFacts = Readonly<{
   request: WorkerRunRequest;
   result: WorkerRunResult;
   events: readonly WorkerEvent[];
+}>;
+
+/** Coordinator-only Phase 1 verification boundary; workers submit proposals, never pass verdicts. */
+export type ArtifactVerifier = Readonly<{
+  verify: (facts: TrustedCoreArtifactFacts) => Promise<Readonly<{ artifact: AcceptedArtifact; contractInput: ArtifactContractInput }> | undefined>;
 }>;
 
 export type TrustedCoreOptions = Readonly<{
@@ -50,7 +57,7 @@ export type TrustedCoreOptions = Readonly<{
   tokenCounter?: TokenCounter;
   riskDetector?: RiskSignalDetector;
   dispatcher?: ToolDispatcher;
-  artifactInput?: (facts: TrustedCoreArtifactFacts) => ArtifactContractInput;
+  artifactVerifier?: ArtifactVerifier;
   sessions?: readonly SessionRecord[];
   now?: () => number;
 }>;
@@ -62,7 +69,7 @@ type InternalDependencies = Readonly<{
   tokenCounter: TokenCounter;
   riskDetector: RiskSignalDetector;
   dispatcher: ToolDispatcher;
-  artifactInput: (facts: TrustedCoreArtifactFacts) => ArtifactContractInput;
+  artifactVerifier: ArtifactVerifier;
   now: () => number;
 }>;
 
@@ -97,17 +104,7 @@ async function digestText(value: string): Promise<string> {
   return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function artifactInputFromWorker(facts: TrustedCoreArtifactFacts): ArtifactContractInput {
-  if (facts.result.status !== "completed") throw new Error("artifact binding requires a completed worker result");
-  const artifact = facts.result.artifact;
-  return {
-    purpose: artifact.purpose,
-    surface: artifact.surface,
-    dependencies: artifact.dependencies,
-    capabilities: artifact.capabilities,
-    upstream: artifact.upstream,
-  };
-}
+const DEFAULT_ARTIFACT_VERIFIER: ArtifactVerifier = Object.freeze({ verify: async () => undefined });
 
 function artifactMatchesRequest(artifact: WorkerArtifact, request: WorkerRunRequest): boolean {
   return artifact.sessionId === request.sessionId
@@ -116,6 +113,12 @@ function artifactMatchesRequest(artifact: WorkerArtifact, request: WorkerRunRequ
     && artifact.policyVersion === request.policyVersion
     && artifact.capabilityGrant === request.capabilityGrant
     && artifact.workspaceId === request.workspaceId;
+}
+
+function isDigest(value: string): boolean { return /^[a-f0-9]{64}$/iu.test(value); }
+function verifiedArtifactIsValid(value: Readonly<{ artifact: AcceptedArtifact; contractInput: ArtifactContractInput }>): boolean {
+  const artifact = value.artifact;
+  return artifact.artifactId.length > 0 && isDigest(artifact.artifactSha256) && isDigest(artifact.scannerReportSha256) && isDigest(artifact.conformanceReportSha256);
 }
 
 function asFailure(code: string, details: unknown): Promise<TrustedCoreResult> {
@@ -134,6 +137,8 @@ function sessionResult(result: SessionActionResult): TrustedCoreResult {
     ...(result.currentVersion === undefined ? {} : { currentVersion: result.currentVersion }),
     ...(result.evidenceDigest === undefined ? {} : { evidenceDigest: result.evidenceDigest }),
     ...(result.evidenceId === undefined ? {} : { evidenceId: result.evidenceId }),
+    ...(result.artifactId === undefined ? {} : { artifactId: result.artifactId }),
+    ...(result.artifactDigest === undefined ? {} : { artifactDigest: result.artifactDigest }),
   });
 }
 
@@ -252,6 +257,14 @@ export class TrustedCore {
     if (workerResult.checkpoint && !await validateCheckpointProposal(workerResult.checkpoint, request, events)) {
       return asFailure("WORKER_UNCERTAIN", { reason: "checkpoint binding invalid" });
     }
+    const facts = freeze({ action, request, result: workerResult, events: freeze(events) });
+    let verified;
+    try { verified = await this.dependencies.artifactVerifier.verify(facts); }
+    catch { return asFailure("ARTIFACT_CONTRACT_BLOCKED", { reason: "trusted artifact verifier unavailable" }); }
+    if (!verified || !verifiedArtifactIsValid(verified)) return asFailure("ARTIFACT_CONTRACT_BLOCKED", { reason: "trusted artifact verification required" });
+    const artifact = await evaluateArtifactContract(verified.contractInput);
+    if (artifact.verdict !== "pass") return asFailure("ARTIFACT_CONTRACT_BLOCKED", { evidenceSha256: artifact.evidenceSha256 });
+
     for (const event of events) {
       if (!("kind" in event)) return asFailure("WORKER_UNCERTAIN", { reason: "legacy worker event cannot carry effects" });
       if (event.kind === "tool_proposal") {
@@ -259,10 +272,6 @@ export class TrustedCore {
         if (decision.status !== "allowed") return asFailure("TOOL_AUTHORIZATION_DENIED", { code: decision.code });
       }
     }
-
-    const facts = freeze({ action, request, result: workerResult, events: freeze(events) });
-    const artifact = await evaluateArtifactContract(this.dependencies.artifactInput(facts));
-    if (artifact.verdict !== "pass") return asFailure("ARTIFACT_CONTRACT_BLOCKED", { evidenceSha256: artifact.evidenceSha256 });
 
     const sessionAction: SessionAction = freeze({
       principal: action.principal,
@@ -272,7 +281,11 @@ export class TrustedCore {
       idempotencyKey: action.idempotencyKey,
       expectedVersion: action.expectedVersion,
       policyVersion: action.policyVersion,
-      payload: freeze({ ideaSha256: admission.evidence.inputSha256, artifactGate: "phase-1-composed" }),
+      // This payload is deliberately identical to replayAction: the durable
+      // action fingerprint below carries the verified artifact identity, while
+      // the request fingerprint remains usable before worker allocation.
+      payload: replayAction.payload,
+      artifact: verified.artifact,
     });
     const committed = await this.#service.apply(sessionAction, signal);
     if (committed.status === "completed") grants.terminal(capabilityGrant);
@@ -309,7 +322,7 @@ export function createTrustedCore(options: TrustedCoreOptions): TrustedCoreCompo
     tokenCounter: options.tokenCounter ?? DEFAULT_COUNTER,
     riskDetector: options.riskDetector ?? DEFAULT_RISK_DETECTOR,
     dispatcher: options.dispatcher ?? DEFAULT_DISPATCHER,
-    artifactInput: options.artifactInput ?? artifactInputFromWorker,
+    artifactVerifier: options.artifactVerifier ?? DEFAULT_ARTIFACT_VERIFIER,
     now: options.now ?? Date.now,
   });
   return freeze({ core, store, close: () => { if (store instanceof SqliteSessionStore) store.close(); } });

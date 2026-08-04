@@ -10,7 +10,7 @@ import {
   type ActionEnvelope,
   type WorkerPort,
 } from "../../src/phase-02/contracts";
-import { createTrustedCore } from "../../src/phase-02/trusted-core";
+import { createTrustedCore, type ArtifactVerifier } from "../../src/phase-02/trusted-core";
 
 const temporaryDirectories: string[] = [];
 afterEach(() => { for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
@@ -38,6 +38,16 @@ function verifiedArtifact(request: ReturnType<typeof WorkerRunRequestSchema.pars
     upstream: { scanner: { verdict: "pass", checkId: "upstream:test-scanner" }, conformance: { verdict: "pass", checkId: "upstream:test-conformance" } },
   } as const;
 }
+function testArtifactVerifier(): ArtifactVerifier {
+  return { async verify(facts) {
+    if (facts.result.status !== "completed") return undefined;
+    const proposal = facts.result.artifact;
+    return {
+      artifact: { artifactId: proposal.artifactId, artifactSha256: "a".repeat(64), scannerReportSha256: "b".repeat(64), conformanceReportSha256: "c".repeat(64) },
+      contractInput: { purpose: proposal.purpose, surface: proposal.surface, dependencies: proposal.dependencies, capabilities: proposal.capabilities, upstream: proposal.upstream },
+    };
+  } };
+}
 function completingWorker(counter: { runs: number }, mutate?: (request: ReturnType<typeof WorkerRunRequestSchema.parse>) => unknown): WorkerPort {
   return {
     async run(request) {
@@ -57,6 +67,7 @@ function core(databasePath: string, worker: WorkerPort, effects: { calls: number
     worker,
     sessions: [{ sessionId: "session-0001", principalId: principal.id, version: 0 }],
     dispatcher: { dispatch: async () => { effects.calls += 1; return { output: "captured" }; } },
+    artifactVerifier: testArtifactVerifier(),
   });
 }
 
@@ -79,9 +90,12 @@ describe("phase 02 final trusted-core tracer", () => {
 
     expect(result).toMatchObject({ status: "completed", code: "ACTION_COMMITTED", version: 1 });
     expect(result.evidenceDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.artifactId).toBe("action-0001:artifact");
+    expect(result.artifactDigest).toMatch(/^[a-f0-9]{64}$/);
     expect(runs.runs).toBe(1);
     expect(effects.calls).toBe(1);
     expect(composition.store.getSessionVersion("session-0001")).toBe(1);
+    expect(composition.store.evidence[0]?.artifact).toMatchObject({ artifactId: "action-0001:artifact" });
     expect(composition.store.evidence).toHaveLength(1);
     composition.close();
   });
@@ -121,7 +135,7 @@ describe("phase 02 final trusted-core tracer", () => {
     const databasePath = temporaryDatabase();
     const runs = { runs: 0 }; const effects = { calls: 0 };
     const composition = createTrustedCore({ databasePath, worker: completingWorker(runs), sessions: [{ sessionId: "session-0001", principalId: principal.id, version: 0 }],
-      riskDetector: { version: "risk-test", detect: () => [{ id: "PROMPT_INJECTION", severity: "high" }] }, dispatcher: { dispatch: async () => { effects.calls += 1; return {}; } } });
+      riskDetector: { version: "risk-test", detect: () => [{ id: "PROMPT_INJECTION", severity: "high" }] }, dispatcher: { dispatch: async () => { effects.calls += 1; return {}; } }, artifactVerifier: testArtifactVerifier() });
     const result = await composition.core.execute(action());
 
     expect(result).toMatchObject({ status: "denied", code: "RISK_DENIED" });
@@ -229,8 +243,20 @@ describe("phase 02 final trusted-core tracer", () => {
 
   test("keeps prior state when the composed Phase 1 artifact contract blocks output", async () => {
     const databasePath = temporaryDatabase(); const runs = { runs: 0 }; const effects = { calls: 0 };
-    const composition = createTrustedCore({ databasePath, worker: completingWorker(runs), sessions: [{ sessionId: "session-0001", principalId: principal.id, version: 0 }], dispatcher: { dispatch: async () => { effects.calls += 1; return {}; } },
-      artifactInput: () => ({ purpose: { kind: "full-stack", statements: ["bad"] }, surface: { hasBackend: true, hasSecondPurpose: false, serviceWorker: false, dynamicAuthority: false }, dependencies: { appOwnedSignerOrRelay: false, privateNappletImport: false }, capabilities: { declaredHard: [], observedDomains: [], optionalIntentPresenceRead: false, intentUsedThroughSdk: false }, upstream: { scanner: { verdict: "pass", checkId: "upstream:scanner" }, conformance: { verdict: "pass", checkId: "upstream:conformance" } } }) });
+    const rejectingVerifier: ArtifactVerifier = { async verify(facts) {
+      if (facts.result.status !== "completed") return undefined;
+      return {
+        artifact: { artifactId: facts.result.artifact.artifactId, artifactSha256: "a".repeat(64), scannerReportSha256: "b".repeat(64), conformanceReportSha256: "c".repeat(64) },
+        contractInput: {
+          purpose: { kind: "full-stack", statements: ["bad"] },
+          surface: { hasBackend: true, hasSecondPurpose: false, serviceWorker: false, dynamicAuthority: false },
+          dependencies: { appOwnedSignerOrRelay: false, privateNappletImport: false },
+          capabilities: { declaredHard: [], observedDomains: [], optionalIntentPresenceRead: false, intentUsedThroughSdk: false },
+          upstream: { scanner: { verdict: "pass", checkId: "upstream:scanner" }, conformance: { verdict: "pass", checkId: "upstream:conformance" } },
+        },
+      };
+    } };
+    const composition = createTrustedCore({ databasePath, worker: completingWorker(runs), sessions: [{ sessionId: "session-0001", principalId: principal.id, version: 0 }], dispatcher: { dispatch: async () => { effects.calls += 1; return {}; } }, artifactVerifier: rejectingVerifier });
     const result = await composition.core.execute(action());
     expect(result).toMatchObject({ status: "recoverable_failure", code: "ARTIFACT_CONTRACT_BLOCKED" });
     expect(composition.store.getSessionVersion("session-0001")).toBe(0);

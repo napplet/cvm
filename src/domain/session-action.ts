@@ -9,6 +9,15 @@ export type SessionAction = Readonly<{
   expectedVersion: number;
   policyVersion: string;
   payload: unknown;
+  artifact?: AcceptedArtifact;
+}>;
+
+/** Coordinator-verified, content-addressed identity; never a worker assertion. */
+export type AcceptedArtifact = Readonly<{
+  artifactId: string;
+  artifactSha256: string;
+  scannerReportSha256: string;
+  conformanceReportSha256: string;
 }>;
 
 export type SessionActionFingerprint = string;
@@ -29,6 +38,8 @@ export type SessionActionResult = Readonly<{
   currentVersion?: number;
   evidenceId?: string;
   evidenceDigest?: string;
+  artifactId?: string;
+  artifactDigest?: string;
 }>;
 
 async function sha256(text: string): Promise<string> {
@@ -36,8 +47,12 @@ async function sha256(text: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-/** D-20 identity: canonical action envelope plus a canonical normalized payload hash. */
-export async function fingerprintSessionAction(action: SessionAction): Promise<SessionActionFingerprint> {
+/**
+ * Stable identity available before a worker is started.  It deliberately
+ * excludes the verified artifact: a lost-response retry must find the durable
+ * result before recreating a worker proposal.
+ */
+export async function fingerprintSessionRequest(action: SessionAction): Promise<SessionActionFingerprint> {
   const payloadHash = await sha256(canonicalJson(action.payload));
   return sha256(canonicalJson({
     principalId: action.principal.id,
@@ -48,6 +63,12 @@ export async function fingerprintSessionAction(action: SessionAction): Promise<S
     policyVersion: action.policyVersion,
     payloadHash,
   }));
+}
+
+/** D-20 durable action identity includes the coordinator-verified artifact. */
+export async function fingerprintSessionAction(action: SessionAction): Promise<SessionActionFingerprint> {
+  const requestFingerprint = await fingerprintSessionRequest(action);
+  return sha256(canonicalJson({ requestFingerprint, artifact: action.artifact ?? null }));
 }
 
 export async function fingerprintEvidence(value: unknown): Promise<string> {

@@ -1,6 +1,6 @@
 ---
 phase: 04-metered-generation-revision-loop
-reviewed: 2026-08-04T22:20:46Z
+reviewed: 2026-08-04T22:48:15Z
 depth: standard
 files_reviewed: 31
 files_reviewed_list:
@@ -36,144 +36,72 @@ files_reviewed_list:
   - tests/phase-04/session-status.test.ts
   - tests/phase-04/tracer.test.ts
 findings:
-  critical: 7
-  warning: 3
-  info: 1
-  total: 11
+  critical: 3
+  warning: 1
+  info: 0
+  total: 4
 status: issues_found
 ---
 
 # Phase 04: Code Review Report
 
-**Reviewed:** 2026-08-04T22:20:46Z
+**Reviewed:** 2026-08-04T22:48:15Z
 **Depth:** standard
 **Files Reviewed:** 31
 **Status:** issues_found
 
 ## Summary
 
-The deterministic in-memory tests pass, but the production PostgreSQL path is not executable against its migration and does not uphold the metering/session guarantees required by D-59 through D-77.  The primary concerns are a schema-to-query mismatch, duplicate billable dispatch after a crash or multi-instance retry, an authorization ceiling that does not bound the dispatched model profile, and missing durable session/artifact lineage updates.
+The iteration fixes the earlier pre-dispatch ceiling, duplicate-dispatch, reservation-release, reconciliation-claim, cursor-secret, and SQL-column defects. However, the real PostgreSQL path cannot create its first metered action because its referenced pricing records are never seeded. Successful artifacts and revision lineage are still replaced with process-configured or synthesized placeholders, and durable replays retain fake zero balance/cap values. The focused Phase 04 suite passes (45 tests), but it does not exercise these production/restart contracts.
 
 ## Narrative Findings (AI reviewer)
 
 ## Critical Issues
 
-### CR-01: Production metered SQL queries target columns and states that the migration never creates
+### CR-01: Production metered sessions reference profile/card rows that are never created
 
 **Classification:** BLOCKER
 
-**File:** `src/persistence/postgres-sql-funding-store.ts:74`
+**File:** `migrations/phase-04/001_metered_generation.sql:4-16`; `src/persistence/postgres-sql-funding-store.ts:179-181`
 
-**Issue:** The production store selects and updates `receipt_charge`, `provider_receipt_reference`, `session_version`, `artifact_version`, `remaining_cap_sat`, and `remaining_balance_sat` (also at lines 176, 207, and 220). `metered_actions` in the supplied migration has none of those columns, and its state constraint allows `active`/`verified`, while the code writes/reads the mapped action lifecycle. The first production action will therefore fail with PostgreSQL “column does not exist” errors; the passing Phase 04 suite only exercises the memory store.
+**Issue:** `metered_sessions`, `metered_actions`, and `provider_operations` have foreign keys to `model_profile_versions` and `price_card_versions`. The migration only creates those tables; neither it nor any reviewed application code inserts the pinned `code-proposal` profile or `phase-04-deterministic-card-2026-08-04` card. `prepareMeteredAction()` therefore fails at its first `INSERT INTO metered_sessions` in a freshly migrated production database, before any action can be dispatched. The passing finalization test uses the in-memory store and cannot expose this.
 
-**Fix:** Make one authoritative schema contract. Add the required columns and compatible state transitions in a forward migration (or change every query to the actual columns), then add a PostgreSQL migration/integration test that performs prepare → claim → receipt → finalization.
+**Fix:** Add an idempotent, canonical seed/promotion step for the exact pinned profile and price-card JSON (with hashes), run it before accepting generation work, and add a PostgreSQL migration integration test for prepare → claim → finalization on an empty migrated database.
 
-### CR-02: A non-owner of the provider-operation claim dispatches the provider again
-
-**Classification:** BLOCKER
-
-**File:** `src/phase-04/metered-generation-service.ts:139-142`
-
-**Issue:** `claimProviderOperation` is the durable external-effect fence, but a caller that receives `{ claimed: false, action: { result: undefined } }` falls through to `gateway.dispatch`. This happens after a process restart, when another Cloud Run instance owns the active operation, or whenever the original caller has persisted the claim but not yet finalized it. It converts a persisted “exactly once” provider intent into multiple fresh billable provider requests, violating D-65/D-67.
-
-**Fix:** Dispatch only when `claim.claimed` is true. When it is false and no terminal result exists, return a non-dispatch pending/usage-unknown result or perform the original-operation lookup recovery; never call `dispatch` from that branch. Add a cross-instance/crash-after-claim test using a fresh service instance.
-
-### CR-03: The authorized action amount is user-supplied, not the computed maximum charge of the dispatched profile
+### CR-02: Finalization discards the verifier-issued artifact and session-bound workspace/snapshot lineage
 
 **Classification:** BLOCKER
 
-**File:** `src/phase-04/metered-generation-service.ts:131-142`
+**File:** `src/phase-04/metered-generation-service.ts:52,195-204,211`; `src/persistence/postgres-sql-funding-store.ts:233-234`; `src/phase-04/session-status.ts:156`
 
-**Issue:** The service reserves `command.maximum` and passes that same value as the operation reservation, but dispatches the fixed `code-proposal` profile whose maximum units are 1,000 input + 1,000 output + 500 cached + 500 reasoning tokens. At the pinned rates this profile can cost 3,500 sats, while a caller can submit `maximum: "1"`. The receipt is only rejected after the provider has already been asked to spend up to the profile maximum, so the service does not enforce the approved cap before external spend as D-59 requires.
+**Issue:** The harness returns the server-verifier's actual `artifactId` at `src/phase-04/napplet-harness.ts:88`, but the generation service reduces that to a boolean and finalizes only an incremented artifact version. It obtains `snapshotReference` and `priorArtifactId` from service-wide constructor configuration, not durable session state. SQL then writes a fabricated artifact ID (`artifact:${actionId}`) and fabricated lineage (`workspace:${sessionId}`), while status fabricates a different ID (`artifact:${sessionId}:${version}`). There is no persisted checkpoint/snapshot reference or verifier identity that a restart, revision, repair, or failed-artifact-retention decision can validate. Thus separate sessions can be supplied the same configured prior artifact/snapshot, and a displayed/persisted successful artifact need not be the verified artifact.
 
-**Fix:** Calculate `maximumOperationCharge({ card, profile })` before authorization; reject an action whose remaining approved cap/balance cannot cover it, and reserve that calculated ceiling (or a verified, profile-bounded sub-reservation). Add a test with a one-sat command maximum and profile-max receipt that proves no dispatch occurs.
+**Fix:** Extend the metered-session/action finalization contract to carry the verifier-issued artifact ID plus immutable validation evidence and the actual session-owned workspace/checkpoint lineage. Persist those values atomically with the debit/version update; load them for revision/repair; return the stored artifact identity from status. Make repair derive and validate failed-artifact/report references from the same durable records. Add production-backed restart and two-session isolation tests.
 
-### CR-04: Finalization never advances the durable PostgreSQL session or records the verified artifact
-
-**Classification:** BLOCKER
-
-**File:** `src/persistence/postgres-sql-funding-store.ts:209-222`
-
-**Issue:** `finalizeMeteredAction` debits and stores the action result, but never updates `metered_sessions.version`, `state`, `confirmed_spend_sat`, or `current_verified_artifact_version`, and never inserts `session_artifacts`. Consequently `sessionStatus()` continues to return the `prepared` session inserted at line 179, and a production revision is denied as not revision-ready even after a completed action. It also leaves the database without the accepted artifact identity it claims to expose.
-
-**Fix:** In the same serializable finalization transaction, conditionally advance the session version/state and spend, persist a verified `session_artifacts` row only for a verified artifact, and retain the previous artifact/version on failure. Fence the update on expected session version and test a production-backed start followed by revision/status.
-
-### CR-05: Pending or unresolved reconciliation permanently consumes the sole lookup claim
+### CR-03: Stored terminal results retain placeholder cap and balance values, so replay lies after a restart
 
 **Classification:** BLOCKER
 
-**File:** `src/model/reconciliation.ts:59-68`
+**File:** `src/phase-04/metered-generation-service.ts:208-212`; `src/persistence/postgres-sql-funding-store.ts:223-236`; `src/model/reconciliation.ts:74-92`
 
-**Issue:** The service first inserts/claims a reconciliation record, then returns `RECONCILIATION_PENDING` or `RECONCILIATION_UNRESOLVED` without releasing or expiring that claim. Every later call sees `claimed: false` and returns pending at lines 60-63 without another original-operation lookup. A temporary provider pending state therefore blocks the user's session indefinitely, contrary to the required durable lookup recovery.
+**Issue:** The service persists `SessionActionResult` with `remainingCap: "0"` and `remainingBalance: "0"`. `finalizeMeteredAction()` calculates the real values, but only returns them on its transient return object; it serializes the original placeholder result into `terminal_result`. The initial response patches its local result from that return value, while an idempotent retry after the process map is lost reads and returns the durable zero values at `startSession()`/`reviseSession()` lines 61-63 and 82-84. Reconciliation persists the same placeholders and does not patch its returned result. This makes the durable receipt/cap result inconsistent with the actual hold and account projection.
 
-**Fix:** Model an in-flight reconciliation lease with expiry (or release the claim after a nonterminal lookup), preserving the “no fresh dispatch” invariant while allowing a later lookup of the original request. Add a test where the first lookup is pending and a subsequent lookup finds a receipt, asserting one dispatch and two lookups.
-
-### CR-06: Revisions and repairs are not durably bound to their prior workspace/artifact lineage
-
-**Classification:** BLOCKER
-
-**File:** `src/phase-04/metered-generation-service.ts:165`
-
-**Issue:** The harness invocation always constructs `workspaceLineage` from the session ID and injects a service-wide `snapshotReference` and `priorArtifactId`; it does not read them from durable session state. No reviewed implementation writes the migration's `session_artifacts` table or a workspace/checkpoint lineage record. Thus different sessions can be run with the same configured prior artifact/snapshot, and a successful result is represented only by an incremented number rather than the verifier's artifact ID. This breaks D-70/D-71/D-74's same-lineage and artifact-truth guarantees.
-
-**Fix:** Persist a session-bound workspace/checkpoint reference and accepted artifact identity during finalization; load and verify those facts before revision/repair; pass them to the harness instead of process configuration. Validate the supplied repair failed-artifact/report references against persisted evidence, and add a two-session isolation test plus restart/resume lineage tests.
-
-### CR-07: Production status cursors are signed with a process-local random key
-
-**Classification:** BLOCKER
-
-**File:** `src/phase-03/funded-core.ts:103-106`
-
-**Issue:** If `statusCursorSecret` is omitted, every `createFundedCore` instance creates a new random HMAC key. A cursor issued by one Cloud Run replica (or before a restart) is invalid on another replica, even for the same owner/session and unchanged billing history. This violates the promised stable paginated owner history in the multi-instance/multi-region deployment model.
-
-**Fix:** Require a stable server-managed cursor secret in every non-test composition (for example, injected from the secret manager), rotate it deliberately with a versioned cursor key ID, and add a test that a cursor issued by one independently created production composition is accepted by another.
+**Fix:** Construct the canonical terminal response inside the serializable finalization transaction after `nextCap` and `nextBalance` are known, persist exactly that result, and return the same object for first response, replay, and reconciliation. Add restart/replay tests for completed, failed, and receipt-found reconciliation actions that compare all spend/cap/balance fields.
 
 ## Warnings
 
-### WR-01: A thrown provider dispatch leaves an active action with no ambiguity record
+### WR-01: Design evidence marks self-declared effects as passed without observing them
 
 **Classification:** WARNING
 
-**File:** `src/phase-04/metered-generation-service.ts:142`
+**File:** `scripts/verify-phase-04-design-slice.ts:26-39`; `tests/evals/phase-04-reference-set.test.ts:79-83`
 
-**Issue:** Only a returned `usage_unknown` observation is persisted. If `gateway.dispatch` throws after the provider may have accepted the request, the exception escapes before `recordUsageUnknown`; the durable action remains `dispatching` and the next invocation reaches the duplicate-dispatch path. This loses the user-visible reconciliation state and makes a transient transport failure unsafe to retry.
+**Issue:** Each referenced test is executed only for an exit code. The verifier then copies `caseResults: passed` and sums effect counts from the fixture itself. No test emits runtime dispatch, receipt, debit, or release observations for comparison to those fixture counts, so a passing test with weakened/missing assertions can still produce a design-ready evidence record claiming the original effects.
 
-**Fix:** Wrap dispatch in an ambiguity boundary. Persist `usage_unknown` with the stored provider request correlation/evidence whenever acceptance cannot be disproved, then return the reconciliation-required result. Test a gateway that throws after acceptance.
-
-### WR-02: Status turns database failures into an `invalid_cursor` client response
-
-**Classification:** WARNING
-
-**File:** `src/phase-04/session-status.ts:142-167`
-
-**Issue:** The broad `catch` covers account and billing-store reads, not just cursor parsing. A database outage, serialization failure, or malformed stored record is silently reported as `invalid_cursor`, which is false, prevents callers/operators from distinguishing service failure, and makes retry behavior misleading.
-
-**Fix:** Limit cursor-error handling to cursor decode/verification and return or propagate a separate safe internal-unavailable result for durable-read failures. Add fault-injection coverage for `status()` and `listBillingLineItems()` throws.
-
-### WR-03: The TypeScript source uses an invalid private-method declaration
-
-**Classification:** WARNING
-
-**File:** `src/phase-04/metered-generation-service.ts:185`
-
-**Issue:** `private async #serializeSession` combines an accessibility modifier with a `#` private identifier. TypeScript rejects this form (`TS18010`), so a normal type-check cannot compile this changed module even though Bun's test transpilation runs it.
-
-**Fix:** Use either `async #serializeSession(...)` or `private async serializeSession(...)`, and add the repository's Bun-aware TypeScript check to CI.
-
-## Info
-
-### IN-01: The design-evidence gate does not compare declared effect counts with runtime observations
-
-**Classification:** INFO
-
-**File:** `tests/evals/phase-04-reference-set.test.ts:79-83`
-
-**Issue:** Each reference case merely runs the named test and treats its exit code as execution proof. The fixture's expected counts are self-declared and the verifier copies/sums them at `scripts/verify-phase-04-design-slice.ts:26-39`; no runtime result is captured and compared to each case's provider/worker/receipt/debit/release oracle. A changed test with incomplete assertions can therefore leave the evidence claiming unchanged exact effect totals.
-
-**Fix:** Have each reference case emit a structured runtime oracle from the actual service double/store, parse it in the evaluator, and compare every field against the fixture before building evidence.
+**Fix:** Have every reference case expose structured effects from its actual store/gateway/worker double, parse those results in the evaluator, and compare every observed field against the fixture before setting the case or aggregate evidence to passed.
 
 ---
 
-_Reviewed: 2026-08-04T22:20:46Z_
+_Reviewed: 2026-08-04T22:48:15Z_
 _Reviewer: the agent (gsd-code-reviewer)_
 _Depth: standard_

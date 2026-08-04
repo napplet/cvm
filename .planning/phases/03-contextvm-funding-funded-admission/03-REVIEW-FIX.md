@@ -1,10 +1,10 @@
 ---
 phase: 03-contextvm-funding-funded-admission
-fixed_at: 2026-08-04T18:32:00+01:00
+fixed_at: 2026-08-04T18:47:13+01:00
 review_path: .planning/phases/03-contextvm-funding-funded-admission/03-REVIEW.md
-iteration: 3
-findings_in_scope: 9
-fixed: 9
+iteration: 4
+findings_in_scope: 11
+fixed: 11
 skipped: 0
 status: all_fixed
 ---
@@ -49,6 +49,18 @@ Lightning invoice create/query and Cashu settle/observe/treasury calls now recei
 
 Every durable write after an available capacity reservation, including the available-observation write and cap-hold transaction, is inside the compensation guard. Confirmed release durably closes the capacity intent and returns refusal. A timed-out or failed release instead persists `reconciliation_pending` with the original provider reference. Failure-injection coverage proves one reservation, one compensation attempt, no stranded hold, and no second reserve on retry.
 
+### Query-reconcilable default Cashu settlement
+
+The production `CashuTsSettlementAdapter` now binds the server-owned `AbortSignal` to every mint request made by the real cashu-ts `Mint` and `Wallet` path, including mint loading, key discovery, swap, and proof-state observation. An ambiguous swap keeps the original top-up and token commitment as its operation identity; reconciliation opens the encrypted token only for a NUT-07 proof-state query and never performs a second swap. All-spent proofs resolve the original operation as verified, all-unspent proofs resolve it as failed, and mixed or pending states remain unknown.
+
+Regression coverage exercises the default cashu-ts wallet path with only the HTTP request function stubbed. It proves that the load and swap requests receive the aborted settlement signal and that a later query with a fresh signal observes consumed proofs and credits exactly once under the original operation reference.
+
+### Durable capacity-release ambiguity fence
+
+Capacity compensation now persists `reconciliation_pending` before calling the external release. If the provider confirms release but the final `released` persistence write fails, the durable pre-release fence prevents a retry from trusting the stale `available` observation and admitting work. Retry must query capacity state before it can proceed.
+
+The exact `FAIL_5_RELEASE_INTENT_PERSISTENCE` regression proves one external reserve, one external release, one retry observation, one acceptance attempt, zero cap holds, and zero accepted admissions.
+
 ## Regression and Implementation Commits
 
 - `5d85e19` — RED regressions exposing the remaining architecture gaps.
@@ -56,12 +68,14 @@ Every durable write after an available capacity reservation, including the avail
 - `e1a6926` — RED regressions for evidence mutation, rail deadlines, and stranded capacity.
 - `c38394a` — GREEN independent evidence oracles, bounded rail effects, and safe capacity compensation.
 - `0bf4694` — abort-signal propagation for deadline-bound rail adapters.
+- `e4494a3` — RED regressions for default-wallet Cashu reconciliation and failed capacity-release finalization.
+- `a23596b` — GREEN query-reconcilable Cashu settlement and durable capacity-release ambiguity fencing.
 
 ## Verification
 
-- `bun test` — pass: 262 tests, 0 failures, 1,151 expectations.
+- `bun test` — pass: 265 tests, 0 failures, 1,167 expectations.
 - `bun run eval:phase-03` — pass: 22 tests, 0 failures, 102 expectations; 19 fixture-bound scenario/oracle cases plus evidence-mutation regression.
-- `bun run test:phase-03-design-slice` — pass: `design-ready`, offline verdict `passed`, evidence `5d000be03ef48a9aa03f3472389c85ba92280f36a944f36f0f99a4672d328b08`.
+- `bun run test:phase-03-design-slice` — pass: `design-ready`, offline verdict `passed`, evidence `6a905dfa70c2d0db903b4f6347f8ddff9ced2f37ffd0d1a3204f4cf0fca1c79e`.
 - `git diff --check` — pass.
 
 All live ContextVM, Lightning, Cashu, PostgreSQL, capacity, and Modal observations remain honestly `blocked` / `unselected`; Phase 7 still owns live provider and SLO certification.

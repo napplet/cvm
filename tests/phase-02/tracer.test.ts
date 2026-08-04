@@ -10,7 +10,7 @@ import {
   type ActionEnvelope,
   type WorkerPort,
 } from "../../src/phase-02/contracts";
-import { createTrustedCore, type ArtifactVerifier } from "../../src/phase-02/trusted-core";
+import { createTrustedCore, type ArtifactVerifier, type TrustedCoreResult } from "../../src/phase-02/trusted-core";
 
 const temporaryDirectories: string[] = [];
 afterEach(() => { for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
@@ -66,7 +66,7 @@ function core(databasePath: string, worker: WorkerPort, effects: { calls: number
     databasePath,
     worker,
     sessions: [{ sessionId: "session-0001", principalId: principal.id, version: 0 }],
-    dispatcher: { dispatch: async () => { effects.calls += 1; return { output: "captured" }; } },
+    dispatcher: { dispatch: async (_request, context) => context.effectFence?.accept(() => { effects.calls += 1; return { output: "captured" }; }) ?? { output: "captured" } },
     artifactVerifier: testArtifactVerifier(),
     now,
   });
@@ -208,6 +208,44 @@ describe("phase 02 final trusted-core tracer", () => {
     releaseA();
     const leftResult = await leftRun;
     releaseB();
+    const rightResult = await rightRun;
+
+    expect(leftResult.status).not.toBe("completed");
+    expect(rightResult).toMatchObject({ status: "completed", code: "ACTION_COMMITTED" });
+    expect(effects.calls).toBe(1);
+    expect(left.store.getSessionVersion("session-0001")).toBe(1);
+    left.close(); right.close();
+  });
+
+  test("fences effect acceptance when a successor replaces the lease after A enters its dispatcher", async () => {
+    const databasePath = temporaryDatabase();
+    const effects = { calls: 0 }; const aRuns = { runs: 0 }; const bRuns = { runs: 0 };
+    let rightRun!: Promise<TrustedCoreResult>;
+    const acceptedRecipient = async (_request: unknown, context: { effectFence?: { accept: (effect: () => { output?: unknown }) => Promise<{ output?: unknown; effectFenceAccepted: true } | undefined> } }) => {
+      if (context.effectFence) return (await context.effectFence.accept(() => { effects.calls += 1; return { output: "successor" }; })) ?? {};
+      effects.calls += 1;
+      return { output: "successor" };
+    };
+    const right = createTrustedCore({
+      databasePath, worker: completingWorker(bRuns), sessions: [{ sessionId: "session-0001", principalId: principal.id, version: 0 }],
+      dispatcher: { dispatch: acceptedRecipient }, artifactVerifier: testArtifactVerifier(), now: () => 30_001,
+    });
+    let aClockCalls = 0; let startedSuccessor = false;
+    const left = createTrustedCore({
+      databasePath, worker: completingWorker(aRuns), sessions: [{ sessionId: "session-0001", principalId: principal.id, version: 0 }],
+      dispatcher: { dispatch: async (_request, context) => {
+        if (!startedSuccessor) {
+          startedSuccessor = true;
+          rightRun = right.core.execute(action({ actionId: "action-0002", idempotencyKey: "request-0002" }));
+          await rightRun;
+        }
+        if (context.effectFence) return (await context.effectFence.accept(() => { effects.calls += 1; return { output: "stale" }; })) ?? {};
+        effects.calls += 1;
+        return { output: "stale" };
+      } },
+      artifactVerifier: testArtifactVerifier(), now: () => aClockCalls++ === 0 ? 0 : 1_000,
+    });
+    const leftResult = await left.core.execute(action());
     const rightResult = await rightRun;
 
     expect(leftResult.status).not.toBe("completed");

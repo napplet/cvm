@@ -30,6 +30,7 @@ export type SessionEvaluation = (transaction: SessionTransaction) => void;
 export type SessionPreflight = Readonly<{ authorized: true }> | Readonly<{ authorized: false; result: SessionActionResult }>;
 export type WorkerLease = Readonly<{ token: string; expiresAtMs: number }>;
 export type WorkerLeaseClaim = Readonly<{ authorized: true; lease: WorkerLease }> | Readonly<{ authorized: false; result: SessionActionResult }>;
+export type FencedEffectResult = Readonly<{ accepted: true; output?: unknown }> | Readonly<{ accepted: false }>;
 
 /** One authoritative commit decision: replay, fence, result, evidence, and version. */
 export interface SessionStore {
@@ -42,6 +43,8 @@ export interface SessionStore {
   claimWorkerLease(action: SessionAction, nowMs: number, expiresAtMs: number): Promise<WorkerLeaseClaim>;
   /** Re-check at a coordinator effect boundary; a successor lease fences the stale holder. */
   assertWorkerLease(action: SessionAction, lease: WorkerLease, nowMs: number): Promise<SessionPreflight>;
+  /** Atomically fences a synchronous recipient acceptance with the active lease. */
+  acceptWorkerLeaseEffect(action: SessionAction, lease: WorkerLease, nowMs: number, accept: () => { output?: unknown }): Promise<FencedEffectResult>;
   releaseWorkerLease(action: SessionAction, lease: WorkerLease): Promise<void>;
   apply(action: SessionAction, evaluate: SessionEvaluation, lease?: WorkerLease, nowMs?: number): Promise<SessionActionResult>;
   getSessionVersion(sessionId: string): number | undefined;
@@ -156,6 +159,11 @@ export class TransactionalMemorySessionStore implements SessionStore {
     return current?.idempotencyKey === action.idempotencyKey && current.token === lease.token && current.expiresAtMs > nowMs
       ? freeze({ authorized: true })
       : freeze({ authorized: false, result: denial("STALE_SESSION_VERSION", this.#state.sessions.get(action.sessionId)?.version) });
+  }
+
+  async acceptWorkerLeaseEffect(action: SessionAction, lease: WorkerLease, nowMs: number, accept: () => { output?: unknown }): Promise<FencedEffectResult> {
+    const active = await this.assertWorkerLease(action, lease, nowMs);
+    return active.authorized ? freeze({ accepted: true, ...accept() }) : freeze({ accepted: false });
   }
 
   async releaseWorkerLease(action: SessionAction, lease: WorkerLease): Promise<void> {

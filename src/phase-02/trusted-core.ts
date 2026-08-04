@@ -232,16 +232,17 @@ export class TrustedCore {
       tools: ["workspace_write", "capture_evidence", "export_checkpoint"],
       expiresAtMs: this.dependencies.now() + PHASE_02_POLICY_INITIAL.sandbox.execTimeoutSeconds * 1_000,
     });
-    const gateway = new ScopedToolGateway(grants, {
-      dispatch: async (toolRequest, context) => {
-        // This is the final asynchronous coordinator boundary before an
-        // external effect. A replacement lease token therefore fences an old
-        // worker even when its original grant has not yet expired.
-        const active = await this.dependencies.store.assertWorkerLease(replayAction, lease.lease, this.dependencies.now());
-        if (!active.authorized) throw new Error("worker lease is no longer active");
-        return this.dependencies.dispatcher.dispatch(toolRequest, context);
-      },
-    }, { now: this.dependencies.now });
+    const gateway = new ScopedToolGateway(grants, this.dependencies.dispatcher, {
+      now: this.dependencies.now,
+      // The worker never receives this token. The trusted recipient must call
+      // accept() to atomically fence the durable lease with effect acceptance.
+      effectFence: Object.freeze({
+        accept: async (accept) => {
+          const result = await this.dependencies.store.acceptWorkerLeaseEffect(replayAction, lease.lease, this.dependencies.now(), accept);
+          return result.accepted ? Object.freeze({ ...result, effectFenceAccepted: true as const }) : undefined;
+        },
+      }),
+    });
 
     let workerResult: WorkerRunResult;
     try {

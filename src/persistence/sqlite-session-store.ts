@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { fingerprintSessionAction, fingerprintSessionRequest, type SessionAction, type SessionActionResult } from "../domain/session-action";
 import { canonicalJson } from "../promotion/schema";
-import type { SessionEvaluation, SessionEvidence, SessionPreflight, SessionRecord, SessionStore, WorkerLease, WorkerLeaseClaim } from "./session-store";
+import type { FencedEffectResult, SessionEvaluation, SessionEvidence, SessionPreflight, SessionRecord, SessionStore, WorkerLease, WorkerLeaseClaim } from "./session-store";
 
 type ActionRow = { fingerprint: string; request_fingerprint: string; result_json: string; evidence_json: string };
 type SessionRow = { session_id: string; principal_id: string; version: number };
@@ -122,6 +122,19 @@ export class SqliteSessionStore implements SessionStore {
     return row?.idempotency_key === action.idempotencyKey && row.lease_token === lease.token && row.expires_at_ms > nowMs
       ? freeze({ authorized: true })
       : freeze({ authorized: false, result: denial("STALE_SESSION_VERSION", this.getSessionVersion(action.sessionId)) });
+  }
+
+  async acceptWorkerLeaseEffect(action: SessionAction, lease: WorkerLease, nowMs: number, accept: () => { output?: unknown }): Promise<FencedEffectResult> {
+    try {
+      return this.#database.transaction(() => {
+        const row = this.#database.query("SELECT idempotency_key, lease_token, expires_at_ms FROM worker_leases WHERE session_id = ? AND expected_version = ?").get(action.sessionId, action.expectedVersion) as { idempotency_key: string; lease_token: string | null; expires_at_ms: number } | null;
+        if (row?.idempotency_key !== action.idempotencyKey || row.lease_token !== lease.token || row.expires_at_ms <= nowMs) return freeze({ accepted: false });
+        return freeze({ accepted: true, ...accept() });
+      })();
+    } catch (error) {
+      if (error instanceof Error && /(?:SQLITE_BUSY|database is locked)/iu.test(error.message)) return freeze({ accepted: false });
+      throw error;
+    }
   }
 
   async releaseWorkerLease(action: SessionAction, lease: WorkerLease): Promise<void> {

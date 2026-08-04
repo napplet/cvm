@@ -33,9 +33,14 @@ export const APPROVED_COMMANDS = Object.freeze({
   verify_workspace: Object.freeze(["pnpm", "verify"]),
 } as const);
 
-export type ToolDispatchContext = Readonly<{ workspacePath?: string; argv?: readonly string[] }>;
+export type FencedEffectAcceptance = Readonly<{
+  /** Opaque coordinator authority: only a trusted recipient can spend it. */
+  accept: (effect: () => { output?: unknown }) => Promise<Readonly<{ output?: unknown; effectFenceAccepted: true }> | undefined>;
+}>;
+export type ToolDispatchContext = Readonly<{ workspacePath?: string; argv?: readonly string[]; effectFence?: FencedEffectAcceptance }>;
+export type ToolDispatchResult = Readonly<{ output?: unknown; effectFenceAccepted?: true }>;
 export interface ToolDispatcher {
-  dispatch(request: ToolRequest, context: ToolDispatchContext): Promise<{ output?: unknown }> | { output?: unknown };
+  dispatch(request: ToolRequest, context: ToolDispatchContext): Promise<ToolDispatchResult> | ToolDispatchResult;
 }
 
 export class GrantRegistry {
@@ -74,9 +79,11 @@ export class ScopedToolGateway {
   #evidence: ToolDecisionEvidence[] = [];
   #now: () => number;
 
-  constructor(private readonly grants: GrantRegistry, private readonly dispatcher: ToolDispatcher, options: { now?: () => number } = {}) {
+  constructor(private readonly grants: GrantRegistry, private readonly dispatcher: ToolDispatcher, options: { now?: () => number; effectFence?: FencedEffectAcceptance } = {}) {
     this.#now = options.now ?? Date.now;
+    this.#effectFence = options.effectFence;
   }
+  #effectFence?: FencedEffectAcceptance;
 
   get evidence(): readonly ToolDecisionEvidence[] { return Object.freeze(this.#evidence.map((item) => Object.freeze({ ...item }))); }
 
@@ -115,7 +122,8 @@ export class ScopedToolGateway {
     if ("path" in request && workspacePath === undefined) return this.deny("TOOL_PATH_ESCAPE", request);
     const argv = request.tool === "approved_command" ? APPROVED_COMMANDS[request.commandId] : undefined;
     try {
-      const effect = await this.dispatcher.dispatch(request, Object.freeze({ workspacePath, argv }));
+      const effect = await this.dispatcher.dispatch(request, Object.freeze({ workspacePath, argv, ...(this.#effectFence ? { effectFence: this.#effectFence } : {}) }));
+      if (this.#effectFence && effect.effectFenceAccepted !== true) throw new Error("recipient did not accept the fenced effect");
       const result = Object.freeze(ToolResultSchema.parse({ status: "allowed", code: "TOOL_ALLOWED", callId: request.callId, evidenceId: request.evidenceId, output: effect.output }));
       this.#records.set(request.callId, { fingerprint: requestFingerprint, result });
       this.record(result.code, true, request);

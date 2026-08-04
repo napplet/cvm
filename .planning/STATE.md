@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 04
 current_phase_name: Metered Generation & Revision Loop
 status: executing
-stopped_at: Completed 04-06-PLAN.md; Phase 04 awaits formal post-execution review, validation, and verification
-last_updated: "2026-08-04T23:16:34.268Z"
+stopped_at: Completed 04-07-PLAN.md; Phase 04 awaits formal post-execution re-verification
+last_updated: "2026-08-04T23:58:43.555Z"
 last_activity: 2026-08-04
 last_activity_desc: Phase 04 execution started
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 26
-  completed_plans: 25
+  completed_plans: 26
   percent: 57
 ---
 
@@ -30,20 +30,20 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 04 (Metered Generation & Revision Loop) — EXECUTING
-Plan: 6 of 6
-Status: Ready to execute
-Last activity: 2026-08-04 — Phase 04 execution started
+Plan: 7 of 7
+Status: Awaiting formal post-execution re-verification
+Last activity: 2026-08-05 — Completed Plan 04-07 evidence-integrity hardening
 
-Progress: [██████████] 100% of milestone phases complete; Phases 1–3 verified, Phase 4 planned 0/6
+Progress: [██████████] Phase 4 implementation plans 7/7 complete; formal Phase 4 re-verification remains pending
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
-- Phases: Phases 1–3 complete; Phase 4 is active and ready to execute; Phases 5–7 remain.
-- Plans: 19/25 currently known milestone plans executed; Phase 4 has 6 checker-approved plans.
+- Phases: Phases 1–3 complete; Phase 4 implementation is complete but remains active pending formal re-verification; Phases 5–7 remain.
+- Plans: 26/26 currently known milestone plans executed; Phase 4 has 7 executed plans.
 - Requirements: 54/54 v1 requirements assigned; 25 verified complete and 29 pending.
-- Next checkpoint: execute 04-01, the funded start tracer with exact receipt settlement, without revisiting completed Phases 1–3.
+- Next checkpoint: formally re-verify Phase 4 evidence and implementation before advancing to Phase 5.
 
 ## Performance Metrics
 
@@ -87,6 +87,7 @@ Progress: [██████████] 100% of milestone phases complete; Ph
 | Phase 04 P04 | 14m | 3 tasks | 9 files |
 | Phase 04 P05 | 8m | 2 tasks | 8 files |
 | Phase 04 P06 | 34m 37s | 2 tasks | 7 files |
+| Phase 04 P07 | 28m | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -137,6 +138,7 @@ Recent decisions affecting current work:
 - [Phase ?]: Repair remains coordinator-internal; the public generation surface is exactly start_session, revise_session, and session_status.
 - [Phase ?]: Phase 4 evidence gate keeps deterministic gateway unselected and live model not observed pending Phase 7 certification.
 - [Phase ?]: Twenty actual authority cases with exact effect signatures are the Phase 4 design evidence release gate.
+- [Phase ?]: Runtime scenarios receive boundedInput, initialState, and schedule only; expected values remain comparator-only.
 
 ### Pending Todos
 
@@ -158,6 +160,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-04T21:02:02.594Z
-Stopped at: Completed 04-06-PLAN.md; Phase 04 awaits formal post-execution review, validation, and verification
+Last session: 2026-08-04T23:58:43.506Z
+Stopped at: Completed 04-07-PLAN.md; Phase 04 awaits formal post-execution re-verification
 Resume file: None

@@ -65,6 +65,7 @@ export class ModelReconciliationService {
 
     const observation = ModelLookupObservationSchema.parse(await this.options.gateway.lookup(toIntent(claim.action), signal));
     if (observation.status === "pending" || observation.status === "unresolved") {
+      await this.options.store.transact(action.accountId, (transaction) => transaction.releaseReconciliation(action.operationId));
       return ReconciliationResultSchema.parse({ status: "usage_unknown", code: observation.status === "pending" ? "RECONCILIATION_PENDING" : "RECONCILIATION_UNRESOLVED", accountId: action.accountId, sessionId: action.sessionId, operationId: action.operationId });
     }
     if (observation.status === "definitive_not_accepted") {

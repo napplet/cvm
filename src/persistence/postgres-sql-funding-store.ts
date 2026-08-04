@@ -203,6 +203,13 @@ class PgFundingTransaction implements MeteredFundingTransaction {
     const claimed = await this.client.query("INSERT INTO provider_reconciliations(id,account_id,action_id,operation_id,reason,state) VALUES ($1,$2,$3,$4,'usage_unknown','open') ON CONFLICT (operation_id) DO NOTHING RETURNING id", [id("reconciliation", operationId), this.accountId, parsed.actionId, operationId]);
     return frozen({ action: parsed, claimed: Boolean(claimed.rows[0]) });
   }
+  async releaseReconciliation(operationId: string): Promise<MeteredAction> {
+    const row = first(await this.client.query("SELECT a.account_id,a.idempotency_key,a.fingerprint,a.session_id,a.id,a.expected_session_version,a.admission_reference,a.budget_reference,a.reservation_sat,a.operation_id,a.profile_id,a.price_card_id,a.state,a.receipt_charge,a.provider_receipt_reference,a.terminal_result,a.session_version,a.artifact_version,a.remaining_cap_sat,a.remaining_balance_sat,o.provider_request_id FROM provider_operations o JOIN metered_actions a ON a.id=o.action_id WHERE o.id=$1 AND a.account_id=$2 FOR UPDATE", [operationId, this.accountId]), "METERED_OPERATION_NOT_FOUND");
+    const action = actionFromOperationRow(row, operationId);
+    if (action.status !== "usage_unknown") return action;
+    await this.client.query("DELETE FROM provider_reconciliations WHERE account_id=$1 AND operation_id=$2 AND state='open'", [this.accountId, operationId]);
+    return action;
+  }
   async recordUsageReceipt(input: Readonly<{ operationId: string; protectedEvidenceReference: string }>): Promise<MeteredAction> {
     const action = first(await this.client.query("SELECT a.account_id,a.idempotency_key,a.fingerprint,a.session_id,a.id,a.expected_session_version,a.admission_reference,a.budget_reference,a.reservation_sat,a.operation_id,a.profile_id,a.price_card_id,a.state,a.terminal_result,a.session_version,a.artifact_version,a.remaining_cap_sat,a.remaining_balance_sat FROM provider_operations o JOIN metered_actions a ON a.id=o.action_id WHERE o.id=$1 AND a.account_id=$2 FOR UPDATE", [input.operationId, this.accountId]), "METERED_OPERATION_NOT_FOUND"); const parsed = actionFromOperationRow(action, input.operationId); if (parsed.status !== "dispatching" && parsed.status !== "usage_unknown") throw new Error("METERED_RECEIPT_STATE_INVALID"); await this.client.query("UPDATE metered_actions SET provider_receipt_reference=$2 WHERE id=$1", [parsed.actionId, input.protectedEvidenceReference]); return frozen({ ...parsed, providerReceiptReference: input.protectedEvidenceReference });
   }

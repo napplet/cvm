@@ -3,7 +3,7 @@ import {
   DeterministicModelGateway,
   DeterministicGatewayScenarioSchema,
 } from "../../src/model/deterministic-model-gateway";
-import type { ProviderOperationIntent } from "../../src/model/model-gateway";
+import type { ModelGateway, ProviderOperationIntent } from "../../src/model/model-gateway";
 import { ModelReconciliationService } from "../../src/model/reconciliation";
 import { MeteredGenerationService } from "../../src/phase-04/metered-generation-service";
 import { FundingService } from "../../src/funding/funding-service";
@@ -110,6 +110,25 @@ async function ambiguousAction(lookup: "receipt_found" | "definitive_not_accepte
 }
 
 describe("reconciliation", () => {
+  test("retries a nonterminal original-operation lookup without redispatching", async () => {
+    const { store, action, gateway: dispatchedGateway } = await ambiguousAction("pending");
+    let lookups = 0;
+    const gateway: ModelGateway = {
+      dispatch: dispatchedGateway.dispatch.bind(dispatchedGateway),
+      async lookup(intent) {
+        lookups += 1;
+        if (lookups === 1) return { status: "pending" as const, operationId: intent.operationId, providerRequestId: `deterministic:${intent.operationId}`, provenance: { protectedEvidenceReference: "evidence:pending" } };
+        return { status: "receipt_found" as const, receipt: { operationId: intent.operationId, providerRequestId: `deterministic:${intent.operationId}`, provider: "deterministic_fixture", model: "phase-04-fixture-model", profileId: intent.profileId, priceCardId: intent.priceCardId, selection: "unselected", completedAt: "2026-08-04T00:00:01.000Z", provenance: { protectedEvidenceReference: "evidence:receipt" }, usage: [{ dimension: "input_tokens" as const, units: "1" }] } };
+      },
+    };
+    const reconciliation = new ModelReconciliationService({ store, gateway });
+    const command = { principal: reconciliationPrincipal, sessionId: action.sessionId, actionId: action.actionId, operationId: action.operationId };
+    await expect(reconciliation.reconcile(command)).resolves.toMatchObject({ status: "usage_unknown", code: "RECONCILIATION_PENDING" });
+    await expect(reconciliation.reconcile(command)).resolves.toMatchObject({ status: "failed", code: "RECONCILED_RECEIPT_FOUND" });
+    expect(lookups).toBe(2);
+    expect(dispatchedGateway.dispatchCount(action.operationId)).toBe(1);
+  });
+
   test("settles one found receipt under concurrent original-operation-only recovery", async () => {
     const { store, gateway, action } = await ambiguousAction("receipt_found");
     const reconciliation = new ModelReconciliationService({ store, gateway });

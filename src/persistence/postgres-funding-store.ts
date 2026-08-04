@@ -71,6 +71,7 @@ export class PostgresFundingStore implements MeteredFundingStore {
             claimProviderOperation: async (operationId) => this.claimProviderOperation(state, accountId, operationId),
             recordUsageUnknown: async (input) => this.recordUsageUnknown(state, accountId, input),
             claimReconciliation: async (operationId) => this.claimReconciliation(state, accountId, operationId),
+            releaseReconciliation: async (operationId) => this.releaseReconciliation(state, accountId, operationId),
             recordUsageReceipt: async (input) => this.recordUsageReceipt(state, accountId, input),
             finalizeMeteredAction: async (input) => this.finalizeMeteredAction(state, accountId, input),
           };
@@ -154,6 +155,11 @@ export class PostgresFundingStore implements MeteredFundingStore {
     const action = [...state.meteredActions.values()].find((item) => item.accountId === accountId && item.operationId === operationId); if (!action) throw new Error("METERED_OPERATION_NOT_FOUND");
     if (action.status !== "usage_unknown" || action.reconciliationClaimed) return frozen({ action, claimed: false });
     const next = frozen({ ...action, reconciliationClaimed: true }); state.meteredActions.set(key(accountId, action.idempotencyKey), next); return frozen({ action: next, claimed: true });
+  }
+  private releaseReconciliation(state: State, accountId: string, operationId: string): MeteredAction {
+    const action = [...state.meteredActions.values()].find((item) => item.accountId === accountId && item.operationId === operationId); if (!action) throw new Error("METERED_OPERATION_NOT_FOUND");
+    if (action.status !== "usage_unknown" || !action.reconciliationClaimed) return action;
+    const next = frozen({ ...action, reconciliationClaimed: false }); state.meteredActions.set(key(accountId, action.idempotencyKey), next); return next;
   }
   private recordUsageReceipt(state: State, accountId: string, input: Readonly<{ operationId: string; protectedEvidenceReference: string }>): MeteredAction {
     const action = [...state.meteredActions.values()].find((item) => item.accountId === accountId && item.operationId === input.operationId); if (!action || (action.status !== "dispatching" && action.status !== "usage_unknown")) throw new Error("METERED_RECEIPT_STATE_INVALID");

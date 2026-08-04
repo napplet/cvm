@@ -54,6 +54,8 @@ export interface MeteredFundingTransaction extends FundingTransaction {
   recordUsageUnknown(input: UsageUnknownInput): Promise<MeteredAction>;
   /** Claims the single lookup-only recovery attempt for an ambiguous original operation. */
   claimReconciliation(operationId: string): Promise<ReconciliationClaim>;
+  /** Releases a nonterminal lookup claim so a later call can retry the original operation. */
+  releaseReconciliation(operationId: string): Promise<MeteredAction>;
   recordUsageReceipt(input: Readonly<{ operationId: string; protectedEvidenceReference: string }>): Promise<MeteredAction>;
   finalizeMeteredAction(input: MeteredFinalizeInput): Promise<MeteredAction>;
 }
@@ -268,6 +270,14 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore {
           const next = freeze({ ...found, reconciliationClaimed: true });
           state.meteredActions.set(commandKey(accountId, found.idempotencyKey), next);
           return freeze({ action: next, claimed: true });
+        },
+        releaseReconciliation: async (operationId) => {
+          const found = [...state.meteredActions.values()].find((action) => action.accountId === accountId && action.operationId === operationId);
+          if (!found) throw new Error("METERED_OPERATION_NOT_FOUND");
+          if (found.status !== "usage_unknown" || !found.reconciliationClaimed) return found;
+          const next = freeze({ ...found, reconciliationClaimed: false });
+          state.meteredActions.set(commandKey(accountId, found.idempotencyKey), next);
+          return next;
         },
         recordUsageReceipt: async (input) => {
           const found = [...state.meteredActions.values()].find((action) => action.accountId === accountId && action.operationId === input.operationId);

@@ -92,7 +92,12 @@ export class CashuTopUpCoordinator {
   async reconcile(topUpId: string): Promise<CashuTopUpResult> {
     const record = await this.options.repository.find(topUpId); if (!record) throw asError("CASHU_TOP_UP_UNKNOWN");
     if (record.result.state !== "reconciliation_pending") return record.result;
-    const request = (signal: AbortSignal): CashuObserveRequest => ({ topUpId, policy: record.policy, commitment: record.result.commitment, amount: record.amount, signal });
+    let token: Uint8Array | undefined;
+    if (this.options.vault.open) {
+      try { token = await this.options.vault.open({ id: record.protectedId, accountId: record.accountId, topUpId, rail: "cashu" }); }
+      catch { token = undefined; }
+    }
+    const request = (signal: AbortSignal): CashuObserveRequest => ({ topUpId, policy: record.policy, commitment: record.result.commitment, amount: record.amount, ...(token ? { token } : {}), signal });
     // Reconciliation is query-only.  Bearer material is deliberately not supplied
     // to a provider observation because it could be re-submitted as a swap.
     let observed: CashuSettlementObservation;

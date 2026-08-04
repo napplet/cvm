@@ -6,7 +6,7 @@ import { FakeCashuSettlementPort } from "../../src/funding/cashu-provider";
 import { CashuTsSettlementAdapter } from "../../src/funding/cashu-provider";
 import { CashuTopUpCoordinator, InMemoryCashuTopUpRepository } from "../../src/funding/cashu-top-up";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
-import { getEncodedToken } from "@cashu/cashu-ts";
+import { getEncodedToken, type RequestFn } from "@cashu/cashu-ts";
 
 const principal = { pubkey: "a".repeat(64) };
 const token = new TextEncoder().encode("cashuB-safe-fixture-token");
@@ -44,6 +44,11 @@ function validSubmit(topUpId = "cashu-top-up-1") {
 const adapterToken = new TextEncoder().encode(getEncodedToken({
   mint: "https://mint-a.example", unit: "sat",
   proofs: [{ amount: 21n, id: "009a1b2c3d4e5f60", secret: "adapter-secret", C: `02${"11".repeat(32)}`, dleq: { e: "11".repeat(32), s: "22".repeat(32), r: "33".repeat(32) } }],
+}));
+const defaultAdapterKeysetId = "01b318594eee08c75392d79ea6d2429df1e882991128bc12c55966ac34407b5044";
+const adapterTokenWithoutDleq = new TextEncoder().encode(getEncodedToken({
+  mint: "https://mint-b.example", unit: "sat",
+  proofs: [{ amount: 21n, id: defaultAdapterKeysetId, secret: "default-adapter-secret", C: `02${"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"}` }],
 }));
 
 describe("Cashu policy", () => {
@@ -189,9 +194,9 @@ describe("Cashu credit and treasury", () => {
     const store = new TransactionalMemoryFundingStore();
     const coordinator = new CashuTopUpCoordinator({
       policies, vault,
-      provider: new CashuTsSettlementAdapter({ operations, now: () => "2026-08-04T12:00:00.000Z" } as never),
+      provider: new CashuTsSettlementAdapter({ operations, now: () => "2026-08-04T12:00:00.000Z" }),
       funding: new FundingService(store), repository: new InMemoryCashuTopUpRepository(), providerTimeoutMs: 5,
-    } as never);
+    });
     const command = { ...validSubmit("adapter-timeout"), token: adapterToken };
     const nativeFetch = globalThis.fetch;
     globalThis.fetch = (async () => new Promise<never>(() => undefined)) as typeof fetch;
@@ -205,6 +210,38 @@ describe("Cashu credit and treasury", () => {
     } finally {
       globalThis.fetch = nativeFetch;
     }
+  });
+
+  test("cashu-ts default Wallet binds the operation AbortSignal to load, swap, and proof-state requests", async () => {
+    const generator = `02${"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"}`;
+    const adapterPolicy = { ...firstPolicy, mints: firstPolicy.mints.map((mint) => mint.url === "https://mint-b.example" ? { ...mint, keysetIds: [defaultAdapterKeysetId] } : mint) };
+    const seen: { endpoint: string; signal?: AbortSignal }[] = [];
+    const request: RequestFn = async (input) => {
+      seen.push({ endpoint: input.endpoint, signal: input.signal });
+      if (input.endpoint.endsWith("/v1/info")) return { name: "test", version: "Nutshell/0.0", nuts: {} } as never;
+      if (input.endpoint.endsWith("/v1/keysets")) return { keysets: [{ id: defaultAdapterKeysetId, unit: "sat", active: true, input_fee_ppk: 0 }] } as never;
+      if (input.endpoint.endsWith("/v1/keys") || input.endpoint.includes("/v1/keys/")) return { keysets: [{ id: defaultAdapterKeysetId, unit: "sat", keys: Object.fromEntries([1, 2, 4, 8, 16, 32].map((amount) => [String(amount), generator])) }] } as never;
+      if (input.endpoint.endsWith("/v1/checkstate")) {
+        const ys = (input.requestBody as { Ys: string[] }).Ys;
+        return { states: ys.map((Y) => ({ Y, state: "SPENT", witness: null })) } as never;
+      }
+      if (input.endpoint.endsWith("/v1/swap")) {
+        return new Promise<never>((_, reject) => input.signal!.addEventListener("abort", () => reject(new Error("ABORTED_SWAP_REQUEST")), { once: true }));
+      }
+      throw new Error(`UNEXPECTED_CASHU_ENDPOINT:${input.endpoint}`);
+    };
+    const adapter = new CashuTsSettlementAdapter({ request, now: () => "2026-08-04T12:00:00.000Z" });
+    const commitment = [...new Uint8Array(await crypto.subtle.digest("SHA-256", adapterTokenWithoutDleq))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    const abort = new AbortController();
+    const settling = adapter.settle({ topUpId: "default-adapter", policy: adapterPolicy, amount: "21", commitment, token: adapterTokenWithoutDleq, signal: abort.signal });
+    setTimeout(() => abort.abort(), 5);
+
+    expect(await settling).toEqual({ status: "unknown", operationReference: `cashu:${commitment}` });
+    expect(seen.some(({ endpoint }) => endpoint.endsWith("/v1/swap"))).toBeTrue();
+    expect(seen.every(({ signal }) => signal === abort.signal)).toBeTrue();
+    const observeAbort = new AbortController();
+    expect(await adapter.observe({ topUpId: "default-adapter", policy: adapterPolicy, amount: "21", commitment, token: adapterTokenWithoutDleq, signal: observeAbort.signal })).toMatchObject({ status: "verified", settlementReference: `cashu-swap:default-adapter:${commitment}` });
+    expect(seen.find(({ endpoint }) => endpoint.endsWith("/v1/checkstate"))?.signal).toBe(observeAbort.signal);
   });
 
   test("unknown reconciliation remains pending and treasury movement never recredits", async () => {

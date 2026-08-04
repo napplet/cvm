@@ -159,14 +159,21 @@ export class FundedAdmissionService {
   }
 
   private async compensateReservation(accountId: string, intentReference: string, reference: string): Promise<FundedAdmissionOutcome> {
+    // Fence retries durably before releasing externally. If release succeeds but
+    // finalization cannot commit, a fresh service observes this ambiguity rather
+    // than trusting the stale prior `available` observation.
+    await this.options.store.transact(accountId, (transaction) => transaction.recordCapacityObservation({ intentReference, state: "reconciliation_pending", capacityReference: reference }));
     let released = false;
     try { await this.bounded(this.options.capacity.release({ intentReference, reference })); released = true; }
     catch { released = false; }
     if (released) {
-      await this.options.store.transact(accountId, (transaction) => transaction.releaseCapacityIntent(intentReference));
-      return freeze({ status: "refused" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
+      try {
+        await this.options.store.transact(accountId, (transaction) => transaction.releaseCapacityIntent(intentReference));
+        return freeze({ status: "refused" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
+      } catch {
+        return freeze({ status: "reconciliation_pending" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
+      }
     }
-    await this.options.store.transact(accountId, (transaction) => transaction.recordCapacityObservation({ intentReference, state: "reconciliation_pending", capacityReference: reference }));
     return freeze({ status: "reconciliation_pending" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
   }
 

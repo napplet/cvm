@@ -1,4 +1,3 @@
-import { ModalClient, type App, type Image, type Sandbox, type SandboxCreateParams } from "modal";
 import { z } from "zod";
 import {
   WorkerEventSchema,
@@ -125,21 +124,28 @@ function parseEvents(stdout: string): WorkerEvent[] {
   return lines.map((line) => WorkerEventSchema.parse(JSON.parse(line)));
 }
 
-function productionModalSdk(): ModalSdkPort {
+async function productionModalSdk(): Promise<ModalSdkPort> {
+  const { ModalClient } = await import("modal");
   const client = new ModalClient();
   return {
     apps: { fromName: (name, options) => client.apps.fromName(name, options) },
     images: { fromRegistry: (image) => client.images.fromRegistry(image) },
     sandboxes: {
       async create(app, image, options) {
-        const sandbox = await client.sandboxes.create(app as App, image as Image, options as SandboxCreateParams);
+        const sandbox = await client.sandboxes.create(app as never, image as never, options as never);
         return sandboxPort(sandbox);
       },
     },
   };
 }
 
-function sandboxPort(sandbox: Sandbox): ModalSandboxPort {
+function sandboxPort(sandbox: {
+  sandboxId: string;
+  exec(command: string[], options: { timeoutMs: number }): Promise<ModalProcessPort>;
+  poll(): Promise<unknown>;
+  terminate(): Promise<void>;
+  filesystem: ModalSandboxPort["filesystem"];
+}): ModalSandboxPort {
   return {
     id: sandbox.sandboxId,
     exec: async (argv, options) => sandbox.exec([...argv], options),
@@ -158,7 +164,7 @@ export class ModalWorkerAdapter implements WorkerPort {
   readonly #config: ModalWorkerConfig;
   readonly #sdk: ModalSdkPort;
 
-  constructor(config: unknown, sdk: ModalSdkPort = productionModalSdk()) {
+  constructor(config: unknown, sdk: ModalSdkPort) {
     this.#config = ModalWorkerConfigSchema.parse(config);
     this.#sdk = sdk;
   }
@@ -194,6 +200,7 @@ export class ModalWorkerAdapter implements WorkerPort {
   }
 }
 
-export function createModalWorkerAdapter(config: unknown): ModalWorkerAdapter {
-  return new ModalWorkerAdapter(config, productionModalSdk());
+export async function createModalWorkerAdapter(config: unknown): Promise<ModalWorkerAdapter> {
+  const parsed = ModalWorkerConfigSchema.parse(config);
+  return new ModalWorkerAdapter(parsed, await productionModalSdk());
 }

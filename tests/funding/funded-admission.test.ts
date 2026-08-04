@@ -3,6 +3,7 @@ import { FundedAdmissionService } from "../../src/funding/funded-admission";
 import { AccountStatusService } from "../../src/funding/account-status";
 import { FundingService } from "../../src/funding/funding-service";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
+import type { FundingStore, FundingTransaction } from "../../src/persistence/funding-store";
 import { createFundedCore } from "../../src/phase-03/funded-core";
 import cashuFixture from "../fixtures/cashu-phase-03.json";
 import { CashuMintPolicyRegistry } from "../../src/funding/cashu-mint-policy";
@@ -17,6 +18,18 @@ const settlement = {
 
 function creditCommand() {
   return { principal, kind: "credit_settlement" as const, idempotencyKey: "credit-funded-admission", policyVersion: "p1", protocolVersion: "v1", payload: { settlement } };
+}
+
+class FailOnceFundingStore implements FundingStore {
+  transactions = 0;
+  constructor(readonly inner: FundingStore, private readonly failOn: number) {}
+  findRecordedResult(accountId: string, idempotencyKey: string) { return this.inner.findRecordedResult(accountId, idempotencyKey); }
+  status(accountId: string) { return this.inner.status(accountId); }
+  async transact<T>(accountId: string, operation: (transaction: FundingTransaction) => Promise<T> | T): Promise<T> {
+    this.transactions += 1;
+    if (this.transactions === this.failOn) throw new Error("INJECTED_POST_RESERVATION_PERSISTENCE_FAILURE");
+    return this.inner.transact(accountId, operation);
+  }
 }
 
 describe("FundedAdmissionService", () => {
@@ -169,5 +182,44 @@ describe("FundedAdmissionService", () => {
     ]);
     expect(observed).toMatchObject({ status: "reconciliation_pending" });
     expect(store.activeHolds).toHaveLength(0);
+  });
+
+  test("compensates capacity when observation or cap-hold persistence fails after reservation", async () => {
+    for (const failOn of [3, 4]) {
+      const inner = new TransactionalMemoryFundingStore();
+      await new FundingService(inner).execute({ ...creditCommand(), idempotencyKey: `credit-compensation:${failOn}`, payload: { settlement: { ...settlement, topUpId: `topup-compensation:${failOn}`, externalReference: `external-compensation:${failOn}`, settlementReference: `settlement-compensation:${failOn}` } } });
+      const store = new FailOnceFundingStore(inner, failOn);
+      let reserves = 0; let releases = 0;
+      const capacity = {
+        reserveNow: async () => { reserves += 1; return { status: "available" as const, reference: `capacity:compensation:${failOn}`, expiresAt: "2026-08-05T00:00:00.000Z" }; },
+        observe: async () => ({ status: "unknown" as const }),
+        release: async () => { releases += 1; },
+      };
+      const admission = new FundedAdmissionService({ funding: new FundingService(store), store, capacity, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
+      const command = { principal, idempotencyKey: `compensation:${failOn}`, policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "20", unit: "sat" as const } };
+      expect(await admission.admit(command)).toMatchObject({ status: "refused" });
+      expect(await admission.admit(command)).toMatchObject({ status: "refused" });
+      expect(reserves).toBe(1);
+      expect(releases).toBe(1);
+      expect(inner.activeHolds).toHaveLength(0);
+    }
+  });
+
+  test("retains durable ambiguity when post-reservation compensation cannot confirm release", async () => {
+    const inner = new TransactionalMemoryFundingStore();
+    await new FundingService(inner).execute({ ...creditCommand(), idempotencyKey: "credit-release-ambiguous", payload: { settlement: { ...settlement, topUpId: "topup-release-ambiguous", externalReference: "external-release-ambiguous", settlementReference: "settlement-release-ambiguous" } } });
+    const store = new FailOnceFundingStore(inner, 4);
+    let reserves = 0; let releases = 0; let observations = 0;
+    const capacity = {
+      reserveNow: async () => { reserves += 1; return { status: "available" as const, reference: "capacity:release-ambiguous", expiresAt: "2026-08-05T00:00:00.000Z" }; },
+      observe: async () => { observations += 1; return { status: "unknown" as const, reference: "capacity:release-ambiguous" }; },
+      release: async () => { releases += 1; throw new Error("CAPACITY_RELEASE_UNKNOWN"); },
+    };
+    const admission = new FundedAdmissionService({ funding: new FundingService(store), store, capacity, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
+    const command = { principal, idempotencyKey: "release-ambiguous", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "20", unit: "sat" as const } };
+    expect(await admission.admit(command)).toMatchObject({ status: "reconciliation_pending" });
+    expect(await admission.admit(command)).toMatchObject({ status: "reconciliation_pending" });
+    expect({ reserves, releases, observations }).toEqual({ reserves: 1, releases: 1, observations: 1 });
+    expect(inner.activeHolds).toHaveLength(0);
   });
 });

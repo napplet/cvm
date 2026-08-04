@@ -78,6 +78,29 @@ describe("Lightning top-up initiation and protected material", () => {
     expect(receiver.createCalls).toBe(1);
     expect(receiver.queryCalls).toBe(1);
   });
+
+  test("bounds receiver calls and durably reconciles without blind invoice reissue", async () => {
+    let creates = 0; let queries = 0;
+    const never = () => new Promise<never>(() => undefined);
+    const receiver = {
+      createInvoice: async () => { creates += 1; return never(); },
+      queryInvoice: async () => { queries += 1; return never(); },
+    };
+    const fundingStore = new TransactionalMemoryFundingStore();
+    const topUps = new InMemoryLightningTopUpRepository();
+    const coordinator = new LightningTopUpCoordinator({
+      funding: new FundingService(fundingStore), receiver, repository: topUps,
+      vault: new ProtectedRailMaterialVault({ key, repository: new InMemoryProtectedRailMaterialRepository() }),
+      providerTimeoutMs: 5,
+    });
+
+    const first = await Promise.race([coordinator.begin(request("bounded-lightning")), Bun.sleep(50).then(() => ({ status: "unbounded" as const }))]);
+    expect(first).toMatchObject({ status: "reconciliation_pending", state: "reconciliation_pending" });
+    const replay = await Promise.race([coordinator.begin(request("bounded-lightning")), Bun.sleep(50).then(() => ({ status: "unbounded" as const }))]);
+    expect(replay).toMatchObject({ status: "reconciliation_pending", state: "reconciliation_pending" });
+    expect(creates).toBe(1);
+    expect(queries).toBe(1);
+  });
 });
 
 describe("Lightning settlement receipt matrix", () => {

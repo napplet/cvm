@@ -184,4 +184,13 @@ describe("Phase 03 deterministic reference set", () => {
     const source = readFileSync("tests/evals/phase-03-reference-set.test.ts", "utf8");
     expect(source).not.toContain("Bun." + "spawnSync"); expect(source).not.toContain("execution" + "Files");
   });
+
+  test("rejects fixture evidence mutations instead of copying them into actual observations", async () => {
+    const original = referenceSet.cases.find((item) => item.input === "relay-replay")!;
+    const mutated = structuredClone(original) as Reference & { expected: Expected };
+    mutated.expected = { ...mutated.expected, evidence: ["fixture-controlled-evidence"] };
+    const actual = await oracles[mutated.input]!(mutated);
+    expect(actual.evidence).not.toEqual(mutated.expected.evidence);
+    expect(actual).not.toEqual(mutated.expected);
+  });
 });

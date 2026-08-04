@@ -142,6 +142,27 @@ describe("Cashu credit and treasury", () => {
     expect(store.postings).toHaveLength(1);
   });
 
+  test("bounds swap and observation calls while retaining one durable reconciliation intent", async () => {
+    let settles = 0; let observations = 0;
+    const never = () => new Promise<never>(() => undefined);
+    const provider = {
+      settle: async () => { settles += 1; return never(); },
+      observe: async () => { observations += 1; return never(); },
+      reconcileTreasury: async () => never(),
+    };
+    const { policies, vault, store, funding, repository } = harness();
+    const coordinator = new CashuTopUpCoordinator({ policies, provider, vault, funding, repository, providerTimeoutMs: 5 });
+
+    const pending = await Promise.race([coordinator.submit(validSubmit("bounded-cashu")), Bun.sleep(50).then(() => ({ state: "unbounded" as const }))]);
+    expect(pending).toMatchObject({ state: "reconciliation_pending" });
+    expect(await coordinator.submit(validSubmit("bounded-cashu"))).toMatchObject({ state: "reconciliation_pending" });
+    const reconciled = await Promise.race([coordinator.reconcile("bounded-cashu"), Bun.sleep(50).then(() => ({ state: "unbounded" as const }))]);
+    expect(reconciled).toMatchObject({ state: "reconciliation_pending" });
+    expect(settles).toBe(1);
+    expect(observations).toBe(1);
+    expect(store.postings).toHaveLength(0);
+  });
+
   test("unknown reconciliation remains pending and treasury movement never recredits", async () => {
     const { coordinator, provider, store } = harness();
     provider.nextSettlement({ status: "verified", externalReference: "mint-op-treasury", settlementReference: "mint-settlement-treasury", verifiedAt: "2026-08-04T12:00:00.000Z" });

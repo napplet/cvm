@@ -120,6 +120,25 @@ describe("minimal fixture", () => {
     expect(result.reason).toBe("offline template unavailable");
   });
 
+  test("retains the final failed native stage as structured blocked evidence", async () => {
+    const output = runnerOutput(["create"], "blocked");
+    output.stages[0]!.exitCode = 1;
+    output.reason = "create exited 1";
+    const result = await runFixture("minimal", {
+      imageDigest: "a".repeat(64),
+      runSealed: async (request) => ({
+        id: request.id, argv: ["docker", ...request.args], cwd: request.inputDirectory,
+        cwdSha256: "b".repeat(64), toolchainId: request.toolchainId, imageDigest: request.imageDigest,
+        startedAtMs: 1, finishedAtMs: 2, exitCode: 0, stdout: JSON.stringify(output), stderr: "",
+        stdoutSha256: "c".repeat(64), stderrSha256: "d".repeat(64), disposition: "passed", evidenceSha256: "e".repeat(64),
+      }),
+    });
+
+    expect(result.status).toBe("blocked");
+    expect(result.stages).toEqual([expect.objectContaining({ id: "create", exitCode: 1 })]);
+    expect(result.reason).toBe("create exited 1");
+  });
+
   test.each([
     ["missing", ["create", "init", "skills", "overlay", "install", "build", "verify", "conformance"]],
     ["empty", []],

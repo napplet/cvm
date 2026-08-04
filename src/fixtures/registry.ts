@@ -96,6 +96,23 @@ function parseStage(value: unknown, expected: FixtureStage): FixtureStageResult 
   return stage as unknown as FixtureStageResult;
 }
 
+function parseBlockedStages(value: readonly unknown[], expected: readonly FixtureStage[]): FixtureStageResult[] {
+  const stageIds = value.map((stage) => typeof stage === "object" && stage !== null ? (stage as Record<string, unknown>).id : undefined);
+  if (stageIds.some((id, index) => id !== expected[index])) throw new Error("blocked fixture runner stages are reordered");
+  return value.map((stage, index) => {
+    const parsed = stage as Record<string, unknown>;
+    const expectedStage = expected[index]!;
+    if (index < value.length - 1) return parseStage(parsed, expectedStage);
+    if (parsed.id !== expectedStage || !Array.isArray(parsed.argv) || !parsed.argv.every((item) => typeof item === "string") || !Number.isInteger(parsed.exitCode) || parsed.exitCode === 0) {
+      throw new Error(`blocked fixture ${expectedStage} stage evidence must be the final failed stage`);
+    }
+    requireDigest(parsed.stdoutSha256, `${expectedStage} stdout`);
+    requireDigest(parsed.stderrSha256, `${expectedStage} stderr`);
+    requireDigest(parsed.nativeOutputSha256, `${expectedStage} native output`);
+    return parsed as unknown as FixtureStageResult;
+  });
+}
+
 function requireStringArray(value: unknown, label: string): asserts value is string[] {
   if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) throw new Error(`${label} must be a string array`);
 }
@@ -111,8 +128,9 @@ function parseRunnerOutput(value: unknown, definition: FixtureDefinition, mode: 
   if (!Array.isArray(result.stages)) throw new Error("fixture runner stages must be an array");
   const stageIds = result.stages.map((stage) => typeof stage === "object" && stage !== null ? (stage as Record<string, unknown>).id : undefined);
   if (result.status === "passed") requireExactStages(stageIds, definition.stages);
-  if (result.status === "blocked" && stageIds.some((id, index) => id !== definition.stages[index])) throw new Error("blocked fixture runner stages are reordered");
-  const stages = result.stages.map((stage, index) => parseStage(stage, definition.stages[index]!));
+  const stages = result.status === "passed"
+    ? result.stages.map((stage, index) => parseStage(stage, definition.stages[index]!))
+    : parseBlockedStages(result.stages, definition.stages);
   requireDigest(result.installedSkillsSha256, "installed skills");
   requireDigest(result.distSha256, "dist tree");
   requireDigest(result.aggregateHash, "upstream aggregate hash");
@@ -152,9 +170,10 @@ function parseRunnerOutput(value: unknown, definition: FixtureDefinition, mode: 
     optionalIntentPresenceRead: result.optionalIntentPresenceRead,
     intentUsedThroughSdk: result.intentUsedThroughSdk,
     gracefulDegradation: result.gracefulDegradation,
-    ...(typeof result.reason === "string" ? { reason: result.reason } : {}),
+    ...(typeof result.reason === "string" && result.reason.length > 0 ? { reason: result.reason } : {}),
   };
   if (parsed.status === "passed" && parsed.reason) throw new Error("a passing fixture result cannot carry a blocking reason");
+  if (parsed.status === "blocked" && !parsed.reason) throw new Error("a blocked fixture result requires a structured reason");
   return parsed;
 }
 

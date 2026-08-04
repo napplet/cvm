@@ -8,14 +8,14 @@ const action = (overrides: Partial<SessionAction> = {}): SessionAction => ({
   policyVersion: "phase-02-policy-2026-08-04", payload: { idea: "a focused napplet" }, ...overrides,
 });
 
-function service(): { service: SessionService; store: TransactionalMemorySessionStore } {
+function createService(): { service: SessionService; store: TransactionalMemorySessionStore } {
   const store = new TransactionalMemorySessionStore([{ sessionId: "session-a", principalId: "principal-a", version: 0 }]);
   return { service: new SessionService(store), store };
 }
 
 describe("SessionService", () => {
   test("returns recoverable ACTION_INTERRUPTED before evaluation without committing state", async () => {
-    const { service, store } = service();
+    const { service, store } = createService();
     const controller = new AbortController();
     controller.abort();
 
@@ -25,7 +25,7 @@ describe("SessionService", () => {
   });
 
   test("recovers an ambiguous response loss through exact durable replay", async () => {
-    const { service, store } = service();
+    const { service, store } = createService();
     const committed = await service.apply(action());
     const replay = await service.apply(action());
 
@@ -35,7 +35,7 @@ describe("SessionService", () => {
   });
 
   test("exposes only a stable stale code and current version without automatic mutation retry", async () => {
-    const { service, store } = service();
+    const { service, store } = createService();
     await service.apply(action());
     const stale = await service.apply(action({ idempotencyKey: "new-key", expectedVersion: 0 }));
 
@@ -44,11 +44,11 @@ describe("SessionService", () => {
   });
 
   test("converges exact duplicate callers and admits only one competing next state", async () => {
-    const exact = service();
+    const exact = createService();
     const [first, second] = await Promise.all([exact.service.apply(action()), exact.service.apply(action())]);
     expect(first).toEqual(second);
 
-    const competing = service();
+    const competing = createService();
     const [left, right] = await Promise.all([
       competing.service.apply(action({ idempotencyKey: "left" })),
       competing.service.apply(action({ idempotencyKey: "right" })),

@@ -10,6 +10,26 @@ The generation core is transport-neutral. ContextVM over Nostr is the only exter
 
 A user can describe one focused applet and receive a safe, conformant napplet that can be previewed and placed directly into a compatible napplet runtime.
 
+## Active Milestone
+
+**ID:** v1.0
+
+**Name:** Safe Napplet Generation MVP
+
+**Goal:** A funded ContextVM user can submit a bounded idea and receive a safe, conformant, resumable, user-owned napplet that can be previewed and placed into a compatible napplet runtime.
+
+**Scope:** The existing roadmap Phases 1–7: napplet contract verification; trusted-core and worker isolation; ContextVM/CEP-8 funding; exact-usage generation and revision; funding interruption and durable resume; sealed preview and user-owned publication; and measured launch resilience/safety.
+
+**Exclusions:** Existing v1 exclusions remain unchanged: arbitrary/full-stack applications and generated backends; rich or existing-code inputs; direct browser/network/storage/signer/relay authority; CVM custody of user private keys; automatic publication; durable request queues; automatic resume after the ten-minute live window; indefinite checkpoint retention; and public x402/L402 interfaces. Deferred v2 requirements are not part of v1.0.
+
+**Completion outcome:** v1.0 is complete when the existing v1 requirements demonstrate, end to end, that:
+
+- A Nostr-identified user can discover the service through ContextVM, fund a prepaid account through CEP-8 using Lightning or Cashu, approve a spend cap, and be charged exactly once for measured API usage.
+- One bounded text idea starts isolated work immediately or receives a retryable capacity response; the agent can produce only a focused napplet through the promoted napplet toolchain and every previewable artifact passes the required safety and conformance gates.
+- Generation and revision state is serialized, recoverable after insufficient funds, resumable through the ten-minute live window and 30-day durable checkpoint contract, and never silently restarted by a later deposit.
+- The user previews the exact verified artifact, retains sole signing authority over the owning manifest, and explicitly publishes sealed bytes through `@napplet/cli` with a separate CVM build attestation.
+- Integrated load and failure evidence supports the five-second p95 admission claim and shows no duplicate charge, session mutation, settlement credit, publication, or loss of committed checkpoint/artifact/evidence state; all Phase 1 launch-hardening deferrals are closed in Phase 7.
+
 ## Business Context
 
 - **Customer**: Nostr users and napplet-runtime users who want to create focused applets without manually building them

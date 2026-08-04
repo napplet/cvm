@@ -1,18 +1,18 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-milestone_name: milestone
+milestone_name: Safe Napplet Generation MVP
 current_phase: 2
 current_phase_name: Trusted Core & Isolated Agent Execution
 status: planning
-stopped_at: Completed 01-06-PLAN.md
-last_updated: "2026-08-04T09:11:01.695Z"
+stopped_at: Phase 2 plan revision 2 present on disk; independent plan recheck pending
+last_updated: "2026-08-04T10:25:30.000Z"
 last_activity: 2026-08-04
-last_activity_desc: Phase 1 complete, transitioned to Phase 2
+last_activity_desc: Repaired v1.0 milestone hierarchy; Phase 2 remains in planning at plan recheck
 progress:
-  total_phases: 1
+  total_phases: 7
   completed_phases: 1
-  total_plans: 6
+  total_plans: 12
   completed_plans: 6
 ---
 
@@ -20,19 +20,29 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-08-03)
+See: .planning/PROJECT.md (updated 2026-08-04)
 
 **Core value:** A user can describe one focused applet and receive a safe, conformant napplet that can be previewed and placed directly into a compatible napplet runtime.
-**Current focus:** Phase 01 — Napplet Contract & Artifact Verification
+**Active milestone:** v1.0 — Safe Napplet Generation MVP
+**Current focus:** Phase 02 — Trusted Core & Isolated Agent Execution
 
 ## Current Position
 
 Phase: 2 — Trusted Core & Isolated Agent Execution
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-08-04 — Phase 1 complete, transitioned to Phase 2
+Plan: 6 plans drafted, 0 executed; revision 2 is on disk and awaits independent plan recheck
+Status: Planning
+Last activity: 2026-08-04 — v1.0 hierarchy repaired without changing Phase 2 execution state
 
-Progress: [██████████] 100%
+Progress: [█░░░░░░░░░] 14% of milestone phases complete; Phase 2 execution 0/6
+
+## Milestone Progress
+
+**v1.0 — Safe Napplet Generation MVP**
+
+- Phases: 1 complete, Phase 2 active in planning, Phases 3–7 remaining.
+- Plans: 6/12 known plans executed; Phase 1 accounts for all completed plans.
+- Requirements: 54/54 v1 requirements assigned; 6 complete, 48 pending.
+- Next checkpoint: rerun the Phase 2 plan checker against the six revised on-disk plans before execution.
 
 ## Performance Metrics
 
@@ -90,7 +100,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-None yet.
+- Rerun the independent Phase 2 plan checker; do not execute until the revised single-authority `WorkerPort` wiring passes.
 
 ### Blockers/Concerns
 
@@ -109,5 +119,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-08-03T20:44:39.095Z
-Stopped at: Completed 01-06-PLAN.md
+Stopped at: Phase 2 plan revision 2 present on disk; independent plan recheck pending
 Resume file: None

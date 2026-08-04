@@ -2,6 +2,9 @@
 
 **Defined:** 2026-08-03
 **Core Value:** A user can describe one focused applet and receive a safe, conformant napplet that can be previewed and placed directly into a compatible napplet runtime.
+**Owning Milestone:** v1.0 — Safe Napplet Generation MVP
+
+Every requirement under `v1 Requirements` is owned by milestone v1.0 and retains exactly one existing Phase 1–7 assignment. The `v2 Requirements` section remains deferred and is not part of v1.0 completion.
 
 ## v1 Requirements
 
@@ -132,7 +135,17 @@ Explicitly excluded to prevent scope creep.
 
 ## Traceability
 
-Which phases cover which requirements. Populated during roadmap creation.
+Milestone v1.0 owns every row in this table. Existing requirement IDs and phase assignments are authoritative and unchanged.
+
+| Phase | v1.0 requirement groups | Count | Current status |
+|-------|--------------------------|------:|----------------|
+| Phase 1 | GEN-01–GEN-04, SAFE-05–SAFE-06 | 6 | Complete |
+| Phase 2 | SESS-05, SAFE-01–SAFE-04 | 5 | Pending — planning/recheck |
+| Phase 3 | CTX-01–CTX-04, PAY-01–PAY-07, BILL-01–BILL-02, BILL-06 | 14 | Pending |
+| Phase 4 | BILL-03–BILL-05, SESS-01, SESS-03–SESS-04, GEN-05–GEN-06 | 8 | Pending |
+| Phase 5 | CONT-01–CONT-07 | 7 | Pending |
+| Phase 6 | PREV-01–PREV-04, PUB-01–PUB-05 | 9 | Pending |
+| Phase 7 | SESS-02, OPS-01–OPS-04 | 5 | Pending |
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
@@ -194,9 +207,12 @@ Which phases cover which requirements. Populated during roadmap creation.
 **Coverage:**
 
 - v1 requirements: 54 total
+- Owned by milestone v1.0: 54
 - Mapped to phases: 54
 - Unmapped: 0 ✓
+- Complete: 6
+- Pending: 48
 
 ---
 *Requirements defined: 2026-08-03*
-*Last updated: 2026-08-03 after initial definition*
+*Last updated: 2026-08-04 for v1.0 milestone hierarchy repair; requirement IDs and phase assignments unchanged*

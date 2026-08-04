@@ -4,6 +4,26 @@
 
 napplet-cvm moves from proving the permanent napplet contract to a safe, prepaid creation loop: a user funds a Nostr-linked account, starts and revises a constrained agent session, previews the exact verified artifact, and explicitly publishes a user-owned manifest with CVM provenance. Phases follow the trust and state dependencies that make that loop credible: the artifact boundary and worker containment precede money; durable authorization and metering precede continuation; sealed preview precedes publication; and the five-second start promise is accepted only after it is measured under integrated production conditions.
 
+## Active Milestone: v1.0 — Safe Napplet Generation MVP
+
+**Goal:** A funded ContextVM user can submit a bounded idea and receive a safe, conformant, resumable, user-owned napplet that can be previewed and placed into a compatible napplet runtime.
+
+**Scope:** All existing Phases 1–7 below. The milestone adds no phases or product scope; it is the parent outcome those phases already implement.
+
+### Milestone Traceability
+
+| Phase | How it advances v1.0 | Requirement ownership | Planning and verification artifacts |
+|-------|----------------------|-----------------------|-------------------------------------|
+| 1. Napplet Contract & Artifact Verification | Establishes the permanent conformant-napplet boundary and representative fail-closed evidence consumed by every later artifact path. | GEN-01–GEN-04, SAFE-05–SAFE-06 | `.planning/phases/01-napplet-contract-artifact-verification/` — context, discussion log, research, patterns, 6 plans, 6 summaries, blocker record, coverage, validation, review/fix, security audit, verification, and deferred-items record. |
+| 2. Trusted Core & Isolated Agent Execution | Establishes bounded admission, serialized durable session authority, typed worker capabilities, isolation, checkpoint shape, and provider-separated evidence. | SESS-05, SAFE-01–SAFE-04 | `.planning/phases/02-trusted-core-isolated-agent-execution/` — context, research, AI spec, validation, coverage, source audit, and 6 plans; plan recheck pending, no execution summaries yet. |
+| 3. ContextVM Funding & Funded Admission | Connects signed ContextVM identity and CEP-8 Lightning/Cashu settlement to one idempotent prepaid account and capped funded admission. | CTX-01–CTX-04, PAY-01–PAY-07, BILL-01–BILL-02, BILL-06 | Phase directory and phase artifacts not yet created. |
+| 4. Metered Generation & Revision Loop | Turns approved funds into exact-usage, serialized napplet creation, revision, repair, progress, and diagnostic actions. | BILL-03–BILL-05, SESS-01, SESS-03–SESS-04, GEN-05–GEN-06 | Phase directory and phase artifacts not yet created. |
+| 5. Funding Interruption & Durable Resume | Preserves paid work across insufficient funds, the ten-minute live-worker window, explicit resume, and 30-day checkpoint retention. | CONT-01–CONT-07 | Phase directory and phase artifacts not yet created. |
+| 6. Sealed Preview & User-Owned Publication | Lets the user preview the exact verified artifact, retain signing custody, and explicitly deploy a manifest plus CVM attestation. | PREV-01–PREV-04, PUB-01–PUB-05 | Phase directory and phase artifacts not yet created. |
+| 7. Admission SLO, Resilience & Launch Safety | Measures immediate-or-rejected admission, proves integrated failure safety, and closes the launch-hardening work deferred from Phase 1. | SESS-02, OPS-01–OPS-04 | Phase directory and phase artifacts not yet created. |
+
+The phase-to-requirement assignments in this table are identical to `REQUIREMENTS.md` and the phase detail sections below. Existing paths are canonical; future phase artifacts are added to their numbered phase directories without moving or regenerating prior work.
+
 ## Phases
 
 **Phase Numbering:**
@@ -82,7 +102,26 @@ Plans:
   5. Simultaneous or duplicate session actions leave the user with one durable valid next state and artifact version, never competing mutations.
 
 **Validation gate**: Select the worker implementation only after a production-like sandbox demonstrates per-session isolation, default-deny egress, scoped gateway behavior, browser/build support, and checkpoint export semantics. Modal is an initial candidate behind `WorkerPort`, not an assumed decision.
-**Plans**: TBD
+**Plans:** 6 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 02-01-PLAN.md — Prove the bounded-admission-to-versioned-action-to-mediated-tool-to-evidence tracer.
+
+**Wave 2** *(after Wave 1; plans execute in parallel)*
+
+- [ ] 02-02-PLAN.md — Lock canonical text limits and restrictive-only classifier semantics.
+- [ ] 02-03-PLAN.md — Lock exact replay, conflict, stale, interruption, and concurrent transaction semantics.
+- [ ] 02-04-PLAN.md — Prove the closed tool gateway and deterministic isolated WorkerPort fake.
+
+**Wave 3** *(after scoped WorkerPort contracts)*
+
+- [ ] 02-05-PLAN.md — Implement the opt-in Modal candidate adapter and honest passed/failed/blocked probe.
+
+**Wave 4** *(after all deterministic expansions and provider observation)*
+
+- [ ] 02-06-PLAN.md — Compose the hardened core, run the 16-case eval, and emit provider-separated design evidence.
 
 ### Phase 3: ContextVM Funding & Funded Admission
 
@@ -173,9 +212,21 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Napplet Contract & Artifact Verification | 6/6 | Complete    | 2026-08-04 |
-| 2. Trusted Core & Isolated Agent Execution | 0/TBD | Not started | - |
+| 2. Trusted Core & Isolated Agent Execution | 0/6 | Planning — revision 2 on disk, plan recheck pending | - |
 | 3. ContextVM Funding & Funded Admission | 0/TBD | Not started | - |
 | 4. Metered Generation & Revision Loop | 0/TBD | Not started | - |
 | 5. Funding Interruption & Durable Resume | 0/TBD | Not started | - |
 | 6. Sealed Preview & User-Owned Publication | 0/TBD | Not started | - |
 | 7. Admission SLO, Resilience & Launch Safety | 0/TBD | Not started | - |
+
+### Milestone Progress Roll-up
+
+- **Phases:** 1 complete, 1 active in planning, 5 remaining; 1/7 complete (14%).
+- **Known plans:** 6/12 executed across the two phases with plans on disk; all 6 completed plans belong to Phase 1, and Phase 2 has 6 planned / 0 executed.
+- **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 6 complete and 48 pending.
+- **Current checkpoint:** Phase 2 plan revision 2 is present on disk; rerun the independent plan checker before marking Phase 2 ready to execute.
+- **Phase 1 preservation:** Phase 1 remains complete with its review, security, validation, verification evidence, and Phase 7 deferrals unchanged.
+
+### Completion Reporting Contract
+
+Every future phase completion report must include this milestone roll-up: milestone ID/name, phases completed/active/remaining, executed plan counts, v1 requirement completion/coverage, and the next milestone checkpoint. A phase-only completion summary is insufficient for v1.0 tracking.

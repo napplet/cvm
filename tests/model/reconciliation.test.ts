@@ -92,17 +92,17 @@ async function ambiguousAction(lookup: "receipt_found" | "definitive_not_accepte
   const funding = new FundingService(store);
   await funding.execute({
     principal: reconciliationPrincipal, kind: "credit_settlement", idempotencyKey: "reconciliation-credit", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1",
-    payload: { settlement: { topUpId: "reconciliation-topup", rail: "lightning", unit: "sat", amount: "300", externalReference: "reconciliation-external", settlementReference: "reconciliation-settlement", verifiedAt: "2026-08-04T00:00:00.000Z" } },
+    payload: { settlement: { topUpId: "reconciliation-topup", rail: "lightning", unit: "sat", amount: "10000", externalReference: "reconciliation-external", settlementReference: "reconciliation-settlement", verifiedAt: "2026-08-04T00:00:00.000Z" } },
   });
   const fundedAdmission = new FundedAdmissionService({
     funding, store,
     capacity: { reserveNow: async () => ({ status: "available" as const, reference: "reconciliation-capacity", expiresAt: "2026-08-05T00:00:00.000Z" }), observe: async () => ({ status: "available" as const, reference: "reconciliation-capacity", expiresAt: "2026-08-05T00:00:00.000Z" }), release: async () => {} },
   });
-  const admission = await fundedAdmission.admit({ principal: reconciliationPrincipal, idempotencyKey: "reconciliation-admission", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "200", unit: "sat" } });
+  const admission = await fundedAdmission.admit({ principal: reconciliationPrincipal, idempotencyKey: "reconciliation-admission", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "6500", unit: "sat" } });
   if (admission.status !== "accepted") throw new Error("expected funded admission");
   const gateway = new DeterministicModelGateway({ scenario: { dispatch: "accepted_timeout", lookup } });
   const service = new MeteredGenerationService({ fundedAdmission, store, gateway, worker: { run: async () => { throw new Error("worker must remain fenced"); } } as never, artifactVerifier: { verify: async () => undefined } });
-  const started = await service.startSession({ principal: reconciliationPrincipal, admissionReference: admission.reference, idempotencyKey: `reconciliation-${lookup}`, expectedVersion: 0, maximum: "100", policyVersion: "phase-02-policy-2026-08-04", idea: "Build one focused napplet." });
+  const started = await service.startSession({ principal: reconciliationPrincipal, admissionReference: admission.reference, idempotencyKey: `reconciliation-${lookup}`, expectedVersion: 0, maximum: "3250", policyVersion: "phase-02-policy-2026-08-04", idea: "Build one focused napplet." });
   if (started.status !== "usage_unknown") throw new Error("expected usage_unknown");
   const action = store.meteredActions[0];
   if (!action) throw new Error("expected ambiguous action");
@@ -110,6 +110,26 @@ async function ambiguousAction(lookup: "receipt_found" | "definitive_not_accepte
 }
 
 describe("reconciliation", () => {
+  test("releases an exceptional lookup claim so the original operation can be recovered", async () => {
+    const { store, gateway: dispatchedGateway, action } = await ambiguousAction("receipt_found");
+    let attempts = 0;
+    const gateway: ModelGateway = {
+      dispatch: dispatchedGateway.dispatch.bind(dispatchedGateway),
+      async lookup(intent, signal) {
+        attempts += 1;
+        if (attempts === 1) throw new Error("temporary provider lookup failure");
+        return dispatchedGateway.lookup(intent, signal);
+      },
+    };
+    const service = new ModelReconciliationService({ store, gateway });
+    const command = { principal: reconciliationPrincipal, sessionId: action.sessionId, actionId: action.actionId, operationId: action.operationId };
+
+    await expect(service.reconcile(command)).rejects.toThrow("temporary provider lookup failure");
+    await expect(service.reconcile(command)).resolves.toMatchObject({ status: "failed", code: "RECONCILED_RECEIPT_FOUND" });
+    expect(attempts).toBe(2);
+    expect(dispatchedGateway.dispatchCount(action.operationId)).toBe(1);
+  });
+
   test("retries a nonterminal original-operation lookup without redispatching", async () => {
     const { store, action, gateway: dispatchedGateway } = await ambiguousAction("pending");
     let lookups = 0;

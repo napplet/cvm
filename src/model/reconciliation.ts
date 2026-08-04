@@ -13,7 +13,7 @@ export const ReconcileOperationCommandSchema = z.object({
 }).strict();
 
 export const ReconciliationResultSchema = z.discriminatedUnion("status", [
-  z.object({ status: z.literal("failed"), code: z.enum(["RECONCILED_RECEIPT_FOUND", "PROVIDER_NOT_ACCEPTED"]), accountId: z.string().min(1), sessionId: z.string().min(1), operationId: z.string().min(1) }).strict(),
+  z.object({ status: z.literal("failed"), code: z.enum(["RECONCILED_RECEIPT_FOUND", "PROVIDER_NOT_ACCEPTED"]), accountId: z.string().min(1), sessionId: z.string().min(1), sessionVersion: z.number().int().nonnegative(), artifactVersion: z.number().int().nonnegative(), confirmedSpend: z.string(), remainingCap: z.string(), remainingBalance: z.string(), nextAction: z.literal("revise_session"), operationId: z.string().min(1) }).strict(),
   z.object({ status: z.literal("usage_unknown"), code: z.enum(["RECONCILIATION_PENDING", "RECONCILIATION_UNRESOLVED"]), accountId: z.string().min(1), sessionId: z.string().min(1), operationId: z.string().min(1) }).strict(),
   z.object({ status: z.literal("billing_invariant_failed"), code: z.string().min(1), accountId: z.string().min(1), sessionId: z.string().min(1), operationId: z.string().min(1) }).strict(),
 ]);
@@ -63,15 +63,17 @@ export class ModelReconciliationService {
       return ReconciliationResultSchema.parse({ status: "usage_unknown", code: "RECONCILIATION_PENDING", accountId: action.accountId, sessionId: action.sessionId, operationId: action.operationId });
     }
 
+    let terminal = false;
+    try {
     const observation = ModelLookupObservationSchema.parse(await this.options.gateway.lookup(toIntent(claim.action), signal));
     if (observation.status === "pending" || observation.status === "unresolved") {
-      await this.options.store.transact(action.accountId, (transaction) => transaction.releaseReconciliation(action.operationId));
       return ReconciliationResultSchema.parse({ status: "usage_unknown", code: observation.status === "pending" ? "RECONCILIATION_PENDING" : "RECONCILIATION_UNRESOLVED", accountId: action.accountId, sessionId: action.sessionId, operationId: action.operationId });
     }
     if (observation.status === "definitive_not_accepted") {
       this.assertCorrelation(claim.action, observation.operationId, observation.providerRequestId);
-      const result = ReconciliationResultSchema.parse({ status: "failed", code: "PROVIDER_NOT_ACCEPTED", accountId: action.accountId, sessionId: action.sessionId, operationId: action.operationId });
+      const result = ReconciliationResultSchema.parse({ status: "failed", code: "PROVIDER_NOT_ACCEPTED", accountId: action.accountId, sessionId: action.sessionId, sessionVersion: action.expectedVersion, artifactVersion: action.expectedVersion, confirmedSpend: "0", remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId: action.operationId });
       await this.options.store.transact(action.accountId, (transaction) => transaction.finalizeMeteredAction({ idempotencyKey: action.idempotencyKey, operationId: action.operationId, receiptCharge: "0", providerReceiptReference: observation.provenance.protectedEvidenceReference, status: "failed", result, sessionVersion: action.expectedVersion, artifactVersion: 0 }));
+      terminal = true;
       return result;
     }
 
@@ -84,12 +86,16 @@ export class ModelReconciliationService {
       await this.options.store.transact(action.accountId, (transaction) => transaction.finalizeMeteredAction({ idempotencyKey: action.idempotencyKey, operationId: action.operationId, receiptCharge: "0", providerReceiptReference: receipt.provenance.protectedEvidenceReference, status: "billing_invariant_failed", result, sessionVersion: action.expectedVersion, artifactVersion: 0 }));
       return result;
     }
-    const result = ReconciliationResultSchema.parse({ status: "failed", code: "RECONCILED_RECEIPT_FOUND", accountId: action.accountId, sessionId: action.sessionId, operationId: action.operationId });
+    const result = ReconciliationResultSchema.parse({ status: "failed", code: "RECONCILED_RECEIPT_FOUND", accountId: action.accountId, sessionId: action.sessionId, sessionVersion: action.expectedVersion, artifactVersion: action.expectedVersion, confirmedSpend: priced.total, remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId: action.operationId });
     await this.options.store.transact(action.accountId, async (transaction) => {
       await transaction.recordUsageReceipt({ operationId: action.operationId, protectedEvidenceReference: receipt.provenance.protectedEvidenceReference });
       return transaction.finalizeMeteredAction({ idempotencyKey: action.idempotencyKey, operationId: action.operationId, receiptCharge: priced.total, providerReceiptReference: receipt.provenance.protectedEvidenceReference, status: "failed", result, sessionVersion: action.expectedVersion, artifactVersion: 0 });
     });
+    terminal = true;
     return result;
+    } finally {
+      if (!terminal) await this.options.store.transact(action.accountId, (transaction) => transaction.releaseReconciliation(action.operationId));
+    }
   }
 
   private async loadBoundAction(accountId: string, command: ReconcileOperationCommand): Promise<MeteredAction> {

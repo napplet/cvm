@@ -82,6 +82,44 @@ describe("ContextVM v1 announcement", () => {
 });
 
 describe("verified ContextVM funding adapter", () => {
+  test("forwards only an SDK-correlated signed event and preserves the SDK-verified sender", async () => {
+    let inbound: ((message: unknown, context: { clientPubkey: string }) => Promise<void> | void) | undefined;
+    let event: { id: string; tags: string[][] } | undefined = {
+      id: "signed-event-001",
+      tags: [["pmi", fixture.requests.cashuPmi]],
+    };
+    const bridge = new ContextVmSdkBridge({
+      setAnnouncementExtraTags: () => undefined,
+      setAnnouncementPricingTags: () => undefined,
+      setSupportedPaymentInteraction: () => undefined,
+      getNostrRequestEvent: () => event,
+      set onmessage(_handler: undefined) {},
+      set onmessageWithContext(handler: typeof inbound) { inbound = handler; },
+    } as never);
+    const delivered: ContextVmInboundEnvelope[] = [];
+    bridge.onInbound(async (value) => { delivered.push(value); });
+
+    await inbound?.({
+      id: "rpc-001",
+      method: "tools/call",
+      params: { _meta: { requestEventId: "signed-event-001" }, name: "account_status", arguments: {} },
+    }, { clientPubkey: fixture.requests.verifiedPubkey });
+    expect(delivered).toEqual([{
+      verifiedClientPubkey: fixture.requests.verifiedPubkey,
+      requestEventId: "signed-event-001",
+      rawEvent: event,
+      request: { id: "rpc-001", method: "tools/call", params: { _meta: { requestEventId: "signed-event-001" }, name: "account_status", arguments: {} } },
+    }]);
+
+    event = { id: "different-event", tags: [] };
+    await inbound?.({
+      id: "rpc-002",
+      method: "tools/call",
+      params: { _meta: { requestEventId: "signed-event-001" }, name: "account_status", arguments: {} },
+    }, { clientPubkey: fixture.requests.forgedPubkey });
+    expect(delivered).toHaveLength(1);
+  });
+
   test("SDK bridge confines the pinned transport setters and canonical explicit-gating identity to the adapter folder", () => {
     const configured: Record<string, unknown> = {};
     const bridge = new ContextVmSdkBridge({

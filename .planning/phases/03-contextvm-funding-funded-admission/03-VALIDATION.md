@@ -1,9 +1,9 @@
 ---
 phase: 03
 slug: contextvm-funding-funded-admission
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: validated
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-08-04
 ---
 
@@ -35,20 +35,20 @@ created: 2026-08-04
 
 | Task ID | Plan | Wave | Requirements | Threats | Secure behavior | Test type | Automated command | Planned test/evidence file | Status |
 |---|---:|---:|---|---|---|---|---|---|---|
-| 03-01-01 | 01 | 1 | CTX-02/03, PAY-04/05, BILL-01/02/06 | T-03-01–04 | Verified principal -> one account -> verified credit -> cap hold -> admission -> redacted status -> exact replay; representative denials have zero effects | end-to-end tracer | `bun test tests/phase-03/tracer.test.ts` | `tests/phase-03/tracer.test.ts` | ⬜ pending |
-| 03-02-01 | 02 | 2 | supporting all adapter/store requirements | T-03-02-SC | Exact official packages pass registry/source/license/lifecycle/integrity checks before exact install; ambiguity blocks | deterministic supply-chain gate | `bun run scripts/verify-phase-03-packages.ts && bun pm ls @contextvm/sdk @cashu/cashu-ts kysely pg` | `scripts/verify-phase-03-packages.ts`, `evidence/phase-03/package-intake.json` | ⬜ pending |
-| 03-02-02 | 02 | 2 | CTX-02/03/04, PAY-04/05, BILL-01/02/06 | T-03-05–08 | Serializable append-only authority proves replay, uniqueness, conservation, rollback, reconnect, retry, and concurrent holds without repeated external effects | persistence integration | `bun test tests/persistence/postgres-funding-store.test.ts` | `tests/persistence/postgres-funding-store.test.ts` | ⬜ pending |
-| 03-03-01 | 03 | 3 | CTX-01, PAY-01 | T-03-09–12 | Signed announcement contains required surfaces/truthful availability and only v1 top-up PMIs; no x402/L402 or false availability | fixture/contract | `bun test tests/contextvm/adapter.test.ts --test-name-pattern='announcement'` | `tests/fixtures/contextvm-phase-03.json`, `tests/contextvm/adapter.test.ts` | ⬜ pending |
-| 03-03-02 | 03 | 3 | CTX-02/03/04, PAY-01/04, BILL-01 | T-03-09–12, T-03-03-SC | SDK-verified sender only, durable cross-instance replay, transparent/explicit identity, PMI/mode denial, correlation, redaction, import firewall | adapter integration | `bun test tests/contextvm/adapter.test.ts` | `tests/contextvm/adapter.test.ts` | ⬜ pending |
-| 03-04-01 | 04 | 3 | PAY-01/04/05 | T-03-14–16 | Top-up/invoice intent precedes one provider call; protected material is ciphertext-only; ambiguity reconciles by original reference | adapter/state-machine | `bun test tests/funding/lightning-top-up.test.ts --test-name-pattern='initiation|protected material'` | `tests/funding/lightning-top-up.test.ts` | ⬜ pending |
-| 03-04-02 | 04 | 3 | PAY-02/04/05 | T-03-13–16 | Fully matched authoritative settled receipt credits once; all non-final/mismatched/duplicate/unknown receipts have exact safe deltas | settlement integration | `bun test tests/funding/lightning-top-up.test.ts` | `tests/funding/lightning-top-up.test.ts` | ⬜ pending |
-| 03-05-01 | 05 | 3 | PAY-01/03/04/06 | T-03-17–20, T-03-05-SC | Immutable multi-mint policy/history, exact PMI, mint/unit/keyset/DLEQ/condition checks, encrypted proofs, online swap, adapter confinement | fixture/adapter | `bun test tests/funding/cashu-top-up.test.ts --test-name-pattern='policy|validation|swap'` | `tests/fixtures/cashu-phase-03.json`, `tests/funding/cashu-top-up.test.ts` | ⬜ pending |
-| 03-05-02 | 05 | 3 | PAY-03/04/05/07 | T-03-17–20 | Unique proof commitment credits once; timeout-after-swap is query-only reconciliation; treasury outcomes never recredit | settlement integration | `bun test tests/funding/cashu-top-up.test.ts` | `tests/funding/cashu-top-up.test.ts` | ⬜ pending |
-| 03-06-01 | 06 | 4 | BILL-01/02/06 | T-03-21–23, T-03-25 | Immediate capacity + cap hold agree or durable refusal/compensation leaves no queue/hold; action budgets remain bounded non-debit reservations | domain/persistence concurrency | `bun test tests/funding/funded-admission.test.ts tests/phase-03/tracer.test.ts` | `tests/funding/funded-admission.test.ts`, `tests/phase-03/tracer.test.ts` | ⬜ pending |
-| 03-06-02 | 06 | 4 | CTX-04, BILL-01/02/06 | T-03-23–25 | Owner-scoped complete redacted status and explicit production-vs-test composition; missing providers stay blocked/unselected | composition integration | `bun test tests/funding/funded-admission.test.ts tests/phase-03/tracer.test.ts` | `tests/funding/funded-admission.test.ts`, `tests/phase-03/tracer.test.ts` | ⬜ pending |
-| 03-07-01 | 07 | 5 | all 14 | T-03-26–29 plus all above | Versioned complete reference inventory asserts result, state, effect, and evidence deltas with no LLM authority judgment | deterministic eval | `bun run eval:phase-03` | `tests/fixtures/phase-03-reference-set.json`, `tests/evals/phase-03-reference-set.test.ts` | ⬜ pending |
-| 03-07-02 | 07 | 5 | all 14 | T-03-26–29 | Immutable evidence requires every check/mapping, rejects raw secrets/tamper/overclaim, and separates all live provider observations | evidence integration | `bun test tests/verification/phase-03-design-slice.test.ts` | `src/verification/phase-03-design-evidence.ts`, `tests/verification/phase-03-design-slice.test.ts` | ⬜ pending |
-| 03-07-03 | 07 | 5 | all 14 | T-03-26–29 | One command runs full suite/eval/package/API/import/evidence gates and emits independently validated design record | end-to-end design gate | `bun run test:phase-03-design-slice` | `scripts/verify-phase-03-design-slice.ts`, `evidence/design/phase-03.json` | ⬜ pending |
+| 03-01-01 | 01 | 1 | CTX-02/03, PAY-04/05, BILL-01/02/06 | T-03-01–04 | Verified principal -> one account -> verified credit -> cap hold -> admission -> redacted status -> exact replay; representative denials have zero effects | end-to-end tracer | `bun test tests/phase-03/tracer.test.ts` | `tests/phase-03/tracer.test.ts` | ✅ green |
+| 03-02-01 | 02 | 2 | supporting all adapter/store requirements | T-03-02-SC | Exact official packages pass registry/source/license/lifecycle/integrity checks before exact install; ambiguity blocks | deterministic supply-chain gate | `bun run scripts/verify-phase-03-packages.ts && bun pm ls @contextvm/sdk @cashu/cashu-ts kysely pg` | `scripts/verify-phase-03-packages.ts`, `evidence/phase-03/package-intake.json` | ✅ green |
+| 03-02-02 | 02 | 2 | CTX-02/03/04, PAY-04/05, BILL-01/02/06 | T-03-05–08 | Serializable append-only authority proves replay, uniqueness, conservation, rollback, reconnect, retry, and concurrent holds without repeated external effects | persistence integration | `bun test tests/persistence/postgres-funding-store.test.ts` | `tests/persistence/postgres-funding-store.test.ts` | ✅ green |
+| 03-03-01 | 03 | 3 | CTX-01, PAY-01 | T-03-09–12 | Signed announcement contains required surfaces/truthful availability and only v1 top-up PMIs; no x402/L402 or false availability | fixture/contract | `bun test tests/contextvm/adapter.test.ts --test-name-pattern='announcement'` | `tests/fixtures/contextvm-phase-03.json`, `tests/contextvm/adapter.test.ts` | ✅ green |
+| 03-03-02 | 03 | 3 | CTX-02/03/04, PAY-01/04, BILL-01 | T-03-09–12, T-03-03-SC | SDK-verified sender only, durable cross-instance replay, transparent/explicit identity, PMI/mode denial, correlation, redaction, import firewall | adapter integration | `bun test tests/contextvm/adapter.test.ts` | `tests/contextvm/adapter.test.ts` | ✅ green |
+| 03-04-01 | 04 | 3 | PAY-01/04/05 | T-03-14–16 | Top-up/invoice intent precedes one provider call; protected material is ciphertext-only; ambiguity reconciles by original reference | adapter/state-machine | `bun test tests/funding/lightning-top-up.test.ts --test-name-pattern='initiation|protected material'` | `tests/funding/lightning-top-up.test.ts` | ✅ green |
+| 03-04-02 | 04 | 3 | PAY-02/04/05 | T-03-13–16 | Fully matched authoritative settled receipt credits once; all non-final/mismatched/duplicate/unknown receipts have exact safe deltas | settlement integration | `bun test tests/funding/lightning-top-up.test.ts` | `tests/funding/lightning-top-up.test.ts` | ✅ green |
+| 03-05-01 | 05 | 3 | PAY-01/03/04/06 | T-03-17–20, T-03-05-SC | Immutable multi-mint policy/history, exact PMI, mint/unit/keyset/DLEQ/condition checks, encrypted proofs, online swap, adapter confinement | fixture/adapter | `bun test tests/funding/cashu-top-up.test.ts --test-name-pattern='policy|validation|swap'` | `tests/fixtures/cashu-phase-03.json`, `tests/funding/cashu-top-up.test.ts` | ✅ green |
+| 03-05-02 | 05 | 3 | PAY-03/04/05/07 | T-03-17–20 | Unique proof commitment credits once; timeout-after-swap is query-only reconciliation; treasury outcomes never recredit | settlement integration | `bun test tests/funding/cashu-top-up.test.ts` | `tests/funding/cashu-top-up.test.ts` | ✅ green |
+| 03-06-01 | 06 | 4 | BILL-01/02/06 | T-03-21–23, T-03-25 | Immediate capacity + cap hold agree or durable refusal/compensation leaves no queue/hold; action budgets remain bounded non-debit reservations | domain/persistence concurrency | `bun test tests/funding/funded-admission.test.ts tests/phase-03/tracer.test.ts` | `tests/funding/funded-admission.test.ts`, `tests/phase-03/tracer.test.ts` | ✅ green |
+| 03-06-02 | 06 | 4 | CTX-04, BILL-01/02/06 | T-03-23–25 | Owner-scoped complete redacted status and explicit production-vs-test composition; missing providers stay blocked/unselected | composition integration | `bun test tests/funding/funded-admission.test.ts tests/phase-03/tracer.test.ts` | `tests/funding/funded-admission.test.ts`, `tests/phase-03/tracer.test.ts` | ✅ green |
+| 03-07-01 | 07 | 5 | all 14 | T-03-26–29 plus all above | Versioned complete reference inventory asserts result, state, effect, and evidence deltas with no LLM authority judgment | deterministic eval | `bun run eval:phase-03` | `tests/fixtures/phase-03-reference-set.json`, `tests/evals/phase-03-reference-set.test.ts` | ✅ green |
+| 03-07-02 | 07 | 5 | all 14 | T-03-26–29 | Immutable evidence requires every check/mapping, rejects raw secrets/tamper/overclaim, and separates all live provider observations | evidence integration | `bun test tests/verification/phase-03-design-slice.test.ts` | `src/verification/phase-03-design-evidence.ts`, `tests/verification/phase-03-design-slice.test.ts` | ✅ green |
+| 03-07-03 | 07 | 5 | all 14 | T-03-26–29 | One command runs full suite/eval/package/API/import/evidence gates and emits independently validated design record | end-to-end design gate | `bun run test:phase-03-design-slice` | `scripts/verify-phase-03-design-slice.ts`, `evidence/design/phase-03.json` | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠ flaky/blocking environment*
 
@@ -73,13 +73,13 @@ created: 2026-08-04
 
 ## Wave 0 Test Ownership
 
-- [ ] Plan 01 creates the canonical Phase 3 tracer and deterministic memory test authority before expansion.
-- [ ] Plan 02 creates package-intake evidence and PostgreSQL-wire transaction/constraint fakes before rail adapters use the store.
-- [ ] Plan 03 creates pinned ContextVM/CEP-8 fixtures and fake transport before any live relay is considered.
-- [ ] Plan 04 creates fake authoritative Lightning receiver outcomes and protected-material canaries.
-- [ ] Plan 05 creates pinned Cashu policy/proof fixtures and fake online swap/proof-state outcomes.
-- [ ] Plan 06 creates fake immediate-capacity/session-status ports and concurrency/compensation cases.
-- [ ] Plan 07 creates the complete reference inventory, evidence contract, and full design-slice command.
+- [x] Plan 01 creates the canonical Phase 3 tracer and deterministic memory test authority before expansion.
+- [x] Plan 02 creates package-intake evidence and PostgreSQL-wire transaction/constraint fakes before rail adapters use the store.
+- [x] Plan 03 creates pinned ContextVM/CEP-8 fixtures and fake transport before any live relay is considered.
+- [x] Plan 04 creates fake authoritative Lightning receiver outcomes and protected-material canaries.
+- [x] Plan 05 creates pinned Cashu policy/proof fixtures and fake online swap/proof-state outcomes.
+- [x] Plan 06 creates fake immediate-capacity/session-status ports and concurrency/compensation cases.
+- [x] Plan 07 creates the complete reference inventory, evidence contract, and full design-slice command.
 
 ## Manual and Provider-Separated Verification
 
@@ -87,14 +87,14 @@ No manual pass can satisfy a Phase 3 requirement. Live ContextVM relay/signer, L
 
 ## Phase Completion Gates
 
-- [ ] `bun test` passes the full current and prior suite.
-- [ ] `bun run eval:phase-03` passes every fixture oracle.
-- [ ] `bun run test:phase-03-design-slice` validates and emits immutable evidence.
-- [ ] `bun run scripts/verify-phase-03-packages.ts` revalidates exact package/lock identities.
-- [ ] Canonical `COVERAGE.md` passes `api-coverage.verify-pre`; detailed `03-API-COVERAGE.md` remains consistent.
-- [ ] Import firewall confirms SDK/provider/database types remain confined to their adapters.
-- [ ] Ledger conservation/projection recomputation and no-stranded-hold/no-queue checks pass.
-- [ ] Evidence retains Phase 4/5/6/7 and x402/L402 deferrals and makes no live/SLO/provider/provenance overclaim.
+- [x] `bun test` passes the full current and prior suite (267 pass, 0 fail).
+- [x] `bun run eval:phase-03` passes every fixture oracle (22 pass, 0 fail).
+- [x] `bun run test:phase-03-design-slice` validates and emits immutable evidence (`design-ready`; all six live surfaces `blocked/unselected`).
+- [x] `bun run scripts/verify-phase-03-packages.ts` revalidates exact package/lock identities.
+- [x] Canonical `COVERAGE.md` passes `api-coverage.verify-pre`; detailed `03-API-COVERAGE.md` remains consistent.
+- [x] Import firewall confirms SDK/provider/database types remain confined to their adapters.
+- [x] Ledger conservation/projection recomputation and no-stranded-hold/no-queue checks pass.
+- [x] Evidence retains Phase 4/5/6/7 and x402/L402 deferrals and makes no live/SLO/provider/provenance overclaim.
 
 ## Validation Sign-Off
 
@@ -103,7 +103,24 @@ No manual pass can satisfy a Phase 3 requirement. Live ContextVM relay/signer, L
 - [x] No three consecutive tasks lack automated feedback.
 - [x] No watch-mode command appears.
 - [x] Live providers are separated from offline requirement proof.
-- [ ] `wave_0_complete` becomes true only after the planned tests/evidence files exist.
-- [ ] `nyquist_compliant` becomes true only after post-execution audit confirms green runnable coverage.
+- [x] `wave_0_complete` is true: every planned test/evidence file exists.
+- [x] `nyquist_compliant` is true: post-execution audit found one missing behavioral bridge test, added it, and every runnable gate is green.
 
-**Planning verdict:** Complete test design; implementation pending.
+**Validation verdict:** Nyquist-compliant for the offline deterministic Phase 3 scope. Live ContextVM relay/signer, Lightning receiver, Cashu mint, PostgreSQL/Cockroach, capacity, and Modal certification remain `blocked/unselected` Phase 7 work.
+
+## Validation Audit 2026-08-04
+
+| Metric | Count |
+|---|---:|
+| Gaps found | 1 |
+| Resolved | 1 |
+| Escalated | 0 |
+
+Added `tests/contextvm/adapter.test.ts` coverage proving that the SDK bridge forwards only an exactly correlated signed event and preserves the SDK-provided verified sender; an event-ID mismatch is not delivered to the adapter.
+
+**Commands executed:**
+
+- `bun test tests/contextvm/adapter.test.ts` — 7 pass, 0 fail.
+- `bun test tests/funding/funded-admission.test.ts tests/funding/lightning-top-up.test.ts tests/funding/cashu-top-up.test.ts tests/persistence/postgres-funding-store.test.ts tests/persistence/postgres-sql-funding-store.test.ts tests/phase-03/tracer.test.ts` — 46 pass, 0 fail.
+- `bun run eval:phase-03` — 22 pass, 0 fail.
+- `bun run test:phase-03-design-slice` — 267 pass, 0 fail; deterministic evidence is `design-ready` and all six live observations are `blocked/unselected`.

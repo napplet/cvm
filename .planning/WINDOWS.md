@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 3
+open_count: 4
 waived_count: 0
 fixed_count: 0
-total_count: 3
-last_updated: 2026-08-03T20:44:38.817Z
+total_count: 4
+last_updated: 2026-08-04T10:44:56.898Z
 ---
 
 # Broken Windows Ledger
@@ -18,6 +18,7 @@ last_updated: 2026-08-03T20:44:38.817Z
 | 1 | 01 | deviation | tests/promotion/candidate.test.ts |  | Corrected invalid hexadecimal test pins and workflow-guard false positive. | open |  | 2026-08-03T07:10:01.403Z |  |
 | 2 | 01 | stub | infra/toolchain/fixture-runner.ts |  | Sealed native fixture blocks until an upstream-compatible content-addressed boilerplate scaffold and browser dependencies are materialized. | open |  | 2026-08-03T20:32:25.966Z |  |
 | 3 | 01 | stub | infra/toolchain/fixture-runner.ts |  | Native fixture scaffold is not self-contained under sealed --network=none; compatible scaffold and real Chromium closure deferred to Phase 7. | open |  | 2026-08-03T20:44:38.817Z |  |
+| 4 | 02 | deviation | src/phase-02/contracts.ts |  | Completed named strict shared-contract exports required by the Phase 2 integration seam. | open |  | 2026-08-04T10:44:56.898Z |  |
 
 ````json
 [
@@ -55,6 +56,18 @@ last_updated: 2026-08-03T20:44:38.817Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-03T20:44:38.817Z",
+    "resolved_at": null
+  },
+  {
+    "id": 4,
+    "kind": "deviation",
+    "phase": "02",
+    "file": "src/phase-02/contracts.ts",
+    "line": null,
+    "description": "Completed named strict shared-contract exports required by the Phase 2 integration seam.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-04T10:44:56.898Z",
     "resolved_at": null
   }
 ]

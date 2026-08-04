@@ -42,7 +42,7 @@ Requirements for the initial release. Each maps to exactly one roadmap phase.
 - [ ] **SESS-02**: An accepted request obtains a ready isolated worker and begins execution within five seconds at p95; otherwise the user receives an immediate retryable capacity response.
 - [ ] **SESS-03**: A user receives a stable session identifier plus visible state, progress, approved cap, actual spend, and next required action.
 - [ ] **SESS-04**: A user can submit bounded plain-text revisions to the same session, with each revision separately authorized and metered.
-- [ ] **SESS-05**: Concurrent or duplicated session actions are serialized so only one valid next action can mutate a session or artifact version.
+- [x] **SESS-05**: Concurrent or duplicated session actions are serialized so only one valid next action can mutate a session or artifact version.
 
 ### Napplet Generation and Verification
 
@@ -55,10 +55,10 @@ Requirements for the initial release. Each maps to exactly one roadmap phase.
 
 ### Defensive Execution
 
-- [ ] **SAFE-01**: The service rejects prompt and revision input that exceeds configured character, token, encoding, or structural limits before allocating billable execution.
-- [ ] **SAFE-02**: The service detects and records prompt-injection and jailbreak signals while enforcing deterministic policy independently of classifier output.
-- [ ] **SAFE-03**: The agent can use only typed, allowlisted tools scoped to the current session and cannot alter billing, session authority, publication intent, or system policy.
-- [ ] **SAFE-04**: Each worker is isolated from other sessions, has no user/control-plane credentials or durable authority, and uses default-deny network egress through scoped gateways.
+- [x] **SAFE-01**: The service rejects prompt and revision input that exceeds configured character, token, encoding, or structural limits before allocating billable execution.
+- [x] **SAFE-02**: The service detects and records prompt-injection and jailbreak signals while enforcing deterministic policy independently of classifier output.
+- [x] **SAFE-03**: The agent can use only typed, allowlisted tools scoped to the current session and cannot alter billing, session authority, publication intent, or system policy.
+- [x] **SAFE-04**: Each worker is isolated from other sessions, has no user/control-plane credentials or durable authority, and uses default-deny network egress through scoped gateways.
 - [x] **SAFE-05**: Dependency resolution and build scripts are pinned, policy-checked, resource-bounded, and prevented from accessing control-plane secrets or unrestricted networks.
 - [x] **SAFE-06**: Static and runtime checks reject direct `fetch`, XHR, WebSocket, browser storage, cookies, `window.nostr`, external asset loading, service workers, app-owned signing/relay code, or any bypass of shell-mediated NAP authority.
 

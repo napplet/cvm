@@ -14,7 +14,7 @@ type Submit = z.infer<typeof SubmitSchema>;
 export type CashuTopUpState = "verifying" | "credited" | "failed" | "reconciliation_pending";
 export type CashuTopUpResult = Readonly<{ topUpId: string; state: CashuTopUpState; policyVersion: string; commitment: string; settlementReference?: string; treasuryState?: CashuTreasuryState }>;
 type Vault = Readonly<{ seal(metadata: { accountId: string; topUpId: string; rail: "cashu" }, plaintext: Uint8Array): Promise<{ id: string; payloadDigest: string }>; expire(id: string): Promise<void>; open?(request: { id: string; accountId: string; topUpId: string; rail: "cashu" }): Promise<Uint8Array> }>;
-type Record = { result: CashuTopUpResult; accountId: string; policy: CashuMintPolicy; protectedId: string; idempotencyKey: string; principal: Principal; amount: string; token?: Uint8Array };
+type Record = { result: CashuTopUpResult; accountId: string; policy: CashuMintPolicy; protectedId: string; idempotencyKey: string; principal: Principal; amount: string };
 type Journal = { records: Map<string, Record>; commitments: Set<string>; treasury: Map<string, CashuTopUpResult> };
 const journals = new WeakMap<FundingService, Journal>();
 function journalFor(funding: FundingService): Journal {
@@ -49,7 +49,7 @@ export class CashuTopUpCoordinator {
     this.#journal.commitments.add(commitment);
     const protectedReference = await this.options.vault.seal({ accountId, topUpId: submitted.topUpId, rail: "cashu" }, submitted.token);
     const result = frozen({ topUpId: submitted.topUpId, state: "verifying" as const, policyVersion: policy.version, commitment });
-    const record: Record = { result, accountId, policy, protectedId: protectedReference.id, idempotencyKey: submitted.idempotencyKey, principal: submitted.principal as Principal, amount: submitted.amount, token: new Uint8Array(submitted.token) };
+    const record: Record = { result, accountId, policy, protectedId: protectedReference.id, idempotencyKey: submitted.idempotencyKey, principal: submitted.principal as Principal, amount: submitted.amount };
     this.#journal.records.set(submitted.topUpId, record);
     let observed: CashuSettlementObservation;
     try { observed = await this.options.provider.settle({ topUpId: submitted.topUpId, policy, amount: submitted.amount, commitment, token: submitted.token }); }
@@ -63,7 +63,7 @@ export class CashuTopUpCoordinator {
     const request: CashuObserveRequest = { topUpId, policy: record.policy, commitment: record.result.commitment, amount: record.amount };
     if (this.options.vault.open) request.token = await this.options.vault.open({ id: record.protectedId, accountId: record.accountId, topUpId, rail: "cashu" });
     const observed = await this.options.provider.observe(request);
-    return this.#recordObservation(record, { principal: record.principal, idempotencyKey: record.idempotencyKey, topUpId, amount: record.amount, unit: "sat", pmi: CashuPmi, token: record.token ?? new Uint8Array() }, observed);
+    return this.#recordObservation(record, { principal: record.principal, idempotencyKey: record.idempotencyKey, topUpId, amount: record.amount, unit: "sat", pmi: CashuPmi, token: new Uint8Array() }, observed);
   }
 
   async reconcileTreasury(topUpId: string): Promise<CashuTopUpResult> {
@@ -82,13 +82,13 @@ export class CashuTopUpCoordinator {
     }
     if (observed.status === "failed") {
       record.result = frozen({ ...record.result, state: "failed" as const });
-      await this.options.vault.expire(record.protectedId); record.token = undefined;
+      await this.options.vault.expire(record.protectedId);
       throw asError(`CASHU_${observed.code.toUpperCase()}`);
     }
     const settlement = VerifiedSettlementSchema.parse({ topUpId: submitted.topUpId, rail: "cashu", unit: "sat", amount: submitted.amount, externalReference: observed.externalReference, settlementReference: observed.settlementReference, verifiedAt: observed.verifiedAt });
     const credited = await this.options.funding.execute({ principal: submitted.principal, idempotencyKey: `cashu-credit:${submitted.topUpId}`, policyVersion: record.policy.version, protocolVersion: CashuPmi, kind: "credit_settlement", payload: { settlement } });
     record.result = frozen({ ...record.result, state: "credited" as const, settlementReference: credited.settlementReference });
-    await this.options.vault.expire(record.protectedId); record.token = undefined;
+    await this.options.vault.expire(record.protectedId);
     return record.result;
   }
 }

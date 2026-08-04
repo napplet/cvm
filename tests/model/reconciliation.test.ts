@@ -4,6 +4,11 @@ import {
   DeterministicGatewayScenarioSchema,
 } from "../../src/model/deterministic-model-gateway";
 import type { ProviderOperationIntent } from "../../src/model/model-gateway";
+import { ModelReconciliationService } from "../../src/model/reconciliation";
+import { MeteredGenerationService } from "../../src/phase-04/metered-generation-service";
+import { FundingService } from "../../src/funding/funding-service";
+import { FundedAdmissionService } from "../../src/funding/funded-admission";
+import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
 
 const intent = (operationId = "operation:gateway"): ProviderOperationIntent => ({
   operationId,
@@ -77,5 +82,58 @@ describe("gateway", () => {
       expect(gateway.dispatchCount(original.operationId)).toBe(0);
       expect(gateway.lookupCount(original.operationId)).toBe(1);
     }
+  });
+});
+
+const reconciliationPrincipal = { pubkey: "ef".repeat(32) };
+
+async function ambiguousAction(lookup: "receipt_found" | "definitive_not_accepted" | "pending" | "unresolved") {
+  const store = new TransactionalMemoryFundingStore();
+  const funding = new FundingService(store);
+  await funding.execute({
+    principal: reconciliationPrincipal, kind: "credit_settlement", idempotencyKey: "reconciliation-credit", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1",
+    payload: { settlement: { topUpId: "reconciliation-topup", rail: "lightning", unit: "sat", amount: "300", externalReference: "reconciliation-external", settlementReference: "reconciliation-settlement", verifiedAt: "2026-08-04T00:00:00.000Z" } },
+  });
+  const fundedAdmission = new FundedAdmissionService({
+    funding, store,
+    capacity: { reserveNow: async () => ({ status: "available" as const, reference: "reconciliation-capacity", expiresAt: "2026-08-05T00:00:00.000Z" }), observe: async () => ({ status: "available" as const, reference: "reconciliation-capacity", expiresAt: "2026-08-05T00:00:00.000Z" }), release: async () => {} },
+  });
+  const admission = await fundedAdmission.admit({ principal: reconciliationPrincipal, idempotencyKey: "reconciliation-admission", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "200", unit: "sat" } });
+  if (admission.status !== "accepted") throw new Error("expected funded admission");
+  const gateway = new DeterministicModelGateway({ scenario: { dispatch: "accepted_timeout", lookup } });
+  const service = new MeteredGenerationService({ fundedAdmission, store, gateway, worker: { run: async () => { throw new Error("worker must remain fenced"); } } as never, artifactVerifier: { verify: async () => undefined } });
+  const started = await service.startSession({ principal: reconciliationPrincipal, admissionReference: admission.reference, idempotencyKey: `reconciliation-${lookup}`, expectedVersion: 0, maximum: "100", policyVersion: "phase-02-policy-2026-08-04", idea: "Build one focused napplet." });
+  if (started.status !== "usage_unknown") throw new Error("expected usage_unknown");
+  const action = store.meteredActions[0];
+  if (!action) throw new Error("expected ambiguous action");
+  return { store, gateway, action };
+}
+
+describe("reconciliation", () => {
+  test("settles one found receipt under concurrent original-operation-only recovery", async () => {
+    const { store, gateway, action } = await ambiguousAction("receipt_found");
+    const reconciliation = new ModelReconciliationService({ store, gateway });
+    const command = { principal: reconciliationPrincipal, sessionId: action.sessionId, actionId: action.actionId, operationId: action.operationId };
+
+    const [first, duplicate] = await Promise.all([reconciliation.reconcile(command), reconciliation.reconcile(command)]);
+
+    expect(first).toMatchObject({ status: "completed", operationId: action.operationId });
+    expect(duplicate).toMatchObject({ status: "completed", operationId: action.operationId });
+    expect(gateway.dispatchCount(action.operationId)).toBe(1);
+    expect(gateway.lookupCount(action.operationId)).toBe(1);
+    expect(store.postings.filter((posting) => posting.reference === action.operationId)).toHaveLength(1);
+  });
+
+  test("keeps pending reconciliation blocked and releases only proven zero-use observations", async () => {
+    const pending = await ambiguousAction("pending");
+    const pendingResult = await new ModelReconciliationService({ store: pending.store, gateway: pending.gateway }).reconcile({ principal: reconciliationPrincipal, sessionId: pending.action.sessionId, actionId: pending.action.actionId, operationId: pending.action.operationId });
+    expect(pendingResult).toMatchObject({ status: "usage_unknown", code: "RECONCILIATION_PENDING" });
+    expect(pending.store.meteredActions[0]).toMatchObject({ status: "usage_unknown" });
+
+    const zero = await ambiguousAction("definitive_not_accepted");
+    const zeroResult = await new ModelReconciliationService({ store: zero.store, gateway: zero.gateway }).reconcile({ principal: reconciliationPrincipal, sessionId: zero.action.sessionId, actionId: zero.action.actionId, operationId: zero.action.operationId });
+    expect(zeroResult).toMatchObject({ status: "failed", code: "PROVIDER_NOT_ACCEPTED" });
+    expect(zero.store.postings.filter((posting) => posting.reference === zero.action.operationId)).toHaveLength(1);
+    expect(zero.store.postings.find((posting) => posting.reference === zero.action.operationId)?.amount).toBe("-0");
   });
 });

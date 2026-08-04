@@ -27,6 +27,8 @@ export type SessionEvaluation = (transaction: SessionTransaction) => void;
 /** One authoritative commit decision: replay, fence, result, evidence, and version. */
 export interface SessionStore {
   createSession(session: SessionRecord): void;
+  /** Read-only idempotency lookup used before any worker allocation/effect. */
+  findRecordedResult(action: SessionAction): Promise<SessionActionResult | undefined>;
   apply(action: SessionAction, evaluate: SessionEvaluation): Promise<SessionActionResult>;
   getSessionVersion(sessionId: string): number | undefined;
   readonly evidence: readonly SessionEvidence[];
@@ -100,6 +102,13 @@ export class TransactionalMemorySessionStore implements SessionStore {
 
   getSessionVersion(sessionId: string): number | undefined {
     return this.#state.sessions.get(sessionId)?.version;
+  }
+
+  async findRecordedResult(action: SessionAction): Promise<SessionActionResult | undefined> {
+    const stored = this.#state.actions.get(actionKey(action.sessionId, action.idempotencyKey));
+    if (!stored) return undefined;
+    const fingerprint = await fingerprintSessionAction(action);
+    return stored.fingerprint === fingerprint ? freeze(clone(stored.result)) : denial("IDEMPOTENCY_KEY_CONFLICT");
   }
 
   async apply(action: SessionAction, evaluate: SessionEvaluation): Promise<SessionActionResult> {

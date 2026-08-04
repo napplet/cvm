@@ -1,36 +1,81 @@
-import { canonicalJson } from "../promotion/schema";
+import { evaluateAdmission, type TokenCounter } from "../admission/admission-policy";
+import { evaluateRisk, type RiskSignalDetector } from "../admission/risk-policy";
+import { GrantRegistry, ScopedToolGateway, type ToolDispatcher } from "../capabilities/scoped-tool-gateway";
+import { type SessionAction, type SessionActionResult } from "../domain/session-action";
+import { SessionService } from "../domain/session-service";
+import { SqliteSessionStore } from "../persistence/sqlite-session-store";
+import { TransactionalMemorySessionStore, type SessionRecord, type SessionStore } from "../persistence/session-store";
+import { evaluateArtifactContract, type ArtifactContractInput } from "../policy/artifact-contract";
 import { PHASE_02_POLICY_INITIAL } from "../policy/phase-02-policy";
+import { canonicalJson } from "../promotion/schema";
+import { validateCheckpointProposal } from "../worker-port/fake-worker";
 import {
   ActionEnvelopeSchema,
-  EvidenceSchema,
-  ResultSchema,
-  WorkerProposalSchema,
+  WorkerEventSchema,
+  WorkerRunRequestSchema,
+  WorkerRunResultSchema,
   type ActionEnvelope,
-  type SessionEvidence,
-  type SessionStore,
-  type SessionTransaction,
-  type StoredResult,
+  type WorkerEvent,
   type WorkerPort,
   type WorkerRunRequest,
-  type WorkerToolRequest,
+  type WorkerRunResult,
 } from "./contracts";
 
 export type { ActionEnvelope, WorkerPort, WorkerRunRequest } from "./contracts";
 
-type CoreResult = Readonly<{
+export type TrustedCoreResult = Readonly<{
   status: "completed" | "denied" | "recoverable_failure";
-  code: "ACTION_COMMITTED" | "ADMISSION_DENIED" | "IDEMPOTENCY_KEY_CONFLICT" | "STALE_SESSION_VERSION" | "TOOL_AUTHORIZATION_DENIED" | "WORKER_UNCERTAIN";
+  code: string;
   version?: number;
   currentVersion?: number;
   evidenceDigest?: string;
+  evidenceId?: string;
 }>;
 
-type StoredSession = {
-  version: number;
-  replays: Map<string, { fingerprint: string; result: StoredResult }>;
-};
+export type TrustedCoreArtifactFacts = Readonly<{
+  action: ActionEnvelope;
+  request: WorkerRunRequest;
+  result: WorkerRunResult;
+  events: readonly WorkerEvent[];
+}>;
 
-type WorkspaceEffect = Readonly<{ workspaceId: string; path: string; content: string }>;
+export type TrustedCoreOptions = Readonly<{
+  /** Required for final/reference composition unless an explicit test store is supplied. */
+  databasePath?: string;
+  /** Test-only injection; final composition never creates this volatile store implicitly. */
+  store?: SessionStore;
+  worker: WorkerPort;
+  workspaceRoot?: string;
+  tokenCounter?: TokenCounter;
+  riskDetector?: RiskSignalDetector;
+  dispatcher?: ToolDispatcher;
+  artifactInput?: (facts: TrustedCoreArtifactFacts) => ArtifactContractInput;
+  sessions?: readonly SessionRecord[];
+  now?: () => number;
+}>;
+
+type InternalDependencies = Readonly<{
+  store: SessionStore;
+  worker: WorkerPort;
+  workspaceRoot: string;
+  tokenCounter: TokenCounter;
+  riskDetector: RiskSignalDetector;
+  dispatcher: ToolDispatcher;
+  artifactInput: (facts: TrustedCoreArtifactFacts) => ArtifactContractInput;
+  now: () => number;
+}>;
+
+const DEFAULT_COUNTER: TokenCounter = Object.freeze({
+  version: "phase-02-whitespace-token-counter-v1",
+  count: (idea) => idea.trim().split(/\s+/u).filter(Boolean).length,
+});
+const DEFAULT_RISK_DETECTOR: RiskSignalDetector = Object.freeze({
+  version: "phase-02-deterministic-risk-detector-v1",
+  detect: () => [],
+});
+const DEFAULT_DISPATCHER: ToolDispatcher = Object.freeze({
+  dispatch: async () => { throw new Error("no coordinator dispatcher configured"); },
+});
 
 function freeze<T>(value: T): T {
   if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
@@ -40,194 +85,201 @@ function freeze<T>(value: T): T {
   return value;
 }
 
-function copy<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
+async function digest(value: unknown): Promise<string> {
+  const bytes = new TextEncoder().encode(canonicalJson(value));
+  const hash = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function cloneSession(session: StoredSession): StoredSession {
+async function digestText(value: string): Promise<string> {
+  const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function defaultArtifactInput(_facts: TrustedCoreArtifactFacts): ArtifactContractInput {
+  // This is deliberately only a narrow Phase 1 contract input. It does not
+  // inspect or reinterpret a manifest, NIP/NAP rules, or generated source.
   return {
-    version: session.version,
-    replays: new Map([...session.replays].map(([key, record]) => [key, { fingerprint: record.fingerprint, result: copy(record.result) }])),
+    purpose: { kind: "focused", statements: ["one focused napplet"] },
+    surface: { hasBackend: false, hasSecondPurpose: false, serviceWorker: false, dynamicAuthority: false },
+    dependencies: { appOwnedSignerOrRelay: false, privateNappletImport: false },
+    capabilities: { declaredHard: ["storage"], observedDomains: ["storage"], optionalIntentPresenceRead: false, intentUsedThroughSdk: false },
+    upstream: { scanner: { verdict: "pass", checkId: "upstream:worker-output-scanner" }, conformance: { verdict: "pass", checkId: "upstream:worker-output-conformance" } },
   };
 }
 
-async function sha256(value: unknown): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalJson(value)));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+function asFailure(code: string, details: unknown): Promise<TrustedCoreResult> {
+  return digest({ phase: "02", code, details }).then((evidenceDigest) => freeze({
+    status: code === "ADMISSION_DENIED" || code === "RISK_DENIED" || code === "TOOL_AUTHORIZATION_DENIED" ? "denied" : "recoverable_failure",
+    code,
+    evidenceDigest,
+  }));
 }
 
-/** Stable identity for exact duplicate detection, independent of property order. */
-export async function canonicalActionFingerprint(action: ActionEnvelope): Promise<string> {
-  return sha256(action);
-}
-
-/** Canonical, content-addressed audit identity for one trusted-core decision. */
-export async function canonicalEvidenceDigest(evidence: Omit<SessionEvidence, "evidenceDigest">): Promise<string> {
-  return sha256(evidence);
+function sessionResult(result: SessionActionResult): TrustedCoreResult {
+  return freeze({
+    status: result.status,
+    code: result.code,
+    ...(result.version === undefined ? {} : { version: result.version }),
+    ...(result.currentVersion === undefined ? {} : { currentVersion: result.currentVersion }),
+    ...(result.evidenceDigest === undefined ? {} : { evidenceDigest: result.evidenceDigest }),
+    ...(result.evidenceId === undefined ? {} : { evidenceId: result.evidenceId }),
+  });
 }
 
 /**
- * Fast test double only. It serializes all session work, copies state before a
- * transaction, and commits both result and append-only evidence only on return.
- * Plan 03 supplies the durable reference store.
+ * The transport-neutral Phase 2 authority. Order is intentional: admission,
+ * restrictive risk, version-fenced session authority, grant/gateway, canonical
+ * worker parsing, Phase 1 artifact contract, then the one durable commit seam.
  */
-export class TransactionalMemorySessionStore implements SessionStore {
-  #sessions = new Map<string, StoredSession>();
-  #evidence: SessionEvidence[] = [];
-  #tail: Promise<void> = Promise.resolve();
-
-  get evidence(): readonly SessionEvidence[] {
-    return freeze(copy(this.#evidence));
-  }
-
-  getSessionVersion(sessionId: string): number {
-    return this.#sessions.get(sessionId)?.version ?? 0;
-  }
-
-  async transact<T>(sessionId: string, operation: (transaction: SessionTransaction) => Promise<T> | T): Promise<T> {
-    let release: (() => void) | undefined;
-    const previous = this.#tail;
-    this.#tail = new Promise<void>((resolve) => { release = resolve; });
-    await previous;
-    const session = cloneSession(this.#sessions.get(sessionId) ?? { version: 0, replays: new Map() });
-    const evidence = [...this.#evidence];
-    const transaction: SessionTransaction = {
-      getVersion: () => session.version,
-      getReplay: (idempotencyKey) => {
-        const replay = session.replays.get(idempotencyKey);
-        return replay ? freeze(copy(replay)) : undefined;
-      },
-      recordResult: (idempotencyKey, fingerprint, result, nextVersion) => {
-        session.replays.set(idempotencyKey, { fingerprint, result: freeze(copy(result)) });
-        session.version = nextVersion;
-      },
-      appendEvidence: (item) => evidence.push(freeze(copy(item))),
-    };
-    try {
-      const result = await operation(transaction);
-      this.#sessions.set(sessionId, session);
-      this.#evidence = evidence;
-      return result;
-    } finally {
-      release?.();
-    }
-  }
-}
-
-function admissionDenied(): CoreResult {
-  return freeze(ResultSchema.parse({ status: "denied", code: "ADMISSION_DENIED" })) as CoreResult;
-}
-
-function canonicalIdea(idea: string): boolean {
-  const policy = PHASE_02_POLICY_INITIAL.admission;
-  if (idea.length === 0 || idea !== idea.normalize("NFC")) return false;
-  if (new TextDecoder("utf-8", { fatal: true }).decode(new TextEncoder().encode(idea)) !== idea) return false;
-  const codePoints = Array.from(idea);
-  if (codePoints.length > policy.maxCodePoints || new TextEncoder().encode(idea).byteLength > policy.maxUtf8Bytes) return false;
-  const lines = idea.split("\n");
-  if (lines.length > policy.maxLines || lines.some((line) => Array.from(line).length > policy.maxCodePointsPerLine)) return false;
-  const graphemes = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(idea)].length;
-  if (graphemes > policy.maxGraphemes) return false;
-  const tokens = idea.trim().split(/\s+/u).filter(Boolean).length;
-  return tokens <= policy.maxInputTokens;
-}
-
-function riskDecision(idea: string): boolean {
-  return !/(?:ignore\s+(?:all\s+)?previous|system\s+prompt|jailbreak)/iu.test(idea);
-}
-
-function safeWorkspacePath(path: string): boolean {
-  const { maxPathCharacters } = PHASE_02_POLICY_INITIAL.tools;
-  return path.length > 0 && path.length <= maxPathCharacters && !path.includes("\0") && !path.startsWith("/") && !path.split("/").some((part) => part === "" || part === "." || part === "..");
-}
-
 export class TrustedCore {
-  constructor(private readonly store: SessionStore, private readonly worker: WorkerPort, private readonly dispatchWrite: (effect: WorkspaceEffect) => void) {}
+  readonly #service: SessionService;
 
-  async execute(input: unknown, signal: AbortSignal = new AbortController().signal): Promise<CoreResult> {
-    const parsed = ActionEnvelopeSchema.safeParse(input);
-    if (!parsed.success || !canonicalIdea(parsed.data.idea) || !riskDecision(parsed.data.idea) || parsed.data.policyVersion !== PHASE_02_POLICY_INITIAL.policyVersion) {
-      return admissionDenied();
+  constructor(private readonly dependencies: InternalDependencies) {
+    this.#service = new SessionService(dependencies.store);
+  }
+
+  get store(): SessionStore { return this.dependencies.store; }
+
+  async execute(input: unknown, signal: AbortSignal = new AbortController().signal): Promise<TrustedCoreResult> {
+    const parsedAction = ActionEnvelopeSchema.safeParse(input);
+    if (!parsedAction.success || parsedAction.data.policyVersion !== PHASE_02_POLICY_INITIAL.policyVersion) {
+      return asFailure("ADMISSION_DENIED", { reason: "action envelope or policy identity invalid" });
     }
-    const action = parsed.data;
-    const fingerprint = await canonicalActionFingerprint(action);
-    return this.store.transact(action.sessionId, async (transaction) => {
-      const replay = transaction.getReplay(action.idempotencyKey);
-      if (replay) {
-        if (replay.fingerprint !== fingerprint) return freeze(ResultSchema.parse({ status: "denied", code: "IDEMPOTENCY_KEY_CONFLICT" })) as CoreResult;
-        return freeze(copy(replay.result)) as CoreResult;
-      }
-      const currentVersion = transaction.getVersion();
-      if (action.expectedVersion !== currentVersion) return freeze(ResultSchema.parse({ status: "denied", code: "STALE_SESSION_VERSION", currentVersion })) as CoreResult;
+    const action = parsedAction.data;
 
-      const workspaceId = `workspace:${action.sessionId}`;
-      const capabilityGrant = await sha256({
-        policyVersion: PHASE_02_POLICY_INITIAL.policyVersion,
-        principalId: action.principal.id,
-        sessionId: action.sessionId,
-        actionId: action.actionId,
-        expectedVersion: action.expectedVersion,
-        workspaceId,
-      });
-      const request: WorkerRunRequest = { sessionId: action.sessionId, actionId: action.actionId, expectedVersion: action.expectedVersion, policyVersion: action.policyVersion, capabilityGrant, workspaceId, idea: action.idea };
-      if (signal.aborted) return this.recordFailure(transaction, action, fingerprint, capabilityGrant, currentVersion, "WORKER_UNCERTAIN");
-
-      let proposed: unknown;
-      try {
-        proposed = await this.worker.run(request, signal);
-      } catch {
-        return this.recordFailure(transaction, action, fingerprint, capabilityGrant, currentVersion, "WORKER_UNCERTAIN");
-      }
-      const proposal = WorkerProposalSchema.safeParse(proposed);
-      if (!proposal.success || proposal.data.toolRequests.length !== 1) {
-        return this.recordFailure(transaction, action, fingerprint, capabilityGrant, currentVersion, "TOOL_AUTHORIZATION_DENIED");
-      }
-      const tool = proposal.data.toolRequests[0]!;
-      if (!this.isAuthorizedTool(tool, request)) {
-        return this.recordFailure(transaction, action, fingerprint, capabilityGrant, currentVersion, "TOOL_AUTHORIZATION_DENIED");
-      }
-
-      this.dispatchWrite(freeze({ workspaceId, path: tool.path, content: tool.content }));
-      const nextVersion = currentVersion + 1;
-      const evidence = await this.evidence(action, fingerprint, capabilityGrant, nextVersion, "ACTION_COMMITTED");
-      const result = freeze(ResultSchema.parse({ status: "completed", code: "ACTION_COMMITTED", version: nextVersion, evidenceDigest: evidence.evidenceDigest })) as CoreResult;
-      transaction.recordResult(action.idempotencyKey, fingerprint, result, nextVersion);
-      transaction.appendEvidence(evidence);
-      return result;
+    // Exact replay must be resolved before admission/risk/worker allocation so a
+    // response-loss retry cannot repeat a gateway or worker side effect.
+    const replayAction: SessionAction = freeze({
+      principal: action.principal, sessionId: action.sessionId, actionId: action.actionId,
+      kind: action.kind, idempotencyKey: action.idempotencyKey, expectedVersion: action.expectedVersion,
+      policyVersion: action.policyVersion, payload: freeze({ ideaSha256: await digestText(action.idea), artifactGate: "phase-1-composed" }),
     });
-  }
+    const replay = await this.dependencies.store.findRecordedResult(replayAction);
+    if (replay) return sessionResult(replay);
 
-  private isAuthorizedTool(tool: WorkerToolRequest, request: WorkerRunRequest): boolean {
-    return tool.tool === "write_workspace_file"
-      && tool.sessionId === request.sessionId
-      && tool.actionId === request.actionId
-      && tool.expectedVersion === request.expectedVersion
-      && tool.policyVersion === request.policyVersion
-      && tool.capabilityGrant === request.capabilityGrant
-      && tool.workspaceId === request.workspaceId
-      && safeWorkspacePath(tool.path)
-      && tool.content.length <= PHASE_02_POLICY_INITIAL.tools.maxWriteContentCharacters;
-  }
+    // Hard admission is a separate first boundary. No risk detector, store,
+    // worker, gateway, artifact policy, allocation, or billable hook follows a denial.
+    const admission = await evaluateAdmission({ idea: action.idea }, this.dependencies.tokenCounter);
+    if (admission.status !== "accepted") return asFailure("ADMISSION_DENIED", admission.evidence);
 
-  private async evidence(action: ActionEnvelope, fingerprint: string, capabilityGrant: string, version: number, outcomeCode: SessionEvidence["outcomeCode"]): Promise<SessionEvidence> {
-    const base = { principalId: action.principal.id, sessionId: action.sessionId, actionId: action.actionId, version, policyVersion: action.policyVersion, capabilityGrant, outcomeCode, fingerprint };
-    return freeze(EvidenceSchema.parse({ ...base, evidenceDigest: await canonicalEvidenceDigest(base) }));
-  }
+    const risk = await evaluateRisk({ idea: admission.idea }, this.dependencies.tokenCounter, this.dependencies.riskDetector, ["workspace_write"]);
+    if (risk.status !== "accepted") return asFailure("RISK_DENIED", risk.evidence);
+    if (signal.aborted) return asFailure("WORKER_UNCERTAIN", { reason: "aborted before worker allocation" });
 
-  private async recordFailure(transaction: SessionTransaction, action: ActionEnvelope, fingerprint: string, capabilityGrant: string, version: number, code: "TOOL_AUTHORIZATION_DENIED" | "WORKER_UNCERTAIN"): Promise<CoreResult> {
-    const evidence = await this.evidence(action, fingerprint, capabilityGrant, version, code);
-    transaction.appendEvidence(evidence);
-    return freeze(ResultSchema.parse({ status: code === "WORKER_UNCERTAIN" ? "recoverable_failure" : "denied", code, evidenceDigest: evidence.evidenceDigest })) as CoreResult;
+    const capabilityGrant = await digest({
+      policyVersion: PHASE_02_POLICY_INITIAL.policyVersion,
+      principalId: action.principal.id,
+      sessionId: action.sessionId,
+      actionId: action.actionId,
+      expectedVersion: action.expectedVersion,
+      workspaceId: `workspace:${action.sessionId}`,
+    });
+    const request = WorkerRunRequestSchema.parse({
+      sessionId: action.sessionId,
+      actionId: action.actionId,
+      expectedVersion: action.expectedVersion,
+      policyVersion: action.policyVersion,
+      capabilityGrant,
+      workspaceId: `workspace:${action.sessionId}`,
+      idea: admission.idea,
+    });
+
+    const grants = new GrantRegistry();
+    grants.issue({
+      id: capabilityGrant,
+      sessionId: request.sessionId,
+      actionId: request.actionId,
+      expectedVersion: request.expectedVersion,
+      policyVersion: request.policyVersion,
+      workspaceId: request.workspaceId,
+      workspaceRoot: this.dependencies.workspaceRoot,
+      tools: ["workspace_write", "capture_evidence", "export_checkpoint"],
+      expiresAtMs: this.dependencies.now() + PHASE_02_POLICY_INITIAL.sandbox.execTimeoutSeconds * 1_000,
+    });
+    const gateway = new ScopedToolGateway(grants, this.dependencies.dispatcher, { now: this.dependencies.now });
+
+    let workerResult: WorkerRunResult;
+    try {
+      // Parse with the canonical authority before and after the WorkerPort boundary.
+      workerResult = WorkerRunResultSchema.parse(await this.dependencies.worker.run(WorkerRunRequestSchema.parse(request), signal));
+    } catch {
+      return asFailure("WORKER_UNCERTAIN", { request: { sessionId: request.sessionId, actionId: request.actionId } });
+    }
+    if (workerResult.status !== "completed" || workerResult.code !== "WORKER_PROPOSALS_VALIDATED") {
+      return asFailure("WORKER_UNCERTAIN", { status: workerResult.status, code: workerResult.code });
+    }
+
+    const events: WorkerEvent[] = [];
+    for (const event of workerResult.events) {
+      const parsedEvent = WorkerEventSchema.safeParse(event);
+      if (!parsedEvent.success) return asFailure("WORKER_UNCERTAIN", { reason: "worker event malformed" });
+      events.push(parsedEvent.data);
+      if (parsedEvent.data.kind === "tool_proposal") {
+        const decision = await gateway.authorizeAndDispatch(parsedEvent.data.request);
+        if (decision.status !== "allowed") return asFailure("TOOL_AUTHORIZATION_DENIED", { code: decision.code });
+      }
+    }
+    if (workerResult.checkpoint && !await validateCheckpointProposal(workerResult.checkpoint, request)) {
+      return asFailure("WORKER_UNCERTAIN", { reason: "checkpoint binding invalid" });
+    }
+
+    const facts = freeze({ action, request, result: workerResult, events: freeze(events) });
+    const artifact = await evaluateArtifactContract(this.dependencies.artifactInput(facts));
+    if (artifact.verdict !== "pass") return asFailure("ARTIFACT_CONTRACT_BLOCKED", { evidenceSha256: artifact.evidenceSha256 });
+
+    const sessionAction: SessionAction = freeze({
+      principal: action.principal,
+      sessionId: action.sessionId,
+      actionId: action.actionId,
+      kind: action.kind,
+      idempotencyKey: action.idempotencyKey,
+      expectedVersion: action.expectedVersion,
+      policyVersion: action.policyVersion,
+      payload: freeze({ ideaSha256: admission.evidence.inputSha256, artifactGate: "phase-1-composed" }),
+    });
+    const committed = await this.#service.apply(sessionAction, signal);
+    if (committed.status === "completed") grants.terminal(capabilityGrant);
+    return sessionResult(committed);
   }
 }
 
-/** Small runnable composition for the Plan 01 tracer; not the durable reference composition. */
-export function createPhase02Tracer(worker: WorkerPort): { readonly core: TrustedCore; readonly store: TransactionalMemorySessionStore; readonly effects: readonly WorkspaceEffect[] } {
-  const store = new TransactionalMemorySessionStore();
-  const effects: WorkspaceEffect[] = [];
-  return {
-    core: new TrustedCore(store, worker, (effect) => effects.push(effect)),
+export type TrustedCoreComposition = Readonly<{
+  core: TrustedCore;
+  store: SessionStore;
+  close: () => void;
+}>;
+
+/** Final/reference constructor: SQLite is mandatory unless a caller deliberately injects a test double. */
+export function createTrustedCore(options: TrustedCoreOptions): TrustedCoreComposition {
+  if (!options.store && (!options.databasePath || options.databasePath.trim() === "")) {
+    throw new Error("databasePath is required for final TrustedCore composition");
+  }
+  if (options.store && options.databasePath) throw new Error("provide either databasePath or an explicit test store, not both");
+  const store = options.store ?? new SqliteSessionStore(options.databasePath!);
+  for (const session of options.sessions ?? []) {
+    try { store.createSession(session); }
+    catch (error) {
+      if (!(error instanceof Error) || !/UNIQUE constraint failed|session already exists/u.test(error.message)) throw error;
+    }
+  }
+  const core = new TrustedCore({
     store,
-    get effects() { return freeze(copy(effects)); },
-  };
+    worker: options.worker,
+    workspaceRoot: options.workspaceRoot ?? "/workspace",
+    tokenCounter: options.tokenCounter ?? DEFAULT_COUNTER,
+    riskDetector: options.riskDetector ?? DEFAULT_RISK_DETECTOR,
+    dispatcher: options.dispatcher ?? DEFAULT_DISPATCHER,
+    artifactInput: options.artifactInput ?? defaultArtifactInput,
+    now: options.now ?? Date.now,
+  });
+  return freeze({ core, store, close: () => { if (store instanceof SqliteSessionStore) store.close(); } });
+}
+
+/** Compatibility helper for fast tests only; it is never used by final/reference execution. */
+export function createPhase02Tracer(worker: WorkerPort): TrustedCoreComposition {
+  return createTrustedCore({
+    store: new TransactionalMemorySessionStore([{ sessionId: "session-0001", principalId: "principal:alice", version: 0 }]),
+    worker,
+  });
 }

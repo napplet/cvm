@@ -62,6 +62,13 @@ export class SqliteSessionStore implements SessionStore {
     return row?.version;
   }
 
+  async findRecordedResult(action: SessionAction): Promise<SessionActionResult | undefined> {
+    const existing = this.#database.query("SELECT fingerprint, result_json, evidence_id FROM action_results WHERE session_id = ? AND idempotency_key = ?").get(action.sessionId, action.idempotencyKey) as ActionRow | null;
+    if (!existing) return undefined;
+    const fingerprint = await fingerprintSessionAction(action);
+    return existing.fingerprint === fingerprint ? freeze(copy(JSON.parse(existing.result_json) as SessionActionResult)) : denial("IDEMPOTENCY_KEY_CONFLICT");
+  }
+
   get evidence(): readonly SessionEvidence[] {
     const rows = this.#database.query("SELECT record_json FROM evidence ORDER BY rowid").all() as EvidenceRow[];
     return freeze(rows.map((row) => JSON.parse(row.record_json) as SessionEvidence));

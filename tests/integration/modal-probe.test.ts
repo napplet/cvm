@@ -4,6 +4,7 @@ import { readdir } from "node:fs/promises";
 import {
   ModalWorkerAdapter,
   ModalWorkerConfigSchema,
+  runModalIsolationProbe,
   type ModalSdkPort,
 } from "../../src/worker-adapters/modal-worker";
 import { PHASE_02_POLICY_INITIAL } from "../../src/policy/phase-02-policy";
@@ -129,5 +130,33 @@ describe("Modal adapter contract", () => {
         expect(await Bun.file(`${root}/${name}`).text()).not.toMatch(/from\s+["']modal["']/);
       }
     }
+  });
+});
+
+describe("Modal probe evidence", () => {
+  test("writes blocked, unselected evidence without provider configuration", async () => {
+    const process = Bun.spawn(["bun", "run", "scripts/probe-modal-worker.ts"], {
+      cwd: process.cwd(),
+      env: { ...process.env, MODAL_TOKEN_ID: "", MODAL_TOKEN_SECRET: "", NAPPLET_CVM_MODAL_PROBE_CONFIG: "" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(await process.exited).toBe(0);
+    const pointer = await Bun.file("evidence/phase-02/modal-probe.json").json();
+    expect(pointer).toMatchObject({ status: "blocked", selection: "unselected", reasonCode: "PROVIDER_UNSELECTED" });
+    expect(pointer.evidenceSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(existsSync(`evidence/phase-02/provider/${pointer.evidenceSha256}.json`)).toBe(true);
+  });
+
+  test("requires every observation and termination before a provider pass", async () => {
+    const required = {
+      ownCanary: "passed", siblingAbsent: "passed", hostAbsent: "passed", secretAbsent: "passed",
+      dnsDenied: "passed", httpDenied: "passed", websocketDenied: "passed", tcpDenied: "passed",
+      noPorts: "passed", gatewayAllowed: "passed", runtimeBrowserBuild: "passed", checkpointPortable: "passed",
+    } as const;
+    const passed = await runModalIsolationProbe({ config: config(), observe: async () => ({ checks: required, termination: "observed" }) });
+    expect(passed).toMatchObject({ status: "passed", selection: "eligible-not-selected" });
+    const failed = await runModalIsolationProbe({ config: config(), observe: async () => ({ checks: { ...required, tcpDenied: "failed" }, termination: "observed" }) });
+    expect(failed).toMatchObject({ status: "failed", selection: "unselected", failedChecks: ["tcpDenied"] });
   });
 });

@@ -1,41 +1,43 @@
 import { z } from "zod";
 
-export const PrincipalSchema = z.object({ id: z.string().min(1).max(256) }).strict();
-export const PolicyVersionSchema = z.string().min(1).max(128);
-export const ActionEnvelopeSchema = z.object({
+export const PrincipalSchema = z.object({ id: z.string().min(1) }).strict();
+export const PolicyVersionSchema = z.string().min(1);
+export const AdmissionRequestSchema = z.object({ idea: z.string() }).strict();
+export const SessionActionSchema = z.object({
   principal: PrincipalSchema,
-  sessionId: z.string().min(1).max(128),
-  actionId: z.string().min(1).max(128),
+  sessionId: z.string().min(1),
+  actionId: z.string().min(1),
   kind: z.literal("design"),
-  idempotencyKey: z.string().min(1).max(256),
+  idempotencyKey: z.string().min(1),
   expectedVersion: z.number().int().nonnegative(),
   policyVersion: PolicyVersionSchema,
   idea: z.string(),
 }).strict();
+export const ActionEnvelopeSchema = SessionActionSchema;
 
 export const WorkerRunRequestSchema = z.object({
-  sessionId: z.string().min(1).max(128),
-  actionId: z.string().min(1).max(128),
+  sessionId: z.string().min(1),
+  actionId: z.string().min(1),
   expectedVersion: z.number().int().nonnegative(),
   policyVersion: PolicyVersionSchema,
-  capabilityGrant: z.string().min(1).max(256),
-  workspaceId: z.string().min(1).max(256),
+  capabilityGrant: z.string().min(1),
+  workspaceId: z.string().min(1),
   idea: z.string(),
 }).strict();
 
 export const WorkerEvidenceSchema = z.object({
-  type: z.string().min(1).max(128),
-  detail: z.string().max(1_024),
+  type: z.string().min(1),
+  detail: z.string(),
 }).strict();
 
 export const WorkerToolRequestSchema = z.object({
-  tool: z.string().min(1).max(128),
-  sessionId: z.string().min(1).max(128),
-  actionId: z.string().min(1).max(128),
+  tool: z.string().min(1),
+  sessionId: z.string().min(1),
+  actionId: z.string().min(1),
   expectedVersion: z.number().int().nonnegative(),
   policyVersion: PolicyVersionSchema,
-  capabilityGrant: z.string().min(1).max(256),
-  workspaceId: z.string().min(1).max(256),
+  capabilityGrant: z.string().min(1),
+  workspaceId: z.string().min(1),
   path: z.string(),
   content: z.string(),
 }).strict();
@@ -45,6 +47,27 @@ export const WorkerProposalSchema = z.object({
   toolRequests: z.array(WorkerToolRequestSchema).max(1),
   evidence: z.array(WorkerEvidenceSchema).max(16),
 }).strict();
+export const WorkerEventSchema = WorkerProposalSchema;
+export const ToolRequestSchema = WorkerToolRequestSchema;
+
+const EvidenceDigestSchema = z.string().regex(/^[a-f0-9]{64}$/i);
+export const EvidenceSchema = z.object({
+  principalId: z.string().min(1),
+  sessionId: z.string().min(1),
+  actionId: z.string().min(1),
+  version: z.number().int().nonnegative(),
+  policyVersion: PolicyVersionSchema,
+  capabilityGrant: z.string().min(1),
+  outcomeCode: z.string().min(1),
+  fingerprint: EvidenceDigestSchema,
+  evidenceDigest: EvidenceDigestSchema,
+}).strict();
+
+export const ResultSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("completed"), code: z.literal("ACTION_COMMITTED"), version: z.number().int().positive(), evidenceDigest: EvidenceDigestSchema }).strict(),
+  z.object({ status: z.literal("denied"), code: z.enum(["ADMISSION_DENIED", "IDEMPOTENCY_KEY_CONFLICT", "STALE_SESSION_VERSION", "TOOL_AUTHORIZATION_DENIED"]), currentVersion: z.number().int().nonnegative().optional(), evidenceDigest: EvidenceDigestSchema.optional() }).strict(),
+  z.object({ status: z.literal("recoverable_failure"), code: z.literal("WORKER_UNCERTAIN"), evidenceDigest: EvidenceDigestSchema }).strict(),
+]);
 
 export type Principal = z.infer<typeof PrincipalSchema>;
 export type PolicyVersion = z.infer<typeof PolicyVersionSchema>;
@@ -59,17 +82,7 @@ export interface WorkerPort {
 }
 
 export type StoredResult = Readonly<Record<string, unknown>>;
-export type SessionEvidence = Readonly<{
-  principalId: string;
-  sessionId: string;
-  actionId: string;
-  version: number;
-  policyVersion: string;
-  capabilityGrant: string;
-  outcomeCode: string;
-  fingerprint: string;
-  evidenceDigest: string;
-}>;
+export type SessionEvidence = z.infer<typeof EvidenceSchema>;
 
 export interface SessionTransaction {
   getVersion(): number;

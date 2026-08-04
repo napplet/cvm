@@ -25,6 +25,7 @@ export const PHASE_02_POLICY_INITIAL = deepFreeze({
 } as const);
 
 export type Phase02Policy = typeof PHASE_02_POLICY_INITIAL;
+export type Phase02PolicySnapshot = Phase02Policy;
 
 function deepFreeze<T>(value: T): T {
   if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {

@@ -2,6 +2,8 @@ import { canonicalJson } from "../promotion/schema";
 import { PHASE_02_POLICY_INITIAL } from "../policy/phase-02-policy";
 import {
   ActionEnvelopeSchema,
+  EvidenceSchema,
+  ResultSchema,
   WorkerProposalSchema,
   type ActionEnvelope,
   type SessionEvidence,
@@ -113,7 +115,7 @@ export class TransactionalMemorySessionStore implements SessionStore {
 }
 
 function admissionDenied(): CoreResult {
-  return freeze({ status: "denied", code: "ADMISSION_DENIED" });
+  return freeze(ResultSchema.parse({ status: "denied", code: "ADMISSION_DENIED" })) as CoreResult;
 }
 
 function canonicalIdea(idea: string): boolean {
@@ -152,11 +154,11 @@ export class TrustedCore {
     return this.store.transact(action.sessionId, async (transaction) => {
       const replay = transaction.getReplay(action.idempotencyKey);
       if (replay) {
-        if (replay.fingerprint !== fingerprint) return freeze({ status: "denied", code: "IDEMPOTENCY_KEY_CONFLICT" });
+        if (replay.fingerprint !== fingerprint) return freeze(ResultSchema.parse({ status: "denied", code: "IDEMPOTENCY_KEY_CONFLICT" })) as CoreResult;
         return freeze(copy(replay.result)) as CoreResult;
       }
       const currentVersion = transaction.getVersion();
-      if (action.expectedVersion !== currentVersion) return freeze({ status: "denied", code: "STALE_SESSION_VERSION", currentVersion });
+      if (action.expectedVersion !== currentVersion) return freeze(ResultSchema.parse({ status: "denied", code: "STALE_SESSION_VERSION", currentVersion })) as CoreResult;
 
       const workspaceId = `workspace:${action.sessionId}`;
       const capabilityGrant = await sha256({
@@ -188,7 +190,7 @@ export class TrustedCore {
       this.dispatchWrite(freeze({ workspaceId, path: tool.path, content: tool.content }));
       const nextVersion = currentVersion + 1;
       const evidence = await this.evidence(action, fingerprint, capabilityGrant, nextVersion, "ACTION_COMMITTED");
-      const result = freeze({ status: "completed" as const, code: "ACTION_COMMITTED" as const, version: nextVersion, evidenceDigest: evidence.evidenceDigest });
+      const result = freeze(ResultSchema.parse({ status: "completed", code: "ACTION_COMMITTED", version: nextVersion, evidenceDigest: evidence.evidenceDigest })) as CoreResult;
       transaction.recordResult(action.idempotencyKey, fingerprint, result, nextVersion);
       transaction.appendEvidence(evidence);
       return result;
@@ -209,13 +211,13 @@ export class TrustedCore {
 
   private async evidence(action: ActionEnvelope, fingerprint: string, capabilityGrant: string, version: number, outcomeCode: SessionEvidence["outcomeCode"]): Promise<SessionEvidence> {
     const base = { principalId: action.principal.id, sessionId: action.sessionId, actionId: action.actionId, version, policyVersion: action.policyVersion, capabilityGrant, outcomeCode, fingerprint };
-    return freeze({ ...base, evidenceDigest: await canonicalEvidenceDigest(base) });
+    return freeze(EvidenceSchema.parse({ ...base, evidenceDigest: await canonicalEvidenceDigest(base) }));
   }
 
   private async recordFailure(transaction: SessionTransaction, action: ActionEnvelope, fingerprint: string, capabilityGrant: string, version: number, code: "TOOL_AUTHORIZATION_DENIED" | "WORKER_UNCERTAIN"): Promise<CoreResult> {
     const evidence = await this.evidence(action, fingerprint, capabilityGrant, version, code);
     transaction.appendEvidence(evidence);
-    return freeze({ status: code === "WORKER_UNCERTAIN" ? "recoverable_failure" : "denied", code, evidenceDigest: evidence.evidenceDigest });
+    return freeze(ResultSchema.parse({ status: code === "WORKER_UNCERTAIN" ? "recoverable_failure" : "denied", code, evidenceDigest: evidence.evidenceDigest })) as CoreResult;
   }
 }
 

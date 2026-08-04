@@ -70,10 +70,11 @@ describe("ContextVM v1 announcement", () => {
     expect(first.metadata.tools).toEqual([
       { name: "account_status", available: true, planned: false, invocable: true },
       { name: "funded_admission", available: true, planned: false, invocable: true },
-      { name: "generation", available: false, planned: true, invocable: false },
       { name: "preview", available: false, planned: true, invocable: false },
       { name: "publication", available: false, planned: true, invocable: false },
-      { name: "session", available: false, planned: true, invocable: false },
+      { name: "revise_session", available: true, planned: false, invocable: true },
+      { name: "session_status", available: true, planned: false, invocable: true },
+      { name: "start_session", available: true, planned: false, invocable: true },
       { name: "top_up", available: true, planned: false, invocable: true },
     ]);
     expect(JSON.stringify(first)).not.toMatch(/x402|l402|private|secret|invoice|preimage/i);

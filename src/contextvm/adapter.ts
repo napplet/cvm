@@ -3,6 +3,8 @@ import { FundingService } from "../funding/funding-service";
 import type { AccountStatusService } from "../funding/account-status";
 import type { FundedAdmissionService } from "../funding/funded-admission";
 import { PrincipalSchema } from "../phase-03/contracts";
+import { SessionActionResultSchema } from "../phase-04/metered-generation-service";
+import { SessionStatusQuerySchema, SessionStatusSchema } from "../phase-04/session-status";
 import type { ContextVmInboundEnvelope, ContextVmTransportPort, ContextVmWireNotification, ContextVmWireResponse } from "./sdk-bridge";
 
 const SupportedPmiSchema = z.enum(["bitcoin-lightning-bolt11", "bitcoin-cashu-v4-direct"]);
@@ -15,7 +17,7 @@ const RequestSchema = z.object({
   id: z.union([z.string(), z.number(), z.null()]),
   method: z.literal("tools/call"),
   params: z.object({
-    name: z.enum(["account_status", "top_up", "funded_admission"]),
+    name: z.enum(["account_status", "top_up", "funded_admission", "start_session", "revise_session", "session_status"]),
     arguments: z.unknown(),
     _meta: z.unknown().optional(),
   }).strict(),
@@ -39,6 +41,15 @@ const FundedAdmissionArgumentsSchema = z.object({
   idempotencyKey: z.string().min(1),
   requestedCap: z.string().regex(/^[1-9][0-9]*$/u),
   unit: z.literal("sat"),
+}).strict();
+const StartSessionArgumentsSchema = z.object({
+  admissionReference: z.string().min(1), idempotencyKey: z.string().min(1), maximum: z.string().regex(/^[1-9][0-9]*$/u), idea: z.string().min(1).max(4_000),
+}).strict();
+const ReviseSessionArgumentsSchema = z.object({
+  sessionId: z.string().min(1), admissionReference: z.string().min(1), idempotencyKey: z.string().min(1), expectedVersion: z.number().int().nonnegative(), maximum: z.string().regex(/^[1-9][0-9]*$/u), revision: z.string().min(1).max(4_000),
+}).strict();
+const SessionStatusArgumentsSchema = z.object({
+  sessionId: z.string().min(1), billing: z.object({ limit: z.number().int().min(1).max(50).optional(), cursor: z.string().min(1).optional() }).strict().optional(),
 }).strict();
 const RailTopUpResultSchema = z.object({
   topUpId: z.string().min(1),
@@ -66,6 +77,12 @@ export interface ContextVmFundingAdapterOptions {
     lightning: Readonly<{ begin(input: unknown): Promise<unknown> }>;
     cashu: Readonly<{ submit(input: unknown): Promise<unknown> }>;
   }>;
+  /** Narrow transport-neutral generation facades; repair is deliberately absent. */
+  generation?: Readonly<{
+    startSession(input: unknown): Promise<unknown>;
+    reviseSession(input: unknown): Promise<unknown>;
+  }>;
+  sessionStatus?: Readonly<{ read(input: unknown): Promise<unknown> }>;
   policyVersion?: string;
   protocolVersion?: string;
 }
@@ -121,6 +138,26 @@ export class ContextVmFundingAdapter {
 
   private async dispatch(verifiedPubkey: string, requestEventId: string, rawEvent: z.infer<typeof EventSchema>, request: z.infer<typeof RequestSchema>): Promise<ContextVmWireResponse> {
     const { name, arguments: argumentsInput } = request.params;
+    if (name === "start_session") {
+      const args = StartSessionArgumentsSchema.parse(argumentsInput);
+      if (!this.options.generation) throw new Error("METERED_GENERATION_UNAVAILABLE");
+      const result = SessionActionResultSchema.parse(await this.options.generation.startSession({ principal: { pubkey: verifiedPubkey }, admissionReference: args.admissionReference, idempotencyKey: args.idempotencyKey, expectedVersion: 0, maximum: args.maximum, policyVersion: this.policyVersion, idea: args.idea }));
+      return this.generationResponse("start_session", verifiedPubkey, requestEventId, request.id, result);
+    }
+    if (name === "revise_session") {
+      const args = ReviseSessionArgumentsSchema.parse(argumentsInput);
+      if (!this.options.generation) throw new Error("METERED_GENERATION_UNAVAILABLE");
+      const result = SessionActionResultSchema.parse(await this.options.generation.reviseSession({ principal: { pubkey: verifiedPubkey }, sessionId: args.sessionId, admissionReference: args.admissionReference, idempotencyKey: args.idempotencyKey, expectedVersion: args.expectedVersion, maximum: args.maximum, policyVersion: this.policyVersion, revision: args.revision }));
+      return this.generationResponse("revise_session", verifiedPubkey, requestEventId, request.id, result);
+    }
+    if (name === "session_status") {
+      const args = SessionStatusArgumentsSchema.parse(argumentsInput);
+      if (!this.options.sessionStatus) throw new Error("SESSION_STATUS_UNAVAILABLE");
+      const query = SessionStatusQuerySchema.parse({ principal: { pubkey: verifiedPubkey }, sessionId: args.sessionId, ...(args.billing ? { billing: args.billing } : {}) });
+      const result = SessionStatusSchema.parse(await this.options.sessionStatus.read(query));
+      await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({ jsonrpc: "2.0", method: "notifications/session_status", params: result }), requestEventId);
+      return freeze({ jsonrpc: "2.0" as const, id: request.id, result });
+    }
     if (name === "account_status") {
       AccountStatusArgumentsSchema.parse(argumentsInput);
       const status = this.options.accountStatus
@@ -176,6 +213,16 @@ export class ContextVmFundingAdapter {
       id: request.id,
       result: wireResult,
     });
+  }
+
+  private async generationResponse(name: "start_session" | "revise_session", verifiedPubkey: string, requestEventId: string, id: string | number | null, result: z.infer<typeof SessionActionResultSchema>): Promise<ContextVmWireResponse> {
+    const wireResult = result.status === "completed" || result.status === "failed"
+      ? freeze({ status: result.status, code: result.code, sessionId: result.sessionId, sessionVersion: result.sessionVersion, artifactVersion: result.artifactVersion, confirmedSpend: result.confirmedSpend, remainingCap: result.remainingCap, remainingBalance: result.remainingBalance, nextAction: result.nextAction, operationId: result.operationId })
+      : result.status === "billing_invariant_failed" || result.status === "usage_unknown"
+        ? freeze({ status: result.status, code: result.code, sessionId: result.sessionId, nextAction: result.nextAction, operationId: result.operationId })
+        : freeze({ status: result.status, code: result.code });
+    await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({ jsonrpc: "2.0", method: `notifications/${name}`, params: wireResult }), requestEventId);
+    return freeze({ jsonrpc: "2.0" as const, id, result: wireResult });
   }
 
   private paymentTags(event: z.infer<typeof EventSchema>, pmi: z.infer<typeof SupportedPmiSchema>): PaymentTags {

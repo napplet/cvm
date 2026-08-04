@@ -4,11 +4,12 @@
     "pmis": ["bitcoin-lightning-bolt11", "bitcoin-cashu-v4-direct"],
     "paymentInteraction": ["transparent", "explicit_gating"],
     "tools": [
-      { "name": "generation", "available": false, "planned": true },
       { "name": "account_status", "available": true, "planned": false },
       { "name": "top_up", "available": true, "planned": false },
       { "name": "funded_admission", "available": true, "planned": false },
-      { "name": "session", "available": false, "planned": true },
+      { "name": "start_session", "available": true, "planned": false },
+      { "name": "revise_session", "available": true, "planned": false },
+      { "name": "session_status", "available": true, "planned": false },
       { "name": "preview", "available": false, "planned": true },
       { "name": "publication", "available": false, "planned": true }
     ]

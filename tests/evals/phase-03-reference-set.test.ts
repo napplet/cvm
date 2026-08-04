@@ -96,7 +96,7 @@ const zero = { commands: 0, postings: 0, holds: 0, outbox: 0 };
 type Oracle = (item: Reference) => Promise<Expected>;
 const oracles: Readonly<Record<string, Oracle>> = {
   "signed-announcement": async (item) => {
-    const announcement = buildContextVmAnnouncement({ topUpCap: { minimum: "1", maximum: "1000", unit: "sat" }, pmis: ["bitcoin-lightning-bolt11", "bitcoin-cashu-v4-direct"], paymentInteraction: ["transparent", "explicit_gating"], tools: ["generation", "account_status", "top_up", "funded_admission", "session", "preview", "publication"].map((name) => ({ name, available: ["account_status", "top_up", "funded_admission"].includes(name), planned: !["account_status", "top_up", "funded_admission"].includes(name) })) });
+    const announcement = buildContextVmAnnouncement({ topUpCap: { minimum: "1", maximum: "1000", unit: "sat" }, pmis: ["bitcoin-lightning-bolt11", "bitcoin-cashu-v4-direct"], paymentInteraction: ["transparent", "explicit_gating"], tools: ["start_session", "revise_session", "session_status", "account_status", "top_up", "funded_admission", "preview", "publication"].map((name) => ({ name, available: ["start_session", "revise_session", "session_status", "account_status", "top_up", "funded_admission"].includes(name), planned: !["start_session", "revise_session", "session_status", "account_status", "top_up", "funded_admission"].includes(name) })) });
     expect(announcement.metadata.protocol).toBe("contextvm-v1"); expect(JSON.stringify(announcement)).not.toMatch(/x402|l402/iu);
     return observation(item, "ANNOUNCEMENT_TRUTHFUL", zero, { allowed: 0, forbidden: 1 });
   },

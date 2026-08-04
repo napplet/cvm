@@ -1,11 +1,12 @@
 import { z } from "zod";
 
 const ToolNameSchema = z.enum([
-  "generation",
   "account_status",
   "top_up",
   "funded_admission",
-  "session",
+  "start_session",
+  "revise_session",
+  "session_status",
   "preview",
   "publication",
 ]);
@@ -22,11 +23,11 @@ const ContextVmAnnouncementInputSchema = z.object({
     name: ToolNameSchema,
     available: z.boolean(),
     planned: z.boolean(),
-  }).strict()).length(7),
+  }).strict()).length(8),
 }).strict().superRefine((value, context) => {
   if (new Set(value.pmis).size !== 2) context.addIssue({ code: "custom", message: "PMIs must be unique" });
   if (new Set(value.paymentInteraction).size !== 2) context.addIssue({ code: "custom", message: "payment interactions must be unique" });
-  if (new Set(value.tools.map((tool) => tool.name)).size !== 7) context.addIssue({ code: "custom", message: "tools must be unique" });
+  if (new Set(value.tools.map((tool) => tool.name)).size !== 8) context.addIssue({ code: "custom", message: "tools must be unique" });
   for (const tool of value.tools) {
     if (tool.available === tool.planned) context.addIssue({ code: "custom", message: `${tool.name} must be either available or planned` });
   }

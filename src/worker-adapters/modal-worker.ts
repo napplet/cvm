@@ -16,6 +16,10 @@ import { PHASE_02_POLICY_INITIAL } from "../policy/phase-02-policy";
 const SHA256_IMAGE = /^[a-z0-9][a-z0-9._/-]*(?::[a-z0-9._-]+)?@sha256:[a-f0-9]{64}$/i;
 const FORBIDDEN_TAG = /secret|token|password|credential|private.?key|api.?key/i;
 const MAX_OUTPUT_BYTES = PHASE_02_POLICY_INITIAL.sandbox.maxOutputBytes;
+const CheckpointInventorySchema = z.array(z.string().min(1).max(PHASE_02_POLICY_INITIAL.tools.maxPathCharacters).refine(
+  (path) => !path.startsWith("/") && !path.includes("\0") && !path.split("/").some((part) => part === "" || part === "." || part === ".."),
+  "checkpoint inventory paths must be relative and contained",
+)).min(1).max(1_000);
 
 const tagsSchema = z.record(z.string().min(1).max(64), z.string().min(1).max(256)).superRefine((tags, ctx) => {
   for (const [key, value] of Object.entries(tags)) {
@@ -163,6 +167,16 @@ async function sha256(value: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+/** Candidate probe boundary: list output must exactly match a content-addressed checkpoint manifest. */
+export async function validateProbeCheckpointInventory(listing: unknown, declared: unknown, manifestSha256: unknown): Promise<readonly string[]> {
+  if (typeof manifestSha256 !== "string" || !/^[a-f0-9]{64}$/iu.test(manifestSha256)) throw new Error("checkpoint manifest digest is malformed");
+  const actual = [...CheckpointInventorySchema.parse(listing)].sort();
+  const expected = [...CheckpointInventorySchema.parse(declared)].sort();
+  if (new Set(actual).size !== actual.length || new Set(expected).size !== expected.length || actual.length !== expected.length || actual.some((path, index) => path !== expected[index])) throw new Error("checkpoint inventory does not match manifest");
+  if (!actual.includes("checkpoint.tar.zst") || await sha256(canonicalJson(actual)) !== manifestSha256) throw new Error("checkpoint manifest is not bound to the observed inventory");
+  return Object.freeze(actual);
+}
+
 async function sha256Bytes(value: ArrayBuffer): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", value);
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -209,7 +223,7 @@ async function observeLiveModalIsolation(config: ModalWorkerConfig): Promise<Mod
     ]);
     const [firstOutput, secondOutput] = await Promise.all([processOutput(firstProcess), processOutput(secondProcess)]);
     if (firstOutput.exitCode !== 0 || secondOutput.exitCode !== 0) throw new Error("probe command failed");
-    const reportSchema = z.object({ checks: ProbeCheckSchema, gatewayRequest: ToolRequestSchema, checkpointSha256: z.string().regex(/^[a-f0-9]{64}$/i) }).strict();
+    const reportSchema = z.object({ checks: ProbeCheckSchema, gatewayRequest: ToolRequestSchema, checkpointSha256: z.string().regex(/^[a-f0-9]{64}$/i), checkpoint: z.object({ inventory: CheckpointInventorySchema, manifestSha256: z.string().regex(/^[a-f0-9]{64}$/i) }).strict() }).strict();
     const report = reportSchema.parse(JSON.parse(firstOutput.stdout));
     // Both fresh sandboxes must complete the same fixed probe before a report is considered.
     reportSchema.parse(JSON.parse(secondOutput.stdout));
@@ -224,7 +238,7 @@ async function observeLiveModalIsolation(config: ModalWorkerConfig): Promise<Mod
     if (gatewayResult.status !== "allowed") throw new Error("probe gateway request was not mediated");
     const checkpointPath = join(tempDirectory, "checkpoint.tar.zst");
     const listing = await first.filesystem.listFiles(config.workspaceRoot);
-    if (!Array.isArray(listing)) throw new Error("checkpoint listing is malformed");
+    await validateProbeCheckpointInventory(listing, report.checkpoint.inventory, report.checkpoint.manifestSha256);
     await first.filesystem.copyToLocal(`${config.workspaceRoot}/checkpoint.tar.zst`, checkpointPath);
     const actualCheckpointSha256 = await sha256Bytes(await Bun.file(checkpointPath).arrayBuffer());
     if (actualCheckpointSha256 !== report.checkpointSha256) throw new Error("checkpoint hash mismatch");

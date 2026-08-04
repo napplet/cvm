@@ -5,6 +5,7 @@ import {
   ModalWorkerAdapter,
   ModalWorkerConfigSchema,
   runModalIsolationProbe,
+  validateProbeCheckpointInventory,
   type ModalSdkPort,
 } from "../../src/worker-adapters/modal-worker";
 import { PHASE_02_POLICY_INITIAL } from "../../src/policy/phase-02-policy";
@@ -142,6 +143,13 @@ describe("Modal adapter contract", () => {
 });
 
 describe("Modal probe evidence", () => {
+  test("requires a hash-bound manifest that exactly matches the reported checkpoint inventory", async () => {
+    const inventory = ["checkpoint.tar.zst", "src/App.tsx"];
+    const manifestSha256 = new Bun.CryptoHasher("sha256").update(JSON.stringify(inventory)).digest("hex");
+    await expect(validateProbeCheckpointInventory(inventory, inventory, manifestSha256)).resolves.toEqual(inventory);
+    await expect(validateProbeCheckpointInventory(inventory, ["checkpoint.tar.zst"], manifestSha256)).rejects.toThrow();
+  });
+
   test("writes blocked, unselected evidence without provider configuration", async () => {
     const child = Bun.spawn(["bun", "run", "scripts/probe-modal-worker.ts"], {
       cwd: process.cwd(),

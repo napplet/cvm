@@ -1,0 +1,19 @@
+{
+  "pmi": "bitcoin-cashu-v4-direct",
+  "policies": [
+    {
+      "version": "cashu-policy-2026-08-04-a",
+      "mints": [
+        { "url": "https://mint-a.example", "keysetIds": ["009a1b2c3d4e5f60"], "requireDleq": true },
+        { "url": "https://mint-b.example", "keysetIds": ["009f1e2d3c4b5a60"], "requireDleq": false }
+      ]
+    },
+    {
+      "version": "cashu-policy-2026-08-04-b",
+      "mints": [
+        { "url": "https://mint-a.example", "keysetIds": ["009a1b2c3d4e5f61"], "requireDleq": true },
+        { "url": "https://mint-c.example", "keysetIds": ["009c1e2d3c4b5a60"], "requireDleq": false }
+      ]
+    }
+  ]
+}

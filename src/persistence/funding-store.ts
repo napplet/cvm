@@ -1,8 +1,8 @@
 import type { AccountStatus, FundedAdmission, FundingResult, VerifiedSettlement } from "../phase-03/contracts";
 
 export type LedgerPosting = Readonly<{ id: string; accountId: string; reference: string; unit: "sat"; amount: string; balanced: true }>;
-export type FundingEvidence = Readonly<{ id: string; accountId: string; kind: "settlement_credit" | "funded_admission"; reference: string }>;
-export type FundingOutbox = Readonly<{ id: string; accountId: string; kind: "account_credited" | "funded_admission_accepted"; reference: string }>;
+export type FundingEvidence = Readonly<{ id: string; accountId: string; kind: "settlement_credit" | "funded_admission" | "metered_receipt" | "metered_result"; reference: string }>;
+export type FundingOutbox = Readonly<{ id: string; accountId: string; kind: "account_credited" | "funded_admission_accepted" | "metered_action_finalized"; reference: string }>;
 export type StoredFundingCommand = Readonly<{ fingerprint: string; result: FundingResult }>;
 
 export type CreditInput = Readonly<{ accountId: string; fingerprint: string; idempotencyKey: string; settlement: VerifiedSettlement }>;
@@ -13,6 +13,11 @@ export type CapacityDispatchClaim = Readonly<{ intent: CapacityIntent; claimed: 
 export type CapacityObservationInput = Readonly<{ intentReference: string; state: "available" | "refused" | "reconciliation_pending"; capacityReference?: string; expiresAt?: string }>;
 export type ActionBudget = Readonly<{ accountId: string; admissionReference: string; idempotencyKey: string; fingerprint: string; reference: string; amount: bigint }>;
 export type ActionBudgetInput = Readonly<{ accountId: string; admissionReference: string; idempotencyKey: string; fingerprint: string; reference: string; amount: bigint }>;
+export type MeteredActionStatus = "prepared" | "dispatching" | "completed" | "failed" | "billing_invariant_failed";
+export type MeteredAction = Readonly<{ accountId: string; idempotencyKey: string; fingerprint: string; sessionId: string; actionId: string; expectedVersion: number; admissionReference: string; actionBudgetReference: string; maximum: bigint; operationId: string; profileId: string; priceCardId: string; status: MeteredActionStatus; receiptCharge?: string; providerReceiptReference?: string; result?: unknown; sessionVersion?: number; artifactVersion?: number; remainingCap?: string; remainingBalance?: string }>;
+export type PrepareMeteredActionInput = Omit<MeteredAction, "status" | "receiptCharge" | "providerReceiptReference" | "result" | "sessionVersion" | "artifactVersion">;
+export type MeteredOperationClaim = Readonly<{ action: MeteredAction; claimed: boolean }>;
+export type MeteredFinalizeInput = Readonly<{ idempotencyKey: string; operationId: string; receiptCharge: string; providerReceiptReference: string; status: Extract<MeteredActionStatus, "completed" | "failed" | "billing_invariant_failed">; result: unknown; sessionVersion: number; artifactVersion: number }>;
 
 export interface FundingTransaction {
   findRecordedResult(idempotencyKey: string): Promise<StoredFundingCommand | undefined>;
@@ -28,6 +33,14 @@ export interface FundingTransaction {
   reserveActionBudget(input: ActionBudgetInput): Promise<ActionBudget>;
 }
 
+export interface MeteredFundingTransaction extends FundingTransaction {
+  prepareMeteredAction(input: PrepareMeteredActionInput): Promise<MeteredAction>;
+  /** Atomically fences the sole billable provider dispatch for an operation ID. */
+  claimProviderOperation(operationId: string): Promise<MeteredOperationClaim>;
+  recordUsageReceipt(input: Readonly<{ operationId: string; protectedEvidenceReference: string }>): Promise<MeteredAction>;
+  finalizeMeteredAction(input: MeteredFinalizeInput): Promise<MeteredAction>;
+}
+
 /** Serializable financial authority port. Rail adapters never receive a posting or balance mutation API. */
 export interface FundingStore {
   findRecordedResult(accountId: string, idempotencyKey: string): Promise<StoredFundingCommand | undefined>;
@@ -35,10 +48,16 @@ export interface FundingStore {
   status(accountId: string): Promise<AccountStatus | undefined>;
 }
 
+/** Phase 4's explicit metered extension. Production SQL composition is added in the following plan. */
+export interface MeteredFundingStore extends FundingStore {
+  findMeteredAction(accountId: string, idempotencyKey: string): Promise<MeteredAction | undefined>;
+  transact<T>(accountId: string, operation: (transaction: MeteredFundingTransaction) => Promise<T> | T): Promise<T>;
+}
+
 type TopUp = Readonly<{ topUpId: string; rail: "lightning" | "cashu"; unit: "sat"; amount: bigint; state: "credited"; verifiedAt: string; settlementReference: string; externalReference: string }>;
 type Hold = Readonly<{ reference: string; approvedCap: bigint; heldAmount: bigint }>;
 type Account = Readonly<{ settledAvailable: bigint; held: bigint; topUps: readonly TopUp[]; holds: readonly Hold[] }>;
-type State = { accounts: Map<string, Account>; commands: Map<string, StoredFundingCommand>; capacityIntents: Map<string, CapacityIntent>; actionBudgets: Map<string, ActionBudget>; externalReferences: Set<string>; settlementReferences: Set<string>; postings: LedgerPosting[]; evidence: FundingEvidence[]; outbox: FundingOutbox[] };
+type State = { accounts: Map<string, Account>; commands: Map<string, StoredFundingCommand>; capacityIntents: Map<string, CapacityIntent>; actionBudgets: Map<string, ActionBudget>; meteredActions: Map<string, MeteredAction>; externalReferences: Set<string>; settlementReferences: Set<string>; postings: LedgerPosting[]; evidence: FundingEvidence[]; outbox: FundingOutbox[] };
 
 function clone<T>(value: T): T { return structuredClone(value); }
 function freeze<T>(value: T): T {
@@ -57,14 +76,15 @@ function copyState(state: State): State { return clone(state); }
  * Deterministic, serialized copy-then-commit double for tests only. It is not
  * a durable ledger and must never be selected as production monetary storage.
  */
-export class TransactionalMemoryFundingStore implements FundingStore {
-  #state: State = { accounts: new Map(), commands: new Map(), capacityIntents: new Map(), actionBudgets: new Map(), externalReferences: new Set(), settlementReferences: new Set(), postings: [], evidence: [], outbox: [] };
+export class TransactionalMemoryFundingStore implements MeteredFundingStore {
+  #state: State = { accounts: new Map(), commands: new Map(), capacityIntents: new Map(), actionBudgets: new Map(), meteredActions: new Map(), externalReferences: new Set(), settlementReferences: new Set(), postings: [], evidence: [], outbox: [] };
   #tail: Promise<void> = Promise.resolve();
 
   get postings(): readonly LedgerPosting[] { return freeze(clone(this.#state.postings)); }
   get evidence(): readonly FundingEvidence[] { return freeze(clone(this.#state.evidence)); }
   get outbox(): readonly FundingOutbox[] { return freeze(clone(this.#state.outbox)); }
   get activeHolds(): readonly Hold[] { return freeze(clone([...this.#state.accounts.values()].flatMap((account) => account.holds))); }
+  get meteredActions(): readonly MeteredAction[] { return freeze(clone([...this.#state.meteredActions.values()])); }
   snapshot(): Readonly<{ postings: readonly LedgerPosting[]; evidence: readonly FundingEvidence[]; outbox: readonly FundingOutbox[]; accounts: readonly [string, Account][] }> {
     return freeze(clone({ postings: this.#state.postings, evidence: this.#state.evidence, outbox: this.#state.outbox, accounts: [...this.#state.accounts.entries()] }));
   }
@@ -77,6 +97,10 @@ export class TransactionalMemoryFundingStore implements FundingStore {
     const found = this.#state.commands.get(commandKey(accountId, idempotencyKey));
     return found ? freeze(clone(found)) : undefined;
   }
+  async findMeteredAction(accountId: string, idempotencyKey: string): Promise<MeteredAction | undefined> {
+    const found = this.#state.meteredActions.get(commandKey(accountId, idempotencyKey));
+    return found ? freeze(clone(found)) : undefined;
+  }
 
   async transact<T>(accountId: string, operation: (transaction: FundingTransaction) => Promise<T> | T): Promise<T> {
     let release!: () => void;
@@ -85,7 +109,7 @@ export class TransactionalMemoryFundingStore implements FundingStore {
     await prior;
     try {
       const state = copyState(this.#state);
-      const transaction: FundingTransaction = {
+      const transaction: MeteredFundingTransaction = {
         findRecordedResult: async (idempotencyKey) => state.commands.get(commandKey(accountId, idempotencyKey)),
         creditVerifiedSettlement: async (input) => {
           if (input.accountId !== accountId) throw new Error("ACCOUNT_SCOPE_MISMATCH");
@@ -147,6 +171,43 @@ export class TransactionalMemoryFundingStore implements FundingStore {
           const account = accountFor(state, accountId); const hold = account.holds.find((candidate) => candidate.reference === input.admissionReference); if (!hold) throw new Error("ACTIVE_ADMISSION_REQUIRED");
           const reserved = [...state.actionBudgets.values()].filter((budget) => budget.accountId === accountId && budget.admissionReference === input.admissionReference).reduce((total, budget) => total + budget.amount, 0n);
           if (input.amount <= 0n || input.amount > hold.approvedCap - reserved) throw new Error("ACTION_BUDGET_EXCEEDS_APPROVED_CAP"); const next = freeze(input); state.actionBudgets.set(key, next); return next;
+        },
+        prepareMeteredAction: async (input) => {
+          if (input.accountId !== accountId) throw new Error("ACCOUNT_SCOPE_MISMATCH");
+          const key = commandKey(accountId, input.idempotencyKey); const existing = state.meteredActions.get(key);
+          if (existing) { if (existing.fingerprint !== input.fingerprint || existing.expectedVersion !== input.expectedVersion) throw new Error("IDEMPOTENCY_KEY_CONFLICT"); return existing; }
+          const budget = [...state.actionBudgets.values()].find((candidate) => candidate.accountId === accountId && candidate.reference === input.actionBudgetReference);
+          if (!budget || budget.admissionReference !== input.admissionReference || budget.amount !== input.maximum) throw new Error("METERED_ACTION_BUDGET_MISMATCH");
+          const action = freeze({ ...input, status: "prepared" as const }); state.meteredActions.set(key, action); return action;
+        },
+        claimProviderOperation: async (operationId) => {
+          const found = [...state.meteredActions.values()].find((action) => action.accountId === accountId && action.operationId === operationId);
+          if (!found) throw new Error("METERED_OPERATION_NOT_FOUND");
+          if (found.status !== "prepared") return freeze({ action: found, claimed: false });
+          const next = freeze({ ...found, status: "dispatching" as const }); state.meteredActions.set(commandKey(accountId, found.idempotencyKey), next); return freeze({ action: next, claimed: true });
+        },
+        recordUsageReceipt: async (input) => {
+          const found = [...state.meteredActions.values()].find((action) => action.accountId === accountId && action.operationId === input.operationId);
+          if (!found || found.status !== "dispatching") throw new Error("METERED_RECEIPT_STATE_INVALID");
+          const next = freeze({ ...found, providerReceiptReference: input.protectedEvidenceReference }); state.meteredActions.set(commandKey(accountId, found.idempotencyKey), next);
+          state.evidence.push(freeze({ id: `evidence:${input.operationId}:receipt`, accountId, kind: "metered_receipt" as const, reference: input.protectedEvidenceReference })); return next;
+        },
+        finalizeMeteredAction: async (input) => {
+          const found = state.meteredActions.get(commandKey(accountId, input.idempotencyKey));
+          if (!found || found.operationId !== input.operationId || found.status !== "dispatching") throw new Error("METERED_FINALIZATION_STATE_INVALID");
+          const receiptCharge = BigInt(input.receiptCharge); if (receiptCharge < 0n || receiptCharge > found.maximum) throw new Error("METERED_RECEIPT_EXCEEDS_RESERVATION");
+          const account = accountFor(state, accountId); const hold = account.holds.find((candidate) => candidate.reference === found.admissionReference);
+          if (!hold || receiptCharge > hold.heldAmount || receiptCharge > account.settledAvailable) throw new Error("METERED_SETTLEMENT_EXCEEDS_HOLD");
+          const nextHold = freeze({ ...hold, heldAmount: hold.heldAmount - receiptCharge });
+          const nextAccount = freeze({ ...account, settledAvailable: account.settledAvailable - receiptCharge, held: account.held - receiptCharge, holds: account.holds.map((candidate) => candidate.reference === hold.reference ? nextHold : candidate) });
+          state.accounts.set(accountId, nextAccount);
+          const next = freeze({ ...found, status: input.status, receiptCharge: input.receiptCharge, providerReceiptReference: input.providerReceiptReference, result: clone(input.result), sessionVersion: input.sessionVersion, artifactVersion: input.artifactVersion, remainingCap: nextHold.heldAmount.toString(), remainingBalance: nextAccount.settledAvailable.toString() });
+          state.meteredActions.set(commandKey(accountId, found.idempotencyKey), next);
+          state.postings.push(freeze({ id: `posting:${found.operationId}:debit`, accountId, reference: found.operationId, unit: "sat" as const, amount: `-${input.receiptCharge}`, balanced: true as const }));
+          state.postings.push(freeze({ id: `posting:${found.operationId}:release`, accountId, reference: found.actionBudgetReference, unit: "sat" as const, amount: (found.maximum - receiptCharge).toString(), balanced: true as const }));
+          state.evidence.push(freeze({ id: `evidence:${found.operationId}:result`, accountId, kind: "metered_result" as const, reference: input.providerReceiptReference }));
+          state.outbox.push(freeze({ id: `outbox:${found.operationId}:finalized`, accountId, kind: "metered_action_finalized" as const, reference: found.operationId }));
+          return next;
         },
       };
       const result = await operation(transaction);

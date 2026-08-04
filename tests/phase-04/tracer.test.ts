@@ -26,9 +26,9 @@ async function fundedDependencies() {
   return { store, admissions, admission };
 }
 
-function completedWorker(counter: { runs: number }): WorkerPort {
+function completedWorker(counter: { workers: number }): WorkerPort {
   return { async run(request) {
-    counter.runs += 1;
+    counter.workers += 1;
     return {
       status: "completed", code: "WORKER_PROPOSALS_VALIDATED",
       events: [{ kind: "tool_proposal", turn: 1, request: { sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion, capabilityGrant: request.capabilityGrant, workspaceId: request.workspaceId, callId: "call-1", evidenceId: "evidence-1", tool: "capture_evidence", label: "generated" } }],

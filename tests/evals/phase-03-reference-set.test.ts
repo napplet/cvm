@@ -39,14 +39,13 @@ describe("Phase 03 deterministic reference set", () => {
     expect(executionFiles[executionFor(item.id)].length).toBeGreaterThan(0);
   });
 
-  test.each(Object.entries(executionFiles))("executes deterministic authority oracle group %s", (group, files) => {
-    const mapped = referenceSet.cases.filter((item) => executionFor(item.id) === group);
-    expect(mapped.length).toBeGreaterThan(0);
+  test.each(referenceSet.cases)("$id executes its declared deterministic oracle", (item) => {
+    const files = executionFiles[executionFor(item.id)];
+    // Each reference case independently invokes its mapped deterministic oracle;
+    // a fixture cannot pass only because a different group happened to run.
     const result = Bun.spawnSync(["bun", "test", ...files], { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" });
     expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
-    for (const item of mapped) {
-      expect(item.expected.effects.forbidden).toBeGreaterThanOrEqual(1);
-      expect(item.expected.evidence).toEqual(expect.arrayContaining([expect.any(String)]));
-    }
+    expect(item.expected.effects.forbidden).toBeGreaterThanOrEqual(1);
+    expect(item.expected.evidence).toEqual(expect.arrayContaining([expect.any(String)]));
   });
 });

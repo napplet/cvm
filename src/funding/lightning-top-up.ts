@@ -4,6 +4,7 @@ import { PrincipalSchema, type FundingResult, type Principal, type VerifiedSettl
 import type { FundingService } from "./funding-service";
 import { LightningInvoiceObservationSchema, type LightningInvoiceObservation, type LightningReceiptPort } from "./lightning-provider";
 import type { ProtectedRailMaterialVault } from "./protected-rail-material";
+import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
 
 type TopUpState = "pending" | "settled" | "credited" | "failed" | "reconciliation_pending";
 export type LightningTopUpStatus = Readonly<{
@@ -58,6 +59,23 @@ export class InMemoryLightningTopUpRepository implements LightningTopUpRepositor
   snapshot(): readonly LightningTopUpStatus[] { return frozen([...this.#state.topUps.values()].map(publicStatus)); }
 }
 
+/** PostgreSQL-backed lifecycle repository. The serialized record is redacted: it
+ * contains only coordinator state and protected-material references, never an invoice. */
+export class PostgresLightningTopUpRepository implements LightningTopUpRepository {
+  constructor(private readonly pool: PostgresSqlPool) {}
+  async transact<T>(operation: (state: State) => Promise<T> | T): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
+      const found = await client.query<{ state_json: { topUps?: readonly [string, PrivateTopUp][]; commands?: readonly [string, { fingerprint: string; topUpId: string }][] } }>("SELECT state_json FROM lightning_top_up_state WHERE state_key='global' FOR UPDATE");
+      const raw = found.rows[0]?.state_json ?? {}; const state: State = { topUps: new Map(raw.topUps ?? []), commands: new Map(raw.commands ?? []) };
+      const result = await operation(state);
+      await client.query("INSERT INTO lightning_top_up_state(state_key,state_json) VALUES ('global',$1) ON CONFLICT (state_key) DO UPDATE SET state_json=EXCLUDED.state_json,updated_at=now()", [JSON.stringify({ topUps: [...state.topUps], commands: [...state.commands] })]);
+      await client.query("COMMIT"); return frozen(result);
+    } catch (error) { await client.query("ROLLBACK").catch(() => undefined); throw error; } finally { client.release(); }
+  }
+}
+
 export type LightningTopUpCoordinatorOptions = Readonly<{
   funding: FundingService; receiver: LightningReceiptPort; repository: LightningTopUpRepository; vault: ProtectedRailMaterialVault; now?: () => string;
 }>;
@@ -65,7 +83,8 @@ export type LightningTopUpCoordinatorOptions = Readonly<{
 /** Service-owned BOLT11 coordinator: receiver observations never receive ledger authority. */
 export class LightningTopUpCoordinator {
   readonly #now: () => string;
-  constructor(private readonly options: LightningTopUpCoordinatorOptions) { this.#now = options.now ?? (() => new Date().toISOString()); }
+  readonly durable: boolean;
+  constructor(private readonly options: LightningTopUpCoordinatorOptions) { this.#now = options.now ?? (() => new Date().toISOString()); this.durable = options.repository instanceof PostgresLightningTopUpRepository; }
 
   async begin(input: unknown): Promise<LightningTopUpResult> {
     const command = this.parseBegin(input); const accountId = await accountIdForPrincipal(command.principal); const fingerprint = await this.fingerprint(command, accountId); const key = commandKey(accountId, command.idempotencyKey);

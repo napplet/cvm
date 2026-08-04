@@ -4,6 +4,7 @@ import { type Principal, VerifiedSettlementSchema } from "../phase-03/contracts"
 import { FundingService } from "./funding-service";
 import { CashuMintPolicyRegistry, type CashuMintPolicy } from "./cashu-mint-policy";
 import { type CashuObserveRequest, type CashuSettlementObservation, type CashuSettlementPort, type CashuTreasuryState } from "./cashu-provider";
+import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
 
 const CashuPmi = "bitcoin-cashu-v4-direct";
 const SubmitSchema = z.object({
@@ -39,13 +40,32 @@ export class InMemoryCashuTopUpRepository implements CashuTopUpRepository {
   async findTreasury(topUpId: string): Promise<CashuTopUpResult | undefined> { const value = this.#treasury.get(topUpId); return value && frozen(value); }
   async recordTreasury(topUpId: string, result: CashuTopUpResult): Promise<void> { this.#treasury.set(topUpId, frozen(result)); }
 }
+/** PostgreSQL-backed commitment/lifecycle authority. The unique commitment is
+ * claimed in the same SERIALIZABLE transaction before provider I/O. */
+export class PostgresCashuTopUpRepository implements CashuTopUpRepository {
+  constructor(private readonly pool: PostgresSqlPool) {}
+  async claim(input: CashuTopUpRecord): Promise<Readonly<{ claimed: boolean; record: CashuTopUpRecord }>> {
+    const client = await this.pool.connect(); try {
+      await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
+      const existing = await client.query<{ state_json: CashuTopUpRecord }>("SELECT state_json FROM cashu_top_up_state WHERE top_up_id=$1 OR proof_commitment=$2 FOR UPDATE", [input.result.topUpId, input.result.commitment]);
+      if (existing.rows[0]) { await client.query("COMMIT"); return frozen({ claimed: false, record: existing.rows[0].state_json }); }
+      await client.query("INSERT INTO cashu_top_up_state(top_up_id,proof_commitment,state_json) VALUES ($1,$2,$3)", [input.result.topUpId, input.result.commitment, JSON.stringify(input)]);
+      await client.query("COMMIT"); return frozen({ claimed: true, record: input });
+    } catch (error) { await client.query("ROLLBACK").catch(() => undefined); throw error; } finally { client.release(); }
+  }
+  async find(topUpId: string): Promise<CashuTopUpRecord | undefined> { const client = await this.pool.connect(); try { const result = await client.query<{ state_json: CashuTopUpRecord }>("SELECT state_json FROM cashu_top_up_state WHERE top_up_id=$1", [topUpId]); return result.rows[0] && frozen(result.rows[0].state_json); } finally { client.release(); } }
+  async update(record: CashuTopUpRecord): Promise<void> { const client = await this.pool.connect(); try { await client.query("UPDATE cashu_top_up_state SET state_json=$2,updated_at=now() WHERE top_up_id=$1", [record.result.topUpId, JSON.stringify(record)]); } finally { client.release(); } }
+  async findTreasury(topUpId: string): Promise<CashuTopUpResult | undefined> { const client = await this.pool.connect(); try { const result = await client.query<{ treasury_json: CashuTopUpResult }>("SELECT treasury_json FROM cashu_top_up_state WHERE top_up_id=$1", [topUpId]); return result.rows[0]?.treasury_json && frozen(result.rows[0].treasury_json); } finally { client.release(); } }
+  async recordTreasury(topUpId: string, result: CashuTopUpResult): Promise<void> { const client = await this.pool.connect(); try { await client.query("UPDATE cashu_top_up_state SET treasury_json=$2,updated_at=now() WHERE top_up_id=$1", [topUpId, JSON.stringify(result)]); } finally { client.release(); } }
+}
 async function sha256(bytes: Uint8Array): Promise<string> { return [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((byte) => byte.toString(16).padStart(2, "0")).join(""); }
 function frozen<T>(value: T): T { return Object.freeze(structuredClone(value)); }
 function asError(code: string): Error { return new Error(code); }
 
 /** Coordinates protected bearer material, adapter observations, and the sole credit authority. */
 export class CashuTopUpCoordinator {
-  constructor(private readonly options: Readonly<{ policies: CashuMintPolicyRegistry; provider: CashuSettlementPort; vault: Vault; funding: FundingService; repository: CashuTopUpRepository }>) {}
+  readonly durable: boolean;
+  constructor(private readonly options: Readonly<{ policies: CashuMintPolicyRegistry; provider: CashuSettlementPort; vault: Vault; funding: FundingService; repository: CashuTopUpRepository }>) { this.durable = options.repository instanceof PostgresCashuTopUpRepository; }
 
   async prepare(input: unknown): Promise<CashuTopUpResult> { return this.submit(input); }
 

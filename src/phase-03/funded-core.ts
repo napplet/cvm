@@ -51,7 +51,7 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
   if (options.store && (options.postgresExecutor || options.postgresPool)) throw new Error("CONFLICTING_FUNDING_STORE_CONFIGURATION");
   if (options.postgresExecutor && options.postgresPool) throw new Error("CONFLICTING_POSTGRES_CONFIGURATION");
   const store = options.store ?? (options.postgresPool ? new PostgresSqlFundingStore(options.postgresPool) : options.postgresExecutor ? new PostgresFundingStore(options.postgresExecutor) : undefined);
-  const publicFundingSurface = Boolean(options.transport && options.capacity && options.lightning && options.cashu);
+  const publicFundingSurface = Boolean(options.transport && options.capacity && options.lightning?.durable && options.cashu?.durable);
   const offline = !store || (!options.postgresExecutor && !options.postgresPool) || !publicFundingSurface;
   // The deterministic test-only path has an explicit in-memory authority. It is
   // still offline design evidence, never a selected database/provider claim.

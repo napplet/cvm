@@ -74,6 +74,13 @@ ALTER TABLE metered_actions ADD COLUMN IF NOT EXISTS session_version integer;
 ALTER TABLE metered_actions ADD COLUMN IF NOT EXISTS artifact_version integer;
 ALTER TABLE metered_actions ADD COLUMN IF NOT EXISTS remaining_cap_sat bigint;
 ALTER TABLE metered_actions ADD COLUMN IF NOT EXISTS remaining_balance_sat bigint;
+ALTER TABLE metered_actions ADD COLUMN IF NOT EXISTS artifact_id text;
+ALTER TABLE metered_actions ADD COLUMN IF NOT EXISTS workspace_lineage text;
+ALTER TABLE metered_actions ADD COLUMN IF NOT EXISTS checkpoint_reference text;
+ALTER TABLE metered_actions ADD COLUMN IF NOT EXISTS snapshot_reference text;
+ALTER TABLE metered_actions ADD COLUMN IF NOT EXISTS validation_evidence_reference text;
+ALTER TABLE metered_actions ADD COLUMN IF NOT EXISTS failed_artifact_id text;
+ALTER TABLE metered_actions ADD COLUMN IF NOT EXISTS validation_report_reference text;
 DO $$ BEGIN
   ALTER TABLE metered_actions ADD CONSTRAINT metered_actions_operation_fk FOREIGN KEY (operation_id) REFERENCES provider_operations(id) DEFERRABLE INITIALLY DEFERRED;
 EXCEPTION WHEN duplicate_object THEN NULL;

@@ -144,6 +144,9 @@ export async function readSessionStatus(input: Readonly<{ store: MeteredFundingS
     const [account, page] = await Promise.all([input.store.status(accountId), input.store.listBillingLineItems(accountId, { limit, ...(storeCursor ? { cursor: storeCursor } : {}) })]);
     if (!account) return freeze(SessionStatusSchema.parse({ status: "not_found_or_denied" }));
     const nextCursor = page.nextCursor ? await opaqueCursor(input.cursorSecret, { v: 1, accountId, sessionId: query.sessionId, limit, storeCursor: page.nextCursor }) : null;
+    const verifiedArtifact = (await input.store.listMeteredActionsForSession(accountId, query.sessionId))
+      .filter((candidate) => candidate.artifact?.artifactId)
+      .sort((left, right) => (right.artifactVersion ?? 0) - (left.artifactVersion ?? 0))[0];
     const reconciliation = action.status === "usage_unknown" || action.status === "billing_invariant_failed";
     const failed = action.status === "failed";
     const actualSpend = action.receiptCharge ?? "0";
@@ -153,7 +156,7 @@ export async function readSessionStatus(input: Readonly<{ store: MeteredFundingS
       session: {
         id: session.sessionId, version: session.version, state: session.status, progress: safeProgress(session.status), maximum: action.maximum.toString(10), actualSpend,
         remainingBalance: action.remainingBalance ?? account.available, remainingCap,
-        latestVerifiedArtifact: action.artifactVersion && action.artifactVersion > 0 ? { id: `artifact:${session.sessionId}:${action.artifactVersion}`, version: action.artifactVersion } : null,
+        latestVerifiedArtifact: verifiedArtifact?.artifact?.artifactId && verifiedArtifact.artifactVersion ? { id: verifiedArtifact.artifact.artifactId, version: verifiedArtifact.artifactVersion } : null,
         nextAction: reconciliation ? "billing_reconciliation" : session.status === "active" || session.status === "prepared" ? "wait_for_current_action" : "revise_session",
       },
       action: {

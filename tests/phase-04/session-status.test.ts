@@ -40,6 +40,7 @@ async function seededSession(): Promise<Readonly<{ store: TransactionalMemoryFun
     await transaction.finalizeMeteredAction({
       idempotencyKey: "status-action", operationId: "operation:status-001", receiptCharge: "7", providerReceiptReference: "protected-provider-payload",
       status: "completed", result: { providerPayload: "must-not-leak", prompt: "must-not-leak" }, sessionVersion: 1, artifactVersion: 1,
+      artifact: { artifactId: "verified:status-001", workspaceLineage: "workspace:session-status-001", checkpointReference: "checkpoint:session-status-001:start", snapshotReference: "snapshot:session-status-001:start", validationEvidenceReference: "validation:status-001" },
     });
   });
   return { store, accountId, sessionId };
@@ -93,7 +94,7 @@ describe("owner-safe session status", () => {
     const { store, sessionId } = await seededSession();
     const first = await readSessionStatus({ store, cursorSecret: "test-status-secret", query: { principal: owner, sessionId, billing: { limit: 1 } } });
     expect(first).toMatchObject({
-      status: "ok", session: { id: sessionId, version: 1, state: "verified", maximum: "100", actualSpend: "7", latestVerifiedArtifact: { version: 1 }, nextAction: "revise_session" },
+      status: "ok", session: { id: sessionId, version: 1, state: "verified", maximum: "100", actualSpend: "7", latestVerifiedArtifact: { id: "verified:status-001", version: 1 }, nextAction: "revise_session" },
       action: { id: "start:status-action", operationId: "operation:status-001", price: { cardId: "phase-04-deterministic-price-card-v1", profileId: "code-proposal" } },
     });
     if (first.status !== "ok") throw new Error("expected status projection");

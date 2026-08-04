@@ -111,9 +111,13 @@ export class MeteredGenerationService {
       const origin = await this.options.store.findMeteredAction(accountId, command.originatingIdempotencyKey);
       const session = await this.options.store.sessionStatus(accountId, command.sessionId);
       const sessionActions = await this.options.store.listMeteredActionsForSession(accountId, command.sessionId);
+      const durableFailure = origin?.artifact;
+      if (!durableFailure?.failedArtifactId || !durableFailure.validationReportReference) {
+        return SessionActionResultSchema.parse({ status: "denied", code: "REPAIR_LINEAGE_UNAVAILABLE" });
+      }
       const decision = evaluateAutomaticRepair({
         principalId: accountId, sessionId: command.sessionId, expectedVersion: command.expectedVersion, currentVersion: session?.version ?? -1,
-        workspaceLineage: command.workspaceLineage, snapshotReference: command.snapshotReference, originatingActionId: command.originatingActionId, failedArtifactId: command.failedArtifactId, validationReportReference: command.validationReportReference,
+        workspaceLineage: durableFailure.workspaceLineage, snapshotReference: durableFailure.snapshotReference, originatingActionId: command.originatingActionId, failedArtifactId: durableFailure.failedArtifactId, validationReportReference: durableFailure.validationReportReference,
         priorAutomaticRepairs: sessionActions.filter((action) => action.actionId.startsWith(`repair:${command.originatingActionId}:`)).length, permanentNappletPolicy: origin?.actionId === command.originatingActionId && origin.status === "failed" ? "pass" : "deny", actionAuthorized: true,
       });
       if (decision.status === "denied") return SessionActionResultSchema.parse({ status: "denied", code: decision.code });
@@ -186,14 +190,34 @@ export class MeteredGenerationService {
       return result;
     }
     await this.options.store.transact(accountId, (transaction) => transaction.recordUsageReceipt({ operationId, protectedEvidenceReference: observation.receipt.provenance.protectedEvidenceReference }));
+    // Workspace/checkpoint references are coordinator-owned, action-scoped
+    // identities.  Revisions inherit only the prior durable verified lineage;
+    // they never read a process-wide harness default shared with another user.
+    const history = await this.options.store.listMeteredActionsForSession(accountId, sessionId);
+    const prior = [...history].filter((item) => item.artifact?.artifactId).sort((left, right) => (right.artifactVersion ?? 0) - (left.artifactVersion ?? 0))[0];
+    const workspaceLineage = prior?.artifact?.workspaceLineage ?? `workspace:${sessionId}`;
+    const checkpointReference = `checkpoint:${sessionId}:${actionId}`;
+    const snapshotReference = prior?.artifact?.snapshotReference ?? `snapshot:${sessionId}:initial`;
+    let artifactId: string | undefined;
+    let validationEvidenceReference = observation.receipt.provenance.protectedEvidenceReference;
+    let failedArtifactId: string | undefined;
+    let validationReportReference: string | undefined;
     let completed = observation.status === "completed";
     try {
       const idea = "repair" in command ? "Repair only the server-validated failed candidate within the existing focused napplet boundary." : "revision" in command ? command.revision : command.idea;
-      const workspaceId = `workspace:${sessionId}`;
+      const workspaceId = workspaceLineage;
       if (this.options.harness) {
         const harness = this.options.harness.runner;
-        const outcome = await harness.run({ principalId: accountId, sessionId, actionId, expectedVersion: command.expectedVersion, policyVersion: command.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId, idea: riskSafeIdea(idea), actionKind: "repair" in command ? "repair" : "revision" in command ? "revision" : "generation", workspaceLineage: workspaceId, snapshotReference: this.options.harness.snapshotReference, priorArtifactId: this.options.harness.priorArtifactId, approvedApplicationSurfaces: this.options.harness.approvedApplicationSurfaces, toolchain: this.options.harness.toolchain });
+        const outcome = await harness.run({ principalId: accountId, sessionId, actionId, expectedVersion: command.expectedVersion, policyVersion: command.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId, idea: riskSafeIdea(idea), actionKind: "repair" in command ? "repair" : "revision" in command ? "revision" : "generation", workspaceLineage, snapshotReference, priorArtifactId: prior?.artifact?.artifactId ?? `none:${sessionId}`, approvedApplicationSurfaces: this.options.harness.approvedApplicationSurfaces, toolchain: this.options.harness.toolchain });
         completed = outcome.status === "verified";
+        if (outcome.status === "verified") {
+          artifactId = outcome.artifactId;
+          validationEvidenceReference = outcome.evidenceIds.join(",");
+        } else {
+          validationEvidenceReference = outcome.diagnostic.evidenceIds.join(",");
+          failedArtifactId = outcome.priorArtifactId;
+          validationReportReference = outcome.diagnostic.evidenceIds.at(-1);
+        }
       } else {
         const request = WorkerRunRequestSchema.parse({ sessionId, actionId, expectedVersion: command.expectedVersion, policyVersion: command.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId, idea: riskSafeIdea(idea) });
         const workerResult = WorkerRunResultSchema.parse(await this.options.worker.run(request, new AbortController().signal));
@@ -201,6 +225,10 @@ export class MeteredGenerationService {
         else {
           const verified = await this.options.artifactVerifier.verify({ action: { principal: { id: accountId }, sessionId, actionId, kind: "design", idempotencyKey: command.idempotencyKey, expectedVersion: command.expectedVersion, policyVersion: command.policyVersion, idea }, request, result: workerResult, events: workerResult.events });
           completed = Boolean(verified && (await evaluateArtifactContract(verified.contractInput)).verdict === "pass");
+          if (completed && verified) {
+            artifactId = verified.artifact.artifactId;
+            validationEvidenceReference = `verification:${verified.artifact.artifactId}`;
+          }
         }
       }
     } catch { completed = false; }
@@ -208,7 +236,7 @@ export class MeteredGenerationService {
     const result = SessionActionResultSchema.parse(completed
       ? { status, code: "ACTION_COMMITTED", accountId, sessionId, sessionVersion: command.expectedVersion + 1, artifactVersion: command.expectedVersion + 1, confirmedSpend: priced.total, remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId }
       : { status, code: "WORKER_OR_ARTIFACT_FAILED", accountId, sessionId, sessionVersion: command.expectedVersion, artifactVersion: command.expectedVersion, confirmedSpend: priced.total, remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId });
-    const finalized = await this.options.store.transact(accountId, (transaction) => transaction.finalizeMeteredAction({ idempotencyKey: command.idempotencyKey, operationId, receiptCharge: priced.total, providerReceiptReference: observation.receipt.provenance.protectedEvidenceReference, status, result, sessionVersion: completed ? command.expectedVersion + 1 : command.expectedVersion, artifactVersion: completed ? command.expectedVersion + 1 : command.expectedVersion }));
+    const finalized = await this.options.store.transact(accountId, (transaction) => transaction.finalizeMeteredAction({ idempotencyKey: command.idempotencyKey, operationId, receiptCharge: priced.total, providerReceiptReference: observation.receipt.provenance.protectedEvidenceReference, status, result, sessionVersion: completed ? command.expectedVersion + 1 : command.expectedVersion, artifactVersion: completed ? command.expectedVersion + 1 : command.expectedVersion, artifact: { ...(artifactId ? { artifactId } : {}), workspaceLineage, checkpointReference, snapshotReference: `snapshot:${sessionId}:${actionId}`, validationEvidenceReference, ...(failedArtifactId ? { failedArtifactId } : {}), ...(validationReportReference ? { validationReportReference } : {}) } }));
     return SessionActionResultSchema.parse(finalized.result);
   }
 

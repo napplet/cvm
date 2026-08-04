@@ -73,8 +73,10 @@ describe("SAFE-01 canonical text admission", () => {
 
   test("accepts equality and denies one-over for independently reachable token, line, and line-length limits", async () => {
     const policy = PHASE_02_POLICY_INITIAL.admission;
-    expect((await admit(Array(policy.maxInputTokens).fill("x").join(" "))).decision).toMatchObject({ status: "accepted", code: "ADMITTED" });
-    expect((await admit(Array(policy.maxInputTokens + 1).fill("x").join(" "))).decision).toMatchObject({ status: "denied", code: "INPUT_TOKEN_LIMIT" });
+    const atLimit: TokenCounter = { version: "boundary-v1", count() { return policy.maxInputTokens; } };
+    const overLimit: TokenCounter = { version: "boundary-v1", count() { return policy.maxInputTokens + 1; } };
+    expect(await evaluateAdmission({ idea: "bounded" }, atLimit)).toMatchObject({ status: "accepted", code: "ADMITTED" });
+    expect(await evaluateAdmission({ idea: "bounded" }, overLimit)).toMatchObject({ status: "denied", code: "INPUT_TOKEN_LIMIT" });
     expect((await admit(Array(policy.maxLines).fill("x").join("\n"))).decision).toMatchObject({ status: "accepted", code: "ADMITTED" });
     expect((await admit(Array(policy.maxLines + 1).fill("x").join("\n"))).decision).toMatchObject({ status: "denied", code: "INPUT_LINE_LIMIT" });
     expect((await admit("x".repeat(policy.maxCodePointsPerLine))).decision).toMatchObject({ status: "accepted", code: "ADMITTED" });

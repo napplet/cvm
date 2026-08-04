@@ -32,6 +32,16 @@ CREATE TABLE IF NOT EXISTS provider_operations (
   state text NOT NULL CHECK (state IN ('prepared','active','failed','usage_unknown','billing_invariant_failed','verified')),
   UNIQUE (account_id, id), UNIQUE (provider, model, provider_request_id), UNIQUE (action_id, id)
 );
+-- The SQL authority projects these finalized action facts directly for replay,
+-- owner status, and exact ledger reconciliation. Keep this contract in the
+-- migration (including upgrades from the first Phase 04 draft).
+ALTER TABLE metered_actions ADD COLUMN IF NOT EXISTS admission_reference text;
+ALTER TABLE metered_actions ADD COLUMN IF NOT EXISTS receipt_charge bigint;
+ALTER TABLE metered_actions ADD COLUMN IF NOT EXISTS provider_receipt_reference text;
+ALTER TABLE metered_actions ADD COLUMN IF NOT EXISTS session_version integer;
+ALTER TABLE metered_actions ADD COLUMN IF NOT EXISTS artifact_version integer;
+ALTER TABLE metered_actions ADD COLUMN IF NOT EXISTS remaining_cap_sat bigint;
+ALTER TABLE metered_actions ADD COLUMN IF NOT EXISTS remaining_balance_sat bigint;
 DO $$ BEGIN
   ALTER TABLE metered_actions ADD CONSTRAINT metered_actions_operation_fk FOREIGN KEY (operation_id) REFERENCES provider_operations(id) DEFERRABLE INITIALLY DEFERRED;
 EXCEPTION WHEN duplicate_object THEN NULL;

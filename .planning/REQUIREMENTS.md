@@ -32,7 +32,7 @@ Requirements for the initial release. Each maps to exactly one roadmap phase.
 - [x] **BILL-01**: Before the first billable action, a user explicitly approves a maximum spend for the session in a disclosed currency unit.
 - [x] **BILL-02**: The service authorizes each billable action before execution and never spends beyond the lesser of the user's funded balance and remaining approved session cap.
 - [x] **BILL-03**: After a completed action, the service debits the authoritative measured API usage exactly once using the price version that applied when the action was authorized.
-- [ ] **BILL-04**: A user can inspect an immutable line item for every hold, release, debit, credit, and reconciliation, including provider usage inputs and remaining balance/cap.
+- [x] **BILL-04**: A user can inspect an immutable line item for every hold, release, debit, credit, and reconciliation, including provider usage inputs and remaining balance/cap.
 - [ ] **BILL-05**: A timed-out or ambiguous provider request enters an explicit reconciliation state and is not blindly retried or double charged.
 - [x] **BILL-06**: Unused funded balance and unused session cap remain available and are never converted into an undisclosed fixed generation fee or automatic overage.
 

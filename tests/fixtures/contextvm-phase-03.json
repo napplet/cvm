@@ -1,0 +1,16 @@
+{
+  "announcement": {
+    "topUpCap": { "minimum": "1", "maximum": "1000000", "unit": "sat" },
+    "pmis": ["bitcoin-lightning-bolt11", "bitcoin-cashu-v4-direct"],
+    "paymentInteraction": ["transparent", "explicit_gating"],
+    "tools": [
+      { "name": "generation", "available": false, "planned": true },
+      { "name": "account_status", "available": true, "planned": false },
+      { "name": "top_up", "available": true, "planned": false },
+      { "name": "funded_admission", "available": true, "planned": false },
+      { "name": "session", "available": false, "planned": true },
+      { "name": "preview", "available": false, "planned": true },
+      { "name": "publication", "available": false, "planned": true }
+    ]
+  }
+}

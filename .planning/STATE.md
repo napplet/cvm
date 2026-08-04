@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
-current_phase: 4
+current_phase: 04
 current_phase_name: Metered Generation & Revision Loop
-status: ready_to_execute
-stopped_at: Phase 4 plans verified; ready to execute 04-01
-last_updated: "2026-08-04T19:18:41.000Z"
+status: executing
+stopped_at: Completed 04-01-PLAN.md
+last_updated: "2026-08-04T19:30:29.875Z"
 last_activity: 2026-08-04
-last_activity_desc: Phase 4 research and six checker-approved plans completed
+last_activity_desc: Phase 04 execution started
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 25
-  completed_plans: 19
+  completed_plans: 20
   percent: 43
 ---
 
@@ -29,12 +29,12 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 ## Current Position
 
-Phase: 4 — Metered Generation & Revision Loop
-Plan: 0 of 6
+Phase: 04 (Metered Generation & Revision Loop) — EXECUTING
+Plan: 2 of 6
 Status: Ready to execute
-Last activity: 2026-08-04 — completed Phase 4 research, pattern mapping, validation strategy, and checker-approved plans
+Last activity: 2026-08-04 — Phase 04 execution started
 
-Progress: [███░░░░░░░] 43% of milestone phases complete; Phases 1–3 verified, Phase 4 planned 0/6
+Progress: [████████░░] 80% of milestone phases complete; Phases 1–3 verified, Phase 4 planned 0/6
 
 ## Milestone Progress
 
@@ -81,6 +81,7 @@ Progress: [███░░░░░░░] 43% of milestone phases complete; Pha
 | Phase 02 P05 | 6m 19s | 2 tasks | 7 files |
 | Phase 02 P06 | 17m | 3 tasks | 11 files |
 | Phase 03 P07 | 15m | 3 tasks | 8 files |
+| Phase 04 P01 | 5m | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -117,6 +118,8 @@ Recent decisions affecting current work:
 - [Phase ?]: Offline design readiness is provider-separated: blocked/failed remain unselected and a pass is only eligible-not-selected.
 - [Phase ?]: Phase 3 design readiness is offline deterministic proof; all live provider observations remain blocked and unselected until Phase 7.
 - [Phase ?]: Phase 3 reference evidence fixes D-40 through D-58 to result, durable-state, external-effect, and redacted-evidence oracles.
+- [Phase ?]: The deterministic Phase 4 provider fixture remains unselected; metering proof does not select or certify a live provider.
+- [Phase ?]: Receipt settlement prices only a persisted action-time fixture card/profile using bigint rational arithmetic.
 
 ### Pending Todos
 
@@ -138,6 +141,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-04T19:18:41.000Z
-Stopped at: Phase 4 plans verified; ready to execute 04-01
+Last session: 2026-08-04T19:30:29.868Z
+Stopped at: Completed 04-01-PLAN.md
 Resume file: None

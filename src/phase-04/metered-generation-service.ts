@@ -138,6 +138,10 @@ export class MeteredGenerationService {
     if (prepared.result) return SessionActionResultSchema.parse(prepared.result);
     const claim = await this.options.store.transact(accountId, (transaction) => transaction.claimProviderOperation(operationId));
     if (!claim.claimed && claim.action.result) return SessionActionResultSchema.parse(claim.action.result);
+    // A durable claim is the external-effect fence.  A different instance may
+    // already be waiting for the original provider response, so this caller
+    // must surface reconciliation rather than issue a second billable request.
+    if (!claim.claimed) return SessionActionResultSchema.parse({ status: "usage_unknown", code: "USAGE_UNKNOWN", accountId, sessionId, nextAction: "billing_reconciliation", operationId });
     const intent = ProviderOperationIntentSchema.parse({ operationId, accountId, sessionId, actionId, expectedVersion: command.expectedVersion, actionBudgetReference: budget.reference, profileId: profile.id, priceCardId: PHASE_04_DETERMINISTIC_PRICE_CARD.id, requestFingerprint: fingerprint, maximumUnits: profile.maximumUnits, selection: "unselected" });
     const observation = ModelObservationSchema.parse(await this.options.gateway.dispatch(intent, new AbortController().signal));
     if (observation.status === "usage_unknown") {

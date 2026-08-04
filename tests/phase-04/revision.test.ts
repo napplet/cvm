@@ -48,6 +48,26 @@ async function setup() {
 }
 
 describe("same-lineage revisions", () => {
+  test("a fresh coordinator never re-dispatches an operation claimed by another instance", async () => {
+    const store = new TransactionalMemoryFundingStore();
+    const funding = new FundingService(store);
+    await funding.execute({ principal, kind: "credit_settlement", idempotencyKey: "claim-credit", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { settlement: { topUpId: "claim-topup", rail: "lightning", unit: "sat", amount: "500", externalReference: "claim-external", settlementReference: "claim-settlement", verifiedAt: "2026-08-04T00:00:00.000Z" } } });
+    const admissions = new FundedAdmissionService({ funding, store, capacity: { reserveNow: async () => ({ status: "available" as const, reference: "claim-capacity", expiresAt: "2026-08-05T00:00:00.000Z" }), observe: async () => ({ status: "available" as const, reference: "claim-capacity", expiresAt: "2026-08-05T00:00:00.000Z" }), release: async () => {} } });
+    const admission = await admissions.admit({ principal, idempotencyKey: "claim-admission", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "300", unit: "sat" } });
+    if (admission.status !== "accepted") throw new Error("expected admission");
+    let dispatches = 0;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => { release = resolve; });
+    const gateway: ModelGateway = { dispatch: async () => { dispatches += 1; release(); return new Promise<never>(() => {}); }, lookup: async () => ({ status: "pending", operationId: "operation:unused", providerRequestId: "provider:unused", provenance: { protectedEvidenceReference: "evidence:unused" } }) };
+    const options = { fundedAdmission: admissions, store, gateway, worker: completedWorker({ workers: 0 }), artifactVerifier: verifier };
+    const first = new MeteredGenerationService(options).startSession({ principal, admissionReference: admission.reference, idempotencyKey: "claimed-operation", expectedVersion: 0, maximum: "100", policyVersion: "phase-02-policy-2026-08-04", idea: "Build one focused napplet." });
+    await entered;
+    const recovered = await new MeteredGenerationService(options).startSession({ principal, admissionReference: admission.reference, idempotencyKey: "claimed-operation", expectedVersion: 0, maximum: "100", policyVersion: "phase-02-policy-2026-08-04", idea: "Build one focused napplet." });
+    expect(recovered).toMatchObject({ status: "usage_unknown", code: "USAGE_UNKNOWN" });
+    expect(dispatches).toBe(1);
+    void first;
+  });
+
   test("parses exactly one bounded revision field", () => {
     expect(ReviseSessionCommandSchema.parse({ principal, sessionId: "session:stable", admissionReference: "admission", idempotencyKey: "revision", expectedVersion: 1, maximum: "100", policyVersion: "phase-02-policy-2026-08-04", revision: "Make the counter support a reset action." }).revision).toContain("reset");
     expect(() => ReviseSessionCommandSchema.parse({ principal, sessionId: "session:stable", admissionReference: "admission", idempotencyKey: "revision", expectedVersion: 1, maximum: "100", policyVersion: "phase-02-policy-2026-08-04", revision: "", idea: "forbidden second text field" })).toThrow();

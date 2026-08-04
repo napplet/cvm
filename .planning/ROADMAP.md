@@ -176,7 +176,7 @@ Plans:
   5. A failed or incomplete build returns diagnostics and validation evidence—not a previewable or publishable result—and any repair remains within the user’s cap, balance, and napplet policy.
 
 **Validation gate**: Promote a model provider/proxy only if it can reserve an action ceiling, correlate authoritative usage receipts to the action, preserve a price version, and reconcile timeout ambiguity. Otherwise the service must pause in `usage_unknown` rather than assert an exact final charge.
-**Plans**: 3/6 plans executed
+**Plans**: 4/6 plans executed
 
 **Wave 1**
 
@@ -192,7 +192,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 04-04-PLAN.md — Add same-lineage revisions, honest artifact outcomes, and one separately authorized repair.
+- [x] 04-04-PLAN.md — Add same-lineage revisions, honest artifact outcomes, and one separately authorized repair.
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
@@ -261,7 +261,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 1. Napplet Contract & Artifact Verification | 6/6 | Complete    | 2026-08-04 |
 | 2. Trusted Core & Isolated Agent Execution | 6/6 | Complete    | 2026-08-04 |
 | 3. ContextVM Funding & Funded Admission | 7/7 | Complete    | 2026-08-04 |
-| 4. Metered Generation & Revision Loop | 3/6 | In Progress|  |
+| 4. Metered Generation & Revision Loop | 4/6 | In Progress|  |
 | 5. Funding Interruption & Durable Resume | 0/TBD | Not started | - |
 | 6. Sealed Preview & User-Owned Publication | 0/TBD | Not started | - |
 | 7. Admission SLO, Resilience & Launch Safety | 0/TBD | Not started | - |

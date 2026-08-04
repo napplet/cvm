@@ -41,7 +41,7 @@ Requirements for the initial release. Each maps to exactly one roadmap phase.
 - [x] **SESS-01**: A user can start a generation session using one bounded plain-text napplet idea and no file, image, URL, repository, or existing-code input.
 - [ ] **SESS-02**: An accepted request obtains a ready isolated worker and begins execution within five seconds at p95; otherwise the user receives an immediate retryable capacity response.
 - [x] **SESS-03**: A user receives a stable session identifier plus visible state, progress, approved cap, actual spend, and next required action.
-- [ ] **SESS-04**: A user can submit bounded plain-text revisions to the same session, with each revision separately authorized and metered.
+- [x] **SESS-04**: A user can submit bounded plain-text revisions to the same session, with each revision separately authorized and metered.
 - [x] **SESS-05**: Concurrent or duplicated session actions are serialized so only one valid next action can mutate a session or artifact version.
 
 ### Napplet Generation and Verification
@@ -50,8 +50,8 @@ Requirements for the initial release. Each maps to exactly one roadmap phase.
 - [x] **GEN-02**: The agent generates only a small, single-purpose NIP-5D napplet/nsite and rejects or narrows requests for arbitrary websites, full-stack applications, or generated backends.
 - [x] **GEN-03**: Generated application code uses promoted `@napplet/sdk`/NAP interfaces and declares only the hard capabilities required for the focused napplet to function.
 - [x] **GEN-04**: Each artifact is built reproducibly with pinned dependencies and passes the maintained verification command, forbidden-authority checks, and real-Chromium conformance suite.
-- [ ] **GEN-05**: The agent may repair a failing artifact only while the next repair action remains within the funded balance, approved cap, and permanent napplet policy.
-- [ ] **GEN-06**: A failed or incomplete artifact is returned only with diagnostics and evidence; it is never labeled previewable or publishable.
+- [x] **GEN-05**: The agent may repair a failing artifact only while the next repair action remains within the funded balance, approved cap, and permanent napplet policy.
+- [x] **GEN-06**: A failed or incomplete artifact is returned only with diagnostics and evidence; it is never labeled previewable or publishable.
 
 ### Defensive Execution
 

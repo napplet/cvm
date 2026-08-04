@@ -150,7 +150,7 @@ src/
 │   ├── deterministic-model-gateway.ts# offline authoritative-fixture fake
 │   └── price-card.ts                 # integer/rational pricing and validation
 ├── persistence/
-│   └── metered-session-store.ts      # action/operation/receipt/finalization port
+│   └── funding-store.ts              # extended single action/operation/receipt/finalization authority
 └── verification/
     └── phase-04-design-evidence.ts   # immutable, redacted deterministic evidence
 tests/
@@ -324,16 +324,16 @@ Build this object field-by-field from persisted projections. Do not include raw 
 | A1 | No proxy/aggregator has yet been shown to meet every Phase 4 receipt/reconciliation requirement. | Provider / Proxy Eligibility Research | An implementer might introduce an unproven paid path; keep it unselected until a formal contract test passes. |
 | A2 | Anthropic’s accessible dynamic reference did not prove the needed lookup contract. | Provider / Proxy Eligibility Research | This is absence of evidence, not a claim of lack of capability; require official proof before use. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Which live provider/proxy passes the complete gate?**
-   - What we know: OpenAI documentation provides correlation primitives and usage dimensions; the deterministic fixture can prove local semantics. [CITED: https://platform.openai.com/docs/guides/production-best-practices]
-   - What's unclear: A production adapter’s normal receipt retrieval, immutable pricing snapshot, and post-timeout lookup behavior for the exact selected profile.
-   - Recommendation: Keep all real adapters `eligible-not-selected`/`unselected`; Phase 7 performs certification after an integration fixture proves all four gate properties.
-2. **What is the chosen exact status pagination/retention policy?**
-   - What we know: Status must be safe, owner-scoped, and evidence-linked. [VERIFIED: `04-CONTEXT.md`]
-   - What's unclear: The bounded list size/cursor representation.
-   - Recommendation: Use opaque cursor plus fixed maximum and retain only immutable evidence identifiers in ordinary status.
+1. **Which live provider/proxy passes the complete gate? — RESOLVED by approved deferral.**
+   - Phase 4 selects and certifies no live provider or proxy. Every Phase 4 provider/model observation remains explicitly `unselected`; the deterministic gateway proves only project-owned lifecycle, accounting, ambiguity, and evidence semantics.
+   - Phase 7 owns live provider integration and certification after an integration fixture proves normal receipt retrieval, immutable pricing, authoritative usage correlation, and post-timeout lookup for the exact selected profile.
+2. **What is the chosen exact status pagination/retention policy? — RESOLVED.**
+   - Billing history accepts a page limit from 1 through 50 inclusive and defaults to 50. Ordering is immutable ascending commit sequence plus stable item ID.
+   - The cursor is opaque, versioned, integrity-protected, bound to owner/session/query, and resumes strictly after the last sequence/item. An invalid or foreign cursor returns one generic `invalid_cursor` result without data.
+   - Phase 4 never deletes or mutates financial line items and can traverse all committed line items. Public status exposes only normalized items and evidence identifiers.
+   - Retention or deletion of protected provider-native payloads is not a status feature. It remains governed by later operational/legal policy and such payloads are never copied into public billing history.
 
 ## Environment Availability
 

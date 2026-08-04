@@ -4,15 +4,15 @@ milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
 current_phase: 4
 current_phase_name: Metered Generation & Revision Loop
-status: planning
-stopped_at: Phase 4 AI specification complete; ready for research and planning
-last_updated: "2026-08-04T18:33:10.629Z"
+status: ready_to_execute
+stopped_at: Phase 4 plans verified; ready to execute 04-01
+last_updated: "2026-08-04T19:18:41.000Z"
 last_activity: 2026-08-04
-last_activity_desc: Phase 4 AI specification completed; technical research and planning next
+last_activity_desc: Phase 4 research and six checker-approved plans completed
 progress:
   total_phases: 7
   completed_phases: 3
-  total_plans: 19
+  total_plans: 25
   completed_plans: 19
   percent: 43
 ---
@@ -30,20 +30,20 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 4 — Metered Generation & Revision Loop
-Plan: Not started
-Status: Context and AI specification complete; technical research and planning next
-Last activity: 2026-08-04 — completed the Phase 4 metered-agent AI design and evaluation contract
+Plan: 0 of 6
+Status: Ready to execute
+Last activity: 2026-08-04 — completed Phase 4 research, pattern mapping, validation strategy, and checker-approved plans
 
-Progress: [███░░░░░░░] 43% of milestone phases complete; Phases 1–3 verified, Phase 4 context and AI specification complete
+Progress: [███░░░░░░░] 43% of milestone phases complete; Phases 1–3 verified, Phase 4 planned 0/6
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
-- Phases: Phases 1–3 complete; Phase 4 is active with context and AI specification complete; Phases 5–7 remain.
-- Plans: 19/19 currently known milestone plans executed; Phase 4 plans have not yet been created.
+- Phases: Phases 1–3 complete; Phase 4 is active and ready to execute; Phases 5–7 remain.
+- Plans: 19/25 currently known milestone plans executed; Phase 4 has 6 checker-approved plans.
 - Requirements: 54/54 v1 requirements assigned; 25 verified complete and 29 pending.
-- Next checkpoint: research Phase 4 provider/metering contracts, map existing implementation patterns, and create checker-approved execution plans without revisiting completed Phases 1–3.
+- Next checkpoint: execute 04-01, the funded start tracer with exact receipt settlement, without revisiting completed Phases 1–3.
 
 ## Performance Metrics
 
@@ -120,7 +120,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Research Phase 4 provider/metering contracts and map implementation patterns before planning.
+- Execute Phase 4 plans 04-01 through 04-06 in dependency order.
 
 ### Blockers/Concerns
 
@@ -138,6 +138,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-04T18:33:10.619Z
-Stopped at: Phase 4 AI specification complete; ready for research and planning
+Last session: 2026-08-04T19:18:41.000Z
+Stopped at: Phase 4 plans verified; ready to execute 04-01
 Resume file: None

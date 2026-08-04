@@ -176,7 +176,31 @@ Plans:
   5. A failed or incomplete build returns diagnostics and validation evidence—not a previewable or publishable result—and any repair remains within the user’s cap, balance, and napplet policy.
 
 **Validation gate**: Promote a model provider/proxy only if it can reserve an action ceiling, correlate authoritative usage receipts to the action, preserve a price version, and reconcile timeout ambiguity. Otherwise the service must pause in `usage_unknown` rather than assert an exact final charge.
-**Plans**: TBD
+**Plans**: 6 plans
+
+**Wave 1**
+
+- [ ] 04-01-PLAN.md — Prove the funded start tracer with durable provider intent, exact receipt settlement, and one verified artifact advance.
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 04-02-PLAN.md — Persist atomic PostgreSQL settlement, immutable billing history, and crash-safe replay.
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 04-03-PLAN.md — Fence ambiguous provider operations in `usage_unknown` and reconcile only the original operation.
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 04-04-PLAN.md — Add same-lineage revisions, honest artifact outcomes, and one separately authorized repair.
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 04-05-PLAN.md — Expose owner-safe status and the three locked ContextVM generation/session tools.
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 04-06-PLAN.md — Seal the phase with twenty deterministic cases and content-addressed design evidence.
 
 ### Phase 5: Funding Interruption & Durable Resume
 

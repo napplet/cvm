@@ -1,8 +1,8 @@
 # Phase 04: Metered Generation & Revision Loop - Pattern Map
 
 **Mapped:** 2026-08-04  
-**Files classified:** 26 (including the required test/evidence surfaces)  
-**Analogs found:** 25 / 26
+**Files classified:** 25 (including the required test/evidence surfaces)
+**Analogs found:** 24 / 25
 
 ## File Classification
 
@@ -14,7 +14,6 @@
 | `src/model/model-gateway.ts` | port/schema | request-response | `src/phase-02/contracts.ts` | role-match |
 | `src/model/deterministic-model-gateway.ts` | adapter/test fake | request-response | `src/worker-port/fake-worker.ts` | role-match |
 | `src/model/price-card.ts` | utility/model | transform | `src/funding/funded-admission.ts` | partial |
-| `src/persistence/metered-session-store.ts` | persistence port | CRUD / event-driven | `src/persistence/funding-store.ts` | role + transaction |
 | `src/persistence/funding-store.ts` | persistence port | CRUD | itself / `funded-admission.ts` consumer | extension |
 | `src/persistence/postgres-sql-funding-store.ts` | persistence adapter | CRUD | itself | exact extension |
 | `src/persistence/postgres-funding-database.ts` | persistence composition | CRUD | itself | exact extension |
@@ -33,7 +32,7 @@
 
 ## Pattern Assignments
 
-### `src/phase-04/metered-generation-service.ts` and `src/persistence/metered-session-store.ts`
+### `src/phase-04/metered-generation-service.ts` and the single `FundingStore` authority
 
 **Analogs:** `src/phase-02/trusted-core.ts`, `src/domain/session-action.ts`, `src/persistence/session-store.ts`.
 
@@ -51,7 +50,7 @@ export async function fingerprintSessionRequest(action: SessionAction) {
 }
 ```
 
-Keep the existing request/action fingerprint split. Add the Phase 4 action, operation, receipt, artifact-lineage, and result fields to durable records; do not make a worker result or model observation the commit authority.
+Keep the existing request/action fingerprint split. Add the Phase 4 action, operation, receipt, artifact-lineage, and result fields to durable records; do not make a worker result or model observation the commit authority. `src/persistence/metered-session-store.ts` is explicitly not created: Phase 4 extends `src/persistence/funding-store.ts` plus its memory and PostgreSQL implementations so session/action/ledger/artifact state commits under one database-owned transactional authority.
 
 **Worker/artifact ordering** — `src/phase-02/trusted-core.ts:246-277`:
 
@@ -92,11 +91,11 @@ return freeze({ status: "authorized" as const, ... , reservedAmount: action.amou
 
 Use decimal strings at public/store boundaries and `bigint` for all rate, unit, reservation, quotient, remainder, debit, and release calculations. No `number` or current-price lookup may influence settlement.
 
-### Funding and PostgreSQL extensions
+### Deliberate single-database funding, session, and artifact authority
 
 **Analogs:** `src/funding/funded-admission.ts`, `src/persistence/funding-store.ts`, `src/persistence/postgres-sql-funding-store.ts`, and `tests/persistence/postgres-sql-funding-store.test.ts:16-33`.
 
-**Transaction ownership:** retain the `FundingStore.transact(accountId, callback)` pattern. Extend its narrow transaction interface with operation-intent/sub-reservation/finalization/reconciliation methods rather than letting Phase 4 issue raw SQL or mutate a balance. The one terminal transaction must fence operation ID and provider receipt identity, settle receipt-derived charge, release unused reservation, append balanced immutable postings/evidence/outbox, persist the action result, and advance artifact only when all gates passed.
+**Transaction ownership:** retain the `FundingStore.transact(accountId, callback)` pattern. Extend its narrow transaction interface and the existing memory/PostgreSQL implementations with session/action, operation-intent, sub-reservation, finalization, reconciliation, and verified-artifact methods. Do not create a separate metered-session store or a second database capability. The one terminal transaction must fence operation ID and provider receipt identity, settle receipt-derived charge, release unused reservation, append balanced immutable postings/evidence/outbox, persist the action result, and advance artifact only when all gates passed.
 
 **Serializable SQL discipline** — `tests/persistence/postgres-sql-funding-store.test.ts:16-23` asserts the production adapter uses:
 
@@ -144,7 +143,7 @@ Build Phase 4 status field-by-field from a server projection. Never spread domai
 
 **Analogs:** `src/funding/account-status.ts` for owner-scoped status and `src/policy/phase-02-policy.ts` for frozen, versioned policy objects.
 
-Status must derive from durable session/action/financial/evidence projections and use public decimal strings. Return a bounded history/cursor only if selected, validate owner before lookup, and encode an honest `nextRequiredAction`. Repair policy must be a coordinator-only versioned decision over originating action, validation report, and repair count; it returns denial after one automatic repair rather than looping.
+Status must derive from durable session/action/financial/evidence projections and use public decimal strings. Billing-history page limits are 1–50 and default to 50; order by immutable ascending commit sequence plus stable item ID. Use an opaque, versioned, integrity-protected owner/session/query-bound cursor that resumes after the last sequence/item, and return generic `invalid_cursor` without data for invalid or foreign cursors. All committed financial line items remain traversable and immutable; public status exposes normalized items/evidence IDs only, never protected provider-native payloads. Repair policy must be a coordinator-only versioned decision over originating action, validation report, and repair count; it returns denial after one automatic repair rather than looping.
 
 ### Phase 4 evidence and verifier script
 

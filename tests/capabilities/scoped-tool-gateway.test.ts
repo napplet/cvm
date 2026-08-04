@@ -37,7 +37,7 @@ function request(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function gateway() {
+function createGateway() {
   const registry = new GrantRegistry();
   registry.issue(baseGrant);
   const calls: unknown[] = [];
@@ -52,7 +52,7 @@ function gateway() {
 
 describe("ScopedToolGateway", () => {
   test("mediates a strict request and replays an exact duplicate without a second effect", async () => {
-    const { gateway, calls } = gateway();
+    const { gateway, calls } = createGateway();
     const first = await gateway.authorizeAndDispatch(request());
     const replay = await gateway.authorizeAndDispatch(request());
 
@@ -75,7 +75,7 @@ describe("ScopedToolGateway", () => {
     ["oversize path", { path: "x".repeat(PHASE_02_POLICY_INITIAL.tools.maxPathCharacters + 1) }],
     ["oversize content", { content: "x".repeat(PHASE_02_POLICY_INITIAL.tools.maxWriteContentCharacters + 1) }],
   ])("denies %s before the dispatcher runs", async (_name, mutation) => {
-    const { gateway, calls } = gateway();
+    const { gateway, calls } = createGateway();
     const result = await gateway.authorizeAndDispatch(request(mutation));
     expect(result.status).toBe("denied");
     expect(calls).toHaveLength(0);
@@ -83,20 +83,20 @@ describe("ScopedToolGateway", () => {
   });
 
   test("denies expiry, revocation, terminal grants, and conflicting call reuse with zero new effects", async () => {
-    const expiry = gateway();
+    const expiry = createGateway();
     now.value = 2_001;
     expect(await expiry.gateway.authorizeAndDispatch(request())).toMatchObject({ code: "TOOL_GRANT_EXPIRED" });
     expect(expiry.calls).toHaveLength(0);
 
     now.value = 1_000;
-    const revoked = gateway();
+    const revoked = createGateway();
     revoked.registry.revoke(baseGrant.id);
     expect(await revoked.gateway.authorizeAndDispatch(request())).toMatchObject({ code: "TOOL_GRANT_REVOKED" });
     revoked.registry.terminal(baseGrant.id);
     expect(await revoked.gateway.authorizeAndDispatch(request({ callId: "call-2", evidenceId: "evidence-2" }))).toMatchObject({ code: "TOOL_GRANT_TERMINAL" });
     expect(revoked.calls).toHaveLength(0);
 
-    const duplicate = gateway();
+    const duplicate = createGateway();
     await duplicate.gateway.authorizeAndDispatch(request());
     expect(await duplicate.gateway.authorizeAndDispatch(request({ content: "changed" }))).toMatchObject({ code: "TOOL_REQUEST_CONFLICT" });
     expect(duplicate.calls).toHaveLength(1);

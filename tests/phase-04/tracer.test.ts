@@ -47,7 +47,7 @@ describe("Phase 04 funded start tracer", () => {
     const { store, admissions, admission } = await fundedDependencies();
     const effects = { dispatches: 0, workers: 0 };
     const gateway: ModelGateway = {
-      async dispatch(intent) { effects.dispatches += 1; return { status: "completed", receipt: { operationId: intent.operationId, providerRequestId: "provider-request-1", provider: "deterministic_fixture", model: "phase-04-fixture-model", profileId: intent.profileId, priceCardId: intent.priceCardId, selection: "unselected", completedAt: "2026-08-04T00:00:01.000Z", provenance: { protectedEvidenceReference: "provider-evidence-1" }, usage: [{ dimension: "input_tokens", units: "10" }, { dimension: "output_tokens", units: "5" }] } }; },
+      async dispatch(intent) { effects.dispatches += 1; return { status: "completed", receipt: { operationId: intent.operationId, providerRequestId: intent.providerRequestId, provider: "deterministic_fixture", model: "phase-04-fixture-model", profileId: intent.profileId, priceCardId: intent.priceCardId, selection: "unselected", completedAt: "2026-08-04T00:00:01.000Z", provenance: { protectedEvidenceReference: "provider-evidence-1" }, usage: [{ dimension: "input_tokens", units: "10" }, { dimension: "output_tokens", units: "5" }] } }; },
       async lookup() { return { status: "not_found" }; },
     };
     const service = new MeteredGenerationService({ fundedAdmission: admissions, store, gateway, worker: completedWorker(effects), artifactVerifier: verifier });

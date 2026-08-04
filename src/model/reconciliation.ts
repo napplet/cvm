@@ -23,7 +23,7 @@ export type ReconciliationResult = z.infer<typeof ReconciliationResultSchema>;
 
 function toIntent(action: MeteredAction) {
   return ProviderOperationIntentSchema.parse({
-    operationId: action.operationId,
+    operationId: action.operationId, providerRequestId: action.providerRequestId ?? action.operationId,
     accountId: action.accountId,
     sessionId: action.sessionId,
     actionId: action.actionId,

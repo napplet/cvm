@@ -90,7 +90,7 @@ export class DeterministicModelGateway implements ModelGateway {
     return ModelDispatchObservationSchema.parse({ status: "usage_unknown", ...correlation, reason: this.#scenario.dispatch });
   }
 
-  private providerRequestId(intent: ProviderOperationIntent): string { return `deterministic:${intent.operationId}`; }
+  private providerRequestId(intent: ProviderOperationIntent): string { return intent.providerRequestId; }
 
   private async provenance(intent: ProviderOperationIntent, stage: "dispatch" | "lookup") {
     // The body is intentionally not returned: callers can correlate it only by

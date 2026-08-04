@@ -149,7 +149,10 @@ export class MeteredGenerationService {
     // already be waiting for the original provider response, so this caller
     // must surface reconciliation rather than issue a second billable request.
     if (!claim.claimed) return SessionActionResultSchema.parse({ status: "usage_unknown", code: "USAGE_UNKNOWN", accountId, sessionId, nextAction: "billing_reconciliation", operationId });
-    const intent = ProviderOperationIntentSchema.parse({ operationId, accountId, sessionId, actionId, expectedVersion: command.expectedVersion, actionBudgetReference: budget.reference, profileId: profile.id, priceCardId: PHASE_04_DETERMINISTIC_PRICE_CARD.id, requestFingerprint: fingerprint, maximumUnits: profile.maximumUnits, selection: "unselected" });
+    // This coordinator-generated ID is persisted with provider_operations
+    // before dispatch and must be echoed by every receipt.
+    const providerRequestId = operationId;
+    const intent = ProviderOperationIntentSchema.parse({ operationId, providerRequestId, accountId, sessionId, actionId, expectedVersion: command.expectedVersion, actionBudgetReference: budget.reference, profileId: profile.id, priceCardId: PHASE_04_DETERMINISTIC_PRICE_CARD.id, requestFingerprint: fingerprint, maximumUnits: profile.maximumUnits, selection: "unselected" });
     let observation: z.infer<typeof ModelObservationSchema>;
     try {
       observation = ModelObservationSchema.parse(await this.options.gateway.dispatch(intent, new AbortController().signal));
@@ -164,9 +167,17 @@ export class MeteredGenerationService {
       return SessionActionResultSchema.parse({ status: "usage_unknown", code: "USAGE_UNKNOWN", accountId, sessionId, nextAction: "billing_reconciliation", operationId });
     }
     if (observation.status === "definitive_not_accepted") {
+      if (observation.operationId !== operationId || observation.providerRequestId !== providerRequestId) {
+        await this.options.store.transact(accountId, (transaction) => transaction.recordUsageUnknown({ operationId, providerRequestId, protectedEvidenceReference: observation.provenance.protectedEvidenceReference, reason: "uncertain_acceptance" }));
+        return SessionActionResultSchema.parse({ status: "usage_unknown", code: "USAGE_UNKNOWN", accountId, sessionId, nextAction: "billing_reconciliation", operationId });
+      }
       const result = SessionActionResultSchema.parse({ status: "failed", code: "WORKER_OR_ARTIFACT_FAILED", accountId, sessionId, sessionVersion: 0, artifactVersion: 0, confirmedSpend: "0", remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId });
       const finalized = await this.options.store.transact(accountId, (transaction) => transaction.finalizeMeteredAction({ idempotencyKey: command.idempotencyKey, operationId, receiptCharge: "0", providerReceiptReference: observation.provenance.protectedEvidenceReference, status: "failed", result, sessionVersion: 0, artifactVersion: 0 }));
       return SessionActionResultSchema.parse({ ...result, remainingCap: finalized.remainingCap!, remainingBalance: finalized.remainingBalance! });
+    }
+    if (observation.receipt.operationId !== operationId || observation.receipt.providerRequestId !== providerRequestId) {
+      await this.options.store.transact(accountId, (transaction) => transaction.recordUsageUnknown({ operationId, providerRequestId, protectedEvidenceReference: observation.receipt.provenance.protectedEvidenceReference, reason: "uncertain_acceptance" }));
+      return SessionActionResultSchema.parse({ status: "usage_unknown", code: "USAGE_UNKNOWN", accountId, sessionId, nextAction: "billing_reconciliation", operationId });
     }
     const priced = priceReceipt({ receipt: observation.receipt, card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile, reservation: profileCeiling });
     if (priced.status !== "priced") {

@@ -13,7 +13,7 @@ const ObservationCorrelationSchema = z.object({
 
 /** Persisted, coordinator-created billable request. Provider adapters never receive a mutable price policy. */
 export const ProviderOperationIntentSchema = z.object({
-  operationId: z.string().min(1), accountId: z.string().min(1), sessionId: z.string().min(1), actionId: z.string().min(1),
+  operationId: z.string().min(1), providerRequestId: z.string().min(1), accountId: z.string().min(1), sessionId: z.string().min(1), actionId: z.string().min(1),
   expectedVersion: z.number().int().nonnegative(), actionBudgetReference: z.string().min(1), profileId: z.string().min(1),
   priceCardId: z.string().min(1), requestFingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
   maximumUnits: z.array(z.object({ dimension: UsageDimensionSchema, units: DecimalSchema }).strict()).min(1),

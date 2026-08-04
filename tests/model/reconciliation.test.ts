@@ -11,7 +11,7 @@ import { FundedAdmissionService } from "../../src/funding/funded-admission";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
 
 const intent = (operationId = "operation:gateway"): ProviderOperationIntent => ({
-  operationId,
+  operationId, providerRequestId: `deterministic:${operationId}`,
   accountId: "account:gateway",
   sessionId: "session:gateway",
   actionId: "action:gateway",
@@ -137,8 +137,8 @@ describe("reconciliation", () => {
       dispatch: dispatchedGateway.dispatch.bind(dispatchedGateway),
       async lookup(intent) {
         lookups += 1;
-        if (lookups === 1) return { status: "pending" as const, operationId: intent.operationId, providerRequestId: `deterministic:${intent.operationId}`, provenance: { protectedEvidenceReference: "evidence:pending" } };
-        return { status: "receipt_found" as const, receipt: { operationId: intent.operationId, providerRequestId: `deterministic:${intent.operationId}`, provider: "deterministic_fixture", model: "phase-04-fixture-model", profileId: intent.profileId, priceCardId: intent.priceCardId, selection: "unselected", completedAt: "2026-08-04T00:00:01.000Z", provenance: { protectedEvidenceReference: "evidence:receipt" }, usage: [{ dimension: "input_tokens" as const, units: "1" }] } };
+        if (lookups === 1) return { status: "pending" as const, operationId: intent.operationId, providerRequestId: intent.providerRequestId, provenance: { protectedEvidenceReference: "evidence:pending" } };
+        return { status: "receipt_found" as const, receipt: { operationId: intent.operationId, providerRequestId: intent.providerRequestId, provider: "deterministic_fixture", model: "phase-04-fixture-model", profileId: intent.profileId, priceCardId: intent.priceCardId, selection: "unselected", completedAt: "2026-08-04T00:00:01.000Z", provenance: { protectedEvidenceReference: "evidence:receipt" }, usage: [{ dimension: "input_tokens" as const, units: "1" }] } };
       },
     };
     const reconciliation = new ModelReconciliationService({ store, gateway });

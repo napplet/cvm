@@ -12,29 +12,29 @@ Requirements for the initial release. Each maps to exactly one roadmap phase.
 
 ### ContextVM and Identity
 
-- [ ] **CTX-01**: A user can discover the CVM and its supported generation, account, top-up, session, preview, and publication capabilities through a signed ContextVM announcement.
-- [ ] **CTX-02**: A signed ContextVM request resolves to one stable account identified by the user's Nostr public key without a password or service-held user secret.
-- [ ] **CTX-03**: Replaying or redelivering the same signed ContextVM request returns its durable prior result without repeating a state change, charge, credit, worker action, or publication.
-- [ ] **CTX-04**: A user can query their current balance, active and resumable sessions, pending actions, and settlement states through ContextVM.
+- [x] **CTX-01**: A user can discover the CVM and its supported generation, account, top-up, session, preview, and publication capabilities through a signed ContextVM announcement.
+- [x] **CTX-02**: A signed ContextVM request resolves to one stable account identified by the user's Nostr public key without a password or service-held user secret.
+- [x] **CTX-03**: Replaying or redelivering the same signed ContextVM request returns its durable prior result without repeating a state change, charge, credit, worker action, or publication.
+- [x] **CTX-04**: A user can query their current balance, active and resumable sessions, pending actions, and settlement states through ContextVM.
 
 ### Funding and Settlement
 
-- [ ] **PAY-01**: A user can invoke a separate CEP-8 top-up capability and choose a mutually supported payment method through PMI negotiation.
-- [ ] **PAY-02**: A user can fund their account by paying a Lightning BOLT11 request whose settlement is verified before credit is posted.
-- [ ] **PAY-03**: A user can fund their account with Cashu from a configured trusted mint only after token amount, unit, mint, and spendability are verified.
-- [ ] **PAY-04**: A user can see each top-up move through explicit pending, settled, credited, or failed states with its amount, unit, rail, and settlement reference.
-- [ ] **PAY-05**: A verified settlement credits the user's balance exactly once even when payment notifications, relay messages, or client requests are duplicated.
-- [ ] **PAY-06**: An operator can configure and rotate an allowlist containing multiple trusted Cashu mints without changing historical settlement records.
-- [ ] **PAY-07**: Accepted Cashu value is automatically reconciled into treasury settlement records without crediting the user twice or treating an unspendable token as settled value.
+- [x] **PAY-01**: A user can invoke a separate CEP-8 top-up capability and choose a mutually supported payment method through PMI negotiation.
+- [x] **PAY-02**: A user can fund their account by paying a Lightning BOLT11 request whose settlement is verified before credit is posted.
+- [x] **PAY-03**: A user can fund their account with Cashu from a configured trusted mint only after token amount, unit, mint, and spendability are verified.
+- [x] **PAY-04**: A user can see each top-up move through explicit pending, settled, credited, or failed states with its amount, unit, rail, and settlement reference.
+- [x] **PAY-05**: A verified settlement credits the user's balance exactly once even when payment notifications, relay messages, or client requests are duplicated.
+- [x] **PAY-06**: An operator can configure and rotate an allowlist containing multiple trusted Cashu mints without changing historical settlement records.
+- [x] **PAY-07**: Accepted Cashu value is automatically reconciled into treasury settlement records without crediting the user twice or treating an unspendable token as settled value.
 
 ### Metering and Spend Safety
 
-- [ ] **BILL-01**: Before the first billable action, a user explicitly approves a maximum spend for the session in a disclosed currency unit.
-- [ ] **BILL-02**: The service authorizes each billable action before execution and never spends beyond the lesser of the user's funded balance and remaining approved session cap.
+- [x] **BILL-01**: Before the first billable action, a user explicitly approves a maximum spend for the session in a disclosed currency unit.
+- [x] **BILL-02**: The service authorizes each billable action before execution and never spends beyond the lesser of the user's funded balance and remaining approved session cap.
 - [ ] **BILL-03**: After a completed action, the service debits the authoritative measured API usage exactly once using the price version that applied when the action was authorized.
 - [ ] **BILL-04**: A user can inspect an immutable line item for every hold, release, debit, credit, and reconciliation, including provider usage inputs and remaining balance/cap.
 - [ ] **BILL-05**: A timed-out or ambiguous provider request enters an explicit reconciliation state and is not blindly retried or double charged.
-- [ ] **BILL-06**: Unused funded balance and unused session cap remain available and are never converted into an undisclosed fixed generation fee or automatic overage.
+- [x] **BILL-06**: Unused funded balance and unused session cap remain available and are never converted into an undisclosed fixed generation fee or automatic overage.
 
 ### Session Admission and Interaction
 
@@ -141,7 +141,7 @@ Milestone v1.0 owns every row in this table. Existing requirement IDs and phase 
 |-------|--------------------------|------:|----------------|
 | Phase 1 | GEN-01–GEN-04, SAFE-05–SAFE-06 | 6 | Complete |
 | Phase 2 | SESS-05, SAFE-01–SAFE-04 | 5 | Complete |
-| Phase 3 | CTX-01–CTX-04, PAY-01–PAY-07, BILL-01–BILL-02, BILL-06 | 14 | Execution complete; verification pending |
+| Phase 3 | CTX-01–CTX-04, PAY-01–PAY-07, BILL-01–BILL-02, BILL-06 | 14 | Complete |
 | Phase 4 | BILL-03–BILL-05, SESS-01, SESS-03–SESS-04, GEN-05–GEN-06 | 8 | Pending |
 | Phase 5 | CONT-01–CONT-07 | 7 | Pending |
 | Phase 6 | PREV-01–PREV-04, PUB-01–PUB-05 | 9 | Pending |
@@ -149,23 +149,23 @@ Milestone v1.0 owns every row in this table. Existing requirement IDs and phase 
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CTX-01 | Phase 3 | Execution complete; verification pending |
-| CTX-02 | Phase 3 | Execution complete; verification pending |
-| CTX-03 | Phase 3 | Execution complete; verification pending |
-| CTX-04 | Phase 3 | Execution complete; verification pending |
-| PAY-01 | Phase 3 | Execution complete; verification pending |
-| PAY-02 | Phase 3 | Execution complete; verification pending |
-| PAY-03 | Phase 3 | Execution complete; verification pending |
-| PAY-04 | Phase 3 | Execution complete; verification pending |
-| PAY-05 | Phase 3 | Execution complete; verification pending |
-| PAY-06 | Phase 3 | Execution complete; verification pending |
-| PAY-07 | Phase 3 | Execution complete; verification pending |
-| BILL-01 | Phase 3 | Execution complete; verification pending |
-| BILL-02 | Phase 3 | Execution complete; verification pending |
+| CTX-01 | Phase 3 | Complete |
+| CTX-02 | Phase 3 | Complete |
+| CTX-03 | Phase 3 | Complete |
+| CTX-04 | Phase 3 | Complete |
+| PAY-01 | Phase 3 | Complete |
+| PAY-02 | Phase 3 | Complete |
+| PAY-03 | Phase 3 | Complete |
+| PAY-04 | Phase 3 | Complete |
+| PAY-05 | Phase 3 | Complete |
+| PAY-06 | Phase 3 | Complete |
+| PAY-07 | Phase 3 | Complete |
+| BILL-01 | Phase 3 | Complete |
+| BILL-02 | Phase 3 | Complete |
 | BILL-03 | Phase 4 | Pending |
 | BILL-04 | Phase 4 | Pending |
 | BILL-05 | Phase 4 | Pending |
-| BILL-06 | Phase 3 | Execution complete; verification pending |
+| BILL-06 | Phase 3 | Complete |
 | SESS-01 | Phase 4 | Pending |
 | SESS-02 | Phase 7 | Pending |
 | SESS-03 | Phase 4 | Pending |
@@ -210,10 +210,10 @@ Milestone v1.0 owns every row in this table. Existing requirement IDs and phase 
 - Owned by milestone v1.0: 54
 - Mapped to phases: 54
 - Unmapped: 0 ✓
-- Complete: 11
-- Execution complete; verification pending: 14
+- Complete: 25
+- Execution complete; verification pending: 0
 - Pending: 29
 
 ---
 *Requirements defined: 2026-08-03*
-*Last updated: 2026-08-04 after Phase 3 execution; requirement IDs and phase assignments unchanged*
+*Last updated: 2026-08-04 after Phase 3 completion; requirement IDs and phase assignments unchanged*

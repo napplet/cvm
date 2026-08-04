@@ -16,7 +16,7 @@ napplet-cvm moves from proving the permanent napplet contract to a safe, prepaid
 |-------|----------------------|-----------------------|-------------------------------------|
 | 1. Napplet Contract & Artifact Verification | Establishes the permanent conformant-napplet boundary and representative fail-closed evidence consumed by every later artifact path. | GEN-01–GEN-04, SAFE-05–SAFE-06 | `.planning/phases/01-napplet-contract-artifact-verification/` — context, discussion log, research, patterns, 6 plans, 6 summaries, blocker record, coverage, validation, review/fix, security audit, verification, and deferred-items record. |
 | 2. Trusted Core & Isolated Agent Execution | Establishes bounded admission, serialized durable session authority, typed worker capabilities, isolation, checkpoint shape, and provider-separated evidence. | SESS-05, SAFE-01–SAFE-04 | `.planning/phases/02-trusted-core-isolated-agent-execution/` — context, research, AI spec, validation, coverage, source audit, 6 plans, 6 summaries, review/fix, security audit, and goal verification. |
-| 3. ContextVM Funding & Funded Admission | Connects signed ContextVM identity and CEP-8 Lightning/Cashu settlement to one idempotent prepaid account and capped funded admission. | CTX-01–CTX-04, PAY-01–PAY-07, BILL-01–BILL-02, BILL-06 | `.planning/phases/03-contextvm-funding-funded-admission/` — context, discussion log, research, patterns, detailed and canonical API coverage, validation, source audit, and 7 executable plans. |
+| 3. ContextVM Funding & Funded Admission | Connects signed ContextVM identity and CEP-8 Lightning/Cashu settlement to one idempotent prepaid account and capped funded admission. | CTX-01–CTX-04, PAY-01–PAY-07, BILL-01–BILL-02, BILL-06 | `.planning/phases/03-contextvm-funding-funded-admission/` — context, discussion log, research, patterns, API coverage, validation, source audit, 7 plans and summaries, review/fix history, final clean review, security audit, and passed goal verification. |
 | 4. Metered Generation & Revision Loop | Turns approved funds into exact-usage, serialized napplet creation, revision, repair, progress, and diagnostic actions. | BILL-03–BILL-05, SESS-01, SESS-03–SESS-04, GEN-05–GEN-06 | Phase directory and phase artifacts not yet created. |
 | 5. Funding Interruption & Durable Resume | Preserves paid work across insufficient funds, the ten-minute live-worker window, explicit resume, and 30-day checkpoint retention. | CONT-01–CONT-07 | Phase directory and phase artifacts not yet created. |
 | 6. Sealed Preview & User-Owned Publication | Lets the user preview the exact verified artifact, retain signing custody, and explicitly deploy a manifest plus CVM attestation. | PREV-01–PREV-04, PUB-01–PUB-05 | Phase directory and phase artifacts not yet created. |
@@ -35,7 +35,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Napplet Contract & Artifact Verification** - Prove a pinned toolchain can produce only conformant, independently verifiable napplets. (completed 2026-08-04)
 - [x] **Phase 2: Trusted Core & Isolated Agent Execution** - Establish deterministic policy, serialized state, and a fenced worker boundary. (completed 2026-08-04)
-- [ ] **Phase 3: ContextVM Funding & Funded Admission** - Provide Nostr-linked accounts, CEP-8 top-ups, and safe prepaid authorization.
+- [x] **Phase 3: ContextVM Funding & Funded Admission** - Provide Nostr-linked accounts, CEP-8 top-ups, and safe prepaid authorization. (completed 2026-08-04)
 - [ ] **Phase 4: Metered Generation & Revision Loop** - Turn approved funds into exact-usage, constrained generation and repair actions.
 - [ ] **Phase 5: Funding Interruption & Durable Resume** - Preserve safely-paused work through the ten-minute grace window and 30-day checkpoints.
 - [ ] **Phase 6: Sealed Preview & User-Owned Publication** - Let users inspect, preview, sign, attest, and deploy one immutable artifact identity.
@@ -236,7 +236,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 |-------|----------------|--------|-----------|
 | 1. Napplet Contract & Artifact Verification | 6/6 | Complete    | 2026-08-04 |
 | 2. Trusted Core & Isolated Agent Execution | 6/6 | Complete    | 2026-08-04 |
-| 3. ContextVM Funding & Funded Admission | 7/7 | Execution complete; verification pending |  |
+| 3. ContextVM Funding & Funded Admission | 7/7 | Complete    | 2026-08-04 |
 | 4. Metered Generation & Revision Loop | 0/TBD | Not started | - |
 | 5. Funding Interruption & Durable Resume | 0/TBD | Not started | - |
 | 6. Sealed Preview & User-Owned Publication | 0/TBD | Not started | - |
@@ -244,10 +244,10 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 ### Milestone Progress Roll-up
 
-- **Phases:** Phases 1–2 complete; Phase 3 execution is complete and awaiting goal verification; Phases 4–7 remain; 2/7 phases verified complete (29%), 3/7 execution-complete (43%).
+- **Phases:** Phases 1–3 are verified complete; Phase 4 is active and ready for discussion; Phases 5–7 remain; 3/7 phases complete (43%).
 - **Known plans:** 19/19 executed; Phase 3 contributes 7 completed plans across 5 waves.
-- **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 11 verified complete, 14 execution-complete awaiting verification, and 29 pending.
-- **Current checkpoint:** Verify Phase 3, including validation, review, and security gates; do not revisit or replan completed Phase 1, Phase 2, or valid Phase 3 plans.
+- **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 25 verified complete and 29 pending.
+- **Current checkpoint:** Discuss Phase 4, then research, specify, plan, and execute it; do not revisit or replan completed Phases 1–3.
 - **Phase 1 preservation:** Phase 1 remains complete with its review, security, validation, verification evidence, and Phase 7 deferrals unchanged.
 
 ### Completion Reporting Contract

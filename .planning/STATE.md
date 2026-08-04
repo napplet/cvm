@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
-current_phase: 3
-current_phase_name: ContextVM Funding & Funded Admission
-status: executing
-stopped_at: Completed 03-07-PLAN.md
-last_updated: "2026-08-04T16:31:20.594Z"
+current_phase: 4
+current_phase_name: Metered Generation & Revision Loop
+status: planning
+stopped_at: Phase 3 complete; ready to discuss Phase 4
+last_updated: "2026-08-04T17:58:46.771Z"
 last_activity: 2026-08-04
-last_activity_desc: Phase 3 planned with 7 executable plans in 5 waves
+last_activity_desc: Phase 3 complete, transitioned to Phase 4
 progress:
   total_phases: 7
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 19
   completed_plans: 19
-  percent: 29
+  percent: 43
 ---
 
 # Project State
@@ -29,21 +29,21 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 ## Current Position
 
-Phase: 3 — ContextVM Funding & Funded Admission
-Plan: 7/7 executed
-Status: Phase verification pending
-Last activity: 2026-08-04 — completed the Phase 3 deterministic reference/evidence gate
+Phase: 4 — Metered Generation & Revision Loop
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-04 — Phase 3 complete, transitioned to Phase 4
 
-Progress: [████░░░░░░] 43% of milestone phases complete; Phases 1–2 verified, Phase 3 execution complete
+Progress: [███░░░░░░░] 43% of milestone phases complete; Phases 1–3 verified, Phase 4 ready for discussion
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
-- Phases: Phases 1–2 complete; Phase 3 execution is complete and awaiting verification; Phases 4–7 remain.
-- Plans: 19/19 currently known milestone plans executed; Phase 3 has 7/7 executed across five waves.
-- Requirements: 54/54 v1 requirements assigned; 11 verified complete, 14 execution-complete awaiting verification, 29 pending.
-- Next checkpoint: verify Phase 3 against its goal, then run required validation/review/security gates before beginning Phase 4.
+- Phases: Phases 1–3 complete; Phase 4 is active and ready for discussion; Phases 5–7 remain.
+- Plans: 19/19 currently known milestone plans executed; Phase 4 plans have not yet been created.
+- Requirements: 54/54 v1 requirements assigned; 25 verified complete and 29 pending.
+- Next checkpoint: discuss Phase 4 Metered Generation & Revision Loop, then research, specify, plan, and execute it without revisiting completed Phases 1–3.
 
 ## Performance Metrics
 
@@ -59,7 +59,7 @@ Progress: [████░░░░░░] 43% of milestone phases complete; Pha
 |-------|-------|-------|----------|
 | 1 | 6 | - | - |
 | 2 | 6 | - | - |
-| 3 | 7 | 15m | ~2m |
+| 3 | 7 | - | - |
 
 **Recent Trend:**
 
@@ -120,7 +120,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Verify Phase 3 ContextVM funding and funded-admission execution before advancing the v1.0 milestone.
+- Discuss and plan Phase 4 Metered Generation & Revision Loop from the completed Phase 3 funding authority.
 
 ### Blockers/Concerns
 

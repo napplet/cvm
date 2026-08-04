@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { evaluatePhase04Design, validatePhase04DesignEvidence, writePhase04DesignEvidence } from "../../src/verification/phase-04-design-evidence";
 
 const fixturePath = "tests/fixtures/phase-04-reference-set.json";
 
@@ -49,6 +51,25 @@ async function referenceSet(): Promise<readonly ReferenceCase[]> {
   return validateReferenceSet(JSON.parse(await readFile(fixturePath, "utf8")));
 }
 
+const digest = (character: string): string => character.repeat(64);
+async function evidenceInput() {
+  const cases = await referenceSet();
+  const caseIds = cases.map((item) => item.id);
+  return {
+    identities: { referenceSet: fixturePath, meteredService: "src/phase-04/metered-generation-service.ts", gateway: "src/model/deterministic-model-gateway.ts", reconciliation: "src/model/reconciliation.ts", status: "src/phase-04/session-status.ts", adapter: "src/contextvm/adapter.ts" },
+    checks: ["reference-set", "metered-authority", "reconciliation", "artifact-honesty", "owner-status", "contextvm-boundary"].map((id, index) => ({ id, severity: id === "reference-set" ? "critical" as const : "high" as const, status: "passed" as const, evidenceSha256: digest(String(index + 1)) })),
+    caseResults: caseIds.map((id) => ({ id, status: "passed" as const })),
+    requirementMappings: Object.fromEntries(requiredRequirements.map((id) => [id, caseIds.filter((caseId, index) => cases[index]!.requirements.includes(id))])),
+    decisionMappings: requiredDecisions,
+    threatMappings: requiredThreats,
+    aggregateEffects: { providerDispatches: 7, providerLookups: 3, workerCalls: 6, receiptWrites: 4, debitPostings: 7, creditPostings: 2, releases: 7 },
+    observations: [
+      { provider: "deterministic_gateway", status: "passed" as const, selection: "unselected" as const, evidenceSha256: digest("a"), limitations: ["fixture-only execution"] },
+      { provider: "live_model", status: "not_observed" as const, selection: "unselected" as const, evidenceSha256: digest("b"), limitations: ["Phase 7 owns live provider selection and certification"] },
+    ],
+  };
+}
+
 describe("Phase 04 deterministic reference set", () => {
   test("requires twenty complete, uniquely mapped actual-service cases", async () => {
     const cases = await referenceSet();
@@ -71,5 +92,31 @@ describe("Phase 04 deterministic reference set", () => {
     expect(() => validateReferenceSet({ ...fixture, cases: fixture.cases.map((item, index) => index === 0 ? { ...item, expected: { ...item.expected, status: "preview_ready" } } : item) })).toThrow("overclaims");
     expect(() => validateReferenceSet({ ...fixture, cases: fixture.cases.map((item, index) => index === 0 ? { ...item, expected: { ...item.expected, providerSelection: "selected" } } : item) })).toThrow("overclaims");
     expect(() => validateReferenceSet({ ...fixture, cases: fixture.cases.map((item, index) => index === 0 ? { ...item, decisions: [] } : item) })).toThrow();
+  });
+});
+
+describe("Phase 04 immutable design evidence", () => {
+  test("accepts complete twenty-case deterministic proof while live providers remain unselected", async () => {
+    const decision = await evaluatePhase04Design(await evidenceInput());
+    expect(decision.reasons).toEqual([]);
+    expect(decision.evidence).toMatchObject({ verdict: "design-ready", offlineVerdict: "passed" });
+    expect(decision.evidence.observations).toEqual(expect.arrayContaining([expect.objectContaining({ provider: "deterministic_gateway", selection: "unselected" }), expect.objectContaining({ provider: "live_model", status: "not_observed", selection: "unselected" })]));
+  });
+
+  test("fails closed for incomplete evidence, disclosure, readiness claims, and immutable collisions", async () => {
+    const input = await evidenceInput();
+    await expect(evaluatePhase04Design({ ...input, caseResults: input.caseResults.slice(1) })).resolves.toMatchObject({ evidence: { verdict: "blocked" } });
+    await expect(evaluatePhase04Design({ ...input, generatedSource: "forbidden" } as never)).resolves.toMatchObject({ evidence: { verdict: "blocked" } });
+    await expect(evaluatePhase04Design({ ...input, observations: [{ ...input.observations[0]!, selection: "selected" as never }] })).resolves.toMatchObject({ evidence: { verdict: "blocked" } });
+    const valid = (await evaluatePhase04Design(input)).evidence;
+    await expect(validatePhase04DesignEvidence({ ...valid, evidenceSha256: digest("f") })).rejects.toThrow();
+    const directory = await mkdtemp(join(process.env.TMPDIR ?? "/tmp", "napplet-phase-04-evidence-"));
+    try {
+      const first = await writePhase04DesignEvidence(directory, input);
+      expect(await writePhase04DesignEvidence(directory, input)).toEqual(first);
+      await writeFile(join(directory, `${first.evidenceSha256}.json`), "collision", "utf8");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

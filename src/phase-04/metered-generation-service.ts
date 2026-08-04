@@ -173,7 +173,7 @@ export class MeteredGenerationService {
       }
       const result = SessionActionResultSchema.parse({ status: "failed", code: "WORKER_OR_ARTIFACT_FAILED", accountId, sessionId, sessionVersion: 0, artifactVersion: 0, confirmedSpend: "0", remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId });
       const finalized = await this.options.store.transact(accountId, (transaction) => transaction.finalizeMeteredAction({ idempotencyKey: command.idempotencyKey, operationId, receiptCharge: "0", providerReceiptReference: observation.provenance.protectedEvidenceReference, status: "failed", result, sessionVersion: 0, artifactVersion: 0 }));
-      return SessionActionResultSchema.parse({ ...result, remainingCap: finalized.remainingCap!, remainingBalance: finalized.remainingBalance! });
+      return SessionActionResultSchema.parse(finalized.result);
     }
     if (observation.receipt.operationId !== operationId || observation.receipt.providerRequestId !== providerRequestId) {
       await this.options.store.transact(accountId, (transaction) => transaction.recordUsageUnknown({ operationId, providerRequestId, protectedEvidenceReference: observation.receipt.provenance.protectedEvidenceReference, reason: "uncertain_acceptance" }));
@@ -209,7 +209,7 @@ export class MeteredGenerationService {
       ? { status, code: "ACTION_COMMITTED", accountId, sessionId, sessionVersion: command.expectedVersion + 1, artifactVersion: command.expectedVersion + 1, confirmedSpend: priced.total, remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId }
       : { status, code: "WORKER_OR_ARTIFACT_FAILED", accountId, sessionId, sessionVersion: command.expectedVersion, artifactVersion: command.expectedVersion, confirmedSpend: priced.total, remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId });
     const finalized = await this.options.store.transact(accountId, (transaction) => transaction.finalizeMeteredAction({ idempotencyKey: command.idempotencyKey, operationId, receiptCharge: priced.total, providerReceiptReference: observation.receipt.provenance.protectedEvidenceReference, status, result, sessionVersion: completed ? command.expectedVersion + 1 : command.expectedVersion, artifactVersion: completed ? command.expectedVersion + 1 : command.expectedVersion }));
-    return SessionActionResultSchema.parse({ ...result, ...(result.status === "completed" || result.status === "failed" ? { remainingCap: finalized.remainingCap!, remainingBalance: finalized.remainingBalance! } : {}) });
+    return SessionActionResultSchema.parse(finalized.result);
   }
 
   async #serializeSession<T>(accountId: string, sessionId: string, operation: () => Promise<T>): Promise<T> {

@@ -72,9 +72,9 @@ export class ModelReconciliationService {
     if (observation.status === "definitive_not_accepted") {
       this.assertCorrelation(claim.action, observation.operationId, observation.providerRequestId);
       const result = ReconciliationResultSchema.parse({ status: "failed", code: "PROVIDER_NOT_ACCEPTED", accountId: action.accountId, sessionId: action.sessionId, sessionVersion: action.expectedVersion, artifactVersion: action.expectedVersion, confirmedSpend: "0", remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId: action.operationId });
-      await this.options.store.transact(action.accountId, (transaction) => transaction.finalizeMeteredAction({ idempotencyKey: action.idempotencyKey, operationId: action.operationId, receiptCharge: "0", providerReceiptReference: observation.provenance.protectedEvidenceReference, status: "failed", result, sessionVersion: action.expectedVersion, artifactVersion: 0 }));
+      const finalized = await this.options.store.transact(action.accountId, (transaction) => transaction.finalizeMeteredAction({ idempotencyKey: action.idempotencyKey, operationId: action.operationId, receiptCharge: "0", providerReceiptReference: observation.provenance.protectedEvidenceReference, status: "failed", result, sessionVersion: action.expectedVersion, artifactVersion: 0 }));
       terminal = true;
-      return result;
+      return ReconciliationResultSchema.parse(finalized.result);
     }
 
     const receipt = observation.receipt;
@@ -87,12 +87,12 @@ export class ModelReconciliationService {
       return result;
     }
     const result = ReconciliationResultSchema.parse({ status: "failed", code: "RECONCILED_RECEIPT_FOUND", accountId: action.accountId, sessionId: action.sessionId, sessionVersion: action.expectedVersion, artifactVersion: action.expectedVersion, confirmedSpend: priced.total, remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId: action.operationId });
-    await this.options.store.transact(action.accountId, async (transaction) => {
+    const finalized = await this.options.store.transact(action.accountId, async (transaction) => {
       await transaction.recordUsageReceipt({ operationId: action.operationId, protectedEvidenceReference: receipt.provenance.protectedEvidenceReference });
       return transaction.finalizeMeteredAction({ idempotencyKey: action.idempotencyKey, operationId: action.operationId, receiptCharge: priced.total, providerReceiptReference: receipt.provenance.protectedEvidenceReference, status: "failed", result, sessionVersion: action.expectedVersion, artifactVersion: 0 });
     });
     terminal = true;
-    return result;
+    return ReconciliationResultSchema.parse(finalized.result);
     } finally {
       if (!terminal) await this.options.store.transact(action.accountId, (transaction) => transaction.releaseReconciliation(action.operationId));
     }

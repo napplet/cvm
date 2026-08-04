@@ -32,6 +32,19 @@ export type UsageReceiptRecord = Readonly<{ accountId: string; operationId: stri
 export type MeteredFinalizationInput = MeteredFinalizeInput;
 export type MeteredFinalizationResult = MeteredAction;
 
+/**
+ * A terminal action receipt is persisted only after the serialized ledger
+ * transaction has calculated its authoritative projections.  Coordinators may
+ * supply a typed result shell, but they must not be able to persist stale
+ * balance/cap placeholders that differ from the first response or replay.
+ */
+export function canonicalMeteredTerminalResult(result: unknown, financials: Readonly<{ confirmedSpend: string; remainingCap: string; remainingBalance: string }>): unknown {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return result;
+  const candidate = result as Record<string, unknown>;
+  if (candidate.status !== "completed" && candidate.status !== "failed") return structuredClone(result);
+  return Object.freeze({ ...candidate, confirmedSpend: financials.confirmedSpend, remainingCap: financials.remainingCap, remainingBalance: financials.remainingBalance });
+}
+
 export interface FundingTransaction {
   findRecordedResult(idempotencyKey: string): Promise<StoredFundingCommand | undefined>;
   creditVerifiedSettlement(input: CreditInput): Promise<FundingResult>;
@@ -302,7 +315,8 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore {
           const budget = [...state.actionBudgets.values()].find((item) => item.accountId === accountId && item.reference === found.actionBudgetReference);
           if (!budget || budget.state !== "authorized") throw new Error("METERED_ACTION_BUDGET_STATE_INVALID");
           state.actionBudgets.set(commandKey(accountId, budget.idempotencyKey), freeze({ ...budget, state: "released" as const }));
-          const next = freeze({ ...found, status: input.status, receiptCharge: input.receiptCharge, providerReceiptReference: input.providerReceiptReference, result: clone(input.result), sessionVersion: input.sessionVersion, artifactVersion: input.artifactVersion, remainingCap: nextHold.heldAmount.toString(), remainingBalance: nextAccount.settledAvailable.toString() });
+          const terminalResult = canonicalMeteredTerminalResult(input.result, { confirmedSpend: input.receiptCharge, remainingCap: nextHold.heldAmount.toString(), remainingBalance: nextAccount.settledAvailable.toString() });
+          const next = freeze({ ...found, status: input.status, receiptCharge: input.receiptCharge, providerReceiptReference: input.providerReceiptReference, result: clone(terminalResult), sessionVersion: input.sessionVersion, artifactVersion: input.artifactVersion, remainingCap: nextHold.heldAmount.toString(), remainingBalance: nextAccount.settledAvailable.toString() });
           state.meteredActions.set(commandKey(accountId, found.idempotencyKey), next);
           state.postings.push(freeze({ id: `posting:${found.operationId}:debit`, accountId, reference: found.operationId, unit: "sat" as const, amount: `-${input.receiptCharge}`, balanced: true as const }));
           state.postings.push(freeze({ id: `posting:${found.operationId}:release`, accountId, reference: found.actionBudgetReference, unit: "sat" as const, amount: (found.maximum - receiptCharge).toString(), balanced: true as const }));

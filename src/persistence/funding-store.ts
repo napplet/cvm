@@ -7,22 +7,25 @@ export type StoredFundingCommand = Readonly<{ fingerprint: string; result: Fundi
 
 export type CreditInput = Readonly<{ accountId: string; fingerprint: string; idempotencyKey: string; settlement: VerifiedSettlement }>;
 export type AdmissionInput = Readonly<{ accountId: string; fingerprint: string; idempotencyKey: string; requestedCap: bigint; capacityReference: string }>;
-export type CapacityIntent = Readonly<{ accountId: string; idempotencyKey: string; fingerprint: string; intentReference: string; state: "created" | "available" | "refused" | "reconciliation_pending" | "released"; capacityReference?: string; expiresAt?: string }>;
+export type CapacityIntent = Readonly<{ accountId: string; idempotencyKey: string; fingerprint: string; intentReference: string; state: "created" | "dispatching" | "available" | "refused" | "reconciliation_pending" | "released"; capacityReference?: string; expiresAt?: string }>;
 export type CapacityIntentInput = Readonly<{ accountId: string; idempotencyKey: string; fingerprint: string; intentReference: string }>;
+export type CapacityDispatchClaim = Readonly<{ intent: CapacityIntent; claimed: boolean }>;
 export type CapacityObservationInput = Readonly<{ intentReference: string; state: "available" | "refused" | "reconciliation_pending"; capacityReference?: string; expiresAt?: string }>;
 export type ActionBudget = Readonly<{ accountId: string; admissionReference: string; idempotencyKey: string; fingerprint: string; reference: string; amount: bigint }>;
 export type ActionBudgetInput = Readonly<{ accountId: string; admissionReference: string; idempotencyKey: string; fingerprint: string; reference: string; amount: bigint }>;
 
 export interface FundingTransaction {
-  findRecordedResult(idempotencyKey: string): StoredFundingCommand | undefined;
-  creditVerifiedSettlement(input: CreditInput): FundingResult;
-  acceptFundedAdmission(input: AdmissionInput): FundedAdmission;
-  findCapacityIntent(idempotencyKey: string): CapacityIntent | undefined;
-  createCapacityIntent(input: CapacityIntentInput): CapacityIntent;
-  recordCapacityObservation(input: CapacityObservationInput): CapacityIntent;
-  releaseCapacityIntent(intentReference: string): CapacityIntent;
-  findActionBudget(idempotencyKey: string): ActionBudget | undefined;
-  reserveActionBudget(input: ActionBudgetInput): ActionBudget;
+  findRecordedResult(idempotencyKey: string): Promise<StoredFundingCommand | undefined>;
+  creditVerifiedSettlement(input: CreditInput): Promise<FundingResult>;
+  acceptFundedAdmission(input: AdmissionInput): Promise<FundedAdmission>;
+  findCapacityIntent(idempotencyKey: string): Promise<CapacityIntent | undefined>;
+  createCapacityIntent(input: CapacityIntentInput): Promise<CapacityIntent>;
+  /** Atomically fences the sole external capacity-reservation attempt. */
+  claimCapacityDispatch(intentReference: string): Promise<CapacityDispatchClaim>;
+  recordCapacityObservation(input: CapacityObservationInput): Promise<CapacityIntent>;
+  releaseCapacityIntent(intentReference: string): Promise<CapacityIntent>;
+  findActionBudget(idempotencyKey: string): Promise<ActionBudget | undefined>;
+  reserveActionBudget(input: ActionBudgetInput): Promise<ActionBudget>;
 }
 
 /** Serializable financial authority port. Rail adapters never receive a posting or balance mutation API. */
@@ -83,8 +86,8 @@ export class TransactionalMemoryFundingStore implements FundingStore {
     try {
       const state = copyState(this.#state);
       const transaction: FundingTransaction = {
-        findRecordedResult: (idempotencyKey) => state.commands.get(commandKey(accountId, idempotencyKey)),
-        creditVerifiedSettlement: (input) => {
+        findRecordedResult: async (idempotencyKey) => state.commands.get(commandKey(accountId, idempotencyKey)),
+        creditVerifiedSettlement: async (input) => {
           if (input.accountId !== accountId) throw new Error("ACCOUNT_SCOPE_MISMATCH");
           if (state.externalReferences.has(input.settlement.externalReference) || state.settlementReferences.has(input.settlement.settlementReference)) throw new Error("SETTLEMENT_REFERENCE_CONFLICT");
           const amount = BigInt(input.settlement.amount);
@@ -99,7 +102,7 @@ export class TransactionalMemoryFundingStore implements FundingStore {
           state.commands.set(commandKey(accountId, input.idempotencyKey), freeze({ fingerprint: input.fingerprint, result }));
           return result;
         },
-        acceptFundedAdmission: (input) => {
+        acceptFundedAdmission: async (input) => {
           if (input.accountId !== accountId) throw new Error("ACCOUNT_SCOPE_MISMATCH");
           const account = accountFor(state, accountId);
           const available = account.settledAvailable - account.held;
@@ -113,14 +116,20 @@ export class TransactionalMemoryFundingStore implements FundingStore {
           state.commands.set(commandKey(accountId, input.idempotencyKey), freeze({ fingerprint: input.fingerprint, result }));
           return result;
         },
-        findCapacityIntent: (idempotencyKey) => state.capacityIntents.get(commandKey(accountId, idempotencyKey)),
-        createCapacityIntent: (input) => {
+        findCapacityIntent: async (idempotencyKey) => state.capacityIntents.get(commandKey(accountId, idempotencyKey)),
+        createCapacityIntent: async (input) => {
           if (input.accountId !== accountId) throw new Error("ACCOUNT_SCOPE_MISMATCH");
           const key = commandKey(accountId, input.idempotencyKey); const existing = state.capacityIntents.get(key);
           if (existing) { if (existing.fingerprint !== input.fingerprint || existing.intentReference !== input.intentReference) throw new Error("IDEMPOTENCY_KEY_CONFLICT"); return existing; }
           const next = freeze({ ...input, state: "created" as const }); state.capacityIntents.set(key, next); return next;
         },
-        recordCapacityObservation: (input) => {
+        claimCapacityDispatch: async (intentReference) => {
+          const current = [...state.capacityIntents.values()].find((intent) => intent.accountId === accountId && intent.intentReference === intentReference);
+          if (!current) throw new Error("CAPACITY_INTENT_NOT_FOUND");
+          if (current.state !== "created") return freeze({ intent: current, claimed: false });
+          const next = freeze({ ...current, state: "dispatching" as const }); state.capacityIntents.set(commandKey(accountId, current.idempotencyKey), next); return freeze({ intent: next, claimed: true });
+        },
+        recordCapacityObservation: async (input) => {
           const current = [...state.capacityIntents.values()].find((intent) => intent.accountId === accountId && intent.intentReference === input.intentReference);
           if (!current) throw new Error("CAPACITY_INTENT_NOT_FOUND");
           if (current.state === "released" || current.state === "refused") return current;
@@ -128,12 +137,12 @@ export class TransactionalMemoryFundingStore implements FundingStore {
           const next = freeze({ ...current, state: input.state, ...(input.capacityReference ? { capacityReference: input.capacityReference } : {}), ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}) });
           state.capacityIntents.set(commandKey(accountId, current.idempotencyKey), next); return next;
         },
-        releaseCapacityIntent: (intentReference) => {
+        releaseCapacityIntent: async (intentReference) => {
           const current = [...state.capacityIntents.values()].find((intent) => intent.accountId === accountId && intent.intentReference === intentReference);
           if (!current) throw new Error("CAPACITY_INTENT_NOT_FOUND"); const next = freeze({ ...current, state: "released" as const }); state.capacityIntents.set(commandKey(accountId, current.idempotencyKey), next); return next;
         },
-        findActionBudget: (idempotencyKey) => state.actionBudgets.get(commandKey(accountId, idempotencyKey)),
-        reserveActionBudget: (input) => {
+        findActionBudget: async (idempotencyKey) => state.actionBudgets.get(commandKey(accountId, idempotencyKey)),
+        reserveActionBudget: async (input) => {
           if (input.accountId !== accountId) throw new Error("ACCOUNT_SCOPE_MISMATCH"); const key = commandKey(accountId, input.idempotencyKey); const existing = state.actionBudgets.get(key); if (existing) { if (existing.fingerprint !== input.fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT"); return existing; }
           const account = accountFor(state, accountId); const hold = account.holds.find((candidate) => candidate.reference === input.admissionReference); if (!hold) throw new Error("ACTIVE_ADMISSION_REQUIRED");
           const reserved = [...state.actionBudgets.values()].filter((budget) => budget.accountId === accountId && budget.admissionReference === input.admissionReference).reduce((total, budget) => total + budget.amount, 0n);

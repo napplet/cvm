@@ -23,8 +23,8 @@ export class FundingService {
       if (replay.fingerprint !== fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
       return freeze(structuredClone(replay.result));
     }
-    return this.store.transact(accountId, (transaction) => {
-      const insideReplay = transaction.findRecordedResult(command.idempotencyKey);
+    return this.store.transact(accountId, async (transaction) => {
+      const insideReplay = await transaction.findRecordedResult(command.idempotencyKey);
       if (insideReplay) {
         if (insideReplay.fingerprint !== fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
         return insideReplay.result;

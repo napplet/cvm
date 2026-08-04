@@ -57,6 +57,38 @@ describe("FundedAdmissionService", () => {
     await expect(admission.authorizeActionBudget({ principal, admissionReference: "capacity:ambiguous", idempotencyKey: "too-large", maximum: "201", unit: "sat" })).rejects.toThrow("ACTION_BUDGET_EXCEEDS_APPROVED_CAP");
   });
 
+  test("atomically fences concurrent capacity dispatch and rejects an expired lease", async () => {
+    const store = new TransactionalMemoryFundingStore();
+    const funding = new FundingService(store);
+    await funding.execute(creditCommand());
+    let reserves = 0; let release!: () => void;
+    const started = new Promise<void>((resolve) => { release = resolve; });
+    const capacity = {
+      reserveNow: async () => { reserves += 1; await started; return { status: "available" as const, reference: "capacity:fenced", expiresAt: "2026-08-05T00:00:00.000Z" }; },
+      observe: async () => ({ status: "unknown" as const }), release: async () => undefined,
+    };
+    const admission = new FundedAdmissionService({ funding, store, capacity, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
+    const request = { principal, idempotencyKey: "fenced", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "100", unit: "sat" as const } };
+    const first = admission.admit(request);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(reserves).toBe(1);
+    const second = admission.admit(request);
+    release();
+    const outcomes = await Promise.all([first, second]);
+    expect(reserves).toBe(1);
+    expect(outcomes.some((item) => item.status === "accepted")).toBe(true);
+
+    const expiredStore = new TransactionalMemoryFundingStore(); const expiredFunding = new FundingService(expiredStore);
+    await expiredFunding.execute(creditCommand());
+    const expiredAdmission = new FundedAdmissionService({ funding: expiredFunding, store: expiredStore, capacity: {
+      reserveNow: async () => ({ status: "available" as const, reference: "capacity:expired", expiresAt: "2026-08-03T23:59:59.000Z" }),
+      observe: async () => ({ status: "unknown" as const }), release: async () => undefined,
+    }, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
+    expect(await expiredAdmission.admit({ ...request, idempotencyKey: "expired" })).toMatchObject({ status: "refused" });
+    expect(expiredStore.activeHolds).toHaveLength(0);
+
+  });
+
   test("projects only the authenticated account and declares offline provider surfaces", async () => {
     const store = new TransactionalMemoryFundingStore();
     const funding = new FundingService(store);

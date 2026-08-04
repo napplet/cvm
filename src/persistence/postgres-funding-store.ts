@@ -42,15 +42,16 @@ export class PostgresFundingStore implements FundingStore {
           // The closure contains only canonical SQL-state mutation logic. Rail/provider
           // I/O is deliberately outside this retryable boundary.
           const tx: FundingTransaction = {
-            findRecordedResult: (idempotencyKey) => state.commands.get(key(accountId, idempotencyKey)),
-            creditVerifiedSettlement: (input) => this.credit(state, accountId, input),
-            acceptFundedAdmission: (input) => this.admit(state, accountId, input),
-            findCapacityIntent: (idempotencyKey) => state.capacityIntents.get(key(accountId, idempotencyKey)),
-            createCapacityIntent: (input) => this.createCapacityIntent(state, accountId, input),
-            recordCapacityObservation: (input) => this.recordCapacityObservation(state, accountId, input),
-            releaseCapacityIntent: (intentReference) => this.releaseCapacityIntent(state, accountId, intentReference),
-            findActionBudget: (idempotencyKey) => state.actionBudgets.get(key(accountId, idempotencyKey)),
-            reserveActionBudget: (input) => this.reserveActionBudget(state, accountId, input),
+            findRecordedResult: async (idempotencyKey) => state.commands.get(key(accountId, idempotencyKey)),
+            creditVerifiedSettlement: async (input) => this.credit(state, accountId, input),
+            acceptFundedAdmission: async (input) => this.admit(state, accountId, input),
+            findCapacityIntent: async (idempotencyKey) => state.capacityIntents.get(key(accountId, idempotencyKey)),
+            createCapacityIntent: async (input) => this.createCapacityIntent(state, accountId, input),
+            claimCapacityDispatch: async (intentReference) => this.claimCapacityDispatch(state, accountId, intentReference),
+            recordCapacityObservation: async (input) => this.recordCapacityObservation(state, accountId, input),
+            releaseCapacityIntent: async (intentReference) => this.releaseCapacityIntent(state, accountId, intentReference),
+            findActionBudget: async (idempotencyKey) => state.actionBudgets.get(key(accountId, idempotencyKey)),
+            reserveActionBudget: async (input) => this.reserveActionBudget(state, accountId, input),
           };
           return frozen(await operation(tx));
         });
@@ -87,6 +88,13 @@ export class PostgresFundingStore implements FundingStore {
     if (input.accountId !== accountId) throw new Error("ACCOUNT_SCOPE_MISMATCH"); const command = key(accountId, input.idempotencyKey); const existing = state.capacityIntents.get(command);
     if (existing) { if (existing.fingerprint !== input.fingerprint || existing.intentReference !== input.intentReference) throw new Error("IDEMPOTENCY_KEY_CONFLICT"); return existing; }
     const next = frozen({ ...input, state: "created" as const }); state.capacityIntents.set(command, next); return next;
+  }
+  private claimCapacityDispatch(state: State, accountId: string, intentReference: string) {
+    const current = [...state.capacityIntents.values()].find((intent) => intent.accountId === accountId && intent.intentReference === intentReference);
+    if (!current) throw new Error("CAPACITY_INTENT_NOT_FOUND");
+    if (current.state !== "created") return frozen({ intent: current, claimed: false });
+    const next = frozen({ ...current, state: "dispatching" as const }); state.capacityIntents.set(key(accountId, current.idempotencyKey), next);
+    return frozen({ intent: next, claimed: true });
   }
   private recordCapacityObservation(state: State, accountId: string, input: CapacityObservationInput): CapacityIntent {
     const current = [...state.capacityIntents.values()].find((intent) => intent.accountId === accountId && intent.intentReference === input.intentReference); if (!current) throw new Error("CAPACITY_INTENT_NOT_FOUND");

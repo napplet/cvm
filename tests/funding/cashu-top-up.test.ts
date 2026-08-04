@@ -3,7 +3,7 @@ import fixture from "../fixtures/cashu-phase-03.json";
 import { FundingService } from "../../src/funding/funding-service";
 import { CashuMintPolicyRegistry } from "../../src/funding/cashu-mint-policy";
 import { FakeCashuSettlementPort } from "../../src/funding/cashu-provider";
-import { CashuTopUpCoordinator } from "../../src/funding/cashu-top-up";
+import { CashuTopUpCoordinator, InMemoryCashuTopUpRepository } from "../../src/funding/cashu-top-up";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
 
 const principal = { pubkey: "a".repeat(64) };
@@ -28,7 +28,8 @@ function harness() {
   const vault = new FakeCashuVault();
   const store = new TransactionalMemoryFundingStore();
   const funding = new FundingService(store);
-  return { policies, provider, vault, store, funding, coordinator: new CashuTopUpCoordinator({ policies, provider, vault, funding }) };
+  const repository = new InMemoryCashuTopUpRepository();
+  return { policies, provider, vault, store, funding, repository, coordinator: new CashuTopUpCoordinator({ policies, provider, vault, funding, repository }) };
 }
 
 function validSubmit(topUpId = "cashu-top-up-1") {
@@ -53,6 +54,7 @@ describe("Cashu validation and swap", () => {
     const { coordinator, provider, vault } = harness();
     await expect(coordinator.submit({ ...validSubmit(), pmi: "bitcoin-cashu-v3-direct" })).rejects.toThrow("CASHU_PMI_UNSUPPORTED");
     await expect(coordinator.submit({ ...validSubmit("too-large"), token: new Uint8Array(8_193) })).rejects.toThrow("CASHU_TOKEN_TOO_LARGE");
+    await expect(coordinator.submit({ ...validSubmit("amount-overflow"), amount: String(BigInt(Number.MAX_SAFE_INTEGER) + 1n) })).rejects.toThrow("CASHU_INPUT_INVALID");
     expect(provider.settleCalls).toBe(0);
     expect(vault.sealed).toHaveLength(0);
   });
@@ -99,10 +101,10 @@ describe("Cashu validation and swap", () => {
 
 describe("Cashu credit and treasury", () => {
   test("credit deduplicates a proof commitment across coordinator instances", async () => {
-    const { policies, provider, vault, funding, store, coordinator } = harness();
+    const { policies, provider, vault, funding, store, repository, coordinator } = harness();
     provider.nextSettlement({ status: "verified", externalReference: "mint-op-duplicate", settlementReference: "mint-settlement-duplicate", verifiedAt: "2026-08-04T12:00:00.000Z" });
     await coordinator.submit(validSubmit("first"));
-    const second = new CashuTopUpCoordinator({ policies, provider, vault, funding });
+    const second = new CashuTopUpCoordinator({ policies, provider, vault, funding, repository });
     await expect(second.submit({ ...validSubmit("second"), idempotencyKey: "submit:second" })).rejects.toThrow("CASHU_PROOF_ALREADY_CLAIMED");
     expect(store.postings).toHaveLength(1);
   });

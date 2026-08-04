@@ -65,10 +65,12 @@ export class CashuTsSettlementAdapter implements CashuSettlementPort {
   }
 
   async observe(request: CashuObserveRequest): Promise<CashuSettlementObservation> {
-    // A mint observation needs original protected proofs. Absence is explicit rather
-    // than inferred success; the coordinator supplies them only after vault access.
-    if (!request.token) return { status: "unknown", operationReference: `cashu:${request.commitment}` };
-    return this.settle({ ...request, token: request.token });
+    // cashu-ts has no operation-status API for a receive/swap.  In particular, do
+    // not turn an ambiguity query into another `completeSwap` by accepting the
+    // bearer token here.  A configured provider with a queryable operation API can
+    // override this port; otherwise ambiguity stays durable and explicit.
+    void request;
+    return { status: "unknown", operationReference: `cashu:${request.commitment}` };
   }
 
   async reconcileTreasury(): Promise<Readonly<{ state: CashuTreasuryState }>> { return { state: "unknown" }; }

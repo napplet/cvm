@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { FundingService } from "../funding/funding-service";
+import type { AccountStatusService } from "../funding/account-status";
+import type { FundedAdmissionService } from "../funding/funded-admission";
 import { PrincipalSchema } from "../phase-03/contracts";
 import type { ContextVmInboundEnvelope, ContextVmTransportPort, ContextVmWireNotification, ContextVmWireResponse } from "./sdk-bridge";
 
@@ -30,12 +32,13 @@ const TopUpArgumentsSchema = z.object({
   idempotencyKey: z.string().min(1),
   pmi: SupportedPmiSchema,
   mode: InteractionModeSchema,
+  amount: z.string().regex(/^[1-9][0-9]*$/u).refine((value) => BigInt(value) <= BigInt(Number.MAX_SAFE_INTEGER)),
+  topUpId: z.string().min(1).optional(),
 }).strict();
 const FundedAdmissionArgumentsSchema = z.object({
   idempotencyKey: z.string().min(1),
   requestedCap: z.string().regex(/^[1-9][0-9]*$/u),
   unit: z.literal("sat"),
-  capacity: z.object({ reference: z.string().min(1), usable: z.boolean() }).strict(),
 }).strict();
 
 export interface ProtectedMaterialPort {
@@ -45,7 +48,13 @@ export interface ProtectedMaterialPort {
 export interface ContextVmFundingAdapterOptions {
   service: FundingService;
   transport: ContextVmTransportPort;
-  protectedMaterial?: ProtectedMaterialPort;
+  /** Server-owned facades. Their absence makes their public tool unavailable. */
+  admissions?: FundedAdmissionService;
+  accountStatus?: AccountStatusService;
+  topUps?: Readonly<{
+    lightning: Readonly<{ begin(input: unknown): Promise<unknown> }>;
+    cashu: Readonly<{ submit(input: unknown): Promise<unknown> }>;
+  }>;
   policyVersion?: string;
   protocolVersion?: string;
 }
@@ -103,17 +112,20 @@ export class ContextVmFundingAdapter {
     const { name, arguments: argumentsInput } = request.params;
     if (name === "account_status") {
       AccountStatusArgumentsSchema.parse(argumentsInput);
-      const status = await this.options.service.status({ pubkey: verifiedPubkey });
+      const status = this.options.accountStatus
+        ? await this.options.accountStatus.status({ pubkey: verifiedPubkey })
+        : await this.options.service.status({ pubkey: verifiedPubkey });
       const notification = freeze<ContextVmWireNotification>({ jsonrpc: "2.0", method: "notifications/account_status", params: status });
       await this.options.transport.sendNotification(verifiedPubkey, notification, requestEventId);
       return freeze({ jsonrpc: "2.0" as const, id: request.id, result: status });
     }
     if (name === "funded_admission") {
       const args = FundedAdmissionArgumentsSchema.parse(argumentsInput);
-      const result = await this.options.service.execute({
-        principal: { pubkey: verifiedPubkey }, kind: "funded_admission", idempotencyKey: args.idempotencyKey,
+      if (!this.options.admissions) throw new Error("FUNDED_ADMISSION_UNAVAILABLE");
+      const result = await this.options.admissions.admit({
+        principal: { pubkey: verifiedPubkey }, idempotencyKey: args.idempotencyKey,
         policyVersion: this.policyVersion, protocolVersion: this.protocolVersion,
-        payload: { requestedCap: args.requestedCap, unit: args.unit, capacity: args.capacity },
+        payload: { requestedCap: args.requestedCap, unit: args.unit },
       });
       const wireResult = freeze({ ...result, payment: { generationPriceWaivedForAdmission: true } });
       await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({
@@ -126,25 +138,23 @@ export class ContextVmFundingAdapter {
     const tags = this.paymentTags(rawEvent, args.pmi);
     if (!tags.clientPmis.includes(args.pmi) || tags.mode !== args.mode) throw new Error("CEP8_NEGOTIATION_DENIED");
     if (args.pmi === "bitcoin-cashu-v4-direct") {
-      if (!tags.directPayment || !this.options.protectedMaterial) throw new Error("CASHU_DIRECT_PAYMENT_DENIED");
-      z.object({ reference: z.string().min(1) }).strict().parse(await this.options.protectedMaterial.protect(tags.directPayment));
+      if (!tags.directPayment || !this.options.topUps) throw new Error("CASHU_DIRECT_PAYMENT_DENIED");
     } else if (tags.directPayment) {
       throw new Error("LIGHTNING_DIRECT_PAYMENT_DENIED");
     }
     const canonical = this.options.transport.canonicalInvocation(verifiedPubkey, request.method, request.params);
-    const result = freeze({
-      status: "top_up_pending",
-      pmi: args.pmi,
-      paymentInteraction: args.mode,
-      explicitGatingIdentity: args.mode === "explicit_gating" ? canonical.invocationHash : undefined,
-    });
+    const result = args.pmi === "bitcoin-lightning-bolt11"
+      ? await this.options.topUps?.lightning.begin({ principal: { pubkey: verifiedPubkey }, idempotencyKey: args.idempotencyKey, amount: args.amount, unit: "sat", policyVersion: this.policyVersion, protocolVersion: this.protocolVersion })
+      : await this.options.topUps?.cashu.submit({ principal: { pubkey: verifiedPubkey }, idempotencyKey: args.idempotencyKey, topUpId: args.topUpId ?? `cashu:${canonical.invocationHash}`, amount: args.amount, unit: "sat", pmi: args.pmi, token: new TextEncoder().encode(tags.directPayment!.payload) });
+    if (!result) throw new Error("TOP_UP_UNAVAILABLE");
+    const wireResult = freeze({ ...z.object({}).passthrough().parse(result), paymentInteraction: args.mode, explicitGatingIdentity: args.mode === "explicit_gating" ? canonical.invocationHash : undefined });
     await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({
-      jsonrpc: "2.0", method: "notifications/top_up_pending", params: result,
+      jsonrpc: "2.0", method: "notifications/top_up", params: wireResult,
     }), requestEventId);
     return freeze({
       jsonrpc: "2.0" as const,
       id: request.id,
-      result,
+      result: wireResult,
     });
   }
 

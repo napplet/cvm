@@ -101,9 +101,10 @@ describe("verified ContextVM funding adapter", () => {
     const service = new FundingService(store);
     await credit(service);
     const transport = new FakeContextVmTransport();
-    const adapter = new ContextVmFundingAdapter({ service, transport });
+    const admissions = { admit: async () => ({ status: "accepted" as const, accountId: "account:verified", reference: "capacity:server-owned", approvedCap: "500", heldAmount: "500", unit: "sat" as const }) } as never;
+    const adapter = new ContextVmFundingAdapter({ service, transport, admissions });
     const admission = envelope({
-      request: { id: "request-0002", method: "tools/call", params: { name: "funded_admission", arguments: { idempotencyKey: "admission-0001", requestedCap: "700", unit: "sat", capacity: { reference: "ready-0001", usable: true } } } },
+      request: { id: "request-0002", method: "tools/call", params: { name: "funded_admission", arguments: { idempotencyKey: "admission-0001", requestedCap: "700", unit: "sat" } } },
       rawEvent: { id: "event-0002", tags: [["payment_interaction", "transparent"]] }, requestEventId: "event-0002",
     });
 
@@ -113,13 +114,15 @@ describe("verified ContextVM funding adapter", () => {
     expect(transport.notifications.at(-1)).toMatchObject({ requestEventId: "event-0002" });
 
     const secondTransport = new FakeContextVmTransport();
-    const second = new ContextVmFundingAdapter({ service, transport: secondTransport });
+    const second = new ContextVmFundingAdapter({ service, transport: secondTransport, admissions });
     await second.handle(envelope({ ...admission, requestEventId: "event-0003", rawEvent: { id: "event-0003", tags: [["payment_interaction", "transparent"]] } }));
     expect(secondTransport.responses.at(-1)?.response).toEqual(first);
     await adapter.handle(admission);
-    await adapter.handle(envelope({ ...admission, requestEventId: "event-0004", rawEvent: { id: "event-0004", tags: [["payment_interaction", "transparent"]] }, request: { ...admission.request, params: { name: "funded_admission", arguments: { idempotencyKey: "admission-0001", requestedCap: "701", unit: "sat", capacity: { reference: "ready-0001", usable: true } } } } }));
+    await adapter.handle(envelope({ ...admission, requestEventId: "event-0004", rawEvent: { id: "event-0004", tags: [["payment_interaction", "transparent"]] }, request: { ...admission.request, params: { name: "funded_admission", arguments: { idempotencyKey: "admission-0001", requestedCap: "701", unit: "sat", capacity: { reference: "forged", usable: true } } } } }));
     expect(transport.responses.at(-1)?.response).toMatchObject({ error: { code: -32602 } });
-    expect(store.activeHolds).toHaveLength(1);
+    // The adapter cannot manufacture a funding hold: only the injected
+    // server-owned admission facade can do so.
+    expect(store.activeHolds).toHaveLength(0);
 
     await adapter.handle(envelope({ request: { id: "request-0004", method: "tools/call", params: { name: "account_status", arguments: { pubkey: fixture.requests.forgedPubkey } } } }));
     expect(transport.responses.at(-1)?.response).toMatchObject({ error: { code: -32602 } });
@@ -129,23 +132,25 @@ describe("verified ContextVM funding adapter", () => {
   test("requires exact CEP-8 negotiation, protects bearer bytes, correlates redacted responses, and denies malformed wire facts", async () => {
     const service = new FundingService(new TransactionalMemoryFundingStore());
     const transport = new FakeContextVmTransport();
-    const protectedMaterial: Array<{ pmi: string; payload: string }> = [];
+    const cashuCalls: unknown[] = [];
     const adapter = new ContextVmFundingAdapter({
       service, transport,
-      protectedMaterial: { protect: async (input) => { protectedMaterial.push(input); return { reference: "protected:cashu:0001" }; } },
+      topUps: { lightning: { begin: async () => ({ state: "pending" }) }, cashu: { submit: async (input) => { cashuCalls.push(input); return { state: "credited", topUpId: "cashu:one" }; } } },
     });
     await adapter.handle(envelope());
-    expect(protectedMaterial).toEqual([{ pmi: fixture.requests.cashuPmi, payload: fixture.requests.directPayment }]);
-    expect(transport.responses.at(-1)).toMatchObject({ clientPubkey: fixture.requests.verifiedPubkey, requestEventId: "event-0001", response: { result: { status: "top_up_pending", pmi: fixture.requests.cashuPmi } } });
-    expect(transport.notifications.at(-1)).toMatchObject({ requestEventId: "event-0001", notification: { method: "notifications/top_up_pending" } });
+    expect(cashuCalls).toHaveLength(0);
+    await adapter.handle(envelope({ request: { id: "request-0001b", method: "tools/call", params: { name: "top_up", arguments: { idempotencyKey: "topup-0001b", pmi: fixture.requests.cashuPmi, mode: "explicit_gating", amount: "21", topUpId: "cashu:one" } } } }));
+    expect(cashuCalls).toHaveLength(1);
+    expect(transport.responses.at(-1)).toMatchObject({ clientPubkey: fixture.requests.verifiedPubkey, requestEventId: "event-0001", response: { result: { state: "credited", topUpId: "cashu:one" } } });
+    expect(transport.notifications.at(-1)).toMatchObject({ requestEventId: "event-0001", notification: { method: "notifications/top_up" } });
     expect(JSON.stringify(transport.responses)).not.toContain(fixture.requests.directPayment);
-    expect(transport.canonicalCalls).toEqual([{ clientPubkey: fixture.requests.verifiedPubkey, method: "tools/call", params: envelope().request.params }]);
+    expect(transport.canonicalCalls).toEqual([{ clientPubkey: fixture.requests.verifiedPubkey, method: "tools/call", params: { name: "top_up", arguments: { idempotencyKey: "topup-0001b", pmi: fixture.requests.cashuPmi, mode: "explicit_gating", amount: "21", topUpId: "cashu:one" } } }]);
 
     await adapter.handle(envelope({ rawEvent: { id: "event-0001", tags: [["pmi", fixture.requests.cashuPmi], ["direct_payment", fixture.requests.cashuPmi, "one"], ["direct_payment", fixture.requests.cashuPmi, "two"]] } }));
     await adapter.handle(envelope({ verifiedClientPubkey: fixture.requests.forgedPubkey.toUpperCase() }));
     await adapter.handle(envelope({ requestEventId: "wrong-event" }));
     expect(transport.responses.slice(-3).every((entry) => "error" in entry.response)).toBe(true);
-    expect(protectedMaterial).toHaveLength(1);
+    expect(cashuCalls).toHaveLength(1);
   });
 
   test("keeps ContextVM and CEP-8 imports out of financial core modules", async () => {

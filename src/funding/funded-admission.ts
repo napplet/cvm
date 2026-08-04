@@ -52,7 +52,12 @@ function intentKey(accountId: string, idempotencyKey: string): string { return `
  * FundingStore before external I/O; the store remains the replay authority.
  */
 export class FundedAdmissionService {
-  constructor(private readonly options: Readonly<{ funding: FundingService; store: FundingStore; capacity: ReadyCapacityPort }>) {}
+  readonly #now: () => number;
+  readonly #minimumLeaseMs: number;
+  constructor(private readonly options: Readonly<{ funding: FundingService; store: FundingStore; capacity: ReadyCapacityPort; now?: () => number; minimumLeaseMs?: number }>) {
+    this.#now = options.now ?? Date.now;
+    this.#minimumLeaseMs = options.minimumLeaseMs ?? 5_000;
+  }
 
   async admit(input: unknown): Promise<FundedAdmissionOutcome> {
     const command = AdmissionCommandSchema.parse(input);
@@ -69,8 +74,8 @@ export class FundedAdmissionService {
 
     const intentReference = `capacity-intent:${await hash(`${accountId}:${command.idempotencyKey}`)}`;
     const intentFingerprint = await hash(JSON.stringify({ accountId, command }));
-    let intent = await this.options.store.transact(accountId, (transaction) => {
-      const existing = transaction.findCapacityIntent(command.idempotencyKey);
+    let intent = await this.options.store.transact(accountId, async (transaction) => {
+      const existing = await transaction.findCapacityIntent(command.idempotencyKey);
       return existing ?? transaction.createCapacityIntent({ accountId, idempotencyKey: command.idempotencyKey, fingerprint: intentFingerprint, intentReference });
     });
     if (intent.fingerprint !== intentFingerprint || intent.intentReference !== intentReference) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
@@ -83,8 +88,13 @@ export class FundedAdmissionService {
     } else if (intent.state === "refused" || intent.state === "released") {
       return freeze({ status: "refused" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
     } else {
-      try { observation = await this.options.capacity.reserveNow({ intentReference }); }
-      catch { observation = await this.options.capacity.observe({ intentReference }); }
+      const dispatch = await this.options.store.transact(accountId, (transaction) => transaction.claimCapacityDispatch(intentReference));
+      if (dispatch.claimed) {
+        try { observation = await this.options.capacity.reserveNow({ intentReference }); }
+        catch { observation = await this.options.capacity.observe({ intentReference }); }
+      } else {
+        observation = await this.options.capacity.observe({ intentReference, reference: dispatch.intent.capacityReference });
+      }
     }
 
     if (observation.status === "refused") {
@@ -98,6 +108,11 @@ export class FundedAdmissionService {
       return outcome;
     }
 
+    if (!this.isUsableLease(observation.expiresAt)) {
+      await this.options.capacity.release({ intentReference, reference: observation.reference });
+      await this.options.store.transact(accountId, (transaction) => transaction.recordCapacityObservation({ intentReference, state: "refused" }));
+      return freeze({ status: "refused" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
+    }
     intent = await this.options.store.transact(accountId, (transaction) => transaction.recordCapacityObservation({ intentReference, state: "available", capacityReference: observation.reference, expiresAt: observation.expiresAt }));
     try {
       const accepted = await this.options.funding.execute(this.fundingCommand(command, intent.capacityReference!));
@@ -117,9 +132,9 @@ export class FundedAdmissionService {
     const actionKey = `${intentKey(accountId, command.admissionReference)}:${command.idempotencyKey}`;
     const actionFingerprint = await hash(JSON.stringify({ accountId, command }));
     const result = await this.options.store.transact(accountId, async (transaction) => {
-      const existing = transaction.findActionBudget(command.idempotencyKey);
+      const existing = await transaction.findActionBudget(command.idempotencyKey);
       if (existing && existing.fingerprint !== actionFingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
-      const action = existing ?? transaction.reserveActionBudget({ accountId, admissionReference: command.admissionReference, idempotencyKey: command.idempotencyKey, fingerprint: actionFingerprint, reference: `action-budget:${await hash(actionKey)}`, amount: BigInt(command.maximum) });
+      const action = existing ?? await transaction.reserveActionBudget({ accountId, admissionReference: command.admissionReference, idempotencyKey: command.idempotencyKey, fingerprint: actionFingerprint, reference: `action-budget:${await hash(actionKey)}`, amount: BigInt(command.maximum) });
       return freeze({ status: "authorized" as const, accountId, admissionReference: action.admissionReference, reference: action.reference, reservedAmount: action.amount.toString(), unit: "sat" as const });
     });
     return result;
@@ -131,5 +146,12 @@ export class FundedAdmissionService {
       policyVersion: command.policyVersion, protocolVersion: command.protocolVersion,
       payload: { requestedCap: command.payload.requestedCap, unit: "sat" as const, capacity: { reference: capacityReference, usable: true as const } },
     });
+  }
+
+  private isUsableLease(expiresAt: string): boolean {
+    const parsed = z.iso.datetime().safeParse(expiresAt);
+    if (!parsed.success) return false;
+    const expiry = Date.parse(parsed.data);
+    return Number.isFinite(expiry) && expiry - this.#now() >= this.#minimumLeaseMs;
   }
 }

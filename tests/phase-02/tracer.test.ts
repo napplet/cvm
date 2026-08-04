@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { PHASE_02_POLICY_INITIAL } from "../../src/policy/phase-02-policy";
 import {
+  AdmissionRequestSchema,
+  EvidenceSchema,
+  ResultSchema,
+  SessionActionSchema,
+  ToolRequestSchema,
+  WorkerEventSchema,
+} from "../../src/phase-02/contracts";
+import {
   createPhase02Tracer,
   type ActionEnvelope,
   type WorkerPort,
@@ -47,6 +55,16 @@ function successfulWorker(counter: { runs: number }): WorkerPort {
 }
 
 describe("phase 02 trusted-core tracer", () => {
+  test("exports strict transport-neutral boundary schemas for downstream phases", () => {
+    expect(AdmissionRequestSchema.safeParse({ idea: "One focused napplet." }).success).toBeTrue();
+    expect(AdmissionRequestSchema.safeParse({ idea: "One focused napplet.", transport: "nostr" }).success).toBeFalse();
+    expect(SessionActionSchema.safeParse(action()).success).toBeTrue();
+    expect(WorkerEventSchema.safeParse({ status: "proposed", toolRequests: [], evidence: [] }).success).toBeTrue();
+    expect(ToolRequestSchema.safeParse({ tool: "write_workspace_file" }).success).toBeFalse();
+    expect(ResultSchema.safeParse({ status: "denied", code: "ADMISSION_DENIED" }).success).toBeTrue();
+    expect(EvidenceSchema.safeParse({ principalId: "principal:alice" }).success).toBeFalse();
+  });
+
   test("pins every Phase 2 ceiling in one immutable fixture", () => {
     expect(PHASE_02_POLICY_INITIAL).toEqual({
       policyVersion: "phase-02-policy-2026-08-04",

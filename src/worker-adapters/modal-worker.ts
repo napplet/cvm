@@ -5,10 +5,8 @@ import { GrantRegistry, ScopedToolGateway } from "../capabilities/scoped-tool-ga
 import { ToolRequestSchema } from "../phase-02/contracts";
 import { canonicalJson } from "../promotion/schema";
 import {
-  WorkerEventSchema,
   WorkerRunRequestSchema,
   WorkerRunResultSchema,
-  type WorkerEvent,
   type WorkerPort,
   type WorkerRunRequest,
   type WorkerRunResult,
@@ -156,10 +154,8 @@ async function processOutput(process: ModalProcessPort): Promise<{ stdout: strin
   return { stdout, stderr, exitCode };
 }
 
-function parseEvents(stdout: string): WorkerEvent[] {
-  const lines = stdout.split("\n").filter(Boolean);
-  if (lines.length === 0) throw new Error("worker emitted no events");
-  return lines.map((line) => WorkerEventSchema.parse(JSON.parse(line)));
+function parseWorkerResult(stdout: string): WorkerRunResult {
+  return WorkerRunResultSchema.parse(JSON.parse(stdout));
 }
 
 async function sha256(value: string): Promise<string> {
@@ -318,23 +314,35 @@ export class ModalWorkerAdapter implements WorkerPort {
     if (!request.success) return WorkerRunResultSchema.parse({ status: "unavailable", code: "WORKER_UNAVAILABLE" });
     if (signal.aborted) return WorkerRunResultSchema.parse({ status: "interrupted", code: "WORKER_INTERRUPTED" });
     let sandbox: ModalSandboxPort | undefined;
+    let requestDirectory: string | undefined;
     let result: WorkerRunResult = WorkerRunResultSchema.parse({ status: "unavailable", code: "WORKER_UNAVAILABLE" });
     let terminationUncertain = false;
     try {
       const app = await this.#sdk.apps.fromName(this.#config.appName, { createIfMissing: false });
       const image = this.#sdk.images.fromRegistry(this.#config.image);
       sandbox = await this.#sdk.sandboxes.create(app, image, strictCreateOptions(this.#config));
-      const process = await sandbox.exec(WORKER_EXEC, { timeoutMs: PHASE_02_POLICY_INITIAL.sandbox.execTimeoutSeconds * 1_000 });
+      requestDirectory = await mkdtemp("/tmp/napplet-cvm-modal-request-");
+      const localRequestPath = join(requestDirectory, "request.json");
+      const remoteRequestPath = `${this.#config.workspaceRoot}/.napplet-cvm/request.json`;
+      await writeFile(localRequestPath, canonicalJson(request.data), "utf8");
+      await sandbox.filesystem.copyFromLocal(localRequestPath, remoteRequestPath);
+      const process = await sandbox.exec([...WORKER_EXEC, "--request", remoteRequestPath], { timeoutMs: PHASE_02_POLICY_INITIAL.sandbox.execTimeoutSeconds * 1_000 });
       const output = await processOutput(process);
       if (output.exitCode !== 0 || signal.aborted) throw new Error("worker did not complete cleanly");
-      const events = parseEvents(output.stdout);
-      result = WorkerRunResultSchema.parse({ status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events });
+      result = parseWorkerResult(output.stdout);
     } catch {
       result = WorkerRunResultSchema.parse({ status: "unavailable", code: "WORKER_UNAVAILABLE" });
     } finally {
       if (sandbox) {
         try {
           await sandbox.terminate();
+        } catch {
+          terminationUncertain = true;
+        }
+      }
+      if (requestDirectory) {
+        try {
+          await rm(requestDirectory, { recursive: true, force: true });
         } catch {
           terminationUncertain = true;
         }

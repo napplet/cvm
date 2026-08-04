@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import {
   ModalWorkerAdapter,
@@ -29,14 +29,21 @@ function config() {
   };
 }
 
+function workerOutput() {
+  return JSON.stringify({ status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events: [{ kind: "progress", turn: 1, detail: "sandbox-ready" }], artifact: {
+    sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion, capabilityGrant: request.capabilityGrant, workspaceId: request.workspaceId, artifactId: "modal-artifact",
+    purpose: { kind: "focused", statements: ["one focused napplet"] }, surface: { hasBackend: false, hasSecondPurpose: false, serviceWorker: false, dynamicAuthority: false }, dependencies: { appOwnedSignerOrRelay: false, privateNappletImport: false }, capabilities: { declaredHard: ["storage"], observedDomains: ["storage"], optionalIntentPresenceRead: false, intentUsedThroughSdk: false }, upstream: { scanner: { verdict: "pass", checkId: "upstream:modal-scanner" }, conformance: { verdict: "pass", checkId: "upstream:modal-conformance" } },
+  } });
+}
+
 function fakeSdk(options: { output?: string; exitCode?: number; execError?: Error; terminateError?: Error } = {}): { sdk: ModalSdkPort; calls: Record<string, unknown[]> } {
-  const calls: Record<string, unknown[]> = { app: [], image: [], create: [], exec: [], terminate: [] };
+  const calls: Record<string, unknown[]> = { app: [], image: [], create: [], exec: [], terminate: [], copyFromLocal: [] };
   const sandbox = {
     id: "sandbox-test",
     async exec(argv: readonly string[], input: { timeoutMs: number }) {
       calls.exec.push([argv, input]);
       if (options.execError) throw options.execError;
-      return { stdout: options.output ?? '{"kind":"progress","turn":1,"detail":"sandbox-ready"}\n', stderr: "", exitCode: options.exitCode ?? 0 };
+      return { stdout: options.output ?? workerOutput(), stderr: "", exitCode: options.exitCode ?? 0 };
     },
     async poll() { return { state: "terminated" }; },
     async terminate() {
@@ -44,7 +51,7 @@ function fakeSdk(options: { output?: string; exitCode?: number; execError?: Erro
       if (options.terminateError) throw options.terminateError;
     },
     filesystem: {
-      async copyFromLocal() {},
+      async copyFromLocal(localPath, remotePath) { calls.copyFromLocal.push([JSON.parse(readFileSync(localPath, "utf8")), remotePath]); },
       async copyToLocal() {},
       async listFiles() { return []; },
     },
@@ -66,7 +73,7 @@ describe("Modal adapter contract", () => {
 
     const result = await adapter.run(request, new AbortController().signal);
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       status: "completed",
       code: "WORKER_PROPOSALS_VALIDATED",
       events: [{ kind: "progress", turn: 1, detail: "sandbox-ready" }],
@@ -87,7 +94,8 @@ describe("Modal adapter contract", () => {
         env: { NAPPLET_CVM_POLICY_VERSION: PHASE_02_POLICY_INITIAL.policyVersion },
         tags: { correlation: "test-correlation" },
       })],]);
-    expect(calls.exec).toEqual([[["/usr/local/bin/napplet-cvm-worker", "run-proposal"], { timeoutMs: 30_000 }]]);
+    expect(calls.exec).toEqual([[["/usr/local/bin/napplet-cvm-worker", "run-proposal", "--request", "/workspace/.napplet-cvm/request.json"], { timeoutMs: 30_000 }]]);
+    expect(calls.copyFromLocal).toEqual([[request, "/workspace/.napplet-cvm/request.json"]]);
     expect(calls.terminate).toHaveLength(1);
   });
 
@@ -120,8 +128,8 @@ describe("Modal adapter contract", () => {
     const source = await Bun.file("src/worker-adapters/modal-worker.ts").text();
     expect(source).toContain('from "../phase-02/contracts"');
     expect(source).toContain("WorkerRunRequestSchema");
-    expect(source).toContain("WorkerEventSchema");
     expect(source).toContain("WorkerRunResultSchema");
+    expect(source).toContain(".napplet-cvm/request.json");
     expect(existsSync("src/worker-port/contracts.ts")).toBe(false);
     const sourceRoots = ["src/domain", "src/capabilities", "src/persistence"];
     for (const root of sourceRoots) {

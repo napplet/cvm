@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 4
 current_phase_name: Metered Generation & Revision Loop
 status: planning
-stopped_at: Phase 4 context complete; ready for research and AI specification
-last_updated: "2026-08-04T18:09:59.611Z"
+stopped_at: Phase 4 AI specification complete; ready for research and planning
+last_updated: "2026-08-04T18:33:10.629Z"
 last_activity: 2026-08-04
-last_activity_desc: Phase 4 context captured; ready for research and AI specification
+last_activity_desc: Phase 4 AI specification completed; technical research and planning next
 progress:
   total_phases: 7
   completed_phases: 3
@@ -31,19 +31,19 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 Phase: 4 — Metered Generation & Revision Loop
 Plan: Not started
-Status: Context complete; research and AI specification next
-Last activity: 2026-08-04 — captured Phase 4 metering, session, repair, and provider-ambiguity decisions
+Status: Context and AI specification complete; technical research and planning next
+Last activity: 2026-08-04 — completed the Phase 4 metered-agent AI design and evaluation contract
 
-Progress: [███░░░░░░░] 43% of milestone phases complete; Phases 1–3 verified, Phase 4 context complete
+Progress: [███░░░░░░░] 43% of milestone phases complete; Phases 1–3 verified, Phase 4 context and AI specification complete
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
-- Phases: Phases 1–3 complete; Phase 4 is active and ready for discussion; Phases 5–7 remain.
+- Phases: Phases 1–3 complete; Phase 4 is active with context and AI specification complete; Phases 5–7 remain.
 - Plans: 19/19 currently known milestone plans executed; Phase 4 plans have not yet been created.
 - Requirements: 54/54 v1 requirements assigned; 25 verified complete and 29 pending.
-- Next checkpoint: research Phase 4 provider/metering contracts and generate its AI specification, then plan and execute it without revisiting completed Phases 1–3.
+- Next checkpoint: research Phase 4 provider/metering contracts, map existing implementation patterns, and create checker-approved execution plans without revisiting completed Phases 1–3.
 
 ## Performance Metrics
 
@@ -120,7 +120,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Research Phase 4 provider/metering contracts and generate its AI specification before planning.
+- Research Phase 4 provider/metering contracts and map implementation patterns before planning.
 
 ### Blockers/Concerns
 
@@ -138,6 +138,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-04T18:09:59.602Z
-Stopped at: Phase 4 context complete; ready for research and AI specification
+Last session: 2026-08-04T18:33:10.619Z
+Stopped at: Phase 4 AI specification complete; ready for research and planning
 Resume file: None

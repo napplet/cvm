@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { evaluatePhase04Design, validatePhase04DesignEvidence, writePhase04DesignEvidence } from "../../src/verification/phase-04-design-evidence";
 import { comparePhase04Case, executePhase04ReferenceGate, observePhase04Case } from "./phase-04-runtime-observation";
+import { runPhase04DesignGate } from "../../scripts/verify-phase-04-design-slice";
 
 const fixturePath = "tests/fixtures/phase-04-reference-set.json";
 
@@ -169,12 +170,30 @@ describe("Phase 04 immutable design evidence", () => {
     await expect(validatePhase04DesignEvidence({ ...blocked, evidenceSha256: digest("f") })).rejects.toThrow();
     const directory = await mkdtemp(join(process.env.TMPDIR ?? "/tmp", "napplet-phase-04-evidence-"));
     try {
-      const first = await writePhase04DesignEvidence(directory, input);
-      expect(await writePhase04DesignEvidence(directory, input)).toEqual(first);
-      await writeFile(join(directory, `${first.evidenceSha256}.json`), "collision", "utf8");
-      await expect(writePhase04DesignEvidence(directory, input)).rejects.toThrow("collision");
+      await expect(writePhase04DesignEvidence(directory, input)).rejects.toThrow("blocked");
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  test("mismatched oracle fails before a content-addressed record or pointer write", async () => {
+    const fixture = JSON.parse(await readFile(fixturePath, "utf8")) as { cases: ReferenceCase[] };
+    const altered = structuredClone(fixture);
+    const target = altered.cases.find((item) => item.id === "P04-ACCT-03");
+    if (!target) throw new Error("missing funded-start reference case");
+    target.expected.providerDispatches += 1;
+    target.expected.oracle = oracleFor(target.expected);
+    const directory = await mkdtemp(join(process.env.TMPDIR ?? "/tmp", "napplet-phase-04-gate-"));
+    const alteredPath = join(directory, "wrong-oracle.json");
+    const evidenceDirectory = join(directory, "evidence");
+    const pointerPath = join(directory, "phase-04.json");
+    try {
+      await writeFile(alteredPath, JSON.stringify(altered), "utf8");
+      await expect(runPhase04DesignGate({ fixturePath: alteredPath, evidenceDirectory, pointerPath, runSuites: false })).rejects.toThrow("runtime reference gate blocked");
+      await expect(Bun.file(pointerPath).exists()).resolves.toBe(false);
+      await expect(Bun.file(evidenceDirectory).exists()).resolves.toBe(false);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 60_000);
 });

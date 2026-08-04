@@ -88,14 +88,16 @@ export async function evaluatePhase04Design(input: Phase04DesignInput): Promise<
 /** Strictly re-evaluates a loaded record, rejecting collision, tamper, redaction, and readiness overclaims. */
 export async function validatePhase04DesignEvidence(evidence: Phase04DesignEvidence): Promise<void> {
   if (!Phase04DesignEvidenceSchema.safeParse(evidence).success || forbidden(evidence) || !exact(evidence.deferrals, DEFERRALS)) throw new Error("Phase 04 design evidence schema, redaction, or deferral validation failed");
-  const { evidenceSha256, version: _version, certificationProfile: _profile, verdict: _verdict, offlineVerdict: _offline, deferrals: _deferrals, ...input } = evidence;
-  const evaluated = await evaluatePhase04Design(input);
+  const { evidenceSha256, version: _version, certificationProfile: _profile, verdict: _verdict, offlineVerdict: _offline, deferrals: _deferrals, caseResults: _caseResults, aggregateEffects: _aggregateEffects, caseComparisons, ...input } = evidence;
+  const runtimeInput = { ...input, caseComparisons: caseComparisons.map(({ id, expected, observed }) => ({ id, expected, observed })) };
+  const evaluated = await evaluatePhase04Design(runtimeInput);
   if (evaluated.evidence.evidenceSha256 !== evidenceSha256 || evaluated.evidence.verdict !== evidence.verdict || evaluated.evidence.offlineVerdict !== evidence.offlineVerdict) throw new Error("Phase 04 design evidence deterministic proof is invalid");
 }
 
 /** Writes a canonical content-addressed record once, or verifies identical bytes when it already exists. */
 export async function writePhase04DesignEvidence(directory: string, input: Phase04DesignInput): Promise<Phase04DesignEvidence> {
-  const { evidence } = await evaluatePhase04Design(input);
+  const { evidence, reasons } = await evaluatePhase04Design(input);
+  if (evidence.verdict !== "design-ready") throw new Error(`Phase 04 design evidence is blocked: ${reasons.join("; ")}`);
   await validatePhase04DesignEvidence(evidence);
   await mkdir(directory, { recursive: true });
   const content = `${canonicalJson(evidence)}\n`;

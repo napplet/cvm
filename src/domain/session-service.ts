@@ -1,5 +1,5 @@
 import { fingerprintEvidence, fingerprintSessionAction, type SessionAction, type SessionActionResult } from "./session-action";
-import type { SessionStore } from "../persistence/session-store";
+import type { SessionStore, WorkerLease } from "../persistence/session-store";
 
 class ActionInterrupted extends Error {
   constructor() { super("action interrupted before evaluation"); }
@@ -21,14 +21,14 @@ function freeze<T>(value: T): T {
 export class SessionService {
   constructor(private readonly store: SessionStore) {}
 
-  async apply(action: SessionAction, signal: AbortSignal = new AbortController().signal): Promise<SessionActionResult> {
+  async apply(action: SessionAction, signal: AbortSignal = new AbortController().signal, lease?: WorkerLease, nowMs?: number): Promise<SessionActionResult> {
     if (signal.aborted) return this.interrupted(action);
     try {
       return await this.store.apply(action, () => {
         // This check occurs inside the store transaction immediately before
         // evaluation. Throwing makes the store rollback its private copy/SQL tx.
         if (signal.aborted) throw new ActionInterrupted();
-      });
+      }, lease, nowMs);
     } catch (error) {
       if (error instanceof ActionInterrupted) return this.interrupted(action);
       throw error;

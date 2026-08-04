@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { fingerprintSessionAction, fingerprintSessionRequest, type SessionAction, type SessionActionResult } from "../domain/session-action";
 import { canonicalJson } from "../promotion/schema";
-import type { SessionEvaluation, SessionEvidence, SessionPreflight, SessionRecord, SessionStore } from "./session-store";
+import type { SessionEvaluation, SessionEvidence, SessionPreflight, SessionRecord, SessionStore, WorkerLease, WorkerLeaseClaim } from "./session-store";
 
 type ActionRow = { fingerprint: string; request_fingerprint: string; result_json: string; evidence_json: string };
 type SessionRow = { session_id: string; principal_id: string; version: number };
@@ -55,6 +55,7 @@ export class SqliteSessionStore implements SessionStore {
         session_id TEXT NOT NULL REFERENCES sessions(session_id),
         expected_version INTEGER NOT NULL CHECK (expected_version >= 0),
         idempotency_key TEXT NOT NULL,
+        lease_token TEXT NOT NULL,
         expires_at_ms INTEGER NOT NULL,
         PRIMARY KEY (session_id, expected_version)
       ) STRICT;
@@ -64,6 +65,10 @@ export class SqliteSessionStore implements SessionStore {
       this.#database.exec("ALTER TABLE action_results ADD COLUMN request_fingerprint TEXT;");
     }
     this.#database.exec("UPDATE action_results SET request_fingerprint = fingerprint WHERE request_fingerprint IS NULL;");
+    const leaseColumns = this.#database.query("PRAGMA table_info(worker_leases)").all() as readonly { name: string }[];
+    if (!leaseColumns.some((column) => column.name === "lease_token")) {
+      this.#database.exec("ALTER TABLE worker_leases ADD COLUMN lease_token TEXT;");
+    }
   }
 
   createSession(session: SessionRecord): void {
@@ -92,7 +97,8 @@ export class SqliteSessionStore implements SessionStore {
     return freeze({ authorized: true });
   }
 
-  async claimWorkerLease(action: SessionAction, nowMs: number, expiresAtMs: number): Promise<SessionPreflight> {
+  async claimWorkerLease(action: SessionAction, nowMs: number, expiresAtMs: number): Promise<WorkerLeaseClaim> {
+    const lease = freeze({ token: crypto.randomUUID(), expiresAtMs });
     try {
       return this.#database.transaction(() => {
         this.#database.query("DELETE FROM worker_leases WHERE expires_at_ms <= ?").run(nowMs);
@@ -100,10 +106,10 @@ export class SqliteSessionStore implements SessionStore {
         if (!row) return freeze({ authorized: false, result: denial("SESSION_NOT_FOUND") });
         if (row.principal_id !== action.principal.id) return freeze({ authorized: false, result: denial("SESSION_SCOPE_MISMATCH") });
         if (row.version !== action.expectedVersion) return freeze({ authorized: false, result: denial("STALE_SESSION_VERSION", row.version) });
-        const inserted = this.#database.query("INSERT OR IGNORE INTO worker_leases (session_id, expected_version, idempotency_key, expires_at_ms) VALUES (?, ?, ?, ?)").run(action.sessionId, action.expectedVersion, action.idempotencyKey, expiresAtMs);
-        if (inserted.changes === 1) return freeze({ authorized: true });
-        const lease = this.#database.query("SELECT idempotency_key FROM worker_leases WHERE session_id = ? AND expected_version = ?").get(action.sessionId, action.expectedVersion) as { idempotency_key: string } | null;
-        return freeze({ authorized: false, result: lease?.idempotency_key === action.idempotencyKey ? denial("STORE_BUSY") : denial("STALE_SESSION_VERSION", row.version) });
+        const inserted = this.#database.query("INSERT OR IGNORE INTO worker_leases (session_id, expected_version, idempotency_key, lease_token, expires_at_ms) VALUES (?, ?, ?, ?, ?)").run(action.sessionId, action.expectedVersion, action.idempotencyKey, lease.token, expiresAtMs);
+        if (inserted.changes === 1) return freeze({ authorized: true, lease });
+        const currentLease = this.#database.query("SELECT idempotency_key FROM worker_leases WHERE session_id = ? AND expected_version = ?").get(action.sessionId, action.expectedVersion) as { idempotency_key: string } | null;
+        return freeze({ authorized: false, result: currentLease?.idempotency_key === action.idempotencyKey ? denial("STORE_BUSY") : denial("STALE_SESSION_VERSION", row.version) });
       })();
     } catch (error) {
       if (error instanceof Error && /(?:SQLITE_BUSY|database is locked)/iu.test(error.message)) return freeze({ authorized: false, result: denial("STORE_BUSY") });
@@ -111,8 +117,15 @@ export class SqliteSessionStore implements SessionStore {
     }
   }
 
-  async releaseWorkerLease(action: SessionAction): Promise<void> {
-    this.#database.query("DELETE FROM worker_leases WHERE session_id = ? AND expected_version = ? AND idempotency_key = ?").run(action.sessionId, action.expectedVersion, action.idempotencyKey);
+  async assertWorkerLease(action: SessionAction, lease: WorkerLease, nowMs: number): Promise<SessionPreflight> {
+    const row = this.#database.query("SELECT idempotency_key, lease_token, expires_at_ms FROM worker_leases WHERE session_id = ? AND expected_version = ?").get(action.sessionId, action.expectedVersion) as { idempotency_key: string; lease_token: string | null; expires_at_ms: number } | null;
+    return row?.idempotency_key === action.idempotencyKey && row.lease_token === lease.token && row.expires_at_ms > nowMs
+      ? freeze({ authorized: true })
+      : freeze({ authorized: false, result: denial("STALE_SESSION_VERSION", this.getSessionVersion(action.sessionId)) });
+  }
+
+  async releaseWorkerLease(action: SessionAction, lease: WorkerLease): Promise<void> {
+    this.#database.query("DELETE FROM worker_leases WHERE session_id = ? AND expected_version = ? AND idempotency_key = ? AND lease_token = ?").run(action.sessionId, action.expectedVersion, action.idempotencyKey, lease.token);
   }
 
   get evidence(): readonly SessionEvidence[] {
@@ -122,14 +135,14 @@ export class SqliteSessionStore implements SessionStore {
 
   close(): void { this.#database.close(); }
 
-  async apply(action: SessionAction, evaluate: SessionEvaluation): Promise<SessionActionResult> {
+  async apply(action: SessionAction, evaluate: SessionEvaluation, lease?: WorkerLease, nowMs: number = Date.now()): Promise<SessionActionResult> {
     let release!: () => void;
     const previous = this.#tail;
     this.#tail = new Promise<void>((resolve) => { release = resolve; });
     await previous;
     try {
       const [fingerprint, requestFingerprint] = await Promise.all([fingerprintSessionAction(action), fingerprintSessionRequest(action)]);
-      return this.#database.transaction(() => this.#applyInTransaction(action, fingerprint, requestFingerprint, evaluate))();
+      return this.#database.transaction(() => this.#applyInTransaction(action, fingerprint, requestFingerprint, evaluate, lease, nowMs))();
     } catch (error) {
       if (error instanceof Error && /(?:SQLITE_BUSY|database is locked)/iu.test(error.message)) return denial("STORE_BUSY");
       throw error;
@@ -138,13 +151,17 @@ export class SqliteSessionStore implements SessionStore {
     }
   }
 
-  #applyInTransaction(action: SessionAction, fingerprint: string, requestFingerprint: string, evaluate: SessionEvaluation): SessionActionResult {
+  #applyInTransaction(action: SessionAction, fingerprint: string, requestFingerprint: string, evaluate: SessionEvaluation, lease?: WorkerLease, nowMs: number = Date.now()): SessionActionResult {
     const existing = this.#database.query("SELECT fingerprint, request_fingerprint, result_json, evidence_id FROM action_results WHERE session_id = ? AND idempotency_key = ?").get(action.sessionId, action.idempotencyKey) as ActionRow | null;
     if (existing) return existing.request_fingerprint === requestFingerprint ? freeze(copy(JSON.parse(existing.result_json) as SessionActionResult)) : denial("IDEMPOTENCY_KEY_CONFLICT");
     const row = this.#database.query("SELECT session_id, principal_id, version FROM sessions WHERE session_id = ?").get(action.sessionId) as SessionRow | null;
     if (!row) return denial("SESSION_NOT_FOUND");
     if (row.principal_id !== action.principal.id) return denial("SESSION_SCOPE_MISMATCH");
     if (row.version !== action.expectedVersion) return denial("STALE_SESSION_VERSION", row.version);
+    if (lease) {
+      const current = this.#database.query("SELECT idempotency_key, lease_token, expires_at_ms FROM worker_leases WHERE session_id = ? AND expected_version = ?").get(action.sessionId, action.expectedVersion) as { idempotency_key: string; lease_token: string | null; expires_at_ms: number } | null;
+      if (current?.idempotency_key !== action.idempotencyKey || current.lease_token !== lease.token || current.expires_at_ms <= nowMs) return denial("STALE_SESSION_VERSION", row.version);
+    }
 
     const session = freeze({ sessionId: row.session_id, principalId: row.principal_id, version: row.version });
     evaluate(freeze(copy({ session })));

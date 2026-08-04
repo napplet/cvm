@@ -232,7 +232,16 @@ export class TrustedCore {
       tools: ["workspace_write", "capture_evidence", "export_checkpoint"],
       expiresAtMs: this.dependencies.now() + PHASE_02_POLICY_INITIAL.sandbox.execTimeoutSeconds * 1_000,
     });
-    const gateway = new ScopedToolGateway(grants, this.dependencies.dispatcher, { now: this.dependencies.now });
+    const gateway = new ScopedToolGateway(grants, {
+      dispatch: async (toolRequest, context) => {
+        // This is the final asynchronous coordinator boundary before an
+        // external effect. A replacement lease token therefore fences an old
+        // worker even when its original grant has not yet expired.
+        const active = await this.dependencies.store.assertWorkerLease(replayAction, lease.lease, this.dependencies.now());
+        if (!active.authorized) throw new Error("worker lease is no longer active");
+        return this.dependencies.dispatcher.dispatch(toolRequest, context);
+      },
+    }, { now: this.dependencies.now });
 
     let workerResult: WorkerRunResult;
     try {
@@ -257,6 +266,8 @@ export class TrustedCore {
     if (workerResult.checkpoint && !await validateCheckpointProposal(workerResult.checkpoint, request, events)) {
       return asFailure("WORKER_UNCERTAIN", { reason: "checkpoint binding invalid" });
     }
+    const verificationLease = await this.dependencies.store.assertWorkerLease(replayAction, lease.lease, this.dependencies.now());
+    if (!verificationLease.authorized) return sessionResult(verificationLease.result);
     const facts = freeze({ action, request, result: workerResult, events: freeze(events) });
     let verified;
     try { verified = await this.dependencies.artifactVerifier.verify(facts); }
@@ -287,11 +298,13 @@ export class TrustedCore {
       payload: replayAction.payload,
       artifact: verified.artifact,
     });
-    const committed = await this.#service.apply(sessionAction, signal);
+    const commitLease = await this.dependencies.store.assertWorkerLease(replayAction, lease.lease, this.dependencies.now());
+    if (!commitLease.authorized) return sessionResult(commitLease.result);
+    const committed = await this.#service.apply(sessionAction, signal, lease.lease, this.dependencies.now());
     if (committed.status === "completed") grants.terminal(capabilityGrant);
       return sessionResult(committed);
     } finally {
-      await this.dependencies.store.releaseWorkerLease(replayAction);
+      await this.dependencies.store.releaseWorkerLease(replayAction, lease.lease);
     }
   }
 }

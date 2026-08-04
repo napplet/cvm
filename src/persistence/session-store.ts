@@ -28,6 +28,8 @@ export type SessionEvaluation = (transaction: SessionTransaction) => void;
 
 /** The pre-effect fence is advisory only; apply() remains the commit-time authority. */
 export type SessionPreflight = Readonly<{ authorized: true }> | Readonly<{ authorized: false; result: SessionActionResult }>;
+export type WorkerLease = Readonly<{ token: string; expiresAtMs: number }>;
+export type WorkerLeaseClaim = Readonly<{ authorized: true; lease: WorkerLease }> | Readonly<{ authorized: false; result: SessionActionResult }>;
 
 /** One authoritative commit decision: replay, fence, result, evidence, and version. */
 export interface SessionStore {
@@ -37,9 +39,11 @@ export interface SessionStore {
   /** Atomically checks the target session's principal and version before worker allocation/effects. */
   preflight(action: SessionAction): Promise<SessionPreflight>;
   /** Durable, expiring exclusion for one session/version before worker or gateway effects. */
-  claimWorkerLease(action: SessionAction, nowMs: number, expiresAtMs: number): Promise<SessionPreflight>;
-  releaseWorkerLease(action: SessionAction): Promise<void>;
-  apply(action: SessionAction, evaluate: SessionEvaluation): Promise<SessionActionResult>;
+  claimWorkerLease(action: SessionAction, nowMs: number, expiresAtMs: number): Promise<WorkerLeaseClaim>;
+  /** Re-check at a coordinator effect boundary; a successor lease fences the stale holder. */
+  assertWorkerLease(action: SessionAction, lease: WorkerLease, nowMs: number): Promise<SessionPreflight>;
+  releaseWorkerLease(action: SessionAction, lease: WorkerLease): Promise<void>;
+  apply(action: SessionAction, evaluate: SessionEvaluation, lease?: WorkerLease, nowMs?: number): Promise<SessionActionResult>;
   getSessionVersion(sessionId: string): number | undefined;
   readonly evidence: readonly SessionEvidence[];
 }
@@ -48,7 +52,7 @@ type State = {
   sessions: Map<string, SessionRecord>;
   actions: Map<string, StoredActionResult>;
   evidence: SessionEvidence[];
-  leases: Map<string, Readonly<{ idempotencyKey: string; expiresAtMs: number }>>;
+  leases: Map<string, Readonly<{ idempotencyKey: string; token: string; expiresAtMs: number }>>;
 };
 
 function leaseKey(sessionId: string, version: number): string { return `${sessionId.length}:${sessionId}:${version}`; }
@@ -134,7 +138,7 @@ export class TransactionalMemorySessionStore implements SessionStore {
     return freeze({ authorized: true });
   }
 
-  async claimWorkerLease(action: SessionAction, nowMs: number, expiresAtMs: number): Promise<SessionPreflight> {
+  async claimWorkerLease(action: SessionAction, nowMs: number, expiresAtMs: number): Promise<WorkerLeaseClaim> {
     const preflight = await this.preflight(action);
     if (!preflight.authorized) return preflight;
     const key = leaseKey(action.sessionId, action.expectedVersion);
@@ -142,16 +146,25 @@ export class TransactionalMemorySessionStore implements SessionStore {
     if (current && current.expiresAtMs > nowMs) {
       return freeze({ authorized: false, result: current.idempotencyKey === action.idempotencyKey ? denial("STORE_BUSY") : denial("STALE_SESSION_VERSION", action.expectedVersion) });
     }
-    this.#state.leases.set(key, freeze({ idempotencyKey: action.idempotencyKey, expiresAtMs }));
-    return freeze({ authorized: true });
+    const lease = freeze({ token: crypto.randomUUID(), expiresAtMs });
+    this.#state.leases.set(key, freeze({ idempotencyKey: action.idempotencyKey, ...lease }));
+    return freeze({ authorized: true, lease });
   }
 
-  async releaseWorkerLease(action: SessionAction): Promise<void> {
+  async assertWorkerLease(action: SessionAction, lease: WorkerLease, nowMs: number): Promise<SessionPreflight> {
+    const current = this.#state.leases.get(leaseKey(action.sessionId, action.expectedVersion));
+    return current?.idempotencyKey === action.idempotencyKey && current.token === lease.token && current.expiresAtMs > nowMs
+      ? freeze({ authorized: true })
+      : freeze({ authorized: false, result: denial("STALE_SESSION_VERSION", this.#state.sessions.get(action.sessionId)?.version) });
+  }
+
+  async releaseWorkerLease(action: SessionAction, lease: WorkerLease): Promise<void> {
     const key = leaseKey(action.sessionId, action.expectedVersion);
-    if (this.#state.leases.get(key)?.idempotencyKey === action.idempotencyKey) this.#state.leases.delete(key);
+    const current = this.#state.leases.get(key);
+    if (current?.idempotencyKey === action.idempotencyKey && current.token === lease.token) this.#state.leases.delete(key);
   }
 
-  async apply(action: SessionAction, evaluate: SessionEvaluation): Promise<SessionActionResult> {
+  async apply(action: SessionAction, evaluate: SessionEvaluation, lease?: WorkerLease, nowMs: number = Date.now()): Promise<SessionActionResult> {
     let release!: () => void;
     const previous = this.#tail;
     this.#tail = new Promise<void>((resolve) => { release = resolve; });
@@ -170,6 +183,10 @@ export class TransactionalMemorySessionStore implements SessionStore {
       if (!session) return denial("SESSION_NOT_FOUND");
       if (session.principalId !== action.principal.id) return denial("SESSION_SCOPE_MISMATCH");
       if (session.version !== action.expectedVersion) return denial("STALE_SESSION_VERSION", session.version);
+      if (lease) {
+        const current = state.leases.get(leaseKey(action.sessionId, action.expectedVersion));
+        if (current?.idempotencyKey !== action.idempotencyKey || current.token !== lease.token || current.expiresAtMs <= nowMs) return denial("STALE_SESSION_VERSION", session.version);
+      }
 
       evaluate(freeze(clone({ session })));
       const stored = await committed(action, fingerprint, requestFingerprint, session.version + 1);

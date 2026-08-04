@@ -61,13 +61,14 @@ function completingWorker(counter: { runs: number }, mutate?: (request: ReturnTy
     },
   };
 }
-function core(databasePath: string, worker: WorkerPort, effects: { calls: number }) {
+function core(databasePath: string, worker: WorkerPort, effects: { calls: number }, now: () => number = Date.now) {
   return createTrustedCore({
     databasePath,
     worker,
     sessions: [{ sessionId: "session-0001", principalId: principal.id, version: 0 }],
     dispatcher: { dispatch: async () => { effects.calls += 1; return { output: "captured" }; } },
     artifactVerifier: testArtifactVerifier(),
+    now,
   });
 }
 
@@ -178,6 +179,41 @@ describe("phase 02 final trusted-core tracer", () => {
     expect([first.code, second.code]).toContain("ACTION_COMMITTED");
     expect(effects.calls).toBe(1);
     expect(leftRuns.runs + rightRuns.runs).toBe(1);
+    left.close(); right.close();
+  });
+
+  test("fences an expired lease holder before it can dispatch after a successor claims the version", async () => {
+    const databasePath = temporaryDatabase();
+    const effects = { calls: 0 };
+    let releaseA!: () => void; let releaseB!: () => void;
+    let startedA!: () => void; let startedB!: () => void;
+    const aBlocked = new Promise<void>((resolve) => { releaseA = resolve; });
+    const bBlocked = new Promise<void>((resolve) => { releaseB = resolve; });
+    const aStarted = new Promise<void>((resolve) => { startedA = resolve; });
+    const bStarted = new Promise<void>((resolve) => { startedB = resolve; });
+    const waitingWorker = (wait: Promise<void>, started: () => void): WorkerPort => ({ async run(request) {
+      started();
+      await wait;
+      return WorkerRunResultSchema.parse({ status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events: [{ kind: "tool_proposal", turn: 1, request: { sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion, capabilityGrant: request.capabilityGrant, workspaceId: request.workspaceId, callId: `${request.actionId}:call`, evidenceId: `${request.actionId}:evidence`, tool: "capture_evidence", label: "lease-fence" } }], artifact: verifiedArtifact(request) });
+    } });
+    let aClockCalls = 0;
+    // A claims at 0 but issues a grant through 31,000, so generic grant expiry
+    // cannot hide the lost-lease race. B reclaims at 30,001 while A is stalled.
+    const left = core(databasePath, waitingWorker(aBlocked, startedA), effects, () => aClockCalls++ === 0 ? 0 : 1_000);
+    const right = core(databasePath, waitingWorker(bBlocked, startedB), effects, () => 30_001);
+    const leftRun = left.core.execute(action());
+    await aStarted;
+    const rightRun = right.core.execute(action({ actionId: "action-0002", idempotencyKey: "request-0002" }));
+    await bStarted;
+    releaseA();
+    const leftResult = await leftRun;
+    releaseB();
+    const rightResult = await rightRun;
+
+    expect(leftResult.status).not.toBe("completed");
+    expect(rightResult).toMatchObject({ status: "completed", code: "ACTION_COMMITTED" });
+    expect(effects.calls).toBe(1);
+    expect(left.store.getSessionVersion("session-0001")).toBe(1);
     left.close(); right.close();
   });
 

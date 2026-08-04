@@ -5,6 +5,7 @@ const SHA256 = /^[a-f0-9]{64}$/iu;
 const REQUIRED_CHECK_IDS = ["contextvm", "ledger", "lightning", "cashu", "funded-admission", "reference-set", "package-intake", "api-coverage"] as const;
 const REQUIRED_REQUIREMENTS = ["CTX-01", "CTX-02", "CTX-03", "CTX-04", "PAY-01", "PAY-02", "PAY-03", "PAY-04", "PAY-05", "PAY-06", "PAY-07", "BILL-01", "BILL-02", "BILL-06"] as const;
 const REQUIRED_DECISIONS = Array.from({ length: 19 }, (_, index) => `D-${index + 40}`) as readonly string[];
+const REQUIRED_THREATS = ["T-03-09", "T-03-10", "T-03-11", "T-03-12", "T-03-05", "T-03-06", "T-03-13", "T-03-14", "T-03-15", "T-03-16", "T-03-17", "T-03-18", "T-03-19", "T-03-21", "T-03-22", "T-03-23", "T-03-24", "T-03-25", "T-03-28"] as const;
 const REQUIRED_OBSERVATIONS = ["contextvm", "lightning", "cashu", "postgres", "capacity", "modal"] as const;
 const DEFERRALS = ["phase-04-exact-usage-debit", "phase-05-interruption-resume", "phase-06-preview-publication", "phase-07-live-slo-provider-provenance-certification", "v2-x402-l402"] as const;
 
@@ -17,6 +18,7 @@ export type Phase03DesignInput = Readonly<{
   checks: readonly Phase03Check[];
   requirementMappings: Readonly<Record<string, readonly string[]>>;
   decisionMappings: readonly string[];
+  threatMappings: readonly string[];
   observations: readonly Phase03Observation[];
 }>;
 export type Phase03DesignEvidence = Readonly<Phase03DesignInput & {
@@ -33,6 +35,7 @@ async function digest(value: unknown): Promise<string> {
   return Array.from(new Uint8Array(result), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 function forbidden(value: unknown): boolean {
+  if (typeof value === "string") return /(?:\bbearer\b|\bsecret\b|\bprivate(?:[_ -]?key)?\b|\bpreimage\b|\bcredential\b|\btoken\b|\bproof\b|\binvoice\b|cashu[ab][a-z0-9_-]{6,}|lnbc[0-9a-z]+)/iu.test(value);
   if (Array.isArray(value)) return value.some(forbidden);
   if (!isRecord(value)) return false;
   return Object.entries(value).some(([key, nested]) => /(?:raw.?event|raw.?prompt|\btoken\b|\bproof\b|invoice|preimage|credential|private.?key|protected.?plaintext|generated.?source|secret)/iu.test(key) || forbidden(nested));
@@ -51,7 +54,7 @@ export async function evaluatePhase03Design(input: Phase03DesignInput): Promise<
   const reasons: string[] = [];
   if (!input || !isRecord(input)) add(reasons, "design input is malformed");
   const identities = input?.identities;
-  if (!identities || identities.packageIntake !== "evidence/phase-03/package-intake.json" || identities.postgres !== "src/persistence/postgres-funding-store.ts" || identities.contextvm !== "src/contextvm/adapter.ts" || identities.lightning !== "src/funding/lightning-top-up.ts" || identities.cashu !== "src/funding/cashu-top-up.ts" || identities.fundedCore !== "src/phase-03/funded-core.ts" || identities.referenceSet !== "tests/fixtures/phase-03-reference-set.json") add(reasons, "authority identity set is invalid");
+  if (!identities || identities.packageIntake !== "evidence/phase-03/package-intake.json" || identities.postgres !== "src/persistence/postgres-sql-funding-store.ts" || identities.contextvm !== "src/contextvm/adapter.ts" || identities.lightning !== "src/funding/lightning-top-up.ts" || identities.cashu !== "src/funding/cashu-top-up.ts" || identities.fundedCore !== "src/phase-03/funded-core.ts" || identities.referenceSet !== "tests/fixtures/phase-03-reference-set.json") add(reasons, "authority identity set is invalid");
   if (forbidden(input)) add(reasons, "design evidence contains forbidden raw material");
   if (!Array.isArray(input.checks) || !exact(input.checks.map((check) => check.id), REQUIRED_CHECK_IDS)) add(reasons, "deterministic check identity set is incomplete, duplicate, or unknown");
   for (const check of input.checks ?? []) {
@@ -59,13 +62,14 @@ export async function evaluatePhase03Design(input: Phase03DesignInput): Promise<
   }
   if (!input.requirementMappings || !exact(Object.keys(input.requirementMappings), REQUIRED_REQUIREMENTS) || Object.values(input.requirementMappings).some((mappings) => !Array.isArray(mappings) || mappings.length === 0 || mappings.some((item) => !REQUIRED_CHECK_IDS.includes(item as Phase03CheckId)))) add(reasons, "requirement mapping set is incomplete or invalid");
   if (!Array.isArray(input.decisionMappings) || !exact(input.decisionMappings, REQUIRED_DECISIONS)) add(reasons, "decision mapping set is incomplete, duplicate, or unknown");
+  if (!Array.isArray(input.threatMappings) || !exact(input.threatMappings, REQUIRED_THREATS)) add(reasons, "threat mapping set is incomplete, duplicate, or unknown");
   if (!Array.isArray(input.observations) || !exact(input.observations.map((observation) => observation.provider), REQUIRED_OBSERVATIONS)) add(reasons, "provider observation set is incomplete, duplicate, or unknown");
   for (const observation of input.observations ?? []) validateObservation(observation, reasons);
   const offlineVerdict = reasons.length === 0 ? "passed" as const : "blocked" as const;
   const withoutDigest = {
     version: 1 as const, certificationProfile: "design" as const, verdict: offlineVerdict === "passed" ? "design-ready" as const : "blocked" as const, offlineVerdict,
     identities: Object.freeze({ ...input.identities }), checks: Object.freeze(input.checks.map((check) => Object.freeze({ ...check }))),
-    requirementMappings: Object.freeze(Object.fromEntries(Object.entries(input.requirementMappings).map(([key, value]) => [key, Object.freeze([...value])]))), decisionMappings: Object.freeze([...input.decisionMappings]),
+    requirementMappings: Object.freeze(Object.fromEntries(Object.entries(input.requirementMappings).map(([key, value]) => [key, Object.freeze([...value])]))), decisionMappings: Object.freeze([...input.decisionMappings]), threatMappings: Object.freeze([...input.threatMappings]),
     observations: Object.freeze(input.observations.map((observation) => Object.freeze({ ...observation, limitations: Object.freeze([...observation.limitations]) }))), deferrals: Object.freeze([...DEFERRALS]),
   };
   return Object.freeze({ evidence: Object.freeze({ ...withoutDigest, evidenceSha256: await digest(withoutDigest) }), reasons: Object.freeze(reasons) });

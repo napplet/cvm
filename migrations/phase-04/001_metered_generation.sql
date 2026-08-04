@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS metered_sessions (
 CREATE TABLE IF NOT EXISTS metered_actions (
   id text PRIMARY KEY, account_id text NOT NULL REFERENCES funding_accounts(account_id), session_id text NOT NULL REFERENCES metered_sessions(id),
   idempotency_key text NOT NULL, fingerprint text NOT NULL, expected_session_version integer NOT NULL CHECK (expected_session_version >= 0),
-  budget_reference text NOT NULL REFERENCES action_budget_reservations(reservation_reference), reservation_sat bigint NOT NULL CHECK (reservation_sat > 0),
+  budget_reference text NOT NULL REFERENCES action_budget_reservations(reservation_reference), reservation_sat bigint NOT NULL CHECK (reservation_sat > 0), operation_id text NOT NULL UNIQUE,
+  profile_id text NOT NULL REFERENCES model_profile_versions(id), price_card_id text NOT NULL REFERENCES price_card_versions(id),
   state text NOT NULL CHECK (state IN ('prepared','active','failed','usage_unknown','billing_invariant_failed','verified')),
   terminal_result jsonb, evidence_reference text, settled_at timestamptz,
   UNIQUE (account_id, idempotency_key), UNIQUE (account_id, id),
@@ -31,6 +32,10 @@ CREATE TABLE IF NOT EXISTS provider_operations (
   state text NOT NULL CHECK (state IN ('prepared','active','failed','usage_unknown','billing_invariant_failed','verified')),
   UNIQUE (account_id, id), UNIQUE (provider, model, provider_request_id), UNIQUE (action_id, id)
 );
+DO $$ BEGIN
+  ALTER TABLE metered_actions ADD CONSTRAINT metered_actions_operation_fk FOREIGN KEY (operation_id) REFERENCES provider_operations(id) DEFERRABLE INITIALLY DEFERRED;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 CREATE TABLE IF NOT EXISTS usage_receipts (
   id text PRIMARY KEY, account_id text NOT NULL REFERENCES funding_accounts(account_id), action_id text NOT NULL REFERENCES metered_actions(id), operation_id text NOT NULL REFERENCES provider_operations(id),
   provider text NOT NULL, model text NOT NULL, provider_receipt_id text NOT NULL, normalized_receipt jsonb NOT NULL, protected_evidence_reference text NOT NULL,

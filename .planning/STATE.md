@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
-current_phase: 2
-current_phase_name: Trusted Core & Isolated Agent Execution
-status: executing
-stopped_at: Completed 02-06-PLAN.md
-last_updated: "2026-08-04T11:25:25.119Z"
+current_phase: 3
+current_phase_name: ContextVM Funding & Funded Admission
+status: planning
+stopped_at: Phase 2 complete; Phase 3 ready for discussion
+last_updated: "2026-08-04T15:13:57.661Z"
 last_activity: 2026-08-04
-last_activity_desc: Phase 2 plans passed independent verification and deterministic coverage gates
+last_activity_desc: Phase 2 complete, transitioned to Phase 3
 progress:
   total_phases: 7
   completed_phases: 2
@@ -25,31 +25,31 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 **Core value:** A user can describe one focused applet and receive a safe, conformant napplet that can be previewed and placed directly into a compatible napplet runtime.
 **Active milestone:** v1.0 — Safe Napplet Generation MVP
-**Current focus:** Phase 02 — Trusted Core & Isolated Agent Execution
+**Current focus:** Phase 03 — ContextVM Funding & Funded Admission
 
 ## Current Position
 
-Phase: 2 — Trusted Core & Isolated Agent Execution
-Plan: 5 of 6 — ready to execute
-Status: Ready to execute
-Last activity: 2026-08-04 — Phase 2 plans passed independent verification and deterministic coverage gates
+Phase: 3 — ContextVM Funding & Funded Admission
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-04 — Phase 2 complete, transitioned to Phase 3
 
-Progress: [██████████] 100% of milestone phases complete; Phase 2 execution 0/6
+Progress: [███░░░░░░░] 29% of milestone phases complete; Phases 1–2 verified
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
-- Phases: 1 complete, Phase 2 active and ready to execute, Phases 3–7 remaining.
-- Plans: 6/12 known plans executed; Phase 1 accounts for all completed plans.
-- Requirements: 54/54 v1 requirements assigned; 6 complete, 48 pending.
-- Next checkpoint: execute Phase 2 Wave 1 (`02-01-PLAN.md`).
+- Phases: Phases 1–2 complete, Phase 3 active and ready for discussion/planning, Phases 4–7 remaining.
+- Plans: 12/12 known plans executed across the two completed phases.
+- Requirements: 54/54 v1 requirements assigned; 11 complete, 43 pending.
+- Next checkpoint: discuss/research/plan Phase 3 without revisiting completed Phase 1 or Phase 2 work.
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 6
+- Total plans completed: 12
 - Average duration: -
 - Total execution time: 0 hours
 
@@ -58,6 +58,7 @@ Progress: [██████████] 100% of milestone phases complete; Ph
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 1 | 6 | - | - |
+| 2 | 6 | - | - |
 
 **Recent Trend:**
 
@@ -115,7 +116,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Execute Phase 2 Wave 1 (`02-01-PLAN.md`) before the parallel Wave 2 expansions.
+- Begin Phase 3 context gathering for ContextVM identity, CEP-8 funding, ledger credit, and funded admission boundaries.
 
 ### Blockers/Concerns
 

@@ -140,7 +140,7 @@ Milestone v1.0 owns every row in this table. Existing requirement IDs and phase 
 | Phase | v1.0 requirement groups | Count | Current status |
 |-------|--------------------------|------:|----------------|
 | Phase 1 | GEN-01–GEN-04, SAFE-05–SAFE-06 | 6 | Complete |
-| Phase 2 | SESS-05, SAFE-01–SAFE-04 | 5 | Pending — planned/ready to execute |
+| Phase 2 | SESS-05, SAFE-01–SAFE-04 | 5 | Complete |
 | Phase 3 | CTX-01–CTX-04, PAY-01–PAY-07, BILL-01–BILL-02, BILL-06 | 14 | Pending |
 | Phase 4 | BILL-03–BILL-05, SESS-01, SESS-03–SESS-04, GEN-05–GEN-06 | 8 | Pending |
 | Phase 5 | CONT-01–CONT-07 | 7 | Pending |
@@ -170,17 +170,17 @@ Milestone v1.0 owns every row in this table. Existing requirement IDs and phase 
 | SESS-02 | Phase 7 | Pending |
 | SESS-03 | Phase 4 | Pending |
 | SESS-04 | Phase 4 | Pending |
-| SESS-05 | Phase 2 | Pending |
+| SESS-05 | Phase 2 | Complete |
 | GEN-01 | Phase 1 | Complete |
 | GEN-02 | Phase 1 | Complete |
 | GEN-03 | Phase 1 | Complete |
 | GEN-04 | Phase 1 | Complete |
 | GEN-05 | Phase 4 | Pending |
 | GEN-06 | Phase 4 | Pending |
-| SAFE-01 | Phase 2 | Pending |
-| SAFE-02 | Phase 2 | Pending |
-| SAFE-03 | Phase 2 | Pending |
-| SAFE-04 | Phase 2 | Pending |
+| SAFE-01 | Phase 2 | Complete |
+| SAFE-02 | Phase 2 | Complete |
+| SAFE-03 | Phase 2 | Complete |
+| SAFE-04 | Phase 2 | Complete |
 | SAFE-05 | Phase 1 | Complete |
 | SAFE-06 | Phase 1 | Complete |
 | CONT-01 | Phase 5 | Pending |
@@ -210,9 +210,9 @@ Milestone v1.0 owns every row in this table. Existing requirement IDs and phase 
 - Owned by milestone v1.0: 54
 - Mapped to phases: 54
 - Unmapped: 0 ✓
-- Complete: 6
-- Pending: 48
+- Complete: 11
+- Pending: 43
 
 ---
 *Requirements defined: 2026-08-03*
-*Last updated: 2026-08-04 for v1.0 milestone hierarchy repair; requirement IDs and phase assignments unchanged*
+*Last updated: 2026-08-04 after verified Phase 2 completion; requirement IDs and phase assignments unchanged*

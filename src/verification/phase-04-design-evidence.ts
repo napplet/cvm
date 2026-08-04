@@ -1,0 +1,87 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { z } from "zod";
+import { canonicalJson } from "../promotion/schema";
+
+const SHA256 = /^[a-f0-9]{64}$/iu;
+const CHECK_IDS = ["reference-set", "metered-authority", "reconciliation", "artifact-honesty", "owner-status", "contextvm-boundary"] as const;
+const CASE_IDS = ["P04-AUTH-01", "P04-AUTH-02", "P04-AUTH-03", "P04-AUTH-04", "P04-ACCT-01", "P04-ACCT-02", "P04-ACCT-03", "P04-ACCT-04", "P04-SER-01", "P04-SER-02", "P04-SER-03", "P04-AMB-01", "P04-AMB-02", "P04-AMB-03", "P04-ART-01", "P04-ART-02", "P04-ART-03", "P04-ADV-01", "P04-ADV-02", "P04-STATUS-01"] as const;
+const REQUIREMENTS = ["BILL-03", "BILL-04", "BILL-05", "SESS-01", "SESS-03", "SESS-04", "GEN-05", "GEN-06"] as const;
+const DECISIONS = Array.from({ length: 20 }, (_, index) => `D-${index + 59}`);
+const THREATS = ["T-04-ADAPTER", "T-04-AMBIGUITY", "T-04-ATOMIC", "T-04-AUTHORITY", "T-04-BLOCK", "T-04-DIAGNOSTIC", "T-04-DISCLOSE", "T-04-DOUBLE", "T-04-EFFECT", "T-04-EVIDENCE", "T-04-EVIDENCE-LEAK", "T-04-HISTORY-DOS", "T-04-HONESTY", "T-04-INJECTION", "T-04-INPUT", "T-04-MISMATCH", "T-04-NATIVE", "T-04-ORACLE", "T-04-PRICE", "T-04-QUARANTINE", "T-04-RACE", "T-04-READINESS", "T-04-REPAIR", "T-04-REPLAY", "T-04-RETRY", "T-04-SC", "T-04-STATUS-LEAK", "T-04-STATUS-OWNER"] as const;
+const DEFERRALS = ["live-provider-selection", "live-provider-certification", "provider-latency-availability-cost-certification", "preview-and-publication", "phase-07-slo-chaos-certification"] as const;
+const EXPECTED_EFFECTS = { providerDispatches: 9, providerLookups: 3, workerCalls: 7, receiptWrites: 7, debitPostings: 9, creditPostings: 2, releases: 10 } as const;
+
+export const Phase04DesignEvidenceSchema = z.object({
+  version: z.literal(1), certificationProfile: z.literal("design"), verdict: z.enum(["design-ready", "blocked"]), offlineVerdict: z.enum(["passed", "blocked"]), evidenceSha256: z.string().regex(SHA256),
+});
+export type Phase04Check = Readonly<{ id: typeof CHECK_IDS[number]; severity: "critical" | "high"; status: "passed" | "failed" | "blocked"; evidenceSha256: string }>;
+export type Phase04Observation = Readonly<{ provider: "deterministic_gateway" | "live_model"; status: "passed" | "not_observed"; selection: "unselected"; evidenceSha256: string; limitations: readonly string[] }>;
+export type Phase04DesignInput = Readonly<{
+  identities: Readonly<{ referenceSet: string; meteredService: string; gateway: string; reconciliation: string; status: string; adapter: string }>;
+  checks: readonly Phase04Check[];
+  caseResults: readonly Readonly<{ id: typeof CASE_IDS[number]; status: "passed" | "failed" | "blocked" }>[];
+  requirementMappings: Readonly<Record<string, readonly string[]>>;
+  decisionMappings: readonly string[];
+  threatMappings: readonly string[];
+  aggregateEffects: Readonly<typeof EXPECTED_EFFECTS>;
+  observations: readonly Phase04Observation[];
+}>;
+export type Phase04DesignEvidence = Readonly<Phase04DesignInput & { version: 1; certificationProfile: "design"; verdict: "design-ready" | "blocked"; offlineVerdict: "passed" | "blocked"; deferrals: readonly typeof DEFERRALS[number][]; evidenceSha256: string }>;
+export type Phase04DesignDecision = Readonly<{ evidence: Phase04DesignEvidence; reasons: readonly string[] }>;
+
+function isRecord(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === "object" && !Array.isArray(value); }
+function digest(value: unknown): Promise<string> { return crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalJson(value))).then((hash) => Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("")); }
+function exact(values: readonly string[], expected: readonly string[]): boolean { return values.length === expected.length && new Set(values).size === expected.length && expected.every((value) => values.includes(value)); }
+function add(reasons: string[], reason: string): void { if (!reasons.includes(reason)) reasons.push(reason); }
+function forbidden(value: unknown): boolean {
+  if (typeof value === "string") return /(?:\bbearer\b|\bsecret\b|\bprivate(?:[_ -]?key)?\b|\bcredential\b|\btoken\b|\bgrant\b|\bprompt\b|\breasoning\b|generated[_ -]?source|provider[_ -]?native|internal[_ -]?capability|preview[_ -]?(?:ready|url)|publish[_ -]?(?:ready|url)|live[_ -]?selected)/iu.test(value);
+  if (Array.isArray(value)) return value.some(forbidden);
+  return isRecord(value) && Object.entries(value).some(([key, nested]) => /(?:prompt|source|reasoning|credential|grant|provider.?native|internal.?capability|preview|publish)/iu.test(key) || forbidden(nested));
+}
+
+/** Evaluates only the deterministic Phase 4 proof, keeping live-provider certification explicitly deferred. */
+export async function evaluatePhase04Design(input: Phase04DesignInput): Promise<Phase04DesignDecision> {
+  const reasons: string[] = [];
+  if (!input || !isRecord(input)) add(reasons, "Phase 04 design input is malformed");
+  if (!input?.identities || input.identities.referenceSet !== "tests/fixtures/phase-04-reference-set.json" || input.identities.meteredService !== "src/phase-04/metered-generation-service.ts" || input.identities.gateway !== "src/model/deterministic-model-gateway.ts" || input.identities.reconciliation !== "src/model/reconciliation.ts" || input.identities.status !== "src/phase-04/session-status.ts" || input.identities.adapter !== "src/contextvm/adapter.ts") add(reasons, "Phase 04 authority identity set is invalid");
+  if (forbidden(input)) add(reasons, "Phase 04 evidence contains forbidden disclosure or readiness claim");
+  if (!Array.isArray(input?.checks) || !exact(input.checks.map((item) => item.id), CHECK_IDS)) add(reasons, "Phase 04 deterministic check identity set is incomplete, duplicate, or unknown");
+  for (const check of input?.checks ?? []) if (!CHECK_IDS.includes(check.id) || !["critical", "high"].includes(check.severity) || check.status !== "passed" || !SHA256.test(check.evidenceSha256)) add(reasons, `Phase 04 check ${String(check.id)} is malformed or not passed`);
+  if (!Array.isArray(input?.caseResults) || !exact(input.caseResults.map((item) => item.id), CASE_IDS) || input.caseResults.some((item) => item.status !== "passed")) add(reasons, "Phase 04 case result set is incomplete or not passed");
+  if (!input?.requirementMappings || !exact(Object.keys(input.requirementMappings), REQUIREMENTS) || Object.values(input.requirementMappings).some((ids) => !Array.isArray(ids) || ids.length === 0 || ids.some((id) => !CASE_IDS.includes(id as typeof CASE_IDS[number])))) add(reasons, "Phase 04 requirement mappings are incomplete or invalid");
+  if (!Array.isArray(input?.decisionMappings) || !exact(input.decisionMappings, DECISIONS)) add(reasons, "Phase 04 decision mappings are incomplete, duplicate, or unknown");
+  if (!Array.isArray(input?.threatMappings) || !exact(input.threatMappings, THREATS)) add(reasons, "Phase 04 threat mappings are incomplete, duplicate, or unknown");
+  if (canonicalJson(input?.aggregateEffects) !== canonicalJson(EXPECTED_EFFECTS)) add(reasons, "Phase 04 aggregate effect counts changed");
+  if (!Array.isArray(input?.observations) || !exact(input.observations.map((item) => item.provider), ["deterministic_gateway", "live_model"])) add(reasons, "Phase 04 provider observations are incomplete, duplicate, or unknown");
+  for (const observation of input?.observations ?? []) {
+    if (!SHA256.test(observation.evidenceSha256) || observation.selection !== "unselected" || !Array.isArray(observation.limitations)) add(reasons, "Phase 04 provider observation is malformed or selected");
+    if (observation.provider === "deterministic_gateway" && observation.status !== "passed") add(reasons, "deterministic gateway observation must pass without selection");
+    if (observation.provider === "live_model" && observation.status !== "not_observed") add(reasons, "live model observation must remain not observed and unselected");
+  }
+  const offlineVerdict = reasons.length === 0 ? "passed" as const : "blocked" as const;
+  const withoutDigest = { version: 1 as const, certificationProfile: "design" as const, verdict: offlineVerdict === "passed" ? "design-ready" as const : "blocked" as const, offlineVerdict, identities: Object.freeze({ ...input.identities }), checks: Object.freeze(input.checks.map((item) => Object.freeze({ ...item }))), caseResults: Object.freeze(input.caseResults.map((item) => Object.freeze({ ...item }))), requirementMappings: Object.freeze(Object.fromEntries(Object.entries(input.requirementMappings).map(([key, value]) => [key, Object.freeze([...value])]))), decisionMappings: Object.freeze([...input.decisionMappings]), threatMappings: Object.freeze([...input.threatMappings]), aggregateEffects: Object.freeze({ ...input.aggregateEffects }), observations: Object.freeze(input.observations.map((item) => Object.freeze({ ...item, limitations: Object.freeze([...item.limitations]) }))), deferrals: Object.freeze([...DEFERRALS]) };
+  return Object.freeze({ evidence: Object.freeze({ ...withoutDigest, evidenceSha256: await digest(withoutDigest) }), reasons: Object.freeze(reasons) });
+}
+
+/** Strictly re-evaluates a loaded record, rejecting collision, tamper, redaction, and readiness overclaims. */
+export async function validatePhase04DesignEvidence(evidence: Phase04DesignEvidence): Promise<void> {
+  if (!Phase04DesignEvidenceSchema.safeParse(evidence).success || forbidden(evidence) || !exact(evidence.deferrals, DEFERRALS)) throw new Error("Phase 04 design evidence schema, redaction, or deferral validation failed");
+  const { evidenceSha256, version: _version, certificationProfile: _profile, verdict: _verdict, offlineVerdict: _offline, deferrals: _deferrals, ...input } = evidence;
+  const evaluated = await evaluatePhase04Design(input);
+  if (evaluated.evidence.evidenceSha256 !== evidenceSha256 || evaluated.evidence.verdict !== evidence.verdict || evaluated.evidence.offlineVerdict !== evidence.offlineVerdict) throw new Error("Phase 04 design evidence deterministic proof is invalid");
+}
+
+/** Writes a canonical content-addressed record once, or verifies identical bytes when it already exists. */
+export async function writePhase04DesignEvidence(directory: string, input: Phase04DesignInput): Promise<Phase04DesignEvidence> {
+  const { evidence } = await evaluatePhase04Design(input);
+  await validatePhase04DesignEvidence(evidence);
+  await mkdir(directory, { recursive: true });
+  const content = `${canonicalJson(evidence)}\n`;
+  const path = `${directory}/${evidence.evidenceSha256}.json`;
+  try { await writeFile(path, content, { encoding: "utf8", flag: "wx" }); }
+  catch (error) {
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "EEXIST") throw error;
+    if (await readFile(path, "utf8") !== content) throw new Error("immutable Phase 04 design evidence collision");
+  }
+  return evidence;
+}

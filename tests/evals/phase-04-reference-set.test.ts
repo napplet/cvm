@@ -62,7 +62,7 @@ async function evidenceInput() {
     requirementMappings: Object.fromEntries(requiredRequirements.map((id) => [id, caseIds.filter((caseId, index) => cases[index]!.requirements.includes(id))])),
     decisionMappings: requiredDecisions,
     threatMappings: requiredThreats,
-    aggregateEffects: { providerDispatches: 7, providerLookups: 3, workerCalls: 6, receiptWrites: 4, debitPostings: 7, creditPostings: 2, releases: 7 },
+    aggregateEffects: { providerDispatches: 9, providerLookups: 3, workerCalls: 7, receiptWrites: 7, debitPostings: 9, creditPostings: 2, releases: 10 },
     observations: [
       { provider: "deterministic_gateway", status: "passed" as const, selection: "unselected" as const, evidenceSha256: digest("a"), limitations: ["fixture-only execution"] },
       { provider: "live_model", status: "not_observed" as const, selection: "unselected" as const, evidenceSha256: digest("b"), limitations: ["Phase 7 owns live provider selection and certification"] },
@@ -115,6 +115,7 @@ describe("Phase 04 immutable design evidence", () => {
       const first = await writePhase04DesignEvidence(directory, input);
       expect(await writePhase04DesignEvidence(directory, input)).toEqual(first);
       await writeFile(join(directory, `${first.evidenceSha256}.json`), "collision", "utf8");
+      await expect(writePhase04DesignEvidence(directory, input)).rejects.toThrow("collision");
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

@@ -16,6 +16,8 @@
     "test:modal-probe": "bun run scripts/probe-modal-worker.ts",
     "eval:phase-02": "bun test tests/evals/phase-02-reference-set.test.ts",
     "eval:phase-03": "bun test tests/evals/phase-03-reference-set.test.ts",
+    "eval:phase04": "bun test tests/evals/phase-04-reference-set.test.ts --timeout 10000",
+    "verify:phase04-design": "bun run scripts/verify-phase-04-design-slice.ts",
     "test:phase-03-design-slice": "bun run scripts/verify-phase-03-design-slice.ts",
     "test:phase-02-design-slice": "bun run scripts/verify-phase-02-design-slice.ts"
   },

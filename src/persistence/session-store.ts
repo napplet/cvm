@@ -34,6 +34,9 @@ export interface SessionStore {
   findRecordedResult(action: SessionAction): Promise<SessionActionResult | undefined>;
   /** Atomically checks the target session's principal and version before worker allocation/effects. */
   preflight(action: SessionAction): Promise<SessionPreflight>;
+  /** Durable, expiring exclusion for one session/version before worker or gateway effects. */
+  claimWorkerLease(action: SessionAction, nowMs: number, expiresAtMs: number): Promise<SessionPreflight>;
+  releaseWorkerLease(action: SessionAction): Promise<void>;
   apply(action: SessionAction, evaluate: SessionEvaluation): Promise<SessionActionResult>;
   getSessionVersion(sessionId: string): number | undefined;
   readonly evidence: readonly SessionEvidence[];
@@ -43,7 +46,10 @@ type State = {
   sessions: Map<string, SessionRecord>;
   actions: Map<string, StoredActionResult>;
   evidence: SessionEvidence[];
+  leases: Map<string, Readonly<{ idempotencyKey: string; expiresAtMs: number }>>;
 };
+
+function leaseKey(sessionId: string, version: number): string { return `${sessionId.length}:${sessionId}:${version}`; }
 
 function actionKey(sessionId: string, idempotencyKey: string): string {
   return `${sessionId.length}:${sessionId}${idempotencyKey.length}:${idempotencyKey}`;
@@ -89,7 +95,7 @@ async function committed(action: SessionAction, fingerprint: string, version: nu
  * not the durable reference composition; SqliteSessionStore is that authority.
  */
 export class TransactionalMemorySessionStore implements SessionStore {
-  #state: State = { sessions: new Map(), actions: new Map(), evidence: [] };
+  #state: State = { sessions: new Map(), actions: new Map(), evidence: [], leases: new Map() };
   #tail: Promise<void> = Promise.resolve();
 
   constructor(sessions: readonly SessionRecord[] = []) {
@@ -124,6 +130,23 @@ export class TransactionalMemorySessionStore implements SessionStore {
     return freeze({ authorized: true });
   }
 
+  async claimWorkerLease(action: SessionAction, nowMs: number, expiresAtMs: number): Promise<SessionPreflight> {
+    const preflight = await this.preflight(action);
+    if (!preflight.authorized) return preflight;
+    const key = leaseKey(action.sessionId, action.expectedVersion);
+    const current = this.#state.leases.get(key);
+    if (current && current.expiresAtMs > nowMs) {
+      return freeze({ authorized: false, result: current.idempotencyKey === action.idempotencyKey ? denial("STORE_BUSY") : denial("STALE_SESSION_VERSION", action.expectedVersion) });
+    }
+    this.#state.leases.set(key, freeze({ idempotencyKey: action.idempotencyKey, expiresAtMs }));
+    return freeze({ authorized: true });
+  }
+
+  async releaseWorkerLease(action: SessionAction): Promise<void> {
+    const key = leaseKey(action.sessionId, action.expectedVersion);
+    if (this.#state.leases.get(key)?.idempotencyKey === action.idempotencyKey) this.#state.leases.delete(key);
+  }
+
   async apply(action: SessionAction, evaluate: SessionEvaluation): Promise<SessionActionResult> {
     let release!: () => void;
     const previous = this.#tail;
@@ -134,6 +157,7 @@ export class TransactionalMemorySessionStore implements SessionStore {
         sessions: new Map([...this.#state.sessions].map(([id, session]) => [id, clone(session)])),
         actions: new Map([...this.#state.actions].map(([id, stored]) => [id, clone(stored)])),
         evidence: clone(this.#state.evidence),
+        leases: new Map([...this.#state.leases].map(([id, lease]) => [id, clone(lease)])),
       };
       const fingerprint = await fingerprintSessionAction(action);
       const existing = state.actions.get(actionKey(action.sessionId, action.idempotencyKey));

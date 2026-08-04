@@ -144,6 +144,40 @@ describe("phase 02 final trusted-core tracer", () => {
     composition.close();
   });
 
+  test("allows only one of two independently composed cores to reach effects for one durable version", async () => {
+    const databasePath = temporaryDatabase();
+    const effects = { calls: 0 }; let started = 0;
+    const worker = (counter: { runs: number }): WorkerPort => ({ async run(request) {
+      counter.runs += 1;
+      started += 1;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return WorkerRunResultSchema.parse({ status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events: [{ kind: "tool_proposal", turn: 1, request: { sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion, capabilityGrant: request.capabilityGrant, workspaceId: request.workspaceId, callId: `${request.actionId}:call`, evidenceId: `${request.actionId}:evidence`, tool: "capture_evidence", label: "concurrent" } }], artifact: verifiedArtifact(request) });
+    } });
+    const leftRuns = { runs: 0 }; const rightRuns = { runs: 0 };
+    const left = core(databasePath, worker(leftRuns), effects);
+    const right = core(databasePath, worker(rightRuns), effects);
+    const [first, second] = await Promise.all([
+      left.core.execute(action()),
+      right.core.execute(action({ actionId: "action-0002", idempotencyKey: "request-0002" })),
+    ]);
+
+    expect([first.code, second.code]).toContain("ACTION_COMMITTED");
+    expect(effects.calls).toBe(1);
+    expect(leftRuns.runs + rightRuns.runs).toBe(1);
+    left.close(); right.close();
+  });
+
+  test("fails closed on a worker-forged all-pass artifact before any effect or commit", async () => {
+    const databasePath = temporaryDatabase(); const runs = { runs: 0 }; const effects = { calls: 0 };
+    const composition = createTrustedCore({ databasePath, worker: completingWorker(runs), sessions: [{ sessionId: "session-0001", principalId: principal.id, version: 0 }], dispatcher: { dispatch: async () => { effects.calls += 1; return {}; } } });
+    const result = await composition.core.execute(action());
+
+    expect(result.status).not.toBe("completed");
+    expect(effects.calls).toBe(0);
+    expect(composition.store.getSessionVersion("session-0001")).toBe(0);
+    composition.close();
+  });
+
   test.each([
     ["malformed worker event", () => ({ kind: "tool_proposal", turn: 1, request: { tool: "unknown" } })],
     ["wrong worker correlation", (request: ReturnType<typeof WorkerRunRequestSchema.parse>) => ({ kind: "tool_proposal", turn: 1, request: { sessionId: "other", actionId: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion, capabilityGrant: request.capabilityGrant, workspaceId: request.workspaceId, callId: "call-1", evidenceId: "evidence-1", tool: "capture_evidence", label: "bad" } })],

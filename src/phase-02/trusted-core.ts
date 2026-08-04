@@ -191,13 +191,11 @@ export class TrustedCore {
 
     const risk = await evaluateRisk({ idea: admission.idea }, this.dependencies.tokenCounter, this.dependencies.riskDetector, ["workspace_write"]);
     if (risk.status !== "accepted") return asFailure("RISK_DENIED", risk.evidence);
-    // This pre-effect authorization fence prevents a caller from consuming a
-    // target session's worker/gateway authority. apply() repeats it at commit
-    // time so a concurrent action can only produce a stale result, never a
-    // cross-session effect.
-    const preflight = await this.dependencies.store.preflight(replayAction);
-    if (!preflight.authorized) return sessionResult(preflight.result);
-    if (signal.aborted) return asFailure("WORKER_UNCERTAIN", { reason: "aborted before worker allocation" });
+    const leaseNow = this.dependencies.now();
+    const lease = await this.dependencies.store.claimWorkerLease(replayAction, leaseNow, leaseNow + PHASE_02_POLICY_INITIAL.sandbox.execTimeoutSeconds * 1_000);
+    if (!lease.authorized) return sessionResult(lease.result);
+    try {
+      if (signal.aborted) return asFailure("WORKER_UNCERTAIN", { reason: "aborted before worker allocation" });
 
     const capabilityGrant = await digest({
       policyVersion: PHASE_02_POLICY_INITIAL.policyVersion,
@@ -278,7 +276,10 @@ export class TrustedCore {
     });
     const committed = await this.#service.apply(sessionAction, signal);
     if (committed.status === "completed") grants.terminal(capabilityGrant);
-    return sessionResult(committed);
+      return sessionResult(committed);
+    } finally {
+      await this.dependencies.store.releaseWorkerLease(replayAction);
+    }
   }
 }
 

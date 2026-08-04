@@ -50,6 +50,13 @@ export class SqliteSessionStore implements SessionStore {
         evidence_id TEXT NOT NULL REFERENCES evidence(evidence_id),
         PRIMARY KEY (session_id, idempotency_key)
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS worker_leases (
+        session_id TEXT NOT NULL REFERENCES sessions(session_id),
+        expected_version INTEGER NOT NULL CHECK (expected_version >= 0),
+        idempotency_key TEXT NOT NULL,
+        expires_at_ms INTEGER NOT NULL,
+        PRIMARY KEY (session_id, expected_version)
+      ) STRICT;
     `);
   }
 
@@ -77,6 +84,29 @@ export class SqliteSessionStore implements SessionStore {
     if (row.principal_id !== action.principal.id) return freeze({ authorized: false, result: denial("SESSION_SCOPE_MISMATCH") });
     if (row.version !== action.expectedVersion) return freeze({ authorized: false, result: denial("STALE_SESSION_VERSION", row.version) });
     return freeze({ authorized: true });
+  }
+
+  async claimWorkerLease(action: SessionAction, nowMs: number, expiresAtMs: number): Promise<SessionPreflight> {
+    try {
+      return this.#database.transaction(() => {
+        this.#database.query("DELETE FROM worker_leases WHERE expires_at_ms <= ?").run(nowMs);
+        const row = this.#database.query("SELECT principal_id, version FROM sessions WHERE session_id = ?").get(action.sessionId) as Pick<SessionRow, "principal_id" | "version"> | null;
+        if (!row) return freeze({ authorized: false, result: denial("SESSION_NOT_FOUND") });
+        if (row.principal_id !== action.principal.id) return freeze({ authorized: false, result: denial("SESSION_SCOPE_MISMATCH") });
+        if (row.version !== action.expectedVersion) return freeze({ authorized: false, result: denial("STALE_SESSION_VERSION", row.version) });
+        const inserted = this.#database.query("INSERT OR IGNORE INTO worker_leases (session_id, expected_version, idempotency_key, expires_at_ms) VALUES (?, ?, ?, ?)").run(action.sessionId, action.expectedVersion, action.idempotencyKey, expiresAtMs);
+        if (inserted.changes === 1) return freeze({ authorized: true });
+        const lease = this.#database.query("SELECT idempotency_key FROM worker_leases WHERE session_id = ? AND expected_version = ?").get(action.sessionId, action.expectedVersion) as { idempotency_key: string } | null;
+        return freeze({ authorized: false, result: lease?.idempotency_key === action.idempotencyKey ? denial("STORE_BUSY") : denial("STALE_SESSION_VERSION", row.version) });
+      })();
+    } catch (error) {
+      if (error instanceof Error && /(?:SQLITE_BUSY|database is locked)/iu.test(error.message)) return freeze({ authorized: false, result: denial("STORE_BUSY") });
+      throw error;
+    }
+  }
+
+  async releaseWorkerLease(action: SessionAction): Promise<void> {
+    this.#database.query("DELETE FROM worker_leases WHERE session_id = ? AND expected_version = ? AND idempotency_key = ?").run(action.sessionId, action.expectedVersion, action.idempotencyKey);
   }
 
   get evidence(): readonly SessionEvidence[] {

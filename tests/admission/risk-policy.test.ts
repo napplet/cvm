@@ -35,8 +35,8 @@ describe("SAFE-02 restrictive-only risk policy", () => {
   });
 
   test.each([
-    [{ id: "PROMPT_INJECTION", severity: "high" }],
-    [{ id: "JAILBREAK", severity: "high" }],
+    [[{ id: "PROMPT_INJECTION", severity: "high" }]],
+    [[{ id: "JAILBREAK", severity: "high" }]],
   ])("rejects configured signals without adding a grant", async (signals) => {
     const decision = await evaluateRisk({ idea: "Build a focused counter." }, tokenCounter, detector(signals), baseGrant);
     expect(decision).toMatchObject({ status: "denied", code: "RISK_POLICY_REJECTED", grants: [] });

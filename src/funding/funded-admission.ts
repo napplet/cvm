@@ -32,8 +32,6 @@ export type ActionBudgetAuthorization = Readonly<{
   status: "authorized"; accountId: string; admissionReference: string; reference: string; reservedAmount: string; unit: "sat";
 }>;
 
-type Intent = { state: "created" | "unknown" | "available" | "refused" | "released"; reference?: string; outcome?: FundedAdmissionOutcome };
-type Action = { amount: bigint; result: ActionBudgetAuthorization };
 
 function freeze<T>(value: T): T {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
@@ -50,14 +48,10 @@ function intentKey(accountId: string, idempotencyKey: string): string { return `
 
 /**
  * Couples a serializable cap hold with a capacity reservation that is usable at
- * return time. The local journal is deliberately a correlation cache only: the
- * FundingStore remains the durable monetary/replay authority.
+ * return time. Capacity intent and action-budget correlation are persisted by
+ * FundingStore before external I/O; the store remains the replay authority.
  */
 export class FundedAdmissionService {
-  #intents = new Map<string, Intent>();
-  #actions = new Map<string, Action>();
-  #actionTail: Promise<void> = Promise.resolve();
-
   constructor(private readonly options: Readonly<{ funding: FundingService; store: FundingStore; capacity: ReadyCapacityPort }>) {}
 
   async admit(input: unknown): Promise<FundedAdmissionOutcome> {
@@ -73,40 +67,46 @@ export class FundedAdmissionService {
       return freeze(structuredClone(recorded.result));
     }
 
-    let intent = this.#intents.get(key);
     const intentReference = `capacity-intent:${await hash(`${accountId}:${command.idempotencyKey}`)}`;
-    if (!intent) { intent = { state: "created" }; this.#intents.set(key, intent); }
-    if (intent.outcome && intent.outcome.status !== "reconciliation_pending") return freeze(structuredClone(intent.outcome));
+    const intentFingerprint = await hash(JSON.stringify({ accountId, command }));
+    let intent = await this.options.store.transact(accountId, (transaction) => {
+      const existing = transaction.findCapacityIntent(command.idempotencyKey);
+      return existing ?? transaction.createCapacityIntent({ accountId, idempotencyKey: command.idempotencyKey, fingerprint: intentFingerprint, intentReference });
+    });
+    if (intent.fingerprint !== intentFingerprint || intent.intentReference !== intentReference) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
 
     let observation: CapacityObservation;
-    if (intent.state === "unknown") {
-      observation = await this.options.capacity.observe({ intentReference, reference: intent.reference });
+    if (intent.state === "available") {
+      observation = { status: "available", reference: intent.capacityReference!, expiresAt: intent.expiresAt! };
+    } else if (intent.state === "reconciliation_pending") {
+      observation = await this.options.capacity.observe({ intentReference, reference: intent.capacityReference });
+    } else if (intent.state === "refused" || intent.state === "released") {
+      return freeze({ status: "refused" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
     } else {
       try { observation = await this.options.capacity.reserveNow({ intentReference }); }
-      catch { intent.state = "unknown"; observation = await this.options.capacity.observe({ intentReference, reference: intent.reference }); }
+      catch { observation = await this.options.capacity.observe({ intentReference }); }
     }
 
     if (observation.status === "refused") {
       const outcome = freeze({ status: "refused" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
-      intent.state = "refused"; intent.outcome = outcome; return outcome;
+      await this.options.store.transact(accountId, (transaction) => transaction.recordCapacityObservation({ intentReference, state: "refused" }));
+      return outcome;
     }
     if (observation.status === "unknown") {
-      intent.state = "unknown"; intent.reference = observation.reference;
       const outcome = freeze({ status: "reconciliation_pending" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
-      intent.outcome = outcome; return outcome;
+      await this.options.store.transact(accountId, (transaction) => transaction.recordCapacityObservation({ intentReference, state: "reconciliation_pending", ...(observation.reference ? { capacityReference: observation.reference } : {}) }));
+      return outcome;
     }
 
-    intent.state = "available"; intent.reference = observation.reference;
+    intent = await this.options.store.transact(accountId, (transaction) => transaction.recordCapacityObservation({ intentReference, state: "available", capacityReference: observation.reference, expiresAt: observation.expiresAt }));
     try {
-      const accepted = await this.options.funding.execute(this.fundingCommand(command, observation.reference));
+      const accepted = await this.options.funding.execute(this.fundingCommand(command, intent.capacityReference!));
       if (accepted.status !== "accepted") throw new Error("FUNDED_ADMISSION_NOT_ACCEPTED");
-      intent.outcome = freeze(structuredClone(accepted));
-      return intent.outcome;
+      return freeze(structuredClone(accepted));
     } catch (error) {
-      await this.options.capacity.release({ intentReference, reference: observation.reference });
-      intent.state = "released";
+      await this.options.capacity.release({ intentReference, reference: intent.capacityReference! });
+      await this.options.store.transact(accountId, (transaction) => transaction.releaseCapacityIntent(intentReference));
       const outcome = freeze({ status: "refused" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
-      intent.outcome = outcome;
       return outcome;
     }
   }
@@ -115,29 +115,14 @@ export class FundedAdmissionService {
     const command = ActionCommandSchema.parse(input);
     const accountId = await accountIdForPrincipal(command.principal);
     const actionKey = `${intentKey(accountId, command.admissionReference)}:${command.idempotencyKey}`;
-    const existing = this.#actions.get(actionKey);
-    if (existing) return freeze(structuredClone(existing.result));
-
-    let release!: () => void;
-    const prior = this.#actionTail;
-    this.#actionTail = new Promise<void>((resolve) => { release = resolve; });
-    await prior;
-    try {
-      const replay = this.#actions.get(actionKey);
-      if (replay) return freeze(structuredClone(replay.result));
-      const status = await this.options.store.status(accountId);
-      const admission = status?.admissions.find((candidate) => candidate.reference === command.admissionReference);
-      if (!admission) throw new Error("ACTIVE_ADMISSION_REQUIRED");
-      const reserved = [...this.#actions.entries()]
-        .filter(([key]) => key.startsWith(`${intentKey(accountId, command.admissionReference)}:`))
-        .reduce((total, [, action]) => total + action.amount, 0n);
-      const maximum = BigInt(command.maximum);
-      const remaining = BigInt(admission.approvedCap) - reserved;
-      if (maximum > remaining) throw new Error("ACTION_BUDGET_EXCEEDS_APPROVED_CAP");
-      const result = freeze({ status: "authorized" as const, accountId, admissionReference: command.admissionReference, reference: `action-budget:${await hash(actionKey)}`, reservedAmount: command.maximum, unit: "sat" as const });
-      this.#actions.set(actionKey, { amount: maximum, result });
-      return result;
-    } finally { release(); }
+    const actionFingerprint = await hash(JSON.stringify({ accountId, command }));
+    const result = await this.options.store.transact(accountId, async (transaction) => {
+      const existing = transaction.findActionBudget(command.idempotencyKey);
+      if (existing && existing.fingerprint !== actionFingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
+      const action = existing ?? transaction.reserveActionBudget({ accountId, admissionReference: command.admissionReference, idempotencyKey: command.idempotencyKey, fingerprint: actionFingerprint, reference: `action-budget:${await hash(actionKey)}`, amount: BigInt(command.maximum) });
+      return freeze({ status: "authorized" as const, accountId, admissionReference: action.admissionReference, reference: action.reference, reservedAmount: action.amount.toString(), unit: "sat" as const });
+    });
+    return result;
   }
 
   private fundingCommand(command: z.infer<typeof AdmissionCommandSchema>, capacityReference: string) {

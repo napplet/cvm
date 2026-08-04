@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { FundingService } from "../../src/funding/funding-service";
+import { FundedAdmissionService } from "../../src/funding/funded-admission";
 import { DeterministicPostgresFundingExecutor, PostgresFundingStore } from "../../src/persistence/postgres-funding-store";
 
 const principal = { pubkey: "a".repeat(64) };
@@ -55,5 +56,30 @@ describe("PostgresFundingStore", () => {
     await service.execute(credited());
     expect(executor.retryAttempts).toBe(2);
     expect(executor.externalEffectCount).toBe(0);
+  });
+
+  test("persists capacity ambiguity and action budgets across fresh funded-admission services", async () => {
+    const executor = new DeterministicPostgresFundingExecutor();
+    const firstStore = new PostgresFundingStore(executor);
+    await new FundingService(firstStore).execute(credited());
+    let reserveCount = 0;
+    const ambiguousCapacity = {
+      reserveNow: async () => { reserveCount += 1; throw new Error("response lost"); },
+      observe: async () => ({ status: "unknown" as const, reference: "capacity:durable" }),
+      release: async () => undefined,
+    };
+    const command = { principal, idempotencyKey: "durable-admission", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "80", unit: "sat" as const } };
+    expect(await new FundedAdmissionService({ funding: new FundingService(firstStore), store: firstStore, capacity: ambiguousCapacity }).admit(command)).toMatchObject({ status: "reconciliation_pending" });
+    const resumedStore = new PostgresFundingStore(executor);
+    const resumedCapacity = { reserveNow: async () => { reserveCount += 1; return { status: "available" as const, reference: "wrong", expiresAt: "2026-08-05T00:00:00.000Z" }; }, observe: async () => ({ status: "available" as const, reference: "capacity:durable", expiresAt: "2026-08-05T00:00:00.000Z" }), release: async () => undefined };
+    const resumed = new FundedAdmissionService({ funding: new FundingService(resumedStore), store: resumedStore, capacity: resumedCapacity });
+    expect(await resumed.admit(command)).toMatchObject({ status: "accepted", heldAmount: "80" });
+    expect(reserveCount).toBe(1);
+    const budget = await resumed.authorizeActionBudget({ principal, admissionReference: "capacity:durable", idempotencyKey: "durable-action", maximum: "40", unit: "sat" });
+    const replay = await new FundedAdmissionService({ funding: new FundingService(new PostgresFundingStore(executor)), store: new PostgresFundingStore(executor), capacity: resumedCapacity }).authorizeActionBudget({ principal, admissionReference: "capacity:durable", idempotencyKey: "durable-action", maximum: "40", unit: "sat" });
+    expect(replay).toEqual(budget);
+    await expect(resumed.authorizeActionBudget({ principal, admissionReference: "capacity:durable", idempotencyKey: "durable-action", maximum: "41", unit: "sat" })).rejects.toThrow("IDEMPOTENCY_KEY_CONFLICT");
+    expect(executor.snapshot().capacityIntents).toHaveLength(1);
+    expect(executor.snapshot().actionBudgets).toHaveLength(1);
   });
 });

@@ -89,21 +89,17 @@ async function writePromotionEvidence(
     manifest: { candidateId, sha256: manifestSha256 },
     nativeReports: stages.map((stage) => ({ id: stage.id, sha256: stage.reportSha256 })),
     integrationResults: [{ id: "promotion-tracer", reportDigests: stages.map((stage) => stage.reportSha256) }],
-    artifacts: { sha256: manifest.fixtures[0]!.sha256, goldenSha256: manifest.goldens[0]!.sha256 },
-    reproducibility: { status: "matched", diffSha256: await sha256(canonicalJson(stages.map((stage) => stage.reportSha256))) },
-    provenance: {
-      links: [
-        `https://github.com/nostr-protocol/nips/commit/${manifest.protocol.nip5dRevision}`,
-        ...manifest.packages.map((pkg) => `https://example.invalid/${encodeURIComponent(pkg.name)}/${pkg.sourceCommit}`),
-      ],
-    },
+    // A single native trace proves neither an artifact/golden comparison nor reproducibility/provenance.
+    artifacts: { status: "not-evaluated" },
+    reproducibility: { status: "not-evaluated" },
+    provenance: { status: "not-evaluated" },
   });
   return { version: 1, candidateId, status, responsibleStage, stages, evidenceSha256: bundle.evidenceSha256 };
 }
 
 /**
  * Executes a manifest candidate without package resolution. A successful trace is
- * review-ready only; it has no promoted-pointer mutation capability.
+ * blocked until the separately measured certification layers are present; it has no promoted-pointer mutation capability.
  */
 export async function runPromotionCandidate(rawManifest: unknown, options: RunPromotionOptions): Promise<PromotionEvidence> {
   const now = options.now ?? Date.now;
@@ -155,5 +151,5 @@ export async function runPromotionCandidate(rawManifest: unknown, options: RunPr
       return writePromotionEvidence(options.evidenceDirectory, manifest, candidateId, "blocked", stage.id, stages);
     }
   }
-  return writePromotionEvidence(options.evidenceDirectory, manifest, candidateId, "review-ready", "none", stages);
+  return writePromotionEvidence(options.evidenceDirectory, manifest, candidateId, "blocked", "certification-deferred", stages);
 }

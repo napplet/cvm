@@ -9,9 +9,9 @@ export type EvidenceBundleInput = {
   readonly manifest: { readonly candidateId: Digest; readonly sha256: Digest };
   readonly nativeReports: readonly { readonly id: string; readonly sha256: Digest }[];
   readonly integrationResults: readonly { readonly id: string; readonly reportDigests: readonly Digest[] }[];
-  readonly artifacts: { readonly sha256: Digest; readonly goldenSha256: Digest };
-  readonly reproducibility: { readonly status: "matched" | "mismatched"; readonly diffSha256: Digest };
-  readonly provenance: { readonly links: readonly string[] };
+  readonly artifacts: { readonly status: "measured"; readonly sha256: Digest; readonly golden: { readonly status: "matched" | "mismatched"; readonly sha256: Digest } } | { readonly status: "not-evaluated" };
+  readonly reproducibility: { readonly status: "matched" | "mismatched"; readonly diffSha256: Digest } | { readonly status: "not-evaluated" };
+  readonly provenance: { readonly status: "verified"; readonly links: readonly string[] } | { readonly status: "not-evaluated" };
 };
 
 export type EvidenceBundle = EvidenceBundleInput & {
@@ -47,12 +47,20 @@ function validateInput(input: EvidenceBundleInput): void {
       if (!reportDigests.has(digest)) throw new Error("integration result references an absent native report digest");
     }
   }
-  requiredDigest(input.artifacts?.sha256, "artifacts digest");
-  requiredDigest(input.artifacts?.goldenSha256, "artifacts golden digest");
-  if (!input.reproducibility || !["matched", "mismatched"].includes(input.reproducibility.status)) throw new Error("reproducibility layer is required");
-  requiredDigest(input.reproducibility.diffSha256, "reproducibility diff digest");
-  if (!input.provenance || !Array.isArray(input.provenance.links) || input.provenance.links.length === 0 || !input.provenance.links.every((link) => typeof link === "string" && link.length > 0)) {
-    throw new Error("provenance layer is required");
+  if (!input.artifacts || !["measured", "not-evaluated"].includes(input.artifacts.status)) throw new Error("artifacts layer is required");
+  if (input.artifacts.status === "measured") {
+    requiredDigest(input.artifacts.sha256, "artifacts digest");
+    if (!input.artifacts.golden || !["matched", "mismatched"].includes(input.artifacts.golden.status)) throw new Error("artifacts golden result is required");
+    requiredDigest(input.artifacts.golden.sha256, "artifacts golden digest");
+  }
+  if (!input.reproducibility || !["matched", "mismatched", "not-evaluated"].includes(input.reproducibility.status)) throw new Error("reproducibility layer is required");
+  if (input.reproducibility.status !== "not-evaluated") requiredDigest(input.reproducibility.diffSha256, "reproducibility diff digest");
+  if (!input.provenance || !["verified", "not-evaluated"].includes(input.provenance.status)) throw new Error("provenance layer is required");
+  if (input.provenance.status === "verified" && (!Array.isArray(input.provenance.links) || input.provenance.links.length === 0 || !input.provenance.links.every((link) => typeof link === "string" && link.length > 0))) {
+    throw new Error("verified provenance links are required");
+  }
+  if (input.verdict.status === "review-ready" && (input.artifacts.status !== "measured" || input.artifacts.golden.status !== "matched" || input.reproducibility.status !== "matched" || input.provenance.status !== "verified")) {
+    throw new Error("review-ready evidence requires measured artifacts, matched reproducibility, and verified provenance");
   }
 }
 

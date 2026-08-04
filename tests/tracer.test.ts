@@ -74,10 +74,15 @@ describe("promotion tracer", () => {
     const first = await runPromotionCandidate(candidate, options);
     const second = await runPromotionCandidate(candidate, options);
 
-    expect(first.status).toBe("review-ready");
+    expect(first.status).toBe("blocked");
+    expect(first.responsibleStage).toBe("certification-deferred");
     expect(second).toEqual(first);
     expect(first.candidateId).toBe(await canonicalToolchainId(parsePromotionManifest(candidate)));
     expect(await Bun.file(join(directory, `${first.evidenceSha256}.json`)).exists()).toBeTrue();
+    const evidence = await Bun.file(join(directory, `${first.evidenceSha256}.json`)).json() as { artifacts: { status: string }; reproducibility: { status: string }; provenance: { status: string } };
+    expect(evidence.artifacts.status).toBe("not-evaluated");
+    expect(evidence.reproducibility.status).toBe("not-evaluated");
+    expect(evidence.provenance.status).toBe("not-evaluated");
   });
 
   test.each([
@@ -98,7 +103,8 @@ describe("promotion tracer", () => {
     const stage = candidate.stages as Record<string, unknown>[];
     stage[0] = { ...stage[0], argv: [join(import.meta.dir, "fixtures", "fake-toolchain.ts"), "--mode=echo", "--literal", literal], expectedOutput: { outcome: "ok", literal } };
     const result = await runPromotionCandidate(candidate, { evidenceDirectory: await evidenceDirectory(), now: () => 1_000, runSealed: sealedTestRunner, runDenialProbes: sealedDenialTestRunner });
-    expect(result.status).toBe("review-ready");
+    expect(result.status).toBe("blocked");
+    expect(result.responsibleStage).toBe("certification-deferred");
     expect(await Bun.file(join(process.cwd(), "should-not-exist")).exists()).toBeFalse();
   });
 });

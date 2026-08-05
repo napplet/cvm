@@ -1514,7 +1514,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "authority:failed:scenario=unsupported",
+        "value": "security:generation:blocked:exports=1:violations=0:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1559,7 +1559,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "authority:failed:scenario=unsupported",
+        "value": "security:generation:blocked:exports=1:violations=1:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1604,7 +1604,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "authority:failed:scenario=unsupported",
+        "value": "security:generation:blocked:exports=1:violations=2:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1649,7 +1649,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "authority:failed:scenario=unsupported",
+        "value": "security:generation:blocked:exports=1:violations=0:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1694,7 +1694,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "authority:failed:scenario=unsupported",
+        "value": "security:generation:blocked:exports=1:violations=1:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1739,7 +1739,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "authority:failed:scenario=unsupported",
+        "value": "security:generation:blocked:exports=1:violations=2:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1784,7 +1784,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "authority:failed:scenario=unsupported",
+        "value": "security:generation:blocked:exports=1:violations=0:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1829,7 +1829,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "authority:failed:scenario=unsupported",
+        "value": "security:generation:blocked:exports=1:violations=1:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1874,7 +1874,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "authority:failed:scenario=unsupported",
+        "value": "security:generation:blocked:exports=1:violations=2:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1919,7 +1919,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "authority:failed:scenario=unsupported",
+        "value": "security:generation:blocked:exports=1:violations=0:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1964,7 +1964,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "authority:failed:scenario=unsupported",
+        "value": "security:generation:blocked:exports=1:violations=1:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -2009,7 +2009,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "authority:failed:scenario=unsupported",
+        "value": "security:generation:blocked:exports=1:violations=2:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -2054,7 +2054,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "authority:failed:scenario=unsupported",
+        "value": "security:generation:blocked:exports=1:violations=0:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,

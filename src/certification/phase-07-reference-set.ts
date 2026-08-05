@@ -116,7 +116,7 @@ async function observeResilience(caseValue: ReferenceCase): Promise<ReferenceObs
 
 async function observeSecurity(caseValue: ReferenceCase): Promise<ReferenceObservation> {
   const exporter = new InMemoryLifecycleExporter({ key: new Uint8Array(32).fill(7) });
-  const stage = caseValue.scenario.initialState === "empty" ? "validation" : "execution";
+  const stage = caseValue.scenario.initialState === "empty" ? "validation" : "generation";
   const raw = { version: "cvm.lifecycle.v1", stage, outcome: "blocked", correlationId: `reference:${caseValue.scenario.input.mode}`, monotonicMs: caseValue.scenario.input.ordinal };
   exporter.observe(raw);
   const violations = [...MODES.security].indexOf(caseValue.scenario.input.mode) % 3;

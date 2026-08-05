@@ -9,6 +9,7 @@ import { SessionActionResultSchema } from "../phase-04/metered-generation-servic
 import { SessionStatusQuerySchema, SessionStatusSchema } from "../phase-04/session-status";
 import { CapabilityReviewSchema, PreviewDescriptorSchema, SignedOwnerManifestEventSchema, SignedPublicationCommandSchema } from "../publication/contracts";
 import { validatedAvailablePromotedCliSourceContract, type AvailablePromotedCliSourceContract } from "../publication/napplet-cli-source-contract";
+import { AdmissionLifecycleContextSchema, type AdmissionLifecycleContext } from "../telemetry/contracts";
 import type { ContextVmInboundEnvelope, ContextVmTransportPort, ContextVmWireNotification, ContextVmWireResponse } from "./sdk-bridge";
 
 const SupportedPmiSchema = z.enum(["bitcoin-lightning-bolt11", "bitcoin-cashu-v4-direct"]);
@@ -116,6 +117,8 @@ export interface ContextVmFundingAdapterOptions {
   publicationSourceContract?: unknown;
   policyVersion?: string;
   protocolVersion?: string;
+  /** Monotonic clock for the trusted receipt-to-ready admission measurement. */
+  monotonicNow?: () => number;
 }
 
 type PaymentTags = Readonly<{
@@ -160,7 +163,8 @@ export class ContextVmFundingAdapter {
       if (envelope.rawEvent.id !== envelope.requestEventId) throw new Error("CONTEXTVM_CORRELATION_MISMATCH");
       const principal = PrincipalSchema.parse({ pubkey: envelope.verifiedClientPubkey });
       const request = envelope.request;
-      const response = await this.dispatch(principal.pubkey, envelope.requestEventId, envelope.rawEvent, request);
+      const lifecycle = await this.lifecycleFor(envelope.rawEvent.id, envelope.verifiedClientPubkey);
+      const response = await this.dispatch(principal.pubkey, envelope.requestEventId, envelope.rawEvent, request, lifecycle);
       await this.options.transport.sendResponse(principal.pubkey, response, envelope.requestEventId);
     } catch {
       if (!correlation) return;
@@ -172,7 +176,7 @@ export class ContextVmFundingAdapter {
     }
   }
 
-  private async dispatch(verifiedPubkey: string, requestEventId: string, rawEvent: z.infer<typeof EventSchema>, request: z.infer<typeof RequestSchema>): Promise<ContextVmWireResponse> {
+  private async dispatch(verifiedPubkey: string, requestEventId: string, rawEvent: z.infer<typeof EventSchema>, request: z.infer<typeof RequestSchema>, lifecycle?: AdmissionLifecycleContext): Promise<ContextVmWireResponse> {
     const { name, arguments: argumentsInput } = request.params;
     if (name === "start_session") {
       const args = StartSessionArgumentsSchema.parse(argumentsInput);
@@ -243,8 +247,8 @@ export class ContextVmFundingAdapter {
         principal: { pubkey: verifiedPubkey }, idempotencyKey: args.idempotencyKey,
         policyVersion: this.policyVersion, protocolVersion: this.protocolVersion,
         payload: { requestedCap: args.requestedCap, unit: args.unit },
-      });
-      const wireResult = freeze({ ...result, payment: { generationPriceWaivedForAdmission: true } });
+      }, lifecycle);
+      const wireResult = freeze({ ...(result.status === "refused" ? { status: "capacity_unavailable" as const, retryAfterSeconds: 5, admissionReference: result.intentReference, unit: "sat" as const } : result), payment: { generationPriceWaivedForAdmission: true } });
       await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({
         jsonrpc: "2.0", method: "notifications/funded_admission", params: wireResult,
       }), requestEventId);
@@ -282,6 +286,13 @@ export class ContextVmFundingAdapter {
       id: request.id,
       result: wireResult,
     });
+  }
+
+  private async lifecycleFor(eventId: string, verifiedPubkey: string): Promise<AdmissionLifecycleContext> {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${eventId}:${verifiedPubkey}`));
+    const correlationDigest = `sha256:${[...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+    const receiptMonotonicMs = Math.floor(this.options.monotonicNow?.() ?? performance.now());
+    return AdmissionLifecycleContextSchema.parse({ version: "admission-lifecycle-v1", receiptMonotonicMs, correlationDigest });
   }
 
   private async generationResponse(name: "start_session" | "revise_session", verifiedPubkey: string, requestEventId: string, id: string | number | null, result: z.infer<typeof SessionActionResultSchema>): Promise<ContextVmWireResponse> {

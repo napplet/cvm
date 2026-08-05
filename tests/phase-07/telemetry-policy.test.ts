@@ -11,6 +11,7 @@ import {
   OpenTelemetryLifecycleExporter,
   createLifecycleTelemetry,
 } from "../../src/telemetry/otel";
+import { LifecycleOutcomeSchema, LifecycleStageSchema } from "../../src/telemetry/contracts";
 
 const key = new Uint8Array(32).fill(7);
 const canaries = [
@@ -22,6 +23,11 @@ const canaries = [
 function observation(stage = LIFECYCLE_STAGES[0], outcome = LIFECYCLE_OUTCOMES[0]) {
   return { version: "cvm.lifecycle.v1", correlationId: "account/session/action", stage, outcome, monotonicMs: 42 };
 }
+
+test("uses the same closed lifecycle vocabulary at trusted coordinator and exporter boundaries", () => {
+  expect(LifecycleStageSchema.options).toEqual(LIFECYCLE_STAGES);
+  expect(LifecycleOutcomeSchema.options).toEqual(LIFECYCLE_OUTCOMES);
+});
 
 test("every finite lifecycle stage and outcome exports with protected correlation and no unknown attributes", async () => {
   const exporter = new InMemoryLifecycleExporter({ key });

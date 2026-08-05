@@ -11,8 +11,17 @@ export const LifecycleStageSchema = z.enum([
   "exact_session_ready",
   "capacity_refused",
   "reconciliation_pending",
+  "generation",
+  "ledger_settlement",
+  "checkpoint",
+  "resume",
+  "validation",
+  "preview",
+  "publication",
+  "reconciliation",
+  "promotion",
 ]);
-export const LifecycleOutcomeSchema = z.enum(["accepted", "capacity_unavailable", "reconciliation_pending"]);
+export const LifecycleOutcomeSchema = z.enum(["accepted", "capacity_unavailable", "reconciliation_pending", "succeeded", "failed", "blocked", "pending"]);
 
 /**
  * Created only by the ContextVM adapter after strict envelope correlation.

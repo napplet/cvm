@@ -4,6 +4,7 @@ import { LifecycleObservationSchema } from "./contracts";
 
 export const LIFECYCLE_STAGES = [
   "correlated_receipt", "capacity_intent_created", "capacity_reserve_started", "exact_session_ready", "capacity_refused",
+  "reconciliation_pending",
   "generation", "ledger_settlement", "checkpoint", "resume", "validation", "preview", "publication", "reconciliation", "promotion",
 ] as const;
 export const LIFECYCLE_OUTCOMES = ["accepted", "capacity_unavailable", "reconciliation_pending", "succeeded", "failed", "blocked", "pending"] as const;

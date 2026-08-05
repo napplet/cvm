@@ -1,79 +1,51 @@
 ---
 phase: 07-admission-slo-resilience-launch-safety
-fixed_at: 2026-08-05T17:32:24Z
+fixed_at: 2026-08-05T19:41:00Z
 review_path: .planning/phases/07-admission-slo-resilience-launch-safety/07-REVIEW.md
-iteration: 1
-findings_in_scope: 7
-fixed: 7
+iteration: 2
+findings_in_scope: 1
+fixed: 1
 skipped: 0
 status: all_fixed
 ---
 
 # Phase 07: Code Review Fix Report
 
-**Fixed at:** 2026-08-05T17:32:24Z
+**Fixed at:** 2026-08-05T19:41:00Z
 **Source review:** `.planning/phases/07-admission-slo-resilience-launch-safety/07-REVIEW.md`
-**Iteration:** 1
+**Iteration:** 2
 
 **Summary:**
 
-- Findings in scope: 7
-- Fixed: 7
+- Findings in scope: 1
+- Fixed: 1
 - Skipped: 0
 
 ## Fixed Issues
 
-### CR-01: Receipt-bound exact readiness is required
+### WR-01: Valid reference scenarios are not uniquely bound to their observed authority result
 
-**Commits:** `6bb36f4`, `12ab1a7`, `ef1a57d`
+**Files modified:** `src/certification/phase-07-reference-set.ts`, `tests/evals/phase-07-reference-set.test.ts`, `tests/fixtures/phase-07-reference-set.json`
+**Commit:** `1319651`
+**Applied fix:** The deterministic adapters now expose domain terminal decisions, ordered transitions, initial state, fault boundaries and restore outcomes, telemetry terminal/rejection facts, and host action/effect projections. No fixture ID, case ID, or scenario hash is part of a reference observation. The test exhaustively substitutes every distinct valid scenario pair within each category while retaining the original oracle; all substitutions fail.
 
-Available capacity requires an exact ready proof plus receipt lifecycle context; absence is compensated with no funded hold. All legacy accepting fixtures now pass the same explicit receipt context and provider-bound intent/lease proof. The Phase 07 evidence record was refreshed against the clean migration commit.
+## Evidence
 
-### CR-02: Release evidence has a closed inventory and immutable binding
-
-**Commit:** `2c51466`
-
-Promotion accepts only the fixed v1 claim inventory. Protected-live evidence is explicitly typed and bound to release ID, source revision, all immutable release inputs, and the candidate worker digest.
-
-### CR-03: Publication observers cannot affect original effects
-
-**Commit:** `1cf5685`
-
-Observer exceptions are contained. Claim, record, and reconciliation callbacks cannot interrupt sibling original operations; unknown effects still reconcile by their original operation ID.
-
-### CR-04: Collector smoke uses an immutable approved digest
-
-**Commit:** `2521f6b`
-
-The smoke now executes `otel/opentelemetry-collector@sha256:6ed874ea083d67a3085acfc75343f2ad11d9abe6006d7ea4a16e2dba9af14e49`. Root pin verification requires a matching passed smoke record; refreshed record: `6d124561d5b61ed453cc2bf1b8bc4cb39c1134da380c3c247a151655aaf6d93e`.
-
-### WR-01: Lifecycle vocabulary is closed across coordinator/exporter contracts
-
-**Commit:** `955a621`
-
-Coordinator and redaction/exporter contracts now use one finite stage/outcome set, including generation, settlement, continuity, validation, preview, publication, reconciliation, and promotion.
-
-### WR-02: Reference evaluation invokes deterministic project ports
-
-**Commit:** `2dbe099`
-
-Reference cases invoke admission and fault-harness ports with comparator-only oracles rather than deriving observations directly from fixture values.
-
-### WR-03: Evidence source revisions are clean immutable commits
-
-**Commits:** `6f40657`, `ef2dd82`, `4af8758`, `ef1a57d`
-
-Evidence writing resolves a clean `HEAD` commit and verifies it is a repository object. Forged source evidence was replaced with the current content-addressed deterministic record.
+**Commit:** `160e837`
+**Record:** `evidence/design/22c6cd2b8e821f9ee155c00c0547395abb22acc7c7775a864e10fb2a01c79c66.json`
+**Bound implementation revision:** `1319651cd0a1dfb71cf8eff0f7b17a7b73788591`
 
 ## Verification
 
-- Targeted migration tests passed: 64 tests across eight affected suites.
-- Full suite passed: `bun test` — 473 passing tests, 0 failures.
-- `bun run eval:phase07` passed: 64 deterministic cases, with promotion safely `blocked`.
-- `bun run verify:phase07-evidence` passed and wrote source-bound evidence `c757581d136c1bae472f6dbb5b58ea6a8e59c22a1deff771bfc7c70bee149b94` for source revision `12ab1a7f8dcc260653dd8f41e586d18512fe26e1`.
+- Focused Phase 07 reference tests: 10 passing tests, including 296 ordered valid cross-case substitutions.
+- `bun run eval:phase07`: passed all 64 cases; promotion verdict remained `blocked`.
+- `bun run verify:phase07-evidence -- --verify-existing`: passed.
+- Clean isolated evidence build: passed; subsequent dirty build correctly failed with `SOURCE_TREE_DIRTY`.
+- Full suite: `bun test` — 483 passing tests, 0 failures, 4,130 expectations.
+- TypeScript compiler was unavailable in the repository; targeted runtime coverage and source re-read completed instead.
 
 ---
 
-_Fixed: 2026-08-05T17:32:24Z_
+_Fixed: 2026-08-05T19:41:00Z_
 _Fixer: the agent (gsd-code-fixer)_
-_Iteration: 1_
+_Iteration: 2_

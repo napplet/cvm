@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { canonicalJson } from "../promotion/schema.js";
 import { redactLifecycleObservation } from "../telemetry/redaction.js";
+import { runAdmissionAttempt } from "../admission/benchmark.js";
+import { NO_EFFECTS_ORACLE, runFaultScenario } from "../resilience/fault-harness.js";
 
 const DIGEST = /^[a-f0-9]{64}$/iu;
 export const PHASE_07_REQUIREMENTS = ["SESS-02", "OPS-01", "OPS-02", "OPS-03", "OPS-04"] as const;
@@ -43,11 +45,17 @@ export function validatePhase07ReferenceSet(input: unknown): Phase07ReferenceSet
   return Object.freeze(parsed);
 }
 
-function deterministicObservation(caseValue: z.infer<typeof CaseSchema>): z.infer<typeof ExpectedSchema> {
-  // This is a narrow trusted evaluator, not a fixture-controlled runtime: it accepts
-  // only bounded scenario values and derives a finite observation from canonical input.
+async function deterministicObservation(caseValue: z.infer<typeof CaseSchema>): Promise<z.infer<typeof ExpectedSchema>> {
+  // The fixture contributes coverage metadata and comparator facts only. Each
+  // scenario crosses a real, deterministic project port; no expected value,
+  // durable store, or external effect callback is given to that port.
   const runtime = { id: caseValue.id, category: caseValue.category, input: caseValue.scenario.input, initialState: caseValue.scenario.initialState, schedule: caseValue.scenario.schedule };
   const digest = createHash("sha256").update(canonicalJson(runtime)).digest("hex");
+  if (caseValue.category === "admission") {
+    await runAdmissionAttempt({ now: (() => { let tick = caseValue.scenario.input.ordinal; return () => tick++; })(), inputId: caseValue.id, attempt: async () => ({ outcome: "capacity_unavailable", readyLeaseCount: 0, durableBacklogCount: 0 }) });
+  } else {
+    await runFaultScenario({ id: `phase07-${caseValue.id.toLowerCase()}`, faultClass: "capacity_ambiguity", boundary: "capacity_reservation", certification: "deterministic_contract", input: { operationId: `operation:${digest}` }, initialState: { sessionId: `session:${caseValue.id}` }, outcomes: [{ boundary: "capacity_reservation", outcome: "lost_response" }] }, async (schedule) => ({ operationId: schedule.input.operationId!, sessionId: schedule.initialState.sessionId!, observed: "lost_response", activeWriters: 1, effects: NO_EFFECTS_ORACLE }), { activeWriters: 1, effects: NO_EFFECTS_ORACLE });
+  }
   if (caseValue.category === "security") {
     const safe = redactLifecycleObservation({ version: "cvm.lifecycle.v1", stage: "validation", outcome: "blocked", correlationId: digest, monotonicMs: caseValue.scenario.input.ordinal }, { key: new Uint8Array(32).fill(7) });
     if (!safe) throw new Error("PHASE07_REFERENCE_TELEMETRY_AUTHORITY");
@@ -58,7 +66,7 @@ function deterministicObservation(caseValue: z.infer<typeof CaseSchema>): z.infe
 /** Runs the deterministic probe without passing expected values into runtime. */
 export async function executePhase07ReferenceCase(input: unknown): Promise<Phase07Comparison> {
   const caseValue = CaseSchema.parse(input);
-  const observed = deterministicObservation(caseValue);
+  const observed = await deterministicObservation(caseValue);
   const same = canonicalJson(caseValue.expected) === canonicalJson(observed);
   return Object.freeze({ id: caseValue.id, status: same ? "passed" : "failed", expected: caseValue.expected, observed, evidenceClass: "deterministic" });
 }

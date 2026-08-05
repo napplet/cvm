@@ -5,8 +5,8 @@ status: OPEN_THREATS
 asvs_level: 1
 block_on: high
 threats_total: 54
-threats_closed: 49
-threats_open: 3
+threats_closed: 51
+threats_open: 2
 audited: 2026-08-05
 ---
 
@@ -15,11 +15,11 @@ audited: 2026-08-05
 ## OPEN_THREATS
 
 **Phase:** 07 — Admission SLO, Resilience & Launch Safety  
-**Closed:** 49/54 | **Open:** 5/54  
+**Closed:** 51/54 | **Open:** 3/54
 **ASVS Level:** 1  
 **Blocking threshold:** high
 
-This is a mitigation audit of every declared `<threat_model>` row in Plans 07-00 through 07-10. It is not a claim that protected live certification has passed. The protected commands correctly remain fail-closed when their release evidence is absent.
+This is a mitigation audit of every declared `<threat_model>` row in Plans 07-00 through 07-10, re-audited after gap-closure Plans 07-14 through 07-16. It is not a claim that protected live certification has passed. Missing protected build/Cosign/topology observations correctly produce finite nonzero blocked results; that external absence is not itself counted as a local mitigation gap.
 
 ### Closed
 
@@ -30,7 +30,9 @@ This is a mitigation audit of every declared `<threat_model>` row in Plans 07-00
 | 00 | T-07-W0-03 | Information Disclosure | high | mitigate | Safe protected-preflight status boundary: `scripts/certify-phase-07.ts:11`; protected-output tests: `tests/phase-07/promotion-gate.test.ts:24`. |
 | 00 | T-07-W0-04 | Elevation of Privilege | high | mitigate | CLIs default to blocked without protected evidence: `scripts/certify-phase-07.ts:11`; `tests/phase-07/promotion-gate.test.ts:24`. |
 | 00 | T-07-SC | Tampering | high | mitigate | Wave-0 commits `44fcc20` and `53027e2` contain no package-root change; current roots are exact-pinned in `package.json:34`. |
+| 01 | T-07-ADM-01 | Spoofing/Tampering | high | mitigate | Canonical invocation is computed after verified-envelope correlation and before receipt issuance: `src/contextvm/adapter.ts:255`; protected correlation binds canonical hash, principal, event, and RPC ID: `src/contextvm/adapter.ts:318`; receipt correlation is verified before any capacity/funding effect: `src/funding/funded-admission.ts:79`. Ordering and zero-effect mismatch tests: `tests/phase-07/admission-slo.test.ts:206`, `tests/phase-07/admission-slo.test.ts:231`. |
 | 01 | T-07-ADM-02 | Tampering/DoS | high | mitigate | Durable coalesced claim and replay fence: `src/funding/funded-admission.ts:65`, `src/funding/funded-admission.ts:133`; concurrency coverage: `tests/phase-07/admission-slo.test.ts:170`. |
+| 01 | T-07-ADM-03 | Information Disclosure | medium | mitigate | Strict internal port result schema and one explicit finite projection for notification and RPC: `src/contextvm/adapter.ts:54`, `src/contextvm/adapter.ts:272`; both-channel malicious-field and outcome tests: `tests/phase-07/admission-slo.test.ts:250`, `tests/phase-07/admission-slo.test.ts:270`. |
 | 01 | T-07-ADM-04 | Elevation of Privilege | high | mitigate | Observation-only telemetry contract: `src/telemetry/contracts.ts:47`; exporter-failure effect oracle: `tests/phase-07/telemetry-policy.test.ts:65`. |
 | 01 | T-07-SC | Tampering | high | mitigate | Plan-01 implementation commits `f6ba0ab` and `489b148` change no dependency root; full focused suite passes. |
 | 02 | T-07-OTEL-01 | Spoofing/Tampering | high | mitigate | Exact version/integrity/repository verification: `scripts/verify-phase-07-otel-packages.ts:41`; mutation coverage: `tests/phase-07/otel-package-legitimacy.test.ts:99`. |
@@ -79,36 +81,35 @@ This is a mitigation audit of every declared `<threat_model>` row in Plans 07-00
 
 | Plan | Threat ID | Category | Severity | Mitigation Expected | Evidence / Files Searched |
 |---|---|---|---|---|---|
-| 01 | T-07-ADM-01 | Spoofing/Tampering | high | Stamp after signed-envelope correlation **and bind timestamp to the canonical invocation hash**. | **Absent.** Funded admission creates lifecycle context from only `eventId:verifiedPubkey` at `src/contextvm/adapter.ts:303`; it emits a receipt at `src/contextvm/adapter.ts:246` without calling `canonicalInvocation`, which is used only by other routes at `src/contextvm/adapter.ts:215`, `src/contextvm/adapter.ts:226`, and `src/contextvm/adapter.ts:278`. The focused test supplies a canonical hash but never asserts its use: `tests/phase-07/admission-slo.test.ts:57`. |
-| 09 | T-07-SC | Tampering | high | Exact source, lock, toolchain, and dataset digests plus two isolated builds/reproducibility verification. | **Absent.** Design evidence contains source revision and dataset only (`src/certification/evidence.ts:71`, `src/certification/evidence.ts:90`); its writer only proves a clean source tree (`scripts/verify-phase-07-evidence.ts:15`). The implementation explicitly defers `cross-environment-reproducibility` and `sbom-provenance-enforcement`: `src/verification/design-evidence.ts:8`. No isolated-build verifier is implemented in the Phase-07 evidence paths. |
-| 10 | T-07-SC | Tampering | high | Verify Cosign identity/predicate, SBOM contents, and cross-environment reproducibility in addition to pins/digests/frozen install. | **Absent.** Release parsing accepts SHA-256 strings for SBOM/provenance (`src/promotion/schema.ts:177`) but verifies neither document nor signature. Candidate evidence marks provenance and reproducibility `not-evaluated` (`src/promotion/run-promotion.ts:162`). Searches of `src/`, `scripts/`, and Phase-07 tests found no Cosign/Sigstore/in-toto verifier or reproducibility execution. |
+| 09 | T-07-SC | Tampering | high | Exact source, lock, toolchain, and dataset digests plus two isolated builds/reproducibility verification. | **Incomplete.** The two-record protected verifier exists and correctly requires distinct isolation/run IDs, matching artifact, lock, toolchain, and dataset (`src/certification/reproducibility.ts:11`, `src/certification/reproducibility.ts:50`). But its only source check is `sourceSha256.startsWith(releaseBinding.sourceRevision)` (`src/certification/reproducibility.ts:18`). The release binding contains no expected source SHA-256 (`src/certification/contracts.ts:31`) and the later revalidator never receives the candidate's `sourceSha256` (`src/certification/reproducibility.ts:70`, `src/certification/runner.ts:40`). A record can therefore satisfy the prefix test without an exact independently bound source digest. |
+| 10 | T-07-SC | Tampering | high | Verify Cosign identity/predicate, SBOM contents, and cross-environment reproducibility in addition to pins/digests/frozen install. | **Incomplete.** The pinned binary, closed argv, DSSE/in-toto parse, CycloneDX parse, and exact record revalidation exist (`src/certification/supply-chain.ts:53`, `src/certification/supply-chain.ts:89`, `src/promotion/run-promotion.ts:72`). However signer identity and issuer are taken solely from the supplied certification input and passed straight into the Cosign argv (`src/certification/supply-chain.ts:22`, `src/certification/supply-chain.ts:54`); neither the release manifest nor an independent policy/profile supplies an expected signer/issuer to compare. A valid attestation from an attacker-selected identity can therefore be verified against that same attacker-selected identity. |
 
 ### Open (non-blocking — severity below high threshold)
 
 | Plan | Threat ID | Category | Severity | Mitigation Expected | Evidence / Files Searched |
 |---|---|---|---|---|---|
-| 00 | T-07-W0-05 | Denial of Service | low | Accepted-risk entry for the bounded Wave-0 test-discovery risk. | **Absent.** No prior `07-SECURITY.md` or accepted-risk log exists for this phase. The row is not an authorized accepted risk merely because its plan says `accept`. |
-| 01 | T-07-ADM-03 | Information Disclosure | medium | Strict owner-safe finite result schema at the ContextVM funded-admission boundary. | **Absent.** The adapter spreads the unvalidated admission-port result into the public wire response at `src/contextvm/adapter.ts:262`; only refused results are manually projected. No output schema/canary test was found in `src/contextvm/adapter.ts` or `tests/phase-07/admission-slo.test.ts`. |
+| 00 | T-07-W0-05 | Denial of Service | low | Authorized accepted-risk decision for the bounded Wave-0 test-discovery risk. | **Pending, not accepted.** `07-RISKS.md` explicitly records `pending_owner_acceptance`, scope, review trigger, and non-waiver limits. It correctly creates no risk authority: `.planning/phases/07-admission-slo-resilience-launch-safety/07-RISKS.md:3`. |
 
 *Only blocking-open threats count toward `threats_open` in the SECURITY frontmatter gate.*
 
 ### Unregistered Flags
 
-None. `## Threat Flags` was absent from every Phase-07 `*-SUMMARY.md` file.
+None. `## Threat Flags` was absent from every Phase-07 `*-SUMMARY.md` file, including Plans 07-14 through 07-16.
 
 ### Audit Commands
 
-- `bun test tests/phase-07 tests/evals/phase-07-reference-set.test.ts --timeout 10000` — passed: 69 tests, 0 failures, 2,056 assertions.
+- `bun test tests/phase-07/admission-slo.test.ts tests/phase-07/reproducibility.test.ts tests/phase-07/supply-chain.test.ts tests/phase-07/certification-runner.test.ts tests/phase-07/promotion-gate.test.ts --timeout 10000` — passed: 34 tests, 0 failures, 138 assertions.
+- `bun test --timeout 10000` — passed: 506 tests, 0 failures, 4,237 assertions.
 - `bun run scripts/verify-phase-07-otel-packages.ts -- --require-approved` — passed.
 - `bun run scripts/verify-phase-07-otel-packages.ts -- --verify-root-pins` — passed.
-- `PHASE07_CERTIFICATION_EVIDENCE_DIRECTORY=<empty-temp-dir> bun run certify:phase07 -- --profile=release --preflight-only` — correctly blocked/nonzero without protected evidence.
+- `bun run scripts/verify-phase-07-reproducibility.ts` and `bun run scripts/verify-phase-07-supply-chain.ts` — correctly blocked/nonzero without protected configuration.
+- `bun run certify:phase07 -- --profile=release --preflight-only` — correctly blocked/nonzero without protected evidence.
 - `bun run candidate:verify -- --release-evidence evidence/design/phase-07.json` — correctly blocked/nonzero for invalid release input.
 
 ## Required Remediation
 
-1. Bind admission lifecycle correlation and receipt timing to the verified `canonicalInvocation(...).invocationHash`, and add a regression test that fails if funded admission does not invoke it.
-2. Add the missing reproducibility/provenance gates: lock/toolchain evidence, two isolated builds, and release-time verification of signed provenance and SBOM contents (Cosign identity/predicate as declared).
-3. Replace the funded-admission result spread with an exact owner-safe response schema and canary serialization test.
-4. Obtain and record an explicit owner acceptance for T-07-W0-05, or change its threat disposition through the planning process.
+1. Add an immutable expected source SHA-256 to the release binding, require every protected build record to equal it, and revalidate it at both protected-runner and sole-evaluator boundaries. Replace the prefix comparison; add a collision/prefix mutation test.
+2. Place the expected Cosign signer identity and issuer in an independently trusted release policy/profile binding, compare them before invocation and during record revalidation, and test a valid-but-unapproved signing identity/issuer as a blocking failure.
+3. Obtain and record an explicit owner acceptance for T-07-W0-05, or change its threat disposition through the planning process.
 
-**threats_open:** 3
+**threats_open:** 2

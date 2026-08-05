@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 6
+open_count: 8
 waived_count: 0
 fixed_count: 0
-total_count: 6
-last_updated: 2026-08-04T11:25:33.387Z
+total_count: 8
+last_updated: 2026-08-05T01:22:59.862Z
 ---
 
 # Broken Windows Ledger
@@ -21,6 +21,8 @@ last_updated: 2026-08-04T11:25:33.387Z
 | 4 | 02 | deviation | src/phase-02/contracts.ts |  | Completed named strict shared-contract exports required by the Phase 2 integration seam. | open |  | 2026-08-04T10:44:56.898Z |  |
 | 5 | 02 | deviation | src/persistence/session-store.ts |  | Replay-before-effect lookup added so exact retries cannot repeat worker or gateway effects | open |  | 2026-08-04T11:25:33.325Z |  |
 | 6 | 02 | deviation | src/phase-02/trusted-core.ts |  | Per-session serialization added so competing actions cannot repeat scoped worker effects | open |  | 2026-08-04T11:25:33.387Z |  |
+| 7 | 05 | deviation | tests/phase-05/checkpoint-envelope.test.ts |  | Corrected checkpoint envelope test setup helper shadowing. | open |  | 2026-08-05T01:22:59.800Z |  |
+| 8 | 05 | deviation | src/continuity/checkpoint-envelope.ts |  | Added strict Web Crypto BufferSource typing compatibility. | open |  | 2026-08-05T01:22:59.862Z |  |
 
 ````json
 [
@@ -94,6 +96,30 @@ last_updated: 2026-08-04T11:25:33.387Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-04T11:25:33.387Z",
+    "resolved_at": null
+  },
+  {
+    "id": 7,
+    "kind": "deviation",
+    "phase": "05",
+    "file": "tests/phase-05/checkpoint-envelope.test.ts",
+    "line": null,
+    "description": "Corrected checkpoint envelope test setup helper shadowing.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-05T01:22:59.800Z",
+    "resolved_at": null
+  },
+  {
+    "id": 8,
+    "kind": "deviation",
+    "phase": "05",
+    "file": "src/continuity/checkpoint-envelope.ts",
+    "line": null,
+    "description": "Added strict Web Crypto BufferSource typing compatibility.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-05T01:22:59.862Z",
     "resolved_at": null
   }
 ]

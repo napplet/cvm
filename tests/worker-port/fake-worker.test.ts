@@ -76,6 +76,31 @@ describe("DeterministicFakeWorker", () => {
     }
   });
 
+  test("exports, restores, and terminates only under the exact coordinator lifecycle lease", async () => {
+    const { request, gateway, workspace } = setup("session-lifecycle");
+    const lifecycle = {
+      accountId: "account-lifecycle", sessionId: request.sessionId, actionId: request.actionId,
+      expectedVersion: request.expectedVersion, policyVersion: request.policyVersion, capabilityGrant: request.capabilityGrant,
+      workspaceId: request.workspaceId, checkpointId: `${request.actionId}:checkpoint:2`, pauseGeneration: 2,
+      actionVersion: 4, workspaceLineage: "workspace-lineage-1", leaseToken: "lease-old", resumeClaim: "claim-lifecycle",
+    };
+    const worker = new DeterministicFakeWorker({
+      gateway, workspace, continuation: lifecycle,
+      script: [{ kind: "write", path: "src/App.tsx", content: "export {};" }, { kind: "checkpoint", archive: "archive", inventory: ["src/App.tsx"] }],
+    });
+    await worker.run(request, new AbortController().signal);
+
+    expect(await worker.exportCheckpoint(lifecycle)).toMatchObject({ status: "exported", code: "WORKER_CHECKPOINT_EXPORTED", proposal: { checkpointId: lifecycle.checkpointId } });
+    expect(await worker.exportCheckpoint({ ...lifecycle, leaseToken: "lease-foreign" })).toEqual({ status: "denied", code: "WORKER_CONTINUATION_DENIED" });
+
+    const restore = { ...lifecycle, leaseToken: "lease-new", resumeClaim: lifecycle.resumeClaim, archive: new TextEncoder().encode("authenticated archive"), archiveSha256: "a".repeat(64) };
+    expect(await worker.restoreCheckpoint(restore)).toEqual({ status: "restored", code: "WORKER_CHECKPOINT_RESTORED", workspaceId: request.workspaceId, workspaceLineage: lifecycle.workspaceLineage });
+    expect(await worker.restoreCheckpoint(restore)).toEqual({ status: "restored", code: "WORKER_CHECKPOINT_RESTORED", workspaceId: request.workspaceId, workspaceLineage: lifecycle.workspaceLineage });
+    expect(await worker.terminateCheckpoint({ ...lifecycle, leaseToken: "lease-old" })).toEqual({ status: "denied", code: "WORKER_CONTINUATION_DENIED" });
+    expect(await worker.terminateCheckpoint({ ...lifecycle, leaseToken: "lease-new" })).toEqual({ status: "terminated", code: "WORKER_LEASE_TERMINATED" });
+    expect(await worker.terminateCheckpoint({ ...lifecycle, leaseToken: "lease-new" })).toEqual({ status: "terminated", code: "WORKER_LEASE_TERMINATED" });
+  });
+
   test("keeps concurrent adjacent sessions and equal turn scripts isolated", async () => {
     const left = setup("session-a");
     const right = setup("session-a-1");

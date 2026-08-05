@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
 import {
+  CheckpointExportRequestSchema,
+  CheckpointRestoreRequestSchema,
+  CheckpointTerminationRequestSchema,
   CheckpointProposalSchema,
   ToolRequestSchema,
   WorkerEventSchema,
@@ -35,4 +38,16 @@ test("canonical WorkerPort schemas are strict and exclude durable authority", ()
   expect(CheckpointProposalSchema.safeParse({ ...binding, checkpointId: "checkpoint-a", formatVersion: "portable-checkpoint-v1", inventory: ["../secret"], archiveBase64: "YQ==", archiveSha256: "a".repeat(64), evidenceSha256: "b".repeat(64), inventorySha256: "c".repeat(64) }).success).toBeFalse();
   const port: WorkerPort = { async run() { return { status: "unavailable", code: "WORKER_UNAVAILABLE" }; } };
   expect(port).toBeDefined();
+});
+
+test("continuation lifecycle contracts are lease-bound and exclude coordinator authority", () => {
+  const lease = {
+    accountId: "account-a", ...binding, checkpointId: "checkpoint-a", pauseGeneration: 2,
+    actionVersion: 3, workspaceLineage: "workspace-lineage-a", leaseToken: "lease-a",
+  };
+  expect(CheckpointExportRequestSchema.safeParse(lease).success).toBeTrue();
+  expect(CheckpointRestoreRequestSchema.safeParse({ ...lease, leaseToken: "lease-b", resumeClaim: "claim-a", archive: new Uint8Array([1]), archiveSha256: "a".repeat(64) }).success).toBeTrue();
+  expect(CheckpointTerminationRequestSchema.safeParse(lease).success).toBeTrue();
+  expect(CheckpointExportRequestSchema.safeParse({ ...lease, balance: "100", keyReference: "key", compatibility: "worker-choice" }).success).toBeFalse();
+  expect(CheckpointRestoreRequestSchema.safeParse({ ...lease, resumeClaim: "claim-a", archive: new Uint8Array([1]), archiveSha256: "a".repeat(64), objectCredential: "secret" }).success).toBeFalse();
 });

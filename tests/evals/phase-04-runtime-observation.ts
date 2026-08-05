@@ -43,10 +43,12 @@ export function aggregateObservedEffects(comparisons: readonly Phase04CaseCompar
 }
 
 /** Partial during tracer work: unmatched/non-observed cases fail closed. */
-export async function executePhase04ReferenceGate(value: unknown) {
+export async function executePhase04ReferenceGate(value: unknown, options: Readonly<{ runChildAssertions?: boolean }> = {}) {
   const cases = z.object({ cases: z.array(z.object({ id: z.string(), boundedInput: z.record(z.string(), z.unknown()), initialState: z.record(z.string(), z.unknown()), schedule: z.array(z.string()), expected: z.unknown(), execution: z.object({ file: z.string(), testName: z.string() }) })) }).parse(value).cases;
   const comparisons = await Promise.all(cases.map(async (item) => comparePhase04Case(item.id, item.expected, await observePhase04Case(item))));
-  const childFailures = cases.filter((item) => Bun.spawnSync(["bun", "test", item.execution.file, "--test-name-pattern", item.execution.testName], { cwd: process.cwd(), env: { ...process.env, PHASE_04_REFERENCE_GATE: "1" }, stdout: "pipe", stderr: "pipe" }).exitCode !== 0).map((item) => item.id);
+  const childFailures = options.runChildAssertions === false
+    ? []
+    : cases.filter((item) => Bun.spawnSync(["bun", "test", item.execution.file, "--test-name-pattern", item.execution.testName], { cwd: process.cwd(), env: { ...process.env, PHASE_04_REFERENCE_GATE: "1" }, stdout: "pipe", stderr: "pipe" }).exitCode !== 0).map((item) => item.id);
   const passed = childFailures.length === 0 && comparisons.length === cases.length && comparisons.every((comparison) => comparison.status === "passed");
   return Object.freeze({ verdict: passed ? "passed" as const : "blocked" as const, comparisons: Object.freeze(comparisons), childFailures: Object.freeze(childFailures), aggregateEffects: passed ? aggregateObservedEffects(comparisons) : undefined });
 }

@@ -27,7 +27,7 @@ export async function runPhase04DesignGate(options: Readonly<{ fixturePath?: str
   const pointerPath = options.pointerPath ?? "evidence/design/phase-04.json";
   if (options.runSuites !== false) run(["tests/billing/price-card.test.ts", "tests/billing/operation-finalization.test.ts", "tests/billing/line-items.test.ts", "tests/model/reconciliation.test.ts", "tests/phase-04/tracer.test.ts", "tests/phase-04/revision.test.ts", "tests/phase-04/repair.test.ts", "tests/phase-04/artifact-outcome.test.ts", "tests/phase-04/session-status.test.ts", "tests/contextvm/adapter.test.ts"]);
   const fixture = JSON.parse(await readFile(fixturePath, "utf8")) as { cases: readonly { id: string; requirements: readonly string[] }[] };
-  const gate = await executePhase04ReferenceGate(fixture);
+  const gate = await executePhase04ReferenceGate(fixture, { runChildAssertions: options.runSuites !== false });
   if (gate.verdict !== "passed") throw new Error(`Phase 04 runtime reference gate blocked: ${gate.comparisons.filter((item) => item.status !== "passed").map((item) => `${item.id}:${item.mismatches.join(",")}`).join("; ") || gate.childFailures.join(",")}`);
   const checks = await Promise.all((Object.keys(checkPaths) as (keyof typeof checkPaths)[]).map(async (id) => ({ id, severity: id === "reference-set" ? "critical" as const : "high" as const, status: "passed" as const, evidenceSha256: await digestPaths(checkPaths[id]) }))) as readonly Phase04Check[];
   const input: Phase04DesignInput = {

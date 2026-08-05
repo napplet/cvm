@@ -91,7 +91,7 @@ export async function validatePhase04DesignEvidence(evidence: Phase04DesignEvide
   const { evidenceSha256, version: _version, certificationProfile: _profile, verdict: _verdict, offlineVerdict: _offline, deferrals: _deferrals, caseResults: _caseResults, aggregateEffects: _aggregateEffects, caseComparisons, ...input } = evidence;
   const runtimeInput = { ...input, caseComparisons: caseComparisons.map(({ id, expected, observed }) => ({ id, expected, observed })) };
   const evaluated = await evaluatePhase04Design(runtimeInput);
-  if (evaluated.evidence.evidenceSha256 !== evidenceSha256 || evaluated.evidence.verdict !== evidence.verdict || evaluated.evidence.offlineVerdict !== evidence.offlineVerdict) throw new Error("Phase 04 design evidence deterministic proof is invalid");
+  if (evaluated.evidence.evidenceSha256 !== evidenceSha256 || canonicalJson(evaluated.evidence) !== canonicalJson(evidence)) throw new Error("Phase 04 design evidence deterministic proof is invalid");
 }
 
 /** Writes a canonical content-addressed record once, or verifies identical bytes when it already exists. */

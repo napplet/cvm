@@ -86,7 +86,7 @@ describe("FundedAdmissionService", () => {
       observe: async () => ({ status: "unknown" as const }),
       release: async () => undefined,
     };
-    const admission = new FundedAdmissionService({ funding, store, capacity });
+    const admission = new FundedAdmissionService({ funding, store, capacity, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
     const accepted = await admission.admit({ principal, idempotencyKey: "funded-admission", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "500", unit: "sat" } });
     expect(accepted).toMatchObject({ status: "accepted", approvedCap: "300", heldAmount: "300", reference: "capacity:one" });
     const budget = await admission.authorizeActionBudget({ principal, admissionReference: "capacity:one", idempotencyKey: "action-one", maximum: "200", unit: "sat" });
@@ -108,7 +108,7 @@ describe("FundedAdmissionService", () => {
       },
       release: async () => undefined,
     };
-    const admission = new FundedAdmissionService({ funding, store, capacity });
+    const admission = new FundedAdmissionService({ funding, store, capacity, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
     const request = { principal, idempotencyKey: "ambiguous-admission", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "200", unit: "sat" as const } };
     expect(await admission.admit(request)).toMatchObject({ status: "reconciliation_pending" });
     expect(store.activeHolds).toHaveLength(0);

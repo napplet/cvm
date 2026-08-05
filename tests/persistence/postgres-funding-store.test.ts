@@ -78,7 +78,7 @@ describe("PostgresFundingStore", () => {
     expect(await new FundedAdmissionService({ funding: new FundingService(firstStore), store: firstStore, capacity: ambiguousCapacity }).admit(command)).toMatchObject({ status: "reconciliation_pending" });
     const resumedStore = new PostgresFundingStore(executor);
     const resumedCapacity = { reserveNow: async () => { reserveCount += 1; return { status: "available" as const, reference: "wrong", expiresAt: "2026-08-05T00:00:00.000Z" }; }, observe: async () => ({ status: "available" as const, reference: "capacity:durable", expiresAt: "2026-08-05T00:00:00.000Z" }), release: async () => undefined };
-    const resumed = new FundedAdmissionService({ funding: new FundingService(resumedStore), store: resumedStore, capacity: resumedCapacity });
+    const resumed = new FundedAdmissionService({ funding: new FundingService(resumedStore), store: resumedStore, capacity: resumedCapacity, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
     expect(await resumed.admit(command)).toMatchObject({ status: "accepted", heldAmount: "80" });
     expect(reserveCount).toBe(1);
     const budget = await resumed.authorizeActionBudget({ principal, admissionReference: "capacity:durable", idempotencyKey: "durable-action", maximum: "40", unit: "sat" });

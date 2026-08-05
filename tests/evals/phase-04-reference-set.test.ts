@@ -104,7 +104,7 @@ describe("Phase 04 deterministic reference set", () => {
       const value = target.expected[field as keyof typeof target.expected];
       (target.expected as Record<string, unknown>)[field] = typeof value === "number" ? value + 1 : `${value}:wrong`;
       target.expected.oracle = oracleFor(target.expected);
-      const gate = await executePhase04ReferenceGate(altered);
+      const gate = await executePhase04ReferenceGate(altered, { runChildAssertions: false });
       expect(gate.verdict, field).toBe("blocked");
       expect(gate.comparisons.find((comparison) => comparison.id === target.id)?.mismatches).toContain(field);
     }
@@ -138,7 +138,7 @@ describe("Phase 04 deterministic reference set", () => {
     fundedStart.expected.providerDispatches += 1;
     fundedStart.expected.oracle = oracleFor(fundedStart.expected);
 
-    const gate = await executePhase04ReferenceGate(altered);
+    const gate = await executePhase04ReferenceGate(altered, { runChildAssertions: false });
     expect(gate.verdict).toBe("blocked");
     expect(gate.comparisons).toContainEqual(expect.objectContaining({ id: "P04-ACCT-03", status: "failed", mismatches: expect.arrayContaining(["providerDispatches"]) }));
     expect(gate.aggregateEffects).toBeUndefined();
@@ -160,7 +160,7 @@ describe("Phase 04 deterministic reference set", () => {
       (target.expected as Record<string, unknown>)[field] = typeof value === "number" ? value + 1 : `${value}:wrong`;
       target.expected.oracle = oracleFor(target.expected);
     }
-    const gate = await executePhase04ReferenceGate(altered);
+    const gate = await executePhase04ReferenceGate(altered, { runChildAssertions: false });
     expect(gate.verdict).toBe("blocked");
     expect(gate.aggregateEffects).toBeUndefined();
     for (const [id, field] of changes) expect(gate.comparisons.find((item) => item.id === id)?.mismatches).toContain(field);

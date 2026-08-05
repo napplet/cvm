@@ -52,7 +52,7 @@ describe("same-lineage revisions", () => {
     const store = new TransactionalMemoryFundingStore();
     const funding = new FundingService(store);
     await funding.execute({ principal, kind: "credit_settlement", idempotencyKey: "claim-credit", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { settlement: { topUpId: "claim-topup", rail: "lightning", unit: "sat", amount: "10000", externalReference: "claim-external", settlementReference: "claim-settlement", verifiedAt: "2026-08-04T00:00:00.000Z" } } });
-    const admissions = new FundedAdmissionService({ funding, store, capacity: { reserveNow: async () => ({ status: "available" as const, reference: "claim-capacity", expiresAt: "2026-08-05T00:00:00.000Z" }), observe: async () => ({ status: "available" as const, reference: "claim-capacity", expiresAt: "2026-08-05T00:00:00.000Z" }), release: async () => {} } });
+    const admissions = new FundedAdmissionService({ funding, store, capacity: { reserveNow: async () => ({ status: "available" as const, reference: "claim-capacity", expiresAt: "2026-08-05T00:00:00.000Z" }), observe: async () => ({ status: "available" as const, reference: "claim-capacity", expiresAt: "2026-08-05T00:00:00.000Z" }), release: async () => {} }, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
     const admission = await admissions.admit({ principal, idempotencyKey: "claim-admission", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "6500", unit: "sat" } });
     if (admission.status !== "accepted") throw new Error("expected admission");
     let dispatches = 0;

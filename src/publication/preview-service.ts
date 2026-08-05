@@ -10,7 +10,7 @@ function parseHostGrant(value: unknown) {
 }
 
 export class PreviewService {
-  constructor(private readonly dependencies: Readonly<{ sealedArtifacts: SealedArtifactPort; host: PreviewHostPort; clock: Phase06Clock; capabilityReview: (artifact: unknown, runtimeVariant: string) => CapabilityReview }>) {}
+  constructor(private readonly dependencies: Readonly<{ sealedArtifacts: SealedArtifactPort; host: PreviewHostPort; clock: Phase06Clock; capabilityReview: (artifact: unknown, runtimeVariant: string) => CapabilityReview | Promise<CapabilityReview> }>) {}
 
   async previewVerifiedArtifact(input: Readonly<{ accountId: string; sessionId: string; artifactId: string; runtimeVariant: string }>): Promise<PreviewDescriptor | SafePreviewDenial> {
     let artifact: ReturnType<typeof SealedArtifactIdentitySchema.parse>;
@@ -21,7 +21,7 @@ export class PreviewService {
     }
     let review: CapabilityReview;
     try {
-      review = CapabilityReviewSchema.parse(this.dependencies.capabilityReview(artifact, input.runtimeVariant));
+      review = CapabilityReviewSchema.parse(await this.dependencies.capabilityReview(artifact, input.runtimeVariant));
     } catch {
       return safePreviewDenial();
     }

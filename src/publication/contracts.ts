@@ -4,6 +4,16 @@ const sha256 = z.string().regex(/^[a-f0-9]{64}$/i, "SHA256_REQUIRED");
 const identifier = z.string().min(1).max(256);
 const publicKey = z.string().regex(/^[a-f0-9]{64}$/i, "PUBLIC_KEY_REQUIRED");
 
+export const VerifiedManifestCapabilitySchema = z.object({
+  name: identifier,
+  requirement: z.enum(["required", "optional"]),
+  purpose: z.string().min(1).max(512),
+  consent: z.enum(["required", "optional"]),
+  compatibleRuntimes: z.array(identifier).max(32),
+  available: z.boolean(),
+}).strict();
+export type VerifiedManifestCapability = Readonly<z.infer<typeof VerifiedManifestCapabilitySchema>>;
+
 export const SealedArtifactIdentitySchema = z.object({
   accountId: identifier,
   sessionId: identifier,
@@ -18,6 +28,7 @@ export const SealedArtifactIdentitySchema = z.object({
   normalizedDTag: z.string().min(1).max(128).regex(/^[a-z0-9][a-z0-9-]*$/),
   requiredCapabilities: z.array(identifier).max(64),
   optionalCapabilities: z.array(identifier).max(64),
+  manifestCapabilities: z.array(VerifiedManifestCapabilitySchema).max(64).optional(),
   policyIdentity: identifier,
   toolchainIdentity: identifier,
   runtimeCompatibilityIdentity: identifier,
@@ -26,8 +37,11 @@ export type SealedArtifactIdentity = Readonly<z.infer<typeof SealedArtifactIdent
 
 export const ManifestCapabilitySchema = z.object({
   capability: identifier,
+  name: identifier.optional(),
+  requirement: z.enum(["required", "optional"]).optional(),
   purpose: z.string().min(1).max(512),
   consent: z.enum(["required", "optional"]),
+  compatibleRuntimes: z.array(identifier).max(32).optional(),
   available: z.boolean(),
 }).strict();
 export type ManifestCapability = Readonly<z.infer<typeof ManifestCapabilitySchema>>;
@@ -41,6 +55,10 @@ export const CapabilityReviewSchema = z.object({
   optional: z.array(ManifestCapabilitySchema).max(64),
   compatibility: z.enum(["compatible", "degraded", "incompatible"]),
   capabilityDigest: sha256,
+  manifestSha256: sha256.optional(),
+  policyIdentity: identifier.optional(),
+  toolchainIdentity: identifier.optional(),
+  runtimeCompatibilityIdentity: identifier.optional(),
 }).strict();
 export type CapabilityReview = Readonly<z.infer<typeof CapabilityReviewSchema>>;
 

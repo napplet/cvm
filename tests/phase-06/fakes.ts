@@ -21,6 +21,10 @@ export const verifiedPhase06Artifact = Object.freeze({
   normalizedDTag: "phase-06-napplet",
   requiredCapabilities: ["notes.read"],
   optionalCapabilities: ["notifications"],
+  manifestCapabilities: [
+    { name: "notes.read", requirement: "required", purpose: "Read selected notes", consent: "required", compatibleRuntimes: ["napplet-host/v1"], available: true },
+    { name: "notifications", requirement: "optional", purpose: "Show completion notices", consent: "optional", compatibleRuntimes: [], available: true },
+  ],
   policyIdentity: "policy:phase-06",
   toolchainIdentity: "toolchain:promoted",
   runtimeCompatibilityIdentity: "runtime:napplet-host-v1",

@@ -332,8 +332,9 @@ if (import.meta.main) {
   } else {
     try {
       if (parsed.mode === "release-evidence") {
-        console.log(JSON.stringify(await verifyReleaseEvidence(parsed.path)));
-        process.exitCode = 1;
+        const decision = await verifyReleaseEvidence(parsed.path);
+        console.log(JSON.stringify(decision));
+        process.exitCode = decision.status === "promoted" ? 0 : 1;
       } else {
         const candidate = await verifyCandidateReviewReadiness(await Bun.file(parsed.path).json());
         console.log(JSON.stringify(candidate));

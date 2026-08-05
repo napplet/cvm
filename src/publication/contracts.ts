@@ -78,8 +78,14 @@ export const PublicationIntentSchema = z.object({
   sessionId: identifier,
   ownerPubkey: publicKey,
   artifact: SealedArtifactIdentitySchema,
+  artifactSha256: sha256,
+  manifestSha256: sha256,
+  aggregateSha256: sha256,
+  dTag: z.string().min(1).max(128).regex(/^[a-z0-9][a-z0-9-]*$/),
   capabilityDigest: sha256,
   runtimeVariant: identifier,
+  policyVersion: identifier,
+  toolchainIdentity: identifier,
   purpose: z.string().min(1).max(512),
   consent: z.literal("approved"),
   idempotencyKey: identifier,
@@ -93,12 +99,10 @@ export type PublicationIntent = Readonly<z.infer<typeof PublicationIntentSchema>
 
 export const OwnerManifestTemplateSchema = z.object({
   kind: z.literal(35129),
-  ownerPubkey: publicKey,
-  normalizedDTag: z.string().min(1).max(128),
-  aggregateSha256: sha256,
-  capabilityDigest: sha256,
-  intentId: identifier,
-  expiresAtMs: z.number().int().positive(),
+  pubkey: publicKey,
+  created_at: z.number().int().nonnegative(),
+  tags: z.array(z.array(z.string().max(4096)).min(1).max(16)).max(128),
+  content: z.string().max(64_000),
   digest: sha256,
 }).strict();
 export type OwnerManifestTemplate = Readonly<z.infer<typeof OwnerManifestTemplateSchema>>;

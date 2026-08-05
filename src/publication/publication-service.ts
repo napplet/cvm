@@ -1,23 +1,23 @@
-import { PublicationIntentSchema, PublicationResultSchema, SignedOwnerManifestEventSchema, type AttestationPort, type CapabilityReview, type NappletDeploymentPort, type OwnerEventVerifierPort, type Phase06Clock, type PublicationIntent, type PublicationObservation, type PublicationResult, type PublicationStatus, type SealedArtifactIdentity } from "./contracts.js";
+import { PublicationResultSchema, SignedOwnerManifestEventSchema, type AttestationPort, type CapabilityReview, type NappletDeploymentPort, type OwnerEventVerifierPort, type Phase06Clock, type PublicationIntent, type PublicationObservation, type PublicationResult, type PublicationStatus, type SealedArtifactIdentity } from "./contracts.js";
 import type { PublicationStore } from "../persistence/publication-store.js";
-import { createHash } from "node:crypto";
+import { createPublicationIntent, isPublicationIntentExpired } from "./publication-intent.js";
 
-const digest = (value: string): string => createHash("sha256").update(value, "utf8").digest("hex");
 const operation = (kind: "deploy" | "owner_manifest" | "attestation", intentId: string) => `${kind}:${intentId}`;
 
 export class PublicationService {
   constructor(private readonly dependencies: Readonly<{ store: PublicationStore; verifier: OwnerEventVerifierPort; deployment: NappletDeploymentPort; attestation: AttestationPort; clock: Phase06Clock }>) {}
 
-  async createIntent(input: Readonly<{ accountId: string; sessionId: string; artifact: SealedArtifactIdentity; review: CapabilityReview; ownerPubkey: string; idempotencyKey: string; fingerprint: string; purpose: string; consent: "approved"; runtimeVariant: string }>): Promise<PublicationIntent> {
-    if (input.artifact.accountId !== input.accountId || input.artifact.sessionId !== input.sessionId || input.review.artifactId !== input.artifact.artifactId || input.review.aggregateSha256 !== input.artifact.aggregateSha256 || input.review.normalizedDTag !== input.artifact.normalizedDTag || input.review.compatibility === "incompatible") throw new Error("PUBLICATION_ARTIFACT_BINDING_INVALID");
-    const createdAtMs = this.dependencies.clock.nowMs(); const intentId = `intent:${input.idempotencyKey}`;
-    const intent = PublicationIntentSchema.parse({ intentId, accountId: input.accountId, sessionId: input.sessionId, ownerPubkey: input.ownerPubkey, artifact: input.artifact, capabilityDigest: input.review.capabilityDigest, runtimeVariant: input.runtimeVariant, purpose: input.purpose, consent: input.consent, idempotencyKey: input.idempotencyKey, fingerprint: input.fingerprint, manifestTemplateDigest: digest(`template:${intentId}:${input.artifact.aggregateSha256}`), createdAtMs, expiresAtMs: createdAtMs + 300_000, status: "intent_ready" });
+  async createIntent(input: Readonly<{ accountId: string; sessionId: string; artifact: SealedArtifactIdentity; review: CapabilityReview; ownerPubkey: string; idempotencyKey: string; purpose: string; consent: "approved"; runtimeVariant: string; expiresAtMs?: number }>): Promise<PublicationIntent> {
+    const createdAtMs = this.dependencies.clock.nowMs();
+    const intent = createPublicationIntent({ ...input, createdAtMs, expiresAtMs: input.expiresAtMs ?? createdAtMs + 300_000 });
+    if (isPublicationIntentExpired(intent, createdAtMs)) throw new Error("PUBLICATION_INTENT_EXPIRED");
     return this.dependencies.store.transact((tx) => tx.putIntent(intent));
   }
 
   async submitSignedManifest(input: Readonly<{ accountId: string; intentId: string; event: unknown }>): Promise<PublicationResult> {
     const intent = await this.dependencies.store.getIntent(input.intentId);
     if (!intent || intent.accountId !== input.accountId) throw new Error("INVALID_MANIFEST");
+    if (isPublicationIntentExpired(intent, this.dependencies.clock.nowMs())) throw new Error("INVALID_MANIFEST");
     const existing = await this.dependencies.store.getStatus(intent.intentId);
     if (existing && (existing.status === "complete" || existing.status === "partial")) return existing;
     const event = SignedOwnerManifestEventSchema.parse(input.event);

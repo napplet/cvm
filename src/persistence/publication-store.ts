@@ -20,12 +20,12 @@ export interface PublicationStore {
   getStatus(intentId: string): Promise<PublicationStatus | PublicationResult | undefined>;
 }
 
-type State = { intents: Map<string, PublicationIntent>; signedEvents: Map<string, SignedOwnerManifestEvent>; effects: Map<string, PublicationEffectIntent>; observations: Map<string, PublicationObservation>; commands: Map<string, PublicationCommandRecord> };
+type State = { intents: Map<string, PublicationIntent>; intentKeys: Map<string, string>; signedEvents: Map<string, SignedOwnerManifestEvent>; effects: Map<string, PublicationEffectIntent>; observations: Map<string, PublicationObservation>; commands: Map<string, PublicationCommandRecord> };
 const freeze = <T>(value: T): T => Object.freeze(structuredClone(value));
 
 /** Deterministic, serialized persistence authority for the Phase 6 tracer. */
 export class TransactionalMemoryPublicationStore implements PublicationStore {
-  #state: State = { intents: new Map(), signedEvents: new Map(), effects: new Map(), observations: new Map(), commands: new Map() };
+  #state: State = { intents: new Map(), intentKeys: new Map(), signedEvents: new Map(), effects: new Map(), observations: new Map(), commands: new Map() };
   #tail: Promise<void> = Promise.resolve();
 
   async transact<T>(operation: (transaction: PublicationStoreTransaction) => Promise<T> | T): Promise<T> {
@@ -38,7 +38,13 @@ export class TransactionalMemoryPublicationStore implements PublicationStore {
             if (existing.fingerprint !== intent.fingerprint || existing.idempotencyKey !== intent.idempotencyKey) throw new Error("PUBLICATION_IDEMPOTENCY_CONFLICT");
             return existing;
           }
-          const record = freeze(intent); state.intents.set(record.intentId, record); return record;
+          const priorIntentId = state.intentKeys.get(intent.idempotencyKey);
+          if (priorIntentId) {
+            const prior = state.intents.get(priorIntentId);
+            if (!prior || prior.fingerprint !== intent.fingerprint) throw new Error("PUBLICATION_IDEMPOTENCY_CONFLICT");
+            return prior;
+          }
+          const record = freeze(intent); state.intents.set(record.intentId, record); state.intentKeys.set(record.idempotencyKey, record.intentId); return record;
         },
         getIntent: async (intentId) => state.intents.get(intentId),
         putSignedEvent: async (intentId, event) => {

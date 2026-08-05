@@ -1,4 +1,6 @@
 import { mkdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { canonicalJson } from "../src/promotion/schema.js";
 import { loadProtectedCertificationAdapterRegistry } from "../src/certification/adapters.js";
 import { ReleaseObservationBindingSchema } from "../src/certification/contracts.js";
@@ -26,7 +28,7 @@ async function profile(): Promise<ProtectedCertificationProfile> {
 async function main(): Promise<void> {
   const requested = argument("--suite") ?? "all"; const preflightOnly = Bun.argv.slice(2).includes("--preflight-only"); const unknown = Bun.argv.slice(2).filter((item) => !item.startsWith("--profile=") && !item.startsWith("--suite=") && item !== "--preflight-only");
   if (argument("--profile") !== "release" || unknown.length || (requested !== "all" && !PROTECTED_SUITES.includes(requested as typeof PROTECTED_SUITES[number]))) { console.error(JSON.stringify({ phase: "07", command: "certify", status: "blocked", reason: "invalid_arguments" })); process.exitCode = 64; return; }
-  const releaseProfile = await profile(); const root = process.env.PHASE07_CERTIFICATION_EVIDENCE_DIRECTORY ?? `evidence/certification/${releaseProfile.candidate.id}/live`; await mkdir(root, { recursive: true });
+  const releaseProfile = await profile(); const root = process.env.PHASE07_CERTIFICATION_EVIDENCE_DIRECTORY ?? (preflightOnly ? join(tmpdir(), `napplet-cvm-phase07-preflight-${releaseProfile.candidate.id}`) : `evidence/certification/${releaseProfile.candidate.id}/live`); await mkdir(root, { recursive: true });
   let registry; if (!preflightOnly && process.env.PHASE07_CERTIFICATION_ADAPTER_ROOT && process.env.PHASE07_CERTIFICATION_ADAPTER_MODULE && process.env.PHASE07_CERTIFICATION_ADAPTER_SHA256) { try { registry = await loadProtectedCertificationAdapterRegistry({ root: process.env.PHASE07_CERTIFICATION_ADAPTER_ROOT, modulePath: process.env.PHASE07_CERTIFICATION_ADAPTER_MODULE, sha256: process.env.PHASE07_CERTIFICATION_ADAPTER_SHA256 }); } catch {} }
   const result = await runProtectedCertificationProfile({ profile: releaseProfile, selectedSuites: requested === "all" ? PROTECTED_SUITES : [requested as typeof PROTECTED_SUITES[number]], evidenceDirectory: root, registry, preflightOnly });
   console.error(JSON.stringify({ phase: "07", command: "certify", profile: "release", status: result.status, records: result.records.map(({ evidenceSha256, status }) => ({ evidenceSha256, status })) })); process.exitCode = result.status === "passed" ? 0 : 1;

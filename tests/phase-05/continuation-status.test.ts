@@ -1,0 +1,64 @@
+import { describe, expect, test } from "bun:test";
+import { accountIdForPrincipal } from "../../src/domain/account-command";
+import { FundingService } from "../../src/funding/funding-service";
+import { FundedAdmissionService } from "../../src/funding/funded-admission";
+import type { ModelGateway } from "../../src/model/model-gateway";
+import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
+import type { WorkerPort } from "../../src/phase-02/contracts";
+import type { ArtifactVerifier } from "../../src/phase-02/trusted-core";
+import { MeteredGenerationService } from "../../src/phase-04/metered-generation-service";
+import { readSessionStatus } from "../../src/phase-04/session-status";
+
+const owner = { pubkey: "ab".repeat(32) };
+const stranger = { pubkey: "cd".repeat(32) };
+const worker: WorkerPort = { async run() { throw new Error("must not run"); } };
+const verifier: ArtifactVerifier = { async verify() { throw new Error("must not verify"); } };
+
+async function pausedFixture() {
+  const store = new TransactionalMemoryFundingStore();
+  const funding = new FundingService(store);
+  await funding.execute({ principal: owner, kind: "credit_settlement", idempotencyKey: "status-credit", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { settlement: { topUpId: "status-topup", rail: "lightning", unit: "sat", amount: "4000", externalReference: "status-external", settlementReference: "status-settlement", verifiedAt: "2026-08-05T00:00:00.000Z" } } });
+  const admissions = new FundedAdmissionService({ funding, store, capacity: { reserveNow: async () => ({ status: "available" as const, reference: "status-capacity", expiresAt: "2026-08-06T00:00:00.000Z" }), observe: async () => ({ status: "available" as const, reference: "status-capacity", expiresAt: "2026-08-06T00:00:00.000Z" }), release: async () => {} }, now: () => Date.parse("2026-08-05T00:00:00.000Z") });
+  const admission = await admissions.admit({ principal: owner, idempotencyKey: "status-admission", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "3250", unit: "sat" } });
+  if (admission.status !== "accepted") throw new Error("expected funded admission");
+  const gateway: ModelGateway = { async dispatch() { throw new Error("must not dispatch"); }, async lookup() { return { status: "not_found" }; } };
+  const service = new MeteredGenerationService({ fundedAdmission: admissions, store, gateway, worker, artifactVerifier: verifier, clock: { nowMs: () => 1_700_000_000_000 } });
+  const paused = await service.startSession({ principal: owner, admissionReference: admission.reference, idempotencyKey: "status-pause", expectedVersion: 0, maximum: "3250", policyVersion: "phase-02-policy-2026-08-04", idea: "Prompt canary: do not expose this text." });
+  if (paused.status !== "needs_top_up") throw new Error("expected paused fixture");
+  return { store, paused };
+}
+
+describe("owner-safe needs_top_up status", () => {
+  test("projects canonical pause facts without protected durable content or owner/session existence disclosure", async () => {
+    const { store, paused } = await pausedFixture();
+    const ownerStatus = await readSessionStatus({ store, cursorSecret: "continuation-status-secret", query: { principal: owner, sessionId: paused.sessionId } });
+    expect(ownerStatus).toMatchObject({
+      status: "ok",
+      session: {
+        id: paused.sessionId, state: "needs_top_up", continuation: {
+          status: "needs_top_up", actionMaximum: "3250", requiredAdditionalFunding: "2500", requiredCapApproval: "0",
+          settledBalance: "4000", availableBalance: "750", remainingCap: "3250", graceDeadlineMs: 1_700_000_600_000,
+          checkpoint: { state: "live_worker" }, nextRequiredAction: "top_up",
+        },
+      },
+      action: null,
+    });
+    expect(JSON.stringify(ownerStatus)).not.toMatch(/Prompt canary|reasoning|credential|bearer|provider|archive|nonce|key reference/i);
+    const foreign = await readSessionStatus({ store, cursorSecret: "continuation-status-secret", query: { principal: stranger, sessionId: paused.sessionId } });
+    const missing = await readSessionStatus({ store, cursorSecret: "continuation-status-secret", query: { principal: owner, sessionId: "missing-session" } });
+    expect(foreign).toEqual({ status: "not_found_or_denied" });
+    expect(foreign).toEqual(missing);
+  });
+
+  test("keeps one-sat and large bigint pause facts as canonical strings", async () => {
+    const { store, paused } = await pausedFixture();
+    const accountId = await accountIdForPrincipal(owner);
+    const record = await store.findContinuation(accountId, "status-pause");
+    if (!record) throw new Error("expected continuation record");
+    expect(record.result.graceDeadlineMs).toBe(1_700_000_600_000);
+    expect(record.result.requiredAdditionalFunding).toBe("2500");
+    expect(record.result.requiredCapApproval).toBe("0");
+    expect(record.result.pendingActionFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(paused.sessionId).toBe(record.intent.sessionId);
+  });
+});

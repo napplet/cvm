@@ -48,7 +48,9 @@ const FundedAdmissionArgumentsSchema = z.object({
   requestedCap: z.string().regex(/^[1-9][0-9]*$/u),
   unit: z.literal("sat"),
 }).strict();
-const CanonicalInvocationSchema = z.object({ invocationHash: z.string().regex(/^[a-f0-9]{64}$/iu) }).strict();
+// SDK canonical invocations retain SDK-owned metadata; the adapter consumes
+// only its validated hash and never re-serializes the SDK object.
+const CanonicalInvocationSchema = z.object({ invocationHash: z.string().regex(/^[a-f0-9]{64}$/iu) }).passthrough();
 const FundedAdmissionPortResultSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("accepted"), accountId: z.string().min(1), reference: z.string().min(1), approvedCap: z.string().regex(/^[1-9][0-9]*$/u), heldAmount: z.string().regex(/^[1-9][0-9]*$/u), unit: z.literal("sat") }).strict(),
   z.object({ status: z.enum(["refused", "reconciliation_pending"]), accountId: z.string().min(1), intentReference: z.string().min(1), retryable: z.boolean(), unit: z.literal("sat") }).strict(),

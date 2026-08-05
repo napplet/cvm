@@ -266,4 +266,35 @@ describe("07-14 canonical funded-admission boundary", () => {
     const text = JSON.stringify([notifications, responses]);
     for (const canary of ["private-account", "malicious-provider", "secret-region", "native-error", "credential", "/private", "sha256:"]) expect(text).not.toContain(canary);
   });
+
+  test("accepted, refused, and reconciliation outcomes use one finite wire projection", async () => {
+    const portResults = [
+      { status: "accepted", accountId: "private-account", reference: "lease-safe", approvedCap: "50", heldAmount: "50", unit: "sat" },
+      { status: "refused", accountId: "private-account", intentReference: "capacity-intent-safe", retryable: true, unit: "sat" },
+      { status: "reconciliation_pending", accountId: "private-account", intentReference: "capacity-intent-safe", retryable: false, unit: "sat" },
+    ] as const;
+    for (const portResult of portResults) {
+      const notifications: unknown[] = [];
+      const responses: unknown[] = [];
+      const transport = {
+        onInbound: () => undefined,
+        canonicalInvocation: () => ({ invocationHash: "b".repeat(64) }),
+        sendNotification: async (_pubkey: string, value: unknown) => { notifications.push(value); },
+        sendResponse: async (_pubkey: string, value: unknown) => { responses.push(value); },
+        configureAnnouncement: () => undefined,
+      };
+      const adapter = new ContextVmFundingAdapter({
+        service: new FundingService(new TransactionalMemoryFundingStore()), transport,
+        admissionReceipts: trustedAdmissionReceiptAuthority,
+        admissions: { admit: async () => portResult } as never,
+      });
+      await adapter.handle(fundedRequest(`request-07-14-${portResult.status}`));
+      const notification = notifications[0] as { params: unknown };
+      const response = responses[0] as { result: unknown };
+      expect(notification.params).toEqual(response.result);
+      expect(response.result).toEqual(portResult.status === "accepted"
+        ? { status: "accepted", admissionReference: "lease-safe", approvedCap: "50", heldAmount: "50", unit: "sat", payment: { generationPriceWaivedForAdmission: true } }
+        : { status: portResult.status === "refused" ? "capacity_unavailable" : "reconciliation_pending", retryAfterSeconds: 5, admissionReference: "capacity-intent-safe", unit: "sat", payment: { generationPriceWaivedForAdmission: true } });
+    }
+  });
 });

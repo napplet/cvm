@@ -23,7 +23,7 @@ class FakeContextVmTransport implements ContextVmTransportPort {
   async sendNotification(clientPubkey: string, notification: ContextVmWireNotification, requestEventId: string): Promise<void> { this.notifications.push({ clientPubkey, notification, requestEventId }); }
   canonicalInvocation(clientPubkey: string, method: string, params: unknown) {
     this.canonicalCalls.push({ clientPubkey, method, params });
-    return { clientPubkey, invocationHash: `${clientPubkey.slice(0, 8)}:${method}` };
+    return { clientPubkey, invocationHash: "a".repeat(64) };
   }
 }
 

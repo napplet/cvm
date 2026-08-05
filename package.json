@@ -23,6 +23,8 @@
     "probe:phase06-cli-source": "bun run scripts/probe-phase-06-cli-source-contract.ts",
     "eval:phase06": "bun test tests/evals/phase-06-reference-set.test.ts --timeout 10000",
     "verify:phase06-design": "bun run scripts/verify-phase-06-design-slice.ts",
+    "eval:phase07": "bun run scripts/eval-phase-07.ts -- --suite=all",
+    "verify:phase07-evidence": "bun run scripts/verify-phase-07-evidence.ts",
     "test:phase-03-design-slice": "bun run scripts/verify-phase-03-design-slice.ts",
     "test:phase-02-design-slice": "bun run scripts/verify-phase-02-design-slice.ts"
   },

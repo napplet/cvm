@@ -1,26 +1,24 @@
-const fixturePath = "tests/fixtures/phase-07-reference-set.json";
-const allowedSuites = new Set(["all", "telemetry"]);
+import { validatePhase07ReferenceSet, executePhase07ReferenceCase } from "../src/certification/phase-07-reference-set.js";
 
-function validateRegistry(registry: unknown): void {
-  if (!registry || typeof registry !== "object") throw new Error("phase07_registry_invalid");
-  const value = registry as { schema?: unknown; version?: unknown; entries?: unknown };
-  if (value.schema !== "phase-07-reference-set" || value.version !== 1 || !Array.isArray(value.entries)) throw new Error("phase07_registry_invalid");
-  const ids = value.entries.map((entry) => (entry && typeof entry === "object" ? (entry as { id?: unknown }).id : undefined));
-  if (ids.join(",") !== "07-W0-01,07-W0-02,07-W0-03,07-W0-04,07-W0-05" || new Set(ids).size !== 5) throw new Error("phase07_registry_invalid");
-  if (value.entries.some((entry) => !entry || typeof entry !== "object" || (entry as { status?: unknown }).status !== "pending")) throw new Error("phase07_registry_nonpass_required");
-}
+const suites = {
+  all: ["admission", "resilience", "security", "publication", "launch"], admission: ["admission"], telemetry: ["launch"], resilience: ["resilience"], restore: ["resilience"], "security-host": ["security", "publication"], "supply-chain": ["launch"],
+} as const;
 
 async function main(): Promise<void> {
   const [argument] = Bun.argv.slice(2);
-  if (Bun.argv.length !== 3 || !argument?.startsWith("--suite=") || !allowedSuites.has(argument.slice("--suite=".length))) {
-    console.error(JSON.stringify({ phase: "07", command: "eval", status: "not_implemented", reason: "invalid_arguments" }));
-    process.exitCode = 64;
-    return;
+  if (Bun.argv.length !== 3 || !argument?.startsWith("--suite=") || !(argument.slice(8) in suites)) {
+    console.error(JSON.stringify({ phase: "07", command: "eval", status: "failed", reason: "invalid_arguments" })); process.exitCode = 64; return;
   }
-  try { validateRegistry(await Bun.file(fixturePath).json()); }
-  catch { console.error(JSON.stringify({ phase: "07", command: "eval", status: "not_implemented", reason: "registry_unavailable" })); process.exitCode = 1; return; }
-  console.error(JSON.stringify({ phase: "07", command: "eval", suite: argument.slice("--suite=".length), status: "not_implemented", reason: "executed_phase_07_evidence_absent" }));
-  process.exitCode = 1;
+  const suite = argument.slice(8) as keyof typeof suites;
+  try {
+    const fixture = validatePhase07ReferenceSet(await Bun.file("tests/fixtures/phase-07-reference-set.json").json());
+    const selected = fixture.cases.filter((item) => suites[suite].includes(item.category));
+    const results = await Promise.all(selected.map(executePhase07ReferenceCase));
+    const failed = results.filter((item) => item.status !== "passed");
+    if (failed.length) throw new Error(`comparison_failed:${failed.map((item) => item.id).join(",")}`);
+    console.log(JSON.stringify({ phase: "07", command: "eval", suite, status: "passed", evidenceClass: "deterministic", cases: selected.length, promotionVerdict: "blocked" }));
+  } catch (error) {
+    console.error(JSON.stringify({ phase: "07", command: "eval", suite, status: "failed", reason: error instanceof Error ? error.message : "unknown" })); process.exitCode = 1;
+  }
 }
-
 await main();

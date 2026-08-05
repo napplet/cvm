@@ -69,7 +69,7 @@ const Phase07ComparisonSchema = z.object({ id: z.string(), status: z.enum(["pass
 const MappingSchema = z.record(z.string(), z.array(z.string()).min(1));
 const Phase07EvidenceBaseSchema = z.object({
   version: z.literal(1), phase: z.literal("07"), evidenceClass: z.literal("deterministic_design"), offlineVerdict: z.literal("passed"), promotionVerdict: z.literal("blocked"),
-  sourceRevision: z.string().regex(/^[a-f0-9]{64}$/iu), datasetSha256: z.string().regex(/^[a-f0-9]{64}$/iu),
+  sourceRevision: z.string().regex(/^[a-f0-9]{40,64}$/iu), datasetSha256: z.string().regex(/^[a-f0-9]{64}$/iu),
   commands: z.array(z.string().min(1)).length(2), caseComparisons: z.array(Phase07ComparisonSchema).length(64), aggregate: z.object({ cases: z.literal(64), passed: z.literal(64), blockedLive: z.number().int().positive(), effects: z.object({ credit: z.literal(0), debit: z.literal(0), worker: z.literal(0), publication: z.literal(0) }).strict() }).strict(),
   requirementMappings: MappingSchema, decisionMappings: MappingSchema, threatMappings: MappingSchema, apiMappings: MappingSchema, uiMappings: MappingSchema, aiMappings: MappingSchema,
   liveObservations: z.array(z.object({ owner: z.string(), status: z.enum(["blocked", "not_observed"]), claim: z.string(), inputDigest: z.string().regex(/^[a-f0-9]{64}$/iu), freshness: z.literal("protected_record_required"), limitation: z.string() }).strict()).min(1),
@@ -93,7 +93,7 @@ export async function buildPhase07DesignEvidence(input: Readonly<{ fixture: unkn
   if (comparisons.some((item) => item.status !== "passed" || canonicalJson(item.expected) !== canonicalJson(item.observed)) || new Set(comparisons.map((item) => item.id)).size !== 64 || comparisons.some((item) => !fixture.cases.some((caseValue) => caseValue.id === item.id))) throw new Error("PHASE07_EVIDENCE_COMPARISON_INVALID");
   const base = {
     version: 1 as const, phase: "07" as const, evidenceClass: "deterministic_design" as const, offlineVerdict: "passed" as const, promotionVerdict: "blocked" as const,
-    sourceRevision: z.string().regex(/^[a-f0-9]{64}$/iu).parse(input.sourceRevision).toLowerCase(), datasetSha256: phase07DatasetSha256(fixture),
+    sourceRevision: z.string().regex(/^[a-f0-9]{40,64}$/iu).parse(input.sourceRevision).toLowerCase(), datasetSha256: phase07DatasetSha256(fixture),
     commands: ["bun run eval:phase07", "bun run verify:phase07-evidence"] as const, caseComparisons: [...comparisons].sort((a, b) => a.id.localeCompare(b.id)),
     aggregate: { cases: 64 as const, passed: 64 as const, blockedLive: fixture.liveObservations.length, effects: { credit: 0 as const, debit: 0 as const, worker: 0 as const, publication: 0 as const } },
     requirementMappings: mappings(fixture, "requirements", PHASE_07_REQUIREMENTS), decisionMappings: mappings(fixture, "decisions", PHASE_07_DECISIONS), threatMappings: mappings(fixture, "threats", PHASE_07_THREATS), apiMappings: mappings(fixture, "apiRows", PHASE_07_API_ROWS), uiMappings: mappings(fixture, "uiRows", PHASE_07_UI_ROWS), aiMappings: mappings(fixture, "aiDimensions", PHASE_07_AI_DIMENSIONS),

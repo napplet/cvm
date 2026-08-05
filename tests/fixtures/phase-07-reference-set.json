@@ -1,7 +1,7 @@
 {
   "schema": "phase-07-reference-set",
   "version": 2,
-  "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "sourceRevision": "2521f6bac70013d011496215f38ae473ec184126",
   "categoryMinimums": { "admission": 12, "resilience": 16, "security": 16, "publication": 10, "launch": 10 },
   "cases": [
     { "id":"A01", "name":"receipt-to-ready pool hit", "category":"admission", "scenario":{"input":{"mode":"pool_hit","ordinal":1},"initialState":"funded","schedule":["correlate","lease","ready"]}, "expected":{"status":"passed","value":"case:A01","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["SESS-02","OPS-01","OPS-02","OPS-03","OPS-04"], "decisions":["D-114","D-115","D-116","D-117","D-118","D-119","D-120","D-121","D-122","D-123","D-124","D-125","D-126","D-127","D-128","D-129"], "threats":["T-07-EVL-01","T-07-EVL-02","T-07-EVL-03","T-07-EVL-04","T-07-SC"], "apiRows":["ADM-01","ADM-02","ADM-03","ADM-04","MOD-01","MOD-02","MOD-03","MOD-04","FLY-01","FLY-02","FLY-03","FLY-04","TEL-01","TEL-02","TEL-03","TEL-04","TEL-05","CTX-01","CEP-01","CEP-02","PAY-01","PAY-02","PAY-03","MODEL-01","MODEL-02","MODEL-03","SQL-01","SQL-02","SQL-03","OBJ-01","OBJ-02","OBJ-03","RUN-01","RUN-02","HOST-01","HOST-02","SIGN-01","SIGN-02","SIGN-03","NAP-01","NAP-02","NAP-03","PUB-01","PUB-02","PUB-03","PUB-04","SC-01","SC-02","SC-03","CERT-01","CERT-02","CERT-03","CERT-04"], "uiRows":["empty","loading","error","populated","partial","overflow","zero_one_many","long_text"], "aiDimensions":["shell_authority","napplet_conformance","tool_use","ledger_integrity","admission_slo","continuity","original_operation","sealed_identity","telemetry_privacy","live_promotion"], "edge":"E-01" },

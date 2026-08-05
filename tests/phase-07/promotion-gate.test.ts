@@ -71,3 +71,10 @@ test("evidence blocks stale, cross-candidate, non-pass, and concurrent release p
   await expect(evaluateReleaseCertification(manifest, [valid[0]!, { ...valid[1]!, candidate: { ...valid[1]!.candidate, id: digest("c") } }], { candidateId, nowMs: 2_000 })).resolves.toMatchObject({ status: "blocked" });
   await expect(evaluateReleaseCertification(manifest, [valid[0]!, { ...valid[1]!, expiresAtMs: 1_500 }], { candidateId, nowMs: 2_000 })).resolves.toMatchObject({ status: "blocked" });
 });
+
+test("final candidate verification rejects the deterministic pointer while live certification is blocked", async () => {
+  const result = await run("src/promotion/candidate.ts", ["--release-evidence", "evidence/design/phase-07.json"]);
+  expect(result.exitCode).not.toBe(0);
+  expect(`${result.stdout}${result.stderr}`).toContain("blocked");
+  expect(`${result.stdout}${result.stderr}`).not.toContain("supersecret");
+});

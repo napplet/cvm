@@ -5,8 +5,8 @@ status: OPEN_THREATS
 asvs_level: 1
 block_on: high
 threats_total: 54
-threats_closed: 51
-threats_open: 2
+threats_closed: 53
+threats_open: 0
 audited: 2026-08-05
 ---
 
@@ -15,11 +15,11 @@ audited: 2026-08-05
 ## OPEN_THREATS
 
 **Phase:** 07 — Admission SLO, Resilience & Launch Safety  
-**Closed:** 51/54 | **Open:** 3/54<br>
+**Closed:** 53/54 | **Open:** 1/54<br>
 **ASVS Level:** 1  
 **Blocking threshold:** high
 
-This is a mitigation audit of every declared `<threat_model>` row in Plans 07-00 through 07-10, re-audited after Plans 07-14 through 07-17 and review-fix commits `d9e7c25`, `6e97c23`, `850d68d`, `ba54962`, `e3217fb`, and `83bd9e8`. It is not a claim that protected live certification has passed. Missing protected build/Cosign/topology observations correctly produce finite nonzero blocked results. The public release-evidence path also fails closed without a root.
+This is a mitigation audit of every declared `<threat_model>` row in Plans 07-00 through 07-10, re-audited after Plans 07-14 through 07-18 and review-fix commits `d9e7c25`, `6e97c23`, `850d68d`, `ba54962`, `e3217fb`, `83bd9e8`, `41bae15`, `769fcc0`, and `2806dd5`. It also rechecks the OTel approval renewal `e6714b6`. It is not a claim that protected live certification has passed. Missing protected build/Cosign/topology observations correctly produce finite nonzero blocked results. The public release-evidence path also fails closed without a root.
 
 ### Closed
 
@@ -38,7 +38,7 @@ This is a mitigation audit of every declared `<threat_model>` row in Plans 07-00
 | 02 | T-07-OTEL-01 | Spoofing/Tampering | high | mitigate | Exact version/integrity/repository verification: `scripts/verify-phase-07-otel-packages.ts:41`; mutation coverage: `tests/phase-07/otel-package-legitimacy.test.ts:99`. |
 | 02 | T-07-OTEL-02 | Elevation of Privilege | high | mitigate | Tarball metadata-only intake and lifecycle-script rejection: `scripts/verify-phase-07-otel-packages.ts:17`, `scripts/verify-phase-07-otel-packages.ts:117`; tests: `tests/phase-07/otel-package-legitimacy.test.ts:109`. |
 | 02 | T-07-OTEL-03 | Repudiation | medium | mitigate | Canonical content-addressed, exclusive evidence record: `scripts/verify-phase-07-otel-packages.ts:168`; repeat/mutation tests: `tests/phase-07/otel-package-legitimacy.test.ts:142`. |
-| 02 | T-07-SC | Tampering | high | mitigate | Pending-human `SUS` gate is retained before root installation: `scripts/verify-phase-07-otel-packages.ts:76`; tests: `tests/phase-07/otel-package-legitimacy.test.ts:155`. |
+| 02 | T-07-SC | Tampering | high | mitigate | Pending-human `SUS` gate is retained before root installation: `scripts/verify-phase-07-otel-packages.ts:76`; renewed approval remains bound to the original audit and exact package set: `scripts/verify-phase-07-otel-packages.ts:168`; tests: `tests/phase-07/otel-package-legitimacy.test.ts:155`. |
 | 03 | T-07-CHK-01 | Spoofing/Tampering | high | mitigate | Approval verifier binds the exact approval digest and package set: `scripts/verify-phase-07-otel-packages.ts:168`, `scripts/verify-phase-07-otel-packages.ts:351`. |
 | 03 | T-07-CHK-02 | Repudiation | medium | mitigate | Bounded approval schema and recorded limitation: `scripts/verify-phase-07-otel-packages.ts:69`, `scripts/verify-phase-07-otel-packages.ts:76`. |
 | 03 | T-07-SC | Elevation of Privilege | high | mitigate | Root-pin installation is refused without approved evidence: `scripts/verify-phase-07-otel-packages.ts:351`; `bun run scripts/verify-phase-07-otel-packages.ts -- --verify-root-pins` passed. |
@@ -46,7 +46,7 @@ This is a mitigation audit of every declared `<threat_model>` row in Plans 07-00
 | 04 | T-07-TEL-02 | Denial of Service | high | mitigate | Finite attributes and computed cardinality bound: `src/telemetry/redaction.ts:56`; cardinality test: `tests/phase-07/telemetry-policy.test.ts:54`. |
 | 04 | T-07-TEL-03 | Elevation of Privilege | high | mitigate | Observer-only port with bounded swallowed exporter failure: `src/telemetry/contracts.ts:47`, `src/telemetry/contracts.ts:82`; test: `tests/phase-07/telemetry-policy.test.ts:65`. |
 | 04 | T-07-TEL-04 | Tampering/Repudiation | medium | mitigate | Digest-pinned Collector/root inputs and standalone verifier: `scripts/verify-phase-07-otel-packages.ts:204`, `scripts/verify-phase-07-otel-packages.ts:351`. |
-| 04 | T-07-SC | Tampering | high | mitigate | Exact OTel roots: `package.json:35`; approval and root-pin checks passed with the frozen current lock. |
+| 04 | T-07-SC | Tampering | high | mitigate | Exact OTel roots: `package.json:35`; renewal is hard-pinned to its approval digest and current package/lock digests: `scripts/verify-phase-07-otel-packages.ts:168`, `:204`. Approved and root-pin modes passed. |
 | 05 | T-07-WRK-01 | Spoofing/Tampering | high | mitigate | Exact session/lease/image/probe readiness checks: `src/worker-adapters/modal-worker.ts:248`; tests: `tests/phase-07/worker-adapters.test.ts:57`. |
 | 05 | T-07-WRK-02 | Information Disclosure/Elevation | high | mitigate | Default-deny network, no inbound port, fixed command, and unconditional cleanup: `src/worker-adapters/modal-worker.ts:95`, `src/worker-adapters/modal-worker.ts:269`; isolation tests: `tests/phase-07/worker-adapters.test.ts:85`. |
 | 05 | T-07-WRK-03 | DoS | high | mitigate | Bounded admission / zero-backlog sample gate: `src/admission/benchmark.ts:121`; negative cases: `tests/phase-07/worker-adapters.test.ts:111`. |
@@ -72,17 +72,16 @@ This is a mitigation audit of every declared `<threat_model>` row in Plans 07-00
 | 09 | T-07-EVL-03 | Information Disclosure | high | mitigate | Protected/raw canaries are rejected before canonical evidence: `src/certification/evidence.ts:32`, `src/certification/evidence.ts:190`; redaction tests: `tests/evals/phase-07-reference-set.test.ts:113`. |
 | 09 | T-07-EVL-04 | Spoofing | high | mitigate | Deterministic and protected-live evidence classes are separated: `src/certification/evidence.ts:71`, `src/certification/evidence.ts:107`; test: `tests/evals/phase-07-reference-set.test.ts:121`. |
 | 09 | T-07-SC | Tampering | high | mitigate | The reproducibility command requires a digest-pinned root module under a protected directory and passes it to verification and record writing: `scripts/verify-phase-07-reproducibility.ts:8`, `:17`. Its concrete root re-hashes an exact non-symlinked archive before accepting its source measurement: `src/certification/trust.ts:52`, `:83`; configured, modified-source, and absent-root cases: `tests/phase-07/reproducibility.test.ts:98`. |
+| 10 | T-07-PRO-01 | Spoofing/Tampering | high | mitigate | The protected release command owns operator configuration, loads the containment/digest-pinned root before reading release evidence, and passes it internally: `scripts/verify-phase-07-release.ts:7`, `:30`. Loader containment/symlink/digest checks: `src/certification/trust.ts:100`; a counterfeit candidate root is never loaded and cannot promote: `tests/phase-07/promotion-gate.test.ts:305`. |
 | 10 | T-07-PRO-02 | Elevation of Privilege | high | mitigate | Closed waiver set, non-waivable classes, and sole atomic decision: `src/promotion/schema.ts:192`, `src/promotion/run-promotion.ts:92`; tests: `tests/phase-07/promotion-gate.test.ts:64`. |
 | 10 | T-07-PRO-03 | Information Disclosure | high | mitigate | Protected runner accepts references and records safe observations: `src/promotion/candidate.ts:287`, `src/promotion/run-promotion.ts:34`; tests: `tests/phase-07/promotion-gate.test.ts:54`. |
 | 10 | T-07-PRO-04 | Tampering/Repudiation | high | mitigate | Exact candidate-bound protected-live requirement and one observation per claim: `src/promotion/run-promotion.ts:80`; fake/insufficient claim tests: `tests/phase-07/promotion-gate.test.ts:76`. |
 | 10 | T-07-PRO-05 | Tampering | high | mitigate | Reconciliation and publication both use original-operation fences: `src/model/reconciliation.ts:71`, `src/publication/publication-service.ts:94`; drill tests: `tests/phase-07/fault-matrix.test.ts:80`. |
+| 10 | T-07-SC | Tampering | high | mitigate | Protected promotion derives the strict `{ version, sourceRevision, sourceSha256 }` measurement from the parsed manifest and verifies it with the pinned root before candidate evidence or evaluator authority: `src/promotion/candidate.ts:300`, `:302`. The sole evaluator independently compares a supplied measurement with that manifest-derived canonical fact before calling the root or consulting cache: `src/promotion/run-promotion.ts:78`, `:84`, `:152`, `:154`. The root re-hashes its non-symlinked protected archive and requires its pinned source revision/digest: `src/certification/trust.ts:71`, `:89`. Reproducibility records independently bind the same digest and exact release binding: `src/certification/reproducibility.ts:83`. Drift, omission, cache, recomputed-counterfeit, rootless-public, and two-archive substitution tests block; the substitution never invokes the root: `tests/phase-07/promotion-gate.test.ts:149`, `:166`, `:382`. |
 
 ### Open (blocking — severity ≥ high threshold)
 
-| Plan | Threat ID | Category | Severity | Mitigation Expected | Evidence / Files Searched |
-|---|---|---|---|---|---|
-| 10 | T-07-PRO-01 | Spoofing/Tampering | high | A promotion composition that itself loads the pinned protected-certifier root and prevents an untrusted caller from choosing a predicate. | **Absent.** A concrete digest-pinned root factory/loader now exists (`src/certification/trust.ts:83`, `:100`) and the public candidate path correctly blocks with no root (`src/promotion/candidate.ts:300`). But the only production composition loads that root for reproducibility (`scripts/verify-phase-07-reproducibility.ts:17`); both candidate verification and promotion still accept an arbitrary caller-supplied `ReleaseCertificationTrustRoot` (`src/promotion/candidate.ts:295`, `src/promotion/run-promotion.ts:141`). No release-promotion entry point loads or owns the pinned root. |
-| 10 | T-07-SC | Tampering | high | Manifest-owned Cosign/SBOM policy and source/reproducibility facts authenticated by a pinned root at the actual promotion entry point. | **Partially present, not closed.** The runner now forwards its root (`src/promotion/run-promotion.ts:271`), authentication precedes cache lookup and the cache key fingerprints manifest/observations/records (`src/promotion/run-promotion.ts:71`, `:146`), and mutations are covered (`tests/phase-07/promotion-gate.test.ts:138`). However, this protection still relies on the arbitrary root supplied by the caller; no promotion composition loads the digest-pinned root. Strict policy, full revisions, and future-record rejection do not by themselves authenticate a record's authority. |
+None. Every high- or critical-severity declared threat is closed.
 
 ### Open (non-blocking — severity below high threshold)
 
@@ -94,22 +93,21 @@ This is a mitigation audit of every declared `<threat_model>` row in Plans 07-00
 
 ### Unregistered Flags
 
-None. `## Threat Flags` was absent from every Phase-07 `*-SUMMARY.md` file, including Plans 07-14 through 07-17.
+None. `## Threat Flags` was absent from every Phase-07 `*-SUMMARY.md` file, including Plans 07-14 through 07-18.
 
 ### Audit Commands
 
-- `bun test tests/phase-07/reproducibility.test.ts tests/phase-07/supply-chain.test.ts tests/phase-07/certification-runner.test.ts tests/phase-07/promotion-gate.test.ts --timeout 10000` — passed: 31 tests, 0 failures, 109 assertions.
-- `bun test --timeout 10000` — passed: 515 tests, 0 failures, 4,269 assertions.
+- `bun test tests/phase-07/promotion-gate.test.ts tests/phase-07/reproducibility.test.ts tests/phase-07/supply-chain.test.ts tests/phase-07/certification-runner.test.ts tests/phase-07/otel-package-legitimacy.test.ts --timeout 10000` — passed: 41 tests, 0 failures, 186 assertions.
+- `bun test --timeout 10000` — passed: 518 tests, 0 failures, 4,299 assertions.
 - `bun run scripts/verify-phase-07-otel-packages.ts -- --require-approved` — passed.
 - `bun run scripts/verify-phase-07-otel-packages.ts -- --verify-root-pins` — passed.
 - `bun run scripts/verify-phase-07-reproducibility.ts` and `bun run scripts/verify-phase-07-supply-chain.ts` — correctly blocked/nonzero without protected configuration.
 - `bun run certify:phase07 -- --profile=release --preflight-only` — correctly blocked/nonzero without protected evidence.
+- `bun run release:verify:protected -- --release-evidence evidence/design/phase-07.json` — correctly blocked/nonzero without protected configuration.
 - `bun run candidate:verify -- --release-evidence evidence/design/phase-07.json` — correctly blocked/nonzero for invalid release input.
 
 ## Required Remediation
 
-1. Add a release-promotion composition that loads the digest-pinned protected-certifier root and supplies it internally to candidate verification and the promotion runner. It must pin manifest, observation, reproducibility, and supply-chain identities; callers at the public boundary must not be able to provide a permissive predicate.
-2. Add an end-to-end regression showing that composition rejects an arbitrary root and a freshly rehashed release bundle, while authentic protected facts may reach the evaluator. Keep the public/rootless path blocked.
-3. Obtain and record an explicit owner acceptance for T-07-W0-05, or change its threat disposition through the planning process. It remains non-blocking and does not waive any release, SLO, or security gate.
+1. Obtain and record an explicit owner acceptance for T-07-W0-05, or change its threat disposition through the planning process. It remains non-blocking and does not waive any release, SLO, or security gate.
 
-**threats_open:** 2
+**threats_open:** 0

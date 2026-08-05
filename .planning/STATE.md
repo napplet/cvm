@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
 current_phase: 7
 current_phase_name: Admission SLO, Resilience & Launch Safety
-status: ready_for_verification
-stopped_at: Completed 07-18-PLAN.md; protected-live evidence remains required
-last_updated: "2026-08-05T21:58:56.219Z"
+status: awaiting_external_evidence
+stopped_at: All local Phase 7 work complete; protected-live certification evidence unavailable
+last_updated: "2026-08-05T22:40:58Z"
 last_activity: 2026-08-05
-last_activity_desc: Security re-audit found the release entrypoint does not own the pinned protected root
+last_activity_desc: Review fix 2806dd5 closed cross-archive source substitution; final local audits converged
 progress:
   total_phases: 7
-  completed_phases: 7
+  completed_phases: 6
   total_plans: 59
   completed_plans: 59
-  percent: 100
+  percent: 86
 ---
 
 # Project State
@@ -31,8 +31,8 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 Phase: 7 — Admission SLO, Resilience & Launch Safety
 Plan: 19 of 19
-Status: Protected promotion composition complete; protected-live evidence and goal verification remain
-Last activity: 2026-08-05 — Protected release command now owns its pinned certifier root
+Status: All local plans and source-measurement closure complete; awaiting protected-live certification evidence
+Last activity: 2026-08-05 — Cross-archive substitution closed; review/security/Nyquist audits converged
 
 Plan execution: [██████████] 100%; Phase verification remains pending
 
@@ -41,9 +41,9 @@ Plan execution: [██████████] 100%; Phase verification remain
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 58/59 known milestone plans executed; Plan 07-18 remains.
+- Plans: 59/59 known milestone plans executed; no local phase plan remains.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Next checkpoint: execute Plan 07-18 and re-audit security, then run the configured protected certification profile with trusted adapters and candidate-bound live observations.
+- Next checkpoint: run the configured protected certification profile with trusted adapters, scoped credentials, and candidate-bound live observations; then re-run Phase 7 verification.
 
 ## Performance Metrics
 
@@ -244,16 +244,23 @@ Recent decisions affecting current work:
 - [Phase ?]: Git source revision and exact source-byte SHA-256 are separate trusted release inputs.
 - [Phase ?]: Cosign and SBOM policy is manifest-owned and revalidated from redacted verification facts.
 - [Phase ?]: Protected release verification loads an operator-pinned trust root before any candidate bundle bytes; public candidate verification remains rootless and fail-closed.
+- [Phase ?]: Protected promotion re-hashes the manifest-bound source archive before authentication, cache lookup, or the sole evaluator.
 
 ### Pending Todos
 
-- Execute the seven checker-approved Phase 6 plans, beginning with the end-to-end tracer in Plan 06-01.
+- Execute the configured protected Phase 7 certification profile and retain candidate-bound live SLO, telemetry, topology, recovery, payment/model, host/browser, upload, and relay observations.
 
 ### Blockers/Concerns
 
 - No active Phase 1 blocker. Official `@napplet/cli@0.5.2` plus matching `@napplet/skills`/`@napplet/boilerplate@0.3.2` is recorded as review-ready candidate `a19fc7d283a4482c53728f4a931743576564fb3826d7f8fa1383d02578b69024` and was explicitly approved for design execution.
-- Exhaustive toolchain provenance, cross-environment reproducibility, full hostile/mutation coverage, formal golden approval, waiver exercises, SBOM/provenance enforcement, and production promotion are intentionally deferred to Phase 7.
-- Future phases must contract-test evolving ContextVM/CEP-8 wire details, model exact-usage receipts, signing-runtime behavior, and the five-second SLO under load.
+- Local provenance, reproducibility, hostile/mutation, SBOM, promotion, and source-measurement gates are complete; genuine protected-live certification remains unavailable in this workspace.
+- T-07-W0-05 remains low severity and pending explicit owner acceptance; it grants no release authority.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260805-wep | Bind protected promotion to fresh operator-authenticated source measurement before cache and evaluator | 2026-08-05 | 769fcc0 | [260805-wep](./quick/260805-wep-bind-protected-promotion-to-fresh-operat/) |
 
 ## Deferred Items
 
@@ -265,6 +272,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T21:58:56.208Z
-Stopped at: Completed 07-18-PLAN.md; protected-live evidence remains required
+Last session: 2026-08-05T22:40:58Z
+Stopped at: All local Phase 7 work complete; protected-live evidence remains required
 Resume file: None

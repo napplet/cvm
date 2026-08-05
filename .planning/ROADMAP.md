@@ -345,7 +345,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 - **Phases:** Phases 1–6 are verified complete; Phase 7 awaits protected live evidence and goal verification; 6/7 phases complete (86%).
 - **Known plans:** 59/59 milestone plans executed; Plan 07-18 closed the protected promotion composition gap.
 - **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 49 verified complete and 5 Phase 7 requirements pending.
-- **Current checkpoint:** Re-audit security, then supply protected-live certification inputs and observations before Phase 7 goal verification.
+- **Current checkpoint:** Supply protected-live certification inputs and candidate-bound observations, then re-run Phase 7 goal verification; no local implementation gap remains.
 - **Phase 1 preservation:** Phase 1 remains complete with its review, security, validation, verification evidence, and Phase 7 deferrals unchanged.
 
 ### Completion Reporting Contract

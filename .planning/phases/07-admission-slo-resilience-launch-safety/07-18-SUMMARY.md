@@ -85,7 +85,7 @@ None - plan executed exactly as written.
 
 ## Issues Encountered
 
-`bun test --timeout 10000` ran 514 passing tests and reported two pre-existing failures in `tests/phase-07/otel-package-legitimacy.test.ts` concerning delegated OpenTelemetry approval/root-pin verification. They are unrelated to the protected promotion files and were not changed.
+The new `package.json` command invalidated the intentionally full-file OpenTelemetry approval snapshot. GSD debug session `otel-approval-digest-drift` renewed the content-addressed delegated approval and generated a fresh real Collector smoke record without weakening drift detection (`e6714b6`). Final convergence, including promotion-time source remeasurement and the cross-archive substitution fix (`769fcc0`, `2806dd5`), passes 518 tests with zero failures.
 
 ## User Setup Required
 

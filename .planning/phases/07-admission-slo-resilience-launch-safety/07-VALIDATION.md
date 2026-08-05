@@ -94,9 +94,9 @@ created: 2026-08-05
 
 ## Validation Audit 2026-08-05
 
-### Re-audit after Plan 07-17 (`85d588d`)
+### Re-audit through Plan 07-18, source-measurement closure, and CR-05 (`2806dd5`)
 
-Plan 07-17 closes the remaining deterministic reproducibility and supply-chain self-attestation paths. The tests below exercise independent exact source-byte identity and manifest-owned Cosign/SBOM policy at the verifier, protected-runner, and sole-evaluator boundaries. They do not create or relabel protected-live evidence; all protected-live requirements remain blocked until the external observations listed below exist.
+The deterministic release-authority path now binds exact source bytes, manifest-owned Cosign/SBOM policy, a digest-pinned operator-owned promotion root, and an archive remeasurement to the manifest before trust-root, cache, or evaluator authority. The tests below exercise archive drift, omission, counterfeit recomputation, cross-archive substitution, cache ordering, and OTel approval-chain drift. They do not create or relabel protected-live evidence; all protected-live requirements remain blocked until the external observations listed below exist.
 
 | Metric | Count |
 |--------|------:|
@@ -108,22 +108,23 @@ Plan 07-17 closes the remaining deterministic reproducibility and supply-chain s
 
 | Command | Actual result |
 |---------|---------------|
-| `bun test tests/phase-07/reproducibility.test.ts tests/phase-07/supply-chain.test.ts tests/phase-07/certification-runner.test.ts tests/phase-07/promotion-gate.test.ts --timeout 10000` | Passed: 28 tests, 0 failures. Exact independent source SHA-256, padded/revision-derived source identity, self-selected/rehashed signer policy, and evaluator binding mutations were exercised. |
-| `bun test --timeout 10000` | Passed: 512 tests, 0 failures, 4,249 assertions. |
+| `bun test tests/phase-07/promotion-gate.test.ts tests/phase-07/reproducibility.test.ts tests/phase-07/supply-chain.test.ts tests/phase-07/certification-runner.test.ts tests/phase-07/otel-package-legitimacy.test.ts --timeout 10000` | Passed: 41 tests, 0 failures. Exercises operator-owned pinned promotion authority; exact source remeasurement; archive drift, omission, counterfeit, and cross-archive substitution; pre-cache authentication; Cosign/SBOM policy; and OTel approval/audit/root-pin drift. |
+| `bun test --timeout 10000` | Passed: 518 tests, 0 failures, 4,299 assertions. |
 | `bun run eval:phase07` | Passed: 64 deterministic cases; `promotionVerdict: blocked`. |
 | `bun run verify:phase07-evidence -- --verify-existing` | Passed: offline deterministic evidence is valid; `promotionVerdict: blocked`. |
+| `bun run candidate:verify -- --release-evidence evidence/design/phase-07.json` | Expected nonzero (1): rootless public verifier returned `RELEASE_INPUT_INVALID`. |
+| `bun run release:verify:protected -- --release-evidence evidence/design/phase-07.json` | Expected nonzero (1): no operator configuration returned `protected_configuration_unavailable`. |
 | `PHASE07_CERTIFICATION_EVIDENCE_DIRECTORY=<temporary-dir> bun run certify:phase07 -- --profile=release --preflight-only` | Expected nonzero (1): eight immutable protected-suite records were `blocked`; no adapter was invoked and no live pass was claimed. |
-| `bun run candidate:verify -- --release-evidence evidence/design/phase-07.json` | Expected nonzero (1): `RELEASE_INPUT_INVALID`; a deterministic pointer alone cannot promote a release. |
 
 ### Requirement Coverage Status
 
 | Requirement | Deterministic behavioral coverage | Current status | External-live evidence still required |
 |-------------|-----------------------------------|----------------|--------------------------------------|
 | SESS-02 | `tests/phase-07/admission-slo.test.ts`, `tests/phase-07/worker-benchmark.test.ts`, `tests/evals/phase-07-reference-set.test.ts` | Local green; protected-live blocked | Fresh Modal and Fly cohorts: 1,000 accepted observations, required forced cohorts, one-sided 95% p95 at most five seconds, and zero durable backlog. |
-| OPS-01 | `tests/phase-07/telemetry-policy.test.ts`, `tests/phase-07/otel-package-legitimacy.test.ts`, `tests/phase-07/certification-runner.test.ts` | Local green; protected-live blocked | Candidate-bound Collector lifecycle export from the selected release topology. |
+| OPS-01 | `tests/phase-07/telemetry-policy.test.ts`, `tests/phase-07/otel-package-legitimacy.test.ts`, `tests/phase-07/certification-runner.test.ts` | Local green; OTel approval/smoke chain renewed; protected-live blocked | Candidate-bound Collector lifecycle export from the selected release topology. |
 | OPS-02 | `tests/phase-07/fault-matrix.test.ts`, `tests/evals/phase-07-reference-set.test.ts` | Local green; protected-live blocked | Protected regional/database/worker/payment/model/publication original-operation recovery drills. |
 | OPS-03 | `tests/phase-07/restore-drill.test.ts`, `tests/evals/phase-07-reference-set.test.ts` | Local green; protected-live blocked | Protected instance-loss and retained-object topology observation. |
-| OPS-04 | `tests/phase-07/reproducibility.test.ts`, `tests/phase-07/supply-chain.test.ts`, `tests/phase-07/promotion-gate.test.ts`, `tests/phase-07/certification-runner.test.ts`, `tests/phase-07/host-presentation.test.ts` | Local green; protected-live blocked | Complete fresh, candidate-bound passed inventory for every closed release claim; only then may the sole evaluator return `promoted`. |
+| OPS-04 | `tests/phase-07/reproducibility.test.ts`, `tests/phase-07/supply-chain.test.ts`, `tests/phase-07/promotion-gate.test.ts`, `tests/phase-07/certification-runner.test.ts`, `tests/phase-07/host-presentation.test.ts` | Local green: exact source remeasurement and manifest binding happen before operator-root/cache/evaluator authority; protected-live blocked | Complete fresh, candidate-bound passed inventory for every closed release claim, including the protected source archive measurement and compatible host/signer/browser/CLI/upload/relay flows; only then may the sole evaluator return `promoted`. |
 
 The local test suite intentionally uses deterministic adapters/fixtures only to exercise fail-closed wiring. Such records remain `deterministic` and cannot satisfy protected-live certification.
 

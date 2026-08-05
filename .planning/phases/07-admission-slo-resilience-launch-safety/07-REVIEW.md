@@ -1,9 +1,12 @@
 ---
 phase: 07-admission-slo-resilience-launch-safety
-reviewed: 2026-08-05T21:41:32Z
+reviewed: 2026-08-05T22:37:29Z
 depth: deep
-files_reviewed: 14
+files_reviewed: 21
 files_reviewed_list:
+  - package.json
+  - scripts/verify-phase-07-otel-packages.ts
+  - scripts/verify-phase-07-release.ts
   - scripts/verify-phase-07-reproducibility.ts
   - src/certification/contracts.ts
   - src/certification/evidence.ts
@@ -15,32 +18,54 @@ files_reviewed_list:
   - src/promotion/run-promotion.ts
   - src/promotion/schema.ts
   - tests/phase-07/certification-runner.test.ts
+  - tests/phase-07/otel-package-legitimacy.test.ts
   - tests/phase-07/promotion-gate.test.ts
   - tests/phase-07/reproducibility.test.ts
   - tests/phase-07/supply-chain.test.ts
+  - evidence/certification/phase-07-otel-package-approval.json
+  - evidence/certification/otel-package-approvals/09594baf4025de3081ec59005b529d2e031c06c38523b8c086efd97dd6e6cc7c.json
+  - evidence/certification/otel-package-smokes/23991864857cc45d6557e96907a9af75084b7b29d49023fb50a8fe8d44849919.json
 findings:
   critical: 0
   warning: 0
   info: 0
   total: 0
 status: clean
-fixed_at: 2026-08-05T21:41:32Z
+fixed_at: 2026-08-05T22:37:29Z
 ---
 
 # Phase 07: Code Review Report
 
-**Reviewed:** 2026-08-05T21:41:32Z
+**Reviewed:** 2026-08-05T22:37:29Z
 **Depth:** deep
-**Files Reviewed:** 14
+**Files Reviewed:** 21
 **Status:** clean
 
 ## Summary
 
-All previous findings are fixed. This final deep pass confirms that promotion authenticates the exact manifest, records, and observations before any cache lookup and fingerprints those values in the cache key. The reproducibility command now requires a digest-pinned, containment-checked operator trust-root module that independently measures immutable source bytes. No additional correctness, security, or robustness defect was found in the reviewed scope.
+All prior findings are fixed. The evaluator now compares the supplied source measurement with the canonical manifest-derived revision and digest before invoking the trust root, computing a cache key, or calling the inner evaluator. The two-archive substitution regression proves that archive B cannot authorize manifest A even when the root pins both archives; the root's existing byte-hash check rejects manifest A when its archive is mutated or absent. No additional correctness, security, or robustness defect was found in the reviewed scope.
 
 ## Narrative Findings (AI reviewer)
 
 ## Critical Issues
+
+### CR-05: Direct promotion can authenticate a different trusted archive than the release manifest — fixed
+
+**File:** `/Users/sandwich/Develop/napplet-cvm/src/promotion/run-promotion.ts:149`
+**Issue:** `evaluateReleaseCertification` accepts caller-provided `sourceMeasurement` as `unknown` and only asks the root whether that object is a recognized measurement. It never checks `sourceMeasurement.sourceRevision` or `.sourceSha256` against `manifest.sourceRevision` / `.sourceSha256`; `evaluateReleaseCertificationInner` receives no measurement to do so either. A root with more than one pinned archive can therefore accept measurement B while it separately authenticates manifest A, A's observations, and A's verification records. A direct caller of this exported sole evaluator can then promote A even after A's archive has drifted or disappeared, provided B remains valid. The new cache fingerprint distinguishes A+B from A+A, but it does not make B manifest-bound.
+
+**Fix:** Do not accept this fact from a caller. Construct it inside `evaluateReleaseCertification` with `releaseSourceMeasurement(manifest)` and remove `sourceMeasurement` from the public input; alternatively, strictly parse it and reject unless both values exactly equal the manifest before calling `verifySourceMeasurement`:
+
+```ts
+const expected = releaseSourceMeasurement(manifest);
+if (canonicalJson(input.sourceMeasurement) !== canonicalJson(expected)) {
+  return blocked("RELEASE_SOURCE_MEASUREMENT_INVALID");
+}
+```
+
+Add a regression with two valid root-pinned archives: use manifest A with measurement B and assert blocking before cache/evaluator reuse, then mutate/remove archive A and assert that it still blocks.
+
+**Resolved:** `2806dd5` compares the supplied measurement to `releaseSourceMeasurement(manifest)` before any root call or cache lookup. The new two-archive regression confirms that an otherwise trusted B measurement does not call the root for manifest A, including after archive A is mutated or removed.
 
 ### CR-01: A self-authenticated release bundle can manufacture a promoted decision — fixed
 
@@ -103,6 +128,6 @@ const SourceRevisionSchema = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i
 
 ---
 
-_Reviewed: 2026-08-05T21:41:32Z; fixes applied 2026-08-05T21:41:32Z_
+_Reviewed: 2026-08-05T22:37:29Z; fixes applied 2026-08-05T22:37:29Z_
 _Reviewer: the agent (gsd-code-reviewer)_
 _Depth: deep_

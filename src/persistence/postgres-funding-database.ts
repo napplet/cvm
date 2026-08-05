@@ -4,7 +4,7 @@ import type { LightningPrivateTopUp, LightningTopUpRepository, LightningTopUpSta
 import type { ProtectedRailMaterialRecord, ProtectedRailMaterialRepository } from "../funding/protected-rail-material";
 import type { AccountTopUpStatus } from "../phase-03/contracts";
 import { PostgresSqlFundingStore, type PostgresSqlClient, type PostgresSqlPool, type PostgresSqlStoreOptions } from "./postgres-sql-funding-store";
-import type { MeteredFundingStore } from "./funding-store";
+import type { ContinuationFundingStore, MeteredFundingStore } from "./funding-store";
 
 type LightningJson = Readonly<{
   topUps?: readonly [string, LightningPrivateTopUp][];
@@ -147,6 +147,8 @@ export class PostgresFundingDatabase {
   readonly funding: PostgresSqlFundingStore;
   /** Alias of `funding`, not a second billing/session capability or connection. */
   readonly meteredFunding: MeteredFundingStore;
+  /** Alias of `funding`; continuation state never receives a second authority. */
+  readonly continuationFunding: ContinuationFundingStore;
   readonly lightning: LightningTopUpRepository;
   readonly cashu: CashuTopUpRepository;
   readonly protectedMaterials: ProtectedRailMaterialRepository;
@@ -155,6 +157,7 @@ export class PostgresFundingDatabase {
   constructor(pool: PostgresSqlPool, options: PostgresSqlStoreOptions = {}) {
     this.funding = new PostgresSqlFundingStore(pool, options);
     this.meteredFunding = this.funding;
+    this.continuationFunding = this.funding;
     this.lightning = new PostgresLightningLifecycleRepository(pool);
     this.cashu = new PostgresCashuLifecycleRepository(pool);
     this.protectedMaterials = new PostgresProtectedRailMaterialRepository(pool);

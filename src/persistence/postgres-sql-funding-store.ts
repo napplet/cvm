@@ -1,6 +1,6 @@
 import type { AccountStatus, FundedAdmission, FundingResult } from "../phase-03/contracts";
 import { AccountStatusSchema, FundingResultSchema } from "../phase-03/contracts";
-import { canonicalMeteredTerminalResult, type ActionBudget, type ActionBudgetInput, type AdmissionInput, type BillingLineItem, type BillingLineItemPage, type BillingLineItemPageRequest, type CapacityDispatchClaim, type CapacityIntent, type CapacityIntentInput, type CapacityObservationInput, type CreditInput, type MeteredAction, type MeteredFinalizeInput, type MeteredFundingStore, type MeteredFundingTransaction, type MeteredOperationClaim, type MeteredSessionRecord, type PrepareMeteredActionInput, type ReconciliationClaim, type StoredFundingCommand, type UsageUnknownInput } from "./funding-store";
+import { canonicalMeteredTerminalResult, type ActionBudget, type ActionBudgetInput, type AdmissionInput, type BeginDeadlineCheckpointInput, type BillingLineItem, type BillingLineItemPage, type BillingLineItemPageRequest, type CapacityDispatchClaim, type CapacityIntent, type CapacityIntentInput, type CapacityObservationInput, type ContinuationCheckpoint, type ContinuationCheckpointInput, type ContinuationFundingStore, type ContinuationFundingTransaction, type ContinuationPause, type ContinuationPauseInput, type ContinuationRecord, type ContinuationResumeClaim, type ContinuationResumeClaimInput, type CreditInput, type DeletionOutcomeInput, type MeteredAction, type MeteredFinalizeInput, type MeteredFundingStore, type MeteredFundingTransaction, type MeteredOperationClaim, type MeteredSessionRecord, type PrepareMeteredActionInput, type ReconciliationClaim, type RestoreObservationInput, type StoredFundingCommand, type UsageUnknownInput } from "./funding-store";
 import { SerializationFailure } from "./postgres-funding-store";
 
 type SqlRow = Record<string, unknown>;
@@ -24,6 +24,8 @@ const lineCursor = (accountId: string, item: BillingLineItem) => Buffer.from(JSO
 const actionFromRow = (row: SqlRow): MeteredAction => frozen({ accountId: asText(row.account_id), idempotencyKey: asText(row.idempotency_key), fingerprint: asText(row.fingerprint), sessionId: asText(row.session_id), actionId: asText(row.id), expectedVersion: Number(row.expected_session_version), admissionReference: asText(row.admission_reference), actionBudgetReference: asText(row.budget_reference), maximum: asBigInt(row.reservation_sat), operationId: asText(row.operation_id), profileId: asText(row.profile_id), priceCardId: asText(row.price_card_id), status: actionStatus(asText(row.state)), ...(row.receipt_charge !== undefined && row.receipt_charge !== null ? { receiptCharge: asText(row.receipt_charge) } : {}), ...(row.provider_receipt_reference ? { providerReceiptReference: asText(row.provider_receipt_reference) } : {}), ...(row.provider_request_id ? { providerRequestId: asText(row.provider_request_id) } : {}), ...(row.terminal_result ? { result: row.terminal_result } : {}), ...(row.session_version !== undefined && row.session_version !== null ? { sessionVersion: Number(row.session_version) } : {}), ...(row.artifact_version !== undefined && row.artifact_version !== null ? { artifactVersion: Number(row.artifact_version) } : {}), ...(row.remaining_cap_sat !== undefined && row.remaining_cap_sat !== null ? { remainingCap: asText(row.remaining_cap_sat) } : {}), ...(row.remaining_balance_sat !== undefined && row.remaining_balance_sat !== null ? { remainingBalance: asText(row.remaining_balance_sat) } : {}), ...(row.workspace_lineage ? { artifact: { ...(row.artifact_id ? { artifactId: asText(row.artifact_id) } : {}), workspaceLineage: asText(row.workspace_lineage), checkpointReference: asText(row.checkpoint_reference), snapshotReference: asText(row.snapshot_reference), validationEvidenceReference: asText(row.validation_evidence_reference), ...(row.failed_artifact_id ? { failedArtifactId: asText(row.failed_artifact_id) } : {}), ...(row.validation_report_reference ? { validationReportReference: asText(row.validation_report_reference) } : {}) } } : {}) });
 const actionFromOperationRow = (row: SqlRow, operationId: string): MeteredAction => actionFromRow({ ...row, operation_id: operationId, profile_id: row.profile_id ?? "unknown", price_card_id: row.price_card_id ?? "unknown" });
 const lineItemFromRow = (row: SqlRow): BillingLineItem => frozen({ id: asText(row.id), sequence: asText(row.sequence), accountId: asText(row.account_id), ...(row.session_id ? { sessionId: asText(row.session_id) } : {}), ...(row.action_id ? { actionId: asText(row.action_id) } : {}), ...(row.operation_id ? { operationId: asText(row.operation_id) } : {}), sourceIdentity: asText(row.source_identity), kind: asText(row.kind) as BillingLineItem["kind"], unit: "sat", amount: asText(row.amount_sat), settledAvailable: asText(row.settled_available_sat), held: asText(row.held_sat), sessionSpend: asText(row.session_spend_sat) });
+const pauseFromRow = (row: SqlRow): ContinuationPause => frozen({ accountId: asText(row.account_id), sessionId: asText(row.session_id), admissionReference: asText(row.admission_reference), idempotencyKey: asText(row.idempotency_key), fingerprint: asText(row.fingerprint_sha256), pendingFingerprint: asText(row.pending_fingerprint_sha256), expectedSessionVersion: Number(row.expected_session_version), pauseGeneration: Number(row.pause_generation), graceDeadlineMs: Number(row.grace_deadline_ms), ...(row.live_lease_token ? { liveLeaseToken: asText(row.live_lease_token) } : {}), result: row.result_json as ContinuationPause["result"], state: asText(row.state) as ContinuationPause["state"] });
+const checkpointFromRow = (row: SqlRow): ContinuationCheckpoint => frozen({ accountId: asText(row.account_id), sessionId: asText(row.session_id), pauseGeneration: Number(row.pause_generation), checkpointId: asText(row.checkpoint_id), expectedSessionVersion: Number(row.expected_session_version), expectedArtifactVersion: Number(row.expected_artifact_version), manifestReference: asText(row.manifest_reference), objectKey: asText(row.object_key), objectGeneration: asText(row.object_generation), objectChecksum: asText(row.object_checksum), keyReference: asText(row.key_reference), compatibilityIdentity: asText(row.compatibility_identity), checkpointCommittedAtMs: Number(row.checkpoint_committed_at_ms), retentionDeadlineMs: Number(row.retention_deadline_ms), state: asText(row.state) as ContinuationCheckpoint["state"] });
 const deadlineError = () => new Error("POSTGRES_OPERATION_DEADLINE_EXCEEDED");
 async function beforeDeadline<T>(promise: Promise<T>, deadline: number, now: () => number): Promise<T> {
   const remaining = deadline - now();
@@ -47,7 +49,7 @@ class DeadlineSqlClient implements PostgresSqlClient {
  * one checked-out pg client after `BEGIN ... SERIALIZABLE`; the deterministic
  * map executor remains a test double in its own module.
  */
-export class PostgresSqlFundingStore implements MeteredFundingStore {
+export class PostgresSqlFundingStore implements MeteredFundingStore, ContinuationFundingStore {
   readonly production = true as const;
   readonly #maxAttempts: number;
   readonly #deadlineMs: number;
@@ -73,6 +75,20 @@ export class PostgresSqlFundingStore implements MeteredFundingStore {
     const client = await this.pool.connect();
     try { const row = (await client.query("SELECT account_id,idempotency_key,fingerprint,session_id,id,expected_session_version,admission_reference,budget_reference,reservation_sat,operation_id,profile_id,price_card_id,state,receipt_charge,provider_receipt_reference,terminal_result,session_version,artifact_version,remaining_cap_sat,remaining_balance_sat,artifact_id,workspace_lineage,checkpoint_reference,snapshot_reference,validation_evidence_reference,failed_artifact_id,validation_report_reference FROM metered_actions WHERE account_id=$1 AND idempotency_key=$2", [accountId, idempotencyKey])).rows[0]; return row && actionFromRow(row); } finally { client.release(); }
   }
+  async findContinuation(accountId: string, idempotencyKey: string): Promise<ContinuationRecord | undefined> {
+    const client = await this.pool.connect();
+    try {
+      const row = (await client.query("SELECT account_id,session_id,idempotency_key,fingerprint_sha256,pending_fingerprint_sha256,expected_session_version,result_json FROM continuation_pauses WHERE account_id=$1 AND idempotency_key=$2", [accountId, idempotencyKey])).rows[0];
+      return row && frozen({ intent: { accountId, sessionId: asText(row.session_id), idempotencyKey, fingerprint: asText(row.fingerprint_sha256), pendingFingerprint: asText(row.pending_fingerprint_sha256), expectedSessionVersion: Number(row.expected_session_version) }, result: row.result_json } as unknown as ContinuationRecord);
+    } finally { client.release(); }
+  }
+  async findContinuationForSession(accountId: string, sessionId: string): Promise<ContinuationRecord | undefined> {
+    const client = await this.pool.connect();
+    try {
+      const row = (await client.query("SELECT account_id,session_id,idempotency_key,fingerprint_sha256,pending_fingerprint_sha256,expected_session_version,result_json FROM continuation_pauses WHERE account_id=$1 AND session_id=$2 ORDER BY pause_generation DESC LIMIT 1", [accountId, sessionId])).rows[0];
+      return row && frozen({ intent: { accountId, sessionId, idempotencyKey: asText(row.idempotency_key), fingerprint: asText(row.fingerprint_sha256), pendingFingerprint: asText(row.pending_fingerprint_sha256), expectedSessionVersion: Number(row.expected_session_version) }, result: row.result_json } as unknown as ContinuationRecord);
+    } finally { client.release(); }
+  }
   async findMeteredActionByOperation(accountId: string, operationId: string): Promise<MeteredAction | undefined> {
     const client = await this.pool.connect();
     try { const row = (await client.query("SELECT a.account_id,a.idempotency_key,a.fingerprint,a.session_id,a.id,a.expected_session_version,a.admission_reference,a.budget_reference,a.reservation_sat,a.operation_id,a.profile_id,a.price_card_id,a.state,a.receipt_charge,a.provider_receipt_reference,a.terminal_result,a.session_version,a.artifact_version,a.remaining_cap_sat,a.remaining_balance_sat,a.artifact_id,a.workspace_lineage,a.checkpoint_reference,a.snapshot_reference,a.validation_evidence_reference,a.failed_artifact_id,a.validation_report_reference,o.provider_request_id FROM metered_actions a JOIN provider_operations o ON o.id=a.operation_id WHERE a.account_id=$1 AND a.operation_id=$2", [accountId, operationId])).rows[0]; return row && actionFromRow(row); } finally { client.release(); }
@@ -96,7 +112,9 @@ export class PostgresSqlFundingStore implements MeteredFundingStore {
     try { const row = (await client.query("SELECT account_id,id,version,state FROM metered_sessions WHERE account_id=$1 AND id=$2", [accountId, sessionId])).rows[0]; return row && frozen({ accountId: asText(row.account_id), sessionId: asText(row.id), version: Number(row.version), status: sessionStatus(asText(row.state)) }); } finally { client.release(); }
   }
 
-  async transact<T>(accountId: string, operation: (transaction: MeteredFundingTransaction) => Promise<T> | T): Promise<T> {
+  async transact<T>(accountId: string, operation: (transaction: MeteredFundingTransaction) => Promise<T> | T): Promise<T>;
+  async transact<T>(accountId: string, operation: (transaction: ContinuationFundingTransaction) => Promise<T> | T): Promise<T>;
+  async transact<T>(accountId: string, operation: (transaction: MeteredFundingTransaction & ContinuationFundingTransaction) => Promise<T> | T): Promise<T> {
     const deadline = this.#now() + this.#deadlineMs;
     let last: unknown;
     for (let attempt = 0; attempt < this.#maxAttempts && this.#now() < deadline; attempt += 1) {
@@ -133,12 +151,99 @@ export class PostgresSqlFundingStore implements MeteredFundingStore {
   }
 }
 
-class PgFundingTransaction implements MeteredFundingTransaction {
+class PgFundingTransaction implements MeteredFundingTransaction, ContinuationFundingTransaction {
   constructor(private readonly client: PostgresSqlClient, private readonly accountId: string) {}
   async findRecordedResult(idempotencyKey: string): Promise<StoredFundingCommand | undefined> {
     const result = await this.client.query<{ fingerprint_sha256: string; result_json: FundingResult }>("SELECT fingerprint_sha256, result_json FROM funding_commands WHERE account_id = $1 AND idempotency_key = $2 ORDER BY created_at DESC LIMIT 1", [this.accountId, idempotencyKey]);
     const row = result.rows[0]; return row && frozen({ fingerprint: row.fingerprint_sha256, result: FundingResultSchema.parse(row.result_json) });
   }
+  async continuationFundingSnapshot(admissionReference: string) {
+    const balance = first(await this.client.query("SELECT settled_available,held FROM account_balance_projection WHERE account_id=$1 FOR UPDATE", [this.accountId]), "ACCOUNT_BALANCE_NOT_FOUND");
+    const hold = first(await this.client.query("SELECT held_amount FROM session_cap_holds WHERE account_id=$1 AND reference=$2 AND state='active' FOR UPDATE", [this.accountId, admissionReference]), "ACTIVE_ADMISSION_REQUIRED");
+    return frozen({ settledBalance: asBigInt(balance.settled_available), availableBalance: asBigInt(balance.settled_available) - asBigInt(balance.held), remainingCap: asBigInt(hold.held_amount) });
+  }
+  async findContinuation(idempotencyKey: string): Promise<ContinuationRecord | undefined> {
+    const row = (await this.client.query("SELECT account_id,session_id,idempotency_key,fingerprint_sha256,pending_fingerprint_sha256,expected_session_version,result_json FROM continuation_pauses WHERE account_id=$1 AND idempotency_key=$2 FOR UPDATE", [this.accountId, idempotencyKey])).rows[0];
+    return row && frozen({ intent: { accountId: this.accountId, sessionId: asText(row.session_id), idempotencyKey, fingerprint: asText(row.fingerprint_sha256), pendingFingerprint: asText(row.pending_fingerprint_sha256), expectedSessionVersion: Number(row.expected_session_version) }, result: row.result_json } as unknown as ContinuationRecord);
+  }
+  async pauseForFunding(input: ContinuationRecord): Promise<ContinuationRecord>;
+  async pauseForFunding(input: ContinuationPauseInput): Promise<ContinuationPause>;
+  async pauseForFunding(input: ContinuationRecord | ContinuationPauseInput): Promise<ContinuationRecord | ContinuationPause> {
+    if ("intent" in input) {
+      const prior = await this.findContinuation(input.intent.idempotencyKey);
+      if (prior) { if (prior.intent.fingerprint !== input.intent.fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT"); return prior; }
+      // The Phase 01 façade is retained for compatibility; durable checkpoint
+      // generation uses the richer pause input below.
+      return frozen(input);
+    }
+    this.assertScope(input.accountId);
+    const existing = await this.client.query("SELECT account_id,session_id,admission_reference,idempotency_key,fingerprint_sha256,pending_fingerprint_sha256,expected_session_version,pause_generation,grace_deadline_ms,live_lease_token,result_json,state FROM continuation_pauses WHERE account_id=$1 AND idempotency_key=$2 FOR UPDATE", [this.accountId, input.idempotencyKey]);
+    if (existing.rows[0]) { const pause = pauseFromRow(existing.rows[0]); if (pause.fingerprint !== input.fingerprint || pause.sessionId !== input.sessionId || pause.pauseGeneration !== input.pauseGeneration) throw new Error("IDEMPOTENCY_KEY_CONFLICT"); return pause; }
+    const generation = await this.client.query("SELECT pause_id FROM continuation_pauses WHERE account_id=$1 AND session_id=$2 AND pause_generation=$3 FOR UPDATE", [this.accountId, input.sessionId, input.pauseGeneration]);
+    if (generation.rows[0]) throw new Error("PAUSE_GENERATION_CONFLICT");
+    await this.client.query("INSERT INTO continuation_pauses(pause_id,account_id,session_id,admission_reference,idempotency_key,fingerprint_sha256,pending_fingerprint_sha256,pause_generation,expected_session_version,grace_deadline_ms,live_lease_token,state,result_json) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'needs_top_up',$12)", [id("pause", `${input.sessionId}:${input.pauseGeneration}`), this.accountId, input.sessionId, input.admissionReference, input.idempotencyKey, input.fingerprint, input.pendingFingerprint, input.pauseGeneration, input.expectedSessionVersion, input.graceDeadlineMs, input.liveLeaseToken, JSON.stringify(input.result)]);
+    return frozen({ ...input, state: "needs_top_up" as const });
+  }
+  async findContinuationPause(sessionId: string, pauseGeneration: number): Promise<ContinuationPause | undefined> {
+    const row = (await this.client.query("SELECT account_id,session_id,admission_reference,idempotency_key,fingerprint_sha256,pending_fingerprint_sha256,expected_session_version,pause_generation,grace_deadline_ms,live_lease_token,result_json,state FROM continuation_pauses WHERE account_id=$1 AND session_id=$2 AND pause_generation=$3 FOR UPDATE", [this.accountId, sessionId, pauseGeneration])).rows[0];
+    return row && pauseFromRow(row);
+  }
+  async wakePausedAction(input: Readonly<{ sessionId: string; pauseGeneration: number; nowMs: number; liveLeaseToken: string }>): Promise<ContinuationPause> {
+    const pause = await this.findContinuationPause(input.sessionId, input.pauseGeneration);
+    if (!pause) throw new Error("CONTINUATION_PAUSE_NOT_FOUND");
+    if (pause.liveLeaseToken !== input.liveLeaseToken) throw new Error("STALE_WORKER_LEASE");
+    if (input.nowMs >= pause.graceDeadlineMs) throw new Error("GRACE_DEADLINE_EXPIRED");
+    if (pause.state !== "needs_top_up") return pause;
+    return pause;
+  }
+  async beginDeadlineCheckpoint(input: BeginDeadlineCheckpointInput): Promise<ContinuationPause> {
+    const pause = await this.findContinuationPause(input.sessionId, input.pauseGeneration);
+    if (!pause) throw new Error("CONTINUATION_PAUSE_NOT_FOUND");
+    if (pause.liveLeaseToken !== input.liveLeaseToken) throw new Error("STALE_WORKER_LEASE");
+    if (pause.state === "checkpointing") return pause;
+    if (pause.state !== "needs_top_up") throw new Error("CHECKPOINT_STATE_INVALID");
+    await this.client.query("UPDATE continuation_pauses SET state='checkpointing' WHERE account_id=$1 AND session_id=$2 AND pause_generation=$3 AND state='needs_top_up'", [this.accountId, input.sessionId, input.pauseGeneration]);
+    return frozen({ ...pause, state: "checkpointing" as const });
+  }
+  async commitDeadlineCheckpoint(input: ContinuationCheckpointInput): Promise<ContinuationCheckpoint> {
+    this.assertScope(input.accountId);
+    const existing = await this.client.query("SELECT account_id,session_id,pause_generation,checkpoint_id,expected_session_version,expected_artifact_version,manifest_reference,object_key,object_generation,object_checksum,key_reference,compatibility_identity,checkpoint_committed_at_ms,retention_deadline_ms,state FROM continuation_checkpoints WHERE checkpoint_id=$1 FOR UPDATE", [input.checkpointId]);
+    if (existing.rows[0]) { const checkpoint = checkpointFromRow(existing.rows[0]); if (checkpoint.objectGeneration !== input.objectGeneration || checkpoint.objectChecksum !== input.objectChecksum) throw new Error("CHECKPOINT_IDENTITY_CONFLICT"); return checkpoint; }
+    const pause = await this.findContinuationPause(input.sessionId, input.pauseGeneration);
+    if (!pause || pause.state !== "checkpointing") throw new Error("CHECKPOINT_STATE_INVALID");
+    const deadline = input.checkpointCommittedAtMs + 2_592_000_000;
+    await this.client.query("INSERT INTO continuation_checkpoints(checkpoint_id,account_id,session_id,pause_generation,expected_session_version,expected_artifact_version,manifest_reference,object_key,object_generation,object_checksum,key_reference,compatibility_identity,checkpoint_committed_at_ms,retention_deadline_ms,state) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'resume_required')", [input.checkpointId, this.accountId, input.sessionId, input.pauseGeneration, input.expectedSessionVersion, input.expectedArtifactVersion, input.manifestReference, input.objectKey, input.objectGeneration, input.objectChecksum, input.keyReference, input.compatibilityIdentity, input.checkpointCommittedAtMs, deadline]);
+    await this.client.query("UPDATE continuation_pauses SET state='resume_required',live_lease_token=NULL WHERE account_id=$1 AND session_id=$2 AND pause_generation=$3 AND state='checkpointing'", [this.accountId, input.sessionId, input.pauseGeneration]);
+    return frozen({ ...input, retentionDeadlineMs: deadline, state: "resume_required" as const });
+  }
+  async claimResume(input: ContinuationResumeClaimInput): Promise<ContinuationResumeClaim> {
+    this.assertScope(input.accountId);
+    const replay = await this.client.query("SELECT account_id,checkpoint_id,idempotency_key,fingerprint_sha256,lease_token,allocation_intent_reference FROM continuation_resume_commands WHERE account_id=$1 AND idempotency_key=$2 FOR UPDATE", [this.accountId, input.idempotencyKey]);
+    if (replay.rows[0]) { const row = replay.rows[0]; if (asText(row.fingerprint_sha256) !== input.fingerprint || asText(row.checkpoint_id) !== input.checkpointId) throw new Error("IDEMPOTENCY_KEY_CONFLICT"); return frozen({ accountId: this.accountId, checkpointId: input.checkpointId, idempotencyKey: input.idempotencyKey, fingerprint: input.fingerprint, leaseToken: asText(row.lease_token), allocationIntentReference: asText(row.allocation_intent_reference), claimed: true }); }
+    const row = first(await this.client.query("SELECT account_id,session_id,pause_generation,checkpoint_id,expected_session_version,expected_artifact_version,manifest_reference,object_key,object_generation,object_checksum,key_reference,compatibility_identity,checkpoint_committed_at_ms,retention_deadline_ms,state FROM continuation_checkpoints WHERE checkpoint_id=$1 AND account_id=$2 FOR UPDATE", [input.checkpointId, this.accountId]), "CHECKPOINT_NOT_FOUND_OR_DENIED");
+    const checkpoint = checkpointFromRow(row);
+    if (input.nowMs >= checkpoint.retentionDeadlineMs || checkpoint.state === "expired") throw new Error("CHECKPOINT_EXPIRED");
+    if (checkpoint.state !== "resume_required") throw new Error("CHECKPOINT_ALREADY_CLAIMED");
+    if (checkpoint.sessionId !== input.sessionId || checkpoint.expectedSessionVersion !== input.expectedSessionVersion || input.expectedCheckpointVersion !== 1) throw new Error("STALE_CHECKPOINT_VERSION");
+    const pause = await this.findContinuationPause(input.sessionId, checkpoint.pauseGeneration);
+    if (!pause || pause.pendingFingerprint !== input.pendingFingerprint) throw new Error("PENDING_ACTION_CONFLICT");
+    const result = frozen({ accountId: this.accountId, checkpointId: input.checkpointId, idempotencyKey: input.idempotencyKey, fingerprint: input.fingerprint, leaseToken: input.newLeaseToken, allocationIntentReference: input.allocationIntentReference, claimed: true as const });
+    await this.client.query("INSERT INTO continuation_resume_commands(command_id,account_id,checkpoint_id,idempotency_key,fingerprint_sha256,pending_fingerprint_sha256,expected_checkpoint_version,expected_session_version,lease_token,allocation_intent_reference,result_json) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)", [id("resume", input.idempotencyKey), this.accountId, input.checkpointId, input.idempotencyKey, input.fingerprint, input.pendingFingerprint, input.expectedCheckpointVersion, input.expectedSessionVersion, input.newLeaseToken, input.allocationIntentReference, JSON.stringify(result)]);
+    await this.client.query("UPDATE continuation_checkpoints SET state='claimed' WHERE checkpoint_id=$1 AND state='resume_required'", [input.checkpointId]);
+    await this.client.query("UPDATE continuation_pauses SET state='claimed' WHERE account_id=$1 AND session_id=$2 AND pause_generation=$3", [this.accountId, input.sessionId, checkpoint.pauseGeneration]);
+    return result;
+  }
+  async recordRestoreObservation(input: RestoreObservationInput): Promise<RestoreObservationInput> { await this.client.query("INSERT INTO continuation_restore_observations(checkpoint_id,allocation_intent_reference,state) VALUES ($1,$2,$3) ON CONFLICT (checkpoint_id,allocation_intent_reference) DO NOTHING", [input.checkpointId, input.allocationIntentReference, input.state]); return frozen(input); }
+  async tombstoneExpiredCheckpoint(input: Readonly<{ checkpointId: string; nowMs: number }>): Promise<ContinuationCheckpoint> {
+    const row = first(await this.client.query("SELECT account_id,session_id,pause_generation,checkpoint_id,expected_session_version,expected_artifact_version,manifest_reference,object_key,object_generation,object_checksum,key_reference,compatibility_identity,checkpoint_committed_at_ms,retention_deadline_ms,state FROM continuation_checkpoints WHERE checkpoint_id=$1 AND account_id=$2 FOR UPDATE", [input.checkpointId, this.accountId]), "CHECKPOINT_NOT_FOUND");
+    const checkpoint = checkpointFromRow(row);
+    if (checkpoint.state === "claimed" || checkpoint.state === "expired") return checkpoint;
+    if (input.nowMs < checkpoint.retentionDeadlineMs) throw new Error("CHECKPOINT_RETENTION_ACTIVE");
+    await this.client.query("UPDATE continuation_checkpoints SET state='expired' WHERE checkpoint_id=$1 AND state='resume_required'", [input.checkpointId]);
+    await this.client.query("INSERT INTO continuation_tombstones(checkpoint_id,account_id,expired_at_ms) VALUES ($1,$2,$3) ON CONFLICT (checkpoint_id) DO NOTHING", [input.checkpointId, this.accountId, input.nowMs]);
+    return frozen({ ...checkpoint, state: "expired" as const });
+  }
+  async recordDeletionOutcome(input: DeletionOutcomeInput): Promise<DeletionOutcomeInput> { await this.client.query("INSERT INTO continuation_deletions(checkpoint_id,object_generation,state) VALUES ($1,$2,$3) ON CONFLICT (checkpoint_id,object_generation) DO NOTHING", [input.checkpointId, input.objectGeneration, input.state]); return frozen(input); }
   async creditVerifiedSettlement(input: CreditInput): Promise<FundingResult> {
     this.assertScope(input.accountId); await this.ensureAccount(this.accountId); await this.ensureAccount("treasury:clearing");
     const amount = BigInt(input.settlement.amount); if (amount <= 0n) throw new Error("INVALID_SETTLEMENT_AMOUNT");

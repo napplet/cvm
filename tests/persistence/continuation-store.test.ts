@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { TransactionalMemoryFundingStore, type ContinuationCheckpointInput, type ContinuationPauseInput, type ContinuationResumeClaimInput } from "../../src/persistence/funding-store";
+import { TransactionalMemoryFundingStore, type ContinuationCheckpointInput, type ContinuationFundingStore, type ContinuationPauseInput, type ContinuationResumeClaimInput } from "../../src/persistence/funding-store";
 
 const accountId = "account:continuation";
 const pause = (overrides: Partial<ContinuationPauseInput> = {}): ContinuationPauseInput => ({
@@ -13,7 +13,7 @@ const pause = (overrides: Partial<ContinuationPauseInput> = {}): ContinuationPau
   pauseGeneration: 1,
   graceDeadlineMs: 1_600,
   liveLeaseToken: "lease:live",
-  result: { status: "needs_top_up", sessionId: "session:one", pendingAction: "revision", pendingFingerprint: "b".repeat(64), additionalFunding: "1", remainingCap: "5", availableBalance: "0", graceDeadline: new Date(1_600).toISOString() },
+  result: { status: "needs_top_up", code: "ACTION_AFFORDABILITY_REQUIRED", accountId, sessionId: "session:one", pendingActionReference: "pending:one", pendingActionFingerprint: "b".repeat(64), pendingActionKind: "revise_session", actionMaximum: "5", requiredAdditionalFunding: "1", requiredCapApproval: "0", settledBalance: "0", availableBalance: "0", remainingCap: "5", graceDeadlineMs: 1_600, checkpoint: { state: "live_worker", reference: "lease:live" }, nextRequiredAction: "top_up" },
   ...overrides,
 });
 
@@ -52,16 +52,18 @@ const claim = (overrides: Partial<ContinuationResumeClaimInput> = {}): Continuat
 describe("TransactionalMemoryFundingStore continuation authority", () => {
   test("stores one pause generation, replays an exact duplicate, and rejects altered reuse", async () => {
     const store = new TransactionalMemoryFundingStore();
-    const first = await store.transact(accountId, (tx) => tx.pauseForFunding(pause()));
-    const replay = await store.transact(accountId, (tx) => tx.pauseForFunding(pause()));
+    const continuationStore = store as ContinuationFundingStore;
+    const first = await continuationStore.transact(accountId, (tx) => tx.pauseForFunding(pause()));
+    const replay = await continuationStore.transact(accountId, (tx) => tx.pauseForFunding(pause()));
     expect(replay).toEqual(first);
-    await expect(store.transact(accountId, (tx) => tx.pauseForFunding(pause({ fingerprint: "e".repeat(64) })))).rejects.toThrow("IDEMPOTENCY_KEY_CONFLICT");
+    await expect(continuationStore.transact(accountId, (tx) => tx.pauseForFunding(pause({ fingerprint: "e".repeat(64) })))).rejects.toThrow("IDEMPOTENCY_KEY_CONFLICT");
   });
 
   test("commits a checkpoint while revoking the live lease, then elects one resume claim", async () => {
     const store = new TransactionalMemoryFundingStore();
-    await store.transact(accountId, (tx) => tx.pauseForFunding(pause()));
-    const committed = await store.transact(accountId, async (tx) => {
+    const continuationStore = store as ContinuationFundingStore;
+    await continuationStore.transact(accountId, (tx) => tx.pauseForFunding(pause()));
+    const committed = await continuationStore.transact(accountId, async (tx) => {
       await tx.beginDeadlineCheckpoint({ sessionId: "session:one", pauseGeneration: 1, liveLeaseToken: "lease:live" });
       return tx.commitDeadlineCheckpoint(checkpoint());
     });
@@ -69,8 +71,8 @@ describe("TransactionalMemoryFundingStore continuation authority", () => {
     expect(committed.liveLeaseToken).toBeUndefined();
 
     const [left, right] = await Promise.all([
-      store.transact(accountId, (tx) => tx.claimResume(claim())),
-      store.transact(accountId, (tx) => tx.claimResume(claim())),
+      continuationStore.transact(accountId, (tx) => tx.claimResume(claim())),
+      continuationStore.transact(accountId, (tx) => tx.claimResume(claim())),
     ]);
     expect(left).toEqual(right);
     expect(left.claimed).toBeTrue();
@@ -79,17 +81,19 @@ describe("TransactionalMemoryFundingStore continuation authority", () => {
 
   test("makes expiry terminal at the exact retention deadline while preserving a pre-expiry claim", async () => {
     const store = new TransactionalMemoryFundingStore();
-    await store.transact(accountId, (tx) => tx.pauseForFunding(pause()));
-    await store.transact(accountId, async (tx) => { await tx.beginDeadlineCheckpoint({ sessionId: "session:one", pauseGeneration: 1, liveLeaseToken: "lease:live" }); return tx.commitDeadlineCheckpoint(checkpoint()); });
+    const continuationStore = store as ContinuationFundingStore;
+    await continuationStore.transact(accountId, (tx) => tx.pauseForFunding(pause()));
+    await continuationStore.transact(accountId, async (tx) => { await tx.beginDeadlineCheckpoint({ sessionId: "session:one", pauseGeneration: 1, liveLeaseToken: "lease:live" }); return tx.commitDeadlineCheckpoint(checkpoint()); });
     const retentionDeadlineMs = 2_000 + 2_592_000_000;
-    const claimed = await store.transact(accountId, (tx) => tx.claimResume(claim({ nowMs: retentionDeadlineMs - 1 })));
+    const claimed = await continuationStore.transact(accountId, (tx) => tx.claimResume(claim({ nowMs: retentionDeadlineMs - 1 })));
     expect(claimed.claimed).toBeTrue();
-    expect((await store.transact(accountId, (tx) => tx.tombstoneExpiredCheckpoint({ checkpointId: "checkpoint:one", nowMs: retentionDeadlineMs }))).state).toBe("claimed");
+    expect((await continuationStore.transact(accountId, (tx) => tx.tombstoneExpiredCheckpoint({ checkpointId: "checkpoint:one", nowMs: retentionDeadlineMs }))).state).toBe("claimed");
 
     const expired = new TransactionalMemoryFundingStore();
-    await expired.transact(accountId, (tx) => tx.pauseForFunding(pause()));
-    await expired.transact(accountId, async (tx) => { await tx.beginDeadlineCheckpoint({ sessionId: "session:one", pauseGeneration: 1, liveLeaseToken: "lease:live" }); return tx.commitDeadlineCheckpoint(checkpoint()); });
-    expect((await expired.transact(accountId, (tx) => tx.tombstoneExpiredCheckpoint({ checkpointId: "checkpoint:one", nowMs: retentionDeadlineMs }))).state).toBe("expired");
-    await expect(expired.transact(accountId, (tx) => tx.claimResume(claim({ nowMs: retentionDeadlineMs })))).rejects.toThrow("CHECKPOINT_EXPIRED");
+    const expiredStore = expired as ContinuationFundingStore;
+    await expiredStore.transact(accountId, (tx) => tx.pauseForFunding(pause()));
+    await expiredStore.transact(accountId, async (tx) => { await tx.beginDeadlineCheckpoint({ sessionId: "session:one", pauseGeneration: 1, liveLeaseToken: "lease:live" }); return tx.commitDeadlineCheckpoint(checkpoint()); });
+    expect((await expiredStore.transact(accountId, (tx) => tx.tombstoneExpiredCheckpoint({ checkpointId: "checkpoint:one", nowMs: retentionDeadlineMs }))).state).toBe("expired");
+    await expect(expiredStore.transact(accountId, (tx) => tx.claimResume(claim({ nowMs: retentionDeadlineMs })))).rejects.toThrow("CHECKPOINT_EXPIRED");
   });
 });

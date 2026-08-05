@@ -18,7 +18,7 @@ napplet-cvm moves from proving the permanent napplet contract to a safe, prepaid
 | 2. Trusted Core & Isolated Agent Execution | Establishes bounded admission, serialized durable session authority, typed worker capabilities, isolation, checkpoint shape, and provider-separated evidence. | SESS-05, SAFE-01–SAFE-04 | `.planning/phases/02-trusted-core-isolated-agent-execution/` — context, research, AI spec, validation, coverage, source audit, 6 plans, 6 summaries, review/fix, security audit, and goal verification. |
 | 3. ContextVM Funding & Funded Admission | Connects signed ContextVM identity and CEP-8 Lightning/Cashu settlement to one idempotent prepaid account and capped funded admission. | CTX-01–CTX-04, PAY-01–PAY-07, BILL-01–BILL-02, BILL-06 | `.planning/phases/03-contextvm-funding-funded-admission/` — context, discussion log, research, patterns, API coverage, validation, source audit, 7 plans and summaries, review/fix history, final clean review, security audit, and passed goal verification. |
 | 4. Metered Generation & Revision Loop | Turns approved funds into exact-usage, serialized napplet creation, revision, repair, progress, and diagnostic actions. | BILL-03–BILL-05, SESS-01, SESS-03–SESS-04, GEN-05–GEN-06 | `.planning/phases/04-metered-generation-revision-loop/` — context, discussion log, research, AI spec, patterns, validation, 7 plans and summaries, review/fix history, immutable design evidence, security audit, and passed goal verification. |
-| 5. Funding Interruption & Durable Resume | Preserves paid work across insufficient funds, the ten-minute live-worker window, explicit resume, and 30-day checkpoint retention. | CONT-01–CONT-07 | `.planning/phases/05-funding-interruption-durable-resume/` — context, research, patterns, validation strategy, and 7 checker-approved execution plans across 6 waves. |
+| 5. Funding Interruption & Durable Resume | Preserves paid work across insufficient funds, the ten-minute live-worker window, explicit resume, and 30-day checkpoint retention. | CONT-01–CONT-07 | `.planning/phases/05-funding-interruption-durable-resume/` — context, research, patterns, validation, 7 plans and summaries, review/fix history, security audit, immutable design evidence, and passed goal verification. |
 | 6. Sealed Preview & User-Owned Publication | Lets the user preview the exact verified artifact, retain signing custody, and explicitly deploy a manifest plus CVM attestation. | PREV-01–PREV-04, PUB-01–PUB-05 | Phase directory and phase artifacts not yet created. |
 | 7. Admission SLO, Resilience & Launch Safety | Measures immediate-or-rejected admission, proves integrated failure safety, and closes the launch-hardening work deferred from Phase 1. | SESS-02, OPS-01–OPS-04 | Phase directory and phase artifacts not yet created. |
 
@@ -37,7 +37,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 2: Trusted Core & Isolated Agent Execution** - Establish deterministic policy, serialized state, and a fenced worker boundary. (completed 2026-08-04)
 - [x] **Phase 3: ContextVM Funding & Funded Admission** - Provide Nostr-linked accounts, CEP-8 top-ups, and safe prepaid authorization. (completed 2026-08-04)
 - [x] **Phase 4: Metered Generation & Revision Loop** - Turn approved funds into exact-usage, constrained generation and repair actions. (completed 2026-08-05)
-- [ ] **Phase 5: Funding Interruption & Durable Resume** - Preserve safely-paused work through the ten-minute grace window and 30-day checkpoints.
+- [x] **Phase 5: Funding Interruption & Durable Resume** - Preserve safely-paused work through the ten-minute grace window and 30-day checkpoints. (completed 2026-08-05)
 - [ ] **Phase 6: Sealed Preview & User-Owned Publication** - Let users inspect, preview, sign, attest, and deploy one immutable artifact identity.
 - [ ] **Phase 7: Admission SLO, Resilience & Launch Safety** - Validate immediate capacity handling and safe operation through failure, load, and supply-chain gates.
 
@@ -289,7 +289,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 2. Trusted Core & Isolated Agent Execution | 6/6 | Complete    | 2026-08-04 |
 | 3. ContextVM Funding & Funded Admission | 7/7 | Complete    | 2026-08-04 |
 | 4. Metered Generation & Revision Loop | 7/7 | Complete    | 2026-08-05 |
-| 5. Funding Interruption & Durable Resume | 7/7 | In Progress|  |
+| 5. Funding Interruption & Durable Resume | 7/7 | Complete    | 2026-08-05 |
 | 6. Sealed Preview & User-Owned Publication | 0/TBD | Not started | - |
 | 7. Admission SLO, Resilience & Launch Safety | 0/TBD | Not started | - |
 

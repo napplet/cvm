@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
-current_phase: 05
-current_phase_name: Funding Interruption & Durable Resume
-status: verifying
-stopped_at: Completed 05-07-PLAN.md
-last_updated: "2026-08-05T02:11:08.923Z"
+current_phase: 6
+current_phase_name: Sealed Preview & User-Owned Publication
+status: planning
+stopped_at: Phase 5 verified complete; Phase 6 ready for discussion and planning
+last_updated: "2026-08-05T04:15:46.093Z"
 last_activity: 2026-08-05
-last_activity_desc: Phase 05 execution started
+last_activity_desc: Phase 05 complete, transitioned to Phase 6
 progress:
   total_phases: 7
   completed_phases: 5
@@ -25,31 +25,31 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 **Core value:** A user can describe one focused applet and receive a safe, conformant napplet that can be previewed and placed directly into a compatible napplet runtime.
 **Active milestone:** v1.0 — Safe Napplet Generation MVP
-**Current focus:** Phase 05 — Funding Interruption & Durable Resume
+**Current focus:** Phase 6 — Sealed Preview & User-Owned Publication
 
 ## Current Position
 
-Phase: 05 (Funding Interruption & Durable Resume) — EXECUTING
-Plan: 7 of 7
-Status: Phase complete — ready for verification
-Last activity: 2026-08-05 — Phase 05 execution started
+Phase: 6 — Sealed Preview & User-Owned Publication
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-05 — Phase 05 complete, transitioned to Phase 6
 
-Progress: [██████████] 100%
+Progress: [███████░░░] 71%
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
-- Phases: Phases 1–4 complete; Phase 5 is active; Phases 6–7 remain.
-- Plans: 26/33 currently known milestone plans executed; Phase 5 has 7 checker-approved plans across 6 waves.
-- Requirements: 54/54 v1 requirements assigned; 33 verified complete and 21 pending.
-- Next checkpoint: execute Phase 5 Plan 05-01 without revisiting completed Phases 1–4.
+- Phases: Phases 1–5 complete; Phase 6 is active for planning; Phase 7 remains.
+- Plans: 33/33 currently known milestone plans executed; Phase 6 plans have not yet been created.
+- Requirements: 54/54 v1 requirements assigned; 40 verified complete and 14 pending.
+- Next checkpoint: discuss, research, and plan Phase 6 without revisiting completed Phases 1–5.
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 26
+- Total plans completed: 33
 - Average duration: -
 - Total execution time: 0 hours
 
@@ -61,6 +61,7 @@ Progress: [██████████] 100%
 | 2 | 6 | - | - |
 | 3 | 7 | - | - |
 | 04 | 7 | - | - |
+| 05 | 7 | - | - |
 
 **Recent Trend:**
 
@@ -166,7 +167,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Execute Phase 5 funding interruption and durable resume plans beginning with 05-01.
+- Define the sealed-preview and user-owned-publication contract for Phase 6, then create checker-approved plans.
 
 ### Blockers/Concerns
 
@@ -184,6 +185,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T02:11:08.915Z
-Stopped at: Completed 05-07-PLAN.md
+Last session: 2026-08-05T04:15:46.093Z
+Stopped at: Phase 5 verified complete; Phase 6 ready for discussion and planning
 Resume file: None

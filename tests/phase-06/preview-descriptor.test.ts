@@ -69,3 +69,17 @@ test("denies empty or null artifact and manifest-like identity before host or pu
     expect(h.attestation.calls).toBe(0);
   }
 });
+
+test("rejects host grants that attempt any browser or publication authority expansion", async () => {
+  const h = previewHarness();
+  h.host.response = { previewGrantId: "preview-grant:unsafe", iframeSandbox: "allow-scripts", authority: "preview_read_only", unrestrictedNetwork: true };
+  const result = await h.preview.previewVerifiedArtifact({
+    accountId: verifiedPhase06Artifact.accountId,
+    sessionId: verifiedPhase06Artifact.sessionId,
+    artifactId: verifiedPhase06Artifact.artifactId,
+    runtimeVariant: "napplet-host/v1",
+  });
+  expect(result).toMatchObject({ state: "denied", safeReasonCode: "preview_not_available" });
+  expect(h.deployment.calls).toBe(0);
+  expect(h.attestation.calls).toBe(0);
+});

@@ -2,10 +2,10 @@ import { CapabilityReviewSchema, SealedArtifactIdentitySchema, type CapabilityRe
 import { safePreviewDenial, type SafePreviewDenial } from "./public-status.js";
 
 const HostGrantSchema = PreviewDescriptorSchema.pick({ previewGrantId: true, iframeSandbox: true, authority: true }).passthrough();
-const forbiddenGrantKeys = new Set(["allowSameOrigin", "allowTopNavigation", "navigation", "network", "relay", "signer", "storage", "cookie", "publicationAuthority"]);
+const allowedHostGrantKeys = new Set(["previewGrantId", "iframeSandbox", "authority", "artifact", "review", "nowMs", "expiresAtMs"]);
 
 function parseHostGrant(value: unknown) {
-  if (!value || typeof value !== "object" || Object.keys(value).some((key) => forbiddenGrantKeys.has(key))) throw new Error("PREVIEW_GRANT_AUTHORITY_INVALID");
+  if (!value || typeof value !== "object" || Object.keys(value).some((key) => !allowedHostGrantKeys.has(key))) throw new Error("PREVIEW_GRANT_AUTHORITY_INVALID");
   return HostGrantSchema.parse(value);
 }
 

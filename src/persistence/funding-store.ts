@@ -1,5 +1,7 @@
 import type { AccountStatus, FundedAdmission, FundingResult, VerifiedSettlement } from "../phase-03/contracts";
 import type { NeedsTopUpResult, PendingActionIntent } from "../continuity/contracts";
+import type { ClaimPublicationEffectInput, ClaimPublicationEffectResult, CreatePublicationIntentInput, CreatePublicationIntentResult, DurablePublicationEffect, PublicationRecord, RecordPublicationObservationInput } from "./publication-store";
+import { TransactionalMemoryPublicationStore } from "./publication-store";
 
 export type LedgerPosting = Readonly<{ id: string; accountId: string; reference: string; unit: "sat"; amount: string; balanced: true }>;
 export type FundingEvidence = Readonly<{ id: string; accountId: string; kind: "settlement_credit" | "funded_admission" | "metered_receipt" | "metered_result"; reference: string }>;
@@ -170,6 +172,19 @@ export interface ContinuationFundingStore extends FundingStore {
   transact<T>(accountId: string, operation: (transaction: ContinuationFundingTransaction) => Promise<T> | T): Promise<T>;
 }
 
+/**
+ * Publication state is composed beside, never inside, monetary entries. This
+ * keeps the PostgreSQL authority transactional without granting publication
+ * code any balance or ledger mutation capability.
+ */
+export interface PublicationFundingStore {
+  createOrReplayPublicationIntent(input: CreatePublicationIntentInput): Promise<CreatePublicationIntentResult>;
+  claimPublicationEffect(input: ClaimPublicationEffectInput): Promise<ClaimPublicationEffectResult>;
+  recordPublicationObservation(input: RecordPublicationObservationInput): Promise<DurablePublicationEffect>;
+  completePublicationRecord(intentId: string): Promise<PublicationRecord>;
+  readPublicationStatus(intentId: string): Promise<PublicationRecord>;
+}
+
 type TopUp = Readonly<{ topUpId: string; rail: "lightning" | "cashu"; unit: "sat"; amount: bigint; state: "credited"; verifiedAt: string; settlementReference: string; externalReference: string }>;
 type Hold = Readonly<{ reference: string; approvedCap: bigint; heldAmount: bigint }>;
 type Account = Readonly<{ settledAvailable: bigint; held: bigint; topUps: readonly TopUp[]; holds: readonly Hold[] }>;
@@ -206,9 +221,16 @@ function cursorAfter(accountId: string, cursor: string | undefined, items: reado
  * Deterministic, serialized copy-then-commit double for tests only. It is not
  * a durable ledger and must never be selected as production monetary storage.
  */
-export class TransactionalMemoryFundingStore implements MeteredFundingStore, ContinuationFundingStore {
+export class TransactionalMemoryFundingStore implements MeteredFundingStore, ContinuationFundingStore, PublicationFundingStore {
   #state: State = { accounts: new Map(), commands: new Map(), capacityIntents: new Map(), actionBudgets: new Map(), meteredActions: new Map(), continuationPauses: new Map(), wakeDispatches: new Map(), checkpoints: new Map(), resumeClaims: new Map(), restoreObservations: new Map(), resumedTerminalStatuses: new Map(), deletionOutcomes: new Map(), externalReferences: new Set(), settlementReferences: new Set(), postings: [], evidence: [], outbox: [], lineItems: [], lineItemSequence: 0n };
   #tail: Promise<void> = Promise.resolve();
+  #publication = new TransactionalMemoryPublicationStore();
+
+  createOrReplayPublicationIntent(input: CreatePublicationIntentInput): Promise<CreatePublicationIntentResult> { return this.#publication.createOrReplayIntent(input); }
+  claimPublicationEffect(input: ClaimPublicationEffectInput): Promise<ClaimPublicationEffectResult> { return this.#publication.claimPublicationEffect(input); }
+  recordPublicationObservation(input: RecordPublicationObservationInput): Promise<DurablePublicationEffect> { return this.#publication.recordPublicationObservation(input); }
+  completePublicationRecord(intentId: string): Promise<PublicationRecord> { return this.#publication.completePublicationRecord(intentId); }
+  readPublicationStatus(intentId: string): Promise<PublicationRecord> { return this.#publication.readPublicationStatus(intentId); }
 
   get postings(): readonly LedgerPosting[] { return freeze(clone(this.#state.postings)); }
   get evidence(): readonly FundingEvidence[] { return freeze(clone(this.#state.evidence)); }

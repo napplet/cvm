@@ -35,9 +35,11 @@ CREATE TABLE IF NOT EXISTS publication_intents (
   state text NOT NULL CHECK (state IN ('intent_ready','signed','reconciliation_pending','partial','complete')),
   created_at_ms bigint NOT NULL CHECK (created_at_ms > 0),
   expires_at_ms bigint NOT NULL CHECK (expires_at_ms > created_at_ms),
+  record_json jsonb NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (owner_principal_id, request_fingerprint_sha256),
-  CHECK (jsonb_typeof(owner_template_json) = 'object')
+  CHECK (jsonb_typeof(owner_template_json) = 'object'),
+  CHECK (jsonb_typeof(record_json) = 'object')
 );
 
 ALTER TABLE publication_commands

@@ -1,6 +1,7 @@
 import type { AccountStatus, FundedAdmission, FundingResult } from "../phase-03/contracts";
 import { AccountStatusSchema, FundingResultSchema } from "../phase-03/contracts";
-import { canonicalMeteredTerminalResult, type ActionBudget, type ActionBudgetInput, type AdmissionInput, type BeginDeadlineCheckpointInput, type BillingLineItem, type BillingLineItemPage, type BillingLineItemPageRequest, type CapacityDispatchClaim, type CapacityIntent, type CapacityIntentInput, type CapacityObservationInput, type CompleteResumedActionInput, type ContinuationCheckpoint, type ContinuationCheckpointInput, type ContinuationFundingStore, type ContinuationFundingTransaction, type ContinuationPause, type ContinuationPauseInput, type ContinuationRecord, type ContinuationResumeClaim, type ContinuationResumeClaimInput, type ContinuationWakeDispatch, type CreditInput, type DeletionOutcomeInput, type MeteredAction, type MeteredFinalizeInput, type MeteredFundingStore, type MeteredFundingTransaction, type MeteredOperationClaim, type MeteredSessionRecord, type PrepareMeteredActionInput, type ReconciliationClaim, type RestoreObservationInput, type StoredFundingCommand, type UsageUnknownInput, type WakeDispatchClaim, type WakeDispatchOutcomeInput } from "./funding-store";
+import { canonicalMeteredTerminalResult, type ActionBudget, type ActionBudgetInput, type AdmissionInput, type BeginDeadlineCheckpointInput, type BillingLineItem, type BillingLineItemPage, type BillingLineItemPageRequest, type CapacityDispatchClaim, type CapacityIntent, type CapacityIntentInput, type CapacityObservationInput, type CompleteResumedActionInput, type ContinuationCheckpoint, type ContinuationCheckpointInput, type ContinuationFundingStore, type ContinuationFundingTransaction, type ContinuationPause, type ContinuationPauseInput, type ContinuationRecord, type ContinuationResumeClaim, type ContinuationResumeClaimInput, type ContinuationWakeDispatch, type CreditInput, type DeletionOutcomeInput, type MeteredAction, type MeteredFinalizeInput, type MeteredFundingStore, type MeteredFundingTransaction, type MeteredOperationClaim, type MeteredSessionRecord, type PrepareMeteredActionInput, type PublicationFundingStore, type ReconciliationClaim, type RestoreObservationInput, type StoredFundingCommand, type UsageUnknownInput, type WakeDispatchClaim, type WakeDispatchOutcomeInput } from "./funding-store";
+import type { ClaimPublicationEffectInput, ClaimPublicationEffectResult, CreatePublicationIntentInput, CreatePublicationIntentResult, DurablePublicationEffect, PublicationEffectKind, PublicationRecord, RecordPublicationObservationInput } from "./publication-store";
 import { SerializationFailure } from "./postgres-funding-store";
 import { NeedsTopUpResultSchema, PendingActionIntentSchema } from "../continuity/contracts";
 
@@ -38,6 +39,13 @@ const pauseFromRow = (row: SqlRow): ContinuationPause => {
 const wakeDispatchFromRow = (row: SqlRow): ContinuationWakeDispatch => frozen({ accountId: asText(row.account_id), sessionId: asText(row.session_id), pauseGeneration: Number(row.pause_generation), pendingFingerprint: asText(row.pending_fingerprint_sha256), expectedSessionVersion: Number(row.expected_session_version), expectedArtifactVersion: Number(row.expected_artifact_version), actionBudgetReference: asText(row.action_budget_reference), operationId: asText(row.operation_id), liveLeaseToken: asText(row.live_lease_token), ...(row.claim_token ? { claimToken: asText(row.claim_token) } : {}), reconciliationAttempts: Number(row.reconciliation_attempts ?? 0), state: asText(row.state) as ContinuationWakeDispatch["state"] });
 const checkpointFromRow = (row: SqlRow): ContinuationCheckpoint => frozen({ accountId: asText(row.account_id), sessionId: asText(row.session_id), pauseGeneration: Number(row.pause_generation), checkpointId: asText(row.checkpoint_id), expectedSessionVersion: Number(row.expected_session_version), expectedArtifactVersion: Number(row.expected_artifact_version), manifestReference: asText(row.manifest_reference), objectKey: asText(row.object_key), objectGeneration: asText(row.object_generation), objectChecksum: asText(row.object_checksum), keyReference: asText(row.key_reference), compatibilityIdentity: asText(row.compatibility_identity), checkpointCommittedAtMs: Number(row.checkpoint_committed_at_ms), retentionDeadlineMs: Number(row.retention_deadline_ms), state: asText(row.state) as ContinuationCheckpoint["state"] });
 const deadlineError = () => new Error("POSTGRES_OPERATION_DEADLINE_EXCEEDED");
+const publicationEffectFromRow = (row: SqlRow): DurablePublicationEffect => frozen({ intentId: asText(row.intent_id), effectKind: asText(row.effect_kind) as PublicationEffectKind, operationId: asText(row.operation_id), requestFingerprintSha256: asText(row.request_fingerprint_sha256), state: asText(row.state) as DurablePublicationEffect["state"], ...(row.claim_token ? { claimToken: asText(row.claim_token) } : {}), ...(row.observation_json ? { observation: typeof row.observation_json === "string" ? JSON.parse(row.observation_json) : row.observation_json } : {}) });
+const publicationRecordFromRows = (intentId: string, rows: readonly SqlRow[]): PublicationRecord => {
+  const byKind = new Map(rows.map((row) => { const value = publicationEffectFromRow(row); return [value.effectKind, value] as const; }));
+  const effects = Object.fromEntries((["deploy", "owner_manifest", "attestation"] as const).map((kind) => [kind, byKind.get(kind) ?? { intentId, effectKind: kind, operationId: `unclaimed:${intentId}:${kind}`, requestFingerprintSha256: "0".repeat(64), state: "created" as const }])) as PublicationRecord["effects"];
+  const states = Object.values(effects).map((effect) => effect.state);
+  return frozen({ intentId, status: states.every((state) => state === "observed_complete") ? "complete" as const : states.some((state) => state === "created" || state === "dispatching" || state === "unknown") ? "publication_reconciliation_pending" as const : "partial" as const, effects });
+};
 async function beforeDeadline<T>(promise: Promise<T>, deadline: number, now: () => number): Promise<T> {
   const remaining = deadline - now();
   if (remaining <= 0) throw deadlineError();
@@ -60,7 +68,7 @@ class DeadlineSqlClient implements PostgresSqlClient {
  * one checked-out pg client after `BEGIN ... SERIALIZABLE`; the deterministic
  * map executor remains a test double in its own module.
  */
-export class PostgresSqlFundingStore implements MeteredFundingStore, ContinuationFundingStore {
+export class PostgresSqlFundingStore implements MeteredFundingStore, ContinuationFundingStore, PublicationFundingStore {
   readonly production = true as const;
   readonly #maxAttempts: number;
   readonly #deadlineMs: number;
@@ -162,6 +170,64 @@ export class PostgresSqlFundingStore implements MeteredFundingStore, Continuatio
   async sessionStatus(accountId: string, sessionId: string): Promise<MeteredSessionRecord | undefined> {
     const client = await this.pool.connect();
     try { const row = (await client.query("SELECT account_id,id,version,state FROM metered_sessions WHERE account_id=$1 AND id=$2", [accountId, sessionId])).rows[0]; return row && frozen({ accountId: asText(row.account_id), sessionId: asText(row.id), version: Number(row.version), status: sessionStatus(asText(row.state)) }); } finally { client.release(); }
+  }
+
+  async createOrReplayPublicationIntent(input: CreatePublicationIntentInput): Promise<CreatePublicationIntentResult> {
+    return this.#publicationTransaction(async (client) => {
+      if (input.intent.accountId !== input.principalId || !/^[a-f0-9]{64}$/iu.test(input.requestFingerprintSha256)) throw new Error("PUBLICATION_COMMAND_INVALID");
+      const prior = (await client.query("SELECT request_fingerprint_sha256,intent_id FROM publication_commands WHERE principal_id=$1 AND idempotency_key=$2 FOR UPDATE", [input.principalId, input.idempotencyKey])).rows[0];
+      if (prior) {
+        if (asText(prior.request_fingerprint_sha256) !== input.requestFingerprintSha256 || asText(prior.intent_id) !== input.intent.intentId) throw new Error("PUBLICATION_COMMAND_CONFLICT");
+        const row = first(await client.query("SELECT record_json FROM publication_intents WHERE intent_id=$1 FOR UPDATE", [input.intent.intentId]), "PUBLICATION_COMMAND_INTEGRITY_INVALID");
+        return frozen({ intent: (typeof row.record_json === "string" ? JSON.parse(row.record_json) : row.record_json) as CreatePublicationIntentResult["intent"], replayed: true });
+      }
+      const existing = (await client.query("SELECT record_json,request_fingerprint_sha256 FROM publication_intents WHERE intent_id=$1 FOR UPDATE", [input.intent.intentId])).rows[0];
+      if (existing && (asText(existing.request_fingerprint_sha256) !== input.intent.fingerprint)) throw new Error("PUBLICATION_COMMAND_CONFLICT");
+      if (!existing) await client.query("INSERT INTO publication_intents(intent_id,owner_principal_id,session_id,artifact_id,artifact_version,artifact_sha256,manifest_sha256,aggregate_sha256,capability_digest,normalized_d_tag,runtime_variant,policy_identity,toolchain_identity,runtime_compatibility_identity,request_fingerprint_sha256,owner_template_json,owner_template_sha256,state,created_at_ms,expires_at_ms,record_json) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'intent_ready',$18,$19,$20)", [input.intent.intentId, input.principalId, input.intent.sessionId, input.intent.artifact.artifactId, input.intent.artifact.artifactVersion, input.intent.artifactSha256, input.intent.manifestSha256, input.intent.aggregateSha256, input.intent.capabilityDigest, input.intent.dTag, input.intent.runtimeVariant, input.intent.policyVersion, input.intent.toolchainIdentity, input.intent.artifact.runtimeCompatibilityIdentity, input.intent.fingerprint, JSON.stringify({ digest: input.intent.manifestTemplateDigest }), input.intent.manifestTemplateDigest, input.intent.createdAtMs, input.intent.expiresAtMs, JSON.stringify(input.intent)]);
+      await client.query("INSERT INTO publication_commands(command_id,principal_id,idempotency_key,request_fingerprint_sha256,intent_id) VALUES ($1,$2,$3,$4,$5)", [id("publication-command", `${input.principalId}:${input.idempotencyKey}`), input.principalId, input.idempotencyKey, input.requestFingerprintSha256, input.intent.intentId]);
+      return frozen({ intent: input.intent, replayed: false });
+    });
+  }
+  async claimPublicationEffect(input: ClaimPublicationEffectInput): Promise<ClaimPublicationEffectResult> {
+    return this.#publicationTransaction(async (client) => {
+      const exact = (await client.query("SELECT intent_id,effect_kind,operation_id,request_fingerprint_sha256,state,claim_token,observation_json FROM publication_effect_intents WHERE operation_id=$1 FOR UPDATE", [input.operationId])).rows[0];
+      if (exact) { const effect = publicationEffectFromRow(exact); if (effect.intentId !== input.intentId || effect.effectKind !== input.effectKind || effect.requestFingerprintSha256 !== input.requestFingerprintSha256) throw new Error("PUBLICATION_COMMAND_CONFLICT"); return frozen({ effect, claimed: false }); }
+      const intent = (await client.query("SELECT intent_id FROM publication_intents WHERE intent_id=$1 FOR UPDATE", [input.intentId])).rows[0]; if (!intent) throw new Error("PUBLICATION_INTENT_NOT_FOUND");
+      const previous = (await client.query("SELECT operation_id FROM publication_effect_intents WHERE intent_id=$1 AND effect_kind=$2 FOR UPDATE", [input.intentId, input.effectKind])).rows[0]; if (previous) throw new Error("PUBLICATION_COMMAND_CONFLICT");
+      const effect: DurablePublicationEffect = { ...input, state: "dispatching", claimToken: `publication-claim:${input.operationId}` };
+      await client.query("INSERT INTO publication_effect_intents(effect_id,intent_id,effect_kind,operation_id,request_fingerprint_sha256,state,claim_token) VALUES ($1,$2,$3,$4,$5,'dispatching',$6)", [id("publication-effect", input.operationId), input.intentId, input.effectKind, input.operationId, input.requestFingerprintSha256, effect.claimToken]);
+      return frozen({ effect, claimed: true });
+    });
+  }
+  async recordPublicationObservation(input: RecordPublicationObservationInput): Promise<DurablePublicationEffect> {
+    return this.#publicationTransaction(async (client) => {
+      const row = first(await client.query("SELECT intent_id,effect_kind,operation_id,request_fingerprint_sha256,state,claim_token,observation_json FROM publication_effect_intents WHERE operation_id=$1 FOR UPDATE", [input.operationId]), "PUBLICATION_EFFECT_NOT_CLAIMED");
+      const effect = publicationEffectFromRow(row); if (effect.effectKind !== input.effectKind) throw new Error("PUBLICATION_EFFECT_NOT_CLAIMED");
+      if (["observed_failed", "observed_partial", "observed_complete"].includes(effect.state)) { if (effect.observation?.observationId === input.observationId && effect.state === input.state) return effect; throw new Error("PUBLICATION_OBSERVATION_IMMUTABLE"); }
+      const observation = { operationId: input.operationId, observationId: input.observationId, state: input.state === "observed_complete" ? "completed" : input.state === "observed_failed" ? "failed" : "unknown", ...(input.deploymentId ? { deploymentId: input.deploymentId } : {}), ...(input.fullServerUploadId ? { fullServerUploadId: input.fullServerUploadId } : {}), ...(input.relayObservation ? { relayObservation: input.relayObservation } : {}), ...(input.attestationId ? { attestationId: input.attestationId } : {}) };
+      await client.query("UPDATE publication_effect_intents SET state=$1,observation_json=$2,observation_sha256=$3,observed_at=now() WHERE operation_id=$4 AND state IN ('created','dispatching','unknown')", [input.state, JSON.stringify(observation), input.requestFingerprintSha256 ?? effect.requestFingerprintSha256, input.operationId]);
+      return frozen({ ...effect, state: input.state, observation });
+    });
+  }
+  async completePublicationRecord(intentId: string): Promise<PublicationRecord> { return this.#publicationTransaction((client) => this.#publicationRecord(client, intentId)); }
+  async readPublicationStatus(intentId: string): Promise<PublicationRecord> {
+    const deadline = this.#now() + this.#deadlineMs; const client = new DeadlineSqlClient(await beforeDeadline(this.pool.connect(), deadline, this.#now), deadline, this.#now);
+    try { return frozen(await this.#publicationRecord(client, intentId)); } finally { client.release(); }
+  }
+  async #publicationRecord(client: PostgresSqlClient, intentId: string): Promise<PublicationRecord> {
+    const intent = (await client.query("SELECT intent_id FROM publication_intents WHERE intent_id=$1", [intentId])).rows[0]; if (!intent) throw new Error("PUBLICATION_INTENT_NOT_FOUND");
+    const rows = (await client.query("SELECT intent_id,effect_kind,operation_id,request_fingerprint_sha256,state,claim_token,observation_json FROM publication_effect_intents WHERE intent_id=$1 ORDER BY effect_kind", [intentId])).rows;
+    return publicationRecordFromRows(intentId, rows);
+  }
+  async #publicationTransaction<T>(operation: (client: PostgresSqlClient) => Promise<T> | T): Promise<T> {
+    const deadline = this.#now() + this.#deadlineMs; let last: unknown;
+    for (let attempt = 0; attempt < this.#maxAttempts && this.#now() < deadline; attempt += 1) {
+      const raw = await beforeDeadline(this.pool.connect(), deadline, this.#now); const client = new DeadlineSqlClient(raw, deadline, this.#now);
+      try { await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE"); const result = await operation(client); await client.query("COMMIT"); return frozen(result); }
+      catch (error) { await beforeDeadline(raw.query("ROLLBACK"), this.#now() + Math.min(50, this.#deadlineMs), this.#now).catch(() => undefined); last = error; if (!(["40001", "40P01"].includes(String((error as { code?: unknown }).code))) || attempt + 1 === this.#maxAttempts || this.#now() >= deadline) throw error; }
+      finally { raw.release(); }
+    }
+    throw last ?? new Error("PUBLICATION_STORE_BUSY");
   }
 
   async transact<T>(accountId: string, operation: (transaction: MeteredFundingTransaction) => Promise<T> | T): Promise<T>;

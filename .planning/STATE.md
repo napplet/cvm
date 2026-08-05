@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 6
 current_phase_name: Sealed Preview & User-Owned Publication
 status: executing
-stopped_at: Completed 06-02-PLAN.md
-last_updated: "2026-08-05T08:50:38.862Z"
+stopped_at: Completed 06-03-PLAN.md
+last_updated: "2026-08-05T09:01:07.722Z"
 last_activity: 2026-08-05
 last_activity_desc: Phase 6 execution started
 progress:
   total_phases: 7
   completed_phases: 5
   total_plans: 40
-  completed_plans: 35
+  completed_plans: 36
   percent: 71
 ---
 
@@ -30,11 +30,11 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 6 (Sealed Preview & User-Owned Publication) — EXECUTING
-Plan: 3 of 7
+Plan: 4 of 7
 Status: Ready to execute
 Last activity: 2026-08-05 — Phase 6 execution started
 
-Progress: [█████████░] 88%
+Progress: [█████████░] 90%
 
 ## Milestone Progress
 
@@ -99,6 +99,7 @@ Progress: [█████████░] 88%
 | Phase 05 P07 | 12 min | 2 tasks | 8 files |
 | Phase 06 P01 | 5m 11s | 1 tasks | 5 files |
 | Phase 06-sealed-preview-user-owned-publication P02 | 38m 22s | 2 tasks | 8 files |
+| Phase 06 P03 | 9m 26s | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -170,6 +171,9 @@ Recent decisions affecting current work:
 - [Phase ?]: Publication effects are persist-before-effect and terminal results require three stored observations.
 - [Phase ?]: Preview host responses are deny-by-default; only expected grant/context fields are allowed.
 - [Phase ?]: Capability approval hashes canonical manifest facts plus artifact, d-tag, policy, toolchain, and runtime fences.
+- [Phase ?]: Publication intent IDs derive from complete canonical approval fingerprints; runtime compatibility remains bound by the capability digest.
+- [Phase ?]: Only nostr-tools/pure serialization, hash, and signature verification APIs enter production; owner signing remains external.
+- [Phase ?]: Publication commands must bind the durable intent fingerprint and all child operation IDs before any external effect.
 
 ### Pending Todos
 
@@ -191,6 +195,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T08:50:38.854Z
-Stopped at: Completed 06-02-PLAN.md
+Last session: 2026-08-05T09:01:07.714Z
+Stopped at: Completed 06-03-PLAN.md
 Resume file: None

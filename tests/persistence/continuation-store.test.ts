@@ -108,6 +108,25 @@ describe("TransactionalMemoryFundingStore continuation authority", () => {
     expect(left.leaseToken).toBe("lease:restored");
   });
 
+  test("restores then retires a resumed pause before admitting the next monotonic generation", async () => {
+    const store = new TransactionalMemoryFundingStore();
+    const continuationStore = store as ContinuationFundingStore;
+    await continuationStore.transact(accountId, (tx) => tx.pauseForFunding(pause()));
+    await continuationStore.transact(accountId, async (tx) => {
+      await tx.beginDeadlineCheckpoint({ sessionId: "session:one", pauseGeneration: 1, liveLeaseToken: "lease:live" });
+      return tx.commitDeadlineCheckpoint(checkpoint());
+    });
+    await continuationStore.transact(accountId, (tx) => tx.claimResume(claim()));
+    expect(await continuationStore.transact(accountId, (tx) => tx.findContinuationPause("session:one", 1))).toMatchObject({ state: "claimed" });
+    await continuationStore.transact(accountId, (tx) => tx.recordRestoreObservation({ checkpointId: "checkpoint:one", allocationIntentReference: "allocation:one", state: "restored" }));
+    expect(await continuationStore.transact(accountId, (tx) => tx.findContinuationPause("session:one", 1))).toMatchObject({ state: "restored" });
+    const second = pause({ idempotencyKey: "pause:two", pauseGeneration: 2, fingerprint: "c".repeat(64), pendingFingerprint: "d".repeat(64), intent: { ...pause().intent, idempotencyKey: "pause:two", fingerprint: "d".repeat(64) } });
+    await expect(continuationStore.transact(accountId, (tx) => tx.pauseForFunding(second))).rejects.toThrow("CONTINUATION_PAUSE_ALREADY_ACTIVE");
+    await continuationStore.transact(accountId, (tx) => tx.retireResumedPause({ checkpointId: "checkpoint:one", allocationIntentReference: "allocation:one", terminalActionReference: "action:resumed:one", terminalStatus: "completed" }));
+    expect(await continuationStore.transact(accountId, (tx) => tx.nextPauseGeneration("session:one"))).toBe(2);
+    await expect(continuationStore.transact(accountId, (tx) => tx.pauseForFunding(second))).resolves.toMatchObject({ state: "needs_top_up", pauseGeneration: 2 });
+  });
+
   test("makes expiry terminal at the exact retention deadline while preserving a pre-expiry claim", async () => {
     const store = new TransactionalMemoryFundingStore();
     const continuationStore = store as ContinuationFundingStore;

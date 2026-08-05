@@ -43,6 +43,8 @@ export type VerifiedCreditWakeResult = Readonly<{
   leaseToken?: string;
   pendingActionReference?: string;
   actionBudgetReference?: string;
+  /** Stable identity for the exact coordinator/worker operation. */
+  operationId?: string;
   /** Server-fenced, internal-only capability used to report the effect outcome. */
   dispatchClaimToken?: string;
 }>;
@@ -150,8 +152,8 @@ export class ContinuationService {
         reference: `action-budget:wake:${pause.sessionId}:${pause.pauseGeneration}`, amount,
       });
       const claim = await transaction.claimWakeDispatch({ accountId: input.accountId, sessionId: input.sessionId, pauseGeneration: input.pauseGeneration, pendingFingerprint: pause.pendingFingerprint, expectedSessionVersion: pause.expectedSessionVersion, expectedArtifactVersion: continuation.expectedArtifactVersion, actionBudgetReference: budget.reference, operationId: `wake-operation:${pause.sessionId}:${pause.pauseGeneration}:${budget.reference}`, liveLeaseToken: input.liveLeaseToken });
-      if (!claim.claimed) return frozen({ status: "replayed" as const, code: claim.dispatch.state === "unknown" ? "WAKE_RECONCILIATION_REQUIRED" : "WAKE_ALREADY_CLAIMED" });
-      return frozen({ status: "continued" as const, code: "WAKE_DISPATCH_CLAIMED", leaseToken: input.liveLeaseToken, pendingActionReference: continuation.reference, actionBudgetReference: budget.reference, dispatchClaimToken: claim.dispatch.claimToken });
+      if (!claim.claimed) return frozen({ status: "replayed" as const, code: claim.dispatch.state === "unknown" || claim.dispatch.state === "reconciliation_terminal" ? "WAKE_RECONCILIATION_REQUIRED" : "WAKE_ALREADY_CLAIMED" });
+      return frozen({ status: "continued" as const, code: "WAKE_DISPATCH_CLAIMED", leaseToken: input.liveLeaseToken, pendingActionReference: continuation.reference, actionBudgetReference: budget.reference, operationId: claim.dispatch.operationId, dispatchClaimToken: claim.dispatch.claimToken });
     });
 
     if (transition.status !== "continued") return transition;
@@ -178,11 +180,26 @@ export class ContinuationService {
     const pause = await this.options.store.findContinuationPause(input.accountId, input.sessionId, input.pauseGeneration);
     if (!dispatch || !pause || dispatch.pendingFingerprint !== pause.pendingFingerprint || dispatch.expectedSessionVersion !== pause.expectedSessionVersion || dispatch.expectedArtifactVersion !== pause.intent.expectedArtifactVersion) return "not_found";
     if (dispatch.state === "completed") return "completed";
-    if (dispatch.state === "unknown") return "unknown";
+    if (dispatch.state === "reconciliation_terminal") return "unknown";
     let outcome: "completed" | "unknown" = "unknown";
     try { outcome = await this.options.wakeReconciliation?.observe({ accountId: input.accountId, sessionId: input.sessionId, pauseGeneration: input.pauseGeneration, operationId: dispatch.operationId, actionBudgetReference: dispatch.actionBudgetReference, liveLeaseToken: dispatch.liveLeaseToken }) ?? "unknown"; } catch { outcome = "unknown"; }
     await this.recordWakeDispatchOutcome({ accountId: input.accountId, sessionId: input.sessionId, pauseGeneration: input.pauseGeneration, dispatchClaimToken: dispatch.claimToken!, outcome });
     return outcome;
+  }
+
+  /**
+   * Coordinator restart surface. Discovery is owner-scoped and reads only
+   * durable claimed/unknown effect intents; it never creates work or calls a
+   * continuation handoff. Each item is reconciled by its exact operation ID.
+   */
+  async reconcileOutstandingWakeDispatches(accountId: string): Promise<readonly Readonly<{ sessionId: string; pauseGeneration: number; outcome: "completed" | "unknown" | "not_found" }>[]> {
+    const outstanding = await this.options.store.listOutstandingWakeDispatches(accountId);
+    const results = await Promise.all(outstanding.map(async (dispatch) => frozen({
+      sessionId: dispatch.sessionId,
+      pauseGeneration: dispatch.pauseGeneration,
+      outcome: await this.reconcileWakeDispatch({ accountId, sessionId: dispatch.sessionId, pauseGeneration: dispatch.pauseGeneration }),
+    })));
+    return frozen(results);
   }
 
   /**
@@ -206,6 +223,20 @@ export class ContinuationService {
     }).finally(() => this.#resumeInFlight.delete(replayKey));
     this.#resumeInFlight.set(replayKey, run);
     return run;
+  }
+
+  /**
+   * The resumed worker's terminal callback retires its exact pause only after
+   * the checkpoint restore has been durably observed. This is intentionally a
+   * coordinator-only lifecycle completion, not an automatic post-grace resume.
+   */
+  async completeResumedAction(input: Readonly<{ accountId: string; checkpointId: string; allocationIntentReference: string; terminalActionReference: string; terminalStatus: "completed" | "failed" }>): Promise<void> {
+    await this.options.store.transact(input.accountId, (transaction) => transaction.retireResumedPause({
+      checkpointId: input.checkpointId,
+      allocationIntentReference: input.allocationIntentReference,
+      terminalActionReference: input.terminalActionReference,
+      terminalStatus: input.terminalStatus,
+    }));
   }
 
   async #claimAndRestore(command: ResumeSessionCommand): Promise<ResumeSessionResult> {

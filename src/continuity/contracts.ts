@@ -63,7 +63,13 @@ const ExpiredContinuationStatusSchema = z.object({
   deletionState: z.enum(["scheduled", "deleted", "failed", "unknown", "not_recorded"]),
   nextRequiredAction: z.literal("none"),
 }).strict();
-export const ContinuationStatusSchema = z.discriminatedUnion("status", [NeedsTopUpContinuationStatusSchema, ExpiredContinuationStatusSchema]);
+const ResumeRecoveryContinuationStatusSchema = z.object({
+  status: z.enum(["resume_required", "restore_pending", "restored"]),
+  /** Server reference only; no archive/object/key metadata is projected. */
+  checkpoint: z.object({ reference: z.string().min(1) }).strict(),
+  nextRequiredAction: z.enum(["resume_session", "wait_for_current_action"]),
+}).strict();
+export const ContinuationStatusSchema = z.discriminatedUnion("status", [NeedsTopUpContinuationStatusSchema, ExpiredContinuationStatusSchema, ResumeRecoveryContinuationStatusSchema]);
 
 /** Owner-signed consent for one exact, previously paused action. */
 export const ResumePendingApprovalSchema = z.object({

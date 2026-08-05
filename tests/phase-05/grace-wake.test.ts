@@ -111,6 +111,41 @@ describe("verified-credit grace wake", () => {
     expect(await fixture.store.sessionStatus(fixture.accountId, "session:grace-wake")).toMatchObject({ status: "usage_unknown" });
   });
 
+  test("a restarted coordinator discovers an unknown wake by owner and accounts it without redispatch", async () => {
+    const fixture = await setup({ credited: true, cap: "3250" });
+    const hint = { accountId: fixture.accountId, sessionId: "session:grace-wake", pauseGeneration: 1, liveLeaseToken, pendingFingerprint, expectedSessionVersion: 4, expectedArtifactVersion: 4 };
+    const claimed = await fixture.service.wakePausedAction(hint);
+    if (!claimed.dispatchClaimToken) throw new Error("expected durable dispatch claim");
+    await fixture.service.recordWakeDispatchOutcome({ accountId: fixture.accountId, sessionId: hint.sessionId, pauseGeneration: 1, dispatchClaimToken: claimed.dispatchClaimToken, outcome: "unknown" });
+
+    let observations = 0;
+    let redispatches = 0;
+    const restarted = new MeteredGenerationService({
+      fundedAdmission: {} as never, store: fixture.store, gateway: {} as never, worker: {} as never, artifactVerifier: {} as never,
+      continuationWake: {
+        continueAction: async () => { redispatches += 1; },
+        observeAction: async (operation) => { observations += 1; expect(operation.operationId).toContain("wake-operation:session:grace-wake:1:"); return "completed"; },
+      },
+    });
+    await expect(restarted.reconcileOutstandingWakeDispatches(fixture.accountId)).resolves.toEqual([{ sessionId: hint.sessionId, pauseGeneration: 1, outcome: "completed" }]);
+    expect({ observations, redispatches }).toEqual({ observations: 1, redispatches: 0 });
+    expect(await fixture.store.findWakeDispatch(fixture.accountId, hint.sessionId, 1)).toMatchObject({ state: "completed" });
+    expect(await fixture.store.transact(fixture.accountId, (tx) => tx.findContinuationPause(hint.sessionId, 1))).toMatchObject({ state: "completed", liveLeaseToken: undefined });
+  });
+
+  test("unknown wake reconciliation is lookup-only and bounded when no exact completion is observable", async () => {
+    const fixture = await setup({ credited: true, cap: "3250" });
+    const hint = { accountId: fixture.accountId, sessionId: "session:grace-wake", pauseGeneration: 1, liveLeaseToken, pendingFingerprint, expectedSessionVersion: 4, expectedArtifactVersion: 4 };
+    const claimed = await fixture.service.wakePausedAction(hint);
+    if (!claimed.dispatchClaimToken) throw new Error("expected durable dispatch claim");
+    await fixture.service.recordWakeDispatchOutcome({ accountId: fixture.accountId, sessionId: hint.sessionId, pauseGeneration: 1, dispatchClaimToken: claimed.dispatchClaimToken, outcome: "unknown" });
+    const restart = new ContinuationService({ store: fixture.store, wakeReconciliation: { observe: async () => "unknown" } });
+    await restart.reconcileOutstandingWakeDispatches(fixture.accountId);
+    await restart.reconcileOutstandingWakeDispatches(fixture.accountId);
+    expect(await fixture.store.findWakeDispatch(fixture.accountId, hint.sessionId, 1)).toMatchObject({ state: "reconciliation_terminal", reconciliationAttempts: 3 });
+    await expect(restart.reconcileOutstandingWakeDispatches(fixture.accountId)).resolves.toEqual([]);
+  });
+
   test("restart reconciliation closes claimed wake crash points by original operation, never redispatch", async () => {
     const fixture = await setup({ credited: true, cap: "3250" });
     const hint = { accountId: fixture.accountId, sessionId: "session:grace-wake", pauseGeneration: 1, liveLeaseToken, pendingFingerprint, expectedSessionVersion: 4, expectedArtifactVersion: 4 };

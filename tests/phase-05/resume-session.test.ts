@@ -6,6 +6,8 @@ import { accountIdForPrincipal } from "../../src/domain/account-command";
 import { FundingService } from "../../src/funding/funding-service";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
 import type { CheckpointRestoreRequest, CheckpointRestoreResult, ContinuationWorkerPort, WorkerRunRequest, WorkerRunResult } from "../../src/phase-02/contracts";
+import { readSessionStatus } from "../../src/phase-04/session-status";
+import { MeteredGenerationService } from "../../src/phase-04/metered-generation-service";
 
 const nowMs = 1_700_000_700_000;
 const principal = { pubkey: "cd".repeat(32) };
@@ -83,7 +85,7 @@ async function setup(input: Readonly<{ topUp?: boolean; compatible?: boolean }> 
   } as never);
   const command = { principal: { id: accountId }, sessionId: "session:resume", checkpointId: "checkpoint:resume", expectedSessionVersion: 4, expectedCheckpointVersion: 1, idempotencyKey: "resume:one", approvePendingAction: true, capApprovalReference: admissionReference, pendingAction: { reference: "pending:resume", fingerprint: pendingFingerprint, kind: "revise_session", maximum: "3250" } };
   const resume = (overrides: Record<string, unknown> = {}) => (service as unknown as { resumeSession(input: unknown): Promise<unknown> }).resumeSession({ ...command, ...overrides });
-  return { allocations: () => allocations, command, resume, store, worker };
+  return { accountId, allocations: () => allocations, command, principal, resume, service, store, worker };
 }
 
 describe("explicit post-grace resume", () => {
@@ -112,5 +114,22 @@ describe("explicit post-grace resume", () => {
     const incompatible = await setup({ compatible: false });
     await expect(incompatible.resume()).resolves.toMatchObject({ status: "denied", code: "RESUME_COMPATIBILITY_DENIED" });
     expect(incompatible.allocations()).toBe(0);
+  });
+
+  test("projects owner-safe resume recovery and retires only after terminal completion", async () => {
+    const fixture = await setup();
+    const pending = await readSessionStatus({ store: fixture.store, cursorSecret: "resume-status-secret", query: { principal: fixture.principal, sessionId: fixture.command.sessionId } });
+    expect(pending).toMatchObject({ status: "ok", session: { state: "active", progress: "waiting_for_dispatch", nextAction: "resume_session", continuation: { status: "resume_required", checkpoint: { reference: "checkpoint:resume" } } } });
+
+    const restored = await fixture.resume() as { allocationIntentReference?: string };
+    if (!restored.allocationIntentReference) throw new Error("expected restored allocation");
+    const running = await readSessionStatus({ store: fixture.store, cursorSecret: "resume-status-secret", query: { principal: fixture.principal, sessionId: fixture.command.sessionId } });
+    expect(running).toMatchObject({ status: "ok", session: { state: "active", progress: "running", nextAction: "wait_for_current_action", continuation: { status: "restored", checkpoint: { reference: "checkpoint:resume" } } } });
+
+    const coordinator = new MeteredGenerationService({ fundedAdmission: {} as never, store: fixture.store, gateway: {} as never, worker: {} as never, artifactVerifier: {} as never, continuation: fixture.service });
+    await coordinator.completeResumedAction({ accountId: fixture.accountId, checkpointId: "checkpoint:resume", allocationIntentReference: restored.allocationIntentReference, terminalActionReference: "action:resume:terminal", terminalStatus: "completed" });
+    expect(await fixture.store.transact(fixture.accountId, (tx) => tx.findContinuationPause("session:resume", 1))).toMatchObject({ state: "completed", liveLeaseToken: undefined });
+    const terminal = await readSessionStatus({ store: fixture.store, cursorSecret: "resume-status-secret", query: { principal: fixture.principal, sessionId: fixture.command.sessionId } });
+    expect(terminal).toMatchObject({ status: "ok", session: { state: "verified", progress: "verified", nextAction: "revise_session", continuation: null } });
   });
 });

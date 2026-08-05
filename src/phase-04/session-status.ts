@@ -55,7 +55,7 @@ const StatusOkSchema = z.object({
     remainingBalance: DecimalSchema,
     remainingCap: DecimalSchema,
     latestVerifiedArtifact: z.object({ id: z.string().min(1), version: z.number().int().nonnegative() }).nullable(),
-    nextAction: z.enum(["revise_session", "billing_reconciliation", "wait_for_current_action", "top_up", "approve_cap", "top_up_and_approve_cap", "none"]),
+    nextAction: z.enum(["revise_session", "resume_session", "billing_reconciliation", "wait_for_current_action", "top_up", "approve_cap", "top_up_and_approve_cap", "none"]),
     continuation: z.union([ContinuationStatusSchema, z.null()]),
   }).strict(),
   action: z.union([z.object({
@@ -153,6 +153,13 @@ function expiredContinuationStatus(checkpoint: ContinuationCheckpoint, deletion:
     nextRequiredAction: "none",
   });
 }
+function resumeRecoveryStatus(checkpoint: ContinuationCheckpoint, state: "resume_required" | "claimed" | "restored"): z.infer<typeof ContinuationStatusSchema> {
+  return ContinuationStatusSchema.parse({
+    status: state === "claimed" ? "restore_pending" : state,
+    checkpoint: { reference: checkpoint.checkpointId },
+    nextRequiredAction: state === "resume_required" ? "resume_session" : "wait_for_current_action",
+  });
+}
 
 /** Pure transport-neutral projection; every durable read is owner scoped. */
 export async function readSessionStatus(input: Readonly<{ store: MeteredFundingStore; query: unknown; cursorSecret: string | Uint8Array }>): Promise<SessionStatus> {
@@ -209,7 +216,21 @@ export async function readSessionStatus(input: Readonly<{ store: MeteredFundingS
         billing: { items: page.items.map(historyItem), nextCursor },
       }));
     }
-    if (continuation && (continuation.state === "resuming" || continuation.state === "completed")) {
+    if (checkpoint && continuation && (continuation.state === "resume_required" || continuation.state === "claimed" || continuation.state === "restored")) {
+      const safe = resumeRecoveryStatus(checkpoint, continuation.state);
+      const restored = continuation.state === "restored";
+      return freeze(SessionStatusSchema.parse({
+        status: "ok",
+        session: {
+          id: session.sessionId, version: session.version, state: "active", progress: restored ? "running" : "waiting_for_dispatch",
+          maximum: continuation.result.actionMaximum, actualSpend: "0", remainingBalance: account.available, remainingCap: continuation.result.remainingCap,
+          latestVerifiedArtifact: null, nextAction: safe.nextRequiredAction, continuation: safe,
+        },
+        action: null,
+        billing: { items: page.items.map(historyItem), nextCursor },
+      }));
+    }
+    if (continuation && (continuation.state === "resuming" || (continuation.state === "completed" && session.status === "active"))) {
       // A wake is an internal, fenced effect. Project only the allowlisted
       // active/recovery shape and never re-expose the old funding demand.
       return freeze(SessionStatusSchema.parse({
@@ -226,6 +247,16 @@ export async function readSessionStatus(input: Readonly<{ store: MeteredFundingS
     if (continuation?.state === "wake_reconciliation") return freeze(SessionStatusSchema.parse({
       status: "ok",
       session: { id: session.sessionId, version: session.version, state: "usage_unknown", progress: "reconciliation_required", maximum: continuation.result.actionMaximum, actualSpend: "0", remainingBalance: account.available, remainingCap: continuation.result.remainingCap, latestVerifiedArtifact: null, nextAction: "billing_reconciliation", continuation: null },
+      action: null,
+      billing: { items: page.items.map(historyItem), nextCursor },
+    }));
+    if (continuation?.state === "completed" && (session.status === "verified" || session.status === "failed")) return freeze(SessionStatusSchema.parse({
+      status: "ok",
+      session: {
+        id: session.sessionId, version: session.version, state: session.status, progress: safeProgress(session.status),
+        maximum: continuation.result.actionMaximum, actualSpend: "0", remainingBalance: account.available, remainingCap: continuation.result.remainingCap,
+        latestVerifiedArtifact: null, nextAction: "revise_session", continuation: null,
+      },
       action: null,
       billing: { items: page.items.map(historyItem), nextCursor },
     }));

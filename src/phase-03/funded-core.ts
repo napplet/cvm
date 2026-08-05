@@ -44,7 +44,7 @@ export type FundedCoreOptions = Readonly<{
   protectedMaterialKey?: Uint8Array;
   announcement?: ContextVmAnnouncementInput;
   /** Phase 4's transport-neutral action authority; never a ContextVM SDK type. */
-  meteredService?: Pick<MeteredGenerationService, "startSession" | "reviseSession">;
+  meteredService?: Pick<MeteredGenerationService, "startSession" | "reviseSession"> & Partial<Pick<MeteredGenerationService, "reconcileOutstandingWakeDispatches" | "completeResumedAction">>;
   /** Phase 5 explicit-resume facade; no payment or ContextVM authority crosses this seam. */
   continuationService?: Pick<ContinuationService, "resumeSession">;
   /** Server-held HMAC material for opaque status cursors. */
@@ -58,6 +58,8 @@ export type FundedCore = Readonly<{
   admissions: FundedAdmissionService;
   accountStatus: AccountStatusService;
   contextvm?: ContextVmFundingAdapter;
+  /** Coordinator-only restart lifecycle; this discovers durable wake effects, never queues generation. */
+  continuationRecovery?: Readonly<{ reconcileOutstandingWakeDispatches(accountId: string): ReturnType<MeteredGenerationService["reconcileOutstandingWakeDispatches"]> }>;
   externalSurfaces: Readonly<{ contextvm: SurfaceState; lightning: SurfaceState; cashu: SurfaceState; postgres: SurfaceState; capacity: SurfaceState; modal: "unselected" }>;
 }>;
 
@@ -112,9 +114,12 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
       ...(options.continuationService ? { continuation: options.continuationService } : {}),
     })
     : undefined;
+  const continuationRecovery = options.meteredService?.reconcileOutstandingWakeDispatches
+    ? Object.freeze({ reconcileOutstandingWakeDispatches: (accountId: string) => options.meteredService!.reconcileOutstandingWakeDispatches!(accountId) })
+    : undefined;
   return Object.freeze({
     mode: offline ? "offline_design_ready" as const : "configured" as const,
-    funding, admissions, accountStatus, ...(contextvm ? { contextvm } : {}),
+    funding, admissions, accountStatus, ...(contextvm ? { contextvm } : {}), ...(continuationRecovery ? { continuationRecovery } : {}),
     externalSurfaces: Object.freeze({
       contextvm: contextvm ? "configured" as const : "blocked" as const,
       lightning: lightning && publicFundingSurface ? "configured" as const : "blocked" as const,

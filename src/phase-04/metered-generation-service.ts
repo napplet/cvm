@@ -42,6 +42,11 @@ export type StartSessionCommand = z.infer<typeof StartSessionCommandSchema>;
 export type ReviseSessionCommand = z.infer<typeof ReviseSessionCommandSchema>;
 export type TriggerValidationRepairCommand = z.infer<typeof TriggerValidationRepairCommandSchema>;
 export type SessionActionResult = z.infer<typeof SessionActionResultSchema>;
+type ContinuationWakePort = Readonly<{
+  continueAction(input: Readonly<{ pendingActionReference: string; actionBudgetReference: string; operationId: string; liveLeaseToken: string }>): Promise<void>;
+  /** Lookup-only exact-operation observer used during coordinator restart. */
+  observeAction?(input: Readonly<{ accountId: string; sessionId: string; pauseGeneration: number; operationId: string; actionBudgetReference: string; liveLeaseToken: string }>): Promise<"completed" | "unknown">;
+}>;
 
 const TOKEN_COUNTER = Object.freeze({ version: "phase-02-whitespace-token-counter-v1", count: (idea: string) => idea.trim().split(/\s+/u).filter(Boolean).length });
 const RISK_DETECTOR: RiskSignalDetector = Object.freeze({ version: "phase-02-deterministic-risk-detector-v1", detect: () => [] });
@@ -52,20 +57,32 @@ async function hash(value: unknown): Promise<string> { const digest = await cryp
 export class MeteredGenerationService {
   #inFlight = new Map<string, Promise<SessionActionResult>>();
   #sessionTails = new Map<string, Promise<void>>();
-  constructor(private readonly options: Readonly<{ fundedAdmission: FundedAdmissionService; store: MeteredFundingStore; gateway: ModelGateway; worker: WorkerPort; artifactVerifier: ArtifactVerifier; riskDetector?: RiskSignalDetector; harness?: Readonly<{ runner: NappletHarness; toolchain: NappletHarnessRequest["toolchain"]; snapshotReference: string; priorArtifactId: string; approvedApplicationSurfaces: readonly string[] }>; continuation?: ContinuationService; clock?: Readonly<{ nowMs(): number }>; continuationWake?: Readonly<{ continueAction(input: Readonly<{ pendingActionReference: string; actionBudgetReference: string; liveLeaseToken: string }>): Promise<void> }> }>) {}
+  constructor(private readonly options: Readonly<{ fundedAdmission: FundedAdmissionService; store: MeteredFundingStore; gateway: ModelGateway; worker: WorkerPort; artifactVerifier: ArtifactVerifier; riskDetector?: RiskSignalDetector; harness?: Readonly<{ runner: NappletHarness; toolchain: NappletHarnessRequest["toolchain"]; snapshotReference: string; priorArtifactId: string; approvedApplicationSurfaces: readonly string[] }>; continuation?: ContinuationService; clock?: Readonly<{ nowMs(): number }>; continuationWake?: ContinuationWakePort }>) {}
+
+  #continuation(): ContinuationService {
+    const continuationStore = this.options.store as MeteredFundingStore & Partial<ContinuationFundingStore>;
+    if (typeof continuationStore.findContinuation !== "function" || typeof continuationStore.listOutstandingWakeDispatches !== "function") throw new Error("CONTINUATION_STORE_UNAVAILABLE");
+    // A supplied facade owns explicit resume dependencies. When this
+    // coordinator also owns an exact-operation observer, build the narrow
+    // wake facade here so restart recovery cannot silently drop that port.
+    if (this.options.continuation && !this.options.continuationWake?.observeAction) return this.options.continuation;
+    return new ContinuationService({
+      store: continuationStore as ContinuationFundingStore,
+      ...(this.options.clock ? { clock: this.options.clock } : {}),
+      ...(this.options.continuationWake?.observeAction ? { wakeReconciliation: { observe: this.options.continuationWake.observeAction } } : {}),
+    });
+  }
 
   /** Internal coordinator hook for a verified-credit hint. It carries no rail payload and cannot widen the session cap. */
   async wakePausedAction(input: VerifiedCreditWakeHint): Promise<VerifiedCreditWakeResult> {
-    const continuationStore = this.options.store as MeteredFundingStore & Partial<ContinuationFundingStore>;
-    if (typeof continuationStore.findContinuation !== "function") throw new Error("CONTINUATION_STORE_UNAVAILABLE");
-    const continuation = this.options.continuation ?? new ContinuationService({ store: continuationStore as ContinuationFundingStore, ...(this.options.clock ? { clock: this.options.clock } : {}) });
+    const continuation = this.#continuation();
     const result = await continuation.wakePausedAction(input);
     // Only the transaction that claimed the coupled effect may cross the
     // worker/provider boundary. A throw is ambiguous, so record unknown and
     // require bounded reconciliation instead of launching a duplicate action.
-    if (result.status === "continued" && this.options.continuationWake && result.pendingActionReference && result.actionBudgetReference && result.leaseToken && result.dispatchClaimToken) {
+    if (result.status === "continued" && this.options.continuationWake && result.pendingActionReference && result.actionBudgetReference && result.operationId && result.leaseToken && result.dispatchClaimToken) {
       try {
-        await this.options.continuationWake.continueAction({ pendingActionReference: result.pendingActionReference, actionBudgetReference: result.actionBudgetReference, liveLeaseToken: result.leaseToken });
+        await this.options.continuationWake.continueAction({ pendingActionReference: result.pendingActionReference, actionBudgetReference: result.actionBudgetReference, operationId: result.operationId, liveLeaseToken: result.leaseToken });
         await continuation.recordWakeDispatchOutcome({ accountId: input.accountId, sessionId: input.sessionId, pauseGeneration: input.pauseGeneration, dispatchClaimToken: result.dispatchClaimToken, outcome: "completed" });
       } catch (error) {
         await continuation.recordWakeDispatchOutcome({ accountId: input.accountId, sessionId: input.sessionId, pauseGeneration: input.pauseGeneration, dispatchClaimToken: result.dispatchClaimToken, outcome: "unknown" });
@@ -73,6 +90,16 @@ export class MeteredGenerationService {
       }
     }
     return result;
+  }
+
+  /** Coordinator restart scheduling surface; it observes existing effects only. */
+  async reconcileOutstandingWakeDispatches(accountId: string): Promise<readonly Readonly<{ sessionId: string; pauseGeneration: number; outcome: "completed" | "unknown" | "not_found" }>[]> {
+    return this.#continuation().reconcileOutstandingWakeDispatches(accountId);
+  }
+
+  /** Called by the lease-bound resumed worker coordinator after terminal action accounting. */
+  async completeResumedAction(input: Readonly<{ accountId: string; checkpointId: string; allocationIntentReference: string; terminalActionReference: string; terminalStatus: "completed" | "failed" }>): Promise<void> {
+    await this.#continuation().completeResumedAction(input);
   }
 
   async startSession(input: unknown): Promise<SessionActionResult> {
@@ -169,9 +196,7 @@ export class MeteredGenerationService {
     const actionKind = "repair" in command ? "repair" as const : "revision" in command ? "revise_session" as const : "start_session" as const;
     const boundedPayloadHash = await hash("repair" in command ? { repair: command.originatingActionId } : "revision" in command ? { revision: command.revision } : { idea: command.idea });
     const pauseFingerprint = await hash({ accountId, sessionId, actionKind, boundedPayloadHash, expectedSessionVersion: command.expectedVersion, expectedArtifactVersion: command.expectedVersion, policyVersion: command.policyVersion, priceCardId: PHASE_04_DETERMINISTIC_PRICE_CARD.id, profileId: profile.id, toolchainId: "phase-04-deterministic-toolchain", actionMaximum: profileCeiling, idempotencyKey: command.idempotencyKey });
-    const continuationStore = this.options.store as MeteredFundingStore & Partial<ContinuationFundingStore>;
-    if (typeof continuationStore.findContinuation !== "function") throw new Error("CONTINUATION_STORE_UNAVAILABLE");
-    const continuation = this.options.continuation ?? new ContinuationService({ store: continuationStore as ContinuationFundingStore, ...(this.options.clock ? { clock: this.options.clock } : {}) });
+    const continuation = this.#continuation();
     const paused = await continuation.pauseForFunding({ intent: { accountId, sessionId, idempotencyKey: command.idempotencyKey, fingerprint: pauseFingerprint, reference: `pending:${(await hash({ accountId, key: command.idempotencyKey, pauseFingerprint })).slice(0, 24)}`, actionKind, boundedPayloadHash, expectedSessionVersion: command.expectedVersion, expectedArtifactVersion: command.expectedVersion, policyVersion: command.policyVersion, priceCardId: PHASE_04_DETERMINISTIC_PRICE_CARD.id, profileId: profile.id, toolchainId: "phase-04-deterministic-toolchain", actionMaximum: profileCeiling, admissionReference: command.admissionReference } });
     if (paused) return SessionActionResultSchema.parse(paused);
     const budget = await this.options.fundedAdmission.authorizeActionBudget({ principal: command.principal, admissionReference: command.admissionReference, idempotencyKey: `phase-04:${command.idempotencyKey}`, maximum: profileCeiling, unit: "sat" });

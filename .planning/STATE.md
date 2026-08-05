@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 7
 current_phase_name: Admission SLO, Resilience & Launch Safety
 status: planned
-stopped_at: Phase 7 security audit found local gaps; 07-14 through 07-16 planned
-last_updated: "2026-08-05T19:47:29.849Z"
+stopped_at: Completed 07-14-PLAN.md
+last_updated: "2026-08-05T20:23:43.933Z"
 last_activity: 2026-08-05
-last_activity_desc: Closed public release CLI exit-status defect; Phase 7 awaits protected evidence
+last_activity_desc: Security audit identified canonical admission and release supply-chain gaps
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 57
-  completed_plans: 54
+  completed_plans: 55
   percent: 86
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 7 — Admission SLO, Resilience & Launch Safety
-Plan: 14 of 17
+Plan: 15 of 17
 Status: Security gap closure planned
 Last activity: 2026-08-05 — Security audit identified canonical admission and release supply-chain gaps
 
@@ -119,6 +119,7 @@ Plan execution: [██████████] 100%; Phase verification remain
 | Phase 07-admission-slo-resilience-launch-safety P11 | 29min | 2 tasks | 6 files |
 | Phase 07-admission-slo-resilience-launch-safety P12 | 3 min | 3 tasks | 7 files |
 | Phase 07 P13 | 10 min | 1 tasks | 2 files |
+| Phase 07 P14 | 5m | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -229,6 +230,9 @@ Recent decisions affecting current work:
 - [Phase ?]: Fixture adapter passes remain deterministic evidence; only protected-live observations may satisfy live claims.
 - [Phase ?]: Exact release bundles route through evaluateReleaseCertification as the sole terminal promotion decision.
 - [Phase ?]: candidate:verify exits zero only when the existing release evaluator returns promoted; canonical deterministic evidence remains blocked.
+- [Phase ?]: Admission correlation hashes canonical invocation, verified principal, event identity, and RPC request identity before receipt authority is issued.
+- [Phase ?]: Funded-admission notifications and RPC responses share a finite explicit projection rather than any result spread.
+- [Phase ?]: T-07-W0-05 remains pending_owner_acceptance and cannot waive launch, SLO, or security gates.
 
 ### Pending Todos
 
@@ -250,6 +254,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T19:47:29.840Z
-Stopped at: Completed 07-13-PLAN.md; Phase 7 requires goal re-verification and protected live evidence
+Last session: 2026-08-05T20:23:43.924Z
+Stopped at: Completed 07-14-PLAN.md
 Resume file: None

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
+import { tmpdir } from "node:os";
 import { z } from "zod";
 import { canonicalJson } from "../src/promotion/schema";
 
@@ -10,7 +11,10 @@ const OFFICIAL_DOCUMENTATION = "https://opentelemetry.io/docs/languages/js/expor
 const CERTIFICATION_DIRECTORY = "evidence/certification";
 const POINTER_PATH = `${CERTIFICATION_DIRECTORY}/phase-07-otel-package-audit.json`;
 const RECORD_DIRECTORY = `${CERTIFICATION_DIRECTORY}/otel-package-audits`;
+const SMOKE_DIRECTORY = `${CERTIFICATION_DIRECTORY}/otel-package-smokes`;
 const FORBIDDEN_LIFECYCLE_SCRIPTS = new Set(["preinstall", "install", "postinstall", "prepare"]);
+const APPROVED_AUDIT_DIGEST = "d7fedf16f62e4088cf17442aa39786c33bb4af8f3377e8d121d76b108eaf22b3";
+const COLLECTOR_IMAGE = "otel/opentelemetry-collector:latest";
 const EXACT_NAMES = [
   "@opentelemetry/api",
   "@opentelemetry/resources",
@@ -55,6 +59,17 @@ export const OtelPackageAuditSchema = z.object({
 });
 export type OtelPackageAudit = z.infer<typeof OtelPackageAuditSchema>;
 
+const SmokeRecordSchema = z.object({
+  schemaVersion: z.literal(1), status: z.enum(["passed", "failed", "blocked"]), mode: z.literal("bun-collector-smoke"),
+  approvedAuditDigest: z.literal(APPROVED_AUDIT_DIGEST), bunVersion: z.string().min(1),
+  packages: z.array(z.object({ name: z.string(), version: z.string() })).length(6),
+  collectorImageDigest: z.string().regex(/^otel\/opentelemetry-collector@sha256:[a-f0-9]{64}$/u).optional(),
+  collectorConfigSha256: z.string().regex(/^[a-f0-9]{64}$/u), otlpEndpoint: z.literal("http/protobuf /v1/traces,/v1/metrics"),
+  outputSha256: z.string().regex(/^[a-f0-9]{64}$/u).optional(), limitations: z.array(z.string()).min(1),
+  inputDigests: z.object({ packageJsonSha256: z.string().regex(/^[a-f0-9]{64}$/), bunLockSha256: z.string().regex(/^[a-f0-9]{64}$/) }),
+  errorCode: z.string().regex(/^[A-Z0-9_]+$/u).optional(), evidenceSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+}).strict();
+
 function sha256(value: Uint8Array | string): string { return createHash("sha256").update(value).digest("hex"); }
 function sriMatches(bytes: Uint8Array, integrity: string): boolean {
   return integrity.split(/\s+/u).some((item) => item === `sha512-${createHash("sha512").update(bytes).digest("base64")}`);
@@ -93,6 +108,83 @@ async function responseJson(fetcher: typeof fetch, url: string): Promise<{ value
   return { value: safeJson(JSON.parse(new TextDecoder().decode(bytes))), sha256: sha256(bytes) };
 }
 async function snapshot(path: string): Promise<string> { return sha256(await readFile(path)); }
+async function run(command: string[], cwd?: string): Promise<{ readonly code: number; readonly stdout: string; readonly stderr: string }> {
+  const process = Bun.spawn(command, { cwd, stdout: "pipe", stderr: "pipe" });
+  const [code, stdout, stderr] = await Promise.all([process.exited, new Response(process.stdout).text(), new Response(process.stderr).text()]);
+  return { code, stdout, stderr };
+}
+async function rootPins(): Promise<Record<string, unknown>> { return safeJson(JSON.parse(await readFile("package.json", "utf8"))); }
+async function exactRootPins(): Promise<boolean> {
+  const dependencies = (await rootPins()).dependencies;
+  if (!isRecord(dependencies)) return false;
+  return OFFICIAL_OTEL_PACKAGES.every((item) => dependencies[item.name] === item.version);
+}
+async function approvedAudit(): Promise<void> {
+  await verifyPointer();
+  const pointer = safeJson(JSON.parse(await readFile(POINTER_PATH, "utf8")));
+  if (pointer.evidenceSha256 !== APPROVED_AUDIT_DIGEST) throw new Error("APPROVAL_DIGEST_DRIFT");
+  const record = safeJson(JSON.parse(await readFile(join(CERTIFICATION_DIRECTORY, String(pointer.record)), "utf8")));
+  const packages = Array.isArray(record.packages) ? record.packages : [];
+  if (packages.length !== OFFICIAL_OTEL_PACKAGES.length || OFFICIAL_OTEL_PACKAGES.some((expected) => !packages.some((value) => isRecord(value) && value.name === expected.name && value.version === expected.version && value.registryIntegrity === expected.integrity && value.verdict === "passed"))) throw new Error("APPROVED_PACKAGE_SET_DRIFT");
+}
+async function writeSmokeRecord(record: z.input<typeof SmokeRecordSchema>): Promise<{ readonly evidenceSha256: string; readonly recordPath: string }> {
+  const withoutDigest = SmokeRecordSchema.omit({ evidenceSha256: true }).parse(record);
+  const evidenceSha256 = sha256(canonicalJson(withoutDigest));
+  const content = `${canonicalJson({ ...withoutDigest, evidenceSha256 })}\n`;
+  const recordPath = join(SMOKE_DIRECTORY, `${evidenceSha256}.json`);
+  await mkdir(SMOKE_DIRECTORY, { recursive: true });
+  try { await writeFile(recordPath, content, { encoding: "utf8", flag: "wx" }); }
+  catch (error) { if (!(error instanceof Error) || !((error as NodeJS.ErrnoException).code === "EEXIST") || await readFile(recordPath, "utf8") !== content) throw new Error("IMMUTABLE_SMOKE_COLLISION"); }
+  return { evidenceSha256, recordPath };
+}
+async function smoke(): Promise<{ readonly evidenceSha256: string; readonly recordPath: string }> {
+  const root = process.cwd();
+  const inputDigests = { packageJsonSha256: await snapshot(join(root, "package.json")), bunLockSha256: await snapshot(join(root, "bun.lock")) };
+  const collectorConfigSha256 = await snapshot(join(root, "infra/otel/collector.yaml"));
+  const base = { schemaVersion: 1 as const, mode: "bun-collector-smoke" as const, approvedAuditDigest: APPROVED_AUDIT_DIGEST, bunVersion: Bun.version, packages: OFFICIAL_OTEL_PACKAGES.map(({ name, version }) => ({ name, version })), collectorConfigSha256, otlpEndpoint: "http/protobuf /v1/traces,/v1/metrics" as const, inputDigests, limitations: ["Certification smoke sends only fixed finite attributes to a local Collector debug sink.", "This is package and protocol compatibility evidence, not live service certification."], };
+  let temp = ""; let container = "";
+  try {
+    await approvedAudit();
+    const dockerReady = await run(["docker", "info", "--format", "{{.ServerVersion}}"]);
+    if (dockerReady.code !== 0) throw new Error("DOCKER_UNAVAILABLE");
+    const pull = await run(["docker", "pull", COLLECTOR_IMAGE]);
+    if (pull.code !== 0) throw new Error("COLLECTOR_PULL_FAILED");
+    const digest = (await run(["docker", "image", "inspect", COLLECTOR_IMAGE, "--format", "{{index .RepoDigests 0}}"])) .stdout.trim();
+    if (!/^otel\/opentelemetry-collector@sha256:[a-f0-9]{64}$/u.test(digest)) throw new Error("COLLECTOR_DIGEST_INVALID");
+    const config = join(root, "infra/otel/collector.yaml");
+    const started = await run(["docker", "run", "-d", "--rm", "-p", "127.0.0.1::4318", "-v", `${config}:/etc/otelcol/config.yaml:ro`, digest, "--config=/etc/otelcol/config.yaml"]);
+    if (started.code !== 0 || !/^[a-f0-9]{12,}$/u.test(started.stdout.trim())) throw new Error("COLLECTOR_START_FAILED");
+    container = started.stdout.trim();
+    const port = (await run(["docker", "port", container, "4318/tcp"])).stdout.trim().match(/127\.0\.0\.1:(\d+)/u)?.[1];
+    if (!port) throw new Error("COLLECTOR_PORT_UNAVAILABLE");
+    await Bun.sleep(500);
+    temp = await mkdtemp(join(tmpdir(), "napplet-cvm-otel-smoke-"));
+    await writeFile(join(temp, "package.json"), `${JSON.stringify({ private: true, type: "module", dependencies: Object.fromEntries(OFFICIAL_OTEL_PACKAGES.map(({ name, version }) => [name, version])) })}\n`, "utf8");
+    const smokeCorrelation = `sha256:${"a".repeat(64)}`;
+    await writeFile(join(temp, "smoke.ts"), `import { metrics, trace } from "@opentelemetry/api";\nimport "@opentelemetry/resources";\nimport { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";\nimport { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-proto";\nimport { BasicTracerProvider, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";\nimport { MeterProvider, PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";\nconst base = process.env.OTLP_ENDPOINT!; const attrs = { "cvm.lifecycle.version": "v1", "cvm.lifecycle.stage": "exact_session_ready", "cvm.lifecycle.outcome": "accepted", "cvm.correlation.digest": "${smokeCorrelation}" };\nconst tracerProvider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(new OTLPTraceExporter({ url: base + "/v1/traces" }))] }); trace.setGlobalTracerProvider(tracerProvider); const meterProvider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter: new OTLPMetricExporter({ url: base + "/v1/metrics" }), exportIntervalMillis: 20 })] }); metrics.setGlobalMeterProvider(meterProvider); const span = trace.getTracer("cvm.lifecycle.v1").startSpan("cvm.lifecycle.exact_session_ready", { attributes: attrs }); span.end(); metrics.getMeter("cvm.lifecycle.v1").createCounter("cvm.lifecycle.observations").add(1, { "cvm.lifecycle.version": "v1", "cvm.lifecycle.stage": "exact_session_ready", "cvm.lifecycle.outcome": "accepted" }); await tracerProvider.forceFlush(); await meterProvider.forceFlush(); await new Promise((resolve) => setTimeout(resolve, 100));\n`, "utf8");
+    const install = await run(["bun", "install", "--ignore-scripts", "--exact"], temp);
+    if (install.code !== 0) throw new Error("DISPOSABLE_INSTALL_FAILED");
+    const imported = await run(["env", `OTLP_ENDPOINT=http://127.0.0.1:${port}`, "bun", "run", "smoke.ts"], temp);
+    if (imported.code !== 0) throw new Error("BUN_IMPORT_OR_OTLP_FAILED");
+    await Bun.sleep(1_500);
+    const collectorLogs = await run(["docker", "logs", container]);
+    const output = `${collectorLogs.stdout}${collectorLogs.stderr}`;
+    if (!output.includes("cvm.lifecycle.exact_session_ready")) throw new Error("COLLECTOR_TRACE_MISSING");
+    if (!output.includes("cvm.lifecycle.observations")) throw new Error("COLLECTOR_METRIC_MISSING");
+    for (const expected of ["exact_session_ready", "accepted", smokeCorrelation]) if (!output.includes(expected)) throw new Error("COLLECTOR_SAFE_ATTRIBUTE_MISSING");
+    const record = await writeSmokeRecord({ ...base, status: "passed", collectorImageDigest: digest, outputSha256: sha256(output) });
+    const after = { packageJsonSha256: await snapshot(join(root, "package.json")), bunLockSha256: await snapshot(join(root, "bun.lock")) };
+    if (after.packageJsonSha256 !== inputDigests.packageJsonSha256 || after.bunLockSha256 !== inputDigests.bunLockSha256) throw new Error("ROOT_DEPENDENCY_GRAPH_MUTATED");
+    return record;
+  } catch (error) {
+    const code = error instanceof Error && /^[A-Z0-9_]+$/u.test(error.message) ? error.message : "SMOKE_FAILED";
+    const record = await writeSmokeRecord({ ...base, status: code === "DOCKER_UNAVAILABLE" ? "blocked" : "failed", errorCode: code });
+    throw new Error(`${code}:${record.evidenceSha256}`);
+  } finally {
+    if (container) await run(["docker", "rm", "-f", container]);
+    if (temp) await rm(temp, { recursive: true, force: true });
+  }
+}
 function failedRow(expected: ExpectedPackage, errors: string[], digests: Partial<z.infer<typeof PackageRowSchema>> = {}) {
   return { name: expected.name, version: expected.version, registryIntegrity: expected.integrity, tarballSha256: digests.tarballSha256 ?? "0".repeat(64), metadataSha256: digests.metadataSha256 ?? "0".repeat(64), publishMetadataSha256: digests.publishMetadataSha256 ?? "0".repeat(64), sourceRepository: OFFICIAL_REPOSITORY, sourceUrls: [OFFICIAL_REPOSITORY, OFFICIAL_DOCUMENTATION], license: "Apache-2.0", publisher: "GitHub Actions", publishedAt: `${expected.publishedOn}T00:00:00.000Z`, lifecycleScripts: [], requiredDependencies: expected.requiredDependencies, disposition: expected.disposition, verdict: "failed" as const, errors };
 }
@@ -160,8 +252,11 @@ export async function verifyPointer(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const args = Bun.argv.slice(2); const offline = args.includes("--offline-fixture"); const pointerOnly = args.includes("--verify-pointer"); const preinstall = args.includes("--mode=preinstall");
-  if (args.length === 0 || args.some((argument) => !["--mode=preinstall", "--offline-fixture", "--verify-pointer"].includes(argument)) || (offline || pointerOnly) && preinstall) throw new Error("usage: --mode=preinstall | --offline-fixture | --verify-pointer");
+  const args = Bun.argv.slice(2); const offline = args.includes("--offline-fixture"); const pointerOnly = args.includes("--verify-pointer"); const preinstall = args.includes("--mode=preinstall"); const requireApproved = args.includes("--require-approved"); const verifyRootPins = args.includes("--verify-root-pins"); const runSmoke = args.includes("--bun-collector-smoke");
+  if (args.length === 0 || args.some((argument) => !["--mode=preinstall", "--offline-fixture", "--verify-pointer", "--require-approved", "--verify-root-pins", "--bun-collector-smoke"].includes(argument)) || [offline, pointerOnly, preinstall, requireApproved, verifyRootPins, runSmoke].filter(Boolean).length > 1) throw new Error("usage: --mode=preinstall | --offline-fixture | --verify-pointer | --require-approved | --verify-root-pins | --bun-collector-smoke");
+  if (requireApproved) { await approvedAudit(); console.log(JSON.stringify({ status: "passed", mode: "approved-audit", evidenceSha256: APPROVED_AUDIT_DIGEST })); return; }
+  if (verifyRootPins) { await approvedAudit(); if (!await exactRootPins()) throw new Error("ROOT_PINS_INVALID"); console.log(JSON.stringify({ status: "passed", mode: "root-pins" })); return; }
+  if (runSmoke) { console.log(JSON.stringify({ status: "passed", mode: "bun-collector-smoke", ...await smoke() })); return; }
   if (offline || pointerOnly) { await verifyPointer(); console.log(JSON.stringify({ status: "passed", mode: "offline-fixture", approvalStatus: "pending_human" })); return; }
   if (!preinstall) throw new Error("mode=preinstall is required");
   const audit = await verifyOfficialOtelPackageSet(); if (audit.status !== "passed") { console.error(JSON.stringify(audit)); process.exitCode = 1; return; }

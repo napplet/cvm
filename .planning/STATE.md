@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
 current_phase: 7
 current_phase_name: Admission SLO, Resilience & Launch Safety
-status: planned
-stopped_at: Security re-audit found protected promotion composition gap; 07-18 planned
-last_updated: "2026-08-05T21:51:50Z"
+status: ready_for_verification
+stopped_at: Completed 07-18-PLAN.md; protected-live evidence remains required
+last_updated: "2026-08-05T21:58:56.219Z"
 last_activity: 2026-08-05
 last_activity_desc: Security re-audit found the release entrypoint does not own the pinned protected root
 progress:
   total_phases: 7
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 59
-  completed_plans: 58
-  percent: 86
+  completed_plans: 59
+  percent: 100
 ---
 
 # Project State
@@ -31,8 +31,8 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 Phase: 7 — Admission SLO, Resilience & Launch Safety
 Plan: 19 of 19
-Status: Protected promotion composition gap closure planned
-Last activity: 2026-08-05 — Security re-audit found the release entrypoint does not own the pinned protected root
+Status: Protected promotion composition complete; protected-live evidence and goal verification remain
+Last activity: 2026-08-05 — Protected release command now owns its pinned certifier root
 
 Plan execution: [██████████] 100%; Phase verification remains pending
 
@@ -123,6 +123,7 @@ Plan execution: [██████████] 100%; Phase verification remain
 | Phase 07-admission-slo-resilience-launch-safety P15 | 7m 11s | 2 tasks | 6 files |
 | Phase 07-admission-slo-resilience-launch-safety P16 | 11m | 2 tasks | 10 files |
 | Phase 07-admission-slo-resilience-launch-safety P17 | 6m 28s | 2 tasks | 11 files |
+| Phase 07 P18 | 6m | 1 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -242,6 +243,7 @@ Recent decisions affecting current work:
 - [Phase ?]: Protected certification and release bundles require two explicit independently revalidated reproducibility and supply-chain record references.
 - [Phase ?]: Git source revision and exact source-byte SHA-256 are separate trusted release inputs.
 - [Phase ?]: Cosign and SBOM policy is manifest-owned and revalidated from redacted verification facts.
+- [Phase ?]: Protected release verification loads an operator-pinned trust root before any candidate bundle bytes; public candidate verification remains rootless and fail-closed.
 
 ### Pending Todos
 
@@ -263,6 +265,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T21:06:03.300Z
-Stopped at: Completed 07-17-PLAN.md
+Last session: 2026-08-05T21:58:56.208Z
+Stopped at: Completed 07-18-PLAN.md; protected-live evidence remains required
 Resume file: None

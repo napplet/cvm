@@ -303,7 +303,7 @@ Plans:
 **Validation gate**: Benchmark Modal and at least one non-AWS fallback with the production-like image, target regions, relay delay, pool misses, database contention, reclaim/failure behavior, and step load. Select a worker vendor only after receipt-to-isolated-worker-ready p95 is at most five seconds with zero durable backlog; establish the database/failover claim to match the chosen deployment scope.
 
 Phase 7 also closes the launch-hardening work intentionally deferred from Phase 1: exhaustive toolchain provenance, repeated/cross-environment reproducibility, full hostile and mutation coverage, formal golden approval, waiver drills, SBOM/provenance enforcement, and the final production promotion gate.
-**Plans**: 18/19 plans executed; protected promotion composition gap active
+**Plans**: 19/19 plans executed
 
 - [x] 07-00-PLAN.md
 - [x] 07-01-PLAN.md
@@ -323,7 +323,7 @@ Phase 7 also closes the launch-hardening work intentionally deferred from Phase 
 - [x] 07-15-PLAN.md — Enforce two-isolation reproducibility plus pinned Cosign/SBOM/provenance verification.
 - [x] 07-16-PLAN.md — Require verified supply-chain records at protected certification and sole promotion boundaries.
 - [x] 07-17-PLAN.md — Bind exact source bytes and Cosign/SBOM expectations to independent release policy.
-- [ ] 07-18-PLAN.md — Load and own the pinned protected certifier root at the release-promotion entrypoint.
+- [x] 07-18-PLAN.md — Load and own the pinned protected certifier root at the release-promotion entrypoint.
 
 ## Progress
 
@@ -338,14 +338,14 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 4. Metered Generation & Revision Loop | 7/7 | Complete    | 2026-08-05 |
 | 5. Funding Interruption & Durable Resume | 7/7 | Complete    | 2026-08-05 |
 | 6. Sealed Preview & User-Owned Publication | 7/7 | Complete    | 2026-08-05 |
-| 7. Admission SLO, Resilience & Launch Safety | 18/19 | In Progress|  |
+| 7. Admission SLO, Resilience & Launch Safety | 19/19 | In Progress|  |
 
 ### Milestone Progress Roll-up
 
 - **Phases:** Phases 1–6 are verified complete; Phase 7 awaits protected live evidence and goal verification; 6/7 phases complete (86%).
-- **Known plans:** 58/59 milestone plans executed; Plan 07-18 closes the protected promotion composition gap.
+- **Known plans:** 59/59 milestone plans executed; Plan 07-18 closed the protected promotion composition gap.
 - **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 49 verified complete and 5 Phase 7 requirements pending.
-- **Current checkpoint:** Execute Plan 07-18 and re-audit security, then supply protected-live certification inputs and observations.
+- **Current checkpoint:** Re-audit security, then supply protected-live certification inputs and observations before Phase 7 goal verification.
 - **Phase 1 preservation:** Phase 1 remains complete with its review, security, validation, verification evidence, and Phase 7 deferrals unchanged.
 
 ### Completion Reporting Contract

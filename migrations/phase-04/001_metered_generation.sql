@@ -44,10 +44,14 @@ ON CONFLICT (id) DO UPDATE SET
 CREATE TABLE IF NOT EXISTS metered_sessions (
   id text PRIMARY KEY, account_id text NOT NULL REFERENCES funding_accounts(account_id), admission_reference text NOT NULL,
   profile_id text NOT NULL REFERENCES model_profile_versions(id), price_card_id text NOT NULL REFERENCES price_card_versions(id),
-  version integer NOT NULL DEFAULT 0 CHECK (version >= 0), state text NOT NULL CHECK (state IN ('prepared','active','failed','usage_unknown','billing_invariant_failed','verified')),
+  version integer NOT NULL DEFAULT 0 CHECK (version >= 0), state text NOT NULL CHECK (state IN ('prepared','active','failed','usage_unknown','billing_invariant_failed','verified','needs_top_up')),
   confirmed_spend_sat bigint NOT NULL DEFAULT 0 CHECK (confirmed_spend_sat >= 0), current_verified_artifact_version integer NOT NULL DEFAULT 0 CHECK (current_verified_artifact_version >= 0),
   UNIQUE (account_id, id)
 );
+-- A Phase 05 affordability pause may be the first durable fact for a session.
+-- Preserve the foreign-key identity without admitting any action or budget.
+ALTER TABLE metered_sessions DROP CONSTRAINT IF EXISTS metered_sessions_state_check;
+ALTER TABLE metered_sessions ADD CONSTRAINT metered_sessions_state_check CHECK (state IN ('prepared','active','failed','usage_unknown','billing_invariant_failed','verified','needs_top_up'));
 CREATE TABLE IF NOT EXISTS metered_actions (
   id text PRIMARY KEY, account_id text NOT NULL REFERENCES funding_accounts(account_id), session_id text NOT NULL REFERENCES metered_sessions(id),
   idempotency_key text NOT NULL, fingerprint text NOT NULL, expected_session_version integer NOT NULL CHECK (expected_session_version >= 0),

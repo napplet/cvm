@@ -1,4 +1,5 @@
 import { canonicalJson } from "./schema";
+import { validatePhase07DesignEvidence } from "../certification/evidence";
 
 export type CandidateReadinessStatus = "unverified" | "review_ready" | "quarantined";
 
@@ -252,23 +253,40 @@ export async function verifyCandidateReviewReadiness(value: unknown): Promise<Ca
   return detectCandidate(value);
 }
 
-function parseCliArguments(args: readonly string[]): { readonly path: string; readonly reviewReady: boolean } | null {
+type CandidateCliArguments = { readonly mode: "review"; readonly path: string; readonly reviewReady: boolean } | { readonly mode: "release-evidence"; readonly path: string };
+
+function parseCliArguments(args: readonly string[]): CandidateCliArguments | null {
+  if (args.length === 2 && args[0] === "--release-evidence" && !args[1]!.startsWith("-")) return { mode: "release-evidence", path: args[1]! };
   const reviewReady = args.includes("--review-ready");
   const paths = args.filter((argument) => argument !== "--review-ready");
   if (paths.length !== 1 || paths[0]!.startsWith("-")) return null;
-  return { path: paths[0]!, reviewReady };
+  return { mode: "review", path: paths[0]!, reviewReady };
+}
+
+/** Final release verification deliberately treats a deterministic record as an
+ * input, never as a substitute for protected evidence. */
+async function verifyReleaseEvidence(path: string): Promise<Readonly<{ status: "blocked"; reason: string; evidenceSha256: string }>> {
+  const pointerOrEvidence = await Bun.file(path).json() as { contentAddressedPath?: unknown };
+  const source = typeof pointerOrEvidence.contentAddressedPath === "string" ? await Bun.file(pointerOrEvidence.contentAddressedPath).json() : pointerOrEvidence;
+  const evidence = await validatePhase07DesignEvidence(source);
+  return { status: "blocked", reason: "PROTECTED_LIVE_CERTIFICATION_REQUIRED", evidenceSha256: evidence.evidenceSha256 };
 }
 
 if (import.meta.main) {
   const parsed = parseCliArguments(process.argv.slice(2));
   if (!parsed) {
-    console.error("usage: bun run candidate:verify -- <candidate.json> --review-ready");
+    console.error("usage: bun run candidate:verify -- <candidate.json> --review-ready | --release-evidence <phase-07-evidence.json>");
     process.exitCode = 2;
   } else {
     try {
-      const candidate = await verifyCandidateReviewReadiness(await Bun.file(parsed.path).json());
-      console.log(JSON.stringify(candidate));
-      if (parsed.reviewReady && candidate.status !== "review_ready") process.exitCode = 1;
+      if (parsed.mode === "release-evidence") {
+        console.log(JSON.stringify(await verifyReleaseEvidence(parsed.path)));
+        process.exitCode = 1;
+      } else {
+        const candidate = await verifyCandidateReviewReadiness(await Bun.file(parsed.path).json());
+        console.log(JSON.stringify(candidate));
+        if (parsed.reviewReady && candidate.status !== "review_ready") process.exitCode = 1;
+      }
     } catch (error) {
       console.error(error instanceof Error ? error.message : "candidate verification failed");
       process.exitCode = 1;

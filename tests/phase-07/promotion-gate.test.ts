@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
-import { evaluateReleaseCertification } from "../../src/promotion/run-promotion";
+import { evaluateReleaseCertification as evaluateReleaseCertificationInner } from "../../src/promotion/run-promotion";
 import { verifyReleaseCertificationInput } from "../../src/promotion/candidate";
 import { canonicalJson, parseReleaseCertificationManifest, RELEASE_CLAIM_INVENTORY } from "../../src/promotion/schema";
 import { writeCertificationObservation } from "../../src/certification/evidence";
@@ -59,6 +59,15 @@ const permissiveTestTrustRoot: ReleaseCertificationTrustRoot = {
   verifySourceMeasurement: async () => true,
 };
 
+const sourceMeasurement = (manifest: Readonly<{ sourceRevision: string; sourceSha256: string }>) => ({ version: 1 as const, sourceRevision: manifest.sourceRevision, sourceSha256: manifest.sourceSha256 });
+async function evaluateReleaseCertification(
+  manifest: ReturnType<typeof parseReleaseCertificationManifest>,
+  observations: readonly unknown[],
+  input: Readonly<{ candidateId: string; nowMs?: number; sourceMeasurement?: unknown; verificationRecords?: Parameters<typeof evaluateReleaseCertificationInner>[2]["verificationRecords"]; trustRoot?: ReleaseCertificationTrustRoot }>,
+) {
+  return evaluateReleaseCertificationInner(manifest, observations, { ...input, sourceMeasurement: input.sourceMeasurement ?? sourceMeasurement(manifest) });
+}
+
 function anchoredTrustRoot(manifest: unknown, observations: readonly unknown[], records: Readonly<{ reproducibility: unknown; supplyChain: unknown }>): ReleaseCertificationTrustRoot {
   const same = (actual: unknown, expected: unknown) => canonicalJson(actual) === canonicalJson(expected);
   return {
@@ -87,7 +96,7 @@ const releaseManifest = () => ({
   waivers: [],
 });
 const observation = (manifest: ReturnType<typeof releaseManifest>, candidateId: string, claim: string, live: boolean, status: "passed" | "blocked" = "passed") => ({
-  version: 1 as const, evidenceClass: live ? "protected_live" as const : "deterministic" as const, status, candidate: { id: candidateId, provider: "modal" as const, image: `example/worker@sha256:${digest("3")}`, sourceSha256: digest("e") },
+  version: 1 as const, evidenceClass: live ? "protected_live" as const : "deterministic" as const, status, candidate: { id: candidateId, provider: "modal" as const, image: `example/worker@sha256:${digest("3")}`, sourceSha256: manifest.sourceSha256 },
   input: { datasetSha256: digest("9"), profileSha256: digest("f"), topologySha256: digest("0"), command: ["certify"] },
   startedAtMs: 1_000, completedAtMs: 1_001, expiresAtMs: 61_001, claims: status === "passed" ? [claim] : [], limitations: status === "passed" ? [] : ["topology-unavailable"], reasonCode: status === "passed" ? "OBSERVATION_COMPLETE" : "TOPOLOGY_UNAVAILABLE",
   releaseBinding: { releaseId: manifest.releaseId, sourceRevision: manifest.sourceRevision, sourceSha256: manifest.sourceSha256, supplyChainPolicy: manifest.supplyChainPolicy, inputs: manifest.inputs },
@@ -149,9 +158,9 @@ test("source measurement is authenticated before cache or evaluator authority", 
     verifySourceMeasurement: async (actual) => canonicalJson(actual) === canonicalJson(measurement),
   };
 
-  await expect(evaluateReleaseCertification(manifest, observations, { candidateId, nowMs: 2_000, verificationRecords: records, trustRoot, sourceMeasurement: measurement })).resolves.toMatchObject({ status: "promoted" });
-  await expect(evaluateReleaseCertification(manifest, observations, { candidateId, nowMs: 2_000, verificationRecords: records, trustRoot, sourceMeasurement: { ...measurement, sourceSha256: digest("0") } })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_SOURCE_MEASUREMENT_INVALID" });
-  await expect(evaluateReleaseCertification(manifest, observations, { candidateId, nowMs: 2_000, verificationRecords: records, trustRoot })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_SOURCE_MEASUREMENT_REQUIRED" });
+  await expect(evaluateReleaseCertificationInner(manifest, observations, { candidateId, nowMs: 2_000, verificationRecords: records, trustRoot, sourceMeasurement: measurement })).resolves.toMatchObject({ status: "promoted" });
+  await expect(evaluateReleaseCertificationInner(manifest, observations, { candidateId, nowMs: 2_000, verificationRecords: records, trustRoot, sourceMeasurement: { ...measurement, sourceSha256: digest("0") } })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_SOURCE_MEASUREMENT_INVALID" });
+  await expect(evaluateReleaseCertificationInner(manifest, observations, { candidateId, nowMs: 2_000, verificationRecords: records, trustRoot })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_SOURCE_MEASUREMENT_REQUIRED" });
 });
 
 test("the sole evaluator authenticates a changed manifest before consulting a promoted cache entry", async () => {
@@ -323,7 +332,11 @@ test("the protected release command owns a pinned root and rejects a freshly reh
   const root = await mkdtemp("tests/.tmp-phase07-protected-release-");
   try {
     const operatorRoot = join(process.cwd(), root);
-    const rawManifest = releaseManifest();
+    const sourcePath = join(root, "source.tar");
+    const sourceBytes = new TextEncoder().encode("operator-held immutable source archive");
+    const sourceSha256 = sha256Bytes(sourceBytes);
+    await writeFile(sourcePath, sourceBytes);
+    const rawManifest = { ...releaseManifest(), sourceSha256 };
     const candidateId = digest("b");
     const now = Date.now();
     const verification = await protectedVerificationRecords(rawManifest, candidateId, now - 1_000);
@@ -353,13 +366,9 @@ test("the protected release command owns a pinned root and rejects a freshly reh
     };
     await writeFile(releasePath, JSON.stringify(release));
 
-    const sourcePath = join(root, "source.tar");
-    const sourceBytes = new TextEncoder().encode("operator-held immutable source archive");
-    await writeFile(sourcePath, sourceBytes);
-    const sourceSha256 = sha256Bytes(sourceBytes);
     const sourceReference = `git+https://github.com/acme/napplet-cvm@${rawManifest.sourceRevision}`;
     const rootModulePath = join(root, "operator-root.ts");
-    const trustedModule = (expected: unknown) => `import { createPinnedReleaseCertificationTrustRoot } from ${JSON.stringify(join(process.cwd(), "src/certification/trust.ts"))};\nexport const protectedReleaseCertificationTrustRoot = createPinnedReleaseCertificationTrustRoot({ sourceArchiveRoot: ${JSON.stringify(operatorRoot)}, sourceArchives: [{ canonicalSourceReference: ${JSON.stringify(sourceReference)}, relativePath: "source.tar", sourceSha256: ${JSON.stringify(sourceSha256)} }], manifest: ${JSON.stringify(expected)}, observations: ${JSON.stringify(observations)}, reproducibilityRecord: ${JSON.stringify(verification.reproducibility)}, supplyChainRecord: ${JSON.stringify(verification.supplyChain)} });\n`;
+    const trustedModule = (expected: unknown) => `import { createPinnedReleaseCertificationTrustRoot } from ${JSON.stringify(join(process.cwd(), "src/certification/trust.ts"))};\nexport const protectedReleaseCertificationTrustRoot = createPinnedReleaseCertificationTrustRoot({ sourceArchiveRoot: ${JSON.stringify(operatorRoot)}, sourceArchives: [{ canonicalSourceReference: ${JSON.stringify(sourceReference)}, sourceRevision: ${JSON.stringify(rawManifest.sourceRevision)}, relativePath: "source.tar", sourceSha256: ${JSON.stringify(sourceSha256)} }], manifest: ${JSON.stringify(expected)}, observations: ${JSON.stringify(observations)}, reproducibilityRecord: ${JSON.stringify(verification.reproducibility)}, supplyChainRecord: ${JSON.stringify(verification.supplyChain)} });\n`;
     await writeFile(rootModulePath, trustedModule(rawManifest));
     const rootDigest = sha256Bytes(new Uint8Array(await Bun.file(rootModulePath).arrayBuffer()));
     const counterfeitRootPath = join(root, "candidate-permissive-root.ts");
@@ -385,7 +394,15 @@ test("the protected release command owns a pinned root and rejects a freshly reh
     }
     expect(await Bun.file(counterfeitMarker).exists()).toBe(false);
 
-    const counterfeitManifest = { ...rawManifest, releaseId: digest("c") };
+    await writeFile(sourcePath, "archive-byte-drift");
+    const archiveDrift = await runProtected();
+    expect(archiveDrift.exitCode).not.toBe(0);
+    expect(`${archiveDrift.stdout}${archiveDrift.stderr}`).toContain('"status":"blocked"');
+    expect(`${archiveDrift.stdout}${archiveDrift.stderr}`).not.toContain("protected_live");
+    expect(`${archiveDrift.stdout}${archiveDrift.stderr}`).not.toContain('"status":"promoted"');
+    await writeFile(sourcePath, sourceBytes);
+
+    const counterfeitManifest = { ...rawManifest, releaseId: digest("c"), sourceSha256: sha256Bytes(new TextEncoder().encode("counterfeit recomputed source archive")) };
     const counterfeitVerification = await protectedVerificationRecords(counterfeitManifest, candidateId, now - 1_000);
     const counterfeitObservationDirectory = join(root, "counterfeit-observations");
     const counterfeitObservations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation(counterfeitObservationDirectory, {
@@ -411,7 +428,7 @@ test("the protected release command owns a pinned root and rejects a freshly reh
     const rejected = await runProtected();
     expect(rejected.exitCode).not.toBe(0);
     expect(`${rejected.stdout}${rejected.stderr}`).toContain('"status":"blocked"');
-    expect(`${rejected.stdout}${rejected.stderr}`).toContain("RELEASE_CERTIFIER_AUTHORITY_REQUIRED");
+    expect(`${rejected.stdout}${rejected.stderr}`).toContain("RELEASE_SOURCE_MEASUREMENT_INVALID");
     expect(`${rejected.stdout}${rejected.stderr}`).not.toContain("protected_live");
     expect(await Bun.file(counterfeitMarker).exists()).toBe(false);
 

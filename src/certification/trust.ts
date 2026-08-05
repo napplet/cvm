@@ -19,7 +19,15 @@ export interface ReleaseCertificationTrustRoot {
 
 export type PinnedProtectedSourceArchive = Readonly<{
   canonicalSourceReference: string;
+  sourceRevision?: string;
   relativePath: string;
+  sourceSha256: string;
+}>;
+
+/** A finite, manifest-derived source fact that a protected root must re-measure. */
+export type ReleaseSourceMeasurement = Readonly<{
+  version: 1;
+  sourceRevision: string;
   sourceSha256: string;
 }>;
 
@@ -40,6 +48,13 @@ const sha256 = async (value: Uint8Array): Promise<string> => {
 
 const same = (left: unknown, right: unknown): boolean => canonicalJson(left) === canonicalJson(right);
 
+export function releaseSourceMeasurement(source: Readonly<{ sourceRevision: string; sourceSha256: string }>): ReleaseSourceMeasurement {
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/iu.test(source.sourceRevision) || !/^[a-f0-9]{64}$/iu.test(source.sourceSha256)) {
+    throw new Error("RELEASE_SOURCE_MEASUREMENT_INVALID");
+  }
+  return { version: 1, sourceRevision: source.sourceRevision.toLowerCase(), sourceSha256: source.sourceSha256.toLowerCase() };
+}
+
 const containedBy = (root: string, child: string): boolean => {
   const value = relative(root, child);
   return value !== "" && value !== ".." && !value.startsWith(`..${sep}`) && !isAbsolute(value);
@@ -55,10 +70,13 @@ async function assertNoSymlinkComponents(root: string, file: string): Promise<vo
 
 async function sourceArchiveMatches(root: string, archive: PinnedProtectedSourceArchive, measurement: unknown): Promise<boolean> {
   try {
-    if (!isAbsolute(root) || !archive.relativePath || isAbsolute(archive.relativePath) || archive.relativePath.split(/[\\/]/u).includes("..") || !/^[a-f0-9]{64}$/iu.test(archive.sourceSha256)) return false;
+    if (!isAbsolute(root) || !archive.relativePath || isAbsolute(archive.relativePath) || archive.relativePath.split(/[\\/]/u).includes("..") || (archive.sourceRevision !== undefined && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/iu.test(archive.sourceRevision)) || !/^[a-f0-9]{64}$/iu.test(archive.sourceSha256)) return false;
     if (!measurement || typeof measurement !== "object" || Array.isArray(measurement)) return false;
     const record = measurement as Record<string, unknown>;
-    if (record.canonicalSourceReference !== archive.canonicalSourceReference || record.sourceSha256 !== archive.sourceSha256.toLowerCase()) return false;
+    const releaseMeasurement = Object.keys(record).length === 3 && record.version === 1 && archive.sourceRevision !== undefined
+      && record.sourceRevision === archive.sourceRevision.toLowerCase() && record.sourceSha256 === archive.sourceSha256.toLowerCase();
+    const reproducibilityMeasurement = record.canonicalSourceReference === archive.canonicalSourceReference && record.sourceSha256 === archive.sourceSha256.toLowerCase();
+    if (!releaseMeasurement && !reproducibilityMeasurement) return false;
     if ((await lstat(root)).isSymbolicLink()) return false;
     const rawRoot = resolve(root);
     const canonicalRoot = await realpath(rawRoot);

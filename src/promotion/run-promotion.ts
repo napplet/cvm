@@ -4,7 +4,7 @@ import { runSealedDenialProbes, runSealedToolchain, type CommandEvidence, type S
 import { validateCertificationObservation } from "../certification/evidence";
 import { validateReproducibilityVerificationRecord } from "../certification/reproducibility";
 import { validateSupplyChainVerificationRecord } from "../certification/supply-chain";
-import type { ReleaseCertificationTrustRoot } from "../certification/trust";
+import { releaseSourceMeasurement, type ReleaseCertificationTrustRoot } from "../certification/trust";
 import { emitLifecycleObservation, type LifecycleTelemetryPort } from "../telemetry/contracts";
 
 export type PromotionStageEvidence = {
@@ -64,19 +64,22 @@ async function releaseEvidenceSha256(observations: readonly unknown[]): Promise<
   return sha256(canonicalJson(observations));
 }
 
-async function releaseDecisionFingerprint(manifest: ReleaseCertificationManifest, observations: readonly unknown[], verificationRecords: ReleaseVerificationRecords): Promise<string> {
-  return sha256(canonicalJson({ manifest, observations, verificationRecords }));
+async function releaseDecisionFingerprint(manifest: ReleaseCertificationManifest, observations: readonly unknown[], sourceMeasurement: unknown, verificationRecords: ReleaseVerificationRecords): Promise<string> {
+  return sha256(canonicalJson({ manifest, observations, sourceMeasurement, verificationRecords }));
 }
 
 async function authenticateReleaseCertificationInput(
   manifest: ReleaseCertificationManifest,
   observations: readonly unknown[],
+  sourceMeasurement: unknown | undefined,
   verificationRecords: ReleaseVerificationRecords | undefined,
   trustRoot: ReleaseCertificationTrustRoot | undefined,
-): Promise<"authenticated" | "RELEASE_VERIFICATION_RECORDS_REQUIRED" | "RELEASE_CERTIFIER_AUTHORITY_REQUIRED" | "RELEASE_CERTIFIER_AUTHORITY_INVALID"> {
+): Promise<"authenticated" | "RELEASE_SOURCE_MEASUREMENT_REQUIRED" | "RELEASE_VERIFICATION_RECORDS_REQUIRED" | "RELEASE_CERTIFIER_AUTHORITY_REQUIRED" | "RELEASE_CERTIFIER_AUTHORITY_INVALID" | "RELEASE_SOURCE_MEASUREMENT_INVALID"> {
+  if (sourceMeasurement === undefined) return "RELEASE_SOURCE_MEASUREMENT_REQUIRED";
   if (!verificationRecords) return "RELEASE_VERIFICATION_RECORDS_REQUIRED";
   if (!trustRoot) return "RELEASE_CERTIFIER_AUTHORITY_REQUIRED";
   try {
+    if (!(await trustRoot.verifySourceMeasurement(sourceMeasurement))) return "RELEASE_SOURCE_MEASUREMENT_INVALID";
     const trusted = await Promise.all([
       trustRoot.verifyManifest(manifest),
       trustRoot.verifyReproducibilityRecord(verificationRecords.reproducibility),
@@ -138,14 +141,14 @@ async function evaluateReleaseCertificationInner(
 export async function evaluateReleaseCertification(
   manifest: ReleaseCertificationManifest,
   observations: readonly unknown[],
-  input: Readonly<{ candidateId: string; nowMs?: number; verificationRecords?: ReleaseVerificationRecords; trustRoot?: ReleaseCertificationTrustRoot }>,
+  input: Readonly<{ candidateId: string; nowMs?: number; sourceMeasurement?: unknown; verificationRecords?: ReleaseVerificationRecords; trustRoot?: ReleaseCertificationTrustRoot }>,
 ): Promise<ReleaseCertificationDecision> {
   const nowMs = input.nowMs ?? Date.now();
-  const evidenceSha256 = await releaseEvidenceSha256([observations, input.verificationRecords ?? null]);
+  const evidenceSha256 = await releaseEvidenceSha256([observations, input.sourceMeasurement ?? null, input.verificationRecords ?? null]);
   const blocked = (reason: Exclude<Awaited<ReturnType<typeof authenticateReleaseCertificationInput>>, "authenticated">): ReleaseCertificationDecision => ({ candidateId: input.candidateId, releaseId: manifest.releaseId, evidenceSha256, status: "blocked", responsibleRequirement: reason === "RELEASE_VERIFICATION_RECORDS_REQUIRED" ? "supply-chain" : null, reason });
-  const authentication = await authenticateReleaseCertificationInput(manifest, observations, input.verificationRecords, input.trustRoot);
+  const authentication = await authenticateReleaseCertificationInput(manifest, observations, input.sourceMeasurement, input.verificationRecords, input.trustRoot);
   if (authentication !== "authenticated") return blocked(authentication);
-  const key = `${input.candidateId}:${await releaseDecisionFingerprint(manifest, observations, input.verificationRecords!)}`;
+  const key = `${input.candidateId}:${await releaseDecisionFingerprint(manifest, observations, input.sourceMeasurement, input.verificationRecords!)}`;
   const existing = releaseDecisions.get(key);
   if (existing) return existing;
   const decision = evaluateReleaseCertificationInner(manifest, observations, { candidateId: input.candidateId, nowMs, evidenceSha256, verificationRecords: input.verificationRecords! });
@@ -268,7 +271,7 @@ async function runPromotionCandidateInner(rawManifest: unknown, options: RunProm
     }
   }
   if (!options.releaseManifest || !options.releaseObservations || !options.verificationRecords) return writePromotionEvidence(options.evidenceDirectory, manifest, candidateId, "blocked", "certification-required", stages);
-  const certification = await evaluateReleaseCertification(options.releaseManifest, options.releaseObservations, { candidateId, nowMs: now(), verificationRecords: options.verificationRecords, trustRoot: options.trustRoot });
+  const certification = await evaluateReleaseCertification(options.releaseManifest, options.releaseObservations, { candidateId, nowMs: now(), sourceMeasurement: releaseSourceMeasurement(options.releaseManifest), verificationRecords: options.verificationRecords, trustRoot: options.trustRoot });
   if (certification.status !== "promoted") return writePromotionEvidence(options.evidenceDirectory, manifest, candidateId, "blocked", certification.responsibleRequirement ?? "release-certification", stages);
   const promoted = await writePromotionEvidence(options.evidenceDirectory, manifest, candidateId, "review-ready", "release-certified", stages);
   return { ...promoted, status: "promoted", responsibleStage: "release-certified" };

@@ -1,7 +1,7 @@
 import { canonicalJson, parseReleaseCertificationManifest, type ReleaseCertificationManifest } from "./schema";
 import { validateCertificationObservation, validatePhase07DesignEvidence } from "../certification/evidence";
 import { evaluateReleaseCertification, type ReleaseCertificationDecision, type ReleaseVerificationRecords } from "./run-promotion";
-import type { ReleaseCertificationTrustRoot } from "../certification/trust";
+import { releaseSourceMeasurement, type ReleaseCertificationTrustRoot } from "../certification/trust";
 
 export type CandidateReadinessStatus = "unverified" | "review_ready" | "quarantined";
 
@@ -297,7 +297,10 @@ export async function verifyReleaseCertificationInput(value: unknown, options: R
   try { input = parseReleaseCertificationInput(value); }
   catch { return { candidateId: "0".repeat(64), releaseId: "0".repeat(64), evidenceSha256: "0".repeat(64), status: "blocked", responsibleRequirement: null, reason: "RELEASE_INPUT_INVALID" }; }
   try {
-    if (!options.trustRoot || !(await options.trustRoot.verifyManifest(input.releaseManifest))) return blockedReleaseDecision(input.candidateId, input.releaseManifest, "RELEASE_CERTIFIER_AUTHORITY_REQUIRED");
+    const sourceMeasurement = releaseSourceMeasurement(input.releaseManifest);
+    if (!options.trustRoot) return blockedReleaseDecision(input.candidateId, input.releaseManifest, "RELEASE_CERTIFIER_AUTHORITY_REQUIRED");
+    if (!(await options.trustRoot.verifySourceMeasurement(sourceMeasurement))) return blockedReleaseDecision(input.candidateId, input.releaseManifest, "RELEASE_SOURCE_MEASUREMENT_INVALID");
+    if (!(await options.trustRoot.verifyManifest(input.releaseManifest))) return blockedReleaseDecision(input.candidateId, input.releaseManifest, "RELEASE_CERTIFIER_AUTHORITY_REQUIRED");
     const deterministic = await validatePhase07DesignEvidence(await options.loadDeterministic(input.deterministicEvidence));
     if (deterministic.evidenceSha256 !== input.deterministicEvidence.evidenceSha256 || deterministic.contentAddressedPath !== input.deterministicEvidence.contentAddressedPath) return blockedReleaseDecision(input.candidateId, input.releaseManifest, "RELEASE_DETERMINISTIC_EVIDENCE_INVALID");
     if (input.protectedObservations.length !== input.releaseManifest.requirements.length) return blockedReleaseDecision(input.candidateId, input.releaseManifest, "RELEASE_OBSERVATION_INVENTORY_INVALID");
@@ -308,7 +311,7 @@ export async function verifyReleaseCertificationInput(value: unknown, options: R
     if (parsedObservations.some((observation, index) => observation.evidenceSha256 !== input.protectedObservations[index]!.evidenceSha256 || (observation.status === "passed" && (observation.claims.length !== 1 || !allowedClaims.has(observation.claims[0]!))))) return blockedReleaseDecision(input.candidateId, input.releaseManifest, "RELEASE_OBSERVATION_INVENTORY_INVALID");
     const verificationRecords: ReleaseVerificationRecords = { reproducibility: await options.loadVerificationRecord(input.verificationRecords.reproducibilityEvidence), supplyChain: await options.loadVerificationRecord(input.verificationRecords.supplyChainEvidence) };
     if (!(await options.trustRoot.verifyReproducibilityRecord(verificationRecords.reproducibility)) || !(await options.trustRoot.verifySupplyChainRecord(verificationRecords.supplyChain))) return blockedReleaseDecision(input.candidateId, input.releaseManifest, "RELEASE_CERTIFIER_AUTHORITY_INVALID");
-    const decision = await evaluateReleaseCertification(input.releaseManifest, parsedObservations, { candidateId: input.candidateId, nowMs: options.nowMs, verificationRecords, trustRoot: options.trustRoot });
+    const decision = await evaluateReleaseCertification(input.releaseManifest, parsedObservations, { candidateId: input.candidateId, nowMs: options.nowMs, sourceMeasurement, verificationRecords, trustRoot: options.trustRoot });
     if (decision.status !== "promoted") return decision;
     const reproducibilityDigest = (verificationRecords.reproducibility as { evidenceSha256?: unknown }).evidenceSha256;
     const supplyChainDigest = (verificationRecords.supplyChain as { evidenceSha256?: unknown }).evidenceSha256;

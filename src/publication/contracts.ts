@@ -220,3 +220,29 @@ export interface AttestationPort {
   observe?(input: Readonly<{ operationId: string }>): Promise<PublicationObservation>;
 }
 export interface Phase06Clock { nowMs(): number; }
+
+/**
+ * Owner-safe workflow facts that may select a compatible-host presentation.
+ * These are deliberately finite operational facts, never iframe/signer/provider
+ * display material. The host adapter owns all visible copy and accessibility.
+ */
+export const HostPresentationSourceStateSchema = z.enum([
+  "admission_preparing", "capacity_unavailable", "descriptor_loading", "verified_artifact_no_preview",
+  "preview_loading", "preview_ready", "preview_incompatible", "preview_expired", "preview_denied",
+  "capability_loading", "capability_empty", "required_capability_missing", "optional_capability_missing",
+  "intent_ready", "intent_invalidated", "publish_approval", "signer_active", "signature_rejected",
+  "signature_stale", "signature_accepted", "deployment_observing", "reconciliation_pending", "exact_replay",
+  "complete", "partial", "conflict", "terminal_failure", "launch_certification_blocked",
+]);
+export type HostPresentationSourceState = z.infer<typeof HostPresentationSourceStateSchema>;
+
+export const HostPresentationSourceFactsSchema = z.object({
+  workflowState: HostPresentationSourceStateSchema,
+  admissionReference: identifier.optional(),
+  publicationIntentId: identifier.optional(),
+  publicationOperationId: identifier.optional(),
+  evidenceReference: identifier.optional(),
+  retryHint: z.enum(["a short while", "the displayed retry window"]).optional(),
+  signerKind: z.enum(["host", "external"]).optional(),
+}).strict();
+export type HostPresentationSourceFacts = Readonly<z.infer<typeof HostPresentationSourceFactsSchema>>;

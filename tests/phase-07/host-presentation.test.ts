@@ -130,10 +130,11 @@ describe("Phase 7 compatible-host presentation contract", () => {
       runtimeVersion: "nip-5d@4.0.0",
       sealedArtifactSha256: sha,
       presentationInputSha256: sha,
+      execution: "unit_projection" as const,
       observations: [
-        { viewportWidthPx: 1280, screenshotSha256: sha, reportSha256: sha, layout: "pass", targets: "pass", accessibility: "pass", stateInventory: "pass", identifierCoverage: "pass" },
-        { viewportWidthPx: 768, screenshotSha256: sha, reportSha256: sha, layout: "pass", targets: "pass", accessibility: "pass", stateInventory: "pass", identifierCoverage: "pass" },
-        { viewportWidthPx: 375, screenshotSha256: sha, reportSha256: sha, layout: "pass", targets: "pass", accessibility: "pass", stateInventory: "pass", identifierCoverage: "pass" },
+        { viewportWidthPx: 1280, screenshotSha256: sha, reportSha256: sha, layout: "pass", targets: "pass", accessibility: "pass", keyboardFocus: "pass", dialog: "pass", liveRegion: "pass", contrast: "pass", reducedMotion: "pass", stateInventory: "pass", identifierCoverage: "pass", minimumMeasuredTargetPx: 44, noClippedStepLabels: true, noNestedHorizontalScroll: true },
+        { viewportWidthPx: 768, screenshotSha256: sha, reportSha256: sha, layout: "pass", targets: "pass", accessibility: "pass", keyboardFocus: "pass", dialog: "pass", liveRegion: "pass", contrast: "pass", reducedMotion: "pass", stateInventory: "pass", identifierCoverage: "pass", minimumMeasuredTargetPx: 44, noClippedStepLabels: true, noNestedHorizontalScroll: true },
+        { viewportWidthPx: 375, screenshotSha256: sha, reportSha256: sha, layout: "pass", targets: "pass", accessibility: "pass", keyboardFocus: "pass", dialog: "pass", liveRegion: "pass", contrast: "pass", reducedMotion: "pass", stateInventory: "pass", identifierCoverage: "pass", minimumMeasuredTargetPx: 44, noClippedStepLabels: true, noNestedHorizontalScroll: true },
       ],
       hostPreview: "blocked",
       hostSigner: "not_observed",
@@ -145,6 +146,7 @@ describe("Phase 7 compatible-host presentation contract", () => {
     expect(evidence.hostPreview).toBe("blocked");
     expect(evidence.certificationStatus).toBe("non_pass");
     expect(() => HostBrowserEvidenceSchema.parse({ ...base, observations: base.observations.slice(0, 2) })).toThrow();
-    expect(() => HostBrowserEvidenceSchema.parse({ ...base, hostPreview: "pass", hostSigner: "pass", externalSigner: "pass", reconciliation: "pass", launchCertificationBlockedState: "pass" })).toThrow();
+    expect(() => HostBrowserEvidenceSchema.parse({ ...base, observations: base.observations.map((observation) => ({ ...observation, minimumMeasuredTargetPx: 43 })) })).toThrow();
+    expect(HostBrowserEvidenceSchema.parse({ ...base, hostPreview: "pass", hostSigner: "pass", externalSigner: "pass", reconciliation: "pass", launchCertificationBlockedState: "pass" }).certificationStatus).toBe("non_pass");
   });
 });

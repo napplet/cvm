@@ -227,14 +227,24 @@ function identifiersFor(identity: z.infer<typeof HostIdentitySchema>): HostIdent
 }
 
 export const HostBrowserEvidenceStatusSchema = z.enum(["pass", "failed", "blocked", "not_observed", "skipped"]);
-const BrowserObservationSchema = z.object({ viewportWidthPx: z.number().int().positive(), screenshotSha256: Sha256Schema, reportSha256: Sha256Schema, layout: HostBrowserEvidenceStatusSchema, targets: HostBrowserEvidenceStatusSchema, accessibility: HostBrowserEvidenceStatusSchema, stateInventory: HostBrowserEvidenceStatusSchema, identifierCoverage: HostBrowserEvidenceStatusSchema }).strict();
+const BrowserObservationSchema = z.object({
+  viewportWidthPx: z.number().int().positive(), screenshotSha256: Sha256Schema, reportSha256: Sha256Schema,
+  layout: HostBrowserEvidenceStatusSchema, targets: HostBrowserEvidenceStatusSchema, accessibility: HostBrowserEvidenceStatusSchema,
+  keyboardFocus: HostBrowserEvidenceStatusSchema, dialog: HostBrowserEvidenceStatusSchema, liveRegion: HostBrowserEvidenceStatusSchema,
+  contrast: HostBrowserEvidenceStatusSchema, reducedMotion: HostBrowserEvidenceStatusSchema, stateInventory: HostBrowserEvidenceStatusSchema,
+  identifierCoverage: HostBrowserEvidenceStatusSchema, minimumMeasuredTargetPx: z.number().int().min(44),
+  noClippedStepLabels: z.literal(true), noNestedHorizontalScroll: z.literal(true),
+}).strict();
 export const HostBrowserEvidenceSchema = z.object({
   hostVersion: z.string().min(1).max(256), runtimeVersion: z.string().min(1).max(256), sealedArtifactSha256: Sha256Schema, presentationInputSha256: Sha256Schema,
+  execution: z.enum(["unit_projection", "real_compatible_host_browser"]),
   observations: z.array(BrowserObservationSchema).min(3).max(3), hostPreview: HostBrowserEvidenceStatusSchema, hostSigner: HostBrowserEvidenceStatusSchema, externalSigner: HostBrowserEvidenceStatusSchema, reconciliation: HostBrowserEvidenceStatusSchema, launchCertificationBlockedState: HostBrowserEvidenceStatusSchema,
 }).strict().superRefine((value, context) => {
   for (const width of [1280, 768, 375]) if (!value.observations.some((observation) => observation.viewportWidthPx >= width && observation.viewportWidthPx < (width === 1280 ? Number.POSITIVE_INFINITY : width === 768 ? 1280 : 768))) context.addIssue({ code: "custom", message: `VIEWPORT_${width}_REQUIRED`, path: ["observations"] });
-  if ([value.hostPreview, value.hostSigner, value.externalSigner, value.reconciliation, value.launchCertificationBlockedState].every((status) => status === "pass")) context.addIssue({ code: "custom", message: "LIVE_HOST_EVIDENCE_MUST_NOT_BE_SELF_CERTIFIED", path: ["hostPreview"] });
-}).transform((value) => ({ ...value, certificationStatus: "non_pass" as const }));
+}).transform((value) => {
+  const statuses = [value.hostPreview, value.hostSigner, value.externalSigner, value.reconciliation, value.launchCertificationBlockedState, ...value.observations.flatMap((observation) => [observation.layout, observation.targets, observation.accessibility, observation.keyboardFocus, observation.dialog, observation.liveRegion, observation.contrast, observation.reducedMotion, observation.stateInventory, observation.identifierCoverage])];
+  return { ...value, certificationStatus: value.execution === "real_compatible_host_browser" && statuses.every((status) => status === "pass") ? "pass" as const : "non_pass" as const };
+});
 export type HostBrowserEvidence = Readonly<z.infer<typeof HostBrowserEvidenceSchema>>;
 
 function canonicalState(input: HostPublicationInput): HostState {

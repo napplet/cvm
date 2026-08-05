@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 19
+open_count: 20
 waived_count: 0
 fixed_count: 0
-total_count: 19
-last_updated: 2026-08-05T17:05:44.142Z
+total_count: 20
+last_updated: 2026-08-05T20:23:59.583Z
 ---
 
 # Broken Windows Ledger
@@ -34,6 +34,7 @@ last_updated: 2026-08-05T17:05:44.142Z
 | 17 | 07 | deviation | .planning/STATE.md |  | Normalized legacy Phase 7 Current Position metadata so state.advance-plan could record Plan 07-00 completion. | open |  | 2026-08-05T15:36:07.022Z |  |
 | 18 | 07 | deviation | scripts/verify-phase-07-otel-packages.ts |  | Docker daemon start and smoke endpoint/batch corrections were required before the passing disposable Collector compatibility record. | open |  | 2026-08-05T16:34:49.306Z |  |
 | 19 | 07 | deviation | tests/tracer.test.ts |  | Promotion tracer assertion changed to the concrete certification-required blocker after the deferred terminal stage was removed. | open |  | 2026-08-05T17:05:44.142Z |  |
+| 20 | 07 | deviation | tests/contextvm/adapter.test.ts |  | ContextVM transport fake now returns a canonical SHA-256-shaped invocation hash required by strict admission validation. | open |  | 2026-08-05T20:23:59.583Z |  |
 
 ````json
 [
@@ -263,6 +264,18 @@ last_updated: 2026-08-05T17:05:44.142Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-05T17:05:44.142Z",
+    "resolved_at": null
+  },
+  {
+    "id": 20,
+    "kind": "deviation",
+    "phase": "07",
+    "file": "tests/contextvm/adapter.test.ts",
+    "line": null,
+    "description": "ContextVM transport fake now returns a canonical SHA-256-shaped invocation hash required by strict admission validation.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-05T20:23:59.583Z",
     "resolved_at": null
   }
 ]

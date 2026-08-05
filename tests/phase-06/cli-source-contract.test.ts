@@ -5,6 +5,7 @@ import {
   NAPPLET_CLI_SOURCE_COMMIT,
   probePromotedCliPreSignedRoute,
 } from "../../src/publication/napplet-cli-source-contract.js";
+import { reportPhase06Observation } from "./reference-observation.js";
 
 describe("promoted napplet CLI exact-source contract", () => {
   test("accepts only the promoted commit, Linux asset, structured pre-signed route, and closed unsafe inventory", () => {
@@ -15,6 +16,7 @@ describe("promoted napplet CLI exact-source contract", () => {
       liveExecution: "not_observed",
     }));
   });
+  reportPhase06Observation({ id: "P06-CLI-CONTRACT-01", status: "available", effects: "deploy=0", value: "source-only" });
 
   test("fails closed for a changed identity, source hash, structured surface, or unsafe route", () => {
     for (const changed of [

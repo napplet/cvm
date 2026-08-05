@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 
 import { HostPublicationSurfaceSchema, projectHostPublicationSurface } from "../../src/publication/host-surface";
+import { reportPhase06Observation } from "./reference-observation.js";
 
 const sha = "a".repeat(64);
 const identity = { artifactId: "artifact:one", aggregateSha256: sha, normalizedDTag: "one", capabilityDigest: sha, intentId: "intent:one" };
@@ -67,6 +68,7 @@ describe("Phase 6 compact host publication surface", () => {
   test("records that the UI specification has zero backstop and zero unresolved rows", async () => {
     const uiSpec = await readFile(new URL("../../.planning/phases/06-sealed-preview-user-owned-publication/06-UI-SPEC.md", import.meta.url), "utf8");
     expect(uiSpec).toContain("20 covered, 0 backstop, 0 unresolved");
-    expect(uiSpec).not.toMatch(/\|\s*(?:backstop|unresolved)\s*\|/iu);
-  });
+  expect(uiSpec).not.toMatch(/\|\s*(?:backstop|unresolved)\s*\|/iu);
+  reportPhase06Observation({ id: "P06-HOST-SURFACE-01", status: "owner_safe", effects: "deploy=0", value: "eight-ui-considerations" });
+});
 });

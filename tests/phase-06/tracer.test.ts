@@ -9,7 +9,9 @@ import type {
 } from "../../src/publication/contracts.js";
 import { PreviewService } from "../../src/publication/preview-service.js";
 import { PublicationService } from "../../src/publication/publication-service.js";
+import { canonicalCapabilityReviewSync } from "../../src/publication/capability-review.js";
 import { TransactionalMemoryPublicationStore } from "../../src/persistence/publication-store.js";
+import { reportPhase06Observation } from "./reference-observation.js";
 
 const artifact = Object.freeze({
   accountId: "account:owner",
@@ -25,20 +27,15 @@ const artifact = Object.freeze({
   normalizedDTag: "tracer-napplet",
   requiredCapabilities: ["storage.read"],
   optionalCapabilities: ["notifications"],
+  manifestCapabilities: [
+    { name: "storage.read", requirement: "required", purpose: "Read the selected note", consent: "required", compatibleRuntimes: ["napplet-host/v1"], available: true },
+    { name: "notifications", requirement: "optional", purpose: "Show optional completion notifications", consent: "optional", compatibleRuntimes: [], available: true },
+  ],
   policyIdentity: "policy:phase-06",
   toolchainIdentity: "toolchain:promoted",
   runtimeCompatibilityIdentity: "runtime:tracer",
 });
-const review = Object.freeze({
-  artifactId: artifact.artifactId,
-  aggregateSha256: artifact.aggregateSha256,
-  normalizedDTag: artifact.normalizedDTag,
-  runtimeVariant: "napplet-host/v1",
-  required: [{ capability: "storage.read", purpose: "Read the selected note", consent: "required", available: true }],
-  optional: [{ capability: "notifications", purpose: "Show optional completion notifications", consent: "optional", available: false }],
-  compatibility: "degraded",
-  capabilityDigest: "e".repeat(64),
-});
+const review = canonicalCapabilityReviewSync(artifact, "napplet-host/v1");
 const completedEvent = Object.freeze({
   id: "f".repeat(64),
   pubkey: "1".repeat(64),
@@ -150,4 +147,6 @@ test("terminal result links every exact identity and exact replay produces no ef
   expect(h.verifier.calls).toBe(1);
   expect(h.deployment.calls).toHaveLength(2);
   expect(h.attestation.calls).toHaveLength(1);
+  reportPhase06Observation({ id: "P06-TRACE-01", status: "complete", effects: "deploy=2;attestation=1", value: "sealed-linked" });
+  reportPhase06Observation({ id: "P06-REPLAY-01", status: "replayed", effects: "deploy=2;attestation=1", value: "stored-result" });
 });

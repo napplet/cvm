@@ -24,31 +24,13 @@ export function assertNoNumericApproximation(value: unknown): void {
   else if (value && typeof value === "object") Object.values(value).forEach(assertNoNumericApproximation);
 }
 
-/** Maps bounded scenario input to independently asserted actual-authority facts; expected data never enters here. */
-export function canonicalObservedPhase06Case(input: Pick<ReferenceCase, "input" | "expectedEffects">): Observation {
-  const [kind, scenario] = Object.entries(input.input)[0] ?? [];
-  if (!kind || !scenario) throw new Error("missing Phase 06 scenario");
-  if (kind === "capabilities" && scenario === "empty") return { status: "canonical", effects: "deploy=0", value: "empty-digest" };
-  if (kind === "capabilities" && scenario === "null") return { status: "denied", effects: "deploy=0", value: "invalid" };
-  if (kind === "source" && scenario === "exact") return { status: "available", effects: "deploy=0", value: "source-only" };
-  if (kind === "provider" && scenario === "timeout") return { status: "pending", effects: "deploy=1;attestation=1", value: "unknown" };
-  if (["empty", "null"].includes(scenario)) return { status: "denied", effects: "host=0;publication=0", value: "safe" };
-  if (scenario === "permuted") return { status: "canonical", effects: "deploy=0", value: "required-first" };
-  if (scenario === "equivalent") return { status: "canonical", effects: "deploy=0", value: "equal-digest" };
-  if (scenario === "before") return { status: "eligible", effects: "deploy=0", value: "integer-ms" };
-  if (["exact", "after"].includes(scenario)) return { status: "denied", effects: "deploy=0", value: "integer-ms" };
-  if (scenario === "replay") return { status: "replayed", effects: "deploy=2;attestation=1", value: "stored-result" };
-  if (scenario === "conflict") return { status: "conflict", effects: "deploy=0", value: "closed" };
-  if (scenario === "concurrent") return { status: "replayed", effects: "deploy=1;attestation=1", value: "single-claim" };
-  if (scenario === "observe-original") return { status: "complete", effects: "deploy=1;observe=3;attestation=1", value: "original-ids" };
-  if (scenario === "timeout") return { status: "pending", effects: "deploy=1;attestation=1", value: "lookup-only" };
-  if (["wrong-artifact", "wrong-dtag", "wrong-capability"].includes(scenario)) return { status: "invalid_manifest", effects: "deploy=0", value: "generic" };
-  if (scenario === "failed") return { status: "partial", effects: "deploy=1;attestation=1", value: "reconcile" };
-  if (scenario === "partial") return { status: "partial", effects: "deploy=1;attestation=1", value: "not-complete" };
-  if (scenario === "variants") return { status: "canonical", effects: "deploy=0", value: "fenced" };
-  if (scenario === "all-eight") return { status: "owner_safe", effects: "deploy=0", value: "eight-ui-considerations" };
-  if (scenario === "verified") return { status: "complete", effects: "deploy=2;attestation=1", value: "sealed-linked" };
-  throw new Error(`unknown actual-authority Phase 06 scenario: ${scenario}`);
+function observationsFrom(output: string): ReadonlyMap<string, Observation> {
+  const values = new Map<string, Observation>();
+  for (const match of output.matchAll(/^PHASE06_OBSERVATION:(.+)$/gmu)) {
+    const value = z.object({ id: z.string(), status: z.string(), effects: z.string(), value: z.string() }).strict().parse(JSON.parse(match[1]));
+    values.set(value.id, { status: value.status, effects: value.effects, value: value.value });
+  }
+  return values;
 }
 
 export function validatePhase06ReferenceSet(value: unknown) {
@@ -62,8 +44,9 @@ export function validatePhase06ReferenceSet(value: unknown) {
 
 export async function executePhase06ReferenceCase(item: ReferenceCase) {
   const exactName = item.execution.testName.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  const child = Bun.spawnSync(["bun", "test", item.execution.file, "--test-name-pattern", `^.*${exactName}$`, "--timeout", "10000"], { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" });
-  const observed = canonicalObservedPhase06Case({ input: item.input, expectedEffects: item.expectedEffects });
+  const child = Bun.spawnSync(["bun", "test", item.execution.file, "--test-name-pattern", `^.*${exactName}$`, "--timeout", "10000"], { cwd: process.cwd(), stdout: "pipe", stderr: "pipe", env: { ...process.env, PHASE06_REFERENCE_OBSERVATIONS: "1" } });
+  const observed = observationsFrom(`${new TextDecoder().decode(child.stdout)}\n${new TextDecoder().decode(child.stderr)}`).get(item.id);
+  if (!observed) return Object.freeze({ id: item.id, expected: item.expected, observed: undefined, expectedEffects: item.expectedEffects, effects: undefined, childExitCode: child.exitCode, mismatches: Object.freeze(["structured_observation_missing"]), status: "failed" as const });
   const mismatches = (Object.keys(item.expected) as (keyof Observation)[]).filter((key) => item.expected[key] !== observed[key]);
   return Object.freeze({ id: item.id, expected: item.expected, observed, expectedEffects: item.expectedEffects, effects: item.expectedEffects, childExitCode: child.exitCode, mismatches: Object.freeze(mismatches), status: child.exitCode === 0 && mismatches.length === 0 ? "passed" as const : "failed" as const });
 }

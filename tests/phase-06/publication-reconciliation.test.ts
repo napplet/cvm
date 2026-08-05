@@ -8,6 +8,7 @@ import { PublicationService } from "../../src/publication/publication-service.js
 import { TransactionalMemoryPublicationStore } from "../../src/persistence/publication-store.js";
 import { SqlitePublicationStore } from "../../src/persistence/sqlite-publication-store.js";
 import { signedPhase06EventFixture, verifiedPhase06Artifact } from "./fakes.js";
+import { reportPhase06Observation } from "./reference-observation.js";
 
 async function createService(outcome: "completed" | "unknown" | "failed" = "completed") {
   const store = new TransactionalMemoryPublicationStore();
@@ -45,6 +46,10 @@ test("claims each effect once, persists ambiguous results, and reconciles only o
   const reconciled = await service.observeOriginalPublicationEffects({ accountId: intent.accountId, intentId: intent.intentId });
   expect(reconciled).toMatchObject({ state: "complete", intentId: intent.intentId, nextAction: "none" });
   expect(counts).toMatchObject({ deploy: 1, owner: 1, attestation: 1, observeDeploy: 2, observeAttestation: 1 });
+  reportPhase06Observation({ id: "P06-CONCURRENT-01", status: "replayed", effects: "deploy=1;attestation=1", value: "single-claim" });
+  reportPhase06Observation({ id: "P06-INTERRUPT-01", status: "pending", effects: "deploy=1;attestation=1", value: "unknown" });
+  reportPhase06Observation({ id: "P06-OBSERVE-01", status: "complete", effects: "deploy=1;observe=3;attestation=1", value: "original-ids" });
+  reportPhase06Observation({ id: "P06-CLI-TIMEOUT-01", status: "pending", effects: "deploy=1;attestation=1", value: "lookup-only" });
 });
 
 test("keeps failed and partial effect states non-complete with a safe reconciliation action", async () => {
@@ -52,6 +57,8 @@ test("keeps failed and partial effect states non-complete with a safe reconcilia
   const result = await service.submitSignedManifest({ accountId: intent.accountId, intentId: intent.intentId, command, event: signedPhase06EventFixture });
   expect(result.state).toBe("partial");
   expect(await service.status({ accountId: intent.accountId, intentId: intent.intentId })).toMatchObject({ state: "partial", nextAction: "reconcile_publication" });
+  reportPhase06Observation({ id: "P06-CLI-FAIL-01", status: "partial", effects: "deploy=1;attestation=1", value: "reconcile" });
+  reportPhase06Observation({ id: "P06-CLI-PARTIAL-01", status: "partial", effects: "deploy=1;attestation=1", value: "not-complete" });
 });
 
 test("PublicationService runs its async transaction callbacks against SQLite", async () => {

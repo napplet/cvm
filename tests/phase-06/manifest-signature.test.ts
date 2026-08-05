@@ -8,6 +8,7 @@ import { canonicalOwnerManifestTemplate, createPublicationIntent } from "../../s
 import { PublicationService } from "../../src/publication/publication-service.js";
 import { TransactionalMemoryPublicationStore } from "../../src/persistence/publication-store.js";
 import { verifiedPhase06Artifact } from "./fakes.js";
+import { reportPhase06Observation } from "./reference-observation.js";
 
 const secret = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
 const ownerPubkey = getPublicKey(secret);
@@ -69,6 +70,9 @@ test("collapses id, signature, owner, kind, tag, content, expiry, and semantic-b
     expect(await verifyOwnerManifestEvent({ event: candidate, intent: publicationIntent, nowMs })).toEqual({ valid: false, safeReasonCode: "INVALID_OWNER_MANIFEST" });
   }
   expect(await verifyOwnerManifestEvent({ event, intent: publicationIntent, nowMs: publicationIntent.expiresAtMs })).toEqual({ valid: false, safeReasonCode: "INVALID_OWNER_MANIFEST" });
+  reportPhase06Observation({ id: "P06-SEMANTIC-ARTIFACT-01", status: "invalid_manifest", effects: "deploy=0", value: "generic" });
+  reportPhase06Observation({ id: "P06-SEMANTIC-DTAG-01", status: "invalid_manifest", effects: "deploy=0", value: "generic" });
+  reportPhase06Observation({ id: "P06-SEMANTIC-CAPABILITY-01", status: "invalid_manifest", effects: "deploy=0", value: "generic" });
 });
 
 test("builds a separately typed, ownership-neutral CVM attestation from verified evidence", async () => {

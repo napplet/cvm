@@ -10,6 +10,7 @@ import {
   fixedPhase06Clock,
   verifiedPhase06Artifact,
 } from "./fakes.js";
+import { reportPhase06Observation } from "./reference-observation.js";
 
 function previewHarness() {
   const sealedArtifacts = new DeterministicSealedArtifactPort();
@@ -68,6 +69,7 @@ test("denies empty or null artifact and manifest-like identity before host or pu
     expect(h.deployment.calls).toBe(0);
     expect(h.attestation.calls).toBe(0);
   }
+  for (const id of ["P06-PREV-EMPTY-01", "P06-PREV-NULL-01", "P06-MANIFEST-EMPTY-01", "P06-MANIFEST-NULL-01"]) reportPhase06Observation({ id, status: "denied", effects: "host=0;publication=0", value: "safe" });
 });
 
 test("rejects host grants that attempt any browser or publication authority expansion", async () => {

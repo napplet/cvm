@@ -16,6 +16,7 @@ import { PublicationService } from "../../src/publication/publication-service.js
 import { TransactionalMemoryPublicationStore } from "../../src/persistence/publication-store.js";
 import { SqlitePublicationStore } from "../../src/persistence/sqlite-publication-store.js";
 import { verifiedPhase06Artifact } from "./fakes.js";
+import { reportPhase06Observation } from "./reference-observation.js";
 
 const ownerPubkey = "1".repeat(64);
 const createdAtMs = 1_700_000_000_000;
@@ -81,6 +82,7 @@ test("keeps runtime variation inside the capability approval while retaining exa
   expect(primary.ownerPubkey).toBe(alternate.ownerPubkey);
   expect(primary.capabilityDigest).not.toBe(alternate.capabilityDigest);
   expect(primary.intentId).not.toBe(alternate.intentId);
+  reportPhase06Observation({ id: "P06-RUNTIME-VARIANTS-01", status: "canonical", effects: "deploy=0", value: "fenced" });
 });
 
 test("uses an exact millisecond expiry fence with no tolerance", async () => {
@@ -88,6 +90,9 @@ test("uses an exact millisecond expiry fence with no tolerance", async () => {
   expect(isPublicationIntentExpired(intent, expiresAtMs - 1)).toBeFalse();
   expect(isPublicationIntentExpired(intent, expiresAtMs)).toBeTrue();
   expect(isPublicationIntentExpired(intent, expiresAtMs + 1)).toBeTrue();
+  reportPhase06Observation({ id: "P06-EXPIRY-BEFORE-01", status: "eligible", effects: "deploy=0", value: "integer-ms" });
+  reportPhase06Observation({ id: "P06-EXPIRY-EXACT-01", status: "denied", effects: "deploy=0", value: "integer-ms" });
+  reportPhase06Observation({ id: "P06-EXPIRY-AFTER-01", status: "denied", effects: "deploy=0", value: "integer-ms" });
 });
 
 test("rejects malformed normalized d-tags and changed approved fences", async () => {
@@ -126,6 +131,7 @@ test("persists exact idempotent replay and closes changed-fence key reuse", asyn
   const replay = await service.createIntent(request);
   expect(replay).toEqual(first);
   await expect(service.createIntent({ ...request, purpose: "Changed after approval" })).rejects.toThrow("PUBLICATION_IDEMPOTENCY_CONFLICT");
+  reportPhase06Observation({ id: "P06-CONFLICT-01", status: "conflict", effects: "deploy=0", value: "closed" });
 });
 
 test("replays the same idempotency command after the coordinator clock advances on memory and SQLite", async () => {

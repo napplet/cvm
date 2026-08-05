@@ -119,14 +119,33 @@ export const SignedOwnerManifestEventSchema = z.object({
 }).strict();
 export type SignedOwnerManifestEvent = Readonly<z.infer<typeof SignedOwnerManifestEventSchema>>;
 
+/** The adapter supplies this only after ContextVM signature verification; it carries no signer material. */
+export const SignedPublicationCommandSchema = z.object({
+  commandId: identifier,
+  intentId: identifier,
+  intentFingerprint: sha256,
+  operationIds: z.object({
+    deploy: identifier,
+    ownerManifest: identifier,
+    attestation: identifier,
+  }).strict(),
+}).strict();
+export type SignedPublicationCommand = Readonly<z.infer<typeof SignedPublicationCommandSchema>>;
+
 export const CvmBuildAttestationSchema = z.object({
+  type: z.literal("cvm_build_attestation"),
   attestationId: identifier,
   ownerEventId: z.string().regex(/^[a-f0-9]{64}$/i),
-  aggregateSha256: sha256,
+  ownerPubkey: publicKey,
   artifactId: identifier,
+  artifactSha256: sha256,
+  aggregateSha256: sha256,
+  sessionId: identifier,
+  sessionVersion: z.number().int().nonnegative(),
   artifactVersion: z.number().int().nonnegative(),
-  policyIdentity: identifier,
+  policyVersion: identifier,
   toolchainIdentity: identifier,
+  verificationEvidenceReference: identifier,
   verificationEvidenceSha256: sha256,
   createdAtMs: z.number().int().positive(),
 }).strict();
@@ -179,7 +198,7 @@ export interface PreviewHostPort {
   createDescriptor(input: Readonly<{ artifact: SealedArtifactIdentity; review: CapabilityReview; nowMs: number; expiresAtMs: number }>): Promise<Readonly<{ previewGrantId: string; iframeSandbox: "allow-scripts"; authority: "preview_read_only" }>>;
 }
 export interface OwnerEventVerifierPort {
-  verify(input: Readonly<{ event: SignedOwnerManifestEvent; intent: PublicationIntent }>): Promise<Readonly<{ accepted: boolean; eventId?: string; relayObservation?: string }>>;
+  verify(input: Readonly<{ event: SignedOwnerManifestEvent; intent: PublicationIntent }>): Promise<Readonly<{ valid?: boolean; accepted?: boolean; eventId?: string; safeReasonCode?: "INVALID_OWNER_MANIFEST"; relayObservation?: string }>>;
 }
 export interface NappletDeploymentPort {
   deployExact(input: Readonly<{ operationId: string; artifact: SealedArtifactIdentity; signedOwnerManifest: SignedOwnerManifestEvent }>): Promise<PublicationObservation>;

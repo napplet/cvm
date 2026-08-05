@@ -72,7 +72,7 @@ class TracerOwnerEventVerifierPort implements OwnerEventVerifierPort {
     expect(input.intent.ownerPubkey).toBe(completedEvent.pubkey);
     expect(input.intent.artifact.aggregateSha256).toBe(artifact.aggregateSha256);
     expect(input.intent.capabilityDigest).toBe(review.capabilityDigest);
-    return { accepted: true as const, eventId: completedEvent.id, relayObservation: "relay:owner-manifest" };
+    return { valid: true as const, eventId: completedEvent.id, relayObservation: "relay:owner-manifest" };
   }
 }
 class TracerNappletDeploymentPort implements NappletDeploymentPort {
@@ -132,7 +132,7 @@ test("verified artifact becomes an exact preview and persisted intent before sig
 test("verified owner event claims each persisted effect before its deterministic call", async () => {
   const h = harness();
   const intent = await h.publication.createIntent({ accountId: artifact.accountId, sessionId: artifact.sessionId, artifact, review, ownerPubkey: completedEvent.pubkey, idempotencyKey: "intent:tracer", fingerprint: "fingerprint:tracer", purpose: "Publish tracer", consent: "approved", runtimeVariant: "napplet-host/v1" });
-  const result = await h.publication.submitSignedManifest({ accountId: artifact.accountId, intentId: intent.intentId, event: completedEvent });
+  const result = await h.publication.submitSignedManifest({ accountId: artifact.accountId, intentId: intent.intentId, command: { commandId: "contextvm:tracer", intentId: intent.intentId, intentFingerprint: intent.fingerprint, operationIds: { deploy: `deploy:${intent.intentId}`, ownerManifest: `owner_manifest:${intent.intentId}`, attestation: `attestation:${intent.intentId}` } }, event: completedEvent });
   expect(h.verifier.calls).toBe(1);
   expect(h.deployment.calls).toEqual([`deploy:${intent.intentId}`, `owner_manifest:${intent.intentId}`]);
   expect(h.attestation.calls).toEqual([`attestation:${intent.intentId}`]);
@@ -142,8 +142,9 @@ test("verified owner event claims each persisted effect before its deterministic
 test("terminal result links every exact identity and exact replay produces no effects", async () => {
   const h = harness();
   const intent = await h.publication.createIntent({ accountId: artifact.accountId, sessionId: artifact.sessionId, artifact, review, ownerPubkey: completedEvent.pubkey, idempotencyKey: "intent:tracer", fingerprint: "fingerprint:tracer", purpose: "Publish tracer", consent: "approved", runtimeVariant: "napplet-host/v1" });
-  const first = await h.publication.submitSignedManifest({ accountId: artifact.accountId, intentId: intent.intentId, event: completedEvent });
-  const replay = await h.publication.submitSignedManifest({ accountId: artifact.accountId, intentId: intent.intentId, event: completedEvent });
+  const command = { commandId: "contextvm:tracer", intentId: intent.intentId, intentFingerprint: intent.fingerprint, operationIds: { deploy: `deploy:${intent.intentId}`, ownerManifest: `owner_manifest:${intent.intentId}`, attestation: `attestation:${intent.intentId}` } };
+  const first = await h.publication.submitSignedManifest({ accountId: artifact.accountId, intentId: intent.intentId, command, event: completedEvent });
+  const replay = await h.publication.submitSignedManifest({ accountId: artifact.accountId, intentId: intent.intentId, command, event: completedEvent });
   expect(replay).toEqual(first);
   expect(first).toMatchObject({ status: "complete", artifact: { aggregateSha256: artifact.aggregateSha256, normalizedDTag: artifact.normalizedDTag }, intentId: intent.intentId, ownerEventId: completedEvent.id, capabilityDigest: review.capabilityDigest, deploymentId: "deployment:tracer", attestationId: "attestation:tracer", fullServerUploadId: "upload:full", ownerRelayObservation: "relay:owner-manifest", attestationRelayObservation: "relay:attestation", nextAction: "none" });
   expect(h.verifier.calls).toBe(1);

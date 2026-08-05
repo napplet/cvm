@@ -1,4 +1,4 @@
-import { PublicationResultSchema, SignedOwnerManifestEventSchema, type AttestationPort, type CapabilityReview, type NappletDeploymentPort, type OwnerEventVerifierPort, type Phase06Clock, type PublicationIntent, type PublicationObservation, type PublicationResult, type PublicationStatus, type SealedArtifactIdentity } from "./contracts.js";
+import { PublicationResultSchema, SignedOwnerManifestEventSchema, SignedPublicationCommandSchema, type AttestationPort, type CapabilityReview, type NappletDeploymentPort, type OwnerEventVerifierPort, type Phase06Clock, type PublicationIntent, type PublicationObservation, type PublicationResult, type PublicationStatus, type SealedArtifactIdentity } from "./contracts.js";
 import type { PublicationStore } from "../persistence/publication-store.js";
 import { createPublicationIntent, isPublicationIntentExpired } from "./publication-intent.js";
 
@@ -14,15 +14,21 @@ export class PublicationService {
     return this.dependencies.store.transact((tx) => tx.putIntent(intent));
   }
 
-  async submitSignedManifest(input: Readonly<{ accountId: string; intentId: string; event: unknown }>): Promise<PublicationResult> {
+  async submitSignedManifest(input: Readonly<{ accountId: string; intentId: string; command: unknown; event: unknown }>): Promise<PublicationResult> {
     const intent = await this.dependencies.store.getIntent(input.intentId);
     if (!intent || intent.accountId !== input.accountId) throw new Error("INVALID_MANIFEST");
     if (isPublicationIntentExpired(intent, this.dependencies.clock.nowMs())) throw new Error("INVALID_MANIFEST");
     const existing = await this.dependencies.store.getStatus(intent.intentId);
     if (existing && (existing.status === "complete" || existing.status === "partial")) return existing;
-    const event = SignedOwnerManifestEventSchema.parse(input.event);
+    let command;
+    let event;
+    try {
+      command = SignedPublicationCommandSchema.parse(input.command);
+      event = SignedOwnerManifestEventSchema.parse(input.event);
+    } catch { throw new Error("INVALID_MANIFEST"); }
+    if (command.intentId !== intent.intentId || command.intentFingerprint !== intent.fingerprint || command.operationIds.deploy !== operation("deploy", intent.intentId) || command.operationIds.ownerManifest !== operation("owner_manifest", intent.intentId) || command.operationIds.attestation !== operation("attestation", intent.intentId)) throw new Error("INVALID_MANIFEST");
     const verified = await this.dependencies.verifier.verify({ event, intent });
-    if (!verified.accepted || verified.eventId !== event.id) throw new Error("INVALID_MANIFEST");
+    if (verified.valid !== true || verified.eventId !== event.id) throw new Error("INVALID_MANIFEST");
     await this.dependencies.store.transact((tx) => tx.putSignedEvent(intent.intentId, event));
     const deploy = await this.#effect(intent, "deploy", () => this.dependencies.deployment.deployExact({ operationId: operation("deploy", intent.intentId), artifact: intent.artifact, signedOwnerManifest: event }));
     const owner = await this.#effect(intent, "owner_manifest", () => this.dependencies.deployment.publishOwnerManifest({ operationId: operation("owner_manifest", intent.intentId), event }));

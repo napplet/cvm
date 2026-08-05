@@ -5,6 +5,8 @@ import { buildCvmAttestation } from "../../src/publication/attestation-event.js"
 import { NostrToolsOwnerEventVerifier, verifyOwnerManifestEvent } from "../../src/publication/manifest-event.js";
 import { canonicalCapabilityReview } from "../../src/publication/capability-review.js";
 import { canonicalOwnerManifestTemplate, createPublicationIntent } from "../../src/publication/publication-intent.js";
+import { PublicationService } from "../../src/publication/publication-service.js";
+import { TransactionalMemoryPublicationStore } from "../../src/persistence/publication-store.js";
 import { verifiedPhase06Artifact } from "./fakes.js";
 
 const secret = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
@@ -47,10 +49,10 @@ test("independently accepts only the exact completed public owner event", async 
 test("collapses id, signature, owner, kind, tag, content, expiry, and semantic-binding failures to one public result", async () => {
   const { publicationIntent, event } = await validEvent();
   const template = canonicalOwnerManifestTemplate(publicationIntent);
-  const wrongArtifact = finalizeEvent({ ...template, tags: template.tags.map((tag) => tag[0] === "x" ? ["x", "f".repeat(64)] : [...tag]) }, secret);
-  const wrongDTag = finalizeEvent({ ...template, tags: template.tags.map((tag) => tag[0] === "d" ? ["d", "other-napplet"] : [...tag]) }, secret);
-  const wrongContent = finalizeEvent({ ...template, content: "{}" }, secret);
-  const wrongExpiry = finalizeEvent({ ...template, tags: template.tags.map((tag) => tag[0] === "expires-at-ms" ? ["expires-at-ms", `${publicationIntent.expiresAtMs + 1}`] : [...tag]) }, secret);
+  const wrongArtifact = signed({ ...template, tags: template.tags.map((tag) => tag[0] === "x" ? ["x", "f".repeat(64)] : [...tag]) });
+  const wrongDTag = signed({ ...template, tags: template.tags.map((tag) => tag[0] === "d" ? ["d", "other-napplet"] : [...tag]) });
+  const wrongContent = signed({ ...template, content: "{}" });
+  const wrongExpiry = signed({ ...template, tags: template.tags.map((tag) => tag[0] === "expires-at-ms" ? ["expires-at-ms", `${publicationIntent.expiresAtMs + 1}`] : [...tag]) });
   const invalids: unknown[] = [
     { ...event, id: "0".repeat(64) },
     { ...event, sig: "0".repeat(128) },
@@ -93,4 +95,25 @@ test("builds a separately typed, ownership-neutral CVM attestation from verified
   });
   expect(attestation.attestationId).not.toBe(event.id);
   expect(JSON.stringify(attestation)).not.toContain("secret");
+});
+
+test("denies a mismatched signed ContextVM command before any deployment effect", async () => {
+  const { publicationIntent, event } = await validEvent();
+  const store = new TransactionalMemoryPublicationStore();
+  let effects = 0;
+  const service = new PublicationService({
+    store,
+    clock: { nowMs: () => nowMs },
+    verifier: new NostrToolsOwnerEventVerifier({ nowMs: () => nowMs }),
+    deployment: { deployExact: async () => { effects += 1; return { state: "completed" as const, observationId: "deploy" }; }, publishOwnerManifest: async () => { effects += 1; return { state: "completed" as const, observationId: "owner" }; } },
+    attestation: { publish: async () => { effects += 1; return { state: "completed" as const, observationId: "attestation" }; } },
+  });
+  await store.transact((tx) => tx.putIntent(publicationIntent));
+  await expect(service.submitSignedManifest({
+    accountId: publicationIntent.accountId,
+    intentId: publicationIntent.intentId,
+    command: { commandId: "contextvm:wrong", intentId: publicationIntent.intentId, intentFingerprint: "f".repeat(64), operationIds: { deploy: "deploy:wrong", ownerManifest: "owner_manifest:wrong", attestation: "attestation:wrong" } },
+    event,
+  })).rejects.toThrow("INVALID_MANIFEST");
+  expect(effects).toBe(0);
 });

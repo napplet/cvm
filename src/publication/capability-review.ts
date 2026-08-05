@@ -98,7 +98,7 @@ export function canonicalCapabilityBytes(reviewInput: unknown): Uint8Array {
 }
 
 export async function capabilityDigestForReview(reviewInput: unknown): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", canonicalCapabilityBytes(reviewInput));
+  const digest = await crypto.subtle.digest("SHA-256", Uint8Array.from(canonicalCapabilityBytes(reviewInput)));
   return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
 }
 

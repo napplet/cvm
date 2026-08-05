@@ -157,7 +157,7 @@ export function createPublicationIntent(input: PublicationIntentInput): Publicat
 /** This is public signing data only. No signer, token, callback, or private key crosses this boundary. */
 export function canonicalOwnerManifestTemplate(intentInput: PublicationIntent): OwnerManifestTemplate {
   const intent = PublicationIntentSchema.parse(intentInput);
-  const tags = [
+  const tags: string[][] = [
     ["d", intent.dTag],
     ["x", intent.aggregateSha256],
     ["manifest", intent.manifestSha256],

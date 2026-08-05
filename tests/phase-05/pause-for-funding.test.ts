@@ -70,4 +70,18 @@ describe("funding interruption before every new effect", () => {
     expect(first).toMatchObject({ status: "needs_top_up", requiredAdditionalFunding: "3250", requiredCapApproval: "1250", availableBalance: "0", remainingCap: "2000" });
     expect(duplicate).toEqual(first);
   });
+
+  test("keeps an exact balance and cap eligible, while altered reuse of a paused idempotency key fails closed", async () => {
+    const exact = await setup({ credit: "6500", requestedCap: "3250" });
+    const eligible = await exact.service.startSession({ principal, admissionReference: exact.admission.reference, idempotencyKey: "exact", expectedVersion: 0, maximum: "3250", policyVersion: "phase-02-policy-2026-08-04", idea: "Build one focused counter napplet." });
+    expect(eligible.status).not.toBe("needs_top_up");
+    expect(exact.budgetAuthorizations()).toBe(1);
+
+    const paused = await setup({ credit: "4000", requestedCap: "3250" });
+    const command = { principal, admissionReference: paused.admission.reference, idempotencyKey: "conflict", expectedVersion: 0, maximum: "3250", policyVersion: "phase-02-policy-2026-08-04", idea: "Build one focused counter napplet." };
+    await paused.service.startSession(command);
+    await expect(paused.service.startSession({ ...command, idea: "Build a different focused counter napplet." })).rejects.toThrow("IDEMPOTENCY_KEY_CONFLICT");
+    expect(paused.budgetAuthorizations()).toBe(0);
+    expect(paused.effects).toEqual({ dispatches: 0, workers: 0 });
+  });
 });

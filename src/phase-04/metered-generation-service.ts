@@ -1,10 +1,12 @@
 import { z } from "zod";
+import { ContinuationService } from "../continuity/continuation-service";
+import { NeedsTopUpResultSchema } from "../continuity/contracts";
 import { evaluateRisk, type RiskSignalDetector } from "../admission/risk-policy";
 import { accountIdForPrincipal } from "../domain/account-command";
 import { FundedAdmissionService } from "../funding/funded-admission";
 import { type ModelGateway, ModelObservationSchema, ProviderOperationIntentSchema } from "../model/model-gateway";
 import { PHASE_04_DETERMINISTIC_PRICE_CARD, PHASE_04_MODEL_PROFILES, maximumOperationCharge, priceReceipt } from "../model/price-card";
-import { type MeteredFundingStore } from "../persistence/funding-store";
+import { type ContinuationFundingStore, type MeteredFundingStore } from "../persistence/funding-store";
 import { type WorkerPort, WorkerRunRequestSchema, WorkerRunResultSchema } from "../phase-02/contracts";
 import { evaluateArtifactContract } from "../policy/artifact-contract";
 import { type ArtifactVerifier } from "../phase-02/trusted-core";
@@ -29,6 +31,7 @@ export const TriggerValidationRepairCommandSchema = z.object({
   originatingActionId: z.string().min(1), originatingIdempotencyKey: z.string().min(1), workspaceLineage: z.string().min(1), snapshotReference: z.string().min(1), failedArtifactId: z.string().min(1), validationReportReference: z.string().min(1),
 }).strict();
 export const SessionActionResultSchema = z.discriminatedUnion("status", [
+  NeedsTopUpResultSchema,
   z.object({ status: z.literal("completed"), code: z.literal("ACTION_COMMITTED"), accountId: z.string().min(1), sessionId: z.string().min(1), sessionVersion: z.number().int().positive(), artifactVersion: z.number().int().positive(), confirmedSpend: z.string(), remainingCap: z.string(), remainingBalance: z.string(), nextAction: z.literal("revise_session"), operationId: z.string().min(1) }).strict(),
   z.object({ status: z.literal("failed"), code: z.enum(["WORKER_OR_ARTIFACT_FAILED", "RECONCILED_RECEIPT_FOUND", "PROVIDER_NOT_ACCEPTED"]), accountId: z.string().min(1), sessionId: z.string().min(1), sessionVersion: z.number().int().nonnegative(), artifactVersion: z.number().int().nonnegative(), confirmedSpend: z.string(), remainingCap: z.string(), remainingBalance: z.string(), nextAction: z.literal("revise_session"), operationId: z.string().min(1) }).strict(),
   z.object({ status: z.literal("billing_invariant_failed"), code: z.string().min(1), accountId: z.string().min(1), sessionId: z.string().min(1), nextAction: z.literal("billing_reconciliation"), operationId: z.string().min(1) }).strict(),
@@ -49,7 +52,7 @@ async function hash(value: unknown): Promise<string> { const digest = await cryp
 export class MeteredGenerationService {
   #inFlight = new Map<string, Promise<SessionActionResult>>();
   #sessionTails = new Map<string, Promise<void>>();
-  constructor(private readonly options: Readonly<{ fundedAdmission: FundedAdmissionService; store: MeteredFundingStore; gateway: ModelGateway; worker: WorkerPort; artifactVerifier: ArtifactVerifier; riskDetector?: RiskSignalDetector; harness?: Readonly<{ runner: NappletHarness; toolchain: NappletHarnessRequest["toolchain"]; snapshotReference: string; priorArtifactId: string; approvedApplicationSurfaces: readonly string[] }> }>) {}
+  constructor(private readonly options: Readonly<{ fundedAdmission: FundedAdmissionService; store: MeteredFundingStore; gateway: ModelGateway; worker: WorkerPort; artifactVerifier: ArtifactVerifier; riskDetector?: RiskSignalDetector; harness?: Readonly<{ runner: NappletHarness; toolchain: NappletHarnessRequest["toolchain"]; snapshotReference: string; priorArtifactId: string; approvedApplicationSurfaces: readonly string[] }>; continuation?: ContinuationService; clock?: Readonly<{ nowMs(): number }> }>) {}
 
   async startSession(input: unknown): Promise<SessionActionResult> {
     const command = StartSessionCommandSchema.parse(input);
@@ -141,8 +144,16 @@ export class MeteredGenerationService {
     if (BigInt(command.maximum) < BigInt(profileCeiling)) {
       return SessionActionResultSchema.parse({ status: "denied", code: "ACTION_MAXIMUM_BELOW_PROFILE_CEILING" });
     }
-    const budget = await this.options.fundedAdmission.authorizeActionBudget({ principal: command.principal, admissionReference: command.admissionReference, idempotencyKey: `phase-04:${command.idempotencyKey}`, maximum: profileCeiling, unit: "sat" });
     const sessionId = "sessionId" in command ? command.sessionId : `session:${(await hash({ accountId, key: command.idempotencyKey })).slice(0, 24)}`;
+    const actionKind = "repair" in command ? "repair" as const : "revision" in command ? "revise_session" as const : "start_session" as const;
+    const boundedPayloadHash = await hash("repair" in command ? { repair: command.originatingActionId } : "revision" in command ? { revision: command.revision } : { idea: command.idea });
+    const pauseFingerprint = await hash({ accountId, sessionId, actionKind, boundedPayloadHash, expectedSessionVersion: command.expectedVersion, expectedArtifactVersion: command.expectedVersion, policyVersion: command.policyVersion, priceCardId: PHASE_04_DETERMINISTIC_PRICE_CARD.id, profileId: profile.id, toolchainId: "phase-04-deterministic-toolchain", actionMaximum: profileCeiling, idempotencyKey: command.idempotencyKey });
+    const continuationStore = this.options.store as MeteredFundingStore & Partial<ContinuationFundingStore>;
+    if (typeof continuationStore.findContinuation !== "function") throw new Error("CONTINUATION_STORE_UNAVAILABLE");
+    const continuation = this.options.continuation ?? new ContinuationService({ store: continuationStore as ContinuationFundingStore, ...(this.options.clock ? { clock: this.options.clock } : {}) });
+    const paused = await continuation.pauseForFunding({ intent: { accountId, sessionId, idempotencyKey: command.idempotencyKey, fingerprint: pauseFingerprint, reference: `pending:${(await hash({ accountId, key: command.idempotencyKey, pauseFingerprint })).slice(0, 24)}`, actionKind, boundedPayloadHash, expectedSessionVersion: command.expectedVersion, expectedArtifactVersion: command.expectedVersion, policyVersion: command.policyVersion, priceCardId: PHASE_04_DETERMINISTIC_PRICE_CARD.id, profileId: profile.id, toolchainId: "phase-04-deterministic-toolchain", actionMaximum: profileCeiling, admissionReference: command.admissionReference } });
+    if (paused) return SessionActionResultSchema.parse(paused);
+    const budget = await this.options.fundedAdmission.authorizeActionBudget({ principal: command.principal, admissionReference: command.admissionReference, idempotencyKey: `phase-04:${command.idempotencyKey}`, maximum: profileCeiling, unit: "sat" });
     const operationId = `operation:${(await hash({ accountId, key: command.idempotencyKey, profile: profile.id })).slice(0, 24)}`;
     const actionId = "repair" in command ? `repair:${command.originatingActionId}:${command.idempotencyKey}` : "revision" in command ? `revision:${command.idempotencyKey}` : `start:${command.idempotencyKey}`;
     const prepared = await this.options.store.transact(accountId, (transaction) => transaction.prepareMeteredAction({ accountId, idempotencyKey: command.idempotencyKey, fingerprint, sessionId, actionId, expectedVersion: command.expectedVersion, admissionReference: command.admissionReference, actionBudgetReference: budget.reference, maximum: BigInt(profileCeiling), operationId, profileId: profile.id, priceCardId: PHASE_04_DETERMINISTIC_PRICE_CARD.id }));

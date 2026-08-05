@@ -1,4 +1,5 @@
 import type { AccountStatus, FundedAdmission, FundingResult, VerifiedSettlement } from "../phase-03/contracts";
+import type { NeedsTopUpResult, PendingActionIntent } from "../continuity/contracts";
 
 export type LedgerPosting = Readonly<{ id: string; accountId: string; reference: string; unit: "sat"; amount: string; balanced: true }>;
 export type FundingEvidence = Readonly<{ id: string; accountId: string; kind: "settlement_credit" | "funded_admission" | "metered_receipt" | "metered_result"; reference: string }>;
@@ -32,6 +33,8 @@ export type ProviderOperationRecord = Readonly<{ accountId: string; operationId:
 export type UsageReceiptRecord = Readonly<{ accountId: string; operationId: string; providerReceiptReference: string; charge: string }>;
 export type MeteredFinalizationInput = MeteredFinalizeInput;
 export type MeteredFinalizationResult = MeteredAction;
+export type ContinuationRecord = Readonly<{ intent: PendingActionIntent; result: NeedsTopUpResult }>;
+export type ContinuationFundingSnapshot = Readonly<{ settledBalance: bigint; availableBalance: bigint; remainingCap: bigint }>;
 
 /**
  * A terminal action receipt is persisted only after the serialized ledger
@@ -58,6 +61,14 @@ export interface FundingTransaction {
   releaseCapacityIntent(intentReference: string): Promise<CapacityIntent>;
   findActionBudget(idempotencyKey: string): Promise<ActionBudget | undefined>;
   reserveActionBudget(input: ActionBudgetInput): Promise<ActionBudget>;
+}
+
+export interface ContinuationFundingTransaction extends FundingTransaction {
+  /** Reads affordability from the same serialized authority that persists a pause. */
+  continuationFundingSnapshot(admissionReference: string): Promise<ContinuationFundingSnapshot>;
+  findContinuation(idempotencyKey: string): Promise<ContinuationRecord | undefined>;
+  /** Persists the first pause deadline/result; callers replay it rather than extending grace. */
+  pauseForFunding(input: ContinuationRecord): Promise<ContinuationRecord>;
 }
 
 export interface MeteredFundingTransaction extends FundingTransaction {
@@ -92,10 +103,16 @@ export interface MeteredFundingStore extends FundingStore {
   transact<T>(accountId: string, operation: (transaction: MeteredFundingTransaction) => Promise<T> | T): Promise<T>;
 }
 
+/** Phase 5's pause extension is implemented by the deterministic store first; SQL parity follows in Plan 05-02. */
+export interface ContinuationFundingStore extends FundingStore {
+  findContinuation(accountId: string, idempotencyKey: string): Promise<ContinuationRecord | undefined>;
+  transact<T>(accountId: string, operation: (transaction: ContinuationFundingTransaction) => Promise<T> | T): Promise<T>;
+}
+
 type TopUp = Readonly<{ topUpId: string; rail: "lightning" | "cashu"; unit: "sat"; amount: bigint; state: "credited"; verifiedAt: string; settlementReference: string; externalReference: string }>;
 type Hold = Readonly<{ reference: string; approvedCap: bigint; heldAmount: bigint }>;
 type Account = Readonly<{ settledAvailable: bigint; held: bigint; topUps: readonly TopUp[]; holds: readonly Hold[] }>;
-type State = { accounts: Map<string, Account>; commands: Map<string, StoredFundingCommand>; capacityIntents: Map<string, CapacityIntent>; actionBudgets: Map<string, ActionBudget>; meteredActions: Map<string, MeteredAction>; externalReferences: Set<string>; settlementReferences: Set<string>; postings: LedgerPosting[]; evidence: FundingEvidence[]; outbox: FundingOutbox[]; lineItems: BillingLineItem[]; lineItemSequence: bigint };
+type State = { accounts: Map<string, Account>; commands: Map<string, StoredFundingCommand>; capacityIntents: Map<string, CapacityIntent>; actionBudgets: Map<string, ActionBudget>; meteredActions: Map<string, MeteredAction>; continuations: Map<string, ContinuationRecord>; externalReferences: Set<string>; settlementReferences: Set<string>; postings: LedgerPosting[]; evidence: FundingEvidence[]; outbox: FundingOutbox[]; lineItems: BillingLineItem[]; lineItemSequence: bigint };
 
 function clone<T>(value: T): T { return structuredClone(value); }
 function freeze<T>(value: T): T {
@@ -128,8 +145,8 @@ function cursorAfter(accountId: string, cursor: string | undefined, items: reado
  * Deterministic, serialized copy-then-commit double for tests only. It is not
  * a durable ledger and must never be selected as production monetary storage.
  */
-export class TransactionalMemoryFundingStore implements MeteredFundingStore {
-  #state: State = { accounts: new Map(), commands: new Map(), capacityIntents: new Map(), actionBudgets: new Map(), meteredActions: new Map(), externalReferences: new Set(), settlementReferences: new Set(), postings: [], evidence: [], outbox: [], lineItems: [], lineItemSequence: 0n };
+export class TransactionalMemoryFundingStore implements MeteredFundingStore, ContinuationFundingStore {
+  #state: State = { accounts: new Map(), commands: new Map(), capacityIntents: new Map(), actionBudgets: new Map(), meteredActions: new Map(), continuations: new Map(), externalReferences: new Set(), settlementReferences: new Set(), postings: [], evidence: [], outbox: [], lineItems: [], lineItemSequence: 0n };
   #tail: Promise<void> = Promise.resolve();
 
   get postings(): readonly LedgerPosting[] { return freeze(clone(this.#state.postings)); }
@@ -152,6 +169,10 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore {
   }
   async findMeteredAction(accountId: string, idempotencyKey: string): Promise<MeteredAction | undefined> {
     const found = this.#state.meteredActions.get(commandKey(accountId, idempotencyKey));
+    return found ? freeze(clone(found)) : undefined;
+  }
+  async findContinuation(accountId: string, idempotencyKey: string): Promise<ContinuationRecord | undefined> {
+    const found = this.#state.continuations.get(commandKey(accountId, idempotencyKey));
     return found ? freeze(clone(found)) : undefined;
   }
   async findMeteredActionByOperation(accountId: string, operationId: string): Promise<MeteredAction | undefined> {
@@ -178,14 +199,14 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore {
     return freeze({ accountId, sessionId, version: action.sessionVersion ?? action.expectedVersion, status });
   }
 
-  async transact<T>(accountId: string, operation: (transaction: MeteredFundingTransaction) => Promise<T> | T): Promise<T> {
+  async transact<T>(accountId: string, operation: (transaction: MeteredFundingTransaction | ContinuationFundingTransaction) => Promise<T> | T): Promise<T> {
     let release!: () => void;
     const prior = this.#tail;
     this.#tail = new Promise<void>((resolve) => { release = resolve; });
     await prior;
     try {
       const state = copyState(this.#state);
-      const transaction: MeteredFundingTransaction = {
+      const transaction: MeteredFundingTransaction & ContinuationFundingTransaction = {
         findRecordedResult: async (idempotencyKey) => state.commands.get(commandKey(accountId, idempotencyKey)),
         creditVerifiedSettlement: async (input) => {
           if (input.accountId !== accountId) throw new Error("ACCOUNT_SCOPE_MISMATCH");
@@ -250,6 +271,25 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore {
           const reserved = [...state.actionBudgets.values()].filter((budget) => budget.accountId === accountId && budget.admissionReference === input.admissionReference && budget.state === "authorized").reduce((total, budget) => total + budget.amount, 0n);
           if (input.amount <= 0n || input.amount > hold.heldAmount - reserved) throw new Error("ACTION_BUDGET_EXCEEDS_APPROVED_CAP"); const next = freeze({ ...input, state: "authorized" as const }); state.actionBudgets.set(key, next);
           appendLineItem(state, { accountId, sourceIdentity: `action_reservation:${input.reference}`, kind: "action_reservation", unit: "sat", amount: decimal(input.amount), settledAvailable: decimal(account.settledAvailable), held: decimal(account.held), sessionSpend: "0" });
+          return next;
+        },
+        continuationFundingSnapshot: async (admissionReference) => {
+          const account = accountFor(state, accountId);
+          const hold = account.holds.find((candidate) => candidate.reference === admissionReference);
+          if (!hold) throw new Error("ACTIVE_ADMISSION_REQUIRED");
+          return freeze({ settledBalance: account.settledAvailable, availableBalance: account.settledAvailable - account.held, remainingCap: hold.heldAmount });
+        },
+        findContinuation: async (idempotencyKey) => state.continuations.get(commandKey(accountId, idempotencyKey)),
+        pauseForFunding: async (input) => {
+          if (input.intent.accountId !== accountId) throw new Error("ACCOUNT_SCOPE_MISMATCH");
+          const key = commandKey(accountId, input.intent.idempotencyKey);
+          const existing = state.continuations.get(key);
+          if (existing) {
+            if (existing.intent.fingerprint !== input.intent.fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
+            return existing;
+          }
+          const next = freeze(clone(input));
+          state.continuations.set(key, next);
           return next;
         },
         prepareMeteredAction: async (input) => {

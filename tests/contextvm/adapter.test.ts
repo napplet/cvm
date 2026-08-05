@@ -74,6 +74,7 @@ describe("ContextVM v1 announcement", () => {
       { name: "preview", available: false, planned: true, invocable: false },
       { name: "publication", available: false, planned: true, invocable: false },
       { name: "revise_session", available: true, planned: false, invocable: true },
+      { name: "resume_session", available: true, planned: false, invocable: true },
       { name: "session_status", available: true, planned: false, invocable: true },
       { name: "start_session", available: true, planned: false, invocable: true },
       { name: "top_up", available: true, planned: false, invocable: true },
@@ -84,7 +85,7 @@ describe("ContextVM v1 announcement", () => {
 });
 
 describe("verified ContextVM funding adapter", () => {
-  test("exposes exactly the locked start, revise, and owner-safe status tools without registering repair", async () => {
+  test("exposes only the signed start, revise, status, and explicit resume tools without registering repair", async () => {
     const probe = await runContextVmAllowlistProbe();
     expect(probe.calls).toEqual({ start: expect.any(Array), revise: expect.any(Array), status: expect.any(Array) });
     expect(probe.calls.start).toHaveLength(1);
@@ -93,7 +94,7 @@ describe("verified ContextVM funding adapter", () => {
     expect(probe.responses.at(-1)?.response).toMatchObject({ error: { code: -32602 } });
     const service = new FundingService(new TransactionalMemoryFundingStore());
     const transport = new FakeContextVmTransport();
-    const calls: Record<string, unknown[]> = { start: [], revise: [], status: [] };
+    const calls: Record<string, unknown[]> = { start: [], revise: [], status: [], resume: [] };
     const adapter = new ContextVmFundingAdapter({
       service, transport,
       generation: {
@@ -101,6 +102,7 @@ describe("verified ContextVM funding adapter", () => {
         reviseSession: async (input) => { calls.revise.push(input); return { status: "denied", code: "STALE_SESSION_VERSION" }; },
       },
       sessionStatus: { read: async (input) => { calls.status.push(input); return { status: "not_found_or_denied" }; } },
+      continuation: { resumeSession: async (input) => { calls.resume.push(input); return { status: "restored", code: "RESUME_RESTORED", sessionId: "session:one", checkpointId: "checkpoint:one", pendingActionReference: "pending:one", actionBudgetReference: "action-budget:one", allocationIntentReference: "allocation:one" }; } },
     });
 
     await adapter.handle(envelope({ request: { id: "start-1", method: "tools/call", params: { name: "start_session", arguments: { admissionReference: "admission:one", idempotencyKey: "start-one", maximum: "100", idea: "A tiny focused napplet" } } } }));
@@ -116,9 +118,19 @@ describe("verified ContextVM funding adapter", () => {
     expect(calls.status).toHaveLength(1);
     expect(transport.responses.at(-1)?.response).toMatchObject({ result: { status: "not_found_or_denied" } });
 
+    const accountId = await accountIdForPrincipal({ pubkey: fixture.requests.verifiedPubkey });
+    await adapter.handle(envelope({ request: { id: "resume-1", method: "tools/call", params: { name: "resume_session", arguments: { sessionId: "session:one", checkpointId: "checkpoint:one", expectedSessionVersion: 1, expectedCheckpointVersion: 1, idempotencyKey: "resume-one", approvePendingAction: true, capApprovalReference: "admission:one", pendingAction: { reference: "pending:one", fingerprint: "a".repeat(64), kind: "revise_session", maximum: "100" } } } } }));
+    expect(calls.resume).toEqual([{ principal: { id: accountId }, sessionId: "session:one", checkpointId: "checkpoint:one", expectedSessionVersion: 1, expectedCheckpointVersion: 1, idempotencyKey: "resume-one", approvePendingAction: true, capApprovalReference: "admission:one", pendingAction: { reference: "pending:one", fingerprint: "a".repeat(64), kind: "revise_session", maximum: "100" } }]);
+    expect(transport.responses.at(-1)).toMatchObject({ requestEventId: "event-0001", response: { result: { status: "restored", sessionId: "session:one", checkpointId: "checkpoint:one" } } });
+    expect(JSON.stringify(transport.responses.at(-1))).not.toMatch(/account:|provider|archive|credential|reasoning|cashu/i);
+
+    await adapter.handle(envelope({ request: { id: "resume-invalid", method: "tools/call", params: { name: "resume_session", arguments: { sessionId: "session:one", checkpointId: "checkpoint:one", expectedSessionVersion: 1, expectedCheckpointVersion: 1, idempotencyKey: "resume-invalid", approvePendingAction: true, capApprovalReference: "admission:one", principal: { id: "account:forged" }, pendingAction: { reference: "pending:one", fingerprint: "a".repeat(64), kind: "revise_session", maximum: "100" } } } } }));
+    expect(transport.responses.at(-1)?.response).toMatchObject({ error: { code: -32602 } });
+    expect(calls.resume).toHaveLength(1);
+
     await adapter.handle(envelope({ request: { id: "repair-1", method: "tools/call", params: { name: "trigger_validation_repair", arguments: {} } } }));
     expect(transport.responses.at(-1)?.response).toMatchObject({ error: { code: -32602 } });
-    expect(calls).toEqual({ start: expect.any(Array), revise: expect.any(Array), status: expect.any(Array) });
+    expect(calls).toEqual({ start: expect.any(Array), revise: expect.any(Array), status: expect.any(Array), resume: expect.any(Array) });
   });
 
   test("forwards only an SDK-correlated signed event and preserves the SDK-verified sender", async () => {

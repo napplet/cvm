@@ -10,6 +10,7 @@
       { "name": "start_session", "available": true, "planned": false },
       { "name": "revise_session", "available": true, "planned": false },
       { "name": "session_status", "available": true, "planned": false },
+      { "name": "resume_session", "available": true, "planned": false },
       { "name": "preview", "available": false, "planned": true },
       { "name": "publication", "available": false, "planned": true }
     ]

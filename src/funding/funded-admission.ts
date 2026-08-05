@@ -24,7 +24,7 @@ const ExactReadyProofSchema = z.object({
   readyMonotonicMs: z.number().int().min(0).finite(),
 }).strict();
 export type ExactReadyProof = z.infer<typeof ExactReadyProofSchema>;
-export type CapacityReservation = Readonly<{ status: "available"; reference: string; expiresAt: string; usable?: true; ready?: ExactReadyProof }>;
+export type CapacityReservation = Readonly<{ status: "available"; reference: string; expiresAt: string; usable?: true; ready: ExactReadyProof }>;
 export type CapacityRefusal = Readonly<{ status: "refused"; reason?: string }>;
 export type CapacityUnknown = Readonly<{ status: "unknown"; reference?: string }>;
 export type CapacityObservation = CapacityReservation | CapacityRefusal | CapacityUnknown;
@@ -116,7 +116,10 @@ export class FundedAdmissionService {
 
     let observation: CapacityObservation;
     if (intent.state === "available") {
-      observation = { status: "available", reference: intent.capacityReference!, expiresAt: intent.expiresAt! };
+      // A persisted lease record contains no ready-proof bytes. Re-observe the
+      // original reservation rather than reconstructing an accept-able lease
+      // from partial durable state.
+      observation = await this.observeCapacity({ intentReference, reference: intent.capacityReference });
     } else if (intent.state === "reconciliation_pending") {
       observation = await this.observeCapacity({ intentReference, reference: intent.capacityReference });
     } else if (intent.state === "refused" || intent.state === "released") {
@@ -188,7 +191,11 @@ export class FundedAdmissionService {
   }
 
   private hasExactReadyProof(observation: CapacityReservation, intentReference: string, lifecycle?: AdmissionLifecycleContext): boolean {
-    if (!lifecycle) return true;
+    // A lease is never sufficient on its own: accepting it would create a
+    // funded hold before the signed request receipt and the exact worker probe
+    // are correlated. Direct callers must supply the same trusted context as
+    // the ContextVM adapter; an absent or mismatched proof is compensated.
+    if (!lifecycle) return false;
     const parsed = ExactReadyProofSchema.safeParse(observation.ready);
     return parsed.success
       && parsed.data.intentReference === intentReference

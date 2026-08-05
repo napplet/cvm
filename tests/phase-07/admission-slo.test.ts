@@ -92,6 +92,26 @@ describe("07-01 trusted immediate-or-refused admission", () => {
     await expect(runAdmissionAttempt({ now: () => 100, attempt: async () => ({ outcome: "accepted", readyLeaseCount: 0, durableBacklogCount: 0 }) })).rejects.toThrow("ADMISSION_READY_LEASE_REQUIRED");
   });
 
+  test("compensates an otherwise-ready lease when a direct caller omits the trusted receipt context", async () => {
+    const { store, funding } = await fundedService();
+    let releases = 0;
+    const capacity = {
+      reserveNow: async ({ intentReference }: { intentReference: string }) => ({
+        status: "available" as const,
+        reference: "lease-without-receipt",
+        expiresAt: "2026-08-05T00:01:00.000Z",
+        ready: { intentReference, leaseReference: "lease-without-receipt", sessionBindingDigest: "sha256:" + "c".repeat(64), imageDigest: "sha256:" + "d".repeat(64), readinessProbeDigest: "sha256:" + "e".repeat(64), readyMonotonicMs: 30 },
+      }),
+      observe: async () => ({ status: "unknown" as const }),
+      release: async () => { releases += 1; },
+    };
+    const service = new FundedAdmissionService({ funding, store, capacity, now: () => Date.parse("2026-08-05T00:00:00.000Z") });
+    const outcome = await service.admit({ principal, idempotencyKey: "phase-07-missing-receipt", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "50", unit: "sat" } });
+    expect(outcome).toMatchObject({ status: "refused" });
+    expect(releases).toBe(1);
+    expect(store.activeHolds).toHaveLength(0);
+  });
+
   test("coalesces concurrent and refused replays without a hold, queue, retry, or extra provider effect", async () => {
     const { store, funding } = await fundedService();
     let reserves = 0; let observes = 0; let releases = 0;

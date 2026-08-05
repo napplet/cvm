@@ -303,7 +303,7 @@ Plans:
 **Validation gate**: Benchmark Modal and at least one non-AWS fallback with the production-like image, target regions, relay delay, pool misses, database contention, reclaim/failure behavior, and step load. Select a worker vendor only after receipt-to-isolated-worker-ready p95 is at most five seconds with zero durable backlog; establish the database/failover claim to match the chosen deployment scope.
 
 Phase 7 also closes the launch-hardening work intentionally deferred from Phase 1: exhaustive toolchain provenance, repeated/cross-environment reproducibility, full hostile and mutation coverage, formal golden approval, waiver drills, SBOM/provenance enforcement, and the final production promotion gate.
-**Plans**: 13/13 plans executed
+**Plans**: 13/14 plans executed; one verifier gap-closure plan active
 
 - [x] 07-00-PLAN.md
 - [x] 07-01-PLAN.md
@@ -318,6 +318,7 @@ Phase 7 also closes the launch-hardening work intentionally deferred from Phase 
 - [x] 07-10-PLAN.md
 - [x] 07-11-PLAN.md — Enforce immutable digest-bound delegated operator approval for the exact OpenTelemetry package set.
 - [x] 07-12-PLAN.md — Dispatch typed protected live adapters and route exact release bundles through the sole promotion decision.
+- [ ] 07-13-PLAN.md — Derive public release verification exit status from the sole promotion decision.
 
 ## Progress
 
@@ -332,14 +333,14 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 4. Metered Generation & Revision Loop | 7/7 | Complete    | 2026-08-05 |
 | 5. Funding Interruption & Durable Resume | 7/7 | Complete    | 2026-08-05 |
 | 6. Sealed Preview & User-Owned Publication | 7/7 | Complete    | 2026-08-05 |
-| 7. Admission SLO, Resilience & Launch Safety | 13/13 | In Progress|  |
+| 7. Admission SLO, Resilience & Launch Safety | 13/14 | In Progress|  |
 
 ### Milestone Progress Roll-up
 
 - **Phases:** Phases 1–6 are verified complete; Phase 7 is active in verifier gap closure; 6/7 phases complete (86%).
-- **Known plans:** 53/53 milestone plans executed; Phase 7 plan execution closed the locally actionable verifier gaps.
+- **Known plans:** 53/54 milestone plans executed; Plan 07-13 closes the remaining public CLI exit-status defect.
 - **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 49 verified complete and 5 Phase 7 requirements pending.
-- **Current checkpoint:** Re-run Phase 7 goal verification only after fresh exact protected-live observations are available; unavailable protected infrastructure remains evidence-blocked rather than inferred.
+- **Current checkpoint:** Execute Plan 07-13, re-run Phase 7 verification, then proceed to protected live certification.
 - **Phase 1 preservation:** Phase 1 remains complete with its review, security, validation, verification evidence, and Phase 7 deferrals unchanged.
 
 ### Completion Reporting Contract

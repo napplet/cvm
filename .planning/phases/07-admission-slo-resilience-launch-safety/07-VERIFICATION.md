@@ -1,174 +1,161 @@
 ---
 phase: 07-admission-slo-resilience-launch-safety
-verified: 2026-08-05T18:49:27Z
+verified: 2026-08-05T19:39:39Z
 status: gaps_found
-score: 53/64 must-haves verified
+score: 66/75 must-haves verified
 behavior_unverified: 0
 overrides_applied: 0
+re_verification:
+  previous_status: gaps_found
+  previous_score: 53/64
+  gaps_closed:
+    - "A pending OpenTelemetry audit no longer authorizes package smoke or root pins."
+    - "The protected runner now loads a trusted digest-pinned adapter registry and dispatches selected suites without fabricating protected-live passes."
+    - "An exact release-bundle verifier now parses explicit evidence pointers and delegates the terminal decision to evaluateReleaseCertification."
+  gaps_remaining:
+    - "No fresh protected Modal/Fly readiness cohorts establish the five-second p95 claim."
+    - "No candidate-bound Collector, topology, recovery, payment/model, host/signer/browser, or publication live observations have passed."
+    - "candidate:verify unconditionally exits 1 in its release-evidence branch, including when the sole evaluator returns promoted."
+  regressions:
+    - "The new positive evaluator path is not reachable as a successful public CLI invocation because src/promotion/candidate.ts:336 always assigns exit code 1."
 gaps:
-  - truth: "An accepted request reaches an isolated ready worker within five seconds at p95, or receives an immediate retryable capacity response."
+  - truth: "An accepted user request reaches an isolated ready worker within five seconds at p95, or immediately receives a retryable capacity response with no durable queue."
     status: failed
-    reason: "The admission implementation and deterministic refusal checks exist, but there is no passed protected Modal or Fly cohort. The canonical design record has worker_slo as not_observed and no provider is selected."
-    artifacts:
-      - path: "scripts/certify-phase-07.ts"
-        issue: "The runner only writes blocked/not_observed inventory records; it never invokes a Modal/Fly benchmark or records a passed claim."
-    missing:
-      - "Run and persist comparable production-like Modal and Fly cohorts meeting the 1,000 accepted / 200 forced cohort / one-sided 95% p95 / zero-backlog gate."
-  - truth: "Operators can measure real lifecycle outcomes and the service preserves committed money, sessions, artifacts, and publication effects through production failures."
-    status: failed
-    reason: "Telemetry, fault, restore, and original-operation logic are deterministically tested, but the required Collector, regional, SQL, object-store, payment/model, and publication drills have no passed protected observations."
+    reason: "Local admission/refusal semantics pass, but the canonical design evidence records worker_slo as not_observed for Modal and blocked for Fly. No selected-provider cohort meets the production sample, confidence, and zero-backlog gate."
     artifacts:
       - path: "evidence/design/22c6cd2b8e821f9ee155c00c0547395abb22acc7c7775a864e10fb2a01c79c66.json"
-        issue: "It explicitly contains 3 blocked and 11 not_observed live claims, so it cannot establish an operations or continuity claim."
+        issue: "Protected worker readiness observations are non-pass only."
     missing:
-      - "Candidate-bound, fresh protected observations for the declared topology and original-operation recovery drills."
-  - truth: "Production promotion is possible only after all required immutable live evidence is passed and current."
+      - "Fresh candidate-bound Modal and Fly benchmark records with the required 1,000 accepted / 200 forced cohorts, one-sided 95% p95 <= 5 seconds, and zero durable backlog."
+  - truth: "Operators can measure lifecycle outcomes and production failures preserve committed money, sessions, artifacts, evidence, and publication effects."
     status: failed
-    reason: "The internal fail-closed evaluator exists, but the public candidate verifier always returns PROTECTED_LIVE_CERTIFICATION_REQUIRED for release evidence and does not accept a release manifest or protected observation bundle."
+    reason: "Telemetry, fault, restore, and original-operation behavior are deterministic-only. The current evidence explicitly records Collector, regional, SQL/object-store, payment/model, host/signer, upload, and relay dependencies as blocked or not_observed."
+    artifacts:
+      - path: "evidence/design/22c6cd2b8e821f9ee155c00c0547395abb22acc7c7775a864e10fb2a01c79c66.json"
+        issue: "The immutable live-claim inventory has 0 passed protected observations and promotionVerdict blocked."
+    missing:
+      - "Fresh protected observations for the declared release topology, Collector lifecycle export, original-operation recovery, checkpoint/object retention, payment/model reconciliation, and publication flows."
+  - truth: "Production promotion can complete through candidate verification only when the exact bundle receives a promoted decision."
+    status: failed
+    reason: "The exact parser and sole evaluator are wired, but the release-evidence CLI unconditionally assigns process.exitCode = 1 after printing the decision. A valid promoted decision can therefore never be a successful public verification command."
     artifacts:
       - path: "src/promotion/candidate.ts"
-        issue: "The --release-evidence path validates deterministic design evidence then unconditionally returns blocked; it does not wire evaluateReleaseCertification or a promoted decision."
+        issue: "Lines 334-336 discard the evaluator status for process exit behavior."
     missing:
-      - "A release CLI path that validates the exact release manifest and protected observation bundle, then invokes the sole atomic promotion decision after every required claim passes."
-  - truth: "Recently published SUS OpenTelemetry packages are not installed until an explicit human approval is enforced."
+      - "Set the release-evidence exit code from the returned decision (zero only when status is promoted) and add a subprocess test for a complete promoted bundle."
+  - truth: "Protected live certification covers the required provider, topology, payment, host/browser, signer, CLI, upload, and relay claims before production promotion."
     status: failed
-    reason: "The immutable audit pointer remains approvalStatus: pending_human, but --require-approved exits 0 and exact root dependencies are already installed."
+    reason: "The protected runner is now capable of dispatching configured adapters and correctly blocks absent prerequisites, but this workspace has no release profile, trusted live adapter module, scoped credentials, or passed protected observations."
     artifacts:
-      - path: "scripts/verify-phase-07-otel-packages.ts"
-        issue: "approvedAudit verifies the pending_human audit digest and package rows, not an approval/rejection record bound to a human decision."
+      - path: "scripts/certify-phase-07.ts"
+        issue: "Credential-free preflight emitted eight blocked records; this is correct fail-closed behavior, not live certification."
     missing:
-      - "A signed or otherwise auditable digest-bound approval record that the smoke/install path requires, with rejection and drift failure coverage."
-deferred:
-  - truth: "Phase 1 real native scaffold/Chromium closure and exhaustive launch certification."
-    addressed_in: "Phase 7"
-    evidence: "01-VERIFICATION.md deferred real native closure plus provenance, reproducibility, hostile/mutation, golden, waiver, SBOM, and promotion gates to Phase 7; those live gates remain blocked here."
-  - truth: "Phase 6 compatible-host, signer, CLI asset, relay, storage/database, selected-provider, and host UI certification."
-    addressed_in: "Phase 7"
-    evidence: "06-VERIFICATION.md deferred these live integrations and 10 host UI findings to Phase 7; no passed browser or integration observation exists."
+      - "Provision the declared protected topology and adapters, run all suites, and retain one fresh exact-binding passed observation for each release claim."
 ---
 
 # Phase 7: Admission SLO, Resilience & Launch Safety Verification Report
 
 **Phase Goal:** The integrated service can honestly promise immediate-or-rejected work and preserve money, sessions, artifacts, and publication effects through production failures.
-
-**Verified:** 2026-08-05T18:49:27Z  
+**Verified:** 2026-08-05T19:39:39Z
 **Status:** gaps_found  
-**Re-verification:** No — initial verification
+**Re-verification:** Yes — after Plans 07-11 and 07-12
 
 ## Goal Achievement
 
-The deterministic safety and fail-closed machinery is substantive and wired. The live release capability is not achieved. This is not a false negative against blocked evidence: blocked evidence and nonzero promotion are correct behavior. They are also explicit evidence that the Phase 7 production claims have not been established.
+The local closure work is largely real: package approval is no longer bypassable, protected certification now has a safe dispatch seam, and the release-bundle verifier reaches the sole evaluator. The phase goal is still not achieved. No protected production observation establishes the SLO or continuity claims, and one remaining local CLI defect makes an otherwise promoted bundle return failure.
 
 ### Observable Truths
 
 | # | Truth | Status | Evidence |
 | --- | --- | --- | --- |
-| 1 | Accepted work reaches a ready isolated worker within five seconds at p95, otherwise a retryable refusal is returned without a durable queue. | ✗ FAILED | Receipt-to-exact-ready and refusal/replay logic pass deterministically, but no protected provider cohort passed. The design record reports `worker_slo` for Modal as `not_observed` and Fly as `blocked`. |
-| 2 | Operators can measure the required lifecycle outcomes without leaking protected content. | ✗ FAILED | Strict versioned OTel/redaction code and tests exist, but no passed candidate-bound Collector/live lifecycle observation is present. |
-| 3 | Production failures preserve committed progress and prevent duplicate money or public effects. | ✗ FAILED | Fault/restore/original-operation schedules pass locally; real regional, database, object, payment/model, and publication drills remain blocked/not observed. |
-| 4 | Promotion is blocked until pinned inputs, supply-chain proof, adversarial tests, reconciliation, and five-second-p95 load evidence are available. | ✓ VERIFIED | `evaluateReleaseCertification` requires fresh passed claims; design evidence has `promotionVerdict: blocked`; `candidate:verify -- --release-evidence evidence/design/phase-07.json` exited 1. |
+| 1 | Accepted work reaches a ready isolated worker within five seconds at p95, otherwise it is immediately refused without a durable queue. | ✗ FAILED | Deterministic admission tests pass, but canonical evidence reports Modal `worker_slo` `not_observed` and Fly `blocked`; neither production-like cohort exists. |
+| 2 | Operators can measure required lifecycle outcomes without protected-content leakage. | ✗ FAILED | Telemetry policy and package smoke gates pass locally, but no candidate-bound Collector/live lifecycle observation has passed. |
+| 3 | Production failures preserve committed progress and prevent duplicate money or public effects. | ✗ FAILED | Fault/restore/original-operation tests pass deterministically; regional, database, object-store, payment/model, and publication drills have no protected passes. |
+| 4 | Promotion is blocked until all pinned inputs and required evidence, including five-second-p95 load evidence, are available. | ✓ VERIFIED | `evaluateReleaseCertification` rejects stale, missing, replaced, wrong-candidate, wrong-binding, and non-pass evidence; current deterministic pointer exits nonzero. |
+| 5 | Delegated OTel approval is distinct from the pending audit, truthful about its authority, exact-package/digest-bound, and shared by approval-dependent paths. | ✓ VERIFIED | Approval record is `approved_operator` / `delegated_operator`, binds audit `d7fed…22b3` and six-package digest `7daf…40f2`; all seven mutation/CLI tests pass. |
+| 6 | The protected runner invokes configured adapters safely and absent prerequisites remain immutable blockers. | ✓ VERIFIED | Digest-pinned root-contained loader, finite result schema, preflight no-invocation, one-call dispatch, error redaction, and failed/blocked/not_observed spot-checks pass. |
+| 7 | Exact release input is validated and fed to the sole promotion evaluator. | ✓ VERIFIED | `verifyReleaseCertificationInput` strictly parses explicit pointers and calls `evaluateReleaseCertification`; unit test proves an exact in-memory complete bundle returns `promoted`. |
+| 8 | Public candidate verification exits zero only for a promoted release decision. | ✗ FAILED | `src/promotion/candidate.ts:334-336` prints the decision then unconditionally assigns `process.exitCode = 1`; the positive CLI path is untested and impossible. |
 
-**Score:** 53/64 must-haves verified. The count includes the four roadmap criteria plus all 60 plan-frontmatter truths. The 11 failed truths are the three unachieved roadmap outcomes, two Plan 07-03 approval truths, one Plan 07-04 approval-dependent truth, one Plan 07-05 live-benchmark truth, one Plan 07-08 real-browser truth, and three Plan 07-10 live/promotion truths.
+**Score:** 66/75 must-haves verified. This carries the prior 64 truth set forward and adds the four Plan 07-11 and seven Plan 07-12 closure truths. Nine remain failed: the three roadmap production outcomes, the unresolved live benchmark/browser/live-certification plan truths, and the release CLI success-path defect.
 
-### Deterministic and Protected Evidence
+## Re-verified Closure Artifacts
 
-| Evidence tier | Result | Verification |
-| --- | --- | --- |
-| Deterministic reference set | ✓ 64/64 passed | `bun run eval:phase07` emitted `status: passed`, `cases: 64`, and `promotionVerdict: blocked`. The canonical record verifies via `bun run verify:phase07-evidence -- --verify-existing`. |
-| Decision/spec-less coverage | ✓ 16/16 D-114–D-129; ✓ 64/64 E-01–E-64 | The fixture has exactly one case for each E-01–E-64 and maps every decision; the canonical record has all 5 requirements, 16 decisions, 5 threats, 53 API rows, 8 UI rows, and 10 AI dimensions. |
-| Canonical design live inventory | 0 passed; 3 blocked, 11 not_observed | `evidence/design/22c6…79c66.json` is explicitly deterministic and reports `promotionVerdict: blocked`. |
-| Canonical protected records | 0/32 passed; 32 blocked | `evidence/certification/fd49…fd32/live/*.json` contains only `status: blocked`, not a live pass. |
-| Fresh verifier preflight | ✓ fail closed | Run in a temporary evidence directory: all 8 suites produced `blocked` records and `certify:phase07 -- --profile=release --preflight-only` exited 1. |
+| Artifact | L1 / L2 | Wiring and data flow | Status |
+| --- | --- | --- | --- |
+| `scripts/verify-phase-07-otel-packages.ts` | ✓ 360-line substantive verifier; exports approval schema and shared verifier. | Approval pointer → immutable record → digest/package/input checks → `--require-approved`, smoke, and root-pin modes. | ✓ VERIFIED |
+| `evidence/certification/phase-07-otel-package-approval.json` | ✓ Exists and points to immutable approval `6fd27b…22ad`. | Record digest, audit digest, exact six package rows, scope, and limitations recomputed successfully. | ✓ VERIFIED |
+| `src/certification/adapters.ts` | ✓ Canonical containment, no-symlink, regular-file and SHA-256 checks are substantive. | `certify-phase-07.ts` invokes loader only for configured root/module/digest and passes registry to runner. | ✓ VERIFIED |
+| `src/certification/runner.ts` | ✓ Closed suites, finite result parsing, status mapping, and all-suite claim gate are substantive. | CLI → `runProtectedCertificationProfile` → one immutable observation per selected suite. Credential-free preflight invokes no adapter. | ✓ VERIFIED |
+| `src/promotion/candidate.ts` | ✓ Strict five-field release input and explicit file pointers. | Exact bundle → deterministic/observation validation → sole `evaluateReleaseCertification`; CLI exit mapping is broken. | ✗ PARTIAL |
 
-### Required Artifacts and Key Links
+The generic artifact query reports bracketed `exports: [a, b]` frontmatter as one literal export. Manual source inspection confirms the declared symbols are exported; this parser limitation is not a source gap. Both Plan 07-11 and 07-12 key-link queries report 2/2 wired.
 
-| Artifact / link | Status | Details |
-| --- | --- | --- |
-| ContextVM adapter → `FundedAdmissionService.admit` | ✓ WIRED | `src/contextvm/adapter.ts:262` passes signed receipt and trusted lifecycle context; `FundedAdmissionService` verifies receipt before provider/hold authority. |
-| Admission benchmark / durable intent / refusal projection | ✓ VERIFIED (deterministic) | Exact-ready lease, capacity intent, duplicate coalescing, bounded refusal, and no-hold/no-queue tests pass. This is not a live p95 proof. |
-| Telemetry contracts → redaction → OTel exporter → funded-core composition | ✓ WIRED | Strict schemas, protected correlations, finite attributes, and observer containment are imported and exercised by telemetry-policy tests. |
-| Fault harness → model/publication/continuation/object store | ✓ WIRED (deterministic) | All D-122 schedule classes, exact object reads/fences, and original-operation-only reconciliation are tested. |
-| Host contracts → strict presentation projection → browser-evidence schema | ✓ WIRED (projection only) | The 28-state and accessibility/copy contract is substantive and tested; no real compatible-host browser record exists. |
-| Certification evidence writer → release evaluator | ✓ WIRED internally | Immutable observations reject non-pass, stale, wrong-candidate, and mutation inputs. |
-| `candidate:verify` → release evaluator / promoted decision | ✗ NOT WIRED | Its release-evidence mode can only return `PROTECTED_LIVE_CERTIFICATION_REQUIRED`; it does not receive a release manifest/bundle or call the promotion evaluator. |
-| Protected certification runner → live adapters | ✗ NOT WIRED | `scripts/certify-phase-07.ts` only parses a profile and writes empty-claim non-pass records; it imports/constructs no Modal, Fly, ContextVM, payment, model, topology, host, signer, CLI, upload, relay, or Collector adapter. |
+## Data-Flow Trace
 
-The generic artifact checker reported several false “missing export” results because PLAN frontmatter writes `exports: [a, b]` as one scalar. Manual source inspection confirms the declared APIs are exported and substantive. The two generic key-link misses were also pattern defects: the fixture is read by `scripts/eval-phase-07.ts`, and the adapter calls `admit` with lifecycle context at line 262. Neither alters the failures above.
+| Flow | Source | Consumer | Status |
+| --- | --- | --- | --- |
+| OTel authority | Pending audit pointer + delegated approval pointer/record | `verifyApprovedOtelPackageSet` → approval/root-pin/smoke modes | ✓ FLOWING, fail-closed |
+| Protected certification | Release-profile facts + digest-verified registry | Runner → immutable observation writer | ✓ FLOWING when configured; current environment correctly blocks before adapter execution |
+| Candidate certification | Exact release bundle + explicit deterministic/protected evidence pointers | `verifyReleaseCertificationInput` → `evaluateReleaseCertification` | ⚠️ PARTIAL: evaluator output reaches stdout but not the process success code |
 
-### Requirements Coverage
-
-| Requirement | Status | Actual evidence |
-| --- | --- | --- |
-| SESS-02 | ✗ BLOCKED | Local immediate/refusal semantics pass, but the required selected-worker receipt-to-ready p95 evidence does not exist. |
-| OPS-01 | ✗ BLOCKED | Redaction/cardinality policy passes; no real operational lifecycle/Collector evidence proves all outcomes in the candidate deployment. |
-| OPS-02 | ✗ BLOCKED | Deterministic exact-effect matrix passes; no real regional/relay/database/worker/publication recovery drill has passed. |
-| OPS-03 | ✗ BLOCKED | Exact-object restore logic passes locally; no tested infrastructure-instance-loss/retention topology result exists. |
-| OPS-04 | ✗ BLOCKED | The gate blocks correctly, but live certification is absent, the package approval gate is bypassable, and the public candidate verifier cannot promote a valid release bundle. |
-
-### Prohibitions, Edges, and UI Contract
-
-| Contract | Status | Evidence |
-| --- | --- | --- |
-| No durable queue, automatic retry, shortened receipt clock, or capacity hold on refusal | ✓ VERIFIED (deterministic) | Admission/refusal/replay tests and trusted receipt-first implementation pass. |
-| No deterministic, fixture, blocked, or not-observed evidence may become a live pass | ✓ VERIFIED | Design evidence is permanently promotion-blocked; protected preflight and candidate verification exit nonzero. |
-| Reconciliation never makes a replacement money/worker/signer/deployment/event effect | ✓ VERIFIED (deterministic) | D-122 fault and publication/reconciliation tests pass exact original-operation oracles. |
-| Telemetry does not leak protected text, keys, payment material, paths, or unbounded labels | ✓ VERIFIED (deterministic) | Canary, unknown-attribute, cardinality, and exporter-failure tests pass. |
-| No CVM napplet-protocol fork or signer authority expansion | ✓ VERIFIED (deterministic boundary) | Static/presentation/source-contract tests keep authority at the existing package/host boundaries. |
-| Explicit human approval before SUS package installation | ✗ FAILED | The only audit state is `pending_human`; `--require-approved` nevertheless exits 0. |
-| All UI considerations and 28 state projections | ✓ VERIFIED (projection) | State-matrix/copy/accessibility schema tests pass. |
-| Real desktop/tablet/mobile compatible-host presentation, signer, focus/dialog/live-region behavior | ✗ FAILED | The UI contract itself says a pure projection is insufficient; no candidate-bound browser evidence passed. |
-
-### Behavioral Spot-Checks
+## Behavioral Spot-Checks
 
 | Behavior | Command | Result | Status |
 | --- | --- | --- | --- |
-| Full workspace regression | `bun test --timeout 10000` | 483 pass, 0 fail, 4,130 assertions | ✓ PASS |
-| Phase 7 deterministic evaluation | `bun run eval:phase07` | 64 passed; promotion blocked | ✓ PASS |
-| Existing canonical evidence | `bun run verify:phase07-evidence -- --verify-existing` | offline passed; promotion blocked | ✓ PASS |
-| Candidate release verification | `bun run candidate:verify -- --release-evidence evidence/design/phase-07.json` | `PROTECTED_LIVE_CERTIFICATION_REQUIRED`; exit 1 | ✓ PASS — correct fail-closed result |
-| Protected preflight | `PHASE07_CERTIFICATION_EVIDENCE_DIRECTORY=<tmp> bun run certify:phase07 -- --profile=release --preflight-only` | 8 blocked suite records; exit 1 | ✓ PASS — correct fail-closed result |
-| OTel approval enforcement | `bun run scripts/verify-phase-07-otel-packages.ts -- --require-approved` | returned passed while pointer says `pending_human` | ✗ FAIL |
+| Full workspace regression | `bun test --timeout 10000` | 494 pass, 0 fail, 4,180 assertions | ✓ PASS |
+| OTel delegated approval and drift rejection | `bun test tests/phase-07/otel-package-legitimacy.test.ts --timeout 10000` | 7 pass | ✓ PASS |
+| Shared approval consumers | `bun run scripts/verify-phase-07-otel-packages.ts -- --require-approved`; `--verify-root-pins` | Both pass with the same approval/audit/package digests | ✓ PASS |
+| Protected runner contract | `bun test tests/phase-07/certification-runner.test.ts --timeout 10000` | 6 pass | ✓ PASS |
+| Runner finite status mapping | Inline fake-adapter spot-check for `failed`, `blocked`, `not_observed` | `runner_status_mapping=passed` | ✓ PASS |
+| Release parser/evaluator contract | `bun test tests/phase-07/promotion-gate.test.ts --timeout 10000` | 8 pass | ✓ PASS |
+| Deterministic Phase 7 evidence | `bun run eval:phase07`; `bun run verify:phase07-evidence -- --verify-existing` | 64 deterministic cases passed; promotion remains blocked | ✓ PASS |
+| Credential-free protected preflight | `PHASE07_CERTIFICATION_EVIDENCE_DIRECTORY=/tmp/napplet-cvm-phase07-reverify-2048 bun run certify:phase07 -- --profile=release --preflight-only` | Eight blocked records; exit 1 | ✓ PASS — correct fail-closed result |
+| Current release evidence | `bun run candidate:verify -- --release-evidence evidence/design/phase-07.json` | `RELEASE_INPUT_INVALID`; exit 1 | ✓ PASS — deterministic pointer alone cannot promote |
+| Promoted public release path | Source and test inspection | CLI always exits 1 at `candidate.ts:336`; no subprocess positive test exists | ✗ FAIL |
 
-### Anti-Patterns Found
+## Requirements Coverage
 
-| File | Line | Pattern | Severity | Impact |
-| --- | --- | --- | --- | --- |
-| `scripts/certify-phase-07.ts` | 79–95 | Inventory-only runner with `claims: []`, unconditional blocked exit, and no live adapter invocation | 🛑 BLOCKER | It truthfully records absence but cannot execute the Phase 7 live integration/certification work. |
-| `src/promotion/candidate.ts` | 265–275 | Release-evidence CLI always returns blocked after reading deterministic evidence | 🛑 BLOCKER | A complete protected bundle cannot reach the sole promotion decision through the public release command. |
-| `scripts/verify-phase-07-otel-packages.ts` | 123–129, 275 | “approved” checks a `pending_human` record | 🛑 BLOCKER | Recently published SUS packages can be installed without the required auditable human approval. |
+| Requirement | Status | Actual evidence |
+| --- | --- | --- |
+| SESS-02 | ✗ BLOCKED | Correct deterministic immediate/refusal semantics, but no passed protected Modal/Fly receipt-to-ready p95 cohort. |
+| OPS-01 | ✗ BLOCKED | Strict finite/redacted telemetry and approved package gate are verified; no candidate-bound Collector lifecycle observation is passed. |
+| OPS-02 | ✗ BLOCKED | Deterministic original-operation fault matrix passes; no protected regional/database/worker/payment/publication failure drill passed. |
+| OPS-03 | ✗ BLOCKED | Exact-object restore logic passes; no infrastructure-instance-loss/retention topology observation passed. |
+| OPS-04 | ✗ BLOCKED | The gate is fail-closed and the exact evaluator is wired, but live claim inventory is empty/non-pass and the public promoted exit path is broken. |
 
-No Phase 7 implementation debt marker (`TBD`, `FIXME`, or `XXX`) was found in the phase-owned source/test files. Existing untracked files predated this verification and were not changed.
+## Prohibitions and Anti-Patterns
 
-### Human Verification Required After Blocker Closure
+| Contract / file | Status | Evidence |
+| --- | --- | --- |
+| Pending audit must not become approval authority | ✓ VERIFIED | Separate approval schema accepts only `approved_operator`; pending/rejected/mutated states fail before approval-dependent CLI modes. |
+| Approval must not claim direct human/signer provenance or broader release authority | ✓ VERIFIED | Immutable approval limitations explicitly disclaim those authorities and tests parse the exact record. |
+| Fixtures/fake adapters must not become protected-live certification | ✓ VERIFIED | Registry controls evidence class; fixture tests remain deterministic and preflight emits non-pass records. |
+| Adapter paths, symlinks, non-files, traversal, and digest drift must fail pre-import | ✓ VERIFIED | Loader and focused rejection tests cover these boundaries. |
+| No secret canary / raw adapter output enters evidence | ✓ VERIFIED | Malformed/throwing/canary adapter test passes; `runner` records finite failure only. |
+| Phase-owned implementation debt markers | ✓ VERIFIED | No unreferenced `TBD`, `FIXME`, or `XXX` found in scanned Phase 7 source and test files. |
+| `src/promotion/candidate.ts` | 🛑 BLOCKER | Unconditional release-evidence exit 1 makes a promoted bundle unusable through the public command. |
 
-1. **Protected release certification**
+## Escalation Gate: Required External Certification
 
-   **Test:** Provision the declared release profile, credentials, images, topology, and selected candidate; run every protected suite.
+The following is not locally runnable and must not be inferred from the deterministic suite:
 
-   **Expected:** Fresh candidate-bound `passed` records cover Modal and Fly cohorts, ContextVM/CEP-8/Lightning/Cashu/model, Cloud Run/SQL/GCS/object restore, Collector, napplet conformance, compatible host/signers, CLI/upload, and owner/attestation relay operations.
+1. Provision the release profile, canonical trusted adapter root/module/digest, and scoped credential reference. Run each protected suite against Modal and Fly, ContextVM/CEP-8/Lightning/Cashu/model, Cloud Run/SQL/GCS, Collector, compatible host/signers, CLI/upload, and owner/attestation relays.
+2. Retain fresh, candidate-bound, exact-release-binding passed records for every closed release claim. Modal/Fly selection additionally needs the roadmap's cohort, confidence, and zero-backlog evidence.
+3. Run the sealed artifact in the compatible host at desktop, tablet, and mobile widths; exercise signer, focus/dialog/live-region, publication reconciliation, and blocked-launch states. Existing projection tests do not establish this browser/runtime result.
 
-   **Why human:** These are external systems and topology effects that local code checks cannot observe.
+## Gaps Summary
 
-2. **Compatible-host browser evidence**
+Plans 07-11 and 07-12 closed the prior approval bypass and the two missing internal wiring seams. There are no remaining local gaps in delegated OTel approval or protected-adapter dispatch. One local code gap remains: the candidate CLI cannot succeed after a valid promotion decision. The other blockers are observable missing evidence, not uncertainty: all current protected records are blocked/not-observed, and no real Modal/Fly/topology/payment/host/browser pass is claimed here.
 
-   **Test:** Run the exact sealed artifact in the compatible host at desktop, tablet, and mobile widths; exercise signing, dialog/focus/live-region, publication reconciliation, and blocked launch state.
+## Milestone Roll-up
 
-   **Expected:** The strict 28-state presentation contract holds visually and accessibly; immutable browser evidence is bound to the candidate.
-
-   **Why human:** No browser host/runtime or signer is available in this workspace.
-
-### Gaps Summary
-
-Four blocking concerns remain: required human package approval is not enforced; the protected runner cannot perform its claimed integration work; no protected live observation has passed; and the candidate CLI cannot feed complete release evidence into the sole promotion decision. The canonical blocked records are valuable evidence of this state and must remain blocked. They cannot be deferred: this is the final milestone phase and the roadmap has no later phase that owns these outcomes.
-
-### Milestone Roll-up
-
-- Phases 1–6 are complete/verified; Phase 7 is the current final phase and is not verified.
-- v1.0 has **54 total requirements**: **49 completed** through Phases 1–6 and **5 blocked** in Phase 7 (`SESS-02`, `OPS-01`–`OPS-04`).
-- Phase 1 deferrals remain unresolved in their live form: real sealed scaffold/Chromium closure and exhaustive provenance, reproducibility, hostile/mutation, golden, waiver, SBOM, and promotion evidence.
-- Phase 6 deferrals remain unresolved: compatible host, external signer, promoted CLI asset, relay/publication, database/object/provider certification, plus its 10 advisory live-host UI/accessibility/responsive findings.
+- Phase 7 is the final v1.0 phase; no later roadmap phase owns these gaps, so nothing is deferred.
+- v1.0 has 54 requirements: 49 complete through Phases 1–6 and 5 blocked in Phase 7 (`SESS-02`, `OPS-01`–`OPS-04`).
+- Phase 1's live launch-hardening closure and Phase 6's compatible-host/external integration deferrals remain blocked until protected evidence exists.
+- The project must fix the local candidate CLI exit mapping, then enter the protected certification environment before Phase 7 can be verified.
 
 ---
 
-_Verified: 2026-08-05T18:49:27Z_  
+_Verified: 2026-08-05T19:39:39Z_
 _Verifier: the agent (gsd-verifier)_

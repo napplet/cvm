@@ -7,7 +7,7 @@ import { writeCertificationObservation } from "../../src/certification/evidence"
 const fixturePath = "tests/fixtures/phase-07-reference-set.json";
 
 async function run(script: string, args: readonly string[]) {
-  const child = Bun.spawn(["bun", script, ...args], { stdout: "pipe", stderr: "pipe", env: { ...process.env, PHASE07_TEST_SECRET: "supersecret" } });
+  const child = Bun.spawn(["bun", script, ...args], { stdout: "pipe", stderr: "pipe", env: { ...process.env, PHASE07_TEST_SECRET: "supersecret", PHASE07_RELEASE_PROFILE_PATH: "", PHASE07_CERTIFICATION_EVIDENCE_DIRECTORY: "/tmp/napplet-cvm-phase07-test-evidence" } });
   const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   return { exitCode, stdout, stderr };
 }

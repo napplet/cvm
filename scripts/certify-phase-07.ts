@@ -83,7 +83,7 @@ async function main(): Promise<void> {
   }
   const state = await profileForPreflight();
   const selected = preflightOnly || suiteArgument === "all" ? suites : [suiteArgument as Suite];
-  const root = `evidence/certification/${state.profile.candidate.id}/live`;
+  const root = process.env.PHASE07_CERTIFICATION_EVIDENCE_DIRECTORY ?? `evidence/certification/${state.profile.candidate.id}/live`;
   await mkdir(root, { recursive: true });
   const records = await Promise.all(selected.map((suite) => recordSuite(root, suite, state)));
   // This local runner intentionally has no provider client constructors.  It is a

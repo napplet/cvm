@@ -73,6 +73,14 @@ test("evidence blocks stale, cross-candidate, non-pass, and concurrent release p
   await expect(evaluateReleaseCertification(manifest, [...valid.slice(0, -1), { ...valid.at(-1)!, expiresAtMs: 1_500 }], { candidateId, nowMs: 2_000 })).resolves.toMatchObject({ status: "blocked" });
 });
 
+test("the sole evaluator blocks complete generic claim inventory when protected verification records are absent", async () => {
+  const rawManifest = releaseManifest();
+  const manifest = parseReleaseCertificationManifest(rawManifest);
+  const candidateId = digest("1");
+  const observations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation(`/tmp/napplet-cvm-phase07-record-gate-${crypto.randomUUID()}`, observation(rawManifest, candidateId, requirement.claim, requirement.live))));
+  await expect(evaluateReleaseCertification(manifest, observations, { candidateId, nowMs: 2_000 })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_VERIFICATION_RECORDS_REQUIRED" });
+});
+
 test("release evidence rejects arbitrary claims, deterministic live relabels, and mismatched immutable inputs", async () => {
   expect(() => parseReleaseCertificationManifest({ ...releaseManifest(), requirements: [{ id: "anything", claim: "release.anything", freshnessMs: 60_000, live: true }] })).toThrow("closed required-claim inventory");
   const rawManifest = releaseManifest();

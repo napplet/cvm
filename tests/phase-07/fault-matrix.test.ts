@@ -59,8 +59,8 @@ async function ambiguousModel() {
   const store = new TransactionalMemoryFundingStore();
   const funding = new FundingService(store);
   await funding.execute({ principal, kind: "credit_settlement", idempotencyKey: "fault-credit", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { settlement: { topUpId: "fault-topup", rail: "lightning", unit: "sat", amount: "10000", externalReference: "fault-external", settlementReference: "fault-settlement", verifiedAt: "2026-08-04T00:00:00.000Z" } } });
-  const fundedAdmission = new FundedAdmissionService({ funding, store, capacity: { reserveNow: async () => ({ status: "available" as const, reference: "fault-capacity", expiresAt: "2026-08-05T00:00:00.000Z" }), observe: async () => ({ status: "available" as const, reference: "fault-capacity", expiresAt: "2026-08-05T00:00:00.000Z" }), release: async () => {} }, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
-  const admission = await fundedAdmission.admit({ principal, idempotencyKey: "fault-admission", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "6500", unit: "sat" } });
+  const fundedAdmission = new FundedAdmissionService({ funding, store, capacity: { reserveNow: async ({ intentReference }) => ({ status: "available" as const, reference: "fault-capacity", expiresAt: "2026-08-05T00:00:00.000Z", ready: { intentReference, leaseReference: "fault-capacity", sessionBindingDigest: `sha256:${"a".repeat(64)}`, imageDigest: `sha256:${"b".repeat(64)}`, readinessProbeDigest: `sha256:${"c".repeat(64)}`, readyMonotonicMs: 2 } }), observe: async () => ({ status: "unknown" as const }), release: async () => {} }, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
+  const admission = await fundedAdmission.admit({ principal, idempotencyKey: "fault-admission", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "6500", unit: "sat" } }, { version: "admission-lifecycle-v1", receiptMonotonicMs: 1, correlationDigest: `sha256:${"d".repeat(64)}` });
   if (admission.status !== "accepted") throw new Error("fault fixture admission failed");
   const gateway = new DeterministicModelGateway({ scenario: { dispatch: "lost_response", lookup: "receipt_found" } });
   const generated = await new MeteredGenerationService({ fundedAdmission, store, gateway, worker: { run: async () => { throw new Error("fault fixture must not run a worker"); } } as never, artifactVerifier: { verify: async () => undefined } }).startSession({ principal, admissionReference: admission.reference, idempotencyKey: "fault-model", expectedVersion: 0, maximum: "3250", policyVersion: "phase-02-policy-2026-08-04", idea: "Build one focused napplet." });
@@ -100,6 +100,30 @@ test("partial publication reconciles fixed children by observation only", async 
   expect(first).toEqual(duplicate);
   expect(calls).toMatchObject({ deploy: 1, owner: 1, attestation: 1 });
   expect(calls.observe).toBeGreaterThan(0);
+});
+
+test("throwing publication observers cannot strand claimed original effects or reconciliation", async () => {
+  const store = new TransactionalMemoryPublicationStore();
+  const calls = { deploy: 0, owner: 0, attestation: 0, observe: 0 };
+  const service = new PublicationService({
+    store, clock: { nowMs: () => 1_700_000_000_000 }, verifier: { verify: async ({ event }) => ({ valid: true, eventId: event.id }) },
+    deployment: {
+      deployExact: async ({ operationId }) => { calls.deploy += 1; return { operationId, state: "unknown" as const, observationId: `deploy:${operationId}` }; },
+      publishOwnerManifest: async ({ operationId }) => { calls.owner += 1; return { operationId, state: "unknown" as const, observationId: `owner:${operationId}` }; },
+      observe: async ({ operationId }) => { calls.observe += 1; return { operationId, state: "completed" as const, observationId: `reconcile:${operationId}` }; },
+    },
+    attestation: { publish: async ({ operationId }) => { calls.attestation += 1; return { operationId, state: "unknown" as const, observationId: `attestation:${operationId}` }; }, observe: async ({ operationId }) => ({ operationId, state: "completed" as const, observationId: `reconcile:${operationId}` }) },
+    onObservation: () => { throw new Error("observer unavailable"); },
+  });
+  const review = await canonicalCapabilityReview(verifiedPhase06Artifact, "napplet-host/v1");
+  const intent = await service.createIntent({ accountId: verifiedPhase06Artifact.accountId, sessionId: verifiedPhase06Artifact.sessionId, artifact: verifiedPhase06Artifact, review, ownerPubkey: signedPhase06EventFixture.pubkey, idempotencyKey: "fault-observer-throws", purpose: "Publish exact sealed bytes", consent: "approved", runtimeVariant: "napplet-host/v1" });
+  const command = { commandId: "fault-observer-command", intentId: intent.intentId, intentFingerprint: intent.fingerprint, operationIds: { deploy: `deploy:${intent.intentId}`, ownerManifest: `owner_manifest:${intent.intentId}`, attestation: `attestation:${intent.intentId}` } };
+  await expect(service.submitSignedManifest({ accountId: intent.accountId, intentId: intent.intentId, command, event: signedPhase06EventFixture })).resolves.toBeDefined();
+  await expect(service.reconcile({ accountId: intent.accountId, intentId: intent.intentId })).resolves.toBeDefined();
+  expect(calls).toMatchObject({ deploy: 1, owner: 1, attestation: 1 });
+  expect(calls.observe).toBeGreaterThan(0);
+  const status = await store.readPublicationStatus(intent.intentId);
+  expect(Object.values(status.effects).every((effect) => effect.state === "observed_complete")).toBe(true);
 });
 
 test("D-122 matrix executes every fault family with one-writer exact-oracle schedules", async () => {

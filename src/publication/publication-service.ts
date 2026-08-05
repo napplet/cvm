@@ -135,6 +135,15 @@ export class PublicationService {
   }
 
   #observe(value: PublicationReconciliationObservation): void {
-    this.dependencies.onObservation?.(Object.freeze(structuredClone(PublicationReconciliationObservationSchema.parse(value))));
+    // Reconciliation telemetry is observational. A callback may be supplied by
+    // an exporter or test harness and must never strand an operation after its
+    // durable claim, prevent sibling original operations, or turn reconcile
+    // into a redispatch path.
+    try {
+      this.dependencies.onObservation?.(Object.freeze(structuredClone(PublicationReconciliationObservationSchema.parse(value))));
+    } catch {
+      // The durable effect state remains the authority; observers get no retry
+      // or mutation capability and their failure is deliberately non-fatal.
+    }
   }
 }

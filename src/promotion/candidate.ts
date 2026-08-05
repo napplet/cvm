@@ -334,10 +334,18 @@ async function readReleaseJson(path: string): Promise<unknown> {
 /** The CLI only reads explicit release-bundle paths; a lone deterministic
  * pointer deliberately fails parsing and cannot be promoted. */
 async function verifyReleaseEvidence(path: string): Promise<ReleaseCertificationDecision> {
+  return verifyReleaseCertificationBundle(path);
+}
+
+/**
+ * The protected operator entrypoint uses this narrow bundle seam after it has
+ * loaded its own pinned root. The public CLI deliberately calls it rootless.
+ */
+export async function verifyReleaseCertificationBundle(path: string, trustRoot?: ReleaseCertificationTrustRoot): Promise<ReleaseCertificationDecision> {
   return verifyReleaseCertificationInput(await readReleaseJson(path), { loadDeterministic: async (pointer) => {
     const source = await readReleaseJson(pointer.contentAddressedPath) as { contentAddressedPath?: unknown };
     return typeof source.contentAddressedPath === "string" ? readReleaseJson(source.contentAddressedPath) : source;
-  }, loadObservation: (pointer) => readReleaseJson(pointer.contentAddressedPath), loadVerificationRecord: (pointer) => readReleaseJson(pointer.contentAddressedPath) });
+  }, loadObservation: (pointer) => readReleaseJson(pointer.contentAddressedPath), loadVerificationRecord: (pointer) => readReleaseJson(pointer.contentAddressedPath), trustRoot });
 }
 
 if (import.meta.main) {

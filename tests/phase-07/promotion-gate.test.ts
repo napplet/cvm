@@ -327,7 +327,7 @@ test("the protected release command owns a pinned root and rejects a freshly reh
       version: 1,
       candidateId,
       releaseManifest: rawManifest,
-      deterministicEvidence: deterministic,
+      deterministicEvidence: { contentAddressedPath: deterministic.contentAddressedPath, evidenceSha256: deterministic.evidenceSha256 },
       protectedObservations: observations.map((item) => ({ contentAddressedPath: join(observationDirectory, `${item.evidenceSha256}.json`), evidenceSha256: item.evidenceSha256 })),
       verificationRecords: {
         reproducibilityEvidence: { contentAddressedPath: reproducibilityPath, evidenceSha256: verification.reproducibility.evidenceSha256 },
@@ -368,11 +368,30 @@ test("the protected release command owns a pinned root and rejects a freshly reh
     }
     expect(await Bun.file(counterfeitMarker).exists()).toBe(false);
 
-    const counterfeit = { ...release, releaseManifest: { ...rawManifest, releaseId: digest("c") } };
+    const counterfeitManifest = { ...rawManifest, releaseId: digest("c") };
+    const counterfeitVerification = await protectedVerificationRecords(counterfeitManifest, candidateId, now - 1_000);
+    const counterfeitObservationDirectory = join(root, "counterfeit-observations");
+    const counterfeitObservations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation(counterfeitObservationDirectory, {
+      ...bindSupplyChainObservation(observation(counterfeitManifest, candidateId, requirement.claim, requirement.live), counterfeitVerification),
+      startedAtMs: now - 2_000,
+      completedAtMs: now - 1_000,
+      expiresAtMs: now + 60_000,
+    })));
+    const counterfeitReproducibilityPath = join(root, "counterfeit-reproducibility.json");
+    const counterfeitSupplyChainPath = join(root, "counterfeit-supply-chain.json");
+    await writeFile(counterfeitReproducibilityPath, JSON.stringify(counterfeitVerification.reproducibility));
+    await writeFile(counterfeitSupplyChainPath, JSON.stringify(counterfeitVerification.supplyChain));
+    const counterfeit = {
+      ...release,
+      releaseManifest: counterfeitManifest,
+      protectedObservations: counterfeitObservations.map((item) => ({ contentAddressedPath: join(counterfeitObservationDirectory, `${item.evidenceSha256}.json`), evidenceSha256: item.evidenceSha256 })),
+      verificationRecords: {
+        reproducibilityEvidence: { contentAddressedPath: counterfeitReproducibilityPath, evidenceSha256: counterfeitVerification.reproducibility.evidenceSha256 },
+        supplyChainEvidence: { contentAddressedPath: counterfeitSupplyChainPath, evidenceSha256: counterfeitVerification.supplyChain.evidenceSha256 },
+      },
+    };
     await writeFile(releasePath, JSON.stringify(counterfeit));
-    await writeFile(rootModulePath, trustedModule(rawManifest));
-    const counterfeitDigest = sha256Bytes(new Uint8Array(await Bun.file(rootModulePath).arrayBuffer()));
-    const rejected = await runProtected({ PHASE07_RELEASE_TRUST_ROOT_SHA256: counterfeitDigest });
+    const rejected = await runProtected();
     expect(rejected.exitCode).not.toBe(0);
     expect(`${rejected.stdout}${rejected.stderr}`).toContain('"status":"blocked"');
     expect(`${rejected.stdout}${rejected.stderr}`).toContain("RELEASE_CERTIFIER_AUTHORITY_REQUIRED");
@@ -382,8 +401,12 @@ test("the protected release command owns a pinned root and rejects a freshly reh
     const missing = await runProtected({ PHASE07_RELEASE_TRUST_ROOT_DIRECTORY: undefined });
     expect(missing.exitCode).not.toBe(0);
     expect(`${missing.stdout}${missing.stderr}`).toContain("protected_configuration_unavailable");
+    const malformed = await runProtected({ PHASE07_RELEASE_TRUST_ROOT_SHA256: "not-a-sha256" });
+    expect(malformed.exitCode).not.toBe(0);
     const escaped = await runProtected({ PHASE07_RELEASE_TRUST_ROOT: join(operatorRoot, "..", "operator-root.ts") });
     expect(escaped.exitCode).not.toBe(0);
+    const nonFile = await runProtected({ PHASE07_RELEASE_TRUST_ROOT: operatorRoot });
+    expect(nonFile.exitCode).not.toBe(0);
     const drift = await runProtected({ PHASE07_RELEASE_TRUST_ROOT_SHA256: digest("0") });
     expect(drift.exitCode).not.toBe(0);
     const missingExportPath = join(root, "missing-export.ts");

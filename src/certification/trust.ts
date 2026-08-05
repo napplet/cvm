@@ -110,9 +110,13 @@ export async function loadPinnedReleaseCertificationTrustRoot(input: Readonly<{ 
     const modulePath = resolve(canonicalRoot, relative(rawRoot, rawModule));
     if (!containedBy(canonicalRoot, modulePath) || !(await stat(modulePath)).isFile()) throw new Error("TRUST_ROOT_PATH_REJECTED");
     if (await sha256(await readFile(modulePath)) !== input.sha256.toLowerCase()) throw new Error("TRUST_ROOT_DIGEST_INVALID");
-    const loaded = await import(`${pathToFileURL(modulePath).href}?sha256=${input.sha256.toLowerCase()}`) as { protectedReproducibilityTrustRoot?: unknown };
-    if (!isTrustRoot(loaded.protectedReproducibilityTrustRoot)) throw new Error("TRUST_ROOT_EXPORT_INVALID");
-    return loaded.protectedReproducibilityTrustRoot;
+    const loaded = await import(`${pathToFileURL(modulePath).href}?sha256=${input.sha256.toLowerCase()}`) as {
+      protectedReleaseCertificationTrustRoot?: unknown;
+      protectedReproducibilityTrustRoot?: unknown;
+    };
+    const trustRoot = loaded.protectedReleaseCertificationTrustRoot ?? loaded.protectedReproducibilityTrustRoot;
+    if (!isTrustRoot(trustRoot)) throw new Error("TRUST_ROOT_EXPORT_INVALID");
+    return trustRoot;
   } catch (error) {
     if (error instanceof Error && /^TRUST_ROOT_[A-Z_]+$/u.test(error.message)) throw error;
     throw new Error("TRUST_ROOT_LOAD_REJECTED");

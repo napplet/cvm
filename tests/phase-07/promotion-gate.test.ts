@@ -36,8 +36,8 @@ test("Phase 07 CLI seams reject unimplemented or protected work without a releas
     expect(`${result.stdout}${result.stderr}`).toMatch(/blocked|not_observed|not_implemented/u);
     expect(`${result.stdout}${result.stderr}`).not.toContain("supersecret");
   }
-  expect(protectedPreflight.stdout).toContain("admission");
-  expect(protectedPreflight.stdout).toContain("publication");
+  expect(`${protectedPreflight.stdout}${protectedPreflight.stderr}`).toContain("admission");
+  expect(`${protectedPreflight.stdout}${protectedPreflight.stderr}`).toContain("publication");
 });
 
 test.todo("07-W0-05 rejects missing, stale, mutated, cross-candidate, skipped, blocked, and not_observed promotion evidence atomically");

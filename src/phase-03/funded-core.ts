@@ -16,6 +16,7 @@ import { PostgresSqlFundingStore, type PostgresSqlPool } from "../persistence/po
 import { PostgresFundingDatabase } from "../persistence/postgres-funding-database";
 import type { MeteredGenerationService } from "../phase-04/metered-generation-service";
 import { readSessionStatus } from "../phase-04/session-status";
+import type { ContinuationService } from "../continuity/continuation-service";
 
 type SurfaceState = "configured" | "blocked" | "unselected";
 type BlockedCapacity = ReadyCapacityPort;
@@ -44,6 +45,8 @@ export type FundedCoreOptions = Readonly<{
   announcement?: ContextVmAnnouncementInput;
   /** Phase 4's transport-neutral action authority; never a ContextVM SDK type. */
   meteredService?: Pick<MeteredGenerationService, "startSession" | "reviseSession">;
+  /** Phase 5 explicit-resume facade; no payment or ContextVM authority crosses this seam. */
+  continuationService?: Pick<ContinuationService, "resumeSession">;
   /** Server-held HMAC material for opaque status cursors. */
   statusCursorSecret?: Uint8Array;
   testOnly?: boolean;
@@ -86,6 +89,7 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
     : options.testOnly ? options.cashu : undefined;
   const publicFundingSurface = Boolean(options.transport && options.capacity && database && vault && lightning && cashu);
   const publicGenerationSurface = Boolean(publicFundingSurface && options.meteredService);
+  const publicContinuationSurface = Boolean(publicFundingSurface && options.continuationService);
   const offline = !store || !database || !publicFundingSurface;
   const admissions = new FundedAdmissionService({ funding, store: authority, capacity: options.capacity ?? blockedCapacity });
   const accountStatus = new AccountStatusService({ store: authority, sessions: options.sessions ?? emptySessions, ...(database ? { rails: database.railStatuses } : {}) });
@@ -95,7 +99,7 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
       pmis: ["bitcoin-lightning-bolt11", "bitcoin-cashu-v4-direct"],
       paymentInteraction: ["transparent", "explicit_gating"],
       tools: [
-        { name: "start_session", available: publicGenerationSurface, planned: !publicGenerationSurface }, { name: "revise_session", available: publicGenerationSurface, planned: !publicGenerationSurface }, { name: "session_status", available: publicGenerationSurface, planned: !publicGenerationSurface }, { name: "account_status", available: true, planned: false },
+        { name: "start_session", available: publicGenerationSurface, planned: !publicGenerationSurface }, { name: "revise_session", available: publicGenerationSurface, planned: !publicGenerationSurface }, { name: "resume_session", available: publicContinuationSurface, planned: !publicContinuationSurface }, { name: "session_status", available: publicGenerationSurface, planned: !publicGenerationSurface }, { name: "account_status", available: true, planned: false },
         { name: "top_up", available: true, planned: false }, { name: "funded_admission", available: true, planned: false },
         { name: "preview", available: false, planned: true }, { name: "publication", available: false, planned: true },
       ],
@@ -105,6 +109,7 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
   const contextvm = publicFundingSurface && options.transport && lightning && cashu
     ? new ContextVmFundingAdapter({ service: funding, transport: options.transport, admissions, accountStatus, topUps: { lightning, cashu },
       ...(options.meteredService ? { generation: options.meteredService, sessionStatus: { read: (query: unknown) => readSessionStatus({ store: authority as MeteredFundingStore, query, cursorSecret: statusCursorSecret }) } } : {}),
+      ...(options.continuationService ? { continuation: options.continuationService } : {}),
     })
     : undefined;
   return Object.freeze({

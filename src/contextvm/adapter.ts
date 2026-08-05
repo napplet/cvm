@@ -2,6 +2,8 @@ import { z } from "zod";
 import { FundingService } from "../funding/funding-service";
 import type { AccountStatusService } from "../funding/account-status";
 import type { FundedAdmissionService } from "../funding/funded-admission";
+import { accountIdForPrincipal } from "../domain/account-command";
+import { ResumeSessionCommandSchema, ResumeSessionResultSchema } from "../continuity/contracts";
 import { PrincipalSchema } from "../phase-03/contracts";
 import { SessionActionResultSchema } from "../phase-04/metered-generation-service";
 import { SessionStatusQuerySchema, SessionStatusSchema } from "../phase-04/session-status";
@@ -17,7 +19,7 @@ const RequestSchema = z.object({
   id: z.union([z.string(), z.number(), z.null()]),
   method: z.literal("tools/call"),
   params: z.object({
-    name: z.enum(["account_status", "top_up", "funded_admission", "start_session", "revise_session", "session_status"]),
+    name: z.enum(["account_status", "top_up", "funded_admission", "start_session", "revise_session", "resume_session", "session_status"]),
     arguments: z.unknown(),
     _meta: z.unknown().optional(),
   }).strict(),
@@ -48,6 +50,7 @@ const StartSessionArgumentsSchema = z.object({
 const ReviseSessionArgumentsSchema = z.object({
   sessionId: z.string().min(1), admissionReference: z.string().min(1), idempotencyKey: z.string().min(1), expectedVersion: z.number().int().nonnegative(), maximum: z.string().regex(/^[1-9][0-9]*$/u), revision: z.string().min(1).max(4_000),
 }).strict();
+const ResumeSessionArgumentsSchema = ResumeSessionCommandSchema.omit({ principal: true });
 const SessionStatusArgumentsSchema = z.object({
   sessionId: z.string().min(1), billing: z.object({ limit: z.number().int().min(1).max(50).optional(), cursor: z.string().min(1).optional() }).strict().optional(),
 }).strict();
@@ -82,6 +85,8 @@ export interface ContextVmFundingAdapterOptions {
     startSession(input: unknown): Promise<unknown>;
     reviseSession(input: unknown): Promise<unknown>;
   }>;
+  /** Explicit post-grace continuation only; rails and status cannot call this facade. */
+  continuation?: Readonly<{ resumeSession(input: unknown): Promise<unknown> }>;
   sessionStatus?: Readonly<{ read(input: unknown): Promise<unknown> }>;
   policyVersion?: string;
   protocolVersion?: string;
@@ -149,6 +154,13 @@ export class ContextVmFundingAdapter {
       if (!this.options.generation) throw new Error("METERED_GENERATION_UNAVAILABLE");
       const result = SessionActionResultSchema.parse(await this.options.generation.reviseSession({ principal: { pubkey: verifiedPubkey }, sessionId: args.sessionId, admissionReference: args.admissionReference, idempotencyKey: args.idempotencyKey, expectedVersion: args.expectedVersion, maximum: args.maximum, policyVersion: this.policyVersion, revision: args.revision }));
       return this.generationResponse("revise_session", verifiedPubkey, requestEventId, request.id, result);
+    }
+    if (name === "resume_session") {
+      const args = ResumeSessionArgumentsSchema.parse(argumentsInput);
+      if (!this.options.continuation) throw new Error("CONTINUATION_UNAVAILABLE");
+      const accountId = await accountIdForPrincipal({ pubkey: verifiedPubkey });
+      const result = ResumeSessionResultSchema.parse(await this.options.continuation.resumeSession({ ...args, principal: { id: accountId } }));
+      return this.resumeResponse(verifiedPubkey, requestEventId, request.id, result);
     }
     if (name === "session_status") {
       const args = SessionStatusArgumentsSchema.parse(argumentsInput);
@@ -222,6 +234,16 @@ export class ContextVmFundingAdapter {
         ? freeze({ status: result.status, code: result.code, sessionId: result.sessionId, nextAction: result.nextAction, operationId: result.operationId })
         : freeze({ status: result.status, code: result.code });
     await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({ jsonrpc: "2.0", method: `notifications/${name}`, params: wireResult }), requestEventId);
+    return freeze({ jsonrpc: "2.0" as const, id, result: wireResult });
+  }
+
+  private async resumeResponse(verifiedPubkey: string, requestEventId: string, id: string | number | null, result: z.infer<typeof ResumeSessionResultSchema>): Promise<ContextVmWireResponse> {
+    const wireResult = result.status === "restored"
+      ? freeze({ status: result.status, code: result.code, sessionId: result.sessionId, checkpointId: result.checkpointId, pendingActionReference: result.pendingActionReference, actionBudgetReference: result.actionBudgetReference, allocationIntentReference: result.allocationIntentReference })
+      : result.status === "reconciliation_pending"
+        ? freeze({ status: result.status, code: result.code, sessionId: result.sessionId, checkpointId: result.checkpointId, pendingActionReference: result.pendingActionReference, allocationIntentReference: result.allocationIntentReference })
+        : freeze({ status: result.status, code: result.code });
+    await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({ jsonrpc: "2.0", method: "notifications/resume_session", params: wireResult }), requestEventId);
     return freeze({ jsonrpc: "2.0" as const, id, result: wireResult });
   }
 

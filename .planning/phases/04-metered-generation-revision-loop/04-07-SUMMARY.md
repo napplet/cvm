@@ -18,11 +18,19 @@ key-files:
   created:
     - .planning/phases/04-metered-generation-revision-loop/04-07-SUMMARY.md
   modified:
+    - scripts/verify-phase-04-design-slice.ts
+    - src/verification/phase-04-design-evidence.ts
     - tests/evals/phase-04-runtime-observation.ts
     - tests/evals/phase-04-runtime-financial.ts
     - tests/evals/phase-04-runtime-session-artifact.ts
     - tests/evals/phase-04-reference-set.test.ts
     - tests/support/phase-04/session-artifact-probes.ts
+    - tests/funding/funded-admission.test.ts
+    - tests/model/reconciliation.test.ts
+    - tests/persistence/postgres-funding-store.test.ts
+    - tests/phase-04/revision.test.ts
+    - evidence/design/phase-04.json
+    - evidence/design/2e9c23219e9ebb0dd02b345ecdbe6b382aed1d1c77acc42707fd23a53b815d88.json
 decisions:
   - "Runtime scenarios receive boundedInput, initialState, and schedule only; expected values remain comparator-only."
   - "Phase 04 remains pending formal re-verification even though this plan's evidence-integrity work is complete."
@@ -30,7 +38,7 @@ metrics:
   duration: 28m
   completed: 2026-08-05
   tasks_completed: 3
-  files_changed: 6
+  files_changed: 13
 status: complete
 ---
 
@@ -42,7 +50,7 @@ The twenty-case Phase 04 gate now feeds bounded case facts into actual authority
 
 1. Preserved the strict observation/comparison schema while forwarding every case's `boundedInput`, `initialState`, and `schedule` to the selected financial or session/artifact authority probe.
 2. Made pricing, funded start, finalization, history pagination, revisions, ambiguity handling, artifact/repair, status, and ContextVM probes validate and use their relevant scenario facts; retained the existing named source assertions as a separate required child gate.
-3. Added static fixture-isolation guards, four-category recomputed-oracle mismatch coverage, and loaded-record validation proving result/aggregate re-derivation from observed values.
+3. Added static fixture-isolation guards, four-category recomputed-oracle mismatch coverage, and strict loaded-record validation proving result/aggregate re-derivation from observed values.
 
 ## Runtime Authority Audit
 
@@ -74,18 +82,20 @@ The twenty-case Phase 04 gate now feeds bounded case facts into actual authority
 - `bun test tests/evals/phase-04-reference-set.test.ts --timeout 10000` — passed.
 - `bun test tests/evals/phase-04-reference-set.test.ts --test-name-pattern='numeric, state|loaded design evidence|mismatched oracle' --timeout 10000` — passed.
 - `bun run eval:phase04` — passed.
-- `bun run verify:phase04-design` — passed; evidence digest `010225b0e5758aec9edcafd13b35eca0b722c28f78721e74b83aa1e31562f91f`.
-- `bun test` — passed.
+- `bun run verify:phase04-design` — passed; canonical evidence digest `2e9c23219e9ebb0dd02b345ecdbe6b382aed1d1c77acc42707fd23a53b815d88`.
+- `bun test` — 317 passed, 0 failed.
 - `git diff --check` — passed.
 
 ## Decisions Made
 
 - Fact validation is intentionally in the probes, where it configures or bounds the exercised authority; neither fixture `expected` data nor its `oracle` checksum can enter a probe signature.
-- Content-addressed records and the current pointer are only created after all comparisons pass. Generated evidence remains untracked here; no transient pointer or record is staged by this plan.
+- Content-addressed records and the current pointer are only created after all comparisons pass. The final record and pointer are committed; transient records from intermediate runs remain untouched and untracked.
 
 ## Deviations from Plan
 
-None - plan executed exactly as written.
+- The clean-suite rerun crossed the fixture lease date and exposed tests that depended on wall-clock time; those constructors now inject the fixture clock explicitly.
+- Standalone evidence validation originally re-derived the digest but ignored tampered derived fields. It now requires canonical equality with the fully re-evaluated evidence record.
+- Negative-oracle tests skip redundant child-suite subprocesses, while canonical gates continue to require all child assertions; this removed timeout-only failures without weakening the release path.
 
 ## Known Stubs
 

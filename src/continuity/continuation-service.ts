@@ -49,6 +49,15 @@ export type VerifiedCreditWakeResult = Readonly<{
   dispatchClaimToken?: string;
 }>;
 
+/**
+ * Narrow post-credit hook exposed to verified payment rails. The only input
+ * is the server-derived account identity; durable continuity state chooses
+ * every session, generation, action identity, and worker lease.
+ */
+export type VerifiedCreditWakeDispatcher = Readonly<{
+  dispatchVerifiedCredit(accountId: string): Promise<readonly VerifiedCreditWakeResult[]>;
+}>;
+
 export type VerifiedCreditWakeInput = VerifiedCreditWakeHint & Readonly<{
   /** Coordinator-only continuation hook. Its result is durably closed below. */
   onAuthorized?: () => Promise<void> | void;

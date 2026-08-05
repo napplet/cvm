@@ -44,7 +44,7 @@ export type FundedCoreOptions = Readonly<{
   protectedMaterialKey?: Uint8Array;
   announcement?: ContextVmAnnouncementInput;
   /** Phase 4's transport-neutral action authority; never a ContextVM SDK type. */
-  meteredService?: Pick<MeteredGenerationService, "startSession" | "reviseSession"> & Partial<Pick<MeteredGenerationService, "reconcileOutstandingWakeDispatches" | "completeResumedAction">>;
+  meteredService?: Pick<MeteredGenerationService, "startSession" | "reviseSession"> & Partial<Pick<MeteredGenerationService, "dispatchVerifiedCredit" | "reconcileOutstandingWakeDispatches" | "completeResumedAction">>;
   /** Phase 5 explicit-resume facade; no payment or ContextVM authority crosses this seam. */
   continuationService?: Pick<ContinuationService, "resumeSession">;
   /** Server-held HMAC material for opaque status cursors. */
@@ -83,14 +83,18 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
   const railConfigurationStarted = Boolean(options.lightningReceiver || options.cashuProvider || options.cashuPolicies || options.protectedMaterialKey);
   if (railConfigurationStarted && (!database || !options.lightningReceiver || !options.cashuProvider || !options.cashuPolicies || !options.protectedMaterialKey)) throw new Error("PRODUCTION_RAIL_COMPOSITION_REQUIRED");
   const vault = database && options.protectedMaterialKey ? new ProtectedRailMaterialVault({ key: options.protectedMaterialKey, repository: database.protectedMaterials }) : undefined;
+  const verifiedCreditWake = options.meteredService?.dispatchVerifiedCredit
+    ? Object.freeze({ dispatchVerifiedCredit: (accountId: string) => options.meteredService!.dispatchVerifiedCredit!(accountId) })
+    : undefined;
   const lightning = database && vault && options.lightningReceiver
-    ? new LightningTopUpCoordinator({ funding, receiver: options.lightningReceiver, repository: database.lightning, vault })
+    ? new LightningTopUpCoordinator({ funding, receiver: options.lightningReceiver, repository: database.lightning, vault, ...(verifiedCreditWake ? { verifiedCreditWake } : {}) })
     : options.testOnly ? options.lightning : undefined;
   const cashu = database && vault && options.cashuProvider && options.cashuPolicies
-    ? new CashuTopUpCoordinator({ funding, provider: options.cashuProvider, policies: options.cashuPolicies, repository: database.cashu, vault })
+    ? new CashuTopUpCoordinator({ funding, provider: options.cashuProvider, policies: options.cashuPolicies, repository: database.cashu, vault, ...(verifiedCreditWake ? { verifiedCreditWake } : {}) })
     : options.testOnly ? options.cashu : undefined;
   const publicFundingSurface = Boolean(options.transport && options.capacity && database && vault && lightning && cashu);
   const publicGenerationSurface = Boolean(publicFundingSurface && options.meteredService);
+  if (publicGenerationSurface && !verifiedCreditWake) throw new Error("PRODUCTION_VERIFIED_CREDIT_WAKE_REQUIRED");
   const publicContinuationSurface = Boolean(publicFundingSurface && options.continuationService);
   const offline = !store || !database || !publicFundingSurface;
   const admissions = new FundedAdmissionService({ funding, store: authority, capacity: options.capacity ?? blockedCapacity });

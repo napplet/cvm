@@ -153,6 +153,12 @@ export interface ContinuationFundingStore extends FundingStore {
   findContinuationForSession(accountId: string, sessionId: string): Promise<ContinuationRecord | undefined>;
   /** Exact durable records for recovery; callers must never select a newer generation implicitly. */
   findContinuationPause(accountId: string, sessionId: string, pauseGeneration: number): Promise<ContinuationPause | undefined>;
+  /**
+   * Server-owned discovery for verified-credit wake processing. The rail
+   * supplies only the owner identity; session, generation, and live lease are
+   * selected from the durable pause row and rechecked by the wake transaction.
+   */
+  listLiveContinuationPauses(accountId: string, nowMs: number): Promise<readonly ContinuationPause[]>;
   findWakeDispatch(accountId: string, sessionId: string, pauseGeneration: number): Promise<ContinuationWakeDispatch | undefined>;
   /** Owner-scoped recovery outbox discovery; this never schedules generation. */
   listOutstandingWakeDispatches(accountId: string): Promise<readonly ContinuationWakeDispatch[]>;
@@ -237,6 +243,11 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
   async findContinuationPause(accountId: string, sessionId: string, pauseGeneration: number): Promise<ContinuationPause | undefined> {
     const found = [...this.#state.continuationPauses.values()].find((pause) => pause.accountId === accountId && pause.sessionId === sessionId && pause.pauseGeneration === pauseGeneration);
     return found ? freeze(clone(found)) : undefined;
+  }
+  async listLiveContinuationPauses(accountId: string, nowMs: number): Promise<readonly ContinuationPause[]> {
+    return freeze(clone([...this.#state.continuationPauses.values()]
+      .filter((pause) => pause.accountId === accountId && pause.state === "needs_top_up" && pause.liveLeaseToken !== undefined && nowMs < pause.graceDeadlineMs)
+      .sort((left, right) => left.sessionId.localeCompare(right.sessionId) || left.pauseGeneration - right.pauseGeneration)));
   }
   async findWakeDispatch(accountId: string, sessionId: string, pauseGeneration: number): Promise<ContinuationWakeDispatch | undefined> {
     const found = this.#state.wakeDispatches.get(`${accountId}\u0000${sessionId}\u0000${pauseGeneration}`);

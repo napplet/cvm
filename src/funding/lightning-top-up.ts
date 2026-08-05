@@ -4,6 +4,7 @@ import { PrincipalSchema, type FundingResult, type Principal, type VerifiedSettl
 import type { FundingService } from "./funding-service";
 import { LightningInvoiceObservationSchema, type LightningInvoiceObservation, type LightningReceiptPort } from "./lightning-provider";
 import type { ProtectedRailMaterialVault } from "./protected-rail-material";
+import type { VerifiedCreditWakeDispatcher } from "../continuity/continuation-service";
 
 type TopUpState = "pending" | "settled" | "credited" | "failed" | "reconciliation_pending";
 export type LightningTopUpStatus = Readonly<{
@@ -59,7 +60,7 @@ export class InMemoryLightningTopUpRepository implements LightningTopUpRepositor
 }
 
 export type LightningTopUpCoordinatorOptions = Readonly<{
-  funding: FundingService; receiver: LightningReceiptPort; repository: LightningTopUpRepository; vault: ProtectedRailMaterialVault; now?: () => string; providerTimeoutMs?: number;
+  funding: FundingService; receiver: LightningReceiptPort; repository: LightningTopUpRepository; vault: ProtectedRailMaterialVault; verifiedCreditWake?: VerifiedCreditWakeDispatcher; now?: () => string; providerTimeoutMs?: number;
 }>;
 
 /** Service-owned BOLT11 coordinator: receiver observations never receive ledger authority. */
@@ -110,7 +111,11 @@ export class LightningTopUpCoordinator {
   }
 
   private async reconcileRecord(topUp: LightningPrivateTopUp): Promise<LightningTopUpResult> {
-    if (topUp.state === "credited" || topUp.state === "failed") return publicResult(topUp);
+    if (topUp.state === "credited") {
+      await this.options.verifiedCreditWake?.dispatchVerifiedCredit(topUp.accountId);
+      return publicResult(topUp);
+    }
+    if (topUp.state === "failed") return publicResult(topUp);
     try { return this.recordObservation(topUp.topUpId, await this.boundedProvider((signal) => this.options.receiver.queryInvoice({ topUpId: topUp.topUpId, serviceReference: topUp.providerReference, signal }))); }
     catch { return this.markUnknown(topUp.topUpId); }
   }
@@ -143,12 +148,16 @@ export class LightningTopUpCoordinator {
   private async recordSettled(topUpId: string, observed: Extract<LightningInvoiceObservation, { status: "settled" }>): Promise<LightningTopUpResult> {
     const topUp = await this.options.repository.transact((state) => this.topUp(state, topUpId));
     this.assertObservationTarget(topUp, observed);
-    if (topUp.state === "credited") return publicResult(topUp);
+    if (topUp.state === "credited") {
+      await this.options.verifiedCreditWake?.dispatchVerifiedCredit(topUp.accountId);
+      return publicResult(topUp);
+    }
     if (!topUp.paymentHashDigest || !topUp.invoiceIdentityDigest || !topUp.expiresAt || observed.amount !== topUp.amount || observed.unit !== "sat" || observed.expiresAt !== topUp.expiresAt || !observed.final || Date.parse(this.#now()) > Date.parse(topUp.expiresAt) || Date.parse(observed.settledAt) > Date.parse(topUp.expiresAt) || Date.parse(observed.settledAt) > Date.parse(this.#now()) || await sha256(observed.paymentHash) !== topUp.paymentHashDigest || await sha256(observed.invoiceIdentity) !== topUp.invoiceIdentityDigest) return this.markUnknown(topUpId);
     const settlement: VerifiedSettlement = { topUpId, rail: "lightning", unit: "sat", amount: topUp.amount, externalReference: `lightning:${await sha256(`${topUpId}:${observed.paymentHash}`)}`, settlementReference: observed.settlementReference, verifiedAt: observed.settledAt };
+    let credited: LightningTopUpResult;
     try {
       const result = await this.options.funding.execute({ principal: topUp.principal, kind: "credit_settlement", idempotencyKey: `lightning-settlement:${topUpId}:${observed.settlementReference}`, policyVersion: "lightning-receipt-v1", protocolVersion: "funding-contract-v1", payload: { settlement } });
-      return this.options.repository.transact(async (state) => {
+      credited = await this.options.repository.transact(async (state) => {
         const current = this.topUp(state, topUpId); const next = frozen({ ...current, state: "credited" as const, providerIntent: "completed" as const, settlementReference: observed.settlementReference, creditedResult: result }); state.topUps.set(topUpId, next);
         if (current.protectedMaterialId) await this.options.vault.expire(current.protectedMaterialId); return publicResult(next);
       });
@@ -156,6 +165,8 @@ export class LightningTopUpCoordinator {
       if (error instanceof Error && error.message === "SETTLEMENT_REFERENCE_CONFLICT") return this.markUnknown(topUpId);
       return this.markUnknown(topUpId);
     }
+    await this.options.verifiedCreditWake?.dispatchVerifiedCredit(topUp.accountId);
+    return credited;
   }
 
   private async markUnknown(topUpId: string): Promise<LightningTopUpResult> {

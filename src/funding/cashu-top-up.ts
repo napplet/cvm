@@ -4,6 +4,7 @@ import { type Principal, VerifiedSettlementSchema } from "../phase-03/contracts"
 import { FundingService } from "./funding-service";
 import { CashuMintPolicyRegistry, type CashuMintPolicy } from "./cashu-mint-policy";
 import { type CashuObserveRequest, type CashuSettlementObservation, type CashuSettlementPort, type CashuTreasuryState } from "./cashu-provider";
+import type { VerifiedCreditWakeDispatcher } from "../continuity/continuation-service";
 
 const CashuPmi = "bitcoin-cashu-v4-direct";
 const SubmitSchema = z.object({
@@ -47,7 +48,7 @@ function asError(code: string): Error { return new Error(code); }
 export class CashuTopUpCoordinator {
   readonly #now: () => string;
   readonly #providerTimeoutMs: number;
-  constructor(private readonly options: Readonly<{ policies: CashuMintPolicyRegistry; provider: CashuSettlementPort; vault: Vault; funding: FundingService; repository: CashuTopUpRepository; now?: () => string; providerTimeoutMs?: number }>) {
+  constructor(private readonly options: Readonly<{ policies: CashuMintPolicyRegistry; provider: CashuSettlementPort; vault: Vault; funding: FundingService; repository: CashuTopUpRepository; verifiedCreditWake?: VerifiedCreditWakeDispatcher; now?: () => string; providerTimeoutMs?: number }>) {
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#providerTimeoutMs = options.providerTimeoutMs ?? 5_000;
     if (this.#providerTimeoutMs < 1) throw asError("INVALID_PROVIDER_TIMEOUT");
@@ -70,6 +71,7 @@ export class CashuTopUpCoordinator {
     if (existing) {
       if (existing.accountId !== accountId) throw asError("CASHU_TOP_UP_NOT_OWNER");
       if (existing.idempotencyKey !== submitted.idempotencyKey || existing.amount !== submitted.amount || existing.result.commitment !== commitment) throw asError("CASHU_TOP_UP_CONFLICT");
+      if (existing.result.state === "credited") await this.options.verifiedCreditWake?.dispatchVerifiedCredit(existing.accountId);
       return existing.result;
     }
     const protectedReference = await this.options.vault.seal({ accountId, topUpId: submitted.topUpId, rail: "cashu" }, submitted.token);
@@ -80,6 +82,7 @@ export class CashuTopUpCoordinator {
       if (claimed.record.accountId !== accountId) throw asError("CASHU_TOP_UP_NOT_OWNER");
       if (claimed.record.result.topUpId !== submitted.topUpId) throw asError("CASHU_PROOF_ALREADY_CLAIMED");
       if (claimed.record.idempotencyKey !== submitted.idempotencyKey || claimed.record.amount !== submitted.amount || claimed.record.result.commitment !== commitment) throw asError("CASHU_TOP_UP_CONFLICT");
+      if (claimed.record.result.state === "credited") await this.options.verifiedCreditWake?.dispatchVerifiedCredit(claimed.record.accountId);
       return claimed.record.result;
     }
     const record = claimed.record;
@@ -91,7 +94,10 @@ export class CashuTopUpCoordinator {
 
   async reconcile(topUpId: string): Promise<CashuTopUpResult> {
     const record = await this.options.repository.find(topUpId); if (!record) throw asError("CASHU_TOP_UP_UNKNOWN");
-    if (record.result.state !== "reconciliation_pending") return record.result;
+    if (record.result.state !== "reconciliation_pending") {
+      if (record.result.state === "credited") await this.options.verifiedCreditWake?.dispatchVerifiedCredit(record.accountId);
+      return record.result;
+    }
     let token: Uint8Array | undefined;
     if (this.options.vault.open) {
       try { token = await this.options.vault.open({ id: record.protectedId, accountId: record.accountId, topUpId, rail: "cashu" }); }
@@ -131,6 +137,7 @@ export class CashuTopUpCoordinator {
     if (credited.status !== "credited") throw asError("CASHU_CREDIT_RESULT_INVALID");
     const result = frozen({ ...record.result, state: "credited" as const, settlementReference: credited.settlementReference }); await this.options.repository.update({ ...record, result });
     await this.options.vault.expire(record.protectedId);
+    await this.options.verifiedCreditWake?.dispatchVerifiedCredit(record.accountId);
     return result;
   }
 

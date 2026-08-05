@@ -40,12 +40,27 @@ test("PostgresSqlFundingStore exposes one metered funding authority", async () =
 
 test("PostgresSqlFundingStore exposes the same continuation transaction authority", async () => {
   const store = new PostgresSqlFundingStore({ connect: async () => new ScriptedClient() });
+  expect(typeof store.listLiveContinuationPauses).toBe("function");
   await store.transact("account:one", async (tx) => {
     const continuation = tx as unknown as { pauseForFunding?: unknown; claimResume?: unknown; tombstoneExpiredCheckpoint?: unknown };
     expect(typeof continuation.pauseForFunding).toBe("function");
     expect(typeof continuation.claimResume).toBe("function");
     expect(typeof continuation.tombstoneExpiredCheckpoint).toBe("function");
   });
+});
+
+test("live-pause discovery is owner/deadline scoped and returns no caller-selected lease tuple", async () => {
+  const queries: { text: string; values?: readonly unknown[] }[] = [];
+  const client: PostgresSqlClient = {
+    query: async (text: string, values?: readonly unknown[]) => { queries.push({ text, values }); return { rows: [] }; },
+    release: () => undefined,
+  };
+  const store = new PostgresSqlFundingStore({ connect: async () => client });
+  await expect(store.listLiveContinuationPauses("account:one", 1_700_000_000_000)).resolves.toEqual([]);
+  expect(queries).toEqual([expect.objectContaining({
+    text: expect.stringContaining("WHERE account_id=$1 AND state='needs_top_up' AND live_lease_token IS NOT NULL AND grace_deadline_ms>$2"),
+    values: ["account:one", 1_700_000_000_000],
+  })]);
 });
 
 test("rail repositories expose narrow ports and leave SQL ownership to the database adapter", async () => {

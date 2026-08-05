@@ -61,7 +61,7 @@ export class MeteredGenerationService {
 
   #continuation(): ContinuationService {
     const continuationStore = this.options.store as MeteredFundingStore & Partial<ContinuationFundingStore>;
-    if (typeof continuationStore.findContinuation !== "function" || typeof continuationStore.listOutstandingWakeDispatches !== "function") throw new Error("CONTINUATION_STORE_UNAVAILABLE");
+    if (typeof continuationStore.findContinuation !== "function" || typeof continuationStore.listLiveContinuationPauses !== "function" || typeof continuationStore.listOutstandingWakeDispatches !== "function") throw new Error("CONTINUATION_STORE_UNAVAILABLE");
     // A supplied facade owns explicit resume dependencies. When this
     // coordinator also owns an exact-operation observer, build the narrow
     // wake facade here so restart recovery cannot silently drop that port.
@@ -90,6 +90,34 @@ export class MeteredGenerationService {
       }
     }
     return result;
+  }
+
+  /**
+   * Verified rails call this owner-only surface after the ledger credit is
+   * durable. It discovers pre-deadline live pauses from the server store and
+   * feeds each exact stored tuple through the existing atomic wake authority.
+   * This is synchronous handling of already-admitted work, never a queue.
+   */
+  async dispatchVerifiedCredit(accountId: string): Promise<readonly VerifiedCreditWakeResult[]> {
+    const store = this.options.store as MeteredFundingStore & ContinuationFundingStore;
+    const nowMs = (this.options.clock ?? { nowMs: Date.now }).nowMs();
+    const pauses = await store.listLiveContinuationPauses(accountId, nowMs);
+    const results: VerifiedCreditWakeResult[] = [];
+    for (const pause of pauses) {
+      // Discovery returns only rows with a live lease. Keep the guard local so
+      // an impossible/corrupt projection cannot be converted into authority.
+      if (pause.accountId !== accountId || !pause.liveLeaseToken) continue;
+      results.push(await this.wakePausedAction({
+        accountId: pause.accountId,
+        sessionId: pause.sessionId,
+        pauseGeneration: pause.pauseGeneration,
+        liveLeaseToken: pause.liveLeaseToken,
+        pendingFingerprint: pause.pendingFingerprint,
+        expectedSessionVersion: pause.expectedSessionVersion,
+        expectedArtifactVersion: pause.intent.expectedArtifactVersion,
+      }));
+    }
+    return freeze(results);
   }
 
   /** Coordinator restart scheduling surface; it observes existing effects only. */

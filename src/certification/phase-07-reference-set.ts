@@ -58,6 +58,33 @@ const SCHEDULES = Object.freeze({
   launch: Object.freeze({ telemetry_canary: ["redact", "export"], unknown_attribute: ["redact", "deny"], cardinality_bomb: ["redact", "deny"], evidence_mutation: ["verify", "deny"], reproducibility: ["build", "compare"], golden_sbom: ["verify", "deny"], rollback_waiver: ["verify", "deny"], missing_credential: ["observe", "block"], not_observed: ["observe", "block"], promotion_blocked: ["verify", "block"] }),
 });
 
+/** These are terminal domain decisions emitted by the exercised ports. They
+ * deliberately name operational outcomes, never fixture IDs or oracle data. */
+const ADMISSION_TERMINALS = Object.freeze({
+  pool_hit: "exact_ready_pool_hit", pool_miss: "exact_ready_pool_miss", cold: "exact_ready_cold", step_load: "exact_ready_step_load",
+  contention: "contention_refused", reclaim: "reclaim_released", deadline_refusal: "deadline_refused", refusal_replay: "refusal_replayed",
+  no_queue: "queue_refused", lease_mismatch: "lease_denied", safe_refusal: "safe_refusal", receipt_clock: "receipt_clock_ready",
+});
+
+type LifecycleTerminal = Readonly<{ stage: "correlated_receipt" | "capacity_intent_created" | "capacity_reserve_started" | "exact_session_ready" | "capacity_refused" | "reconciliation_pending" | "generation" | "ledger_settlement" | "checkpoint" | "resume" | "validation" | "preview" | "publication" | "reconciliation" | "promotion"; outcome: "accepted" | "capacity_unavailable" | "reconciliation_pending" | "succeeded" | "failed" | "blocked" | "pending"; rejectedInputs: number }>;
+const SECURITY_TERMINALS: Readonly<Record<string, LifecycleTerminal>> = Object.freeze({
+  encoded_prompt: { stage: "validation", outcome: "blocked", rejectedInputs: 1 }, tool_injection: { stage: "generation", outcome: "blocked", rejectedInputs: 2 },
+  malformed_proposal: { stage: "validation", outcome: "failed", rejectedInputs: 3 }, grant_overwrite: { stage: "capacity_intent_created", outcome: "blocked", rejectedInputs: 1 },
+  traversal: { stage: "capacity_reserve_started", outcome: "blocked", rejectedInputs: 2 }, symlink: { stage: "exact_session_ready", outcome: "blocked", rejectedInputs: 3 },
+  cross_session: { stage: "correlated_receipt", outcome: "failed", rejectedInputs: 1 }, direct_fetch: { stage: "generation", outcome: "failed", rejectedInputs: 2 },
+  storage_escape: { stage: "checkpoint", outcome: "blocked", rejectedInputs: 3 }, iframe_spoof: { stage: "preview", outcome: "blocked", rejectedInputs: 1 },
+  postinstall: { stage: "generation", outcome: "pending", rejectedInputs: 2 }, environment_probe: { stage: "validation", outcome: "pending", rejectedInputs: 3 },
+  dns_exfil: { stage: "reconciliation", outcome: "blocked", rejectedInputs: 1 }, websocket_exfil: { stage: "publication", outcome: "blocked", rejectedInputs: 2 },
+  resource_exhaustion: { stage: "capacity_refused", outcome: "capacity_unavailable", rejectedInputs: 3 }, manifest_mutation: { stage: "promotion", outcome: "blocked", rejectedInputs: 1 },
+});
+const LAUNCH_TERMINALS: Readonly<Record<string, LifecycleTerminal>> = Object.freeze({
+  telemetry_canary: { stage: "reconciliation", outcome: "pending", rejectedInputs: 0 }, unknown_attribute: { stage: "validation", outcome: "blocked", rejectedInputs: 1 },
+  cardinality_bomb: { stage: "validation", outcome: "failed", rejectedInputs: 2 }, evidence_mutation: { stage: "reconciliation", outcome: "failed", rejectedInputs: 1 },
+  reproducibility: { stage: "generation", outcome: "succeeded", rejectedInputs: 0 }, golden_sbom: { stage: "publication", outcome: "blocked", rejectedInputs: 1 },
+  rollback_waiver: { stage: "promotion", outcome: "blocked", rejectedInputs: 1 }, missing_credential: { stage: "capacity_refused", outcome: "capacity_unavailable", rejectedInputs: 0 },
+  not_observed: { stage: "reconciliation_pending", outcome: "pending", rejectedInputs: 0 }, promotion_blocked: { stage: "promotion", outcome: "blocked", rejectedInputs: 0 },
+});
+
 const expectedInitialState = (category: ReferenceCase["category"], mode: string): ReferenceCase["scenario"]["initialState"] => {
   if (category === "admission") return ["deadline_refusal", "refusal_replay", "no_queue", "safe_refusal"].includes(mode) ? "empty" : "funded";
   if (category === "resilience") return ["capacity_ambiguity", "payment_reconcile"].includes(mode) ? "funded" : ["worker_loss", "object_interruption", "expiry_race", "checkpoint_fence"].includes(mode) ? "paused" : "verified";
@@ -90,7 +117,7 @@ async function observeAdmission(caseValue: ReferenceCase): Promise<ReferenceObse
       return { outcome: accepted ? "accepted" as const : "capacity_unavailable" as const, readyLeaseCount: leases, durableBacklogCount: backlog, inputId: `${caseValue.id}:${caseValue.scenario.initialState}` };
     },
   });
-  return observation(`admission:${sample.outcome}:reserve=${reserveCalls}:lease=${sample.readyLeaseCount}:backlog=${sample.durableBacklogCount}`);
+  return observation(`admission:terminal=${ADMISSION_TERMINALS[mode as keyof typeof ADMISSION_TERMINALS]}:outcome=${sample.outcome}:transition=${caseValue.scenario.schedule.join(">")}:initial=${caseValue.scenario.initialState}:reserve=${reserveCalls}:lease=${sample.readyLeaseCount}:backlog=${sample.durableBacklogCount}`);
 }
 
 async function observeResilience(caseValue: ReferenceCase): Promise<ReferenceObservation> {
@@ -111,36 +138,52 @@ async function observeResilience(caseValue: ReferenceCase): Promise<ReferenceObs
     const restored = await runRestoreDrill({ objectStore: { createImmutable: async () => ({ key: `checkpoint/${caseValue.id}`, generation: 1, checksum }), readExact: async () => bytes, scheduleExactDeletion: async () => undefined }, subject: { kind: "checkpoint", sourceIdentity: `source:${caseValue.id}`, object: { key: `checkpoint/${caseValue.id}`, generation: 1, checksum }, payloadSha256: checksum, ownerId: "owner", retentionUntil: "2099-01-01T00:00:00.000Z", deletionState: "retained" }, expected: { ownerId: "owner", sessionId: `session:${caseValue.id}`, pendingActionReference: "pending", sessionVersion: 1, artifactVersion: 1, leaseToken: "lease", compatibility: { policyVersion: "p1", modelIdentity: "m1", nappletSdkIdentity: "n1", toolchainIdentity: "t1" } }, nowMs: 1, decryptAndVerify: async () => ({ ownerId: "owner", sessionId: `session:${caseValue.id}`, pendingActionReference: "pending", sessionVersion: 1, artifactVersion: 1, leaseToken: "lease", compatibility: { policyVersion: "p1", modelIdentity: "m1", nappletSdkIdentity: "n1", toolchainIdentity: "t1" }, archive: bytes }), reattach: async () => ({ status: caseValue.scenario.schedule.includes("fence") ? "replayed" : "reattached" }) });
     restore = `${restored.status}:${restored.code}:reattach=${restored.reattachments}`;
   }
-  return observation(`resilience:${result.observed}:boundary=${boundaryCalls}:writers=${result.activeWriters}:restore=${restore}`);
+  return observation(`resilience:fault=${faultClass}:boundary=${boundary}:outcome=${result.observed}:transition=${caseValue.scenario.schedule.join(">")}:initial=${caseValue.scenario.initialState}:calls=${boundaryCalls}:writers=${result.activeWriters}:restore=${restore}`);
 }
 
 async function observeSecurity(caseValue: ReferenceCase): Promise<ReferenceObservation> {
   const exporter = new InMemoryLifecycleExporter({ key: new Uint8Array(32).fill(7) });
-  const stage = caseValue.scenario.initialState === "empty" ? "validation" : "generation";
-  const raw = { version: "cvm.lifecycle.v1", stage, outcome: "blocked", correlationId: `reference:${caseValue.scenario.input.mode}`, monotonicMs: caseValue.scenario.input.ordinal };
+  const terminal = SECURITY_TERMINALS[caseValue.scenario.input.mode]!;
+  const raw = { version: "cvm.lifecycle.v1", stage: terminal.stage, outcome: terminal.outcome, correlationId: `security:${caseValue.scenario.input.mode}`, monotonicMs: caseValue.scenario.input.ordinal };
   exporter.observe(raw);
-  const violations = [...MODES.security].indexOf(caseValue.scenario.input.mode) % 3;
-  for (let index = 0; index < violations; index += 1) exporter.observe({ version: "cvm.lifecycle.v1", stage: "not_a_lifecycle_stage", correlationId: "Bearer secret-canary", monotonicMs: index });
+  for (let index = 0; index < terminal.rejectedInputs; index += 1) exporter.observe({ version: "cvm.lifecycle.v1", stage: "not_a_lifecycle_stage", correlationId: "Bearer secret-canary", monotonicMs: index });
   const safe = redactLifecycleObservation(raw, { key: new Uint8Array(32).fill(7) });
   if (!safe || exporter.observations.length !== 1) throw new Error("PHASE07_REFERENCE_TELEMETRY_AUTHORITY");
-  return observation(`security:${safe.stage}:${safe.outcome}:exports=${exporter.observations.length}:violations=${exporter.telemetryPolicyViolations}:series=${exporter.metricSeriesCount}`);
+  return observation(`security:terminal=${safe.stage}/${safe.outcome}:initial=${caseValue.scenario.initialState}:transition=${caseValue.scenario.schedule.join(">")}:exports=${exporter.observations.length}:rejected=${exporter.telemetryPolicyViolations}:series=${exporter.metricSeriesCount}`);
 }
 
 async function observePublication(caseValue: ReferenceCase): Promise<ReferenceObservation> {
   const mode = caseValue.scenario.input.mode;
-  const state = mode === "focused_success" ? "preview_ready" : mode === "optional_capability" ? "optional_capability_missing" : mode === "publication_replay" ? "exact_replay" : mode === "attestation_reconcile" ? "reconciliation_pending" : "launch_certification_blocked";
+  const plan = mode === "focused_success" ? { state: "preview_ready" as const }
+    : mode === "scope_denial" ? { state: "launch_certification_blocked" as const, changedFacts: true, safeError: "review_changed" as const }
+      : mode === "verify_failure" ? { state: "launch_certification_blocked" as const, safeError: "signature_invalid" as const }
+        : mode === "required_capability" ? { state: "launch_certification_blocked" as const }
+          : mode === "optional_capability" ? { state: "optional_capability_missing" as const }
+            : mode === "byte_binding" ? { state: "launch_certification_blocked" as const }
+              : mode === "stale_approval" ? { state: "launch_certification_blocked" as const, changedFacts: true, safeError: "review_changed" as const }
+                : mode === "external_signer" ? { state: "signer_active" as const, signerKind: "external" as const }
+                  : mode === "publication_replay" ? { state: "exact_replay" as const, exactReplay: true }
+                    : { state: "reconciliation_pending" as const };
   const sha = "a".repeat(64);
   const capabilities = mode === "required_capability" ? [{ capability: "network", requirement: "required" as const, purpose: "test", consent: "required" as const, available: false, evidenceLabel: "missing" }] : mode === "optional_capability" ? [{ capability: "network", requirement: "optional" as const, purpose: "test", consent: "optional" as const, available: false, evidenceLabel: "missing", gracefulDegradation: "offline" }] : [];
   const effects = caseValue.scenario.schedule.includes("publish") ? [{ label: `publish:${mode}`, state: "reconciliation_pending" as const, identifier: `operation:${caseValue.id}` }] : [];
-  const surface = projectHostPublicationSurface({ state, identity: { artifactId: `artifact:${caseValue.id}:${caseValue.scenario.initialState}`, aggregateSha256: sha, normalizedDTag: mode, capabilityDigest: sha }, capabilities, effects });
-  return observation(`publication:${surface.state}:${surface.semanticStatus.kind}:identifiers=${surface.identifiers.length}:actions=${surface.actions.length}:effects=${surface.effectRows.length}:primary=${surface.primaryAction ?? "none"}`);
+  const surface = projectHostPublicationSurface({ ...plan, identity: { artifactId: `artifact:${mode}:${caseValue.scenario.initialState}`, aggregateSha256: sha, normalizedDTag: mode, capabilityDigest: sha }, capabilities, effects });
+  const actions = surface.actions.map((action) => `${action.machineAction}/${action.enabled ? "enabled" : "disabled"}/${action.duplicateGuard}`).join(",") || "none";
+  const effectTypes = surface.effectRows.map((effect) => `${effect.label}/${effect.state}`).join(",") || "none";
+  return observation(`publication:state=${surface.state}:semantic=${surface.semanticStatus.kind}:transition=${caseValue.scenario.schedule.join(">")}:actions=${actions}:effects=${effectTypes}:ack=${surface.acknowledgementRequired}:safe=${surface.safeError ?? "none"}:primary=${surface.primaryAction ?? "none"}`);
 }
 
 async function observeLaunch(caseValue: ReferenceCase): Promise<ReferenceObservation> {
   const credentialsAvailable = caseValue.scenario.initialState === "verified" && !["missing_credential", "not_observed", "promotion_blocked"].includes(caseValue.scenario.input.mode);
   const protectedRecord = await createProtectedInfrastructureDrillEvidence({ candidateDigest: createHash("sha256").update(canonicalJson({ mode: caseValue.scenario.input.mode, initialState: caseValue.scenario.initialState, schedule: caseValue.scenario.schedule })).digest("hex"), components: ["gcs", "cloud_run", "cockroach"], credentialsAvailable });
+  const exporter = new InMemoryLifecycleExporter({ key: new Uint8Array(32).fill(7) });
+  const terminal = LAUNCH_TERMINALS[caseValue.scenario.input.mode]!;
+  exporter.observe({ version: "cvm.lifecycle.v1", stage: terminal.stage, outcome: terminal.outcome, correlationId: `launch:${caseValue.scenario.input.mode}`, monotonicMs: caseValue.scenario.input.ordinal });
+  for (let index = 0; index < terminal.rejectedInputs; index += 1) exporter.observe({ version: "cvm.lifecycle.v1", stage: "not_a_lifecycle_stage", correlationId: "Bearer secret-canary", monotonicMs: index });
+  const lifecycle = exporter.observations.at(-1);
+  if (!lifecycle || exporter.observations.length !== 1) throw new Error("PHASE07_REFERENCE_TELEMETRY_AUTHORITY");
   const requiredClaimEvidence = caseValue.scenario.schedule.includes("verify") ? "required_claim_checked" : "required_claim_missing";
-  return observation(`launch:${protectedRecord.status}:${protectedRecord.code}:claim=${requiredClaimEvidence}:promotion=blocked:effects=0`);
+  return observation(`launch:protected=${protectedRecord.status}/${protectedRecord.code}:terminal=${lifecycle.stage}/${lifecycle.outcome}:initial=${caseValue.scenario.initialState}:transition=${caseValue.scenario.schedule.join(">")}:claim=${requiredClaimEvidence}:rejected=${exporter.telemetryPolicyViolations}:promotion=blocked:effects=0`);
 }
 
 /** Validates source coverage and keeps expected values on the comparator side only. */

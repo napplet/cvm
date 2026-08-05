@@ -1,7 +1,6 @@
 {
   "schema": "phase-07-reference-set",
   "version": 2,
-  "sourceRevision": "2521f6bac70013d011496215f38ae473ec184126",
   "categoryMinimums": {
     "admission": 12,
     "resilience": 16,
@@ -28,7 +27,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "admission:accepted:reserve=1:lease=1:backlog=0",
+        "value": "admission:terminal=exact_ready_pool_hit:outcome=accepted:transition=correlate>lease>ready:initial=funded:reserve=1:lease=1:backlog=0",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -165,7 +164,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "admission:accepted:reserve=2:lease=1:backlog=0",
+        "value": "admission:terminal=exact_ready_pool_miss:outcome=accepted:transition=correlate>lease>ready:initial=funded:reserve=2:lease=1:backlog=0",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -211,7 +210,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "admission:accepted:reserve=3:lease=1:backlog=0",
+        "value": "admission:terminal=exact_ready_cold:outcome=accepted:transition=correlate>lease>ready:initial=funded:reserve=3:lease=1:backlog=0",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -257,7 +256,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "admission:accepted:reserve=4:lease=1:backlog=0",
+        "value": "admission:terminal=exact_ready_step_load:outcome=accepted:transition=correlate>lease>ready:initial=funded:reserve=4:lease=1:backlog=0",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -302,7 +301,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "admission:capacity_unavailable:reserve=2:lease=0:backlog=1",
+        "value": "admission:terminal=contention_refused:outcome=capacity_unavailable:transition=claim>replay:initial=funded:reserve=2:lease=0:backlog=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -347,7 +346,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "admission:capacity_unavailable:reserve=1:lease=0:backlog=0",
+        "value": "admission:terminal=reclaim_released:outcome=capacity_unavailable:transition=claim>release:initial=funded:reserve=1:lease=0:backlog=0",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -392,7 +391,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "admission:capacity_unavailable:reserve=0:lease=0:backlog=0",
+        "value": "admission:terminal=deadline_refused:outcome=capacity_unavailable:transition=deadline>refuse:initial=empty:reserve=0:lease=0:backlog=0",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -437,7 +436,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "admission:capacity_unavailable:reserve=0:lease=0:backlog=0",
+        "value": "admission:terminal=refusal_replayed:outcome=capacity_unavailable:transition=refuse>replay:initial=empty:reserve=0:lease=0:backlog=0",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -481,7 +480,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "admission:capacity_unavailable:reserve=0:lease=0:backlog=0",
+        "value": "admission:terminal=queue_refused:outcome=capacity_unavailable:transition=refuse:initial=empty:reserve=0:lease=0:backlog=0",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -526,7 +525,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "admission:capacity_unavailable:reserve=1:lease=0:backlog=0",
+        "value": "admission:terminal=lease_denied:outcome=capacity_unavailable:transition=lease>deny:initial=funded:reserve=1:lease=0:backlog=0",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -570,7 +569,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "admission:capacity_unavailable:reserve=0:lease=0:backlog=0",
+        "value": "admission:terminal=safe_refusal:outcome=capacity_unavailable:transition=refuse:initial=empty:reserve=0:lease=0:backlog=0",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -615,7 +614,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "admission:accepted:reserve=1:lease=1:backlog=0",
+        "value": "admission:terminal=receipt_clock_ready:outcome=accepted:transition=correlate>ready:initial=funded:reserve=1:lease=1:backlog=0",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -660,7 +659,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "resilience:duplicate:boundary=1:writers=1:restore=none",
+        "value": "resilience:fault=duplicate_relay:boundary=relay_delivery:outcome=duplicate:transition=deliver>replay:initial=verified:calls=1:writers=1:restore=none",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -705,7 +704,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "resilience:out_of_order:boundary=1:writers=1:restore=none",
+        "value": "resilience:fault=out_of_order_relay:boundary=relay_delivery:outcome=out_of_order:transition=deliver>observe:initial=verified:calls=1:writers=1:restore=none",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -750,7 +749,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "resilience:unavailable:boundary=1:writers=1:restore=none",
+        "value": "resilience:fault=regional_ingress_loss:boundary=relay_delivery:outcome=unavailable:transition=interrupt>observe:initial=verified:calls=1:writers=1:restore=none",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -795,7 +794,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "resilience:serialization_failure:boundary=1:writers=1:restore=none",
+        "value": "resilience:fault=sql_serialization:boundary=sql_transaction:outcome=serialization_failure:transition=claim>observe:initial=verified:calls=1:writers=1:restore=none",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -840,7 +839,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "resilience:unavailable:boundary=1:writers=1:restore=none",
+        "value": "resilience:fault=sql_unavailable:boundary=sql_transaction:outcome=unavailable:transition=interrupt>observe:initial=verified:calls=1:writers=1:restore=none",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -885,7 +884,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "resilience:lost_response:boundary=1:writers=1:restore=none",
+        "value": "resilience:fault=capacity_ambiguity:boundary=capacity_reservation:outcome=lost_response:transition=claim>observe:initial=funded:calls=1:writers=1:restore=none",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -930,7 +929,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "resilience:worker_lost:boundary=1:writers=1:restore=none",
+        "value": "resilience:fault=worker_loss:boundary=worker_execution:outcome=worker_lost:transition=interrupt>checkpoint:initial=paused:calls=1:writers=1:restore=none",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -975,7 +974,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "resilience:interrupted:boundary=1:writers=1:restore=none",
+        "value": "resilience:fault=object_interruption:boundary=checkpoint_write:outcome=interrupted:transition=checkpoint>interrupt:initial=paused:calls=1:writers=1:restore=none",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1020,7 +1019,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "resilience:unresolved:boundary=1:writers=1:restore=none",
+        "value": "resilience:fault=model_receipt_ambiguity:boundary=model_lookup:outcome=unresolved:transition=dispatch>lookup:initial=verified:calls=1:writers=1:restore=none",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1065,7 +1064,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "resilience:duplicate:boundary=1:writers=1:restore=none",
+        "value": "resilience:fault=payment_notification:boundary=payment_settlement:outcome=duplicate:transition=notify>lookup:initial=funded:calls=1:writers=1:restore=none",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1110,7 +1109,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "resilience:expired:boundary=1:writers=1:restore=restored:RESTORE_REATTACHED:reattach=1",
+        "value": "resilience:fault=restore_expiry_race:boundary=checkpoint_restore:outcome=expired:transition=restore>deny:initial=paused:calls=1:writers=1:restore=restored:RESTORE_REATTACHED:reattach=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1155,7 +1154,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "resilience:invalidated:boundary=1:writers=1:restore=none",
+        "value": "resilience:fault=preview_source_invalidation:boundary=preview_read:outcome=invalidated:transition=invalidate>observe:initial=verified:calls=1:writers=1:restore=none",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1200,7 +1199,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "resilience:partial:boundary=1:writers=1:restore=none",
+        "value": "resilience:fault=partial_publication:boundary=publication_attestation:outcome=partial:transition=publish>observe:initial=verified:calls=1:writers=1:restore=none",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1245,7 +1244,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "resilience:duplicate:boundary=1:writers=1:restore=replayed:RESTORE_REPLAYED:reattach=0",
+        "value": "resilience:fault=restore_expiry_race:boundary=checkpoint_restore:outcome=duplicate:transition=restore>fence:initial=paused:calls=1:writers=1:restore=replayed:RESTORE_REPLAYED:reattach=0",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1289,7 +1288,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "resilience:out_of_order:boundary=1:writers=1:restore=none",
+        "value": "resilience:fault=out_of_order_relay:boundary=relay_delivery:outcome=out_of_order:transition=observe:initial=verified:calls=1:writers=1:restore=none",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1334,7 +1333,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "resilience:unavailable:boundary=1:writers=1:restore=none",
+        "value": "resilience:fault=regional_ingress_loss:boundary=relay_delivery:outcome=unavailable:transition=claim>observe:initial=verified:calls=1:writers=1:restore=none",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1379,7 +1378,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "security:validation:blocked:exports=1:violations=0:series=1",
+        "value": "security:terminal=validation/blocked:initial=empty:transition=validate>deny:exports=1:rejected=1:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1424,7 +1423,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "security:validation:blocked:exports=1:violations=1:series=1",
+        "value": "security:terminal=generation/blocked:initial=empty:transition=validate>deny:exports=1:rejected=2:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1469,7 +1468,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "security:validation:blocked:exports=1:violations=2:series=1",
+        "value": "security:terminal=validation/failed:initial=empty:transition=validate>deny:exports=1:rejected=3:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1514,7 +1513,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "security:generation:blocked:exports=1:violations=0:series=1",
+        "value": "security:terminal=capacity_intent_created/blocked:initial=verified:transition=validate>deny:exports=1:rejected=1:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1559,7 +1558,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "security:generation:blocked:exports=1:violations=1:series=1",
+        "value": "security:terminal=capacity_reserve_started/blocked:initial=verified:transition=validate>deny:exports=1:rejected=2:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1604,7 +1603,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "security:generation:blocked:exports=1:violations=2:series=1",
+        "value": "security:terminal=exact_session_ready/blocked:initial=verified:transition=validate>deny:exports=1:rejected=3:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1649,7 +1648,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "security:generation:blocked:exports=1:violations=0:series=1",
+        "value": "security:terminal=correlated_receipt/failed:initial=verified:transition=validate>deny:exports=1:rejected=1:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1694,7 +1693,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "security:generation:blocked:exports=1:violations=1:series=1",
+        "value": "security:terminal=generation/failed:initial=verified:transition=validate>deny:exports=1:rejected=2:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1739,7 +1738,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "security:generation:blocked:exports=1:violations=2:series=1",
+        "value": "security:terminal=checkpoint/blocked:initial=verified:transition=validate>deny:exports=1:rejected=3:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1784,7 +1783,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "security:generation:blocked:exports=1:violations=0:series=1",
+        "value": "security:terminal=preview/blocked:initial=verified:transition=validate>deny:exports=1:rejected=1:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1829,7 +1828,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "security:generation:blocked:exports=1:violations=1:series=1",
+        "value": "security:terminal=generation/pending:initial=verified:transition=validate>deny:exports=1:rejected=2:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1874,7 +1873,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "security:generation:blocked:exports=1:violations=2:series=1",
+        "value": "security:terminal=validation/pending:initial=verified:transition=validate>deny:exports=1:rejected=3:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1919,7 +1918,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "security:generation:blocked:exports=1:violations=0:series=1",
+        "value": "security:terminal=reconciliation/blocked:initial=verified:transition=validate>deny:exports=1:rejected=1:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -1964,7 +1963,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "security:generation:blocked:exports=1:violations=1:series=1",
+        "value": "security:terminal=publication/blocked:initial=verified:transition=validate>deny:exports=1:rejected=2:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -2009,7 +2008,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "security:generation:blocked:exports=1:violations=2:series=1",
+        "value": "security:terminal=capacity_refused/capacity_unavailable:initial=verified:transition=validate>deny:exports=1:rejected=3:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -2054,7 +2053,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "security:generation:blocked:exports=1:violations=0:series=1",
+        "value": "security:terminal=promotion/blocked:initial=verified:transition=validate>deny:exports=1:rejected=1:series=1",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -2099,7 +2098,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "publication:preview_ready:verified:identifiers=10:actions=1:effects=0:primary=review_capabilities",
+        "value": "publication:state=preview_ready:semantic=verified:transition=verify>preview:actions=review_capabilities/enabled/next_stage_fenced:effects=none:ack=false:safe=none:primary=review_capabilities",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -2144,7 +2143,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "publication:launch_certification_blocked:blocked:identifiers=10:actions=1:effects=0:primary=view_release_evidence",
+        "value": "publication:state=intent_invalidated:semantic=warning:transition=verify>deny:actions=review_capabilities/enabled/next_stage_fenced:effects=none:ack=true:safe=Review changed. Review the exact current details before signing.:primary=review_capabilities",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -2189,7 +2188,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "publication:launch_certification_blocked:blocked:identifiers=10:actions=1:effects=0:primary=view_release_evidence",
+        "value": "publication:state=launch_certification_blocked:semantic=blocked:transition=verify>deny:actions=view_release_evidence/enabled/no_duplicate_effect:effects=none:ack=false:safe=The signature is no longer valid for this publication. Review and sign again.:primary=view_release_evidence",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -2234,7 +2233,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "publication:launch_certification_blocked:blocked:identifiers=10:actions=1:effects=0:primary=view_release_evidence",
+        "value": "publication:state=launch_certification_blocked:semantic=blocked:transition=review>deny:actions=view_release_evidence/enabled/no_duplicate_effect:effects=none:ack=false:safe=none:primary=view_release_evidence",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -2278,7 +2277,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "publication:optional_capability_missing:warning:identifiers=10:actions=0:effects=0:primary=none",
+        "value": "publication:state=optional_capability_missing:semantic=warning:transition=review:actions=none:effects=none:ack=false:safe=none:primary=none",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -2323,7 +2322,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "publication:launch_certification_blocked:blocked:identifiers=10:actions=1:effects=1:primary=view_release_evidence",
+        "value": "publication:state=launch_certification_blocked:semantic=blocked:transition=verify>publish:actions=view_release_evidence/enabled/no_duplicate_effect:effects=publish:byte_binding/reconciliation_pending:ack=false:safe=none:primary=view_release_evidence",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -2368,7 +2367,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "publication:launch_certification_blocked:blocked:identifiers=10:actions=1:effects=0:primary=view_release_evidence",
+        "value": "publication:state=intent_invalidated:semantic=warning:transition=review>deny:actions=review_capabilities/enabled/next_stage_fenced:effects=none:ack=true:safe=Review changed. Review the exact current details before signing.:primary=review_capabilities",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -2413,7 +2412,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "publication:launch_certification_blocked:blocked:identifiers=10:actions=1:effects=0:primary=view_release_evidence",
+        "value": "publication:state=signer_active:semantic=busy:transition=sign>observe:actions=cancel_signing/enabled/local_handoff_only:effects=none:ack=false:safe=none:primary=none",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -2458,7 +2457,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "publication:exact_replay:neutral:identifiers=10:actions=1:effects=1:primary=none",
+        "value": "publication:state=exact_replay:semantic=neutral:transition=publish>replay:actions=view_publication_details/enabled/none:effects=publish:publication_replay/reconciliation_pending:ack=false:safe=none:primary=none",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -2503,7 +2502,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "publication:reconciliation_pending:neutral:identifiers=10:actions=1:effects=1:primary=reconcile_publication",
+        "value": "publication:state=reconciliation_pending:semantic=neutral:transition=publish>observe:actions=reconcile_publication/enabled/original_operation_only:effects=publish:attestation_reconcile/reconciliation_pending:ack=false:safe=none:primary=reconcile_publication",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -2548,7 +2547,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "launch:not_observed:PROTECTED_INFRASTRUCTURE_DRILL_REQUIRED:claim=required_claim_missing:promotion=blocked:effects=0",
+        "value": "launch:protected=not_observed/PROTECTED_INFRASTRUCTURE_DRILL_REQUIRED:terminal=reconciliation/pending:initial=verified:transition=redact>export:claim=required_claim_missing:rejected=0:promotion=blocked:effects=0",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -2593,7 +2592,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "launch:not_observed:PROTECTED_INFRASTRUCTURE_DRILL_REQUIRED:claim=required_claim_missing:promotion=blocked:effects=0",
+        "value": "launch:protected=not_observed/PROTECTED_INFRASTRUCTURE_DRILL_REQUIRED:terminal=validation/blocked:initial=verified:transition=redact>deny:claim=required_claim_missing:rejected=1:promotion=blocked:effects=0",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -2638,7 +2637,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "launch:not_observed:PROTECTED_INFRASTRUCTURE_DRILL_REQUIRED:claim=required_claim_missing:promotion=blocked:effects=0",
+        "value": "launch:protected=not_observed/PROTECTED_INFRASTRUCTURE_DRILL_REQUIRED:terminal=validation/failed:initial=verified:transition=redact>deny:claim=required_claim_missing:rejected=2:promotion=blocked:effects=0",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -2683,7 +2682,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "launch:not_observed:PROTECTED_INFRASTRUCTURE_DRILL_REQUIRED:claim=required_claim_checked:promotion=blocked:effects=0",
+        "value": "launch:protected=not_observed/PROTECTED_INFRASTRUCTURE_DRILL_REQUIRED:terminal=reconciliation/failed:initial=verified:transition=verify>deny:claim=required_claim_checked:rejected=1:promotion=blocked:effects=0",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -2728,7 +2727,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "launch:not_observed:PROTECTED_INFRASTRUCTURE_DRILL_REQUIRED:claim=required_claim_missing:promotion=blocked:effects=0",
+        "value": "launch:protected=not_observed/PROTECTED_INFRASTRUCTURE_DRILL_REQUIRED:terminal=generation/succeeded:initial=verified:transition=build>compare:claim=required_claim_missing:rejected=0:promotion=blocked:effects=0",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -2773,7 +2772,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "launch:not_observed:PROTECTED_INFRASTRUCTURE_DRILL_REQUIRED:claim=required_claim_checked:promotion=blocked:effects=0",
+        "value": "launch:protected=not_observed/PROTECTED_INFRASTRUCTURE_DRILL_REQUIRED:terminal=publication/blocked:initial=verified:transition=verify>deny:claim=required_claim_checked:rejected=1:promotion=blocked:effects=0",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -2818,7 +2817,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "launch:not_observed:PROTECTED_INFRASTRUCTURE_DRILL_REQUIRED:claim=required_claim_checked:promotion=blocked:effects=0",
+        "value": "launch:protected=not_observed/PROTECTED_INFRASTRUCTURE_DRILL_REQUIRED:terminal=promotion/blocked:initial=verified:transition=verify>deny:claim=required_claim_checked:rejected=1:promotion=blocked:effects=0",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -2863,7 +2862,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "launch:blocked:PROTECTED_INFRASTRUCTURE_UNAVAILABLE:claim=required_claim_missing:promotion=blocked:effects=0",
+        "value": "launch:protected=blocked/PROTECTED_INFRASTRUCTURE_UNAVAILABLE:terminal=capacity_refused/capacity_unavailable:initial=empty:transition=observe>block:claim=required_claim_missing:rejected=0:promotion=blocked:effects=0",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -2908,7 +2907,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "launch:blocked:PROTECTED_INFRASTRUCTURE_UNAVAILABLE:claim=required_claim_missing:promotion=blocked:effects=0",
+        "value": "launch:protected=blocked/PROTECTED_INFRASTRUCTURE_UNAVAILABLE:terminal=reconciliation_pending/pending:initial=empty:transition=observe>block:claim=required_claim_missing:rejected=0:promotion=blocked:effects=0",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -2953,7 +2952,7 @@
       },
       "expected": {
         "status": "passed",
-        "value": "launch:blocked:PROTECTED_INFRASTRUCTURE_UNAVAILABLE:claim=required_claim_checked:promotion=blocked:effects=0",
+        "value": "launch:protected=blocked/PROTECTED_INFRASTRUCTURE_UNAVAILABLE:terminal=promotion/blocked:initial=empty:transition=verify>block:claim=required_claim_checked:rejected=0:promotion=blocked:effects=0",
         "effects": {
           "credit": 0,
           "debit": 0,
@@ -3095,5 +3094,6 @@
       "freshness": "protected_record_required",
       "limitation": "relay_required"
     }
-  ]
+  ],
+  "sourceRevision": "2521f6bac70013d011496215f38ae473ec184126"
 }

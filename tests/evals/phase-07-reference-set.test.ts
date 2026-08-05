@@ -37,6 +37,23 @@ describe("Phase 07 actual-authority reference set", () => {
     expect((await executePhase07ReferenceCase(unsupported)).status).toBe("failed");
   }, 60_000);
 
+  test("rejects every valid cross-case scenario substitution within its category", async () => {
+    const fixture = validatePhase07ReferenceSet(JSON.parse(await readFile(fixturePath, "utf8")));
+    for (const category of ["admission", "resilience", "security", "publication", "launch"] as const) {
+      const cases = fixture.cases.filter((caseValue) => caseValue.category === category);
+      for (const original of cases) {
+        for (const replacement of cases) {
+          if (replacement.id === original.id) continue;
+          const substituted = structuredClone(original);
+          substituted.scenario = structuredClone(replacement.scenario);
+          const result = await executePhase07ReferenceCase(substituted);
+          expect(result.status, `${category}: ${original.id} <- ${replacement.id}`).toBe("failed");
+          expect(result.observed.value, `${category}: ${original.id} <- ${replacement.id}`).not.toBe(original.expected.value);
+        }
+      }
+    }
+  }, 60_000);
+
   test("translates each category's mode, state, and ordered events or fails before comparison", async () => {
     const fixture = validatePhase07ReferenceSet(JSON.parse(await readFile(fixturePath, "utf8")));
     const changedModes = new Map([["admission", "contention"], ["resilience", "out_of_order"], ["security", "tool_injection"], ["publication", "scope_denial"], ["launch", "missing_credential"]]);
@@ -78,7 +95,7 @@ describe("Phase 07 actual-authority reference set", () => {
     const launch = await executePhase07ReferenceCase(fixture.cases.find((item) => item.id === "L10")!);
     expect(expiry.observed.value).toContain("RESTORE_REATTACHED");
     expect(fence.observed.value).toContain("RESTORE_REPLAYED");
-    expect(launch.observed.value).toContain("claim=required_claim_checked:promotion=blocked");
+    expect(launch.observed.value).toMatch(/claim=required_claim_checked:rejected=\d+:promotion=blocked/u);
     expect(launch.observed.value).toContain("PROTECTED_INFRASTRUCTURE_UNAVAILABLE");
   });
 

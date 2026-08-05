@@ -303,7 +303,7 @@ Plans:
 **Validation gate**: Benchmark Modal and at least one non-AWS fallback with the production-like image, target regions, relay delay, pool misses, database contention, reclaim/failure behavior, and step load. Select a worker vendor only after receipt-to-isolated-worker-ready p95 is at most five seconds with zero durable backlog; establish the database/failover claim to match the chosen deployment scope.
 
 Phase 7 also closes the launch-hardening work intentionally deferred from Phase 1: exhaustive toolchain provenance, repeated/cross-environment reproducibility, full hostile and mutation coverage, formal golden approval, waiver drills, SBOM/provenance enforcement, and the final production promotion gate.
-**Plans**: 11/13 plans executed; two verifier gap-closure plans active
+**Plans**: 12/13 plans executed
 
 - [x] 07-00-PLAN.md
 - [x] 07-01-PLAN.md
@@ -316,7 +316,7 @@ Phase 7 also closes the launch-hardening work intentionally deferred from Phase 
 - [x] 07-08-PLAN.md
 - [x] 07-09-PLAN.md
 - [x] 07-10-PLAN.md
-- [ ] 07-11-PLAN.md — Enforce immutable digest-bound delegated operator approval for the exact OpenTelemetry package set.
+- [x] 07-11-PLAN.md — Enforce immutable digest-bound delegated operator approval for the exact OpenTelemetry package set.
 - [ ] 07-12-PLAN.md — Dispatch typed protected live adapters and route exact release bundles through the sole promotion decision.
 
 ## Progress
@@ -332,7 +332,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 4. Metered Generation & Revision Loop | 7/7 | Complete    | 2026-08-05 |
 | 5. Funding Interruption & Durable Resume | 7/7 | Complete    | 2026-08-05 |
 | 6. Sealed Preview & User-Owned Publication | 7/7 | Complete    | 2026-08-05 |
-| 7. Admission SLO, Resilience & Launch Safety | 11/13 | In Progress|  |
+| 7. Admission SLO, Resilience & Launch Safety | 12/13 | In Progress|  |
 
 ### Milestone Progress Roll-up
 

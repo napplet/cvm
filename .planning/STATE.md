@@ -5,16 +5,16 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 7
 current_phase_name: Admission SLO, Resilience & Launch Safety
 status: planned
-stopped_at: Phase 7 verification found gaps; 07-11 and 07-12 planned
-last_updated: "2026-08-05T19:15:00.000Z"
+stopped_at: Completed 07-11-PLAN.md
+last_updated: "2026-08-05T19:22:00.356Z"
 last_activity: 2026-08-05
-last_activity_desc: Phase 7 Wave 0 baseline complete
+last_activity_desc: Phase 7 verifier identified three locally actionable wiring gaps
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 53
-  completed_plans: 51
-  percent: 96
+  completed_plans: 52
+  percent: 86
 ---
 
 # Project State
@@ -30,11 +30,11 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 7 — Admission SLO, Resilience & Launch Safety
-Plan: 11 of 13
+Plan: 12 of 13
 Status: Gap closure planned after verification
 Last activity: 2026-08-05 — Phase 7 verifier identified three locally actionable wiring gaps
 
-Progress: [█████████░] 96%
+Progress: [██████████] 98%
 
 ## Milestone Progress
 
@@ -116,6 +116,7 @@ Progress: [█████████░] 96%
 | Phase 07 P07 | 4m 45s | 2 tasks | 4 files |
 | Phase 07-admission-slo-resilience-launch-safety P09 | 11m | 2 tasks | 12 files |
 | Phase 07 P10 | 34m | 3 tasks | 39 files |
+| Phase 07-admission-slo-resilience-launch-safety P11 | 29min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -220,6 +221,8 @@ Recent decisions affecting current work:
 - [Phase ?]: Phase 7 stable pointer references only a validated content-addressed design record.
 - [Phase ?]: Release promotion replays only an identical candidate-and-evidence decision; changed evidence is blocked.
 - [Phase ?]: No-profile protected certification writes blocked observations and cannot promote a candidate.
+- [Phase ?]: The immutable pending OTel audit remains review evidence; a separate delegated-operator record is the only install authority.
+- [Phase ?]: Approval-dependent modes share one verifier and bind smoke evidence to the same approval, audit, and package-set digests.
 
 ### Pending Todos
 
@@ -241,6 +244,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T19:15:00.000Z
-Stopped at: Phase 7 verification found gaps; 07-11 and 07-12 planned
+Last session: 2026-08-05T19:22:00.347Z
+Stopped at: Completed 07-11-PLAN.md
 Resume file: None

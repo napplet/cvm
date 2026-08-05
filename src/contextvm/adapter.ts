@@ -10,7 +10,7 @@ import { SessionActionResultSchema } from "../phase-04/metered-generation-servic
 import { SessionStatusQuerySchema, SessionStatusSchema } from "../phase-04/session-status";
 import { CapabilityReviewSchema, PreviewDescriptorSchema, SignedOwnerManifestEventSchema, SignedPublicationCommandSchema } from "../publication/contracts";
 import { validatedAvailablePromotedCliSourceContract, type AvailablePromotedCliSourceContract } from "../publication/napplet-cli-source-contract";
-import { AdmissionLifecycleContextSchema, type AdmissionLifecycleContext } from "../telemetry/contracts";
+import { AdmissionLifecycleContextSchema, protectedLifecycleCorrelation, type AdmissionLifecycleContext } from "../telemetry/contracts";
 import type { ContextVmInboundEnvelope, ContextVmTransportPort, ContextVmWireNotification, ContextVmWireResponse } from "./sdk-bridge";
 
 const SupportedPmiSchema = z.enum(["bitcoin-lightning-bolt11", "bitcoin-cashu-v4-direct"]);
@@ -48,6 +48,11 @@ const FundedAdmissionArgumentsSchema = z.object({
   requestedCap: z.string().regex(/^[1-9][0-9]*$/u),
   unit: z.literal("sat"),
 }).strict();
+const CanonicalInvocationSchema = z.object({ invocationHash: z.string().regex(/^[a-f0-9]{64}$/iu) }).strict();
+const FundedAdmissionPortResultSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("accepted"), accountId: z.string().min(1), reference: z.string().min(1), approvedCap: z.string().regex(/^[1-9][0-9]*$/u), heldAmount: z.string().regex(/^[1-9][0-9]*$/u), unit: z.literal("sat") }).strict(),
+  z.object({ status: z.enum(["refused", "reconciliation_pending"]), accountId: z.string().min(1), intentReference: z.string().min(1), retryable: z.boolean(), unit: z.literal("sat") }).strict(),
+]);
 const StartSessionArgumentsSchema = z.object({
   admissionReference: z.string().min(1), idempotencyKey: z.string().min(1), maximum: z.string().regex(/^[1-9][0-9]*$/u), idea: z.string().min(1).max(4_000),
 }).strict();
@@ -166,8 +171,7 @@ export class ContextVmFundingAdapter {
       if (envelope.rawEvent.id !== envelope.requestEventId) throw new Error("CONTEXTVM_CORRELATION_MISMATCH");
       const principal = PrincipalSchema.parse({ pubkey: envelope.verifiedClientPubkey });
       const request = envelope.request;
-      const lifecycle = await this.lifecycleFor(envelope.rawEvent.id, envelope.verifiedClientPubkey);
-      const response = await this.dispatch(principal.pubkey, envelope.requestEventId, envelope.rawEvent, request, lifecycle);
+      const response = await this.dispatch(principal.pubkey, envelope.requestEventId, envelope.rawEvent, request);
       await this.options.transport.sendResponse(principal.pubkey, response, envelope.requestEventId);
     } catch {
       if (!correlation) return;
@@ -179,7 +183,7 @@ export class ContextVmFundingAdapter {
     }
   }
 
-  private async dispatch(verifiedPubkey: string, requestEventId: string, rawEvent: z.infer<typeof EventSchema>, request: z.infer<typeof RequestSchema>, lifecycle?: AdmissionLifecycleContext): Promise<ContextVmWireResponse> {
+  private async dispatch(verifiedPubkey: string, requestEventId: string, rawEvent: z.infer<typeof EventSchema>, request: z.infer<typeof RequestSchema>): Promise<ContextVmWireResponse> {
     const { name, arguments: argumentsInput } = request.params;
     if (name === "start_session") {
       const args = StartSessionArgumentsSchema.parse(argumentsInput);
@@ -246,6 +250,10 @@ export class ContextVmFundingAdapter {
     if (name === "funded_admission") {
       const args = FundedAdmissionArgumentsSchema.parse(argumentsInput);
       if (!this.options.admissions || !this.options.admissionReceipts) throw new Error("FUNDED_ADMISSION_UNAVAILABLE");
+      // Canonical identity is established only after the signed envelope and
+      // event correlation are verified, and before receipt/lifecycle authority.
+      const canonical = CanonicalInvocationSchema.parse(this.options.transport.canonicalInvocation(verifiedPubkey, request.method, request.params));
+      const lifecycle = await this.lifecycleFor(canonical.invocationHash, requestEventId, verifiedPubkey, request.id);
       const command = {
         principal: { pubkey: verifiedPubkey }, idempotencyKey: args.idempotencyKey,
         policyVersion: this.policyVersion, protocolVersion: this.protocolVersion,
@@ -259,8 +267,13 @@ export class ContextVmFundingAdapter {
         // while any owner or admission-command change cannot reuse it.
         expectedSessionBindingDigest: await this.digest(`admission-session-binding:${JSON.stringify(command)}`),
       });
-      const result = await this.options.admissions.admit(command, receipt, lifecycle);
-      const wireResult = freeze({ ...(result.status === "refused" ? { status: "capacity_unavailable" as const, retryAfterSeconds: 5, admissionReference: result.intentReference, unit: "sat" as const } : result), payment: { generationPriceWaivedForAdmission: true } });
+      const result = FundedAdmissionPortResultSchema.parse(await this.options.admissions.admit(command, receipt, lifecycle));
+      // This finite projection is shared by notifications and RPC responses.
+      // Account, provider, path, credential, and correlation facts never cross
+      // the ContextVM wire even if an internal port changes its result shape.
+      const wireResult = freeze(result.status === "accepted"
+        ? { status: "accepted" as const, admissionReference: result.reference, approvedCap: result.approvedCap, heldAmount: result.heldAmount, unit: result.unit, payment: { generationPriceWaivedForAdmission: true } }
+        : { status: result.status === "refused" ? "capacity_unavailable" as const : "reconciliation_pending" as const, retryAfterSeconds: 5, admissionReference: result.intentReference, unit: result.unit, payment: { generationPriceWaivedForAdmission: true } });
       await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({
         jsonrpc: "2.0", method: "notifications/funded_admission", params: wireResult,
       }), requestEventId);
@@ -300,8 +313,8 @@ export class ContextVmFundingAdapter {
     });
   }
 
-  private async lifecycleFor(eventId: string, verifiedPubkey: string): Promise<AdmissionLifecycleContext> {
-    const correlationDigest = await this.digest(`${eventId}:${verifiedPubkey}`);
+  private async lifecycleFor(invocationHash: string, requestEventId: string, verifiedPubkey: string, requestId: string | number | null): Promise<AdmissionLifecycleContext> {
+    const correlationDigest = await protectedLifecycleCorrelation([invocationHash, verifiedPubkey, requestEventId, String(requestId)]);
     const receiptMonotonicMs = Math.floor(this.options.monotonicNow?.() ?? performance.now());
     return AdmissionLifecycleContextSchema.parse({ version: "admission-lifecycle-v1", receiptMonotonicMs, correlationDigest });
   }

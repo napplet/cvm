@@ -31,7 +31,7 @@ export type AdmissionReceiptIssue = Readonly<{
 
 export interface AdmissionReceiptAuthority {
   issue(input: AdmissionReceiptIssue): Promise<AdmissionReceipt>;
-  verify(input: unknown, command: unknown): Promise<VerifiedAdmissionReceipt>;
+  verify(input: unknown, command: unknown, currentCorrelationDigest?: unknown): Promise<VerifiedAdmissionReceipt>;
 }
 
 function webCryptoBytes(value: Uint8Array): ArrayBuffer {
@@ -99,7 +99,7 @@ export class HmacAdmissionReceiptAuthority implements AdmissionReceiptAuthority 
     return Object.freeze({ token: `ar1.${claims.receiptId}.${signature}` });
   }
 
-  async verify(input: unknown, command: unknown): Promise<VerifiedAdmissionReceipt> {
+  async verify(input: unknown, command: unknown, currentCorrelationDigest?: unknown): Promise<VerifiedAdmissionReceipt> {
     const token = z.object({ token: z.string().min(1) }).strict().safeParse(input);
     if (!token.success) throw new Error("ADMISSION_RECEIPT_INVALID");
     const [prefix, receiptId, signature, ...extra] = token.data.token.split(".");
@@ -108,6 +108,7 @@ export class HmacAdmissionReceiptAuthority implements AdmissionReceiptAuthority 
     if (!claims) throw new Error("ADMISSION_RECEIPT_INVALID");
     const expected = await commandClaims(command);
     if (claims.ownerFingerprint !== expected.ownerFingerprint || claims.commandFingerprint !== expected.commandFingerprint) throw new Error("ADMISSION_RECEIPT_COMMAND_MISMATCH");
+    if (currentCorrelationDigest !== undefined && claims.correlationDigest !== DigestSchema.parse(currentCorrelationDigest)) throw new Error("ADMISSION_RECEIPT_CORRELATION_MISMATCH");
     const now = this.#now();
     if (!Number.isSafeInteger(now) || now > claims.expiresAtMs || now < claims.issuedAtMs) throw new Error("ADMISSION_RECEIPT_EXPIRED");
     const admissionIdentity = await sha256(`${claims.ownerFingerprint}:${claims.commandFingerprint}:${claims.correlationDigest}:${claims.expectedSessionBindingDigest}`);

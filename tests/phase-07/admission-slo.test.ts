@@ -84,7 +84,8 @@ describe("07-01 trusted immediate-or-refused admission", () => {
     };
     const service = new FundedAdmissionService({ funding, store, capacity, receiptAuthority: trustedAdmissionReceiptAuthority, now: () => Date.parse("2026-08-05T00:00:00.000Z") });
     const command = { principal, idempotencyKey: "phase-07-admission", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "50", unit: "sat" as const } };
-    const accepted = await service.admit(command, await trustedAdmissionReceipt(command), AdmissionLifecycleContextSchema.parse(captured));
+    const lifecycle = AdmissionLifecycleContextSchema.parse(captured);
+    const accepted = await service.admit(command, await trustedAdmissionReceiptAuthority.issue({ command, correlationDigest: lifecycle.correlationDigest, expectedSessionBindingDigest: `sha256:${"a".repeat(64)}` }), lifecycle);
     expect(accepted).toMatchObject({ status: "accepted", reference: "lease-07" });
     expect(store.activeHolds).toHaveLength(1);
   });

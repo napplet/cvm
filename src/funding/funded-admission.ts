@@ -81,8 +81,8 @@ export class FundedAdmissionService {
     // Receipt validation is deliberately the first authority check. Neither a
     // caller-shaped lifecycle object nor an unauthenticated token may reach a
     // capacity provider, durable capacity intent, or funding hold.
-    const receipt = await this.options.receiptAuthority.verify(receiptInput, command);
     const lifecycle = lifecycleInput === undefined ? undefined : AdmissionLifecycleContextSchema.parse(lifecycleInput);
+    const receipt = await this.options.receiptAuthority.verify(receiptInput, command, lifecycle?.correlationDigest);
     const accountId = await accountIdForPrincipal(command.principal);
     const key = intentKey(accountId, command.idempotencyKey);
     const intentFingerprint = await hash(JSON.stringify({ accountId, command }));

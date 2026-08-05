@@ -13,7 +13,7 @@ const InventoryClassSchema = z.enum([
   "pending_action",
   "compatibility_metadata",
 ]);
-const REQUIRED_INVENTORY = new Set(InventoryClassSchema.options);
+const REQUIRED_INVENTORY: ReadonlySet<string> = new Set(InventoryClassSchema.options);
 const FORBIDDEN_INVENTORY = new Set([
   "nostr_private_key",
   "worker_credential",
@@ -111,7 +111,7 @@ function fromB64(value: string): Uint8Array | undefined {
   } catch { return undefined; }
 }
 async function sha256(bytes: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const digest = await crypto.subtle.digest("SHA-256", bytes as BufferSource);
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 function canonicalBytes(value: unknown): Uint8Array { return new TextEncoder().encode(canonicalJson(value)); }
@@ -123,7 +123,10 @@ export class AesGcmCheckpointCrypto implements CheckpointCryptoPort {
   readonly #randomValues: (bytes: Uint8Array) => Uint8Array;
 
   constructor(options: Readonly<{ randomValues?: (bytes: Uint8Array) => Uint8Array }> = {}) {
-    this.#randomValues = options.randomValues ?? ((bytes) => crypto.getRandomValues(bytes));
+    this.#randomValues = options.randomValues ?? ((bytes) => {
+      crypto.getRandomValues(bytes as unknown as ArrayBufferView<ArrayBuffer>);
+      return bytes;
+    });
   }
 
   async seal(input: Readonly<{ checkpointId: string; plaintext: Uint8Array; additionalData: Uint8Array }>) {
@@ -132,8 +135,8 @@ export class AesGcmCheckpointCrypto implements CheckpointCryptoPort {
     const nonce = this.#randomValues(new Uint8Array(12));
     if (keyBytes.byteLength !== 32 || nonce.byteLength !== 12) throw new Error("CHECKPOINT_CRYPTO_RANDOM_INVALID");
     const keyReference = `checkpoint-key:${input.checkpointId}:${++this.#counter}`;
-    const key = await crypto.subtle.importKey("raw", keyBytes, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
-    const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce, additionalData: input.additionalData }, key, input.plaintext));
+    const key = await crypto.subtle.importKey("raw", keyBytes as BufferSource, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+    const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce as BufferSource, additionalData: input.additionalData as BufferSource }, key, input.plaintext as BufferSource));
     this.#keys.set(keyReference, new Uint8Array(keyBytes));
     return Object.freeze({ keyReference, nonce: new Uint8Array(nonce), ciphertext });
   }
@@ -142,8 +145,8 @@ export class AesGcmCheckpointCrypto implements CheckpointCryptoPort {
     const keyBytes = this.#keys.get(input.keyReference);
     if (!keyBytes || input.nonce.byteLength !== 12) throw new Error("CHECKPOINT_RESTORE_DENIED");
     try {
-      const key = await crypto.subtle.importKey("raw", keyBytes, { name: "AES-GCM" }, false, ["decrypt"]);
-      return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: input.nonce, additionalData: input.additionalData }, key, input.ciphertext));
+      const key = await crypto.subtle.importKey("raw", keyBytes as BufferSource, { name: "AES-GCM" }, false, ["decrypt"]);
+      return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: input.nonce as BufferSource, additionalData: input.additionalData as BufferSource }, key, input.ciphertext as BufferSource));
     } catch { throw new Error("CHECKPOINT_RESTORE_DENIED"); }
   }
 

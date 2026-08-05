@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 7
 current_phase_name: Admission SLO, Resilience & Launch Safety
 status: executing
-stopped_at: Completed 07-03-PLAN.md
-last_updated: "2026-08-05T15:57:24.151Z"
+stopped_at: Completed 07-05-PLAN.md
+last_updated: "2026-08-05T16:06:16.161Z"
 last_activity: 2026-08-05
 last_activity_desc: Phase 7 Wave 0 baseline complete
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 51
-  completed_plans: 44
+  completed_plans: 45
   percent: 86
 ---
 
@@ -30,11 +30,11 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 7 — Admission SLO, Resilience & Launch Safety
-Plan: 5 of 11
+Plan: 6 of 11
 Status: Ready to execute
 Last activity: 2026-08-05 — Phase 7 Wave 0 baseline complete
 
-Progress: [█████████░] 86%
+Progress: [█████████░] 88%
 
 ## Milestone Progress
 
@@ -109,6 +109,7 @@ Progress: [█████████░] 86%
 | Phase 07-admission-slo-resilience-launch-safety P01 | 327s | 2 tasks | 5 files |
 | Phase 07-admission-slo-resilience-launch-safety P02 | 7m 17s | 2 tasks | 4 files |
 | Phase 07-admission-slo-resilience-launch-safety P03 | 3m 18s | 1 tasks | 1 files |
+| Phase 07 P05 | 7m | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -199,6 +200,8 @@ Recent decisions affecting current work:
 - [Phase ?]: Bun and Collector compatibility remain pending runtime execution and cannot be inferred from registry or tarball provenance.
 - [Phase ?]: Delegated operator approval binds only immutable OpenTelemetry audit d7fedf16f62e4088cf17442aa39786c33bb4af8f3377e8d121d76b108eaf22b3 and its six exact package identities.
 - [Phase ?]: Plan 07-04 may only run the disposable Bun/Collector smoke and add exact pins after a passing smoke; no release, live-certification, telemetry-data, provider, or promotion authority is granted.
+- [Phase ?]: Deterministic worker benchmark results remain unselected; only fresh protected live evidence can own provider selection.
+- [Phase ?]: Modal and Fly remain provider variants behind one WorkerPort, continuation, and certification evidence contract.
 
 ### Pending Todos
 
@@ -220,6 +223,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T15:57:24.142Z
-Stopped at: Completed 07-03-PLAN.md
+Last session: 2026-08-05T16:06:16.152Z
+Stopped at: Completed 07-05-PLAN.md
 Resume file: None

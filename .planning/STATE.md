@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 6
 current_phase_name: Sealed Preview & User-Owned Publication
 status: executing
-stopped_at: Completed 06-04-PLAN.md
-last_updated: "2026-08-05T09:12:18.109Z"
+stopped_at: Completed 06-05-PLAN.md
+last_updated: "2026-08-05T09:24:45.705Z"
 last_activity: 2026-08-05
 last_activity_desc: Phase 6 execution started
 progress:
   total_phases: 7
   completed_phases: 5
   total_plans: 40
-  completed_plans: 37
+  completed_plans: 38
   percent: 71
 ---
 
@@ -30,11 +30,11 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 6 (Sealed Preview & User-Owned Publication) — EXECUTING
-Plan: 5 of 7
+Plan: 6 of 7
 Status: Ready to execute
 Last activity: 2026-08-05 — Phase 6 execution started
 
-Progress: [█████████░] 93%
+Progress: [██████████] 95%
 
 ## Milestone Progress
 
@@ -101,6 +101,7 @@ Progress: [█████████░] 93%
 | Phase 06-sealed-preview-user-owned-publication P02 | 38m 22s | 2 tasks | 8 files |
 | Phase 06 P03 | 9m 26s | 3 tasks | 11 files |
 | Phase 06 P04 | 9 min | 2 tasks | 6 files |
+| Phase 06 P05 | 8m 27s | 3 tasks | 14 files |
 
 ## Accumulated Context
 
@@ -176,6 +177,8 @@ Recent decisions affecting current work:
 - [Phase ?]: Only nostr-tools/pure serialization, hash, and signature verification APIs enter production; owner signing remains external.
 - [Phase ?]: Publication commands must bind the durable intent fingerprint and all child operation IDs before any external effect.
 - [Phase ?]: Publication effects use one stable durable operation identity and unknown observations remain reconciliation-pending.
+- [Phase ?]: Publication availability remains fail-closed until the exact promoted CLI source checkout and pinned source hashes verify.
+- [Phase ?]: Publication reconciliation observes only durable original operation ids; linked completion requires upload, owner relay, and attestation evidence.
 
 ### Pending Todos
 
@@ -197,6 +200,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T09:12:18.099Z
-Stopped at: Completed 06-04-PLAN.md
+Last session: 2026-08-05T09:24:45.696Z
+Stopped at: Completed 06-05-PLAN.md
 Resume file: None

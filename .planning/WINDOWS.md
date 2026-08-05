@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 18
+open_count: 19
 waived_count: 0
 fixed_count: 0
-total_count: 18
-last_updated: 2026-08-05T16:34:49.306Z
+total_count: 19
+last_updated: 2026-08-05T17:05:44.142Z
 ---
 
 # Broken Windows Ledger
@@ -33,6 +33,7 @@ last_updated: 2026-08-05T16:34:49.306Z
 | 16 | 07 | skipped-test | tests/phase-07/promotion-gate.test.ts | 43 | Intentional pending atomic promotion-evidence registration owned by Plan 07-10. | open |  | 2026-08-05T15:33:50.908Z |  |
 | 17 | 07 | deviation | .planning/STATE.md |  | Normalized legacy Phase 7 Current Position metadata so state.advance-plan could record Plan 07-00 completion. | open |  | 2026-08-05T15:36:07.022Z |  |
 | 18 | 07 | deviation | scripts/verify-phase-07-otel-packages.ts |  | Docker daemon start and smoke endpoint/batch corrections were required before the passing disposable Collector compatibility record. | open |  | 2026-08-05T16:34:49.306Z |  |
+| 19 | 07 | deviation | tests/tracer.test.ts |  | Promotion tracer assertion changed to the concrete certification-required blocker after the deferred terminal stage was removed. | open |  | 2026-08-05T17:05:44.142Z |  |
 
 ````json
 [
@@ -250,6 +251,18 @@ last_updated: 2026-08-05T16:34:49.306Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-05T16:34:49.306Z",
+    "resolved_at": null
+  },
+  {
+    "id": 19,
+    "kind": "deviation",
+    "phase": "07",
+    "file": "tests/tracer.test.ts",
+    "line": null,
+    "description": "Promotion tracer assertion changed to the concrete certification-required blocker after the deferred terminal stage was removed.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-05T17:05:44.142Z",
     "resolved_at": null
   }
 ]

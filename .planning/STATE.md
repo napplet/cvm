@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
 current_phase: 7
 current_phase_name: Admission SLO, Resilience & Launch Safety
-status: executing
-stopped_at: Completed 07-09-PLAN.md
-last_updated: "2026-08-05T16:55:10.889Z"
+status: verifying
+stopped_at: Completed 07-10-PLAN.md
+last_updated: "2026-08-05T17:05:44.538Z"
 last_activity: 2026-08-05
 last_activity_desc: Phase 7 Wave 0 baseline complete
 progress:
   total_phases: 7
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 51
-  completed_plans: 50
-  percent: 86
+  completed_plans: 51
+  percent: 100
 ---
 
 # Project State
@@ -31,10 +31,10 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 Phase: 7 — Admission SLO, Resilience & Launch Safety
 Plan: 11 of 11
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-08-05 — Phase 7 Wave 0 baseline complete
 
-Progress: [██████████] 98%
+Progress: [██████████] 100%
 
 ## Milestone Progress
 
@@ -115,6 +115,7 @@ Progress: [██████████] 98%
 | Phase 07-admission-slo-resilience-launch-safety P04 | 11m | 2 tasks | 12 files |
 | Phase 07 P07 | 4m 45s | 2 tasks | 4 files |
 | Phase 07-admission-slo-resilience-launch-safety P09 | 11m | 2 tasks | 12 files |
+| Phase 07 P10 | 34m | 3 tasks | 39 files |
 
 ## Accumulated Context
 
@@ -217,6 +218,8 @@ Recent decisions affecting current work:
 - [Phase ?]: Unavailable protected topology remains candidate-bound blocked evidence, never a deterministic availability pass.
 - [Phase ?]: Phase 7 deterministic corpus may pass only offline claims; protected live observations remain promotion-blocked.
 - [Phase ?]: Phase 7 stable pointer references only a validated content-addressed design record.
+- [Phase ?]: Release promotion replays only an identical candidate-and-evidence decision; changed evidence is blocked.
+- [Phase ?]: No-profile protected certification writes blocked observations and cannot promote a candidate.
 
 ### Pending Todos
 
@@ -238,6 +241,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T16:55:10.880Z
-Stopped at: Completed 07-09-PLAN.md
+Last session: 2026-08-05T17:05:44.529Z
+Stopped at: Completed 07-10-PLAN.md
 Resume file: None

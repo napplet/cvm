@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 8
+open_count: 9
 waived_count: 0
 fixed_count: 0
-total_count: 8
-last_updated: 2026-08-05T01:22:59.862Z
+total_count: 9
+last_updated: 2026-08-05T01:35:26.127Z
 ---
 
 # Broken Windows Ledger
@@ -23,6 +23,7 @@ last_updated: 2026-08-05T01:22:59.862Z
 | 6 | 02 | deviation | src/phase-02/trusted-core.ts |  | Per-session serialization added so competing actions cannot repeat scoped worker effects | open |  | 2026-08-04T11:25:33.387Z |  |
 | 7 | 05 | deviation | tests/phase-05/checkpoint-envelope.test.ts |  | Corrected checkpoint envelope test setup helper shadowing. | open |  | 2026-08-05T01:22:59.800Z |  |
 | 8 | 05 | deviation | src/continuity/checkpoint-envelope.ts |  | Added strict Web Crypto BufferSource typing compatibility. | open |  | 2026-08-05T01:22:59.862Z |  |
+| 9 | 05 | deviation | tests/phase-05/grace-wake.test.ts | 16 | Corrected grace-wake test account identity to use the funding principal mapping. | open |  | 2026-08-05T01:35:26.127Z |  |
 
 ````json
 [
@@ -120,6 +121,18 @@ last_updated: 2026-08-05T01:22:59.862Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-05T01:22:59.862Z",
+    "resolved_at": null
+  },
+  {
+    "id": 9,
+    "kind": "deviation",
+    "phase": "05",
+    "file": "tests/phase-05/grace-wake.test.ts",
+    "line": 16,
+    "description": "Corrected grace-wake test account identity to use the funding principal mapping.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-05T01:35:26.127Z",
     "resolved_at": null
   }
 ]

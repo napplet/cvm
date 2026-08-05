@@ -217,7 +217,7 @@ Plans:
   4. After the live window, a top-up alone does not restart work; a user must issue a signed explicit resume command and approve the displayed pending action.
   5. For 30 days a checkpoint can resume without two active workers or duplicate charges, then it expires securely and cannot be revived.
 
-**Plans**: 3/7 plans executed
+**Plans**: 4/7 plans executed
 
 **Wave 1**
 
@@ -230,7 +230,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 05-04-PLAN.md — Implement same-worker grace wake and deadline checkpoint/release ordering.
+- [x] 05-04-PLAN.md — Implement same-worker grace wake and deadline checkpoint/release ordering.
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -289,7 +289,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 2. Trusted Core & Isolated Agent Execution | 6/6 | Complete    | 2026-08-04 |
 | 3. ContextVM Funding & Funded Admission | 7/7 | Complete    | 2026-08-04 |
 | 4. Metered Generation & Revision Loop | 7/7 | Complete    | 2026-08-05 |
-| 5. Funding Interruption & Durable Resume | 3/7 | In Progress|  |
+| 5. Funding Interruption & Durable Resume | 4/7 | In Progress|  |
 | 6. Sealed Preview & User-Owned Publication | 0/TBD | Not started | - |
 | 7. Admission SLO, Resilience & Launch Safety | 0/TBD | Not started | - |
 

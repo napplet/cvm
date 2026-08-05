@@ -66,11 +66,11 @@ Requirements for the initial release. Each maps to exactly one roadmap phase.
 
 - [x] **CONT-01**: Before an action that the remaining balance or cap cannot cover, the service reaches a durable safe boundary instead of starting the action or failing the session.
 - [x] **CONT-02**: A paused user sees a `needs_top_up` state containing the pending action, required additional funding, current balance/cap, and ten-minute live-worker deadline.
-- [ ] **CONT-03**: A verified top-up completed within ten minutes resumes the same fenced live worker only after the pending action is re-authorized.
-- [ ] **CONT-04**: At the ten-minute deadline the service writes a complete durable checkpoint and releases the live worker without continuing to spend.
+- [x] **CONT-03**: A verified top-up completed within ten minutes resumes the same fenced live worker only after the pending action is re-authorized.
+- [x] **CONT-04**: At the ten-minute deadline the service writes a complete durable checkpoint and releases the live worker without continuing to spend.
 - [ ] **CONT-05**: A checkpoint preserves the conversation, agent state, workspace, artifact versions, validation evidence, ledger/action identifiers, pending action, and compatible toolchain metadata in encrypted immutable storage.
-- [ ] **CONT-06**: After the live window, a later top-up does not restart work automatically; the user must send an explicit signed resume command and approve the displayed pending action.
-- [ ] **CONT-07**: A checkpoint is resumable for 30 days, cannot create two active workers or duplicate prior charges on resume, and is securely expired after the retention window.
+- [x] **CONT-06**: After the live window, a later top-up does not restart work automatically; the user must send an explicit signed resume command and approve the displayed pending action.
+- [x] **CONT-07**: A checkpoint is resumable for 30 days, cannot create two active workers or duplicate prior charges on resume, and is securely expired after the retention window.
 
 ### Preview and Compatibility
 

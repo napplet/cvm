@@ -54,6 +54,10 @@ export const ProtectedSuiteResultSchema = z.object({
     "READINESS_FAILED", "ISOLATION_FAILED", "CLEANUP_FAILED", "SAMPLE_INSUFFICIENT", "SLO_NOT_MET",
     "EVIDENCE_INVALID", "INPUT_UNAVAILABLE",
   ]),
+  verificationDigests: z.object({
+    reproducibilityEvidenceSha256: DigestSchema,
+    supplyChainEvidenceSha256: DigestSchema,
+  }).strict().optional(),
 }).strict().superRefine((value, context) => {
   if (value.status === "passed" ? value.claims.length === 0 : value.claims.length !== 0) {
     context.addIssue({ code: "custom", message: "only passed suite results may own claims" });
@@ -79,6 +83,10 @@ export const CertificationObservationInputSchema = z.object({
   limitations: z.array(SafeIdSchema).max(32),
   reasonCode: ReasonCodeSchema,
   releaseBinding: ReleaseObservationBindingSchema.optional(),
+  verificationDigests: z.object({
+    reproducibilityEvidenceSha256: DigestSchema,
+    supplyChainEvidenceSha256: DigestSchema,
+  }).strict().optional(),
 }).strict().superRefine((value, context) => {
   if (value.completedAtMs < value.startedAtMs || value.expiresAtMs <= value.completedAtMs) context.addIssue({ code: "custom", message: "observation chronology is invalid" });
   if (new Set(value.claims).size !== value.claims.length || new Set(value.limitations).size !== value.limitations.length) context.addIssue({ code: "custom", message: "observation values must be unique" });

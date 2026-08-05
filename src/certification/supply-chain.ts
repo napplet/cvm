@@ -30,13 +30,13 @@ const SupplyChainInputSchema = z.object({
 export const SupplyChainRecordSchema = z.object({
   version: z.literal(1), evidenceClass: z.literal("protected_live"), status: z.literal("verified"), candidateId: DigestSchema, artifactSha256: DigestSchema,
   releaseBindingSha256: DigestSchema, cosignExecutableSha256: DigestSchema, cosignCommandSha256: DigestSchema, signerIdentitySha256: DigestSchema, issuerSha256: DigestSchema,
-  predicateType: z.literal("https://slsa.dev/provenance/v1"), sbomSha256: DigestSchema, provenanceSha256: DigestSchema, reviewedComponentsSha256: DigestSchema,
+  predicateType: z.literal("https://slsa.dev/provenance/v1"), sbomSha256: DigestSchema, provenanceSha256: DigestSchema, reviewedComponentsSha256: DigestSchema, verifiedAtMs: z.number().int().nonnegative().finite(),
   evidenceSha256: DigestSchema, contentAddressedPath: z.string().regex(/^evidence\/certification\/supply-chain\/[a-f0-9]{64}\.json$/iu),
 }).strict();
 export type SupplyChainRecord = z.infer<typeof SupplyChainRecordSchema>;
 
 export type PinnedCommandRunner = (command: Readonly<{ executable: string; argv: readonly string[] }>) => Promise<Readonly<{ disposition: CommandDisposition; stdout: string; stderr: string }>>;
-export type SupplyChainDependencies = Readonly<{ readExecutable?: (path: string) => Promise<Uint8Array>; run?: PinnedCommandRunner }>;
+export type SupplyChainDependencies = Readonly<{ readExecutable?: (path: string) => Promise<Uint8Array>; run?: PinnedCommandRunner; nowMs?: () => number }>;
 
 async function sha256(value: unknown): Promise<string> {
   const bytes = value instanceof Uint8Array ? value : new TextEncoder().encode(typeof value === "string" ? value : canonicalJson(value));
@@ -98,9 +98,23 @@ export async function verifySupplyChainCertification(raw: unknown, dependencies:
   parseCosignDsse(result.stdout, input);
   const sbomSha256 = await sha256(input.sbom); const provenanceSha256 = await sha256(input.provenance);
   if (sbomSha256 !== input.releaseBinding.inputs.sbomSha256 || provenanceSha256 !== input.releaseBinding.inputs.provenanceSha256) throw new Error("SUPPLY_CHAIN_DOCUMENT_DIGEST_INVALID");
-  const base = { version: 1 as const, evidenceClass: "protected_live" as const, status: "verified" as const, candidateId: input.candidateId, artifactSha256: input.artifactSha256, releaseBindingSha256: await sha256(input.releaseBinding), cosignExecutableSha256: input.cosign.executableSha256, cosignCommandSha256: await sha256({ executable: input.cosign.executable, argv }), signerIdentitySha256: await sha256(input.cosign.signerIdentity), issuerSha256: await sha256(input.cosign.issuer), predicateType: input.cosign.predicateType, sbomSha256, provenanceSha256, reviewedComponentsSha256: await sha256([...input.reviewedComponents].sort((left, right) => left.name.localeCompare(right.name))) };
+  const base = { version: 1 as const, evidenceClass: "protected_live" as const, status: "verified" as const, candidateId: input.candidateId, artifactSha256: input.artifactSha256, releaseBindingSha256: await sha256(input.releaseBinding), cosignExecutableSha256: input.cosign.executableSha256, cosignCommandSha256: await sha256({ executable: input.cosign.executable, argv }), signerIdentitySha256: await sha256(input.cosign.signerIdentity), issuerSha256: await sha256(input.cosign.issuer), predicateType: input.cosign.predicateType, sbomSha256, provenanceSha256, reviewedComponentsSha256: await sha256([...input.reviewedComponents].sort((left, right) => left.name.localeCompare(right.name))), verifiedAtMs: dependencies.nowMs?.() ?? Date.now() };
   const evidenceSha256 = await sha256(base);
   return SupplyChainRecordSchema.parse({ ...base, evidenceSha256, contentAddressedPath: `evidence/certification/supply-chain/${evidenceSha256}.json` });
+}
+
+/** Revalidates the redacted persisted supply-chain facts before they can back a
+ * release claim. Raw Cosign/SBOM/provenance material is never retained here. */
+export async function validateSupplyChainVerificationRecord(value: unknown, expected: Readonly<{ candidateId: string; releaseBinding: unknown; artifactSha256: string; nowMs?: number; maxAgeMs?: number }>): Promise<SupplyChainRecord> {
+  const record = SupplyChainRecordSchema.parse(value);
+  const nowMs = expected.nowMs ?? Date.now(); const maxAgeMs = expected.maxAgeMs ?? 24 * 60 * 60 * 1_000;
+  if (!Number.isInteger(maxAgeMs) || maxAgeMs < 1) throw new Error("SUPPLY_CHAIN_FRESHNESS_INVALID");
+  if (record.candidateId !== expected.candidateId.toLowerCase() || record.artifactSha256 !== expected.artifactSha256.toLowerCase()
+    || record.releaseBindingSha256 !== await sha256(ReleaseObservationBindingSchema.parse(expected.releaseBinding))) throw new Error("SUPPLY_CHAIN_RELEASE_BINDING_INVALID");
+  if (nowMs - record.verifiedAtMs > maxAgeMs) throw new Error("SUPPLY_CHAIN_RECORD_STALE");
+  const { evidenceSha256, contentAddressedPath, ...base } = record;
+  if (evidenceSha256 !== await sha256(base) || contentAddressedPath !== `evidence/certification/supply-chain/${evidenceSha256}.json`) throw new Error("SUPPLY_CHAIN_RECORD_DIGEST_INVALID");
+  return record;
 }
 
 /** Persists exactly the finite, redacted verification facts with create-or-verify semantics. */

@@ -65,6 +65,20 @@ export async function verifyReproducibilityRecord(input: unknown, options: Reado
   return ReproducibilityRecordSchema.parse({ ...base, evidenceSha256, contentAddressedPath: `evidence/certification/reproducibility/${evidenceSha256}.json` });
 }
 
+/** Revalidates the finite persisted record at a later authority boundary. The
+ * original protected build output is intentionally never reloaded or persisted. */
+export async function validateReproducibilityVerificationRecord(value: unknown, expected: Readonly<{ candidateId: string; releaseBinding: unknown; artifactSha256: string; nowMs?: number; maxAgeMs?: number }>): Promise<ReproducibilityRecord> {
+  const record = ReproducibilityRecordSchema.parse(value);
+  const nowMs = expected.nowMs ?? Date.now(); const maxAgeMs = expected.maxAgeMs ?? 24 * 60 * 60 * 1_000;
+  if (!Number.isInteger(maxAgeMs) || maxAgeMs < 1) throw new Error("REPRODUCIBILITY_FRESHNESS_INVALID");
+  if (record.candidateId !== expected.candidateId.toLowerCase() || record.expectedArtifactSha256 !== expected.artifactSha256.toLowerCase()
+    || record.releaseBindingSha256 !== await sha256(ReleaseObservationBindingSchema.parse(expected.releaseBinding))) throw new Error("REPRODUCIBILITY_RELEASE_BINDING_INVALID");
+  if (nowMs - record.completedAtMs > maxAgeMs) throw new Error("REPRODUCIBILITY_RECORD_STALE");
+  const { evidenceSha256, contentAddressedPath, ...base } = record;
+  if (evidenceSha256 !== await sha256(base) || contentAddressedPath !== `evidence/certification/reproducibility/${evidenceSha256}.json`) throw new Error("REPRODUCIBILITY_RECORD_DIGEST_INVALID");
+  return record;
+}
+
 /** Writes a redacted create-or-verify record; raw run identities and paths never reach disk. */
 export async function writeReproducibilityRecord(directory: string, input: unknown, options: Readonly<{ nowMs?: number; maxAgeMs?: number }> = {}): Promise<ReproducibilityRecord> {
   const record = await verifyReproducibilityRecord(input, options);

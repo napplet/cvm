@@ -1,6 +1,8 @@
 import { type CertificationObservation, type CertificationObservationInput, type ProtectedSuite, type ReleaseObservationBindingSchema } from "./contracts";
-import { parseProtectedSuiteResult, type ProtectedCertificationAdapterRegistry } from "./adapters";
+import { loadProtectedVerificationRecords, parseProtectedSuiteResult, type ProtectedCertificationAdapterRegistry, type ProtectedVerificationReferences } from "./adapters";
 import { writeCertificationObservation } from "./evidence";
+import { validateReproducibilityVerificationRecord } from "./reproducibility";
+import { validateSupplyChainVerificationRecord } from "./supply-chain";
 
 export const PROTECTED_SUITES = ["admission", "telemetry", "chaos", "restore", "security-host", "supply-chain", "contextvm-payment-model", "publication"] as const satisfies readonly ProtectedSuite[];
 
@@ -16,6 +18,7 @@ export type ProtectedCertificationProfile = Readonly<{
   topologySha256: string;
   profileSha256: string;
   releaseBinding?: import("zod").infer<typeof ReleaseObservationBindingSchema>;
+  protectedVerificationReferences?: ProtectedVerificationReferences;
   credentialsAvailable?: boolean;
 }>;
 export type ProtectedCertificationRun = Readonly<{ records: readonly CertificationObservation[]; status: "passed" | "blocked" | "failed" }>;
@@ -28,6 +31,16 @@ function finiteFailure(profile: ProtectedCertificationProfile, suite: ProtectedS
   };
 }
 
+type VerificationDigests = Readonly<{ reproducibilityEvidenceSha256: string; supplyChainEvidenceSha256: string }>;
+
+async function verifiedSupplyChainDigests(profile: ProtectedCertificationProfile, now: number): Promise<VerificationDigests> {
+  if (!profile.releaseBinding || !profile.protectedVerificationReferences) throw new Error("CERTIFICATION_RECORDS_UNAVAILABLE");
+  const records = await loadProtectedVerificationRecords(profile.protectedVerificationReferences);
+  const artifactSha256 = profile.candidate.image.slice(-64).toLowerCase();
+  const reproducibility = await validateReproducibilityVerificationRecord(records.reproducibility, { candidateId: profile.candidate.id, releaseBinding: profile.releaseBinding, artifactSha256, nowMs: now });
+  const supplyChain = await validateSupplyChainVerificationRecord(records.supplyChain, { candidateId: profile.candidate.id, releaseBinding: profile.releaseBinding, artifactSha256, nowMs: now });
+  return { reproducibilityEvidenceSha256: reproducibility.evidenceSha256, supplyChainEvidenceSha256: supplyChain.evidenceSha256 };
+}
 /** Runs each requested suite independently. The registry controls evidence
  * class, never adapter output, so fixtures can validate contracts without
  * becoming live-release passes. */
@@ -39,11 +52,16 @@ export async function runProtectedCertificationSuite(input: Readonly<{ profile: 
   if (profile.credentialsAvailable === false) return writeCertificationObservation(input.evidenceDirectory, finiteFailure(profile, suite, "blocked", "CREDENTIALS_UNAVAILABLE", now));
   if (input.registry.evidenceClass === "protected_live" && !profile.releaseBinding) return writeCertificationObservation(input.evidenceDirectory, finiteFailure(profile, suite, "blocked", "TOPOLOGY_UNAVAILABLE", now));
   try {
-    const result = parseProtectedSuiteResult(await input.registry.adapters[suite]!({ suite, candidate: profile.candidate, input: { datasetSha256: profile.datasetSha256, profileSha256: profile.profileSha256, topologySha256: profile.topologySha256, command: ["certify-phase-07", `suite:${suite}`] }, releaseBinding: profile.releaseBinding, credentialReference: profile.credentialsAvailable === false ? "unavailable" : "configured" }));
+    const verificationDigests = suite === "supply-chain" && input.registry.evidenceClass === "protected_live" ? await verifiedSupplyChainDigests(profile, now) : undefined;
+    const result = parseProtectedSuiteResult(await input.registry.adapters[suite]!({ suite, candidate: profile.candidate, input: { datasetSha256: profile.datasetSha256, profileSha256: profile.profileSha256, topologySha256: profile.topologySha256, command: ["certify-phase-07", `suite:${suite}`] }, releaseBinding: profile.releaseBinding, credentialReference: profile.credentialsAvailable === false ? "unavailable" : "configured", ...(verificationDigests ? { verificationDigests } : {}) }));
     if (result.status === "passed" && result.claims.some((claim) => !suiteClaims[suite].includes(claim))) throw new Error("CERTIFICATION_ADAPTER_RESULT_INVALID");
-    const observation: CertificationObservationInput = { version: 1, evidenceClass: input.registry.evidenceClass, status: result.status, candidate: profile.candidate, input: { datasetSha256: profile.datasetSha256, profileSha256: profile.profileSha256, topologySha256: profile.topologySha256, command: ["certify-phase-07", `suite:${suite}`] }, startedAtMs: now, completedAtMs: now, expiresAtMs: now + 60_000, claims: result.claims, limitations: result.limitations, reasonCode: result.reasonCode, ...(input.registry.evidenceClass === "protected_live" && profile.releaseBinding ? { releaseBinding: profile.releaseBinding } : {}) };
+    if (verificationDigests && (result.status !== "passed" || JSON.stringify(result.verificationDigests) !== JSON.stringify(verificationDigests))) throw new Error("CERTIFICATION_ADAPTER_RECORD_BINDING_INVALID");
+    const observation: CertificationObservationInput = { version: 1, evidenceClass: input.registry.evidenceClass, status: result.status, candidate: profile.candidate, input: { datasetSha256: profile.datasetSha256, profileSha256: profile.profileSha256, topologySha256: profile.topologySha256, command: ["certify-phase-07", `suite:${suite}`] }, startedAtMs: now, completedAtMs: now, expiresAtMs: now + 60_000, claims: result.claims, limitations: result.limitations, reasonCode: result.reasonCode, ...(input.registry.evidenceClass === "protected_live" && profile.releaseBinding ? { releaseBinding: profile.releaseBinding } : {}), ...(verificationDigests ? { verificationDigests } : {}) };
     return writeCertificationObservation(input.evidenceDirectory, observation);
-  } catch { return writeCertificationObservation(input.evidenceDirectory, finiteFailure(profile, suite, "failed", "EVIDENCE_INVALID", now)); }
+  } catch (error) {
+    const unavailable = error instanceof Error && error.message === "CERTIFICATION_RECORDS_UNAVAILABLE";
+    return writeCertificationObservation(input.evidenceDirectory, finiteFailure(profile, suite, unavailable ? "blocked" : "failed", unavailable ? "INPUT_UNAVAILABLE" : "EVIDENCE_INVALID", now));
+  }
 }
 
 export async function runProtectedCertificationProfile(input: Readonly<{ profile: ProtectedCertificationProfile; selectedSuites?: readonly ProtectedSuite[]; evidenceDirectory: string; registry?: ProtectedCertificationAdapterRegistry; preflightOnly?: boolean; now?: () => number }>): Promise<ProtectedCertificationRun> {

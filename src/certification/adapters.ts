@@ -11,7 +11,15 @@ export type ProtectedCertificationAdapter = (input: Readonly<{
   input: import("zod").infer<typeof CertificationInputSchema>;
   releaseBinding?: import("zod").infer<typeof ReleaseObservationBindingSchema>;
   credentialReference: "configured" | "unavailable";
+  verificationDigests?: Readonly<{ reproducibilityEvidenceSha256: string; supplyChainEvidenceSha256: string }>;
 }>) => Promise<unknown>;
+
+export type ProtectedVerificationReference = Readonly<{ relativePath: string; evidenceSha256: string }>;
+export type ProtectedVerificationReferences = Readonly<{
+  root: string;
+  reproducibility: ProtectedVerificationReference;
+  supplyChain: ProtectedVerificationReference;
+}>;
 
 export type ProtectedCertificationAdapterRegistry = Readonly<{
   /** Fixture registries must use deterministic. Only digest-verified local modules may use protected_live. */
@@ -36,6 +44,37 @@ async function assertNoSymlinkComponents(root: string, file: string): Promise<vo
 async function sha256Bytes(value: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", value);
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function readProtectedRecord(root: string, reference: ProtectedVerificationReference): Promise<unknown> {
+  if (!isAbsolute(root) || !/^[a-f0-9]{64}$/iu.test(reference.evidenceSha256)
+    || !reference.relativePath || isAbsolute(reference.relativePath) || reference.relativePath.split(/[\\/]/u).includes("..")) {
+    throw new Error("CERTIFICATION_RECORD_CONFIGURATION_INVALID");
+  }
+  const rawRoot = resolve(root);
+  if ((await lstat(rawRoot)).isSymbolicLink()) throw new Error("CERTIFICATION_RECORD_SYMLINK_REJECTED");
+  const canonicalRoot = await realpath(rawRoot);
+  if (!(await stat(canonicalRoot)).isDirectory()) throw new Error("CERTIFICATION_RECORD_ROOT_INVALID");
+  const rawCandidate = resolve(rawRoot, reference.relativePath);
+  if (!containment(rawRoot, rawCandidate)) throw new Error("CERTIFICATION_RECORD_PATH_REJECTED");
+  await assertNoSymlinkComponents(rawRoot, rawCandidate);
+  const candidate = resolve(canonicalRoot, relative(rawRoot, rawCandidate));
+  if (!containment(canonicalRoot, candidate) || !(await stat(candidate)).isFile()) throw new Error("CERTIFICATION_RECORD_PATH_REJECTED");
+  const bytes = await readFile(candidate);
+  if (await sha256Bytes(bytes) !== reference.evidenceSha256.toLowerCase()) throw new Error("CERTIFICATION_RECORD_DIGEST_INVALID");
+  try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
+  catch { throw new Error("CERTIFICATION_RECORD_JSON_INVALID"); }
+}
+
+/** Reads only two profile-named immutable records. This is deliberately not a
+ * directory scanner: a generic adapter cannot discover or replace release inputs. */
+export async function loadProtectedVerificationRecords(references: ProtectedVerificationReferences): Promise<Readonly<{ reproducibility: unknown; supplyChain: unknown }>> {
+  try {
+    return { reproducibility: await readProtectedRecord(references.root, references.reproducibility), supplyChain: await readProtectedRecord(references.root, references.supplyChain) };
+  } catch (error) {
+    if (error instanceof Error && /^CERTIFICATION_RECORD_[A-Z_]+$/u.test(error.message)) throw error;
+    throw new Error("CERTIFICATION_RECORD_LOAD_REJECTED");
+  }
 }
 
 /** Loads only a profile-pinned, regular module under a non-symlink trusted

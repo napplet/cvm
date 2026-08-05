@@ -141,6 +141,7 @@ describe("07-01 trusted immediate-or-refused admission", () => {
     const first = service.admit(command);
     await Bun.sleep(0);
     const second = service.admit(command);
+    await expect(service.admit({ ...command, payload: { requestedCap: "51", unit: "sat" } })).rejects.toThrow("IDEMPOTENCY_KEY_CONFLICT");
     await Bun.sleep(0);
     unblock();
     const outcomes = await Promise.all([first, second]);

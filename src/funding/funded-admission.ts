@@ -66,6 +66,8 @@ export class FundedAdmissionService {
   readonly #now: () => number;
   readonly #minimumLeaseMs: number;
   readonly #capacityTimeoutMs: number;
+  /** Process-local coalescing is not a durable queue: the store remains the cross-process claim fence. */
+  readonly #inflight = new Map<string, Readonly<{ fingerprint: string; outcome: Promise<FundedAdmissionOutcome> }>>();
   constructor(private readonly options: Readonly<{ funding: FundingService; store: FundingStore; capacity: ReadyCapacityPort; now?: () => number; minimumLeaseMs?: number; capacityTimeoutMs?: number; telemetry?: LifecycleTelemetryPort }>) {
     this.#now = options.now ?? Date.now;
     this.#minimumLeaseMs = options.minimumLeaseMs ?? 5_000;
@@ -78,6 +80,23 @@ export class FundedAdmissionService {
     const lifecycle = lifecycleInput === undefined ? undefined : AdmissionLifecycleContextSchema.parse(lifecycleInput);
     const accountId = await accountIdForPrincipal(command.principal);
     const key = intentKey(accountId, command.idempotencyKey);
+    const intentFingerprint = await hash(JSON.stringify({ accountId, command }));
+    const active = this.#inflight.get(key);
+    if (active) {
+      if (active.fingerprint !== intentFingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
+      return freeze(structuredClone(await active.outcome));
+    }
+    const execution = this.admitParsed(command, accountId, lifecycle, intentFingerprint);
+    const inFlight = freeze({ fingerprint: intentFingerprint, outcome: execution });
+    this.#inflight.set(key, inFlight);
+    try {
+      return freeze(structuredClone(await execution));
+    } finally {
+      if (this.#inflight.get(key) === inFlight) this.#inflight.delete(key);
+    }
+  }
+
+  private async admitParsed(command: z.infer<typeof AdmissionCommandSchema>, accountId: string, lifecycle: AdmissionLifecycleContext | undefined, intentFingerprint: string): Promise<FundedAdmissionOutcome> {
     const recorded = await this.options.store.findRecordedResult(accountId, command.idempotencyKey);
     if (recorded) {
       if (recorded.result.status !== "accepted") throw new Error("FUNDED_ADMISSION_REPLAY_INVALID");
@@ -89,7 +108,6 @@ export class FundedAdmissionService {
 
     const intentReference = `capacity-intent:${await hash(`${accountId}:${command.idempotencyKey}`)}`;
     this.observeLifecycle(lifecycle, "capacity_intent_created", lifecycle?.receiptMonotonicMs);
-    const intentFingerprint = await hash(JSON.stringify({ accountId, command }));
     let intent = await this.options.store.transact(accountId, async (transaction) => {
       const existing = await transaction.findCapacityIntent(command.idempotencyKey);
       return existing ?? transaction.createCapacityIntent({ accountId, idempotencyKey: command.idempotencyKey, fingerprint: intentFingerprint, intentReference });

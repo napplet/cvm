@@ -44,7 +44,7 @@ created: 2026-08-05
 | Task ID | Plan | Owner Task | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
 | 07-W0-01 | 07-00 | Task 1 | 0 | SESS-02 | T-07-ADM | Receipt-to-exact-ready p95 is at most 5s or stable refusal has no session, hold, or queue | unit + protected load | `bun test tests/phase-07/admission-slo.test.ts`; `bun run certify:phase07 -- --suite=admission` | ✅ baseline 07-00 | ✅ baseline green; live pending |
-| 07-W0-02 | 07-00 | Task 1 | 0 | OPS-01 | T-07-TEL | Versioned allowlisted telemetry exports no prompt, source, key, payment, provider, or free-text secrets | unit/property + Collector | `bun test tests/phase-07/telemetry-policy.test.ts`; `bun run eval:phase07 -- --suite=telemetry` | ✅ baseline 07-00 | ✅ baseline green; implementation pending |
+| 07-W0-02 | 07-00 | Task 1 | 0 | OPS-01 | T-07-TEL | Versioned allowlisted telemetry exports no prompt, source, key, payment, provider, or free-text secrets | unit/property + Collector | `bun test tests/phase-07/telemetry-policy.test.ts`; `bun run eval:phase07 -- --suite=telemetry` | ✅ baseline 07-00 | ✅ local implementation green; live pending |
 | 07-W0-03 | 07-00 | Task 2 | 0 | OPS-02 | T-07-REC | Every fault recovers only the original operation with exact credit/debit/worker/publication counts | deterministic + protected chaos | `bun test tests/evals/phase-07-reference-set.test.ts`; `bun run certify:phase07 -- --suite=chaos` | ✅ baseline 07-00 | ✅ baseline green; live pending |
 | 07-W0-04 | 07-00 | Task 2 | 0 | OPS-03 | T-07-RST | Restore decrypts and verifies exact object identity, checksum, owner/version/lease fence, retention, and reattachment | deterministic + protected restore | `bun test tests/phase-07/restore-drill.test.ts`; `bun run certify:phase07 -- --suite=restore` | ✅ baseline 07-00 | ✅ baseline green; live pending |
 | 07-W0-05 | 07-00 | Task 3 | 0 | OPS-04 | T-07-PRO | Candidate gate blocks every missing, stale, mutated, skipped, or unobserved required input | unit + protected release | `bun test tests/phase-07/promotion-gate.test.ts`; `bun run candidate:verify` | ✅ baseline 07-00 | ✅ baseline green; release pending |
@@ -80,7 +80,7 @@ created: 2026-08-05
 - [x] **Plan 07-00 Task 2 — 07-W0-03/04:** create compile-safe fault/reference-eval and exact-restore entrypoints with comparator-only expectations and protected-live ownership.
 - [x] **Plan 07-00 Task 3 — 07-W0-05:** create the promotion-gate entrypoint and fail-closed deterministic/evidence/protected certification command seams.
 - [x] **Dependent implementation (local):** Plans 07-01, 07-04, 07-06, 07-07, 07-09, and 07-10 replaced the RED/TODO registrations with deterministic production-derived behavior. Plans 07-11 through 07-13 additionally bound OpenTelemetry approval, protected-adapter dispatch, and the public release-verifier exit code. These local checks do not claim live evidence.
-- [ ] **Sequenced package gate:** Plans 07-02/03/04 verify, approve, and smoke every proposed OpenTelemetry package/version before installation; the research seam marks packages beyond `@opentelemetry/api` as `SUS`.
+- [x] **Sequenced package gate:** Plans 07-02/03/04 and delegated approval Plan 07-11 verify, approve, and smoke the exact OpenTelemetry package set before use.
 
 ---
 
@@ -94,6 +94,10 @@ created: 2026-08-05
 
 ## Validation Audit 2026-08-05
 
+### Re-audit after Plan 07-17 (`85d588d`)
+
+Plan 07-17 closes the remaining deterministic reproducibility and supply-chain self-attestation paths. The tests below exercise independent exact source-byte identity and manifest-owned Cosign/SBOM policy at the verifier, protected-runner, and sole-evaluator boundaries. They do not create or relabel protected-live evidence; all protected-live requirements remain blocked until the external observations listed below exist.
+
 | Metric | Count |
 |--------|------:|
 | Local behavioral gaps found | 0 |
@@ -104,7 +108,8 @@ created: 2026-08-05
 
 | Command | Actual result |
 |---------|---------------|
-| `bun test --timeout 10000` | Passed: 495 tests, 0 failures. |
+| `bun test tests/phase-07/reproducibility.test.ts tests/phase-07/supply-chain.test.ts tests/phase-07/certification-runner.test.ts tests/phase-07/promotion-gate.test.ts --timeout 10000` | Passed: 28 tests, 0 failures. Exact independent source SHA-256, padded/revision-derived source identity, self-selected/rehashed signer policy, and evaluator binding mutations were exercised. |
+| `bun test --timeout 10000` | Passed: 512 tests, 0 failures, 4,249 assertions. |
 | `bun run eval:phase07` | Passed: 64 deterministic cases; `promotionVerdict: blocked`. |
 | `bun run verify:phase07-evidence -- --verify-existing` | Passed: offline deterministic evidence is valid; `promotionVerdict: blocked`. |
 | `PHASE07_CERTIFICATION_EVIDENCE_DIRECTORY=<temporary-dir> bun run certify:phase07 -- --profile=release --preflight-only` | Expected nonzero (1): eight immutable protected-suite records were `blocked`; no adapter was invoked and no live pass was claimed. |
@@ -118,7 +123,7 @@ created: 2026-08-05
 | OPS-01 | `tests/phase-07/telemetry-policy.test.ts`, `tests/phase-07/otel-package-legitimacy.test.ts`, `tests/phase-07/certification-runner.test.ts` | Local green; protected-live blocked | Candidate-bound Collector lifecycle export from the selected release topology. |
 | OPS-02 | `tests/phase-07/fault-matrix.test.ts`, `tests/evals/phase-07-reference-set.test.ts` | Local green; protected-live blocked | Protected regional/database/worker/payment/model/publication original-operation recovery drills. |
 | OPS-03 | `tests/phase-07/restore-drill.test.ts`, `tests/evals/phase-07-reference-set.test.ts` | Local green; protected-live blocked | Protected instance-loss and retained-object topology observation. |
-| OPS-04 | `tests/phase-07/promotion-gate.test.ts`, `tests/phase-07/certification-runner.test.ts`, `tests/phase-07/host-presentation.test.ts` | Local green; protected-live blocked | Complete fresh, candidate-bound passed inventory for every closed release claim; only then may the sole evaluator return `promoted`. |
+| OPS-04 | `tests/phase-07/reproducibility.test.ts`, `tests/phase-07/supply-chain.test.ts`, `tests/phase-07/promotion-gate.test.ts`, `tests/phase-07/certification-runner.test.ts`, `tests/phase-07/host-presentation.test.ts` | Local green; protected-live blocked | Complete fresh, candidate-bound passed inventory for every closed release claim; only then may the sole evaluator return `promoted`. |
 
 The local test suite intentionally uses deterministic adapters/fixtures only to exercise fail-closed wiring. Such records remain `deterministic` and cannot satisfy protected-live certification.
 

@@ -5,16 +5,16 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 7
 current_phase_name: Admission SLO, Resilience & Launch Safety
 status: planned
-stopped_at: Completed 07-17-PLAN.md
-last_updated: "2026-08-05T21:06:03.310Z"
+stopped_at: Security re-audit found protected promotion composition gap; 07-18 planned
+last_updated: "2026-08-05T21:51:50Z"
 last_activity: 2026-08-05
-last_activity_desc: Security re-audit found exact source and signer/issuer policy binding gaps
+last_activity_desc: Security re-audit found the release entrypoint does not own the pinned protected root
 progress:
   total_phases: 7
-  completed_phases: 7
-  total_plans: 58
+  completed_phases: 6
+  total_plans: 59
   completed_plans: 58
-  percent: 100
+  percent: 86
 ---
 
 # Project State
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 7 — Admission SLO, Resilience & Launch Safety
-Plan: 18 of 18
-Status: Final security policy-binding gap closure planned
-Last activity: 2026-08-05 — Security re-audit found exact source and signer/issuer policy binding gaps
+Plan: 19 of 19
+Status: Protected promotion composition gap closure planned
+Last activity: 2026-08-05 — Security re-audit found the release entrypoint does not own the pinned protected root
 
 Plan execution: [██████████] 100%; Phase verification remains pending
 
@@ -41,9 +41,9 @@ Plan execution: [██████████] 100%; Phase verification remain
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 57/58 known milestone plans executed; Plan 07-17 remains.
+- Plans: 58/59 known milestone plans executed; Plan 07-18 remains.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Next checkpoint: execute Plan 07-17, then re-run security and goal verification.
+- Next checkpoint: execute Plan 07-18 and re-audit security, then run the configured protected certification profile with trusted adapters and candidate-bound live observations.
 
 ## Performance Metrics
 

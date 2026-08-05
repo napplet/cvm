@@ -1,51 +1,73 @@
 ---
-phase: 07-admission-slo-resilience-launch-safety
-fixed_at: 2026-08-05T19:41:00Z
+phase: 07
+fixed_at: 2026-08-05T21:37:36Z
 review_path: .planning/phases/07-admission-slo-resilience-launch-safety/07-REVIEW.md
 iteration: 2
-findings_in_scope: 1
-fixed: 1
+findings_in_scope: 6
+fixed: 6
 skipped: 0
 status: all_fixed
 ---
 
 # Phase 07: Code Review Fix Report
 
-**Fixed at:** 2026-08-05T19:41:00Z
+**Fixed at:** 2026-08-05T21:37:36Z
 **Source review:** `.planning/phases/07-admission-slo-resilience-launch-safety/07-REVIEW.md`
 **Iteration:** 2
 
 **Summary:**
 
-- Findings in scope: 1
-- Fixed: 1
+- Findings in scope: 6
+- Fixed: 6
 - Skipped: 0
 
 ## Fixed Issues
 
-### WR-01: Valid reference scenarios are not uniquely bound to their observed authority result
+### CR-01: A self-authenticated release bundle can manufacture a promoted decision
 
-**Files modified:** `src/certification/phase-07-reference-set.ts`, `tests/evals/phase-07-reference-set.test.ts`, `tests/fixtures/phase-07-reference-set.json`
-**Commit:** `1319651`
-**Applied fix:** The deterministic adapters now expose domain terminal decisions, ordered transitions, initial state, fault boundaries and restore outcomes, telemetry terminal/rejection facts, and host action/effect projections. No fixture ID, case ID, or scenario hash is part of a reference observation. The test exhaustively substitutes every distinct valid scenario pair within each category while retaining the original oracle; all substitutions fail.
+**Files modified:** `src/certification/trust.ts`, `src/promotion/candidate.ts`, `src/promotion/run-promotion.ts`, `tests/phase-07/promotion-gate.test.ts`
+**Commit:** d9e7c25
+**Applied fix:** Promotion now requires a configured operator/protected-certifier trust root to authenticate the manifest, observations, and both verification records. The public release-evidence command has no trust root and stays blocked; tests show rehashed public content cannot promote.
 
-## Evidence
+### CR-02: The claimed source SHA-256 is never computed from source bytes
 
-**Commit:** `160e837`
-**Record:** `evidence/design/22c6cd2b8e821f9ee155c00c0547395abb22acc7c7775a864e10fb2a01c79c66.json`
-**Bound implementation revision:** `1319651cd0a1dfb71cf8eff0f7b17a7b73788591`
+**Files modified:** `src/certification/reproducibility.ts`, `tests/phase-07/reproducibility.test.ts`, `tests/phase-07/promotion-gate.test.ts`, `tests/phase-07/certification-runner.test.ts`
+**Commit:** 6e97c23
+**Applied fix:** Reproducibility input now carries an immutable source reference plus byte measurement that the protected trust root must verify. The redacted persisted record binds the measured source digest and reference hashes.
+
+### CR-03: Future-dated verification records bypass the freshness window
+
+**Files modified:** `src/certification/reproducibility.ts`, `src/certification/supply-chain.ts`, `tests/phase-07/reproducibility.test.ts`, `tests/phase-07/supply-chain.test.ts`, `tests/phase-07/promotion-gate.test.ts`
+**Commit:** 850d68d
+**Applied fix:** Reproducibility and supply-chain validators reject timestamps beyond the authority clock before evaluating maximum age; promotion regression coverage verifies the resulting block.
+
+### WR-01: The supposed immutable Git revision accepts invalid intermediate-length IDs
+
+**Files modified:** `src/certification/contracts.ts`, `src/certification/reproducibility.ts`, `src/certification/phase-07-reference-set.ts`, `src/certification/evidence.ts`, `src/certification/supply-chain.ts`, `src/promotion/candidate.ts`, `src/promotion/schema.ts`, `tests/phase-07/promotion-gate.test.ts`
+**Commit:** ba54962
+**Applied fix:** Every relevant release revision parser now accepts exactly 40 or 64 hexadecimal characters, with regression coverage for 41- and 63-character rejection.
+
+### CR-04: Memoized promotion bypasses manifest and evidence authentication
+
+**Files modified:** `src/promotion/run-promotion.ts`, `tests/phase-07/promotion-gate.test.ts`
+**Commit:** `e3217fb`
+**Applied fix:** The evaluator independently authenticates the manifest, observations, and verification records before cache access; its cache key includes a canonical fingerprint of those exact values and the candidate ID. The promotion runner now forwards its configured trust root. Regression coverage proves a changed manifest with the same release ID cannot reuse a promoted cache entry.
+
+### WR-02: The reproducibility CLI has no way to supply the mandatory source-measurement trust root
+
+**Files modified:** `src/certification/trust.ts`, `scripts/verify-phase-07-reproducibility.ts`, `tests/phase-07/reproducibility.test.ts`
+**Commit:** `83bd9e8`
+**Applied fix:** The command requires a digest-pinned operator trust-root module under an explicit protected root and passes it to both verification and record writing. The concrete trust root re-hashes protected immutable source archive bytes before trusting a source measurement; absent, invalid, or modified configuration fails closed.
 
 ## Verification
 
-- Focused Phase 07 reference tests: 10 passing tests, including 296 ordered valid cross-case substitutions.
-- `bun run eval:phase07`: passed all 64 cases; promotion verdict remained `blocked`.
-- `bun run verify:phase07-evidence -- --verify-existing`: passed.
-- Clean isolated evidence build: passed; subsequent dirty build correctly failed with `SOURCE_TREE_DIRTY`.
-- Full suite: `bun test` — 483 passing tests, 0 failures, 4,130 expectations.
-- TypeScript compiler was unavailable in the repository; targeted runtime coverage and source re-read completed instead.
+- TDD regressions: changed manifest cache replay and configured reproducibility command both failed before the fixes and pass afterward.
+- Focused suites: `bun test tests/phase-07/promotion-gate.test.ts` and `bun test tests/phase-07/reproducibility.test.ts` passed.
+- Full Phase 07 suite: `bun test tests/phase-07` — 79 passing tests, 0 failures.
+- Targeted TypeScript check found no errors in the modified files; unrelated project-wide TypeScript errors remain outside this fix.
 
 ---
 
-_Fixed: 2026-08-05T19:41:00Z_
+_Fixed: 2026-08-05T21:37:36Z_
 _Fixer: the agent (gsd-code-fixer)_
 _Iteration: 2_

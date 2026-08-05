@@ -6,8 +6,10 @@ import type { ContextVmInboundEnvelope, ContextVmTransportPort, ContextVmWireNot
 import { FundingService } from "../../src/funding/funding-service";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
 import { canonicalCapabilityReview } from "../../src/publication/capability-review";
+import { probePromotedCliPreSignedRoute } from "../../src/publication/napplet-cli-source-contract";
 import { PreviewService } from "../../src/publication/preview-service";
 import { DeterministicPreviewHostPort, DeterministicSealedArtifactPort, fixedPhase06Clock, verifiedPhase06Artifact } from "../phase-06/fakes";
+import sourceFixture from "../fixtures/phase-06-cli-source-contract.json" with { type: "json" };
 
 const pubkey = "a".repeat(64);
 const sha = "b".repeat(64);
@@ -107,7 +109,7 @@ describe("signed ContextVM preview and publication", () => {
   test("routes available publication actions with stable signed-event correlation and suppresses unsafe fields", async () => {
     const calls: Array<{ name: string; input: unknown }> = [];
     const { sut, transport } = adapter({
-      source: { status: "available", liveExecution: "not_observed", surface: { requiredExports: [], rejectedRoutes: [] } },
+      source: probePromotedCliPreSignedRoute(sourceFixture),
       publication: {
         createIntent: async (value) => { calls.push({ name: "create", input: value }); return { state: "intent_ready", intentId: "intent:one", fingerprint: sha, normalizedDTag: "one", capabilityDigest: sha, expiresAtMs: 10, nextAction: "sign_manifest", rawRecord: "forbidden" }; },
         submitSignedManifest: async (value) => { calls.push({ name: "submit", input: value }); return { state: "partial", intentId: "intent:one", artifactId: "artifact:one", nextAction: "reconcile_publication", safeServerEvidenceCount: 1, providerPayload: "forbidden" }; },
@@ -126,5 +128,24 @@ describe("signed ContextVM preview and publication", () => {
     expect(calls[1]?.input).toMatchObject({ principal: { pubkey }, requestEventId: "event:submit", command, event });
     expect(transport.notifications.map((entry) => entry.notification.method)).toEqual(["notifications/publication", "notifications/publication", "notifications/publication", "notifications/publication"]);
     expect(JSON.stringify(transport.responses)).not.toMatch(/rawRecord|providerPayload|private|secret|credential/i);
+  });
+
+  test("rejects a forged or mutated available contract at the ContextVM dispatch boundary before facade effects", async () => {
+    const verified = probePromotedCliPreSignedRoute(sourceFixture);
+    const candidates = [
+      { status: "available", liveExecution: "not_observed" },
+      { ...verified, identity: { ...verified.identity, linuxSha256: "0".repeat(64) } },
+      { ...verified, sourceFiles: { ...verified.sourceFiles, "deploy-network.ts": "0".repeat(64) } },
+      { ...verified, surface: { ...verified.surface, rejectedRoutes: verified.surface.rejectedRoutes.slice(1) } },
+    ];
+    for (const source of candidates) {
+      let effects = 0;
+      const { sut, transport } = adapter({ source, publication: {
+        createIntent: async () => { effects += 1; return {}; }, submitSignedManifest: async () => { effects += 1; return {}; }, status: async () => { effects += 1; return {}; }, reconcile: async () => { effects += 1; return {}; },
+      } });
+      await sut.handle(request("publication", { action: "create_intent", sessionId: "session:one", artifactId: "artifact:one", runtimeVariant: "runtime:one", idempotencyKey: "intent:one", purpose: "Publish this napplet", consent: "approved" }));
+      expect(effects).toBe(0);
+      expect(transport.responses.at(-1)?.response).toMatchObject({ result: { status: "publication_unavailable" } });
+    }
   });
 });

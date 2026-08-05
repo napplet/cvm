@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { SignedOwnerManifestEventSchema, type PublicationObservation, type SealedArtifactIdentity, type SignedOwnerManifestEvent } from "./contracts.js";
-import { NAPPLET_CLI_LINUX_SHA256, NAPPLET_CLI_SOURCE_COMMIT, type PromotedCliSourceContractResult } from "./napplet-cli-source-contract.js";
+import { NAPPLET_CLI_LINUX_SHA256, NAPPLET_CLI_SOURCE_COMMIT, validatedAvailablePromotedCliSourceContract, type AvailablePromotedCliSourceContract, type PromotedCliSourceContractResult } from "./napplet-cli-source-contract.js";
 import { normalizePublicationDTag } from "./publication-intent.js";
 
 export const NAPPLET_CLI_PROMOTED_IDENTITY = Object.freeze({ version: "0.5.2", sourceCommit: NAPPLET_CLI_SOURCE_COMMIT, linuxSha256: NAPPLET_CLI_LINUX_SHA256 });
@@ -55,9 +55,10 @@ export function assertPromotedCliIdentity(identity: PromotedNappletCliIdentity):
   return NAPPLET_CLI_PROMOTED_IDENTITY;
 }
 
-export function assertAvailablePromotedCliSourceContract(contract: PromotedCliSourceContractResult): Extract<PromotedCliSourceContractResult, { status: "available" }> {
-  if (contract.status !== "available") throw new Error("PUBLICATION_UNAVAILABLE");
-  return contract;
+export function assertAvailablePromotedCliSourceContract(contract: unknown): AvailablePromotedCliSourceContract {
+  const validated = validatedAvailablePromotedCliSourceContract(contract);
+  if (!validated) throw new Error("PUBLICATION_UNAVAILABLE");
+  return validated;
 }
 
 /** Verifies the service-owned sealed records before any external source facade is called. */
@@ -86,13 +87,20 @@ export function toPublicationObservation(result: PromotedDeployResult): Publicat
  */
 export class PromotedNappletCliAdapter {
   readonly identity: PromotedNappletCliIdentity;
+  private readonly validatedContract?: AvailablePromotedCliSourceContract;
 
   constructor(private readonly dependencies: Readonly<{ contract: PromotedCliSourceContractResult; source: PromotedNappletCliSourcePort; identity?: PromotedNappletCliIdentity }>) {
     this.identity = assertPromotedCliIdentity(dependencies.identity ?? NAPPLET_CLI_PROMOTED_IDENTITY);
+    // Construction never upgrades an arbitrary status flag to authority. Keep
+    // the validated result only as a construction-time fence; dispatch checks
+    // the supplied object again to detect post-construction mutation.
+    this.validatedContract = validatedAvailablePromotedCliSourceContract(dependencies.contract);
   }
 
   async deployPreSignedNamed(input: PreSignedNamedDeployInput): Promise<PromotedDeployResult> {
-    if (this.dependencies.contract.status !== "available") return { state: "publication_unavailable", operationId: input.operationId, safeReasonCode: "PUBLICATION_UNAVAILABLE" };
+    // Revalidate immediately before the first effect. A mutated object cannot
+    // retain eligibility merely because it was accepted at construction time.
+    if (!this.validatedContract || !validatedAvailablePromotedCliSourceContract(this.dependencies.contract)) return { state: "publication_unavailable", operationId: input.operationId, safeReasonCode: "PUBLICATION_UNAVAILABLE" };
     assertSealedNamedDeployPlan(input);
     const hashes = input.sealedFiles.map((file) => file.sha256);
     const authorizeExactHashes = async (requested: readonly string[]) => {

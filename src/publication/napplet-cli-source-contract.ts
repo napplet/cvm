@@ -25,15 +25,22 @@ const REJECTED_ROUTES = [
   "main", "root_manifest", "snapshot_manifest", "multi_target", "dependency_build_prebuilt_rebuild", "dry_run_json_stdout",
 ] as const;
 
-export const PromotedCliSourceSnapshotSchema = z.object({
-  identity: z.object({
-    version: z.literal("0.5.2"),
-    sourceCommit: z.literal(NAPPLET_CLI_SOURCE_COMMIT),
-    linuxSha256: z.literal(NAPPLET_CLI_LINUX_SHA256),
-  }).strict(),
-  sourceFiles: z.object(Object.fromEntries(Object.entries(SOURCE_FILE_HASHES).map(([file, hash]) => [file, z.literal(hash)])) as Record<keyof typeof SOURCE_FILE_HASHES, z.ZodLiteral<string>>).strict(),
+const PromotedCliSourceIdentitySchema = z.object({
+  version: z.literal("0.5.2"),
+  sourceCommit: z.literal(NAPPLET_CLI_SOURCE_COMMIT),
+  linuxSha256: z.literal(NAPPLET_CLI_LINUX_SHA256),
+}).strict();
+const PromotedCliSourceFilesSchema = z.object(Object.fromEntries(Object.entries(SOURCE_FILE_HASHES).map(([file, hash]) => [file, z.literal(hash)])) as Record<keyof typeof SOURCE_FILE_HASHES, z.ZodLiteral<string>>).strict();
+const PromotedCliSourceSurfaceSchema = z.object({
   requiredExports: z.array(z.string()).max(REQUIRED_EXPORTS.length),
   rejectedRoutes: z.array(z.string()).max(REJECTED_ROUTES.length),
+}).strict();
+
+export const PromotedCliSourceSnapshotSchema = z.object({
+  identity: PromotedCliSourceIdentitySchema,
+  sourceFiles: PromotedCliSourceFilesSchema,
+  requiredExports: PromotedCliSourceSurfaceSchema.shape.requiredExports,
+  rejectedRoutes: PromotedCliSourceSurfaceSchema.shape.rejectedRoutes,
   liveExecution: z.literal("not_observed"),
 }).strict();
 export type PromotedCliSourceSnapshot = Readonly<z.infer<typeof PromotedCliSourceSnapshotSchema>>;
@@ -42,7 +49,15 @@ const UnavailableReasonSchema = z.enum([
   "SOURCE_SNAPSHOT_INVALID", "PROMOTED_IDENTITY_MISMATCH", "SOURCE_FILE_HASH_MISMATCH", "STRUCTURED_ROUTE_UNAVAILABLE", "UNSAFE_ROUTE_NOT_REJECTED",
 ]);
 export const PromotedCliSourceContractResultSchema = z.discriminatedUnion("status", [
-  z.object({ status: z.literal("available"), liveExecution: z.literal("not_observed"), surface: z.object({ requiredExports: z.array(z.string()), rejectedRoutes: z.array(z.string()) }).strict() }).strict(),
+  z.object({
+    status: z.literal("available"),
+    liveExecution: z.literal("not_observed"),
+    // Keep every source fact in the result. Every downstream trust boundary
+    // revalidates this exact provenance rather than trusting `status` alone.
+    identity: PromotedCliSourceIdentitySchema,
+    sourceFiles: PromotedCliSourceFilesSchema,
+    surface: PromotedCliSourceSurfaceSchema,
+  }).strict(),
   z.object({ status: z.literal("publication_unavailable"), liveExecution: z.literal("not_observed"), reasonCode: UnavailableReasonSchema }).strict(),
 ]);
 export type PromotedCliSourceContractResult = Readonly<z.infer<typeof PromotedCliSourceContractResultSchema>>;
@@ -53,6 +68,21 @@ function unavailable(reasonCode: z.infer<typeof UnavailableReasonSchema>): Promo
 
 function exactSet(actual: readonly string[], expected: readonly string[]): boolean {
   return actual.length === expected.length && actual.every((value) => expected.includes(value)) && new Set(actual).size === actual.length;
+}
+
+export type AvailablePromotedCliSourceContract = Extract<PromotedCliSourceContractResult, { status: "available" }>;
+
+/**
+ * The sole authority for turning an untrusted source-contract result into an
+ * eligible publication capability. Structural `available` values are never
+ * enough: the full pinned identity, source-hash provenance, and closed source
+ * surface must all remain exact at the consuming boundary.
+ */
+export function validatedAvailablePromotedCliSourceContract(input: unknown): AvailablePromotedCliSourceContract | undefined {
+  const parsed = PromotedCliSourceContractResultSchema.safeParse(input);
+  if (!parsed.success || parsed.data.status !== "available") return undefined;
+  if (!exactSet(parsed.data.surface.requiredExports, REQUIRED_EXPORTS) || !exactSet(parsed.data.surface.rejectedRoutes, REJECTED_ROUTES)) return undefined;
+  return PromotedCliSourceContractResultSchema.parse(parsed.data) as AvailablePromotedCliSourceContract;
 }
 
 /**
@@ -72,6 +102,8 @@ export function probePromotedCliPreSignedRoute(snapshot: unknown): PromotedCliSo
   return PromotedCliSourceContractResultSchema.parse({
     status: "available",
     liveExecution: "not_observed",
+    identity: { version: "0.5.2", sourceCommit: NAPPLET_CLI_SOURCE_COMMIT, linuxSha256: NAPPLET_CLI_LINUX_SHA256 },
+    sourceFiles: { ...SOURCE_FILE_HASHES },
     surface: { requiredExports: [...REQUIRED_EXPORTS], rejectedRoutes: [...REJECTED_ROUTES] },
   });
 }

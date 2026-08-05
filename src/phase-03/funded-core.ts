@@ -17,7 +17,7 @@ import { PostgresFundingDatabase } from "../persistence/postgres-funding-databas
 import type { MeteredGenerationService } from "../phase-04/metered-generation-service";
 import { readSessionStatus } from "../phase-04/session-status";
 import type { ContinuationService } from "../continuity/continuation-service";
-import { PromotedCliSourceContractResultSchema } from "../publication/napplet-cli-source-contract";
+import { validatedAvailablePromotedCliSourceContract } from "../publication/napplet-cli-source-contract";
 
 type SurfaceState = "configured" | "blocked" | "unselected";
 type BlockedCapacity = ReadyCapacityPort;
@@ -103,8 +103,11 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
   if (publicGenerationSurface && !verifiedCreditWake) throw new Error("PRODUCTION_VERIFIED_CREDIT_WAKE_REQUIRED");
   const publicContinuationSurface = Boolean(publicFundingSurface && options.continuationService);
   const publicPreviewSurface = Boolean(publicFundingSurface && options.preview);
-  const sourceContract = PromotedCliSourceContractResultSchema.safeParse(options.publicationSourceContract);
-  const publicPublicationSurface = Boolean(publicFundingSurface && options.publication && sourceContract.success && sourceContract.data.status === "available");
+  // Do not let a caller-provided `{ status: "available" }` become a public
+  // publication capability. The exact Plan 05 identity/provenance/surface is
+  // checked here and again in the announcement, transport adapter, and facade.
+  const sourceContract = validatedAvailablePromotedCliSourceContract(options.publicationSourceContract);
+  const publicPublicationSurface = Boolean(publicFundingSurface && options.publication && sourceContract);
   const offline = !store || !database || !publicFundingSurface;
   const admissions = new FundedAdmissionService({ funding, store: authority, capacity: options.capacity ?? blockedCapacity });
   const accountStatus = new AccountStatusService({ store: authority, sessions: options.sessions ?? emptySessions, ...(database ? { rails: database.railStatuses } : {}) });
@@ -121,7 +124,7 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
     };
     options.transport.configureAnnouncement(buildContextVmAnnouncement(configureContextVmToolAvailability(announcement, {
       preview: publicPreviewSurface,
-      publication: publicPublicationSurface,
+      publicationSourceContract: publicPublicationSurface ? sourceContract : undefined,
     })));
   }
   const statusCursorSecret = options.statusCursorSecret ?? crypto.getRandomValues(new Uint8Array(32));

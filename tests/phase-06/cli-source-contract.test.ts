@@ -4,6 +4,7 @@ import {
   NAPPLET_CLI_LINUX_SHA256,
   NAPPLET_CLI_SOURCE_COMMIT,
   probePromotedCliPreSignedRoute,
+  validatedAvailablePromotedCliSourceContract,
 } from "../../src/publication/napplet-cli-source-contract.js";
 import { reportPhase06Observation } from "./reference-observation.js";
 
@@ -15,6 +16,25 @@ describe("promoted napplet CLI exact-source contract", () => {
       status: "available",
       liveExecution: "not_observed",
     }));
+  });
+
+  test("retains complete exact provenance when the validated result crosses another trust boundary", () => {
+    const available = probePromotedCliPreSignedRoute(fixture);
+    expect(available).toMatchObject({
+      status: "available",
+      identity: { version: "0.5.2", sourceCommit: NAPPLET_CLI_SOURCE_COMMIT, linuxSha256: NAPPLET_CLI_LINUX_SHA256 },
+      sourceFiles: fixture.sourceFiles,
+      surface: { requiredExports: fixture.requiredExports, rejectedRoutes: fixture.rejectedRoutes },
+    });
+    expect(validatedAvailablePromotedCliSourceContract(available)).toBeDefined();
+
+    for (const forgedOrMutated of [
+      { status: "available", liveExecution: "not_observed" },
+      { ...available, identity: { ...available.identity, sourceCommit: "0".repeat(40) } },
+      { ...available, sourceFiles: { ...available.sourceFiles, "cli.ts": "0".repeat(64) } },
+      { ...available, surface: { ...available.surface, requiredExports: available.surface.requiredExports.slice(1) } },
+      { ...available, surface: { ...available.surface, rejectedRoutes: available.surface.rejectedRoutes.slice(1) } },
+    ]) expect(validatedAvailablePromotedCliSourceContract(forgedOrMutated)).toBeUndefined();
   });
   reportPhase06Observation({ id: "P06-CLI-CONTRACT-01", status: "available", effects: "deploy=0", value: "source-only" });
 

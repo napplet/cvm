@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { validatedAvailablePromotedCliSourceContract } from "../publication/napplet-cli-source-contract.js";
 
 const ToolNameSchema = z.enum([
   "account_status",
@@ -44,14 +45,15 @@ export type ContextVmAnnouncementInput = z.infer<typeof ContextVmAnnouncementInp
  * tool registry, but preview and publication cannot be advertised merely by
  * configuration: their availability is overwritten by installed safe facades.
  */
-export function configureContextVmToolAvailability(input: unknown, availability: Readonly<{ preview: boolean; publication: boolean }>): ContextVmAnnouncementInput {
+export function configureContextVmToolAvailability(input: unknown, availability: Readonly<{ preview: boolean; publicationSourceContract?: unknown }>): ContextVmAnnouncementInput {
   const parsed = ContextVmAnnouncementInputSchema.parse(input);
+  const publication = Boolean(validatedAvailablePromotedCliSourceContract(availability.publicationSourceContract));
   return ContextVmAnnouncementInputSchema.parse({
     ...parsed,
     tools: parsed.tools.map((tool) => tool.name === "preview"
       ? { ...tool, available: availability.preview, planned: !availability.preview }
       : tool.name === "publication"
-        ? { ...tool, available: availability.publication, planned: !availability.publication }
+        ? { ...tool, available: publication, planned: !publication }
         : tool),
   });
 }

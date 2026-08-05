@@ -37,6 +37,7 @@ test("fails closed before source calls for unavailable source, altered bytes, wr
     operationId: "deploy:intent:sealed", artifact: verifiedPhase06Artifact, target: { kind: 35129 as const, dTag: verifiedPhase06Artifact.normalizedDTag }, sealedFiles: [file], deployFiles: [file], ownerEvent: signedPhase06EventFixture, servers: ["https://blossom.example"], relays: ["wss://relay.example"], authorizeExactHashes: async (hashes: readonly string[]) => ({ hashes }),
   };
   await expect(new PromotedNappletCliAdapter({ contract: { status: "publication_unavailable", liveExecution: "not_observed", reasonCode: "SOURCE_SNAPSHOT_INVALID" }, source }).deployPreSignedNamed(input)).resolves.toMatchObject({ state: "publication_unavailable" });
+  await expect(new PromotedNappletCliAdapter({ contract: { status: "available", liveExecution: "not_observed" } as never, source }).deployPreSignedNamed(input)).resolves.toMatchObject({ state: "publication_unavailable" });
   await expect(new PromotedNappletCliAdapter({ contract: probePromotedCliPreSignedRoute(fixture), source }).deployPreSignedNamed({ ...input, target: { kind: 15129, dTag: "root" } as unknown as { kind: 35129; dTag: string } })).rejects.toThrow("SEALED_NAMED_DEPLOY_INVALID");
   expect(source.uploadCalls).toBe(0);
 });

@@ -8,7 +8,7 @@ import { PrincipalSchema } from "../phase-03/contracts";
 import { SessionActionResultSchema } from "../phase-04/metered-generation-service";
 import { SessionStatusQuerySchema, SessionStatusSchema } from "../phase-04/session-status";
 import { CapabilityReviewSchema, PreviewDescriptorSchema, SignedOwnerManifestEventSchema, SignedPublicationCommandSchema } from "../publication/contracts";
-import { PromotedCliSourceContractResultSchema } from "../publication/napplet-cli-source-contract";
+import { validatedAvailablePromotedCliSourceContract, type AvailablePromotedCliSourceContract } from "../publication/napplet-cli-source-contract";
 import type { ContextVmInboundEnvelope, ContextVmTransportPort, ContextVmWireNotification, ContextVmWireResponse } from "./sdk-bridge";
 
 const SupportedPmiSchema = z.enum(["bitcoin-lightning-bolt11", "bitcoin-cashu-v4-direct"]);
@@ -140,10 +140,15 @@ function freeze<T>(value: T): T {
 export class ContextVmFundingAdapter {
   private readonly policyVersion: string;
   private readonly protocolVersion: string;
+  private readonly publicationSourceContract?: AvailablePromotedCliSourceContract;
 
   constructor(private readonly options: ContextVmFundingAdapterOptions) {
     this.policyVersion = options.policyVersion ?? "funding-policy-v1";
     this.protocolVersion = options.protocolVersion ?? "funding-contract-v1";
+    // Do not preserve a caller-supplied availability shape as a capability.
+    // It must have passed the full Plan 05 source-contract validator before
+    // construction and still pass again immediately before dispatch.
+    this.publicationSourceContract = validatedAvailablePromotedCliSourceContract(options.publicationSourceContract);
     options.transport.onInbound((input) => this.handle(input));
   }
 
@@ -290,8 +295,7 @@ export class ContextVmFundingAdapter {
   }
 
   private publicationAvailable(): boolean {
-    const source = PromotedCliSourceContractResultSchema.safeParse(this.options.publicationSourceContract);
-    return source.success && source.data.status === "available";
+    return Boolean(this.publicationSourceContract && validatedAvailablePromotedCliSourceContract(this.options.publicationSourceContract));
   }
 
   private async previewResponse(verifiedPubkey: string, requestEventId: string, id: string | number | null, action: "descriptor" | "review_capabilities", input: unknown): Promise<ContextVmWireResponse> {

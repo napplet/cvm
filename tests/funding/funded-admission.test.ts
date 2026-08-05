@@ -9,6 +9,8 @@ import cashuFixture from "../fixtures/cashu-phase-03.json";
 import { CashuMintPolicyRegistry } from "../../src/funding/cashu-mint-policy";
 import { FakeCashuSettlementPort } from "../../src/funding/cashu-provider";
 import { FakeLightningReceiptPort } from "../../src/funding/lightning-provider";
+import { probePromotedCliPreSignedRoute } from "../../src/publication/napplet-cli-source-contract";
+import sourceFixture from "../fixtures/phase-06-cli-source-contract.json" with { type: "json" };
 
 const principal = { pubkey: "b".repeat(64) };
 const settlement = {
@@ -212,6 +214,24 @@ describe("FundedAdmissionService", () => {
     const railOptions = { postgresPool: pool, transport, capacity, lightningReceiver, cashuProvider: new FakeCashuSettlementPort(), cashuPolicies: new CashuMintPolicyRegistry(cashuFixture.policies[0]!) };
     expect(createFundedCore({ ...railOptions, protectedMaterialKey: new Uint8Array(32).fill(8) }).mode).toBe("configured");
     expect(() => createFundedCore({ ...railOptions, protectedMaterialKey: new Uint8Array(31) })).toThrow("PROTECTED_MATERIAL_KEY_INVALID");
+  });
+
+  test("funded composition announces publication only for the fully validated promoted source contract", () => {
+    const pool = { connect: async () => { throw new Error("unused"); } };
+    const capacity = { reserveNow: async () => ({ status: "refused" as const }), observe: async () => ({ status: "unknown" as const }), release: async () => undefined };
+    const publication = { createIntent: async () => ({}), submitSignedManifest: async () => ({}), status: async () => ({}), reconcile: async () => ({}) };
+    const source = probePromotedCliPreSignedRoute(sourceFixture);
+    const announcementFor = (publicationSourceContract: unknown) => {
+      let configured: unknown;
+      const transport = { configureAnnouncement: (value: unknown) => { configured = value; }, onInbound: () => undefined, canonicalInvocation: () => ({ invocationHash: "f".repeat(64) }), sendResponse: async () => undefined, sendNotification: async () => undefined };
+      const options = { postgresPool: pool, transport, capacity, publication, publicationSourceContract, lightningReceiver: new FakeLightningReceiptPort({ create: { status: "created", serviceReference: "receiver:publication-contract", invoice: "lnbc-contract", invoiceIdentity: "contract", paymentHash: "contract", amount: "20", unit: "sat" as const, expiresAt: "2026-08-05T00:00:00.000Z", safeDisplayReference: "lightning:…contract" } }), cashuProvider: new FakeCashuSettlementPort(), cashuPolicies: new CashuMintPolicyRegistry(cashuFixture.policies[0]!), protectedMaterialKey: new Uint8Array(32).fill(8) };
+      createFundedCore(options);
+      return configured as { metadata: { tools: Array<{ name: string; available: boolean; invocable: boolean }> } };
+    };
+    const isAvailable = (announcement: ReturnType<typeof announcementFor>) => announcement.metadata.tools.find((tool) => tool.name === "publication");
+    expect(isAvailable(announcementFor(source))).toEqual({ name: "publication", available: true, planned: false, invocable: true });
+    expect(isAvailable(announcementFor({ status: "available", liveExecution: "not_observed" }))).toEqual({ name: "publication", available: false, planned: true, invocable: false });
+    expect(isAvailable(announcementFor({ ...source, identity: { ...source.identity, sourceCommit: "0".repeat(40) } }))).toEqual({ name: "publication", available: false, planned: true, invocable: false });
   });
 
   test("bounds capacity-provider waits and persists an ambiguous outcome", async () => {

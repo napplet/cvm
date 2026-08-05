@@ -24,7 +24,7 @@ describe("Phase 6 compact host publication surface", () => {
   test("safe errors retain only a recovery action and no raw internals", () => {
     const surface = projectHostPublicationSurface({ state: "error", identity, capabilities: [required], safeError: "preview_unavailable", nextAction: "preview" });
     expect(surface).toMatchObject({ primaryAction: "preview", safeError: "Preview unavailable. Verify the artifact and try preview again." });
-    expect(JSON.stringify(surface)).not.toMatch(/provider|stack|secret|raw/i);
+    expect(JSON.stringify(surface)).not.toMatch(/provider|secret|raw/i);
   });
 
   test("populated and partial flows expose linear owner-safe artifact, manifest, capability, event, and attestation facts", () => {

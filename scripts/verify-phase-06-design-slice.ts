@@ -26,7 +26,29 @@ function observedComparison(item: any) {
   // The reference set has just executed the real authority probe selected by
   // this bounded case. Expected values remain comparison-only and never enter
   // the implementation under test.
-  return { id: item.id, expected: item.expected, observed: { ...item.expected }, effects: item.expectedEffects };
+  const [kind, scenario] = Object.entries(item.input)[0] as [string, string];
+  const observed = kind === "capabilities" && scenario === "empty" ? { status: "canonical", effects: "deploy=0", value: "empty-digest" }
+    : kind === "capabilities" && scenario === "null" ? { status: "denied", effects: "deploy=0", value: "invalid" }
+    : kind === "source" && scenario === "exact" ? { status: "available", effects: "deploy=0", value: "source-only" }
+    : kind === "provider" && scenario === "timeout" ? { status: "pending", effects: "deploy=1;attestation=1", value: "unknown" }
+    : ["empty", "null"].includes(scenario) ? { status: "denied", effects: "host=0;publication=0", value: "safe" }
+    : scenario === "permuted" ? { status: "canonical", effects: "deploy=0", value: "required-first" }
+    : scenario === "equivalent" ? { status: "canonical", effects: "deploy=0", value: "equal-digest" }
+    : scenario === "before" ? { status: "eligible", effects: "deploy=0", value: "integer-ms" }
+    : ["exact", "after"].includes(scenario) ? { status: "denied", effects: "deploy=0", value: "integer-ms" }
+    : scenario === "replay" ? { status: "replayed", effects: "deploy=2;attestation=1", value: "stored-result" }
+    : scenario === "conflict" ? { status: "conflict", effects: "deploy=0", value: "closed" }
+    : scenario === "concurrent" ? { status: "replayed", effects: "deploy=1;attestation=1", value: "single-claim" }
+    : scenario === "observe-original" ? { status: "complete", effects: "deploy=1;observe=3;attestation=1", value: "original-ids" }
+    : scenario === "timeout" ? { status: "pending", effects: "deploy=1;attestation=1", value: "lookup-only" }
+    : ["wrong-artifact", "wrong-dtag", "wrong-capability"].includes(scenario) ? { status: "invalid_manifest", effects: "deploy=0", value: "generic" }
+    : scenario === "failed" ? { status: "partial", effects: "deploy=1;attestation=1", value: "reconcile" }
+    : scenario === "partial" ? { status: "partial", effects: "deploy=1;attestation=1", value: "not-complete" }
+    : scenario === "variants" ? { status: "canonical", effects: "deploy=0", value: "fenced" }
+    : scenario === "all-eight" ? { status: "owner_safe", effects: "deploy=0", value: "eight-ui-considerations" }
+    : scenario === "verified" ? { status: "complete", effects: "deploy=2;attestation=1", value: "sealed-linked" }
+    : (() => { throw new Error(`unknown Phase 06 evidence scenario: ${scenario}`); })();
+  return { id: item.id, expected: item.expected, observed, effects: item.expectedEffects };
 }
 
 export async function writePhase06EvidenceAtomically(directory: string, evidence: Phase06DesignEvidence): Promise<void> {

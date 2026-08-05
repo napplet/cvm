@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 05
 current_phase_name: Funding Interruption & Durable Resume
 status: executing
-stopped_at: Completed 05-04-PLAN.md
-last_updated: "2026-08-05T01:35:20.756Z"
+stopped_at: Completed 05-05-PLAN.md
+last_updated: "2026-08-05T01:46:30.822Z"
 last_activity: 2026-08-05
 last_activity_desc: Phase 05 execution started
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 33
-  completed_plans: 30
+  completed_plans: 31
   percent: 57
 ---
 
@@ -30,11 +30,11 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 05 (Funding Interruption & Durable Resume) — EXECUTING
-Plan: 5 of 7
+Plan: 6 of 7
 Status: Ready to execute
 Last activity: 2026-08-05 — Phase 05 execution started
 
-Progress: [█████████░] 91%
+Progress: [█████████░] 94%
 
 ## Milestone Progress
 
@@ -93,6 +93,7 @@ Progress: [█████████░] 91%
 | Phase 05 P02 | 6 min | 2 tasks | 7 files |
 | Phase 05 P03 | 538s | 2 tasks | 7 files |
 | Phase 05 P04 | 10 min | 2 tasks | 5 files |
+| Phase 05 P05 | 306s | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -154,6 +155,8 @@ Recent decisions affecting current work:
 - [Phase ?]: Continuation worker lifecycle contracts are coordinator lease-bound and exclude provider authority.
 - [Phase ?]: Payment and relay signals remain non-authoritative; durable funding and the exact pause/version/lease tuple are required for a fresh wake budget.
 - [Phase ?]: Checkpoint promotion is object-first but SQL-authoritative, with live lease revocation committed before worker termination.
+- [Phase ?]: Resume compares durable server-owned action and compatibility pins before any budget, allocation, or restore effect.
+- [Phase ?]: ContextVM resume_session derives its principal only from verifiedClientPubkey and returns a safe allowlisted result.
 
 ### Pending Todos
 
@@ -175,6 +178,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T01:35:20.748Z
-Stopped at: Completed 05-04-PLAN.md
+Last session: 2026-08-05T01:46:30.814Z
+Stopped at: Completed 05-05-PLAN.md
 Resume file: None

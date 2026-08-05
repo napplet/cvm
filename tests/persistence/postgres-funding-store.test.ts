@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { FundingService } from "../../src/funding/funding-service";
 import { FundedAdmissionService } from "../../src/funding/funded-admission";
 import { DeterministicPostgresFundingExecutor, PostgresFundingStore } from "../../src/persistence/postgres-funding-store";
+import { exactReadyReservation, trustedAdmissionReceipt } from "../fixtures/admission-ready";
 
 const principal = { pubkey: "a".repeat(64) };
 const credited = (idempotencyKey = "credit-1", amount = "100") => ({
@@ -75,11 +76,11 @@ describe("PostgresFundingStore", () => {
       release: async () => undefined,
     };
     const command = { principal, idempotencyKey: "durable-admission", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "80", unit: "sat" as const } };
-    expect(await new FundedAdmissionService({ funding: new FundingService(firstStore), store: firstStore, capacity: ambiguousCapacity }).admit(command)).toMatchObject({ status: "reconciliation_pending" });
+    expect(await new FundedAdmissionService({ funding: new FundingService(firstStore), store: firstStore, capacity: ambiguousCapacity }).admit(command, trustedAdmissionReceipt)).toMatchObject({ status: "reconciliation_pending" });
     const resumedStore = new PostgresFundingStore(executor);
-    const resumedCapacity = { reserveNow: async () => { reserveCount += 1; return { status: "available" as const, reference: "wrong", expiresAt: "2026-08-05T00:00:00.000Z" }; }, observe: async () => ({ status: "available" as const, reference: "capacity:durable", expiresAt: "2026-08-05T00:00:00.000Z" }), release: async () => undefined };
+    const resumedCapacity = { reserveNow: async ({ intentReference }: { intentReference: string }) => { reserveCount += 1; return exactReadyReservation(intentReference, "wrong", "2026-08-05T00:00:00.000Z"); }, observe: async ({ intentReference }: { intentReference: string }) => exactReadyReservation(intentReference, "capacity:durable", "2026-08-05T00:00:00.000Z"), release: async () => undefined };
     const resumed = new FundedAdmissionService({ funding: new FundingService(resumedStore), store: resumedStore, capacity: resumedCapacity, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
-    expect(await resumed.admit(command)).toMatchObject({ status: "accepted", heldAmount: "80" });
+    expect(await resumed.admit(command, trustedAdmissionReceipt)).toMatchObject({ status: "accepted", heldAmount: "80" });
     expect(reserveCount).toBe(1);
     const budget = await resumed.authorizeActionBudget({ principal, admissionReference: "capacity:durable", idempotencyKey: "durable-action", maximum: "40", unit: "sat" });
     const replay = await new FundedAdmissionService({ funding: new FundingService(new PostgresFundingStore(executor)), store: new PostgresFundingStore(executor), capacity: resumedCapacity }).authorizeActionBudget({ principal, admissionReference: "capacity:durable", idempotencyKey: "durable-action", maximum: "40", unit: "sat" });

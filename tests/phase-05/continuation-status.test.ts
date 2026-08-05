@@ -9,6 +9,7 @@ import type { ArtifactVerifier } from "../../src/phase-02/trusted-core";
 import { MeteredGenerationService } from "../../src/phase-04/metered-generation-service";
 import { readSessionStatus } from "../../src/phase-04/session-status";
 import { ContinuationService } from "../../src/continuity/continuation-service";
+import { exactReadyReservation, trustedAdmissionReceipt } from "../fixtures/admission-ready";
 
 const owner = { pubkey: "ab".repeat(32) };
 const stranger = { pubkey: "cd".repeat(32) };
@@ -19,8 +20,8 @@ async function pausedFixture() {
   const store = new TransactionalMemoryFundingStore();
   const funding = new FundingService(store);
   await funding.execute({ principal: owner, kind: "credit_settlement", idempotencyKey: "status-credit", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { settlement: { topUpId: "status-topup", rail: "lightning", unit: "sat", amount: "4000", externalReference: "status-external", settlementReference: "status-settlement", verifiedAt: "2026-08-05T00:00:00.000Z" } } });
-  const admissions = new FundedAdmissionService({ funding, store, capacity: { reserveNow: async () => ({ status: "available" as const, reference: "status-capacity", expiresAt: "2026-08-06T00:00:00.000Z" }), observe: async () => ({ status: "available" as const, reference: "status-capacity", expiresAt: "2026-08-06T00:00:00.000Z" }), release: async () => {} }, now: () => Date.parse("2026-08-05T00:00:00.000Z") });
-  const admission = await admissions.admit({ principal: owner, idempotencyKey: "status-admission", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "3250", unit: "sat" } });
+  const admissions = new FundedAdmissionService({ funding, store, capacity: { reserveNow: async ({ intentReference }) => exactReadyReservation(intentReference, "status-capacity", "2026-08-06T00:00:00.000Z"), observe: async ({ intentReference }) => exactReadyReservation(intentReference, "status-capacity", "2026-08-06T00:00:00.000Z"), release: async () => {} }, now: () => Date.parse("2026-08-05T00:00:00.000Z") });
+  const admission = await admissions.admit({ principal: owner, idempotencyKey: "status-admission", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "3250", unit: "sat" } }, trustedAdmissionReceipt);
   if (admission.status !== "accepted") throw new Error("expected funded admission");
   const gateway: ModelGateway = { async dispatch() { throw new Error("must not dispatch"); }, async lookup() { return { status: "not_found" }; } };
   const service = new MeteredGenerationService({ fundedAdmission: admissions, store, gateway, worker, artifactVerifier: verifier, clock: { nowMs: () => 1_700_000_000_000 } });

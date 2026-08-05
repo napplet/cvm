@@ -8,6 +8,7 @@ import { MeteredGenerationService } from "../../src/phase-04/metered-generation-
 import type { ArtifactVerifier } from "../../src/phase-02/trusted-core";
 import type { WorkerPort } from "../../src/phase-02/contracts";
 import type { Phase04RuntimeCaseInput, Phase04RuntimeObservation } from "./phase-04-runtime-observation";
+import { exactReadyReservation, trustedAdmissionReceipt } from "../fixtures/admission-ready";
 
 const principal = { pubkey: "ab".repeat(32) };
 const policyVersion = "phase-02-policy-2026-08-04";
@@ -74,8 +75,8 @@ async function fundedDependencies(prefix: string, fundedBalance = 10000, request
     funding,
     store,
     capacity: {
-      reserveNow: async () => ({ status: "available" as const, reference: `${prefix}-capacity`, expiresAt: "2026-08-05T00:00:00.000Z" }),
-      observe: async () => ({ status: "available" as const, reference: `${prefix}-capacity`, expiresAt: "2026-08-05T00:00:00.000Z" }),
+      reserveNow: async ({ intentReference }) => exactReadyReservation(intentReference, `${prefix}-capacity`, "2026-08-05T00:00:00.000Z"),
+      observe: async ({ intentReference }) => exactReadyReservation(intentReference, `${prefix}-capacity`, "2026-08-05T00:00:00.000Z"),
       release: async () => {},
     },
     now: () => Date.parse("2026-08-04T00:00:00.000Z"),
@@ -86,7 +87,7 @@ async function fundedDependencies(prefix: string, fundedBalance = 10000, request
     policyVersion: "funding-policy-v1",
     protocolVersion: "funding-contract-v1",
     payload: { requestedCap: String(requestedCap), unit: "sat" },
-  });
+  }, trustedAdmissionReceipt);
   if (admission.status !== "accepted") throw new Error(`${prefix}: funded admission did not succeed`);
   return { store, admissions, admission };
 }

@@ -6,6 +6,7 @@ import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-s
 import { type WorkerPort } from "../../src/phase-02/contracts";
 import { type ArtifactVerifier } from "../../src/phase-02/trusted-core";
 import { MeteredGenerationService, ReviseSessionCommandSchema } from "../../src/phase-04/metered-generation-service";
+import { exactReadyReservation, trustedAdmissionReceipt } from "../fixtures/admission-ready";
 
 const principal = { pubkey: "ab".repeat(32) };
 
@@ -31,10 +32,10 @@ async function setup() {
   await funding.execute({ principal, kind: "credit_settlement", idempotencyKey: "credit", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { settlement: { topUpId: "topup", rail: "lightning", unit: "sat", amount: "10000", externalReference: "external", settlementReference: "settlement", verifiedAt: "2026-08-04T00:00:00.000Z" } } });
   const admissions = new FundedAdmissionService({
     funding, store,
-    capacity: { reserveNow: async () => ({ status: "available" as const, reference: "capacity", expiresAt: "2026-08-05T00:00:00.000Z" }), observe: async () => ({ status: "available" as const, reference: "capacity", expiresAt: "2026-08-05T00:00:00.000Z" }), release: async () => {} },
+    capacity: { reserveNow: async ({ intentReference }) => exactReadyReservation(intentReference, "capacity", "2026-08-05T00:00:00.000Z"), observe: async ({ intentReference }) => exactReadyReservation(intentReference, "capacity", "2026-08-05T00:00:00.000Z"), release: async () => {} },
     now: () => Date.parse("2026-08-04T00:00:00.000Z"),
   });
-  const admission = await admissions.admit({ principal, idempotencyKey: "admission", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "6500", unit: "sat" } });
+  const admission = await admissions.admit({ principal, idempotencyKey: "admission", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "6500", unit: "sat" } }, trustedAdmissionReceipt);
   if (admission.status !== "accepted") throw new Error("test admission must be accepted");
   const effects = { dispatches: 0, workers: 0 };
   const gateway: ModelGateway = { async dispatch(intent) {
@@ -52,8 +53,8 @@ describe("same-lineage revisions", () => {
     const store = new TransactionalMemoryFundingStore();
     const funding = new FundingService(store);
     await funding.execute({ principal, kind: "credit_settlement", idempotencyKey: "claim-credit", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { settlement: { topUpId: "claim-topup", rail: "lightning", unit: "sat", amount: "10000", externalReference: "claim-external", settlementReference: "claim-settlement", verifiedAt: "2026-08-04T00:00:00.000Z" } } });
-    const admissions = new FundedAdmissionService({ funding, store, capacity: { reserveNow: async () => ({ status: "available" as const, reference: "claim-capacity", expiresAt: "2026-08-05T00:00:00.000Z" }), observe: async () => ({ status: "available" as const, reference: "claim-capacity", expiresAt: "2026-08-05T00:00:00.000Z" }), release: async () => {} }, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
-    const admission = await admissions.admit({ principal, idempotencyKey: "claim-admission", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "6500", unit: "sat" } });
+    const admissions = new FundedAdmissionService({ funding, store, capacity: { reserveNow: async ({ intentReference }) => exactReadyReservation(intentReference, "claim-capacity", "2026-08-05T00:00:00.000Z"), observe: async ({ intentReference }) => exactReadyReservation(intentReference, "claim-capacity", "2026-08-05T00:00:00.000Z"), release: async () => {} }, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
+    const admission = await admissions.admit({ principal, idempotencyKey: "claim-admission", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "6500", unit: "sat" } }, trustedAdmissionReceipt);
     if (admission.status !== "accepted") throw new Error("expected admission");
     let dispatches = 0;
     let release!: () => void;

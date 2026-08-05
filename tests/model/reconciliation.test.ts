@@ -8,6 +8,7 @@ import { ModelReconciliationService } from "../../src/model/reconciliation";
 import { MeteredGenerationService } from "../../src/phase-04/metered-generation-service";
 import { FundingService } from "../../src/funding/funding-service";
 import { FundedAdmissionService } from "../../src/funding/funded-admission";
+import { exactReadyReservation, trustedAdmissionReceipt } from "../fixtures/admission-ready";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
 
 const intent = (operationId = "operation:gateway"): ProviderOperationIntent => ({
@@ -96,10 +97,10 @@ async function ambiguousAction(lookup: "receipt_found" | "definitive_not_accepte
   });
   const fundedAdmission = new FundedAdmissionService({
     funding, store,
-    capacity: { reserveNow: async () => ({ status: "available" as const, reference: "reconciliation-capacity", expiresAt: "2026-08-05T00:00:00.000Z" }), observe: async () => ({ status: "available" as const, reference: "reconciliation-capacity", expiresAt: "2026-08-05T00:00:00.000Z" }), release: async () => {} },
+    capacity: { reserveNow: async ({ intentReference }) => exactReadyReservation(intentReference, "reconciliation-capacity", "2026-08-05T00:00:00.000Z"), observe: async ({ intentReference }) => exactReadyReservation(intentReference, "reconciliation-capacity", "2026-08-05T00:00:00.000Z"), release: async () => {} },
     now: () => Date.parse("2026-08-04T00:00:00.000Z"),
   });
-  const admission = await fundedAdmission.admit({ principal: reconciliationPrincipal, idempotencyKey: "reconciliation-admission", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "6500", unit: "sat" } });
+  const admission = await fundedAdmission.admit({ principal: reconciliationPrincipal, idempotencyKey: "reconciliation-admission", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "6500", unit: "sat" } }, trustedAdmissionReceipt);
   if (admission.status !== "accepted") throw new Error("expected funded admission");
   const gateway = new DeterministicModelGateway({ scenario: { dispatch: "accepted_timeout", lookup } });
   const service = new MeteredGenerationService({ fundedAdmission, store, gateway, worker: { run: async () => { throw new Error("worker must remain fenced"); } } as never, artifactVerifier: { verify: async () => undefined } });

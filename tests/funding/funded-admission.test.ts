@@ -11,6 +11,7 @@ import { FakeCashuSettlementPort } from "../../src/funding/cashu-provider";
 import { FakeLightningReceiptPort } from "../../src/funding/lightning-provider";
 import { probePromotedCliPreSignedRoute } from "../../src/publication/napplet-cli-source-contract";
 import sourceFixture from "../fixtures/phase-06-cli-source-contract.json" with { type: "json" };
+import { exactReadyReservation, trustedAdmissionReceipt } from "../fixtures/admission-ready";
 
 const principal = { pubkey: "b".repeat(64) };
 const settlement = {
@@ -84,12 +85,12 @@ describe("FundedAdmissionService", () => {
     const funding = new FundingService(store);
     await funding.execute(creditCommand());
     const capacity = {
-      reserveNow: async () => ({ status: "available" as const, reference: "capacity:one", expiresAt: "2026-08-05T00:00:00.000Z" }),
+      reserveNow: async ({ intentReference }) => exactReadyReservation(intentReference, "capacity:one", "2026-08-05T00:00:00.000Z"),
       observe: async () => ({ status: "unknown" as const }),
       release: async () => undefined,
     };
     const admission = new FundedAdmissionService({ funding, store, capacity, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
-    const accepted = await admission.admit({ principal, idempotencyKey: "funded-admission", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "500", unit: "sat" } });
+    const accepted = await admission.admit({ principal, idempotencyKey: "funded-admission", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "500", unit: "sat" } }, trustedAdmissionReceipt);
     expect(accepted).toMatchObject({ status: "accepted", approvedCap: "300", heldAmount: "300", reference: "capacity:one" });
     const budget = await admission.authorizeActionBudget({ principal, admissionReference: "capacity:one", idempotencyKey: "action-one", maximum: "200", unit: "sat" });
     expect(budget).toMatchObject({ status: "authorized", reservedAmount: "200", unit: "sat" });
@@ -104,17 +105,17 @@ describe("FundedAdmissionService", () => {
     let observations = 0;
     const capacity = {
       reserveNow: async () => { reserves += 1; throw new Error("timeout after effect"); },
-      observe: async () => {
+      observe: async ({ intentReference }) => {
         observations += 1;
-        return observations === 1 ? { status: "unknown" as const, reference: "capacity:ambiguous" } : { status: "available" as const, reference: "capacity:ambiguous", expiresAt: "2026-08-05T00:00:00.000Z" };
+        return observations === 1 ? { status: "unknown" as const, reference: "capacity:ambiguous" } : exactReadyReservation(intentReference, "capacity:ambiguous", "2026-08-05T00:00:00.000Z");
       },
       release: async () => undefined,
     };
     const admission = new FundedAdmissionService({ funding, store, capacity, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
     const request = { principal, idempotencyKey: "ambiguous-admission", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "200", unit: "sat" as const } };
-    expect(await admission.admit(request)).toMatchObject({ status: "reconciliation_pending" });
+    expect(await admission.admit(request, trustedAdmissionReceipt)).toMatchObject({ status: "reconciliation_pending" });
     expect(store.activeHolds).toHaveLength(0);
-    expect(await admission.admit(request)).toMatchObject({ status: "accepted", heldAmount: "200" });
+    expect(await admission.admit(request, trustedAdmissionReceipt)).toMatchObject({ status: "accepted", heldAmount: "200" });
     expect(reserves).toBe(1);
     expect(observations).toBe(2);
     await expect(admission.authorizeActionBudget({ principal, admissionReference: "capacity:ambiguous", idempotencyKey: "too-large", maximum: "201", unit: "sat" })).rejects.toThrow("ACTION_BUDGET_EXCEEDS_APPROVED_CAP");
@@ -127,15 +128,15 @@ describe("FundedAdmissionService", () => {
     let reserves = 0; let release!: () => void;
     const started = new Promise<void>((resolve) => { release = resolve; });
     const capacity = {
-      reserveNow: async () => { reserves += 1; await started; return { status: "available" as const, reference: "capacity:fenced", expiresAt: "2026-08-05T00:00:00.000Z" }; },
+      reserveNow: async ({ intentReference }) => { reserves += 1; await started; return exactReadyReservation(intentReference, "capacity:fenced", "2026-08-05T00:00:00.000Z"); },
       observe: async () => ({ status: "unknown" as const }), release: async () => undefined,
     };
     const admission = new FundedAdmissionService({ funding, store, capacity, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
     const request = { principal, idempotencyKey: "fenced", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "100", unit: "sat" as const } };
-    const first = admission.admit(request);
+    const first = admission.admit(request, trustedAdmissionReceipt);
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(reserves).toBe(1);
-    const second = admission.admit(request);
+    const second = admission.admit(request, trustedAdmissionReceipt);
     release();
     const outcomes = await Promise.all([first, second]);
     expect(reserves).toBe(1);
@@ -144,10 +145,10 @@ describe("FundedAdmissionService", () => {
     const expiredStore = new TransactionalMemoryFundingStore(); const expiredFunding = new FundingService(expiredStore);
     await expiredFunding.execute(creditCommand());
     const expiredAdmission = new FundedAdmissionService({ funding: expiredFunding, store: expiredStore, capacity: {
-      reserveNow: async () => ({ status: "available" as const, reference: "capacity:expired", expiresAt: "2026-08-03T23:59:59.000Z" }),
+      reserveNow: async ({ intentReference }) => exactReadyReservation(intentReference, "capacity:expired", "2026-08-03T23:59:59.000Z"),
       observe: async () => ({ status: "unknown" as const }), release: async () => undefined,
     }, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
-    expect(await expiredAdmission.admit({ ...request, idempotencyKey: "expired" })).toMatchObject({ status: "refused" });
+    expect(await expiredAdmission.admit({ ...request, idempotencyKey: "expired" }, trustedAdmissionReceipt)).toMatchObject({ status: "refused" });
     expect(expiredStore.activeHolds).toHaveLength(0);
 
   });
@@ -241,7 +242,7 @@ describe("FundedAdmissionService", () => {
     const never = () => new Promise<never>(() => undefined);
     const admission = new FundedAdmissionService({ funding, store, capacity: { reserveNow: never, observe: never, release: never }, capacityTimeoutMs: 5 });
     const observed = await Promise.race([
-      admission.admit({ principal, idempotencyKey: "bounded-capacity", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "20", unit: "sat" } }),
+      admission.admit({ principal, idempotencyKey: "bounded-capacity", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "20", unit: "sat" } }, trustedAdmissionReceipt),
       Bun.sleep(50).then(() => ({ status: "unbounded" as const })),
     ]);
     expect(observed).toMatchObject({ status: "reconciliation_pending" });
@@ -255,14 +256,14 @@ describe("FundedAdmissionService", () => {
       const store = new FailOnceFundingStore(inner, failOn);
       let reserves = 0; let releases = 0;
       const capacity = {
-        reserveNow: async () => { reserves += 1; return { status: "available" as const, reference: `capacity:compensation:${failOn}`, expiresAt: "2026-08-05T00:00:00.000Z" }; },
+        reserveNow: async ({ intentReference }) => { reserves += 1; return exactReadyReservation(intentReference, `capacity:compensation:${failOn}`, "2026-08-05T00:00:00.000Z"); },
         observe: async () => ({ status: "unknown" as const }),
         release: async () => { releases += 1; },
       };
       const admission = new FundedAdmissionService({ funding: new FundingService(store), store, capacity, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
       const command = { principal, idempotencyKey: `compensation:${failOn}`, policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "20", unit: "sat" as const } };
-      expect(await admission.admit(command)).toMatchObject({ status: "refused" });
-      expect(await admission.admit(command)).toMatchObject({ status: "refused" });
+      expect(await admission.admit(command, trustedAdmissionReceipt)).toMatchObject({ status: "refused" });
+      expect(await admission.admit(command, trustedAdmissionReceipt)).toMatchObject({ status: "refused" });
       expect(reserves).toBe(1);
       expect(releases).toBe(1);
       expect(inner.activeHolds).toHaveLength(0);
@@ -275,14 +276,14 @@ describe("FundedAdmissionService", () => {
     const store = new FailOnceFundingStore(inner, 4);
     let reserves = 0; let releases = 0; let observations = 0;
     const capacity = {
-      reserveNow: async () => { reserves += 1; return { status: "available" as const, reference: "capacity:release-ambiguous", expiresAt: "2026-08-05T00:00:00.000Z" }; },
+      reserveNow: async ({ intentReference }) => { reserves += 1; return exactReadyReservation(intentReference, "capacity:release-ambiguous", "2026-08-05T00:00:00.000Z"); },
       observe: async () => { observations += 1; return { status: "unknown" as const, reference: "capacity:release-ambiguous" }; },
       release: async () => { releases += 1; throw new Error("CAPACITY_RELEASE_UNKNOWN"); },
     };
     const admission = new FundedAdmissionService({ funding: new FundingService(store), store, capacity, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
     const command = { principal, idempotencyKey: "release-ambiguous", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "20", unit: "sat" as const } };
-    expect(await admission.admit(command)).toMatchObject({ status: "reconciliation_pending" });
-    expect(await admission.admit(command)).toMatchObject({ status: "reconciliation_pending" });
+    expect(await admission.admit(command, trustedAdmissionReceipt)).toMatchObject({ status: "reconciliation_pending" });
+    expect(await admission.admit(command, trustedAdmissionReceipt)).toMatchObject({ status: "reconciliation_pending" });
     expect({ reserves, releases, observations }).toEqual({ reserves: 1, releases: 1, observations: 1 });
     expect(inner.activeHolds).toHaveLength(0);
   });
@@ -293,15 +294,15 @@ describe("FundedAdmissionService", () => {
     const store = new FailAvailableAndPreFenceStore(inner);
     let reserves = 0; let releases = 0; let observations = 0;
     const capacity = {
-      reserveNow: async () => { reserves += 1; return { status: "available" as const, reference: "capacity:fail-4", expiresAt: "2026-08-05T00:00:00.000Z" }; },
+      reserveNow: async ({ intentReference }) => { reserves += 1; return exactReadyReservation(intentReference, "capacity:fail-4", "2026-08-05T00:00:00.000Z"); },
       release: async () => { releases += 1; },
       observe: async () => { observations += 1; return { status: "refused" as const, reason: "already-released" }; },
     };
     const admission = new FundedAdmissionService({ funding: new FundingService(store), store, capacity, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
     const command = { principal, idempotencyKey: "fail-4", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "20", unit: "sat" as const } };
 
-    expect(await admission.admit(command)).toMatchObject({ status: "refused" });
-    expect(await admission.admit(command)).toMatchObject({ status: "refused" });
+    expect(await admission.admit(command, trustedAdmissionReceipt)).toMatchObject({ status: "refused" });
+    expect(await admission.admit(command, trustedAdmissionReceipt)).toMatchObject({ status: "refused" });
     expect({ reserves, releases, observations }).toEqual({ reserves: 1, releases: 1, observations: 0 });
     expect(store.acceptAttempts).toBe(0);
     expect(inner.activeHolds).toHaveLength(0);
@@ -313,15 +314,15 @@ describe("FundedAdmissionService", () => {
     const store = new FailReleaseFinalizationStore(inner);
     let reserves = 0; let releases = 0; let observations = 0;
     const capacity = {
-      reserveNow: async () => { reserves += 1; return { status: "available" as const, reference: "capacity:fail-5", expiresAt: "2026-08-05T00:00:00.000Z" }; },
+      reserveNow: async ({ intentReference }) => { reserves += 1; return exactReadyReservation(intentReference, "capacity:fail-5", "2026-08-05T00:00:00.000Z"); },
       release: async () => { releases += 1; },
       observe: async () => { observations += 1; return { status: "refused" as const, reason: "already-released" }; },
     };
     const admission = new FundedAdmissionService({ funding: new FundingService(store), store, capacity, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
     const command = { principal, idempotencyKey: "fail-5", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "20", unit: "sat" as const } };
 
-    expect(await admission.admit(command)).toMatchObject({ status: "reconciliation_pending" });
-    expect(await admission.admit(command)).toMatchObject({ status: "refused" });
+    expect(await admission.admit(command, trustedAdmissionReceipt)).toMatchObject({ status: "reconciliation_pending" });
+    expect(await admission.admit(command, trustedAdmissionReceipt)).toMatchObject({ status: "refused" });
     expect({ reserves, releases, observations }).toEqual({ reserves: 1, releases: 1, observations: 1 });
     expect(store.acceptAttempts).toBe(1);
     expect(inner.activeHolds).toHaveLength(0);

@@ -210,8 +210,10 @@ class PgFundingTransaction implements MeteredFundingTransaction, ContinuationFun
     return frozen({ ...input, state: "needs_top_up" as const });
   }
   async nextPauseGeneration(sessionId: string): Promise<number> {
-    const row = first(await this.client.query("SELECT COALESCE(MAX(pause_generation),0)+1 AS next_generation FROM continuation_pauses WHERE account_id=$1 AND session_id=$2 FOR UPDATE", [this.accountId, sessionId]), "PAUSE_GENERATION_UNAVAILABLE");
-    return Number(row.next_generation);
+    // PostgreSQL forbids FOR UPDATE on an aggregate. Lock the current maximum
+    // row instead; the serializable transaction supplies the empty-range fence.
+    const row = (await this.client.query("SELECT pause_generation FROM continuation_pauses WHERE account_id=$1 AND session_id=$2 ORDER BY pause_generation DESC LIMIT 1 FOR UPDATE", [this.accountId, sessionId])).rows[0];
+    return row ? Number(row.pause_generation) + 1 : 1;
   }
   async findContinuationPause(sessionId: string, pauseGeneration: number): Promise<ContinuationPause | undefined> {
     const row = (await this.client.query("SELECT account_id,session_id,admission_reference,idempotency_key,fingerprint_sha256,pending_fingerprint_sha256,expected_session_version,pause_generation,grace_deadline_ms,live_lease_token,intent_json,result_json,state FROM continuation_pauses WHERE account_id=$1 AND session_id=$2 AND pause_generation=$3 FOR UPDATE", [this.accountId, sessionId, pauseGeneration])).rows[0];

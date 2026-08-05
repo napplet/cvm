@@ -75,7 +75,7 @@ describe("promotion tracer", () => {
     const second = await runPromotionCandidate(candidate, options);
 
     expect(first.status).toBe("blocked");
-    expect(first.responsibleStage).toBe("certification-deferred");
+    expect(first.responsibleStage).toBe("certification-required");
     expect(second).toEqual(first);
     expect(first.candidateId).toBe(await canonicalToolchainId(parsePromotionManifest(candidate)));
     expect(await Bun.file(join(directory, `${first.evidenceSha256}.json`)).exists()).toBeTrue();
@@ -104,7 +104,7 @@ describe("promotion tracer", () => {
     stage[0] = { ...stage[0], argv: [join(import.meta.dir, "fixtures", "fake-toolchain.ts"), "--mode=echo", "--literal", literal], expectedOutput: { outcome: "ok", literal } };
     const result = await runPromotionCandidate(candidate, { evidenceDirectory: await evidenceDirectory(), now: () => 1_000, runSealed: sealedTestRunner, runDenialProbes: sealedDenialTestRunner });
     expect(result.status).toBe("blocked");
-    expect(result.responsibleStage).toBe("certification-deferred");
+    expect(result.responsibleStage).toBe("certification-required");
     expect(await Bun.file(join(process.cwd(), "should-not-exist")).exists()).toBeFalse();
   });
 });

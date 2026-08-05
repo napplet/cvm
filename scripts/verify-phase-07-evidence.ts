@@ -15,8 +15,9 @@ async function git(args: readonly string[]): Promise<string> {
 /** Generated evidence is intentionally unavailable from a dirty checkout: a
  * deterministic report must never pretend to describe a clean candidate. */
 async function cleanHeadRevision(): Promise<string> {
-  await git(["diff", "--quiet"]);
-  await git(["diff", "--cached", "--quiet"]);
+  // `diff --quiet` misses untracked files. Claim-bearing evidence may only be
+  // written from a fully clean checkout, including index and untracked state.
+  if (await git(["status", "--porcelain=v1", "--untracked-files=all"])) throw new Error("SOURCE_TREE_DIRTY");
   const revision = await git(["rev-parse", "HEAD"]);
   await git(["cat-file", "-e", `${revision}^{commit}`]);
   return revision;

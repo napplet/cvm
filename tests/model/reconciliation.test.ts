@@ -10,6 +10,7 @@ import { FundingService } from "../../src/funding/funding-service";
 import { FundedAdmissionService } from "../../src/funding/funded-admission";
 import { exactReadyReservation, trustedAdmissionReceipt, trustedAdmissionReceiptAuthority } from "../fixtures/admission-ready";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
+import type { LifecycleObservation } from "../../src/telemetry/contracts";
 
 const intent = (operationId = "operation:gateway"): ProviderOperationIntent => ({
   operationId, providerRequestId: `deterministic:${operationId}`,
@@ -155,7 +156,8 @@ describe("reconciliation", () => {
 
   test("settles one found receipt under concurrent original-operation-only recovery", async () => {
     const { store, gateway, action } = await ambiguousAction("receipt_found");
-    const reconciliation = new ModelReconciliationService({ store, gateway });
+    const observations: LifecycleObservation[] = [];
+    const reconciliation = new ModelReconciliationService({ store, gateway, telemetry: { observe: (observation) => { observations.push(observation); } } });
     const command = { principal: reconciliationPrincipal, sessionId: action.sessionId, actionId: action.actionId, operationId: action.operationId };
 
     const [first, duplicate] = await Promise.all([reconciliation.reconcile(command), reconciliation.reconcile(command)]);
@@ -165,6 +167,7 @@ describe("reconciliation", () => {
     expect(gateway.dispatchCount(action.operationId)).toBe(1);
     expect(gateway.lookupCount(action.operationId)).toBe(1);
     expect(store.postings.filter((posting) => posting.reference === action.operationId)).toHaveLength(1);
+    expect(observations).toEqual([expect.objectContaining({ stage: "reconciliation", outcome: "succeeded", correlationDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u) })]);
   });
 
   test("keeps pending reconciliation blocked and releases only proven zero-use observations", async () => {

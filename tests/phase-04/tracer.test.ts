@@ -7,12 +7,13 @@ import type { ModelGateway } from "../../src/model/model-gateway";
 import type { ArtifactVerifier } from "../../src/phase-02/trusted-core";
 import type { WorkerPort } from "../../src/phase-02/contracts";
 import { exactReadyReservation, trustedAdmissionReceipt, trustedAdmissionReceiptAuthority } from "../fixtures/admission-ready";
+import type { LifecycleObservation, LifecycleTelemetryPort } from "../../src/telemetry/contracts";
 
 const principal = { pubkey: "ab".repeat(32) };
 
-async function fundedDependencies() {
+async function fundedDependencies(telemetry?: LifecycleTelemetryPort) {
   const store = new TransactionalMemoryFundingStore();
-  const funding = new FundingService(store);
+  const funding = new FundingService(store, telemetry);
   await funding.execute({
     principal, kind: "credit_settlement", idempotencyKey: "credit-1", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1",
     payload: { settlement: { topUpId: "topup-1", rail: "lightning", unit: "sat", amount: "10000", externalReference: "lightning-1", settlementReference: "settlement-1", verifiedAt: "2026-08-04T00:00:00.000Z" } },
@@ -47,13 +48,15 @@ const verifier: ArtifactVerifier = { async verify(facts) {
 
 describe("Phase 04 funded start tracer", () => {
   test("settles one persisted provider intent, then replays concurrent duplicates without new effects", async () => {
-    const { store, admissions, admission } = await fundedDependencies();
+    const observations: LifecycleObservation[] = [];
+    const telemetry = { observe: (observation: LifecycleObservation) => { observations.push(observation); } };
+    const { store, admissions, admission } = await fundedDependencies(telemetry);
     const effects = { dispatches: 0, workers: 0 };
     const gateway: ModelGateway = {
       async dispatch(intent) { effects.dispatches += 1; return { status: "completed", receipt: { operationId: intent.operationId, providerRequestId: intent.providerRequestId, provider: "deterministic_fixture", model: "phase-04-fixture-model", profileId: intent.profileId, priceCardId: intent.priceCardId, selection: "unselected", completedAt: "2026-08-04T00:00:01.000Z", provenance: { protectedEvidenceReference: "provider-evidence-1" }, usage: [{ dimension: "input_tokens", units: "10" }, { dimension: "output_tokens", units: "5" }] } }; },
       async lookup() { return { status: "not_found" }; },
     };
-    const service = new MeteredGenerationService({ fundedAdmission: admissions, store, gateway, worker: completedWorker(effects), artifactVerifier: verifier });
+    const service = new MeteredGenerationService({ fundedAdmission: admissions, store, gateway, worker: completedWorker(effects), artifactVerifier: verifier, telemetry });
     const command = { principal, admissionReference: admission.reference, idempotencyKey: "start-1", expectedVersion: 0, maximum: "3250", policyVersion: "phase-02-policy-2026-08-04", idea: "Build one focused counter napplet." };
 
     const [first, duplicate] = await Promise.all([service.startSession(command), service.startSession(command)]);
@@ -64,6 +67,12 @@ describe("Phase 04 funded start tracer", () => {
     expect(store.meteredActions).toHaveLength(1);
     expect(store.meteredActions[0]).toMatchObject({ status: "completed", receiptCharge: "15" });
     expect(store.projection(first.accountId)).toEqual({ settledAvailable: "9985", held: "6485", unit: "sat" });
+    expect(observations.map(({ stage, outcome }) => ({ stage, outcome }))).toEqual([
+      { stage: "ledger_settlement", outcome: "succeeded" },
+      { stage: "generation", outcome: "succeeded" },
+      { stage: "ledger_settlement", outcome: "succeeded" },
+    ]);
+    expect(observations.every((observation) => /^sha256:[a-f0-9]{64}$/u.test(observation.correlationDigest))).toBeTrue();
   });
 
   test("denies invalid text before budget, provider, worker, ledger, or artifact effects", async () => {

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { canonicalToolchainId, parsePromotionManifest } from "../src/promotion/schema";
 import { runPromotionCandidate } from "../src/promotion/run-promotion";
 import { runHermeticCommand } from "../src/runner/hermetic-command";
+import type { LifecycleObservation } from "../src/telemetry/contracts";
 
 const cleanup: string[] = [];
 afterEach(async () => {
@@ -70,7 +71,8 @@ describe("promotion tracer", () => {
   test("runs a fully pinned candidate through command evidence deterministically", async () => {
     const candidate = await manifest();
     const directory = await evidenceDirectory();
-    const options = { evidenceDirectory: directory, now: () => 1_000, runSealed: sealedTestRunner, runDenialProbes: sealedDenialTestRunner };
+    const observations: LifecycleObservation[] = [];
+    const options = { evidenceDirectory: directory, now: () => 1_000, runSealed: sealedTestRunner, runDenialProbes: sealedDenialTestRunner, telemetry: { observe: (observation: LifecycleObservation) => { observations.push(observation); } } };
     const first = await runPromotionCandidate(candidate, options);
     const second = await runPromotionCandidate(candidate, options);
 
@@ -83,6 +85,10 @@ describe("promotion tracer", () => {
     expect(evidence.artifacts.status).toBe("not-evaluated");
     expect(evidence.reproducibility.status).toBe("not-evaluated");
     expect(evidence.provenance.status).toBe("not-evaluated");
+    expect(observations).toEqual([
+      expect.objectContaining({ stage: "promotion", outcome: "blocked", correlationDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u) }),
+      expect.objectContaining({ stage: "promotion", outcome: "blocked", correlationDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u) }),
+    ]);
   });
 
   test.each([

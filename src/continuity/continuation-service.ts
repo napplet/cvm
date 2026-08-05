@@ -3,6 +3,7 @@ import type { CheckpointEnvelope, CheckpointEnvelopeService, CheckpointManifest 
 import type { ContinuationFundingStore } from "../persistence/funding-store";
 import type { CheckpointRestoreRequest, ContinuationWorkerPort } from "../phase-02/contracts";
 import { canonicalJson } from "../promotion/schema";
+import { emitLifecycleObservation, type LifecycleTelemetryPort } from "../telemetry/contracts";
 
 const GRACE_WINDOW_MS = 600_000;
 
@@ -78,7 +79,7 @@ export type WakeEffectReconciliationPort = Readonly<{
 export class ContinuationService {
   #resumeInFlight = new Map<string, Promise<ResumeSessionResult>>();
   #resumeResults = new Map<string, ResumeSessionResult>();
-  constructor(private readonly options: Readonly<{ store: ContinuationFundingStore; clock?: Readonly<{ nowMs(): number }>; resume?: ResumeDependencies; wakeReconciliation?: WakeEffectReconciliationPort }>) {}
+  constructor(private readonly options: Readonly<{ store: ContinuationFundingStore; clock?: Readonly<{ nowMs(): number }>; resume?: ResumeDependencies; wakeReconciliation?: WakeEffectReconciliationPort; telemetry?: LifecycleTelemetryPort }>) {}
 
   async pauseForFunding(input: Readonly<{ intent: PendingActionIntent }>): Promise<NeedsTopUpResult | undefined> {
     const intent = PendingActionIntentSchema.parse(input.intent);
@@ -226,8 +227,9 @@ export class ContinuationService {
     if (remembered) return remembered;
     const active = this.#resumeInFlight.get(replayKey);
     if (active) return active;
-    const run = this.#claimAndRestore(command).then((result) => {
+    const run = this.#claimAndRestore(command).then(async (result) => {
       this.#resumeResults.set(replayKey, result);
+      await emitLifecycleObservation(this.options.telemetry, [command.principal.id, command.sessionId, command.checkpointId], "resume", result.status === "restored" ? "succeeded" : result.status === "reconciliation_pending" ? "pending" : "blocked", (this.options.clock ?? { nowMs: Date.now }).nowMs());
       return result;
     }).finally(() => this.#resumeInFlight.delete(replayKey));
     this.#resumeInFlight.set(replayKey, run);

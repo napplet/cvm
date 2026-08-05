@@ -1,5 +1,6 @@
 import { CapabilityReviewSchema, SealedArtifactIdentitySchema, type CapabilityReview, PreviewDescriptorSchema, type Phase06Clock, type PreviewDescriptor, type PreviewHostPort, type SealedArtifactPort } from "./contracts.js";
 import { safePreviewDenial, type SafePreviewDenial } from "./public-status.js";
+import { emitLifecycleObservation, type LifecycleTelemetryPort } from "../telemetry/contracts";
 
 const HostGrantSchema = PreviewDescriptorSchema.pick({ previewGrantId: true, iframeSandbox: true, authority: true }).passthrough();
 const allowedHostGrantKeys = new Set(["previewGrantId", "iframeSandbox", "authority", "artifact", "review", "nowMs", "expiresAtMs"]);
@@ -10,9 +11,16 @@ function parseHostGrant(value: unknown) {
 }
 
 export class PreviewService {
-  constructor(private readonly dependencies: Readonly<{ sealedArtifacts: SealedArtifactPort; host: PreviewHostPort; clock: Phase06Clock; capabilityReview: (artifact: unknown, runtimeVariant: string) => CapabilityReview | Promise<CapabilityReview> }>) {}
+  constructor(private readonly dependencies: Readonly<{ sealedArtifacts: SealedArtifactPort; host: PreviewHostPort; clock: Phase06Clock; capabilityReview: (artifact: unknown, runtimeVariant: string) => CapabilityReview | Promise<CapabilityReview>; telemetry?: LifecycleTelemetryPort }>) {}
 
   async previewVerifiedArtifact(input: Readonly<{ accountId: string; sessionId: string; artifactId: string; runtimeVariant: string }>): Promise<PreviewDescriptor | SafePreviewDenial> {
+    const result = await this.#previewVerifiedArtifact(input);
+    await emitLifecycleObservation(this.dependencies.telemetry, [input.accountId, input.sessionId, input.artifactId], "preview", "previewGrantId" in result ? "succeeded" : "blocked", this.dependencies.clock.nowMs());
+    return result;
+  }
+
+  /** The telemetry wrapper observes the final descriptor/denial without affecting host authority. */
+  async #previewVerifiedArtifact(input: Readonly<{ accountId: string; sessionId: string; artifactId: string; runtimeVariant: string }>): Promise<PreviewDescriptor | SafePreviewDenial> {
     let artifact: ReturnType<typeof SealedArtifactIdentitySchema.parse>;
     try {
       artifact = SealedArtifactIdentitySchema.parse(await this.dependencies.sealedArtifacts.readVerified({ accountId: input.accountId, sessionId: input.sessionId, artifactId: input.artifactId }));

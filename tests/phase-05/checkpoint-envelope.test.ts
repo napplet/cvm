@@ -5,6 +5,7 @@ import {
   type CheckpointSealRequest,
 } from "../../src/continuity/checkpoint-envelope";
 import { DeterministicObjectStore } from "../../src/continuity/object-store";
+import type { LifecycleObservation } from "../../src/telemetry/contracts";
 
 const encoder = new TextEncoder();
 
@@ -59,7 +60,9 @@ function setupEnvelopeService() {
 
 describe("checkpoint envelope", () => {
   test("seals complete coordinator facts into an encrypted immutable object and restores exact bytes", async () => {
-    const { service, store } = setupEnvelopeService();
+    const observations: LifecycleObservation[] = [];
+    const { store, crypto } = setupEnvelopeService();
+    const service = new CheckpointEnvelopeService({ crypto, objectStore: store, now: () => "2026-08-05T00:00:00.000Z", telemetry: { observe: (observation) => { observations.push(observation); } } });
     const request = completeRequest();
 
     const sealed = await service.seal(request);
@@ -70,6 +73,8 @@ describe("checkpoint envelope", () => {
     expect(sealed.envelope.object.generation).toBe(1);
     expect(await service.restore(sealed.envelope, sealed.manifest)).toEqual(request.archive);
     expect(await store.readExact(sealed.envelope.object)).toBeDefined();
+    expect(observations).toHaveLength(1);
+    expect(observations[0]).toMatchObject({ stage: "checkpoint", outcome: "succeeded", correlationDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u) });
   });
 
   test("denies every archive, envelope, manifest, object, and key tamper with one generic result", async () => {

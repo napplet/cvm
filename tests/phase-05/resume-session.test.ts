@@ -8,6 +8,7 @@ import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-s
 import type { CheckpointRestoreRequest, CheckpointRestoreResult, ContinuationWorkerPort, WorkerRunRequest, WorkerRunResult } from "../../src/phase-02/contracts";
 import { readSessionStatus } from "../../src/phase-04/session-status";
 import { MeteredGenerationService } from "../../src/phase-04/metered-generation-service";
+import type { LifecycleObservation } from "../../src/telemetry/contracts";
 
 const nowMs = 1_700_000_700_000;
 const principal = { pubkey: "cd".repeat(32) };
@@ -32,7 +33,7 @@ class ResumeWorker implements ContinuationWorkerPort {
   }
 }
 
-async function setup(input: Readonly<{ topUp?: boolean; compatible?: boolean }> = {}) {
+async function setup(input: Readonly<{ topUp?: boolean; compatible?: boolean; telemetry?: { observe(observation: LifecycleObservation): void } }> = {}) {
   const store = new TransactionalMemoryFundingStore();
   const funding = new FundingService(store);
   const accountId = await accountIdForPrincipal(principal);
@@ -82,6 +83,7 @@ async function setup(input: Readonly<{ topUp?: boolean; compatible?: boolean }> 
       checkpoint: { loadExact: async () => sealed, restore: (material: typeof sealed) => envelope.restore(material.envelope, material.manifest) },
       allocate: async () => { allocations += 1; return { status: "allocated" as const, worker }; },
     },
+    telemetry: input.telemetry,
   } as never);
   const command = { principal: { id: accountId }, sessionId: "session:resume", checkpointId: "checkpoint:resume", expectedSessionVersion: 4, expectedCheckpointVersion: 1, idempotencyKey: "resume:one", approvePendingAction: true, capApprovalReference: admissionReference, pendingAction: { reference: "pending:resume", fingerprint: pendingFingerprint, kind: "revise_session", maximum: "3250" } };
   const resume = (overrides: Record<string, unknown> = {}) => (service as unknown as { resumeSession(input: unknown): Promise<unknown> }).resumeSession({ ...command, ...overrides });
@@ -90,13 +92,15 @@ async function setup(input: Readonly<{ topUp?: boolean; compatible?: boolean }> 
 
 describe("explicit post-grace resume", () => {
   test("claims one approved checkpoint, creates one fresh budget and lease, then restores it exactly once", async () => {
-    const fixture = await setup();
+    const observations: LifecycleObservation[] = [];
+    const fixture = await setup({ telemetry: { observe: (observation) => { observations.push(observation); } } });
     const [first, duplicate, concurrent] = await Promise.all([fixture.resume(), fixture.resume(), fixture.resume()]);
     expect(first).toMatchObject({ status: "restored", checkpointId: "checkpoint:resume", pendingActionReference: "pending:resume" });
     expect(duplicate).toEqual(first);
     expect(concurrent).toEqual(first);
     expect(fixture.allocations()).toBe(1);
     expect(fixture.worker.restores).toBe(1);
+    expect(observations).toEqual([expect.objectContaining({ stage: "resume", outcome: "succeeded", correlationDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u) })]);
   });
 
   test("denies missing consent, altered pending approval, foreign ownership, insufficient funding, and incompatible pins before effects", async () => {

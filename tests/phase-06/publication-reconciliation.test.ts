@@ -9,8 +9,9 @@ import { TransactionalMemoryPublicationStore } from "../../src/persistence/publi
 import { SqlitePublicationStore } from "../../src/persistence/sqlite-publication-store.js";
 import { signedPhase06EventFixture, verifiedPhase06Artifact } from "./fakes.js";
 import { reportPhase06Observation } from "./reference-observation.js";
+import type { LifecycleObservation } from "../../src/telemetry/contracts";
 
-async function createService(outcome: "completed" | "unknown" | "failed" = "completed") {
+async function createService(outcome: "completed" | "unknown" | "failed" = "completed", telemetry?: { observe(observation: LifecycleObservation): void }) {
   const store = new TransactionalMemoryPublicationStore();
   const counts = { deploy: 0, owner: 0, attestation: 0, observeDeploy: 0, observeOwner: 0, observeAttestation: 0 };
   const service = new PublicationService({
@@ -26,6 +27,7 @@ async function createService(outcome: "completed" | "unknown" | "failed" = "comp
       publish: async ({ operationId }) => { counts.attestation += 1; return { operationId, state: outcome, observationId: `attestation:${operationId}`, attestationId: "attestation:phase-06" }; },
       observe: async ({ operationId }) => { counts.observeAttestation += 1; return { operationId, state: "completed" as const, observationId: `observed:${operationId}`, attestationId: "attestation:phase-06", relayObservation: `relay:${operationId}` }; },
     },
+    telemetry,
   });
   const review = await canonicalCapabilityReview(verifiedPhase06Artifact, "napplet-host/v1");
   const intent = await service.createIntent({ accountId: verifiedPhase06Artifact.accountId, sessionId: verifiedPhase06Artifact.sessionId, artifact: verifiedPhase06Artifact, review, ownerPubkey: signedPhase06EventFixture.pubkey, idempotencyKey: `publication:reconcile:${outcome}`, purpose: "Publish exact sealed bytes", consent: "approved", runtimeVariant: "napplet-host/v1" });
@@ -34,7 +36,8 @@ async function createService(outcome: "completed" | "unknown" | "failed" = "comp
 }
 
 test("claims each effect once, persists ambiguous results, and reconciles only original operation identities", async () => {
-  const { service, counts, intent, command } = await createService("unknown");
+  const observations: LifecycleObservation[] = [];
+  const { service, counts, intent, command } = await createService("unknown", { observe: (observation) => { observations.push(observation); } });
   const [first, replay] = await Promise.all([
     service.submitSignedManifest({ accountId: intent.accountId, intentId: intent.intentId, command, event: signedPhase06EventFixture }),
     service.submitSignedManifest({ accountId: intent.accountId, intentId: intent.intentId, command, event: signedPhase06EventFixture }),
@@ -46,6 +49,8 @@ test("claims each effect once, persists ambiguous results, and reconciles only o
   const reconciled = await service.observeOriginalPublicationEffects({ accountId: intent.accountId, intentId: intent.intentId });
   expect(reconciled).toMatchObject({ state: "complete", intentId: intent.intentId, nextAction: "none" });
   expect(counts).toMatchObject({ deploy: 1, owner: 1, attestation: 1, observeDeploy: 2, observeAttestation: 1 });
+  expect(observations).toHaveLength(6);
+  expect(observations.every((observation) => observation.stage === "publication" && ["pending", "succeeded"].includes(observation.outcome ?? "") && /^sha256:[a-f0-9]{64}$/u.test(observation.correlationDigest))).toBeTrue();
   reportPhase06Observation({ id: "P06-CONCURRENT-01", status: "replayed", effects: "deploy=1;attestation=1", value: "single-claim" });
   reportPhase06Observation({ id: "P06-INTERRUPT-01", status: "pending", effects: "deploy=1;attestation=1", value: "unknown" });
   reportPhase06Observation({ id: "P06-OBSERVE-01", status: "complete", effects: "deploy=1;observe=3;attestation=1", value: "original-ids" });

@@ -1,6 +1,7 @@
 import { accountIdForPrincipal, fingerprintAccountCommand } from "../domain/account-command";
 import { AccountStatusSchema, AuthenticatedFundingCommandSchema, type FundingResult, type Principal } from "../phase-03/contracts";
 import type { FundingStore } from "../persistence/funding-store";
+import { emitLifecycleObservation, type LifecycleTelemetryPort } from "../telemetry/contracts";
 
 function freeze<T>(value: T): T {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
@@ -12,7 +13,7 @@ function freeze<T>(value: T): T {
 
 /** Transport-neutral coordination layer. It owns no rail I/O, worker, or provider authority. */
 export class FundingService {
-  constructor(private readonly store: FundingStore) {}
+  constructor(private readonly store: FundingStore, private readonly telemetry?: LifecycleTelemetryPort) {}
 
   async execute(input: unknown): Promise<FundingResult> {
     const command = AuthenticatedFundingCommandSchema.parse(input);
@@ -23,7 +24,7 @@ export class FundingService {
       if (replay.fingerprint !== fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
       return freeze(structuredClone(replay.result));
     }
-    return this.store.transact(accountId, async (transaction) => {
+    const result = await this.store.transact(accountId, async (transaction) => {
       const insideReplay = await transaction.findRecordedResult(command.idempotencyKey);
       if (insideReplay) {
         if (insideReplay.fingerprint !== fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
@@ -35,6 +36,8 @@ export class FundingService {
       if (!command.payload.capacity.usable) throw new Error("CAPACITY_UNAVAILABLE");
       return transaction.acceptFundedAdmission({ accountId, fingerprint, idempotencyKey: command.idempotencyKey, requestedCap: BigInt(command.payload.requestedCap), capacityReference: command.payload.capacity.reference });
     });
+    if (command.kind === "credit_settlement") await emitLifecycleObservation(this.telemetry, [accountId, command.idempotencyKey], "ledger_settlement", "succeeded");
+    return result;
   }
 
   async status(principalInput: unknown) {

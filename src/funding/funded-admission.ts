@@ -4,7 +4,7 @@ import { PrincipalSchema, type FundedAdmission } from "../phase-03/contracts";
 import type { FundingStore } from "../persistence/funding-store";
 import { FundingService } from "./funding-service";
 import type { AdmissionReceiptAuthority, VerifiedAdmissionReceipt } from "./admission-receipt";
-import { AdmissionLifecycleContextSchema, lifecycleObservation, type AdmissionLifecycleContext, type LifecycleTelemetryPort } from "../telemetry/contracts";
+import { AdmissionLifecycleContextSchema, emitLifecycleObservationWithCorrelation, type AdmissionLifecycleContext, type LifecycleTelemetryPort } from "../telemetry/contracts";
 
 const SatSchema = z.string().regex(/^[1-9][0-9]*$/u).refine((value) => BigInt(value) <= BigInt(Number.MAX_SAFE_INTEGER));
 const AdmissionCommandSchema = z.object({
@@ -206,10 +206,9 @@ export class FundedAdmissionService {
       && parsed.data.sessionBindingDigest === receipt.expectedSessionBindingDigest;
   }
 
-  private observeLifecycle(context: AdmissionLifecycleContext | undefined, stage: Parameters<typeof lifecycleObservation>[1], monotonicMs: number | undefined, outcome?: Parameters<typeof lifecycleObservation>[3]): void {
+  private observeLifecycle(context: AdmissionLifecycleContext | undefined, stage: "correlated_receipt" | "capacity_intent_created" | "capacity_reserve_started" | "exact_session_ready" | "capacity_refused" | "reconciliation_pending", monotonicMs: number | undefined, outcome?: "accepted" | "capacity_unavailable" | "reconciliation_pending"): void {
     if (!context || monotonicMs === undefined) return;
-    try { void this.options.telemetry?.observe(lifecycleObservation(context, stage, monotonicMs, outcome)); }
-    catch { /* Telemetry is observational and cannot alter admission. */ }
+    void emitLifecycleObservationWithCorrelation(this.options.telemetry, context.correlationDigest, stage, outcome, monotonicMs);
   }
 
   private async observeCapacity(input: Readonly<{ intentReference: string; expectedSessionBindingDigest: string; reference?: string }>): Promise<CapacityObservation> {

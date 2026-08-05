@@ -4,6 +4,7 @@ import { PrincipalSchema } from "../phase-03/contracts";
 import { PHASE_04_DETERMINISTIC_PRICE_CARD, PHASE_04_MODEL_PROFILES, priceReceipt } from "./price-card";
 import { ModelLookupObservationSchema, ProviderOperationIntentSchema, type ModelGateway } from "./model-gateway";
 import type { MeteredFundingStore, MeteredAction } from "../persistence/funding-store";
+import { emitLifecycleObservation, type LifecycleTelemetryPort } from "../telemetry/contracts";
 
 export const ReconcileOperationCommandSchema = z.object({
   principal: PrincipalSchema,
@@ -48,7 +49,7 @@ function toIntent(action: MeteredAction) {
 /** Lookup-only recovery for a durable ambiguous provider operation. */
 export class ModelReconciliationService {
   readonly #inFlight = new Map<string, Promise<ReconciliationResult>>();
-  constructor(private readonly options: Readonly<{ store: MeteredFundingStore; gateway: ModelGateway; onObservation?: (observation: ModelReconciliationObservation) => void }>) {}
+  constructor(private readonly options: Readonly<{ store: MeteredFundingStore; gateway: ModelGateway; onObservation?: (observation: ModelReconciliationObservation) => void; telemetry?: LifecycleTelemetryPort }>) {}
 
   async reconcile(input: unknown, signal = new AbortController().signal): Promise<ReconciliationResult> {
     const command = ReconcileOperationCommandSchema.parse(input);
@@ -56,7 +57,10 @@ export class ModelReconciliationService {
     const action = await this.loadBoundAction(accountId, command);
     const active = this.#inFlight.get(action.operationId);
     if (active) return active;
-    const run = this.reconcileOnce(action, signal).finally(() => this.#inFlight.delete(action.operationId));
+    const run = this.reconcileOnce(action, signal).then(async (result) => {
+      await emitLifecycleObservation(this.options.telemetry, [action.accountId, action.sessionId, action.operationId], "reconciliation", result.status === "usage_unknown" ? "pending" : result.status === "billing_invariant_failed" ? "blocked" : "succeeded");
+      return result;
+    }).finally(() => this.#inFlight.delete(action.operationId));
     this.#inFlight.set(action.operationId, run);
     return run;
   }
@@ -124,7 +128,7 @@ export class ModelReconciliationService {
     if (operationId !== action.operationId || !action.providerRequestId || providerRequestId !== action.providerRequestId) throw new Error("RECONCILIATION_RECEIPT_CORRELATION_MISMATCH");
   }
 
-  private #observe(value: ModelReconciliationObservation): void {
+  #observe(value: ModelReconciliationObservation): void {
     this.options.onObservation?.(Object.freeze(structuredClone(ModelReconciliationObservationSchema.parse(value))));
   }
 }

@@ -4,6 +4,7 @@ import { ProjectNappletHarness } from "../../src/phase-04/napplet-harness";
 import type { WorkerPort } from "../../src/phase-02/contracts";
 import type { ArtifactVerifier } from "../../src/phase-02/trusted-core";
 import { runFailedArtifactProbe, runVerifiedArtifactProbe } from "../support/phase-04/session-artifact-probes";
+import type { LifecycleObservation } from "../../src/telemetry/contracts";
 
 const manifest = parsePromotionManifest({
   schemaVersion: 1, status: "candidate", protocol: { nip5dRevision: "a".repeat(40), napRevisions: ["b".repeat(40)] },
@@ -36,11 +37,13 @@ describe("project napplet harness artifact truth", () => {
   test("executes the fixed promoted workflow and only returns a verified candidate after all server gates", async () => {
     const probe = await runVerifiedArtifactProbe();
     expect(probe).toMatchObject({ workerCalls: 1, result: { status: "verified", artifactId: "artifact:candidate:2", workflow: ["make-napplet", "design-napplet", "build-napplet", "test-napplet"] } });
-    const harness = new ProjectNappletHarness({ worker: completedWorker(), artifactVerifier: passingVerifier });
+    const observations: LifecycleObservation[] = [];
+    const harness = new ProjectNappletHarness({ worker: completedWorker(), artifactVerifier: passingVerifier, telemetry: { observe: (observation) => { observations.push(observation); } } });
     const result = await harness.run(await request());
     expect(result).toMatchObject({ status: "verified", artifactId: "artifact:candidate:2", workflow: ["make-napplet", "design-napplet", "build-napplet", "test-napplet"] });
     expect(result).not.toHaveProperty("previewUrl");
     expect(result).not.toHaveProperty("publish");
+    expect(observations).toEqual([expect.objectContaining({ stage: "validation", outcome: "succeeded", correlationDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u) })]);
   });
 
   test("retains the prior artifact with redacted diagnostics for incomplete or validation failures", async () => {

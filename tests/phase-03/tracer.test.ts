@@ -69,4 +69,13 @@ describe("Phase 3 funded-account tracer", () => {
     await expect(service.execute(command("funded_admission", "admission-0001", { requestedCap: "500", unit: "sat", capacity: { reference: "no-capacity", usable: false } }))).rejects.toThrow("CAPACITY_UNAVAILABLE");
     expect(store.snapshot()).toEqual(before);
   });
+
+  test("contains a throwing lifecycle observer after the durable settlement result", async () => {
+    const store = new TransactionalMemoryFundingStore();
+    const service = new FundingService(store, { observe: () => { throw new Error("exporter unavailable"); } });
+    const result = await service.execute(command("credit_settlement", "credit-throwing-observer", { settlement: { ...settlement, topUpId: "topup-throwing-observer", externalReference: "external-throwing-observer", settlementReference: "settlement-throwing-observer" } }));
+    expect(result).toMatchObject({ status: "credited", creditedAmount: "300" });
+    expect(store.postings).toHaveLength(1);
+    expect(store.projection(result.accountId)).toEqual({ settledAvailable: "300", held: "0", unit: "sat" });
+  });
 });

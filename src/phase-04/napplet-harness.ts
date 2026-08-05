@@ -3,6 +3,7 @@ import { type WorkerEvent, type WorkerPort, WorkerRunRequestSchema, WorkerRunRes
 import { type ArtifactVerifier } from "../phase-02/trusted-core";
 import { evaluateArtifactContract } from "../policy/artifact-contract";
 import { canonicalToolchainId, parsePromotionManifest } from "../promotion/schema";
+import { emitLifecycleObservation, type LifecycleTelemetryPort } from "../telemetry/contracts";
 
 const WORKFLOW = ["make-napplet", "design-napplet", "build-napplet", "test-napplet"] as const;
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu);
@@ -59,10 +60,17 @@ function eventsStayOnApprovedSurfaces(events: readonly WorkerEvent[], allowed: r
  * grants credentials, billing, publication, or manifest authority to a worker.
  */
 export class ProjectNappletHarness implements NappletHarness {
-  constructor(private readonly options: Readonly<{ worker: WorkerPort; artifactVerifier: ArtifactVerifier }>) {}
+  constructor(private readonly options: Readonly<{ worker: WorkerPort; artifactVerifier: ArtifactVerifier; telemetry?: LifecycleTelemetryPort }>) {}
 
   async run(input: unknown, signal: AbortSignal = new AbortController().signal): Promise<NappletHarnessResult> {
     const request = NappletHarnessRequestSchema.parse(input);
+    const result = await this.#run(request, signal);
+    await emitLifecycleObservation(this.options.telemetry, [request.principalId, request.sessionId, request.actionId], "validation", result.status === "verified" ? "succeeded" : result.status === "blocked" ? "blocked" : "failed");
+    return result;
+  }
+
+  /** Emits only the final finite conformance decision; worker payloads stay local. */
+  async #run(request: NappletHarnessRequest, signal: AbortSignal): Promise<NappletHarnessResult> {
     const workflow = fixedWorkflow(request.toolchain.manifest);
     if (!workflow || await canonicalToolchainId(parsePromotionManifest(request.toolchain.manifest)) !== request.toolchain.toolchainId) {
       return NappletHarnessResultSchema.parse({ status: "blocked", code: "HARNESS_BLOCKED", priorArtifactId: request.priorArtifactId, diagnostic: safeDiagnostic("TOOLCHAIN_IDENTITY_INVALID", "promoted toolchain identity could not be verified", [request.toolchain.evidence.verify]) });

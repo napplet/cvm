@@ -11,20 +11,22 @@ import {
   verifiedPhase06Artifact,
 } from "./fakes.js";
 import { reportPhase06Observation } from "./reference-observation.js";
+import type { LifecycleObservation } from "../../src/telemetry/contracts";
 
-function previewHarness() {
+function previewHarness(telemetry?: { observe(observation: LifecycleObservation): void }) {
   const sealedArtifacts = new DeterministicSealedArtifactPort();
   const host = new DeterministicPreviewHostPort();
   const deployment = new DeterministicNappletDeploymentPort();
   const attestation = new DeterministicAttestationPort();
   return {
     sealedArtifacts, host, deployment, attestation,
-    preview: new PreviewService({ sealedArtifacts, host, clock: fixedPhase06Clock(), capabilityReview: canonicalCapabilityReview }),
+    preview: new PreviewService({ sealedArtifacts, host, clock: fixedPhase06Clock(), capabilityReview: canonicalCapabilityReview, telemetry }),
   };
 }
 
 test("issues one exact verified-artifact descriptor with an allow-scripts-only read grant", async () => {
-  const h = previewHarness();
+  const observations: LifecycleObservation[] = [];
+  const h = previewHarness({ observe: (observation) => { observations.push(observation); } });
   const result = await h.preview.previewVerifiedArtifact({
     accountId: verifiedPhase06Artifact.accountId,
     sessionId: verifiedPhase06Artifact.sessionId,
@@ -58,6 +60,7 @@ test("issues one exact verified-artifact descriptor with an allow-scripts-only r
   expect(h.attestation.calls).toBe(0);
   expect(JSON.stringify(result)).not.toContain("allowSameOrigin");
   expect(JSON.stringify(result)).not.toContain("publicationAuthority");
+  expect(observations).toEqual([expect.objectContaining({ stage: "preview", outcome: "succeeded", correlationDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u) })]);
 });
 
 test("blocks an incompatible required-capability review before descriptor or facade effects", async () => {

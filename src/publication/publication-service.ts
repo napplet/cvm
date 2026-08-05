@@ -3,6 +3,7 @@ import type { DurablePublicationStore, PublicationEffectKind, RecordPublicationO
 import { createPublicationIntent, isPublicationIntentExpired, publicationIntentRequestFingerprint } from "./publication-intent.js";
 import { projectPublicationStatus, type ProjectedPublicationStatus } from "./public-status.js";
 import { z } from "zod";
+import { emitLifecycleObservation, type LifecycleTelemetryPort } from "../telemetry/contracts";
 
 const operation = (kind: PublicationEffectKind, intentId: string) => `${kind}:${intentId}`;
 const durableState = (state: PublicationObservation["state"]): RecordPublicationObservationInput["state"] => state === "completed" ? "observed_complete" : state === "partial" ? "observed_partial" : state === "failed" ? "observed_failed" : "unknown";
@@ -25,7 +26,7 @@ export type PublicationServiceStatus = ProjectedPublicationStatus & Readonly<{
 
 export class PublicationService {
   #submissions = new Map<string, Promise<PublicationServiceStatus>>();
-  constructor(private readonly dependencies: Readonly<{ store: DurablePublicationStore; verifier: OwnerEventVerifierPort; deployment: NappletDeploymentPort; attestation: AttestationPort; clock: Phase06Clock; onObservation?: (observation: PublicationReconciliationObservation) => void }>) {}
+  constructor(private readonly dependencies: Readonly<{ store: DurablePublicationStore; verifier: OwnerEventVerifierPort; deployment: NappletDeploymentPort; attestation: AttestationPort; clock: Phase06Clock; onObservation?: (observation: PublicationReconciliationObservation) => void; telemetry?: LifecycleTelemetryPort }>) {}
 
   async createIntent(input: Readonly<{ accountId: string; sessionId: string; artifact: SealedArtifactIdentity; review: CapabilityReview; ownerPubkey: string; idempotencyKey: string; purpose: string; consent: "approved"; runtimeVariant: string; expiresAtMs?: number }>): Promise<PublicationIntent> {
     const createdAtMs = this.dependencies.clock.nowMs();
@@ -81,7 +82,7 @@ export class PublicationService {
       const observation = kind === "attestation" ? await this.dependencies.attestation.observe?.({ operationId: effect.operationId }) : await this.dependencies.deployment.observe?.({ operationId: effect.operationId });
       if (observation) {
         this.#observe({ operationId: effect.operationId, effectKind: kind, stage: "observe", state: observation.state });
-        await this.#recordObserved(kind, effect.operationId, observation);
+        await this.#recordObserved(intent, kind, effect.operationId, observation);
       }
     }));
     return this.#status(intent);
@@ -95,17 +96,19 @@ export class PublicationService {
     const claim = await this.dependencies.store.claimPublicationEffect({ intentId: intent.intentId, effectKind: kind, operationId, requestFingerprintSha256: intent.aggregateSha256 });
     this.#observe({ operationId, effectKind: kind, stage: "claim", state: claim.claimed ? "claimed" : "contended" });
     if (!claim.claimed) return;
-    try { await this.#recordObserved(kind, operationId, await invoke()); }
+    try { await this.#recordObserved(intent, kind, operationId, await invoke()); }
     catch {
       await this.dependencies.store.recordPublicationObservation({ operationId, effectKind: kind, state: "unknown", observationId: `observation:${operationId}:unknown` });
       this.#observe({ operationId, effectKind: kind, stage: "record", state: "unknown" });
+      await emitLifecycleObservation(this.dependencies.telemetry, [intent.accountId, intent.sessionId, intent.intentId, operationId], "publication", "pending", this.dependencies.clock.nowMs());
     }
   }
 
-  async #recordObserved(kind: PublicationEffectKind, operationId: string, observation: PublicationObservation): Promise<void> {
+  async #recordObserved(intent: PublicationIntent, kind: PublicationEffectKind, operationId: string, observation: PublicationObservation): Promise<void> {
     if (observation.operationId && observation.operationId !== operationId) throw new Error("PUBLICATION_OBSERVATION_OPERATION_MISMATCH");
     await this.dependencies.store.recordPublicationObservation({ operationId, effectKind: kind, state: durableState(observation.state), observationId: observation.observationId, ...(observation.deploymentId ? { deploymentId: observation.deploymentId } : {}), ...(observation.fullServerUploadId ? { fullServerUploadId: observation.fullServerUploadId } : {}), ...(observation.relayObservation ? { relayObservation: observation.relayObservation } : {}), ...(observation.attestationId ? { attestationId: observation.attestationId } : {}) });
     this.#observe({ operationId, effectKind: kind, stage: "record", state: observation.state });
+    await emitLifecycleObservation(this.dependencies.telemetry, [intent.accountId, intent.sessionId, intent.intentId, operationId], "publication", observation.state === "completed" ? "succeeded" : observation.state === "unknown" ? "pending" : "failed", this.dependencies.clock.nowMs());
   }
 
   async #intentForOwner(accountId: string, intentId: string): Promise<PublicationIntent> {

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { canonicalJson } from "../promotion/schema";
 import { ImmutableObjectReferenceSchema, type ImmutableObjectReference, type ObjectStorePort } from "./object-store";
+import { emitLifecycleObservation, type LifecycleTelemetryPort } from "../telemetry/contracts";
 
 const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/iu);
 const Base64Schema = z.string().min(1).regex(/^[A-Za-z0-9+/]+={0,2}$/u);
@@ -165,11 +166,14 @@ export class CheckpointEnvelopeService {
   readonly #objectStore: ObjectStorePort;
   readonly #now: () => string;
 
-  constructor(options: Readonly<{ crypto: CheckpointCryptoPort; objectStore: ObjectStorePort; now?: () => string }>) {
+  constructor(options: Readonly<{ crypto: CheckpointCryptoPort; objectStore: ObjectStorePort; now?: () => string; telemetry?: LifecycleTelemetryPort }>) {
     this.#crypto = options.crypto;
     this.#objectStore = options.objectStore;
     this.#now = options.now ?? (() => new Date().toISOString());
+    this.#telemetry = options.telemetry;
   }
+
+  readonly #telemetry?: LifecycleTelemetryPort;
 
   async seal(request: CheckpointSealRequest): Promise<Readonly<{ manifest: CheckpointManifest; envelope: CheckpointEnvelope }>> {
     validateInventory(request.inventory);
@@ -207,7 +211,9 @@ export class CheckpointEnvelopeService {
       object,
       crypto: { algorithm: "AES-GCM", keyReference: sealed.keyReference, nonceBase64: b64(sealed.nonce), aadSha256: await sha256(additionalData) },
     });
-    return Object.freeze({ manifest, envelope });
+    const result = Object.freeze({ manifest, envelope });
+    await emitLifecycleObservation(this.#telemetry, [manifest.accountId, manifest.sessionId, manifest.checkpointId], "checkpoint", "succeeded", Date.parse(manifest.committedAt));
+    return result;
   }
 
   async restore(envelopeInput: unknown, manifestInput: unknown): Promise<Uint8Array> {

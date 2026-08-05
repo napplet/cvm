@@ -2,6 +2,7 @@ import { canonicalJson, canonicalToolchainId, parsePromotionManifest, type Candi
 import { writeEvidenceBundle } from "../evidence/bundle";
 import { runSealedDenialProbes, runSealedToolchain, type CommandEvidence, type SealedToolchainRequest } from "../runner/sealed-toolchain";
 import { validateCertificationObservation } from "../certification/evidence";
+import { emitLifecycleObservation, type LifecycleTelemetryPort } from "../telemetry/contracts";
 
 export type PromotionStageEvidence = {
   readonly id: string;
@@ -33,6 +34,7 @@ export type RunPromotionOptions = {
   readonly now?: () => number;
   readonly releaseManifest?: ReleaseCertificationManifest;
   readonly releaseObservations?: readonly unknown[];
+  readonly telemetry?: LifecycleTelemetryPort;
 };
 
 export type ReleaseCertificationDecision = {
@@ -169,7 +171,7 @@ async function writePromotionEvidence(
  * Executes a manifest candidate without package resolution. A successful trace is
  * blocked until the separately measured certification layers are present; it has no promoted-pointer mutation capability.
  */
-export async function runPromotionCandidate(rawManifest: unknown, options: RunPromotionOptions): Promise<PromotionEvidence> {
+async function runPromotionCandidateInner(rawManifest: unknown, options: RunPromotionOptions): Promise<PromotionEvidence> {
   const now = options.now ?? Date.now;
   let manifest: PromotionManifest;
   let candidateId: string;
@@ -224,4 +226,11 @@ export async function runPromotionCandidate(rawManifest: unknown, options: RunPr
   if (certification.status !== "promoted") return writePromotionEvidence(options.evidenceDirectory, manifest, candidateId, "blocked", certification.responsibleRequirement ?? "release-certification", stages);
   const promoted = await writePromotionEvidence(options.evidenceDirectory, manifest, candidateId, "review-ready", "release-certified", stages);
   return { ...promoted, status: "promoted", responsibleStage: "release-certified" };
+}
+
+/** Promotion has no mutation capability; emit its final candidate decision only after it is known. */
+export async function runPromotionCandidate(rawManifest: unknown, options: RunPromotionOptions): Promise<PromotionEvidence> {
+  const result = await runPromotionCandidateInner(rawManifest, options);
+  await emitLifecycleObservation(options.telemetry, [result.candidateId ?? "invalid-candidate", result.evidenceSha256], "promotion", result.status === "promoted" ? "succeeded" : "blocked", options.now?.() ?? Date.now());
+  return result;
 }

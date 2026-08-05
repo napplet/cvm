@@ -38,7 +38,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: ContextVM Funding & Funded Admission** - Provide Nostr-linked accounts, CEP-8 top-ups, and safe prepaid authorization. (completed 2026-08-04)
 - [x] **Phase 4: Metered Generation & Revision Loop** - Turn approved funds into exact-usage, constrained generation and repair actions. (completed 2026-08-05)
 - [x] **Phase 5: Funding Interruption & Durable Resume** - Preserve safely-paused work through the ten-minute grace window and 30-day checkpoints. (completed 2026-08-05)
-- [ ] **Phase 6: Sealed Preview & User-Owned Publication** - Let users inspect, preview, sign, attest, and deploy one immutable artifact identity.
+- [x] **Phase 6: Sealed Preview & User-Owned Publication** - Let users inspect, preview, sign, attest, and deploy one immutable artifact identity. (completed 2026-08-05)
 - [ ] **Phase 7: Admission SLO, Resilience & Launch Safety** - Validate immediate capacity handling and safe operation through failure, load, and supply-chain gates.
 
 ## Phase Details
@@ -317,15 +317,15 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 3. ContextVM Funding & Funded Admission | 7/7 | Complete    | 2026-08-04 |
 | 4. Metered Generation & Revision Loop | 7/7 | Complete    | 2026-08-05 |
 | 5. Funding Interruption & Durable Resume | 7/7 | Complete    | 2026-08-05 |
-| 6. Sealed Preview & User-Owned Publication | 7/7 | In Progress|  |
+| 6. Sealed Preview & User-Owned Publication | 7/7 | Complete    | 2026-08-05 |
 | 7. Admission SLO, Resilience & Launch Safety | 0/TBD | Not started | - |
 
 ### Milestone Progress Roll-up
 
-- **Phases:** Phases 1–5 are verified complete; Phase 6 is checker-approved and ready to execute; Phase 7 remains; 5/7 phases complete (71%).
-- **Known plans:** 33/40 executed; Phase 6 contributes 7 checker-approved plans across 6 waves.
-- **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 40 verified complete and 14 pending.
-- **Current checkpoint:** Execute Phase 6 from Plan 06-01; do not revisit or replan completed Phases 1–5.
+- **Phases:** Phases 1–6 are verified complete; Phase 7 is active at discussion; 6/7 phases complete (86%).
+- **Known plans:** 40/40 currently known plans executed; Phase 7 plans remain to be created from its discussion and research.
+- **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 49 verified complete and 5 Phase 7 requirements pending.
+- **Current checkpoint:** Discuss Phase 7, then research/plan its admission SLO, resilience, live certification, and launch-safety work; do not revisit or replan completed Phases 1–6.
 - **Phase 1 preservation:** Phase 1 remains complete with its review, security, validation, verification evidence, and Phase 7 deferrals unchanged.
 
 ### Completion Reporting Contract

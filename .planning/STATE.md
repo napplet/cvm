@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
-current_phase: 6
-current_phase_name: Sealed Preview & User-Owned Publication
-status: verifying
-stopped_at: Completed 06-07-PLAN.md
-last_updated: "2026-08-05T09:54:28.643Z"
+current_phase: 7
+current_phase_name: Admission SLO, Resilience & Launch Safety
+status: planning
+stopped_at: Phase 6 verified complete; Phase 7 smart discussion pending
+last_updated: "2026-08-05T11:21:31.771Z"
 last_activity: 2026-08-05
-last_activity_desc: Phase 6 execution started
+last_activity_desc: Phase 6 complete, transitioned to Phase 7
 progress:
   total_phases: 7
   completed_phases: 6
@@ -25,14 +25,14 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 **Core value:** A user can describe one focused applet and receive a safe, conformant napplet that can be previewed and placed directly into a compatible napplet runtime.
 **Active milestone:** v1.0 — Safe Napplet Generation MVP
-**Current focus:** Phase 6 — Sealed Preview & User-Owned Publication
+**Current focus:** Phase 7 — Admission SLO, Resilience & Launch Safety
 
 ## Current Position
 
-Phase: 6 (Sealed Preview & User-Owned Publication) — EXECUTING
-Plan: 7 of 7
-Status: Phase complete — ready for verification
-Last activity: 2026-08-05 — Phase 6 execution started
+Phase: 7 — Admission SLO, Resilience & Launch Safety
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-05 — Phase 6 complete, transitioned to Phase 7
 
 Progress: [██████████] 100%
 
@@ -40,16 +40,16 @@ Progress: [██████████] 100%
 
 **v1.0 — Safe Napplet Generation MVP**
 
-- Phases: Phases 1–5 complete; Phase 6 is checker-approved and ready to execute; Phase 7 remains.
-- Plans: 33/40 currently known milestone plans executed; Phase 6 contributes 7 approved plans across 6 waves.
-- Requirements: 54/54 v1 requirements assigned; 40 verified complete and 14 pending.
-- Next checkpoint: execute Phase 6 from Plan 06-01 without revisiting completed Phases 1–5.
+- Phases: Phases 1–6 verified complete; Phase 7 is active at discussion (6/7, 86%).
+- Plans: 40/40 currently known milestone plans executed; Phase 7 plans remain to be created.
+- Requirements: 54/54 v1 requirements assigned; 49 verified complete and 5 Phase 7 requirements pending.
+- Next checkpoint: smart-discuss Phase 7, then research and plan its admission SLO, resilience, live certification, and launch-safety work without revisiting completed Phases 1–6.
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 33
+- Total plans completed: 40
 - Average duration: -
 - Total execution time: 0 hours
 
@@ -62,6 +62,7 @@ Progress: [██████████] 100%
 | 3 | 7 | - | - |
 | 04 | 7 | - | - |
 | 05 | 7 | - | - |
+| 6 | 7 | - | - |
 
 **Recent Trend:**
 

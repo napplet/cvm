@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
-current_phase: 5
+current_phase: 05
 current_phase_name: Funding Interruption & Durable Resume
 status: executing
-stopped_at: Phase 05 planned and checker-approved; ready to execute Plan 05-01
-last_updated: "2026-08-05T00:48:58.235Z"
-last_activity: 2026-08-05 -- Phase 5 planning complete
-last_activity_desc: Phase 05 planned and checker-approved; ready to execute Plan 05-01
+stopped_at: Completed 05-01-PLAN.md
+last_updated: "2026-08-05T01:01:28.997Z"
+last_activity: 2026-08-05
+last_activity_desc: Phase 05 execution started
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 33
-  completed_plans: 26
+  completed_plans: 27
   percent: 57
 ---
 
@@ -25,16 +25,16 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 **Core value:** A user can describe one focused applet and receive a safe, conformant napplet that can be previewed and placed directly into a compatible napplet runtime.
 **Active milestone:** v1.0 — Safe Napplet Generation MVP
-**Current focus:** Phase 5 — Funding Interruption & Durable Resume
+**Current focus:** Phase 05 — Funding Interruption & Durable Resume
 
 ## Current Position
 
-Phase: 5 — Funding Interruption & Durable Resume
-Plan: Not started
+Phase: 05 (Funding Interruption & Durable Resume) — EXECUTING
+Plan: 2 of 7
 Status: Ready to execute
-Last activity: 2026-08-05 -- Phase 5 planning complete
+Last activity: 2026-08-05 — Phase 05 execution started
 
-Progress: [██████████] Phase 4 complete; Phase 5 has 7 checker-approved plans ready for execution
+Progress: [████████░░] 82%
 
 ## Milestone Progress
 
@@ -89,6 +89,7 @@ Progress: [██████████] Phase 4 complete; Phase 5 has 7 check
 | Phase 04 P05 | 8m | 2 tasks | 8 files |
 | Phase 04 P06 | 34m 37s | 2 tasks | 7 files |
 | Phase 04 P07 | 28m | 3 tasks | 6 files |
+| Phase 05 P01 | 6 min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -140,6 +141,9 @@ Recent decisions affecting current work:
 - [Phase ?]: Phase 4 evidence gate keeps deterministic gateway unselected and live model not observed pending Phase 7 certification.
 - [Phase ?]: Twenty actual authority cases with exact effect signatures are the Phase 4 design evidence release gate.
 - [Phase ?]: Runtime scenarios receive boundedInput, initialState, and schedule only; expected values remain comparator-only.
+- [Phase ?]: Unaffordable actions pause in the serialized funding authority before any action-budget authorization.
+- [Phase ?]: Funding and approved-cap shortfalls remain separate bigint-derived canonical decimal values.
+- [Phase ?]: Continuation status uses an explicit owner-safe allowlist rather than spreading durable records.
 
 ### Pending Todos
 
@@ -161,6 +165,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T00:48:58.235Z
-Stopped at: Phase 05 planned and checker-approved; ready to execute Plan 05-01
+Last session: 2026-08-05T01:01:28.988Z
+Stopped at: Completed 05-01-PLAN.md
 Resume file: None

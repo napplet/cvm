@@ -1,0 +1,114 @@
+---
+phase: 07-admission-slo-resilience-launch-safety
+audit: security
+status: OPEN_THREATS
+asvs_level: 1
+block_on: high
+threats_total: 54
+threats_closed: 49
+threats_open: 3
+audited: 2026-08-05
+---
+
+# Phase 07 Security Audit
+
+## OPEN_THREATS
+
+**Phase:** 07 — Admission SLO, Resilience & Launch Safety  
+**Closed:** 49/54 | **Open:** 5/54  
+**ASVS Level:** 1  
+**Blocking threshold:** high
+
+This is a mitigation audit of every declared `<threat_model>` row in Plans 07-00 through 07-10. It is not a claim that protected live certification has passed. The protected commands correctly remain fail-closed when their release evidence is absent.
+
+### Closed
+
+| Plan | Threat ID | Category | Severity | Disposition | Evidence |
+|---|---|---|---|---|---|
+| 00 | T-07-W0-01 | Tampering/Elevation | high | mitigate | Closed registry and comparator-only evaluation: `src/certification/phase-07-reference-set.ts:20`; mutation tests: `tests/evals/phase-07-reference-set.test.ts:15`. |
+| 00 | T-07-W0-02 | Spoofing/Repudiation | high | mitigate | Complete owned mapping validation: `src/certification/evidence.ts:89`; mapping tests: `tests/evals/phase-07-reference-set.test.ts:24`. |
+| 00 | T-07-W0-03 | Information Disclosure | high | mitigate | Safe protected-preflight status boundary: `scripts/certify-phase-07.ts:11`; protected-output tests: `tests/phase-07/promotion-gate.test.ts:24`. |
+| 00 | T-07-W0-04 | Elevation of Privilege | high | mitigate | CLIs default to blocked without protected evidence: `scripts/certify-phase-07.ts:11`; `tests/phase-07/promotion-gate.test.ts:24`. |
+| 00 | T-07-SC | Tampering | high | mitigate | Wave-0 commits `44fcc20` and `53027e2` contain no package-root change; current roots are exact-pinned in `package.json:34`. |
+| 01 | T-07-ADM-02 | Tampering/DoS | high | mitigate | Durable coalesced claim and replay fence: `src/funding/funded-admission.ts:65`, `src/funding/funded-admission.ts:133`; concurrency coverage: `tests/phase-07/admission-slo.test.ts:170`. |
+| 01 | T-07-ADM-04 | Elevation of Privilege | high | mitigate | Observation-only telemetry contract: `src/telemetry/contracts.ts:47`; exporter-failure effect oracle: `tests/phase-07/telemetry-policy.test.ts:65`. |
+| 01 | T-07-SC | Tampering | high | mitigate | Plan-01 implementation commits `f6ba0ab` and `489b148` change no dependency root; full focused suite passes. |
+| 02 | T-07-OTEL-01 | Spoofing/Tampering | high | mitigate | Exact version/integrity/repository verification: `scripts/verify-phase-07-otel-packages.ts:41`; mutation coverage: `tests/phase-07/otel-package-legitimacy.test.ts:99`. |
+| 02 | T-07-OTEL-02 | Elevation of Privilege | high | mitigate | Tarball metadata-only intake and lifecycle-script rejection: `scripts/verify-phase-07-otel-packages.ts:17`, `scripts/verify-phase-07-otel-packages.ts:117`; tests: `tests/phase-07/otel-package-legitimacy.test.ts:109`. |
+| 02 | T-07-OTEL-03 | Repudiation | medium | mitigate | Canonical content-addressed, exclusive evidence record: `scripts/verify-phase-07-otel-packages.ts:168`; repeat/mutation tests: `tests/phase-07/otel-package-legitimacy.test.ts:142`. |
+| 02 | T-07-SC | Tampering | high | mitigate | Pending-human `SUS` gate is retained before root installation: `scripts/verify-phase-07-otel-packages.ts:76`; tests: `tests/phase-07/otel-package-legitimacy.test.ts:155`. |
+| 03 | T-07-CHK-01 | Spoofing/Tampering | high | mitigate | Approval verifier binds the exact approval digest and package set: `scripts/verify-phase-07-otel-packages.ts:168`, `scripts/verify-phase-07-otel-packages.ts:351`. |
+| 03 | T-07-CHK-02 | Repudiation | medium | mitigate | Bounded approval schema and recorded limitation: `scripts/verify-phase-07-otel-packages.ts:69`, `scripts/verify-phase-07-otel-packages.ts:76`. |
+| 03 | T-07-SC | Elevation of Privilege | high | mitigate | Root-pin installation is refused without approved evidence: `scripts/verify-phase-07-otel-packages.ts:351`; `bun run scripts/verify-phase-07-otel-packages.ts -- --verify-root-pins` passed. |
+| 04 | T-07-TEL-01 | Information Disclosure | high | mitigate | Telemetry allowlist and forbidden-canary rejection: `src/telemetry/redaction.ts:39`; sink tests: `tests/phase-07/telemetry-policy.test.ts:37`. |
+| 04 | T-07-TEL-02 | Denial of Service | high | mitigate | Finite attributes and computed cardinality bound: `src/telemetry/redaction.ts:56`; cardinality test: `tests/phase-07/telemetry-policy.test.ts:54`. |
+| 04 | T-07-TEL-03 | Elevation of Privilege | high | mitigate | Observer-only port with bounded swallowed exporter failure: `src/telemetry/contracts.ts:47`, `src/telemetry/contracts.ts:82`; test: `tests/phase-07/telemetry-policy.test.ts:65`. |
+| 04 | T-07-TEL-04 | Tampering/Repudiation | medium | mitigate | Digest-pinned Collector/root inputs and standalone verifier: `scripts/verify-phase-07-otel-packages.ts:204`, `scripts/verify-phase-07-otel-packages.ts:351`. |
+| 04 | T-07-SC | Tampering | high | mitigate | Exact OTel roots: `package.json:35`; approval and root-pin checks passed with the frozen current lock. |
+| 05 | T-07-WRK-01 | Spoofing/Tampering | high | mitigate | Exact session/lease/image/probe readiness checks: `src/worker-adapters/modal-worker.ts:248`; tests: `tests/phase-07/worker-adapters.test.ts:57`. |
+| 05 | T-07-WRK-02 | Information Disclosure/Elevation | high | mitigate | Default-deny network, no inbound port, fixed command, and unconditional cleanup: `src/worker-adapters/modal-worker.ts:95`, `src/worker-adapters/modal-worker.ts:269`; isolation tests: `tests/phase-07/worker-adapters.test.ts:85`. |
+| 05 | T-07-WRK-03 | DoS | high | mitigate | Bounded admission / zero-backlog sample gate: `src/admission/benchmark.ts:121`; negative cases: `tests/phase-07/worker-adapters.test.ts:111`. |
+| 05 | T-07-WRK-04 | Repudiation/Tampering | high | mitigate | Candidate/input/freshness-bound benchmark evidence: `src/certification/evidence.ts:20`, `src/certification/evidence.ts:45`; tests: `tests/phase-07/certification-runner.test.ts:35`. |
+| 05 | T-07-SC | Tampering | high | mitigate | Existing exact Modal pin is retained: `package.json:42`; injected Fly REST port has no added package: `src/worker-adapters/fly-worker.ts:35`. |
+| 06 | T-07-REC-01 | Tampering/Elevation | high | mitigate | Fault injection is restricted to typed seams: `src/resilience/fault-harness.ts:188`; effect-counter tests: `tests/phase-07/fault-matrix.test.ts:54`. |
+| 06 | T-07-REC-02 | Tampering/Repudiation | high | mitigate | Original-operation lookup and visible unknown/partial state: `src/model/reconciliation.ts:71`, `src/publication/publication-service.ts:94`; matrix tests: `tests/phase-07/fault-matrix.test.ts:80`. |
+| 06 | T-07-REC-03 | DoS/Tampering | high | mitigate | Durable claim/version fence and bounded transaction retry: `src/model/reconciliation.ts:71`; parallel cases: `tests/phase-07/fault-matrix.test.ts:105`. |
+| 06 | T-07-REC-04 | Information Disclosure | medium | mitigate | Typed finite schedule/evidence projections: `src/resilience/fault-harness.ts:188`; serialization canaries: `tests/phase-07/fault-matrix.test.ts:129`. |
+| 06 | T-07-SC | Tampering | high | mitigate | Existing ports only; plan introduces no dependency root. Frozen focused suite passed: `bun test tests/phase-07 tests/evals/phase-07-reference-set.test.ts --timeout 10000`. |
+| 07 | T-07-RST-01 | Spoofing/Tampering | high | mitigate | Generation/checksum/authenticated manifest and identity fences: `src/continuity/checkpoint-envelope.ts:70`, `src/continuity/continuation-service.ts:334`; mutation matrix: `tests/phase-07/restore-drill.test.ts:81`. |
+| 07 | T-07-RST-02 | Elevation of Privilege | high | mitigate | Durable resume claim/lease and terminal fence: `src/continuity/continuation-service.ts:285`; concurrency test: `tests/phase-07/restore-drill.test.ts:106`. |
+| 07 | T-07-RST-03 | Repudiation | high | mitigate | Candidate-bound claim schema rejects wider RTO/RPO claims: `src/resilience/fault-harness.ts:106`; test: `tests/phase-07/restore-drill.test.ts:124`. |
+| 07 | T-07-RST-04 | Information Disclosure | high | mitigate | Object adapter excludes secret/path data and decrypts only through injected key port: `src/continuity/object-store-adapter.ts:30`; tests: `tests/phase-07/restore-drill.test.ts:150`. |
+| 07 | T-07-SC | Tampering | high | mitigate | Storage/database adapters remain injected ports, with no new package root: `src/continuity/object-store-adapter.ts:30`. |
+| 08 | T-07-UI-01 | Spoofing/Tampering | high | mitigate | Strict host presentation projection rejects unmapped iframe fields/messages: `src/host/presentation.ts:277`; tests: `tests/phase-07/host-presentation.test.ts:111`. |
+| 08 | T-07-UI-02 | Elevation of Privilege | high | mitigate | One authorized action, duplicate guard, and query-only reconciliation: `src/host/presentation.ts:206`; guard tests: `tests/phase-07/host-presentation.test.ts:80`. |
+| 08 | T-07-UI-03 | Information Disclosure | high | mitigate | Identifier/safe-copy allowlist: `src/host/presentation.ts:140`; canary tests: `tests/phase-07/host-presentation.test.ts:90`. |
+| 08 | T-07-UI-04 | DoS | medium | mitigate | Deterministic bounded UI state is projected by the host: `src/host/presentation.ts:291`; contract tests: `tests/phase-07/host-presentation.test.ts:119`. |
+| 08 | T-07-SC | Tampering | high | mitigate | UI uses no new runtime package; host/candidate identity is part of browser evidence: `src/certification/evidence.ts:45`. |
+| 09 | T-07-EVL-01 | Tampering | high | mitigate | Runtime gets bounded input/schedule while expected values remain comparator-only: `src/certification/phase-07-reference-set.ts:201`; test: `tests/evals/phase-07-reference-set.test.ts:102`. |
+| 09 | T-07-EVL-02 | Repudiation/Tampering | high | mitigate | Executed-ID complete mapping validator: `src/certification/evidence.ts:89`; mapping mutation tests: `tests/evals/phase-07-reference-set.test.ts:24`. |
+| 09 | T-07-EVL-03 | Information Disclosure | high | mitigate | Protected/raw canaries are rejected before canonical evidence: `src/certification/evidence.ts:32`, `src/certification/evidence.ts:190`; redaction tests: `tests/evals/phase-07-reference-set.test.ts:113`. |
+| 09 | T-07-EVL-04 | Spoofing | high | mitigate | Deterministic and protected-live evidence classes are separated: `src/certification/evidence.ts:71`, `src/certification/evidence.ts:107`; test: `tests/evals/phase-07-reference-set.test.ts:121`. |
+| 10 | T-07-PRO-01 | Spoofing/Tampering | high | mitigate | Candidate/input/freshness binding and no replacement: `src/promotion/run-promotion.ts:73`, `src/promotion/run-promotion.ts:99`; tests: `tests/phase-07/promotion-gate.test.ts:137`. |
+| 10 | T-07-PRO-02 | Elevation of Privilege | high | mitigate | Closed waiver set, non-waivable classes, and sole atomic decision: `src/promotion/schema.ts:192`, `src/promotion/run-promotion.ts:92`; tests: `tests/phase-07/promotion-gate.test.ts:64`. |
+| 10 | T-07-PRO-03 | Information Disclosure | high | mitigate | Protected runner accepts references and records safe observations: `src/promotion/candidate.ts:287`, `src/promotion/run-promotion.ts:34`; tests: `tests/phase-07/promotion-gate.test.ts:54`. |
+| 10 | T-07-PRO-04 | Tampering/Repudiation | high | mitigate | Exact candidate-bound protected-live requirement and one observation per claim: `src/promotion/run-promotion.ts:80`; fake/insufficient claim tests: `tests/phase-07/promotion-gate.test.ts:76`. |
+| 10 | T-07-PRO-05 | Tampering | high | mitigate | Reconciliation and publication both use original-operation fences: `src/model/reconciliation.ts:71`, `src/publication/publication-service.ts:94`; drill tests: `tests/phase-07/fault-matrix.test.ts:80`. |
+
+### Open (blocking — severity ≥ high threshold)
+
+| Plan | Threat ID | Category | Severity | Mitigation Expected | Evidence / Files Searched |
+|---|---|---|---|---|---|
+| 01 | T-07-ADM-01 | Spoofing/Tampering | high | Stamp after signed-envelope correlation **and bind timestamp to the canonical invocation hash**. | **Absent.** Funded admission creates lifecycle context from only `eventId:verifiedPubkey` at `src/contextvm/adapter.ts:303`; it emits a receipt at `src/contextvm/adapter.ts:246` without calling `canonicalInvocation`, which is used only by other routes at `src/contextvm/adapter.ts:215`, `src/contextvm/adapter.ts:226`, and `src/contextvm/adapter.ts:278`. The focused test supplies a canonical hash but never asserts its use: `tests/phase-07/admission-slo.test.ts:57`. |
+| 09 | T-07-SC | Tampering | high | Exact source, lock, toolchain, and dataset digests plus two isolated builds/reproducibility verification. | **Absent.** Design evidence contains source revision and dataset only (`src/certification/evidence.ts:71`, `src/certification/evidence.ts:90`); its writer only proves a clean source tree (`scripts/verify-phase-07-evidence.ts:15`). The implementation explicitly defers `cross-environment-reproducibility` and `sbom-provenance-enforcement`: `src/verification/design-evidence.ts:8`. No isolated-build verifier is implemented in the Phase-07 evidence paths. |
+| 10 | T-07-SC | Tampering | high | Verify Cosign identity/predicate, SBOM contents, and cross-environment reproducibility in addition to pins/digests/frozen install. | **Absent.** Release parsing accepts SHA-256 strings for SBOM/provenance (`src/promotion/schema.ts:177`) but verifies neither document nor signature. Candidate evidence marks provenance and reproducibility `not-evaluated` (`src/promotion/run-promotion.ts:162`). Searches of `src/`, `scripts/`, and Phase-07 tests found no Cosign/Sigstore/in-toto verifier or reproducibility execution. |
+
+### Open (non-blocking — severity below high threshold)
+
+| Plan | Threat ID | Category | Severity | Mitigation Expected | Evidence / Files Searched |
+|---|---|---|---|---|---|
+| 00 | T-07-W0-05 | Denial of Service | low | Accepted-risk entry for the bounded Wave-0 test-discovery risk. | **Absent.** No prior `07-SECURITY.md` or accepted-risk log exists for this phase. The row is not an authorized accepted risk merely because its plan says `accept`. |
+| 01 | T-07-ADM-03 | Information Disclosure | medium | Strict owner-safe finite result schema at the ContextVM funded-admission boundary. | **Absent.** The adapter spreads the unvalidated admission-port result into the public wire response at `src/contextvm/adapter.ts:262`; only refused results are manually projected. No output schema/canary test was found in `src/contextvm/adapter.ts` or `tests/phase-07/admission-slo.test.ts`. |
+
+*Only blocking-open threats count toward `threats_open` in the SECURITY frontmatter gate.*
+
+### Unregistered Flags
+
+None. `## Threat Flags` was absent from every Phase-07 `*-SUMMARY.md` file.
+
+### Audit Commands
+
+- `bun test tests/phase-07 tests/evals/phase-07-reference-set.test.ts --timeout 10000` — passed: 69 tests, 0 failures, 2,056 assertions.
+- `bun run scripts/verify-phase-07-otel-packages.ts -- --require-approved` — passed.
+- `bun run scripts/verify-phase-07-otel-packages.ts -- --verify-root-pins` — passed.
+- `PHASE07_CERTIFICATION_EVIDENCE_DIRECTORY=<empty-temp-dir> bun run certify:phase07 -- --profile=release --preflight-only` — correctly blocked/nonzero without protected evidence.
+- `bun run candidate:verify -- --release-evidence evidence/design/phase-07.json` — correctly blocked/nonzero for invalid release input.
+
+## Required Remediation
+
+1. Bind admission lifecycle correlation and receipt timing to the verified `canonicalInvocation(...).invocationHash`, and add a regression test that fails if funded admission does not invoke it.
+2. Add the missing reproducibility/provenance gates: lock/toolchain evidence, two isolated builds, and release-time verification of signed provenance and SBOM contents (Cosign identity/predicate as declared).
+3. Replace the funded-admission result spread with an exact owner-safe response schema and canary serialization test.
+4. Obtain and record an explicit owner acceptance for T-07-W0-05, or change its threat disposition through the planning process.
+
+**threats_open:** 3

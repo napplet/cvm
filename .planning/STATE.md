@@ -4,15 +4,15 @@ milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
 current_phase: 7
 current_phase_name: Admission SLO, Resilience & Launch Safety
-status: in_progress
-stopped_at: Completed 07-13-PLAN.md; Phase 7 requires goal re-verification and protected live evidence
+status: planned
+stopped_at: Phase 7 security audit found local gaps; 07-14 through 07-16 planned
 last_updated: "2026-08-05T19:47:29.849Z"
 last_activity: 2026-08-05
 last_activity_desc: Closed public release CLI exit-status defect; Phase 7 awaits protected evidence
 progress:
   total_phases: 7
   completed_phases: 6
-  total_plans: 54
+  total_plans: 57
   completed_plans: 54
   percent: 86
 ---
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 7 — Admission SLO, Resilience & Launch Safety
-Plan: 14 of 14
-Status: All local plan executions complete; protected live evidence and goal verification pending
-Last activity: 2026-08-05 — Closed the public release CLI exit-status defect
+Plan: 14 of 17
+Status: Security gap closure planned
+Last activity: 2026-08-05 — Security audit identified canonical admission and release supply-chain gaps
 
 Plan execution: [██████████] 100%; Phase verification remains pending
 
@@ -41,9 +41,9 @@ Plan execution: [██████████] 100%; Phase verification remain
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 54/54 known milestone plans executed; Phase 7 plan execution is complete.
+- Plans: 54/57 known milestone plans executed; Plans 07-14 through 07-16 remain.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Next checkpoint: re-run Phase 7 goal verification, then collect protected live certification evidence.
+- Next checkpoint: execute Plans 07-14 through 07-16, then re-run security and goal verification.
 
 ## Performance Metrics
 

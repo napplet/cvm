@@ -303,7 +303,7 @@ Plans:
 **Validation gate**: Benchmark Modal and at least one non-AWS fallback with the production-like image, target regions, relay delay, pool misses, database contention, reclaim/failure behavior, and step load. Select a worker vendor only after receipt-to-isolated-worker-ready p95 is at most five seconds with zero durable backlog; establish the database/failover claim to match the chosen deployment scope.
 
 Phase 7 also closes the launch-hardening work intentionally deferred from Phase 1: exhaustive toolchain provenance, repeated/cross-environment reproducibility, full hostile and mutation coverage, formal golden approval, waiver drills, SBOM/provenance enforcement, and the final production promotion gate.
-**Plans**: 14/14 plans executed
+**Plans**: 14/17 plans executed; security gap-closure plans active
 
 - [x] 07-00-PLAN.md
 - [x] 07-01-PLAN.md
@@ -319,6 +319,9 @@ Phase 7 also closes the launch-hardening work intentionally deferred from Phase 
 - [x] 07-11-PLAN.md — Enforce immutable digest-bound delegated operator approval for the exact OpenTelemetry package set.
 - [x] 07-12-PLAN.md — Dispatch typed protected live adapters and route exact release bundles through the sole promotion decision.
 - [x] 07-13-PLAN.md — Derive public release verification exit status from the sole promotion decision.
+- [ ] 07-14-PLAN.md — Bind funded admission to canonical invocation identity and close its wire projection.
+- [ ] 07-15-PLAN.md — Enforce two-isolation reproducibility plus pinned Cosign/SBOM/provenance verification.
+- [ ] 07-16-PLAN.md — Require verified supply-chain records at protected certification and sole promotion boundaries.
 
 ## Progress
 
@@ -333,14 +336,14 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 4. Metered Generation & Revision Loop | 7/7 | Complete    | 2026-08-05 |
 | 5. Funding Interruption & Durable Resume | 7/7 | Complete    | 2026-08-05 |
 | 6. Sealed Preview & User-Owned Publication | 7/7 | Complete    | 2026-08-05 |
-| 7. Admission SLO, Resilience & Launch Safety | 14/14 | In Progress|  |
+| 7. Admission SLO, Resilience & Launch Safety | 14/17 | In Progress|  |
 
 ### Milestone Progress Roll-up
 
 - **Phases:** Phases 1–6 are verified complete; Phase 7 awaits protected live evidence and goal verification; 6/7 phases complete (86%).
-- **Known plans:** 54/54 milestone plans executed; the public CLI exit-status defect is closed.
+- **Known plans:** 54/57 milestone plans executed; Plans 07-14 through 07-16 close security-audit findings.
 - **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 49 verified complete and 5 Phase 7 requirements pending.
-- **Current checkpoint:** Re-run Phase 7 verification, then proceed to protected live certification.
+- **Current checkpoint:** Execute security gap Plans 07-14 through 07-16, re-audit security, then re-run Phase 7 verification.
 - **Phase 1 preservation:** Phase 1 remains complete with its review, security, validation, verification evidence, and Phase 7 deferrals unchanged.
 
 ### Completion Reporting Contract

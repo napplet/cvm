@@ -2,7 +2,7 @@
 phase: 7
 slug: admission-slo-resilience-launch-safety
 # status lifecycle: draft (seeded by plan-phase) → validated (set by validate-phase)
-status: draft
+status: validated
 nyquist_compliant: false
 wave_0_complete: true
 created: 2026-08-05
@@ -79,7 +79,7 @@ created: 2026-08-05
 - [x] **Plan 07-00 Task 1 — 07-W0-01/02:** create the strict five-row registry plus compile-safe admission and telemetry contract entrypoints; keep every unexecuted behavior pending/non-pass.
 - [x] **Plan 07-00 Task 2 — 07-W0-03/04:** create compile-safe fault/reference-eval and exact-restore entrypoints with comparator-only expectations and protected-live ownership.
 - [x] **Plan 07-00 Task 3 — 07-W0-05:** create the promotion-gate entrypoint and fail-closed deterministic/evidence/protected certification command seams.
-- [ ] **Dependent implementation:** Plans 07-01, 07-04, 07-06, 07-07, 07-09, and 07-10 replace the RED/TODO registrations with production-derived behavior and claim-bearing evidence; Wave 0 does not duplicate those implementations.
+- [x] **Dependent implementation (local):** Plans 07-01, 07-04, 07-06, 07-07, 07-09, and 07-10 replaced the RED/TODO registrations with deterministic production-derived behavior. Plans 07-11 through 07-13 additionally bound OpenTelemetry approval, protected-adapter dispatch, and the public release-verifier exit code. These local checks do not claim live evidence.
 - [ ] **Sequenced package gate:** Plans 07-02/03/04 verify, approve, and smoke every proposed OpenTelemetry package/version before installation; the research seam marks packages beyond `@opentelemetry/api` as `SUS`.
 
 ---
@@ -92,6 +92,36 @@ created: 2026-08-05
 | Subjective focused-napplet quality calibration | OPS-04 | The optional LLM judge must be calibrated against practitioner judgment | Two qualified reviewers label at least 20 artifacts; require Spearman rho ≥0.70 and false-pass ≤5%, otherwise disable the judge. |
 | Narrow waiver/rollback drill | OPS-04 | Authorization and operational response require accountable release owners | Exercise a named, time-bounded non-safety waiver with owner, reason, expiry, rollback, audit linkage, and automatic expiry; prove core safety/SLO/live-certification checks reject waivers. |
 
+## Validation Audit 2026-08-05
+
+| Metric | Count |
+|--------|------:|
+| Local behavioral gaps found | 0 |
+| Local behavioral gaps resolved | 0 |
+| External-live blockers | 5 requirements |
+
+### Commands Run
+
+| Command | Actual result |
+|---------|---------------|
+| `bun test --timeout 10000` | Passed: 495 tests, 0 failures. |
+| `bun run eval:phase07` | Passed: 64 deterministic cases; `promotionVerdict: blocked`. |
+| `bun run verify:phase07-evidence -- --verify-existing` | Passed: offline deterministic evidence is valid; `promotionVerdict: blocked`. |
+| `PHASE07_CERTIFICATION_EVIDENCE_DIRECTORY=<temporary-dir> bun run certify:phase07 -- --profile=release --preflight-only` | Expected nonzero (1): eight immutable protected-suite records were `blocked`; no adapter was invoked and no live pass was claimed. |
+| `bun run candidate:verify -- --release-evidence evidence/design/phase-07.json` | Expected nonzero (1): `RELEASE_INPUT_INVALID`; a deterministic pointer alone cannot promote a release. |
+
+### Requirement Coverage Status
+
+| Requirement | Deterministic behavioral coverage | Current status | External-live evidence still required |
+|-------------|-----------------------------------|----------------|--------------------------------------|
+| SESS-02 | `tests/phase-07/admission-slo.test.ts`, `tests/phase-07/worker-benchmark.test.ts`, `tests/evals/phase-07-reference-set.test.ts` | Local green; protected-live blocked | Fresh Modal and Fly cohorts: 1,000 accepted observations, required forced cohorts, one-sided 95% p95 at most five seconds, and zero durable backlog. |
+| OPS-01 | `tests/phase-07/telemetry-policy.test.ts`, `tests/phase-07/otel-package-legitimacy.test.ts`, `tests/phase-07/certification-runner.test.ts` | Local green; protected-live blocked | Candidate-bound Collector lifecycle export from the selected release topology. |
+| OPS-02 | `tests/phase-07/fault-matrix.test.ts`, `tests/evals/phase-07-reference-set.test.ts` | Local green; protected-live blocked | Protected regional/database/worker/payment/model/publication original-operation recovery drills. |
+| OPS-03 | `tests/phase-07/restore-drill.test.ts`, `tests/evals/phase-07-reference-set.test.ts` | Local green; protected-live blocked | Protected instance-loss and retained-object topology observation. |
+| OPS-04 | `tests/phase-07/promotion-gate.test.ts`, `tests/phase-07/certification-runner.test.ts`, `tests/phase-07/host-presentation.test.ts` | Local green; protected-live blocked | Complete fresh, candidate-bound passed inventory for every closed release claim; only then may the sole evaluator return `promoted`. |
+
+The local test suite intentionally uses deterministic adapters/fixtures only to exercise fail-closed wiring. Such records remain `deterministic` and cannot satisfy protected-live certification.
+
 ---
 
 ## Validation Sign-Off
@@ -101,7 +131,8 @@ created: 2026-08-05
 - [x] Wave 0 covers every missing reference above.
 - [x] No watch-mode flags.
 - [x] Fast feedback latency is under 30 seconds.
-- [ ] Required live observations are executed and fresh; blocked evidence is not promoted.
+- [x] Blocked live observations are explicitly non-promotable; the protected preflight and deterministic pointer were re-run and returned nonzero.
+- [ ] Required live observations are executed and fresh.
 - [ ] `nyquist_compliant: true` is set only after `$gsd-validate-phase` confirms coverage.
 
 **Approval:** pending

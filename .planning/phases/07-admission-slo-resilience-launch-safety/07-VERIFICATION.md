@@ -1,23 +1,19 @@
 ---
 phase: 07-admission-slo-resilience-launch-safety
-verified: 2026-08-05T19:39:39Z
+verified: 2026-08-05T19:48:59Z
 status: gaps_found
-score: 66/75 must-haves verified
+score: 70/78 must-haves verified
 behavior_unverified: 0
 overrides_applied: 0
 re_verification:
   previous_status: gaps_found
-  previous_score: 53/64
+  previous_score: 66/75
   gaps_closed:
-    - "A pending OpenTelemetry audit no longer authorizes package smoke or root pins."
-    - "The protected runner now loads a trusted digest-pinned adapter registry and dispatches selected suites without fabricating protected-live passes."
-    - "An exact release-bundle verifier now parses explicit evidence pointers and delegates the terminal decision to evaluateReleaseCertification."
+    - "candidate:verify now exits zero exactly when the existing sole evaluator returns promoted, with real on-disk subprocess coverage."
   gaps_remaining:
     - "No fresh protected Modal/Fly readiness cohorts establish the five-second p95 claim."
     - "No candidate-bound Collector, topology, recovery, payment/model, host/signer/browser, or publication live observations have passed."
-    - "candidate:verify unconditionally exits 1 in its release-evidence branch, including when the sole evaluator returns promoted."
-  regressions:
-    - "The new positive evaluator path is not reachable as a successful public CLI invocation because src/promotion/candidate.ts:336 always assigns exit code 1."
+  regressions: []
 gaps:
   - truth: "An accepted user request reaches an isolated ready worker within five seconds at p95, or immediately receives a retryable capacity response with no durable queue."
     status: failed
@@ -35,14 +31,6 @@ gaps:
         issue: "The immutable live-claim inventory has 0 passed protected observations and promotionVerdict blocked."
     missing:
       - "Fresh protected observations for the declared release topology, Collector lifecycle export, original-operation recovery, checkpoint/object retention, payment/model reconciliation, and publication flows."
-  - truth: "Production promotion can complete through candidate verification only when the exact bundle receives a promoted decision."
-    status: failed
-    reason: "The exact parser and sole evaluator are wired, but the release-evidence CLI unconditionally assigns process.exitCode = 1 after printing the decision. A valid promoted decision can therefore never be a successful public verification command."
-    artifacts:
-      - path: "src/promotion/candidate.ts"
-        issue: "Lines 334-336 discard the evaluator status for process exit behavior."
-    missing:
-      - "Set the release-evidence exit code from the returned decision (zero only when status is promoted) and add a subprocess test for a complete promoted bundle."
   - truth: "Protected live certification covers the required provider, topology, payment, host/browser, signer, CLI, upload, and relay claims before production promotion."
     status: failed
     reason: "The protected runner is now capable of dispatching configured adapters and correctly blocks absent prerequisites, but this workspace has no release profile, trusted live adapter module, scoped credentials, or passed protected observations."
@@ -56,13 +44,13 @@ gaps:
 # Phase 7: Admission SLO, Resilience & Launch Safety Verification Report
 
 **Phase Goal:** The integrated service can honestly promise immediate-or-rejected work and preserve money, sessions, artifacts, and publication effects through production failures.
-**Verified:** 2026-08-05T19:39:39Z
+**Verified:** 2026-08-05T19:48:59Z
 **Status:** gaps_found  
-**Re-verification:** Yes — after Plans 07-11 and 07-12
+**Re-verification:** Yes — after Plans 07-11 through 07-13
 
 ## Goal Achievement
 
-The local closure work is largely real: package approval is no longer bypassable, protected certification now has a safe dispatch seam, and the release-bundle verifier reaches the sole evaluator. The phase goal is still not achieved. No protected production observation establishes the SLO or continuity claims, and one remaining local CLI defect makes an otherwise promoted bundle return failure.
+All local closure work is verified: package approval is no longer bypassable, protected certification has a safe dispatch seam, and an exact release bundle reaches the sole evaluator and reports its terminal status correctly through the public CLI. The phase goal is still not achieved because no protected production observation establishes the SLO or continuity claims.
 
 ### Observable Truths
 
@@ -75,9 +63,9 @@ The local closure work is largely real: package approval is no longer bypassable
 | 5 | Delegated OTel approval is distinct from the pending audit, truthful about its authority, exact-package/digest-bound, and shared by approval-dependent paths. | ✓ VERIFIED | Approval record is `approved_operator` / `delegated_operator`, binds audit `d7fed…22b3` and six-package digest `7daf…40f2`; all seven mutation/CLI tests pass. |
 | 6 | The protected runner invokes configured adapters safely and absent prerequisites remain immutable blockers. | ✓ VERIFIED | Digest-pinned root-contained loader, finite result schema, preflight no-invocation, one-call dispatch, error redaction, and failed/blocked/not_observed spot-checks pass. |
 | 7 | Exact release input is validated and fed to the sole promotion evaluator. | ✓ VERIFIED | `verifyReleaseCertificationInput` strictly parses explicit pointers and calls `evaluateReleaseCertification`; unit test proves an exact in-memory complete bundle returns `promoted`. |
-| 8 | Public candidate verification exits zero only for a promoted release decision. | ✗ FAILED | `src/promotion/candidate.ts:334-336` prints the decision then unconditionally assigns `process.exitCode = 1`; the positive CLI path is untested and impossible. |
+| 8 | Public candidate verification exits zero only for a promoted release decision. | ✓ VERIFIED | A real subprocess creates an exact relative-path bundle, receives `status: promoted` with exit 0, then receives `status: blocked` and nonzero after candidate substitution. Canonical deterministic input remains nonzero. |
 
-**Score:** 66/75 must-haves verified. This carries the prior 64 truth set forward and adds the four Plan 07-11 and seven Plan 07-12 closure truths. Nine remain failed: the three roadmap production outcomes, the unresolved live benchmark/browser/live-certification plan truths, and the release CLI success-path defect.
+**Score:** 70/78 must-haves verified. This carries the prior 64 truth set forward and adds the four Plan 07-11, seven Plan 07-12, and three Plan 07-13 truths. Eight remain failed, all for unobserved protected benchmark, topology, host/browser, and live-certification outcomes; there is no remaining local implementation gap.
 
 ## Re-verified Closure Artifacts
 
@@ -87,7 +75,7 @@ The local closure work is largely real: package approval is no longer bypassable
 | `evidence/certification/phase-07-otel-package-approval.json` | ✓ Exists and points to immutable approval `6fd27b…22ad`. | Record digest, audit digest, exact six package rows, scope, and limitations recomputed successfully. | ✓ VERIFIED |
 | `src/certification/adapters.ts` | ✓ Canonical containment, no-symlink, regular-file and SHA-256 checks are substantive. | `certify-phase-07.ts` invokes loader only for configured root/module/digest and passes registry to runner. | ✓ VERIFIED |
 | `src/certification/runner.ts` | ✓ Closed suites, finite result parsing, status mapping, and all-suite claim gate are substantive. | CLI → `runProtectedCertificationProfile` → one immutable observation per selected suite. Credential-free preflight invokes no adapter. | ✓ VERIFIED |
-| `src/promotion/candidate.ts` | ✓ Strict five-field release input and explicit file pointers. | Exact bundle → deterministic/observation validation → sole `evaluateReleaseCertification`; CLI exit mapping is broken. | ✗ PARTIAL |
+| `src/promotion/candidate.ts` | ✓ Strict five-field release input and explicit file pointers. | Exact bundle → deterministic/observation validation → sole `evaluateReleaseCertification` → exit 0 only for `promoted`. | ✓ VERIFIED |
 
 The generic artifact query reports bracketed `exports: [a, b]` frontmatter as one literal export. Manual source inspection confirms the declared symbols are exported; this parser limitation is not a source gap. Both Plan 07-11 and 07-12 key-link queries report 2/2 wired.
 
@@ -97,22 +85,22 @@ The generic artifact query reports bracketed `exports: [a, b]` frontmatter as on
 | --- | --- | --- | --- |
 | OTel authority | Pending audit pointer + delegated approval pointer/record | `verifyApprovedOtelPackageSet` → approval/root-pin/smoke modes | ✓ FLOWING, fail-closed |
 | Protected certification | Release-profile facts + digest-verified registry | Runner → immutable observation writer | ✓ FLOWING when configured; current environment correctly blocks before adapter execution |
-| Candidate certification | Exact release bundle + explicit deterministic/protected evidence pointers | `verifyReleaseCertificationInput` → `evaluateReleaseCertification` | ⚠️ PARTIAL: evaluator output reaches stdout but not the process success code |
+| Candidate certification | Exact release bundle + explicit deterministic/protected evidence pointers | `verifyReleaseCertificationInput` → `evaluateReleaseCertification` → process exit | ✓ FLOWING: subprocess proves promoted = 0 and substitution = nonzero |
 
 ## Behavioral Spot-Checks
 
 | Behavior | Command | Result | Status |
 | --- | --- | --- | --- |
-| Full workspace regression | `bun test --timeout 10000` | 494 pass, 0 fail, 4,180 assertions | ✓ PASS |
+| Full workspace regression | `bun test --timeout 10000` | 495 pass, 0 fail, 4,184 assertions | ✓ PASS |
 | OTel delegated approval and drift rejection | `bun test tests/phase-07/otel-package-legitimacy.test.ts --timeout 10000` | 7 pass | ✓ PASS |
 | Shared approval consumers | `bun run scripts/verify-phase-07-otel-packages.ts -- --require-approved`; `--verify-root-pins` | Both pass with the same approval/audit/package digests | ✓ PASS |
 | Protected runner contract | `bun test tests/phase-07/certification-runner.test.ts --timeout 10000` | 6 pass | ✓ PASS |
 | Runner finite status mapping | Inline fake-adapter spot-check for `failed`, `blocked`, `not_observed` | `runner_status_mapping=passed` | ✓ PASS |
-| Release parser/evaluator contract | `bun test tests/phase-07/promotion-gate.test.ts --timeout 10000` | 8 pass | ✓ PASS |
+| Release parser/evaluator contract | `bun test tests/phase-07/promotion-gate.test.ts --timeout 10000` | 9 pass | ✓ PASS |
 | Deterministic Phase 7 evidence | `bun run eval:phase07`; `bun run verify:phase07-evidence -- --verify-existing` | 64 deterministic cases passed; promotion remains blocked | ✓ PASS |
 | Credential-free protected preflight | `PHASE07_CERTIFICATION_EVIDENCE_DIRECTORY=/tmp/napplet-cvm-phase07-reverify-2048 bun run certify:phase07 -- --profile=release --preflight-only` | Eight blocked records; exit 1 | ✓ PASS — correct fail-closed result |
 | Current release evidence | `bun run candidate:verify -- --release-evidence evidence/design/phase-07.json` | `RELEASE_INPUT_INVALID`; exit 1 | ✓ PASS — deterministic pointer alone cannot promote |
-| Promoted public release path | Source and test inspection | CLI always exits 1 at `candidate.ts:336`; no subprocess positive test exists | ✗ FAIL |
+| Promoted public release path | `bun test tests/phase-07/promotion-gate.test.ts --test-name-pattern='candidate verification|release evidence' --timeout 10000` | 5 pass; exact on-disk promoted bundle exits 0, substituted bundle and canonical deterministic pointer exit nonzero | ✓ PASS |
 
 ## Requirements Coverage
 
@@ -122,7 +110,7 @@ The generic artifact query reports bracketed `exports: [a, b]` frontmatter as on
 | OPS-01 | ✗ BLOCKED | Strict finite/redacted telemetry and approved package gate are verified; no candidate-bound Collector lifecycle observation is passed. |
 | OPS-02 | ✗ BLOCKED | Deterministic original-operation fault matrix passes; no protected regional/database/worker/payment/publication failure drill passed. |
 | OPS-03 | ✗ BLOCKED | Exact-object restore logic passes; no infrastructure-instance-loss/retention topology observation passed. |
-| OPS-04 | ✗ BLOCKED | The gate is fail-closed and the exact evaluator is wired, but live claim inventory is empty/non-pass and the public promoted exit path is broken. |
+| OPS-04 | ✗ BLOCKED | The gate is fail-closed and the public exact-bundle evaluator path is verified, but live claim inventory is empty/non-pass. |
 
 ## Prohibitions and Anti-Patterns
 
@@ -134,7 +122,7 @@ The generic artifact query reports bracketed `exports: [a, b]` frontmatter as on
 | Adapter paths, symlinks, non-files, traversal, and digest drift must fail pre-import | ✓ VERIFIED | Loader and focused rejection tests cover these boundaries. |
 | No secret canary / raw adapter output enters evidence | ✓ VERIFIED | Malformed/throwing/canary adapter test passes; `runner` records finite failure only. |
 | Phase-owned implementation debt markers | ✓ VERIFIED | No unreferenced `TBD`, `FIXME`, or `XXX` found in scanned Phase 7 source and test files. |
-| `src/promotion/candidate.ts` | 🛑 BLOCKER | Unconditional release-evidence exit 1 makes a promoted bundle unusable through the public command. |
+| Public promotion CLI exit mapping | ✓ VERIFIED | Process success derives directly from the returned sole evaluator decision; subprocess coverage proves both promoted and blocked paths. |
 
 ## Escalation Gate: Required External Certification
 
@@ -146,16 +134,16 @@ The following is not locally runnable and must not be inferred from the determin
 
 ## Gaps Summary
 
-Plans 07-11 and 07-12 closed the prior approval bypass and the two missing internal wiring seams. There are no remaining local gaps in delegated OTel approval or protected-adapter dispatch. One local code gap remains: the candidate CLI cannot succeed after a valid promotion decision. The other blockers are observable missing evidence, not uncertainty: all current protected records are blocked/not-observed, and no real Modal/Fly/topology/payment/host/browser pass is claimed here.
+Plans 07-11 through 07-13 closed the prior approval bypass, protected-runner/release-evaluator wiring gaps, and the public CLI exit-code gap. There are **no remaining local implementation gaps** in the Phase 7 closure scope. The remaining blockers are observable missing evidence, not uncertainty: all current protected records are blocked/not-observed, and no real Modal/Fly/topology/payment/host/browser pass is claimed here.
 
 ## Milestone Roll-up
 
 - Phase 7 is the final v1.0 phase; no later roadmap phase owns these gaps, so nothing is deferred.
 - v1.0 has 54 requirements: 49 complete through Phases 1–6 and 5 blocked in Phase 7 (`SESS-02`, `OPS-01`–`OPS-04`).
 - Phase 1's live launch-hardening closure and Phase 6's compatible-host/external integration deferrals remain blocked until protected evidence exists.
-- The project must fix the local candidate CLI exit mapping, then enter the protected certification environment before Phase 7 can be verified.
+- The project must enter the protected certification environment and retain exact fresh passed observations before Phase 7 can be verified.
 
 ---
 
-_Verified: 2026-08-05T19:39:39Z_
+_Verified: 2026-08-05T19:48:59Z_
 _Verifier: the agent (gsd-verifier)_

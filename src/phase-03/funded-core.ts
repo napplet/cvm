@@ -18,6 +18,7 @@ import type { MeteredGenerationService } from "../phase-04/metered-generation-se
 import { readSessionStatus } from "../phase-04/session-status";
 import type { ContinuationService } from "../continuity/continuation-service";
 import { validatedAvailablePromotedCliSourceContract } from "../publication/napplet-cli-source-contract";
+import type { LifecycleTelemetryPort } from "../telemetry/contracts";
 
 type SurfaceState = "configured" | "blocked" | "unselected";
 type BlockedCapacity = ReadyCapacityPort;
@@ -55,6 +56,8 @@ export type FundedCoreOptions = Readonly<{
   publicationSourceContract?: unknown;
   /** Server-held HMAC material for opaque status cursors. */
   statusCursorSecret?: Uint8Array;
+  /** Observation-only lifecycle port. It never receives funding, session, or effect authority. */
+  lifecycle?: LifecycleTelemetryPort;
   testOnly?: boolean;
 }>;
 
@@ -109,7 +112,7 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
   const sourceContract = validatedAvailablePromotedCliSourceContract(options.publicationSourceContract);
   const publicPublicationSurface = Boolean(publicFundingSurface && options.publication && sourceContract);
   const offline = !store || !database || !publicFundingSurface;
-  const admissions = new FundedAdmissionService({ funding, store: authority, capacity: options.capacity ?? blockedCapacity });
+  const admissions = new FundedAdmissionService({ funding, store: authority, capacity: options.capacity ?? blockedCapacity, ...(options.lifecycle ? { telemetry: options.lifecycle } : {}) });
   const accountStatus = new AccountStatusService({ store: authority, sessions: options.sessions ?? emptySessions, ...(database ? { rails: database.railStatuses } : {}) });
   if (publicFundingSurface && options.transport) {
     const announcement = options.announcement ?? {

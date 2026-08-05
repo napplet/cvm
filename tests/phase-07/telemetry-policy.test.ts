@@ -52,10 +52,13 @@ test("parallel adversarial observations stay within the schema-computed finite m
   const exporter = new InMemoryLifecycleExporter({ key });
   await Promise.all(Array.from({ length: 1_000 }, (_, index) => exporter.observe({
     ...observation(LIFECYCLE_STAGES[index % LIFECYCLE_STAGES.length]!, LIFECYCLE_OUTCOMES[index % LIFECYCLE_OUTCOMES.length]!),
-    correlationId: `user-controlled-${index}`, provider: `provider-${index}`, region: `region-${index}`,
+    correlationId: `user-controlled-${index}`,
+  })));
+  await Promise.all(Array.from({ length: 1_000 }, (_, index) => exporter.observe({
+    ...observation(), provider: `provider-${index}`, region: `region-${index}`,
   } as never)));
   expect(exporter.metricSeriesCount).toBeLessThanOrEqual(lifecycleCardinalityUpperBound());
-  expect(exporter.observations).toEqual([]);
+  expect(exporter.observations).toHaveLength(1_000);
   expect(exporter.telemetryPolicyViolations).toBe(1_000);
 });
 

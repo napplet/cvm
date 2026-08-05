@@ -4,15 +4,15 @@ milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
 current_phase: 5
 current_phase_name: Funding Interruption & Durable Resume
-status: planning
-stopped_at: Phase 04 complete; Phase 05 ready for autonomous discussion and planning
-last_updated: "2026-08-05T00:15:42.926Z"
-last_activity: 2026-08-05
-last_activity_desc: Phase 04 complete, transitioned to Phase 5
+status: executing
+stopped_at: Phase 05 planned and checker-approved; ready to execute Plan 05-01
+last_updated: "2026-08-05T00:48:58.235Z"
+last_activity: 2026-08-05 -- Phase 5 planning complete
+last_activity_desc: Phase 05 planned and checker-approved; ready to execute Plan 05-01
 progress:
   total_phases: 7
   completed_phases: 4
-  total_plans: 26
+  total_plans: 33
   completed_plans: 26
   percent: 57
 ---
@@ -31,19 +31,19 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 Phase: 5 — Funding Interruption & Durable Resume
 Plan: Not started
-Status: Ready to plan
-Last activity: 2026-08-05 — Phase 04 complete, transitioned to Phase 5
+Status: Ready to execute
+Last activity: 2026-08-05 -- Phase 5 planning complete
 
-Progress: [██████████] Phase 4 complete; Phase 5 is ready for discussion and planning
+Progress: [██████████] Phase 4 complete; Phase 5 has 7 checker-approved plans ready for execution
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–4 complete; Phase 5 is active; Phases 6–7 remain.
-- Plans: 26/26 currently known milestone plans executed; Phase 4 has 7 executed plans.
+- Plans: 26/33 currently known milestone plans executed; Phase 5 has 7 checker-approved plans across 6 waves.
 - Requirements: 54/54 v1 requirements assigned; 33 verified complete and 21 pending.
-- Next checkpoint: discuss and plan Phase 5 without revisiting completed Phase 4 work.
+- Next checkpoint: execute Phase 5 Plan 05-01 without revisiting completed Phases 1–4.
 
 ## Performance Metrics
 
@@ -143,7 +143,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Discuss and plan Phase 5 funding interruption and durable resume behavior.
+- Execute Phase 5 funding interruption and durable resume plans beginning with 05-01.
 
 ### Blockers/Concerns
 
@@ -161,6 +161,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T00:15:42.926Z
-Stopped at: Phase 04 complete; Phase 05 ready for autonomous discussion and planning
+Last session: 2026-08-05T00:48:58.235Z
+Stopped at: Phase 05 planned and checker-approved; ready to execute Plan 05-01
 Resume file: None

@@ -18,7 +18,7 @@ napplet-cvm moves from proving the permanent napplet contract to a safe, prepaid
 | 2. Trusted Core & Isolated Agent Execution | Establishes bounded admission, serialized durable session authority, typed worker capabilities, isolation, checkpoint shape, and provider-separated evidence. | SESS-05, SAFE-01–SAFE-04 | `.planning/phases/02-trusted-core-isolated-agent-execution/` — context, research, AI spec, validation, coverage, source audit, 6 plans, 6 summaries, review/fix, security audit, and goal verification. |
 | 3. ContextVM Funding & Funded Admission | Connects signed ContextVM identity and CEP-8 Lightning/Cashu settlement to one idempotent prepaid account and capped funded admission. | CTX-01–CTX-04, PAY-01–PAY-07, BILL-01–BILL-02, BILL-06 | `.planning/phases/03-contextvm-funding-funded-admission/` — context, discussion log, research, patterns, API coverage, validation, source audit, 7 plans and summaries, review/fix history, final clean review, security audit, and passed goal verification. |
 | 4. Metered Generation & Revision Loop | Turns approved funds into exact-usage, serialized napplet creation, revision, repair, progress, and diagnostic actions. | BILL-03–BILL-05, SESS-01, SESS-03–SESS-04, GEN-05–GEN-06 | `.planning/phases/04-metered-generation-revision-loop/` — context, discussion log, research, AI spec, patterns, validation, 7 plans and summaries, review/fix history, immutable design evidence, security audit, and passed goal verification. |
-| 5. Funding Interruption & Durable Resume | Preserves paid work across insufficient funds, the ten-minute live-worker window, explicit resume, and 30-day checkpoint retention. | CONT-01–CONT-07 | Phase directory and phase artifacts not yet created. |
+| 5. Funding Interruption & Durable Resume | Preserves paid work across insufficient funds, the ten-minute live-worker window, explicit resume, and 30-day checkpoint retention. | CONT-01–CONT-07 | `.planning/phases/05-funding-interruption-durable-resume/` — context, research, patterns, validation strategy, and 7 checker-approved execution plans across 6 waves. |
 | 6. Sealed Preview & User-Owned Publication | Lets the user preview the exact verified artifact, retain signing custody, and explicitly deploy a manifest plus CVM attestation. | PREV-01–PREV-04, PUB-01–PUB-05 | Phase directory and phase artifacts not yet created. |
 | 7. Admission SLO, Resilience & Launch Safety | Measures immediate-or-rejected admission, proves integrated failure safety, and closes the launch-hardening work deferred from Phase 1. | SESS-02, OPS-01–OPS-04 | Phase directory and phase artifacts not yet created. |
 
@@ -217,7 +217,32 @@ Plans:
   4. After the live window, a top-up alone does not restart work; a user must issue a signed explicit resume command and approve the displayed pending action.
   5. For 30 days a checkpoint can resume without two active workers or duplicate charges, then it expires securely and cannot be revived.
 
-**Plans**: TBD
+**Plans**: 7 plans across 6 waves
+
+**Wave 1**
+
+- [ ] 05-01-PLAN.md — Prove the unaffordable-action pause tracer and precise owner-safe `needs_top_up` status.
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 05-02-PLAN.md — Create the atomic durable continuation authority and PostgreSQL-wire parity.
+- [ ] 05-03-PLAN.md — Seal complete checkpoints and extend lease-bound worker lifecycle contracts.
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 05-04-PLAN.md — Implement same-worker grace wake and deadline checkpoint/release ordering.
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 05-05-PLAN.md — Add signed explicit `resume_session` and exactly-once checkpoint restore.
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 05-06-PLAN.md — Enforce exact, race-safe, irreversible 30-day checkpoint expiry.
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 05-07-PLAN.md — Seal Phase 5 with deterministic reference coverage and immutable design evidence.
 
 ### Phase 6: Sealed Preview & User-Owned Publication
 
@@ -264,16 +289,16 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 2. Trusted Core & Isolated Agent Execution | 6/6 | Complete    | 2026-08-04 |
 | 3. ContextVM Funding & Funded Admission | 7/7 | Complete    | 2026-08-04 |
 | 4. Metered Generation & Revision Loop | 7/7 | Complete    | 2026-08-05 |
-| 5. Funding Interruption & Durable Resume | 0/TBD | Not started | - |
+| 5. Funding Interruption & Durable Resume | 0/7 | Planned | - |
 | 6. Sealed Preview & User-Owned Publication | 0/TBD | Not started | - |
 | 7. Admission SLO, Resilience & Launch Safety | 0/TBD | Not started | - |
 
 ### Milestone Progress Roll-up
 
 - **Phases:** Phases 1–4 are verified complete; Phase 5 is active; Phases 6–7 remain; 4/7 phases complete (57%).
-- **Known plans:** 26/26 executed; Phase 4 contributes 7 completed plans across 7 waves.
+- **Known plans:** 26/33 executed; Phase 5 contributes 7 checker-approved plans across 6 waves.
 - **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 33 verified complete and 21 pending.
-- **Current checkpoint:** Discuss and plan Phase 5; do not revisit or replan completed Phases 1–4.
+- **Current checkpoint:** Execute Phase 5 from Plan 05-01; do not revisit or replan completed Phases 1–4.
 - **Phase 1 preservation:** Phase 1 remains complete with its review, security, validation, verification evidence, and Phase 7 deferrals unchanged.
 
 ### Completion Reporting Contract

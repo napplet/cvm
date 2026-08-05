@@ -49,7 +49,7 @@ function completeRequest(overrides: Partial<CheckpointSealRequest> = {}): Checkp
   };
 }
 
-function service() {
+function setupEnvelopeService() {
   const store = new DeterministicObjectStore();
   const crypto = new AesGcmCheckpointCrypto({
     randomValues: (bytes) => bytes.fill(7),
@@ -59,7 +59,7 @@ function service() {
 
 describe("checkpoint envelope", () => {
   test("seals complete coordinator facts into an encrypted immutable object and restores exact bytes", async () => {
-    const { service, store } = service();
+    const { service, store } = setupEnvelopeService();
     const request = completeRequest();
 
     const sealed = await service.seal(request);
@@ -73,7 +73,7 @@ describe("checkpoint envelope", () => {
   });
 
   test("denies every archive, envelope, manifest, object, and key tamper with one generic result", async () => {
-    const { service } = service();
+    const { service } = setupEnvelopeService();
     const sealed = await service.seal(completeRequest());
     const tampered = [
       { envelope: { ...sealed.envelope, ciphertextBase64: "AA" }, manifest: sealed.manifest },
@@ -88,7 +88,7 @@ describe("checkpoint envelope", () => {
   });
 
   test("rejects incomplete or secret-bearing archives before key creation or object write", async () => {
-    const { service, crypto, store } = service();
+    const { service, crypto, store } = setupEnvelopeService();
     await expect(service.seal(completeRequest({ inventory: ["workspace"] }))).rejects.toThrow("CHECKPOINT_INCOMPLETE");
     await expect(service.seal(completeRequest({ inventory: [...completeRequest().inventory, "nostr_private_key"] }))).rejects.toThrow("CHECKPOINT_FORBIDDEN_CONTENT");
     expect(crypto.keyReferences()).toEqual([]);
@@ -96,7 +96,7 @@ describe("checkpoint envelope", () => {
   });
 
   test("reuses an identical immutable object and rejects a conflicting write without overwrite", async () => {
-    const { store } = service();
+    const { store } = setupEnvelopeService();
     const key = "checkpoints/checkpoint-immutable";
     const first = await store.createImmutable({ key, bytes: encoder.encode("one") });
     const duplicate = await store.createImmutable({ key, bytes: encoder.encode("one") });

@@ -1,9 +1,9 @@
 ---
 phase: 04
 slug: metered-generation-revision-loop
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: validated
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-08-04
 ---
 
@@ -38,15 +38,15 @@ created: 2026-08-04
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 04-W0-01 | TBD | 0 | BILL-03 | T-04-PRICE | Authorization-time price card produces one receipt-derived debit and unused release; replay cannot debit again. | unit + integration | `bun test tests/billing/price-card.test.ts tests/billing/operation-finalization.test.ts` | ❌ W0 | ⬜ pending |
-| 04-W0-02 | TBD | 0 | BILL-04 | T-04-EVIDENCE | Immutable correlated line items and safe status expose every monetary/reconciliation transition without protected data. | integration | `bun test tests/billing/line-items.test.ts tests/phase-04/session-status.test.ts` | ❌ W0 | ⬜ pending |
-| 04-W0-03 | TBD | 0 | BILL-05 | T-04-RETRY | Timeout, loss, or malformed receipt enters `usage_unknown`; reconciliation uses the original identity and never redispatches. | fault injection | `bun test tests/model/reconciliation.test.ts` | ❌ W0 | ⬜ pending |
-| 04-W0-04 | TBD | 0 | SESS-01 | T-04-ORDER | Bounded start runs Phase 2 gates before budget, model, or worker effects and returns a stable owner-scoped session. | tracer | `bun test tests/phase-04/tracer.test.ts` | ❌ W0 | ⬜ pending |
-| 04-W0-05 | TBD | 0 | SESS-03 | T-04-STATUS | Status is owner-only, truthful, bounded, and redacted while showing cap, confirmed spend, progress, and next action. | contract | `bun test tests/phase-04/session-status.test.ts` | ❌ W0 | ⬜ pending |
-| 04-W0-06 | TBD | 0 | SESS-04 | T-04-RACE | Revision preserves checkpoint lineage, independently authorizes, replays exact duplicates, and rejects stale conflicts without effects. | integration | `bun test tests/phase-04/revision.test.ts` | ❌ W0 | ⬜ pending |
-| 04-W0-07 | TBD | 0 | GEN-05 | T-04-REPAIR | One validation failure permits at most one separately authorized repair; another automatic repair is denied. | integration | `bun test tests/phase-04/repair.test.ts` | ❌ W0 | ⬜ pending |
-| 04-W0-08 | TBD | 0 | GEN-06 | T-04-HONESTY | Failed/incomplete candidates retain the prior verified artifact and expose safe diagnostics/evidence only. | integration | `bun test tests/phase-04/artifact-outcome.test.ts` | ❌ W0 | ⬜ pending |
-| 04-W0-09 | TBD | 0 | BILL-03, BILL-05, GEN-05, GEN-06 | T-04-SEPARATION | Deterministic fixtures prove the Phase 4 contract without implying live-provider selection or production readiness. | reference evidence | `bun test tests/evals/phase-04-reference-set.test.ts && bun run verify:phase04-design` | ❌ W0 | ⬜ pending |
+| 04-01/02/03 | 04-01–03 | 1–3 | BILL-03 | T-04-PRICE | Authorization-time price card produces one receipt-derived debit and unused release; replay cannot debit again. | unit + integration | `bun test tests/billing/price-card.test.ts tests/billing/operation-finalization.test.ts` | ✅ | ✅ green |
+| 04-02/05 | 04-02, 04-05 | 2, 5 | BILL-04 | T-04-EVIDENCE | Immutable correlated line items and safe status expose every monetary/reconciliation transition without protected data. | integration | `bun test tests/billing/line-items.test.ts tests/phase-04/session-status.test.ts` | ✅ | ✅ green |
+| 04-03/05 | 04-03, 04-05 | 3, 5 | BILL-05 | T-04-RETRY | Timeout, loss, or malformed receipt enters `usage_unknown`; reconciliation uses the original identity and never redispatches. | fault injection | `bun test tests/model/reconciliation.test.ts` | ✅ | ✅ green |
+| 04-01/05 | 04-01, 04-05 | 1, 5 | SESS-01 | T-04-ORDER | Bounded start runs Phase 2 gates before budget, model, or worker effects and returns a stable owner-scoped session. | tracer | `bun test tests/phase-04/tracer.test.ts` | ✅ | ✅ green |
+| 04-01/05 | 04-01, 04-05 | 1, 5 | SESS-03 | T-04-STATUS | Status is owner-only, truthful, bounded, and redacted while showing cap, confirmed spend, progress, and next action. | contract | `bun test tests/phase-04/session-status.test.ts` | ✅ | ✅ green |
+| 04-04/05 | 04-04, 04-05 | 4, 5 | SESS-04 | T-04-RACE | Revision preserves checkpoint lineage, independently authorizes, replays exact duplicates, and rejects stale conflicts without effects. | integration | `bun test tests/phase-04/revision.test.ts` | ✅ | ✅ green |
+| 04-04 | 04-04 | 4 | GEN-05 | T-04-REPAIR | One validation failure permits at most one separately authorized repair; another automatic repair is denied. | integration | `bun test tests/phase-04/repair.test.ts` | ✅ | ✅ green |
+| 04-04 | 04-04 | 4 | GEN-06 | T-04-HONESTY | Failed/incomplete candidates retain the prior verified artifact and expose safe diagnostics/evidence only. | integration | `bun test tests/phase-04/artifact-outcome.test.ts` | ✅ | ✅ green |
+| 04-06/07 | 04-06, 04-07 | 6, 7 | BILL-03/04/05, SESS-01/03/04, GEN-05/06 | T-04-SEPARATION | Deterministic fixtures prove the Phase 4 contract without implying live-provider selection or production readiness. | reference evidence | `bun run eval:phase04 && bun run verify:phase04-design` | ✅ | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -54,14 +54,14 @@ created: 2026-08-04
 
 ## Wave 0 Requirements
 
-- [ ] `tests/billing/price-card.test.ts` and `tests/billing/operation-finalization.test.ts` — BILL-03 bigint/rational pricing and exact settlement.
-- [ ] `tests/billing/line-items.test.ts` — BILL-04 immutable financial/evidence projection.
-- [ ] `tests/model/reconciliation.test.ts` — BILL-05 timeout/lookup/no-retry behavior.
-- [ ] `tests/phase-04/tracer.test.ts` and `tests/phase-04/session-status.test.ts` — SESS-01 and SESS-03 public lifecycle contract.
-- [ ] `tests/phase-04/revision.test.ts`, `repair.test.ts`, and `artifact-outcome.test.ts` — SESS-04, GEN-05, and GEN-06.
-- [ ] `tests/evals/phase-04-reference-set.test.ts` plus redacted fixtures — provider-separated deterministic acceptance gate.
-- [ ] `scripts/verify-phase-04-design-slice.ts` and `src/verification/phase-04-design-evidence.ts` — immutable Phase 4 evidence emission.
-- [ ] `package.json` scripts `eval:phase04` and `verify:phase04-design` — stable CI entry points without a live provider.
+- [x] `tests/billing/price-card.test.ts` and `tests/billing/operation-finalization.test.ts` — BILL-03 bigint/rational pricing and exact settlement.
+- [x] `tests/billing/line-items.test.ts` — BILL-04 immutable financial/evidence projection.
+- [x] `tests/model/reconciliation.test.ts` — BILL-05 timeout/lookup/no-retry behavior.
+- [x] `tests/phase-04/tracer.test.ts` and `tests/phase-04/session-status.test.ts` — SESS-01 and SESS-03 public lifecycle contract.
+- [x] `tests/phase-04/revision.test.ts`, `repair.test.ts`, and `artifact-outcome.test.ts` — SESS-04, GEN-05, and GEN-06.
+- [x] `tests/evals/phase-04-reference-set.test.ts` plus redacted fixtures — provider-separated deterministic acceptance gate.
+- [x] `scripts/verify-phase-04-design-slice.ts` and `src/verification/phase-04-design-evidence.ts` — immutable Phase 4 evidence emission.
+- [x] `package.json` scripts `eval:phase04` and `verify:phase04-design` — stable CI entry points without a live provider.
 
 ---
 
@@ -86,12 +86,21 @@ created: 2026-08-04
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verification or Wave 0 dependencies.
-- [ ] Sampling continuity: no three consecutive tasks without automated verification.
-- [ ] Wave 0 covers all missing references.
-- [ ] No watch-mode flags.
-- [ ] Targeted feedback latency remains below 15 seconds.
-- [ ] Provider-separated evidence never promotes a live provider or claims production readiness.
-- [ ] `nyquist_compliant: true` is set in frontmatter after the implementation audit.
+- [x] All tasks have `<automated>` verification or implemented test dependencies.
+- [x] Sampling continuity: no three consecutive tasks without automated verification.
+- [x] All planned validation references exist and run green.
+- [x] No watch-mode flags.
+- [x] Full suite completes in 15 seconds; targeted lanes remain bounded.
+- [x] Provider-separated evidence never promotes a live provider or claims production readiness.
+- [x] `nyquist_compliant: true` is set in frontmatter after the implementation audit.
 
-**Approval:** pending
+**Approval:** validated — 317 tests passed; all eight Phase 04 requirements have automated coverage. Live-provider certification remains an explicit Phase 07 deferral.
+
+## Validation Audit 2026-08-05
+
+| Metric | Count |
+|--------|-------|
+| Requirements audited | 8 |
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |

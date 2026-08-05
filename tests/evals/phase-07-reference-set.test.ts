@@ -37,9 +37,9 @@ describe("Phase 07 actual-authority reference set", () => {
     expect(first.evidenceSha256).toBe(second.evidenceSha256);
     expect(first.offlineVerdict).toBe("passed");
     expect(first.promotionVerdict).toBe("blocked");
-    expect(validatePhase07DesignEvidence(first).contentAddressedPath).toBe(`evidence/design/${first.evidenceSha256}.json`);
+    expect((await validatePhase07DesignEvidence(first)).contentAddressedPath).toBe(`evidence/design/${first.evidenceSha256}.json`);
     const forged = structuredClone(first);
     forged.liveObservations[0].status = "passed";
-    expect(() => validatePhase07DesignEvidence(forged)).toThrow();
+    await expect(validatePhase07DesignEvidence(forged)).rejects.toThrow();
   });
 });

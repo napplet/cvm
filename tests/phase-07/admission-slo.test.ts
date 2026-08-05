@@ -8,64 +8,30 @@ import { runAdmissionAttempt, summarizeAdmissionSamples } from "../../src/admiss
 import { AdmissionLifecycleContextSchema } from "../../src/telemetry/contracts";
 
 const fixturePath = "tests/fixtures/phase-07-reference-set.json";
-const knownStatuses = new Set(["pending", "blocked", "not_observed", "passed"]);
-const knownTiers = new Set(["fast", "medium", "live"]);
-
-type RegistryRow = Readonly<{
-  id: string;
-  requirement: string;
-  threat: string;
-  evidenceTier: string;
-  status: string;
-  commands: readonly string[];
-  owners: readonly string[];
-  cases: readonly string[];
-}>;
-
-async function loadRegistry(): Promise<Readonly<{ schema: "phase-07-reference-set"; version: 1; entries: readonly RegistryRow[] }>> {
+async function loadRegistry(): Promise<Readonly<{ schema: "phase-07-reference-set"; version: 2; cases: readonly { id: string; category: string; requirements: readonly string[]; scenario: unknown }[]; liveObservations: readonly { status: string }[] }>> {
   return JSON.parse(await readFile(fixturePath, "utf8"));
 }
 
 function assertStrictRegistry(registry: Awaited<ReturnType<typeof loadRegistry>>): void {
-  expect(registry).toMatchObject({ schema: "phase-07-reference-set", version: 1 });
-  expect(registry.entries.map((entry) => entry.id)).toEqual(["07-W0-01", "07-W0-02", "07-W0-03", "07-W0-04", "07-W0-05"]);
-  expect(new Set(registry.entries.map((entry) => entry.id)).size).toBe(registry.entries.length);
-  for (const entry of registry.entries) {
-    expect(entry.requirement).toMatch(/^(SESS-02|OPS-0[1-4])$/u);
-    expect(entry.threat).toMatch(/^T-07-(ADM|TEL|REC|RST|PRO)$/u);
-    expect(knownTiers.has(entry.evidenceTier)).toBe(true);
-    expect(knownStatuses.has(entry.status)).toBe(true);
-    expect(entry.status).not.toBe("passed");
-    expect(entry.commands.length).toBeGreaterThan(0);
-    expect(entry.owners.length).toBeGreaterThan(0);
-    expect(entry.cases.length).toBeGreaterThan(0);
-  }
+  expect(registry).toMatchObject({ schema: "phase-07-reference-set", version: 2 });
+  expect(registry.cases).toHaveLength(64);
+  expect(new Set(registry.cases.map((entry) => entry.id)).size).toBe(64);
+  expect(registry.cases.filter((entry) => entry.category === "admission")).toHaveLength(12);
+  expect(registry.cases.every((entry) => entry.scenario && entry.requirements.length > 0)).toBe(true);
+  expect(registry.liveObservations.every((entry) => entry.status === "blocked" || entry.status === "not_observed")).toBe(true);
 }
 
-test("07-W0-01 registry is unique, owner-bound, and pending until Plan 07-01 observations exist", async () => {
+test("07-W0-01 corpus preserves admission coverage and explicit protected-live non-pass states", async () => {
   const registry = await loadRegistry();
   assertStrictRegistry(registry);
-  const entry = registry.entries.find((candidate) => candidate.id === "07-W0-01");
-  expect(entry).toMatchObject({
-    requirement: "SESS-02",
-    threat: "T-07-ADM",
-    evidenceTier: "live",
-    status: "pending",
-    commands: ["bun test tests/phase-07/admission-slo.test.ts", "bun run certify:phase07 -- --suite=admission"],
-    owners: ["07-01 Task 1", "07-01 Task 2"],
-  });
-  expect(entry?.cases).toEqual(expect.arrayContaining([
-    "receipt-before-effects", "exact-session-readiness", "stable-no-effect-refusal", "exact-replay", "concurrent-single-claim", "sample-confidence", "zero-backlog",
-  ]));
+  expect(registry.cases.filter((entry) => entry.requirements.includes("SESS-02")).map((entry) => entry.id)).toEqual(expect.arrayContaining(["A01", "A02", "A07", "A08", "A12"]));
 });
 
-test("07-W0-01 rejects duplicate IDs, unknown registry enums, and baseline pass claims", async () => {
+test("07-W0-01 rejects duplicate IDs and fabricated protected-live pass claims", async () => {
   const registry = await loadRegistry();
-  const duplicate = structuredClone(registry); duplicate.entries.push(structuredClone(duplicate.entries[0]));
+  const duplicate = structuredClone(registry); duplicate.cases.push(structuredClone(duplicate.cases[0]));
   expect(() => assertStrictRegistry(duplicate)).toThrow();
-  const unknownStatus = structuredClone(registry); unknownStatus.entries[0].status = "unknown";
-  expect(() => assertStrictRegistry(unknownStatus)).toThrow();
-  const passClaim = structuredClone(registry); passClaim.entries[0].status = "passed";
+  const passClaim = structuredClone(registry); passClaim.liveObservations[0].status = "passed";
   expect(() => assertStrictRegistry(passClaim)).toThrow();
 });
 

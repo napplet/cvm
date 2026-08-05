@@ -1,22 +1,28 @@
-const fixturePath = "tests/fixtures/phase-07-reference-set.json";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { executePhase07ReferenceCase, validatePhase07ReferenceSet } from "../src/certification/phase-07-reference-set.js";
+import { validatePhase07DesignEvidence, writePhase07DesignEvidence } from "../src/certification/evidence.js";
 
-function validateRegistry(registry: unknown): void {
-  if (!registry || typeof registry !== "object") throw new Error("phase07_registry_invalid");
-  const value = registry as { schema?: unknown; version?: unknown; entries?: unknown };
-  if (value.schema !== "phase-07-reference-set" || value.version !== 1 || !Array.isArray(value.entries) || value.entries.length !== 5) throw new Error("phase07_registry_invalid");
-  if (value.entries.some((entry) => !entry || typeof entry !== "object" || (entry as { status?: unknown }).status !== "pending")) throw new Error("phase07_registry_nonpass_required");
-}
+const directory = "evidence/design";
 
 async function main(): Promise<void> {
-  if (Bun.argv.length !== 3 || Bun.argv[2] !== "--verify-existing") {
-    console.error(JSON.stringify({ phase: "07", command: "verify-evidence", status: "not_observed", reason: "invalid_arguments" }));
-    process.exitCode = 64;
-    return;
-  }
-  try { validateRegistry(await Bun.file(fixturePath).json()); }
-  catch { console.error(JSON.stringify({ phase: "07", command: "verify-evidence", status: "not_observed", reason: "registry_unavailable" })); process.exitCode = 1; return; }
-  console.error(JSON.stringify({ phase: "07", command: "verify-evidence", status: "not_observed", reason: "canonical_executed_evidence_absent" }));
-  process.exitCode = 1;
+  const [argument] = Bun.argv.slice(2);
+  if (Bun.argv.length > 3 || (argument && argument !== "--verify-existing")) { console.error(JSON.stringify({ phase: "07", command: "verify-evidence", status: "failed", reason: "invalid_arguments" })); process.exitCode = 64; return; }
+  try {
+    if (argument === "--verify-existing") {
+      const pointer = JSON.parse(await readFile(join(directory, "phase-07.json"), "utf8")) as { contentAddressedPath?: string; evidenceSha256?: string };
+      if (typeof pointer.contentAddressedPath !== "string" || typeof pointer.evidenceSha256 !== "string") throw new Error("pointer_invalid");
+      const evidence = await validatePhase07DesignEvidence(JSON.parse(await readFile(pointer.contentAddressedPath, "utf8")));
+      if (evidence.evidenceSha256 !== pointer.evidenceSha256) throw new Error("pointer_digest_invalid");
+      console.log(JSON.stringify({ phase: "07", command: "verify-evidence", status: "passed", mode: "verify-existing", offlineVerdict: evidence.offlineVerdict, promotionVerdict: evidence.promotionVerdict }));
+      return;
+    }
+    const fixture = validatePhase07ReferenceSet(await Bun.file("tests/fixtures/phase-07-reference-set.json").json());
+    const comparisons = await Promise.all(fixture.cases.map(executePhase07ReferenceCase));
+    const evidence = await writePhase07DesignEvidence(directory, { fixture, comparisons, sourceRevision: fixture.sourceRevision });
+    const reread = await validatePhase07DesignEvidence(JSON.parse(await readFile(evidence.contentAddressedPath, "utf8")));
+    if (reread.evidenceSha256 !== evidence.evidenceSha256) throw new Error("record_reread_invalid");
+    console.log(JSON.stringify({ phase: "07", command: "verify-evidence", status: "passed", mode: "build", evidenceSha256: evidence.evidenceSha256, offlineVerdict: evidence.offlineVerdict, promotionVerdict: evidence.promotionVerdict }));
+  } catch (error) { console.error(JSON.stringify({ phase: "07", command: "verify-evidence", status: "failed", reason: error instanceof Error ? error.message : "unknown" })); process.exitCode = 1; }
 }
-
 await main();

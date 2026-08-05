@@ -30,7 +30,7 @@ decisions:
   - Canonical checkpoint metadata is authenticated AES-GCM additional data and the archive identity is independently bound by SHA-256.
   - Worker continuation operations accept only project-owned lease/claim contracts; the Modal boundary remains unselected and denies lifecycle calls.
 metrics:
-  duration: 18m
+  duration: 8m 58s
   completed: 2026-08-05
   tasks_completed: 2
   files_changed: 7

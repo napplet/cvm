@@ -73,4 +73,25 @@ describe("CONT-07 retention expiry", () => {
     await expect(atExpiry.store.transact(accountId, (transaction) => transaction.claimResume({ ...claim, nowMs: committedAtMs + RETENTION_MS }))).rejects.toThrow("CHECKPOINT_EXPIRED");
   });
 
+  test("projects only owner-safe terminal expiry with no action that can resume or top up", async () => {
+    const owner = { pubkey: "ef".repeat(32) };
+    const ownerAccountId = await accountIdForPrincipal(owner);
+    const continuation = {
+      intent: { accountId: ownerAccountId, sessionId: "session:expired", idempotencyKey: "pause:expired", fingerprint: "a".repeat(64), reference: "pending:expired", actionKind: "revise_session" as const, boundedPayloadHash: "b".repeat(64), expectedSessionVersion: 2, expectedArtifactVersion: 1, policyVersion: "policy", priceCardId: "price", profileId: "model", toolchainId: "toolchain", actionMaximum: "5", admissionReference: "admission:expired" },
+      result: { status: "needs_top_up" as const, code: "ACTION_AFFORDABILITY_REQUIRED" as const, accountId: ownerAccountId, sessionId: "session:expired", pendingActionReference: "pending:expired", pendingActionFingerprint: "a".repeat(64), pendingActionKind: "revise_session" as const, actionMaximum: "5", requiredAdditionalFunding: "5", requiredCapApproval: "0", settledBalance: "0", availableBalance: "0", remainingCap: "5", graceDeadlineMs: 1, checkpoint: { state: "live_worker" as const, reference: "checkpoint-pending:expired" }, nextRequiredAction: "top_up" as const },
+    };
+    const store = {
+      async sessionStatus() { return { accountId: ownerAccountId, sessionId: "session:expired", version: 2, status: "needs_top_up" as const }; },
+      async findContinuationForSession() { return continuation; },
+      async findContinuationCheckpointForSession() { return { accountId: ownerAccountId, sessionId: "session:expired", pauseGeneration: 1, checkpointId: "checkpoint:safe", expectedSessionVersion: 2, expectedArtifactVersion: 1, manifestReference: "manifest:secret", objectKey: "object:secret", objectGeneration: "7", objectChecksum: "c".repeat(64), keyReference: "key:secret", compatibilityIdentity: "toolchain", checkpointCommittedAtMs, retentionDeadlineMs: committedAtMs + RETENTION_MS, state: "expired" as const }; },
+      async findDeletionOutcome() { return { checkpointId: "checkpoint:safe", objectGeneration: "7", state: "unknown" as const }; },
+      async listMeteredActionsForSession() { return []; },
+      async status() { return { accountId: ownerAccountId, unit: "sat" as const, available: "0", held: "0", topUps: [], admissions: [] }; },
+      async listBillingLineItems() { return { items: [] }; },
+    };
+    const result = await readSessionStatus({ store: store as never, cursorSecret: "retention-status-secret", query: { principal: owner, sessionId: "session:expired" } });
+    expect(result).toMatchObject({ status: "ok", session: { state: "needs_top_up", nextAction: "none", continuation: { status: "expired", checkpoint: { reference: "checkpoint:safe" }, retentionDeadlineMs: committedAtMs + RETENTION_MS, deletionState: "unknown", nextRequiredAction: "none" } } });
+    expect(JSON.stringify(result)).not.toMatch(/manifest:secret|object:secret|key:secret|checksum|archive|provider/i);
+  });
+
 });

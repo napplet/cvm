@@ -5,7 +5,7 @@ import { FundedAdmissionService } from "../../src/funding/funded-admission";
 import { FundingService } from "../../src/funding/funding-service";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
 import { runAdmissionAttempt, summarizeAdmissionSamples } from "../../src/admission/benchmark";
-import { AdmissionLifecycleContextSchema } from "../../src/telemetry/contracts";
+import { AdmissionLifecycleContextSchema, protectedLifecycleCorrelation } from "../../src/telemetry/contracts";
 import { HmacAdmissionReceiptAuthority } from "../../src/funding/admission-receipt";
 import { trustedAdmissionReceipt, trustedAdmissionReceiptAuthority } from "../fixtures/admission-ready";
 
@@ -190,5 +190,79 @@ describe("07-01 trusted immediate-or-refused admission", () => {
       { candidateId: "candidate-07", inputId: "partial", outcome: "accepted", receiptMonotonicMs: 1, readyMonotonicMs: null, readyLeaseCount: 0, durableBacklogCount: 0 },
       { candidateId: "candidate-07", inputId: "good", outcome: "accepted", receiptMonotonicMs: 1, readyMonotonicMs: 3, readyLeaseCount: 1, durableBacklogCount: 0 },
     ], { minimumSamples: 3 })).toMatchObject({ outcome: "failed", acceptedWithoutReadyCount: 1, durableBacklogCount: 1 });
+  });
+});
+
+describe("07-14 canonical funded-admission boundary", () => {
+  const principal = { pubkey: "a".repeat(64) };
+  const fundedRequest = (requestId = "request-07-14") => ({
+    verifiedClientPubkey: principal.pubkey,
+    requestEventId: "event-07-14",
+    rawEvent: { id: "event-07-14", tags: [] },
+    request: { id: requestId, method: "tools/call", params: { name: "funded_admission", arguments: { idempotencyKey: "phase-07-14", requestedCap: "50", unit: "sat" } } },
+  });
+
+  test("canonical invocation is computed once before receipt issuance and binds lifecycle correlation to invocation, event, principal, and RPC request", async () => {
+    const calls: string[] = [];
+    const issued: unknown[] = [];
+    const transport = {
+      onInbound: () => undefined,
+      canonicalInvocation: () => { calls.push("canonical"); return { invocationHash: "b".repeat(64) }; },
+      sendNotification: async () => undefined,
+      sendResponse: async () => undefined,
+      configureAnnouncement: () => undefined,
+    };
+    const adapter = new ContextVmFundingAdapter({
+      service: new FundingService(new TransactionalMemoryFundingStore()), transport,
+      admissionReceipts: {
+        issue: async (input: unknown) => { calls.push("issue"); issued.push(input); return { token: "ar1.00000000-0000-4000-8000-000000000000.signature" }; },
+        verify: async () => { throw new Error("not reached"); },
+      },
+      admissions: { admit: async () => { calls.push("admit"); return { status: "refused", accountId: "private-account", intentReference: "capacity-intent:private", retryable: true, unit: "sat" }; } } as never,
+    });
+    await adapter.handle(fundedRequest());
+    expect(calls).toEqual(["canonical", "issue", "admit"]);
+    expect(issued).toEqual([expect.objectContaining({
+      correlationDigest: await protectedLifecycleCorrelation(["b".repeat(64), principal.pubkey, "event-07-14", "request-07-14"]),
+    })]);
+  });
+
+  test("forged lifecycle correlation is rejected before capacity or funding effects", async () => {
+    const { store, funding } = await (async () => {
+      const store = new TransactionalMemoryFundingStore();
+      const funding = new FundingService(store);
+      await funding.execute({ principal, kind: "credit_settlement", idempotencyKey: "phase-07-14-credit", policyVersion: "p1", protocolVersion: "v1", payload: { settlement: { topUpId: "phase-07-14-topup", rail: "lightning", unit: "sat", amount: "100", externalReference: "phase-07-14-external", settlementReference: "phase-07-14-settlement", verifiedAt: "2026-08-05T00:00:00.000Z" } } });
+      return { store, funding };
+    })();
+    let reserves = 0;
+    const authority = new HmacAdmissionReceiptAuthority({ secret: new Uint8Array(32).fill(7) });
+    const command = { principal, idempotencyKey: "phase-07-14-forged", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "50", unit: "sat" as const } };
+    const receipt = await authority.issue({ command, correlationDigest: `sha256:${"c".repeat(64)}`, expectedSessionBindingDigest: `sha256:${"d".repeat(64)}` });
+    const service = new FundedAdmissionService({
+      funding, store, receiptAuthority: authority,
+      capacity: { reserveNow: async () => { reserves += 1; return { status: "refused" as const }; }, observe: async () => ({ status: "unknown" as const }), release: async () => undefined },
+    });
+    await expect(service.admit(command, receipt, { version: "admission-lifecycle-v1", receiptMonotonicMs: 1, correlationDigest: `sha256:${"e".repeat(64)}` })).rejects.toThrow("ADMISSION_RECEIPT_CORRELATION_MISMATCH");
+    expect({ reserves, holds: store.activeHolds.length }).toEqual({ reserves: 0, holds: 0 });
+  });
+
+  test("both funded-admission wire channels omit malicious port fields", async () => {
+    const notifications: unknown[] = [];
+    const responses: unknown[] = [];
+    const transport = {
+      onInbound: () => undefined,
+      canonicalInvocation: () => ({ invocationHash: "b".repeat(64) }),
+      sendNotification: async (_pubkey: string, value: unknown) => { notifications.push(value); },
+      sendResponse: async (_pubkey: string, value: unknown) => { responses.push(value); },
+      configureAnnouncement: () => undefined,
+    };
+    const adapter = new ContextVmFundingAdapter({
+      service: new FundingService(new TransactionalMemoryFundingStore()), transport,
+      admissionReceipts: trustedAdmissionReceiptAuthority,
+      admissions: { admit: async () => ({ status: "accepted", accountId: "private-account", reference: "lease-safe", admissionReference: "admission-safe", reservedAmount: "50", unit: "sat", provider: "malicious-provider", region: "secret-region", inventory: 1, nativeError: "native-error", credential: "credential", path: "/private", correlationDigest: `sha256:${"f".repeat(64)}` }) } as never,
+    });
+    await adapter.handle(fundedRequest());
+    const text = JSON.stringify([notifications, responses]);
+    for (const canary of ["private-account", "malicious-provider", "secret-region", "native-error", "credential", "/private", "sha256:"]) expect(text).not.toContain(canary);
   });
 });

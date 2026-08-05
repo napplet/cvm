@@ -117,6 +117,11 @@ export class ContinuationService {
       if (!pause) return frozen({ status: "no_effect" as const, code: "PAUSE_NOT_FOUND_OR_DENIED" });
       if (pause.liveLeaseToken !== input.liveLeaseToken) return frozen({ status: "no_effect" as const, code: "STALE_LIVE_LEASE" });
       if (nowMs >= pause.graceDeadlineMs) return frozen({ status: "no_effect" as const, code: "GRACE_DEADLINE_EXPIRED" });
+      if (pause.state === "resuming") {
+        const continuation = await this.options.store.findContinuationForSession(input.accountId, input.sessionId);
+        const budget = await transaction.findActionBudget(`continuation-wake:${pause.idempotencyKey}:${pause.pauseGeneration}`);
+        return budget && continuation ? frozen({ status: "replayed" as const, code: "WAKE_DISPATCH_RECOVERY", leaseToken: input.liveLeaseToken, pendingActionReference: continuation.intent.reference, actionBudgetReference: budget.reference }) : frozen({ status: "no_effect" as const, code: "WAKE_RECONCILIATION_REQUIRED" });
+      }
       if (pause.state !== "needs_top_up") return frozen({ status: "no_effect" as const, code: "PAUSE_NOT_LIVE" });
       if (pause.pendingFingerprint !== input.pendingFingerprint) return frozen({ status: "no_effect" as const, code: "PENDING_ACTION_MISMATCH" });
       if (pause.expectedSessionVersion !== input.expectedSessionVersion) return frozen({ status: "no_effect" as const, code: "STALE_SESSION_VERSION" });

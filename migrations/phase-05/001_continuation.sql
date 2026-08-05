@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS continuation_pauses (
   intent_json jsonb NOT NULL,
   grace_deadline_ms bigint NOT NULL,
   live_lease_token text,
-  state text NOT NULL CHECK (state IN ('needs_top_up','checkpointing','resume_required','claimed','expired')),
+  state text NOT NULL CHECK (state IN ('needs_top_up','resuming','checkpointing','resume_required','claimed','expired')),
   result_json jsonb NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (account_id, idempotency_key),

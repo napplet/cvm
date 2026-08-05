@@ -218,7 +218,8 @@ class PgFundingTransaction implements MeteredFundingTransaction, ContinuationFun
     if (pause.liveLeaseToken !== input.liveLeaseToken) throw new Error("STALE_WORKER_LEASE");
     if (input.nowMs >= pause.graceDeadlineMs) throw new Error("GRACE_DEADLINE_EXPIRED");
     if (pause.state !== "needs_top_up") return pause;
-    return pause;
+    await this.client.query("UPDATE continuation_pauses SET state='resuming' WHERE account_id=$1 AND session_id=$2 AND pause_generation=$3 AND state='needs_top_up'", [this.accountId, input.sessionId, input.pauseGeneration]);
+    return frozen({ ...pause, state: "resuming" as const });
   }
   async beginDeadlineCheckpoint(input: BeginDeadlineCheckpointInput): Promise<ContinuationPause> {
     const pause = await this.findContinuationPause(input.sessionId, input.pauseGeneration);

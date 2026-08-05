@@ -41,7 +41,7 @@ export type ContinuationFundingSnapshot = Readonly<{ settledBalance: bigint; ava
  * explicit resume must all read the same immutable action identity.
  */
 export type ContinuationPauseInput = Readonly<{ accountId: string; sessionId: string; admissionReference: string; idempotencyKey: string; fingerprint: string; pendingFingerprint: string; expectedSessionVersion: number; pauseGeneration: number; graceDeadlineMs: number; liveLeaseToken: string; intent: PendingActionIntent; result: NeedsTopUpResult }>;
-export type ContinuationPause = Omit<ContinuationPauseInput, "liveLeaseToken"> & Readonly<{ liveLeaseToken?: string; state: "needs_top_up" | "checkpointing" | "resume_required" | "claimed" | "expired" }>;
+export type ContinuationPause = Omit<ContinuationPauseInput, "liveLeaseToken"> & Readonly<{ liveLeaseToken?: string; state: "needs_top_up" | "resuming" | "checkpointing" | "resume_required" | "claimed" | "expired" }>;
 export type ContinuationCheckpointInput = Readonly<{ accountId: string; sessionId: string; pauseGeneration: number; checkpointId: string; expectedSessionVersion: number; expectedArtifactVersion: number; manifestReference: string; objectKey: string; objectGeneration: string; objectChecksum: string; keyReference: string; compatibilityIdentity: string; checkpointCommittedAtMs: number }>;
 export type ContinuationCheckpoint = ContinuationCheckpointInput & Readonly<{ retentionDeadlineMs: number; state: "resume_required" | "claimed" | "expired"; liveLeaseToken?: string; claim?: ContinuationResumeClaim }>;
 export type BeginDeadlineCheckpointInput = Readonly<{ sessionId: string; pauseGeneration: number; liveLeaseToken: string }>;
@@ -233,7 +233,7 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
   }
   async sessionStatus(accountId: string, sessionId: string): Promise<MeteredSessionRecord | undefined> {
     const continuation = [...this.#state.continuationPauses.values()].filter((item) => item.intent.accountId === accountId && item.intent.sessionId === sessionId).sort((left, right) => right.pauseGeneration - left.pauseGeneration)[0];
-    if (continuation) return freeze({ accountId, sessionId, version: continuation.intent.expectedSessionVersion, status: "needs_top_up" as const });
+    if (continuation?.state === "needs_top_up") return freeze({ accountId, sessionId, version: continuation.intent.expectedSessionVersion, status: "needs_top_up" as const });
     const actions = [...this.#state.meteredActions.values()].filter((action) => action.accountId === accountId && action.sessionId === sessionId);
     const action = actions.sort((left, right) => (right.sessionVersion ?? 0) - (left.sessionVersion ?? 0))[0];
     if (!action) return undefined;
@@ -347,12 +347,15 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
           return pause && freeze(clone(pause));
         },
         wakePausedAction: async (input) => {
-          const pause = [...state.continuationPauses.values()].find((item) => item.accountId === accountId && item.sessionId === input.sessionId && item.pauseGeneration === input.pauseGeneration);
-          if (!pause) throw new Error("CONTINUATION_PAUSE_NOT_FOUND");
+          const entry = [...state.continuationPauses.entries()].find(([, item]) => item.accountId === accountId && item.sessionId === input.sessionId && item.pauseGeneration === input.pauseGeneration);
+          if (!entry) throw new Error("CONTINUATION_PAUSE_NOT_FOUND");
+          const [key, pause] = entry;
           if (pause.liveLeaseToken !== input.liveLeaseToken) throw new Error("STALE_WORKER_LEASE");
           if (input.nowMs >= pause.graceDeadlineMs) throw new Error("GRACE_DEADLINE_EXPIRED");
           if (pause.state !== "needs_top_up") return pause;
-          return pause;
+          const next = freeze({ ...pause, state: "resuming" as const });
+          state.continuationPauses.set(key, next);
+          return next;
         },
         beginDeadlineCheckpoint: async (input) => {
           const index = [...state.continuationPauses.entries()].find(([, pause]) => pause.accountId === accountId && pause.sessionId === input.sessionId && pause.pauseGeneration === input.pauseGeneration);

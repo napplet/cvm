@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
-import { FaultBoundarySchema, FaultClassSchema, FaultScheduleSchema, runFaultScenario } from "../../src/resilience/fault-harness";
+import { D122_FAULT_MATRIX, FaultBoundarySchema, FaultClassSchema, FaultScheduleSchema, runFaultScenario } from "../../src/resilience/fault-harness";
 import { DeterministicModelGateway } from "../../src/model/deterministic-model-gateway";
 import { ModelReconciliationService } from "../../src/model/reconciliation";
 import { MeteredGenerationService } from "../../src/phase-04/metered-generation-service";
@@ -108,4 +108,21 @@ test("partial publication reconciles fixed children by observation only", async 
   expect(first).toEqual(duplicate);
   expect(calls).toMatchObject({ deploy: 1, owner: 1, attestation: 1 });
   expect(calls.observe).toBeGreaterThan(0);
+});
+
+test("D-122 matrix executes every fault family with one-writer exact-oracle schedules", async () => {
+  expect(D122_FAULT_MATRIX.map((schedule) => schedule.faultClass)).toEqual([
+    "duplicate_relay", "out_of_order_relay", "regional_ingress_loss", "sql_serialization", "sql_unavailable",
+    "capacity_ambiguity", "worker_loss", "object_interruption", "model_receipt_ambiguity", "payment_notification",
+    "restore_expiry_race", "preview_source_invalidation", "partial_publication",
+  ]);
+  for (const schedule of D122_FAULT_MATRIX) {
+    await expect(runFaultScenario(schedule, ({ input, initialState, outcomes }) => ({
+      operationId: input.operationId ?? `operation:${schedule.id}`,
+      sessionId: initialState.sessionId ?? `session:${schedule.id}`,
+      observed: outcomes.at(-1)?.outcome ?? "unresolved",
+      activeWriters: 1,
+      effects: { credit: 0, debit: 0, worker: 0, session: 0, artifact: 0, checkpoint: 0, deploy: 0, ownerEvent: 0, attestation: 0 },
+    }), { activeWriters: 1, effects: { credit: 0, debit: 0, worker: 0, session: 0, artifact: 0, checkpoint: 0, deploy: 0, ownerEvent: 0, attestation: 0 } })).resolves.toMatchObject({ activeWriters: 1 });
+  }
 });

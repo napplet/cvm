@@ -48,10 +48,15 @@ export type VerifiedCreditWakeResult = Readonly<{
 }>;
 
 export type VerifiedCreditWakeInput = VerifiedCreditWakeHint & Readonly<{
-  /** Coordinator-only continuation hook; payment hints cannot provide this callback. */
+  /** Coordinator-only continuation hook. Its result is durably closed below. */
   onAuthorized?: () => Promise<void> | void;
   /** Test/observability seam for proving authorization happens only after the atomic transition. */
   onAuthorization?: () => void;
+}>;
+
+/** Lookup-only owner for a previously claimed external wake operation. */
+export type WakeEffectReconciliationPort = Readonly<{
+  observe(input: Readonly<{ accountId: string; sessionId: string; pauseGeneration: number; operationId: string; actionBudgetReference: string; liveLeaseToken: string }>): Promise<"completed" | "unknown">;
 }>;
 
 /**
@@ -62,7 +67,7 @@ export type VerifiedCreditWakeInput = VerifiedCreditWakeHint & Readonly<{
 export class ContinuationService {
   #resumeInFlight = new Map<string, Promise<ResumeSessionResult>>();
   #resumeResults = new Map<string, ResumeSessionResult>();
-  constructor(private readonly options: Readonly<{ store: ContinuationFundingStore; clock?: Readonly<{ nowMs(): number }>; resume?: ResumeDependencies }>) {}
+  constructor(private readonly options: Readonly<{ store: ContinuationFundingStore; clock?: Readonly<{ nowMs(): number }>; resume?: ResumeDependencies; wakeReconciliation?: WakeEffectReconciliationPort }>) {}
 
   async pauseForFunding(input: Readonly<{ intent: PendingActionIntent }>): Promise<NeedsTopUpResult | undefined> {
     const intent = PendingActionIntentSchema.parse(input.intent);
@@ -122,16 +127,16 @@ export class ContinuationService {
       if (pause.pendingFingerprint !== input.pendingFingerprint) return frozen({ status: "no_effect" as const, code: "PENDING_ACTION_MISMATCH" });
       if (pause.expectedSessionVersion !== input.expectedSessionVersion) return frozen({ status: "no_effect" as const, code: "STALE_SESSION_VERSION" });
 
-      // The full intent is the durable source for artifact lineage. A pause
-      // without its matching intent is not eligible to wake a worker.
-      const continuation = await this.options.store.findContinuationForSession(input.accountId, input.sessionId);
-      if (!continuation || continuation.intent.fingerprint !== pause.pendingFingerprint) return frozen({ status: "no_effect" as const, code: "PENDING_ACTION_MISMATCH" });
-      if (continuation.intent.expectedArtifactVersion !== input.expectedArtifactVersion) return frozen({ status: "no_effect" as const, code: "STALE_ARTIFACT_VERSION" });
+      // The locked pause contains the immutable action identity. Never select
+      // a newer pause generation while waking this worker.
+      const continuation = pause.intent;
+      if (continuation.fingerprint !== pause.pendingFingerprint) return frozen({ status: "no_effect" as const, code: "PENDING_ACTION_MISMATCH" });
+      if (continuation.expectedArtifactVersion !== input.expectedArtifactVersion) return frozen({ status: "no_effect" as const, code: "STALE_ARTIFACT_VERSION" });
 
       if (pause.state !== "needs_top_up" && pause.state !== "resuming") return frozen({ status: "no_effect" as const, code: "PAUSE_NOT_LIVE" });
 
       const funding = await transaction.continuationFundingSnapshot(pause.admissionReference);
-      const amount = BigInt(continuation.intent.actionMaximum);
+      const amount = BigInt(continuation.actionMaximum);
       if (funding.remainingCap < amount) return frozen({ status: "no_effect" as const, code: "APPROVED_CAP_INSUFFICIENT" });
       if (funding.availableBalance < amount) return frozen({ status: "no_effect" as const, code: "VERIFIED_CREDIT_REQUIRED" });
 
@@ -141,23 +146,43 @@ export class ContinuationService {
       await transaction.wakePausedAction({ sessionId: input.sessionId, pauseGeneration: input.pauseGeneration, nowMs, liveLeaseToken: input.liveLeaseToken });
       const budget = await transaction.findActionBudget(idempotencyKey) ?? await transaction.reserveActionBudget({
         accountId: input.accountId, admissionReference: pause.admissionReference, idempotencyKey,
-        fingerprint: `wake:${pause.pendingFingerprint}:${pause.expectedSessionVersion}:${continuation.intent.expectedArtifactVersion}`,
+        fingerprint: `wake:${pause.pendingFingerprint}:${pause.expectedSessionVersion}:${continuation.expectedArtifactVersion}`,
         reference: `action-budget:wake:${pause.sessionId}:${pause.pauseGeneration}`, amount,
       });
-      const claim = await transaction.claimWakeDispatch({ accountId: input.accountId, sessionId: input.sessionId, pauseGeneration: input.pauseGeneration, pendingFingerprint: pause.pendingFingerprint, expectedSessionVersion: pause.expectedSessionVersion, expectedArtifactVersion: continuation.intent.expectedArtifactVersion, actionBudgetReference: budget.reference, liveLeaseToken: input.liveLeaseToken });
+      const claim = await transaction.claimWakeDispatch({ accountId: input.accountId, sessionId: input.sessionId, pauseGeneration: input.pauseGeneration, pendingFingerprint: pause.pendingFingerprint, expectedSessionVersion: pause.expectedSessionVersion, expectedArtifactVersion: continuation.expectedArtifactVersion, actionBudgetReference: budget.reference, operationId: `wake-operation:${pause.sessionId}:${pause.pauseGeneration}:${budget.reference}`, liveLeaseToken: input.liveLeaseToken });
       if (!claim.claimed) return frozen({ status: "replayed" as const, code: claim.dispatch.state === "unknown" ? "WAKE_RECONCILIATION_REQUIRED" : "WAKE_ALREADY_CLAIMED" });
-      return frozen({ status: "continued" as const, code: "WAKE_DISPATCH_CLAIMED", leaseToken: input.liveLeaseToken, pendingActionReference: continuation.intent.reference, actionBudgetReference: budget.reference, dispatchClaimToken: claim.dispatch.claimToken });
+      return frozen({ status: "continued" as const, code: "WAKE_DISPATCH_CLAIMED", leaseToken: input.liveLeaseToken, pendingActionReference: continuation.reference, actionBudgetReference: budget.reference, dispatchClaimToken: claim.dispatch.claimToken });
     });
 
     if (transition.status !== "continued") return transition;
-    input.onAuthorization?.();
-    await input.onAuthorized?.();
+    if (!input.onAuthorization && !input.onAuthorized) return transition;
+    try {
+      input.onAuthorization?.();
+      await input.onAuthorized?.();
+      await this.recordWakeDispatchOutcome({ accountId: input.accountId, sessionId: input.sessionId, pauseGeneration: input.pauseGeneration, dispatchClaimToken: transition.dispatchClaimToken!, outcome: "completed" });
+    } catch (error) {
+      await this.recordWakeDispatchOutcome({ accountId: input.accountId, sessionId: input.sessionId, pauseGeneration: input.pauseGeneration, dispatchClaimToken: transition.dispatchClaimToken!, outcome: "unknown" }).catch(() => undefined);
+      throw error;
+    }
     return transition;
   }
 
   /** The caller holding the effect claim must durably close it after dispatch. */
   async recordWakeDispatchOutcome(input: Readonly<{ accountId: string; sessionId: string; pauseGeneration: number; dispatchClaimToken: string; outcome: "completed" | "unknown" }>): Promise<void> {
     await this.options.store.transact(input.accountId, (transaction) => transaction.recordWakeDispatchOutcome({ sessionId: input.sessionId, pauseGeneration: input.pauseGeneration, claimToken: input.dispatchClaimToken, state: input.outcome }));
+  }
+
+  /** Restart-safe, lookup-only closure for a claim whose original handoff died. */
+  async reconcileWakeDispatch(input: Readonly<{ accountId: string; sessionId: string; pauseGeneration: number }>): Promise<"completed" | "unknown" | "not_found"> {
+    const dispatch = await this.options.store.findWakeDispatch(input.accountId, input.sessionId, input.pauseGeneration);
+    const pause = await this.options.store.findContinuationPause(input.accountId, input.sessionId, input.pauseGeneration);
+    if (!dispatch || !pause || dispatch.pendingFingerprint !== pause.pendingFingerprint || dispatch.expectedSessionVersion !== pause.expectedSessionVersion || dispatch.expectedArtifactVersion !== pause.intent.expectedArtifactVersion) return "not_found";
+    if (dispatch.state === "completed") return "completed";
+    if (dispatch.state === "unknown") return "unknown";
+    let outcome: "completed" | "unknown" = "unknown";
+    try { outcome = await this.options.wakeReconciliation?.observe({ accountId: input.accountId, sessionId: input.sessionId, pauseGeneration: input.pauseGeneration, operationId: dispatch.operationId, actionBudgetReference: dispatch.actionBudgetReference, liveLeaseToken: dispatch.liveLeaseToken }) ?? "unknown"; } catch { outcome = "unknown"; }
+    await this.recordWakeDispatchOutcome({ accountId: input.accountId, sessionId: input.sessionId, pauseGeneration: input.pauseGeneration, dispatchClaimToken: dispatch.claimToken!, outcome });
+    return outcome;
   }
 
   /**
@@ -186,8 +211,10 @@ export class ContinuationService {
   async #claimAndRestore(command: ResumeSessionCommand): Promise<ResumeSessionResult> {
     const dependencies = this.options.resume!;
     const accountId = command.principal.id;
-    const continuation = await this.options.store.findContinuationForSession(accountId, command.sessionId);
-    if (!continuation || command.checkpointId.length === 0) return ResumeSessionResultSchema.parse({ status: "denied", code: "RESUME_CHECKPOINT_NOT_FOUND_OR_DENIED" });
+    const checkpoint = command.checkpointId.length > 0 ? await this.options.store.findContinuationCheckpoint(accountId, command.checkpointId) : undefined;
+    const pause = checkpoint ? await this.options.store.findContinuationPause(accountId, command.sessionId, checkpoint.pauseGeneration) : undefined;
+    const continuation = pause ? { intent: pause.intent, result: pause.result, state: pause.state } : undefined;
+    if (!checkpoint || !continuation) return ResumeSessionResultSchema.parse({ status: "denied", code: "RESUME_CHECKPOINT_NOT_FOUND_OR_DENIED" });
     if (!command.approvePendingAction) return ResumeSessionResultSchema.parse({ status: "denied", code: "RESUME_PENDING_APPROVAL_REQUIRED" });
     if (command.pendingAction.reference !== continuation.intent.reference || command.pendingAction.fingerprint !== continuation.intent.fingerprint || command.pendingAction.kind !== continuation.intent.actionKind || command.pendingAction.maximum !== continuation.intent.actionMaximum) {
       return ResumeSessionResultSchema.parse({ status: "denied", code: "RESUME_PENDING_ACTION_MISMATCH" });

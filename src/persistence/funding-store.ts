@@ -46,10 +46,10 @@ export type WakeDispatchState = "pending" | "claimed" | "completed" | "unknown";
  * A transactionally-coupled effect intent for one already admitted live
  * action. It is deliberately not a generation queue.
  */
-export type ContinuationWakeDispatch = Readonly<{ accountId: string; sessionId: string; pauseGeneration: number; pendingFingerprint: string; expectedSessionVersion: number; expectedArtifactVersion: number; actionBudgetReference: string; liveLeaseToken: string; claimToken?: string; state: WakeDispatchState }>;
+export type ContinuationWakeDispatch = Readonly<{ accountId: string; sessionId: string; pauseGeneration: number; pendingFingerprint: string; expectedSessionVersion: number; expectedArtifactVersion: number; actionBudgetReference: string; /** Stable external-operation identity for lookup-only reconciliation. */ operationId: string; liveLeaseToken: string; claimToken?: string; state: WakeDispatchState }>;
 export type WakeDispatchClaim = Readonly<{ dispatch: ContinuationWakeDispatch; claimed: boolean }>;
 export type WakeDispatchOutcomeInput = Readonly<{ sessionId: string; pauseGeneration: number; claimToken: string; state: "completed" | "unknown" }>;
-export type ContinuationPause = Omit<ContinuationPauseInput, "liveLeaseToken"> & Readonly<{ liveLeaseToken?: string; state: "needs_top_up" | "resuming" | "completed" | "checkpointing" | "resume_required" | "claimed" | "expired" }>;
+export type ContinuationPause = Omit<ContinuationPauseInput, "liveLeaseToken"> & Readonly<{ liveLeaseToken?: string; state: "needs_top_up" | "resuming" | "wake_reconciliation" | "completed" | "checkpointing" | "resume_required" | "claimed" | "expired" }>;
 export type ContinuationCheckpointInput = Readonly<{ accountId: string; sessionId: string; pauseGeneration: number; checkpointId: string; expectedSessionVersion: number; expectedArtifactVersion: number; manifestReference: string; objectKey: string; objectGeneration: string; objectChecksum: string; keyReference: string; compatibilityIdentity: string; checkpointCommittedAtMs: number }>;
 export type ContinuationCheckpoint = ContinuationCheckpointInput & Readonly<{ retentionDeadlineMs: number; state: "resume_required" | "claimed" | "expired"; liveLeaseToken?: string; claim?: ContinuationResumeClaim }>;
 export type BeginDeadlineCheckpointInput = Readonly<{ sessionId: string; pauseGeneration: number; liveLeaseToken: string }>;
@@ -144,6 +144,10 @@ export interface MeteredFundingStore extends FundingStore {
 export interface ContinuationFundingStore extends FundingStore {
   findContinuation(accountId: string, idempotencyKey: string): Promise<ContinuationRecord | undefined>;
   findContinuationForSession(accountId: string, sessionId: string): Promise<ContinuationRecord | undefined>;
+  /** Exact durable records for recovery; callers must never select a newer generation implicitly. */
+  findContinuationPause(accountId: string, sessionId: string, pauseGeneration: number): Promise<ContinuationPause | undefined>;
+  findWakeDispatch(accountId: string, sessionId: string, pauseGeneration: number): Promise<ContinuationWakeDispatch | undefined>;
+  findContinuationCheckpoint(accountId: string, checkpointId: string): Promise<ContinuationCheckpoint | undefined>;
   /** Owner-scoped terminal checkpoint read used only for safe status projection. */
   findContinuationCheckpointForSession(accountId: string, sessionId: string): Promise<ContinuationCheckpoint | undefined>;
   /** Coarse deletion audit for an exact terminal checkpoint, never archive/key metadata. */
@@ -221,6 +225,18 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
     const found = [...this.#state.continuationPauses.values()].filter((pause) => pause.accountId === accountId && pause.sessionId === sessionId).sort((left, right) => right.pauseGeneration - left.pauseGeneration)[0];
     return found ? freeze({ intent: clone(found.intent), result: clone(found.result), state: found.state }) : undefined;
   }
+  async findContinuationPause(accountId: string, sessionId: string, pauseGeneration: number): Promise<ContinuationPause | undefined> {
+    const found = [...this.#state.continuationPauses.values()].find((pause) => pause.accountId === accountId && pause.sessionId === sessionId && pause.pauseGeneration === pauseGeneration);
+    return found ? freeze(clone(found)) : undefined;
+  }
+  async findWakeDispatch(accountId: string, sessionId: string, pauseGeneration: number): Promise<ContinuationWakeDispatch | undefined> {
+    const found = this.#state.wakeDispatches.get(`${accountId}\u0000${sessionId}\u0000${pauseGeneration}`);
+    return found ? freeze(clone(found)) : undefined;
+  }
+  async findContinuationCheckpoint(accountId: string, checkpointId: string): Promise<ContinuationCheckpoint | undefined> {
+    const found = this.#state.checkpoints.get(checkpointId);
+    return found?.accountId === accountId ? freeze(clone(found)) : undefined;
+  }
   async findContinuationCheckpointForSession(accountId: string, sessionId: string): Promise<ContinuationCheckpoint | undefined> {
     const found = [...this.#state.checkpoints.values()].find((checkpoint) => checkpoint.accountId === accountId && checkpoint.sessionId === sessionId);
     return found ? freeze(clone(found)) : undefined;
@@ -249,6 +265,7 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
     const continuation = [...this.#state.continuationPauses.values()].filter((item) => item.intent.accountId === accountId && item.intent.sessionId === sessionId).sort((left, right) => right.pauseGeneration - left.pauseGeneration)[0];
     if (continuation?.state === "needs_top_up") return freeze({ accountId, sessionId, version: continuation.intent.expectedSessionVersion, status: "needs_top_up" as const });
     if (continuation?.state === "resuming" || continuation?.state === "completed") return freeze({ accountId, sessionId, version: continuation.intent.expectedSessionVersion, status: "active" as const });
+    if (continuation?.state === "wake_reconciliation") return freeze({ accountId, sessionId, version: continuation.intent.expectedSessionVersion, status: "usage_unknown" as const });
     const actions = [...this.#state.meteredActions.values()].filter((action) => action.accountId === accountId && action.sessionId === sessionId);
     const action = actions.sort((left, right) => (right.sessionVersion ?? 0) - (left.sessionVersion ?? 0))[0];
     if (!action) return undefined;
@@ -353,6 +370,8 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
           }
           const generation = [...state.continuationPauses.values()].find((pause) => pause.accountId === accountId && pause.sessionId === input.sessionId && pause.pauseGeneration === input.pauseGeneration);
           if (generation) throw new Error("PAUSE_GENERATION_CONFLICT");
+          const live = [...state.continuationPauses.values()].find((pause) => pause.accountId === accountId && pause.sessionId === input.sessionId && pause.state !== "completed" && pause.state !== "expired");
+          if (live) throw new Error("CONTINUATION_PAUSE_ALREADY_ACTIVE");
           const next = freeze({ ...clone(input), state: "needs_top_up" as const });
           state.continuationPauses.set(command, next);
           return next;
@@ -385,7 +404,7 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
           const key = `${accountId}\u0000${input.sessionId}\u0000${input.pauseGeneration}`;
           const existing = state.wakeDispatches.get(key);
           if (existing) {
-            if (existing.pendingFingerprint !== input.pendingFingerprint || existing.expectedSessionVersion !== input.expectedSessionVersion || existing.expectedArtifactVersion !== input.expectedArtifactVersion || existing.actionBudgetReference !== input.actionBudgetReference || existing.liveLeaseToken !== input.liveLeaseToken) throw new Error("WAKE_DISPATCH_BINDING_INVALID");
+            if (existing.pendingFingerprint !== input.pendingFingerprint || existing.expectedSessionVersion !== input.expectedSessionVersion || existing.expectedArtifactVersion !== input.expectedArtifactVersion || existing.actionBudgetReference !== input.actionBudgetReference || existing.operationId !== input.operationId || existing.liveLeaseToken !== input.liveLeaseToken) throw new Error("WAKE_DISPATCH_BINDING_INVALID");
             return freeze({ dispatch: existing, claimed: false });
           }
           const dispatch = freeze({ ...clone(input), claimToken: `wake-claim:${input.sessionId}:${input.pauseGeneration}:${input.pendingFingerprint.slice(0, 24)}`, state: "claimed" as const });
@@ -401,6 +420,9 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
           if (input.state === "completed") {
             const pauseKey = [...state.continuationPauses.entries()].find(([, pause]) => pause.accountId === accountId && pause.sessionId === input.sessionId && pause.pauseGeneration === input.pauseGeneration)?.[0];
             if (pauseKey) state.continuationPauses.set(pauseKey, freeze({ ...state.continuationPauses.get(pauseKey)!, state: "completed" as const, liveLeaseToken: undefined }));
+          } else {
+            const pauseKey = [...state.continuationPauses.entries()].find(([, pause]) => pause.accountId === accountId && pause.sessionId === input.sessionId && pause.pauseGeneration === input.pauseGeneration)?.[0];
+            if (pauseKey) state.continuationPauses.set(pauseKey, freeze({ ...state.continuationPauses.get(pauseKey)!, state: "wake_reconciliation" as const, liveLeaseToken: undefined }));
           }
           return next;
         },

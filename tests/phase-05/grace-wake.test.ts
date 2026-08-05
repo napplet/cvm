@@ -55,7 +55,7 @@ describe("verified-credit grace wake", () => {
     const duplicate = await fixture.wake();
 
     expect(first).toMatchObject({ status: "continued", leaseToken: liveLeaseToken, pendingActionReference: "pending:grace-wake" });
-    expect(duplicate).toMatchObject({ status: "replayed" });
+    expect(duplicate).toMatchObject({ status: "no_effect", code: "STALE_LIVE_LEASE" });
     expect(fixture.effects).toEqual({ authorizations: 1, actions: 1, model: 1, tool: 1, build: 1, network: 1, provider: 1, debit: 1 });
     expect(fixture.store.projection(fixture.accountId)).toMatchObject({ settledAvailable: "6500", held: "3250" });
   });
@@ -106,14 +106,55 @@ describe("verified-credit grace wake", () => {
     const service = new MeteredGenerationService({ fundedAdmission: {} as never, store: fixture.store, gateway: {} as never, worker: {} as never, artifactVerifier: {} as never, continuation: fixture.service, clock: { nowMs: () => deadlineMs - 1 }, continuationWake: { continueAction: async () => { externalDispatches += 1; throw new Error("WORKER_CONNECTION_LOST"); } } });
     const hint = { accountId: fixture.accountId, sessionId: "session:grace-wake", pauseGeneration: 1, liveLeaseToken, pendingFingerprint, expectedSessionVersion: 4, expectedArtifactVersion: 4 };
     await expect(service.wakePausedAction(hint)).rejects.toThrow("WORKER_CONNECTION_LOST");
-    await expect(service.wakePausedAction(hint)).resolves.toMatchObject({ status: "replayed", code: "WAKE_RECONCILIATION_REQUIRED" });
+    await expect(service.wakePausedAction(hint)).resolves.toMatchObject({ status: "no_effect", code: "STALE_LIVE_LEASE" });
     expect(externalDispatches).toBe(1);
-    expect(await fixture.store.sessionStatus(fixture.accountId, "session:grace-wake")).toMatchObject({ status: "active" });
+    expect(await fixture.store.sessionStatus(fixture.accountId, "session:grace-wake")).toMatchObject({ status: "usage_unknown" });
+  });
+
+  test("restart reconciliation closes claimed wake crash points by original operation, never redispatch", async () => {
+    const fixture = await setup({ credited: true, cap: "3250" });
+    const hint = { accountId: fixture.accountId, sessionId: "session:grace-wake", pauseGeneration: 1, liveLeaseToken, pendingFingerprint, expectedSessionVersion: 4, expectedArtifactVersion: 4 };
+    // Crash after claim but before the handoff: lookup reports bounded unknown.
+    await new ContinuationService({ store: fixture.store, clock: { nowMs: () => deadlineMs - 1 } }).wakePausedAction(hint);
+    let observedOperation = "";
+    const restart = new ContinuationService({ store: fixture.store, wakeReconciliation: { observe: async (input) => { observedOperation = input.operationId; return "unknown"; } } });
+    await expect(restart.reconcileWakeDispatch({ accountId: fixture.accountId, sessionId: hint.sessionId, pauseGeneration: 1 })).resolves.toBe("unknown");
+    expect(observedOperation).toContain("wake-operation:session:grace-wake:1:");
+    expect(await fixture.store.findWakeDispatch(fixture.accountId, hint.sessionId, 1)).toMatchObject({ state: "unknown" });
+    expect(await fixture.store.sessionStatus(fixture.accountId, hint.sessionId)).toMatchObject({ status: "usage_unknown" });
+
+    // Handoff success before the outcome write: a fresh owner queries the same
+    // operation and closes it without another continuation call.
+    const succeeded = await setup({ credited: true, cap: "3250" });
+    await new ContinuationService({ store: succeeded.store, clock: { nowMs: () => deadlineMs - 1 } }).wakePausedAction({ ...hint, accountId: succeeded.accountId });
+    let lookupCalls = 0;
+    await expect(new ContinuationService({ store: succeeded.store, wakeReconciliation: { observe: async () => { lookupCalls += 1; return "completed"; } } }).reconcileWakeDispatch({ accountId: succeeded.accountId, sessionId: hint.sessionId, pauseGeneration: 1 })).resolves.toBe("completed");
+    expect(lookupCalls).toBe(1);
+    expect(await succeeded.store.findContinuationPause(succeeded.accountId, hint.sessionId, 1)).toMatchObject({ state: "completed", liveLeaseToken: undefined });
+  });
+
+  test("outcome-write loss retains the original claim for restart reconciliation", async () => {
+    const fixture = await setup({ credited: true, cap: "3250" });
+    const hint = { accountId: fixture.accountId, sessionId: "session:grace-wake", pauseGeneration: 1, liveLeaseToken, pendingFingerprint, expectedSessionVersion: 4, expectedArtifactVersion: 4 };
+    await new ContinuationService({ store: fixture.store, clock: { nowMs: () => deadlineMs - 1 } }).wakePausedAction(hint);
+    let failOutcomeWrite = true;
+    const flaky = new Proxy(fixture.store, { get(target, property, receiver) {
+      if (property === "transact") return async (accountId: string, operation: (transaction: Record<string, unknown>) => unknown) => target.transact(accountId, (transaction) => operation(new Proxy(transaction as object, { get(inner, key, innerReceiver) {
+        if (key === "recordWakeDispatchOutcome" && failOutcomeWrite) return () => { failOutcomeWrite = false; throw new Error("OUTCOME_WRITE_LOST"); };
+        const value = Reflect.get(inner, key, innerReceiver); return typeof value === "function" ? value.bind(inner) : value;
+      } }) as Record<string, unknown>));
+      const value = Reflect.get(target, property, receiver); return typeof value === "function" ? value.bind(target) : value;
+    } });
+    await expect(new ContinuationService({ store: flaky as typeof fixture.store, wakeReconciliation: { observe: async () => "completed" } }).reconcileWakeDispatch({ accountId: fixture.accountId, sessionId: hint.sessionId, pauseGeneration: 1 })).rejects.toThrow("OUTCOME_WRITE_LOST");
+    expect(await fixture.store.findWakeDispatch(fixture.accountId, hint.sessionId, 1)).toMatchObject({ state: "claimed" });
+    await expect(new ContinuationService({ store: fixture.store, wakeReconciliation: { observe: async () => "completed" } }).reconcileWakeDispatch({ accountId: fixture.accountId, sessionId: hint.sessionId, pauseGeneration: 1 })).resolves.toBe("completed");
+    expect(await fixture.store.findWakeDispatch(fixture.accountId, hint.sessionId, 1)).toMatchObject({ state: "completed" });
   });
 
   test("recovery still denies every pending/session/artifact fence mismatch", async () => {
     const fixture = await setup({ credited: true, cap: "3250" });
-    await fixture.wake();
+    const claimed = await new ContinuationService({ store: fixture.store, clock: { nowMs: () => deadlineMs - 1 } }).wakePausedAction({ accountId: fixture.accountId, sessionId: "session:grace-wake", pauseGeneration: 1, liveLeaseToken, pendingFingerprint, expectedSessionVersion: 4, expectedArtifactVersion: 4 });
+    expect(claimed.status).toBe("continued");
     await expect(fixture.wake({ pendingFingerprint: "c".repeat(64) })).resolves.toMatchObject({ status: "no_effect", code: "PENDING_ACTION_MISMATCH" });
     await expect(fixture.wake({ expectedSessionVersion: 5 })).resolves.toMatchObject({ status: "no_effect", code: "STALE_SESSION_VERSION" });
     await expect(fixture.wake({ expectedArtifactVersion: 5 })).resolves.toMatchObject({ status: "no_effect", code: "STALE_ARTIFACT_VERSION" });

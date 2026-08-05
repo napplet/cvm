@@ -8,6 +8,9 @@ test("Phase 05 migration keeps continuation identity, leases, claims, and expiry
   for (const table of ["continuation_pauses", "continuation_wake_dispatches", "continuation_checkpoints", "continuation_resume_commands", "continuation_tombstones", "continuation_deletions"] as const) expect(migration).toContain(`CREATE TABLE IF NOT EXISTS ${table}`);
   for (const field of ["pause_generation", "live_lease_token", "object_generation", "object_checksum", "retention_deadline_ms", "allocation_intent_reference"] as const) expect(migration).toContain(field);
   expect(migration).toContain("intent_json jsonb NOT NULL");
+  expect(migration).toContain("continuation_one_live_pause_per_session");
+  expect(migration).toContain("state NOT IN ('completed','expired')");
+  expect(migration).toContain("operation_id text NOT NULL UNIQUE");
   expect(migration).toContain("'needs_top_up'");
   expect(migration).toContain("attempt integer NOT NULL");
   expect(migration).toContain("'unknown'");
@@ -18,5 +21,8 @@ test("Phase 05 migration keeps continuation identity, leases, claims, and expiry
   expect(store).toContain("PendingActionIntentSchema.parse");
   expect(store).toContain("INSERT INTO metered_sessions");
   expect(store).toContain("CONTINUATION_SESSION_IDENTITY_CONFLICT");
+  expect(store).toContain("CONTINUATION_PAUSE_ALREADY_ACTIVE");
+  expect(store).toContain("operation_id");
+  expect(store).toContain("findWakeDispatch");
   expect(store).toContain("COALESCE(MAX(attempt),0)+1");
 });

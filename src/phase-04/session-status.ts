@@ -223,6 +223,12 @@ export async function readSessionStatus(input: Readonly<{ store: MeteredFundingS
         billing: { items: page.items.map(historyItem), nextCursor },
       }));
     }
+    if (continuation?.state === "wake_reconciliation") return freeze(SessionStatusSchema.parse({
+      status: "ok",
+      session: { id: session.sessionId, version: session.version, state: "usage_unknown", progress: "reconciliation_required", maximum: continuation.result.actionMaximum, actualSpend: "0", remainingBalance: account.available, remainingCap: continuation.result.remainingCap, latestVerifiedArtifact: null, nextAction: "billing_reconciliation", continuation: null },
+      action: null,
+      billing: { items: page.items.map(historyItem), nextCursor },
+    }));
     if (!action) return freeze(SessionStatusSchema.parse({ status: "not_found_or_denied" }));
     const verifiedArtifact = (await input.store.listMeteredActionsForSession(accountId, query.sessionId))
       .filter((candidate) => candidate.artifact?.artifactId)

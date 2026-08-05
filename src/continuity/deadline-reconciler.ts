@@ -128,15 +128,15 @@ export class ContinuationDeadlineReconciler {
       return frozen({ status: "checkpoint_retryable", code: "CHECKPOINT_CLAIM_RETRYABLE", sessionId: candidate.sessionId, pauseGeneration: candidate.pauseGeneration });
     }
 
-    const continuation = await this.options.store.findContinuationForSession(candidate.accountId, candidate.sessionId);
-    if (!continuation || continuation.intent.fingerprint !== pause.pendingFingerprint) return frozen({ status: "checkpoint_retryable", code: "CHECKPOINT_LINEAGE_RETRYABLE", sessionId: candidate.sessionId, pauseGeneration: candidate.pauseGeneration });
+    const continuation = pause.intent;
+    if (continuation.fingerprint !== pause.pendingFingerprint) return frozen({ status: "checkpoint_retryable", code: "CHECKPOINT_LINEAGE_RETRYABLE", sessionId: candidate.sessionId, pauseGeneration: candidate.pauseGeneration });
 
     const binding = {
       accountId: candidate.accountId,
       sessionId: candidate.sessionId,
-      actionId: `action:${continuation.intent.reference}`,
+      actionId: `action:${continuation.reference}`,
       expectedVersion: pause.expectedSessionVersion,
-      policyVersion: continuation.intent.policyVersion,
+      policyVersion: continuation.policyVersion,
       capabilityGrant: "phase-05-continuation-grant",
       workspaceId: `workspace:${candidate.sessionId}`,
       checkpointId: `checkpoint:${candidate.sessionId}:${candidate.pauseGeneration}`,
@@ -166,14 +166,14 @@ export class ContinuationDeadlineReconciler {
         pauseGeneration: candidate.pauseGeneration,
         sessionVersion: pause.expectedSessionVersion,
         actionVersion: pause.expectedSessionVersion,
-        artifactVersion: continuation.intent.expectedArtifactVersion,
+        artifactVersion: continuation.expectedArtifactVersion,
         workspaceVersion: pause.expectedSessionVersion,
         workspaceLineage: binding.workspaceLineage,
-        action: { actionId: binding.actionId, operationId: `operation:${continuation.intent.reference}`, ledgerReference: pause.admissionReference, pendingActionReference: continuation.intent.reference, idempotencyKey: continuation.intent.idempotencyKey },
+        action: { actionId: binding.actionId, operationId: `operation:${continuation.reference}`, ledgerReference: pause.admissionReference, pendingActionReference: continuation.reference, idempotencyKey: continuation.idempotencyKey },
         archive,
         inventory: proposal.inventory,
         evidenceSha256: proposal.evidenceSha256,
-        compatibility: { policyVersion: continuation.intent.policyVersion, modelIdentity: continuation.intent.profileId, nappletSdkIdentity: continuation.intent.priceCardId, toolchainIdentity: continuation.intent.toolchainId },
+        compatibility: { policyVersion: continuation.policyVersion, modelIdentity: continuation.profileId, nappletSdkIdentity: continuation.priceCardId, toolchainIdentity: continuation.toolchainId },
         retentionUntil: new Date(nowMs + RETENTION_MS).toISOString(),
       });
     } catch {
@@ -188,13 +188,13 @@ export class ContinuationDeadlineReconciler {
         pauseGeneration: candidate.pauseGeneration,
         checkpointId: sealed.manifest.checkpointId,
         expectedSessionVersion: pause.expectedSessionVersion,
-        expectedArtifactVersion: continuation.intent.expectedArtifactVersion,
+        expectedArtifactVersion: continuation.expectedArtifactVersion,
         manifestReference: `checkpoint-manifest:${sealed.manifest.checkpointId}:${sealed.envelope.manifestSha256}`,
         objectKey: sealed.envelope.object.key,
         objectGeneration: sealed.envelope.object.generation.toString(10),
         objectChecksum: sealed.envelope.object.checksum,
         keyReference: sealed.envelope.crypto.keyReference,
-        compatibilityIdentity: continuation.intent.toolchainId,
+        compatibilityIdentity: continuation.toolchainId,
         checkpointCommittedAtMs: nowMs,
       }));
       if (this.#failpoint === "after_commit") { this.#failpoint = undefined; throw new Error("CHECKPOINT_AFTER_COMMIT_FAULT"); }

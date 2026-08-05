@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS continuation_pauses (
   intent_json jsonb NOT NULL,
   grace_deadline_ms bigint NOT NULL,
   live_lease_token text,
-  state text NOT NULL CHECK (state IN ('needs_top_up','resuming','completed','checkpointing','resume_required','claimed','expired')),
+  state text NOT NULL CHECK (state IN ('needs_top_up','resuming','wake_reconciliation','completed','checkpointing','resume_required','claimed','expired')),
   result_json jsonb NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (account_id, idempotency_key),
@@ -23,6 +23,10 @@ CREATE TABLE IF NOT EXISTS continuation_pauses (
   CHECK (intent_json ?& ARRAY['accountId','sessionId','idempotencyKey','fingerprint','reference','actionKind','boundedPayloadHash','expectedSessionVersion','expectedArtifactVersion','policyVersion','priceCardId','profileId','toolchainId','actionMaximum','admissionReference']),
   CHECK ((state IN ('needs_top_up','resuming','checkpointing')) = (live_lease_token IS NOT NULL))
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS continuation_one_live_pause_per_session
+  ON continuation_pauses(account_id, session_id)
+  WHERE state NOT IN ('completed','expired');
 
 -- This is a coupled effect intent for a single already-admitted wake, not a
 -- request queue. The claim token fences the only coordinator allowed to call
@@ -35,6 +39,7 @@ CREATE TABLE IF NOT EXISTS continuation_wake_dispatches (
   expected_session_version integer NOT NULL CHECK (expected_session_version >= 0),
   expected_artifact_version integer NOT NULL CHECK (expected_artifact_version >= 0),
   action_budget_reference text NOT NULL,
+  operation_id text NOT NULL UNIQUE,
   live_lease_token text NOT NULL,
   claim_token text NOT NULL UNIQUE,
   state text NOT NULL CHECK (state IN ('pending','claimed','completed','unknown')),

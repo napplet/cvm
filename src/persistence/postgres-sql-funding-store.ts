@@ -109,7 +109,7 @@ export class PostgresSqlFundingStore implements MeteredFundingStore, Continuatio
   async findDeletionOutcome(checkpointId: string, objectGeneration: string): Promise<DeletionOutcomeInput | undefined> {
     const client = await this.pool.connect();
     try {
-      const row = (await client.query("SELECT checkpoint_id,object_generation,state FROM continuation_deletions WHERE checkpoint_id=$1 AND object_generation=$2", [checkpointId, objectGeneration])).rows[0];
+      const row = (await client.query("SELECT checkpoint_id,object_generation,state FROM continuation_deletions WHERE checkpoint_id=$1 AND object_generation=$2 ORDER BY attempt DESC LIMIT 1", [checkpointId, objectGeneration])).rows[0];
       return row && frozen({ checkpointId: asText(row.checkpoint_id), objectGeneration: asText(row.object_generation), state: asText(row.state) as DeletionOutcomeInput["state"] });
     } finally { client.release(); }
   }
@@ -261,7 +261,10 @@ class PgFundingTransaction implements MeteredFundingTransaction, ContinuationFun
     await this.client.query("INSERT INTO continuation_tombstones(checkpoint_id,account_id,expired_at_ms) VALUES ($1,$2,$3) ON CONFLICT (checkpoint_id) DO NOTHING", [input.checkpointId, this.accountId, input.nowMs]);
     return frozen({ ...checkpoint, state: "expired" as const });
   }
-  async recordDeletionOutcome(input: DeletionOutcomeInput): Promise<DeletionOutcomeInput> { await this.client.query("INSERT INTO continuation_deletions(checkpoint_id,object_generation,state) VALUES ($1,$2,$3) ON CONFLICT (checkpoint_id,object_generation) DO UPDATE SET state=EXCLUDED.state WHERE continuation_deletions.state IN ('scheduled','unknown')", [input.checkpointId, input.objectGeneration, input.state]); return frozen(input); }
+  async recordDeletionOutcome(input: DeletionOutcomeInput): Promise<DeletionOutcomeInput> {
+    await this.client.query("INSERT INTO continuation_deletions(checkpoint_id,object_generation,attempt,state) SELECT $1,$2,COALESCE(MAX(attempt),0)+1,$3 FROM continuation_deletions WHERE checkpoint_id=$1 AND object_generation=$2", [input.checkpointId, input.objectGeneration, input.state]);
+    return frozen(input);
+  }
   async creditVerifiedSettlement(input: CreditInput): Promise<FundingResult> {
     this.assertScope(input.accountId); await this.ensureAccount(this.accountId); await this.ensureAccount("treasury:clearing");
     const amount = BigInt(input.settlement.amount); if (amount <= 0n) throw new Error("INVALID_SETTLEMENT_AMOUNT");

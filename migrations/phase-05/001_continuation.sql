@@ -82,9 +82,10 @@ CREATE TABLE IF NOT EXISTS continuation_tombstones (
 CREATE TABLE IF NOT EXISTS continuation_deletions (
   checkpoint_id text NOT NULL REFERENCES continuation_checkpoints(checkpoint_id),
   object_generation text NOT NULL,
-  state text NOT NULL CHECK (state IN ('scheduled','deleted','failed')),
+  attempt integer NOT NULL CHECK (attempt > 0),
+  state text NOT NULL CHECK (state IN ('scheduled','deleted','failed','unknown')),
   recorded_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (checkpoint_id, object_generation)
+  PRIMARY KEY (checkpoint_id, object_generation, attempt)
 );
 
 -- Immutable checkpoint identity and append-only terminal evidence prevent a
@@ -98,6 +99,5 @@ BEGIN
 END; $$;
 CREATE TRIGGER continuation_checkpoint_identity_immutable BEFORE UPDATE ON continuation_checkpoints FOR EACH ROW EXECUTE FUNCTION reject_phase05_continuation_identity_change();
 CREATE TRIGGER continuation_tombstones_append_only BEFORE UPDATE OR DELETE ON continuation_tombstones FOR EACH ROW EXECUTE FUNCTION reject_phase04_append_only_change();
-CREATE TRIGGER continuation_deletions_append_only BEFORE UPDATE OR DELETE ON continuation_deletions FOR EACH ROW EXECUTE FUNCTION reject_phase04_append_only_change();
 
 COMMIT;

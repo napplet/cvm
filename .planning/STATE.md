@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 7
 current_phase_name: Admission SLO, Resilience & Launch Safety
 status: executing
-stopped_at: Completed 07-08-PLAN.md
-last_updated: "2026-08-05T16:16:25.049Z"
+stopped_at: Completed 07-06-PLAN.md
+last_updated: "2026-08-05T16:22:26.335Z"
 last_activity: 2026-08-05
 last_activity_desc: Phase 7 Wave 0 baseline complete
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 51
-  completed_plans: 46
+  completed_plans: 47
   percent: 86
 ---
 
@@ -30,11 +30,11 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 7 — Admission SLO, Resilience & Launch Safety
-Plan: 7 of 11
+Plan: 8 of 11
 Status: Ready to execute
 Last activity: 2026-08-05 — Phase 7 Wave 0 baseline complete
 
-Progress: [█████████░] 90%
+Progress: [█████████░] 92%
 
 ## Milestone Progress
 
@@ -111,6 +111,7 @@ Progress: [█████████░] 90%
 | Phase 07-admission-slo-resilience-launch-safety P03 | 3m 18s | 1 tasks | 1 files |
 | Phase 07 P05 | 7m | 2 tasks | 7 files |
 | Phase 07 P08 | 7m 32s | 2 tasks | 3 files |
+| Phase 07-admission-slo-resilience-launch-safety P06 | 3m 43s | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -205,6 +206,8 @@ Recent decisions affecting current work:
 - [Phase ?]: Modal and Fly remain provider variants behind one WorkerPort, continuation, and certification evidence contract.
 - [Phase ?]: Legacy Phase 6 workflow inputs map into the v1 closed state set, while new hosts render only structured v1 presentation facts.
 - [Phase ?]: Only a real compatible-host browser record may yield certification pass; unit, blocked, and not_observed evidence remains non-pass.
+- [Phase ?]: Fault schedules carry bounded inputs and comparator-only expected effect oracles.
+- [Phase ?]: Protected-live fault rows remain certification requirements and never become synthetic live passes.
 
 ### Pending Todos
 
@@ -226,6 +229,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T16:16:25.039Z
-Stopped at: Completed 07-08-PLAN.md
+Last session: 2026-08-05T16:22:26.326Z
+Stopped at: Completed 07-06-PLAN.md
 Resume file: None

@@ -1,4 +1,111 @@
 import { z } from "zod";
+import { ImmutableObjectReferenceSchema, type ImmutableObjectReference, type ObjectStorePort } from "../continuity/object-store";
+
+const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/iu);
+export const DURABILITY_SUBJECT_KINDS = [
+  "checkpoint", "sealed_artifact", "validation_evidence", "usage_receipt", "promotion_evidence", "owner_event", "attestation",
+] as const;
+export const DurabilitySubjectSchema = z.object({
+  kind: z.enum(DURABILITY_SUBJECT_KINDS),
+  sourceIdentity: z.string().min(1).max(256),
+  object: ImmutableObjectReferenceSchema,
+  payloadSha256: Sha256Schema,
+  ownerId: z.string().min(1).max(256),
+  retentionUntil: z.string().datetime(),
+  deletionState: z.enum(["retained", "tombstoned", "deleted"]),
+}).strict();
+
+const RestoreExpectedFactsSchema = z.object({
+  ownerId: z.string().min(1),
+  sessionId: z.string().min(1),
+  pendingActionReference: z.string().min(1),
+  sessionVersion: z.number().int().nonnegative(),
+  artifactVersion: z.number().int().nonnegative(),
+  leaseToken: z.string().min(1),
+  compatibility: z.object({
+    policyVersion: z.string().min(1), modelIdentity: z.string().min(1), nappletSdkIdentity: z.string().min(1), toolchainIdentity: z.string().min(1),
+  }).strict(),
+}).strict();
+
+const VerifiedRestoreMaterialSchema = RestoreExpectedFactsSchema.extend({ archive: z.instanceof(Uint8Array) }).strict();
+const RestoreReattachResultSchema = z.object({ status: z.enum(["reattached", "replayed", "reconciliation_pending"]), workerId: z.string().min(1).optional() }).strict();
+export const RestoreDrillResultSchema = z.object({
+  status: z.enum(["restored", "replayed", "reconciliation_pending", "blocked"]),
+  code: z.string().min(1), reattachments: z.number().int().nonnegative(), effects: z.literal(0),
+}).strict();
+
+export type RestoreDrillInput = Readonly<{
+  objectStore: ObjectStorePort;
+  subject: z.input<typeof DurabilitySubjectSchema>;
+  expected: z.input<typeof RestoreExpectedFactsSchema>;
+  nowMs: number;
+  decryptAndVerify(bytes: Uint8Array): Promise<z.input<typeof VerifiedRestoreMaterialSchema>>;
+  reattach(input: Readonly<{ sourceIdentity: string; object: ImmutableObjectReference; archive: Uint8Array; expected: z.infer<typeof RestoreExpectedFactsSchema> }>): Promise<z.input<typeof RestoreReattachResultSchema>>;
+}>;
+
+export const RestoreDrillInputSchema = z.object({
+  subject: DurabilitySubjectSchema,
+  expected: RestoreExpectedFactsSchema,
+  nowMs: z.number().int().nonnegative(),
+}).strict();
+
+async function digest(bytes: Uint8Array): Promise<string> {
+  const value = await crypto.subtle.digest("SHA-256", bytes as BufferSource);
+  return Array.from(new Uint8Array(value), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function drillResult(status: z.infer<typeof RestoreDrillResultSchema>["status"], code: string, reattachments = 0) {
+  return RestoreDrillResultSchema.parse({ status, code, reattachments, effects: 0 });
+}
+
+/**
+ * Exact retained-object restore drill for a freshly composed coordinator.
+ * The caller supplies only narrow decryption and reattachment seams; every
+ * byte, ownership, compatibility, version, lease, and retention fact is
+ * verified before it can receive reattachment authority.
+ */
+export async function runRestoreDrill(input: RestoreDrillInput): Promise<z.infer<typeof RestoreDrillResultSchema>> {
+  const parsed = RestoreDrillInputSchema.safeParse({ subject: input.subject, expected: input.expected, nowMs: input.nowMs });
+  if (!parsed.success) return drillResult("blocked", "RESTORE_INVALID_INPUT");
+  const { subject, expected, nowMs } = parsed.data;
+  if (subject.deletionState !== "retained" || nowMs >= Date.parse(subject.retentionUntil)) return drillResult("blocked", "RESTORE_EXPIRED_OR_DELETED");
+
+  let bytes: Uint8Array | undefined;
+  try { bytes = await input.objectStore.readExact(subject.object); } catch { return drillResult("blocked", "RESTORE_OBJECT_NOT_FOUND"); }
+  if (!bytes) return drillResult("blocked", "RESTORE_OBJECT_NOT_FOUND");
+  if (await digest(bytes) !== subject.object.checksum) return drillResult("blocked", "RESTORE_OBJECT_CHECKSUM_MISMATCH");
+
+  let material: z.infer<typeof VerifiedRestoreMaterialSchema>;
+  try { material = VerifiedRestoreMaterialSchema.parse(await input.decryptAndVerify(new Uint8Array(bytes))); } catch { return drillResult("blocked", "RESTORE_DECRYPT_OR_ARCHIVE_DENIED"); }
+  if (await digest(material.archive) !== subject.payloadSha256) return drillResult("blocked", "RESTORE_DECRYPT_OR_ARCHIVE_DENIED");
+  if (subject.ownerId !== expected.ownerId || material.ownerId !== expected.ownerId || material.sessionId !== expected.sessionId || material.pendingActionReference !== expected.pendingActionReference || material.sessionVersion !== expected.sessionVersion || material.artifactVersion !== expected.artifactVersion || material.leaseToken !== expected.leaseToken || JSON.stringify(material.compatibility) !== JSON.stringify(expected.compatibility)) {
+    return drillResult("blocked", "RESTORE_FACTS_DENIED");
+  }
+
+  try {
+    const result = RestoreReattachResultSchema.parse(await input.reattach({ sourceIdentity: subject.sourceIdentity, object: subject.object, archive: new Uint8Array(material.archive), expected }));
+    if (result.status === "reattached") return drillResult("restored", "RESTORE_REATTACHED", 1);
+    if (result.status === "replayed") return drillResult("replayed", "RESTORE_REPLAYED");
+    return drillResult("reconciliation_pending", "RESTORE_RECONCILIATION_PENDING");
+  } catch { return drillResult("blocked", "RESTORE_REATTACH_DENIED"); }
+}
+
+const TopologyClaimSchema = z.object({
+  ingressRegions: z.array(z.string().min(1)).min(1), databaseRegions: z.array(z.string().min(1)).min(1), objectRegions: z.array(z.string().min(1)).min(1), workerRegions: z.array(z.string().min(1)).min(1), relayRegions: z.array(z.string().min(1)).min(1),
+  activeStandby: z.enum(["active-active", "active-standby", "single-active"]), failureDomain: z.enum(["instance", "zone", "region"]), rtoMs: z.number().int().nonnegative(), rpoMs: z.number().int().nonnegative(), limitations: z.array(z.string().min(1)),
+}).strict();
+const TopologyObservationSchema = z.union([
+  z.object({ status: z.literal("blocked"), reason: z.string().min(1) }).strict(),
+  z.object({ status: z.literal("observed"), topology: TopologyClaimSchema }).strict(),
+]);
+export function validateTopologyClaim(input: Readonly<{ claimed: z.input<typeof TopologyClaimSchema>; observation: z.input<typeof TopologyObservationSchema> }>) {
+  const claimed = TopologyClaimSchema.parse(input.claimed);
+  const observation = TopologyObservationSchema.parse(input.observation);
+  if (observation.status === "blocked") return Object.freeze({ status: "blocked" as const, code: "TOPOLOGY_NOT_OBSERVED", reason: observation.reason });
+  const actual = observation.topology;
+  if (JSON.stringify(claimed) !== JSON.stringify(actual)) return Object.freeze({ status: "blocked" as const, code: "TOPOLOGY_CLAIM_EXCEEDS_OBSERVATION", reason: "TOPOLOGY_MISMATCH" });
+  return Object.freeze({ status: "observed" as const, code: "TOPOLOGY_OBSERVED" });
+}
 
 /** Closed fault families from D-122. Schedules carry facts, never mutation handles. */
 export const FaultClassSchema = z.enum([

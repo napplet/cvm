@@ -257,6 +257,19 @@ export class ContinuationService {
     if (command.capApprovalReference !== continuation.intent.admissionReference) return ResumeSessionResultSchema.parse({ status: "denied", code: "RESUME_CAP_APPROVAL_REQUIRED" });
     if (!this.#compatible(continuation.intent, dependencies.compatibility)) return ResumeSessionResultSchema.parse({ status: "denied", code: "RESUME_COMPATIBILITY_DENIED" });
 
+    // A replacement instance must prove the retained encrypted object and all
+    // durable bindings before it can claim budget, provider authority, or a
+    // worker allocation. Object presence alone is never resume authority.
+    let material: ResumeCheckpointMaterial;
+    let archive: Uint8Array;
+    try {
+      material = await dependencies.checkpoint.loadExact(command.checkpointId);
+      if (!this.#materialMatches(material.manifest, command, continuation.intent, dependencies.compatibility)) throw new Error("CHECKPOINT_BINDING_DENIED");
+      archive = await dependencies.checkpoint.restore(material);
+    } catch {
+      return ResumeSessionResultSchema.parse({ status: "reconciliation_pending", code: "RESUME_CHECKPOINT_RECONCILIATION", sessionId: command.sessionId, checkpointId: command.checkpointId, pendingActionReference: continuation.intent.reference });
+    }
+
     const commandFingerprint = await fingerprint({ principal: command.principal, sessionId: command.sessionId, checkpointId: command.checkpointId, expectedSessionVersion: command.expectedSessionVersion, expectedCheckpointVersion: command.expectedCheckpointVersion, idempotencyKey: command.idempotencyKey, pendingAction: command.pendingAction, capApprovalReference: command.capApprovalReference });
     const leaseToken = `lease:resume:${commandFingerprint.slice(0, 24)}`;
     const allocationIntentReference = `allocation:resume:${command.checkpointId}:${commandFingerprint.slice(0, 24)}`;
@@ -293,17 +306,6 @@ export class ContinuationService {
     if (allocation.status !== "allocated") {
       await this.#recordRestoreObservation(accountId, command.checkpointId, claimed.allocationIntentReference, allocation.status === "refused" ? "refused" : "reconciliation_pending");
       return ResumeSessionResultSchema.parse({ status: "reconciliation_pending", code: "RESUME_ALLOCATION_RECONCILIATION", sessionId: command.sessionId, checkpointId: command.checkpointId, pendingActionReference: continuation.intent.reference });
-    }
-
-    let material: ResumeCheckpointMaterial;
-    let archive: Uint8Array;
-    try {
-      material = await dependencies.checkpoint.loadExact(command.checkpointId);
-      if (!this.#materialMatches(material.manifest, command, continuation.intent, dependencies.compatibility)) throw new Error("CHECKPOINT_BINDING_DENIED");
-      archive = await dependencies.checkpoint.restore(material);
-    } catch {
-      await this.#recordRestoreObservation(accountId, command.checkpointId, claimed.allocationIntentReference, "reconciliation_pending");
-      return ResumeSessionResultSchema.parse({ status: "reconciliation_pending", code: "RESUME_CHECKPOINT_RECONCILIATION", sessionId: command.sessionId, checkpointId: command.checkpointId, pendingActionReference: continuation.intent.reference });
     }
 
     try {

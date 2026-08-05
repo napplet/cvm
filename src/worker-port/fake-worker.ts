@@ -189,6 +189,7 @@ export class DeterministicFakeWorker implements ContinuationWorkerPort {
       let turn = 0;
       for (let index = 0; index < script.length; index += 1) {
         if (signal.aborted) return this.finish(identity, { status: "interrupted", code: "WORKER_INTERRUPTED" });
+        if (this.isFenced(request)) return this.finish(identity, { status: "interrupted", code: "WORKER_INTERRUPTED" });
         if (this.options.faultAtTurn === index + 1) return this.finish(identity, { status: "interrupted", code: "WORKER_INTERRUPTED" });
         const step = script[index]!;
         if (step.kind === "checkpoint" && !validatedBoundary) return this.finish(identity, { status: "blocked", code: "CHECKPOINT_BOUNDARY_REQUIRED" });
@@ -198,6 +199,9 @@ export class DeterministicFakeWorker implements ContinuationWorkerPort {
         const proposal = this.toolFor(step, request, turn);
         const parsedProposal = ToolRequestSchema.parse(proposal);
         events.push(WorkerEventSchema.parse({ kind: "tool_proposal", turn, request: parsedProposal }));
+        // Recheck at the effect boundary: a deadline fence can race a held
+        // proposal, but no gateway dispatch may occur after acknowledgement.
+        if (this.isFenced(request)) return this.finish(identity, { status: "interrupted", code: "WORKER_INTERRUPTED" });
         const decision = await this.options.gateway.authorizeAndDispatch(parsedProposal);
         if (decision.status !== "allowed") return this.finish(identity, { status: "blocked", code: "WORKER_GATEWAY_DENIED" });
         if (step.kind === "checkpoint") {
@@ -267,6 +271,11 @@ export class DeterministicFakeWorker implements ContinuationWorkerPort {
     if (!parsed.success || !this.matchesActiveLease(parsed.data)) return CheckpointFenceResultSchema.parse({ status: "denied", code: "WORKER_CONTINUATION_DENIED" });
     this.#fencedLeases.add(parsed.data.leaseToken);
     return CheckpointFenceResultSchema.parse({ status: "fenced", code: "WORKER_EFFECTS_FENCED" });
+  }
+
+  private isFenced(request: WorkerRunRequest): boolean {
+    const lease = this.#activeContinuation;
+    return !!lease && this.#fencedLeases.has(lease.leaseToken) && this.matchesRun(request, lease);
   }
 
   async restoreCheckpoint(input: CheckpointRestoreRequest): Promise<CheckpointRestoreResult> {

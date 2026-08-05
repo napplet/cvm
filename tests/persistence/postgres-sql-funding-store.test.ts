@@ -38,6 +38,16 @@ test("PostgresSqlFundingStore exposes one metered funding authority", async () =
   expect(typeof (store as unknown as { listBillingLineItems?: unknown }).listBillingLineItems).toBe("function");
 });
 
+test("PostgresSqlFundingStore exposes the same continuation transaction authority", async () => {
+  const store = new PostgresSqlFundingStore({ connect: async () => new ScriptedClient() });
+  await store.transact("account:one", async (tx) => {
+    const continuation = tx as unknown as { pauseForFunding?: unknown; claimResume?: unknown; tombstoneExpiredCheckpoint?: unknown };
+    expect(typeof continuation.pauseForFunding).toBe("function");
+    expect(typeof continuation.claimResume).toBe("function");
+    expect(typeof continuation.tombstoneExpiredCheckpoint).toBe("function");
+  });
+});
+
 test("rail repositories expose narrow ports and leave SQL ownership to the database adapter", async () => {
   const lightning = await Bun.file("src/funding/lightning-top-up.ts").text();
   const cashu = await Bun.file("src/funding/cashu-top-up.ts").text();

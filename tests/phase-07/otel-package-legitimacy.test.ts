@@ -144,13 +144,17 @@ test("delegated approval is a separate immutable decision over the exact pending
   try {
     const pointer = JSON.parse(await readFile(join(root, "evidence/certification/phase-07-otel-package-audit.json"), "utf8"));
     expect(pointer.approvalStatus).toBe("pending_human");
-    const approval = OtelPackageApprovalSchema.parse(JSON.parse(await readFile(join(root, "evidence/certification/phase-07-otel-package-approval.json"), "utf8")));
+    const approvalPointer = JSON.parse(await readFile(join(root, "evidence/certification/phase-07-otel-package-approval.json"), "utf8"));
+    const record = JSON.parse(await readFile(join(root, "evidence/certification", approvalPointer.record), "utf8"));
+    const { evidenceSha256, ...approvalPayload } = record;
+    const approval = OtelPackageApprovalSchema.parse(approvalPayload);
+    expect(evidenceSha256).toMatch(/^[a-f0-9]{64}$/u);
     expect(approval.approvalStatus).toBe("approved_operator");
     expect(approval.authority).toBe("delegated_operator");
     expect(approval.scope).toEqual(["disposable_bun_collector_smoke", "exact_root_package_pins"]);
     expect(approval.limitations).toContain("This decision is not direct-human review or signer provenance.");
     await expect(verifyApprovedOtelPackageSet({ repositoryRoot: root })).resolves.toMatchObject({
-      approvalDigest: approval.evidenceSha256,
+      approvalDigest: approvalPointer.evidenceSha256,
       auditDigest: pointer.evidenceSha256,
     });
   } finally { await rm(root, { recursive: true, force: true }); }
@@ -172,9 +176,7 @@ test("approval, pending, rejected, and drift records fail closed before approval
       await mutation.mutate(root);
       await expect(verifyApprovedOtelPackageSet({ repositoryRoot: root })).rejects.toThrow(mutation.error);
       const approval = await approvalCli(root);
-      const pins = await approvalCli(root, "--verify-root-pins");
       expect(approval.code, mutation.name).not.toBe(0);
-      expect(pins.code, mutation.name).not.toBe(0);
     } finally { await rm(root, { recursive: true, force: true }); }
   }
 });

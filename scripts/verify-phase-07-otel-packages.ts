@@ -9,11 +9,14 @@ const REGISTRY = "https://registry.npmjs.org";
 const OFFICIAL_REPOSITORY = "https://github.com/open-telemetry/opentelemetry-js";
 const OFFICIAL_DOCUMENTATION = "https://opentelemetry.io/docs/languages/js/exporters/";
 const CERTIFICATION_DIRECTORY = "evidence/certification";
-const POINTER_PATH = `${CERTIFICATION_DIRECTORY}/phase-07-otel-package-audit.json`;
+const AUDIT_POINTER_PATH = `${CERTIFICATION_DIRECTORY}/phase-07-otel-package-audit.json`;
+const APPROVAL_POINTER_PATH = `${CERTIFICATION_DIRECTORY}/phase-07-otel-package-approval.json`;
 const RECORD_DIRECTORY = `${CERTIFICATION_DIRECTORY}/otel-package-audits`;
+const APPROVAL_RECORD_DIRECTORY = `${CERTIFICATION_DIRECTORY}/otel-package-approvals`;
 const SMOKE_DIRECTORY = `${CERTIFICATION_DIRECTORY}/otel-package-smokes`;
 const FORBIDDEN_LIFECYCLE_SCRIPTS = new Set(["preinstall", "install", "postinstall", "prepare"]);
 const APPROVED_AUDIT_DIGEST = "d7fedf16f62e4088cf17442aa39786c33bb4af8f3377e8d121d76b108eaf22b3";
+const APPROVED_OPERATOR_RECORD_DIGEST = "6fd27b004e02493a81deffe5286ae8137cbe4f362a4e9e706ff53ca262be22ad";
 /** Official Docker Hub Collector manifest digest reviewed on 2026-08-05. */
 export const COLLECTOR_IMAGE = "otel/opentelemetry-collector@sha256:6ed874ea083d67a3085acfc75343f2ad11d9abe6006d7ea4a16e2dba9af14e49";
 const EXACT_NAMES = [
@@ -59,6 +62,35 @@ export const OtelPackageAuditSchema = z.object({
   limitations: z.array(z.string()).min(1), inputDigests: z.object({ packageJsonSha256: z.string().regex(/^[a-f0-9]{64}$/), bunLockSha256: z.string().regex(/^[a-f0-9]{64}$/) }),
 });
 export type OtelPackageAudit = z.infer<typeof OtelPackageAuditSchema>;
+
+const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/u);
+const PackageIdentitySchema = z.object({
+  name: z.enum(EXACT_NAMES), version: z.string().min(1), registryIntegrity: z.string().startsWith("sha512-"),
+}).strict();
+const InputDigestsSchema = z.object({ packageJsonSha256: DigestSchema, bunLockSha256: DigestSchema }).strict();
+const ApprovalScopeSchema = z.tuple([
+  z.literal("disposable_bun_collector_smoke"),
+  z.literal("exact_root_package_pins"),
+]);
+const ApprovalLimitationsSchema = z.tuple([
+  z.literal("This decision is not direct-human review or signer provenance."),
+  z.literal("This decision authorizes only the exact package set's disposable Bun/Collector smoke and exact root package pins."),
+  z.literal("This decision grants no release, live certification, telemetry-data, provider, promotion, or changed-package authority."),
+]);
+
+/** A delegated operator decision, deliberately distinct from the pending human audit pointer. */
+export const OtelPackageApprovalSchema = z.object({
+  schemaVersion: z.literal(1), approvalStatus: z.enum(["approved_operator", "rejected"]), authority: z.literal("delegated_operator"),
+  auditEvidenceSha256: DigestSchema, packageSetSha256: DigestSchema, auditInputDigests: InputDigestsSchema,
+  rootInputDigests: InputDigestsSchema, packages: z.array(PackageIdentitySchema).length(6), decidedAt: z.string().datetime(),
+  expiresAt: z.string().datetime(), scope: ApprovalScopeSchema, limitations: ApprovalLimitationsSchema,
+}).strict();
+export type OtelPackageApproval = z.infer<typeof OtelPackageApprovalSchema>;
+
+const ApprovalPointerSchema = z.object({
+  schemaVersion: z.literal(1), approvalStatus: z.literal("approved_operator"), evidenceSha256: DigestSchema,
+  auditEvidenceSha256: DigestSchema, packageSetSha256: DigestSchema, record: z.string().regex(/^otel-package-approvals\/[a-f0-9]{64}\.json$/u),
+}).strict();
 
 const SmokeRecordSchema = z.object({
   schemaVersion: z.literal(1), status: z.enum(["passed", "failed", "blocked"]), mode: z.literal("bun-collector-smoke"),
@@ -114,19 +146,60 @@ async function run(command: string[], cwd?: string): Promise<{ readonly code: nu
   const [code, stdout, stderr] = await Promise.all([process.exited, new Response(process.stdout).text(), new Response(process.stderr).text()]);
   return { code, stdout, stderr };
 }
-async function rootPins(): Promise<Record<string, unknown>> { return safeJson(JSON.parse(await readFile("package.json", "utf8"))); }
-async function exactRootPins(): Promise<boolean> {
-  const dependencies = (await rootPins()).dependencies;
+function packageSetDigest(packages: readonly { readonly name: string; readonly version: string; readonly registryIntegrity: string }[]): string {
+  return sha256(canonicalJson([...packages].map(({ name, version, registryIntegrity }) => ({ name, version, registryIntegrity })).sort((left, right) => left.name.localeCompare(right.name))));
+}
+function samePackageSet(packages: readonly { readonly name: string; readonly version: string; readonly registryIntegrity: string }[]): boolean {
+  return packages.length === OFFICIAL_OTEL_PACKAGES.length
+    && packageSetDigest(packages) === packageSetDigest(OFFICIAL_OTEL_PACKAGES.map(({ name, version, integrity }) => ({ name, version, registryIntegrity: integrity })))
+    && new Set(packages.map((entry) => entry.name)).size === OFFICIAL_OTEL_PACKAGES.length;
+}
+function certificationPaths(root: string) {
+  const directory = join(root, CERTIFICATION_DIRECTORY);
+  return { directory, auditPointer: join(root, AUDIT_POINTER_PATH), approvalPointer: join(root, APPROVAL_POINTER_PATH) };
+}
+async function rootPins(root = process.cwd()): Promise<Record<string, unknown>> { return safeJson(JSON.parse(await readFile(join(root, "package.json"), "utf8"))); }
+async function exactRootPins(root = process.cwd()): Promise<boolean> {
+  const dependencies = (await rootPins(root)).dependencies;
   if (!isRecord(dependencies)) return false;
   return OFFICIAL_OTEL_PACKAGES.every((item) => dependencies[item.name] === item.version);
 }
-async function approvedAudit(): Promise<void> {
-  await verifyPointer();
-  const pointer = safeJson(JSON.parse(await readFile(POINTER_PATH, "utf8")));
-  if (pointer.evidenceSha256 !== APPROVED_AUDIT_DIGEST) throw new Error("APPROVAL_DIGEST_DRIFT");
-  const record = safeJson(JSON.parse(await readFile(join(CERTIFICATION_DIRECTORY, String(pointer.record)), "utf8")));
-  const packages = Array.isArray(record.packages) ? record.packages : [];
-  if (packages.length !== OFFICIAL_OTEL_PACKAGES.length || OFFICIAL_OTEL_PACKAGES.some((expected) => !packages.some((value) => isRecord(value) && value.name === expected.name && value.version === expected.version && value.registryIntegrity === expected.integrity && value.verdict === "passed"))) throw new Error("APPROVED_PACKAGE_SET_DRIFT");
+
+export async function verifyApprovedOtelPackageSet(options: { readonly repositoryRoot?: string } = {}): Promise<{ readonly approvalDigest: string; readonly auditDigest: string; readonly packageSetSha256: string }> {
+  const root = options.repositoryRoot ?? process.cwd();
+  const paths = certificationPaths(root);
+  await verifyPointer({ repositoryRoot: root });
+  const auditPointer = safeJson(JSON.parse(await readFile(paths.auditPointer, "utf8")));
+  if (auditPointer.evidenceSha256 !== APPROVED_AUDIT_DIGEST) throw new Error("APPROVAL_AUDIT_DIGEST_DRIFT");
+  let pointer: z.infer<typeof ApprovalPointerSchema>;
+  try { pointer = ApprovalPointerSchema.parse(JSON.parse(await readFile(paths.approvalPointer, "utf8"))); }
+  catch (error) {
+    if (error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT") throw new Error("APPROVAL_POINTER_REQUIRED");
+    throw new Error("APPROVAL_POINTER_INVALID");
+  }
+  if (pointer.evidenceSha256 !== APPROVED_OPERATOR_RECORD_DIGEST) throw new Error("APPROVAL_DECISION_DIGEST_DRIFT");
+  if (pointer.auditEvidenceSha256 !== auditPointer.evidenceSha256 || pointer.auditEvidenceSha256 !== APPROVED_AUDIT_DIGEST) throw new Error("APPROVAL_POINTER_AUDIT_DRIFT");
+  const expectedPackageSetSha256 = packageSetDigest(OFFICIAL_OTEL_PACKAGES.map(({ name, version, integrity }) => ({ name, version, registryIntegrity: integrity })));
+  if (pointer.packageSetSha256 !== expectedPackageSetSha256) throw new Error("APPROVAL_POINTER_PACKAGE_SET_DRIFT");
+  let record: Record<string, unknown>;
+  try { record = safeJson(JSON.parse(await readFile(join(paths.directory, pointer.record), "utf8"))); }
+  catch { throw new Error("APPROVAL_RECORD_REQUIRED"); }
+  const { evidenceSha256, ...approvalPayload } = record;
+  if (evidenceSha256 !== pointer.evidenceSha256 || sha256(canonicalJson(approvalPayload)) !== pointer.evidenceSha256) throw new Error("APPROVAL_RECORD_DIGEST_MISMATCH");
+  const approval = OtelPackageApprovalSchema.parse(approvalPayload);
+  if (approval.approvalStatus !== "approved_operator") throw new Error("APPROVAL_RECORD_NOT_APPROVED");
+  if (approval.auditEvidenceSha256 !== pointer.auditEvidenceSha256 || approval.packageSetSha256 !== pointer.packageSetSha256) throw new Error("APPROVAL_RECORD_POINTER_DRIFT");
+  if (approval.expiresAt <= new Date().toISOString()) throw new Error("APPROVAL_RECORD_EXPIRED");
+  if (!samePackageSet(approval.packages) || approval.packageSetSha256 !== packageSetDigest(approval.packages)) throw new Error("APPROVAL_PACKAGE_SET_DRIFT");
+  const auditRecord = safeJson(JSON.parse(await readFile(join(paths.directory, String(auditPointer.record)), "utf8")));
+  const { evidenceSha256: auditEvidenceSha256, ...auditPayload } = auditRecord;
+  if (auditEvidenceSha256 !== auditPointer.evidenceSha256 || sha256(canonicalJson(auditPayload)) !== auditPointer.evidenceSha256) throw new Error("APPROVAL_AUDIT_RECORD_DRIFT");
+  const audit = OtelPackageAuditSchema.parse(auditPayload);
+  if (audit.status !== "passed" || audit.approvalStatus !== "pending_human" || packageSetDigest(audit.packages) !== pointer.packageSetSha256) throw new Error("APPROVAL_AUDIT_PACKAGE_SET_DRIFT");
+  if (canonicalJson(audit.inputDigests) !== canonicalJson(approval.auditInputDigests)) throw new Error("APPROVAL_AUDIT_INPUT_DRIFT");
+  const rootInputs = { packageJsonSha256: await snapshot(join(root, "package.json")), bunLockSha256: await snapshot(join(root, "bun.lock")) };
+  if (canonicalJson(rootInputs) !== canonicalJson(approval.rootInputDigests)) throw new Error("APPROVAL_INPUT_DIGEST_DRIFT");
+  return { approvalDigest: pointer.evidenceSha256, auditDigest: pointer.auditEvidenceSha256, packageSetSha256: pointer.packageSetSha256 };
 }
 async function verifyCurrentSmokeRecord(): Promise<void> {
   const root = process.cwd();
@@ -164,7 +237,7 @@ async function smoke(): Promise<{ readonly evidenceSha256: string; readonly reco
   const base = { schemaVersion: 1 as const, mode: "bun-collector-smoke" as const, approvedAuditDigest: APPROVED_AUDIT_DIGEST, bunVersion: Bun.version, packages: OFFICIAL_OTEL_PACKAGES.map(({ name, version }) => ({ name, version })), collectorConfigSha256, otlpEndpoint: "http/protobuf /v1/traces,/v1/metrics" as const, inputDigests, limitations: ["Certification smoke sends only fixed finite attributes to a local Collector debug sink.", "This is package and protocol compatibility evidence, not live service certification."], };
   let temp = ""; let container = "";
   try {
-    await approvedAudit();
+    await verifyApprovedOtelPackageSet();
     const dockerReady = await run(["docker", "info", "--format", "{{.ServerVersion}}"]);
     if (dockerReady.code !== 0) throw new Error("DOCKER_UNAVAILABLE");
     const pull = await run(["docker", "pull", COLLECTOR_IMAGE]);
@@ -256,24 +329,26 @@ async function writeAuditEvidence(audit: OtelPackageAudit): Promise<{ readonly e
   try { await writeFile(recordPath, content, { encoding: "utf8", flag: "wx" }); }
   catch (error) { if (!(error instanceof Error) || !((error as NodeJS.ErrnoException).code === "EEXIST") || await readFile(recordPath, "utf8") !== content) throw new Error("IMMUTABLE_AUDIT_COLLISION"); }
   const pointer = { schemaVersion: 1, approvalStatus: "pending_human", evidenceSha256, record: relative(CERTIFICATION_DIRECTORY, recordPath), status: audit.status };
-  const pointerContent = `${canonicalJson(pointer)}\n`; const temporary = `${POINTER_PATH}.tmp`;
-  await mkdir(dirname(POINTER_PATH), { recursive: true }); await writeFile(temporary, pointerContent, "utf8"); await rename(temporary, POINTER_PATH);
+  const pointerContent = `${canonicalJson(pointer)}\n`; const temporary = `${AUDIT_POINTER_PATH}.tmp`;
+  await mkdir(dirname(AUDIT_POINTER_PATH), { recursive: true }); await writeFile(temporary, pointerContent, "utf8"); await rename(temporary, AUDIT_POINTER_PATH);
   await verifyPointer(); return { evidenceSha256, recordPath };
 }
 
-export async function verifyPointer(): Promise<void> {
-  const pointer = safeJson(JSON.parse(await readFile(POINTER_PATH, "utf8")));
+export async function verifyPointer(options: { readonly repositoryRoot?: string } = {}): Promise<void> {
+  const root = options.repositoryRoot ?? process.cwd();
+  const paths = certificationPaths(root);
+  const pointer = safeJson(JSON.parse(await readFile(paths.auditPointer, "utf8")));
   if (pointer.schemaVersion !== 1 || pointer.approvalStatus !== "pending_human" || pointer.status !== "passed" || typeof pointer.evidenceSha256 !== "string" || !/^[a-f0-9]{64}$/u.test(pointer.evidenceSha256) || typeof pointer.record !== "string" || pointer.record.includes("..")) throw new Error("AUDIT_POINTER_INVALID");
-  const recordPath = join(CERTIFICATION_DIRECTORY, pointer.record); const record = safeJson(JSON.parse(await readFile(recordPath, "utf8"))); const { evidenceSha256, ...audit } = record;
+  const recordPath = join(paths.directory, pointer.record); const record = safeJson(JSON.parse(await readFile(recordPath, "utf8"))); const { evidenceSha256, ...audit } = record;
   if (evidenceSha256 !== pointer.evidenceSha256 || sha256(canonicalJson(audit)) !== pointer.evidenceSha256) throw new Error("AUDIT_POINTER_DIGEST_MISMATCH");
-  const parsed = OtelPackageAuditSchema.parse(audit); if (parsed.status !== "passed" || parsed.approvalStatus !== "pending_human" || parsed.packages.some((entry) => entry.disposition === "SUS" && entry.verdict !== "passed")) throw new Error("AUDIT_POINTER_NONPASS");
+  const parsed = OtelPackageAuditSchema.parse(audit); if (parsed.status !== "passed" || parsed.approvalStatus !== "pending_human" || parsed.packages.some((entry) => entry.verdict !== "passed")) throw new Error("AUDIT_POINTER_NONPASS");
 }
 
 async function main(): Promise<void> {
   const args = Bun.argv.slice(2); const offline = args.includes("--offline-fixture"); const pointerOnly = args.includes("--verify-pointer"); const preinstall = args.includes("--mode=preinstall"); const requireApproved = args.includes("--require-approved"); const verifyRootPins = args.includes("--verify-root-pins"); const runSmoke = args.includes("--bun-collector-smoke");
   if (args.length === 0 || args.some((argument) => !["--mode=preinstall", "--offline-fixture", "--verify-pointer", "--require-approved", "--verify-root-pins", "--bun-collector-smoke"].includes(argument)) || [offline, pointerOnly, preinstall, requireApproved, verifyRootPins, runSmoke].filter(Boolean).length > 1) throw new Error("usage: --mode=preinstall | --offline-fixture | --verify-pointer | --require-approved | --verify-root-pins | --bun-collector-smoke");
-  if (requireApproved) { await approvedAudit(); console.log(JSON.stringify({ status: "passed", mode: "approved-audit", evidenceSha256: APPROVED_AUDIT_DIGEST })); return; }
-  if (verifyRootPins) { await approvedAudit(); if (!await exactRootPins()) throw new Error("ROOT_PINS_INVALID"); await verifyCurrentSmokeRecord(); console.log(JSON.stringify({ status: "passed", mode: "root-pins", collectorImageDigest: COLLECTOR_IMAGE })); return; }
+  if (requireApproved) { const approval = await verifyApprovedOtelPackageSet(); console.log(JSON.stringify({ status: "passed", mode: "approved-operator", ...approval })); return; }
+  if (verifyRootPins) { await verifyApprovedOtelPackageSet(); if (!await exactRootPins()) throw new Error("ROOT_PINS_INVALID"); await verifyCurrentSmokeRecord(); console.log(JSON.stringify({ status: "passed", mode: "root-pins", collectorImageDigest: COLLECTOR_IMAGE })); return; }
   if (runSmoke) { console.log(JSON.stringify({ status: "passed", mode: "bun-collector-smoke", ...await smoke() })); return; }
   if (offline || pointerOnly) { await verifyPointer(); console.log(JSON.stringify({ status: "passed", mode: "offline-fixture", approvalStatus: "pending_human" })); return; }
   if (!preinstall) throw new Error("mode=preinstall is required");

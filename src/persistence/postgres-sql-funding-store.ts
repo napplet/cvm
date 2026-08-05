@@ -105,7 +105,8 @@ export class PostgresSqlFundingStore implements MeteredFundingStore, Continuatio
     try { const row = (await client.query("SELECT account_id,session_id,admission_reference,idempotency_key,fingerprint_sha256,pending_fingerprint_sha256,expected_session_version,pause_generation,grace_deadline_ms,live_lease_token,intent_json,result_json,state FROM continuation_pauses WHERE account_id=$1 AND session_id=$2 AND pause_generation=$3", [accountId, sessionId, pauseGeneration])).rows[0]; return row && pauseFromRow(row); } finally { client.release(); }
   }
   async listLiveContinuationPauses(accountId: string, nowMs: number): Promise<readonly ContinuationPause[]> {
-    const client = await this.pool.connect();
+    const deadline = this.#now() + this.#deadlineMs;
+    const client = new DeadlineSqlClient(await beforeDeadline(this.pool.connect(), deadline, this.#now), deadline, this.#now);
     try {
       const rows = (await client.query("SELECT account_id,session_id,admission_reference,idempotency_key,fingerprint_sha256,pending_fingerprint_sha256,expected_session_version,pause_generation,grace_deadline_ms,live_lease_token,intent_json,result_json,state FROM continuation_pauses WHERE account_id=$1 AND state='needs_top_up' AND live_lease_token IS NOT NULL AND grace_deadline_ms>$2 ORDER BY session_id,pause_generation", [accountId, nowMs])).rows;
       return frozen(rows.map(pauseFromRow));

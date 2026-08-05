@@ -63,6 +63,27 @@ test("live-pause discovery is owner/deadline scoped and returns no caller-select
   })]);
 });
 
+test("verified-credit pause discovery bounds both pool checkout and SQL query time", async () => {
+  const checkoutStore = new PostgresSqlFundingStore({ connect: () => new Promise(() => undefined) }, { deadlineMs: 5 });
+  const checkout = await Promise.race([
+    checkoutStore.listLiveContinuationPauses("account:one", 1_700_000_000_000).then(() => "resolved", (error) => error instanceof Error ? error.message : "rejected"),
+    Bun.sleep(50).then(() => "unbounded"),
+  ]);
+  expect(checkout).toBe("POSTGRES_OPERATION_DEADLINE_EXCEEDED");
+
+  let released = 0;
+  const queryStore = new PostgresSqlFundingStore({ connect: async () => ({
+    query: () => new Promise(() => undefined),
+    release: () => { released += 1; },
+  }) }, { deadlineMs: 5 });
+  const query = await Promise.race([
+    queryStore.listLiveContinuationPauses("account:one", 1_700_000_000_000).then(() => "resolved", (error) => error instanceof Error ? error.message : "rejected"),
+    Bun.sleep(50).then(() => "unbounded"),
+  ]);
+  expect(query).toBe("POSTGRES_OPERATION_DEADLINE_EXCEEDED");
+  expect(released).toBe(1);
+});
+
 test("rail repositories expose narrow ports and leave SQL ownership to the database adapter", async () => {
   const lightning = await Bun.file("src/funding/lightning-top-up.ts").text();
   const cashu = await Bun.file("src/funding/cashu-top-up.ts").text();

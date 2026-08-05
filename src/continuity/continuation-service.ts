@@ -186,8 +186,10 @@ export class ContinuationService {
         const amount = BigInt(continuation.intent.actionMaximum);
         if (funds.availableBalance < amount) throw new Error("RESUME_BALANCE_INSUFFICIENT");
         if (funds.remainingCap < amount) throw new Error("RESUME_CAP_INSUFFICIENT");
-        const budget = await transaction.reserveActionBudget({ accountId, admissionReference: continuation.intent.admissionReference, idempotencyKey: budgetKey, fingerprint: commandFingerprint, reference: `action-budget:resume:${command.checkpointId}:${commandFingerprint.slice(0, 24)}`, amount });
         const claim = await transaction.claimResume({ accountId, sessionId: command.sessionId, checkpointId: command.checkpointId, idempotencyKey: command.idempotencyKey, fingerprint: commandFingerprint, pendingFingerprint: command.pendingAction.fingerprint, expectedCheckpointVersion: command.expectedCheckpointVersion, expectedSessionVersion: command.expectedSessionVersion, nowMs, newLeaseToken: leaseToken, allocationIntentReference });
+        // Claim expiry authority before reserving budget: a terminal tombstone
+        // must reject a late command without creating any financial effect.
+        const budget = await transaction.reserveActionBudget({ accountId, admissionReference: continuation.intent.admissionReference, idempotencyKey: budgetKey, fingerprint: commandFingerprint, reference: `action-budget:resume:${command.checkpointId}:${commandFingerprint.slice(0, 24)}`, amount });
         return frozen({ actionBudgetReference: budget.reference, allocationIntentReference: claim.allocationIntentReference, leaseToken: claim.leaseToken });
       });
     } catch (error) {

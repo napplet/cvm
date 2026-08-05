@@ -89,6 +89,20 @@ export class PostgresSqlFundingStore implements MeteredFundingStore, Continuatio
       return row && frozen({ intent: { accountId, sessionId, idempotencyKey: asText(row.idempotency_key), fingerprint: asText(row.fingerprint_sha256), pendingFingerprint: asText(row.pending_fingerprint_sha256), expectedSessionVersion: Number(row.expected_session_version) }, result: row.result_json } as unknown as ContinuationRecord);
     } finally { client.release(); }
   }
+  async findContinuationCheckpointForSession(accountId: string, sessionId: string): Promise<ContinuationCheckpoint | undefined> {
+    const client = await this.pool.connect();
+    try {
+      const row = (await client.query("SELECT account_id,session_id,pause_generation,checkpoint_id,expected_session_version,expected_artifact_version,manifest_reference,object_key,object_generation,object_checksum,key_reference,compatibility_identity,checkpoint_committed_at_ms,retention_deadline_ms,state FROM continuation_checkpoints WHERE account_id=$1 AND session_id=$2 ORDER BY pause_generation DESC LIMIT 1", [accountId, sessionId])).rows[0];
+      return row && checkpointFromRow(row);
+    } finally { client.release(); }
+  }
+  async findDeletionOutcome(checkpointId: string, objectGeneration: string): Promise<DeletionOutcomeInput | undefined> {
+    const client = await this.pool.connect();
+    try {
+      const row = (await client.query("SELECT checkpoint_id,object_generation,state FROM continuation_deletions WHERE checkpoint_id=$1 AND object_generation=$2", [checkpointId, objectGeneration])).rows[0];
+      return row && frozen({ checkpointId: asText(row.checkpoint_id), objectGeneration: asText(row.object_generation), state: asText(row.state) as DeletionOutcomeInput["state"] });
+    } finally { client.release(); }
+  }
   async findMeteredActionByOperation(accountId: string, operationId: string): Promise<MeteredAction | undefined> {
     const client = await this.pool.connect();
     try { const row = (await client.query("SELECT a.account_id,a.idempotency_key,a.fingerprint,a.session_id,a.id,a.expected_session_version,a.admission_reference,a.budget_reference,a.reservation_sat,a.operation_id,a.profile_id,a.price_card_id,a.state,a.receipt_charge,a.provider_receipt_reference,a.terminal_result,a.session_version,a.artifact_version,a.remaining_cap_sat,a.remaining_balance_sat,a.artifact_id,a.workspace_lineage,a.checkpoint_reference,a.snapshot_reference,a.validation_evidence_reference,a.failed_artifact_id,a.validation_report_reference,o.provider_request_id FROM metered_actions a JOIN provider_operations o ON o.id=a.operation_id WHERE a.account_id=$1 AND a.operation_id=$2", [accountId, operationId])).rows[0]; return row && actionFromRow(row); } finally { client.release(); }
@@ -243,7 +257,7 @@ class PgFundingTransaction implements MeteredFundingTransaction, ContinuationFun
     await this.client.query("INSERT INTO continuation_tombstones(checkpoint_id,account_id,expired_at_ms) VALUES ($1,$2,$3) ON CONFLICT (checkpoint_id) DO NOTHING", [input.checkpointId, this.accountId, input.nowMs]);
     return frozen({ ...checkpoint, state: "expired" as const });
   }
-  async recordDeletionOutcome(input: DeletionOutcomeInput): Promise<DeletionOutcomeInput> { await this.client.query("INSERT INTO continuation_deletions(checkpoint_id,object_generation,state) VALUES ($1,$2,$3) ON CONFLICT (checkpoint_id,object_generation) DO NOTHING", [input.checkpointId, input.objectGeneration, input.state]); return frozen(input); }
+  async recordDeletionOutcome(input: DeletionOutcomeInput): Promise<DeletionOutcomeInput> { await this.client.query("INSERT INTO continuation_deletions(checkpoint_id,object_generation,state) VALUES ($1,$2,$3) ON CONFLICT (checkpoint_id,object_generation) DO UPDATE SET state=EXCLUDED.state WHERE continuation_deletions.state IN ('scheduled','unknown')", [input.checkpointId, input.objectGeneration, input.state]); return frozen(input); }
   async creditVerifiedSettlement(input: CreditInput): Promise<FundingResult> {
     this.assertScope(input.accountId); await this.ensureAccount(this.accountId); await this.ensureAccount("treasury:clearing");
     const amount = BigInt(input.settlement.amount); if (amount <= 0n) throw new Error("INVALID_SETTLEMENT_AMOUNT");

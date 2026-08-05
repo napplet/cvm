@@ -42,7 +42,7 @@ export const NeedsTopUpResultSchema = z.object({
 }).strict();
 
 /** Public projection shape; it intentionally contains no payload, archive, or provider material. */
-export const ContinuationStatusSchema = z.object({
+const NeedsTopUpContinuationStatusSchema = z.object({
   status: z.literal("needs_top_up"),
   pendingAction: z.object({ reference: z.string().min(1), fingerprint: z.string().regex(/^[a-f0-9]{64}$/u), kind: z.enum(["start_session", "revise_session", "repair"]) }).strict(),
   actionMaximum: CanonicalSatSchema,
@@ -55,6 +55,15 @@ export const ContinuationStatusSchema = z.object({
   checkpoint: z.object({ state: z.literal("live_worker"), reference: z.string().min(1) }).strict(),
   nextRequiredAction: z.enum(["top_up", "approve_cap", "top_up_and_approve_cap"]),
 }).strict();
+const ExpiredContinuationStatusSchema = z.object({
+  status: z.literal("expired"),
+  /** Safe server reference only; no manifest, object, or key identity crosses this boundary. */
+  checkpoint: z.object({ reference: z.string().min(1) }).strict(),
+  retentionDeadlineMs: EpochMillisecondsSchema,
+  deletionState: z.enum(["scheduled", "deleted", "failed", "unknown", "not_recorded"]),
+  nextRequiredAction: z.literal("none"),
+}).strict();
+export const ContinuationStatusSchema = z.discriminatedUnion("status", [NeedsTopUpContinuationStatusSchema, ExpiredContinuationStatusSchema]);
 
 /** Owner-signed consent for one exact, previously paused action. */
 export const ResumePendingApprovalSchema = z.object({

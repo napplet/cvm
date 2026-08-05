@@ -11,7 +11,7 @@ const accountId = "account:retention";
 const checkpointId = "checkpoint:retention";
 const committedAtMs = 1_700_000_000_000;
 
-async function fixture(nowMs: number) {
+async function fixture(nowMs: number, options: Readonly<{ failDelete?: boolean }> = {}) {
   const store = new TransactionalMemoryFundingStore() as TransactionalMemoryFundingStore & ContinuationFundingStore;
   await store.transact(accountId, (transaction) => transaction.pauseForFunding({
     accountId, sessionId: "session:retention", admissionReference: "admission:retention", idempotencyKey: "pause:retention",
@@ -28,9 +28,10 @@ async function fixture(nowMs: number) {
   });
   const deletes: unknown[] = [];
   const destroyed: string[] = [];
+  let failDelete = options.failDelete ?? false;
   const envelope = {
     async destroyKey(keyReference: string) { destroyed.push(keyReference); },
-    async scheduleDeleteGeneration(reference: unknown) { deletes.push(reference); },
+    async scheduleDeleteGeneration(reference: unknown) { if (failDelete) throw new Error("OBJECT_DELETE_UNKNOWN"); deletes.push(reference); },
   } as unknown as CheckpointEnvelopeService;
   const reconciler = new ContinuationDeadlineReconciler({
     store,
@@ -42,7 +43,7 @@ async function fixture(nowMs: number) {
     },
     clock: { nowMs: () => nowMs },
   });
-  return { store, reconciler, deletes, destroyed };
+  return { store, reconciler, deletes, destroyed, retryDeletion() { failDelete = false; } };
 }
 
 describe("CONT-07 retention expiry", () => {
@@ -73,6 +74,23 @@ describe("CONT-07 retention expiry", () => {
     await expect(atExpiry.store.transact(accountId, (transaction) => transaction.claimResume({ ...claim, nowMs: committedAtMs + RETENTION_MS }))).rejects.toThrow("CHECKPOINT_EXPIRED");
   });
 
+  test("serializes duplicate reapers and reconciles an unknown exact deletion without reopening the checkpoint", async () => {
+    const duplicate = await fixture(committedAtMs + RETENTION_MS);
+    const [left, right] = await Promise.all([duplicate.reconciler.scanRetention(), duplicate.reconciler.scanRetention()]);
+    expect(left).toMatchObject([{ status: "expired" }]);
+    expect(right).toMatchObject([{ status: "expired" }]);
+    expect(duplicate.destroyed).toEqual(["key:retention"]);
+    expect(duplicate.deletes).toHaveLength(1);
+
+    const unknown = await fixture(committedAtMs + RETENTION_MS, { failDelete: true });
+    await expect(unknown.reconciler.scanRetention()).resolves.toMatchObject([{ status: "deletion_pending", code: "RETENTION_DELETE_RECONCILIATION" }]);
+    await expect(unknown.store.findDeletionOutcome(checkpointId, "7")).resolves.toMatchObject({ state: "unknown" });
+    unknown.retryDeletion();
+    await expect(unknown.reconciler.scanRetention()).resolves.toMatchObject([{ status: "expired" }]);
+    await expect(unknown.store.findContinuationCheckpointForSession(accountId, "session:retention")).resolves.toMatchObject({ state: "expired" });
+    expect(unknown.deletes).toEqual([{ key: "checkpoints/retention", generation: 7, checksum: "c".repeat(64) }]);
+  });
+
   test("projects only owner-safe terminal expiry with no action that can resume or top up", async () => {
     const owner = { pubkey: "ef".repeat(32) };
     const ownerAccountId = await accountIdForPrincipal(owner);
@@ -83,14 +101,14 @@ describe("CONT-07 retention expiry", () => {
     const store = {
       async sessionStatus() { return { accountId: ownerAccountId, sessionId: "session:expired", version: 2, status: "needs_top_up" as const }; },
       async findContinuationForSession() { return continuation; },
-      async findContinuationCheckpointForSession() { return { accountId: ownerAccountId, sessionId: "session:expired", pauseGeneration: 1, checkpointId: "checkpoint:safe", expectedSessionVersion: 2, expectedArtifactVersion: 1, manifestReference: "manifest:secret", objectKey: "object:secret", objectGeneration: "7", objectChecksum: "c".repeat(64), keyReference: "key:secret", compatibilityIdentity: "toolchain", checkpointCommittedAtMs, retentionDeadlineMs: committedAtMs + RETENTION_MS, state: "expired" as const }; },
+      async findContinuationCheckpointForSession() { return { accountId: ownerAccountId, sessionId: "session:expired", pauseGeneration: 1, checkpointId: "checkpoint:safe", expectedSessionVersion: 2, expectedArtifactVersion: 1, manifestReference: "manifest:secret", objectKey: "object:secret", objectGeneration: "7", objectChecksum: "c".repeat(64), keyReference: "key:secret", compatibilityIdentity: "toolchain", checkpointCommittedAtMs: committedAtMs, retentionDeadlineMs: committedAtMs + RETENTION_MS, state: "expired" as const }; },
       async findDeletionOutcome() { return { checkpointId: "checkpoint:safe", objectGeneration: "7", state: "unknown" as const }; },
       async listMeteredActionsForSession() { return []; },
       async status() { return { accountId: ownerAccountId, unit: "sat" as const, available: "0", held: "0", topUps: [], admissions: [] }; },
       async listBillingLineItems() { return { items: [] }; },
     };
     const result = await readSessionStatus({ store: store as never, cursorSecret: "retention-status-secret", query: { principal: owner, sessionId: "session:expired" } });
-    expect(result).toMatchObject({ status: "ok", session: { state: "needs_top_up", nextAction: "none", continuation: { status: "expired", checkpoint: { reference: "checkpoint:safe" }, retentionDeadlineMs: committedAtMs + RETENTION_MS, deletionState: "unknown", nextRequiredAction: "none" } } });
+    expect(result).toMatchObject({ status: "ok", session: { state: "expired", nextAction: "none", continuation: { status: "expired", checkpoint: { reference: "checkpoint:safe" }, retentionDeadlineMs: committedAtMs + RETENTION_MS, deletionState: "unknown", nextRequiredAction: "none" } } });
     expect(JSON.stringify(result)).not.toMatch(/manifest:secret|object:secret|key:secret|checksum|archive|provider/i);
   });
 

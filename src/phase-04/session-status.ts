@@ -2,7 +2,7 @@ import { z } from "zod";
 import { accountIdForPrincipal } from "../domain/account-command";
 import { PrincipalSchema } from "../phase-03/contracts";
 import { ContinuationStatusSchema } from "../continuity/contracts";
-import type { BillingLineItem, ContinuationFundingStore, ContinuationRecord, MeteredAction, MeteredFundingStore } from "../persistence/funding-store";
+import type { BillingLineItem, ContinuationCheckpoint, ContinuationFundingStore, ContinuationRecord, DeletionOutcomeInput, MeteredAction, MeteredFundingStore } from "../persistence/funding-store";
 
 const DecimalSchema = z.string().regex(/^(0|[1-9][0-9]*)$/u);
 const SignedDecimalSchema = z.string().regex(/^-?(0|[1-9][0-9]*)$/u);
@@ -48,14 +48,14 @@ const StatusOkSchema = z.object({
   session: z.object({
     id: z.string().min(1),
     version: z.number().int().nonnegative(),
-    state: z.enum(["prepared", "active", "failed", "usage_unknown", "billing_invariant_failed", "verified", "needs_top_up"]),
+    state: z.enum(["prepared", "active", "failed", "usage_unknown", "billing_invariant_failed", "verified", "needs_top_up", "expired"]),
     progress: z.enum(["waiting_for_dispatch", "waiting_for_funding", "running", "verified", "failed", "reconciliation_required"]),
     maximum: DecimalSchema,
     actualSpend: DecimalSchema,
     remainingBalance: DecimalSchema,
     remainingCap: DecimalSchema,
     latestVerifiedArtifact: z.object({ id: z.string().min(1), version: z.number().int().nonnegative() }).nullable(),
-    nextAction: z.enum(["revise_session", "billing_reconciliation", "wait_for_current_action", "top_up", "approve_cap", "top_up_and_approve_cap"]),
+    nextAction: z.enum(["revise_session", "billing_reconciliation", "wait_for_current_action", "top_up", "approve_cap", "top_up_and_approve_cap", "none"]),
     continuation: z.union([ContinuationStatusSchema, z.null()]),
   }).strict(),
   action: z.union([z.object({
@@ -144,6 +144,15 @@ function continuationStatus(record: ContinuationRecord): z.infer<typeof Continua
     nextRequiredAction: result.nextRequiredAction,
   });
 }
+function expiredContinuationStatus(checkpoint: ContinuationCheckpoint, deletion: DeletionOutcomeInput | undefined): z.infer<typeof ContinuationStatusSchema> {
+  return ContinuationStatusSchema.parse({
+    status: "expired",
+    checkpoint: { reference: checkpoint.checkpointId },
+    retentionDeadlineMs: checkpoint.retentionDeadlineMs,
+    deletionState: deletion?.state ?? "not_recorded",
+    nextRequiredAction: "none",
+  });
+}
 
 /** Pure transport-neutral projection; every durable read is owner scoped. */
 export async function readSessionStatus(input: Readonly<{ store: MeteredFundingStore; query: unknown; cursorSecret: string | Uint8Array }>): Promise<SessionStatus> {
@@ -161,14 +170,34 @@ export async function readSessionStatus(input: Readonly<{ store: MeteredFundingS
   const continuation = typeof continuationStore.findContinuationForSession === "function"
     ? await continuationStore.findContinuationForSession(accountId, query.sessionId)
     : undefined;
+  const checkpoint = typeof continuationStore.findContinuationCheckpointForSession === "function"
+    ? await continuationStore.findContinuationCheckpointForSession(accountId, query.sessionId)
+    : undefined;
   const action = newestAction(await input.store.listMeteredActionsForSession(accountId, query.sessionId));
   if (!action && !continuation) return freeze(SessionStatusSchema.parse({ status: "not_found_or_denied" }));
   try {
     const [account, page] = await Promise.all([input.store.status(accountId), input.store.listBillingLineItems(accountId, { limit, ...(storeCursor ? { cursor: storeCursor } : {}) })]);
     if (!account) return freeze(SessionStatusSchema.parse({ status: "not_found_or_denied" }));
     const nextCursor = page.nextCursor ? await opaqueCursor(input.cursorSecret, { v: 1, accountId, sessionId: query.sessionId, limit, storeCursor: page.nextCursor }) : null;
+    if (checkpoint?.state === "expired") {
+      const deletion = typeof continuationStore.findDeletionOutcome === "function"
+        ? await continuationStore.findDeletionOutcome(checkpoint.checkpointId, checkpoint.objectGeneration)
+        : undefined;
+      const safe = expiredContinuationStatus(checkpoint, deletion);
+      return freeze(SessionStatusSchema.parse({
+        status: "ok",
+        session: {
+          id: session.sessionId, version: session.version, state: "expired", progress: "failed",
+          maximum: continuation?.result.actionMaximum ?? "0", actualSpend: "0", remainingBalance: account.available, remainingCap: "0",
+          latestVerifiedArtifact: null, nextAction: "none", continuation: safe,
+        },
+        action: null,
+        billing: { items: page.items.map(historyItem), nextCursor },
+      }));
+    }
     if (continuation) {
       const safe = continuationStatus(continuation);
+      if (safe.status !== "needs_top_up") return freeze(SessionStatusSchema.parse({ status: "service_unavailable" }));
       return freeze(SessionStatusSchema.parse({
         status: "ok",
         session: {

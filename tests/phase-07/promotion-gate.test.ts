@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { evaluateReleaseCertification } from "../../src/promotion/run-promotion";
 import { verifyReleaseCertificationInput } from "../../src/promotion/candidate";
@@ -38,6 +39,7 @@ test("blocked protected preflight emits not_observed-safe records without a rele
 
 
 const digest = (value: string) => value.repeat(64).slice(0, 64);
+const sha256Bytes = (value: Uint8Array): string => createHash("sha256").update(value).digest("hex");
 async function sha256(value: unknown): Promise<string> {
   const bytes = new TextEncoder().encode(canonicalJson(value));
   const hash = await crypto.subtle.digest("SHA-256", bytes);
@@ -298,4 +300,105 @@ test("release evidence input rejects replacement pointers and extra claim owners
   const entries = records.map((record) => ({ contentAddressedPath: `evidence/certification/test/${record.evidenceSha256}.json`, evidenceSha256: record.evidenceSha256 }));
   const result = await verifyReleaseCertificationInput({ version: 1, candidateId, releaseManifest: rawManifest, deterministicEvidence: { contentAddressedPath: pointer.contentAddressedPath, evidenceSha256: pointer.evidenceSha256 }, protectedObservations: entries, verificationRecords: { reproducibilityEvidence: { contentAddressedPath: "evidence/certification/test/reproducibility.json", evidenceSha256: verification.reproducibility.evidenceSha256 }, supplyChainEvidence: { contentAddressedPath: "evidence/certification/test/supply-chain.json", evidenceSha256: verification.supplyChain.evidenceSha256 } } }, { nowMs: 2_000, loadDeterministic: async () => deterministic, loadObservation: async (entry) => ({ ...records.find((record) => record.evidenceSha256 === entry.evidenceSha256)!, claims: entry.evidenceSha256 === entries[0]!.evidenceSha256 ? ["release.admission_slo", "release.worker"] : records.find((record) => record.evidenceSha256 === entry.evidenceSha256)!.claims }), loadVerificationRecord: async (entry) => entry.evidenceSha256 === verification.reproducibility.evidenceSha256 ? verification.reproducibility : verification.supplyChain, trustRoot: permissiveTestTrustRoot });
   expect(result).toMatchObject({ status: "blocked", reason: "RELEASE_EVIDENCE_INVALID" });
+});
+
+test("the protected release command owns a pinned root and rejects a freshly rehashed counterfeit before evaluator authority", async () => {
+  const root = await mkdtemp("tests/.tmp-phase07-protected-release-");
+  try {
+    const operatorRoot = join(process.cwd(), root);
+    const rawManifest = releaseManifest();
+    const candidateId = digest("b");
+    const now = Date.now();
+    const verification = await protectedVerificationRecords(rawManifest, candidateId, now - 1_000);
+    const observationDirectory = join(root, "observations");
+    const observations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation(observationDirectory, {
+      ...bindSupplyChainObservation(observation(rawManifest, candidateId, requirement.claim, requirement.live), verification),
+      startedAtMs: now - 2_000,
+      completedAtMs: now - 1_000,
+      expiresAtMs: now + 60_000,
+    })));
+    const deterministic = await Bun.file("evidence/design/phase-07.json").json() as { contentAddressedPath: string; evidenceSha256: string };
+    const reproducibilityPath = join(root, "reproducibility.json");
+    const supplyChainPath = join(root, "supply-chain.json");
+    await writeFile(reproducibilityPath, JSON.stringify(verification.reproducibility));
+    await writeFile(supplyChainPath, JSON.stringify(verification.supplyChain));
+    const releasePath = join(root, "release.json");
+    const release = {
+      version: 1,
+      candidateId,
+      releaseManifest: rawManifest,
+      deterministicEvidence: deterministic,
+      protectedObservations: observations.map((item) => ({ contentAddressedPath: join(observationDirectory, `${item.evidenceSha256}.json`), evidenceSha256: item.evidenceSha256 })),
+      verificationRecords: {
+        reproducibilityEvidence: { contentAddressedPath: reproducibilityPath, evidenceSha256: verification.reproducibility.evidenceSha256 },
+        supplyChainEvidence: { contentAddressedPath: supplyChainPath, evidenceSha256: verification.supplyChain.evidenceSha256 },
+      },
+    };
+    await writeFile(releasePath, JSON.stringify(release));
+
+    const sourcePath = join(root, "source.tar");
+    const sourceBytes = new TextEncoder().encode("operator-held immutable source archive");
+    await writeFile(sourcePath, sourceBytes);
+    const sourceSha256 = sha256Bytes(sourceBytes);
+    const sourceReference = `git+https://github.com/acme/napplet-cvm@${rawManifest.sourceRevision}`;
+    const rootModulePath = join(root, "operator-root.ts");
+    const trustedModule = (expected: unknown) => `import { createPinnedReleaseCertificationTrustRoot } from ${JSON.stringify(join(process.cwd(), "src/certification/trust.ts"))};\nexport const protectedReleaseCertificationTrustRoot = createPinnedReleaseCertificationTrustRoot({ sourceArchiveRoot: ${JSON.stringify(operatorRoot)}, sourceArchives: [{ canonicalSourceReference: ${JSON.stringify(sourceReference)}, relativePath: "source.tar", sourceSha256: ${JSON.stringify(sourceSha256)} }], manifest: ${JSON.stringify(expected)}, observations: ${JSON.stringify(observations)}, reproducibilityRecord: ${JSON.stringify(verification.reproducibility)}, supplyChainRecord: ${JSON.stringify(verification.supplyChain)} });\n`;
+    await writeFile(rootModulePath, trustedModule(rawManifest));
+    const rootDigest = sha256Bytes(new Uint8Array(await Bun.file(rootModulePath).arrayBuffer()));
+    const counterfeitRootPath = join(root, "candidate-permissive-root.ts");
+    const counterfeitMarker = join(root, "counterfeit-root-loaded");
+    await writeFile(counterfeitRootPath, `await Bun.write(${JSON.stringify(counterfeitMarker)}, "loaded");\nexport const protectedReleaseCertificationTrustRoot = { verifyManifest: async () => true, verifyObservation: async () => true, verifyReproducibilityRecord: async () => true, verifySupplyChainRecord: async () => true, verifySourceMeasurement: async () => true };\n`);
+
+    const runProtected = async (env: Record<string, string | undefined> = {}) => {
+      const child = Bun.spawn(["bun", "run", "release:verify:protected", "--", "--release-evidence", releasePath], { stdout: "pipe", stderr: "pipe", env: {
+        ...process.env,
+        PHASE07_RELEASE_TRUST_ROOT_DIRECTORY: operatorRoot,
+        PHASE07_RELEASE_TRUST_ROOT: join(process.cwd(), rootModulePath),
+        PHASE07_RELEASE_TRUST_ROOT_SHA256: rootDigest,
+        PHASE07_RELEASE_CANDIDATE_TRUST_ROOT: counterfeitRootPath,
+        ...env,
+      } });
+      const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      return { exitCode, stdout, stderr };
+    };
+
+    for (const result of [await runProtected(), await runProtected()]) {
+      expect(result.exitCode, `${result.stdout}${result.stderr}`).toBe(0);
+      expect(`${result.stdout}${result.stderr}`).toContain('"status":"promoted"');
+    }
+    expect(await Bun.file(counterfeitMarker).exists()).toBe(false);
+
+    const counterfeit = { ...release, releaseManifest: { ...rawManifest, releaseId: digest("c") } };
+    await writeFile(releasePath, JSON.stringify(counterfeit));
+    await writeFile(rootModulePath, trustedModule(rawManifest));
+    const counterfeitDigest = sha256Bytes(new Uint8Array(await Bun.file(rootModulePath).arrayBuffer()));
+    const rejected = await runProtected({ PHASE07_RELEASE_TRUST_ROOT_SHA256: counterfeitDigest });
+    expect(rejected.exitCode).not.toBe(0);
+    expect(`${rejected.stdout}${rejected.stderr}`).toContain('"status":"blocked"');
+    expect(`${rejected.stdout}${rejected.stderr}`).toContain("RELEASE_CERTIFIER_AUTHORITY_REQUIRED");
+    expect(`${rejected.stdout}${rejected.stderr}`).not.toContain("protected_live");
+    expect(await Bun.file(counterfeitMarker).exists()).toBe(false);
+
+    const missing = await runProtected({ PHASE07_RELEASE_TRUST_ROOT_DIRECTORY: undefined });
+    expect(missing.exitCode).not.toBe(0);
+    expect(`${missing.stdout}${missing.stderr}`).toContain("protected_configuration_unavailable");
+    const escaped = await runProtected({ PHASE07_RELEASE_TRUST_ROOT: join(operatorRoot, "..", "operator-root.ts") });
+    expect(escaped.exitCode).not.toBe(0);
+    const drift = await runProtected({ PHASE07_RELEASE_TRUST_ROOT_SHA256: digest("0") });
+    expect(drift.exitCode).not.toBe(0);
+    const missingExportPath = join(root, "missing-export.ts");
+    await writeFile(missingExportPath, "export const notATrustRoot = {};\n");
+    const missingExport = await runProtected({ PHASE07_RELEASE_TRUST_ROOT: join(process.cwd(), missingExportPath), PHASE07_RELEASE_TRUST_ROOT_SHA256: sha256Bytes(new Uint8Array(await Bun.file(missingExportPath).arrayBuffer())) });
+    expect(missingExport.exitCode).not.toBe(0);
+    const incompletePath = join(root, "incomplete-root.ts");
+    await writeFile(incompletePath, "export const protectedReleaseCertificationTrustRoot = { verifyManifest: async () => true };\n");
+    const incomplete = await runProtected({ PHASE07_RELEASE_TRUST_ROOT: join(process.cwd(), incompletePath), PHASE07_RELEASE_TRUST_ROOT_SHA256: sha256Bytes(new Uint8Array(await Bun.file(incompletePath).arrayBuffer())) });
+    expect(incomplete.exitCode).not.toBe(0);
+    const symlinkPath = join(root, "symlink-root.ts");
+    await symlink(rootModulePath, symlinkPath);
+    const symlinked = await runProtected({ PHASE07_RELEASE_TRUST_ROOT: join(process.cwd(), symlinkPath), PHASE07_RELEASE_TRUST_ROOT_SHA256: rootDigest });
+    expect(symlinked.exitCode).not.toBe(0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

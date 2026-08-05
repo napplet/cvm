@@ -1,12 +1,19 @@
-import type { AdmissionLifecycleContext } from "../../src/telemetry/contracts";
 import type { CapacityReservation } from "../../src/funding/funded-admission";
+import { HmacAdmissionReceiptAuthority, type AdmissionReceipt } from "../../src/funding/admission-receipt";
 
-/** A receipt context explicitly captured before test admission dispatch. */
-export const trustedAdmissionReceipt: AdmissionLifecycleContext = Object.freeze({
-  version: "admission-lifecycle-v1",
-  receiptMonotonicMs: 1,
-  correlationDigest: `sha256:${"d".repeat(64)}`,
+/** Explicit deterministic test authority; production composition never supplies a fallback key. */
+export const trustedAdmissionReceiptAuthority = new HmacAdmissionReceiptAuthority({
+  secret: new Uint8Array(32).fill(7),
+  now: () => 1,
 });
+
+export async function trustedAdmissionReceipt(command: unknown, expectedSessionBindingDigest = `sha256:${"a".repeat(64)}`): Promise<AdmissionReceipt> {
+  return trustedAdmissionReceiptAuthority.issue({
+    command,
+    correlationDigest: `sha256:${"d".repeat(64)}`,
+    expectedSessionBindingDigest,
+  });
+}
 
 /**
  * Builds a test double for the capacity provider's trusted, exact-ready

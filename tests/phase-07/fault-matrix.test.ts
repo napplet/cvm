@@ -11,6 +11,7 @@ import { canonicalCapabilityReview } from "../../src/publication/capability-revi
 import { PublicationService } from "../../src/publication/publication-service";
 import { TransactionalMemoryPublicationStore } from "../../src/persistence/publication-store";
 import { signedPhase06EventFixture, verifiedPhase06Artifact } from "../phase-06/fakes";
+import { trustedAdmissionReceipt, trustedAdmissionReceiptAuthority } from "../fixtures/admission-ready";
 
 const fixturePath = "tests/fixtures/phase-07-reference-set.json";
 
@@ -59,8 +60,9 @@ async function ambiguousModel() {
   const store = new TransactionalMemoryFundingStore();
   const funding = new FundingService(store);
   await funding.execute({ principal, kind: "credit_settlement", idempotencyKey: "fault-credit", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { settlement: { topUpId: "fault-topup", rail: "lightning", unit: "sat", amount: "10000", externalReference: "fault-external", settlementReference: "fault-settlement", verifiedAt: "2026-08-04T00:00:00.000Z" } } });
-  const fundedAdmission = new FundedAdmissionService({ funding, store, capacity: { reserveNow: async ({ intentReference }) => ({ status: "available" as const, reference: "fault-capacity", expiresAt: "2026-08-05T00:00:00.000Z", ready: { intentReference, leaseReference: "fault-capacity", sessionBindingDigest: `sha256:${"a".repeat(64)}`, imageDigest: `sha256:${"b".repeat(64)}`, readinessProbeDigest: `sha256:${"c".repeat(64)}`, readyMonotonicMs: 2 } }), observe: async () => ({ status: "unknown" as const }), release: async () => {} }, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
-  const admission = await fundedAdmission.admit({ principal, idempotencyKey: "fault-admission", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "6500", unit: "sat" } }, { version: "admission-lifecycle-v1", receiptMonotonicMs: 1, correlationDigest: `sha256:${"d".repeat(64)}` });
+  const fundedAdmission = new FundedAdmissionService({ funding, store, capacity: { reserveNow: async ({ intentReference }) => ({ status: "available" as const, reference: "fault-capacity", expiresAt: "2026-08-05T00:00:00.000Z", ready: { intentReference, leaseReference: "fault-capacity", sessionBindingDigest: `sha256:${"a".repeat(64)}`, imageDigest: `sha256:${"b".repeat(64)}`, readinessProbeDigest: `sha256:${"c".repeat(64)}`, readyMonotonicMs: 2 } }), observe: async () => ({ status: "unknown" as const }), release: async () => {} }, receiptAuthority: trustedAdmissionReceiptAuthority, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
+  const command = { principal, idempotencyKey: "fault-admission", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "6500", unit: "sat" as const } };
+  const admission = await fundedAdmission.admit(command, await trustedAdmissionReceipt(command));
   if (admission.status !== "accepted") throw new Error("fault fixture admission failed");
   const gateway = new DeterministicModelGateway({ scenario: { dispatch: "lost_response", lookup: "receipt_found" } });
   const generated = await new MeteredGenerationService({ fundedAdmission, store, gateway, worker: { run: async () => { throw new Error("fault fixture must not run a worker"); } } as never, artifactVerifier: { verify: async () => undefined } }).startSession({ principal, admissionReference: admission.reference, idempotencyKey: "fault-model", expectedVersion: 0, maximum: "3250", policyVersion: "phase-02-policy-2026-08-04", idea: "Build one focused napplet." });

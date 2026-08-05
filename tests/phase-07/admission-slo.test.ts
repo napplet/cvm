@@ -6,6 +6,8 @@ import { FundingService } from "../../src/funding/funding-service";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
 import { runAdmissionAttempt, summarizeAdmissionSamples } from "../../src/admission/benchmark";
 import { AdmissionLifecycleContextSchema } from "../../src/telemetry/contracts";
+import { HmacAdmissionReceiptAuthority } from "../../src/funding/admission-receipt";
+import { trustedAdmissionReceipt, trustedAdmissionReceiptAuthority } from "../fixtures/admission-ready";
 
 const fixturePath = "tests/fixtures/phase-07-reference-set.json";
 async function loadRegistry(): Promise<Readonly<{ schema: "phase-07-reference-set"; version: 2; cases: readonly { id: string; category: string; requirements: readonly string[]; scenario: unknown }[]; liveObservations: readonly { status: string }[] }>> {
@@ -51,6 +53,7 @@ describe("07-01 trusted immediate-or-refused admission", () => {
   test("stamps a correlated signed receipt before admission work and accepts only an exact ready lease", async () => {
     let clock = 10;
     let captured: unknown;
+    let capturedReceipt: unknown;
     const transport = {
       onInbound: () => undefined,
       canonicalInvocation: () => ({ invocationHash: "b".repeat(64) }),
@@ -61,24 +64,27 @@ describe("07-01 trusted immediate-or-refused admission", () => {
     const adapter = new ContextVmFundingAdapter({
       service: new FundingService(new TransactionalMemoryFundingStore()), transport,
       monotonicNow: () => clock++,
-      admissions: { admit: async (_command: unknown, lifecycle: unknown) => { captured = lifecycle; return { status: "refused", accountId: "account:safe", intentReference: "capacity-intent:safe", retryable: true, unit: "sat" }; } } as never,
+      admissionReceipts: trustedAdmissionReceiptAuthority,
+      admissions: { admit: async (_command: unknown, receipt: unknown, lifecycle: unknown) => { capturedReceipt = receipt; captured = lifecycle; return { status: "refused", accountId: "account:safe", intentReference: "capacity-intent:safe", retryable: true, unit: "sat" }; } } as never,
     });
     await adapter.handle({
       verifiedClientPubkey: principal.pubkey, requestEventId: "event-07", rawEvent: { id: "event-07", tags: [] },
       request: { id: "request-07", method: "tools/call", params: { name: "funded_admission", arguments: { idempotencyKey: "phase-07-admission", requestedCap: "50", unit: "sat" } } },
     });
     expect(AdmissionLifecycleContextSchema.parse(captured)).toMatchObject({ version: "admission-lifecycle-v1", receiptMonotonicMs: 10 });
+    expect(capturedReceipt).toEqual({ token: expect.stringMatching(/^ar1\./u) });
 
     const { store, funding } = await fundedService();
     const capacity = {
-      reserveNow: async ({ intentReference }: { intentReference: string }) => ({
+      reserveNow: async ({ intentReference, expectedSessionBindingDigest }: { intentReference: string; expectedSessionBindingDigest: string }) => ({
         status: "available" as const, reference: "lease-07", expiresAt: "2026-08-05T00:01:00.000Z",
-        ready: { intentReference, leaseReference: "lease-07", sessionBindingDigest: "sha256:" + "c".repeat(64), imageDigest: "sha256:" + "d".repeat(64), readinessProbeDigest: "sha256:" + "e".repeat(64), readyMonotonicMs: 30 },
+        ready: { intentReference, leaseReference: "lease-07", sessionBindingDigest: expectedSessionBindingDigest, imageDigest: "sha256:" + "d".repeat(64), readinessProbeDigest: "sha256:" + "e".repeat(64), readyMonotonicMs: 30 },
       }),
       observe: async () => ({ status: "unknown" as const }), release: async () => undefined,
     };
-    const service = new FundedAdmissionService({ funding, store, capacity, now: () => Date.parse("2026-08-05T00:00:00.000Z") });
-    const accepted = await service.admit({ principal, idempotencyKey: "phase-07-admission", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "50", unit: "sat" } }, AdmissionLifecycleContextSchema.parse(captured));
+    const service = new FundedAdmissionService({ funding, store, capacity, receiptAuthority: trustedAdmissionReceiptAuthority, now: () => Date.parse("2026-08-05T00:00:00.000Z") });
+    const command = { principal, idempotencyKey: "phase-07-admission", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "50", unit: "sat" as const } };
+    const accepted = await service.admit(command, await trustedAdmissionReceipt(command), AdmissionLifecycleContextSchema.parse(captured));
     expect(accepted).toMatchObject({ status: "accepted", reference: "lease-07" });
     expect(store.activeHolds).toHaveLength(1);
   });
@@ -92,7 +98,7 @@ describe("07-01 trusted immediate-or-refused admission", () => {
     await expect(runAdmissionAttempt({ now: () => 100, attempt: async () => ({ outcome: "accepted", readyLeaseCount: 0, durableBacklogCount: 0 }) })).rejects.toThrow("ADMISSION_READY_LEASE_REQUIRED");
   });
 
-  test("compensates an otherwise-ready lease when a direct caller omits the trusted receipt context", async () => {
+  test("rejects an otherwise-ready lease before capacity effects when a direct caller omits trusted receipt authority", async () => {
     const { store, funding } = await fundedService();
     let releases = 0;
     const capacity = {
@@ -105,11 +111,50 @@ describe("07-01 trusted immediate-or-refused admission", () => {
       observe: async () => ({ status: "unknown" as const }),
       release: async () => { releases += 1; },
     };
-    const service = new FundedAdmissionService({ funding, store, capacity, now: () => Date.parse("2026-08-05T00:00:00.000Z") });
-    const outcome = await service.admit({ principal, idempotencyKey: "phase-07-missing-receipt", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "50", unit: "sat" } });
-    expect(outcome).toMatchObject({ status: "refused" });
-    expect(releases).toBe(1);
+    const service = new FundedAdmissionService({ funding, store, capacity, receiptAuthority: trustedAdmissionReceiptAuthority, now: () => Date.parse("2026-08-05T00:00:00.000Z") });
+    await expect(service.admit({ principal, idempotencyKey: "phase-07-missing-receipt", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "50", unit: "sat" } })).rejects.toThrow("ADMISSION_RECEIPT_INVALID");
+    expect(releases).toBe(0);
     expect(store.activeHolds).toHaveLength(0);
+  });
+
+  test("rejects forged, expired, changed-command, binding-mutated, and foreign-authority receipts before capacity or holds", async () => {
+    const { store, funding } = await fundedService();
+    let now = 1_000;
+    const authority = new HmacAdmissionReceiptAuthority({ secret: new Uint8Array(32).fill(9), now: () => now, ttlMs: 10 });
+    let reserves = 0;
+    const capacity = {
+      reserveNow: async () => { reserves += 1; return { status: "refused" as const }; },
+      observe: async () => ({ status: "unknown" as const }), release: async () => undefined,
+    };
+    const service = new FundedAdmissionService({ funding, store, capacity, receiptAuthority: authority, now: () => Date.parse("2026-08-05T00:00:00.000Z") });
+    const command = { principal, idempotencyKey: "phase-07-receipt-fence", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "50", unit: "sat" as const } };
+    const receipt = await authority.issue({ command, correlationDigest: `sha256:${"d".repeat(64)}`, expectedSessionBindingDigest: `sha256:${"a".repeat(64)}` });
+    const [prefix, payload, signature] = receipt.token.split(".");
+    const mutated = { token: `${prefix}.${payload}.${signature![0] === "A" ? "B" : "A"}${signature!.slice(1)}` };
+    await expect(service.admit(command, mutated)).rejects.toThrow("ADMISSION_RECEIPT_INVALID");
+    await expect(service.admit({ ...command, payload: { requestedCap: "51", unit: "sat" } }, receipt)).rejects.toThrow("ADMISSION_RECEIPT_COMMAND_MISMATCH");
+    await expect(service.admit({ ...command, principal: { pubkey: "b".repeat(64) } }, receipt)).rejects.toThrow("ADMISSION_RECEIPT_COMMAND_MISMATCH");
+    const foreign = new HmacAdmissionReceiptAuthority({ secret: new Uint8Array(32).fill(10), now: () => now });
+    await expect(new FundedAdmissionService({ funding, store, capacity, receiptAuthority: foreign }).admit(command, receipt)).rejects.toThrow("ADMISSION_RECEIPT_INVALID");
+    now = 1_011;
+    await expect(service.admit(command, receipt)).rejects.toThrow("ADMISSION_RECEIPT_EXPIRED");
+    expect({ reserves, holds: store.activeHolds.length }).toEqual({ reserves: 0, holds: 0 });
+  });
+
+  test("releases a ready lease whose exact worker binding differs from the authenticated receipt", async () => {
+    const { store, funding } = await fundedService();
+    let releases = 0;
+    const capacity = {
+      reserveNow: async ({ intentReference }: { intentReference: string }) => ({
+        status: "available" as const, reference: "lease-binding-mismatch", expiresAt: "2026-08-05T00:01:00.000Z",
+        ready: { intentReference, leaseReference: "lease-binding-mismatch", sessionBindingDigest: `sha256:${"f".repeat(64)}`, imageDigest: `sha256:${"d".repeat(64)}`, readinessProbeDigest: `sha256:${"e".repeat(64)}`, readyMonotonicMs: 30 },
+      }),
+      observe: async () => ({ status: "unknown" as const }), release: async () => { releases += 1; },
+    };
+    const service = new FundedAdmissionService({ funding, store, capacity, receiptAuthority: trustedAdmissionReceiptAuthority, now: () => Date.parse("2026-08-05T00:00:00.000Z") });
+    const command = { principal, idempotencyKey: "phase-07-binding-mismatch", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "50", unit: "sat" as const } };
+    expect(await service.admit(command, await trustedAdmissionReceipt(command))).toMatchObject({ status: "refused" });
+    expect({ releases, holds: store.activeHolds.length }).toEqual({ releases: 1, holds: 0 });
   });
 
   test("coalesces concurrent and refused replays without a hold, queue, retry, or extra provider effect", async () => {
@@ -122,12 +167,13 @@ describe("07-01 trusted immediate-or-refused admission", () => {
       observe: async () => { observes += 1; return { status: "unknown" as const }; },
       release: async () => { releases += 1; },
     };
-    const service = new FundedAdmissionService({ funding, store, capacity, now: () => Date.parse("2026-08-05T00:00:00.000Z") });
+    const service = new FundedAdmissionService({ funding, store, capacity, receiptAuthority: trustedAdmissionReceiptAuthority, now: () => Date.parse("2026-08-05T00:00:00.000Z") });
     const command = { principal, idempotencyKey: "phase-07-concurrent", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "50", unit: "sat" as const } };
-    const first = service.admit(command);
+    const receipt = await trustedAdmissionReceipt(command);
+    const first = service.admit(command, receipt);
     await Bun.sleep(0);
-    const second = service.admit(command);
-    await expect(service.admit({ ...command, payload: { requestedCap: "51", unit: "sat" } })).rejects.toThrow("IDEMPOTENCY_KEY_CONFLICT");
+    const second = service.admit(command, receipt);
+    await expect(service.admit({ ...command, payload: { requestedCap: "51", unit: "sat" } }, receipt)).rejects.toThrow("ADMISSION_RECEIPT_COMMAND_MISMATCH");
     await Bun.sleep(0);
     unblock();
     const outcomes = await Promise.all([first, second]);
@@ -135,9 +181,9 @@ describe("07-01 trusted immediate-or-refused admission", () => {
     expect(outcomes[0]).toMatchObject({ status: "refused" });
     expect({ reserves, observes, releases }).toEqual({ reserves: 1, observes: 0, releases: 0 });
     expect(store.activeHolds).toHaveLength(0);
-    expect(await service.admit(command)).toEqual(outcomes[0]);
+    expect(await service.admit(command, receipt)).toEqual(outcomes[0]);
     expect({ reserves, observes, releases }).toEqual({ reserves: 1, observes: 0, releases: 0 });
-    await expect(service.admit({ ...command, payload: { requestedCap: "51", unit: "sat" } })).rejects.toThrow("IDEMPOTENCY_KEY_CONFLICT");
+    await expect(service.admit({ ...command, payload: { requestedCap: "51", unit: "sat" } }, receipt)).rejects.toThrow("ADMISSION_RECEIPT_COMMAND_MISMATCH");
 
     expect(summarizeAdmissionSamples([
       { candidateId: "candidate-07", inputId: "backlog", outcome: "accepted", receiptMonotonicMs: 1, readyMonotonicMs: 2, readyLeaseCount: 1, durableBacklogCount: 1 },

@@ -6,7 +6,7 @@ import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-s
 import type { WorkerPort } from "../../src/phase-02/contracts";
 import type { ArtifactVerifier } from "../../src/phase-02/trusted-core";
 import { MeteredGenerationService } from "../../src/phase-04/metered-generation-service";
-import { exactReadyReservation, trustedAdmissionReceipt } from "../fixtures/admission-ready";
+import { exactReadyReservation, trustedAdmissionReceipt, trustedAdmissionReceiptAuthority } from "../fixtures/admission-ready";
 
 const principal = { pubkey: "ab".repeat(32) };
 
@@ -29,11 +29,13 @@ async function setup(input: Readonly<{ credit: string; requestedCap: string }>) 
     funding,
     store,
     capacity: { reserveNow: async ({ intentReference }) => exactReadyReservation(intentReference, `capacity:${input.credit}:${input.requestedCap}`, "2026-08-06T00:00:00.000Z"), observe: async ({ intentReference }) => exactReadyReservation(intentReference, `capacity:${input.credit}:${input.requestedCap}`, "2026-08-06T00:00:00.000Z"), release: async () => {} },
+    receiptAuthority: trustedAdmissionReceiptAuthority,
     now: () => Date.parse("2026-08-05T00:00:00.000Z"),
   });
   const authorizeActionBudget = admissions.authorizeActionBudget.bind(admissions);
   admissions.authorizeActionBudget = async (value) => { budgetAuthorizations += 1; return authorizeActionBudget(value); };
-  const admission = await admissions.admit({ principal, idempotencyKey: `admission:${input.credit}:${input.requestedCap}`, policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: input.requestedCap, unit: "sat" } }, trustedAdmissionReceipt);
+  const command = { principal, idempotencyKey: `admission:${input.credit}:${input.requestedCap}`, policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: input.requestedCap, unit: "sat" as const } };
+  const admission = await admissions.admit(command, await trustedAdmissionReceipt(command));
   if (admission.status !== "accepted") throw new Error("test admission must be accepted");
   const effects = { dispatches: 0, workers: 0 };
   const gateway: ModelGateway = { async dispatch() { effects.dispatches += 1; throw new Error("must not dispatch"); }, async lookup() { return { status: "not_found" }; } };

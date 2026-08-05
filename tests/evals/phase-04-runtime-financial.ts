@@ -8,7 +8,7 @@ import { MeteredGenerationService } from "../../src/phase-04/metered-generation-
 import type { ArtifactVerifier } from "../../src/phase-02/trusted-core";
 import type { WorkerPort } from "../../src/phase-02/contracts";
 import type { Phase04RuntimeCaseInput, Phase04RuntimeObservation } from "./phase-04-runtime-observation";
-import { exactReadyReservation, trustedAdmissionReceipt } from "../fixtures/admission-ready";
+import { exactReadyReservation, trustedAdmissionReceipt, trustedAdmissionReceiptAuthority } from "../fixtures/admission-ready";
 
 const principal = { pubkey: "ab".repeat(32) };
 const policyVersion = "phase-02-policy-2026-08-04";
@@ -79,15 +79,17 @@ async function fundedDependencies(prefix: string, fundedBalance = 10000, request
       observe: async ({ intentReference }) => exactReadyReservation(intentReference, `${prefix}-capacity`, "2026-08-05T00:00:00.000Z"),
       release: async () => {},
     },
+    receiptAuthority: trustedAdmissionReceiptAuthority,
     now: () => Date.parse("2026-08-04T00:00:00.000Z"),
   });
-  const admission = await admissions.admit({
+  const command = {
     principal,
     idempotencyKey: `${prefix}-admission`,
     policyVersion: "funding-policy-v1",
     protocolVersion: "funding-contract-v1",
-    payload: { requestedCap: String(requestedCap), unit: "sat" },
-  }, trustedAdmissionReceipt);
+    payload: { requestedCap: String(requestedCap), unit: "sat" as const },
+  };
+  const admission = await admissions.admit(command, await trustedAdmissionReceipt(command));
   if (admission.status !== "accepted") throw new Error(`${prefix}: funded admission did not succeed`);
   return { store, admissions, admission };
 }

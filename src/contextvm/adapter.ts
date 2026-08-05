@@ -2,6 +2,7 @@ import { z } from "zod";
 import { FundingService } from "../funding/funding-service";
 import type { AccountStatusService } from "../funding/account-status";
 import type { FundedAdmissionService } from "../funding/funded-admission";
+import type { AdmissionReceiptAuthority } from "../funding/admission-receipt";
 import { accountIdForPrincipal } from "../domain/account-command";
 import { ResumeSessionCommandSchema, ResumeSessionResultSchema } from "../continuity/contracts";
 import { PrincipalSchema } from "../phase-03/contracts";
@@ -88,6 +89,8 @@ export interface ContextVmFundingAdapterOptions {
   transport: ContextVmTransportPort;
   /** Server-owned facades. Their absence makes their public tool unavailable. */
   admissions?: FundedAdmissionService;
+  /** Server-held issuer for receipt-before-capacity admission authority. */
+  admissionReceipts?: AdmissionReceiptAuthority;
   accountStatus?: AccountStatusService;
   topUps?: Readonly<{
     lightning: Readonly<{ begin(input: unknown): Promise<unknown> }>;
@@ -242,12 +245,21 @@ export class ContextVmFundingAdapter {
     }
     if (name === "funded_admission") {
       const args = FundedAdmissionArgumentsSchema.parse(argumentsInput);
-      if (!this.options.admissions) throw new Error("FUNDED_ADMISSION_UNAVAILABLE");
-      const result = await this.options.admissions.admit({
+      if (!this.options.admissions || !this.options.admissionReceipts) throw new Error("FUNDED_ADMISSION_UNAVAILABLE");
+      const command = {
         principal: { pubkey: verifiedPubkey }, idempotencyKey: args.idempotencyKey,
         policyVersion: this.policyVersion, protocolVersion: this.protocolVersion,
         payload: { requestedCap: args.requestedCap, unit: args.unit },
-      }, lifecycle);
+      };
+      const receipt = await this.options.admissionReceipts.issue({
+        command,
+        correlationDigest: lifecycle?.correlationDigest ?? (await this.digest(`contextvm:${requestEventId}:${verifiedPubkey}`)),
+        // Bind the worker session to the normalized approved command, not raw
+        // transport metadata. Exact redelivery therefore keeps the binding,
+        // while any owner or admission-command change cannot reuse it.
+        expectedSessionBindingDigest: await this.digest(`admission-session-binding:${JSON.stringify(command)}`),
+      });
+      const result = await this.options.admissions.admit(command, receipt, lifecycle);
       const wireResult = freeze({ ...(result.status === "refused" ? { status: "capacity_unavailable" as const, retryAfterSeconds: 5, admissionReference: result.intentReference, unit: "sat" as const } : result), payment: { generationPriceWaivedForAdmission: true } });
       await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({
         jsonrpc: "2.0", method: "notifications/funded_admission", params: wireResult,
@@ -289,10 +301,14 @@ export class ContextVmFundingAdapter {
   }
 
   private async lifecycleFor(eventId: string, verifiedPubkey: string): Promise<AdmissionLifecycleContext> {
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${eventId}:${verifiedPubkey}`));
-    const correlationDigest = `sha256:${[...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+    const correlationDigest = await this.digest(`${eventId}:${verifiedPubkey}`);
     const receiptMonotonicMs = Math.floor(this.options.monotonicNow?.() ?? performance.now());
     return AdmissionLifecycleContextSchema.parse({ version: "admission-lifecycle-v1", receiptMonotonicMs, correlationDigest });
+  }
+
+  private async digest(value: string): Promise<string> {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+    return `sha256:${[...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
   }
 
   private async generationResponse(name: "start_session" | "revise_session", verifiedPubkey: string, requestEventId: string, id: string | number | null, result: z.infer<typeof SessionActionResultSchema>): Promise<ContextVmWireResponse> {

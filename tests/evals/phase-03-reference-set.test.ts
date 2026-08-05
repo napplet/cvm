@@ -13,7 +13,7 @@ import { FakeLightningReceiptPort } from "../../src/funding/lightning-provider";
 import { InMemoryLightningTopUpRepository, LightningTopUpCoordinator } from "../../src/funding/lightning-top-up";
 import { InMemoryProtectedRailMaterialRepository, ProtectedRailMaterialVault } from "../../src/funding/protected-rail-material";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
-import { exactReadyReservation, trustedAdmissionReceipt } from "../fixtures/admission-ready";
+import { exactReadyReservation, trustedAdmissionReceipt, trustedAdmissionReceiptAuthority } from "../fixtures/admission-ready";
 
 type Expected = Readonly<{ result: string; stateDelta: Readonly<Record<string, number>>; effects: Readonly<Record<string, number>>; evidence: readonly string[] }>;
 type Reference = Readonly<{ id: string; requirement: string; decision: string; threat: string; scenario: string; input: string; execution: string; expected: Expected }>;
@@ -108,9 +108,9 @@ const oracles: Readonly<Record<string, Oracle>> = {
   },
   "relay-replay": async (item) => {
     const harness = fundingHarness(); await seedCredit(harness, "relay"); const ready = capacity("capacity:relay");
-    const service = new FundedAdmissionService({ funding: harness.funding, store: harness.store, capacity: ready.port, now: () => Date.parse(now) });
+    const service = new FundedAdmissionService({ funding: harness.funding, store: harness.store, capacity: ready.port, receiptAuthority: trustedAdmissionReceiptAuthority, now: () => Date.parse(now) });
     const command = { principal, idempotencyKey: "relay", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "100", unit: "sat" as const } };
-    const first = await service.admit(command, trustedAdmissionReceipt); const replay = await service.admit(command, trustedAdmissionReceipt);
+    const receipt = await trustedAdmissionReceipt(command); const first = await service.admit(command, receipt); const replay = await service.admit(command, receipt);
     expect(replay).toEqual(first); expect(ready.reserves()).toBe(1);
     return observation(item, "DURABLE_REPLAY_OR_DENIAL", { commands: 1, postings: 0, holds: 1, outbox: 1 }, { allowed: 1, forbidden: 1 });
   },
@@ -163,15 +163,15 @@ const oracles: Readonly<Record<string, Oracle>> = {
     return observation(item, "QUERY_ONLY_RECONCILIATION", { commands: 1, postings: 1, holds: 0, outbox: 1 }, { allowed: 1, forbidden: 1 });
   },
   "cap-hold": async (item) => {
-    const harness = fundingHarness(); await seedCredit(harness, "cap", "30"); const ready = capacity("capacity:cap"); const service = new FundedAdmissionService({ funding: harness.funding, store: harness.store, capacity: ready.port, now: () => Date.parse(now) }); const result = await service.admit({ principal, idempotencyKey: "cap", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "50", unit: "sat" } }, trustedAdmissionReceipt); expect(result).toMatchObject({ approvedCap: "30", heldAmount: "30" });
+    const harness = fundingHarness(); await seedCredit(harness, "cap", "30"); const ready = capacity("capacity:cap"); const service = new FundedAdmissionService({ funding: harness.funding, store: harness.store, capacity: ready.port, receiptAuthority: trustedAdmissionReceiptAuthority, now: () => Date.parse(now) }); const command = { principal, idempotencyKey: "cap", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "50", unit: "sat" as const } }; const result = await service.admit(command, await trustedAdmissionReceipt(command)); expect(result).toMatchObject({ approvedCap: "30", heldAmount: "30" });
     return observation(item, "CAP_HELD_LESSER_OF_AVAILABLE", { commands: 1, postings: 0, holds: 1, outbox: 1 }, { allowed: ready.reserves(), forbidden: 1 });
   },
   "action-budget": async (item) => {
-    const harness = fundingHarness(); await seedCredit(harness, "budget"); const ready = capacity("capacity:budget"); const service = new FundedAdmissionService({ funding: harness.funding, store: harness.store, capacity: ready.port, now: () => Date.parse(now) }); await service.admit({ principal, idempotencyKey: "budget", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "50", unit: "sat" } }, trustedAdmissionReceipt); const result = await service.authorizeActionBudget({ principal, admissionReference: "capacity:budget", idempotencyKey: "action", maximum: "20", unit: "sat" }); expect(result.reservedAmount).toBe("20");
+    const harness = fundingHarness(); await seedCredit(harness, "budget"); const ready = capacity("capacity:budget"); const service = new FundedAdmissionService({ funding: harness.funding, store: harness.store, capacity: ready.port, receiptAuthority: trustedAdmissionReceiptAuthority, now: () => Date.parse(now) }); const command = { principal, idempotencyKey: "budget", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "50", unit: "sat" as const } }; await service.admit(command, await trustedAdmissionReceipt(command)); const result = await service.authorizeActionBudget({ principal, admissionReference: "capacity:budget", idempotencyKey: "action", maximum: "20", unit: "sat" }); expect(result.reservedAmount).toBe("20");
     return observation(item, "ACTION_BUDGET_AUTHORIZED", zero, { allowed: 0, forbidden: 1 });
   },
   "capacity-intent": async (item) => {
-    const harness = fundingHarness(); await seedCredit(harness, "capacity"); const ready = capacity("capacity:commit"); const service = new FundedAdmissionService({ funding: harness.funding, store: harness.store, capacity: ready.port, now: () => Date.parse(now) }); expect((await service.admit({ principal, idempotencyKey: "capacity", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "50", unit: "sat" } }, trustedAdmissionReceipt)).status).toBe("accepted");
+    const harness = fundingHarness(); await seedCredit(harness, "capacity"); const ready = capacity("capacity:commit"); const service = new FundedAdmissionService({ funding: harness.funding, store: harness.store, capacity: ready.port, receiptAuthority: trustedAdmissionReceiptAuthority, now: () => Date.parse(now) }); const command = { principal, idempotencyKey: "capacity", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "50", unit: "sat" as const } }; expect((await service.admit(command, await trustedAdmissionReceipt(command))).status).toBe("accepted");
     return observation(item, "COMMIT_OR_REJECT", { commands: 1, postings: 0, holds: 1, outbox: 1 }, { allowed: ready.reserves(), forbidden: 1 });
   },
   "at-least-once-delivery": async (item) => {

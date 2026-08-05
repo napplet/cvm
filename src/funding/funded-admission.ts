@@ -3,6 +3,7 @@ import { accountIdForPrincipal, fingerprintAccountCommand } from "../domain/acco
 import { PrincipalSchema, type FundedAdmission } from "../phase-03/contracts";
 import type { FundingStore } from "../persistence/funding-store";
 import { FundingService } from "./funding-service";
+import type { AdmissionReceiptAuthority, VerifiedAdmissionReceipt } from "./admission-receipt";
 import { AdmissionLifecycleContextSchema, lifecycleObservation, type AdmissionLifecycleContext, type LifecycleTelemetryPort } from "../telemetry/contracts";
 
 const SatSchema = z.string().regex(/^[1-9][0-9]*$/u).refine((value) => BigInt(value) <= BigInt(Number.MAX_SAFE_INTEGER));
@@ -31,8 +32,8 @@ export type CapacityObservation = CapacityReservation | CapacityRefusal | Capaci
 
 /** Provider-neutral, immediate-only capacity authority. It cannot create workers or debit value. */
 export interface ReadyCapacityPort {
-  reserveNow(input: Readonly<{ intentReference: string }>): Promise<CapacityObservation>;
-  observe(input: Readonly<{ intentReference: string; reference?: string }>): Promise<CapacityObservation>;
+  reserveNow(input: Readonly<{ intentReference: string; expectedSessionBindingDigest: string }>): Promise<CapacityObservation>;
+  observe(input: Readonly<{ intentReference: string; expectedSessionBindingDigest: string; reference?: string }>): Promise<CapacityObservation>;
   release(input: Readonly<{ intentReference: string; reference: string }>): Promise<void>;
 }
 
@@ -68,15 +69,19 @@ export class FundedAdmissionService {
   readonly #capacityTimeoutMs: number;
   /** Process-local coalescing is not a durable queue: the store remains the cross-process claim fence. */
   readonly #inflight = new Map<string, Readonly<{ fingerprint: string; outcome: Promise<FundedAdmissionOutcome> }>>();
-  constructor(private readonly options: Readonly<{ funding: FundingService; store: FundingStore; capacity: ReadyCapacityPort; now?: () => number; minimumLeaseMs?: number; capacityTimeoutMs?: number; telemetry?: LifecycleTelemetryPort }>) {
+  constructor(private readonly options: Readonly<{ funding: FundingService; store: FundingStore; capacity: ReadyCapacityPort; receiptAuthority: AdmissionReceiptAuthority; now?: () => number; minimumLeaseMs?: number; capacityTimeoutMs?: number; telemetry?: LifecycleTelemetryPort }>) {
     this.#now = options.now ?? Date.now;
     this.#minimumLeaseMs = options.minimumLeaseMs ?? 5_000;
     this.#capacityTimeoutMs = options.capacityTimeoutMs ?? 5_000;
     if (this.#capacityTimeoutMs < 1) throw new Error("INVALID_CAPACITY_TIMEOUT");
   }
 
-  async admit(input: unknown, lifecycleInput?: unknown): Promise<FundedAdmissionOutcome> {
+  async admit(input: unknown, receiptInput?: unknown, lifecycleInput?: unknown): Promise<FundedAdmissionOutcome> {
     const command = AdmissionCommandSchema.parse(input);
+    // Receipt validation is deliberately the first authority check. Neither a
+    // caller-shaped lifecycle object nor an unauthenticated token may reach a
+    // capacity provider, durable capacity intent, or funding hold.
+    const receipt = await this.options.receiptAuthority.verify(receiptInput, command);
     const lifecycle = lifecycleInput === undefined ? undefined : AdmissionLifecycleContextSchema.parse(lifecycleInput);
     const accountId = await accountIdForPrincipal(command.principal);
     const key = intentKey(accountId, command.idempotencyKey);
@@ -86,7 +91,7 @@ export class FundedAdmissionService {
       if (active.fingerprint !== intentFingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
       return freeze(structuredClone(await active.outcome));
     }
-    const execution = this.admitParsed(command, accountId, lifecycle, intentFingerprint);
+    const execution = this.admitParsed(command, accountId, receipt, lifecycle, intentFingerprint);
     const inFlight = freeze({ fingerprint: intentFingerprint, outcome: execution });
     this.#inflight.set(key, inFlight);
     try {
@@ -96,7 +101,7 @@ export class FundedAdmissionService {
     }
   }
 
-  private async admitParsed(command: z.infer<typeof AdmissionCommandSchema>, accountId: string, lifecycle: AdmissionLifecycleContext | undefined, intentFingerprint: string): Promise<FundedAdmissionOutcome> {
+  private async admitParsed(command: z.infer<typeof AdmissionCommandSchema>, accountId: string, receipt: VerifiedAdmissionReceipt, lifecycle: AdmissionLifecycleContext | undefined, intentFingerprint: string): Promise<FundedAdmissionOutcome> {
     const recorded = await this.options.store.findRecordedResult(accountId, command.idempotencyKey);
     if (recorded) {
       if (recorded.result.status !== "accepted") throw new Error("FUNDED_ADMISSION_REPLAY_INVALID");
@@ -119,19 +124,19 @@ export class FundedAdmissionService {
       // A persisted lease record contains no ready-proof bytes. Re-observe the
       // original reservation rather than reconstructing an accept-able lease
       // from partial durable state.
-      observation = await this.observeCapacity({ intentReference, reference: intent.capacityReference });
+      observation = await this.observeCapacity({ intentReference, expectedSessionBindingDigest: receipt.expectedSessionBindingDigest, reference: intent.capacityReference });
     } else if (intent.state === "reconciliation_pending") {
-      observation = await this.observeCapacity({ intentReference, reference: intent.capacityReference });
+      observation = await this.observeCapacity({ intentReference, expectedSessionBindingDigest: receipt.expectedSessionBindingDigest, reference: intent.capacityReference });
     } else if (intent.state === "refused" || intent.state === "released") {
       return freeze({ status: "refused" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
     } else {
       const dispatch = await this.options.store.transact(accountId, (transaction) => transaction.claimCapacityDispatch(intentReference));
       if (dispatch.claimed) {
         this.observeLifecycle(lifecycle, "capacity_reserve_started", lifecycle?.receiptMonotonicMs);
-        try { observation = await this.bounded(this.options.capacity.reserveNow({ intentReference })); }
-        catch { observation = await this.observeCapacity({ intentReference }); }
+        try { observation = await this.bounded(this.options.capacity.reserveNow({ intentReference, expectedSessionBindingDigest: receipt.expectedSessionBindingDigest })); }
+        catch { observation = await this.observeCapacity({ intentReference, expectedSessionBindingDigest: receipt.expectedSessionBindingDigest }); }
       } else {
-        observation = await this.observeCapacity({ intentReference, reference: dispatch.intent.capacityReference });
+        observation = await this.observeCapacity({ intentReference, expectedSessionBindingDigest: receipt.expectedSessionBindingDigest, reference: dispatch.intent.capacityReference });
       }
     }
 
@@ -147,7 +152,7 @@ export class FundedAdmissionService {
       return outcome;
     }
 
-    if (!this.isUsableLease(observation.expiresAt) || !this.hasExactReadyProof(observation, intentReference, lifecycle)) {
+    if (!this.isUsableLease(observation.expiresAt) || !this.hasExactReadyProof(observation, intentReference, receipt)) {
       return this.compensateReservation(accountId, intentReference, observation.reference);
     }
     try {
@@ -190,17 +195,15 @@ export class FundedAdmissionService {
     return Number.isFinite(expiry) && expiry - this.#now() >= this.#minimumLeaseMs;
   }
 
-  private hasExactReadyProof(observation: CapacityReservation, intentReference: string, lifecycle?: AdmissionLifecycleContext): boolean {
-    // A lease is never sufficient on its own: accepting it would create a
-    // funded hold before the signed request receipt and the exact worker probe
-    // are correlated. Direct callers must supply the same trusted context as
-    // the ContextVM adapter; an absent or mismatched proof is compensated.
-    if (!lifecycle) return false;
+  private hasExactReadyProof(observation: CapacityReservation, intentReference: string, receipt: VerifiedAdmissionReceipt): boolean {
+    // The ready proof is useful only when it names the exact, authenticated
+    // binding minted at the signed-command boundary. Lifecycle telemetry is
+    // never consulted as authorization material.
     const parsed = ExactReadyProofSchema.safeParse(observation.ready);
     return parsed.success
       && parsed.data.intentReference === intentReference
       && parsed.data.leaseReference === observation.reference
-      && parsed.data.readyMonotonicMs >= lifecycle.receiptMonotonicMs;
+      && parsed.data.sessionBindingDigest === receipt.expectedSessionBindingDigest;
   }
 
   private observeLifecycle(context: AdmissionLifecycleContext | undefined, stage: Parameters<typeof lifecycleObservation>[1], monotonicMs: number | undefined, outcome?: Parameters<typeof lifecycleObservation>[3]): void {
@@ -209,7 +212,7 @@ export class FundedAdmissionService {
     catch { /* Telemetry is observational and cannot alter admission. */ }
   }
 
-  private async observeCapacity(input: Readonly<{ intentReference: string; reference?: string }>): Promise<CapacityObservation> {
+  private async observeCapacity(input: Readonly<{ intentReference: string; expectedSessionBindingDigest: string; reference?: string }>): Promise<CapacityObservation> {
     try { return await this.bounded(this.options.capacity.observe(input)); }
     catch { return freeze({ status: "unknown" as const, ...(input.reference ? { reference: input.reference } : {}) }); }
   }

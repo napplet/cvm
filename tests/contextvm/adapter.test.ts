@@ -8,6 +8,7 @@ import { AccountStatusService } from "../../src/funding/account-status";
 import { accountIdForPrincipal } from "../../src/domain/account-command";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
 import { runContextVmAllowlistProbe } from "../support/phase-04/session-artifact-probes";
+import { trustedAdmissionReceiptAuthority } from "../fixtures/admission-ready";
 
 class FakeContextVmTransport implements ContextVmTransportPort {
   inbound?: (input: ContextVmInboundEnvelope) => Promise<void>;
@@ -193,7 +194,7 @@ describe("verified ContextVM funding adapter", () => {
     await credit(service);
     const transport = new FakeContextVmTransport();
     const admissions = { admit: async () => ({ status: "accepted" as const, accountId: "account:verified", reference: "capacity:server-owned", approvedCap: "500", heldAmount: "500", unit: "sat" as const }) } as never;
-    const adapter = new ContextVmFundingAdapter({ service, transport, admissions });
+    const adapter = new ContextVmFundingAdapter({ service, transport, admissions, admissionReceipts: trustedAdmissionReceiptAuthority });
     const admission = envelope({
       request: { id: "request-0002", method: "tools/call", params: { name: "funded_admission", arguments: { idempotencyKey: "admission-0001", requestedCap: "700", unit: "sat" } } },
       rawEvent: { id: "event-0002", tags: [["payment_interaction", "transparent"]] }, requestEventId: "event-0002",
@@ -205,7 +206,7 @@ describe("verified ContextVM funding adapter", () => {
     expect(transport.notifications.at(-1)).toMatchObject({ requestEventId: "event-0002" });
 
     const secondTransport = new FakeContextVmTransport();
-    const second = new ContextVmFundingAdapter({ service, transport: secondTransport, admissions });
+    const second = new ContextVmFundingAdapter({ service, transport: secondTransport, admissions, admissionReceipts: trustedAdmissionReceiptAuthority });
     await second.handle(envelope({ ...admission, requestEventId: "event-0003", rawEvent: { id: "event-0003", tags: [["payment_interaction", "transparent"]] } }));
     expect(secondTransport.responses.at(-1)?.response).toEqual(first);
     await adapter.handle(admission);

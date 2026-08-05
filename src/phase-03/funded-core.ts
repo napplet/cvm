@@ -4,6 +4,7 @@ import type { ContextVmTransportPort } from "../contextvm/sdk-bridge";
 import { AccountStatusService, type AccountSessionStatusPort } from "../funding/account-status";
 import { FundedAdmissionService, type ReadyCapacityPort } from "../funding/funded-admission";
 import { FundingService } from "../funding/funding-service";
+import { HmacAdmissionReceiptAuthority, type AdmissionReceiptAuthority } from "../funding/admission-receipt";
 import { LightningTopUpCoordinator } from "../funding/lightning-top-up";
 import { CashuTopUpCoordinator } from "../funding/cashu-top-up";
 import type { LightningReceiptPort } from "../funding/lightning-provider";
@@ -28,6 +29,10 @@ const blockedCapacity: BlockedCapacity = {
   observe: async () => ({ status: "unknown" }),
   release: async () => undefined,
 };
+const unavailableAdmissionReceipts: AdmissionReceiptAuthority = Object.freeze({
+  issue: async () => { throw new Error("ADMISSION_RECEIPT_AUTHORITY_UNAVAILABLE"); },
+  verify: async () => { throw new Error("ADMISSION_RECEIPT_AUTHORITY_UNAVAILABLE"); },
+});
 
 export type FundedCoreOptions = Readonly<{
   /** Explicit monetary authority. Non-Postgres stores are test-only by contract. */
@@ -56,6 +61,8 @@ export type FundedCoreOptions = Readonly<{
   publicationSourceContract?: unknown;
   /** Server-held HMAC material for opaque status cursors. */
   statusCursorSecret?: Uint8Array;
+  /** Server-held HMAC material for expiring admission receipt capabilities. */
+  admissionReceiptSecret?: Uint8Array;
   /** Observation-only lifecycle port. It never receives funding, session, or effect authority. */
   lifecycle?: LifecycleTelemetryPort;
   testOnly?: boolean;
@@ -101,7 +108,12 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
   const cashu = database && vault && options.cashuProvider && options.cashuPolicies
     ? new CashuTopUpCoordinator({ funding, provider: options.cashuProvider, policies: options.cashuPolicies, repository: database.cashu, vault, ...(verifiedCreditWake ? { verifiedCreditWake } : {}) })
     : options.testOnly ? options.cashu : undefined;
-  const publicFundingSurface = Boolean(options.transport && options.capacity && database && vault && lightning && cashu);
+  const admissionReceipts = options.admissionReceiptSecret
+    ? new HmacAdmissionReceiptAuthority({ secret: options.admissionReceiptSecret })
+    : unavailableAdmissionReceipts;
+  const otherwisePublicFundingSurface = Boolean(options.transport && options.capacity && database && vault && lightning && cashu);
+  if (otherwisePublicFundingSurface && !options.admissionReceiptSecret) throw new Error("PRODUCTION_ADMISSION_RECEIPT_SECRET_REQUIRED");
+  const publicFundingSurface = Boolean(otherwisePublicFundingSurface && options.admissionReceiptSecret);
   const publicGenerationSurface = Boolean(publicFundingSurface && options.meteredService);
   if (publicGenerationSurface && !verifiedCreditWake) throw new Error("PRODUCTION_VERIFIED_CREDIT_WAKE_REQUIRED");
   const publicContinuationSurface = Boolean(publicFundingSurface && options.continuationService);
@@ -112,7 +124,7 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
   const sourceContract = validatedAvailablePromotedCliSourceContract(options.publicationSourceContract);
   const publicPublicationSurface = Boolean(publicFundingSurface && options.publication && sourceContract);
   const offline = !store || !database || !publicFundingSurface;
-  const admissions = new FundedAdmissionService({ funding, store: authority, capacity: options.capacity ?? blockedCapacity, ...(options.lifecycle ? { telemetry: options.lifecycle } : {}) });
+  const admissions = new FundedAdmissionService({ funding, store: authority, capacity: options.capacity ?? blockedCapacity, receiptAuthority: admissionReceipts, ...(options.lifecycle ? { telemetry: options.lifecycle } : {}) });
   const accountStatus = new AccountStatusService({ store: authority, sessions: options.sessions ?? emptySessions, ...(database ? { rails: database.railStatuses } : {}) });
   if (publicFundingSurface && options.transport) {
     const announcement = options.announcement ?? {
@@ -132,7 +144,7 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
   }
   const statusCursorSecret = options.statusCursorSecret ?? crypto.getRandomValues(new Uint8Array(32));
   const contextvm = publicFundingSurface && options.transport && lightning && cashu
-    ? new ContextVmFundingAdapter({ service: funding, transport: options.transport, admissions, accountStatus, topUps: { lightning, cashu },
+    ? new ContextVmFundingAdapter({ service: funding, transport: options.transport, admissions, admissionReceipts, accountStatus, topUps: { lightning, cashu },
       ...(options.meteredService ? { generation: options.meteredService, sessionStatus: { read: (query: unknown) => readSessionStatus({ store: authority as MeteredFundingStore, query, cursorSecret: statusCursorSecret }) } } : {}),
       ...(options.continuationService ? { continuation: options.continuationService } : {}),
       ...(options.preview ? { preview: options.preview } : {}),

@@ -39,7 +39,7 @@ class DeadlineWorker implements ContinuationWorkerPort {
   }
 }
 
-async function setup(nowMs = deadlineMs) {
+async function setup(nowMs = deadlineMs, envelopeOverride?: CheckpointEnvelopeService) {
   const store = new TransactionalMemoryFundingStore();
   const accountId = await accountIdForPrincipal(principal);
   const funding = new FundingService(store);
@@ -53,7 +53,7 @@ async function setup(nowMs = deadlineMs) {
   let pauseAfterTermination: unknown;
   const worker = new DeadlineWorker(proposal, async () => { pauseAfterTermination = await store.transact(accountId, (transaction) => transaction.findContinuationPause("session:deadline", 1)); });
   const objects = new DeterministicObjectStore();
-  const envelope = new CheckpointEnvelopeService({ crypto: new AesGcmCheckpointCrypto({ randomValues: (bytes) => bytes.fill(7) }), objectStore: objects, now: () => "2026-08-05T00:10:00.000Z" });
+  const envelope = envelopeOverride ?? new CheckpointEnvelopeService({ crypto: new AesGcmCheckpointCrypto({ randomValues: (bytes) => bytes.fill(7) }), objectStore: objects, now: () => "2026-08-05T00:10:00.000Z" });
   const reconciler = new ContinuationDeadlineReconciler({ store, worker, envelope, clock: { nowMs: () => nowMs }, candidates: { listDue: async () => [{ accountId, sessionId: "session:deadline", pauseGeneration: 1, liveLeaseToken: leaseToken }] } });
   return { accountId, envelope, objects, pauseAfterTermination: () => pauseAfterTermination, reconciler, store, worker };
 }
@@ -90,6 +90,12 @@ describe("fixed-deadline checkpoint reconciliation", () => {
     expect(preCommit.objects.entries()).toHaveLength(1);
     expect(preCommitPause).toMatchObject({ state: "checkpointing", liveLeaseToken: leaseToken });
     expect(preCommit.worker.terminations).toBe(0);
+
+    const sealFailure = await setup(deadlineMs, { seal: async () => { throw new Error("OBJECT_STORE_UNAVAILABLE"); } } as unknown as CheckpointEnvelopeService);
+    await expect(sealFailure.reconciler.scan()).resolves.toMatchObject([{ status: "checkpoint_retryable", code: "CHECKPOINT_SEAL_RETRYABLE" }]);
+    const sealFailurePause = await sealFailure.store.transact(sealFailure.accountId, (transaction) => transaction.findContinuationPause("session:deadline", 1));
+    expect(sealFailurePause).toMatchObject({ state: "checkpointing", liveLeaseToken: leaseToken });
+    expect(sealFailure.worker.terminations).toBe(0);
 
     const postCommit = await setup();
     postCommit.worker.terminateFailure = true;

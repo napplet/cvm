@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   canonicalOwnerManifestTemplate,
@@ -11,6 +14,7 @@ import {
 import { canonicalCapabilityReview } from "../../src/publication/capability-review.js";
 import { PublicationService } from "../../src/publication/publication-service.js";
 import { TransactionalMemoryPublicationStore } from "../../src/persistence/publication-store.js";
+import { SqlitePublicationStore } from "../../src/persistence/sqlite-publication-store.js";
 import { verifiedPhase06Artifact } from "./fakes.js";
 
 const ownerPubkey = "1".repeat(64);
@@ -122,4 +126,28 @@ test("persists exact idempotent replay and closes changed-fence key reuse", asyn
   const replay = await service.createIntent(request);
   expect(replay).toEqual(first);
   await expect(service.createIntent({ ...request, purpose: "Changed after approval" })).rejects.toThrow("PUBLICATION_IDEMPOTENCY_CONFLICT");
+});
+
+test("replays the same idempotency command after the coordinator clock advances on memory and SQLite", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "napplet-publication-idempotency-"));
+  const sqlite = new SqlitePublicationStore(join(directory, "publication.sqlite"));
+  try {
+    for (const store of [new TransactionalMemoryPublicationStore(), sqlite]) {
+      let now = createdAtMs;
+      const service = new PublicationService({
+        store,
+        clock: { nowMs: () => now },
+        verifier: { verify: async () => ({ valid: true, eventId: "e".repeat(64) }) },
+        deployment: { deployExact: async () => ({ state: "completed" as const, observationId: "deploy" }), publishOwnerManifest: async () => ({ state: "completed" as const, observationId: "owner" }) },
+        attestation: { publish: async () => ({ state: "completed" as const, observationId: "attestation" }) },
+      });
+      const request = await input();
+      const first = await service.createIntent(request);
+      now += 5_000;
+      expect(await service.createIntent(request)).toEqual(first);
+    }
+  } finally {
+    sqlite.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

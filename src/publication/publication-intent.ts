@@ -96,6 +96,31 @@ export function publicationIntentFingerprint(input: PublicationIntentInput): str
   return hash(canonicalPublicationIntentBytes(input));
 }
 
+/**
+ * Stable command identity for durable idempotency. Issued and expiry times are
+ * coordinator-assigned fences on an intent, not client command fields.
+ */
+export function publicationIntentRequestFingerprint(intentInput: PublicationIntent): string {
+  const intent = PublicationIntentSchema.parse(intentInput);
+  return hash(encoder.encode(JSON.stringify({
+    v: 1,
+    accountId: intent.accountId,
+    sessionId: intent.sessionId,
+    ownerPubkey: intent.ownerPubkey,
+    artifact: canonicalArtifact(intent.artifact),
+    artifactSha256: intent.artifactSha256,
+    manifestSha256: intent.manifestSha256,
+    aggregateSha256: intent.aggregateSha256,
+    dTag: intent.dTag,
+    capabilityDigest: intent.capabilityDigest,
+    runtimeVariant: intent.runtimeVariant,
+    policyVersion: intent.policyVersion,
+    toolchainIdentity: intent.toolchainIdentity,
+    purpose: intent.purpose,
+    consent: intent.consent,
+  })));
+}
+
 /** Builds the immutable owner-scoped record before the host/external signer sees its public template. */
 export function createPublicationIntent(input: PublicationIntentInput): PublicationIntent {
   const { artifact, review, dTag } = parsedInput(input);

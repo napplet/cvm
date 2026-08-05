@@ -90,7 +90,7 @@ export class TransactionalMemoryPublicationStore implements DurablePublicationSt
     const commandKey = key(input.principalId, input.idempotencyKey);
     const existing = state.commandKeys.get(commandKey);
     if (existing) {
-      if (existing.requestFingerprintSha256 !== input.requestFingerprintSha256 || existing.intentId !== input.intent.intentId) conflict();
+      if (existing.requestFingerprintSha256 !== input.requestFingerprintSha256) conflict();
       const intent = state.intents.get(existing.intentId); if (!intent) throw new Error("PUBLICATION_COMMAND_INTEGRITY_INVALID");
       return { intent, replayed: true };
     }

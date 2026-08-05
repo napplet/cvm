@@ -1,6 +1,6 @@
 import { SignedOwnerManifestEventSchema, SignedPublicationCommandSchema, type AttestationPort, type CapabilityReview, type NappletDeploymentPort, type OwnerEventVerifierPort, type Phase06Clock, type PublicationIntent, type PublicationObservation, type SealedArtifactIdentity } from "./contracts.js";
 import type { DurablePublicationStore, PublicationEffectKind, RecordPublicationObservationInput } from "../persistence/publication-store.js";
-import { createPublicationIntent, isPublicationIntentExpired } from "./publication-intent.js";
+import { createPublicationIntent, isPublicationIntentExpired, publicationIntentRequestFingerprint } from "./publication-intent.js";
 import { projectPublicationStatus, type ProjectedPublicationStatus } from "./public-status.js";
 
 const operation = (kind: PublicationEffectKind, intentId: string) => `${kind}:${intentId}`;
@@ -23,7 +23,12 @@ export class PublicationService {
     const createdAtMs = this.dependencies.clock.nowMs();
     const intent = createPublicationIntent({ ...input, createdAtMs, expiresAtMs: input.expiresAtMs ?? createdAtMs + 300_000 });
     if (isPublicationIntentExpired(intent, createdAtMs)) throw new Error("PUBLICATION_INTENT_EXPIRED");
-    return this.dependencies.store.transact((tx) => tx.putIntent(intent));
+    try {
+      return (await this.dependencies.store.createOrReplayIntent({ principalId: input.accountId, idempotencyKey: input.idempotencyKey, requestFingerprintSha256: publicationIntentRequestFingerprint(intent), intent })).intent;
+    } catch (error) {
+      if (error instanceof Error && error.message === "PUBLICATION_COMMAND_CONFLICT") throw new Error("PUBLICATION_IDEMPOTENCY_CONFLICT");
+      throw error;
+    }
   }
 
   async submitSignedManifest(input: Readonly<{ accountId: string; intentId: string; command: unknown; event: unknown }>): Promise<PublicationServiceStatus> {

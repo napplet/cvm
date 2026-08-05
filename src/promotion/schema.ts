@@ -1,6 +1,6 @@
 /** Immutable identity contracts for a candidate promotion toolchain. */
 
-export type CandidateStatus = "candidate" | "review-ready" | "blocked";
+export type CandidateStatus = "candidate" | "review-ready" | "promoted" | "blocked";
 
 export type PromotionStage = {
   readonly id: string;
@@ -38,6 +38,38 @@ export type PromotionManifest = {
   readonly workingDirectory: string;
   readonly stages: readonly PromotionStage[];
 };
+
+/** One immutable, candidate-independent release input set.  These fields close the
+ * Phase 1/6 deferrals without reimplementing the napplet manifest or CLI contract. */
+export type ReleaseCertificationManifest = {
+  readonly version: 1;
+  readonly releaseId: string;
+  readonly sourceRevision: string;
+  readonly inputs: {
+    readonly controlImageDigest: string;
+    readonly workerImageDigest: string;
+    readonly packageLockSha256: string;
+    readonly toolchainSha256: string;
+    readonly migrationSha256: string;
+    readonly configSha256: string;
+    readonly policySha256: string;
+    readonly datasetSha256: string;
+    readonly goldenSha256: string;
+    readonly sbomSha256: string;
+    readonly provenanceSha256: string;
+  };
+  readonly requirements: readonly ReleaseEvidenceRequirement[];
+  readonly waivers: readonly ReleaseWaiver[];
+};
+
+export type ReleaseEvidenceRequirement = { readonly id: string; readonly claim: string; readonly freshnessMs: number; readonly live: boolean };
+export type ReleaseWaiver = { readonly class: string; readonly owner: string; readonly reason: string; readonly evidenceSha256: string; readonly expiresAtMs: number; readonly rollbackTrigger: string; readonly affectedIdentity: string };
+
+/** D-129: no waiver may weaken these release safety or live-certification gates. */
+export const NON_WAIVABLE_RELEASE_CLASSES = new Set([
+  "nip5d-conformance", "sealed-identity", "user-key-custody", "direct-authority-escape", "ledger-double-charge",
+  "duplicate-ownership-publication", "five-second-slo", "required-live-certification",
+]);
 
 type JsonRecord = Record<string, unknown>;
 
@@ -102,6 +134,53 @@ function deepFreeze<T>(value: T): T {
     Object.freeze(value);
   }
   return value;
+}
+
+function exactRecord(value: unknown, label: string, keys: readonly string[]): JsonRecord {
+  if (!isRecord(value) || Object.keys(value).length !== keys.length || keys.some((key) => !(key in value))) throw new Error(`${label} must contain exactly its required immutable fields`);
+  return value;
+}
+
+function releaseClaim(value: unknown, label: string): string {
+  const claim = requiredString({ value }, "value");
+  if (!/^[a-z][a-z0-9_.-]{2,127}$/u.test(claim)) throw new Error(`${label} must be a bounded claim`);
+  return claim;
+}
+
+/** Parses the single authoritative release gate input.  It deliberately accepts
+ * digests and observations only; vendor output, credentials, and key material never enter it. */
+export function parseReleaseCertificationManifest(value: unknown): ReleaseCertificationManifest {
+  const record = exactRecord(value, "release manifest", ["version", "releaseId", "sourceRevision", "inputs", "requirements", "waivers"]);
+  if (record.version !== 1) throw new Error("release manifest.version must be 1");
+  const inputsRecord = exactRecord(record.inputs, "release manifest.inputs", [
+    "controlImageDigest", "workerImageDigest", "packageLockSha256", "toolchainSha256", "migrationSha256", "configSha256",
+    "policySha256", "datasetSha256", "goldenSha256", "sbomSha256", "provenanceSha256",
+  ]);
+  const requirementsRaw = records(record.requirements, "release manifest.requirements");
+  const requirements = requirementsRaw.map((entry) => {
+    const freshnessMs = entry.freshnessMs;
+    if (!Number.isInteger(freshnessMs) || (freshnessMs as number) < 1 || (freshnessMs as number) > 31 * 24 * 60 * 60 * 1000) throw new Error("release requirement freshnessMs is invalid");
+    if (typeof entry.live !== "boolean") throw new Error("release requirement live must be boolean");
+    return { id: requiredString(entry, "id"), claim: releaseClaim(entry.claim, "release requirement claim"), freshnessMs: freshnessMs as number, live: entry.live };
+  });
+  if (new Set(requirements.map((item) => item.id)).size !== requirements.length || new Set(requirements.map((item) => item.claim)).size !== requirements.length) throw new Error("release requirement IDs and claims must be unique");
+  if (!requirements.some((item) => item.live) || !requirements.some((item) => !item.live)) throw new Error("release requirements must include deterministic and protected live evidence");
+  if (!Array.isArray(record.waivers) || !record.waivers.every(isRecord)) throw new Error("release manifest.waivers must be an array");
+  const waivers = record.waivers.map((entry) => {
+    const waiver = exactRecord(entry, "release waiver", ["class", "owner", "reason", "evidenceSha256", "expiresAtMs", "rollbackTrigger", "affectedIdentity"]);
+    const waiverClass = requiredString(waiver, "class");
+    if (NON_WAIVABLE_RELEASE_CLASSES.has(waiverClass)) throw new Error(`release waiver class ${waiverClass} is non-waivable`);
+    const expiresAtMs = waiver.expiresAtMs;
+    if (!Number.isInteger(expiresAtMs) || (expiresAtMs as number) <= 0) throw new Error("release waiver expiry must be a positive integer");
+    return { class: waiverClass, owner: requiredString(waiver, "owner"), reason: requiredString(waiver, "reason"), evidenceSha256: sha256(waiver, "evidenceSha256"), expiresAtMs: expiresAtMs as number, rollbackTrigger: requiredString(waiver, "rollbackTrigger"), affectedIdentity: sha256(waiver, "affectedIdentity") };
+  });
+  if (new Set(waivers.map((item) => item.class)).size !== waivers.length) throw new Error("release waiver classes must be unique");
+  return deepFreeze({
+    version: 1, releaseId: sha256(record, "releaseId"), sourceRevision: revision(requiredString(record, "sourceRevision"), "release sourceRevision"),
+    inputs: {
+      controlImageDigest: sha256(inputsRecord, "controlImageDigest"), workerImageDigest: sha256(inputsRecord, "workerImageDigest"), packageLockSha256: sha256(inputsRecord, "packageLockSha256"), toolchainSha256: sha256(inputsRecord, "toolchainSha256"), migrationSha256: sha256(inputsRecord, "migrationSha256"), configSha256: sha256(inputsRecord, "configSha256"), policySha256: sha256(inputsRecord, "policySha256"), datasetSha256: sha256(inputsRecord, "datasetSha256"), goldenSha256: sha256(inputsRecord, "goldenSha256"), sbomSha256: sha256(inputsRecord, "sbomSha256"), provenanceSha256: sha256(inputsRecord, "provenanceSha256"),
+    }, requirements, waivers,
+  });
 }
 
 /** Parses every D-04 pin before an executable can be invoked. */

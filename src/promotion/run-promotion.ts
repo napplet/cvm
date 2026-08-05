@@ -1,6 +1,7 @@
-import { canonicalJson, canonicalToolchainId, parsePromotionManifest, type CandidateStatus, type PromotionManifest } from "./schema";
+import { canonicalJson, canonicalToolchainId, parsePromotionManifest, type CandidateStatus, type PromotionManifest, type ReleaseCertificationManifest } from "./schema";
 import { writeEvidenceBundle } from "../evidence/bundle";
 import { runSealedDenialProbes, runSealedToolchain, type CommandEvidence, type SealedToolchainRequest } from "../runner/sealed-toolchain";
+import { validateCertificationObservation } from "../certification/evidence";
 
 export type PromotionStageEvidence = {
   readonly id: string;
@@ -30,11 +31,68 @@ export type RunPromotionOptions = {
   readonly runSealed?: (request: SealedToolchainRequest) => Promise<CommandEvidence>;
   readonly runDenialProbes?: (request: Omit<SealedToolchainRequest, "id" | "script" | "args">) => Promise<readonly CommandEvidence[]>;
   readonly now?: () => number;
+  readonly releaseManifest?: ReleaseCertificationManifest;
+  readonly releaseObservations?: readonly unknown[];
 };
+
+export type ReleaseCertificationDecision = {
+  readonly candidateId: string;
+  readonly releaseId: string;
+  readonly evidenceSha256: string;
+  readonly status: "promoted" | "blocked";
+  readonly responsibleRequirement: string | null;
+  readonly reason: string | null;
+};
+
+const releaseDecisions = new Map<string, Readonly<{ evidenceSha256: string; decision: Promise<ReleaseCertificationDecision> }>>();
 
 async function sha256(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function releaseEvidenceSha256(observations: readonly unknown[]): Promise<string> {
+  return sha256(canonicalJson(observations));
+}
+
+async function evaluateReleaseCertificationInner(
+  manifest: ReleaseCertificationManifest,
+  observations: readonly unknown[],
+  input: Readonly<{ candidateId: string; nowMs: number; evidenceSha256: string }>,
+): Promise<ReleaseCertificationDecision> {
+  const blocked = (responsibleRequirement: string | null, reason: string): ReleaseCertificationDecision => ({ candidateId: input.candidateId, releaseId: manifest.releaseId, evidenceSha256: input.evidenceSha256, status: "blocked", responsibleRequirement, reason });
+  if (manifest.waivers.some((waiver) => waiver.expiresAtMs <= input.nowMs)) return blocked("waiver", "RELEASE_WAIVER_EXPIRED");
+  const parsed = await Promise.all(observations.map(async (value) => {
+    try { return { observation: await validateCertificationObservation(value, { nowMs: input.nowMs, candidateId: input.candidateId }), error: null }; }
+    catch (error) { return { observation: null, error: error instanceof Error ? error.message : "CERTIFICATION_OBSERVATION_INVALID" }; }
+  }));
+  const invalid = parsed.find((item) => item.error);
+  if (invalid) return blocked(null, invalid.error!);
+  for (const requirement of manifest.requirements) {
+    const matches = parsed.map((item) => item.observation!).filter((item) => item.status === "passed" && item.claims.includes(requirement.claim) && item.completedAtMs >= input.nowMs - requirement.freshnessMs);
+    if (matches.length !== 1) return blocked(requirement.id, matches.length === 0 ? "RELEASE_REQUIRED_CLAIM_MISSING_OR_STALE" : "RELEASE_REQUIRED_CLAIM_AMBIGUOUS");
+  }
+  return { candidateId: input.candidateId, releaseId: manifest.releaseId, evidenceSha256: input.evidenceSha256, status: "promoted", responsibleRequirement: null, reason: null };
+}
+
+/** The sole promotion decision is candidate-scoped and input-fingerprinted.  A
+ * replay receives the same immutable terminal result; later evidence cannot replace it. */
+export async function evaluateReleaseCertification(
+  manifest: ReleaseCertificationManifest,
+  observations: readonly unknown[],
+  input: Readonly<{ candidateId: string; nowMs?: number }>,
+): Promise<ReleaseCertificationDecision> {
+  const nowMs = input.nowMs ?? Date.now();
+  const evidenceSha256 = await releaseEvidenceSha256(observations);
+  const key = `${input.candidateId}:${manifest.releaseId}`;
+  const existing = releaseDecisions.get(key);
+  if (existing) {
+    if (existing.evidenceSha256 !== evidenceSha256) return { candidateId: input.candidateId, releaseId: manifest.releaseId, evidenceSha256, status: "blocked", responsibleRequirement: null, reason: "RELEASE_EVIDENCE_REPLACEMENT_REJECTED" };
+    return existing.decision;
+  }
+  const decision = evaluateReleaseCertificationInner(manifest, observations, { candidateId: input.candidateId, nowMs, evidenceSha256 });
+  releaseDecisions.set(key, { evidenceSha256, decision });
+  return decision;
 }
 
 async function stageEvidence(stageId: string, command: CommandEvidence, expectedOutput: unknown): Promise<PromotionStageEvidence> {
@@ -151,5 +209,9 @@ export async function runPromotionCandidate(rawManifest: unknown, options: RunPr
       return writePromotionEvidence(options.evidenceDirectory, manifest, candidateId, "blocked", stage.id, stages);
     }
   }
-  return writePromotionEvidence(options.evidenceDirectory, manifest, candidateId, "blocked", "certification-deferred", stages);
+  if (!options.releaseManifest || !options.releaseObservations) return writePromotionEvidence(options.evidenceDirectory, manifest, candidateId, "blocked", "certification-required", stages);
+  const certification = await evaluateReleaseCertification(options.releaseManifest, options.releaseObservations, { candidateId, nowMs: now() });
+  if (certification.status !== "promoted") return writePromotionEvidence(options.evidenceDirectory, manifest, candidateId, "blocked", certification.responsibleRequirement ?? "release-certification", stages);
+  const promoted = await writePromotionEvidence(options.evidenceDirectory, manifest, candidateId, "review-ready", "release-certified", stages);
+  return { ...promoted, status: "promoted", responsibleStage: "release-certified" };
 }

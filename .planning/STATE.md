@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
 current_phase: 7
 current_phase_name: Admission SLO, Resilience & Launch Safety
-status: verifying
-stopped_at: Completed 07-10-PLAN.md
-last_updated: "2026-08-05T17:05:44.538Z"
+status: planned
+stopped_at: Phase 7 verification found gaps; 07-11 and 07-12 planned
+last_updated: "2026-08-05T19:15:00.000Z"
 last_activity: 2026-08-05
 last_activity_desc: Phase 7 Wave 0 baseline complete
 progress:
   total_phases: 7
-  completed_phases: 7
-  total_plans: 51
+  completed_phases: 6
+  total_plans: 53
   completed_plans: 51
-  percent: 100
+  percent: 96
 ---
 
 # Project State
@@ -30,20 +30,20 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 7 — Admission SLO, Resilience & Launch Safety
-Plan: 11 of 11
-Status: Phase complete — ready for verification
-Last activity: 2026-08-05 — Phase 7 Wave 0 baseline complete
+Plan: 11 of 13
+Status: Gap closure planned after verification
+Last activity: 2026-08-05 — Phase 7 verifier identified three locally actionable wiring gaps
 
-Progress: [██████████] 100%
+Progress: [█████████░] 96%
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
-- Phases: Phases 1–6 verified complete; Phase 7 is executing (6/7, 86%).
-- Plans: 41/51 known milestone plans executed; ten Phase 7 plans remain.
-- Requirements: All v1 requirements are assigned; Phase 7 live certification remains pending despite its completed Wave 0 baseline.
-- Next checkpoint: execute Plan 07-01 admission implementation against the Wave 0 baseline.
+- Phases: Phases 1–6 verified complete; Phase 7 is active in gap closure (6/7, 86%).
+- Plans: 51/53 known milestone plans executed; Plans 07-11 and 07-12 remain.
+- Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain blocked pending gap closure and protected live evidence.
+- Next checkpoint: execute Plan 07-11, then 07-12, and re-run Phase 7 goal verification.
 
 ## Performance Metrics
 
@@ -241,6 +241,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T17:05:44.529Z
-Stopped at: Completed 07-10-PLAN.md
+Last session: 2026-08-05T19:15:00.000Z
+Stopped at: Phase 7 verification found gaps; 07-11 and 07-12 planned
 Resume file: None

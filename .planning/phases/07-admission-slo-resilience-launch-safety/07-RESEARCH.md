@@ -315,22 +315,22 @@ OTLP HTTP/protobuf exports traces and metrics to a Collector; use a sink-inspect
 | A2 | The listed OTel packages work together under the selected Bun image. Registry existence and official JS docs do not certify Bun compatibility. | Standard Stack | Telemetry implementation could fail at runtime. |
 | A3 | A specific SBOM generator/format integration can meet the release gate without extending the project’s trust boundary. | Supply-chain implementation | Could require an additional vetted tool or a revised release process. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Which workspace provider wins Modal-versus-Fly certification?**
    - What we know: Modal has an existing adapter and official probe/pool/network primitives; Fly offers API-managed fast-launching VMs. [CITED: https://modal.com/docs/sdk/js/latest/Sandbox] [CITED: https://www.fly.io/docs/machines/api/working-with-machines-api/]
    - What's unclear: Selected regions, immutable-image cold/pool/step performance, egress isolation, and p95 acceptance under the exact load profile.
-   - Recommendation: Build one provider-neutral harness and select only after both produce candidate-bound live evidence; otherwise block promotion.
+   - Resolution: No provider is selected by research or deterministic tests. Plan 07-10 alone may decide Modal-versus-Fly selection from fresh protected evidence produced by the identical immutable-image benchmark, cohort, readiness, isolation, cleanup, sample, confidence, and zero-backlog contract. If either required record is absent, stale, incomplete, or non-pass, both remain unselected and promotion stays blocked. This resolves the decision procedure; it does not claim the live benchmark has run.
 
 2. **What exact topology earns the availability claim?**
    - What we know: Cloud Run can deploy one service to multiple regions and per-region minimum instances apply. [CITED: https://docs.cloud.google.com/run/docs/multiple-regions]
    - What's unclear: Provisioned Cockroach/GCS/worker locations, relay routing, and paid-tier configuration.
-   - Recommendation: Start with a narrowly documented two-region control plane and one explicitly named data/worker failure domain; do not state regional continuity until drill evidence exists.
+   - Resolution: Availability language is bounded to the exact protected topology that passes Plan 07-10: named component and region inventory, routing, data/object/worker failure domains, active/standby behavior, executed fault/restore drills, measured RTO/RPO, and recorded limitations. Two ingress regions or structural configuration alone confer no wider database, object, relay, or worker continuity claim. Until such evidence passes, the corresponding availability claim remains blocked. This resolves claim scope; it does not assert any topology has passed.
 
 3. **Which live profiles/credentials are available?**
    - What we know: Local audit found Bun, Node, npm, and Docker, but no Modal, Fly, gcloud, Cockroach, cosign, syft, OTel Collector, or Playwright CLI.
    - What's unclear: ContextVM relay, CEP-8 Lightning/Cashu, model, host/signer, CLI asset/upload/relay, and managed storage/database credentials.
-   - Recommendation: Make credential preflight a protected live command that emits exact `blocked` evidence and exits nonzero for a required release profile.
+   - Resolution: Plan 07-10 protected preflight inventories every required profile, credential reference, tool, sample, and topology input. Any absence emits candidate/input-bound `blocked` or `not_observed` evidence, exits nonzero, and blocks promotion; it is never replaced by fixture or deterministic evidence. This resolves fail-closed behavior while preserving the empirical fact that protected profile availability has not yet been observed.
 
 ## Environment Availability
 

@@ -41,13 +41,13 @@ created: 2026-08-05
 
 ## Per-Task Verification Map
 
-| Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
-|---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 07-W0-01 | TBD | 0 | SESS-02 | T-07-ADM | Receipt-to-exact-ready p95 is at most 5s or stable refusal has no session, hold, or queue | unit + protected load | `bun test tests/phase-07/admission-slo.test.ts`; `bun run certify:phase07 -- --suite=admission` | ❌ W0 | ⬜ pending |
-| 07-W0-02 | TBD | 0 | OPS-01 | T-07-TEL | Versioned allowlisted telemetry exports no prompt, source, key, payment, provider, or free-text secrets | unit/property + Collector | `bun test tests/phase-07/telemetry-policy.test.ts`; `bun run eval:phase07 -- --suite=telemetry` | ❌ W0 | ⬜ pending |
-| 07-W0-03 | TBD | 0 | OPS-02 | T-07-REC | Every fault recovers only the original operation with exact credit/debit/worker/publication counts | deterministic + protected chaos | `bun test tests/evals/phase-07-reference-set.test.ts`; `bun run certify:phase07 -- --suite=chaos` | ❌ W0 | ⬜ pending |
-| 07-W0-04 | TBD | 0 | OPS-03 | T-07-RST | Restore decrypts and verifies exact object identity, checksum, owner/version/lease fence, retention, and reattachment | deterministic + protected restore | `bun test tests/phase-07/restore-drill.test.ts`; `bun run certify:phase07 -- --suite=restore` | ❌ W0 | ⬜ pending |
-| 07-W0-05 | TBD | 0 | OPS-04 | T-07-PRO | Candidate gate blocks every missing, stale, mutated, skipped, or unobserved required input | unit + protected release | `bun test tests/phase-07/promotion-gate.test.ts`; `bun run candidate:verify` | ❌ W0 | ⬜ pending |
+| Task ID | Plan | Owner Task | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
+|---------|------|------------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
+| 07-W0-01 | 07-00 | Task 1 | 0 | SESS-02 | T-07-ADM | Receipt-to-exact-ready p95 is at most 5s or stable refusal has no session, hold, or queue | unit + protected load | `bun test tests/phase-07/admission-slo.test.ts`; `bun run certify:phase07 -- --suite=admission` | ❌ pending 07-00 | ⬜ pending |
+| 07-W0-02 | 07-00 | Task 1 | 0 | OPS-01 | T-07-TEL | Versioned allowlisted telemetry exports no prompt, source, key, payment, provider, or free-text secrets | unit/property + Collector | `bun test tests/phase-07/telemetry-policy.test.ts`; `bun run eval:phase07 -- --suite=telemetry` | ❌ pending 07-00 | ⬜ pending |
+| 07-W0-03 | 07-00 | Task 2 | 0 | OPS-02 | T-07-REC | Every fault recovers only the original operation with exact credit/debit/worker/publication counts | deterministic + protected chaos | `bun test tests/evals/phase-07-reference-set.test.ts`; `bun run certify:phase07 -- --suite=chaos` | ❌ pending 07-00 | ⬜ pending |
+| 07-W0-04 | 07-00 | Task 2 | 0 | OPS-03 | T-07-RST | Restore decrypts and verifies exact object identity, checksum, owner/version/lease fence, retention, and reattachment | deterministic + protected restore | `bun test tests/phase-07/restore-drill.test.ts`; `bun run certify:phase07 -- --suite=restore` | ❌ pending 07-00 | ⬜ pending |
+| 07-W0-05 | 07-00 | Task 3 | 0 | OPS-04 | T-07-PRO | Candidate gate blocks every missing, stale, mutated, skipped, or unobserved required input | unit + protected release | `bun test tests/phase-07/promotion-gate.test.ts`; `bun run candidate:verify` | ❌ pending 07-00 | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -76,13 +76,11 @@ created: 2026-08-05
 
 ## Wave 0 Requirements
 
-- [ ] `src/telemetry/contracts.ts`, `src/telemetry/redaction.ts`, `src/telemetry/otel.ts` — versioned lifecycle vocabulary, redaction, and test exporter.
-- [ ] `src/certification/contracts.ts`, `src/certification/evidence.ts` — strict content-addressed observation/freshness contracts.
-- [ ] `src/resilience/fault-harness.ts`, `src/admission/benchmark.ts` — provider-neutral fault schedules, monotonic timing, and confidence reports.
-- [ ] `src/worker-adapters/fly-worker.ts` — candidate-only Fly adapter after its API/credential checkpoint.
-- [ ] `tests/phase-07/*.test.ts`, `tests/evals/phase-07-reference-set.test.ts`, `tests/fixtures/phase-07-reference-set.json` — executable requirement and matrix cases.
-- [ ] `scripts/eval-phase-07.ts`, `scripts/verify-phase-07-evidence.ts`, `scripts/certify-phase-07.ts` — deterministic verification and protected live blocked-evidence runner.
-- [ ] Verify every proposed OpenTelemetry package/version against official package metadata, Bun compatibility, and a throwaway Collector fixture before installation; the research seam marks packages beyond `@opentelemetry/api` as `SUS`.
+- [ ] **Plan 07-00 Task 1 — 07-W0-01/02:** create the strict five-row registry plus compile-safe admission and telemetry contract entrypoints; keep every unexecuted behavior pending/non-pass.
+- [ ] **Plan 07-00 Task 2 — 07-W0-03/04:** create compile-safe fault/reference-eval and exact-restore entrypoints with comparator-only expectations and protected-live ownership.
+- [ ] **Plan 07-00 Task 3 — 07-W0-05:** create the promotion-gate entrypoint and fail-closed deterministic/evidence/protected certification command seams.
+- [ ] **Dependent implementation:** Plans 07-01, 07-04, 07-06, 07-07, 07-09, and 07-10 replace the RED/TODO registrations with production-derived behavior and claim-bearing evidence; Wave 0 does not duplicate those implementations.
+- [ ] **Sequenced package gate:** Plans 07-02/03/04 verify, approve, and smoke every proposed OpenTelemetry package/version before installation; the research seam marks packages beyond `@opentelemetry/api` as `SUS`.
 
 ---
 

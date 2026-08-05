@@ -68,8 +68,18 @@ async function evaluateReleaseCertificationInner(
   }));
   const invalid = parsed.find((item) => item.error);
   if (invalid) return blocked(null, invalid.error!);
+  const bindingMatches = (observation: NonNullable<(typeof parsed)[number]["observation"]>): boolean => {
+    const binding = observation.releaseBinding;
+    if (!binding || binding.releaseId !== manifest.releaseId || binding.sourceRevision !== manifest.sourceRevision) return false;
+    return Object.entries(manifest.inputs).every(([key, value]) => binding.inputs[key as keyof typeof binding.inputs] === value)
+      && observation.candidate.image.endsWith(`@sha256:${manifest.inputs.workerImageDigest}`);
+  };
+  if (parsed.some((item) => !bindingMatches(item.observation!))) return blocked(null, "RELEASE_OBSERVATION_BINDING_MISMATCH");
   for (const requirement of manifest.requirements) {
-    const matches = parsed.map((item) => item.observation!).filter((item) => item.status === "passed" && item.claims.includes(requirement.claim) && item.completedAtMs >= input.nowMs - requirement.freshnessMs);
+    const matches = parsed.map((item) => item.observation!).filter((item) => item.status === "passed"
+      && item.claims.includes(requirement.claim)
+      && item.completedAtMs >= input.nowMs - requirement.freshnessMs
+      && (!requirement.live || item.evidenceClass === "protected_live"));
     if (matches.length !== 1) return blocked(requirement.id, matches.length === 0 ? "RELEASE_REQUIRED_CLAIM_MISSING_OR_STALE" : "RELEASE_REQUIRED_CLAIM_AMBIGUOUS");
   }
   return { candidateId: input.candidateId, releaseId: manifest.releaseId, evidenceSha256: input.evidenceSha256, status: "promoted", responsibleRequirement: null, reason: null };

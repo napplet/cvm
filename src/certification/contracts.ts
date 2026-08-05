@@ -25,6 +25,19 @@ export const CertificationInputSchema = z.object({
   command: CommandSchema,
 }).strict();
 
+/** Release-scoped facts are explicit, finite and digest-only. They bind an
+ * observation to every immutable promotion input instead of trusting a claim
+ * supplied by a provider or caller. */
+export const ReleaseObservationBindingSchema = z.object({
+  releaseId: DigestSchema,
+  sourceRevision: z.string().regex(/^[a-f0-9]{40,64}$/iu),
+  inputs: z.object({
+    controlImageDigest: DigestSchema, workerImageDigest: DigestSchema, packageLockSha256: DigestSchema, toolchainSha256: DigestSchema,
+    migrationSha256: DigestSchema, configSha256: DigestSchema, policySha256: DigestSchema, datasetSha256: DigestSchema,
+    goldenSha256: DigestSchema, sbomSha256: DigestSchema, provenanceSha256: DigestSchema,
+  }).strict(),
+}).strict();
+
 export const CertificationClaimSchema = z.string().regex(/^[a-z][a-z0-9_.-]{2,127}$/u);
 const ReasonCodeSchema = z.enum([
   "OBSERVATION_COMPLETE", "CREDENTIALS_UNAVAILABLE", "TOPOLOGY_UNAVAILABLE", "PROVIDER_UNAVAILABLE",
@@ -34,6 +47,7 @@ const ReasonCodeSchema = z.enum([
 
 export const CertificationObservationInputSchema = z.object({
   version: z.literal(1),
+  evidenceClass: z.enum(["deterministic", "protected_live"]).default("deterministic"),
   status: CertificationStatusSchema,
   candidate: WorkerCandidateSchema,
   input: CertificationInputSchema,
@@ -43,10 +57,12 @@ export const CertificationObservationInputSchema = z.object({
   claims: z.array(CertificationClaimSchema).max(32),
   limitations: z.array(SafeIdSchema).max(32),
   reasonCode: ReasonCodeSchema,
+  releaseBinding: ReleaseObservationBindingSchema.optional(),
 }).strict().superRefine((value, context) => {
   if (value.completedAtMs < value.startedAtMs || value.expiresAtMs <= value.completedAtMs) context.addIssue({ code: "custom", message: "observation chronology is invalid" });
   if (new Set(value.claims).size !== value.claims.length || new Set(value.limitations).size !== value.limitations.length) context.addIssue({ code: "custom", message: "observation values must be unique" });
   if (value.status === "passed" ? value.claims.length === 0 : value.claims.length !== 0) context.addIssue({ code: "custom", message: "only passed observations may own claims" });
+  if (value.evidenceClass === "protected_live" && !value.releaseBinding) context.addIssue({ code: "custom", message: "protected live evidence requires a release binding" });
 });
 
 export const CertificationObservationSchema = CertificationObservationInputSchema.extend({ evidenceSha256: DigestSchema }).strict();

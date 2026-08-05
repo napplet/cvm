@@ -65,6 +65,28 @@ export type ReleaseCertificationManifest = {
 export type ReleaseEvidenceRequirement = { readonly id: string; readonly claim: string; readonly freshnessMs: number; readonly live: boolean };
 export type ReleaseWaiver = { readonly class: string; readonly owner: string; readonly reason: string; readonly evidenceSha256: string; readonly expiresAtMs: number; readonly rollbackTrigger: string; readonly affectedIdentity: string };
 
+/** The release gate owns this inventory. Callers may supply freshness windows,
+ * never substitute, omit, or invent the claims that make up a v1 release. */
+export const RELEASE_CLAIM_INVENTORY = Object.freeze([
+  { id: "deterministic-fault-matrix", claim: "release.deterministic_fault_matrix", live: false },
+  { id: "telemetry-policy", claim: "release.telemetry_policy", live: false },
+  { id: "supply-chain", claim: "release.supply_chain", live: false },
+  { id: "admission-slo", claim: "release.admission_slo", live: true },
+  { id: "contextvm-relay", claim: "release.contextvm_relay", live: true },
+  { id: "cep8-lightning", claim: "release.cep8_lightning", live: true },
+  { id: "cashu", claim: "release.cashu", live: true },
+  { id: "model-reconciliation", claim: "release.model_reconciliation", live: true },
+  { id: "worker", claim: "release.worker", live: true },
+  { id: "checkpoint-object", claim: "release.checkpoint_object", live: true },
+  { id: "database-failover", claim: "release.database_failover", live: true },
+  { id: "control-plane", claim: "release.control_plane", live: true },
+  { id: "compatible-host", claim: "release.compatible_host", live: true },
+  { id: "owner-signer", claim: "release.owner_signer", live: true },
+  { id: "promoted-cli", claim: "release.promoted_cli", live: true },
+  { id: "sealed-upload", claim: "release.sealed_upload", live: true },
+  { id: "publication-relay", claim: "release.publication_relay", live: true },
+] as const);
+
 /** D-129: no waiver may weaken these release safety or live-certification gates. */
 export const NON_WAIVABLE_RELEASE_CLASSES = new Set([
   "nip5d-conformance", "sealed-identity", "user-key-custody", "direct-authority-escape", "ledger-double-charge",
@@ -164,7 +186,9 @@ export function parseReleaseCertificationManifest(value: unknown): ReleaseCertif
     return { id: requiredString(entry, "id"), claim: releaseClaim(entry.claim, "release requirement claim"), freshnessMs: freshnessMs as number, live: entry.live };
   });
   if (new Set(requirements.map((item) => item.id)).size !== requirements.length || new Set(requirements.map((item) => item.claim)).size !== requirements.length) throw new Error("release requirement IDs and claims must be unique");
-  if (!requirements.some((item) => item.live) || !requirements.some((item) => !item.live)) throw new Error("release requirements must include deterministic and protected live evidence");
+  if (requirements.length !== RELEASE_CLAIM_INVENTORY.length || requirements.some((item) => !RELEASE_CLAIM_INVENTORY.some((required) => required.id === item.id && required.claim === item.claim && required.live === item.live))) {
+    throw new Error("release requirements must match the closed required-claim inventory");
+  }
   if (!Array.isArray(record.waivers) || !record.waivers.every(isRecord)) throw new Error("release manifest.waivers must be an array");
   const waivers = record.waivers.map((entry) => {
     const waiver = exactRecord(entry, "release waiver", ["class", "owner", "reason", "evidenceSha256", "expiresAtMs", "rollbackTrigger", "affectedIdentity"]);

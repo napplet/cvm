@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { evaluateReleaseCertification } from "../../src/promotion/run-promotion";
-import { parseReleaseCertificationManifest } from "../../src/promotion/schema";
+import { parseReleaseCertificationManifest, RELEASE_CLAIM_INVENTORY } from "../../src/promotion/schema";
 import { writeCertificationObservation } from "../../src/certification/evidence";
 
 const fixturePath = "tests/fixtures/phase-07-reference-set.json";
@@ -44,16 +44,14 @@ const releaseManifest = () => ({
     migrationSha256: digest("6"), configSha256: digest("7"), policySha256: digest("8"), datasetSha256: digest("9"),
     goldenSha256: digest("a"), sbomSha256: digest("b"), provenanceSha256: digest("c"),
   },
-  requirements: [
-    { id: "deterministic", claim: "release.deterministic", freshnessMs: 60_000, live: false },
-    { id: "live", claim: "release.live", freshnessMs: 60_000, live: true },
-  ],
+  requirements: RELEASE_CLAIM_INVENTORY.map((item) => ({ ...item, freshnessMs: 60_000 })),
   waivers: [],
 });
-const observation = (candidateId: string, claim: string, status: "passed" | "blocked" = "passed") => ({
-  version: 1 as const, status, candidate: { id: candidateId, provider: "modal" as const, image: `example/worker@sha256:${"d".repeat(64)}`, sourceSha256: digest("e") },
+const observation = (manifest: ReturnType<typeof releaseManifest>, candidateId: string, claim: string, live: boolean, status: "passed" | "blocked" = "passed") => ({
+  version: 1 as const, evidenceClass: live ? "protected_live" as const : "deterministic" as const, status, candidate: { id: candidateId, provider: "modal" as const, image: `example/worker@sha256:${digest("3")}`, sourceSha256: digest("e") },
   input: { datasetSha256: digest("9"), profileSha256: digest("f"), topologySha256: digest("0"), command: ["certify"] },
   startedAtMs: 1_000, completedAtMs: 1_001, expiresAtMs: 61_001, claims: status === "passed" ? [claim] : [], limitations: status === "passed" ? [] : ["topology-unavailable"], reasonCode: status === "passed" ? "OBSERVATION_COMPLETE" : "TOPOLOGY_UNAVAILABLE",
+  releaseBinding: { releaseId: manifest.releaseId, sourceRevision: manifest.sourceRevision, inputs: manifest.inputs },
 });
 
 test("manifest rejects missing exact release inputs and non-waivable safety waivers", () => {
@@ -63,13 +61,23 @@ test("manifest rejects missing exact release inputs and non-waivable safety waiv
 
 test("evidence blocks stale, cross-candidate, non-pass, and concurrent release promotion decisions", async () => {
   const manifest = parseReleaseCertificationManifest(releaseManifest());
-  const candidateId = digest("d");
-  const valid = await Promise.all(["release.deterministic", "release.live"].map((claim) => writeCertificationObservation("/tmp/napplet-cvm-phase07-gate", observation(candidateId, claim))));
+  const candidateId = digest("f");
+  const rawManifest = releaseManifest();
+  const valid = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation("/tmp/napplet-cvm-phase07-gate", observation(rawManifest, candidateId, requirement.claim, requirement.live))));
   const [first, second] = await Promise.all([evaluateReleaseCertification(manifest, valid, { candidateId, nowMs: 2_000 }), evaluateReleaseCertification(manifest, valid, { candidateId, nowMs: 2_000 })]);
   expect(first).toEqual(second);
   expect(first.status).toBe("promoted");
-  await expect(evaluateReleaseCertification(manifest, [valid[0]!, { ...valid[1]!, candidate: { ...valid[1]!.candidate, id: digest("c") } }], { candidateId, nowMs: 2_000 })).resolves.toMatchObject({ status: "blocked" });
-  await expect(evaluateReleaseCertification(manifest, [valid[0]!, { ...valid[1]!, expiresAtMs: 1_500 }], { candidateId, nowMs: 2_000 })).resolves.toMatchObject({ status: "blocked" });
+  await expect(evaluateReleaseCertification(manifest, [...valid.slice(0, -1), { ...valid.at(-1)!, candidate: { ...valid.at(-1)!.candidate, id: digest("c") } }], { candidateId, nowMs: 2_000 })).resolves.toMatchObject({ status: "blocked" });
+  await expect(evaluateReleaseCertification(manifest, [...valid.slice(0, -1), { ...valid.at(-1)!, expiresAtMs: 1_500 }], { candidateId, nowMs: 2_000 })).resolves.toMatchObject({ status: "blocked" });
+});
+
+test("release evidence rejects arbitrary claims, deterministic live relabels, and mismatched immutable inputs", async () => {
+  expect(() => parseReleaseCertificationManifest({ ...releaseManifest(), requirements: [{ id: "anything", claim: "release.anything", freshnessMs: 60_000, live: true }] })).toThrow("closed required-claim inventory");
+  const rawManifest = releaseManifest();
+  const manifest = parseReleaseCertificationManifest(rawManifest);
+  const candidateId = digest("d");
+  const observations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation("/tmp/napplet-cvm-phase07-gate", observation(rawManifest, candidateId, requirement.claim, false))));
+  await expect(evaluateReleaseCertification(manifest, observations, { candidateId, nowMs: 2_000 })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_REQUIRED_CLAIM_MISSING_OR_STALE" });
 });
 
 test("final candidate verification rejects the deterministic pointer while live certification is blocked", async () => {

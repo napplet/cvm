@@ -23,14 +23,10 @@ async function setup(input: Readonly<{ credited?: boolean; cap: string; nowMs?: 
     principal: { pubkey: "ab".repeat(32) }, kind: "funded_admission", idempotencyKey: "admission", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1",
     payload: { requestedCap: input.cap, unit: "sat", capacity: { usable: true, reference: admissionReference } },
   });
-  const recordedContinuation = new ContinuationService({ store, clock: { nowMs: () => deadlineMs - 1 } });
-  await recordedContinuation.pauseForFunding({ intent: {
-    accountId, sessionId: "session:grace-wake", idempotencyKey: "pause:grace-wake", fingerprint: pendingFingerprint, reference: "pending:grace-wake", actionKind: "revise_session",
-    boundedPayloadHash: "d".repeat(64), expectedSessionVersion: 4, expectedArtifactVersion: 4, policyVersion: "policy:grace-wake", priceCardId: "price:grace-wake", profileId: "profile:grace-wake", toolchainId: "toolchain:grace-wake", actionMaximum: "3250", admissionReference,
-  } });
   await store.transact(accountId, (transaction) => transaction.pauseForFunding({
     accountId, sessionId: "session:grace-wake", admissionReference, idempotencyKey: "pause:grace-wake", fingerprint: "b".repeat(64), pendingFingerprint,
     expectedSessionVersion: 4, pauseGeneration: 1, graceDeadlineMs: deadlineMs, liveLeaseToken,
+    intent: { accountId, sessionId: "session:grace-wake", idempotencyKey: "pause:grace-wake", fingerprint: pendingFingerprint, reference: "pending:grace-wake", actionKind: "revise_session", boundedPayloadHash: "d".repeat(64), expectedSessionVersion: 4, expectedArtifactVersion: 4, policyVersion: "policy:grace-wake", priceCardId: "price:grace-wake", profileId: "profile:grace-wake", toolchainId: "toolchain:grace-wake", actionMaximum: "3250", admissionReference },
     result: { status: "needs_top_up", code: "ACTION_AFFORDABILITY_REQUIRED", accountId, sessionId: "session:grace-wake", pendingActionReference: "pending:grace-wake", pendingActionFingerprint: pendingFingerprint, pendingActionKind: "revise_session", actionMaximum: "3250", requiredAdditionalFunding: "3250", requiredCapApproval: "0", settledBalance: input.cap, availableBalance: "0", remainingCap: input.cap, graceDeadlineMs: deadlineMs, checkpoint: { state: "live_worker", reference: "checkpoint-pending:grace-wake" }, nextRequiredAction: "top_up" },
   }));
   if (input.credited) {

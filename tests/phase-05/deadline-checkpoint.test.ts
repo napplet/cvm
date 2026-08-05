@@ -6,7 +6,7 @@ import { ContinuationService } from "../../src/continuity/continuation-service";
 import { accountIdForPrincipal } from "../../src/domain/account-command";
 import { FundingService } from "../../src/funding/funding-service";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
-import type { CheckpointExportRequest, CheckpointExportResult, CheckpointProposal, CheckpointTerminationRequest, CheckpointTerminationResult, ContinuationWorkerPort, WorkerRunRequest, WorkerRunResult } from "../../src/phase-02/contracts";
+import type { CheckpointExportRequest, CheckpointExportResult, CheckpointFenceRequest, CheckpointFenceResult, CheckpointProposal, CheckpointTerminationRequest, CheckpointTerminationResult, ContinuationWorkerPort, WorkerRunRequest, WorkerRunResult } from "../../src/phase-02/contracts";
 
 const principal = { pubkey: "ab".repeat(32) };
 const deadlineMs = 1_700_000_600_000;
@@ -21,11 +21,13 @@ async function digest(value: Uint8Array | unknown): Promise<string> {
 
 class DeadlineWorker implements ContinuationWorkerPort {
   exports = 0;
+  fences = 0;
   terminations = 0;
   invalid = false;
   terminateFailure = false;
   constructor(private readonly proposal: CheckpointProposal, private readonly onTerminate: () => Promise<void>) {}
   async run(_request: WorkerRunRequest, _signal: AbortSignal): Promise<WorkerRunResult> { throw new Error("deadline reconciliation never runs new worker work"); }
+  async fenceCheckpoint(_request: CheckpointFenceRequest): Promise<CheckpointFenceResult> { this.fences += 1; return { status: "fenced", code: "WORKER_EFFECTS_FENCED" }; }
   async exportCheckpoint(_request: CheckpointExportRequest): Promise<CheckpointExportResult> {
     this.exports += 1;
     return this.invalid ? { status: "denied", code: "WORKER_CONTINUATION_DENIED" } : { status: "exported", code: "WORKER_CHECKPOINT_EXPORTED", proposal: this.proposal };
@@ -45,9 +47,7 @@ async function setup(nowMs = deadlineMs, envelopeOverride?: CheckpointEnvelopeSe
   const funding = new FundingService(store);
   await funding.execute({ principal, kind: "credit_settlement", idempotencyKey: "initial-credit", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { settlement: { topUpId: "initial", rail: "lightning", unit: "sat", amount: "3250", externalReference: "external:initial", settlementReference: "settlement:initial", verifiedAt: "2026-08-05T00:00:00.000Z" } } });
   await funding.execute({ principal, kind: "funded_admission", idempotencyKey: "admission", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "3250", unit: "sat", capacity: { usable: true, reference: "admission:deadline" } } });
-  const continuation = new ContinuationService({ store, clock: { nowMs: () => deadlineMs - 1 } });
-  await continuation.pauseForFunding({ intent: { accountId, sessionId: "session:deadline", idempotencyKey: "pause:deadline", fingerprint: "a".repeat(64), reference: "pending:deadline", actionKind: "revise_session", boundedPayloadHash: "b".repeat(64), expectedSessionVersion: 4, expectedArtifactVersion: 4, policyVersion: "policy:deadline", priceCardId: "price:deadline", profileId: "model:deadline", toolchainId: "toolchain:deadline", actionMaximum: "3250", admissionReference: "admission:deadline" } });
-  await store.transact(accountId, (transaction) => transaction.pauseForFunding({ accountId, sessionId: "session:deadline", admissionReference: "admission:deadline", idempotencyKey: "pause:deadline", fingerprint: "c".repeat(64), pendingFingerprint: "a".repeat(64), expectedSessionVersion: 4, pauseGeneration: 1, graceDeadlineMs: deadlineMs, liveLeaseToken: leaseToken, result: { status: "needs_top_up", code: "ACTION_AFFORDABILITY_REQUIRED", accountId, sessionId: "session:deadline", pendingActionReference: "pending:deadline", pendingActionFingerprint: "a".repeat(64), pendingActionKind: "revise_session", actionMaximum: "3250", requiredAdditionalFunding: "3250", requiredCapApproval: "0", settledBalance: "3250", availableBalance: "0", remainingCap: "3250", graceDeadlineMs: deadlineMs, checkpoint: { state: "live_worker", reference: "checkpoint-pending:deadline" }, nextRequiredAction: "top_up" } }));
+  await store.transact(accountId, (transaction) => transaction.pauseForFunding({ accountId, sessionId: "session:deadline", admissionReference: "admission:deadline", idempotencyKey: "pause:deadline", fingerprint: "c".repeat(64), pendingFingerprint: "a".repeat(64), expectedSessionVersion: 4, pauseGeneration: 1, graceDeadlineMs: deadlineMs, liveLeaseToken: leaseToken, intent: { accountId, sessionId: "session:deadline", idempotencyKey: "pause:deadline", fingerprint: "a".repeat(64), reference: "pending:deadline", actionKind: "revise_session", boundedPayloadHash: "b".repeat(64), expectedSessionVersion: 4, expectedArtifactVersion: 4, policyVersion: "policy:deadline", priceCardId: "price:deadline", profileId: "model:deadline", toolchainId: "toolchain:deadline", actionMaximum: "3250", admissionReference: "admission:deadline" }, result: { status: "needs_top_up", code: "ACTION_AFFORDABILITY_REQUIRED", accountId, sessionId: "session:deadline", pendingActionReference: "pending:deadline", pendingActionFingerprint: "a".repeat(64), pendingActionKind: "revise_session", actionMaximum: "3250", requiredAdditionalFunding: "3250", requiredCapApproval: "0", settledBalance: "3250", availableBalance: "0", remainingCap: "3250", graceDeadlineMs: deadlineMs, checkpoint: { state: "live_worker", reference: "checkpoint-pending:deadline" }, nextRequiredAction: "top_up" } }));
   const archive = new TextEncoder().encode("complete durable workspace");
   const proposal: CheckpointProposal = { sessionId: "session:deadline", actionId: "action:pending:deadline", expectedVersion: 4, policyVersion: "policy:deadline", capabilityGrant: "phase-05-continuation-grant", workspaceId: "workspace:session:deadline", checkpointId: "checkpoint:deadline", formatVersion: "portable-checkpoint-v1", inventory, archiveBase64: Buffer.from(archive).toString("base64"), archiveSha256: await digest(archive), evidenceSha256: await digest({ evidence: "checkpoint" }), inventorySha256: await digest(inventory) };
   let pauseAfterTermination: unknown;
@@ -67,6 +67,7 @@ describe("fixed-deadline checkpoint reconciliation", () => {
 
     const at = await setup();
     await expect(at.reconciler.scan()).resolves.toMatchObject([{ status: "checkpointed", checkpointId: "checkpoint:deadline" }]);
+    expect(at.worker.fences).toBe(1);
     expect(at.worker.exports).toBe(1);
     expect(at.worker.terminations).toBe(1);
     expect(at.objects.entries()).toHaveLength(1);

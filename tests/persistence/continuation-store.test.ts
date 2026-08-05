@@ -13,6 +13,7 @@ const pause = (overrides: Partial<ContinuationPauseInput> = {}): ContinuationPau
   pauseGeneration: 1,
   graceDeadlineMs: 1_600,
   liveLeaseToken: "lease:live",
+  intent: { accountId, sessionId: "session:one", idempotencyKey: "pause:one", fingerprint: "b".repeat(64), reference: "pending:one", actionKind: "revise_session", boundedPayloadHash: "f".repeat(64), expectedSessionVersion: 3, expectedArtifactVersion: 2, policyVersion: "policy:one", priceCardId: "price:one", profileId: "profile:one", toolchainId: "toolchain:one", actionMaximum: "5", admissionReference: "admission:one" },
   result: { status: "needs_top_up", code: "ACTION_AFFORDABILITY_REQUIRED", accountId, sessionId: "session:one", pendingActionReference: "pending:one", pendingActionFingerprint: "b".repeat(64), pendingActionKind: "revise_session", actionMaximum: "5", requiredAdditionalFunding: "1", requiredCapApproval: "0", settledBalance: "0", availableBalance: "0", remainingCap: "5", graceDeadlineMs: 1_600, checkpoint: { state: "live_worker", reference: "lease:live" }, nextRequiredAction: "top_up" },
   ...overrides,
 });

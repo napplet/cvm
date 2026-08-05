@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS continuation_pauses (
   pending_fingerprint_sha256 char(64) NOT NULL,
   pause_generation integer NOT NULL CHECK (pause_generation > 0),
   expected_session_version integer NOT NULL CHECK (expected_session_version >= 0),
+  intent_json jsonb NOT NULL,
   grace_deadline_ms bigint NOT NULL,
   live_lease_token text,
   state text NOT NULL CHECK (state IN ('needs_top_up','checkpointing','resume_required','claimed','expired')),
@@ -19,6 +20,7 @@ CREATE TABLE IF NOT EXISTS continuation_pauses (
   created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (account_id, idempotency_key),
   UNIQUE (account_id, session_id, pause_generation),
+  CHECK (intent_json ?& ARRAY['accountId','sessionId','idempotencyKey','fingerprint','reference','actionKind','boundedPayloadHash','expectedSessionVersion','expectedArtifactVersion','policyVersion','priceCardId','profileId','toolchainId','actionMaximum','admissionReference']),
   CHECK ((state IN ('needs_top_up','checkpointing')) = (live_lease_token IS NOT NULL))
 );
 

@@ -21,6 +21,7 @@ async function digest(value: unknown): Promise<string> {
 class ResumeWorker implements ContinuationWorkerPort {
   restores = 0;
   async run(_request: WorkerRunRequest, _signal: AbortSignal): Promise<WorkerRunResult> { throw new Error("resume does not run new worker work"); }
+  async fenceCheckpoint(): Promise<never> { throw new Error("not used"); }
   async exportCheckpoint(): Promise<never> { throw new Error("not used"); }
   async terminateCheckpoint(): Promise<never> { throw new Error("not used"); }
   async restoreCheckpoint(_request: CheckpointRestoreRequest): Promise<CheckpointRestoreResult> {
@@ -42,15 +43,11 @@ async function setup(input: Readonly<{ topUp?: boolean; compatible?: boolean }> 
     payload: { requestedCap: "3250", unit: "sat", capacity: { usable: true, reference: admissionReference } },
   });
 
-  const pause = new ContinuationService({ store, clock: { nowMs: () => nowMs - 1 } });
-  await pause.pauseForFunding({ intent: {
-    accountId, sessionId: "session:resume", idempotencyKey: "pause:resume", fingerprint: pendingFingerprint, reference: "pending:resume", actionKind: "revise_session",
-    boundedPayloadHash: "b".repeat(64), expectedSessionVersion: 4, expectedArtifactVersion: 4, policyVersion: "policy:resume", priceCardId: "price:resume", profileId: "model:resume", toolchainId: "toolchain:resume", actionMaximum: "3250", admissionReference,
-  } });
   await store.transact(accountId, async (transaction) => {
     await transaction.pauseForFunding({
       accountId, sessionId: "session:resume", admissionReference, idempotencyKey: "pause:resume", fingerprint: "c".repeat(64), pendingFingerprint,
       expectedSessionVersion: 4, pauseGeneration: 1, graceDeadlineMs: nowMs - 1, liveLeaseToken: "lease:old",
+      intent: { accountId, sessionId: "session:resume", idempotencyKey: "pause:resume", fingerprint: pendingFingerprint, reference: "pending:resume", actionKind: "revise_session", boundedPayloadHash: "b".repeat(64), expectedSessionVersion: 4, expectedArtifactVersion: 4, policyVersion: "policy:resume", priceCardId: "price:resume", profileId: "model:resume", toolchainId: "toolchain:resume", actionMaximum: "3250", admissionReference },
       result: { status: "needs_top_up", code: "ACTION_AFFORDABILITY_REQUIRED", accountId, sessionId: "session:resume", pendingActionReference: "pending:resume", pendingActionFingerprint: pendingFingerprint, pendingActionKind: "revise_session", actionMaximum: "3250", requiredAdditionalFunding: "3250", requiredCapApproval: "0", settledBalance: "3250", availableBalance: "0", remainingCap: "3250", graceDeadlineMs: nowMs - 1, checkpoint: { state: "live_worker", reference: "checkpoint-pending:resume" }, nextRequiredAction: "top_up" },
     });
     await transaction.beginDeadlineCheckpoint({ sessionId: "session:resume", pauseGeneration: 1, liveLeaseToken: "lease:old" });

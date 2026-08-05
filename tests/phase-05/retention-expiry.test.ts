@@ -17,6 +17,7 @@ async function fixture(nowMs: number, options: Readonly<{ failDelete?: boolean }
     accountId, sessionId: "session:retention", admissionReference: "admission:retention", idempotencyKey: "pause:retention",
     fingerprint: "a".repeat(64), pendingFingerprint: "b".repeat(64), expectedSessionVersion: 2, pauseGeneration: 1,
     graceDeadlineMs: committedAtMs - 1, liveLeaseToken: "lease:retention",
+    intent: { accountId, sessionId: "session:retention", idempotencyKey: "pause:retention", fingerprint: "b".repeat(64), reference: "pending:retention", actionKind: "revise_session", boundedPayloadHash: "d".repeat(64), expectedSessionVersion: 2, expectedArtifactVersion: 1, policyVersion: "policy:retention", priceCardId: "price:retention", profileId: "profile:retention", toolchainId: "toolchain:retention", actionMaximum: "5", admissionReference: "admission:retention" },
     result: { status: "needs_top_up", code: "ACTION_AFFORDABILITY_REQUIRED", accountId, sessionId: "session:retention", pendingActionReference: "pending:retention", pendingActionFingerprint: "b".repeat(64), pendingActionKind: "revise_session", actionMaximum: "5", requiredAdditionalFunding: "5", requiredCapApproval: "0", settledBalance: "0", availableBalance: "0", remainingCap: "5", graceDeadlineMs: committedAtMs - 1, checkpoint: { state: "live_worker", reference: "checkpoint-pending:retention" }, nextRequiredAction: "top_up" },
   }));
   await store.transact(accountId, async (transaction) => {

@@ -60,7 +60,10 @@ export class MeteredGenerationService {
     if (typeof continuationStore.findContinuation !== "function") throw new Error("CONTINUATION_STORE_UNAVAILABLE");
     const continuation = this.options.continuation ?? new ContinuationService({ store: continuationStore as ContinuationFundingStore, ...(this.options.clock ? { clock: this.options.clock } : {}) });
     const result = await continuation.wakePausedAction(input);
-    if (result.status === "continued" && this.options.continuationWake && result.pendingActionReference && result.actionBudgetReference && result.leaseToken) {
+    // A prior coordinator may have crashed after durably reserving the wake
+    // budget.  Replay re-delivers the same fenced intent rather than stranding
+    // it; the continuation dispatcher must treat this tuple idempotently.
+    if ((result.status === "continued" || result.status === "replayed") && this.options.continuationWake && result.pendingActionReference && result.actionBudgetReference && result.leaseToken) {
       await this.options.continuationWake.continueAction({ pendingActionReference: result.pendingActionReference, actionBudgetReference: result.actionBudgetReference, liveLeaseToken: result.leaseToken });
     }
     return result;

@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 7
 current_phase_name: Admission SLO, Resilience & Launch Safety
 status: planned
-stopped_at: Completed 07-14-PLAN.md
-last_updated: "2026-08-05T20:23:43.933Z"
+stopped_at: Completed 07-15-PLAN.md
+last_updated: "2026-08-05T20:33:17.115Z"
 last_activity: 2026-08-05
 last_activity_desc: Security audit identified canonical admission and release supply-chain gaps
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 57
-  completed_plans: 55
+  completed_plans: 56
   percent: 86
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 7 — Admission SLO, Resilience & Launch Safety
-Plan: 15 of 17
+Plan: 16 of 17
 Status: Security gap closure planned
 Last activity: 2026-08-05 — Security audit identified canonical admission and release supply-chain gaps
 
@@ -120,6 +120,7 @@ Plan execution: [██████████] 100%; Phase verification remain
 | Phase 07-admission-slo-resilience-launch-safety P12 | 3 min | 3 tasks | 7 files |
 | Phase 07 P13 | 10 min | 1 tasks | 2 files |
 | Phase 07 P14 | 5m | 2 tasks | 6 files |
+| Phase 07-admission-slo-resilience-launch-safety P15 | 7m 11s | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -233,6 +234,9 @@ Recent decisions affecting current work:
 - [Phase ?]: Admission correlation hashes canonical invocation, verified principal, event identity, and RPC request identity before receipt authority is issued.
 - [Phase ?]: Funded-admission notifications and RPC responses share a finite explicit projection rather than any result spread.
 - [Phase ?]: T-07-W0-05 remains pending_owner_acceptance and cannot waive launch, SLO, or security gates.
+- [Phase ?]: Two protected build observations must have distinct isolation and run identities, exact release bindings, and one matching artifact digest.
+- [Phase ?]: Cosign provides signature verification; the verifier only hashes the pinned executable, constructs closed argv, and parses the verified attestation payload.
+- [Phase ?]: Persisted reproducibility and supply-chain records contain only finite hashes and status facts, never raw identities, paths, documents, or command output.
 
 ### Pending Todos
 
@@ -254,6 +258,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T20:23:43.924Z
-Stopped at: Completed 07-14-PLAN.md
+Last session: 2026-08-05T20:33:17.106Z
+Stopped at: Completed 07-15-PLAN.md
 Resume file: None

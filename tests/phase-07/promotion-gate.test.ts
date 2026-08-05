@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { evaluateReleaseCertification } from "../../src/promotion/run-promotion";
 import { verifyReleaseCertificationInput } from "../../src/promotion/candidate";
-import { parseReleaseCertificationManifest, RELEASE_CLAIM_INVENTORY } from "../../src/promotion/schema";
+import { canonicalJson, parseReleaseCertificationManifest, RELEASE_CLAIM_INVENTORY } from "../../src/promotion/schema";
 import { writeCertificationObservation } from "../../src/certification/evidence";
 
 const fixturePath = "tests/fixtures/phase-07-reference-set.json";
@@ -37,6 +37,11 @@ test("blocked protected preflight emits not_observed-safe records without a rele
 
 
 const digest = (value: string) => value.repeat(64).slice(0, 64);
+async function sha256(value: unknown): Promise<string> {
+  const bytes = new TextEncoder().encode(canonicalJson(value));
+  const hash = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 const releaseManifest = () => ({
   version: 1,
   sourceRevision: "a".repeat(40),
@@ -56,6 +61,30 @@ const observation = (manifest: ReturnType<typeof releaseManifest>, candidateId: 
   releaseBinding: { releaseId: manifest.releaseId, sourceRevision: manifest.sourceRevision, inputs: manifest.inputs },
 });
 
+async function protectedVerificationRecords(manifest: ReturnType<typeof releaseManifest>, candidateId: string, atMs = 1_000) {
+  const releaseBindingSha256 = await sha256({ releaseId: manifest.releaseId, sourceRevision: manifest.sourceRevision, inputs: manifest.inputs });
+  const reproducibilityBase = {
+    version: 1 as const, evidenceClass: "protected_live" as const, status: "verified" as const, candidateId,
+    releaseBindingSha256, expectedArtifactSha256: manifest.inputs.workerImageDigest,
+    buildEvidenceSha256: [digest("a"), digest("b")], isolationIdentitySha256: [digest("c"), digest("d")], runIdentitySha256: [digest("e"), digest("f")], completedAtMs: atMs,
+  };
+  const reproducibilityEvidenceSha256 = await sha256(reproducibilityBase);
+  const supplyChainBase = {
+    version: 1 as const, evidenceClass: "protected_live" as const, status: "verified" as const, candidateId, artifactSha256: manifest.inputs.workerImageDigest,
+    releaseBindingSha256, cosignExecutableSha256: digest("0"), cosignCommandSha256: digest("1"), signerIdentitySha256: digest("2"), issuerSha256: digest("3"),
+    predicateType: "https://slsa.dev/provenance/v1" as const, sbomSha256: manifest.inputs.sbomSha256, provenanceSha256: manifest.inputs.provenanceSha256, reviewedComponentsSha256: digest("4"), verifiedAtMs: atMs,
+  };
+  const supplyChainEvidenceSha256 = await sha256(supplyChainBase);
+  return {
+    reproducibility: { ...reproducibilityBase, evidenceSha256: reproducibilityEvidenceSha256, contentAddressedPath: `evidence/certification/reproducibility/${reproducibilityEvidenceSha256}.json` },
+    supplyChain: { ...supplyChainBase, evidenceSha256: supplyChainEvidenceSha256, contentAddressedPath: `evidence/certification/supply-chain/${supplyChainEvidenceSha256}.json` },
+  };
+}
+
+function bindSupplyChainObservation<T extends ReturnType<typeof observation>>(value: T, records: Awaited<ReturnType<typeof protectedVerificationRecords>>): T {
+  return value.claims.includes("release.supply_chain") ? { ...value, verificationDigests: { reproducibilityEvidenceSha256: records.reproducibility.evidenceSha256, supplyChainEvidenceSha256: records.supplyChain.evidenceSha256 } } as T : value;
+}
+
 test("manifest rejects missing exact release inputs and non-waivable safety waivers", () => {
   expect(() => parseReleaseCertificationManifest({ ...releaseManifest(), inputs: { ...releaseManifest().inputs, goldenSha256: "latest" } })).toThrow();
   expect(() => parseReleaseCertificationManifest({ ...releaseManifest(), waivers: [{ class: "user-key-custody", owner: "owner", reason: "no", evidenceSha256: digest("f"), expiresAtMs: 2_000, rollbackTrigger: "rollback", affectedIdentity: digest("1") }] })).toThrow();
@@ -65,12 +94,13 @@ test("evidence blocks stale, cross-candidate, non-pass, and concurrent release p
   const manifest = parseReleaseCertificationManifest(releaseManifest());
   const candidateId = digest("f");
   const rawManifest = releaseManifest();
-  const valid = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation("/tmp/napplet-cvm-phase07-gate", observation(rawManifest, candidateId, requirement.claim, requirement.live))));
-  const [first, second] = await Promise.all([evaluateReleaseCertification(manifest, valid, { candidateId, nowMs: 2_000 }), evaluateReleaseCertification(manifest, valid, { candidateId, nowMs: 2_000 })]);
+  const records = await protectedVerificationRecords(rawManifest, candidateId);
+  const valid = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation("/tmp/napplet-cvm-phase07-gate", bindSupplyChainObservation(observation(rawManifest, candidateId, requirement.claim, requirement.live), records))));
+  const [first, second] = await Promise.all([evaluateReleaseCertification(manifest, valid, { candidateId, nowMs: 2_000, verificationRecords: records }), evaluateReleaseCertification(manifest, valid, { candidateId, nowMs: 2_000, verificationRecords: records })]);
   expect(first).toEqual(second);
   expect(first.status).toBe("promoted");
-  await expect(evaluateReleaseCertification(manifest, [...valid.slice(0, -1), { ...valid.at(-1)!, candidate: { ...valid.at(-1)!.candidate, id: digest("c") } }], { candidateId, nowMs: 2_000 })).resolves.toMatchObject({ status: "blocked" });
-  await expect(evaluateReleaseCertification(manifest, [...valid.slice(0, -1), { ...valid.at(-1)!, expiresAtMs: 1_500 }], { candidateId, nowMs: 2_000 })).resolves.toMatchObject({ status: "blocked" });
+  await expect(evaluateReleaseCertification(manifest, [...valid.slice(0, -1), { ...valid.at(-1)!, candidate: { ...valid.at(-1)!.candidate, id: digest("c") } }], { candidateId, nowMs: 2_000, verificationRecords: records })).resolves.toMatchObject({ status: "blocked" });
+  await expect(evaluateReleaseCertification(manifest, [...valid.slice(0, -1), { ...valid.at(-1)!, expiresAtMs: 1_500 }], { candidateId, nowMs: 2_000, verificationRecords: records })).resolves.toMatchObject({ status: "blocked" });
 });
 
 test("the sole evaluator blocks complete generic claim inventory when protected verification records are absent", async () => {
@@ -81,13 +111,28 @@ test("the sole evaluator blocks complete generic claim inventory when protected 
   await expect(evaluateReleaseCertification(manifest, observations, { candidateId, nowMs: 2_000 })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_VERIFICATION_RECORDS_REQUIRED" });
 });
 
+test("the sole evaluator rejects deterministic, stale, and swapped protected verification records", async () => {
+  const rawManifest = releaseManifest(); const manifest = parseReleaseCertificationManifest(rawManifest);
+  const candidateId = digest("5"); const records = await protectedVerificationRecords(rawManifest, candidateId);
+  const observations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation(`/tmp/napplet-cvm-phase07-record-mutations-${crypto.randomUUID()}`, bindSupplyChainObservation(observation(rawManifest, candidateId, requirement.claim, requirement.live), records))));
+  const variants = [
+    { reproducibility: { ...records.reproducibility, evidenceClass: "deterministic" }, supplyChain: records.supplyChain },
+    { reproducibility: records.reproducibility, supplyChain: { ...records.supplyChain, candidateId: digest("6") } },
+  ];
+  for (const verificationRecords of variants) await expect(evaluateReleaseCertification(manifest, observations, { candidateId, nowMs: 2_000, verificationRecords })).resolves.toMatchObject({ status: "blocked" });
+  const staleCandidateId = digest("e"); const stale = await protectedVerificationRecords(rawManifest, staleCandidateId, 0);
+  const staleObservations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation(`/tmp/napplet-cvm-phase07-record-stale-${crypto.randomUUID()}`, bindSupplyChainObservation(observation(rawManifest, staleCandidateId, requirement.claim, requirement.live), stale))));
+  await expect(evaluateReleaseCertification(manifest, staleObservations, { candidateId: staleCandidateId, nowMs: 86_400_002, verificationRecords: stale })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_VERIFICATION_RECORDS_INVALID" });
+});
+
 test("release evidence rejects arbitrary claims, deterministic live relabels, and mismatched immutable inputs", async () => {
   expect(() => parseReleaseCertificationManifest({ ...releaseManifest(), requirements: [{ id: "anything", claim: "release.anything", freshnessMs: 60_000, live: true }] })).toThrow("closed required-claim inventory");
   const rawManifest = releaseManifest();
   const manifest = parseReleaseCertificationManifest(rawManifest);
   const candidateId = digest("d");
-  const observations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation("/tmp/napplet-cvm-phase07-gate", observation(rawManifest, candidateId, requirement.claim, false))));
-  await expect(evaluateReleaseCertification(manifest, observations, { candidateId, nowMs: 2_000 })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_REQUIRED_CLAIM_MISSING_OR_STALE" });
+  const records = await protectedVerificationRecords(rawManifest, candidateId);
+  const observations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation("/tmp/napplet-cvm-phase07-gate", bindSupplyChainObservation(observation(rawManifest, candidateId, requirement.claim, false), records))));
+  await expect(evaluateReleaseCertification(manifest, observations, { candidateId, nowMs: 2_000, verificationRecords: records })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_REQUIRED_CLAIM_MISSING_OR_STALE" });
 });
 
 test("final candidate verification rejects the deterministic pointer while live certification is blocked", async () => {
@@ -104,13 +149,16 @@ test("candidate verification reports promoted release evidence as a successful p
     const candidateId = digest("8");
     const now = Date.now();
     const observationDirectory = join(root, "observations");
+    const verification = await protectedVerificationRecords(rawManifest, candidateId, now - 1_000);
     const observations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation(observationDirectory, {
-      ...observation(rawManifest, candidateId, requirement.claim, requirement.live),
+      ...bindSupplyChainObservation(observation(rawManifest, candidateId, requirement.claim, requirement.live), verification),
       startedAtMs: now - 2_000,
       completedAtMs: now - 1_000,
       expiresAtMs: now + 60_000,
     })));
     const deterministic = await Bun.file("evidence/design/phase-07.json").json() as { contentAddressedPath: string; evidenceSha256: string };
+    const reproducibilityPath = join(root, "reproducibility.json"); const supplyChainPath = join(root, "supply-chain.json");
+    await writeFile(reproducibilityPath, JSON.stringify(verification.reproducibility), "utf8"); await writeFile(supplyChainPath, JSON.stringify(verification.supplyChain), "utf8");
     const releasePath = join(root, "release.json");
     const release = {
       version: 1,
@@ -121,6 +169,10 @@ test("candidate verification reports promoted release evidence as a successful p
         contentAddressedPath: relative(process.cwd(), join(observationDirectory, `${entry.evidenceSha256}.json`)),
         evidenceSha256: entry.evidenceSha256,
       })),
+      verificationRecords: {
+        reproducibilityEvidence: { contentAddressedPath: relative(process.cwd(), reproducibilityPath), evidenceSha256: verification.reproducibility.evidenceSha256 },
+        supplyChainEvidence: { contentAddressedPath: relative(process.cwd(), supplyChainPath), evidenceSha256: verification.supplyChain.evidenceSha256 },
+      },
     };
     await writeFile(releasePath, JSON.stringify(release), "utf8");
     const runCandidateVerify = async () => {
@@ -145,23 +197,26 @@ test("candidate verification reports promoted release evidence as a successful p
 test("release evidence input uses the sole evaluator for one exact complete candidate-bound bundle", async () => {
   const rawManifest = releaseManifest();
   const candidateId = digest("8");
-  const observations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation(`/tmp/napplet-cvm-phase07-cli-${crypto.randomUUID()}`, observation(rawManifest, candidateId, requirement.claim, requirement.live))));
+  const verification = await protectedVerificationRecords(rawManifest, candidateId);
+  const observations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation(`/tmp/napplet-cvm-phase07-cli-${crypto.randomUUID()}`, bindSupplyChainObservation(observation(rawManifest, candidateId, requirement.claim, requirement.live), verification))));
   const pointer = await Bun.file("evidence/design/phase-07.json").json() as { contentAddressedPath: string; evidenceSha256: string };
   const deterministic = await Bun.file(pointer.contentAddressedPath).json();
   const observationPointers = observations.map((item) => ({ contentAddressedPath: `evidence/certification/test/${item.evidenceSha256}.json`, evidenceSha256: item.evidenceSha256 }));
   const result = await verifyReleaseCertificationInput({
     version: 1, candidateId, releaseManifest: rawManifest,
     deterministicEvidence: { contentAddressedPath: pointer.contentAddressedPath, evidenceSha256: pointer.evidenceSha256 }, protectedObservations: observationPointers,
-  }, { nowMs: 2_000, loadDeterministic: async () => deterministic, loadObservation: async (entry) => observations.find((item) => item.evidenceSha256 === entry.evidenceSha256) });
+    verificationRecords: { reproducibilityEvidence: { contentAddressedPath: "evidence/certification/test/reproducibility.json", evidenceSha256: verification.reproducibility.evidenceSha256 }, supplyChainEvidence: { contentAddressedPath: "evidence/certification/test/supply-chain.json", evidenceSha256: verification.supplyChain.evidenceSha256 } },
+  }, { nowMs: 2_000, loadDeterministic: async () => deterministic, loadObservation: async (entry) => observations.find((item) => item.evidenceSha256 === entry.evidenceSha256), loadVerificationRecord: async (entry) => entry.evidenceSha256 === verification.reproducibility.evidenceSha256 ? verification.reproducibility : verification.supplyChain });
   expect(result).toMatchObject({ status: "promoted" });
 });
 
 test("release evidence input rejects replacement pointers and extra claim ownership before promotion", async () => {
   const rawManifest = releaseManifest(); const candidateId = digest("7");
-  const records = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation(`/tmp/napplet-cvm-phase07-cli-${crypto.randomUUID()}`, observation(rawManifest, candidateId, requirement.claim, requirement.live))));
+  const verification = await protectedVerificationRecords(rawManifest, candidateId);
+  const records = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation(`/tmp/napplet-cvm-phase07-cli-${crypto.randomUUID()}`, bindSupplyChainObservation(observation(rawManifest, candidateId, requirement.claim, requirement.live), verification))));
   const pointer = await Bun.file("evidence/design/phase-07.json").json() as { contentAddressedPath: string; evidenceSha256: string };
   const deterministic = await Bun.file(pointer.contentAddressedPath).json();
   const entries = records.map((record) => ({ contentAddressedPath: `evidence/certification/test/${record.evidenceSha256}.json`, evidenceSha256: record.evidenceSha256 }));
-  const result = await verifyReleaseCertificationInput({ version: 1, candidateId, releaseManifest: rawManifest, deterministicEvidence: { contentAddressedPath: pointer.contentAddressedPath, evidenceSha256: pointer.evidenceSha256 }, protectedObservations: entries }, { nowMs: 2_000, loadDeterministic: async () => deterministic, loadObservation: async (entry) => ({ ...records.find((record) => record.evidenceSha256 === entry.evidenceSha256)!, claims: entry.evidenceSha256 === entries[0]!.evidenceSha256 ? ["release.admission_slo", "release.worker"] : records.find((record) => record.evidenceSha256 === entry.evidenceSha256)!.claims }) });
+  const result = await verifyReleaseCertificationInput({ version: 1, candidateId, releaseManifest: rawManifest, deterministicEvidence: { contentAddressedPath: pointer.contentAddressedPath, evidenceSha256: pointer.evidenceSha256 }, protectedObservations: entries, verificationRecords: { reproducibilityEvidence: { contentAddressedPath: "evidence/certification/test/reproducibility.json", evidenceSha256: verification.reproducibility.evidenceSha256 }, supplyChainEvidence: { contentAddressedPath: "evidence/certification/test/supply-chain.json", evidenceSha256: verification.supplyChain.evidenceSha256 } } }, { nowMs: 2_000, loadDeterministic: async () => deterministic, loadObservation: async (entry) => ({ ...records.find((record) => record.evidenceSha256 === entry.evidenceSha256)!, claims: entry.evidenceSha256 === entries[0]!.evidenceSha256 ? ["release.admission_slo", "release.worker"] : records.find((record) => record.evidenceSha256 === entry.evidenceSha256)!.claims }), loadVerificationRecord: async (entry) => entry.evidenceSha256 === verification.reproducibility.evidenceSha256 ? verification.reproducibility : verification.supplyChain });
   expect(result).toMatchObject({ status: "blocked", reason: "RELEASE_EVIDENCE_INVALID" });
 });

@@ -1,6 +1,6 @@
 import { canonicalJson, parseReleaseCertificationManifest, type ReleaseCertificationManifest } from "./schema";
 import { validateCertificationObservation, validatePhase07DesignEvidence } from "../certification/evidence";
-import { evaluateReleaseCertification, type ReleaseCertificationDecision } from "./run-promotion";
+import { evaluateReleaseCertification, type ReleaseCertificationDecision, type ReleaseVerificationRecords } from "./run-promotion";
 
 export type CandidateReadinessStatus = "unverified" | "review_ready" | "quarantined";
 
@@ -257,7 +257,7 @@ export async function verifyCandidateReviewReadiness(value: unknown): Promise<Ca
 type CandidateCliArguments = { readonly mode: "review"; readonly path: string; readonly reviewReady: boolean } | { readonly mode: "release-evidence"; readonly path: string };
 
 type ReleaseEvidencePointer = Readonly<{ contentAddressedPath: string; evidenceSha256: string }>;
-type ReleaseCertificationInput = Readonly<{ version: 1; candidateId: string; releaseManifest: ReleaseCertificationManifest; deterministicEvidence: ReleaseEvidencePointer; protectedObservations: readonly ReleaseEvidencePointer[] }>;
+type ReleaseCertificationInput = Readonly<{ version: 1; candidateId: string; releaseManifest: ReleaseCertificationManifest; deterministicEvidence: ReleaseEvidencePointer; protectedObservations: readonly ReleaseEvidencePointer[]; verificationRecords: Readonly<{ reproducibilityEvidence: ReleaseEvidencePointer; supplyChainEvidence: ReleaseEvidencePointer }> }>;
 
 function exactReleaseRecord(value: unknown, keys: readonly string[]): Record<string, unknown> {
   if (!isRecord(value) || Object.keys(value).length !== keys.length || keys.some((key) => !(key in value))) throw new Error("RELEASE_INPUT_INVALID");
@@ -273,11 +273,15 @@ function parseEvidencePointer(value: unknown): ReleaseEvidencePointer {
  * Evidence names are explicit pointers; it has no directory enumeration or
  * fallback discovery authority. */
 export function parseReleaseCertificationInput(value: unknown): ReleaseCertificationInput {
-  const record = exactReleaseRecord(value, ["version", "candidateId", "releaseManifest", "deterministicEvidence", "protectedObservations"]);
+  const record = exactReleaseRecord(value, ["version", "candidateId", "releaseManifest", "deterministicEvidence", "protectedObservations", "verificationRecords"]);
   if (record.version !== 1 || typeof record.candidateId !== "string" || !SHA256.test(record.candidateId) || !Array.isArray(record.protectedObservations) || record.protectedObservations.length === 0) throw new Error("RELEASE_INPUT_INVALID");
   const protectedObservations = record.protectedObservations.map(parseEvidencePointer);
   if (new Set(protectedObservations.map((item) => item.contentAddressedPath)).size !== protectedObservations.length || new Set(protectedObservations.map((item) => item.evidenceSha256)).size !== protectedObservations.length) throw new Error("RELEASE_INPUT_INVALID");
-  return { version: 1, candidateId: record.candidateId.toLowerCase(), releaseManifest: parseReleaseCertificationManifest(record.releaseManifest), deterministicEvidence: parseEvidencePointer(record.deterministicEvidence), protectedObservations };
+  const verificationRecords = exactReleaseRecord(record.verificationRecords, ["reproducibilityEvidence", "supplyChainEvidence"]);
+  const reproducibilityEvidence = parseEvidencePointer(verificationRecords.reproducibilityEvidence);
+  const supplyChainEvidence = parseEvidencePointer(verificationRecords.supplyChainEvidence);
+  if (reproducibilityEvidence.evidenceSha256 === supplyChainEvidence.evidenceSha256 || reproducibilityEvidence.contentAddressedPath === supplyChainEvidence.contentAddressedPath) throw new Error("RELEASE_INPUT_INVALID");
+  return { version: 1, candidateId: record.candidateId.toLowerCase(), releaseManifest: parseReleaseCertificationManifest(record.releaseManifest), deterministicEvidence: parseEvidencePointer(record.deterministicEvidence), protectedObservations, verificationRecords: { reproducibilityEvidence, supplyChainEvidence } };
 }
 
 function blockedReleaseDecision(candidateId: string, manifest: ReleaseCertificationManifest, reason: string): ReleaseCertificationDecision {
@@ -287,7 +291,7 @@ function blockedReleaseDecision(candidateId: string, manifest: ReleaseCertificat
 /** Validates deterministic provenance and the closed, explicitly named
  * observation inventory, then delegates the only promoted/blocked decision to
  * evaluateReleaseCertification exactly once. */
-export async function verifyReleaseCertificationInput(value: unknown, options: Readonly<{ nowMs?: number; loadDeterministic: (pointer: ReleaseEvidencePointer) => Promise<unknown>; loadObservation: (pointer: ReleaseEvidencePointer) => Promise<unknown> }>): Promise<ReleaseCertificationDecision> {
+export async function verifyReleaseCertificationInput(value: unknown, options: Readonly<{ nowMs?: number; loadDeterministic: (pointer: ReleaseEvidencePointer) => Promise<unknown>; loadObservation: (pointer: ReleaseEvidencePointer) => Promise<unknown>; loadVerificationRecord: (pointer: ReleaseEvidencePointer) => Promise<unknown> }>): Promise<ReleaseCertificationDecision> {
   let input: ReleaseCertificationInput;
   try { input = parseReleaseCertificationInput(value); }
   catch { return { candidateId: "0".repeat(64), releaseId: "0".repeat(64), evidenceSha256: "0".repeat(64), status: "blocked", responsibleRequirement: null, reason: "RELEASE_INPUT_INVALID" }; }
@@ -299,7 +303,15 @@ export async function verifyReleaseCertificationInput(value: unknown, options: R
     const parsedObservations = await Promise.all(observations.map((observation) => validateCertificationObservation(observation)));
     const allowedClaims = new Set(input.releaseManifest.requirements.map((requirement) => requirement.claim));
     if (parsedObservations.some((observation, index) => observation.evidenceSha256 !== input.protectedObservations[index]!.evidenceSha256 || (observation.status === "passed" && (observation.claims.length !== 1 || !allowedClaims.has(observation.claims[0]!))))) return blockedReleaseDecision(input.candidateId, input.releaseManifest, "RELEASE_OBSERVATION_INVENTORY_INVALID");
-    return evaluateReleaseCertification(input.releaseManifest, parsedObservations, { candidateId: input.candidateId, nowMs: options.nowMs });
+    const verificationRecords: ReleaseVerificationRecords = { reproducibility: await options.loadVerificationRecord(input.verificationRecords.reproducibilityEvidence), supplyChain: await options.loadVerificationRecord(input.verificationRecords.supplyChainEvidence) };
+    const decision = await evaluateReleaseCertification(input.releaseManifest, parsedObservations, { candidateId: input.candidateId, nowMs: options.nowMs, verificationRecords });
+    if (decision.status !== "promoted") return decision;
+    const reproducibilityDigest = (verificationRecords.reproducibility as { evidenceSha256?: unknown }).evidenceSha256;
+    const supplyChainDigest = (verificationRecords.supplyChain as { evidenceSha256?: unknown }).evidenceSha256;
+    if (reproducibilityDigest !== input.verificationRecords.reproducibilityEvidence.evidenceSha256 || supplyChainDigest !== input.verificationRecords.supplyChainEvidence.evidenceSha256) return blockedReleaseDecision(input.candidateId, input.releaseManifest, "RELEASE_VERIFICATION_RECORD_POINTER_INVALID");
+    const supplyObservation = parsedObservations.find((item) => item.claims.includes("release.supply_chain"));
+    if (!supplyObservation || supplyObservation.verificationDigests?.reproducibilityEvidenceSha256 !== reproducibilityDigest || supplyObservation.verificationDigests?.supplyChainEvidenceSha256 !== supplyChainDigest) return blockedReleaseDecision(input.candidateId, input.releaseManifest, "RELEASE_SUPPLY_CHAIN_RECORD_BINDING_INVALID");
+    return decision;
   } catch { return blockedReleaseDecision(input.candidateId, input.releaseManifest, "RELEASE_EVIDENCE_INVALID"); }
 }
 
@@ -321,7 +333,7 @@ async function verifyReleaseEvidence(path: string): Promise<ReleaseCertification
   return verifyReleaseCertificationInput(await readReleaseJson(path), { loadDeterministic: async (pointer) => {
     const source = await readReleaseJson(pointer.contentAddressedPath) as { contentAddressedPath?: unknown };
     return typeof source.contentAddressedPath === "string" ? readReleaseJson(source.contentAddressedPath) : source;
-  }, loadObservation: (pointer) => readReleaseJson(pointer.contentAddressedPath) });
+  }, loadObservation: (pointer) => readReleaseJson(pointer.contentAddressedPath), loadVerificationRecord: (pointer) => readReleaseJson(pointer.contentAddressedPath) });
 }
 
 if (import.meta.main) {

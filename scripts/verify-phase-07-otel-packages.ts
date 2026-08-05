@@ -16,7 +16,7 @@ const APPROVAL_RECORD_DIRECTORY = `${CERTIFICATION_DIRECTORY}/otel-package-appro
 const SMOKE_DIRECTORY = `${CERTIFICATION_DIRECTORY}/otel-package-smokes`;
 const FORBIDDEN_LIFECYCLE_SCRIPTS = new Set(["preinstall", "install", "postinstall", "prepare"]);
 const APPROVED_AUDIT_DIGEST = "d7fedf16f62e4088cf17442aa39786c33bb4af8f3377e8d121d76b108eaf22b3";
-const APPROVED_OPERATOR_RECORD_DIGEST = "6fd27b004e02493a81deffe5286ae8137cbe4f362a4e9e706ff53ca262be22ad";
+const APPROVED_OPERATOR_RECORD_DIGEST = "09594baf4025de3081ec59005b529d2e031c06c38523b8c086efd97dd6e6cc7c";
 /** Official Docker Hub Collector manifest digest reviewed on 2026-08-05. */
 export const COLLECTOR_IMAGE = "otel/opentelemetry-collector@sha256:6ed874ea083d67a3085acfc75343f2ad11d9abe6006d7ea4a16e2dba9af14e49";
 const EXACT_NAMES = [

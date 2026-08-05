@@ -54,6 +54,7 @@ describe("signed ContextVM preview and publication", () => {
 
     expect(calls).toHaveLength(2);
     expect(calls[0]).toMatchObject({ principal: { pubkey }, sessionId: "session:one", artifactId: "artifact:one", requestEventId: "event:publication" });
+    expect(transport.responses[0]?.response).toMatchObject({ result: { status: "ready", artifactId: "artifact:one", nextAction: "review_capabilities" } });
     expect(transport.notifications.map((entry) => entry.notification.method)).toEqual(["notifications/preview", "notifications/preview"]);
     expect(JSON.stringify(transport.responses)).not.toContain("providerPayload");
   });

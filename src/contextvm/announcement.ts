@@ -39,6 +39,23 @@ const ContextVmAnnouncementInputSchema = z.object({
 
 export type ContextVmAnnouncementInput = z.infer<typeof ContextVmAnnouncementInputSchema>;
 
+/**
+ * The composition root owns invocability. Callers may describe their normal
+ * tool registry, but preview and publication cannot be advertised merely by
+ * configuration: their availability is overwritten by installed safe facades.
+ */
+export function configureContextVmToolAvailability(input: unknown, availability: Readonly<{ preview: boolean; publication: boolean }>): ContextVmAnnouncementInput {
+  const parsed = ContextVmAnnouncementInputSchema.parse(input);
+  return ContextVmAnnouncementInputSchema.parse({
+    ...parsed,
+    tools: parsed.tools.map((tool) => tool.name === "preview"
+      ? { ...tool, available: availability.preview, planned: !availability.preview }
+      : tool.name === "publication"
+        ? { ...tool, available: availability.publication, planned: !availability.publication }
+        : tool),
+  });
+}
+
 export type ContextVmAnnouncement = Readonly<{
   tags: readonly (readonly string[])[];
   metadata: Readonly<{

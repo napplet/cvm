@@ -1,5 +1,5 @@
 import { ContextVmFundingAdapter } from "../contextvm/adapter";
-import { buildContextVmAnnouncement, type ContextVmAnnouncementInput } from "../contextvm/announcement";
+import { buildContextVmAnnouncement, configureContextVmToolAvailability, type ContextVmAnnouncementInput } from "../contextvm/announcement";
 import type { ContextVmTransportPort } from "../contextvm/sdk-bridge";
 import { AccountStatusService, type AccountSessionStatusPort } from "../funding/account-status";
 import { FundedAdmissionService, type ReadyCapacityPort } from "../funding/funded-admission";
@@ -17,6 +17,7 @@ import { PostgresFundingDatabase } from "../persistence/postgres-funding-databas
 import type { MeteredGenerationService } from "../phase-04/metered-generation-service";
 import { readSessionStatus } from "../phase-04/session-status";
 import type { ContinuationService } from "../continuity/continuation-service";
+import { PromotedCliSourceContractResultSchema } from "../publication/napplet-cli-source-contract";
 
 type SurfaceState = "configured" | "blocked" | "unselected";
 type BlockedCapacity = ReadyCapacityPort;
@@ -47,6 +48,11 @@ export type FundedCoreOptions = Readonly<{
   meteredService?: Pick<MeteredGenerationService, "startSession" | "reviseSession"> & Partial<Pick<MeteredGenerationService, "dispatchVerifiedCredit" | "reconcileOutstandingWakeDispatches" | "completeResumedAction">>;
   /** Phase 5 explicit-resume facade; no payment or ContextVM authority crosses this seam. */
   continuationService?: Pick<ContinuationService, "resumeSession">;
+  /** Owner-scoped Phase 6 facades. They remain transport-neutral and receive no ContextVM SDK types. */
+  preview?: NonNullable<ConstructorParameters<typeof ContextVmFundingAdapter>[0]["preview"]>;
+  publication?: NonNullable<ConstructorParameters<typeof ContextVmFundingAdapter>[0]["publication"]>;
+  /** A missing, invalid, or unavailable Plan 05 probe keeps publication fail-closed. */
+  publicationSourceContract?: unknown;
   /** Server-held HMAC material for opaque status cursors. */
   statusCursorSecret?: Uint8Array;
   testOnly?: boolean;
@@ -96,11 +102,14 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
   const publicGenerationSurface = Boolean(publicFundingSurface && options.meteredService);
   if (publicGenerationSurface && !verifiedCreditWake) throw new Error("PRODUCTION_VERIFIED_CREDIT_WAKE_REQUIRED");
   const publicContinuationSurface = Boolean(publicFundingSurface && options.continuationService);
+  const publicPreviewSurface = Boolean(publicFundingSurface && options.preview);
+  const sourceContract = PromotedCliSourceContractResultSchema.safeParse(options.publicationSourceContract);
+  const publicPublicationSurface = Boolean(publicFundingSurface && options.publication && sourceContract.success && sourceContract.data.status === "available");
   const offline = !store || !database || !publicFundingSurface;
   const admissions = new FundedAdmissionService({ funding, store: authority, capacity: options.capacity ?? blockedCapacity });
   const accountStatus = new AccountStatusService({ store: authority, sessions: options.sessions ?? emptySessions, ...(database ? { rails: database.railStatuses } : {}) });
   if (publicFundingSurface && options.transport) {
-    options.transport.configureAnnouncement(buildContextVmAnnouncement(options.announcement ?? {
+    const announcement = options.announcement ?? {
       topUpCap: { minimum: "1", maximum: String(Number.MAX_SAFE_INTEGER), unit: "sat" },
       pmis: ["bitcoin-lightning-bolt11", "bitcoin-cashu-v4-direct"],
       paymentInteraction: ["transparent", "explicit_gating"],
@@ -109,13 +118,20 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
         { name: "top_up", available: true, planned: false }, { name: "funded_admission", available: true, planned: false },
         { name: "preview", available: false, planned: true }, { name: "publication", available: false, planned: true },
       ],
-    }));
+    };
+    options.transport.configureAnnouncement(buildContextVmAnnouncement(configureContextVmToolAvailability(announcement, {
+      preview: publicPreviewSurface,
+      publication: publicPublicationSurface,
+    })));
   }
   const statusCursorSecret = options.statusCursorSecret ?? crypto.getRandomValues(new Uint8Array(32));
   const contextvm = publicFundingSurface && options.transport && lightning && cashu
     ? new ContextVmFundingAdapter({ service: funding, transport: options.transport, admissions, accountStatus, topUps: { lightning, cashu },
       ...(options.meteredService ? { generation: options.meteredService, sessionStatus: { read: (query: unknown) => readSessionStatus({ store: authority as MeteredFundingStore, query, cursorSecret: statusCursorSecret }) } } : {}),
       ...(options.continuationService ? { continuation: options.continuationService } : {}),
+      ...(options.preview ? { preview: options.preview } : {}),
+      ...(options.publication ? { publication: options.publication } : {}),
+      ...(options.publicationSourceContract !== undefined ? { publicationSourceContract: options.publicationSourceContract } : {}),
     })
     : undefined;
   const continuationRecovery = options.meteredService?.reconcileOutstandingWakeDispatches

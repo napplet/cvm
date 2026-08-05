@@ -7,6 +7,8 @@ import { ResumeSessionCommandSchema, ResumeSessionResultSchema } from "../contin
 import { PrincipalSchema } from "../phase-03/contracts";
 import { SessionActionResultSchema } from "../phase-04/metered-generation-service";
 import { SessionStatusQuerySchema, SessionStatusSchema } from "../phase-04/session-status";
+import { CapabilityReviewSchema, PreviewDescriptorSchema, SignedOwnerManifestEventSchema, SignedPublicationCommandSchema } from "../publication/contracts";
+import { PromotedCliSourceContractResultSchema } from "../publication/napplet-cli-source-contract";
 import type { ContextVmInboundEnvelope, ContextVmTransportPort, ContextVmWireNotification, ContextVmWireResponse } from "./sdk-bridge";
 
 const SupportedPmiSchema = z.enum(["bitcoin-lightning-bolt11", "bitcoin-cashu-v4-direct"]);
@@ -19,7 +21,7 @@ const RequestSchema = z.object({
   id: z.union([z.string(), z.number(), z.null()]),
   method: z.literal("tools/call"),
   params: z.object({
-    name: z.enum(["account_status", "top_up", "funded_admission", "start_session", "revise_session", "resume_session", "session_status"]),
+    name: z.enum(["account_status", "top_up", "funded_admission", "start_session", "revise_session", "resume_session", "session_status", "preview", "publication"]),
     arguments: z.unknown(),
     _meta: z.unknown().optional(),
   }).strict(),
@@ -54,6 +56,16 @@ const ResumeSessionArgumentsSchema = ResumeSessionCommandSchema.omit({ principal
 const SessionStatusArgumentsSchema = z.object({
   sessionId: z.string().min(1), billing: z.object({ limit: z.number().int().min(1).max(50).optional(), cursor: z.string().min(1).optional() }).strict().optional(),
 }).strict();
+const PreviewArgumentsSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("descriptor"), sessionId: z.string().min(1), artifactId: z.string().min(1), runtimeVariant: z.string().min(1) }).strict(),
+  z.object({ action: z.literal("review_capabilities"), sessionId: z.string().min(1), artifactId: z.string().min(1), runtimeVariant: z.string().min(1) }).strict(),
+]);
+const PublicationArgumentsSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("create_intent"), sessionId: z.string().min(1), artifactId: z.string().min(1), runtimeVariant: z.string().min(1), idempotencyKey: z.string().min(1), purpose: z.string().min(1).max(512), consent: z.literal("approved") }).strict(),
+  z.object({ action: z.literal("submit_signed_manifest"), intentId: z.string().min(1), command: SignedPublicationCommandSchema, event: SignedOwnerManifestEventSchema }).strict(),
+  z.object({ action: z.literal("status"), intentId: z.string().min(1) }).strict(),
+  z.object({ action: z.literal("reconcile"), intentId: z.string().min(1) }).strict(),
+]);
 const RailTopUpResultSchema = z.object({
   topUpId: z.string().min(1),
   state: z.enum(["pending", "settled", "credited", "failed", "reconciliation_pending", "verifying"]),
@@ -88,6 +100,20 @@ export interface ContextVmFundingAdapterOptions {
   /** Explicit post-grace continuation only; rails and status cannot call this facade. */
   continuation?: Readonly<{ resumeSession(input: unknown): Promise<unknown> }>;
   sessionStatus?: Readonly<{ read(input: unknown): Promise<unknown> }>;
+  /** Preview remains a read-only, owner-scoped facade and never gains publication authority. */
+  preview?: Readonly<{
+    previewVerifiedArtifact(input: unknown): Promise<unknown>;
+    reviewCapabilities(input: unknown): Promise<unknown>;
+  }>;
+  /** Transport-neutral publication authority; the adapter only passes verified owner and correlation facts. */
+  publication?: Readonly<{
+    createIntent(input: unknown): Promise<unknown>;
+    submitSignedManifest(input: unknown): Promise<unknown>;
+    status(input: unknown): Promise<unknown>;
+    reconcile(input: unknown): Promise<unknown>;
+  }>;
+  /** Result of the Plan 05 exact promoted-source probe. Absence always fails closed. */
+  publicationSourceContract?: unknown;
   policyVersion?: string;
   protocolVersion?: string;
 }
@@ -170,6 +196,32 @@ export class ContextVmFundingAdapter {
       await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({ jsonrpc: "2.0", method: "notifications/session_status", params: result }), requestEventId);
       return freeze({ jsonrpc: "2.0" as const, id: request.id, result });
     }
+    if (name === "preview") {
+      const args = PreviewArgumentsSchema.parse(argumentsInput);
+      if (!this.options.preview) throw new Error("PREVIEW_UNAVAILABLE");
+      const accountId = await accountIdForPrincipal({ pubkey: verifiedPubkey });
+      const canonical = this.options.transport.canonicalInvocation(verifiedPubkey, request.method, request.params);
+      const result = args.action === "descriptor"
+        ? await this.options.preview.previewVerifiedArtifact({ principal: { pubkey: verifiedPubkey }, accountId, sessionId: args.sessionId, artifactId: args.artifactId, runtimeVariant: args.runtimeVariant, requestEventId, invocationHash: canonical.invocationHash })
+        : await this.options.preview.reviewCapabilities({ principal: { pubkey: verifiedPubkey }, accountId, sessionId: args.sessionId, artifactId: args.artifactId, runtimeVariant: args.runtimeVariant, requestEventId, invocationHash: canonical.invocationHash });
+      return this.previewResponse(verifiedPubkey, requestEventId, request.id, args.action, result);
+    }
+    if (name === "publication") {
+      const args = PublicationArgumentsSchema.parse(argumentsInput);
+      if (!this.publicationAvailable()) return this.publicationUnavailableResponse(verifiedPubkey, requestEventId, request.id);
+      if (!this.options.publication) return this.publicationUnavailableResponse(verifiedPubkey, requestEventId, request.id);
+      const accountId = await accountIdForPrincipal({ pubkey: verifiedPubkey });
+      const canonical = this.options.transport.canonicalInvocation(verifiedPubkey, request.method, request.params);
+      const common = { principal: { pubkey: verifiedPubkey }, accountId, requestEventId, invocationHash: canonical.invocationHash };
+      const result = args.action === "create_intent"
+        ? await this.options.publication.createIntent({ ...common, sessionId: args.sessionId, artifactId: args.artifactId, runtimeVariant: args.runtimeVariant, idempotencyKey: args.idempotencyKey, purpose: args.purpose, consent: args.consent })
+        : args.action === "submit_signed_manifest"
+          ? await this.options.publication.submitSignedManifest({ ...common, intentId: args.intentId, command: args.command, event: args.event })
+          : args.action === "status"
+            ? await this.options.publication.status({ ...common, intentId: args.intentId })
+            : await this.options.publication.reconcile({ ...common, intentId: args.intentId });
+      return this.publicationResponse(verifiedPubkey, requestEventId, request.id, result);
+    }
     if (name === "account_status") {
       AccountStatusArgumentsSchema.parse(argumentsInput);
       const status = this.options.accountStatus
@@ -235,6 +287,40 @@ export class ContextVmFundingAdapter {
         : freeze({ status: result.status, code: result.code });
     await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({ jsonrpc: "2.0", method: `notifications/${name}`, params: wireResult }), requestEventId);
     return freeze({ jsonrpc: "2.0" as const, id, result: wireResult });
+  }
+
+  private publicationAvailable(): boolean {
+    const source = PromotedCliSourceContractResultSchema.safeParse(this.options.publicationSourceContract);
+    return source.success && source.data.status === "available";
+  }
+
+  private async previewResponse(verifiedPubkey: string, requestEventId: string, id: string | number | null, action: "descriptor" | "review_capabilities", input: unknown): Promise<ContextVmWireResponse> {
+    const descriptor = PreviewDescriptorSchema.safeParse(input);
+    const review = CapabilityReviewSchema.safeParse(input);
+    const projected = z.object({ state: z.enum(["ready", "incompatible", "expired", "denied"]), artifactId: z.string().min(1).optional(), aggregateSha256: z.string().regex(/^[a-f0-9]{64}$/iu).optional(), previewGrantId: z.string().min(1).optional(), expiresAtMs: z.number().int().positive().optional(), capabilityDigest: z.string().regex(/^[a-f0-9]{64}$/iu).optional(), runtimeVariant: z.string().min(1).optional(), required: z.array(z.object({ capability: z.string().min(1), requirement: z.enum(["required", "optional"]), purpose: z.string().min(1).max(512), consent: z.enum(["required", "optional"]), available: z.boolean() }).strict()).optional(), optional: z.array(z.object({ capability: z.string().min(1), requirement: z.enum(["required", "optional"]), purpose: z.string().min(1).max(512), consent: z.enum(["required", "optional"]), available: z.boolean() }).strict()).optional(), nextAction: z.enum(["preview", "review_capabilities", "sign_manifest"]), safeReasonCode: z.enum(["preview_not_available", "runtime_incompatible", "preview_expired", "runtime_denied"]).optional() }).passthrough().safeParse(input);
+    const value = projected.success
+      ? freeze({ status: projected.data.state, ...(projected.data.artifactId ? { artifactId: projected.data.artifactId } : {}), ...(projected.data.aggregateSha256 ? { aggregateSha256: projected.data.aggregateSha256 } : {}), ...(projected.data.previewGrantId ? { previewGrantId: projected.data.previewGrantId } : {}), ...(projected.data.expiresAtMs ? { expiresAtMs: projected.data.expiresAtMs } : {}), ...(projected.data.capabilityDigest ? { capabilityDigest: projected.data.capabilityDigest } : {}), ...(projected.data.runtimeVariant ? { runtimeVariant: projected.data.runtimeVariant } : {}), ...(projected.data.required ? { required: projected.data.required } : {}), ...(projected.data.optional ? { optional: projected.data.optional } : {}), ...(projected.data.safeReasonCode ? { safeReasonCode: projected.data.safeReasonCode } : {}), nextAction: projected.data.nextAction })
+      : descriptor.success
+      ? freeze({ status: "ready" as const, artifactId: descriptor.data.artifact.artifactId, aggregateSha256: descriptor.data.artifact.aggregateSha256, previewGrantId: descriptor.data.previewGrantId, expiresAtMs: descriptor.data.expiresAtMs, capabilityDigest: descriptor.data.review.capabilityDigest, runtimeVariant: descriptor.data.review.runtimeVariant, nextAction: "review_capabilities" as const })
+      : review.success
+        ? freeze({ status: "ready" as const, artifactId: review.data.artifactId, aggregateSha256: review.data.aggregateSha256, capabilityDigest: review.data.capabilityDigest, runtimeVariant: review.data.runtimeVariant, required: review.data.required.map((item) => ({ capability: item.capability, requirement: item.requirement ?? "required", purpose: item.purpose, consent: item.consent, available: item.available })), optional: review.data.optional.map((item) => ({ capability: item.capability, requirement: item.requirement ?? "optional", purpose: item.purpose, consent: item.consent, available: item.available })), nextAction: "sign_manifest" as const })
+        : freeze({ status: "denied" as const, nextAction: "preview" as const });
+    await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({ jsonrpc: "2.0", method: "notifications/preview", params: value }), requestEventId);
+    return freeze({ jsonrpc: "2.0" as const, id, result: value });
+  }
+
+  private async publicationUnavailableResponse(verifiedPubkey: string, requestEventId: string, id: string | number | null): Promise<ContextVmWireResponse> {
+    const result = freeze({ status: "publication_unavailable" as const, nextAction: "preview" as const });
+    await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({ jsonrpc: "2.0", method: "notifications/publication", params: result }), requestEventId);
+    return freeze({ jsonrpc: "2.0" as const, id, result });
+  }
+
+  private async publicationResponse(verifiedPubkey: string, requestEventId: string, id: string | number | null, input: unknown): Promise<ContextVmWireResponse> {
+    const candidate = z.object({ state: z.enum(["intent_ready", "publication_reconciliation_pending", "partial", "complete"]), intentId: z.string().min(1), artifactId: z.string().min(1).optional(), fingerprint: z.string().regex(/^[a-f0-9]{64}$/iu).optional(), normalizedDTag: z.string().min(1).optional(), capabilityDigest: z.string().regex(/^[a-f0-9]{64}$/iu).optional(), expiresAtMs: z.number().int().positive().optional(), nextAction: z.enum(["sign_manifest", "publish", "reconcile_publication", "none"]), ownerEventId: z.string().regex(/^[a-f0-9]{64}$/iu).optional(), attestationId: z.string().min(1).optional(), deploymentId: z.string().min(1).optional(), fullServerUploadId: z.string().min(1).optional(), safeServerEvidenceCount: z.number().int().nonnegative().optional(), safeRelayEvidenceCount: z.number().int().nonnegative().optional() }).passthrough().safeParse(input);
+    if (!candidate.success) throw new Error("PUBLICATION_RESULT_INVALID");
+    const result = freeze({ status: candidate.data.state, intentId: candidate.data.intentId, ...(candidate.data.artifactId ? { artifactId: candidate.data.artifactId } : {}), ...(candidate.data.fingerprint ? { fingerprint: candidate.data.fingerprint } : {}), ...(candidate.data.normalizedDTag ? { normalizedDTag: candidate.data.normalizedDTag } : {}), ...(candidate.data.capabilityDigest ? { capabilityDigest: candidate.data.capabilityDigest } : {}), ...(candidate.data.expiresAtMs ? { expiresAtMs: candidate.data.expiresAtMs } : {}), ...(candidate.data.ownerEventId ? { ownerEventId: candidate.data.ownerEventId } : {}), ...(candidate.data.attestationId ? { attestationId: candidate.data.attestationId } : {}), ...(candidate.data.deploymentId ? { deploymentId: candidate.data.deploymentId } : {}), ...(candidate.data.fullServerUploadId ? { fullServerUploadId: candidate.data.fullServerUploadId } : {}), ...(candidate.data.safeServerEvidenceCount !== undefined ? { safeServerEvidenceCount: candidate.data.safeServerEvidenceCount } : {}), ...(candidate.data.safeRelayEvidenceCount !== undefined ? { safeRelayEvidenceCount: candidate.data.safeRelayEvidenceCount } : {}), nextAction: candidate.data.nextAction });
+    await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({ jsonrpc: "2.0", method: "notifications/publication", params: result }), requestEventId);
+    return freeze({ jsonrpc: "2.0" as const, id, result });
   }
 
   private async resumeResponse(verifiedPubkey: string, requestEventId: string, id: string | number | null, result: z.infer<typeof ResumeSessionResultSchema>): Promise<ContextVmWireResponse> {

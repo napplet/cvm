@@ -27,7 +27,7 @@ export type BillingLineItemKind = "credit" | "cap_hold" | "action_reservation" |
 export type BillingLineItem = Readonly<{ id: string; sequence: string; accountId: string; sessionId?: string; actionId?: string; operationId?: string; sourceIdentity: string; kind: BillingLineItemKind; unit: "sat"; amount: string; settledAvailable: string; held: string; sessionSpend: string }>;
 export type BillingLineItemPage = Readonly<{ items: readonly BillingLineItem[]; nextCursor?: string }>;
 export type BillingLineItemPageRequest = Readonly<{ limit?: number; cursor?: string }>;
-export type MeteredSessionRecord = Readonly<{ accountId: string; sessionId: string; version: number; status: "prepared" | "active" | "failed" | "usage_unknown" | "billing_invariant_failed" | "verified" }>;
+export type MeteredSessionRecord = Readonly<{ accountId: string; sessionId: string; version: number; status: "prepared" | "active" | "failed" | "usage_unknown" | "billing_invariant_failed" | "verified" | "needs_top_up" }>;
 export type MeteredActionRecord = MeteredAction;
 export type ProviderOperationRecord = Readonly<{ accountId: string; operationId: string; actionId: string; status: MeteredActionStatus; providerReceiptReference?: string }>;
 export type UsageReceiptRecord = Readonly<{ accountId: string; operationId: string; providerReceiptReference: string; charge: string }>;
@@ -106,6 +106,7 @@ export interface MeteredFundingStore extends FundingStore {
 /** Phase 5's pause extension is implemented by the deterministic store first; SQL parity follows in Plan 05-02. */
 export interface ContinuationFundingStore extends FundingStore {
   findContinuation(accountId: string, idempotencyKey: string): Promise<ContinuationRecord | undefined>;
+  findContinuationForSession(accountId: string, sessionId: string): Promise<ContinuationRecord | undefined>;
   transact<T>(accountId: string, operation: (transaction: ContinuationFundingTransaction) => Promise<T> | T): Promise<T>;
 }
 
@@ -175,6 +176,10 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
     const found = this.#state.continuations.get(commandKey(accountId, idempotencyKey));
     return found ? freeze(clone(found)) : undefined;
   }
+  async findContinuationForSession(accountId: string, sessionId: string): Promise<ContinuationRecord | undefined> {
+    const found = [...this.#state.continuations.values()].find((continuation) => continuation.intent.accountId === accountId && continuation.intent.sessionId === sessionId);
+    return found ? freeze(clone(found)) : undefined;
+  }
   async findMeteredActionByOperation(accountId: string, operationId: string): Promise<MeteredAction | undefined> {
     const found = [...this.#state.meteredActions.values()].find((action) => action.accountId === accountId && action.operationId === operationId);
     return found ? freeze(clone(found)) : undefined;
@@ -192,6 +197,8 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
     return freeze({ items: freeze(clone(items)), ...(last && start + items.length < all.length ? { nextCursor: cursorFor(accountId, last) } : {}) });
   }
   async sessionStatus(accountId: string, sessionId: string): Promise<MeteredSessionRecord | undefined> {
+    const continuation = [...this.#state.continuations.values()].find((item) => item.intent.accountId === accountId && item.intent.sessionId === sessionId);
+    if (continuation) return freeze({ accountId, sessionId, version: continuation.intent.expectedSessionVersion, status: "needs_top_up" as const });
     const actions = [...this.#state.meteredActions.values()].filter((action) => action.accountId === accountId && action.sessionId === sessionId);
     const action = actions.sort((left, right) => (right.sessionVersion ?? 0) - (left.sessionVersion ?? 0))[0];
     if (!action) return undefined;

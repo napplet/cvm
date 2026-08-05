@@ -44,6 +44,16 @@ describe("owner-safe needs_top_up status", () => {
       action: null,
     });
     expect(JSON.stringify(ownerStatus)).not.toMatch(/Prompt canary|reasoning|credential|bearer|provider|archive|nonce|key reference/i);
+    const accountId = await accountIdForPrincipal(owner);
+    const record = await store.findContinuation(accountId, "status-pause");
+    if (!record) throw new Error("expected continuation record");
+    const canaryStore = new Proxy(store, { get(target, property) {
+      if (property === "findContinuationForSession") return async () => ({ ...record, result: { ...record.result, prompt: "prompt-canary", generatedSource: "source-canary", rawReasoning: "reasoning-canary", bearer: "credential-canary", nativeProviderPayload: "provider-canary", archiveBytes: "archive-canary", nonce: "nonce-canary", keyReference: "key-reference-canary" } });
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    } });
+    const safeCanaryStatus = await readSessionStatus({ store: canaryStore, cursorSecret: "continuation-status-secret", query: { principal: owner, sessionId: paused.sessionId } });
+    expect(JSON.stringify(safeCanaryStatus)).not.toMatch(/prompt-canary|source-canary|reasoning-canary|credential-canary|provider-canary|archive-canary|nonce-canary|key-reference-canary/i);
     const foreign = await readSessionStatus({ store, cursorSecret: "continuation-status-secret", query: { principal: stranger, sessionId: paused.sessionId } });
     const missing = await readSessionStatus({ store, cursorSecret: "continuation-status-secret", query: { principal: owner, sessionId: "missing-session" } });
     expect(foreign).toEqual({ status: "not_found_or_denied" });

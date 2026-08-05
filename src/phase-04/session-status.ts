@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { accountIdForPrincipal } from "../domain/account-command";
 import { PrincipalSchema } from "../phase-03/contracts";
-import type { BillingLineItem, MeteredAction, MeteredFundingStore } from "../persistence/funding-store";
+import { ContinuationStatusSchema } from "../continuity/contracts";
+import type { BillingLineItem, ContinuationFundingStore, ContinuationRecord, MeteredAction, MeteredFundingStore } from "../persistence/funding-store";
 
 const DecimalSchema = z.string().regex(/^(0|[1-9][0-9]*)$/u);
 const SignedDecimalSchema = z.string().regex(/^-?(0|[1-9][0-9]*)$/u);
@@ -47,16 +48,17 @@ const StatusOkSchema = z.object({
   session: z.object({
     id: z.string().min(1),
     version: z.number().int().nonnegative(),
-    state: z.enum(["prepared", "active", "failed", "usage_unknown", "billing_invariant_failed", "verified"]),
-    progress: z.enum(["waiting_for_dispatch", "running", "verified", "failed", "reconciliation_required"]),
+    state: z.enum(["prepared", "active", "failed", "usage_unknown", "billing_invariant_failed", "verified", "needs_top_up"]),
+    progress: z.enum(["waiting_for_dispatch", "waiting_for_funding", "running", "verified", "failed", "reconciliation_required"]),
     maximum: DecimalSchema,
     actualSpend: DecimalSchema,
     remainingBalance: DecimalSchema,
     remainingCap: DecimalSchema,
     latestVerifiedArtifact: z.object({ id: z.string().min(1), version: z.number().int().nonnegative() }).nullable(),
-    nextAction: z.enum(["revise_session", "billing_reconciliation", "wait_for_current_action"]),
+    nextAction: z.enum(["revise_session", "billing_reconciliation", "wait_for_current_action", "top_up", "approve_cap", "top_up_and_approve_cap"]),
+    continuation: z.union([ContinuationStatusSchema, z.null()]),
   }).strict(),
-  action: z.object({
+  action: z.union([z.object({
     id: z.string().min(1),
     operationId: z.string().min(1),
     state: z.enum(["prepared", "dispatching", "usage_unknown", "completed", "failed", "billing_invariant_failed"]),
@@ -64,7 +66,7 @@ const StatusOkSchema = z.object({
     price: z.object({ cardId: z.string().min(1), profileId: z.string().min(1) }).strict(),
     reconciliation: z.object({ state: z.enum(["not_required", "pending", "claimed"]), evidenceId: z.string().min(1).nullable() }).strict(),
     diagnostic: z.object({ code: z.enum(["none", "action_failed", "usage_unknown", "billing_invariant_failed"]), evidenceId: z.string().min(1).nullable() }).strict(),
-  }).strict(),
+  }).strict(), z.null()]),
   billing: BillingHistoryPageSchema,
 }).strict();
 
@@ -120,10 +122,27 @@ function newestAction(actions: readonly MeteredAction[]): MeteredAction | undefi
   return [...actions].sort((left, right) => (right.sessionVersion ?? right.expectedVersion) - (left.sessionVersion ?? left.expectedVersion) || right.actionId.localeCompare(left.actionId))[0];
 }
 function safeProgress(state: z.infer<typeof StatusOkSchema>["session"]["state"]): z.infer<typeof StatusOkSchema>["session"]["progress"] {
+  if (state === "needs_top_up") return "waiting_for_funding";
   if (state === "usage_unknown" || state === "billing_invariant_failed") return "reconciliation_required";
   if (state === "verified") return "verified";
   if (state === "failed") return "failed";
   return state === "active" ? "running" : "waiting_for_dispatch";
+}
+function continuationStatus(record: ContinuationRecord): z.infer<typeof ContinuationStatusSchema> {
+  const result = record.result;
+  return ContinuationStatusSchema.parse({
+    status: "needs_top_up",
+    pendingAction: { reference: result.pendingActionReference, fingerprint: result.pendingActionFingerprint, kind: result.pendingActionKind },
+    actionMaximum: result.actionMaximum,
+    requiredAdditionalFunding: result.requiredAdditionalFunding,
+    requiredCapApproval: result.requiredCapApproval,
+    settledBalance: result.settledBalance,
+    availableBalance: result.availableBalance,
+    remainingCap: result.remainingCap,
+    graceDeadlineMs: result.graceDeadlineMs,
+    checkpoint: { state: result.checkpoint.state, reference: result.checkpoint.reference },
+    nextRequiredAction: result.nextRequiredAction,
+  });
 }
 
 /** Pure transport-neutral projection; every durable read is owner scoped. */
@@ -138,12 +157,30 @@ export async function readSessionStatus(input: Readonly<{ store: MeteredFundingS
   }
   const session = await input.store.sessionStatus(accountId, query.sessionId);
   if (!session) return freeze(SessionStatusSchema.parse({ status: "not_found_or_denied" }));
+  const continuationStore = input.store as MeteredFundingStore & Partial<ContinuationFundingStore>;
+  const continuation = typeof continuationStore.findContinuationForSession === "function"
+    ? await continuationStore.findContinuationForSession(accountId, query.sessionId)
+    : undefined;
   const action = newestAction(await input.store.listMeteredActionsForSession(accountId, query.sessionId));
-  if (!action) return freeze(SessionStatusSchema.parse({ status: "not_found_or_denied" }));
+  if (!action && !continuation) return freeze(SessionStatusSchema.parse({ status: "not_found_or_denied" }));
   try {
     const [account, page] = await Promise.all([input.store.status(accountId), input.store.listBillingLineItems(accountId, { limit, ...(storeCursor ? { cursor: storeCursor } : {}) })]);
     if (!account) return freeze(SessionStatusSchema.parse({ status: "not_found_or_denied" }));
     const nextCursor = page.nextCursor ? await opaqueCursor(input.cursorSecret, { v: 1, accountId, sessionId: query.sessionId, limit, storeCursor: page.nextCursor }) : null;
+    if (continuation) {
+      const safe = continuationStatus(continuation);
+      return freeze(SessionStatusSchema.parse({
+        status: "ok",
+        session: {
+          id: session.sessionId, version: session.version, state: "needs_top_up", progress: "waiting_for_funding",
+          maximum: safe.actionMaximum, actualSpend: "0", remainingBalance: safe.availableBalance, remainingCap: safe.remainingCap,
+          latestVerifiedArtifact: null, nextAction: safe.nextRequiredAction, continuation: safe,
+        },
+        action: null,
+        billing: { items: page.items.map(historyItem), nextCursor },
+      }));
+    }
+    if (!action) return freeze(SessionStatusSchema.parse({ status: "not_found_or_denied" }));
     const verifiedArtifact = (await input.store.listMeteredActionsForSession(accountId, query.sessionId))
       .filter((candidate) => candidate.artifact?.artifactId)
       .sort((left, right) => (right.artifactVersion ?? 0) - (left.artifactVersion ?? 0))[0];
@@ -158,6 +195,7 @@ export async function readSessionStatus(input: Readonly<{ store: MeteredFundingS
         remainingBalance: action.remainingBalance ?? account.available, remainingCap,
         latestVerifiedArtifact: verifiedArtifact?.artifact?.artifactId && verifiedArtifact.artifactVersion ? { id: verifiedArtifact.artifact.artifactId, version: verifiedArtifact.artifactVersion } : null,
         nextAction: reconciliation ? "billing_reconciliation" : session.status === "active" || session.status === "prepared" ? "wait_for_current_action" : "revise_session",
+        continuation: null,
       },
       action: {
         id: action.actionId, operationId: action.operationId, state: action.status,

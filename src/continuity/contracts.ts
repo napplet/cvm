@@ -56,6 +56,46 @@ export const ContinuationStatusSchema = z.object({
   nextRequiredAction: z.enum(["top_up", "approve_cap", "top_up_and_approve_cap"]),
 }).strict();
 
+/** Owner-signed consent for one exact, previously paused action. */
+export const ResumePendingApprovalSchema = z.object({
+  reference: z.string().min(1),
+  fingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
+  kind: z.enum(["start_session", "revise_session", "repair"]),
+  maximum: CanonicalSatSchema,
+}).strict();
+
+/** Server-owned pins; checkpoint/archive text is never a compatibility authority. */
+export const ResumeCompatibilitySchema = z.object({
+  policyVersion: z.string().min(1),
+  profileId: z.string().min(1),
+  priceCardId: z.string().min(1),
+  toolchainId: z.string().min(1),
+}).strict();
+
+/** Strict, transport-neutral explicit-resume command. The adapter injects principal. */
+export const ResumeSessionCommandSchema = z.object({
+  principal: z.object({ id: z.string().min(1) }).strict(),
+  sessionId: z.string().min(1),
+  checkpointId: z.string().min(1),
+  expectedSessionVersion: z.number().int().nonnegative(),
+  expectedCheckpointVersion: z.literal(1),
+  idempotencyKey: z.string().min(1),
+  approvePendingAction: z.literal(true),
+  capApprovalReference: z.string().min(1),
+  pendingAction: ResumePendingApprovalSchema,
+}).strict();
+
+/** Safe public result: no account, archive, key, provider, or payment material. */
+export const ResumeSessionResultSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("restored"), code: z.literal("RESUME_RESTORED"), sessionId: z.string().min(1), checkpointId: z.string().min(1), pendingActionReference: z.string().min(1), actionBudgetReference: z.string().min(1), allocationIntentReference: z.string().min(1) }).strict(),
+  z.object({ status: z.literal("reconciliation_pending"), code: z.enum(["RESUME_ALLOCATION_RECONCILIATION", "RESUME_RESTORE_RECONCILIATION", "RESUME_CHECKPOINT_RECONCILIATION"]), sessionId: z.string().min(1), checkpointId: z.string().min(1), pendingActionReference: z.string().min(1), allocationIntentReference: z.string().min(1) }).strict(),
+  z.object({ status: z.literal("denied"), code: z.enum(["RESUME_INVALID_COMMAND", "RESUME_CHECKPOINT_NOT_FOUND_OR_DENIED", "RESUME_PENDING_APPROVAL_REQUIRED", "RESUME_PENDING_ACTION_MISMATCH", "RESUME_CAP_APPROVAL_REQUIRED", "RESUME_COMPATIBILITY_DENIED", "RESUME_BALANCE_INSUFFICIENT", "RESUME_CAP_INSUFFICIENT", "RESUME_STALE_OR_CONFLICTING"]) }).strict(),
+]);
+
 export type PendingActionIntent = z.infer<typeof PendingActionIntentSchema>;
 export type NeedsTopUpResult = z.infer<typeof NeedsTopUpResultSchema>;
 export type ContinuationStatus = z.infer<typeof ContinuationStatusSchema>;
+export type ResumePendingApproval = z.infer<typeof ResumePendingApprovalSchema>;
+export type ResumeCompatibility = z.infer<typeof ResumeCompatibilitySchema>;
+export type ResumeSessionCommand = z.infer<typeof ResumeSessionCommandSchema>;
+export type ResumeSessionResult = z.infer<typeof ResumeSessionResultSchema>;

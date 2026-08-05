@@ -1,11 +1,31 @@
-import { NeedsTopUpResultSchema, PendingActionIntentSchema, type NeedsTopUpResult, type PendingActionIntent } from "./contracts";
+import { NeedsTopUpResultSchema, PendingActionIntentSchema, ResumeSessionCommandSchema, ResumeSessionResultSchema, type NeedsTopUpResult, type PendingActionIntent, type ResumeCompatibility, type ResumeSessionCommand, type ResumeSessionResult } from "./contracts";
+import type { CheckpointEnvelope, CheckpointEnvelopeService, CheckpointManifest } from "./checkpoint-envelope";
 import type { ContinuationFundingStore } from "../persistence/funding-store";
+import type { CheckpointRestoreRequest, ContinuationWorkerPort } from "../phase-02/contracts";
+import { canonicalJson } from "../promotion/schema";
 
 const GRACE_WINDOW_MS = 600_000;
 
 function decimal(value: bigint): string { return value.toString(10); }
 function shortfall(maximum: bigint, available: bigint): bigint { return maximum > available ? maximum - available : 0n; }
 function frozen<T>(value: T): T { return Object.freeze(value); }
+async function fingerprint(value: unknown): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalJson(value)));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export type ResumeCheckpointMaterial = Readonly<{ manifest: CheckpointManifest; envelope: CheckpointEnvelope }>;
+export type ResumeAllocation = Readonly<{ status: "allocated"; worker: ContinuationWorkerPort }> | Readonly<{ status: "refused" | "unknown" }>;
+export type ResumeDependencies = Readonly<{
+  compatibility: ResumeCompatibility;
+  /** Server-owned exact-generation reader; it never accepts checkpoint material from a caller. */
+  checkpoint: Readonly<{
+    loadExact(checkpointId: string): Promise<ResumeCheckpointMaterial>;
+    restore(material: ResumeCheckpointMaterial): Promise<Uint8Array>;
+  }>;
+  /** The allocation implementation must reconcile this durable intent, never allocate by a fresh caller-generated key. */
+  allocate(input: Readonly<{ accountId: string; sessionId: string; checkpointId: string; leaseToken: string; allocationIntentReference: string }>): Promise<ResumeAllocation>;
+}>;
 
 export type VerifiedCreditWakeHint = Readonly<{
   accountId: string;
@@ -38,7 +58,9 @@ export type VerifiedCreditWakeInput = VerifiedCreditWakeHint & Readonly<{
  * replayable pending intent in the same serialized store transaction.
  */
 export class ContinuationService {
-  constructor(private readonly options: Readonly<{ store: ContinuationFundingStore; clock?: Readonly<{ nowMs(): number }> }>) {}
+  #resumeInFlight = new Map<string, Promise<ResumeSessionResult>>();
+  #resumeResults = new Map<string, ResumeSessionResult>();
+  constructor(private readonly options: Readonly<{ store: ContinuationFundingStore; clock?: Readonly<{ nowMs(): number }>; resume?: ResumeDependencies }>) {}
 
   async pauseForFunding(input: Readonly<{ intent: PendingActionIntent }>): Promise<NeedsTopUpResult | undefined> {
     const intent = PendingActionIntentSchema.parse(input.intent);
@@ -115,5 +137,110 @@ export class ContinuationService {
     input.onAuthorization?.();
     await input.onAuthorized?.();
     return transition;
+  }
+
+  /**
+   * Claims a post-grace checkpoint before any allocation, archive read, worker
+   * restore, provider work, or charge. A later credit changes the ledger only;
+   * this explicit owner command is the sole resume authority.
+   */
+  async resumeSession(input: unknown): Promise<ResumeSessionResult> {
+    const parsed = ResumeSessionCommandSchema.safeParse(input);
+    if (!parsed.success) return ResumeSessionResultSchema.parse({ status: "denied", code: "RESUME_INVALID_COMMAND" });
+    if (!this.options.resume) return ResumeSessionResultSchema.parse({ status: "denied", code: "RESUME_CHECKPOINT_NOT_FOUND_OR_DENIED" });
+    const command = parsed.data;
+    const replayKey = `${command.principal.id}\u0000${command.idempotencyKey}`;
+    const remembered = this.#resumeResults.get(replayKey);
+    if (remembered) return remembered;
+    const active = this.#resumeInFlight.get(replayKey);
+    if (active) return active;
+    const run = this.#claimAndRestore(command).then((result) => {
+      this.#resumeResults.set(replayKey, result);
+      return result;
+    }).finally(() => this.#resumeInFlight.delete(replayKey));
+    this.#resumeInFlight.set(replayKey, run);
+    return run;
+  }
+
+  async #claimAndRestore(command: ResumeSessionCommand): Promise<ResumeSessionResult> {
+    const dependencies = this.options.resume!;
+    const accountId = command.principal.id;
+    const continuation = await this.options.store.findContinuationForSession(accountId, command.sessionId);
+    if (!continuation || command.checkpointId.length === 0) return ResumeSessionResultSchema.parse({ status: "denied", code: "RESUME_CHECKPOINT_NOT_FOUND_OR_DENIED" });
+    if (!command.approvePendingAction) return ResumeSessionResultSchema.parse({ status: "denied", code: "RESUME_PENDING_APPROVAL_REQUIRED" });
+    if (command.pendingAction.reference !== continuation.intent.reference || command.pendingAction.fingerprint !== continuation.intent.fingerprint || command.pendingAction.kind !== continuation.intent.actionKind || command.pendingAction.maximum !== continuation.intent.actionMaximum) {
+      return ResumeSessionResultSchema.parse({ status: "denied", code: "RESUME_PENDING_ACTION_MISMATCH" });
+    }
+    if (command.capApprovalReference !== continuation.intent.admissionReference) return ResumeSessionResultSchema.parse({ status: "denied", code: "RESUME_CAP_APPROVAL_REQUIRED" });
+    if (!this.#compatible(continuation.intent, dependencies.compatibility)) return ResumeSessionResultSchema.parse({ status: "denied", code: "RESUME_COMPATIBILITY_DENIED" });
+
+    const commandFingerprint = await fingerprint({ principal: command.principal, sessionId: command.sessionId, checkpointId: command.checkpointId, expectedSessionVersion: command.expectedSessionVersion, expectedCheckpointVersion: command.expectedCheckpointVersion, idempotencyKey: command.idempotencyKey, pendingAction: command.pendingAction, capApprovalReference: command.capApprovalReference });
+    const leaseToken = `lease:resume:${commandFingerprint.slice(0, 24)}`;
+    const allocationIntentReference = `allocation:resume:${command.checkpointId}:${commandFingerprint.slice(0, 24)}`;
+    const budgetKey = `continuation-resume:${command.checkpointId}:${command.idempotencyKey}`;
+    const nowMs = (this.options.clock ?? { nowMs: Date.now }).nowMs();
+    let claimed: Readonly<{ actionBudgetReference: string; allocationIntentReference: string; leaseToken: string }>;
+    try {
+      claimed = await this.options.store.transact(accountId, async (transaction) => {
+        const funds = await transaction.continuationFundingSnapshot(continuation.intent.admissionReference);
+        const amount = BigInt(continuation.intent.actionMaximum);
+        if (funds.availableBalance < amount) throw new Error("RESUME_BALANCE_INSUFFICIENT");
+        if (funds.remainingCap < amount) throw new Error("RESUME_CAP_INSUFFICIENT");
+        const budget = await transaction.reserveActionBudget({ accountId, admissionReference: continuation.intent.admissionReference, idempotencyKey: budgetKey, fingerprint: commandFingerprint, reference: `action-budget:resume:${command.checkpointId}:${commandFingerprint.slice(0, 24)}`, amount });
+        const claim = await transaction.claimResume({ accountId, sessionId: command.sessionId, checkpointId: command.checkpointId, idempotencyKey: command.idempotencyKey, fingerprint: commandFingerprint, pendingFingerprint: command.pendingAction.fingerprint, expectedCheckpointVersion: command.expectedCheckpointVersion, expectedSessionVersion: command.expectedSessionVersion, nowMs, newLeaseToken: leaseToken, allocationIntentReference });
+        return frozen({ actionBudgetReference: budget.reference, allocationIntentReference: claim.allocationIntentReference, leaseToken: claim.leaseToken });
+      });
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "";
+      if (code === "RESUME_BALANCE_INSUFFICIENT" || code === "RESUME_CAP_INSUFFICIENT") return ResumeSessionResultSchema.parse({ status: "denied", code });
+      return ResumeSessionResultSchema.parse({ status: "denied", code: "RESUME_STALE_OR_CONFLICTING" });
+    }
+
+    let allocation: ResumeAllocation;
+    try {
+      allocation = await dependencies.allocate({ accountId, sessionId: command.sessionId, checkpointId: command.checkpointId, leaseToken: claimed.leaseToken, allocationIntentReference: claimed.allocationIntentReference });
+    } catch { allocation = { status: "unknown" }; }
+    if (allocation.status !== "allocated") {
+      await this.#recordRestoreObservation(accountId, command.checkpointId, claimed.allocationIntentReference, allocation.status === "refused" ? "refused" : "reconciliation_pending");
+      return ResumeSessionResultSchema.parse({ status: "reconciliation_pending", code: "RESUME_ALLOCATION_RECONCILIATION", sessionId: command.sessionId, checkpointId: command.checkpointId, pendingActionReference: continuation.intent.reference, allocationIntentReference: claimed.allocationIntentReference });
+    }
+
+    let material: ResumeCheckpointMaterial;
+    let archive: Uint8Array;
+    try {
+      material = await dependencies.checkpoint.loadExact(command.checkpointId);
+      if (!this.#materialMatches(material.manifest, command, continuation.intent, dependencies.compatibility)) throw new Error("CHECKPOINT_BINDING_DENIED");
+      archive = await dependencies.checkpoint.restore(material);
+    } catch {
+      await this.#recordRestoreObservation(accountId, command.checkpointId, claimed.allocationIntentReference, "reconciliation_pending");
+      return ResumeSessionResultSchema.parse({ status: "reconciliation_pending", code: "RESUME_CHECKPOINT_RECONCILIATION", sessionId: command.sessionId, checkpointId: command.checkpointId, pendingActionReference: continuation.intent.reference, allocationIntentReference: claimed.allocationIntentReference });
+    }
+
+    try {
+      const restored = await allocation.worker.restoreCheckpoint({
+        accountId, sessionId: command.sessionId, actionId: material.manifest.action.actionId, expectedVersion: command.expectedSessionVersion,
+        policyVersion: continuation.intent.policyVersion, capabilityGrant: "phase-05-continuation-grant", workspaceId: material.manifest.workspaceLineage,
+        checkpointId: command.checkpointId, pauseGeneration: material.manifest.pauseGeneration, actionVersion: material.manifest.actionVersion,
+        workspaceLineage: material.manifest.workspaceLineage, leaseToken: claimed.leaseToken, resumeClaim: claimed.allocationIntentReference, archive, archiveSha256: material.manifest.archiveSha256,
+      } satisfies CheckpointRestoreRequest);
+      if (restored.status !== "restored") throw new Error("WORKER_RESTORE_DENIED");
+      await this.#recordRestoreObservation(accountId, command.checkpointId, claimed.allocationIntentReference, "restored");
+      return ResumeSessionResultSchema.parse({ status: "restored", code: "RESUME_RESTORED", sessionId: command.sessionId, checkpointId: command.checkpointId, pendingActionReference: continuation.intent.reference, actionBudgetReference: claimed.actionBudgetReference, allocationIntentReference: claimed.allocationIntentReference });
+    } catch {
+      await this.#recordRestoreObservation(accountId, command.checkpointId, claimed.allocationIntentReference, "refused");
+      return ResumeSessionResultSchema.parse({ status: "reconciliation_pending", code: "RESUME_RESTORE_RECONCILIATION", sessionId: command.sessionId, checkpointId: command.checkpointId, pendingActionReference: continuation.intent.reference, allocationIntentReference: claimed.allocationIntentReference });
+    }
+  }
+
+  async #recordRestoreObservation(accountId: string, checkpointId: string, allocationIntentReference: string, state: "restored" | "refused" | "reconciliation_pending"): Promise<void> {
+    try { await this.options.store.transact(accountId, (transaction) => transaction.recordRestoreObservation({ checkpointId, allocationIntentReference, state })); } catch { /* Durable claim remains the fence; a retry reconciles its original intent. */ }
+  }
+
+  #compatible(intent: PendingActionIntent, pins: ResumeCompatibility): boolean {
+    return intent.policyVersion === pins.policyVersion && intent.profileId === pins.profileId && intent.priceCardId === pins.priceCardId && intent.toolchainId === pins.toolchainId;
+  }
+
+  #materialMatches(manifest: CheckpointManifest, command: ResumeSessionCommand, intent: PendingActionIntent, pins: ResumeCompatibility): boolean {
+    return manifest.checkpointId === command.checkpointId && manifest.accountId === command.principal.id && manifest.sessionId === command.sessionId && manifest.sessionVersion === command.expectedSessionVersion && manifest.artifactVersion === intent.expectedArtifactVersion && manifest.action.pendingActionReference === intent.reference && manifest.action.idempotencyKey === intent.idempotencyKey && manifest.compatibility.policyVersion === pins.policyVersion && manifest.compatibility.modelIdentity === pins.profileId && manifest.compatibility.nappletSdkIdentity === pins.priceCardId && manifest.compatibility.toolchainIdentity === pins.toolchainId;
   }
 }

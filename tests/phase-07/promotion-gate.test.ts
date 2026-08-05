@@ -46,6 +46,10 @@ const releaseManifest = () => ({
   version: 1,
   sourceRevision: "a".repeat(40),
   sourceSha256: digest("e"),
+  supplyChainPolicy: {
+    cosign: { executableSha256: digest("0"), signerIdentity: "https://github.com/acme/napplet/.github/workflows/release.yml@refs/heads/main", issuer: "https://token.actions.githubusercontent.com", predicateType: "https://slsa.dev/provenance/v1" },
+    sbom: { bomFormat: "CycloneDX", specVersion: "1.5", generator: { vendor: "acme", name: "sealed-toolchain", version: "1" } },
+  },
   releaseId: digest("1"),
   inputs: {
     controlImageDigest: digest("2"), workerImageDigest: digest("3"), packageLockSha256: digest("4"), toolchainSha256: digest("5"),
@@ -59,11 +63,11 @@ const observation = (manifest: ReturnType<typeof releaseManifest>, candidateId: 
   version: 1 as const, evidenceClass: live ? "protected_live" as const : "deterministic" as const, status, candidate: { id: candidateId, provider: "modal" as const, image: `example/worker@sha256:${digest("3")}`, sourceSha256: digest("e") },
   input: { datasetSha256: digest("9"), profileSha256: digest("f"), topologySha256: digest("0"), command: ["certify"] },
   startedAtMs: 1_000, completedAtMs: 1_001, expiresAtMs: 61_001, claims: status === "passed" ? [claim] : [], limitations: status === "passed" ? [] : ["topology-unavailable"], reasonCode: status === "passed" ? "OBSERVATION_COMPLETE" : "TOPOLOGY_UNAVAILABLE",
-  releaseBinding: { releaseId: manifest.releaseId, sourceRevision: manifest.sourceRevision, sourceSha256: manifest.sourceSha256, inputs: manifest.inputs },
+  releaseBinding: { releaseId: manifest.releaseId, sourceRevision: manifest.sourceRevision, sourceSha256: manifest.sourceSha256, supplyChainPolicy: manifest.supplyChainPolicy, inputs: manifest.inputs },
 });
 
 async function protectedVerificationRecords(manifest: ReturnType<typeof releaseManifest>, candidateId: string, atMs = 1_000) {
-  const releaseBindingSha256 = await sha256({ releaseId: manifest.releaseId, sourceRevision: manifest.sourceRevision, sourceSha256: manifest.sourceSha256, inputs: manifest.inputs });
+  const releaseBindingSha256 = await sha256({ releaseId: manifest.releaseId, sourceRevision: manifest.sourceRevision, sourceSha256: manifest.sourceSha256, supplyChainPolicy: manifest.supplyChainPolicy, inputs: manifest.inputs });
   const reproducibilityBase = {
     version: 1 as const, evidenceClass: "protected_live" as const, status: "verified" as const, candidateId,
     releaseBindingSha256, expectedArtifactSha256: manifest.inputs.workerImageDigest,
@@ -72,7 +76,7 @@ async function protectedVerificationRecords(manifest: ReturnType<typeof releaseM
   const reproducibilityEvidenceSha256 = await sha256(reproducibilityBase);
   const supplyChainBase = {
     version: 1 as const, evidenceClass: "protected_live" as const, status: "verified" as const, candidateId, artifactSha256: manifest.inputs.workerImageDigest,
-    releaseBindingSha256, cosignExecutableSha256: digest("0"), cosignCommandSha256: digest("1"), signerIdentitySha256: digest("2"), issuerSha256: digest("3"),
+    releaseBindingSha256, cosignExecutableSha256: manifest.supplyChainPolicy.cosign.executableSha256, cosignCommandSha256: digest("1"), signerIdentitySha256: await sha256(manifest.supplyChainPolicy.cosign.signerIdentity), issuerSha256: await sha256(manifest.supplyChainPolicy.cosign.issuer),
     predicateType: "https://slsa.dev/provenance/v1" as const, sbomSha256: manifest.inputs.sbomSha256, provenanceSha256: manifest.inputs.provenanceSha256, reviewedComponentsSha256: digest("4"), verifiedAtMs: atMs,
   };
   const supplyChainEvidenceSha256 = await sha256(supplyChainBase);

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { verifySupplyChainCertification, writeSupplyChainRecord } from "../../src/certification/supply-chain";
+import { validateSupplyChainVerificationRecord, verifySupplyChainCertification, writeSupplyChainRecord } from "../../src/certification/supply-chain";
 import { canonicalJson } from "../../src/promotion/schema";
 
 const digest = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
@@ -17,7 +17,10 @@ const sbom = {
   components: [{ type: "library", name: "@napplet/sdk", version: "0.27.2", hashes: [{ alg: "SHA-256", content: "e".repeat(64) }] }],
 };
 const binding = {
-  releaseId: "f".repeat(64), sourceRevision: "1".repeat(40), inputs: {
+  releaseId: "f".repeat(64), sourceRevision: "1".repeat(40), sourceSha256: "f".repeat(64), supplyChainPolicy: {
+    cosign: { executableSha256: digest("approved cosign bytes"), signerIdentity: "https://github.com/acme/napplet/.github/workflows/release.yml@refs/heads/main", issuer: "https://token.actions.githubusercontent.com", predicateType: "https://slsa.dev/provenance/v1" },
+    sbom: { bomFormat: "CycloneDX", specVersion: "1.5", generator: { vendor: "acme", name: "sealed-toolchain", version: "1" } },
+  }, inputs: {
     controlImageDigest: "2".repeat(64), workerImageDigest: "3".repeat(64), packageLockSha256: lockSha256, toolchainSha256,
     migrationSha256: "4".repeat(64), configSha256: "5".repeat(64), policySha256: "6".repeat(64), datasetSha256: "7".repeat(64), goldenSha256: "8".repeat(64), sbomSha256: digest(canonicalJson(sbom)), provenanceSha256: "0".repeat(64),
   },
@@ -65,4 +68,15 @@ test("wrong tool, argv-result, identity, predicate, subject, reviewed contents, 
     { value: input(), stdout: JSON.stringify({ rawSecret: "supersecret" }) },
   ];
   for (const item of cases) await expect(verifySupplyChainCertification(item.value, { readExecutable: async () => item.executable ?? cosignBytes, run: runner(item.stdout).run })).rejects.toThrow();
+});
+
+test("manifest-owned Cosign and SBOM policy rejects self-selected identities and freshly rehashed records", async () => {
+  const verified = await verifySupplyChainCertification(input(), { readExecutable: async () => cosignBytes, run: runner().run, nowMs: () => 1_000 });
+  const selfSelected = { ...input(), cosign: { ...cosign, signerIdentity: "https://github.com/attacker/release.yml@refs/heads/main" } };
+  await expect(verifySupplyChainCertification(selfSelected, { readExecutable: async () => cosignBytes, run: runner().run })).rejects.toThrow("SUPPLY_CHAIN_POLICY_MISMATCH");
+  await expect(verifySupplyChainCertification({ ...input(), sbom: { ...sbom, metadata: { ...sbom.metadata, tools: [{ ...sbom.metadata.tools[0]!, version: "2" }] } } }, { readExecutable: async () => cosignBytes, run: runner().run })).rejects.toThrow("SUPPLY_CHAIN_POLICY_MISMATCH");
+
+  const substitutedBase = { ...verified, signerIdentitySha256: digest("https://github.com/attacker/release.yml@refs/heads/main") };
+  const substituted = { ...substitutedBase, evidenceSha256: digest(canonicalJson(Object.fromEntries(Object.entries(substitutedBase).filter(([key]) => key !== "evidenceSha256" && key !== "contentAddressedPath")))) };
+  await expect(validateSupplyChainVerificationRecord({ ...substituted, contentAddressedPath: `evidence/certification/supply-chain/${substituted.evidenceSha256}.json` }, { candidateId, releaseBinding: binding, artifactSha256, nowMs: 1_001 })).rejects.toThrow("SUPPLY_CHAIN_POLICY_MISMATCH");
 });

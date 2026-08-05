@@ -101,7 +101,7 @@ export const NON_WAIVABLE_RELEASE_CLASSES = new Set([
 type JsonRecord = Record<string, unknown>;
 
 const SHA256 = /^[a-f0-9]{64}$/i;
-const COMMIT = /^[a-f0-9]{40,64}$/i;
+const COMMIT = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -120,7 +120,7 @@ function sha256(record: JsonRecord, key: string): string {
 }
 
 function revision(value: string, label: string): string {
-  if (!COMMIT.test(value)) throw new Error(`${label} must be a 40-64 character revision pin`);
+  if (!COMMIT.test(value)) throw new Error(`${label} must be a complete SHA-1 or SHA-256 revision pin`);
   return value.toLowerCase();
 }
 

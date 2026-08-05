@@ -118,6 +118,8 @@ function bindSupplyChainObservation<T extends ReturnType<typeof observation>>(va
 test("manifest rejects missing exact release inputs and non-waivable safety waivers", () => {
   expect(() => parseReleaseCertificationManifest({ ...releaseManifest(), inputs: { ...releaseManifest().inputs, goldenSha256: "latest" } })).toThrow();
   expect(() => parseReleaseCertificationManifest({ ...releaseManifest(), waivers: [{ class: "user-key-custody", owner: "owner", reason: "no", evidenceSha256: digest("f"), expiresAtMs: 2_000, rollbackTrigger: "rollback", affectedIdentity: digest("1") }] })).toThrow();
+  for (const length of [41, 63]) expect(() => parseReleaseCertificationManifest({ ...releaseManifest(), sourceRevision: "a".repeat(length) })).toThrow("complete SHA-1 or SHA-256 revision pin");
+  expect(parseReleaseCertificationManifest({ ...releaseManifest(), sourceRevision: "b".repeat(64) }).sourceRevision).toBe("b".repeat(64));
 });
 
 test("evidence blocks stale, cross-candidate, non-pass, and concurrent release promotion decisions", async () => {

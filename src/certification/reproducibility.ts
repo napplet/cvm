@@ -9,7 +9,7 @@ const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => v
 const IdentitySchema = z.string().regex(/^[a-z][a-z0-9._-]{2,127}$/u);
 const EpochMsSchema = z.number().int().nonnegative().finite();
 export const SourceByteMeasurementSchema = z.object({
-  canonicalSourceReference: z.string().regex(/^git\+https:\/\/[a-z0-9.-]+\/[a-z0-9._/-]+@[a-f0-9]{40,64}$/iu),
+  canonicalSourceReference: z.string().regex(/^git\+https:\/\/[a-z0-9.-]+\/[a-z0-9._/-]+@(?:[a-f0-9]{40}|[a-f0-9]{64})$/iu),
   sourceSha256: DigestSchema,
 }).strict();
 

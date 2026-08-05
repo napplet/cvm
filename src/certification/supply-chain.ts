@@ -17,7 +17,7 @@ const CycloneDxSchema = z.object({
 const ProvenanceSchema = z.object({
   _type: z.literal("https://in-toto.io/Statement/v1"), subject: z.array(z.object({ name: z.string().min(1), digest: z.object({ sha256: DigestSchema }).strict() }).strict()).length(1),
   predicateType: z.literal("https://slsa.dev/provenance/v1"),
-  predicate: z.object({ buildDefinition: z.object({ externalParameters: z.object({ candidateId: DigestSchema, sourceRevision: z.string().regex(/^[a-f0-9]{40,64}$/iu), sourceSha256: DigestSchema, lockSha256: DigestSchema, toolchainSha256: DigestSchema, datasetSha256: DigestSchema }).strict() }).strict() }).strict(),
+  predicate: z.object({ buildDefinition: z.object({ externalParameters: z.object({ candidateId: DigestSchema, sourceRevision: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/iu), sourceSha256: DigestSchema, lockSha256: DigestSchema, toolchainSha256: DigestSchema, datasetSha256: DigestSchema }).strict() }).strict() }).strict(),
 }).strict();
 const CosignSchema = z.object({ executable: z.string().regex(/^\/[^\0\r\n]*$/u), executableSha256: DigestSchema, signerIdentity: z.string().min(1).max(512), issuer: z.string().url().max(512), predicateType: z.literal("https://slsa.dev/provenance/v1") }).strict();
 const SupplyChainInputSchema = z.object({

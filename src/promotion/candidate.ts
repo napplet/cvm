@@ -37,7 +37,7 @@ export type CandidateDetection = {
 };
 
 const SHA256 = /^[a-f0-9]{64}$/i;
-const REVISION = /^[a-f0-9]{40,64}$/i;
+const REVISION = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
 const INTEGRITY = /^sha512-[A-Za-z0-9+/]+={0,2}$/;
 const REVIEW_SCOPE = "provenance-intake";
 

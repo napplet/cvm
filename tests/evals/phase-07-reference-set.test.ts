@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { executePhase07ReferenceCase, validatePhase07ReferenceSet } from "../../src/certification/phase-07-reference-set.js";
+import { buildPhase07DesignEvidence, validatePhase07DesignEvidence } from "../../src/certification/evidence.js";
 
 const fixturePath = "tests/fixtures/phase-07-reference-set.json";
 
@@ -26,5 +27,19 @@ describe("Phase 07 actual-authority reference set", () => {
     const contaminated = structuredClone(fixture);
     contaminated.liveObservations[0].limitation = "Bearer secret-canary";
     expect(() => validatePhase07ReferenceSet(contaminated)).toThrow();
+  });
+
+  test("builds canonical deterministic evidence and rejects a promoted live claim", async () => {
+    const fixture = validatePhase07ReferenceSet(JSON.parse(await readFile(fixturePath, "utf8")));
+    const comparisons = await Promise.all(fixture.cases.map(executePhase07ReferenceCase));
+    const first = await buildPhase07DesignEvidence({ fixture, comparisons, sourceRevision: fixture.sourceRevision });
+    const second = await buildPhase07DesignEvidence({ fixture, comparisons, sourceRevision: fixture.sourceRevision });
+    expect(first.evidenceSha256).toBe(second.evidenceSha256);
+    expect(first.offlineVerdict).toBe("passed");
+    expect(first.promotionVerdict).toBe("blocked");
+    expect(validatePhase07DesignEvidence(first).contentAddressedPath).toBe(`evidence/design/${first.evidenceSha256}.json`);
+    const forged = structuredClone(first);
+    forged.liveObservations[0].status = "passed";
+    expect(() => validatePhase07DesignEvidence(forged)).toThrow();
   });
 });

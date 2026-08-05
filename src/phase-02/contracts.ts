@@ -121,6 +121,36 @@ export const CheckpointProposalSchema = CorrelationSchema.extend({
   if (new Set(value.inventory).size !== value.inventory.length) ctx.addIssue({ code: "custom", message: "inventory entries must be unique" });
 });
 
+/** Coordinator-issued fence for a single continuation lifecycle operation. */
+export const ContinuationLeaseBindingSchema = CorrelationSchema.extend({
+  accountId: z.string().min(1),
+  checkpointId: z.string().min(1),
+  pauseGeneration: z.number().int().nonnegative(),
+  actionVersion: z.number().int().nonnegative(),
+  workspaceLineage: z.string().min(1),
+  leaseToken: z.string().min(1),
+}).strict();
+export const CheckpointExportRequestSchema = ContinuationLeaseBindingSchema;
+export const CheckpointRestoreRequestSchema = ContinuationLeaseBindingSchema.extend({
+  resumeClaim: z.string().min(1),
+  archive: z.instanceof(Uint8Array),
+  archiveSha256: DigestSchema,
+}).strict();
+export const CheckpointTerminationRequestSchema = ContinuationLeaseBindingSchema;
+
+export const CheckpointExportResultSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("exported"), code: z.literal("WORKER_CHECKPOINT_EXPORTED"), proposal: CheckpointProposalSchema }).strict(),
+  z.object({ status: z.literal("denied"), code: z.literal("WORKER_CONTINUATION_DENIED") }).strict(),
+]);
+export const CheckpointRestoreResultSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("restored"), code: z.literal("WORKER_CHECKPOINT_RESTORED"), workspaceId: z.string().min(1), workspaceLineage: z.string().min(1) }).strict(),
+  z.object({ status: z.literal("denied"), code: z.literal("WORKER_CONTINUATION_DENIED") }).strict(),
+]);
+export const CheckpointTerminationResultSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("terminated"), code: z.literal("WORKER_LEASE_TERMINATED") }).strict(),
+  z.object({ status: z.literal("denied"), code: z.literal("WORKER_CONTINUATION_DENIED") }).strict(),
+]);
+
 export const WorkerRunResultSchema = z.discriminatedUnion("status", [
   WorkerProposalSchema,
   z.object({ status: z.literal("completed"), code: z.literal("WORKER_PROPOSALS_VALIDATED"), events: CompletedWorkerEventsSchema, artifact: WorkerArtifactSchema, checkpoint: CheckpointProposalSchema.optional() }).strict(),
@@ -152,10 +182,24 @@ export type WorkerEvent = z.infer<typeof WorkerEventSchema>;
 export type WorkerArtifact = z.infer<typeof WorkerArtifactSchema>;
 export type WorkerRunResult = z.infer<typeof WorkerRunResultSchema>;
 export type CheckpointProposal = z.infer<typeof CheckpointProposalSchema>;
+export type ContinuationLeaseBinding = z.infer<typeof ContinuationLeaseBindingSchema>;
+export type CheckpointExportRequest = z.infer<typeof CheckpointExportRequestSchema>;
+export type CheckpointRestoreRequest = z.infer<typeof CheckpointRestoreRequestSchema>;
+export type CheckpointTerminationRequest = z.infer<typeof CheckpointTerminationRequestSchema>;
+export type CheckpointExportResult = z.infer<typeof CheckpointExportResultSchema>;
+export type CheckpointRestoreResult = z.infer<typeof CheckpointRestoreResultSchema>;
+export type CheckpointTerminationResult = z.infer<typeof CheckpointTerminationResultSchema>;
 
 /** The worker can only produce parsed proposals/results; it owns no state API. */
 export interface WorkerPort {
   run(request: WorkerRunRequest, signal: AbortSignal): Promise<WorkerRunResult>;
+}
+
+/** Lifecycle extension uses only coordinator-issued project contracts, never provider handles. */
+export interface ContinuationWorkerPort extends WorkerPort {
+  exportCheckpoint(request: CheckpointExportRequest): Promise<CheckpointExportResult>;
+  restoreCheckpoint(request: CheckpointRestoreRequest): Promise<CheckpointRestoreResult>;
+  terminateCheckpoint(request: CheckpointTerminationRequest): Promise<CheckpointTerminationResult>;
 }
 
 export type StoredResult = Readonly<Record<string, unknown>>;

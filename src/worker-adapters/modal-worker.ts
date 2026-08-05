@@ -5,9 +5,21 @@ import { GrantRegistry, ScopedToolGateway } from "../capabilities/scoped-tool-ga
 import { ToolRequestSchema } from "../phase-02/contracts";
 import { canonicalJson } from "../promotion/schema";
 import {
+  CheckpointExportRequestSchema,
+  CheckpointExportResultSchema,
+  CheckpointRestoreRequestSchema,
+  CheckpointRestoreResultSchema,
+  CheckpointTerminationRequestSchema,
+  CheckpointTerminationResultSchema,
   WorkerRunRequestSchema,
   WorkerRunResultSchema,
-  type WorkerPort,
+  type ContinuationWorkerPort,
+  type CheckpointExportRequest,
+  type CheckpointExportResult,
+  type CheckpointRestoreRequest,
+  type CheckpointRestoreResult,
+  type CheckpointTerminationRequest,
+  type CheckpointTerminationResult,
   type WorkerRunRequest,
   type WorkerRunResult,
 } from "../phase-02/contracts";
@@ -314,7 +326,7 @@ function sandboxPort(sandbox: {
 }
 
 /** Candidate-only adapter. It returns only project WorkerPort values, never Modal objects or errors. */
-export class ModalWorkerAdapter implements WorkerPort {
+export class ModalWorkerAdapter implements ContinuationWorkerPort {
   readonly #config: ModalWorkerConfig;
   readonly #sdk: ModalSdkPort;
 
@@ -363,6 +375,21 @@ export class ModalWorkerAdapter implements WorkerPort {
       }
     }
     return terminationUncertain ? WorkerRunResultSchema.parse({ status: "unavailable", code: "WORKER_UNAVAILABLE" }) : result;
+  }
+
+  async exportCheckpoint(input: CheckpointExportRequest): Promise<CheckpointExportResult> {
+    CheckpointExportRequestSchema.safeParse(input);
+    return CheckpointExportResultSchema.parse({ status: "denied", code: "WORKER_CONTINUATION_DENIED" });
+  }
+
+  async restoreCheckpoint(input: CheckpointRestoreRequest): Promise<CheckpointRestoreResult> {
+    CheckpointRestoreRequestSchema.safeParse(input);
+    return CheckpointRestoreResultSchema.parse({ status: "denied", code: "WORKER_CONTINUATION_DENIED" });
+  }
+
+  async terminateCheckpoint(input: CheckpointTerminationRequest): Promise<CheckpointTerminationResult> {
+    CheckpointTerminationRequestSchema.safeParse(input);
+    return CheckpointTerminationResultSchema.parse({ status: "denied", code: "WORKER_CONTINUATION_DENIED" });
   }
 }
 

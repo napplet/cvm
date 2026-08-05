@@ -1,12 +1,27 @@
 import { canonicalJson } from "../promotion/schema";
 import { z } from "zod";
 import {
+  CheckpointExportRequestSchema,
+  CheckpointExportResultSchema,
   CheckpointProposalSchema,
+  CheckpointRestoreRequestSchema,
+  CheckpointRestoreResultSchema,
+  CheckpointTerminationRequestSchema,
+  CheckpointTerminationResultSchema,
+  ContinuationLeaseBindingSchema,
   ToolRequestSchema,
   WorkerEventSchema,
   WorkerRunRequestSchema,
   WorkerRunResultSchema,
+  type CheckpointExportRequest,
+  type CheckpointExportResult,
   type CheckpointProposal,
+  type CheckpointRestoreRequest,
+  type CheckpointRestoreResult,
+  type CheckpointTerminationRequest,
+  type CheckpointTerminationResult,
+  type ContinuationLeaseBinding,
+  type ContinuationWorkerPort,
   type ToolRequest,
   type WorkerEvent,
   type WorkerPort,
@@ -123,9 +138,13 @@ export async function validateCheckpointProposal(proposal: unknown, request: Wor
  * only effect path is ScopedToolGateway; no environment, credentials, network,
  * host filesystem, or durable store is attached to this object.
  */
-export class DeterministicFakeWorker implements WorkerPort {
+export class DeterministicFakeWorker implements ContinuationWorkerPort {
   #active = new Set<string>();
   #terminal = new Map<string, WorkerRunResult>();
+  #checkpointRecords = new Map<string, Readonly<{ request: WorkerRunRequest; events: readonly WorkerEvent[]; proposal: CheckpointProposal }>>();
+  #activeContinuation?: ContinuationLeaseBinding;
+  #restores = new Map<string, CheckpointRestoreResult>();
+  #terminatedLeases = new Set<string>();
   #clock: () => number;
   #barrier?: () => Promise<void>;
 
@@ -137,9 +156,14 @@ export class DeterministicFakeWorker implements WorkerPort {
     now?: () => number;
     barrier?: () => Promise<void>;
     faultAtTurn?: number;
+    continuation?: Readonly<ContinuationLeaseBinding & { resumeClaim: string }>;
   }>) {
     this.#clock = options.now ?? Date.now;
     this.#barrier = options.barrier;
+    if (options.continuation) {
+      const { resumeClaim: _resumeClaim, ...binding } = options.continuation;
+      this.#activeContinuation = ContinuationLeaseBindingSchema.parse(binding);
+    }
   }
 
   async run(input: WorkerRunRequest, signal: AbortSignal): Promise<WorkerRunResult> {
@@ -181,7 +205,9 @@ export class DeterministicFakeWorker implements WorkerPort {
       }
       if (signal.aborted) return this.finish(identity, { status: "interrupted", code: "WORKER_INTERRUPTED" });
       if (events.length === 0) return this.finish(identity, { status: "blocked", code: "CHECKPOINT_BOUNDARY_REQUIRED" });
-      return this.finish(identity, { status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events, artifact: this.artifact(request), ...(checkpoint ? { checkpoint } : {}) });
+      const result = this.finish(identity, { status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events, artifact: this.artifact(request), ...(checkpoint ? { checkpoint } : {}) });
+      if (checkpoint) this.#checkpointRecords.set(checkpoint.checkpointId, Object.freeze({ request, events: Object.freeze([...events]), proposal: checkpoint }));
+      return result;
     } finally {
       this.#active.delete(identity);
     }
@@ -221,5 +247,53 @@ export class DeterministicFakeWorker implements WorkerPort {
     const parsed = WorkerRunResultSchema.parse(result);
     this.#terminal.set(identity, parsed);
     return parsed;
+  }
+
+  async exportCheckpoint(input: CheckpointExportRequest): Promise<CheckpointExportResult> {
+    const parsed = CheckpointExportRequestSchema.safeParse(input);
+    if (!parsed.success || !this.matchesActiveLease(parsed.data)) return CheckpointExportResultSchema.parse({ status: "denied", code: "WORKER_CONTINUATION_DENIED" });
+    const record = this.#checkpointRecords.get(parsed.data.checkpointId);
+    if (!record || !this.matchesRun(record.request, parsed.data) || !await validateCheckpointProposal(record.proposal, record.request, record.events)) return CheckpointExportResultSchema.parse({ status: "denied", code: "WORKER_CONTINUATION_DENIED" });
+    return CheckpointExportResultSchema.parse({ status: "exported", code: "WORKER_CHECKPOINT_EXPORTED", proposal: record.proposal });
+  }
+
+  async restoreCheckpoint(input: CheckpointRestoreRequest): Promise<CheckpointRestoreResult> {
+    const parsed = CheckpointRestoreRequestSchema.safeParse(input);
+    if (!parsed.success || !this.options.continuation || parsed.data.resumeClaim !== this.options.continuation.resumeClaim || !this.matchesContinuation(parsed.data, this.options.continuation, false) || !this.#checkpointRecords.has(parsed.data.checkpointId)) return CheckpointRestoreResultSchema.parse({ status: "denied", code: "WORKER_CONTINUATION_DENIED" });
+    const existing = this.#restores.get(parsed.data.resumeClaim);
+    if (existing) return existing.status === "restored" && existing.workspaceId === parsed.data.workspaceId && existing.workspaceLineage === parsed.data.workspaceLineage
+      ? existing
+      : CheckpointRestoreResultSchema.parse({ status: "denied", code: "WORKER_CONTINUATION_DENIED" });
+    const result = CheckpointRestoreResultSchema.parse({ status: "restored", code: "WORKER_CHECKPOINT_RESTORED", workspaceId: parsed.data.workspaceId, workspaceLineage: parsed.data.workspaceLineage });
+    const { resumeClaim: _resumeClaim, archive: _archive, archiveSha256: _archiveSha256, ...binding } = parsed.data;
+    this.#activeContinuation = ContinuationLeaseBindingSchema.parse(binding);
+    this.#restores.set(parsed.data.resumeClaim, result);
+    return result;
+  }
+
+  async terminateCheckpoint(input: CheckpointTerminationRequest): Promise<CheckpointTerminationResult> {
+    const parsed = CheckpointTerminationRequestSchema.safeParse(input);
+    if (!parsed.success) return CheckpointTerminationResultSchema.parse({ status: "denied", code: "WORKER_CONTINUATION_DENIED" });
+    if (this.#terminatedLeases.has(parsed.data.leaseToken)) return CheckpointTerminationResultSchema.parse({ status: "terminated", code: "WORKER_LEASE_TERMINATED" });
+    if (!this.matchesActiveLease(parsed.data)) return CheckpointTerminationResultSchema.parse({ status: "denied", code: "WORKER_CONTINUATION_DENIED" });
+    this.#activeContinuation = undefined;
+    this.#terminatedLeases.add(parsed.data.leaseToken);
+    return CheckpointTerminationResultSchema.parse({ status: "terminated", code: "WORKER_LEASE_TERMINATED" });
+  }
+
+  private matchesActiveLease(input: ContinuationLeaseBinding): boolean {
+    return !!this.#activeContinuation && this.matchesContinuation(input, this.#activeContinuation, true);
+  }
+
+  private matchesContinuation(input: ContinuationLeaseBinding, expected: ContinuationLeaseBinding, includeLease: boolean): boolean {
+    return input.accountId === expected.accountId && input.sessionId === expected.sessionId && input.actionId === expected.actionId
+      && input.expectedVersion === expected.expectedVersion && input.policyVersion === expected.policyVersion && input.capabilityGrant === expected.capabilityGrant
+      && input.workspaceId === expected.workspaceId && input.checkpointId === expected.checkpointId && input.pauseGeneration === expected.pauseGeneration
+      && input.actionVersion === expected.actionVersion && input.workspaceLineage === expected.workspaceLineage && (!includeLease || input.leaseToken === expected.leaseToken);
+  }
+
+  private matchesRun(request: WorkerRunRequest, binding: ContinuationLeaseBinding): boolean {
+    return request.sessionId === binding.sessionId && request.actionId === binding.actionId && request.expectedVersion === binding.expectedVersion
+      && request.policyVersion === binding.policyVersion && request.capabilityGrant === binding.capabilityGrant && request.workspaceId === binding.workspaceId;
   }
 }

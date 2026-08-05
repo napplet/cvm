@@ -2,7 +2,10 @@ import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   DURABILITY_SUBJECT_KINDS,
+  ProtectedInfrastructureDrillInputSchema,
+  createProtectedInfrastructureDrillEvidence,
   runRestoreDrill,
+  validateDurabilityInventory,
   validateTopologyClaim,
   type RestoreDrillInput,
 } from "../../src/resilience/fault-harness";
@@ -126,6 +129,22 @@ test("every retained subject requires an exact object identity and blocked live 
     claimed: { ingressRegions: ["us-east1", "us-west1"], databaseRegions: ["us-east1"], objectRegions: ["us-east1"], workerRegions: ["us-east1"], relayRegions: ["us-east1"], activeStandby: "active-active", failureDomain: "region", rtoMs: 10, rpoMs: 0, limitations: [] },
     observation: { status: "blocked", reason: "PROTECTED_INFRASTRUCTURE_UNAVAILABLE" },
   })).toEqual(expect.objectContaining({ status: "blocked", code: "TOPOLOGY_NOT_OBSERVED" }));
+});
+
+test("all seven retained subjects are exact-generation inventory entries and unavailable protected infrastructure is immutable blocked evidence", async () => {
+  const reference = { key: "retained/object", generation: 1, checksum: checksum(ciphertext) };
+  expect(validateDurabilityInventory(DURABILITY_SUBJECT_KINDS.map((kind) => ({
+    kind, sourceIdentity: `${kind}-1`, object: reference, payloadSha256: checksum(archive), ownerId: "owner-1", retentionUntil: "2030-01-01T00:00:00.000Z", deletionState: "retained",
+  })))).toHaveLength(7);
+  expect(() => validateDurabilityInventory(DURABILITY_SUBJECT_KINDS.slice(0, -1).map((kind) => ({
+    kind, sourceIdentity: `${kind}-1`, object: reference, payloadSha256: checksum(archive), ownerId: "owner-1", retentionUntil: "2030-01-01T00:00:00.000Z", deletionState: "retained",
+  })))).toThrow();
+  const input = ProtectedInfrastructureDrillInputSchema.parse({
+    candidateDigest: "a".repeat(64), components: ["gcs", "cloud_run", "cockroach"], credentialsAvailable: false,
+  });
+  const evidence = await createProtectedInfrastructureDrillEvidence(input);
+  expect(evidence).toEqual(expect.objectContaining({ status: "blocked", code: "PROTECTED_INFRASTRUCTURE_UNAVAILABLE", candidateDigest: input.candidateDigest }));
+  expect(evidence.evidenceDigest).toMatch(/^[a-f0-9]{64}$/u);
 });
 
 test("the GCS-shaped adapter only permits exact generation/checksum client operations", async () => {

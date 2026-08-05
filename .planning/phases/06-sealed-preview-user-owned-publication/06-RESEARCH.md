@@ -102,9 +102,9 @@ NIP-5D’s current contract supports this boundary: host iframe identity is a `(
 
 | Library / contract | Version / pin | Purpose | Required use |
 |---|---|---|---|
-| Promoted standalone `napplet` CLI | `@napplet/cli@0.5.2`, commit `1a38b9150f3a3da148091c11bce4d0365f7298e5`, asset SHA `46685f…3ec5e` | Package-owned deploy plan/template, upload, and relay behavior | Reuse only behind `NappletDeploymentPort`; persist this compatibility ID. [VERIFIED: repository `toolchains/candidates/cli-0.5.2-release-set.json`] |
+| Promoted standalone `napplet` CLI | `@napplet/cli@0.5.2`, commit `1a38b9150f3a3da148091c11bce4d0365f7298e5`, Linux asset SHA-256 `46685f2e4df516b5b2e7e2e133480c90e5c85dbd36d05c6e95f4eee6af33ec5e` | Package-owned structured upload, pre-signed relay, progress/result, and success-predicate behavior | Reuse only behind `NappletDeploymentPort`; persist this compatibility ID and require the exact-source contract probe before publication availability. [VERIFIED: repository `toolchains/candidates/cli-0.5.2-release-set.json`] |
 | NIP-5D/NIP-5A/NAP | Phase 1 NIP-5D revision `eb45dfd…4c34` | Sandbox, source identity, aggregate/manifest, capability semantics | Consume upstream manifest output; never recreate protocol behavior. [VERIFIED: repository release set] [CITED: https://github.com/nostr-protocol/nips/pull/2303] |
-| `nostr-tools` | `2.24.1` locked transitively | NIP-01 event ID/signature verification | Add direct exact dependency only after human checkpoint. [ASSUMED] `nostr-tools@2.24.1` [WARNING: flagged as suspicious — verify before using.] |
+| `nostr-tools` | exact direct `2.24.1` | NIP-01 event ID/signature verification | Declare the exact root dependency autonomously per explicit developer direction and import only `serializeEvent`, `getEventHash`, and `verifyEvent` from `nostr-tools/pure`; exhaustive package certification remains Phase 7. [ASSUMED] [VERIFIED: repository `bun.lock`] |
 | `zod` | `4.4.3` existing | Strict command/descriptor/event/status schemas | Follow existing adapter boundary convention. [VERIFIED: repository `package.json`, `src/contextvm/adapter.ts`] |
 | Project canonical JSON | `src/promotion/schema.ts` | Internal fingerprints/evidence | Never substitute for NIP-01 serialization. [VERIFIED: repository source] |
 
@@ -112,15 +112,15 @@ NIP-5D’s current contract supports this boundary: host iframe identity is a `(
 
 | Package / tool | Registry / distribution | Verdict | Disposition |
 |---|---|---|---|
-| `nostr-tools@2.24.1` | npm, already transitive in `bun.lock` | SUS (`too-new`) | Flagged — `checkpoint:human-verify` before direct install. [ASSUMED] [VERIFIED: repository `bun.lock`] |
+| `nostr-tools@2.24.1` | npm, already resolved transitively in `bun.lock` | SUS (`too-new`) | Developer explicitly authorized an autonomous exact direct pin for the pure verification API; no human trust checkpoint and no perfect-package-validation precondition in Phase 6. Verify root manifest/lock resolution and defer exhaustive legitimacy certification to Phase 7. [ASSUMED] [VERIFIED: repository `bun.lock`] |
 | `@napplet/conformance-cli@0.2.18` | existing promoted toolchain lock | SUS (`too-new`, `low-downloads`) | Do not newly install; reuse pinned toolchain only. [ASSUMED] [VERIFIED: repository lock] |
 | standalone CLI 0.5.2 | GitHub release asset | existing approved release set | Reuse through port; no npm install. [VERIFIED: repository release set] |
 | npm `@napplet/cli@0.0.0` | npm | SUS (`too-new`, `low-downloads`) | **REMOVED** — it is not this project’s promoted CLI distribution. [ASSUMED] [VERIFIED: repository release set] |
 
-**Installation (only after checkpoint):**
+**Autonomous exact direct pin:**
 
 ```bash
-bun add nostr-tools@2.24.1
+bun add --exact nostr-tools@2.24.1
 ```
 
 ## Architecture Patterns
@@ -208,7 +208,7 @@ Recommended ordering is verify signed owner event → persist all intents → de
 
 ### Pattern 5: Pinned upstream CLI adapter
 
-`NappletDeploymentPort.deployExact()` accepts only the committed operation ID, CLI ID, sealed object generation/checksum, aggregate, template digest, and signed owner event. The current CLI source exposes `executeNetworkDeploy` over pre-signed manifest templates but its normal `napplet deploy` command creates/signs templates and accepts secret/remote-signer inputs. The adapter must use only the pre-signed path plus a separate server deployment-authorization identity; it must never pass user `nsec`, `nbunksec`, bunker URL, key reference, `--sec`, or `--prompt-sec`. [VERIFIED: upstream CLI source at `napplet/web@1a38b9150f3a3da148091c11bce4d0365f7298e5`] [CITED: https://napplet.run/docs/packages/cli.html]
+`NappletDeploymentPort.deployExact()` accepts only the committed operation ID, CLI ID, sealed object generation/checksum, aggregate, template digest, and signed owner event. At the promoted commit, the safe candidate source surface is lower-level structured `uploadFilesToServers`, `publishEventWithSimplePool`, and `networkDeploySucceeded`; the command path performs discovery/planning/signing and `executeNetworkDeploy` combines upload plus relay behind a signer. The adapter must use only a passing repository-owned exact-source contract over the lower-level structured route, supply sealed payloads and the completed owner event directly, and keep server-owned Blossom authorization separate. It must reject/avoid user `nsec`, `nbunksec`, bunker/key references, source workspace collection, command dispatch, dependency/build/rebuild, root/snapshot/multi-target, JSON report, and human stdout paths. [VERIFIED: upstream CLI source at `napplet/web@1a38b9150f3a3da148091c11bce4d0365f7298e5`] [CITED: https://napplet.run/docs/packages/cli.html]
 
 If the sealed release asset cannot expose a supported pre-signed template path, return a truthful design-stage blocked/not-available observation and close the upstream compatibility gap in Phase 7—never replace it with a custom uploader/manifest builder. [VERIFIED: repository Phase 1 design evidence] [ASSUMED]
 
@@ -218,7 +218,7 @@ If the sealed release asset cannot expose a supported pre-signed template path, 
 |---|---|---|---|
 | Iframe/NAP protocol | CVM-specific browser runtime | compatible NIP-5D host | NIP-5D owns sandbox, source identity, and message behavior. [CITED: https://github.com/nostr-protocol/nips/pull/2303] |
 | Aggregate/manifest | server-side hash/tag generator | promoted CLI/vite-plugin output | Upstream owns NIP-5A construction. [VERIFIED: repository Phase 1 verification] |
-| Event crypto | custom ID/Schnorr verifier | `nostr-tools` after checkpoint | NIP-01 interoperability/crypto semantics are security critical. [CITED: https://github.com/nostr-protocol/nips/blob/master/01.md] |
+| Event crypto | custom ID/Schnorr verifier | exact direct `nostr-tools@2.24.1` pure verification API | NIP-01 interoperability/crypto semantics are security critical; no signing/key API is exposed. [CITED: https://github.com/nostr-protocol/nips/blob/master/01.md] |
 | Upload/relay publisher | custom Blossom/relay client | promoted CLI adapter | Current CLI owns auth, mirrors, and network observations. [VERIFIED: upstream CLI source] |
 | User signer | CVM key form/vault/delegation | host/external signer callback | Preserves key custody. [VERIFIED: repository D-104] |
 
@@ -281,11 +281,11 @@ After an unknown result, only `observe` is callable. The implementation rejects 
 | A2 | CVM attestation uses a safe project-owned immutable Nostr event kind/schema. | Attestation | A conflicting/replaceable kind would undermine interoperability/provenance. |
 | A3 | Promoted CLI 0.5.2 release asset can expose a safe pre-signed-template adapter route. | CLI adapter | If false, Phase 6 stays design-stage truthful and Phase 7/upstream work must close it. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Attestation event kind/tags:** NIP-5D/NIP-5A reviewed material does not define CVM attestation semantics. Define a strict project-owned schema in Phase 6, label it non-standard, and defer ecosystem/relay interoperability certification to Phase 7. [CITED: https://github.com/nostr-protocol/nips/pull/2303] [ASSUMED]
-2. **CLI pre-signed route:** Inspect/probe the sealed 0.5.2 release asset against a deterministic pre-signed template and deploy-authorization signer before exposing `publication` as available. [VERIFIED: upstream CLI source] [ASSUMED]
-3. **Host/signer choice:** Use deterministic fake host/external signer ports in this phase; selected runtime, real signer, relays, and Blossom provider certification remain Phase 7. [VERIFIED: repository deferred ideas]
+1. **RESOLVED — Attestation event kind/tags:** Phase 6 uses a strict project-owned, explicitly non-standard immutable schema. Phase 7 owns ecosystem and relay interoperability certification. [CITED: https://github.com/nostr-protocol/nips/pull/2303] [ASSUMED]
+2. **RESOLVED — CLI pre-signed route:** Phase 6 uses the bounded exact-source contract probe for the promoted 0.5.2 route; probe failure truthfully yields `publication_unavailable`. Live binary and provider certification remain Phase 7. [VERIFIED: upstream CLI source] [ASSUMED]
+3. **RESOLVED — Host/signer choice:** Phase 6 uses deterministic narrow host and external-signer ports. Selection and certification of the production runtime, signer, relays, and Blossom providers remain Phase 7. [VERIFIED: repository deferred ideas]
 
 ## Environment Availability
 
@@ -316,12 +316,12 @@ After an unknown result, only `observe` is callable. The implementation rejects 
 | PREV-03/04 | required/optional review/compatibility/degradation/no fallback | `bun test tests/phase-06/capability-review.test.ts --timeout 10000` | ❌ Wave 0 |
 | PUB-01 | intent/invalidation/exact replay/conflict | `bun test tests/phase-06/publication-intent.test.ts --timeout 10000` | ❌ Wave 0 |
 | PUB-02/03 | exact template, NIP-01 positive/negative, no secret/no oracle, attestation separation | `bun test tests/phase-06/manifest-signature.test.ts --timeout 10000` | ❌ Wave 0 |
-| PUB-04 | sealed byte/hash/CLI identity and linked completion | `bun test tests/phase-06/sealed-deployment.test.ts --timeout 10000` | ❌ Wave 0 |
+| PUB-04 | exact-source route availability plus sealed byte/hash/CLI identity and linked completion | `bun test tests/phase-06/cli-source-contract.test.ts tests/phase-06/sealed-deployment.test.ts --timeout 10000` | ❌ Wave 0 |
 | PUB-05 | duplicate/timeout/restart only observes original effects; partial safe status | `bun test tests/phase-06/publication-reconciliation.test.ts --timeout 10000` | ❌ Wave 0 |
 
 ### Wave 0 Gaps
 
-- [ ] All Phase 6 tests listed above, plus deterministic host/signer/CLI/relay fakes.
+- [ ] All Phase 6 tests listed above, plus the exact promoted-source contract probe/fixture and deterministic host/signer-return/CLI/relay fakes.
 - [ ] `migrations/phase-06/001_publication.sql`, memory/SQLite/PostgreSQL parity tests, and publication store.
 - [ ] `tests/evals/phase-06-reference-set.test.ts`, `src/verification/phase-06-design-evidence.ts`, and `scripts/verify-phase-06-design-slice.ts` that re-derive comparison results and state real providers as `not_observed`/Phase 7.
 
@@ -353,7 +353,7 @@ After an unknown result, only `observe` is callable. The implementation rejects 
 
 **Confidence breakdown:**
 
-- Standard stack: MEDIUM — promoted toolchain is verified; NIP-5D/CLI remain moving alpha and package legitimacy flags require a checkpoint. [VERIFIED: repository] [CITED: https://napplet.run/]
+- Standard stack: MEDIUM — promoted toolchain identity is verified; NIP-5D/CLI remain moving alpha, the source route is fail-closed behind an exact contract probe, and exhaustive package legitimacy remains Phase 7 work under the developer-authorized autonomous direct pin. [VERIFIED: repository] [CITED: https://napplet.run/]
 - Architecture: HIGH — directly follows locked decisions and established intent/reconciliation patterns. [VERIFIED: repository `06-CONTEXT.md`, Phase 3–5 verification]
 - Pitfalls: HIGH — grounded in NIP-01, NIP-5D, and inspected CLI source. [CITED: https://github.com/nostr-protocol/nips/blob/master/01.md] [VERIFIED: upstream source]
 

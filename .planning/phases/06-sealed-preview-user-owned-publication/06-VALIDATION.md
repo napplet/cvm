@@ -1,88 +1,123 @@
 ---
-phase: 6
-slug: sealed-preview-user-owned-publication
-# status lifecycle: draft (seeded by plan-phase) → validated (set by validate-phase §6)
+phase: 06-sealed-preview-user-owned-publication
 status: draft
 nyquist_compliant: false
 wave_0_complete: false
 created: 2026-08-05
+updated: 2026-08-05
 ---
 
 # Phase 6 — Validation Strategy
 
-> Per-phase validation contract for feedback sampling during execution.
+> Nyquist contract for sealed preview, owner-held signing, exact-byte publication, and original-operation reconciliation. This remains `draft` until execution creates every named test/fake/evidence surface and the final Phase 6 gate passes.
 
----
+## Validation principle
 
-## Test Infrastructure
+Every behavior-changing task creates its named test/fake surface before production implementation and observes a focused failure first. Deterministic host, signer-return, promoted-CLI-source, Blossom, relay, attestation, clock, and SQL fakes are authoritative for this design slice. Live host, external signer, standalone CLI asset, relay, Blossom, PostgreSQL/Cockroach, and provider execution remain explicit `not_observed` facts for Phase 7.
 
-| Property | Value |
-|----------|-------|
-| **Framework** | Bun test |
-| **Config file** | `package.json` and existing repository test conventions |
-| **Quick run command** | `bun test tests/phase-06 --timeout 10000` |
-| **Full suite command** | `bun test --timeout 10000 && bun run eval:phase06 && bun run verify:phase06-design` |
-| **Estimated runtime** | ~30 seconds locally with deterministic ports |
+Exact comparisons use bytes, canonical UTF-8 strings, SHA-256 values, and integer timestamps. No rounding, tolerance, approximate matcher, rebuild, re-sign, redeploy, or replacement effect is permitted.
 
----
+## Wave 0 test/fake/evidence ownership
 
-## Sampling Rate
+| ID | Plan/task | Surface created before dependent implementation | Requirements | Initial proof command | File exists |
+|---|---|---|---|---|---|
+| 06-W0-01 | 06-01-01 | `tests/phase-06/tracer.test.ts` with local deterministic ports | PREV-01..04, PUB-01..05 | `bun test tests/phase-06/tracer.test.ts --timeout 10000` | ❌ |
+| 06-W0-02 | 06-02-01 | `tests/phase-06/fakes.ts`, `preview-descriptor.test.ts` | PREV-01 | `bun test tests/phase-06/preview-descriptor.test.ts --timeout 10000` | ❌ |
+| 06-W0-03 | 06-02-01 | `runtime-status.test.ts` | PREV-02 | `bun test tests/phase-06/runtime-status.test.ts --timeout 10000` | ❌ |
+| 06-W0-04 | 06-02-02 | `capability-review.test.ts` | PREV-03, PREV-04 | `bun test tests/phase-06/capability-review.test.ts --timeout 10000` | ❌ |
+| 06-W0-05 | 06-03-01 | `publication-intent.test.ts` | PUB-01 | `bun test tests/phase-06/publication-intent.test.ts --timeout 10000` | ❌ |
+| 06-W0-06 | 06-03-02 | `nostr-tools-direct-dependency.test.ts` | PUB-03 | `bun test tests/phase-06/nostr-tools-direct-dependency.test.ts --timeout 10000` | ❌ |
+| 06-W0-07 | 06-03-03 | `manifest-signature.test.ts` | PUB-02, PUB-03 | `bun test tests/phase-06/manifest-signature.test.ts --timeout 10000` | ❌ |
+| 06-W0-08 | 06-04-01 / 06-04-02 | `publication-store-parity.test.ts` | PUB-01, PUB-05 | `bun test tests/phase-06/publication-store-parity.test.ts --timeout 10000` | ❌ |
+| 06-W0-09 | 06-05-01 | `src/publication/napplet-cli-source-contract.ts`, `scripts/probe-phase-06-cli-source-contract.ts`, `tests/fixtures/phase-06-cli-source-contract.json`, `tests/phase-06/cli-source-contract.test.ts` | PUB-04 | `bun test tests/phase-06/cli-source-contract.test.ts --timeout 10000 && bun run scripts/probe-phase-06-cli-source-contract.ts` | ❌ |
+| 06-W0-10 | 06-05-02 | `sealed-deployment.test.ts` plus deterministic promoted-source fake gated by the exact-source result | PUB-04 | `bun test tests/phase-06/sealed-deployment.test.ts --timeout 10000` | ❌ |
+| 06-W0-11 | 06-05-03 | `publication-reconciliation.test.ts` | PUB-05 | `bun test tests/phase-06/publication-reconciliation.test.ts --timeout 10000` | ❌ |
+| 06-W0-12 | 06-06-01 | `tests/contextvm/publication-adapter.test.ts` including unavailable-probe announcement/effect cases | PREV-01..04, PUB-01..05 | `bun test tests/contextvm/publication-adapter.test.ts --timeout 10000` | ❌ |
+| 06-W0-13 | 06-06-02 | `host-surface.test.ts` | PREV-01..04, PUB-01..05 | `bun test tests/phase-06/host-surface.test.ts --timeout 10000` | ❌ |
+| 06-W0-14 | 06-07-01 | `tests/fixtures/phase-06-reference-set.json`, `tests/evals/phase-06-reference-set.test.ts` | PREV-01..04, PUB-01..05 | `bun test tests/evals/phase-06-reference-set.test.ts --timeout 10000` | ❌ |
+| 06-W0-15 | 06-07-02 | `src/verification/phase-06-design-evidence.ts`, `scripts/verify-phase-06-design-slice.ts` | PREV-01..04, PUB-01..05 | `bun run verify:phase06-design` | ❌ |
 
-- **After every task commit:** Run the narrowest affected `tests/phase-06/*.test.ts` file, then `bun test tests/phase-06 --timeout 10000`.
-- **After every plan wave:** Run `bun test --timeout 10000 && bun run eval:phase06`.
-- **Before `$gsd-verify-work`:** Run `bun test --timeout 10000 && bun run eval:phase06 && bun run verify:phase06-design`; all commands must be green.
-- **Max feedback latency:** 60 seconds for deterministic test and evidence generation.
+## Per-plan verification map
 
----
+| Plan | Focused automated gate | What it proves |
+|---|---|---|
+| 06-01 | `bun test tests/phase-06/tracer.test.ts --timeout 10000` | One exact artifact-to-linked-publication vertical path and persist-before-effect ordering. |
+| 06-02 | `bun test tests/phase-06/preview-descriptor.test.ts tests/phase-06/runtime-status.test.ts tests/phase-06/capability-review.test.ts --timeout 10000` | Sealed descriptor/grant, finite runtime state, required/optional capability semantics, canonical digest. |
+| 06-03 | `bun test tests/phase-06/nostr-tools-direct-dependency.test.ts tests/phase-06/publication-intent.test.ts tests/phase-06/manifest-signature.test.ts --timeout 10000` | Exact direct pure-verification dependency, intent identity/expiry/replay, external signing custody, NIP-01 and semantic verification, distinct attestation. |
+| 06-04 | `bun test tests/phase-06/publication-store-parity.test.ts tests/persistence/phase-05-sql-schema-parity.test.ts --timeout 10000` | Memory/SQLite/PostgreSQL-style transaction parity, concurrency, restart, original operation identities. |
+| 06-05 | `bun test tests/phase-06/cli-source-contract.test.ts tests/phase-06/sealed-deployment.test.ts tests/phase-06/publication-reconciliation.test.ts --timeout 10000 && bun run scripts/probe-phase-06-cli-source-contract.ts` | Exact promoted identity/source route, fail-closed publication availability, exact sealed bytes/event, failure/timeout/partial, lookup-only reconciliation. |
+| 06-06 | `bun test tests/contextvm/publication-adapter.test.ts tests/phase-06/host-surface.test.ts --timeout 10000` | Signed owner actions, safe notifications, no preview/top-up effect, and every covered UI consideration. |
+| 06-07 | `bun run verify:phase06-design` | Actual-authority reference set, full mappings/API gate, content-address integrity, redaction, honest live observations. |
 
-## Per-Task Verification Map
+## Requirement coverage
 
-| Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
-|---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 06-W0-01 | TBD | 0 | PREV-01 | T-06-ARTIFACT-SWAP | Only the owner-scoped durable verified artifact and exact sealed object can produce a descriptor. | contract | `bun test tests/phase-06/preview-descriptor.test.ts --timeout 10000` | ❌ W0 | ⬜ pending |
-| 06-W0-02 | TBD | 0 | PREV-02 | T-06-RUNTIME-AUTHORITY | The host contract requires `sandbox="allow-scripts"` without `allow-same-origin`; untrusted messages have zero authoritative effects. | contract | `bun test tests/phase-06/runtime-status.test.ts --timeout 10000` | ❌ W0 | ⬜ pending |
-| 06-W0-03 | TBD | 0 | PREV-03, PREV-04 | T-06-CAPABILITY-ESCALATION | Missing required capabilities block; missing optional capabilities degrade; neither grants direct authority. | unit | `bun test tests/phase-06/capability-review.test.ts --timeout 10000` | ❌ W0 | ⬜ pending |
-| 06-W0-04 | TBD | 0 | PUB-01 | T-06-INTENT-CONFLICT | Publication approval binds one owner, artifact, d-tag, capability digest, and compatibility identity; changed inputs invalidate it. | contract | `bun test tests/phase-06/publication-intent.test.ts --timeout 10000` | ❌ W0 | ⬜ pending |
-| 06-W0-05 | TBD | 0 | PUB-02, PUB-03 | T-06-SIGNATURE-SUBSTITUTION | Exact NIP-01 serialization, ID, signature, owner, tags, content, intent, and expiry are verified with generic rejection; user secret material never enters CVM. | security | `bun test tests/phase-06/manifest-signature.test.ts --timeout 10000` | ❌ W0 | ⬜ pending |
-| 06-W0-06 | TBD | 0 | PUB-04 | T-06-DEPLOY-BYTE-SWAP | The promoted CLI adapter receives only persisted identities and exact sealed bytes; it cannot rebuild or accept user signing secrets. | integration | `bun test tests/phase-06/sealed-deployment.test.ts --timeout 10000` | ❌ W0 | ⬜ pending |
-| 06-W0-07 | TBD | 0 | PUB-05 | T-06-DUPLICATE-EFFECT | Timeout, replay, and restart observe original operation IDs only and preserve truthful partial/pending outcomes. | integration | `bun test tests/phase-06/publication-reconciliation.test.ts --timeout 10000` | ❌ W0 | ⬜ pending |
-| 06-W0-08 | TBD | 0 | PREV-01–04, PUB-01–05 | T-06-EVIDENCE-FORGERY | Design evidence is derived from deterministic fixtures; live host/signer/CLI/relay/provider observations remain explicitly `not_observed` for Phase 7. | eval | `bun run eval:phase06 && bun run verify:phase06-design` | ❌ W0 | ⬜ pending |
+| Requirement | Primary tests | Reference/evidence gate |
+|---|---|---|
+| PREV-01 | tracer, preview descriptor, ContextVM adapter | P06-TRACE-01; P06-PREV-EMPTY/NULL; phase-06 evidence mapping |
+| PREV-02 | runtime status, host surface | ready/incompatible/expired/denied and runtime-message taint cases |
+| PREV-03 | capability review, host surface | empty/null/order/hash/zero-one-many cases |
+| PREV-04 | capability review, publication intent, ContextVM adapter | required/optional and runtime-variant fence cases |
+| PUB-01 | publication intent, persistence parity | expiry -1/exact/+1, replay/conflict/concurrency cases |
+| PUB-02 | manifest signature, ContextVM adapter | no-secret completed-event handoff cases |
+| PUB-03 | manifest signature | NIP-01 plus valid-signature/wrong-semantic cases |
+| PUB-04 | sealed deployment | promoted identity, exact bytes/event, full-server/relay predicates |
+| PUB-05 | persistence parity, reconciliation, host surface | interrupted/unknown/failure/timeout/partial/original-observe cases |
 
-*Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+## Mandatory edge probes
 
----
+The canonical E-01 through E-23 definitions and plan/task mappings live in `COVERAGE.md`. The reference set must execute all of them, including:
 
-## Wave 0 Requirements
+- empty and null artifacts;
+- empty and null manifests;
+- empty and null capability sets;
+- stable capability ordering and canonical equality/hash behavior;
+- expiry one millisecond before, exact, and one millisecond after;
+- exact replay and conflicting duplicate;
+- concurrent submit and interrupted unknown effect;
+- reconciliation of original operations only;
+- cryptographically valid signatures with wrong artifact, d-tag, capability digest, intent, or expiry bindings;
+- promoted CLI source failure, timeout, and partial observations;
+- all runtime variants preserving identical artifact/intent/capability-digest fences.
 
-- [ ] `tests/phase-06/preview-descriptor.test.ts` — PREV-01 exact verified-artifact descriptor and denial fixtures.
-- [ ] `tests/phase-06/runtime-status.test.ts` — PREV-02 iframe/source safe-status contract and zero-authority runtime messages.
-- [ ] `tests/phase-06/capability-review.test.ts` — PREV-03/PREV-04 required, optional, compatibility, and no-fallback cases.
-- [ ] `tests/phase-06/publication-intent.test.ts` — PUB-01 intent, invalidation, replay, and conflict fixtures.
-- [ ] `tests/phase-06/manifest-signature.test.ts` — PUB-02/PUB-03 exact event, negative crypto/binding, no-secret, no-oracle, and separate-attestation fixtures.
-- [ ] `tests/phase-06/sealed-deployment.test.ts` — PUB-04 sealed-byte/hash/CLI identity continuity.
-- [ ] `tests/phase-06/publication-reconciliation.test.ts` — PUB-05 duplicate, timeout, restart, partial, and original-operation observation fixtures.
-- [ ] `tests/evals/phase-06-reference-set.test.ts` — deterministic Phase 6 evaluation set.
-- [ ] `src/verification/phase-06-design-evidence.ts` and `scripts/verify-phase-06-design-slice.ts` — reproducible evidence with live dependencies explicitly not observed.
-- [ ] Deterministic host, external signer, CLI, relay, and attestation-publisher fakes plus memory/SQLite/PostgreSQL publication-store parity coverage.
+## API/package coverage gate
 
----
+`COVERAGE.md` is canonical. `verify:phase06-design` must fail unless every relevant host, NIP-5D/NIP-5A/NIP-01, attestation, promoted CLI source, ContextVM, and effect capability has exactly one `INTEGRATE` or `OPT-OUT` decision with a reason and plan/task mapping. It must also fail if:
 
-## Manual-Only Verifications
+- npm `@napplet/cli@0.0.0` is installed, invoked, or treated as integrated;
+- promoted standalone CLI 0.5.2 commit is not exactly `1a38b9150f3a3da148091c11bce4d0365f7298e5` or Linux SHA-256 is not exactly `46685f2e4df516b5b2e7e2e133480c90e5c85dbd36d05c6e95f4eee6af33ec5e`;
+- the exact-source probe is missing/unavailable/mismatched while `publication` is announced available;
+- the root manifest/lock does not declare and resolve exact direct `nostr-tools@2.24.1`, or production imports any non-`pure` verifier surface;
+- a signing/key-management capability is reachable from production;
+- a CLI workspace/build/manifest mutation path is reachable from publication;
+- an INTEGRATE row lacks a direct test/source-facade/evidence mapping.
 
-| Behavior | Requirement | Why Manual | Test Instructions |
-|----------|-------------|------------|-------------------|
-| Production host renders and signs the exact manifest through a supported signer. | PREV-02, PUB-02 | Runtime and signer selection/certification are Phase 7 scope. | Phase 7 must execute the promoted runtime/signer fixture and attach observed compatibility evidence before launch. |
-| Promoted CLI 0.5.2 performs supported pre-signed-template deployment against selected storage and relays. | PUB-04, PUB-05 | The pinned Linux asset and live providers are not available in the local macOS design environment. | Phase 7 must run the sealed image contract probe and live reconciliation fixtures; until then report `not_observed`, never infer success. |
+## Evidence honesty and redaction
 
----
+The final evidence record must distinguish:
 
-## Validation Sign-Off
+- `passed`: deterministic in-process service/store/adapter/port behavior actually executed by the verifier;
+- `not_observed`: live host, external signer, promoted standalone CLI asset, relay, Blossom, PostgreSQL/Cockroach, and selected provider behavior not executed in Phase 6.
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 60s
-- [ ] `nyquist_compliant: true` set in frontmatter
+Evidence/status serialization must not contain user private keys, signer secrets, raw ContextVM envelopes, bearer credentials, protected evidence payloads, full provider/CLI output, or untrusted runtime messages. Public owner event ids/signatures may appear only where the owner-safe schema explicitly requires them.
 
-**Approval:** pending
+## Phase gate
+
+Run in order:
+
+1. `bun test tests/phase-06/tracer.test.ts tests/phase-06/preview-descriptor.test.ts tests/phase-06/runtime-status.test.ts tests/phase-06/capability-review.test.ts --timeout 10000`
+2. `bun test tests/phase-06/nostr-tools-direct-dependency.test.ts tests/phase-06/publication-intent.test.ts tests/phase-06/manifest-signature.test.ts tests/phase-06/publication-store-parity.test.ts --timeout 10000`
+3. `bun test tests/phase-06/cli-source-contract.test.ts tests/phase-06/sealed-deployment.test.ts tests/phase-06/publication-reconciliation.test.ts tests/contextvm/publication-adapter.test.ts tests/phase-06/host-surface.test.ts --timeout 10000`
+4. `bun run probe:phase06-cli-source`
+5. `bun run eval:phase06`
+6. `bun run verify:phase06-design`
+7. Repeat `bun run verify:phase06-design` and require byte-identical pointer/content-address evidence.
+8. `bun test --timeout 10000`
+
+## Completion conditions
+
+- All Wave 0 rows exist and their focused commands pass.
+- The promoted source probe asserts the exact full commit/SHA and safe structured route; an unavailable result keeps publication announcement/actions unavailable with zero effects.
+- All nine requirement mappings, D-96 through D-113 mappings, high-severity threat mappings, API capability dispositions, E-01 through E-23 mappings, and eight UI consideration mappings are nonempty.
+- No product prohibition is violated: exact verified bytes only, no same-origin/direct authority, no user key custody, no effect recreation during reconciliation, no partial-as-complete, no preview/top-up publication effect.
+- `evidence/design/phase-06.json` points to a hash-valid immutable record and repeated verification is deterministic.
+- Live integrations remain explicitly `not_observed` until Phase 7 executes them.

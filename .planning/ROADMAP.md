@@ -19,7 +19,7 @@ napplet-cvm moves from proving the permanent napplet contract to a safe, prepaid
 | 3. ContextVM Funding & Funded Admission | Connects signed ContextVM identity and CEP-8 Lightning/Cashu settlement to one idempotent prepaid account and capped funded admission. | CTX-01–CTX-04, PAY-01–PAY-07, BILL-01–BILL-02, BILL-06 | `.planning/phases/03-contextvm-funding-funded-admission/` — context, discussion log, research, patterns, API coverage, validation, source audit, 7 plans and summaries, review/fix history, final clean review, security audit, and passed goal verification. |
 | 4. Metered Generation & Revision Loop | Turns approved funds into exact-usage, serialized napplet creation, revision, repair, progress, and diagnostic actions. | BILL-03–BILL-05, SESS-01, SESS-03–SESS-04, GEN-05–GEN-06 | `.planning/phases/04-metered-generation-revision-loop/` — context, discussion log, research, AI spec, patterns, validation, 7 plans and summaries, review/fix history, immutable design evidence, security audit, and passed goal verification. |
 | 5. Funding Interruption & Durable Resume | Preserves paid work across insufficient funds, the ten-minute live-worker window, explicit resume, and 30-day checkpoint retention. | CONT-01–CONT-07 | `.planning/phases/05-funding-interruption-durable-resume/` — context, research, patterns, validation, 7 plans and summaries, review/fix history, security audit, immutable design evidence, and passed goal verification. |
-| 6. Sealed Preview & User-Owned Publication | Lets the user preview the exact verified artifact, retain signing custody, and explicitly deploy a manifest plus CVM attestation. | PREV-01–PREV-04, PUB-01–PUB-05 | Phase directory and phase artifacts not yet created. |
+| 6. Sealed Preview & User-Owned Publication | Lets the user preview the exact verified artifact, retain signing custody, and explicitly deploy a manifest plus CVM attestation. | PREV-01–PREV-04, PUB-01–PUB-05 | `.planning/phases/06-sealed-preview-user-owned-publication/` — context, approved UI spec, current research, pattern map, API/source coverage, draft validation strategy, and 7 checker-approved plans across 6 waves; execution evidence remains pending. |
 | 7. Admission SLO, Resilience & Launch Safety | Measures immediate-or-rejected admission, proves integrated failure safety, and closes the launch-hardening work deferred from Phase 1. | SESS-02, OPS-01–OPS-04 | Phase directory and phase artifacts not yet created. |
 
 The phase-to-requirement assignments in this table are identical to `REQUIREMENTS.md` and the phase detail sections below. Existing paths are canonical; future phase artifacts are added to their numbered phase directories without moving or regenerating prior work.
@@ -258,8 +258,35 @@ Plans:
   5. A duplicate or timed-out publication request reconciles persisted intent and exact signed events, returning linked deployment/manifest/attestation identifiers without rebuilding, re-signing, double deploying, or creating conflicting ownership.
 
 **Validation gate**: Verify the selected runtime can display and locally sign the exact manifest, resolve the promoted `@napplet/cli` deployment contract, and prove deploy-byte/hash continuity with end-to-end fixtures before calling the publication flow available.
-**Plans**: TBD
+**Plans**: 0/7 plans executed
 **UI hint**: yes
+
+Plans:
+
+**Wave 1**
+
+- [ ] 06-01-PLAN.md — Prove the exact sealed-artifact-to-linked-publication end-to-end tracer.
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 06-02-PLAN.md — Complete sealed preview, runtime status, and required/optional capability review.
+- [ ] 06-03-PLAN.md — Bind publication intent, external owner signing, exact event verification, and separate attestation.
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 06-04-PLAN.md — Persist publication intent and effect state with memory, SQLite, and PostgreSQL parity.
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 06-05-PLAN.md — Probe the promoted CLI source contract and implement exact-byte, reconciled publication effects.
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 06-06-PLAN.md — Expose preview and user-owned publication through ContextVM and the narrow host surface.
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 06-07-PLAN.md — Seal deterministic reference coverage and content-addressed Phase 6 design evidence.
 
 ### Phase 7: Admission SLO, Resilience & Launch Safety
 
@@ -290,15 +317,15 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 3. ContextVM Funding & Funded Admission | 7/7 | Complete    | 2026-08-04 |
 | 4. Metered Generation & Revision Loop | 7/7 | Complete    | 2026-08-05 |
 | 5. Funding Interruption & Durable Resume | 7/7 | Complete    | 2026-08-05 |
-| 6. Sealed Preview & User-Owned Publication | 0/TBD | Not started | - |
+| 6. Sealed Preview & User-Owned Publication | 0/7 | Ready to execute | - |
 | 7. Admission SLO, Resilience & Launch Safety | 0/TBD | Not started | - |
 
 ### Milestone Progress Roll-up
 
-- **Phases:** Phases 1–4 are verified complete; Phase 5 is active; Phases 6–7 remain; 4/7 phases complete (57%).
-- **Known plans:** 26/33 executed; Phase 5 contributes 7 checker-approved plans across 6 waves.
-- **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 33 verified complete and 21 pending.
-- **Current checkpoint:** Execute Phase 5 from Plan 05-01; do not revisit or replan completed Phases 1–4.
+- **Phases:** Phases 1–5 are verified complete; Phase 6 is checker-approved and ready to execute; Phase 7 remains; 5/7 phases complete (71%).
+- **Known plans:** 33/40 executed; Phase 6 contributes 7 checker-approved plans across 6 waves.
+- **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 40 verified complete and 14 pending.
+- **Current checkpoint:** Execute Phase 6 from Plan 06-01; do not revisit or replan completed Phases 1–5.
 - **Phase 1 preservation:** Phase 1 remains complete with its review, security, validation, verification evidence, and Phase 7 deferrals unchanged.
 
 ### Completion Reporting Contract

@@ -4,15 +4,15 @@ milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
 current_phase: 6
 current_phase_name: Sealed Preview & User-Owned Publication
-status: planning
-stopped_at: Phase 5 verified complete; Phase 6 ready for discussion and planning
-last_updated: "2026-08-05T04:15:46.093Z"
+status: executing
+stopped_at: Phase 6 checker-approved planning complete; execution not started
+last_updated: "2026-08-05T05:38:02.042Z"
 last_activity: 2026-08-05
-last_activity_desc: Phase 05 complete, transitioned to Phase 6
+last_activity_desc: Phase 06 planned and checker-approved; ready to execute Plan 06-01
 progress:
   total_phases: 7
   completed_phases: 5
-  total_plans: 33
+  total_plans: 40
   completed_plans: 33
   percent: 71
 ---
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 6 — Sealed Preview & User-Owned Publication
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-08-05 — Phase 05 complete, transitioned to Phase 6
+Plan: 0 of 7
+Status: Ready to execute
+Last activity: 2026-08-05 — Phase 06 planned and checker-approved; ready to execute Plan 06-01
 
 Progress: [███████░░░] 71%
 
@@ -40,10 +40,10 @@ Progress: [███████░░░] 71%
 
 **v1.0 — Safe Napplet Generation MVP**
 
-- Phases: Phases 1–5 complete; Phase 6 is active for planning; Phase 7 remains.
-- Plans: 33/33 currently known milestone plans executed; Phase 6 plans have not yet been created.
+- Phases: Phases 1–5 complete; Phase 6 is checker-approved and ready to execute; Phase 7 remains.
+- Plans: 33/40 currently known milestone plans executed; Phase 6 contributes 7 approved plans across 6 waves.
 - Requirements: 54/54 v1 requirements assigned; 40 verified complete and 14 pending.
-- Next checkpoint: discuss, research, and plan Phase 6 without revisiting completed Phases 1–5.
+- Next checkpoint: execute Phase 6 from Plan 06-01 without revisiting completed Phases 1–5.
 
 ## Performance Metrics
 
@@ -167,7 +167,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Define the sealed-preview and user-owned-publication contract for Phase 6, then create checker-approved plans.
+- Execute the seven checker-approved Phase 6 plans, beginning with the end-to-end tracer in Plan 06-01.
 
 ### Blockers/Concerns
 
@@ -185,6 +185,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T04:15:46.093Z
-Stopped at: Phase 5 verified complete; Phase 6 ready for discussion and planning
+Last session: 2026-08-05T05:38:02.042Z
+Stopped at: Phase 6 checker-approved planning complete; execution not started
 Resume file: None

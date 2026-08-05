@@ -1,14 +1,38 @@
 import { expect, test } from "bun:test";
+import { mkdtemp, cp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import {
   COLLECTOR_IMAGE,
   OFFICIAL_OTEL_PACKAGES,
+  OtelPackageApprovalSchema,
+  verifyApprovedOtelPackageSet,
   verifyOfficialOtelPackageSet,
 } from "../../scripts/verify-phase-07-otel-packages";
 
 const repositoryRoot = new URL("../..", import.meta.url).pathname;
 const packageJsonPath = `${repositoryRoot}/package.json`;
 const bunLockPath = `${repositoryRoot}/bun.lock`;
+const approvalPointerPath = `${repositoryRoot}/evidence/certification/phase-07-otel-package-approval.json`;
+const scriptPath = `${repositoryRoot}/scripts/verify-phase-07-otel-packages.ts`;
+
+async function approvalFixture(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "napplet-cvm-otel-approval-"));
+  await Promise.all([
+    cp(packageJsonPath, join(root, "package.json")),
+    cp(bunLockPath, join(root, "bun.lock")),
+    cp(`${repositoryRoot}/infra/otel/collector.yaml`, join(root, "infra/otel/collector.yaml"), { recursive: true }),
+    cp(`${repositoryRoot}/evidence/certification`, join(root, "evidence/certification"), { recursive: true }),
+  ]);
+  return root;
+}
+
+async function approvalCli(root: string, flag = "--require-approved"): Promise<{ code: number; stdout: string; stderr: string }> {
+  const process = Bun.spawn(["bun", scriptPath, flag], { cwd: root, stdout: "pipe", stderr: "pipe" });
+  const [code, stdout, stderr] = await Promise.all([process.exited, new Response(process.stdout).text(), new Response(process.stderr).text()]);
+  return { code, stdout, stderr };
+}
 
 function tarHeader(name: string, size: number): Uint8Array {
   const header = new Uint8Array(512);
@@ -113,4 +137,44 @@ test("is no-install: repository dependency manifests and node_modules are unchan
 test("pins the Collector by immutable digest rather than a mutable tag", () => {
   expect(COLLECTOR_IMAGE).toMatch(/^otel\/opentelemetry-collector@sha256:[a-f0-9]{64}$/u);
   expect(COLLECTOR_IMAGE).not.toContain(":latest");
+});
+
+test("delegated approval is a separate immutable decision over the exact pending audit", async () => {
+  const root = await approvalFixture();
+  try {
+    const pointer = JSON.parse(await readFile(join(root, "evidence/certification/phase-07-otel-package-audit.json"), "utf8"));
+    expect(pointer.approvalStatus).toBe("pending_human");
+    const approval = OtelPackageApprovalSchema.parse(JSON.parse(await readFile(join(root, "evidence/certification/phase-07-otel-package-approval.json"), "utf8")));
+    expect(approval.approvalStatus).toBe("approved_operator");
+    expect(approval.authority).toBe("delegated_operator");
+    expect(approval.scope).toEqual(["disposable_bun_collector_smoke", "exact_root_package_pins"]);
+    expect(approval.limitations).toContain("This decision is not direct-human review or signer provenance.");
+    await expect(verifyApprovedOtelPackageSet({ repositoryRoot: root })).resolves.toMatchObject({
+      approvalDigest: approval.evidenceSha256,
+      auditDigest: pointer.evidenceSha256,
+    });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("approval, pending, rejected, and drift records fail closed before approval-dependent effects", async () => {
+  const mutations: ReadonlyArray<{ readonly name: string; readonly mutate: (root: string) => Promise<void>; readonly error: RegExp }> = [
+    { name: "missing pointer", mutate: async (root) => { await rm(join(root, "evidence/certification/phase-07-otel-package-approval.json")); }, error: /APPROVAL_POINTER_REQUIRED/ },
+    { name: "pending decision", mutate: async (root) => { const path = join(root, "evidence/certification/phase-07-otel-package-approval.json"); const value = JSON.parse(await readFile(path, "utf8")); value.approvalStatus = "pending_human"; await writeFile(path, JSON.stringify(value)); }, error: /APPROVAL_POINTER_INVALID/ },
+    { name: "pointer substitution", mutate: async (root) => { const path = join(root, "evidence/certification/phase-07-otel-package-approval.json"); const value = JSON.parse(await readFile(path, "utf8")); value.auditEvidenceSha256 = "0".repeat(64); await writeFile(path, JSON.stringify(value)); }, error: /APPROVAL_POINTER_AUDIT_DRIFT/ },
+    { name: "record mutation", mutate: async (root) => { const pointer = JSON.parse(await readFile(join(root, "evidence/certification/phase-07-otel-package-approval.json"), "utf8")); const path = join(root, "evidence/certification", pointer.record); const value = JSON.parse(await readFile(path, "utf8")); value.limitations.push("mutated"); await writeFile(path, JSON.stringify(value)); }, error: /APPROVAL_RECORD_DIGEST_MISMATCH/ },
+    { name: "package drift", mutate: async (root) => { const pointer = JSON.parse(await readFile(join(root, "evidence/certification/phase-07-otel-package-approval.json"), "utf8")); const path = join(root, "evidence/certification", pointer.record); const value = JSON.parse(await readFile(path, "utf8")); value.packages[0].version = "9.9.9"; await writeFile(path, JSON.stringify(value)); }, error: /APPROVAL_RECORD_DIGEST_MISMATCH|APPROVAL_PACKAGE_SET_DRIFT/ },
+    { name: "integrity drift", mutate: async (root) => { const pointer = JSON.parse(await readFile(join(root, "evidence/certification/phase-07-otel-package-approval.json"), "utf8")); const path = join(root, "evidence/certification", pointer.record); const value = JSON.parse(await readFile(path, "utf8")); value.packages[0].registryIntegrity = "sha512-drift"; await writeFile(path, JSON.stringify(value)); }, error: /APPROVAL_RECORD_DIGEST_MISMATCH|APPROVAL_PACKAGE_SET_DRIFT/ },
+    { name: "input drift", mutate: async (root) => { await writeFile(join(root, "package.json"), `${await readFile(join(root, "package.json"), "utf8")}\n`); }, error: /APPROVAL_INPUT_DIGEST_DRIFT/ },
+  ];
+  for (const mutation of mutations) {
+    const root = await approvalFixture();
+    try {
+      await mutation.mutate(root);
+      await expect(verifyApprovedOtelPackageSet({ repositoryRoot: root })).rejects.toThrow(mutation.error);
+      const approval = await approvalCli(root);
+      const pins = await approvalCli(root, "--verify-root-pins");
+      expect(approval.code, mutation.name).not.toBe(0);
+      expect(pins.code, mutation.name).not.toBe(0);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
 });

@@ -137,6 +137,23 @@ test("evidence blocks stale, cross-candidate, non-pass, and concurrent release p
   await expect(evaluateReleaseCertification(manifest, [...valid.slice(0, -1), { ...valid.at(-1)!, expiresAtMs: 1_500 }], { candidateId, nowMs: 2_000, verificationRecords: records, trustRoot: permissiveTestTrustRoot })).resolves.toMatchObject({ status: "blocked" });
 });
 
+test("source measurement is authenticated before cache or evaluator authority", async () => {
+  const rawManifest = releaseManifest();
+  const manifest = parseReleaseCertificationManifest(rawManifest);
+  const candidateId = digest("8");
+  const records = await protectedVerificationRecords(rawManifest, candidateId);
+  const observations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation(`/tmp/napplet-cvm-phase07-source-measurement-${crypto.randomUUID()}`, bindSupplyChainObservation(observation(rawManifest, candidateId, requirement.claim, requirement.live), records))));
+  const measurement = { version: 1, sourceRevision: manifest.sourceRevision, sourceSha256: manifest.sourceSha256 };
+  const trustRoot: ReleaseCertificationTrustRoot = {
+    ...permissiveTestTrustRoot,
+    verifySourceMeasurement: async (actual) => canonicalJson(actual) === canonicalJson(measurement),
+  };
+
+  await expect(evaluateReleaseCertification(manifest, observations, { candidateId, nowMs: 2_000, verificationRecords: records, trustRoot, sourceMeasurement: measurement })).resolves.toMatchObject({ status: "promoted" });
+  await expect(evaluateReleaseCertification(manifest, observations, { candidateId, nowMs: 2_000, verificationRecords: records, trustRoot, sourceMeasurement: { ...measurement, sourceSha256: digest("0") } })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_SOURCE_MEASUREMENT_INVALID" });
+  await expect(evaluateReleaseCertification(manifest, observations, { candidateId, nowMs: 2_000, verificationRecords: records, trustRoot })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_SOURCE_MEASUREMENT_REQUIRED" });
+});
+
 test("the sole evaluator authenticates a changed manifest before consulting a promoted cache entry", async () => {
   const rawManifest = releaseManifest();
   const manifest = parseReleaseCertificationManifest(rawManifest);

@@ -1,11 +1,12 @@
 ---
 phase: 05-funding-interruption-durable-resume
-reviewed: 2026-08-05T02:16:54Z
+reviewed: 2026-08-05T03:37:56Z
 depth: standard
-files_reviewed: 39
+files_reviewed: 41
 files_reviewed_list:
   - evidence/design/phase-05.json
-  - evidence/design/4043df1d9f60ee0e84893d2c66a7bcfe235ffb5fd8a66656080471ee267009ae.json
+  - evidence/design/ed2db45d9d7ab949d4d8388cefe56bea35b88f02a52dd914cf4f6e247a56bcdf.json
+  - migrations/phase-04/001_metered_generation.sql
   - migrations/phase-05/001_continuation.sql
   - package.json
   - scripts/verify-phase-05-design-slice.ts
@@ -44,82 +45,54 @@ files_reviewed_list:
   - tests/verification/phase-05-design-slice.test.ts
   - tests/worker-port/fake-worker.test.ts
 findings:
-  critical: 5
-  warning: 1
+  critical: 0
+  warning: 2
   info: 0
-  total: 6
-status: issues_found
+  total: 2
+status: clean
 ---
 
 # Phase 05: Code Review Report
 
-**Reviewed:** 2026-08-05T02:16:54Z
+**Reviewed:** 2026-08-05T03:37:56Z
 **Depth:** standard
-**Files Reviewed:** 39
-**Status:** issues_found
+**Files Reviewed:** 41
+**Status:** clean
 
 ## Summary
 
-The Phase 05 tests and `bun run verify:phase05-design` pass, but the tested paths use manually split in-memory records and shallow SQL-string assertions. The actual unaffordable-action path does not create the live continuation state required by grace, checkpoint, or resume; the PostgreSQL implementation loses required intent data; and the evidence gate does not derive case observations from the authority it certifies.
+Final closure audit of `338fb55` found no remaining runtime blocker in the prior wake-accounting or resumed-action fencing paths. The third exact `unknown` observation now atomically changes the dispatch to a terminal state, releases its still-authorized wake budget once, and records release audit/outbox material. Late exact completion transitions only to `late_evidence_requires_operator`; it neither redispatches nor posts a debit.
 
-The requested evidence anomaly is **not a current deterministic-pointer bug**. `ccf7a330…` is invalid because it lacks `caseComparisons`; it was timestamped before the valid `4043df…` record. The current verifier rejects it, and rerunning the gate validated `4043df…` and left the tracked pointer unchanged.
+The resume command persists private lease, action, operation, and budget identities, prepares and claims the bound metered action before restore, and requires its exact durable finalization before retiring the restored pause. ContextVM responses no longer disclose the private allocation/budget/lease fields. Wrong lease/operation, missing finalization, and conflicting completed finalizations fail closed. The focused suite passes 51 tests, and `git diff --check 338fb55^..338fb55` is clean.
+
+The following two warnings are explicitly non-blocking design/provider deferrals; no runtime critical finding remains in this closure scope.
 
 ## Narrative Findings (AI reviewer)
 
-## Critical Issues
-
-### CR-01: The real unaffordable-action path never creates a durable live pause
-
-**File:** `src/continuity/continuation-service.ts:65-88`, `src/persistence/postgres-sql-funding-store.ts:186-191`, `src/phase-04/metered-generation-service.ts:163-167`
-
-**Issue:** `MeteredGenerationService` calls `ContinuationService.pauseForFunding`, which persists the legacy `ContinuationRecord` form only. The PostgreSQL implementation explicitly returns that form without inserting any row, while the memory implementation puts it in a separate `continuations` map. Neither creates the `ContinuationPause` required by `wakePausedAction`, deadline scanning, checkpointing, or claiming a resume. Thus production duplicate calls do not replay a persisted pause/deadline, and a genuine `needs_top_up` result cannot enter the ten-minute or durable-resume lifecycle. The tests mask this by manually creating a second, richer pause record after calling the service.
-
-**Fix:** Replace the split overloads with one atomic pause transition. At the affordability boundary, persist the complete pending intent, fixed grace deadline, pause generation, and server-issued live lease (or an explicit no-live-worker state) in the same record/transaction that stores the replay result. Make all wake/checkpoint/status/resume reads use that record, and add an integration test beginning with `MeteredGenerationService.startSession` against the SQL store.
-
-### CR-02: PostgreSQL drops the full pending intent required to wake, checkpoint, and resume
-
-**File:** `migrations/phase-05/001_continuation.sql:5-23`, `src/persistence/postgres-sql-funding-store.ts:78-90`, `src/continuity/continuation-service.ts:110-132`, `src/continuity/continuation-service.ts:241-246`
-
-**Issue:** `continuation_pauses` has no storage for `actionKind`, `actionMaximum`, policy/profile/price-card/toolchain pins, payload hash, reference, or artifact version. Both SQL read methods construct only five fields and cast the incomplete object to `ContinuationRecord`. Consequently wake reaches `BigInt(continuation.intent.actionMaximum)` with `undefined`, and resume compatibility always compares missing fields to real pins and is denied. Deadline checkpoint sealing also receives missing compatibility/action fields. This makes the PostgreSQL continuation path nonfunctional even when a rich pause row is manually inserted.
-
-**Fix:** Persist a strict, canonical `PendingActionIntent` (for example an `intent_json` column validated on write/read) or add all required immutable columns. Hydrate it with `PendingActionIntentSchema.parse` rather than `as unknown as`, and add real PostgreSQL integration coverage for wake, deadline checkpoint, and resume.
-
-### CR-03: The SQL deletion audit cannot record its own retry/final states
-
-**File:** `migrations/phase-05/001_continuation.sql:80-99`, `src/persistence/postgres-sql-funding-store.ts:260`, `src/continuity/deadline-reconciler.ts:103-112`
-
-**Issue:** The TypeScript lifecycle writes `scheduled`, then `deleted` or `unknown`. The migration permits only `scheduled`, `deleted`, and `failed`—not `unknown`. It also installs an append-only trigger that rejects every update, while `recordDeletionOutcome` uses `ON CONFLICT ... DO UPDATE` to transition an existing `scheduled` row. On production PostgreSQL, the first failure either violates the check constraint (`unknown`) or every final update fails due to the trigger. The retention reconciler then cannot persist its terminal/retry audit and may reject rather than return a reconciliation result.
-
-**Fix:** Model append-only deletion observations as separate rows (include an attempt/sequence key) and derive the latest coarse state, or remove the append-only trigger and constrain a deliberate state transition graph. Align the DB enum with the TypeScript contract, including `unknown` if it remains a valid recoverable state. Test the actual migration on PostgreSQL, not text presence.
-
-### CR-04: Deadline checkpointing does not fence worker effects before external checkpoint I/O
-
-**File:** `src/continuity/deadline-reconciler.ts:122-147`, `src/phase-02/contracts.ts:198-203`
-
-**Issue:** At grace expiry, the reconciler changes a database state to `checkpointing` and immediately asks the worker to export. The worker contract has no pause/fence/abort operation and no requirement that its commands revalidate the coordinator lease. A live worker can therefore continue model/tool/build/network work while the archive is captured and until termination occurs after the SQL commit. This violates the required deadline fence and permits effects after the durable safe boundary.
-
-**Fix:** Add a coordinator-owned fence operation that the worker acknowledges before export, or route every worker action through a lease validator backed by the same durable transaction. Do not begin export until that fence succeeds; make a failed fence retryable without allowing worker effects. Add a race test with a worker attempting an effect concurrently with the deadline claim.
-
-### CR-05: The design-evidence gate compares fixture labels, not authority observations
-
-**File:** `src/verification/phase-05-design-evidence.ts:31-49`, `src/verification/phase-05-design-evidence.ts:57-65`, `scripts/verify-phase-05-design-slice.ts:15-16`
-
-**Issue:** Every reported observation is selected by schedule-string matching in `observePhase05Facts`; it does not invoke the continuation authority or inspect its resulting durable/effect state. The child-suite command runs an entire test file and ignores each case's `execution.testName`, bounded input, and initial state. Therefore a case can keep passing after the implementation no longer satisfies its fixture scenario, provided the generic child test file still passes. The evidence record is content-addressed but not evidence of the per-case behavior it claims, so it can produce a false `design-ready` verdict.
-
-**Fix:** Give each fixture case a real probe that constructs only its bounded input/initial state, invokes the named public authority, and returns independently captured durable/effect/status facts. Run the exact named test or probe per case, fail on an unknown/missing test name, and retain the fixture expected values solely as the comparator.
-
 ## Warnings
 
-### WR-01: The exposed Modal continuation adapter is permanently nonfunctional
+### WR-01: Phase 05 design evidence still derives observations from static labels
 
-**File:** `src/worker-adapters/modal-worker.ts:380-393`
+**Classification:** WARNING — verification-evidence debt; non-blocking runtime design issue.
 
-**Issue:** `ModalWorkerAdapter` advertises `ContinuationWorkerPort` but unconditionally returns `WORKER_CONTINUATION_DENIED` for checkpoint export, restore, and termination. Any deployment that composes this adapter with the Phase 05 coordinator will always fail to checkpoint or resume; the deterministic fake is the only worker that implements the protocol.
+**File:** `/Users/sandwich/Develop/napplet-cvm/src/verification/phase-05-design-evidence.ts:35-43`, `/Users/sandwich/Develop/napplet-cvm/tests/evals/phase-05-reference-set.test.ts:24-65`
 
-**Fix:** Either do not expose this adapter as `ContinuationWorkerPort` until lifecycle support exists, or implement the same lease-bound export/restore/terminate protocol using the sandbox's persisted workspace/session state. Add adapter-level continuation tests that exercise a real lifecycle port double.
+**Issue:** The evidence comparison is supplied by a static case-ID map and schedule-label mapper. Named tests run, but their durable/effect/status outputs do not feed the recorded observation.
+
+**Fix:** Have each case invoke a bounded authority probe and persist its captured durable state, effect count, and safe status projection for comparison.
+
+### WR-02: Modal continuation remains an explicit Phase 7 provider deferral
+
+**Classification:** WARNING — documented provider/design deferral; non-blocking for this design-profile closure audit.
+
+**File:** `/Users/sandwich/Develop/napplet-cvm/src/worker-adapters/modal-worker.ts:384-401`, `/Users/sandwich/Develop/napplet-cvm/src/verification/phase-05-design-evidence.ts:64-67`
+
+**Issue:** Modal continuation methods safely return `WORKER_CONTINUATION_DENIED`; the provider is intentionally unselected in this phase.
+
+**Fix:** Keep this adapter out of production continuation composition until Phase 7 implements and certifies the lease-bound worker, storage, key-management, and recovery lifecycle.
 
 ---
 
-_Reviewed: 2026-08-05T02:16:54Z_
+_Reviewed: 2026-08-05T03:37:56Z_
 _Reviewer: the agent (gsd-code-reviewer)_
 _Depth: standard_

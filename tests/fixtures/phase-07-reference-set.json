@@ -1,0 +1,105 @@
+{
+  "schema": "phase-07-reference-set",
+  "version": 1,
+  "entries": [
+    {
+      "id": "07-W0-01",
+      "requirement": "SESS-02",
+      "threat": "T-07-ADM",
+      "evidenceTier": "live",
+      "status": "pending",
+      "commands": [
+        "bun test tests/phase-07/admission-slo.test.ts",
+        "bun run certify:phase07 -- --suite=admission"
+      ],
+      "owners": ["07-01 Task 1", "07-01 Task 2"],
+      "cases": [
+        "receipt-before-effects",
+        "exact-session-readiness",
+        "stable-no-effect-refusal",
+        "exact-replay",
+        "concurrent-single-claim",
+        "sample-confidence",
+        "zero-backlog"
+      ]
+    },
+    {
+      "id": "07-W0-02",
+      "requirement": "OPS-01",
+      "threat": "T-07-TEL",
+      "evidenceTier": "medium",
+      "status": "pending",
+      "commands": [
+        "bun test tests/phase-07/telemetry-policy.test.ts",
+        "bun run eval:phase07 -- --suite=telemetry"
+      ],
+      "owners": ["07-04 Task 2"],
+      "cases": [
+        "finite-vocabulary",
+        "canary-redaction",
+        "protected-correlation",
+        "cardinality-bound",
+        "concurrent-export",
+        "exporter-failure-non-authority"
+      ]
+    },
+    {
+      "id": "07-W0-03",
+      "requirement": "OPS-02",
+      "threat": "T-07-REC",
+      "evidenceTier": "medium",
+      "status": "pending",
+      "commands": [
+        "bun test tests/evals/phase-07-reference-set.test.ts",
+        "bun run certify:phase07 -- --suite=chaos"
+      ],
+      "owners": ["07-06 Task 1", "07-06 Task 2", "07-09 Task 1"],
+      "cases": [
+        "d122-fault-families",
+        "durable-boundaries",
+        "concurrent-retry-schedule",
+        "single-writer",
+        "visible-unknown-state",
+        "exact-credit-debit-worker-session-artifact-checkpoint-deploy-owner-event-attestation"
+      ]
+    },
+    {
+      "id": "07-W0-04",
+      "requirement": "OPS-03",
+      "threat": "T-07-RST",
+      "evidenceTier": "live",
+      "status": "pending",
+      "commands": [
+        "bun test tests/phase-07/restore-drill.test.ts",
+        "bun run certify:phase07 -- --suite=restore"
+      ],
+      "owners": ["07-07 Task 1", "07-07 Task 2"],
+      "cases": [
+        "generation-checksum-read-decrypt-manifest-owner-version-lease-compatibility-expiry",
+        "fresh-instance-reattachment",
+        "mutation-deletion-races",
+        "retention-inventory",
+        "bounded-topology-claim"
+      ]
+    },
+    {
+      "id": "07-W0-05",
+      "requirement": "OPS-04",
+      "threat": "T-07-PRO",
+      "evidenceTier": "live",
+      "status": "pending",
+      "commands": [
+        "bun test tests/phase-07/promotion-gate.test.ts",
+        "bun run candidate:verify"
+      ],
+      "owners": ["07-10 Task 1", "07-10 Task 2", "07-10 Task 3"],
+      "cases": [
+        "exact-input-freshness-digest-binding",
+        "concurrency",
+        "non-waivable-classes",
+        "blocked-preflight",
+        "atomic-decision"
+      ]
+    }
+  ]
+}

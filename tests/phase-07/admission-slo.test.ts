@@ -56,11 +56,11 @@ test("07-W0-01 registry is unique, owner-bound, and pending until Plan 07-01 obs
 test("07-W0-01 rejects duplicate IDs, unknown registry enums, and baseline pass claims", async () => {
   const registry = await loadRegistry();
   const duplicate = structuredClone(registry); duplicate.entries.push(structuredClone(duplicate.entries[0]));
-  expect(new Set(duplicate.entries.map((entry) => entry.id)).size).not.toBe(duplicate.entries.length);
+  expect(() => assertStrictRegistry(duplicate)).toThrow();
   const unknownStatus = structuredClone(registry); unknownStatus.entries[0].status = "unknown";
-  expect(knownStatuses.has(unknownStatus.entries[0].status)).toBe(false);
+  expect(() => assertStrictRegistry(unknownStatus)).toThrow();
   const passClaim = structuredClone(registry); passClaim.entries[0].status = "passed";
-  expect(passClaim.entries[0].status).not.toBe("pending");
+  expect(() => assertStrictRegistry(passClaim)).toThrow();
 });
 
 test.todo("07-W0-01 derives receipt-to-exact-ready timing and refusal effects from the production admission service");

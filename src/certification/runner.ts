@@ -48,6 +48,7 @@ export async function runProtectedCertificationSuite(input: Readonly<{ profile: 
 
 export async function runProtectedCertificationProfile(input: Readonly<{ profile: ProtectedCertificationProfile; selectedSuites?: readonly ProtectedSuite[]; evidenceDirectory: string; registry?: ProtectedCertificationAdapterRegistry; preflightOnly?: boolean; now?: () => number }>): Promise<ProtectedCertificationRun> {
   const selectedSuites = input.selectedSuites ?? PROTECTED_SUITES;
+  if (selectedSuites.length === 0 || new Set(selectedSuites).size !== selectedSuites.length || selectedSuites.some((suite) => !PROTECTED_SUITES.includes(suite))) throw new Error("CERTIFICATION_SUITE_SELECTION_INVALID");
   const records: CertificationObservation[] = [];
   for (const suite of selectedSuites) records.push(await runProtectedCertificationSuite({ ...input, suite }));
   const allRequiredClaims = Object.values(suiteClaims).flat();

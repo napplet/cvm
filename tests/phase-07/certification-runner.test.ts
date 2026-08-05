@@ -38,6 +38,11 @@ test("preflight writes every selected non-pass inventory record without invoking
   expect(outcome.records.map((record) => record.status)).toEqual(["blocked", "blocked"]);
 });
 
+test("runner rejects empty or duplicate suite selection instead of silently succeeding", async () => {
+  await expect(runProtectedCertificationProfile({ profile, selectedSuites: [], evidenceDirectory: `/tmp/napplet-cvm-certification-${crypto.randomUUID()}` })).rejects.toThrow("CERTIFICATION_SUITE_SELECTION_INVALID");
+  await expect(runProtectedCertificationProfile({ profile, selectedSuites: ["admission", "admission"], evidenceDirectory: `/tmp/napplet-cvm-certification-${crypto.randomUUID()}` })).rejects.toThrow("CERTIFICATION_SUITE_SELECTION_INVALID");
+});
+
 test("all-suite dispatch refuses a partial claim inventory even when every adapter reports passed", async () => {
   const claims = { admission: "release.admission_slo", telemetry: "release.telemetry_policy", chaos: "release.database_failover", restore: "release.checkpoint_object", "security-host": "release.compatible_host", "supply-chain": "release.supply_chain", "contextvm-payment-model": "release.contextvm_relay", publication: "release.sealed_upload" };
   const adapters = Object.fromEntries(Object.entries(claims).map(([suite, claim]) => [suite, async () => ({ status: "passed", claims: [claim], limitations: [], reasonCode: "OBSERVATION_COMPLETE" })]));

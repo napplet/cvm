@@ -1,6 +1,6 @@
 ---
 phase: 06-sealed-preview-user-owned-publication
-reviewed: 2026-08-05T10:00:10Z
+reviewed: 2026-08-05T10:31:57Z
 depth: standard
 files_reviewed: 43
 files_reviewed_list:
@@ -46,68 +46,55 @@ files_reviewed_list:
   - tests/phase-06/sealed-deployment.test.ts
   - tests/phase-06/tracer.test.ts
 findings:
-  critical: 5
+  critical: 2
   warning: 1
   info: 0
-  total: 6
+  total: 3
 status: issues_found
 ---
 
 # Phase 06: Code Review Report
 
-**Reviewed:** 2026-08-05T10:00:10Z  
-**Depth:** standard  
-**Files Reviewed:** 43  
+**Reviewed:** 2026-08-05T10:31:57Z
+**Depth:** standard
+**Files Reviewed:** 43
 **Status:** issues_found
 
 ## Summary
 
-The reviewed paths contain security and correctness defects in the publication approval, owner isolation, durable-store, and production-composition paths. The targeted Phase 06 suite passes, but it primarily exercises the in-memory store and does not cover the failing SQLite transaction path or a production PostgreSQL integration.
+CR-01 through CR-05 from the prior review are closed: approval is recomputed from the sealed artifact, SQLite awaits asynchronous callbacks, request replay is timestamp-independent, owner authorization precedes in-flight sharing, and the PostgreSQL durable-store surface is present. Both prior generations of WR-01 are closed: the design script now calls `executePhase06ReferenceCase` and consumes structured observations. The previously cited direct compiler errors in `capability-review.ts`, `publication-intent.ts`, and `postgres-sql-funding-store.ts` are also cleared.
+
+The re-review found two new critical defects in the promoted CLI adapter. Its exact-byte check accepts an arbitrary file set because it never derives the artifact aggregate from those bytes, and it treats an untrusted source callback as sufficient proof that an incomplete relay effect completed. Both were reproduced with executed calls to `deployPreSignedNamed`. The full compiler still reports three direct TypeScript errors in `sqlite-publication-store.ts`; the focused Phase 06 suite passes 50 tests, and `bun run scripts/verify-phase-06-design-slice.ts` passes while producing evidence from structured observations.
 
 ## Narrative Findings (AI reviewer)
 
 ## Critical Issues
 
-### CR-01: Caller-supplied capability review can bypass required-capability approval
+### CR-01: Sealed deployment accepts a substituted file set
 
-**File:** `/Users/sandwich/Develop/napplet-cvm/src/publication/publication-intent.ts:60`  
-**Issue:** `parsedInput` accepts any syntactically valid `CapabilityReview`; it does not recompute `capabilityDigest` or require the optional manifest/policy/toolchain/runtime identity fences. A caller can submit an artifact with an unavailable required capability alongside `{ required: [], optional: [], compatibility: "compatible", capabilityDigest: <sha> }`, omitting the optional fences, and `createPublicationIntent` creates a signable intent. This was reproduced directly against the implementation.  
-**Fix:** Recompute the review with `canonicalCapabilityReview(artifact, runtimeVariant)` inside the trusted publication facade and compare every canonical field and digest. At minimum, require all four currently optional identity fields and verify `await capabilityDigestForReview(review) === review.capabilityDigest` before accepting the review.
+**Classification:** BLOCKER
+**File:** `/Users/sandwich/Develop/napplet-cvm/src/publication/napplet-cli-adapter.ts:48-57`
+**Issue:** `assertSealedNamedDeployPlan` verifies each supplied file against its *caller-supplied* per-file hash, then compares the equally caller-supplied `sealedAggregateSha256` and `deployAggregateSha256` strings to the artifact aggregate. It never derives the aggregate from the supplied files or compares the files to a trusted sealed-file manifest. A reproduced call supplied different bytes (`05e7d216…`) with their matching per-file SHA-256 while copying the artifact aggregate (`aaaaaaaa…`); `deployPreSignedNamed` returned `completed`. This breaks the core guarantee that only the verified, sealed artifact is deployed.
+**Fix:** Read the sealed file manifest from a trusted artifact record and require an exact path, MIME type, size, and hash match before deployment. Derive the canonical aggregate from that trusted manifest (or from the supplied canonical file list) and reject unless it equals `artifact.aggregateSha256`; do not accept caller-provided aggregate strings as proof.
 
-### CR-02: SQLite cannot execute the transaction callbacks used by PublicationService
+### CR-02: Adapter promotes incomplete source effects to completed deployment
 
-**File:** `/Users/sandwich/Develop/napplet-cvm/src/persistence/sqlite-publication-store.ts:75`  
-**Issue:** `transact` passes an async callback into `#serialized(false, ...)`. That method immediately calls `immutable(operation())`, which attempts `structuredClone` on the returned Promise and throws `DataCloneError`. PublicationService uses this API to create intents, persist signed events, and read signed events, so it cannot operate with `SqlitePublicationStore` despite the store passing its direct-method parity test.  
-**Fix:** Do not clone a Promise. Provide explicit asynchronous read/write transaction helpers that await the callback before cloning, and avoid re-entering the same serialization queue from inside a held transaction. Add an integration test that runs `PublicationService.createIntent` and `submitSignedManifest` against SQLite.
-
-### CR-03: Intent creation bypasses the durable idempotency API
-
-**File:** `/Users/sandwich/Develop/napplet-cvm/src/publication/publication-service.ts:22`  
-**Issue:** `createIntent` calls legacy `transact(tx.putIntent)` instead of `createOrReplayIntent`. The intended command identity is therefore not recorded. Because `createdAtMs` is part of the fingerprint, an ordinary retry after the clock advances becomes a new intent: the SQLite legacy path permits two records with the same idempotency key, while the memory path returns an idempotency conflict. This breaks retry semantics and creates divergent behavior between stores.  
-**Fix:** Make `PublicationService` depend on the durable create/replay interface, derive a stable request fingerprint excluding server-assigned timestamps, and return the prior intent for an exact owner-scoped idempotency-key replay. Test a retry with a later clock value on both memory and SQLite implementations.
-
-### CR-04: Concurrent request can bypass the owner check and receive another owner’s result
-
-**File:** `/Users/sandwich/Develop/napplet-cvm/src/publication/publication-service.ts:29`  
-**Issue:** The in-process deduplication map is keyed only by `intentId` and is consulted before `#intentForOwner`. During an active legitimate submission, a caller for a different account who knows the intent ID receives the existing promise and its publication status without owner authorization.  
-**Fix:** Resolve and authorize the intent before consulting the in-flight map, and key the map by both `accountId` and `intentId` (or store an owner-bound promise record). Add a concurrent cross-account test asserting `PUBLICATION_NOT_FOUND_OR_DENIED`.
-
-### CR-05: The PostgreSQL publication authority cannot back PublicationService
-
-**File:** `/Users/sandwich/Develop/napplet-cvm/src/persistence/postgres-sql-funding-store.ts:71`  
-**Issue:** The production store implements `PublicationFundingStore`, but PublicationService requires `DurablePublicationStore` (`transact`, `getIntent`, and persistence for signed owner events). The PostgreSQL class does not implement those methods, and the provided migration has no signed-event table. It cannot be passed to PublicationService without a type escape and then fails at runtime; production publication therefore has no durable service-compatible persistence path.  
-**Fix:** Implement a single production `DurablePublicationStore` backed by PostgreSQL, including owner-event persistence and transactional intent/effect operations, or refactor PublicationService to use a complete owner-scoped PostgreSQL publication interface. Exercise the service end-to-end against PostgreSQL/Cockroach rather than source-text assertions.
+**Classification:** BLOCKER
+**File:** `/Users/sandwich/Develop/napplet-cvm/src/publication/napplet-cli-adapter.ts:85-91`
+**Issue:** After only checking the upload state, the adapter delegates its completion decision entirely to `source.networkDeploySucceeded`. It does not validate the relay effect state or require the evidence identifiers before returning `completed`. An executed probe supplied `publishEventWithSimplePool` with `{ state: "partial" }` and `networkDeploySucceeded: () => true`; the adapter returned `{ state: "completed", fullServerUploadId: "upload" }`. Dependency/tool output is untrusted in this system, so a malformed or compromised source facade can falsely commit a publication effect and suppress the required reconciliation path.
+**Fix:** Parse both source responses at the adapter boundary and compute completion locally. Return `completed` only when upload and relay are both exactly `complete` and their required operation-bound evidence is present; otherwise return the corresponding `partial`, `failed`, or `unknown` result. Remove `networkDeploySucceeded` from the untrusted port, or make it an additional consistency check that cannot upgrade an incomplete effect.
 
 ## Warnings
 
-### WR-01: The reference-set evaluator hard-codes its observations instead of reading test results
+### WR-01: Reviewed SQLite publication authority still prevents a clean type check
 
-**File:** `/Users/sandwich/Develop/napplet-cvm/tests/evals/phase-06-reference-set.test.ts:28`  
-**Issue:** `canonicalObservedPhase06Case` returns a hard-coded expected-looking record based solely on fixture labels. `executePhase06ReferenceCase` only uses the spawned test’s exit code, so a test may pass while no asserted runtime value/effect is connected to the fixture’s claimed observation. This can report a green “actual-authority” reference set while the mapped fact has regressed or was never exercised.  
-**Fix:** Have each referenced test emit a structured, asserted result (status, exact effect counts, value) and compare that output to the fixture, or replace the fixture runner with direct scenario invocations that return those values.
+**Classification:** WARNING
+**Files:** `/Users/sandwich/Develop/napplet-cvm/src/persistence/sqlite-publication-store.ts:1`; `/Users/sandwich/Develop/napplet-cvm/src/persistence/sqlite-publication-store.ts:40-41`; `/Users/sandwich/Develop/napplet-cvm/src/persistence/sqlite-publication-store.ts:93`
+**Issue:** `bunx tsc --noEmit --pretty false` still fails directly in this Phase 06 module. The project does not provide the `bun:sqlite` declaration, and the SQLite row helpers return `null` through interface methods declared to return `undefined` for a missing intent, effect, or signed event. These errors make the durable publication implementation fail the repository compiler gate and hide future contract regressions behind existing diagnostics.
+**Fix:** Configure the supported Bun type declarations for the compiler, then normalize absent rows explicitly, for example `return row === null ? undefined : parsedIntent;`, in `#intent`, `#effect`, and `getSignedEvent`. Add the Phase 06 compiler command to the required gate after baseline compiler errors are addressed.
 
 ---
 
-_Reviewed: 2026-08-05T10:00:10Z_  
-_Reviewer: the agent (gsd-code-reviewer)_  
+_Reviewed: 2026-08-05T10:31:57Z_
+_Reviewer: the agent (gsd-code-reviewer)_
 _Depth: standard_

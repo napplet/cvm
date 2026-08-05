@@ -1,40 +1,69 @@
 import { expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import {
+  LIFECYCLE_OUTCOMES,
+  LIFECYCLE_STAGES,
+  lifecycleCardinalityUpperBound,
+  protectedCorrelationId,
+  redactLifecycleObservation,
+} from "../../src/telemetry/redaction";
+import {
+  InMemoryLifecycleExporter,
+  OpenTelemetryLifecycleExporter,
+  createLifecycleTelemetry,
+} from "../../src/telemetry/otel";
 
-const fixturePath = "tests/fixtures/phase-07-reference-set.json";
+const key = new Uint8Array(32).fill(7);
+const canaries = [
+  "prompt: private idea", "generated source: const secret = 1", "nsec1privatekey", "signer-token-123",
+  "cashu-proof-123", "lightning-preimage-123", "credential-123", "raw ContextVM envelope",
+  "native receipt", "cli output", "runtime message", "provider payload", "/private/local/path", "user-defined-label",
+];
 
-type RegistryRow = Readonly<{ id: string; requirement: string; threat: string; evidenceTier: string; status: string; commands: readonly string[]; owners: readonly string[]; cases: readonly string[] }>;
-
-async function loadRegistry(): Promise<Readonly<{ schema: string; version: number; entries: readonly RegistryRow[] }>> {
-  return JSON.parse(await readFile(fixturePath, "utf8"));
+function observation(stage = LIFECYCLE_STAGES[0], outcome = LIFECYCLE_OUTCOMES[0]) {
+  return { version: "cvm.lifecycle.v1", correlationId: "account/session/action", stage, outcome, monotonicMs: 42 };
 }
 
-test("07-W0-02 registry binds telemetry privacy coverage to Plan 07-04 and remains non-pass", async () => {
-  const registry = await loadRegistry();
-  expect(registry).toMatchObject({ schema: "phase-07-reference-set", version: 1 });
-  const entry = registry.entries.filter((candidate) => candidate.id === "07-W0-02");
-  expect(entry).toHaveLength(1);
-  expect(entry[0]).toMatchObject({
-    requirement: "OPS-01",
-    threat: "T-07-TEL",
-    evidenceTier: "medium",
-    status: "pending",
-    commands: ["bun test tests/phase-07/telemetry-policy.test.ts", "bun run eval:phase07 -- --suite=telemetry"],
-    owners: ["07-04 Task 2"],
-  });
-  expect(entry[0].cases).toEqual(expect.arrayContaining([
-    "finite-vocabulary", "canary-redaction", "protected-correlation", "cardinality-bound", "concurrent-export", "exporter-failure-non-authority",
-  ]));
-  expect(entry[0].status).not.toBe("passed");
+test("every finite lifecycle stage and outcome exports with protected correlation and no unknown attributes", async () => {
+  const exporter = new InMemoryLifecycleExporter({ key });
+  for (const stage of LIFECYCLE_STAGES) for (const outcome of LIFECYCLE_OUTCOMES) await exporter.observe(observation(stage, outcome));
+  expect(exporter.observations).toHaveLength(LIFECYCLE_STAGES.length * LIFECYCLE_OUTCOMES.length);
+  expect(exporter.observations.every((entry) => entry.correlationDigest.startsWith("sha256:"))).toBe(true);
+  expect(exporter.observations.some((entry) => JSON.stringify(entry).includes("account/session/action"))).toBe(false);
+  expect(protectedCorrelationId("account/session/action", key)).toEqual(exporter.observations[0]?.correlationDigest);
 });
 
-test("07-W0-02 keeps comparator facts out of telemetry runtime inputs", async () => {
-  const registry = await loadRegistry();
-  const entry = registry.entries.find((candidate) => candidate.id === "07-W0-02");
-  expect(entry?.cases.every((item) => typeof item === "string" && item.length > 0)).toBe(true);
-  expect(JSON.stringify(entry)).not.toContain("prompt");
-  expect(JSON.stringify(entry)).not.toContain("secretValue");
-  expect(JSON.stringify(entry)).not.toContain("exporterCallback");
+test("forbidden canaries and unknown or free-text attributes reach neither in-memory nor OTLP sink", async () => {
+  const memory = new InMemoryLifecycleExporter({ key });
+  const otlpRecords: unknown[] = [];
+  const otlp = new OpenTelemetryLifecycleExporter({ key, onRedactedObservation: (entry) => otlpRecords.push(entry) });
+  for (const canary of canaries) {
+    const unsafe = { ...observation(), prompt: canary, provider: canary, labels: { user: canary } };
+    await memory.observe(unsafe as never);
+    await otlp.observe(unsafe as never);
+    expect(redactLifecycleObservation(unsafe, { key })).toBeNull();
+  }
+  expect(memory.observations).toEqual([]);
+  expect(otlpRecords).toEqual([]);
+  expect(memory.telemetryPolicyViolations).toBe(canaries.length);
+  expect(otlp.telemetryPolicyViolations).toBe(canaries.length);
 });
 
-test.todo("07-W0-02 derives finite-vocabulary telemetry and redaction observations from the Plan 07-04 exporter");
+test("parallel adversarial observations stay within the schema-computed finite metric cardinality bound", async () => {
+  const exporter = new InMemoryLifecycleExporter({ key });
+  await Promise.all(Array.from({ length: 1_000 }, (_, index) => exporter.observe({
+    ...observation(LIFECYCLE_STAGES[index % LIFECYCLE_STAGES.length]!, LIFECYCLE_OUTCOMES[index % LIFECYCLE_OUTCOMES.length]!),
+    correlationId: `user-controlled-${index}`, provider: `provider-${index}`, region: `region-${index}`,
+  } as never)));
+  expect(exporter.metricSeriesCount).toBeLessThanOrEqual(lifecycleCardinalityUpperBound());
+  expect(exporter.observations).toEqual([]);
+  expect(exporter.telemetryPolicyViolations).toBe(1_000);
+});
+
+test("exporter failure is contained as one bounded policy fact and cannot change the caller's effect", async () => {
+  let effects = 0;
+  const telemetry = createLifecycleTelemetry({ key, exporter: { observe: () => { throw new Error("collector unavailable"); } } });
+  const domainResult = async () => { await telemetry.observe(observation()); effects += 1; return { status: "accepted", effects }; };
+  await expect(domainResult()).resolves.toEqual({ status: "accepted", effects: 1 });
+  expect(telemetry.telemetryPolicyViolations).toBe(1);
+  expect(effects).toBe(1);
+});

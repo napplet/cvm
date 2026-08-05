@@ -98,7 +98,7 @@ export class MeteredGenerationService {
   }
 
   /** Called by the lease-bound resumed worker coordinator after terminal action accounting. */
-  async completeResumedAction(input: Readonly<{ accountId: string; checkpointId: string; allocationIntentReference: string; terminalActionReference: string; terminalStatus: "completed" | "failed" }>): Promise<void> {
+  async completeResumedAction(input: Readonly<{ accountId: string; checkpointId: string; allocationIntentReference: string; leaseToken: string; actionId: string; operationId: string; finalization: import("../persistence/funding-store").MeteredFinalizeInput }>): Promise<void> {
     await this.#continuation().completeResumedAction(input);
   }
 

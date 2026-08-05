@@ -65,7 +65,7 @@ describe("CONT-07 retention expiry", () => {
 
   test("allows only a pre-expiry claim to win and fences claims at the deadline", async () => {
     const preExpiry = await fixture(committedAtMs + RETENTION_MS - 1);
-    const claim = { accountId, sessionId: "session:retention", checkpointId, idempotencyKey: "resume:retention", fingerprint: "d".repeat(64), pendingFingerprint: "b".repeat(64), expectedCheckpointVersion: 1 as const, expectedSessionVersion: 2, nowMs: committedAtMs + RETENTION_MS - 1, newLeaseToken: "lease:restored", allocationIntentReference: "allocation:retention" };
+    const claim = { accountId, sessionId: "session:retention", checkpointId, idempotencyKey: "resume:retention", fingerprint: "d".repeat(64), pendingFingerprint: "b".repeat(64), expectedCheckpointVersion: 1 as const, expectedSessionVersion: 2, nowMs: committedAtMs + RETENTION_MS - 1, newLeaseToken: "lease:restored", allocationIntentReference: "allocation:retention", actionId: "action:retention", operationId: "operation:retention", actionBudgetReference: "action-budget:retention" };
     await expect(preExpiry.store.transact(accountId, (transaction) => transaction.claimResume(claim))).resolves.toMatchObject({ claimed: true });
     await expect(preExpiry.reconciler.scanRetention()).resolves.toMatchObject([{ status: "claimed" }]);
     expect(preExpiry.destroyed).toEqual([]);

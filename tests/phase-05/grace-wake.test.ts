@@ -133,7 +133,7 @@ describe("verified-credit grace wake", () => {
     expect(await fixture.store.transact(fixture.accountId, (tx) => tx.findContinuationPause(hint.sessionId, 1))).toMatchObject({ state: "completed", liveLeaseToken: undefined });
   });
 
-  test("unknown wake reconciliation is lookup-only and bounded when no exact completion is observable", async () => {
+  test("third unknown reconciliation releases the exact authorization once and preserves late evidence without redispatch or debit", async () => {
     const fixture = await setup({ credited: true, cap: "3250" });
     const hint = { accountId: fixture.accountId, sessionId: "session:grace-wake", pauseGeneration: 1, liveLeaseToken, pendingFingerprint, expectedSessionVersion: 4, expectedArtifactVersion: 4 };
     const claimed = await fixture.service.wakePausedAction(hint);
@@ -143,7 +143,22 @@ describe("verified-credit grace wake", () => {
     await restart.reconcileOutstandingWakeDispatches(fixture.accountId);
     await restart.reconcileOutstandingWakeDispatches(fixture.accountId);
     expect(await fixture.store.findWakeDispatch(fixture.accountId, hint.sessionId, 1)).toMatchObject({ state: "reconciliation_terminal", reconciliationAttempts: 3 });
+    expect(await fixture.store.transact(fixture.accountId, (tx) => tx.findActionBudget("continuation-wake:pause:grace-wake:1"))).toMatchObject({ state: "released" });
+    const terminalSnapshot = fixture.store.snapshot();
+    expect(terminalSnapshot.outbox.filter((event) => event.kind === "continuation_wake_released")).toHaveLength(1);
+    await fixture.service.recordWakeDispatchOutcome({ accountId: fixture.accountId, sessionId: hint.sessionId, pauseGeneration: 1, dispatchClaimToken: claimed.dispatchClaimToken, outcome: "unknown" });
+    expect(await fixture.store.findWakeDispatch(fixture.accountId, hint.sessionId, 1)).toMatchObject({ state: "reconciliation_terminal", reconciliationAttempts: 3 });
     await expect(restart.reconcileOutstandingWakeDispatches(fixture.accountId)).resolves.toEqual([]);
+
+    const lateEvidence = new ContinuationService({ store: fixture.store, wakeReconciliation: { observe: async () => "completed" } });
+    await expect(lateEvidence.reconcileWakeDispatch({ accountId: fixture.accountId, sessionId: hint.sessionId, pauseGeneration: 1 })).resolves.toBe("completed");
+    expect(await fixture.store.findWakeDispatch(fixture.accountId, hint.sessionId, 1)).toMatchObject({ state: "late_evidence_requires_operator", reconciliationAttempts: 3 });
+    expect(await fixture.store.transact(fixture.accountId, (tx) => tx.findActionBudget("continuation-wake:pause:grace-wake:1"))).toMatchObject({ state: "released" });
+    const lateSnapshot = fixture.store.snapshot();
+    expect(lateSnapshot.outbox.filter((event) => event.kind === "continuation_wake_released")).toHaveLength(1);
+    expect(lateSnapshot.outbox.filter((event) => event.kind === "continuation_wake_late_evidence")).toHaveLength(1);
+    expect(lateSnapshot.postings.filter((posting) => posting.reference.includes("wake-operation") && posting.amount.startsWith("-"))).toEqual([]);
+    await expect(lateEvidence.reconcileWakeDispatch({ accountId: fixture.accountId, sessionId: hint.sessionId, pauseGeneration: 1 })).resolves.toBe("unknown");
   });
 
   test("restart reconciliation closes claimed wake crash points by original operation, never redispatch", async () => {

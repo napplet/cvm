@@ -239,9 +239,9 @@ export class ContextVmFundingAdapter {
 
   private async resumeResponse(verifiedPubkey: string, requestEventId: string, id: string | number | null, result: z.infer<typeof ResumeSessionResultSchema>): Promise<ContextVmWireResponse> {
     const wireResult = result.status === "restored"
-      ? freeze({ status: result.status, code: result.code, sessionId: result.sessionId, checkpointId: result.checkpointId, pendingActionReference: result.pendingActionReference, actionBudgetReference: result.actionBudgetReference, allocationIntentReference: result.allocationIntentReference })
+      ? freeze({ status: result.status, code: result.code, sessionId: result.sessionId, checkpointId: result.checkpointId, pendingActionReference: result.pendingActionReference })
       : result.status === "reconciliation_pending"
-        ? freeze({ status: result.status, code: result.code, sessionId: result.sessionId, checkpointId: result.checkpointId, pendingActionReference: result.pendingActionReference, allocationIntentReference: result.allocationIntentReference })
+        ? freeze({ status: result.status, code: result.code, sessionId: result.sessionId, checkpointId: result.checkpointId, pendingActionReference: result.pendingActionReference })
         : freeze({ status: result.status, code: result.code });
     await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({ jsonrpc: "2.0", method: "notifications/resume_session", params: wireResult }), requestEventId);
     return freeze({ jsonrpc: "2.0" as const, id, result: wireResult });

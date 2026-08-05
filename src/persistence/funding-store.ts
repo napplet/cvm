@@ -3,7 +3,7 @@ import type { NeedsTopUpResult, PendingActionIntent } from "../continuity/contra
 
 export type LedgerPosting = Readonly<{ id: string; accountId: string; reference: string; unit: "sat"; amount: string; balanced: true }>;
 export type FundingEvidence = Readonly<{ id: string; accountId: string; kind: "settlement_credit" | "funded_admission" | "metered_receipt" | "metered_result"; reference: string }>;
-export type FundingOutbox = Readonly<{ id: string; accountId: string; kind: "account_credited" | "funded_admission_accepted" | "metered_action_finalized" | "continuation_wake_accounted" | "continuation_resume_terminal"; reference: string }>;
+export type FundingOutbox = Readonly<{ id: string; accountId: string; kind: "account_credited" | "funded_admission_accepted" | "metered_action_finalized" | "continuation_wake_accounted" | "continuation_wake_released" | "continuation_wake_late_evidence" | "continuation_resume_terminal"; reference: string }>;
 export type StoredFundingCommand = Readonly<{ fingerprint: string; result: FundingResult }>;
 
 export type CreditInput = Readonly<{ accountId: string; fingerprint: string; idempotencyKey: string; settlement: VerifiedSettlement }>;
@@ -41,7 +41,7 @@ export type ContinuationFundingSnapshot = Readonly<{ settledBalance: bigint; ava
  * explicit resume must all read the same immutable action identity.
  */
 export type ContinuationPauseInput = Readonly<{ accountId: string; sessionId: string; admissionReference: string; idempotencyKey: string; fingerprint: string; pendingFingerprint: string; expectedSessionVersion: number; pauseGeneration: number; graceDeadlineMs: number; liveLeaseToken: string; intent: PendingActionIntent; result: NeedsTopUpResult }>;
-export type WakeDispatchState = "pending" | "claimed" | "completed" | "unknown" | "reconciliation_terminal";
+export type WakeDispatchState = "pending" | "claimed" | "completed" | "unknown" | "reconciliation_terminal" | "late_evidence_requires_operator";
 /**
  * A transactionally-coupled effect intent for one already admitted live
  * action. It is deliberately not a generation queue.
@@ -53,11 +53,11 @@ export type ContinuationPause = Omit<ContinuationPauseInput, "liveLeaseToken"> &
 export type ContinuationCheckpointInput = Readonly<{ accountId: string; sessionId: string; pauseGeneration: number; checkpointId: string; expectedSessionVersion: number; expectedArtifactVersion: number; manifestReference: string; objectKey: string; objectGeneration: string; objectChecksum: string; keyReference: string; compatibilityIdentity: string; checkpointCommittedAtMs: number }>;
 export type ContinuationCheckpoint = ContinuationCheckpointInput & Readonly<{ retentionDeadlineMs: number; state: "resume_required" | "claimed" | "expired"; liveLeaseToken?: string; claim?: ContinuationResumeClaim }>;
 export type BeginDeadlineCheckpointInput = Readonly<{ sessionId: string; pauseGeneration: number; liveLeaseToken: string }>;
-export type ContinuationResumeClaimInput = Readonly<{ accountId: string; sessionId: string; checkpointId: string; idempotencyKey: string; fingerprint: string; pendingFingerprint: string; expectedCheckpointVersion: number; expectedSessionVersion: number; nowMs: number; newLeaseToken: string; allocationIntentReference: string }>;
-export type ContinuationResumeClaim = Readonly<{ accountId: string; checkpointId: string; idempotencyKey: string; fingerprint: string; leaseToken: string; allocationIntentReference: string; claimed: boolean }>;
+export type ContinuationResumeClaimInput = Readonly<{ accountId: string; sessionId: string; checkpointId: string; idempotencyKey: string; fingerprint: string; pendingFingerprint: string; expectedCheckpointVersion: number; expectedSessionVersion: number; nowMs: number; newLeaseToken: string; allocationIntentReference: string; actionId: string; operationId: string; actionBudgetReference: string }>;
+export type ContinuationResumeClaim = Readonly<{ accountId: string; checkpointId: string; idempotencyKey: string; fingerprint: string; leaseToken: string; allocationIntentReference: string; actionId: string; operationId: string; actionBudgetReference: string; claimed: boolean }>;
 export type RestoreObservationInput = Readonly<{ checkpointId: string; allocationIntentReference: string; state: "restored" | "refused" | "reconciliation_pending" }>;
 /** A coordinator-owned terminal callback for an already restored action. */
-export type RetireResumedPauseInput = Readonly<{ checkpointId: string; allocationIntentReference: string; terminalActionReference: string; terminalStatus: "completed" | "failed" }>;
+export type CompleteResumedActionInput = Readonly<{ checkpointId: string; allocationIntentReference: string; leaseToken: string; actionId: string; operationId: string; finalization: MeteredFinalizeInput }>;
 /** Coarse, immutable deletion audit; no storage key or cryptographic material is projected publicly. */
 export type DeletionOutcomeInput = Readonly<{ checkpointId: string; objectGeneration: string; state: "scheduled" | "deleted" | "failed" | "unknown" }>;
 
@@ -106,10 +106,13 @@ export interface ContinuationFundingTransaction extends FundingTransaction {
   commitDeadlineCheckpoint(input: ContinuationCheckpointInput): Promise<ContinuationCheckpoint>;
   claimResume(input: ContinuationResumeClaimInput): Promise<ContinuationResumeClaim>;
   recordRestoreObservation(input: RestoreObservationInput): Promise<RestoreObservationInput>;
-  /** Releases the one-live-pause fence only after the restored action is terminal. */
-  retireResumedPause(input: RetireResumedPauseInput): Promise<ContinuationPause>;
+  /** Validates the lease-bound action result and retires the exact pause in one transaction. */
+  completeResumedAction(input: CompleteResumedActionInput): Promise<ContinuationPause>;
   tombstoneExpiredCheckpoint(input: Readonly<{ checkpointId: string; nowMs: number }>): Promise<ContinuationCheckpoint>;
   recordDeletionOutcome(input: DeletionOutcomeInput): Promise<DeletionOutcomeInput>;
+  prepareMeteredAction(input: PrepareMeteredActionInput): Promise<MeteredAction>;
+  claimProviderOperation(operationId: string): Promise<MeteredOperationClaim>;
+  finalizeMeteredAction(input: MeteredFinalizeInput): Promise<MeteredAction>;
 }
 
 export interface MeteredFundingTransaction extends FundingTransaction {
@@ -427,7 +430,16 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
         recordWakeDispatchOutcome: async (input) => {
           const key = `${accountId}\u0000${input.sessionId}\u0000${input.pauseGeneration}`;
           const dispatch = state.wakeDispatches.get(key);
-          if (!dispatch || dispatch.claimToken !== input.claimToken || (dispatch.state !== "claimed" && dispatch.state !== "unknown")) throw new Error("WAKE_DISPATCH_OUTCOME_INVALID");
+          if (!dispatch || dispatch.claimToken !== input.claimToken) throw new Error("WAKE_DISPATCH_OUTCOME_INVALID");
+          if (dispatch.state === "late_evidence_requires_operator") return dispatch;
+          if (dispatch.state === "reconciliation_terminal") {
+            if (input.state !== "completed") return dispatch;
+            const late = freeze({ ...dispatch, state: "late_evidence_requires_operator" as const });
+            state.wakeDispatches.set(key, late);
+            state.outbox.push(freeze({ id: `outbox:${dispatch.operationId}:late-evidence`, accountId, kind: "continuation_wake_late_evidence" as const, reference: dispatch.operationId }));
+            return late;
+          }
+          if (dispatch.state !== "claimed" && dispatch.state !== "unknown") throw new Error("WAKE_DISPATCH_OUTCOME_INVALID");
           const reconciliationAttempts = input.state === "unknown" ? dispatch.reconciliationAttempts + 1 : dispatch.reconciliationAttempts;
           const stateAfterObservation: WakeDispatchState = input.state === "unknown" && reconciliationAttempts >= 3 ? "reconciliation_terminal" : input.state;
           const next = freeze({ ...dispatch, reconciliationAttempts, state: stateAfterObservation });
@@ -439,6 +451,14 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
           } else {
             const pauseKey = [...state.continuationPauses.entries()].find(([, pause]) => pause.accountId === accountId && pause.sessionId === input.sessionId && pause.pauseGeneration === input.pauseGeneration)?.[0];
             if (pauseKey) state.continuationPauses.set(pauseKey, freeze({ ...state.continuationPauses.get(pauseKey)!, state: "wake_reconciliation" as const, liveLeaseToken: undefined }));
+            if (stateAfterObservation === "reconciliation_terminal") {
+              const budget = [...state.actionBudgets.values()].find((item) => item.accountId === accountId && item.reference === dispatch.actionBudgetReference);
+              if (!budget || budget.state !== "authorized") throw new Error("WAKE_TERMINAL_BUDGET_INVALID");
+              state.actionBudgets.set(commandKey(accountId, budget.idempotencyKey), freeze({ ...budget, state: "released" as const }));
+              appendLineItem(state, { accountId, sessionId: dispatch.sessionId, operationId: dispatch.operationId, sourceIdentity: `wake-release:${dispatch.operationId}`, kind: "release", unit: "sat", amount: decimal(budget.amount), settledAvailable: decimal(accountFor(state, accountId).settledAvailable), held: decimal(accountFor(state, accountId).held), sessionSpend: "0" });
+              state.postings.push(freeze({ id: `posting:${dispatch.operationId}:wake-release`, accountId, reference: dispatch.actionBudgetReference, unit: "sat" as const, amount: decimal(budget.amount), balanced: true as const }));
+              state.outbox.push(freeze({ id: `outbox:${dispatch.operationId}:wake-released`, accountId, kind: "continuation_wake_released" as const, reference: dispatch.operationId }));
+            }
           }
           return next;
         },
@@ -485,7 +505,7 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
           const pauseEntry = [...state.continuationPauses.entries()].find(([, item]) => item.accountId === accountId && item.sessionId === input.sessionId && item.pauseGeneration === checkpoint.pauseGeneration);
           const pause = pauseEntry?.[1];
           if (!pause || pause.pendingFingerprint !== input.pendingFingerprint) throw new Error("PENDING_ACTION_CONFLICT");
-          const claim = freeze({ accountId, checkpointId: input.checkpointId, idempotencyKey: input.idempotencyKey, fingerprint: input.fingerprint, leaseToken: input.newLeaseToken, allocationIntentReference: input.allocationIntentReference, claimed: true as const });
+          const claim = freeze({ accountId, checkpointId: input.checkpointId, idempotencyKey: input.idempotencyKey, fingerprint: input.fingerprint, leaseToken: input.newLeaseToken, allocationIntentReference: input.allocationIntentReference, actionId: input.actionId, operationId: input.operationId, actionBudgetReference: input.actionBudgetReference, claimed: true as const });
           state.resumeClaims.set(command, claim);
           state.checkpoints.set(input.checkpointId, freeze({ ...checkpoint, state: "claimed" as const, claim }));
           state.continuationPauses.set(pauseEntry![0], freeze({ ...pause, state: "claimed" as const, liveLeaseToken: undefined }));
@@ -505,11 +525,17 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
           }
           return freeze(clone(effective));
         },
-        retireResumedPause: async (input) => {
+        completeResumedAction: async (input) => {
+          if (!input.finalization) throw new Error("RESUMED_ACTION_ACCOUNTING_INVALID");
           const checkpoint = state.checkpoints.get(input.checkpointId);
-          if (!checkpoint || checkpoint.accountId !== accountId || checkpoint.state !== "claimed" || checkpoint.claim?.allocationIntentReference !== input.allocationIntentReference) throw new Error("RESUMED_PAUSE_RETIRE_INVALID");
+          if (!checkpoint || checkpoint.accountId !== accountId || checkpoint.state !== "claimed" || checkpoint.claim?.allocationIntentReference !== input.allocationIntentReference || checkpoint.claim.leaseToken !== input.leaseToken || checkpoint.claim.actionId !== input.actionId || checkpoint.claim.operationId !== input.operationId) throw new Error("RESUMED_ACTION_FENCE_INVALID");
           const observation = state.restoreObservations.get(`${input.checkpointId}:${input.allocationIntentReference}`);
           if (observation?.state !== "restored") throw new Error("RESUMED_ACTION_NOT_RESTORED");
+          const action = [...state.meteredActions.values()].find((item) => item.accountId === accountId && item.operationId === input.operationId);
+          if (!action || action.actionId !== input.actionId || action.actionBudgetReference !== checkpoint.claim.actionBudgetReference || input.finalization.operationId !== input.operationId || input.finalization.idempotencyKey !== action.idempotencyKey || (input.finalization.status !== "completed" && input.finalization.status !== "failed")) throw new Error("RESUMED_ACTION_ACCOUNTING_INVALID");
+          if (action.result && (action.status !== input.finalization.status || action.sessionVersion !== input.finalization.sessionVersion || action.artifactVersion !== input.finalization.artifactVersion)) throw new Error("METERED_FINALIZATION_IDENTITY_CONFLICT");
+          const finalized = await transaction.finalizeMeteredAction(input.finalization);
+          if (!finalized.result || (finalized.status !== "completed" && finalized.status !== "failed")) throw new Error("RESUMED_ACTION_ACCOUNTING_INVALID");
           const pauseEntry = [...state.continuationPauses.entries()].find(([, pause]) => pause.accountId === accountId && pause.sessionId === checkpoint.sessionId && pause.pauseGeneration === checkpoint.pauseGeneration);
           if (!pauseEntry) throw new Error("CONTINUATION_PAUSE_NOT_FOUND");
           const pause = pauseEntry[1];
@@ -517,8 +543,8 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
           if (pause.state !== "restored") throw new Error("RESUMED_PAUSE_STATE_INVALID");
           const retired = freeze({ ...pause, state: "completed" as const, liveLeaseToken: undefined });
           state.continuationPauses.set(pauseEntry[0], retired);
-          state.resumedTerminalStatuses.set(`${accountId}\u0000${checkpoint.sessionId}`, input.terminalStatus);
-          state.evidence.push(freeze({ id: `evidence:${input.checkpointId}:resumed-terminal`, accountId, kind: "metered_result" as const, reference: `${input.terminalActionReference}:${input.terminalStatus}` }));
+          state.resumedTerminalStatuses.set(`${accountId}\u0000${checkpoint.sessionId}`, finalized.status);
+          state.evidence.push(freeze({ id: `evidence:${input.checkpointId}:resumed-terminal`, accountId, kind: "metered_result" as const, reference: finalized.operationId }));
           state.outbox.push(freeze({ id: `outbox:${input.checkpointId}:resume-terminal`, accountId, kind: "continuation_resume_terminal" as const, reference: input.checkpointId }));
           return retired;
         },

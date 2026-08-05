@@ -102,7 +102,7 @@ describe("verified ContextVM funding adapter", () => {
         reviseSession: async (input) => { calls.revise.push(input); return { status: "denied", code: "STALE_SESSION_VERSION" }; },
       },
       sessionStatus: { read: async (input) => { calls.status.push(input); return { status: "not_found_or_denied" }; } },
-      continuation: { resumeSession: async (input) => { calls.resume.push(input); return { status: "restored", code: "RESUME_RESTORED", sessionId: "session:one", checkpointId: "checkpoint:one", pendingActionReference: "pending:one", actionBudgetReference: "action-budget:one", allocationIntentReference: "allocation:one" }; } },
+      continuation: { resumeSession: async (input) => { calls.resume.push(input); return { status: "restored", code: "RESUME_RESTORED", sessionId: "session:one", checkpointId: "checkpoint:one", pendingActionReference: "pending:one" }; } },
     });
 
     await adapter.handle(envelope({ request: { id: "start-1", method: "tools/call", params: { name: "start_session", arguments: { admissionReference: "admission:one", idempotencyKey: "start-one", maximum: "100", idea: "A tiny focused napplet" } } } }));
@@ -122,7 +122,7 @@ describe("verified ContextVM funding adapter", () => {
     await adapter.handle(envelope({ request: { id: "resume-1", method: "tools/call", params: { name: "resume_session", arguments: { sessionId: "session:one", checkpointId: "checkpoint:one", expectedSessionVersion: 1, expectedCheckpointVersion: 1, idempotencyKey: "resume-one", approvePendingAction: true, capApprovalReference: "admission:one", pendingAction: { reference: "pending:one", fingerprint: "a".repeat(64), kind: "revise_session", maximum: "100" } } } } }));
     expect(calls.resume).toEqual([{ principal: { id: accountId }, sessionId: "session:one", checkpointId: "checkpoint:one", expectedSessionVersion: 1, expectedCheckpointVersion: 1, idempotencyKey: "resume-one", approvePendingAction: true, capApprovalReference: "admission:one", pendingAction: { reference: "pending:one", fingerprint: "a".repeat(64), kind: "revise_session", maximum: "100" } }]);
     expect(transport.responses.at(-1)).toMatchObject({ requestEventId: "event-0001", response: { result: { status: "restored", sessionId: "session:one", checkpointId: "checkpoint:one" } } });
-    expect(JSON.stringify(transport.responses.at(-1))).not.toMatch(/account:|provider|archive|credential|reasoning|cashu/i);
+    expect(JSON.stringify(transport.responses.at(-1))).not.toMatch(/account:|provider|archive|credential|reasoning|cashu|allocation|lease|action-budget/i);
 
     await adapter.handle(envelope({ request: { id: "resume-invalid", method: "tools/call", params: { name: "resume_session", arguments: { sessionId: "session:one", checkpointId: "checkpoint:one", expectedSessionVersion: 1, expectedCheckpointVersion: 1, idempotencyKey: "resume-invalid", approvePendingAction: true, capApprovalReference: "admission:one", principal: { id: "account:forged" }, pendingAction: { reference: "pending:one", fingerprint: "a".repeat(64), kind: "revise_session", maximum: "100" } } } } }));
     expect(transport.responses.at(-1)?.response).toMatchObject({ error: { code: -32602 } });

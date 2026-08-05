@@ -116,18 +116,41 @@ describe("explicit post-grace resume", () => {
     expect(incompatible.allocations()).toBe(0);
   });
 
-  test("projects owner-safe resume recovery and retires only after terminal completion", async () => {
+  test("keeps resume capabilities private and retires only the exact lease-bound, durably accounted action", async () => {
     const fixture = await setup();
     const pending = await readSessionStatus({ store: fixture.store, cursorSecret: "resume-status-secret", query: { principal: fixture.principal, sessionId: fixture.command.sessionId } });
     expect(pending).toMatchObject({ status: "ok", session: { state: "active", progress: "waiting_for_dispatch", nextAction: "resume_session", continuation: { status: "resume_required", checkpoint: { reference: "checkpoint:resume" } } } });
 
-    const restored = await fixture.resume() as { allocationIntentReference?: string };
-    if (!restored.allocationIntentReference) throw new Error("expected restored allocation");
+    const restored = await fixture.resume() as Record<string, unknown>;
+    expect(restored).toMatchObject({ status: "restored", checkpointId: "checkpoint:resume" });
+    expect(restored.allocationIntentReference).toBeUndefined();
+    expect(restored.actionBudgetReference).toBeUndefined();
+    expect(restored.leaseToken).toBeUndefined();
+    const claim = (await fixture.store.findContinuationCheckpoint(fixture.accountId, "checkpoint:resume"))?.claim;
+    if (!claim) throw new Error("expected durable coordinator claim");
     const running = await readSessionStatus({ store: fixture.store, cursorSecret: "resume-status-secret", query: { principal: fixture.principal, sessionId: fixture.command.sessionId } });
     expect(running).toMatchObject({ status: "ok", session: { state: "active", progress: "running", nextAction: "wait_for_current_action", continuation: { status: "restored", checkpoint: { reference: "checkpoint:resume" } } } });
 
     const coordinator = new MeteredGenerationService({ fundedAdmission: {} as never, store: fixture.store, gateway: {} as never, worker: {} as never, artifactVerifier: {} as never, continuation: fixture.service });
-    await coordinator.completeResumedAction({ accountId: fixture.accountId, checkpointId: "checkpoint:resume", allocationIntentReference: restored.allocationIntentReference, terminalActionReference: "action:resume:terminal", terminalStatus: "completed" });
+    const completion = {
+      accountId: fixture.accountId, checkpointId: "checkpoint:resume", allocationIntentReference: claim.allocationIntentReference,
+      leaseToken: claim.leaseToken, actionId: claim.actionId, operationId: claim.operationId,
+      finalization: {
+        idempotencyKey: "continuation-resume:checkpoint:resume:resume:one", operationId: claim.operationId, receiptCharge: "0", providerReceiptReference: "receipt:resume:one", status: "completed" as const,
+        result: { status: "completed", code: "ACTION_COMMITTED", accountId: fixture.accountId, sessionId: "session:resume", sessionVersion: 5, artifactVersion: 5, confirmedSpend: "untrusted", remainingCap: "untrusted", remainingBalance: "untrusted", nextAction: "revise_session", operationId: claim.operationId },
+        sessionVersion: 5, artifactVersion: 5,
+        artifact: { artifactId: "artifact:resume:five", workspaceLineage: "workspace:resume", checkpointReference: "checkpoint:resume", snapshotReference: "snapshot:resume:five", validationEvidenceReference: "evidence:resume:five" },
+      },
+    };
+    await expect(coordinator.completeResumedAction({ ...completion, leaseToken: "lease:forged" })).rejects.toThrow("RESUMED_ACTION_FENCE_INVALID");
+    await expect(coordinator.completeResumedAction({ ...completion, operationId: "operation:forged" })).rejects.toThrow("RESUMED_ACTION_FENCE_INVALID");
+    await expect(coordinator.completeResumedAction(({ ...completion, finalization: undefined } as unknown) as typeof completion)).rejects.toThrow("RESUMED_ACTION_ACCOUNTING_INVALID");
+    expect(await fixture.store.transact(fixture.accountId, (tx) => tx.findContinuationPause("session:resume", 1))).toMatchObject({ state: "restored" });
+
+    await coordinator.completeResumedAction(completion);
+    await coordinator.completeResumedAction(completion);
+    await expect(coordinator.completeResumedAction({ ...completion, finalization: { ...completion.finalization, providerReceiptReference: "receipt:resume:conflict" } })).rejects.toThrow("METERED_FINALIZATION_IDENTITY_CONFLICT");
+    await expect(coordinator.completeResumedAction({ ...completion, finalization: { ...completion.finalization, sessionVersion: 6 } })).rejects.toThrow("METERED_FINALIZATION_IDENTITY_CONFLICT");
     expect(await fixture.store.transact(fixture.accountId, (tx) => tx.findContinuationPause("session:resume", 1))).toMatchObject({ state: "completed", liveLeaseToken: undefined });
     const terminal = await readSessionStatus({ store: fixture.store, cursorSecret: "resume-status-secret", query: { principal: fixture.principal, sessionId: fixture.command.sessionId } });
     expect(terminal).toMatchObject({ status: "ok", session: { state: "verified", progress: "verified", nextAction: "revise_session", continuation: null } });

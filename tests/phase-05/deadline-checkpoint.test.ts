@@ -109,7 +109,7 @@ describe("fixed-deadline checkpoint reconciliation", () => {
     const fixture = await setup();
     await fixture.store.transact(fixture.accountId, async (tx) => {
       await tx.wakePausedAction({ sessionId: "session:deadline", pauseGeneration: 1, nowMs: deadlineMs - 1, liveLeaseToken: leaseToken });
-      return tx.claimWakeDispatch({ accountId: fixture.accountId, sessionId: "session:deadline", pauseGeneration: 1, pendingFingerprint: "a".repeat(64), expectedSessionVersion: 4, expectedArtifactVersion: 4, actionBudgetReference: "action-budget:wake:deadline", liveLeaseToken: leaseToken });
+      return tx.claimWakeDispatch({ accountId: fixture.accountId, sessionId: "session:deadline", pauseGeneration: 1, pendingFingerprint: "a".repeat(64), expectedSessionVersion: 4, expectedArtifactVersion: 4, actionBudgetReference: "action-budget:wake:deadline", operationId: "wake-operation:session:deadline:1", liveLeaseToken: leaseToken });
     });
     await expect(fixture.reconciler.scan()).resolves.toEqual([{ status: "already_checkpointed", code: "WAKE_DISPATCH_OWNS_PAUSE", sessionId: "session:deadline", pauseGeneration: 1 }]);
     expect(fixture.worker.exports).toBe(0);

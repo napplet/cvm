@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { z } from "zod";
@@ -14,7 +14,8 @@ const RECORD_DIRECTORY = `${CERTIFICATION_DIRECTORY}/otel-package-audits`;
 const SMOKE_DIRECTORY = `${CERTIFICATION_DIRECTORY}/otel-package-smokes`;
 const FORBIDDEN_LIFECYCLE_SCRIPTS = new Set(["preinstall", "install", "postinstall", "prepare"]);
 const APPROVED_AUDIT_DIGEST = "d7fedf16f62e4088cf17442aa39786c33bb4af8f3377e8d121d76b108eaf22b3";
-const COLLECTOR_IMAGE = "otel/opentelemetry-collector:latest";
+/** Official Docker Hub Collector manifest digest reviewed on 2026-08-05. */
+export const COLLECTOR_IMAGE = "otel/opentelemetry-collector@sha256:6ed874ea083d67a3085acfc75343f2ad11d9abe6006d7ea4a16e2dba9af14e49";
 const EXACT_NAMES = [
   "@opentelemetry/api",
   "@opentelemetry/resources",
@@ -127,6 +128,25 @@ async function approvedAudit(): Promise<void> {
   const packages = Array.isArray(record.packages) ? record.packages : [];
   if (packages.length !== OFFICIAL_OTEL_PACKAGES.length || OFFICIAL_OTEL_PACKAGES.some((expected) => !packages.some((value) => isRecord(value) && value.name === expected.name && value.version === expected.version && value.registryIntegrity === expected.integrity && value.verdict === "passed"))) throw new Error("APPROVED_PACKAGE_SET_DRIFT");
 }
+async function verifyCurrentSmokeRecord(): Promise<void> {
+  const root = process.cwd();
+  const expectedInputs = { packageJsonSha256: await snapshot(join(root, "package.json")), bunLockSha256: await snapshot(join(root, "bun.lock")) };
+  const expectedConfig = await snapshot(join(root, "infra/otel/collector.yaml"));
+  let names: string[];
+  try { names = await readdir(SMOKE_DIRECTORY); } catch { throw new Error("COLLECTOR_SMOKE_RECORD_REQUIRED"); }
+  for (const name of names.filter((value) => value.endsWith(".json"))) {
+    try {
+      const value = SmokeRecordSchema.parse(JSON.parse(await readFile(join(SMOKE_DIRECTORY, name), "utf8")));
+      const { evidenceSha256, ...payload } = value;
+      if (value.status !== "passed" || !evidenceSha256 || sha256(canonicalJson(payload)) !== evidenceSha256) continue;
+      if (value.collectorImageDigest !== COLLECTOR_IMAGE || !value.outputSha256 || value.bunVersion !== Bun.version || value.collectorConfigSha256 !== expectedConfig) continue;
+      if (value.inputDigests.packageJsonSha256 !== expectedInputs.packageJsonSha256 || value.inputDigests.bunLockSha256 !== expectedInputs.bunLockSha256) continue;
+      if (value.packages.length !== OFFICIAL_OTEL_PACKAGES.length || OFFICIAL_OTEL_PACKAGES.some((expected) => !value.packages.some((item) => item.name === expected.name && item.version === expected.version))) continue;
+      return;
+    } catch { /* Invalid or unrelated immutable records cannot authorize pins. */ }
+  }
+  throw new Error("COLLECTOR_SMOKE_RECORD_REQUIRED");
+}
 async function writeSmokeRecord(record: z.input<typeof SmokeRecordSchema>): Promise<{ readonly evidenceSha256: string; readonly recordPath: string }> {
   const withoutDigest = SmokeRecordSchema.omit({ evidenceSha256: true }).parse(record);
   const evidenceSha256 = sha256(canonicalJson(withoutDigest));
@@ -149,10 +169,8 @@ async function smoke(): Promise<{ readonly evidenceSha256: string; readonly reco
     if (dockerReady.code !== 0) throw new Error("DOCKER_UNAVAILABLE");
     const pull = await run(["docker", "pull", COLLECTOR_IMAGE]);
     if (pull.code !== 0) throw new Error("COLLECTOR_PULL_FAILED");
-    const digest = (await run(["docker", "image", "inspect", COLLECTOR_IMAGE, "--format", "{{index .RepoDigests 0}}"])) .stdout.trim();
-    if (!/^otel\/opentelemetry-collector@sha256:[a-f0-9]{64}$/u.test(digest)) throw new Error("COLLECTOR_DIGEST_INVALID");
     const config = join(root, "infra/otel/collector.yaml");
-    const started = await run(["docker", "run", "-d", "--rm", "-p", "127.0.0.1::4318", "-v", `${config}:/etc/otelcol/config.yaml:ro`, digest, "--config=/etc/otelcol/config.yaml"]);
+    const started = await run(["docker", "run", "-d", "--rm", "-p", "127.0.0.1::4318", "-v", `${config}:/etc/otelcol/config.yaml:ro`, COLLECTOR_IMAGE, "--config=/etc/otelcol/config.yaml"]);
     if (started.code !== 0 || !/^[a-f0-9]{12,}$/u.test(started.stdout.trim())) throw new Error("COLLECTOR_START_FAILED");
     container = started.stdout.trim();
     const port = (await run(["docker", "port", container, "4318/tcp"])).stdout.trim().match(/127\.0\.0\.1:(\d+)/u)?.[1];
@@ -172,7 +190,7 @@ async function smoke(): Promise<{ readonly evidenceSha256: string; readonly reco
     if (!output.includes("cvm.lifecycle.exact_session_ready")) throw new Error("COLLECTOR_TRACE_MISSING");
     if (!output.includes("cvm.lifecycle.observations")) throw new Error("COLLECTOR_METRIC_MISSING");
     for (const expected of ["exact_session_ready", "accepted", smokeCorrelation]) if (!output.includes(expected)) throw new Error("COLLECTOR_SAFE_ATTRIBUTE_MISSING");
-    const record = await writeSmokeRecord({ ...base, status: "passed", collectorImageDigest: digest, outputSha256: sha256(output) });
+    const record = await writeSmokeRecord({ ...base, status: "passed", collectorImageDigest: COLLECTOR_IMAGE, outputSha256: sha256(output) });
     const after = { packageJsonSha256: await snapshot(join(root, "package.json")), bunLockSha256: await snapshot(join(root, "bun.lock")) };
     if (after.packageJsonSha256 !== inputDigests.packageJsonSha256 || after.bunLockSha256 !== inputDigests.bunLockSha256) throw new Error("ROOT_DEPENDENCY_GRAPH_MUTATED");
     return record;
@@ -255,7 +273,7 @@ async function main(): Promise<void> {
   const args = Bun.argv.slice(2); const offline = args.includes("--offline-fixture"); const pointerOnly = args.includes("--verify-pointer"); const preinstall = args.includes("--mode=preinstall"); const requireApproved = args.includes("--require-approved"); const verifyRootPins = args.includes("--verify-root-pins"); const runSmoke = args.includes("--bun-collector-smoke");
   if (args.length === 0 || args.some((argument) => !["--mode=preinstall", "--offline-fixture", "--verify-pointer", "--require-approved", "--verify-root-pins", "--bun-collector-smoke"].includes(argument)) || [offline, pointerOnly, preinstall, requireApproved, verifyRootPins, runSmoke].filter(Boolean).length > 1) throw new Error("usage: --mode=preinstall | --offline-fixture | --verify-pointer | --require-approved | --verify-root-pins | --bun-collector-smoke");
   if (requireApproved) { await approvedAudit(); console.log(JSON.stringify({ status: "passed", mode: "approved-audit", evidenceSha256: APPROVED_AUDIT_DIGEST })); return; }
-  if (verifyRootPins) { await approvedAudit(); if (!await exactRootPins()) throw new Error("ROOT_PINS_INVALID"); console.log(JSON.stringify({ status: "passed", mode: "root-pins" })); return; }
+  if (verifyRootPins) { await approvedAudit(); if (!await exactRootPins()) throw new Error("ROOT_PINS_INVALID"); await verifyCurrentSmokeRecord(); console.log(JSON.stringify({ status: "passed", mode: "root-pins", collectorImageDigest: COLLECTOR_IMAGE })); return; }
   if (runSmoke) { console.log(JSON.stringify({ status: "passed", mode: "bun-collector-smoke", ...await smoke() })); return; }
   if (offline || pointerOnly) { await verifyPointer(); console.log(JSON.stringify({ status: "passed", mode: "offline-fixture", approvalStatus: "pending_human" })); return; }
   if (!preinstall) throw new Error("mode=preinstall is required");

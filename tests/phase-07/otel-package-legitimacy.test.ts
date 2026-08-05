@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { gzipSync } from "node:zlib";
 import {
+  COLLECTOR_IMAGE,
   OFFICIAL_OTEL_PACKAGES,
   verifyOfficialOtelPackageSet,
 } from "../../scripts/verify-phase-07-otel-packages";
@@ -107,4 +108,9 @@ test("is no-install: repository dependency manifests and node_modules are unchan
   const after = await Promise.all([Bun.file(packageJsonPath).text(), Bun.file(bunLockPath).text()]);
   expect(result.status).toBe("passed");
   expect(after).toEqual(before);
+});
+
+test("pins the Collector by immutable digest rather than a mutable tag", () => {
+  expect(COLLECTOR_IMAGE).toMatch(/^otel\/opentelemetry-collector@sha256:[a-f0-9]{64}$/u);
+  expect(COLLECTOR_IMAGE).not.toContain(":latest");
 });

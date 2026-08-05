@@ -95,7 +95,7 @@ async function protectedVerificationRecords(manifest: ReturnType<typeof releaseM
   const releaseBindingSha256 = await sha256({ releaseId: manifest.releaseId, sourceRevision: manifest.sourceRevision, sourceSha256: manifest.sourceSha256, supplyChainPolicy: manifest.supplyChainPolicy, inputs: manifest.inputs });
   const reproducibilityBase = {
     version: 1 as const, evidenceClass: "protected_live" as const, status: "verified" as const, candidateId,
-    releaseBindingSha256, expectedArtifactSha256: manifest.inputs.workerImageDigest,
+    releaseBindingSha256, measuredSourceSha256: manifest.sourceSha256, sourceReferenceSha256: [await sha256String(`git+https://github.com/acme/napplet-cvm@${manifest.sourceRevision}`), await sha256String(`git+https://github.com/acme/napplet-cvm@${manifest.sourceRevision}`)], expectedArtifactSha256: manifest.inputs.workerImageDigest,
     buildEvidenceSha256: [digest("a"), digest("b")], isolationIdentitySha256: [digest("c"), digest("d")], runIdentitySha256: [digest("e"), digest("f")], completedAtMs: atMs,
   };
   const reproducibilityEvidenceSha256 = await sha256(reproducibilityBase);

@@ -3,15 +3,20 @@ import { join } from "node:path";
 import { z } from "zod";
 import { canonicalJson } from "../promotion/schema";
 import { ReleaseObservationBindingSchema } from "./contracts";
+import type { ReleaseCertificationTrustRoot } from "./trust";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 const IdentitySchema = z.string().regex(/^[a-z][a-z0-9._-]{2,127}$/u);
 const EpochMsSchema = z.number().int().nonnegative().finite();
+export const SourceByteMeasurementSchema = z.object({
+  canonicalSourceReference: z.string().regex(/^git\+https:\/\/[a-z0-9.-]+\/[a-z0-9._/-]+@[a-f0-9]{40,64}$/iu),
+  sourceSha256: DigestSchema,
+}).strict();
 
 export const ProtectedBuildObservationSchema = z.object({
   version: z.literal(1), evidenceClass: z.literal("protected_live"), status: z.literal("passed"), candidateId: DigestSchema,
   releaseBinding: ReleaseObservationBindingSchema, isolationId: IdentitySchema, runId: IdentitySchema,
-  sourceSha256: DigestSchema, lockSha256: DigestSchema, toolchainSha256: DigestSchema, datasetSha256: DigestSchema,
+  sourceMeasurement: SourceByteMeasurementSchema, lockSha256: DigestSchema, toolchainSha256: DigestSchema, datasetSha256: DigestSchema,
   outputArtifactSha256: DigestSchema, runnerEvidenceSha256: DigestSchema, startedAtMs: EpochMsSchema, completedAtMs: EpochMsSchema,
 }).strict().superRefine((value, context) => {
   if (value.completedAtMs < value.startedAtMs) context.addIssue({ code: "custom", message: "build observation chronology is invalid" });
@@ -27,7 +32,7 @@ const ReproducibilityInputSchema = z.object({
 
 export const ReproducibilityRecordSchema = z.object({
   version: z.literal(1), evidenceClass: z.literal("protected_live"), status: z.literal("verified"), candidateId: DigestSchema,
-  releaseBindingSha256: DigestSchema, expectedArtifactSha256: DigestSchema, buildEvidenceSha256: z.array(DigestSchema).length(2),
+  releaseBindingSha256: DigestSchema, measuredSourceSha256: DigestSchema, sourceReferenceSha256: z.array(DigestSchema).length(2), expectedArtifactSha256: DigestSchema, buildEvidenceSha256: z.array(DigestSchema).length(2),
   isolationIdentitySha256: z.array(DigestSchema).length(2), runIdentitySha256: z.array(DigestSchema).length(2), completedAtMs: EpochMsSchema,
   evidenceSha256: DigestSchema, contentAddressedPath: z.string().regex(/^evidence\/certification\/reproducibility\/[a-f0-9]{64}\.json$/iu),
 }).strict();
@@ -41,14 +46,15 @@ async function sha256(value: unknown): Promise<string> {
 function exactBinding(left: unknown, right: unknown): boolean { return canonicalJson(left) === canonicalJson(right); }
 
 /** Validates two independently protected builds before producing any reusable release fact. */
-export async function verifyReproducibilityRecord(input: unknown, options: Readonly<{ nowMs?: number; maxAgeMs?: number }> = {}): Promise<ReproducibilityRecord> {
+export async function verifyReproducibilityRecord(input: unknown, options: Readonly<{ nowMs?: number; maxAgeMs?: number; trustRoot?: ReleaseCertificationTrustRoot }> = {}): Promise<ReproducibilityRecord> {
   const parsed = ReproducibilityInputSchema.parse(input);
   const nowMs = options.nowMs ?? Date.now();
   const maxAgeMs = options.maxAgeMs ?? 24 * 60 * 60 * 1_000;
   if (!Number.isInteger(maxAgeMs) || maxAgeMs < 1) throw new Error("REPRODUCIBILITY_FRESHNESS_INVALID");
   const [first, second] = parsed.records;
   if (first!.candidateId !== parsed.candidateId || second!.candidateId !== parsed.candidateId || !exactBinding(first!.releaseBinding, parsed.releaseBinding) || !exactBinding(second!.releaseBinding, parsed.releaseBinding)) throw new Error("REPRODUCIBILITY_RELEASE_BINDING_INVALID");
-  if (first!.sourceSha256 !== parsed.releaseBinding.sourceSha256 || second!.sourceSha256 !== parsed.releaseBinding.sourceSha256) throw new Error("REPRODUCIBILITY_SOURCE_DIGEST_INVALID");
+  if (!options.trustRoot || !(await options.trustRoot.verifySourceMeasurement(first!.sourceMeasurement)) || !(await options.trustRoot.verifySourceMeasurement(second!.sourceMeasurement))) throw new Error("REPRODUCIBILITY_SOURCE_MEASUREMENT_UNTRUSTED");
+  if (first!.sourceMeasurement.sourceSha256 !== parsed.releaseBinding.sourceSha256 || second!.sourceMeasurement.sourceSha256 !== parsed.releaseBinding.sourceSha256) throw new Error("REPRODUCIBILITY_SOURCE_DIGEST_INVALID");
   if (first!.isolationId === second!.isolationId || first!.runId === second!.runId) throw new Error("REPRODUCIBILITY_IDENTITIES_NOT_DISTINCT");
   if (first!.outputArtifactSha256 !== parsed.expectedArtifactSha256 || second!.outputArtifactSha256 !== parsed.expectedArtifactSha256) throw new Error("REPRODUCIBILITY_OUTPUT_MISMATCH");
   const completedAtMs = Math.max(first!.completedAtMs, second!.completedAtMs);
@@ -56,7 +62,8 @@ export async function verifyReproducibilityRecord(input: unknown, options: Reado
   if (nowMs - completedAtMs > maxAgeMs) throw new Error("REPRODUCIBILITY_RECORD_STALE");
   const base = {
     version: 1 as const, evidenceClass: "protected_live" as const, status: "verified" as const, candidateId: parsed.candidateId,
-    releaseBindingSha256: await sha256(parsed.releaseBinding), expectedArtifactSha256: parsed.expectedArtifactSha256,
+    releaseBindingSha256: await sha256(parsed.releaseBinding), measuredSourceSha256: parsed.releaseBinding.sourceSha256,
+    sourceReferenceSha256: (await Promise.all([sha256(first!.sourceMeasurement.canonicalSourceReference), sha256(second!.sourceMeasurement.canonicalSourceReference)])).sort(), expectedArtifactSha256: parsed.expectedArtifactSha256,
     buildEvidenceSha256: [first!.runnerEvidenceSha256, second!.runnerEvidenceSha256].sort(),
     isolationIdentitySha256: (await Promise.all([sha256(first!.isolationId), sha256(second!.isolationId)])).sort(),
     runIdentitySha256: (await Promise.all([sha256(first!.runId), sha256(second!.runId)])).sort(), completedAtMs,
@@ -71,8 +78,9 @@ export async function validateReproducibilityVerificationRecord(value: unknown, 
   const record = ReproducibilityRecordSchema.parse(value);
   const nowMs = expected.nowMs ?? Date.now(); const maxAgeMs = expected.maxAgeMs ?? 24 * 60 * 60 * 1_000;
   if (!Number.isInteger(maxAgeMs) || maxAgeMs < 1) throw new Error("REPRODUCIBILITY_FRESHNESS_INVALID");
+  const releaseBinding = ReleaseObservationBindingSchema.parse(expected.releaseBinding);
   if (record.candidateId !== expected.candidateId.toLowerCase() || record.expectedArtifactSha256 !== expected.artifactSha256.toLowerCase()
-    || record.releaseBindingSha256 !== await sha256(ReleaseObservationBindingSchema.parse(expected.releaseBinding))) throw new Error("REPRODUCIBILITY_RELEASE_BINDING_INVALID");
+    || record.measuredSourceSha256 !== releaseBinding.sourceSha256 || record.releaseBindingSha256 !== await sha256(releaseBinding)) throw new Error("REPRODUCIBILITY_RELEASE_BINDING_INVALID");
   if (nowMs - record.completedAtMs > maxAgeMs) throw new Error("REPRODUCIBILITY_RECORD_STALE");
   const { evidenceSha256, contentAddressedPath, ...base } = record;
   if (evidenceSha256 !== await sha256(base) || contentAddressedPath !== `evidence/certification/reproducibility/${evidenceSha256}.json`) throw new Error("REPRODUCIBILITY_RECORD_DIGEST_INVALID");
@@ -80,7 +88,7 @@ export async function validateReproducibilityVerificationRecord(value: unknown, 
 }
 
 /** Writes a redacted create-or-verify record; raw run identities and paths never reach disk. */
-export async function writeReproducibilityRecord(directory: string, input: unknown, options: Readonly<{ nowMs?: number; maxAgeMs?: number }> = {}): Promise<ReproducibilityRecord> {
+export async function writeReproducibilityRecord(directory: string, input: unknown, options: Readonly<{ nowMs?: number; maxAgeMs?: number; trustRoot?: ReleaseCertificationTrustRoot }> = {}): Promise<ReproducibilityRecord> {
   const record = await verifyReproducibilityRecord(input, options);
   await mkdir(directory, { recursive: true });
   const path = join(directory, `${record.evidenceSha256}.json`);

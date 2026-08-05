@@ -77,7 +77,7 @@ test("a protected adapter cannot run when candidate source bytes differ from the
 test("runner rejects a freshly rehashed supply record that self-selects a signer before adapter invocation", async () => {
   const root = await mkdtemp(join(tmpdir(), "napplet-cvm-records-"));
   const releaseBindingSha256 = await sha256(binding);
-  const reproducibilityBase = { version: 1 as const, evidenceClass: "protected_live" as const, status: "verified" as const, candidateId: profile.candidate.id, releaseBindingSha256, expectedArtifactSha256: digest("3"), buildEvidenceSha256: [digest("1"), digest("2")], isolationIdentitySha256: [digest("3"), digest("4")], runIdentitySha256: [digest("5"), digest("6")], completedAtMs: 1_000 };
+  const reproducibilityBase = { version: 1 as const, evidenceClass: "protected_live" as const, status: "verified" as const, candidateId: profile.candidate.id, releaseBindingSha256, measuredSourceSha256: binding.sourceSha256, sourceReferenceSha256: [digest("a"), digest("b")], expectedArtifactSha256: digest("3"), buildEvidenceSha256: [digest("1"), digest("2")], isolationIdentitySha256: [digest("3"), digest("4")], runIdentitySha256: [digest("5"), digest("6")], completedAtMs: 1_000 };
   const reproducibilityEvidenceSha256 = await sha256(reproducibilityBase);
   const reproducibility = { ...reproducibilityBase, evidenceSha256: reproducibilityEvidenceSha256, contentAddressedPath: `evidence/certification/reproducibility/${reproducibilityEvidenceSha256}.json` };
   const supplyChainEvidenceSha256 = digest("7");

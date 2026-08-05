@@ -17,7 +17,7 @@ created: 2026-08-05
 |----------|-------|
 | **Framework** | Bun test, Bun 1.3.14 |
 | **Config file** | none — `package.json` delegates to `bun test` |
-| **Quick run command** | `bun test tests/phase-05 tests/persistence/continuation-store.test.ts tests/contextvm/adapter.test.ts --timeout 10000` |
+| **Quick run command** | `bun test tests/phase-05 tests/persistence/continuation-store.test.ts tests/persistence/phase-05-sql-schema-parity.test.ts tests/persistence/postgres-sql-funding-store.test.ts tests/contextvm/adapter.test.ts --timeout 10000` |
 | **Full suite command** | `bun test` |
 | **Estimated runtime** | targeted ≤ 15 seconds; full suite ≤ 90 seconds on the reference development host |
 
@@ -34,7 +34,7 @@ created: 2026-08-05
 |---------|------|------|-------------|-----------------|-----------|-------------------|-------------|--------|
 | 05-W0-01 | 05-01 | 1 | CONT-01 | Unaffordable action persists one pending intent and pauses before budget, provider, worker, or debit effects. | unit + transaction | `bun test tests/phase-05/pause-for-funding.test.ts --timeout 10000` | ✅ | ✅ green |
 | 05-W0-02 | 05-01 | 1 | CONT-02 | Owner-safe `needs_top_up` status discloses exact funding/cap/deadline facts while redacting protected content. | contract + leakage | `bun test tests/phase-05/continuation-status.test.ts --timeout 10000` | ✅ | ✅ green |
-| 05-W0-03 | 05-04 | 2 | CONT-03 | Verified credit before the deadline resumes only one unchanged lease after fresh authorization. | race + integration | `bun test tests/phase-05/grace-wake.test.ts --timeout 10000` | ✅ | ✅ green |
+| 05-W0-03 | 05-04 + closure | 2 | CONT-03 | Only a durable, verified Lightning or Cashu credit before the deadline re-authorizes and continues the stored live lease exactly once; replay and late credit have no wake effect. | race + rail integration + SQL deadline | `bun test tests/phase-05/grace-wake.test.ts tests/phase-05/verified-credit-rail-wake.test.ts tests/persistence/postgres-sql-funding-store.test.ts --timeout 10000` | ✅ | ✅ green |
 | 05-W0-04 | 05-04 | 2 | CONT-04 | Deadline checkpoint ordering survives crash points and revokes the worker before any later effect. | fault injection | `bun test tests/phase-05/deadline-checkpoint.test.ts --timeout 10000` | ✅ | ✅ green |
 | 05-W0-05 | 05-03 | 2 | CONT-05 | Authenticated immutable checkpoint binds required lineage and rejects tamper/forbidden archive fields. | unit + security | `bun test tests/phase-05/checkpoint-envelope.test.ts --timeout 10000` | ✅ | ✅ green |
 | 05-W0-06 | 05-05 | 3 | CONT-06 | Post-grace credit cannot restart work; signed owner resume replays and rejects foreign/stale/conflicting input before effects. | ContextVM + integration | `bun test tests/phase-05/resume-session.test.ts tests/contextvm/adapter.test.ts --timeout 10000` | ✅ | ✅ green |
@@ -46,7 +46,7 @@ created: 2026-08-05
 ## Wave 0 Requirements
 
 - [x] `tests/phase-05/pause-for-funding.test.ts` and `continuation-status.test.ts` — CONT-01/02.
-- [x] `tests/phase-05/grace-wake.test.ts` — CONT-03 same-live-worker authorization and races.
+- [x] `tests/phase-05/grace-wake.test.ts`, `verified-credit-rail-wake.test.ts`, and `tests/persistence/postgres-sql-funding-store.test.ts` — CONT-03 same-live-worker authorization, real Lightning/Cashu settlement wake, owner/deadline SQL discovery, and bounded database waits.
 - [x] `tests/phase-05/deadline-checkpoint.test.ts` and `checkpoint-envelope.test.ts` — CONT-04/05 persistence, encryption, tamper, and crash ordering.
 - [x] `tests/phase-05/resume-session.test.ts` and ContextVM adapter coverage — CONT-06 explicit signed resume.
 - [x] `tests/phase-05/retention-expiry.test.ts` — CONT-07 claim/expiry/deletion behavior.
@@ -95,4 +95,20 @@ created: 2026-08-05
 - `bun run eval:phase05` — 3 pass, 0 fail.
 - `bun run verify:phase05-design` — 50 pass, 0 fail; it independently re-ran the deterministic authority/reference suites.
 
-The deterministic evidence remains deliberately provider-separated. Live Modal, GCS/object storage, KMS, PostgreSQL, latency, failover, and multi-region certification are Phase 7 manual-only work and are not evidence of launch readiness here.
+The deterministic evidence remains deliberately provider-separated. Live Modal, GCS/object storage, KMS, production PostgreSQL, latency, failover, and multi-region certification are Phase 7 manual-only work and are not evidence of launch readiness here.
+
+## CONT-03 Closure Re-audit 2026-08-05
+
+| Metric | Count |
+|--------|-------|
+| New coverage gaps found | 2 |
+| Resolved | 2 |
+| Escalated | 0 |
+
+### Executed Evidence
+
+- `bun test tests/phase-05/pause-for-funding.test.ts tests/phase-05/continuation-status.test.ts tests/phase-05/grace-wake.test.ts tests/phase-05/verified-credit-rail-wake.test.ts tests/phase-05/deadline-checkpoint.test.ts tests/phase-05/checkpoint-envelope.test.ts tests/phase-05/resume-session.test.ts tests/phase-05/retention-expiry.test.ts tests/persistence/continuation-store.test.ts tests/persistence/phase-05-sql-schema-parity.test.ts tests/persistence/postgres-sql-funding-store.test.ts tests/contextvm/adapter.test.ts --timeout 10000` — 56 pass, 0 fail.
+- `bun run eval:phase05` — 3 pass, 0 fail.
+- `bun run verify:phase05-design` — 50 pass, 0 fail.
+
+The CONT-03 map now includes rail-to-wake integration coverage and PostgreSQL deadline/timeout coverage. These deterministic adapters do not select or certify live providers; the existing Phase 7 deferrals remain in force.

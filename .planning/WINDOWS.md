@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 10
+open_count: 17
 waived_count: 0
 fixed_count: 0
-total_count: 10
-last_updated: 2026-08-05T08:09:03.064Z
+total_count: 17
+last_updated: 2026-08-05T15:36:07.022Z
 ---
 
 # Broken Windows Ledger
@@ -25,6 +25,13 @@ last_updated: 2026-08-05T08:09:03.064Z
 | 8 | 05 | deviation | src/continuity/checkpoint-envelope.ts |  | Added strict Web Crypto BufferSource typing compatibility. | open |  | 2026-08-05T01:22:59.862Z |  |
 | 9 | 05 | deviation | tests/phase-05/grace-wake.test.ts | 16 | Corrected grace-wake test account identity to use the funding principal mapping. | open |  | 2026-08-05T01:35:26.127Z |  |
 | 10 | 06 | deviation | src/publication/publication-service.ts |  | Tracer implementation corrected strict preview input and SHA-256 template digest validation. | open |  | 2026-08-05T08:09:03.064Z |  |
+| 11 | 07 | skipped-test | tests/phase-07/admission-slo.test.ts | 66 | Intentional pending production-observation registration owned by Plan 07-01. | open |  | 2026-08-05T15:33:50.591Z |  |
+| 12 | 07 | skipped-test | tests/phase-07/telemetry-policy.test.ts | 40 | Intentional pending production-observation registration owned by Plan 07-04. | open |  | 2026-08-05T15:33:50.656Z |  |
+| 13 | 07 | skipped-test | tests/phase-07/fault-matrix.test.ts | 27 | Intentional pending original-operation observation registration owned by Plans 07-06 and 07-09. | open |  | 2026-08-05T15:33:50.720Z |  |
+| 14 | 07 | skipped-test | tests/phase-07/restore-drill.test.ts | 27 | Intentional pending fresh-instance restore observation registration owned by Plan 07-07. | open |  | 2026-08-05T15:33:50.781Z |  |
+| 15 | 07 | skipped-test | tests/evals/phase-07-reference-set.test.ts | 29 | Intentional pending actual-authority comparator registration owned by Plans 07-06 and 07-09. | open |  | 2026-08-05T15:33:50.844Z |  |
+| 16 | 07 | skipped-test | tests/phase-07/promotion-gate.test.ts | 43 | Intentional pending atomic promotion-evidence registration owned by Plan 07-10. | open |  | 2026-08-05T15:33:50.908Z |  |
+| 17 | 07 | deviation | .planning/STATE.md |  | Normalized legacy Phase 7 Current Position metadata so state.advance-plan could record Plan 07-00 completion. | open |  | 2026-08-05T15:36:07.022Z |  |
 
 ````json
 [
@@ -146,6 +153,90 @@ last_updated: 2026-08-05T08:09:03.064Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-05T08:09:03.064Z",
+    "resolved_at": null
+  },
+  {
+    "id": 11,
+    "kind": "skipped-test",
+    "phase": "07",
+    "file": "tests/phase-07/admission-slo.test.ts",
+    "line": 66,
+    "description": "Intentional pending production-observation registration owned by Plan 07-01.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-05T15:33:50.591Z",
+    "resolved_at": null
+  },
+  {
+    "id": 12,
+    "kind": "skipped-test",
+    "phase": "07",
+    "file": "tests/phase-07/telemetry-policy.test.ts",
+    "line": 40,
+    "description": "Intentional pending production-observation registration owned by Plan 07-04.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-05T15:33:50.656Z",
+    "resolved_at": null
+  },
+  {
+    "id": 13,
+    "kind": "skipped-test",
+    "phase": "07",
+    "file": "tests/phase-07/fault-matrix.test.ts",
+    "line": 27,
+    "description": "Intentional pending original-operation observation registration owned by Plans 07-06 and 07-09.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-05T15:33:50.720Z",
+    "resolved_at": null
+  },
+  {
+    "id": 14,
+    "kind": "skipped-test",
+    "phase": "07",
+    "file": "tests/phase-07/restore-drill.test.ts",
+    "line": 27,
+    "description": "Intentional pending fresh-instance restore observation registration owned by Plan 07-07.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-05T15:33:50.781Z",
+    "resolved_at": null
+  },
+  {
+    "id": 15,
+    "kind": "skipped-test",
+    "phase": "07",
+    "file": "tests/evals/phase-07-reference-set.test.ts",
+    "line": 29,
+    "description": "Intentional pending actual-authority comparator registration owned by Plans 07-06 and 07-09.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-05T15:33:50.844Z",
+    "resolved_at": null
+  },
+  {
+    "id": 16,
+    "kind": "skipped-test",
+    "phase": "07",
+    "file": "tests/phase-07/promotion-gate.test.ts",
+    "line": 43,
+    "description": "Intentional pending atomic promotion-evidence registration owned by Plan 07-10.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-05T15:33:50.908Z",
+    "resolved_at": null
+  },
+  {
+    "id": 17,
+    "kind": "deviation",
+    "phase": "07",
+    "file": ".planning/STATE.md",
+    "line": null,
+    "description": "Normalized legacy Phase 7 Current Position metadata so state.advance-plan could record Plan 07-00 completion.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-05T15:36:07.022Z",
     "resolved_at": null
   }
 ]

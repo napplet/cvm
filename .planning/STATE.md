@@ -5,16 +5,16 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 7
 current_phase_name: Admission SLO, Resilience & Launch Safety
 status: executing
-stopped_at: Phase 7 AI-SPEC complete; research next
-last_updated: "2026-08-05T15:26:31.499Z"
+stopped_at: Completed 07-00-PLAN.md
+last_updated: "2026-08-05T15:36:06.890Z"
 last_activity: 2026-08-05
-last_activity_desc: Phase 6 complete, transitioned to Phase 7
+last_activity_desc: Phase 7 Wave 0 baseline complete
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 51
-  completed_plans: 40
-  percent: 86
+  completed_plans: 41
+  percent: 80
 ---
 
 # Project State
@@ -30,20 +30,20 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 7 — Admission SLO, Resilience & Launch Safety
-Plan: Not started
+Plan: 2 of 11
 Status: Ready to execute
-Last activity: 2026-08-05 — Phase 6 complete, transitioned to Phase 7
+Last activity: 2026-08-05 — Phase 7 Wave 0 baseline complete
 
-Progress: [██████████] 100%
+Progress: [████████░░] 80%
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
-- Phases: Phases 1–6 verified complete; Phase 7 is active at discussion (6/7, 86%).
-- Plans: 40/40 currently known milestone plans executed; Phase 7 plans remain to be created.
-- Requirements: 54/54 v1 requirements assigned; 49 verified complete and 5 Phase 7 requirements pending.
-- Next checkpoint: smart-discuss Phase 7, then research and plan its admission SLO, resilience, live certification, and launch-safety work without revisiting completed Phases 1–6.
+- Phases: Phases 1–6 verified complete; Phase 7 is executing (6/7, 86%).
+- Plans: 41/51 known milestone plans executed; ten Phase 7 plans remain.
+- Requirements: All v1 requirements are assigned; Phase 7 live certification remains pending despite its completed Wave 0 baseline.
+- Next checkpoint: execute Plan 07-01 admission implementation against the Wave 0 baseline.
 
 ## Performance Metrics
 
@@ -105,6 +105,7 @@ Progress: [██████████] 100%
 | Phase 06 P05 | 8m 27s | 3 tasks | 14 files |
 | Phase 06-sealed-preview-user-owned-publication P06 | 13m | 2 tasks | 6 files |
 | Phase 06 P07 | 13m | 2 tasks | 7 files |
+| Phase 07-admission-slo-resilience-launch-safety P00 | 5m | 3 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -186,6 +187,8 @@ Recent decisions affecting current work:
 - [Phase ?]: The host surface is a pure strict owner-safe rendering projection with no dashboard, signer, or transport authority.
 - [Phase ?]: Phase 6 design evidence accepts deterministic authority and source-contract proof only; live host, signer, CLI asset, relay, Blossom, PostgreSQL/Cockroach, and provider records remain not_observed under Phase 7 ownership.
 - [Phase ?]: Phase 6 evidence hashes canonical payload bytes and requires complete mapping coverage before atomically updating its content-addressed pointer.
+- [Phase ?]: Wave 0 registry rows are pending-only and have no runtime, store, provider, or promotion authority.
+- [Phase ?]: Baseline CLI seams report only bounded non-pass facts until later plans supply executed candidate-bound evidence.
 
 ### Pending Todos
 
@@ -207,6 +210,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T11:53:32.704Z
-Stopped at: Phase 7 AI-SPEC complete; research next
-Resume file: .planning/phases/07-admission-slo-resilience-launch-safety/07-AI-SPEC.md
+Last session: 2026-08-05T15:35:15.058Z
+Stopped at: Completed 07-00-PLAN.md
+Resume file: None

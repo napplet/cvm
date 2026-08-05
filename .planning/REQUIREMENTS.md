@@ -39,7 +39,7 @@ Requirements for the initial release. Each maps to exactly one roadmap phase.
 ### Session Admission and Interaction
 
 - [x] **SESS-01**: A user can start a generation session using one bounded plain-text napplet idea and no file, image, URL, repository, or existing-code input.
-- [ ] **SESS-02**: An accepted request obtains a ready isolated worker and begins execution within five seconds at p95; otherwise the user receives an immediate retryable capacity response.
+- [x] **SESS-02**: An accepted request obtains a ready isolated worker and begins execution within five seconds at p95; otherwise the user receives an immediate retryable capacity response.
 - [x] **SESS-03**: A user receives a stable session identifier plus visible state, progress, approved cap, actual spend, and next required action.
 - [x] **SESS-04**: A user can submit bounded plain-text revisions to the same session, with each revision separately authorized and metered.
 - [x] **SESS-05**: Concurrent or duplicated session actions are serialized so only one valid next action can mutate a session or artifact version.
@@ -89,10 +89,10 @@ Requirements for the initial release. Each maps to exactly one roadmap phase.
 
 ### Availability and Operations
 
-- [ ] **OPS-01**: The service exposes measured request-receipt-to-worker-ready latency, capacity rejection, generation, payment, checkpoint, resume, validation, and publication telemetry without leaking prompts, keys, or payment secrets.
-- [ ] **OPS-02**: Regional, relay, database, worker, or publication failures preserve single-writer ledger/session semantics and do not lose committed progress or duplicate money and event effects.
-- [ ] **OPS-03**: Checkpoints, sealed artifacts, validation evidence, usage receipts, and attestations remain durably available for their promised retention across an infrastructure instance failure.
-- [ ] **OPS-04**: Production promotion requires pinned images/packages, SBOM and provenance evidence, adversarial prompt/escape/exfiltration tests, payment and publication reconciliation tests, and measured five-second p95 load evidence.
+- [x] **OPS-01**: The service exposes measured request-receipt-to-worker-ready latency, capacity rejection, generation, payment, checkpoint, resume, validation, and publication telemetry without leaking prompts, keys, or payment secrets.
+- [x] **OPS-02**: Regional, relay, database, worker, or publication failures preserve single-writer ledger/session semantics and do not lose committed progress or duplicate money and event effects.
+- [x] **OPS-03**: Checkpoints, sealed artifacts, validation evidence, usage receipts, and attestations remain durably available for their promised retention across an infrastructure instance failure.
+- [x] **OPS-04**: Production promotion requires pinned images/packages, SBOM and provenance evidence, adversarial prompt/escape/exfiltration tests, payment and publication reconciliation tests, and measured five-second p95 load evidence.
 
 ## v2 Requirements
 

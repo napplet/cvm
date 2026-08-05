@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { NAPPLET_CLI_LINUX_SHA256, NAPPLET_CLI_SOURCE_COMMIT, probePromotedCliPreSignedRoute } from "../src/publication/napplet-cli-source-contract.js";
 import { canonicalJson } from "../src/promotion/schema.js";
 import { buildPhase06DesignEvidence, canonicalPhase06EvidenceBytes, phase06EvidenceSha256, validatePhase06DesignEvidence, type Phase06DesignEvidence } from "../src/verification/phase-06-design-evidence.js";
+import { executePhase06ReferenceCase, validatePhase06ReferenceSet } from "../src/verification/phase-06-reference-set.js";
 
 const fixturePath = "tests/fixtures/phase-06-reference-set.json";
 const cliFixturePath = "tests/fixtures/phase-06-cli-source-contract.json";
@@ -22,33 +23,12 @@ export function validatePhase06ApiCoverage(coverage: string) {
   return rows;
 }
 
-function observedComparison(item: any) {
-  // The reference set has just executed the real authority probe selected by
-  // this bounded case. Expected values remain comparison-only and never enter
-  // the implementation under test.
-  const [kind, scenario] = Object.entries(item.input)[0] as [string, string];
-  const observed = kind === "capabilities" && scenario === "empty" ? { status: "canonical", effects: "deploy=0", value: "empty-digest" }
-    : kind === "capabilities" && scenario === "null" ? { status: "denied", effects: "deploy=0", value: "invalid" }
-    : kind === "source" && scenario === "exact" ? { status: "available", effects: "deploy=0", value: "source-only" }
-    : kind === "provider" && scenario === "timeout" ? { status: "pending", effects: "deploy=1;attestation=1", value: "unknown" }
-    : ["empty", "null"].includes(scenario) ? { status: "denied", effects: "host=0;publication=0", value: "safe" }
-    : scenario === "permuted" ? { status: "canonical", effects: "deploy=0", value: "required-first" }
-    : scenario === "equivalent" ? { status: "canonical", effects: "deploy=0", value: "equal-digest" }
-    : scenario === "before" ? { status: "eligible", effects: "deploy=0", value: "integer-ms" }
-    : ["exact", "after"].includes(scenario) ? { status: "denied", effects: "deploy=0", value: "integer-ms" }
-    : scenario === "replay" ? { status: "replayed", effects: "deploy=2;attestation=1", value: "stored-result" }
-    : scenario === "conflict" ? { status: "conflict", effects: "deploy=0", value: "closed" }
-    : scenario === "concurrent" ? { status: "replayed", effects: "deploy=1;attestation=1", value: "single-claim" }
-    : scenario === "observe-original" ? { status: "complete", effects: "deploy=1;observe=3;attestation=1", value: "original-ids" }
-    : scenario === "timeout" ? { status: "pending", effects: "deploy=1;attestation=1", value: "lookup-only" }
-    : ["wrong-artifact", "wrong-dtag", "wrong-capability"].includes(scenario) ? { status: "invalid_manifest", effects: "deploy=0", value: "generic" }
-    : scenario === "failed" ? { status: "partial", effects: "deploy=1;attestation=1", value: "reconcile" }
-    : scenario === "partial" ? { status: "partial", effects: "deploy=1;attestation=1", value: "not-complete" }
-    : scenario === "variants" ? { status: "canonical", effects: "deploy=0", value: "fenced" }
-    : scenario === "all-eight" ? { status: "owner_safe", effects: "deploy=0", value: "eight-ui-considerations" }
-    : scenario === "verified" ? { status: "complete", effects: "deploy=2;attestation=1", value: "sealed-linked" }
-    : (() => { throw new Error(`unknown Phase 06 evidence scenario: ${scenario}`); })();
-  return { id: item.id, expected: item.expected, observed, effects: item.expectedEffects };
+async function observedComparisons(fixture: unknown) {
+  const parsed = validatePhase06ReferenceSet(fixture);
+  const results = await Promise.all(parsed.cases.map(executePhase06ReferenceCase));
+  const failed = results.find((result) => result.childExitCode !== 0 || result.status !== "passed" || !result.observed || !result.effects);
+  if (failed) throw new Error(`Phase 06 reference observation failed before evidence: ${failed.id} (${failed.mismatches.join(",") || `exit_${failed.childExitCode}`})`);
+  return results.map((result) => ({ id: result.id, expected: result.expected, observed: result.observed!, effects: result.effects! }));
 }
 
 export async function writePhase06EvidenceAtomically(directory: string, evidence: Phase06DesignEvidence): Promise<void> {
@@ -68,7 +48,8 @@ export async function runPhase06DesignChecks(options: Readonly<{ evidenceDirecto
   const changed = structuredClone(JSON.parse(cliFixture)); changed.identity.sourceCommit = "0".repeat(40);
   if (probePromotedCliPreSignedRoute(changed).status !== "publication_unavailable") throw new Error("Phase 06 source mutation did not fail closed");
   const sourceSnapshot = JSON.parse(cliFixture);
-  const input = { fixture: JSON.parse(fixture), comparisons: JSON.parse(fixture).cases.map(observedComparison), apiRows: validatePhase06ApiCoverage(coverage), sourceContract: { ...sourceContract, identity: sourceSnapshot.identity } };
+  const fixtureValue = JSON.parse(fixture);
+  const input = { fixture: fixtureValue, comparisons: await observedComparisons(fixtureValue), apiRows: validatePhase06ApiCoverage(coverage), sourceContract: { ...sourceContract, identity: sourceSnapshot.identity } };
   const first = buildPhase06DesignEvidence(input); const second = buildPhase06DesignEvidence(structuredClone(input));
   if (canonicalPhase06EvidenceBytes(first).toString() !== canonicalPhase06EvidenceBytes(second).toString() || phase06EvidenceSha256(first) !== phase06EvidenceSha256(second)) throw new Error("Phase 06 evidence is not byte deterministic");
   const evidence = validatePhase06DesignEvidence(first);

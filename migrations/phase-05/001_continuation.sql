@@ -15,13 +15,34 @@ CREATE TABLE IF NOT EXISTS continuation_pauses (
   intent_json jsonb NOT NULL,
   grace_deadline_ms bigint NOT NULL,
   live_lease_token text,
-  state text NOT NULL CHECK (state IN ('needs_top_up','resuming','checkpointing','resume_required','claimed','expired')),
+  state text NOT NULL CHECK (state IN ('needs_top_up','resuming','completed','checkpointing','resume_required','claimed','expired')),
   result_json jsonb NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (account_id, idempotency_key),
   UNIQUE (account_id, session_id, pause_generation),
   CHECK (intent_json ?& ARRAY['accountId','sessionId','idempotencyKey','fingerprint','reference','actionKind','boundedPayloadHash','expectedSessionVersion','expectedArtifactVersion','policyVersion','priceCardId','profileId','toolchainId','actionMaximum','admissionReference']),
-  CHECK ((state IN ('needs_top_up','checkpointing')) = (live_lease_token IS NOT NULL))
+  CHECK ((state IN ('needs_top_up','resuming','checkpointing')) = (live_lease_token IS NOT NULL))
+);
+
+-- This is a coupled effect intent for a single already-admitted wake, not a
+-- request queue. The claim token fences the only coordinator allowed to call
+-- the live worker; unknown outcomes require bounded reconciliation.
+CREATE TABLE IF NOT EXISTS continuation_wake_dispatches (
+  account_id text NOT NULL REFERENCES funding_accounts(account_id),
+  session_id text NOT NULL REFERENCES metered_sessions(id),
+  pause_generation integer NOT NULL,
+  pending_fingerprint_sha256 char(64) NOT NULL,
+  expected_session_version integer NOT NULL CHECK (expected_session_version >= 0),
+  expected_artifact_version integer NOT NULL CHECK (expected_artifact_version >= 0),
+  action_budget_reference text NOT NULL,
+  live_lease_token text NOT NULL,
+  claim_token text NOT NULL UNIQUE,
+  state text NOT NULL CHECK (state IN ('pending','claimed','completed','unknown')),
+  completed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (account_id, session_id, pause_generation),
+  FOREIGN KEY (account_id, session_id, pause_generation) REFERENCES continuation_pauses(account_id, session_id, pause_generation),
+  CHECK ((state = 'completed') = (completed_at IS NOT NULL))
 );
 
 CREATE TABLE IF NOT EXISTS continuation_checkpoints (

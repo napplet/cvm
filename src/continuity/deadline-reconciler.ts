@@ -118,6 +118,7 @@ export class ContinuationDeadlineReconciler {
     const existing = await this.options.store.transact(candidate.accountId, (transaction) => transaction.findContinuationPause(candidate.sessionId, candidate.pauseGeneration));
     if (!existing || existing.liveLeaseToken !== candidate.liveLeaseToken) return frozen({ status: "already_checkpointed", code: "LIVE_LEASE_ALREADY_FENCED", sessionId: candidate.sessionId, pauseGeneration: candidate.pauseGeneration });
     if (nowMs < existing.graceDeadlineMs) return frozen({ status: "not_due", code: "GRACE_DEADLINE_PENDING", sessionId: candidate.sessionId, pauseGeneration: candidate.pauseGeneration });
+    if (existing.state === "resuming" || existing.state === "completed") return frozen({ status: "already_checkpointed", code: "WAKE_DISPATCH_OWNS_PAUSE", sessionId: candidate.sessionId, pauseGeneration: candidate.pauseGeneration });
     if (existing.state === "resume_required" || existing.state === "claimed" || existing.state === "expired") return frozen({ status: "already_checkpointed", code: "CHECKPOINT_ALREADY_COMMITTED", sessionId: candidate.sessionId, pauseGeneration: candidate.pauseGeneration });
 
     let pause: typeof existing;

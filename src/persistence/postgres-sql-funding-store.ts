@@ -1,6 +1,6 @@
 import type { AccountStatus, FundedAdmission, FundingResult } from "../phase-03/contracts";
 import { AccountStatusSchema, FundingResultSchema } from "../phase-03/contracts";
-import { canonicalMeteredTerminalResult, type ActionBudget, type ActionBudgetInput, type AdmissionInput, type BeginDeadlineCheckpointInput, type BillingLineItem, type BillingLineItemPage, type BillingLineItemPageRequest, type CapacityDispatchClaim, type CapacityIntent, type CapacityIntentInput, type CapacityObservationInput, type ContinuationCheckpoint, type ContinuationCheckpointInput, type ContinuationFundingStore, type ContinuationFundingTransaction, type ContinuationPause, type ContinuationPauseInput, type ContinuationRecord, type ContinuationResumeClaim, type ContinuationResumeClaimInput, type CreditInput, type DeletionOutcomeInput, type MeteredAction, type MeteredFinalizeInput, type MeteredFundingStore, type MeteredFundingTransaction, type MeteredOperationClaim, type MeteredSessionRecord, type PrepareMeteredActionInput, type ReconciliationClaim, type RestoreObservationInput, type StoredFundingCommand, type UsageUnknownInput } from "./funding-store";
+import { canonicalMeteredTerminalResult, type ActionBudget, type ActionBudgetInput, type AdmissionInput, type BeginDeadlineCheckpointInput, type BillingLineItem, type BillingLineItemPage, type BillingLineItemPageRequest, type CapacityDispatchClaim, type CapacityIntent, type CapacityIntentInput, type CapacityObservationInput, type ContinuationCheckpoint, type ContinuationCheckpointInput, type ContinuationFundingStore, type ContinuationFundingTransaction, type ContinuationPause, type ContinuationPauseInput, type ContinuationRecord, type ContinuationResumeClaim, type ContinuationResumeClaimInput, type ContinuationWakeDispatch, type CreditInput, type DeletionOutcomeInput, type MeteredAction, type MeteredFinalizeInput, type MeteredFundingStore, type MeteredFundingTransaction, type MeteredOperationClaim, type MeteredSessionRecord, type PrepareMeteredActionInput, type ReconciliationClaim, type RestoreObservationInput, type StoredFundingCommand, type UsageUnknownInput, type WakeDispatchClaim, type WakeDispatchOutcomeInput } from "./funding-store";
 import { SerializationFailure } from "./postgres-funding-store";
 import { NeedsTopUpResultSchema, PendingActionIntentSchema } from "../continuity/contracts";
 
@@ -29,12 +29,13 @@ const continuationFromRow = (row: SqlRow): ContinuationRecord => {
   const intent = PendingActionIntentSchema.parse(row.intent_json);
   const result = NeedsTopUpResultSchema.parse(row.result_json);
   if (intent.accountId !== asText(row.account_id) || intent.sessionId !== asText(row.session_id) || intent.idempotencyKey !== asText(row.idempotency_key) || intent.fingerprint !== asText(row.pending_fingerprint_sha256) || intent.admissionReference !== asText(row.admission_reference) || result.pendingActionReference !== intent.reference || result.graceDeadlineMs !== Number(row.grace_deadline_ms)) throw new Error("CONTINUATION_INTENT_BINDING_INVALID");
-  return frozen({ intent, result });
+  return frozen({ intent, result, state: asText(row.state) as ContinuationPause["state"] });
 };
 const pauseFromRow = (row: SqlRow): ContinuationPause => {
   const continuation = continuationFromRow(row);
   return frozen({ accountId: asText(row.account_id), sessionId: asText(row.session_id), admissionReference: asText(row.admission_reference), idempotencyKey: asText(row.idempotency_key), fingerprint: asText(row.fingerprint_sha256), pendingFingerprint: asText(row.pending_fingerprint_sha256), expectedSessionVersion: Number(row.expected_session_version), pauseGeneration: Number(row.pause_generation), graceDeadlineMs: Number(row.grace_deadline_ms), ...(row.live_lease_token ? { liveLeaseToken: asText(row.live_lease_token) } : {}), intent: continuation.intent, result: continuation.result, state: asText(row.state) as ContinuationPause["state"] });
 };
+const wakeDispatchFromRow = (row: SqlRow): ContinuationWakeDispatch => frozen({ accountId: asText(row.account_id), sessionId: asText(row.session_id), pauseGeneration: Number(row.pause_generation), pendingFingerprint: asText(row.pending_fingerprint_sha256), expectedSessionVersion: Number(row.expected_session_version), expectedArtifactVersion: Number(row.expected_artifact_version), actionBudgetReference: asText(row.action_budget_reference), liveLeaseToken: asText(row.live_lease_token), ...(row.claim_token ? { claimToken: asText(row.claim_token) } : {}), state: asText(row.state) as ContinuationWakeDispatch["state"] });
 const checkpointFromRow = (row: SqlRow): ContinuationCheckpoint => frozen({ accountId: asText(row.account_id), sessionId: asText(row.session_id), pauseGeneration: Number(row.pause_generation), checkpointId: asText(row.checkpoint_id), expectedSessionVersion: Number(row.expected_session_version), expectedArtifactVersion: Number(row.expected_artifact_version), manifestReference: asText(row.manifest_reference), objectKey: asText(row.object_key), objectGeneration: asText(row.object_generation), objectChecksum: asText(row.object_checksum), keyReference: asText(row.key_reference), compatibilityIdentity: asText(row.compatibility_identity), checkpointCommittedAtMs: Number(row.checkpoint_committed_at_ms), retentionDeadlineMs: Number(row.retention_deadline_ms), state: asText(row.state) as ContinuationCheckpoint["state"] });
 const deadlineError = () => new Error("POSTGRES_OPERATION_DEADLINE_EXCEEDED");
 async function beforeDeadline<T>(promise: Promise<T>, deadline: number, now: () => number): Promise<T> {
@@ -208,6 +209,10 @@ class PgFundingTransaction implements MeteredFundingTransaction, ContinuationFun
     await this.client.query("INSERT INTO continuation_pauses(pause_id,account_id,session_id,admission_reference,idempotency_key,fingerprint_sha256,pending_fingerprint_sha256,pause_generation,expected_session_version,grace_deadline_ms,live_lease_token,state,intent_json,result_json) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'needs_top_up',$12,$13)", [id("pause", `${input.sessionId}:${input.pauseGeneration}`), this.accountId, input.sessionId, input.admissionReference, input.idempotencyKey, input.fingerprint, input.pendingFingerprint, input.pauseGeneration, input.expectedSessionVersion, input.graceDeadlineMs, input.liveLeaseToken, JSON.stringify(input.intent), JSON.stringify(input.result)]);
     return frozen({ ...input, state: "needs_top_up" as const });
   }
+  async nextPauseGeneration(sessionId: string): Promise<number> {
+    const row = first(await this.client.query("SELECT COALESCE(MAX(pause_generation),0)+1 AS next_generation FROM continuation_pauses WHERE account_id=$1 AND session_id=$2 FOR UPDATE", [this.accountId, sessionId]), "PAUSE_GENERATION_UNAVAILABLE");
+    return Number(row.next_generation);
+  }
   async findContinuationPause(sessionId: string, pauseGeneration: number): Promise<ContinuationPause | undefined> {
     const row = (await this.client.query("SELECT account_id,session_id,admission_reference,idempotency_key,fingerprint_sha256,pending_fingerprint_sha256,expected_session_version,pause_generation,grace_deadline_ms,live_lease_token,intent_json,result_json,state FROM continuation_pauses WHERE account_id=$1 AND session_id=$2 AND pause_generation=$3 FOR UPDATE", [this.accountId, sessionId, pauseGeneration])).rows[0];
     return row && pauseFromRow(row);
@@ -219,7 +224,30 @@ class PgFundingTransaction implements MeteredFundingTransaction, ContinuationFun
     if (input.nowMs >= pause.graceDeadlineMs) throw new Error("GRACE_DEADLINE_EXPIRED");
     if (pause.state !== "needs_top_up") return pause;
     await this.client.query("UPDATE continuation_pauses SET state='resuming' WHERE account_id=$1 AND session_id=$2 AND pause_generation=$3 AND state='needs_top_up'", [this.accountId, input.sessionId, input.pauseGeneration]);
+    await this.client.query("UPDATE metered_sessions SET state='active' WHERE account_id=$1 AND id=$2 AND state='needs_top_up'", [this.accountId, input.sessionId]);
     return frozen({ ...pause, state: "resuming" as const });
+  }
+  async claimWakeDispatch(input: Omit<ContinuationWakeDispatch, "claimToken" | "state">): Promise<WakeDispatchClaim> {
+    this.assertScope(input.accountId);
+    const pause = await this.findContinuationPause(input.sessionId, input.pauseGeneration);
+    if (!pause || pause.state !== "resuming" || pause.liveLeaseToken !== input.liveLeaseToken || pause.pendingFingerprint !== input.pendingFingerprint || pause.expectedSessionVersion !== input.expectedSessionVersion || pause.intent.expectedArtifactVersion !== input.expectedArtifactVersion) throw new Error("WAKE_DISPATCH_BINDING_INVALID");
+    const existing = await this.client.query("SELECT account_id,session_id,pause_generation,pending_fingerprint_sha256,expected_session_version,expected_artifact_version,action_budget_reference,live_lease_token,claim_token,state FROM continuation_wake_dispatches WHERE account_id=$1 AND session_id=$2 AND pause_generation=$3 FOR UPDATE", [this.accountId, input.sessionId, input.pauseGeneration]);
+    if (existing.rows[0]) {
+      const dispatch = wakeDispatchFromRow(existing.rows[0]);
+      if (dispatch.pendingFingerprint !== input.pendingFingerprint || dispatch.expectedSessionVersion !== input.expectedSessionVersion || dispatch.expectedArtifactVersion !== input.expectedArtifactVersion || dispatch.actionBudgetReference !== input.actionBudgetReference || dispatch.liveLeaseToken !== input.liveLeaseToken) throw new Error("WAKE_DISPATCH_BINDING_INVALID");
+      return frozen({ dispatch, claimed: false });
+    }
+    const claimToken = `wake-claim:${input.sessionId}:${input.pauseGeneration}:${input.pendingFingerprint.slice(0, 24)}`;
+    await this.client.query("INSERT INTO continuation_wake_dispatches(account_id,session_id,pause_generation,pending_fingerprint_sha256,expected_session_version,expected_artifact_version,action_budget_reference,live_lease_token,claim_token,state) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'claimed')", [this.accountId, input.sessionId, input.pauseGeneration, input.pendingFingerprint, input.expectedSessionVersion, input.expectedArtifactVersion, input.actionBudgetReference, input.liveLeaseToken, claimToken]);
+    return frozen({ dispatch: { ...input, claimToken, state: "claimed" }, claimed: true });
+  }
+  async recordWakeDispatchOutcome(input: WakeDispatchOutcomeInput): Promise<ContinuationWakeDispatch> {
+    const row = first(await this.client.query("SELECT account_id,session_id,pause_generation,pending_fingerprint_sha256,expected_session_version,expected_artifact_version,action_budget_reference,live_lease_token,claim_token,state FROM continuation_wake_dispatches WHERE account_id=$1 AND session_id=$2 AND pause_generation=$3 FOR UPDATE", [this.accountId, input.sessionId, input.pauseGeneration]), "WAKE_DISPATCH_OUTCOME_INVALID");
+    const dispatch = wakeDispatchFromRow(row);
+    if (dispatch.claimToken !== input.claimToken || dispatch.state !== "claimed") throw new Error("WAKE_DISPATCH_OUTCOME_INVALID");
+    await this.client.query("UPDATE continuation_wake_dispatches SET state=$1,completed_at=CASE WHEN $1='completed' THEN now() ELSE completed_at END WHERE account_id=$2 AND session_id=$3 AND pause_generation=$4 AND claim_token=$5 AND state='claimed'", [input.state, this.accountId, input.sessionId, input.pauseGeneration, input.claimToken]);
+    if (input.state === "completed") await this.client.query("UPDATE continuation_pauses SET state='completed',live_lease_token=NULL WHERE account_id=$1 AND session_id=$2 AND pause_generation=$3 AND state='resuming'", [this.accountId, input.sessionId, input.pauseGeneration]);
+    return frozen({ ...dispatch, state: input.state });
   }
   async beginDeadlineCheckpoint(input: BeginDeadlineCheckpointInput): Promise<ContinuationPause> {
     const pause = await this.findContinuationPause(input.sessionId, input.pauseGeneration);

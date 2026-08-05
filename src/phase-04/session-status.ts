@@ -195,7 +195,7 @@ export async function readSessionStatus(input: Readonly<{ store: MeteredFundingS
         billing: { items: page.items.map(historyItem), nextCursor },
       }));
     }
-    if (continuation) {
+    if (continuation?.state === "needs_top_up" || continuation?.state === "checkpointing") {
       const safe = continuationStatus(continuation);
       if (safe.status !== "needs_top_up") return freeze(SessionStatusSchema.parse({ status: "service_unavailable" }));
       return freeze(SessionStatusSchema.parse({
@@ -204,6 +204,20 @@ export async function readSessionStatus(input: Readonly<{ store: MeteredFundingS
           id: session.sessionId, version: session.version, state: "needs_top_up", progress: "waiting_for_funding",
           maximum: safe.actionMaximum, actualSpend: "0", remainingBalance: safe.availableBalance, remainingCap: safe.remainingCap,
           latestVerifiedArtifact: null, nextAction: safe.nextRequiredAction, continuation: safe,
+        },
+        action: null,
+        billing: { items: page.items.map(historyItem), nextCursor },
+      }));
+    }
+    if (continuation && (continuation.state === "resuming" || continuation.state === "completed")) {
+      // A wake is an internal, fenced effect. Project only the allowlisted
+      // active/recovery shape and never re-expose the old funding demand.
+      return freeze(SessionStatusSchema.parse({
+        status: "ok",
+        session: {
+          id: session.sessionId, version: session.version, state: "active", progress: "running",
+          maximum: continuation.result.actionMaximum, actualSpend: "0", remainingBalance: account.available, remainingCap: continuation.result.remainingCap,
+          latestVerifiedArtifact: null, nextAction: "wait_for_current_action", continuation: null,
         },
         action: null,
         billing: { items: page.items.map(historyItem), nextCursor },

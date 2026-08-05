@@ -8,6 +8,7 @@ import type { WorkerPort } from "../../src/phase-02/contracts";
 import type { ArtifactVerifier } from "../../src/phase-02/trusted-core";
 import { MeteredGenerationService } from "../../src/phase-04/metered-generation-service";
 import { readSessionStatus } from "../../src/phase-04/session-status";
+import { ContinuationService } from "../../src/continuity/continuation-service";
 
 const owner = { pubkey: "ab".repeat(32) };
 const stranger = { pubkey: "cd".repeat(32) };
@@ -25,7 +26,7 @@ async function pausedFixture() {
   const service = new MeteredGenerationService({ fundedAdmission: admissions, store, gateway, worker, artifactVerifier: verifier, clock: { nowMs: () => 1_700_000_000_000 } });
   const paused = await service.startSession({ principal: owner, admissionReference: admission.reference, idempotencyKey: "status-pause", expectedVersion: 0, maximum: "3250", policyVersion: "phase-02-policy-2026-08-04", idea: "Prompt canary: do not expose this text." });
   if (paused.status !== "needs_top_up") throw new Error("expected paused fixture");
-  return { store, paused };
+  return { store, paused, funding };
 }
 
 describe("owner-safe needs_top_up status", () => {
@@ -70,5 +71,19 @@ describe("owner-safe needs_top_up status", () => {
     expect(record.result.requiredCapApproval).toBe("0");
     expect(record.result.pendingActionFingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(paused.sessionId).toBe(record.intent.sessionId);
+  });
+
+  test("projects a claimed wake as active/recovery and never as needs_top_up", async () => {
+    const { store, paused, funding } = await pausedFixture();
+    await funding.execute({ principal: owner, kind: "credit_settlement", idempotencyKey: "status-wake-credit", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { settlement: { topUpId: "status-wake", rail: "cashu", unit: "sat", amount: "3250", externalReference: "status-wake-external", settlementReference: "status-wake-settlement", verifiedAt: "2026-08-05T00:01:00.000Z" } } });
+    const accountId = await accountIdForPrincipal(owner);
+    const record = await store.findContinuation(accountId, "status-pause");
+    if (!record) throw new Error("expected continuation record");
+    const pause = await store.transact(accountId, (tx) => tx.findContinuationPause(paused.sessionId, 1));
+    if (!pause?.liveLeaseToken) throw new Error("expected live pause");
+    await new ContinuationService({ store, clock: { nowMs: () => 1_700_000_000_001 } }).wakePausedAction({ accountId, sessionId: paused.sessionId, pauseGeneration: 1, liveLeaseToken: pause.liveLeaseToken, pendingFingerprint: record.intent.fingerprint, expectedSessionVersion: record.intent.expectedSessionVersion, expectedArtifactVersion: record.intent.expectedArtifactVersion });
+    const status = await readSessionStatus({ store, cursorSecret: "continuation-status-secret", query: { principal: owner, sessionId: paused.sessionId } });
+    expect(status).toMatchObject({ status: "ok", session: { state: "active", continuation: null, nextAction: "wait_for_current_action" } });
+    expect(JSON.stringify(status)).not.toContain("needs_top_up");
   });
 });

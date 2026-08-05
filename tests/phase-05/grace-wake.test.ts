@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ContinuationService } from "../../src/continuity/continuation-service";
+import { MeteredGenerationService } from "../../src/phase-04/metered-generation-service";
 import { accountIdForPrincipal } from "../../src/domain/account-command";
 import { FundingService } from "../../src/funding/funding-service";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
@@ -83,5 +84,38 @@ describe("verified-credit grace wake", () => {
     expect(outcomes.filter((outcome) => outcome.status === "replayed")).toHaveLength(7);
     expect(fixture.effects.authorizations).toBe(1);
     expect(fixture.effects.actions).toBe(1);
+  });
+
+  test("two independent coordinators claim one durable wake effect and complete the old pause", async () => {
+    const fixture = await setup({ credited: true, cap: "3250" });
+    let externalDispatches = 0;
+    const options = (continuation: ContinuationService) => ({ fundedAdmission: {} as never, store: fixture.store, gateway: {} as never, worker: {} as never, artifactVerifier: {} as never, continuation, clock: { nowMs: () => deadlineMs - 1 }, continuationWake: { continueAction: async () => { externalDispatches += 1; } } });
+    const left = new MeteredGenerationService(options(new ContinuationService({ store: fixture.store, clock: { nowMs: () => deadlineMs - 1 } })));
+    const right = new MeteredGenerationService(options(new ContinuationService({ store: fixture.store, clock: { nowMs: () => deadlineMs - 1 } })));
+    const hint = { accountId: fixture.accountId, sessionId: "session:grace-wake", pauseGeneration: 1, liveLeaseToken, pendingFingerprint, expectedSessionVersion: 4, expectedArtifactVersion: 4 };
+    const outcomes = await Promise.all([left.wakePausedAction(hint), right.wakePausedAction(hint)]);
+    expect(outcomes.filter((outcome) => outcome.status === "continued")).toHaveLength(1);
+    expect(externalDispatches).toBe(1);
+    expect(await fixture.store.sessionStatus(fixture.accountId, "session:grace-wake")).toMatchObject({ status: "active" });
+    expect(await fixture.store.transact(fixture.accountId, (tx) => tx.findContinuationPause("session:grace-wake", 1))).toMatchObject({ state: "completed", liveLeaseToken: undefined });
+  });
+
+  test("a dispatch throw is durably unknown and never blindly redispatched", async () => {
+    const fixture = await setup({ credited: true, cap: "3250" });
+    let externalDispatches = 0;
+    const service = new MeteredGenerationService({ fundedAdmission: {} as never, store: fixture.store, gateway: {} as never, worker: {} as never, artifactVerifier: {} as never, continuation: fixture.service, clock: { nowMs: () => deadlineMs - 1 }, continuationWake: { continueAction: async () => { externalDispatches += 1; throw new Error("WORKER_CONNECTION_LOST"); } } });
+    const hint = { accountId: fixture.accountId, sessionId: "session:grace-wake", pauseGeneration: 1, liveLeaseToken, pendingFingerprint, expectedSessionVersion: 4, expectedArtifactVersion: 4 };
+    await expect(service.wakePausedAction(hint)).rejects.toThrow("WORKER_CONNECTION_LOST");
+    await expect(service.wakePausedAction(hint)).resolves.toMatchObject({ status: "replayed", code: "WAKE_RECONCILIATION_REQUIRED" });
+    expect(externalDispatches).toBe(1);
+    expect(await fixture.store.sessionStatus(fixture.accountId, "session:grace-wake")).toMatchObject({ status: "active" });
+  });
+
+  test("recovery still denies every pending/session/artifact fence mismatch", async () => {
+    const fixture = await setup({ credited: true, cap: "3250" });
+    await fixture.wake();
+    await expect(fixture.wake({ pendingFingerprint: "c".repeat(64) })).resolves.toMatchObject({ status: "no_effect", code: "PENDING_ACTION_MISMATCH" });
+    await expect(fixture.wake({ expectedSessionVersion: 5 })).resolves.toMatchObject({ status: "no_effect", code: "STALE_SESSION_VERSION" });
+    await expect(fixture.wake({ expectedArtifactVersion: 5 })).resolves.toMatchObject({ status: "no_effect", code: "STALE_ARTIFACT_VERSION" });
   });
 });

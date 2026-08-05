@@ -60,11 +60,17 @@ export class MeteredGenerationService {
     if (typeof continuationStore.findContinuation !== "function") throw new Error("CONTINUATION_STORE_UNAVAILABLE");
     const continuation = this.options.continuation ?? new ContinuationService({ store: continuationStore as ContinuationFundingStore, ...(this.options.clock ? { clock: this.options.clock } : {}) });
     const result = await continuation.wakePausedAction(input);
-    // A prior coordinator may have crashed after durably reserving the wake
-    // budget.  Replay re-delivers the same fenced intent rather than stranding
-    // it; the continuation dispatcher must treat this tuple idempotently.
-    if ((result.status === "continued" || result.status === "replayed") && this.options.continuationWake && result.pendingActionReference && result.actionBudgetReference && result.leaseToken) {
-      await this.options.continuationWake.continueAction({ pendingActionReference: result.pendingActionReference, actionBudgetReference: result.actionBudgetReference, liveLeaseToken: result.leaseToken });
+    // Only the transaction that claimed the coupled effect may cross the
+    // worker/provider boundary. A throw is ambiguous, so record unknown and
+    // require bounded reconciliation instead of launching a duplicate action.
+    if (result.status === "continued" && this.options.continuationWake && result.pendingActionReference && result.actionBudgetReference && result.leaseToken && result.dispatchClaimToken) {
+      try {
+        await this.options.continuationWake.continueAction({ pendingActionReference: result.pendingActionReference, actionBudgetReference: result.actionBudgetReference, liveLeaseToken: result.leaseToken });
+        await continuation.recordWakeDispatchOutcome({ accountId: input.accountId, sessionId: input.sessionId, pauseGeneration: input.pauseGeneration, dispatchClaimToken: result.dispatchClaimToken, outcome: "completed" });
+      } catch (error) {
+        await continuation.recordWakeDispatchOutcome({ accountId: input.accountId, sessionId: input.sessionId, pauseGeneration: input.pauseGeneration, dispatchClaimToken: result.dispatchClaimToken, outcome: "unknown" });
+        throw error;
+      }
     }
     return result;
   }

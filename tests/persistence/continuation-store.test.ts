@@ -60,6 +60,21 @@ describe("TransactionalMemoryFundingStore continuation authority", () => {
     await expect(continuationStore.transact(accountId, (tx) => tx.pauseForFunding(pause({ fingerprint: "e".repeat(64) })))).rejects.toThrow("IDEMPOTENCY_KEY_CONFLICT");
   });
 
+  test("retires a completed wake and allocates the next monotonic pause generation", async () => {
+    const store = new TransactionalMemoryFundingStore();
+    const continuationStore = store as ContinuationFundingStore;
+    await continuationStore.transact(accountId, (tx) => tx.pauseForFunding(pause()));
+    const claim = await continuationStore.transact(accountId, async (tx) => {
+      await tx.wakePausedAction({ sessionId: "session:one", pauseGeneration: 1, nowMs: 1_000, liveLeaseToken: "lease:live" });
+      return tx.claimWakeDispatch({ accountId, sessionId: "session:one", pauseGeneration: 1, pendingFingerprint: "b".repeat(64), expectedSessionVersion: 3, expectedArtifactVersion: 2, actionBudgetReference: "action-budget:wake:one", liveLeaseToken: "lease:live" });
+    });
+    expect(claim.claimed).toBeTrue();
+    await continuationStore.transact(accountId, (tx) => tx.recordWakeDispatchOutcome({ sessionId: "session:one", pauseGeneration: 1, claimToken: claim.dispatch.claimToken!, state: "completed" }));
+    expect(await continuationStore.transact(accountId, (tx) => tx.nextPauseGeneration("session:one"))).toBe(2);
+    const second = pause({ idempotencyKey: "pause:two", pauseGeneration: 2, fingerprint: "c".repeat(64), pendingFingerprint: "d".repeat(64), intent: { ...pause().intent, idempotencyKey: "pause:two", fingerprint: "d".repeat(64) } });
+    await expect(continuationStore.transact(accountId, (tx) => tx.pauseForFunding(second))).resolves.toMatchObject({ pauseGeneration: 2, state: "needs_top_up" });
+  });
+
   test("commits a checkpoint while revoking the live lease, then elects one resume claim", async () => {
     const store = new TransactionalMemoryFundingStore();
     const continuationStore = store as ContinuationFundingStore;

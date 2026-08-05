@@ -43,6 +43,8 @@ export type VerifiedCreditWakeResult = Readonly<{
   leaseToken?: string;
   pendingActionReference?: string;
   actionBudgetReference?: string;
+  /** Server-fenced, internal-only capability used to report the effect outcome. */
+  dispatchClaimToken?: string;
 }>;
 
 export type VerifiedCreditWakeInput = VerifiedCreditWakeHint & Readonly<{
@@ -95,7 +97,7 @@ export class ContinuationService {
         fingerprint: intent.fingerprint,
         pendingFingerprint: intent.fingerprint,
         expectedSessionVersion: intent.expectedSessionVersion,
-        pauseGeneration: 1,
+        pauseGeneration: await transaction.nextPauseGeneration(intent.sessionId),
         graceDeadlineMs: deadline,
         liveLeaseToken: `lease:live:${intent.reference}:${intent.fingerprint.slice(0, 24)}`,
         intent,
@@ -117,12 +119,6 @@ export class ContinuationService {
       if (!pause) return frozen({ status: "no_effect" as const, code: "PAUSE_NOT_FOUND_OR_DENIED" });
       if (pause.liveLeaseToken !== input.liveLeaseToken) return frozen({ status: "no_effect" as const, code: "STALE_LIVE_LEASE" });
       if (nowMs >= pause.graceDeadlineMs) return frozen({ status: "no_effect" as const, code: "GRACE_DEADLINE_EXPIRED" });
-      if (pause.state === "resuming") {
-        const continuation = await this.options.store.findContinuationForSession(input.accountId, input.sessionId);
-        const budget = await transaction.findActionBudget(`continuation-wake:${pause.idempotencyKey}:${pause.pauseGeneration}`);
-        return budget && continuation ? frozen({ status: "replayed" as const, code: "WAKE_DISPATCH_RECOVERY", leaseToken: input.liveLeaseToken, pendingActionReference: continuation.intent.reference, actionBudgetReference: budget.reference }) : frozen({ status: "no_effect" as const, code: "WAKE_RECONCILIATION_REQUIRED" });
-      }
-      if (pause.state !== "needs_top_up") return frozen({ status: "no_effect" as const, code: "PAUSE_NOT_LIVE" });
       if (pause.pendingFingerprint !== input.pendingFingerprint) return frozen({ status: "no_effect" as const, code: "PENDING_ACTION_MISMATCH" });
       if (pause.expectedSessionVersion !== input.expectedSessionVersion) return frozen({ status: "no_effect" as const, code: "STALE_SESSION_VERSION" });
 
@@ -132,32 +128,36 @@ export class ContinuationService {
       if (!continuation || continuation.intent.fingerprint !== pause.pendingFingerprint) return frozen({ status: "no_effect" as const, code: "PENDING_ACTION_MISMATCH" });
       if (continuation.intent.expectedArtifactVersion !== input.expectedArtifactVersion) return frozen({ status: "no_effect" as const, code: "STALE_ARTIFACT_VERSION" });
 
+      if (pause.state !== "needs_top_up" && pause.state !== "resuming") return frozen({ status: "no_effect" as const, code: "PAUSE_NOT_LIVE" });
+
       const funding = await transaction.continuationFundingSnapshot(pause.admissionReference);
       const amount = BigInt(continuation.intent.actionMaximum);
       if (funding.remainingCap < amount) return frozen({ status: "no_effect" as const, code: "APPROVED_CAP_INSUFFICIENT" });
       if (funding.availableBalance < amount) return frozen({ status: "no_effect" as const, code: "VERIFIED_CREDIT_REQUIRED" });
 
-      // Reassert the store fence only after every coordinator predicate above.
-      // Its deadline/lease checks protect a racing checkpoint attempt as well.
-      await transaction.wakePausedAction({ sessionId: input.sessionId, pauseGeneration: input.pauseGeneration, nowMs, liveLeaseToken: input.liveLeaseToken });
       const idempotencyKey = `continuation-wake:${pause.idempotencyKey}:${pause.pauseGeneration}`;
-      const existing = await transaction.findActionBudget(idempotencyKey);
-      if (existing) return frozen({ status: "replayed" as const, code: "WAKE_ALREADY_AUTHORIZED", leaseToken: input.liveLeaseToken, pendingActionReference: continuation.intent.reference, actionBudgetReference: existing.reference });
-      const budget = await transaction.reserveActionBudget({
-        accountId: input.accountId,
-        admissionReference: pause.admissionReference,
-        idempotencyKey,
+      // Reassert the store fence only after every coordinator predicate above.
+      // The pause transition, budget, and durable effect intent commit together.
+      await transaction.wakePausedAction({ sessionId: input.sessionId, pauseGeneration: input.pauseGeneration, nowMs, liveLeaseToken: input.liveLeaseToken });
+      const budget = await transaction.findActionBudget(idempotencyKey) ?? await transaction.reserveActionBudget({
+        accountId: input.accountId, admissionReference: pause.admissionReference, idempotencyKey,
         fingerprint: `wake:${pause.pendingFingerprint}:${pause.expectedSessionVersion}:${continuation.intent.expectedArtifactVersion}`,
-        reference: `action-budget:wake:${pause.sessionId}:${pause.pauseGeneration}`,
-        amount,
+        reference: `action-budget:wake:${pause.sessionId}:${pause.pauseGeneration}`, amount,
       });
-      return frozen({ status: "continued" as const, code: "WAKE_AUTHORIZED", leaseToken: input.liveLeaseToken, pendingActionReference: continuation.intent.reference, actionBudgetReference: budget.reference });
+      const claim = await transaction.claimWakeDispatch({ accountId: input.accountId, sessionId: input.sessionId, pauseGeneration: input.pauseGeneration, pendingFingerprint: pause.pendingFingerprint, expectedSessionVersion: pause.expectedSessionVersion, expectedArtifactVersion: continuation.intent.expectedArtifactVersion, actionBudgetReference: budget.reference, liveLeaseToken: input.liveLeaseToken });
+      if (!claim.claimed) return frozen({ status: "replayed" as const, code: claim.dispatch.state === "unknown" ? "WAKE_RECONCILIATION_REQUIRED" : "WAKE_ALREADY_CLAIMED" });
+      return frozen({ status: "continued" as const, code: "WAKE_DISPATCH_CLAIMED", leaseToken: input.liveLeaseToken, pendingActionReference: continuation.intent.reference, actionBudgetReference: budget.reference, dispatchClaimToken: claim.dispatch.claimToken });
     });
 
     if (transition.status !== "continued") return transition;
     input.onAuthorization?.();
     await input.onAuthorized?.();
     return transition;
+  }
+
+  /** The caller holding the effect claim must durably close it after dispatch. */
+  async recordWakeDispatchOutcome(input: Readonly<{ accountId: string; sessionId: string; pauseGeneration: number; dispatchClaimToken: string; outcome: "completed" | "unknown" }>): Promise<void> {
+    await this.options.store.transact(input.accountId, (transaction) => transaction.recordWakeDispatchOutcome({ sessionId: input.sessionId, pauseGeneration: input.pauseGeneration, claimToken: input.dispatchClaimToken, state: input.outcome }));
   }
 
   /**

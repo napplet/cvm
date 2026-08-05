@@ -35,6 +35,16 @@ export type MeteredFinalizationInput = MeteredFinalizeInput;
 export type MeteredFinalizationResult = MeteredAction;
 export type ContinuationRecord = Readonly<{ intent: PendingActionIntent; result: NeedsTopUpResult }>;
 export type ContinuationFundingSnapshot = Readonly<{ settledBalance: bigint; availableBalance: bigint; remainingCap: bigint }>;
+/** Durable, owner-bound pause state. The pending action is represented only by its digest. */
+export type ContinuationPauseInput = Readonly<{ accountId: string; sessionId: string; admissionReference: string; idempotencyKey: string; fingerprint: string; pendingFingerprint: string; expectedSessionVersion: number; pauseGeneration: number; graceDeadlineMs: number; liveLeaseToken: string; result: NeedsTopUpResult }>;
+export type ContinuationPause = Omit<ContinuationPauseInput, "liveLeaseToken"> & Readonly<{ liveLeaseToken?: string; state: "needs_top_up" | "checkpointing" | "resume_required" | "claimed" | "expired" }>;
+export type ContinuationCheckpointInput = Readonly<{ accountId: string; sessionId: string; pauseGeneration: number; checkpointId: string; expectedSessionVersion: number; expectedArtifactVersion: number; manifestReference: string; objectKey: string; objectGeneration: string; objectChecksum: string; keyReference: string; compatibilityIdentity: string; checkpointCommittedAtMs: number }>;
+export type ContinuationCheckpoint = ContinuationCheckpointInput & Readonly<{ retentionDeadlineMs: number; state: "resume_required" | "claimed" | "expired"; liveLeaseToken?: string; claim?: ContinuationResumeClaim }>;
+export type BeginDeadlineCheckpointInput = Readonly<{ sessionId: string; pauseGeneration: number; liveLeaseToken: string }>;
+export type ContinuationResumeClaimInput = Readonly<{ accountId: string; sessionId: string; checkpointId: string; idempotencyKey: string; fingerprint: string; pendingFingerprint: string; expectedCheckpointVersion: number; expectedSessionVersion: number; nowMs: number; newLeaseToken: string; allocationIntentReference: string }>;
+export type ContinuationResumeClaim = Readonly<{ accountId: string; checkpointId: string; idempotencyKey: string; fingerprint: string; leaseToken: string; allocationIntentReference: string; claimed: boolean }>;
+export type RestoreObservationInput = Readonly<{ checkpointId: string; allocationIntentReference: string; state: "restored" | "refused" | "reconciliation_pending" }>;
+export type DeletionOutcomeInput = Readonly<{ checkpointId: string; objectGeneration: string; state: "scheduled" | "deleted" | "failed" }>;
 
 /**
  * A terminal action receipt is persisted only after the serialized ledger
@@ -69,6 +79,15 @@ export interface ContinuationFundingTransaction extends FundingTransaction {
   findContinuation(idempotencyKey: string): Promise<ContinuationRecord | undefined>;
   /** Persists the first pause deadline/result; callers replay it rather than extending grace. */
   pauseForFunding(input: ContinuationRecord): Promise<ContinuationRecord>;
+  pauseForFunding(input: ContinuationPauseInput): Promise<ContinuationPause>;
+  findContinuationPause(sessionId: string, pauseGeneration: number): Promise<ContinuationPause | undefined>;
+  wakePausedAction(input: Readonly<{ sessionId: string; pauseGeneration: number; nowMs: number; liveLeaseToken: string }>): Promise<ContinuationPause>;
+  beginDeadlineCheckpoint(input: BeginDeadlineCheckpointInput): Promise<ContinuationPause>;
+  commitDeadlineCheckpoint(input: ContinuationCheckpointInput): Promise<ContinuationCheckpoint>;
+  claimResume(input: ContinuationResumeClaimInput): Promise<ContinuationResumeClaim>;
+  recordRestoreObservation(input: RestoreObservationInput): Promise<RestoreObservationInput>;
+  tombstoneExpiredCheckpoint(input: Readonly<{ checkpointId: string; nowMs: number }>): Promise<ContinuationCheckpoint>;
+  recordDeletionOutcome(input: DeletionOutcomeInput): Promise<DeletionOutcomeInput>;
 }
 
 export interface MeteredFundingTransaction extends FundingTransaction {
@@ -113,7 +132,7 @@ export interface ContinuationFundingStore extends FundingStore {
 type TopUp = Readonly<{ topUpId: string; rail: "lightning" | "cashu"; unit: "sat"; amount: bigint; state: "credited"; verifiedAt: string; settlementReference: string; externalReference: string }>;
 type Hold = Readonly<{ reference: string; approvedCap: bigint; heldAmount: bigint }>;
 type Account = Readonly<{ settledAvailable: bigint; held: bigint; topUps: readonly TopUp[]; holds: readonly Hold[] }>;
-type State = { accounts: Map<string, Account>; commands: Map<string, StoredFundingCommand>; capacityIntents: Map<string, CapacityIntent>; actionBudgets: Map<string, ActionBudget>; meteredActions: Map<string, MeteredAction>; continuations: Map<string, ContinuationRecord>; externalReferences: Set<string>; settlementReferences: Set<string>; postings: LedgerPosting[]; evidence: FundingEvidence[]; outbox: FundingOutbox[]; lineItems: BillingLineItem[]; lineItemSequence: bigint };
+type State = { accounts: Map<string, Account>; commands: Map<string, StoredFundingCommand>; capacityIntents: Map<string, CapacityIntent>; actionBudgets: Map<string, ActionBudget>; meteredActions: Map<string, MeteredAction>; continuations: Map<string, ContinuationRecord>; continuationPauses: Map<string, ContinuationPause>; checkpoints: Map<string, ContinuationCheckpoint>; resumeClaims: Map<string, ContinuationResumeClaim>; restoreObservations: Map<string, RestoreObservationInput>; deletionOutcomes: Map<string, DeletionOutcomeInput>; externalReferences: Set<string>; settlementReferences: Set<string>; postings: LedgerPosting[]; evidence: FundingEvidence[]; outbox: FundingOutbox[]; lineItems: BillingLineItem[]; lineItemSequence: bigint };
 
 function clone<T>(value: T): T { return structuredClone(value); }
 function freeze<T>(value: T): T {
@@ -147,7 +166,7 @@ function cursorAfter(accountId: string, cursor: string | undefined, items: reado
  * a durable ledger and must never be selected as production monetary storage.
  */
 export class TransactionalMemoryFundingStore implements MeteredFundingStore, ContinuationFundingStore {
-  #state: State = { accounts: new Map(), commands: new Map(), capacityIntents: new Map(), actionBudgets: new Map(), meteredActions: new Map(), continuations: new Map(), externalReferences: new Set(), settlementReferences: new Set(), postings: [], evidence: [], outbox: [], lineItems: [], lineItemSequence: 0n };
+  #state: State = { accounts: new Map(), commands: new Map(), capacityIntents: new Map(), actionBudgets: new Map(), meteredActions: new Map(), continuations: new Map(), continuationPauses: new Map(), checkpoints: new Map(), resumeClaims: new Map(), restoreObservations: new Map(), deletionOutcomes: new Map(), externalReferences: new Set(), settlementReferences: new Set(), postings: [], evidence: [], outbox: [], lineItems: [], lineItemSequence: 0n };
   #tail: Promise<void> = Promise.resolve();
 
   get postings(): readonly LedgerPosting[] { return freeze(clone(this.#state.postings)); }
@@ -206,7 +225,9 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
     return freeze({ accountId, sessionId, version: action.sessionVersion ?? action.expectedVersion, status });
   }
 
-  async transact<T>(accountId: string, operation: (transaction: MeteredFundingTransaction | ContinuationFundingTransaction) => Promise<T> | T): Promise<T> {
+  async transact<T>(accountId: string, operation: (transaction: MeteredFundingTransaction) => Promise<T> | T): Promise<T>;
+  async transact<T>(accountId: string, operation: (transaction: ContinuationFundingTransaction) => Promise<T> | T): Promise<T>;
+  async transact<T>(accountId: string, operation: (transaction: MeteredFundingTransaction & ContinuationFundingTransaction) => Promise<T> | T): Promise<T> {
     let release!: () => void;
     const prior = this.#tail;
     this.#tail = new Promise<void>((resolve) => { release = resolve; });
@@ -287,17 +308,112 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
           return freeze({ settledBalance: account.settledAvailable, availableBalance: account.settledAvailable - account.held, remainingCap: hold.heldAmount });
         },
         findContinuation: async (idempotencyKey) => state.continuations.get(commandKey(accountId, idempotencyKey)),
-        pauseForFunding: async (input) => {
-          if (input.intent.accountId !== accountId) throw new Error("ACCOUNT_SCOPE_MISMATCH");
-          const key = commandKey(accountId, input.intent.idempotencyKey);
-          const existing = state.continuations.get(key);
+        pauseForFunding: (async (input: ContinuationRecord | ContinuationPauseInput) => {
+          if ("intent" in input) {
+            if (input.intent.accountId !== accountId) throw new Error("ACCOUNT_SCOPE_MISMATCH");
+            const key = commandKey(accountId, input.intent.idempotencyKey);
+            const existing = state.continuations.get(key);
+            if (existing) {
+              if (existing.intent.fingerprint !== input.intent.fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
+              return existing;
+            }
+            const next = freeze(clone(input));
+            state.continuations.set(key, next);
+            return next;
+          }
+          if (input.accountId !== accountId) throw new Error("ACCOUNT_SCOPE_MISMATCH");
+          const command = commandKey(accountId, input.idempotencyKey);
+          const existing = state.continuationPauses.get(command);
           if (existing) {
-            if (existing.intent.fingerprint !== input.intent.fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
+            if (existing.fingerprint !== input.fingerprint || existing.sessionId !== input.sessionId || existing.pauseGeneration !== input.pauseGeneration) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
             return existing;
           }
-          const next = freeze(clone(input));
-          state.continuations.set(key, next);
+          const generation = [...state.continuationPauses.values()].find((pause) => pause.accountId === accountId && pause.sessionId === input.sessionId && pause.pauseGeneration === input.pauseGeneration);
+          if (generation) throw new Error("PAUSE_GENERATION_CONFLICT");
+          const next = freeze({ ...clone(input), state: "needs_top_up" as const });
+          state.continuationPauses.set(command, next);
           return next;
+        }) as ContinuationFundingTransaction["pauseForFunding"],
+        findContinuationPause: async (sessionId, pauseGeneration) => {
+          const pause = [...state.continuationPauses.values()].find((item) => item.accountId === accountId && item.sessionId === sessionId && item.pauseGeneration === pauseGeneration);
+          return pause && freeze(clone(pause));
+        },
+        wakePausedAction: async (input) => {
+          const pause = [...state.continuationPauses.values()].find((item) => item.accountId === accountId && item.sessionId === input.sessionId && item.pauseGeneration === input.pauseGeneration);
+          if (!pause) throw new Error("CONTINUATION_PAUSE_NOT_FOUND");
+          if (pause.liveLeaseToken !== input.liveLeaseToken) throw new Error("STALE_WORKER_LEASE");
+          if (input.nowMs >= pause.graceDeadlineMs) throw new Error("GRACE_DEADLINE_EXPIRED");
+          if (pause.state !== "needs_top_up") return pause;
+          return pause;
+        },
+        beginDeadlineCheckpoint: async (input) => {
+          const index = [...state.continuationPauses.entries()].find(([, pause]) => pause.accountId === accountId && pause.sessionId === input.sessionId && pause.pauseGeneration === input.pauseGeneration);
+          if (!index) throw new Error("CONTINUATION_PAUSE_NOT_FOUND");
+          const [key, pause] = index;
+          if (pause.liveLeaseToken !== input.liveLeaseToken) throw new Error("STALE_WORKER_LEASE");
+          if (pause.state === "checkpointing") return pause;
+          if (pause.state !== "needs_top_up") throw new Error("CHECKPOINT_STATE_INVALID");
+          const next = freeze({ ...pause, state: "checkpointing" as const });
+          state.continuationPauses.set(key, next);
+          return next;
+        },
+        commitDeadlineCheckpoint: async (input) => {
+          if (input.accountId !== accountId) throw new Error("ACCOUNT_SCOPE_MISMATCH");
+          const pauseIndex = [...state.continuationPauses.entries()].find(([, pause]) => pause.accountId === accountId && pause.sessionId === input.sessionId && pause.pauseGeneration === input.pauseGeneration);
+          if (!pauseIndex) throw new Error("CONTINUATION_PAUSE_NOT_FOUND");
+          const [pauseKey, pause] = pauseIndex;
+          if (pause.state !== "checkpointing") throw new Error("CHECKPOINT_STATE_INVALID");
+          const existing = state.checkpoints.get(input.checkpointId);
+          if (existing) {
+            if (existing.objectGeneration !== input.objectGeneration || existing.objectChecksum !== input.objectChecksum || existing.sessionId !== input.sessionId) throw new Error("CHECKPOINT_IDENTITY_CONFLICT");
+            return existing;
+          }
+          const next = freeze({ ...clone(input), retentionDeadlineMs: input.checkpointCommittedAtMs + 2_592_000_000, state: "resume_required" as const });
+          state.checkpoints.set(input.checkpointId, next);
+          state.continuationPauses.set(pauseKey, freeze({ ...pause, state: "resume_required" as const, liveLeaseToken: undefined }));
+          return next;
+        },
+        claimResume: async (input) => {
+          if (input.accountId !== accountId) throw new Error("ACCOUNT_SCOPE_MISMATCH");
+          const command = commandKey(accountId, input.idempotencyKey);
+          const replay = state.resumeClaims.get(command);
+          if (replay) {
+            if (replay.fingerprint !== input.fingerprint || replay.checkpointId !== input.checkpointId) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
+            return replay;
+          }
+          const checkpoint = state.checkpoints.get(input.checkpointId);
+          if (!checkpoint || checkpoint.accountId !== accountId || checkpoint.sessionId !== input.sessionId) throw new Error("CHECKPOINT_NOT_FOUND_OR_DENIED");
+          if (input.nowMs >= checkpoint.retentionDeadlineMs || checkpoint.state === "expired") throw new Error("CHECKPOINT_EXPIRED");
+          if (checkpoint.state !== "resume_required") throw new Error("CHECKPOINT_ALREADY_CLAIMED");
+          if (checkpoint.expectedSessionVersion !== input.expectedSessionVersion || input.expectedCheckpointVersion !== 1) throw new Error("STALE_CHECKPOINT_VERSION");
+          const pause = [...state.continuationPauses.values()].find((item) => item.accountId === accountId && item.sessionId === input.sessionId && item.pauseGeneration === checkpoint.pauseGeneration);
+          if (!pause || pause.pendingFingerprint !== input.pendingFingerprint) throw new Error("PENDING_ACTION_CONFLICT");
+          const claim = freeze({ accountId, checkpointId: input.checkpointId, idempotencyKey: input.idempotencyKey, fingerprint: input.fingerprint, leaseToken: input.newLeaseToken, allocationIntentReference: input.allocationIntentReference, claimed: true as const });
+          state.resumeClaims.set(command, claim);
+          state.checkpoints.set(input.checkpointId, freeze({ ...checkpoint, state: "claimed" as const, claim }));
+          return claim;
+        },
+        recordRestoreObservation: async (input) => {
+          const checkpoint = state.checkpoints.get(input.checkpointId);
+          if (!checkpoint || checkpoint.state !== "claimed" || checkpoint.claim?.allocationIntentReference !== input.allocationIntentReference) throw new Error("RESTORE_OBSERVATION_INVALID");
+          state.restoreObservations.set(`${input.checkpointId}:${input.allocationIntentReference}`, freeze(clone(input)));
+          return freeze(clone(input));
+        },
+        tombstoneExpiredCheckpoint: async (input) => {
+          const checkpoint = state.checkpoints.get(input.checkpointId);
+          if (!checkpoint) throw new Error("CHECKPOINT_NOT_FOUND");
+          if (checkpoint.state === "claimed") return checkpoint;
+          if (checkpoint.state === "expired") return checkpoint;
+          if (input.nowMs < checkpoint.retentionDeadlineMs) throw new Error("CHECKPOINT_RETENTION_ACTIVE");
+          const expired = freeze({ ...checkpoint, state: "expired" as const });
+          state.checkpoints.set(input.checkpointId, expired);
+          return expired;
+        },
+        recordDeletionOutcome: async (input) => {
+          const checkpoint = state.checkpoints.get(input.checkpointId);
+          if (!checkpoint || checkpoint.state !== "expired" || checkpoint.objectGeneration !== input.objectGeneration) throw new Error("DELETION_OUTCOME_INVALID");
+          state.deletionOutcomes.set(`${input.checkpointId}:${input.objectGeneration}`, freeze(clone(input)));
+          return freeze(clone(input));
         },
         prepareMeteredAction: async (input) => {
           if (input.accountId !== accountId) throw new Error("ACCOUNT_SCOPE_MISMATCH");

@@ -1,0 +1,101 @@
+-- Phase 05 continuation authority.  This schema adds paused-session recovery;
+-- it is deliberately not a generation request queue.
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS continuation_pauses (
+  pause_id text PRIMARY KEY,
+  account_id text NOT NULL REFERENCES funding_accounts(account_id),
+  session_id text NOT NULL REFERENCES metered_sessions(id),
+  admission_reference text NOT NULL REFERENCES admissions(reference),
+  idempotency_key text NOT NULL,
+  fingerprint_sha256 char(64) NOT NULL,
+  pending_fingerprint_sha256 char(64) NOT NULL,
+  pause_generation integer NOT NULL CHECK (pause_generation > 0),
+  expected_session_version integer NOT NULL CHECK (expected_session_version >= 0),
+  grace_deadline_ms bigint NOT NULL,
+  live_lease_token text,
+  state text NOT NULL CHECK (state IN ('needs_top_up','checkpointing','resume_required','claimed','expired')),
+  result_json jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (account_id, idempotency_key),
+  UNIQUE (account_id, session_id, pause_generation),
+  CHECK ((state IN ('needs_top_up','checkpointing')) = (live_lease_token IS NOT NULL))
+);
+
+CREATE TABLE IF NOT EXISTS continuation_checkpoints (
+  checkpoint_id text PRIMARY KEY,
+  account_id text NOT NULL REFERENCES funding_accounts(account_id),
+  session_id text NOT NULL REFERENCES metered_sessions(id),
+  pause_generation integer NOT NULL,
+  expected_session_version integer NOT NULL CHECK (expected_session_version >= 0),
+  expected_artifact_version integer NOT NULL CHECK (expected_artifact_version >= 0),
+  manifest_reference text NOT NULL,
+  object_key text NOT NULL,
+  object_generation text NOT NULL,
+  object_checksum char(64) NOT NULL,
+  key_reference text NOT NULL,
+  compatibility_identity text NOT NULL,
+  checkpoint_committed_at_ms bigint NOT NULL,
+  retention_deadline_ms bigint NOT NULL,
+  state text NOT NULL CHECK (state IN ('resume_required','claimed','expired')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (account_id, session_id, pause_generation),
+  UNIQUE (object_key, object_generation),
+  FOREIGN KEY (account_id, session_id, pause_generation) REFERENCES continuation_pauses(account_id, session_id, pause_generation),
+  CHECK (retention_deadline_ms = checkpoint_committed_at_ms + 2592000000)
+);
+
+CREATE TABLE IF NOT EXISTS continuation_resume_commands (
+  command_id text PRIMARY KEY,
+  account_id text NOT NULL REFERENCES funding_accounts(account_id),
+  checkpoint_id text NOT NULL REFERENCES continuation_checkpoints(checkpoint_id),
+  idempotency_key text NOT NULL,
+  fingerprint_sha256 char(64) NOT NULL,
+  pending_fingerprint_sha256 char(64) NOT NULL,
+  expected_checkpoint_version integer NOT NULL CHECK (expected_checkpoint_version = 1),
+  expected_session_version integer NOT NULL CHECK (expected_session_version >= 0),
+  lease_token text NOT NULL UNIQUE,
+  allocation_intent_reference text NOT NULL UNIQUE,
+  result_json jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (account_id, idempotency_key),
+  UNIQUE (checkpoint_id)
+);
+
+CREATE TABLE IF NOT EXISTS continuation_restore_observations (
+  checkpoint_id text NOT NULL REFERENCES continuation_checkpoints(checkpoint_id),
+  allocation_intent_reference text NOT NULL,
+  state text NOT NULL CHECK (state IN ('restored','refused','reconciliation_pending')),
+  observed_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (checkpoint_id, allocation_intent_reference)
+);
+
+CREATE TABLE IF NOT EXISTS continuation_tombstones (
+  checkpoint_id text PRIMARY KEY REFERENCES continuation_checkpoints(checkpoint_id),
+  account_id text NOT NULL REFERENCES funding_accounts(account_id),
+  expired_at_ms bigint NOT NULL,
+  deletion_scheduled_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS continuation_deletions (
+  checkpoint_id text NOT NULL REFERENCES continuation_checkpoints(checkpoint_id),
+  object_generation text NOT NULL,
+  state text NOT NULL CHECK (state IN ('scheduled','deleted','failed')),
+  recorded_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (checkpoint_id, object_generation)
+);
+
+-- Immutable checkpoint identity and append-only terminal evidence prevent a
+-- retry from silently replacing archival bytes or reopening an expired session.
+CREATE OR REPLACE FUNCTION reject_phase05_continuation_identity_change() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF OLD.object_key <> NEW.object_key OR OLD.object_generation <> NEW.object_generation OR OLD.object_checksum <> NEW.object_checksum OR OLD.retention_deadline_ms <> NEW.retention_deadline_ms THEN
+    RAISE EXCEPTION 'PHASE05_CHECKPOINT_IDENTITY_IMMUTABLE';
+  END IF;
+  RETURN NEW;
+END; $$;
+CREATE TRIGGER continuation_checkpoint_identity_immutable BEFORE UPDATE ON continuation_checkpoints FOR EACH ROW EXECUTE FUNCTION reject_phase05_continuation_identity_change();
+CREATE TRIGGER continuation_tombstones_append_only BEFORE UPDATE OR DELETE ON continuation_tombstones FOR EACH ROW EXECUTE FUNCTION reject_phase04_append_only_change();
+CREATE TRIGGER continuation_deletions_append_only BEFORE UPDATE OR DELETE ON continuation_deletions FOR EACH ROW EXECUTE FUNCTION reject_phase04_append_only_change();
+
+COMMIT;

@@ -32,15 +32,16 @@ export class PublicationService {
   }
 
   async submitSignedManifest(input: Readonly<{ accountId: string; intentId: string; command: unknown; event: unknown }>): Promise<PublicationServiceStatus> {
-    const active = this.#submissions.get(input.intentId);
+    const intent = await this.#intentForOwner(input.accountId, input.intentId);
+    const key = `${input.accountId.length}:${input.accountId}|${input.intentId.length}:${input.intentId}`;
+    const active = this.#submissions.get(key);
     if (active) return active;
-    const submission = this.#submit(input).finally(() => this.#submissions.delete(input.intentId));
-    this.#submissions.set(input.intentId, submission);
+    const submission = this.#submitAuthorized(input, intent).finally(() => this.#submissions.delete(key));
+    this.#submissions.set(key, submission);
     return submission;
   }
 
-  async #submit(input: Readonly<{ accountId: string; intentId: string; command: unknown; event: unknown }>): Promise<PublicationServiceStatus> {
-    const intent = await this.#intentForOwner(input.accountId, input.intentId);
+  async #submitAuthorized(input: Readonly<{ accountId: string; intentId: string; command: unknown; event: unknown }>, intent: PublicationIntent): Promise<PublicationServiceStatus> {
     let command;
     let event;
     try { command = SignedPublicationCommandSchema.parse(input.command); event = SignedOwnerManifestEventSchema.parse(input.event); } catch { throw new Error("INVALID_MANIFEST"); }

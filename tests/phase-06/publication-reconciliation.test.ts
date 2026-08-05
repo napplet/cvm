@@ -75,3 +75,26 @@ test("PublicationService runs its async transaction callbacks against SQLite", a
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("denies a concurrent submission from another account before sharing an in-flight result", async () => {
+  let releaseVerification!: () => void;
+  let signalVerification!: () => void;
+  const verificationGate = new Promise<void>((resolve) => { releaseVerification = resolve; });
+  const verificationStarted = new Promise<void>((resolve) => { signalVerification = resolve; });
+  const store = new TransactionalMemoryPublicationStore();
+  const service = new PublicationService({
+    store,
+    clock: { nowMs: () => 1_700_000_000_000 },
+    verifier: { verify: async ({ event }) => { signalVerification(); await verificationGate; return { valid: true, eventId: event.id }; } },
+    deployment: { deployExact: async ({ operationId }) => ({ operationId, state: "completed" as const, observationId: `deploy:${operationId}` }), publishOwnerManifest: async ({ operationId }) => ({ operationId, state: "completed" as const, observationId: `owner:${operationId}` }) },
+    attestation: { publish: async ({ operationId }) => ({ operationId, state: "completed" as const, observationId: `attestation:${operationId}` }) },
+  });
+  const review = await canonicalCapabilityReview(verifiedPhase06Artifact, "napplet-host/v1");
+  const intent = await service.createIntent({ accountId: verifiedPhase06Artifact.accountId, sessionId: verifiedPhase06Artifact.sessionId, artifact: verifiedPhase06Artifact, review, ownerPubkey: signedPhase06EventFixture.pubkey, idempotencyKey: "publication:cross-owner", purpose: "Publish exact sealed bytes", consent: "approved", runtimeVariant: "napplet-host/v1" });
+  const command = { commandId: "publication:cross-owner-command", intentId: intent.intentId, intentFingerprint: intent.fingerprint, operationIds: { deploy: `deploy:${intent.intentId}`, ownerManifest: `owner_manifest:${intent.intentId}`, attestation: `attestation:${intent.intentId}` } };
+  const ownerSubmission = service.submitSignedManifest({ accountId: intent.accountId, intentId: intent.intentId, command, event: signedPhase06EventFixture });
+  await verificationStarted;
+  await expect(service.submitSignedManifest({ accountId: "account:other-owner", intentId: intent.intentId, command, event: signedPhase06EventFixture })).rejects.toThrow("PUBLICATION_NOT_FOUND_OR_DENIED");
+  releaseVerification();
+  await expect(ownerSubmission).resolves.toMatchObject({ intentId: intent.intentId });
+});

@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
 
 import { ContextVmFundingAdapter } from "../../src/contextvm/adapter";
+import { accountIdForPrincipal } from "../../src/domain/account-command";
 import type { ContextVmInboundEnvelope, ContextVmTransportPort, ContextVmWireNotification, ContextVmWireResponse } from "../../src/contextvm/sdk-bridge";
 import { FundingService } from "../../src/funding/funding-service";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
+import { canonicalCapabilityReview } from "../../src/publication/capability-review";
+import { PreviewService } from "../../src/publication/preview-service";
+import { DeterministicPreviewHostPort, DeterministicSealedArtifactPort, fixedPhase06Clock, verifiedPhase06Artifact } from "../phase-06/fakes";
 
 const pubkey = "a".repeat(64);
 const sha = "b".repeat(64);
@@ -57,6 +61,34 @@ describe("signed ContextVM preview and publication", () => {
     expect(transport.responses[0]?.response).toMatchObject({ result: { status: "ready", artifactId: "artifact:one", nextAction: "review_capabilities" } });
     expect(transport.notifications.map((entry) => entry.notification.method)).toEqual(["notifications/preview", "notifications/preview"]);
     expect(JSON.stringify(transport.responses)).not.toContain("providerPayload");
+  });
+
+  test("blocks an incompatible required capability through the signed preview action before a host descriptor exists", async () => {
+    const sealedArtifacts = new DeterministicSealedArtifactPort();
+    sealedArtifacts.artifact = {
+      ...verifiedPhase06Artifact,
+      accountId: await accountIdForPrincipal({ pubkey }),
+      manifestCapabilities: verifiedPhase06Artifact.manifestCapabilities?.map((capability) => capability.name === "notes.read" ? { ...capability, available: false } : capability),
+    };
+    const host = new DeterministicPreviewHostPort();
+    const service = new PreviewService({ sealedArtifacts, host, clock: fixedPhase06Clock(), capabilityReview: canonicalCapabilityReview });
+    let facadeCalls = 0;
+    const { sut, transport } = adapter({ preview: {
+      previewVerifiedArtifact: async (input) => {
+        facadeCalls += 1;
+        return service.previewVerifiedArtifact(input as { accountId: string; sessionId: string; artifactId: string; runtimeVariant: string });
+      },
+      reviewCapabilities: async () => { throw new Error("REVIEW_NOT_EXPECTED"); },
+    } });
+
+    await sut.handle(request("preview", { action: "descriptor", sessionId: verifiedPhase06Artifact.sessionId, artifactId: verifiedPhase06Artifact.artifactId, runtimeVariant: "napplet-host/v1" }));
+
+    expect(facadeCalls).toBe(1);
+    expect(host.calls).toBe(0);
+    expect(host.descriptors).toEqual([]);
+    expect(transport.responses.at(-1)?.response).toMatchObject({ result: { status: "denied", safeReasonCode: "preview_not_available", nextAction: "preview" } });
+    expect(JSON.stringify(transport.responses)).not.toContain("previewGrantId");
+    expect(JSON.stringify(transport.responses)).not.toMatch(/authority|signer|relay|storage|cookie/i);
   });
 
   test("fails closed with publication_unavailable before a facade can observe any action", async () => {

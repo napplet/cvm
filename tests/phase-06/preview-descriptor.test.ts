@@ -42,6 +42,12 @@ test("issues one exact verified-artifact descriptor with an allow-scripts-only r
     iframeSandbox: "allow-scripts",
     authority: "preview_read_only",
     expiresAtMs: 1_700_000_060_000,
+    review: {
+      compatibility: "degraded",
+      optional: [
+        { capability: "notifications", available: false },
+      ],
+    },
   });
   expect(h.host.calls).toBe(1);
   expect(h.host.descriptors[0]).toMatchObject({
@@ -52,6 +58,29 @@ test("issues one exact verified-artifact descriptor with an allow-scripts-only r
   expect(h.attestation.calls).toBe(0);
   expect(JSON.stringify(result)).not.toContain("allowSameOrigin");
   expect(JSON.stringify(result)).not.toContain("publicationAuthority");
+});
+
+test("blocks an incompatible required-capability review before descriptor or facade effects", async () => {
+  const h = previewHarness();
+  h.sealedArtifacts.artifact = {
+    ...verifiedPhase06Artifact,
+    manifestCapabilities: verifiedPhase06Artifact.manifestCapabilities?.map((capability) => capability.name === "notes.read" ? { ...capability, available: false } : capability),
+  };
+
+  const result = await h.preview.previewVerifiedArtifact({
+    accountId: verifiedPhase06Artifact.accountId,
+    sessionId: verifiedPhase06Artifact.sessionId,
+    artifactId: verifiedPhase06Artifact.artifactId,
+    runtimeVariant: "napplet-host/v1",
+  });
+
+  expect(result).toEqual({ state: "denied", safeReasonCode: "preview_not_available", nextAction: "preview" });
+  expect("previewGrantId" in result).toBe(false);
+  expect(h.host.calls).toBe(0);
+  expect(h.host.descriptors).toEqual([]);
+  expect(h.deployment.calls).toBe(0);
+  expect(h.attestation.calls).toBe(0);
+  reportPhase06Observation({ id: "P06-CAP-REQUIRED-BLOCK-01", status: "denied", effects: "host=0;publication=0", value: "required-capability-incompatible" });
 });
 
 test("denies empty or null artifact and manifest-like identity before host or publication effects", async () => {

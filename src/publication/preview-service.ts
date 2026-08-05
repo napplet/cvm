@@ -25,7 +25,7 @@ export class PreviewService {
     } catch {
       return safePreviewDenial();
     }
-    if (artifact.accountId !== input.accountId || artifact.sessionId !== input.sessionId || artifact.artifactId !== input.artifactId || review.artifactId !== artifact.artifactId || review.aggregateSha256 !== artifact.aggregateSha256 || review.normalizedDTag !== artifact.normalizedDTag || review.runtimeVariant !== input.runtimeVariant) return safePreviewDenial();
+    if (artifact.accountId !== input.accountId || artifact.sessionId !== input.sessionId || artifact.artifactId !== input.artifactId || review.artifactId !== artifact.artifactId || review.aggregateSha256 !== artifact.aggregateSha256 || review.normalizedDTag !== artifact.normalizedDTag || review.runtimeVariant !== input.runtimeVariant || review.compatibility === "incompatible") return safePreviewDenial();
     const nowMs = this.dependencies.clock.nowMs(); const expiresAtMs = nowMs + 60_000;
     try {
       const grant = parseHostGrant(await this.dependencies.host.createDescriptor({ artifact, review, nowMs, expiresAtMs }));

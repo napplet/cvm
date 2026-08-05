@@ -135,6 +135,27 @@ test("evidence blocks stale, cross-candidate, non-pass, and concurrent release p
   await expect(evaluateReleaseCertification(manifest, [...valid.slice(0, -1), { ...valid.at(-1)!, expiresAtMs: 1_500 }], { candidateId, nowMs: 2_000, verificationRecords: records, trustRoot: permissiveTestTrustRoot })).resolves.toMatchObject({ status: "blocked" });
 });
 
+test("the sole evaluator authenticates a changed manifest before consulting a promoted cache entry", async () => {
+  const rawManifest = releaseManifest();
+  const manifest = parseReleaseCertificationManifest(rawManifest);
+  const candidateId = digest("7");
+  const records = await protectedVerificationRecords(rawManifest, candidateId);
+  const observations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation(`/tmp/napplet-cvm-phase07-cache-auth-${crypto.randomUUID()}`, bindSupplyChainObservation(observation(rawManifest, candidateId, requirement.claim, requirement.live), records))));
+  let manifestChecks = 0;
+  const trustRoot: ReleaseCertificationTrustRoot = {
+    ...permissiveTestTrustRoot,
+    verifyManifest: async (actual) => {
+      manifestChecks += 1;
+      return canonicalJson(actual) === canonicalJson(manifest);
+    },
+  };
+
+  await expect(evaluateReleaseCertification(manifest, observations, { candidateId, nowMs: 2_000, verificationRecords: records, trustRoot })).resolves.toMatchObject({ status: "promoted" });
+  const changedManifest = parseReleaseCertificationManifest({ ...rawManifest, requirements: rawManifest.requirements.map((requirement, index) => index === 0 ? { ...requirement, freshnessMs: requirement.freshnessMs + 1 } : requirement) });
+  await expect(evaluateReleaseCertification(changedManifest, observations, { candidateId, nowMs: 2_000, verificationRecords: records, trustRoot })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_CERTIFIER_AUTHORITY_INVALID" });
+  expect(manifestChecks).toBe(2);
+});
+
 test("the sole evaluator rejects an observation whose candidate source digest differs from the manifest", async () => {
   const rawManifest = releaseManifest();
   const manifest = parseReleaseCertificationManifest(rawManifest);

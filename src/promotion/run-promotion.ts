@@ -53,7 +53,7 @@ export type ReleaseCertificationDecision = {
 
 export type ReleaseVerificationRecords = Readonly<{ reproducibility: unknown; supplyChain: unknown }>;
 
-const releaseDecisions = new Map<string, Readonly<{ evidenceSha256: string; decision: Promise<ReleaseCertificationDecision> }>>();
+const releaseDecisions = new Map<string, Promise<ReleaseCertificationDecision>>();
 
 async function sha256(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
@@ -64,25 +64,38 @@ async function releaseEvidenceSha256(observations: readonly unknown[]): Promise<
   return sha256(canonicalJson(observations));
 }
 
+async function releaseDecisionFingerprint(manifest: ReleaseCertificationManifest, observations: readonly unknown[], verificationRecords: ReleaseVerificationRecords): Promise<string> {
+  return sha256(canonicalJson({ manifest, observations, verificationRecords }));
+}
+
+async function authenticateReleaseCertificationInput(
+  manifest: ReleaseCertificationManifest,
+  observations: readonly unknown[],
+  verificationRecords: ReleaseVerificationRecords | undefined,
+  trustRoot: ReleaseCertificationTrustRoot | undefined,
+): Promise<"authenticated" | "RELEASE_VERIFICATION_RECORDS_REQUIRED" | "RELEASE_CERTIFIER_AUTHORITY_REQUIRED" | "RELEASE_CERTIFIER_AUTHORITY_INVALID"> {
+  if (!verificationRecords) return "RELEASE_VERIFICATION_RECORDS_REQUIRED";
+  if (!trustRoot) return "RELEASE_CERTIFIER_AUTHORITY_REQUIRED";
+  try {
+    const trusted = await Promise.all([
+      trustRoot.verifyManifest(manifest),
+      trustRoot.verifyReproducibilityRecord(verificationRecords.reproducibility),
+      trustRoot.verifySupplyChainRecord(verificationRecords.supplyChain),
+      ...observations.map((observation) => trustRoot.verifyObservation(observation)),
+    ]);
+    return trusted.every(Boolean) ? "authenticated" : "RELEASE_CERTIFIER_AUTHORITY_INVALID";
+  } catch {
+    return "RELEASE_CERTIFIER_AUTHORITY_INVALID";
+  }
+}
+
 async function evaluateReleaseCertificationInner(
   manifest: ReleaseCertificationManifest,
   observations: readonly unknown[],
-  input: Readonly<{ candidateId: string; nowMs: number; evidenceSha256: string; verificationRecords?: ReleaseVerificationRecords; trustRoot?: ReleaseCertificationTrustRoot }>,
+  input: Readonly<{ candidateId: string; nowMs: number; evidenceSha256: string; verificationRecords: ReleaseVerificationRecords }>,
 ): Promise<ReleaseCertificationDecision> {
   const blocked = (responsibleRequirement: string | null, reason: string): ReleaseCertificationDecision => ({ candidateId: input.candidateId, releaseId: manifest.releaseId, evidenceSha256: input.evidenceSha256, status: "blocked", responsibleRequirement, reason });
   if (manifest.waivers.some((waiver) => waiver.expiresAtMs <= input.nowMs)) return blocked("waiver", "RELEASE_WAIVER_EXPIRED");
-  if (!input.verificationRecords) return blocked("supply-chain", "RELEASE_VERIFICATION_RECORDS_REQUIRED");
-  if (!input.trustRoot) return blocked("supply-chain", "RELEASE_CERTIFIER_AUTHORITY_REQUIRED");
-  try {
-    if (!(await input.trustRoot.verifyManifest(manifest))
-      || !(await input.trustRoot.verifyReproducibilityRecord(input.verificationRecords.reproducibility))
-      || !(await input.trustRoot.verifySupplyChainRecord(input.verificationRecords.supplyChain))
-      || !(await Promise.all(observations.map((observation) => input.trustRoot!.verifyObservation(observation)))).every(Boolean)) {
-      return blocked("supply-chain", "RELEASE_CERTIFIER_AUTHORITY_INVALID");
-    }
-  } catch {
-    return blocked("supply-chain", "RELEASE_CERTIFIER_AUTHORITY_INVALID");
-  }
   const releaseBinding = { releaseId: manifest.releaseId, sourceRevision: manifest.sourceRevision, sourceSha256: manifest.sourceSha256, supplyChainPolicy: manifest.supplyChainPolicy, inputs: manifest.inputs };
   let verificationDigests: Readonly<{ reproducibilityEvidenceSha256: string; supplyChainEvidenceSha256: string }>;
   try {
@@ -129,14 +142,14 @@ export async function evaluateReleaseCertification(
 ): Promise<ReleaseCertificationDecision> {
   const nowMs = input.nowMs ?? Date.now();
   const evidenceSha256 = await releaseEvidenceSha256([observations, input.verificationRecords ?? null]);
-  const key = `${input.candidateId}:${manifest.releaseId}`;
+  const blocked = (reason: Exclude<Awaited<ReturnType<typeof authenticateReleaseCertificationInput>>, "authenticated">): ReleaseCertificationDecision => ({ candidateId: input.candidateId, releaseId: manifest.releaseId, evidenceSha256, status: "blocked", responsibleRequirement: reason === "RELEASE_VERIFICATION_RECORDS_REQUIRED" ? "supply-chain" : null, reason });
+  const authentication = await authenticateReleaseCertificationInput(manifest, observations, input.verificationRecords, input.trustRoot);
+  if (authentication !== "authenticated") return blocked(authentication);
+  const key = `${input.candidateId}:${await releaseDecisionFingerprint(manifest, observations, input.verificationRecords!)}`;
   const existing = releaseDecisions.get(key);
-  if (existing) {
-    if (existing.evidenceSha256 !== evidenceSha256) return { candidateId: input.candidateId, releaseId: manifest.releaseId, evidenceSha256, status: "blocked", responsibleRequirement: null, reason: "RELEASE_EVIDENCE_REPLACEMENT_REJECTED" };
-    return existing.decision;
-  }
-  const decision = evaluateReleaseCertificationInner(manifest, observations, { candidateId: input.candidateId, nowMs, evidenceSha256, verificationRecords: input.verificationRecords, trustRoot: input.trustRoot });
-  releaseDecisions.set(key, { evidenceSha256, decision });
+  if (existing) return existing;
+  const decision = evaluateReleaseCertificationInner(manifest, observations, { candidateId: input.candidateId, nowMs, evidenceSha256, verificationRecords: input.verificationRecords! });
+  releaseDecisions.set(key, decision);
   return decision;
 }
 
@@ -255,7 +268,7 @@ async function runPromotionCandidateInner(rawManifest: unknown, options: RunProm
     }
   }
   if (!options.releaseManifest || !options.releaseObservations || !options.verificationRecords) return writePromotionEvidence(options.evidenceDirectory, manifest, candidateId, "blocked", "certification-required", stages);
-  const certification = await evaluateReleaseCertification(options.releaseManifest, options.releaseObservations, { candidateId, nowMs: now(), verificationRecords: options.verificationRecords });
+  const certification = await evaluateReleaseCertification(options.releaseManifest, options.releaseObservations, { candidateId, nowMs: now(), verificationRecords: options.verificationRecords, trustRoot: options.trustRoot });
   if (certification.status !== "promoted") return writePromotionEvidence(options.evidenceDirectory, manifest, candidateId, "blocked", certification.responsibleRequirement ?? "release-certification", stages);
   const promoted = await writePromotionEvidence(options.evidenceDirectory, manifest, candidateId, "review-ready", "release-certified", stages);
   return { ...promoted, status: "promoted", responsibleStage: "release-certified" };

@@ -176,7 +176,24 @@ test("approval, pending, rejected, and drift records fail closed before approval
       await mutation.mutate(root);
       await expect(verifyApprovedOtelPackageSet({ repositoryRoot: root })).rejects.toThrow(mutation.error);
       const approval = await approvalCli(root);
+      const pins = await approvalCli(root, "--verify-root-pins");
       expect(approval.code, mutation.name).not.toBe(0);
+      expect(pins.code, mutation.name).not.toBe(0);
     } finally { await rm(root, { recursive: true, force: true }); }
   }
+});
+
+test("approval-dependent root pins return the same decision and audit digests as the shared verifier", async () => {
+  const approved = await approvalCli(repositoryRoot);
+  const pins = await approvalCli(repositoryRoot, "--verify-root-pins");
+  expect(approved.code).toBe(0);
+  expect(pins.code).toBe(0);
+  const approval = JSON.parse(approved.stdout);
+  const rootPins = JSON.parse(pins.stdout);
+  expect(rootPins).toMatchObject({
+    status: "passed",
+    mode: "root-pins",
+    approvalDigest: approval.approvalDigest,
+    auditDigest: approval.auditDigest,
+  });
 });

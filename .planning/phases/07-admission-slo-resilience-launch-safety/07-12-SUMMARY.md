@@ -76,7 +76,7 @@ status: complete
 
 1. **Task 1: Dispatch the closed protected-suite adapter registry** — `0d55bfa` (feat)
 2. **Task 2: Feed an exact release bundle into the sole promotion decision** — `e3f2adc` (feat)
-3. **Task 3: Seal regression and evidence behavior** — `6fbf5c2` (fix)
+3. **Task 3: Seal regression and evidence behavior** — `6fbf5c2`, `66ce911` (fix)
 
 ## Files Created/Modified
 
@@ -95,7 +95,7 @@ status: complete
 
 ## Verification
 
-- `bun test --timeout 10000` — passed (493 tests).
+- `bun test --timeout 10000` — passed (494 tests).
 - `bun run eval:phase07` and `bun run verify:phase07-evidence -- --verify-existing` — passed.
 - Credential-free `certify:phase07 -- --profile=release --preflight-only` — correctly blocked/nonzero.
 - Credential-free `candidate:verify -- --release-evidence evidence/design/phase-07.json` — correctly blocked/nonzero.

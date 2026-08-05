@@ -125,4 +125,37 @@ describe("07-01 trusted immediate-or-refused admission", () => {
     expect(report).toMatchObject({ outcome: "insufficient_sample", count: 2, rejectionRate: 0.5, acceptedWithoutReadyCount: 0, durableBacklogCount: 0 });
     await expect(runAdmissionAttempt({ now: () => 100, attempt: async () => ({ outcome: "accepted", readyLeaseCount: 0, durableBacklogCount: 0 }) })).rejects.toThrow("ADMISSION_READY_LEASE_REQUIRED");
   });
+
+  test("coalesces concurrent and refused replays without a hold, queue, retry, or extra provider effect", async () => {
+    const { store, funding } = await fundedService();
+    let reserves = 0; let observes = 0; let releases = 0;
+    let unblock!: () => void;
+    const blocked = new Promise<void>((resolve) => { unblock = resolve; });
+    const capacity = {
+      reserveNow: async () => { reserves += 1; await blocked; return { status: "refused" as const }; },
+      observe: async () => { observes += 1; return { status: "unknown" as const }; },
+      release: async () => { releases += 1; },
+    };
+    const service = new FundedAdmissionService({ funding, store, capacity, now: () => Date.parse("2026-08-05T00:00:00.000Z") });
+    const command = { principal, idempotencyKey: "phase-07-concurrent", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "50", unit: "sat" as const } };
+    const first = service.admit(command);
+    await Bun.sleep(0);
+    const second = service.admit(command);
+    await Bun.sleep(0);
+    unblock();
+    const outcomes = await Promise.all([first, second]);
+    expect(outcomes[0]).toEqual(outcomes[1]);
+    expect(outcomes[0]).toMatchObject({ status: "refused" });
+    expect({ reserves, observes, releases }).toEqual({ reserves: 1, observes: 0, releases: 0 });
+    expect(store.activeHolds).toHaveLength(0);
+    expect(await service.admit(command)).toEqual(outcomes[0]);
+    expect({ reserves, observes, releases }).toEqual({ reserves: 1, observes: 0, releases: 0 });
+    await expect(service.admit({ ...command, payload: { requestedCap: "51", unit: "sat" } })).rejects.toThrow("IDEMPOTENCY_KEY_CONFLICT");
+
+    expect(summarizeAdmissionSamples([
+      { candidateId: "candidate-07", inputId: "backlog", outcome: "accepted", receiptMonotonicMs: 1, readyMonotonicMs: 2, readyLeaseCount: 1, durableBacklogCount: 1 },
+      { candidateId: "candidate-07", inputId: "partial", outcome: "accepted", receiptMonotonicMs: 1, readyMonotonicMs: null, readyLeaseCount: 0, durableBacklogCount: 0 },
+      { candidateId: "candidate-07", inputId: "good", outcome: "accepted", receiptMonotonicMs: 1, readyMonotonicMs: 3, readyLeaseCount: 1, durableBacklogCount: 0 },
+    ], { minimumSamples: 3 })).toMatchObject({ outcome: "failed", acceptedWithoutReadyCount: 1, durableBacklogCount: 1 });
+  });
 });

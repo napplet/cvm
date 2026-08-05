@@ -2,87 +2,3098 @@
   "schema": "phase-07-reference-set",
   "version": 2,
   "sourceRevision": "2521f6bac70013d011496215f38ae473ec184126",
-  "categoryMinimums": { "admission": 12, "resilience": 16, "security": 16, "publication": 10, "launch": 10 },
+  "categoryMinimums": {
+    "admission": 12,
+    "resilience": 16,
+    "security": 16,
+    "publication": 10,
+    "launch": 10
+  },
   "cases": [
-    { "id":"A01", "name":"receipt-to-ready pool hit", "category":"admission", "scenario":{"input":{"mode":"pool_hit","ordinal":1},"initialState":"funded","schedule":["correlate","lease","ready"]}, "expected":{"status":"passed","value":"admission:capacity_unavailable:reserve=1:backlog=0:scenario=f0fb115ded0d4724","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["SESS-02","OPS-01","OPS-02","OPS-03","OPS-04"], "decisions":["D-114","D-115","D-116","D-117","D-118","D-119","D-120","D-121","D-122","D-123","D-124","D-125","D-126","D-127","D-128","D-129"], "threats":["T-07-EVL-01","T-07-EVL-02","T-07-EVL-03","T-07-EVL-04","T-07-SC"], "apiRows":["ADM-01","ADM-02","ADM-03","ADM-04","MOD-01","MOD-02","MOD-03","MOD-04","FLY-01","FLY-02","FLY-03","FLY-04","TEL-01","TEL-02","TEL-03","TEL-04","TEL-05","CTX-01","CEP-01","CEP-02","PAY-01","PAY-02","PAY-03","MODEL-01","MODEL-02","MODEL-03","SQL-01","SQL-02","SQL-03","OBJ-01","OBJ-02","OBJ-03","RUN-01","RUN-02","HOST-01","HOST-02","SIGN-01","SIGN-02","SIGN-03","NAP-01","NAP-02","NAP-03","PUB-01","PUB-02","PUB-03","PUB-04","SC-01","SC-02","SC-03","CERT-01","CERT-02","CERT-03","CERT-04"], "uiRows":["empty","loading","error","populated","partial","overflow","zero_one_many","long_text"], "aiDimensions":["shell_authority","napplet_conformance","tool_use","ledger_integrity","admission_slo","continuity","original_operation","sealed_identity","telemetry_privacy","live_promotion"], "edge":"E-01" },
-    { "id":"A02", "name":"pool miss", "category":"admission", "scenario":{"input":{"mode":"pool_miss","ordinal":2},"initialState":"funded","schedule":["correlate","lease","ready"]}, "expected":{"status":"passed","value":"admission:capacity_unavailable:reserve=1:backlog=0:scenario=ae5605dc7e4b002a","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["SESS-02"],"decisions":["D-114"],"threats":["T-07-EVL-01"],"apiRows":["ADM-02"],"uiRows":["loading"],"aiDimensions":["admission_slo"],"edge":"E-02" },
-    { "id":"A03", "name":"cold start", "category":"admission", "scenario":{"input":{"mode":"cold","ordinal":3},"initialState":"funded","schedule":["correlate","lease","ready"]}, "expected":{"status":"passed","value":"admission:capacity_unavailable:reserve=1:backlog=0:scenario=1c0f2d0fd09ddee8","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["SESS-02"],"decisions":["D-116"],"threats":["T-07-EVL-01"],"apiRows":["MOD-01"],"uiRows":["loading"],"aiDimensions":["admission_slo"],"edge":"E-03" },
-    { "id":"A04", "name":"step load", "category":"admission", "scenario":{"input":{"mode":"step_load","ordinal":4},"initialState":"funded","schedule":["correlate","lease","ready"]}, "expected":{"status":"passed","value":"admission:capacity_unavailable:reserve=1:backlog=0:scenario=2d880aa707922944","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["SESS-02"],"decisions":["D-116"],"threats":["T-07-EVL-01"],"apiRows":["FLY-01"],"uiRows":["loading"],"aiDimensions":["admission_slo"],"edge":"E-04" },
-    { "id":"A05", "name":"contention", "category":"admission", "scenario":{"input":{"mode":"contention","ordinal":5},"initialState":"funded","schedule":["claim","replay"]}, "expected":{"status":"passed","value":"admission:capacity_unavailable:reserve=1:backlog=0:scenario=4185a351f0625e91","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["SESS-02"],"decisions":["D-115"],"threats":["T-07-EVL-02"],"apiRows":["SQL-01"],"uiRows":["loading"],"aiDimensions":["admission_slo"],"edge":"E-05" },
-    { "id":"A06", "name":"reclaim", "category":"admission", "scenario":{"input":{"mode":"reclaim","ordinal":6},"initialState":"funded","schedule":["claim","release"]}, "expected":{"status":"passed","value":"admission:capacity_unavailable:reserve=1:backlog=0:scenario=8892bd98fc514c6c","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["SESS-02"],"decisions":["D-115"],"threats":["T-07-EVL-02"],"apiRows":["ADM-02"],"uiRows":["loading"],"aiDimensions":["admission_slo"],"edge":"E-06" },
-    { "id":"A07", "name":"deadline refusal", "category":"admission", "scenario":{"input":{"mode":"deadline_refusal","ordinal":7},"initialState":"empty","schedule":["deadline","refuse"]}, "expected":{"status":"passed","value":"admission:capacity_unavailable:reserve=1:backlog=0:scenario=1432a8529b4b4d86","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["SESS-02"],"decisions":["D-115"],"threats":["T-07-EVL-02"],"apiRows":["ADM-03"],"uiRows":["error"],"aiDimensions":["admission_slo"],"edge":"E-07" },
-    { "id":"A08", "name":"refusal replay", "category":"admission", "scenario":{"input":{"mode":"refusal_replay","ordinal":8},"initialState":"empty","schedule":["refuse","replay"]}, "expected":{"status":"passed","value":"admission:capacity_unavailable:reserve=1:backlog=0:scenario=4a7cad3f78ca4e2d","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["SESS-02"],"decisions":["D-117"],"threats":["T-07-EVL-02"],"apiRows":["ADM-03"],"uiRows":["error"],"aiDimensions":["admission_slo"],"edge":"E-08" },
-    { "id":"A09", "name":"no durable queue", "category":"admission", "scenario":{"input":{"mode":"no_queue","ordinal":9},"initialState":"empty","schedule":["refuse"]}, "expected":{"status":"passed","value":"admission:capacity_unavailable:reserve=1:backlog=0:scenario=1bee9123054e5a00","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["SESS-02"],"decisions":["D-115"],"threats":["T-07-EVL-02"],"apiRows":["SQL-03"],"uiRows":["empty"],"aiDimensions":["admission_slo"],"edge":"E-09" },
-    { "id":"A10", "name":"exact lease mismatch", "category":"admission", "scenario":{"input":{"mode":"lease_mismatch","ordinal":10},"initialState":"funded","schedule":["lease","deny"]}, "expected":{"status":"passed","value":"admission:capacity_unavailable:reserve=1:backlog=0:scenario=a17e387510909a30","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["SESS-02"],"decisions":["D-114"],"threats":["T-07-EVL-01"],"apiRows":["ADM-02"],"uiRows":["error"],"aiDimensions":["admission_slo"],"edge":"E-10" },
-    { "id":"A11", "name":"safe retry hint", "category":"admission", "scenario":{"input":{"mode":"safe_refusal","ordinal":11},"initialState":"empty","schedule":["refuse"]}, "expected":{"status":"passed","value":"admission:capacity_unavailable:reserve=1:backlog=0:scenario=38b69f58ba1013ea","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["SESS-02"],"decisions":["D-117"],"threats":["T-07-EVL-03"],"apiRows":["CTX-01"],"uiRows":["error"],"aiDimensions":["admission_slo"],"edge":"E-11" },
-    { "id":"A12", "name":"receipt clock", "category":"admission", "scenario":{"input":{"mode":"receipt_clock","ordinal":12},"initialState":"funded","schedule":["correlate","ready"]}, "expected":{"status":"passed","value":"admission:capacity_unavailable:reserve=1:backlog=0:scenario=ac3f46e2f94122ad","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["SESS-02"],"decisions":["D-114"],"threats":["T-07-EVL-01"],"apiRows":["ADM-01"],"uiRows":["loading"],"aiDimensions":["admission_slo"],"edge":"E-12" },
-    { "id":"R01", "name":"duplicate relay", "category":"resilience", "scenario":{"input":{"mode":"duplicate_relay","ordinal":13},"initialState":"verified","schedule":["deliver","replay"]}, "expected":{"status":"passed","value":"resilience:duplicate:boundary=1:writers=1:scenario=224098534fa74f3a","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-02"],"decisions":["D-122"],"threats":["T-07-EVL-02"],"apiRows":["CTX-01"],"uiRows":["partial"],"aiDimensions":["original_operation"],"edge":"E-13" },
-    { "id":"R02", "name":"out of order relay", "category":"resilience", "scenario":{"input":{"mode":"out_of_order","ordinal":14},"initialState":"verified","schedule":["deliver","observe"]}, "expected":{"status":"passed","value":"resilience:out_of_order:boundary=1:writers=1:scenario=3d54a8e09779a3da","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-02"],"decisions":["D-122"],"threats":["T-07-EVL-02"],"apiRows":["CTX-01"],"uiRows":["partial"],"aiDimensions":["original_operation"],"edge":"E-14" },
-    { "id":"R03", "name":"ingress loss", "category":"resilience", "scenario":{"input":{"mode":"ingress_loss","ordinal":15},"initialState":"verified","schedule":["interrupt","observe"]}, "expected":{"status":"passed","value":"resilience:unavailable:boundary=1:writers=1:scenario=28e4a5b2b95a06ca","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-02"],"decisions":["D-123"],"threats":["T-07-EVL-02"],"apiRows":["RUN-01"],"uiRows":["partial"],"aiDimensions":["original_operation"],"edge":"E-15" },
-    { "id":"R04", "name":"sql serialization", "category":"resilience", "scenario":{"input":{"mode":"sql_serialization","ordinal":16},"initialState":"verified","schedule":["claim","observe"]}, "expected":{"status":"passed","value":"resilience:serialization_failure:boundary=1:writers=1:scenario=6f3bd561d349a421","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-02"],"decisions":["D-122"],"threats":["T-07-EVL-02"],"apiRows":["SQL-01"],"uiRows":["partial"],"aiDimensions":["original_operation"],"edge":"E-16" },
-    { "id":"R05", "name":"sql unavailable", "category":"resilience", "scenario":{"input":{"mode":"sql_unavailable","ordinal":17},"initialState":"verified","schedule":["interrupt","observe"]}, "expected":{"status":"passed","value":"resilience:unavailable:boundary=1:writers=1:scenario=17c174723d489d38","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-02"],"decisions":["D-122"],"threats":["T-07-EVL-02"],"apiRows":["SQL-02"],"uiRows":["partial"],"aiDimensions":["original_operation"],"edge":"E-17" },
-    { "id":"R06", "name":"capacity ambiguity", "category":"resilience", "scenario":{"input":{"mode":"capacity_ambiguity","ordinal":18},"initialState":"funded","schedule":["claim","observe"]}, "expected":{"status":"passed","value":"resilience:lost_response:boundary=1:writers=1:scenario=29a860af5cd1ee32","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-02"],"decisions":["D-124"],"threats":["T-07-EVL-02"],"apiRows":["ADM-02"],"uiRows":["partial"],"aiDimensions":["original_operation"],"edge":"E-18" },
-    { "id":"R07", "name":"worker loss", "category":"resilience", "scenario":{"input":{"mode":"worker_loss","ordinal":19},"initialState":"paused","schedule":["interrupt","checkpoint"]}, "expected":{"status":"passed","value":"resilience:worker_lost:boundary=1:writers=1:scenario=e2985089381ed6eb","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-03"],"decisions":["D-125"],"threats":["T-07-EVL-02"],"apiRows":["MOD-02"],"uiRows":["partial"],"aiDimensions":["continuity"],"edge":"E-19" },
-    { "id":"R08", "name":"object interruption", "category":"resilience", "scenario":{"input":{"mode":"object_interruption","ordinal":20},"initialState":"paused","schedule":["checkpoint","interrupt"]}, "expected":{"status":"passed","value":"resilience:interrupted:boundary=1:writers=1:scenario=fc80f0b4f7aef2ba","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-03"],"decisions":["D-125"],"threats":["T-07-EVL-02"],"apiRows":["OBJ-01"],"uiRows":["partial"],"aiDimensions":["continuity"],"edge":"E-20" },
-    { "id":"R09", "name":"model ambiguity", "category":"resilience", "scenario":{"input":{"mode":"model_ambiguity","ordinal":21},"initialState":"verified","schedule":["dispatch","lookup"]}, "expected":{"status":"passed","value":"resilience:unresolved:boundary=1:writers=1:scenario=0217af1114d4cba5","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-02"],"decisions":["D-124"],"threats":["T-07-EVL-02"],"apiRows":["MODEL-02"],"uiRows":["partial"],"aiDimensions":["ledger_integrity"],"edge":"E-21" },
-    { "id":"R10", "name":"payment reconcile", "category":"resilience", "scenario":{"input":{"mode":"payment_reconcile","ordinal":22},"initialState":"funded","schedule":["notify","lookup"]}, "expected":{"status":"passed","value":"resilience:duplicate:boundary=1:writers=1:scenario=c7a085847084f1d7","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-02"],"decisions":["D-124"],"threats":["T-07-EVL-02"],"apiRows":["PAY-01"],"uiRows":["partial"],"aiDimensions":["ledger_integrity"],"edge":"E-22" },
-    { "id":"R11", "name":"restore expiry race", "category":"resilience", "scenario":{"input":{"mode":"expiry_race","ordinal":23},"initialState":"paused","schedule":["restore","deny"]}, "expected":{"status":"passed","value":"resilience:expired:boundary=1:writers=1:scenario=02d748f7c72fd4e6","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-03"],"decisions":["D-125"],"threats":["T-07-EVL-02"],"apiRows":["OBJ-02"],"uiRows":["error"],"aiDimensions":["continuity"],"edge":"E-23" },
-    { "id":"R12", "name":"preview invalidation", "category":"resilience", "scenario":{"input":{"mode":"preview_invalid","ordinal":24},"initialState":"verified","schedule":["invalidate","observe"]}, "expected":{"status":"passed","value":"resilience:invalidated:boundary=1:writers=1:scenario=6ed4acab18128ef0","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-02"],"decisions":["D-122"],"threats":["T-07-EVL-02"],"apiRows":["HOST-02"],"uiRows":["error"],"aiDimensions":["sealed_identity"],"edge":"E-24" },
-    { "id":"R13", "name":"partial publication", "category":"resilience", "scenario":{"input":{"mode":"partial_publication","ordinal":25},"initialState":"verified","schedule":["publish","observe"]}, "expected":{"status":"passed","value":"resilience:partial:boundary=1:writers=1:scenario=a7c6a56876d121e6","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-02"],"decisions":["D-124"],"threats":["T-07-EVL-02"],"apiRows":["PUB-04"],"uiRows":["partial"],"aiDimensions":["original_operation"],"edge":"E-25" },
-    { "id":"R14", "name":"checkpoint fence", "category":"resilience", "scenario":{"input":{"mode":"checkpoint_fence","ordinal":26},"initialState":"paused","schedule":["restore","fence"]}, "expected":{"status":"passed","value":"resilience:duplicate:boundary=1:writers=1:scenario=67edc601fc6ad0a6","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-03"],"decisions":["D-125"],"threats":["T-07-EVL-02"],"apiRows":["OBJ-01"],"uiRows":["partial"],"aiDimensions":["continuity"],"edge":"E-26" },
-    { "id":"R15", "name":"unknown remains visible", "category":"resilience", "scenario":{"input":{"mode":"unknown","ordinal":27},"initialState":"verified","schedule":["observe"]}, "expected":{"status":"passed","value":"resilience:out_of_order:boundary=1:writers=1:scenario=33df1efe00102496","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-02"],"decisions":["D-124"],"threats":["T-07-EVL-02"],"apiRows":["CERT-01"],"uiRows":["partial"],"aiDimensions":["original_operation"],"edge":"E-27" },
-    { "id":"R16", "name":"one writer fence", "category":"resilience", "scenario":{"input":{"mode":"single_writer","ordinal":28},"initialState":"verified","schedule":["claim","observe"]}, "expected":{"status":"passed","value":"resilience:unavailable:boundary=1:writers=1:scenario=a9a4a5dd57bac7cc","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-02"],"decisions":["D-124"],"threats":["T-07-EVL-02"],"apiRows":["SQL-01"],"uiRows":["partial"],"aiDimensions":["original_operation"],"edge":"E-28" },
-    { "id":"S01", "name":"encoded prompt injection", "category":"security", "scenario":{"input":{"mode":"encoded_prompt","ordinal":29},"initialState":"empty","schedule":["validate","deny"]}, "expected":{"status":"passed","value":"security:blocked:exports=1:violations=0:scenario=8c4df70bfdde8ec0","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-119"],"threats":["T-07-EVL-01"],"apiRows":["TEL-01"],"uiRows":["error"],"aiDimensions":["shell_authority"],"edge":"E-29" },
-    { "id":"S02", "name":"tool output injection", "category":"security", "scenario":{"input":{"mode":"tool_injection","ordinal":30},"initialState":"empty","schedule":["validate","deny"]}, "expected":{"status":"passed","value":"security:blocked:exports=1:violations=0:scenario=a25b0837522a76a4","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-119"],"threats":["T-07-EVL-01"],"apiRows":["MODEL-01"],"uiRows":["error"],"aiDimensions":["tool_use"],"edge":"E-30" },
-    { "id":"S03", "name":"malformed proposal", "category":"security", "scenario":{"input":{"mode":"malformed_proposal","ordinal":31},"initialState":"empty","schedule":["validate","deny"]}, "expected":{"status":"passed","value":"security:blocked:exports=1:violations=0:scenario=d8889d8e7cfd8741","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-119"],"threats":["T-07-EVL-01"],"apiRows":["MODEL-01"],"uiRows":["error"],"aiDimensions":["tool_use"],"edge":"E-31" },
-    { "id":"S04", "name":"grant overwrite", "category":"security", "scenario":{"input":{"mode":"grant_overwrite","ordinal":32},"initialState":"verified","schedule":["validate","deny"]}, "expected":{"status":"passed","value":"security:blocked:exports=1:violations=0:scenario=0e6952c844ef9212","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-119"],"threats":["T-07-EVL-01"],"apiRows":["MODEL-01"],"uiRows":["error"],"aiDimensions":["tool_use"],"edge":"E-32" },
-    { "id":"S05", "name":"traversal", "category":"security", "scenario":{"input":{"mode":"traversal","ordinal":33},"initialState":"verified","schedule":["validate","deny"]}, "expected":{"status":"passed","value":"security:blocked:exports=1:violations=0:scenario=8ab35ce471f51e8d","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-127"],"threats":["T-07-EVL-01"],"apiRows":["MOD-02"],"uiRows":["error"],"aiDimensions":["shell_authority"],"edge":"E-33" },
-    { "id":"S06", "name":"symlink", "category":"security", "scenario":{"input":{"mode":"symlink","ordinal":34},"initialState":"verified","schedule":["validate","deny"]}, "expected":{"status":"passed","value":"security:blocked:exports=1:violations=0:scenario=f1c53da059dba2e1","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-127"],"threats":["T-07-EVL-01"],"apiRows":["MOD-02"],"uiRows":["error"],"aiDimensions":["shell_authority"],"edge":"E-34" },
-    { "id":"S07", "name":"cross session", "category":"security", "scenario":{"input":{"mode":"cross_session","ordinal":35},"initialState":"verified","schedule":["validate","deny"]}, "expected":{"status":"passed","value":"security:blocked:exports=1:violations=0:scenario=bf356e1d38be6eac","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-127"],"threats":["T-07-EVL-01"],"apiRows":["MOD-02"],"uiRows":["error"],"aiDimensions":["shell_authority"],"edge":"E-35" },
-    { "id":"S08", "name":"direct fetch", "category":"security", "scenario":{"input":{"mode":"direct_fetch","ordinal":36},"initialState":"verified","schedule":["validate","deny"]}, "expected":{"status":"passed","value":"security:blocked:exports=1:violations=0:scenario=7a94c00ecae024c8","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-127"],"threats":["T-07-EVL-01"],"apiRows":["NAP-02"],"uiRows":["error"],"aiDimensions":["shell_authority"],"edge":"E-36" },
-    { "id":"S09", "name":"storage escape", "category":"security", "scenario":{"input":{"mode":"storage_escape","ordinal":37},"initialState":"verified","schedule":["validate","deny"]}, "expected":{"status":"passed","value":"security:blocked:exports=1:violations=0:scenario=573294139abbf3b3","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-127"],"threats":["T-07-EVL-01"],"apiRows":["NAP-02"],"uiRows":["error"],"aiDimensions":["shell_authority"],"edge":"E-37" },
-    { "id":"S10", "name":"iframe spoof", "category":"security", "scenario":{"input":{"mode":"iframe_spoof","ordinal":38},"initialState":"verified","schedule":["validate","deny"]}, "expected":{"status":"passed","value":"security:blocked:exports=1:violations=0:scenario=64fd9a4701c99f48","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-128"],"threats":["T-07-EVL-04"],"apiRows":["HOST-02"],"uiRows":["error"],"aiDimensions":["shell_authority"],"edge":"E-38" },
-    { "id":"S11", "name":"dependency postinstall", "category":"security", "scenario":{"input":{"mode":"postinstall","ordinal":39},"initialState":"verified","schedule":["validate","deny"]}, "expected":{"status":"passed","value":"security:blocked:exports=1:violations=0:scenario=7af94c7d7f15036c","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-127"],"threats":["T-07-SC"],"apiRows":["SC-01"],"uiRows":["error"],"aiDimensions":["live_promotion"],"edge":"E-39" },
-    { "id":"S12", "name":"environment probe", "category":"security", "scenario":{"input":{"mode":"environment_probe","ordinal":40},"initialState":"verified","schedule":["validate","deny"]}, "expected":{"status":"passed","value":"security:blocked:exports=1:violations=0:scenario=a903ab6269af9459","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-119"],"threats":["T-07-EVL-03"],"apiRows":["TEL-04"],"uiRows":["error"],"aiDimensions":["telemetry_privacy"],"edge":"E-40" },
-    { "id":"S13", "name":"dns exfiltration", "category":"security", "scenario":{"input":{"mode":"dns_exfil","ordinal":41},"initialState":"verified","schedule":["validate","deny"]}, "expected":{"status":"passed","value":"security:blocked:exports=1:violations=0:scenario=6a0cccb7d8b8abc1","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-127"],"threats":["T-07-EVL-01"],"apiRows":["MOD-04"],"uiRows":["error"],"aiDimensions":["shell_authority"],"edge":"E-41" },
-    { "id":"S14", "name":"websocket exfiltration", "category":"security", "scenario":{"input":{"mode":"websocket_exfil","ordinal":42},"initialState":"verified","schedule":["validate","deny"]}, "expected":{"status":"passed","value":"security:blocked:exports=1:violations=0:scenario=9897c5de3788b22d","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-127"],"threats":["T-07-EVL-01"],"apiRows":["MOD-04"],"uiRows":["error"],"aiDimensions":["shell_authority"],"edge":"E-42" },
-    { "id":"S15", "name":"resource exhaustion", "category":"security", "scenario":{"input":{"mode":"resource_exhaustion","ordinal":43},"initialState":"verified","schedule":["validate","deny"]}, "expected":{"status":"passed","value":"security:blocked:exports=1:violations=0:scenario=5b3b970ced118aa8","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-127"],"threats":["T-07-EVL-01"],"apiRows":["MOD-01"],"uiRows":["error"],"aiDimensions":["shell_authority"],"edge":"E-43" },
-    { "id":"S16", "name":"manifest mutation", "category":"security", "scenario":{"input":{"mode":"manifest_mutation","ordinal":44},"initialState":"verified","schedule":["validate","deny"]}, "expected":{"status":"passed","value":"security:blocked:exports=1:violations=0:scenario=a73259438fee9d72","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-126"],"threats":["T-07-SC"],"apiRows":["NAP-02"],"uiRows":["error"],"aiDimensions":["sealed_identity"],"edge":"E-44" },
-    { "id":"P01", "name":"focused success", "category":"publication", "scenario":{"input":{"mode":"focused_success","ordinal":45},"initialState":"verified","schedule":["verify","preview"]}, "expected":{"status":"passed","value":"publication:verified:identifiers=10:actions=1:scenario=f5e9aa2bc5b19ee8","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-128"],"threats":["T-07-EVL-04"],"apiRows":["HOST-01"],"uiRows":["populated"],"aiDimensions":["napplet_conformance"],"edge":"E-45" },
-    { "id":"P02", "name":"scope denial", "category":"publication", "scenario":{"input":{"mode":"scope_denial","ordinal":46},"initialState":"verified","schedule":["verify","deny"]}, "expected":{"status":"passed","value":"publication:blocked:identifiers=10:actions=1:scenario=88e75695dc11d1c7","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-126"],"threats":["T-07-EVL-04"],"apiRows":["NAP-02"],"uiRows":["error"],"aiDimensions":["napplet_conformance"],"edge":"E-46" },
-    { "id":"P03", "name":"verify failure", "category":"publication", "scenario":{"input":{"mode":"verify_failure","ordinal":47},"initialState":"verified","schedule":["verify","deny"]}, "expected":{"status":"passed","value":"publication:blocked:identifiers=10:actions=1:scenario=fdb615c6577b9ce8","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-126"],"threats":["T-07-EVL-04"],"apiRows":["NAP-01"],"uiRows":["error"],"aiDimensions":["napplet_conformance"],"edge":"E-47" },
-    { "id":"P04", "name":"required capability", "category":"publication", "scenario":{"input":{"mode":"required_capability","ordinal":48},"initialState":"verified","schedule":["review","deny"]}, "expected":{"status":"passed","value":"publication:blocked:identifiers=10:actions=1:scenario=e242d3841b8ed640","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-128"],"threats":["T-07-EVL-04"],"apiRows":["HOST-02"],"uiRows":["error"],"aiDimensions":["sealed_identity"],"edge":"E-48" },
-    { "id":"P05", "name":"optional capability", "category":"publication", "scenario":{"input":{"mode":"optional_capability","ordinal":49},"initialState":"verified","schedule":["review"]}, "expected":{"status":"passed","value":"publication:warning:identifiers=10:actions=0:scenario=1c8e4a15760cc1a5","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-128"],"threats":["T-07-EVL-04"],"apiRows":["HOST-02"],"uiRows":["populated"],"aiDimensions":["sealed_identity"],"edge":"E-49" },
-    { "id":"P06", "name":"byte binding", "category":"publication", "scenario":{"input":{"mode":"byte_binding","ordinal":50},"initialState":"verified","schedule":["verify","publish"]}, "expected":{"status":"passed","value":"publication:blocked:identifiers=10:actions=1:scenario=28fbffbd8c7e1cb9","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-126"],"threats":["T-07-EVL-04"],"apiRows":["PUB-01"],"uiRows":["populated"],"aiDimensions":["sealed_identity"],"edge":"E-50" },
-    { "id":"P07", "name":"stale approval", "category":"publication", "scenario":{"input":{"mode":"stale_approval","ordinal":51},"initialState":"verified","schedule":["review","deny"]}, "expected":{"status":"passed","value":"publication:blocked:identifiers=10:actions=1:scenario=2d09e3baee42d3cd","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-126"],"threats":["T-07-EVL-04"],"apiRows":["SIGN-01"],"uiRows":["error"],"aiDimensions":["sealed_identity"],"edge":"E-51" },
-    { "id":"P08", "name":"external signer", "category":"publication", "scenario":{"input":{"mode":"external_signer","ordinal":52},"initialState":"verified","schedule":["sign","observe"]}, "expected":{"status":"passed","value":"publication:blocked:identifiers=10:actions=1:scenario=b72eee855cb3a35a","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-128"],"threats":["T-07-EVL-04"],"apiRows":["SIGN-02"],"uiRows":["populated"],"aiDimensions":["sealed_identity"],"edge":"E-52" },
-    { "id":"P09", "name":"publication replay", "category":"publication", "scenario":{"input":{"mode":"publication_replay","ordinal":53},"initialState":"verified","schedule":["publish","replay"]}, "expected":{"status":"passed","value":"publication:blocked:identifiers=10:actions=1:scenario=f30284f71a92558d","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-02"],"decisions":["D-124"],"threats":["T-07-EVL-04"],"apiRows":["PUB-02"],"uiRows":["partial"],"aiDimensions":["original_operation"],"edge":"E-53" },
-    { "id":"P10", "name":"attestation reconciliation", "category":"publication", "scenario":{"input":{"mode":"attestation_reconcile","ordinal":54},"initialState":"verified","schedule":["publish","observe"]}, "expected":{"status":"passed","value":"publication:blocked:identifiers=10:actions=1:scenario=0c05d90b02751922","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-02"],"decisions":["D-124"],"threats":["T-07-EVL-04"],"apiRows":["PUB-03"],"uiRows":["partial"],"aiDimensions":["original_operation"],"edge":"E-54" },
-    { "id":"L01", "name":"telemetry canary", "category":"launch", "scenario":{"input":{"mode":"telemetry_canary","ordinal":55},"initialState":"verified","schedule":["redact","export"]}, "expected":{"status":"passed","value":"launch:blocked:PROTECTED_INFRASTRUCTURE_UNAVAILABLE:effects=0:scenario=81b892aa0bf70d02","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-01"],"decisions":["D-118"],"threats":["T-07-EVL-03"],"apiRows":["TEL-01"],"uiRows":["loading"],"aiDimensions":["telemetry_privacy"],"edge":"E-55" },
-    { "id":"L02", "name":"unknown telemetry attr", "category":"launch", "scenario":{"input":{"mode":"unknown_attribute","ordinal":56},"initialState":"verified","schedule":["redact","deny"]}, "expected":{"status":"passed","value":"launch:blocked:PROTECTED_INFRASTRUCTURE_UNAVAILABLE:effects=0:scenario=3257f912be8631ad","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-01"],"decisions":["D-119"],"threats":["T-07-EVL-03"],"apiRows":["TEL-05"],"uiRows":["error"],"aiDimensions":["telemetry_privacy"],"edge":"E-56" },
-    { "id":"L03", "name":"cardinality bomb", "category":"launch", "scenario":{"input":{"mode":"cardinality_bomb","ordinal":57},"initialState":"verified","schedule":["redact","deny"]}, "expected":{"status":"passed","value":"launch:blocked:PROTECTED_INFRASTRUCTURE_UNAVAILABLE:effects=0:scenario=416b6d4b2f7d3b35","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-01"],"decisions":["D-119"],"threats":["T-07-EVL-03"],"apiRows":["TEL-03"],"uiRows":["error"],"aiDimensions":["telemetry_privacy"],"edge":"E-57" },
-    { "id":"L04", "name":"immutable mutation", "category":"launch", "scenario":{"input":{"mode":"evidence_mutation","ordinal":58},"initialState":"verified","schedule":["verify","deny"]}, "expected":{"status":"passed","value":"launch:blocked:PROTECTED_INFRASTRUCTURE_UNAVAILABLE:effects=0:scenario=6807316137650330","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-121"],"threats":["T-07-SC"],"apiRows":["CERT-01"],"uiRows":["error"],"aiDimensions":["live_promotion"],"edge":"E-58" },
-    { "id":"L05", "name":"reproducibility", "category":"launch", "scenario":{"input":{"mode":"reproducibility","ordinal":59},"initialState":"verified","schedule":["build","compare"]}, "expected":{"status":"passed","value":"launch:blocked:PROTECTED_INFRASTRUCTURE_UNAVAILABLE:effects=0:scenario=e2060867b2722263","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-127"],"threats":["T-07-SC"],"apiRows":["SC-02"],"uiRows":["populated"],"aiDimensions":["live_promotion"],"edge":"E-59" },
-    { "id":"L06", "name":"golden and sbom", "category":"launch", "scenario":{"input":{"mode":"golden_sbom","ordinal":60},"initialState":"verified","schedule":["verify","deny"]}, "expected":{"status":"passed","value":"launch:blocked:PROTECTED_INFRASTRUCTURE_UNAVAILABLE:effects=0:scenario=28e4a4e0a12bdc36","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-127"],"threats":["T-07-SC"],"apiRows":["SC-01"],"uiRows":["error"],"aiDimensions":["live_promotion"],"edge":"E-60" },
-    { "id":"L07", "name":"rollback waiver", "category":"launch", "scenario":{"input":{"mode":"rollback_waiver","ordinal":61},"initialState":"verified","schedule":["verify","deny"]}, "expected":{"status":"passed","value":"launch:blocked:PROTECTED_INFRASTRUCTURE_UNAVAILABLE:effects=0:scenario=4032de99314c86b3","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-129"],"threats":["T-07-SC"],"apiRows":["CERT-03"],"uiRows":["error"],"aiDimensions":["live_promotion"],"edge":"E-61" },
-    { "id":"L08", "name":"missing credential", "category":"launch", "scenario":{"input":{"mode":"missing_credential","ordinal":62},"initialState":"empty","schedule":["observe","block"]}, "expected":{"status":"passed","value":"launch:blocked:PROTECTED_INFRASTRUCTURE_UNAVAILABLE:effects=0:scenario=1e522d0500630324","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-128"],"threats":["T-07-EVL-04"],"apiRows":["CERT-02"],"uiRows":["error"],"aiDimensions":["live_promotion"],"edge":"E-62" },
-    { "id":"L09", "name":"not observed is nonpass", "category":"launch", "scenario":{"input":{"mode":"not_observed","ordinal":63},"initialState":"empty","schedule":["observe","block"]}, "expected":{"status":"passed","value":"launch:blocked:PROTECTED_INFRASTRUCTURE_UNAVAILABLE:effects=0:scenario=f6931aff8f3f82a0","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-121"],"threats":["T-07-EVL-04"],"apiRows":["CERT-04"],"uiRows":["error"],"aiDimensions":["live_promotion"],"edge":"E-63" },
-    { "id":"L10", "name":"promotion blocked", "category":"launch", "scenario":{"input":{"mode":"promotion_blocked","ordinal":64},"initialState":"empty","schedule":["verify","block"]}, "expected":{"status":"passed","value":"launch:blocked:PROTECTED_INFRASTRUCTURE_UNAVAILABLE:effects=0:scenario=1e619e9a25269492","effects":{"credit":0,"debit":0,"worker":0,"publication":0}}, "requirements":["OPS-04"],"decisions":["D-126"],"threats":["T-07-EVL-04"],"apiRows":["CERT-02"],"uiRows":["error"],"aiDimensions":["live_promotion"],"edge":"E-64" }
+    {
+      "id": "A01",
+      "name": "receipt-to-ready pool hit",
+      "category": "admission",
+      "scenario": {
+        "input": {
+          "mode": "pool_hit",
+          "ordinal": 1
+        },
+        "initialState": "funded",
+        "schedule": [
+          "correlate",
+          "lease",
+          "ready"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "admission:accepted:reserve=1:lease=1:backlog=0",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "SESS-02",
+        "OPS-01",
+        "OPS-02",
+        "OPS-03",
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-114",
+        "D-115",
+        "D-116",
+        "D-117",
+        "D-118",
+        "D-119",
+        "D-120",
+        "D-121",
+        "D-122",
+        "D-123",
+        "D-124",
+        "D-125",
+        "D-126",
+        "D-127",
+        "D-128",
+        "D-129"
+      ],
+      "threats": [
+        "T-07-EVL-01",
+        "T-07-EVL-02",
+        "T-07-EVL-03",
+        "T-07-EVL-04",
+        "T-07-SC"
+      ],
+      "apiRows": [
+        "ADM-01",
+        "ADM-02",
+        "ADM-03",
+        "ADM-04",
+        "MOD-01",
+        "MOD-02",
+        "MOD-03",
+        "MOD-04",
+        "FLY-01",
+        "FLY-02",
+        "FLY-03",
+        "FLY-04",
+        "TEL-01",
+        "TEL-02",
+        "TEL-03",
+        "TEL-04",
+        "TEL-05",
+        "CTX-01",
+        "CEP-01",
+        "CEP-02",
+        "PAY-01",
+        "PAY-02",
+        "PAY-03",
+        "MODEL-01",
+        "MODEL-02",
+        "MODEL-03",
+        "SQL-01",
+        "SQL-02",
+        "SQL-03",
+        "OBJ-01",
+        "OBJ-02",
+        "OBJ-03",
+        "RUN-01",
+        "RUN-02",
+        "HOST-01",
+        "HOST-02",
+        "SIGN-01",
+        "SIGN-02",
+        "SIGN-03",
+        "NAP-01",
+        "NAP-02",
+        "NAP-03",
+        "PUB-01",
+        "PUB-02",
+        "PUB-03",
+        "PUB-04",
+        "SC-01",
+        "SC-02",
+        "SC-03",
+        "CERT-01",
+        "CERT-02",
+        "CERT-03",
+        "CERT-04"
+      ],
+      "uiRows": [
+        "empty",
+        "loading",
+        "error",
+        "populated",
+        "partial",
+        "overflow",
+        "zero_one_many",
+        "long_text"
+      ],
+      "aiDimensions": [
+        "shell_authority",
+        "napplet_conformance",
+        "tool_use",
+        "ledger_integrity",
+        "admission_slo",
+        "continuity",
+        "original_operation",
+        "sealed_identity",
+        "telemetry_privacy",
+        "live_promotion"
+      ],
+      "edge": "E-01"
+    },
+    {
+      "id": "A02",
+      "name": "pool miss",
+      "category": "admission",
+      "scenario": {
+        "input": {
+          "mode": "pool_miss",
+          "ordinal": 2
+        },
+        "initialState": "funded",
+        "schedule": [
+          "correlate",
+          "lease",
+          "ready"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "admission:accepted:reserve=2:lease=1:backlog=0",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "SESS-02"
+      ],
+      "decisions": [
+        "D-114"
+      ],
+      "threats": [
+        "T-07-EVL-01"
+      ],
+      "apiRows": [
+        "ADM-02"
+      ],
+      "uiRows": [
+        "loading"
+      ],
+      "aiDimensions": [
+        "admission_slo"
+      ],
+      "edge": "E-02"
+    },
+    {
+      "id": "A03",
+      "name": "cold start",
+      "category": "admission",
+      "scenario": {
+        "input": {
+          "mode": "cold",
+          "ordinal": 3
+        },
+        "initialState": "funded",
+        "schedule": [
+          "correlate",
+          "lease",
+          "ready"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "admission:accepted:reserve=3:lease=1:backlog=0",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "SESS-02"
+      ],
+      "decisions": [
+        "D-116"
+      ],
+      "threats": [
+        "T-07-EVL-01"
+      ],
+      "apiRows": [
+        "MOD-01"
+      ],
+      "uiRows": [
+        "loading"
+      ],
+      "aiDimensions": [
+        "admission_slo"
+      ],
+      "edge": "E-03"
+    },
+    {
+      "id": "A04",
+      "name": "step load",
+      "category": "admission",
+      "scenario": {
+        "input": {
+          "mode": "step_load",
+          "ordinal": 4
+        },
+        "initialState": "funded",
+        "schedule": [
+          "correlate",
+          "lease",
+          "ready"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "admission:accepted:reserve=4:lease=1:backlog=0",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "SESS-02"
+      ],
+      "decisions": [
+        "D-116"
+      ],
+      "threats": [
+        "T-07-EVL-01"
+      ],
+      "apiRows": [
+        "FLY-01"
+      ],
+      "uiRows": [
+        "loading"
+      ],
+      "aiDimensions": [
+        "admission_slo"
+      ],
+      "edge": "E-04"
+    },
+    {
+      "id": "A05",
+      "name": "contention",
+      "category": "admission",
+      "scenario": {
+        "input": {
+          "mode": "contention",
+          "ordinal": 5
+        },
+        "initialState": "funded",
+        "schedule": [
+          "claim",
+          "replay"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "admission:capacity_unavailable:reserve=2:lease=0:backlog=1",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "SESS-02"
+      ],
+      "decisions": [
+        "D-115"
+      ],
+      "threats": [
+        "T-07-EVL-02"
+      ],
+      "apiRows": [
+        "SQL-01"
+      ],
+      "uiRows": [
+        "loading"
+      ],
+      "aiDimensions": [
+        "admission_slo"
+      ],
+      "edge": "E-05"
+    },
+    {
+      "id": "A06",
+      "name": "reclaim",
+      "category": "admission",
+      "scenario": {
+        "input": {
+          "mode": "reclaim",
+          "ordinal": 6
+        },
+        "initialState": "funded",
+        "schedule": [
+          "claim",
+          "release"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "admission:capacity_unavailable:reserve=1:lease=0:backlog=0",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "SESS-02"
+      ],
+      "decisions": [
+        "D-115"
+      ],
+      "threats": [
+        "T-07-EVL-02"
+      ],
+      "apiRows": [
+        "ADM-02"
+      ],
+      "uiRows": [
+        "loading"
+      ],
+      "aiDimensions": [
+        "admission_slo"
+      ],
+      "edge": "E-06"
+    },
+    {
+      "id": "A07",
+      "name": "deadline refusal",
+      "category": "admission",
+      "scenario": {
+        "input": {
+          "mode": "deadline_refusal",
+          "ordinal": 7
+        },
+        "initialState": "empty",
+        "schedule": [
+          "deadline",
+          "refuse"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "admission:capacity_unavailable:reserve=0:lease=0:backlog=0",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "SESS-02"
+      ],
+      "decisions": [
+        "D-115"
+      ],
+      "threats": [
+        "T-07-EVL-02"
+      ],
+      "apiRows": [
+        "ADM-03"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "admission_slo"
+      ],
+      "edge": "E-07"
+    },
+    {
+      "id": "A08",
+      "name": "refusal replay",
+      "category": "admission",
+      "scenario": {
+        "input": {
+          "mode": "refusal_replay",
+          "ordinal": 8
+        },
+        "initialState": "empty",
+        "schedule": [
+          "refuse",
+          "replay"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "admission:capacity_unavailable:reserve=0:lease=0:backlog=0",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "SESS-02"
+      ],
+      "decisions": [
+        "D-117"
+      ],
+      "threats": [
+        "T-07-EVL-02"
+      ],
+      "apiRows": [
+        "ADM-03"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "admission_slo"
+      ],
+      "edge": "E-08"
+    },
+    {
+      "id": "A09",
+      "name": "no durable queue",
+      "category": "admission",
+      "scenario": {
+        "input": {
+          "mode": "no_queue",
+          "ordinal": 9
+        },
+        "initialState": "empty",
+        "schedule": [
+          "refuse"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "admission:capacity_unavailable:reserve=0:lease=0:backlog=0",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "SESS-02"
+      ],
+      "decisions": [
+        "D-115"
+      ],
+      "threats": [
+        "T-07-EVL-02"
+      ],
+      "apiRows": [
+        "SQL-03"
+      ],
+      "uiRows": [
+        "empty"
+      ],
+      "aiDimensions": [
+        "admission_slo"
+      ],
+      "edge": "E-09"
+    },
+    {
+      "id": "A10",
+      "name": "exact lease mismatch",
+      "category": "admission",
+      "scenario": {
+        "input": {
+          "mode": "lease_mismatch",
+          "ordinal": 10
+        },
+        "initialState": "funded",
+        "schedule": [
+          "lease",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "admission:capacity_unavailable:reserve=1:lease=0:backlog=0",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "SESS-02"
+      ],
+      "decisions": [
+        "D-114"
+      ],
+      "threats": [
+        "T-07-EVL-01"
+      ],
+      "apiRows": [
+        "ADM-02"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "admission_slo"
+      ],
+      "edge": "E-10"
+    },
+    {
+      "id": "A11",
+      "name": "safe retry hint",
+      "category": "admission",
+      "scenario": {
+        "input": {
+          "mode": "safe_refusal",
+          "ordinal": 11
+        },
+        "initialState": "empty",
+        "schedule": [
+          "refuse"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "admission:capacity_unavailable:reserve=0:lease=0:backlog=0",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "SESS-02"
+      ],
+      "decisions": [
+        "D-117"
+      ],
+      "threats": [
+        "T-07-EVL-03"
+      ],
+      "apiRows": [
+        "CTX-01"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "admission_slo"
+      ],
+      "edge": "E-11"
+    },
+    {
+      "id": "A12",
+      "name": "receipt clock",
+      "category": "admission",
+      "scenario": {
+        "input": {
+          "mode": "receipt_clock",
+          "ordinal": 12
+        },
+        "initialState": "funded",
+        "schedule": [
+          "correlate",
+          "ready"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "admission:accepted:reserve=1:lease=1:backlog=0",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "SESS-02"
+      ],
+      "decisions": [
+        "D-114"
+      ],
+      "threats": [
+        "T-07-EVL-01"
+      ],
+      "apiRows": [
+        "ADM-01"
+      ],
+      "uiRows": [
+        "loading"
+      ],
+      "aiDimensions": [
+        "admission_slo"
+      ],
+      "edge": "E-12"
+    },
+    {
+      "id": "R01",
+      "name": "duplicate relay",
+      "category": "resilience",
+      "scenario": {
+        "input": {
+          "mode": "duplicate_relay",
+          "ordinal": 13
+        },
+        "initialState": "verified",
+        "schedule": [
+          "deliver",
+          "replay"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "resilience:duplicate:boundary=1:writers=1:restore=none",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-02"
+      ],
+      "decisions": [
+        "D-122"
+      ],
+      "threats": [
+        "T-07-EVL-02"
+      ],
+      "apiRows": [
+        "CTX-01"
+      ],
+      "uiRows": [
+        "partial"
+      ],
+      "aiDimensions": [
+        "original_operation"
+      ],
+      "edge": "E-13"
+    },
+    {
+      "id": "R02",
+      "name": "out of order relay",
+      "category": "resilience",
+      "scenario": {
+        "input": {
+          "mode": "out_of_order",
+          "ordinal": 14
+        },
+        "initialState": "verified",
+        "schedule": [
+          "deliver",
+          "observe"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "resilience:out_of_order:boundary=1:writers=1:restore=none",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-02"
+      ],
+      "decisions": [
+        "D-122"
+      ],
+      "threats": [
+        "T-07-EVL-02"
+      ],
+      "apiRows": [
+        "CTX-01"
+      ],
+      "uiRows": [
+        "partial"
+      ],
+      "aiDimensions": [
+        "original_operation"
+      ],
+      "edge": "E-14"
+    },
+    {
+      "id": "R03",
+      "name": "ingress loss",
+      "category": "resilience",
+      "scenario": {
+        "input": {
+          "mode": "ingress_loss",
+          "ordinal": 15
+        },
+        "initialState": "verified",
+        "schedule": [
+          "interrupt",
+          "observe"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "resilience:unavailable:boundary=1:writers=1:restore=none",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-02"
+      ],
+      "decisions": [
+        "D-123"
+      ],
+      "threats": [
+        "T-07-EVL-02"
+      ],
+      "apiRows": [
+        "RUN-01"
+      ],
+      "uiRows": [
+        "partial"
+      ],
+      "aiDimensions": [
+        "original_operation"
+      ],
+      "edge": "E-15"
+    },
+    {
+      "id": "R04",
+      "name": "sql serialization",
+      "category": "resilience",
+      "scenario": {
+        "input": {
+          "mode": "sql_serialization",
+          "ordinal": 16
+        },
+        "initialState": "verified",
+        "schedule": [
+          "claim",
+          "observe"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "resilience:serialization_failure:boundary=1:writers=1:restore=none",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-02"
+      ],
+      "decisions": [
+        "D-122"
+      ],
+      "threats": [
+        "T-07-EVL-02"
+      ],
+      "apiRows": [
+        "SQL-01"
+      ],
+      "uiRows": [
+        "partial"
+      ],
+      "aiDimensions": [
+        "original_operation"
+      ],
+      "edge": "E-16"
+    },
+    {
+      "id": "R05",
+      "name": "sql unavailable",
+      "category": "resilience",
+      "scenario": {
+        "input": {
+          "mode": "sql_unavailable",
+          "ordinal": 17
+        },
+        "initialState": "verified",
+        "schedule": [
+          "interrupt",
+          "observe"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "resilience:unavailable:boundary=1:writers=1:restore=none",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-02"
+      ],
+      "decisions": [
+        "D-122"
+      ],
+      "threats": [
+        "T-07-EVL-02"
+      ],
+      "apiRows": [
+        "SQL-02"
+      ],
+      "uiRows": [
+        "partial"
+      ],
+      "aiDimensions": [
+        "original_operation"
+      ],
+      "edge": "E-17"
+    },
+    {
+      "id": "R06",
+      "name": "capacity ambiguity",
+      "category": "resilience",
+      "scenario": {
+        "input": {
+          "mode": "capacity_ambiguity",
+          "ordinal": 18
+        },
+        "initialState": "funded",
+        "schedule": [
+          "claim",
+          "observe"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "resilience:lost_response:boundary=1:writers=1:restore=none",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-02"
+      ],
+      "decisions": [
+        "D-124"
+      ],
+      "threats": [
+        "T-07-EVL-02"
+      ],
+      "apiRows": [
+        "ADM-02"
+      ],
+      "uiRows": [
+        "partial"
+      ],
+      "aiDimensions": [
+        "original_operation"
+      ],
+      "edge": "E-18"
+    },
+    {
+      "id": "R07",
+      "name": "worker loss",
+      "category": "resilience",
+      "scenario": {
+        "input": {
+          "mode": "worker_loss",
+          "ordinal": 19
+        },
+        "initialState": "paused",
+        "schedule": [
+          "interrupt",
+          "checkpoint"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "resilience:worker_lost:boundary=1:writers=1:restore=none",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-03"
+      ],
+      "decisions": [
+        "D-125"
+      ],
+      "threats": [
+        "T-07-EVL-02"
+      ],
+      "apiRows": [
+        "MOD-02"
+      ],
+      "uiRows": [
+        "partial"
+      ],
+      "aiDimensions": [
+        "continuity"
+      ],
+      "edge": "E-19"
+    },
+    {
+      "id": "R08",
+      "name": "object interruption",
+      "category": "resilience",
+      "scenario": {
+        "input": {
+          "mode": "object_interruption",
+          "ordinal": 20
+        },
+        "initialState": "paused",
+        "schedule": [
+          "checkpoint",
+          "interrupt"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "resilience:interrupted:boundary=1:writers=1:restore=none",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-03"
+      ],
+      "decisions": [
+        "D-125"
+      ],
+      "threats": [
+        "T-07-EVL-02"
+      ],
+      "apiRows": [
+        "OBJ-01"
+      ],
+      "uiRows": [
+        "partial"
+      ],
+      "aiDimensions": [
+        "continuity"
+      ],
+      "edge": "E-20"
+    },
+    {
+      "id": "R09",
+      "name": "model ambiguity",
+      "category": "resilience",
+      "scenario": {
+        "input": {
+          "mode": "model_ambiguity",
+          "ordinal": 21
+        },
+        "initialState": "verified",
+        "schedule": [
+          "dispatch",
+          "lookup"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "resilience:unresolved:boundary=1:writers=1:restore=none",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-02"
+      ],
+      "decisions": [
+        "D-124"
+      ],
+      "threats": [
+        "T-07-EVL-02"
+      ],
+      "apiRows": [
+        "MODEL-02"
+      ],
+      "uiRows": [
+        "partial"
+      ],
+      "aiDimensions": [
+        "ledger_integrity"
+      ],
+      "edge": "E-21"
+    },
+    {
+      "id": "R10",
+      "name": "payment reconcile",
+      "category": "resilience",
+      "scenario": {
+        "input": {
+          "mode": "payment_reconcile",
+          "ordinal": 22
+        },
+        "initialState": "funded",
+        "schedule": [
+          "notify",
+          "lookup"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "resilience:duplicate:boundary=1:writers=1:restore=none",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-02"
+      ],
+      "decisions": [
+        "D-124"
+      ],
+      "threats": [
+        "T-07-EVL-02"
+      ],
+      "apiRows": [
+        "PAY-01"
+      ],
+      "uiRows": [
+        "partial"
+      ],
+      "aiDimensions": [
+        "ledger_integrity"
+      ],
+      "edge": "E-22"
+    },
+    {
+      "id": "R11",
+      "name": "restore expiry race",
+      "category": "resilience",
+      "scenario": {
+        "input": {
+          "mode": "expiry_race",
+          "ordinal": 23
+        },
+        "initialState": "paused",
+        "schedule": [
+          "restore",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "resilience:expired:boundary=1:writers=1:restore=restored:RESTORE_REATTACHED:reattach=1",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-03"
+      ],
+      "decisions": [
+        "D-125"
+      ],
+      "threats": [
+        "T-07-EVL-02"
+      ],
+      "apiRows": [
+        "OBJ-02"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "continuity"
+      ],
+      "edge": "E-23"
+    },
+    {
+      "id": "R12",
+      "name": "preview invalidation",
+      "category": "resilience",
+      "scenario": {
+        "input": {
+          "mode": "preview_invalid",
+          "ordinal": 24
+        },
+        "initialState": "verified",
+        "schedule": [
+          "invalidate",
+          "observe"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "resilience:invalidated:boundary=1:writers=1:restore=none",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-02"
+      ],
+      "decisions": [
+        "D-122"
+      ],
+      "threats": [
+        "T-07-EVL-02"
+      ],
+      "apiRows": [
+        "HOST-02"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "sealed_identity"
+      ],
+      "edge": "E-24"
+    },
+    {
+      "id": "R13",
+      "name": "partial publication",
+      "category": "resilience",
+      "scenario": {
+        "input": {
+          "mode": "partial_publication",
+          "ordinal": 25
+        },
+        "initialState": "verified",
+        "schedule": [
+          "publish",
+          "observe"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "resilience:partial:boundary=1:writers=1:restore=none",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-02"
+      ],
+      "decisions": [
+        "D-124"
+      ],
+      "threats": [
+        "T-07-EVL-02"
+      ],
+      "apiRows": [
+        "PUB-04"
+      ],
+      "uiRows": [
+        "partial"
+      ],
+      "aiDimensions": [
+        "original_operation"
+      ],
+      "edge": "E-25"
+    },
+    {
+      "id": "R14",
+      "name": "checkpoint fence",
+      "category": "resilience",
+      "scenario": {
+        "input": {
+          "mode": "checkpoint_fence",
+          "ordinal": 26
+        },
+        "initialState": "paused",
+        "schedule": [
+          "restore",
+          "fence"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "resilience:duplicate:boundary=1:writers=1:restore=replayed:RESTORE_REPLAYED:reattach=0",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-03"
+      ],
+      "decisions": [
+        "D-125"
+      ],
+      "threats": [
+        "T-07-EVL-02"
+      ],
+      "apiRows": [
+        "OBJ-01"
+      ],
+      "uiRows": [
+        "partial"
+      ],
+      "aiDimensions": [
+        "continuity"
+      ],
+      "edge": "E-26"
+    },
+    {
+      "id": "R15",
+      "name": "unknown remains visible",
+      "category": "resilience",
+      "scenario": {
+        "input": {
+          "mode": "unknown",
+          "ordinal": 27
+        },
+        "initialState": "verified",
+        "schedule": [
+          "observe"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "resilience:out_of_order:boundary=1:writers=1:restore=none",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-02"
+      ],
+      "decisions": [
+        "D-124"
+      ],
+      "threats": [
+        "T-07-EVL-02"
+      ],
+      "apiRows": [
+        "CERT-01"
+      ],
+      "uiRows": [
+        "partial"
+      ],
+      "aiDimensions": [
+        "original_operation"
+      ],
+      "edge": "E-27"
+    },
+    {
+      "id": "R16",
+      "name": "one writer fence",
+      "category": "resilience",
+      "scenario": {
+        "input": {
+          "mode": "single_writer",
+          "ordinal": 28
+        },
+        "initialState": "verified",
+        "schedule": [
+          "claim",
+          "observe"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "resilience:unavailable:boundary=1:writers=1:restore=none",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-02"
+      ],
+      "decisions": [
+        "D-124"
+      ],
+      "threats": [
+        "T-07-EVL-02"
+      ],
+      "apiRows": [
+        "SQL-01"
+      ],
+      "uiRows": [
+        "partial"
+      ],
+      "aiDimensions": [
+        "original_operation"
+      ],
+      "edge": "E-28"
+    },
+    {
+      "id": "S01",
+      "name": "encoded prompt injection",
+      "category": "security",
+      "scenario": {
+        "input": {
+          "mode": "encoded_prompt",
+          "ordinal": 29
+        },
+        "initialState": "empty",
+        "schedule": [
+          "validate",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "security:validation:blocked:exports=1:violations=0:series=1",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-119"
+      ],
+      "threats": [
+        "T-07-EVL-01"
+      ],
+      "apiRows": [
+        "TEL-01"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "shell_authority"
+      ],
+      "edge": "E-29"
+    },
+    {
+      "id": "S02",
+      "name": "tool output injection",
+      "category": "security",
+      "scenario": {
+        "input": {
+          "mode": "tool_injection",
+          "ordinal": 30
+        },
+        "initialState": "empty",
+        "schedule": [
+          "validate",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "security:validation:blocked:exports=1:violations=1:series=1",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-119"
+      ],
+      "threats": [
+        "T-07-EVL-01"
+      ],
+      "apiRows": [
+        "MODEL-01"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "tool_use"
+      ],
+      "edge": "E-30"
+    },
+    {
+      "id": "S03",
+      "name": "malformed proposal",
+      "category": "security",
+      "scenario": {
+        "input": {
+          "mode": "malformed_proposal",
+          "ordinal": 31
+        },
+        "initialState": "empty",
+        "schedule": [
+          "validate",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "security:validation:blocked:exports=1:violations=2:series=1",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-119"
+      ],
+      "threats": [
+        "T-07-EVL-01"
+      ],
+      "apiRows": [
+        "MODEL-01"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "tool_use"
+      ],
+      "edge": "E-31"
+    },
+    {
+      "id": "S04",
+      "name": "grant overwrite",
+      "category": "security",
+      "scenario": {
+        "input": {
+          "mode": "grant_overwrite",
+          "ordinal": 32
+        },
+        "initialState": "verified",
+        "schedule": [
+          "validate",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "authority:failed:scenario=unsupported",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-119"
+      ],
+      "threats": [
+        "T-07-EVL-01"
+      ],
+      "apiRows": [
+        "MODEL-01"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "tool_use"
+      ],
+      "edge": "E-32"
+    },
+    {
+      "id": "S05",
+      "name": "traversal",
+      "category": "security",
+      "scenario": {
+        "input": {
+          "mode": "traversal",
+          "ordinal": 33
+        },
+        "initialState": "verified",
+        "schedule": [
+          "validate",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "authority:failed:scenario=unsupported",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-127"
+      ],
+      "threats": [
+        "T-07-EVL-01"
+      ],
+      "apiRows": [
+        "MOD-02"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "shell_authority"
+      ],
+      "edge": "E-33"
+    },
+    {
+      "id": "S06",
+      "name": "symlink",
+      "category": "security",
+      "scenario": {
+        "input": {
+          "mode": "symlink",
+          "ordinal": 34
+        },
+        "initialState": "verified",
+        "schedule": [
+          "validate",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "authority:failed:scenario=unsupported",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-127"
+      ],
+      "threats": [
+        "T-07-EVL-01"
+      ],
+      "apiRows": [
+        "MOD-02"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "shell_authority"
+      ],
+      "edge": "E-34"
+    },
+    {
+      "id": "S07",
+      "name": "cross session",
+      "category": "security",
+      "scenario": {
+        "input": {
+          "mode": "cross_session",
+          "ordinal": 35
+        },
+        "initialState": "verified",
+        "schedule": [
+          "validate",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "authority:failed:scenario=unsupported",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-127"
+      ],
+      "threats": [
+        "T-07-EVL-01"
+      ],
+      "apiRows": [
+        "MOD-02"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "shell_authority"
+      ],
+      "edge": "E-35"
+    },
+    {
+      "id": "S08",
+      "name": "direct fetch",
+      "category": "security",
+      "scenario": {
+        "input": {
+          "mode": "direct_fetch",
+          "ordinal": 36
+        },
+        "initialState": "verified",
+        "schedule": [
+          "validate",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "authority:failed:scenario=unsupported",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-127"
+      ],
+      "threats": [
+        "T-07-EVL-01"
+      ],
+      "apiRows": [
+        "NAP-02"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "shell_authority"
+      ],
+      "edge": "E-36"
+    },
+    {
+      "id": "S09",
+      "name": "storage escape",
+      "category": "security",
+      "scenario": {
+        "input": {
+          "mode": "storage_escape",
+          "ordinal": 37
+        },
+        "initialState": "verified",
+        "schedule": [
+          "validate",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "authority:failed:scenario=unsupported",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-127"
+      ],
+      "threats": [
+        "T-07-EVL-01"
+      ],
+      "apiRows": [
+        "NAP-02"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "shell_authority"
+      ],
+      "edge": "E-37"
+    },
+    {
+      "id": "S10",
+      "name": "iframe spoof",
+      "category": "security",
+      "scenario": {
+        "input": {
+          "mode": "iframe_spoof",
+          "ordinal": 38
+        },
+        "initialState": "verified",
+        "schedule": [
+          "validate",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "authority:failed:scenario=unsupported",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-128"
+      ],
+      "threats": [
+        "T-07-EVL-04"
+      ],
+      "apiRows": [
+        "HOST-02"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "shell_authority"
+      ],
+      "edge": "E-38"
+    },
+    {
+      "id": "S11",
+      "name": "dependency postinstall",
+      "category": "security",
+      "scenario": {
+        "input": {
+          "mode": "postinstall",
+          "ordinal": 39
+        },
+        "initialState": "verified",
+        "schedule": [
+          "validate",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "authority:failed:scenario=unsupported",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-127"
+      ],
+      "threats": [
+        "T-07-SC"
+      ],
+      "apiRows": [
+        "SC-01"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "live_promotion"
+      ],
+      "edge": "E-39"
+    },
+    {
+      "id": "S12",
+      "name": "environment probe",
+      "category": "security",
+      "scenario": {
+        "input": {
+          "mode": "environment_probe",
+          "ordinal": 40
+        },
+        "initialState": "verified",
+        "schedule": [
+          "validate",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "authority:failed:scenario=unsupported",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-119"
+      ],
+      "threats": [
+        "T-07-EVL-03"
+      ],
+      "apiRows": [
+        "TEL-04"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "telemetry_privacy"
+      ],
+      "edge": "E-40"
+    },
+    {
+      "id": "S13",
+      "name": "dns exfiltration",
+      "category": "security",
+      "scenario": {
+        "input": {
+          "mode": "dns_exfil",
+          "ordinal": 41
+        },
+        "initialState": "verified",
+        "schedule": [
+          "validate",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "authority:failed:scenario=unsupported",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-127"
+      ],
+      "threats": [
+        "T-07-EVL-01"
+      ],
+      "apiRows": [
+        "MOD-04"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "shell_authority"
+      ],
+      "edge": "E-41"
+    },
+    {
+      "id": "S14",
+      "name": "websocket exfiltration",
+      "category": "security",
+      "scenario": {
+        "input": {
+          "mode": "websocket_exfil",
+          "ordinal": 42
+        },
+        "initialState": "verified",
+        "schedule": [
+          "validate",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "authority:failed:scenario=unsupported",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-127"
+      ],
+      "threats": [
+        "T-07-EVL-01"
+      ],
+      "apiRows": [
+        "MOD-04"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "shell_authority"
+      ],
+      "edge": "E-42"
+    },
+    {
+      "id": "S15",
+      "name": "resource exhaustion",
+      "category": "security",
+      "scenario": {
+        "input": {
+          "mode": "resource_exhaustion",
+          "ordinal": 43
+        },
+        "initialState": "verified",
+        "schedule": [
+          "validate",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "authority:failed:scenario=unsupported",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-127"
+      ],
+      "threats": [
+        "T-07-EVL-01"
+      ],
+      "apiRows": [
+        "MOD-01"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "shell_authority"
+      ],
+      "edge": "E-43"
+    },
+    {
+      "id": "S16",
+      "name": "manifest mutation",
+      "category": "security",
+      "scenario": {
+        "input": {
+          "mode": "manifest_mutation",
+          "ordinal": 44
+        },
+        "initialState": "verified",
+        "schedule": [
+          "validate",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "authority:failed:scenario=unsupported",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-126"
+      ],
+      "threats": [
+        "T-07-SC"
+      ],
+      "apiRows": [
+        "NAP-02"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "sealed_identity"
+      ],
+      "edge": "E-44"
+    },
+    {
+      "id": "P01",
+      "name": "focused success",
+      "category": "publication",
+      "scenario": {
+        "input": {
+          "mode": "focused_success",
+          "ordinal": 45
+        },
+        "initialState": "verified",
+        "schedule": [
+          "verify",
+          "preview"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "publication:preview_ready:verified:identifiers=10:actions=1:effects=0:primary=review_capabilities",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-128"
+      ],
+      "threats": [
+        "T-07-EVL-04"
+      ],
+      "apiRows": [
+        "HOST-01"
+      ],
+      "uiRows": [
+        "populated"
+      ],
+      "aiDimensions": [
+        "napplet_conformance"
+      ],
+      "edge": "E-45"
+    },
+    {
+      "id": "P02",
+      "name": "scope denial",
+      "category": "publication",
+      "scenario": {
+        "input": {
+          "mode": "scope_denial",
+          "ordinal": 46
+        },
+        "initialState": "verified",
+        "schedule": [
+          "verify",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "publication:launch_certification_blocked:blocked:identifiers=10:actions=1:effects=0:primary=view_release_evidence",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-126"
+      ],
+      "threats": [
+        "T-07-EVL-04"
+      ],
+      "apiRows": [
+        "NAP-02"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "napplet_conformance"
+      ],
+      "edge": "E-46"
+    },
+    {
+      "id": "P03",
+      "name": "verify failure",
+      "category": "publication",
+      "scenario": {
+        "input": {
+          "mode": "verify_failure",
+          "ordinal": 47
+        },
+        "initialState": "verified",
+        "schedule": [
+          "verify",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "publication:launch_certification_blocked:blocked:identifiers=10:actions=1:effects=0:primary=view_release_evidence",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-126"
+      ],
+      "threats": [
+        "T-07-EVL-04"
+      ],
+      "apiRows": [
+        "NAP-01"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "napplet_conformance"
+      ],
+      "edge": "E-47"
+    },
+    {
+      "id": "P04",
+      "name": "required capability",
+      "category": "publication",
+      "scenario": {
+        "input": {
+          "mode": "required_capability",
+          "ordinal": 48
+        },
+        "initialState": "verified",
+        "schedule": [
+          "review",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "publication:launch_certification_blocked:blocked:identifiers=10:actions=1:effects=0:primary=view_release_evidence",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-128"
+      ],
+      "threats": [
+        "T-07-EVL-04"
+      ],
+      "apiRows": [
+        "HOST-02"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "sealed_identity"
+      ],
+      "edge": "E-48"
+    },
+    {
+      "id": "P05",
+      "name": "optional capability",
+      "category": "publication",
+      "scenario": {
+        "input": {
+          "mode": "optional_capability",
+          "ordinal": 49
+        },
+        "initialState": "verified",
+        "schedule": [
+          "review"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "publication:optional_capability_missing:warning:identifiers=10:actions=0:effects=0:primary=none",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-128"
+      ],
+      "threats": [
+        "T-07-EVL-04"
+      ],
+      "apiRows": [
+        "HOST-02"
+      ],
+      "uiRows": [
+        "populated"
+      ],
+      "aiDimensions": [
+        "sealed_identity"
+      ],
+      "edge": "E-49"
+    },
+    {
+      "id": "P06",
+      "name": "byte binding",
+      "category": "publication",
+      "scenario": {
+        "input": {
+          "mode": "byte_binding",
+          "ordinal": 50
+        },
+        "initialState": "verified",
+        "schedule": [
+          "verify",
+          "publish"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "publication:launch_certification_blocked:blocked:identifiers=10:actions=1:effects=1:primary=view_release_evidence",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-126"
+      ],
+      "threats": [
+        "T-07-EVL-04"
+      ],
+      "apiRows": [
+        "PUB-01"
+      ],
+      "uiRows": [
+        "populated"
+      ],
+      "aiDimensions": [
+        "sealed_identity"
+      ],
+      "edge": "E-50"
+    },
+    {
+      "id": "P07",
+      "name": "stale approval",
+      "category": "publication",
+      "scenario": {
+        "input": {
+          "mode": "stale_approval",
+          "ordinal": 51
+        },
+        "initialState": "verified",
+        "schedule": [
+          "review",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "publication:launch_certification_blocked:blocked:identifiers=10:actions=1:effects=0:primary=view_release_evidence",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-126"
+      ],
+      "threats": [
+        "T-07-EVL-04"
+      ],
+      "apiRows": [
+        "SIGN-01"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "sealed_identity"
+      ],
+      "edge": "E-51"
+    },
+    {
+      "id": "P08",
+      "name": "external signer",
+      "category": "publication",
+      "scenario": {
+        "input": {
+          "mode": "external_signer",
+          "ordinal": 52
+        },
+        "initialState": "verified",
+        "schedule": [
+          "sign",
+          "observe"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "publication:launch_certification_blocked:blocked:identifiers=10:actions=1:effects=0:primary=view_release_evidence",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-128"
+      ],
+      "threats": [
+        "T-07-EVL-04"
+      ],
+      "apiRows": [
+        "SIGN-02"
+      ],
+      "uiRows": [
+        "populated"
+      ],
+      "aiDimensions": [
+        "sealed_identity"
+      ],
+      "edge": "E-52"
+    },
+    {
+      "id": "P09",
+      "name": "publication replay",
+      "category": "publication",
+      "scenario": {
+        "input": {
+          "mode": "publication_replay",
+          "ordinal": 53
+        },
+        "initialState": "verified",
+        "schedule": [
+          "publish",
+          "replay"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "publication:exact_replay:neutral:identifiers=10:actions=1:effects=1:primary=none",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-02"
+      ],
+      "decisions": [
+        "D-124"
+      ],
+      "threats": [
+        "T-07-EVL-04"
+      ],
+      "apiRows": [
+        "PUB-02"
+      ],
+      "uiRows": [
+        "partial"
+      ],
+      "aiDimensions": [
+        "original_operation"
+      ],
+      "edge": "E-53"
+    },
+    {
+      "id": "P10",
+      "name": "attestation reconciliation",
+      "category": "publication",
+      "scenario": {
+        "input": {
+          "mode": "attestation_reconcile",
+          "ordinal": 54
+        },
+        "initialState": "verified",
+        "schedule": [
+          "publish",
+          "observe"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "publication:reconciliation_pending:neutral:identifiers=10:actions=1:effects=1:primary=reconcile_publication",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-02"
+      ],
+      "decisions": [
+        "D-124"
+      ],
+      "threats": [
+        "T-07-EVL-04"
+      ],
+      "apiRows": [
+        "PUB-03"
+      ],
+      "uiRows": [
+        "partial"
+      ],
+      "aiDimensions": [
+        "original_operation"
+      ],
+      "edge": "E-54"
+    },
+    {
+      "id": "L01",
+      "name": "telemetry canary",
+      "category": "launch",
+      "scenario": {
+        "input": {
+          "mode": "telemetry_canary",
+          "ordinal": 55
+        },
+        "initialState": "verified",
+        "schedule": [
+          "redact",
+          "export"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "launch:not_observed:PROTECTED_INFRASTRUCTURE_DRILL_REQUIRED:claim=required_claim_missing:promotion=blocked:effects=0",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-01"
+      ],
+      "decisions": [
+        "D-118"
+      ],
+      "threats": [
+        "T-07-EVL-03"
+      ],
+      "apiRows": [
+        "TEL-01"
+      ],
+      "uiRows": [
+        "loading"
+      ],
+      "aiDimensions": [
+        "telemetry_privacy"
+      ],
+      "edge": "E-55"
+    },
+    {
+      "id": "L02",
+      "name": "unknown telemetry attr",
+      "category": "launch",
+      "scenario": {
+        "input": {
+          "mode": "unknown_attribute",
+          "ordinal": 56
+        },
+        "initialState": "verified",
+        "schedule": [
+          "redact",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "launch:not_observed:PROTECTED_INFRASTRUCTURE_DRILL_REQUIRED:claim=required_claim_missing:promotion=blocked:effects=0",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-01"
+      ],
+      "decisions": [
+        "D-119"
+      ],
+      "threats": [
+        "T-07-EVL-03"
+      ],
+      "apiRows": [
+        "TEL-05"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "telemetry_privacy"
+      ],
+      "edge": "E-56"
+    },
+    {
+      "id": "L03",
+      "name": "cardinality bomb",
+      "category": "launch",
+      "scenario": {
+        "input": {
+          "mode": "cardinality_bomb",
+          "ordinal": 57
+        },
+        "initialState": "verified",
+        "schedule": [
+          "redact",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "launch:not_observed:PROTECTED_INFRASTRUCTURE_DRILL_REQUIRED:claim=required_claim_missing:promotion=blocked:effects=0",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-01"
+      ],
+      "decisions": [
+        "D-119"
+      ],
+      "threats": [
+        "T-07-EVL-03"
+      ],
+      "apiRows": [
+        "TEL-03"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "telemetry_privacy"
+      ],
+      "edge": "E-57"
+    },
+    {
+      "id": "L04",
+      "name": "immutable mutation",
+      "category": "launch",
+      "scenario": {
+        "input": {
+          "mode": "evidence_mutation",
+          "ordinal": 58
+        },
+        "initialState": "verified",
+        "schedule": [
+          "verify",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "launch:not_observed:PROTECTED_INFRASTRUCTURE_DRILL_REQUIRED:claim=required_claim_checked:promotion=blocked:effects=0",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-121"
+      ],
+      "threats": [
+        "T-07-SC"
+      ],
+      "apiRows": [
+        "CERT-01"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "live_promotion"
+      ],
+      "edge": "E-58"
+    },
+    {
+      "id": "L05",
+      "name": "reproducibility",
+      "category": "launch",
+      "scenario": {
+        "input": {
+          "mode": "reproducibility",
+          "ordinal": 59
+        },
+        "initialState": "verified",
+        "schedule": [
+          "build",
+          "compare"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "launch:not_observed:PROTECTED_INFRASTRUCTURE_DRILL_REQUIRED:claim=required_claim_missing:promotion=blocked:effects=0",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-127"
+      ],
+      "threats": [
+        "T-07-SC"
+      ],
+      "apiRows": [
+        "SC-02"
+      ],
+      "uiRows": [
+        "populated"
+      ],
+      "aiDimensions": [
+        "live_promotion"
+      ],
+      "edge": "E-59"
+    },
+    {
+      "id": "L06",
+      "name": "golden and sbom",
+      "category": "launch",
+      "scenario": {
+        "input": {
+          "mode": "golden_sbom",
+          "ordinal": 60
+        },
+        "initialState": "verified",
+        "schedule": [
+          "verify",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "launch:not_observed:PROTECTED_INFRASTRUCTURE_DRILL_REQUIRED:claim=required_claim_checked:promotion=blocked:effects=0",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-127"
+      ],
+      "threats": [
+        "T-07-SC"
+      ],
+      "apiRows": [
+        "SC-01"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "live_promotion"
+      ],
+      "edge": "E-60"
+    },
+    {
+      "id": "L07",
+      "name": "rollback waiver",
+      "category": "launch",
+      "scenario": {
+        "input": {
+          "mode": "rollback_waiver",
+          "ordinal": 61
+        },
+        "initialState": "verified",
+        "schedule": [
+          "verify",
+          "deny"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "launch:not_observed:PROTECTED_INFRASTRUCTURE_DRILL_REQUIRED:claim=required_claim_checked:promotion=blocked:effects=0",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-129"
+      ],
+      "threats": [
+        "T-07-SC"
+      ],
+      "apiRows": [
+        "CERT-03"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "live_promotion"
+      ],
+      "edge": "E-61"
+    },
+    {
+      "id": "L08",
+      "name": "missing credential",
+      "category": "launch",
+      "scenario": {
+        "input": {
+          "mode": "missing_credential",
+          "ordinal": 62
+        },
+        "initialState": "empty",
+        "schedule": [
+          "observe",
+          "block"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "launch:blocked:PROTECTED_INFRASTRUCTURE_UNAVAILABLE:claim=required_claim_missing:promotion=blocked:effects=0",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-128"
+      ],
+      "threats": [
+        "T-07-EVL-04"
+      ],
+      "apiRows": [
+        "CERT-02"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "live_promotion"
+      ],
+      "edge": "E-62"
+    },
+    {
+      "id": "L09",
+      "name": "not observed is nonpass",
+      "category": "launch",
+      "scenario": {
+        "input": {
+          "mode": "not_observed",
+          "ordinal": 63
+        },
+        "initialState": "empty",
+        "schedule": [
+          "observe",
+          "block"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "launch:blocked:PROTECTED_INFRASTRUCTURE_UNAVAILABLE:claim=required_claim_missing:promotion=blocked:effects=0",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-121"
+      ],
+      "threats": [
+        "T-07-EVL-04"
+      ],
+      "apiRows": [
+        "CERT-04"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "live_promotion"
+      ],
+      "edge": "E-63"
+    },
+    {
+      "id": "L10",
+      "name": "promotion blocked",
+      "category": "launch",
+      "scenario": {
+        "input": {
+          "mode": "promotion_blocked",
+          "ordinal": 64
+        },
+        "initialState": "empty",
+        "schedule": [
+          "verify",
+          "block"
+        ]
+      },
+      "expected": {
+        "status": "passed",
+        "value": "launch:blocked:PROTECTED_INFRASTRUCTURE_UNAVAILABLE:claim=required_claim_checked:promotion=blocked:effects=0",
+        "effects": {
+          "credit": 0,
+          "debit": 0,
+          "worker": 0,
+          "publication": 0
+        }
+      },
+      "requirements": [
+        "OPS-04"
+      ],
+      "decisions": [
+        "D-126"
+      ],
+      "threats": [
+        "T-07-EVL-04"
+      ],
+      "apiRows": [
+        "CERT-02"
+      ],
+      "uiRows": [
+        "error"
+      ],
+      "aiDimensions": [
+        "live_promotion"
+      ],
+      "edge": "E-64"
+    }
   ],
   "liveObservations": [
-    {"owner":"contextvm","status":"not_observed","claim":"signed_relay","inputDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","freshness":"protected_record_required","limitation":"protected_relay_required"},
-    {"owner":"cep8_lightning","status":"blocked","claim":"lightning_topup","inputDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","freshness":"protected_record_required","limitation":"credentials_unavailable"},
-    {"owner":"cashu","status":"blocked","claim":"cashu_topup","inputDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","freshness":"protected_record_required","limitation":"credentials_unavailable"},
-    {"owner":"model","status":"not_observed","claim":"receipt_reconcile","inputDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","freshness":"protected_record_required","limitation":"protected_model_required"},
-    {"owner":"modal","status":"not_observed","claim":"worker_slo","inputDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","freshness":"protected_record_required","limitation":"protected_provider_required"},
-    {"owner":"fly","status":"blocked","claim":"worker_slo","inputDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","freshness":"protected_record_required","limitation":"credentials_unavailable"},
-    {"owner":"object_storage","status":"not_observed","claim":"restore_drill","inputDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","freshness":"protected_record_required","limitation":"protected_topology_required"},
-    {"owner":"database","status":"not_observed","claim":"serializable_failover","inputDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","freshness":"protected_record_required","limitation":"protected_topology_required"},
-    {"owner":"control_plane","status":"not_observed","claim":"regional_ingress","inputDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","freshness":"protected_record_required","limitation":"protected_topology_required"},
-    {"owner":"compatible_host","status":"not_observed","claim":"browser_conformance","inputDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","freshness":"protected_record_required","limitation":"compatible_host_required"},
-    {"owner":"signer","status":"not_observed","claim":"owner_signature","inputDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","freshness":"protected_record_required","limitation":"signer_required"},
-    {"owner":"napplet_cli","status":"not_observed","claim":"promoted_cli","inputDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","freshness":"protected_record_required","limitation":"protected_cli_required"},
-    {"owner":"upload","status":"not_observed","claim":"sealed_upload","inputDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","freshness":"protected_record_required","limitation":"upload_required"},
-    {"owner":"relay","status":"not_observed","claim":"publication_relay","inputDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","freshness":"protected_record_required","limitation":"relay_required"}
+    {
+      "owner": "contextvm",
+      "status": "not_observed",
+      "claim": "signed_relay",
+      "inputDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "freshness": "protected_record_required",
+      "limitation": "protected_relay_required"
+    },
+    {
+      "owner": "cep8_lightning",
+      "status": "blocked",
+      "claim": "lightning_topup",
+      "inputDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "freshness": "protected_record_required",
+      "limitation": "credentials_unavailable"
+    },
+    {
+      "owner": "cashu",
+      "status": "blocked",
+      "claim": "cashu_topup",
+      "inputDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "freshness": "protected_record_required",
+      "limitation": "credentials_unavailable"
+    },
+    {
+      "owner": "model",
+      "status": "not_observed",
+      "claim": "receipt_reconcile",
+      "inputDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "freshness": "protected_record_required",
+      "limitation": "protected_model_required"
+    },
+    {
+      "owner": "modal",
+      "status": "not_observed",
+      "claim": "worker_slo",
+      "inputDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "freshness": "protected_record_required",
+      "limitation": "protected_provider_required"
+    },
+    {
+      "owner": "fly",
+      "status": "blocked",
+      "claim": "worker_slo",
+      "inputDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "freshness": "protected_record_required",
+      "limitation": "credentials_unavailable"
+    },
+    {
+      "owner": "object_storage",
+      "status": "not_observed",
+      "claim": "restore_drill",
+      "inputDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "freshness": "protected_record_required",
+      "limitation": "protected_topology_required"
+    },
+    {
+      "owner": "database",
+      "status": "not_observed",
+      "claim": "serializable_failover",
+      "inputDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "freshness": "protected_record_required",
+      "limitation": "protected_topology_required"
+    },
+    {
+      "owner": "control_plane",
+      "status": "not_observed",
+      "claim": "regional_ingress",
+      "inputDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "freshness": "protected_record_required",
+      "limitation": "protected_topology_required"
+    },
+    {
+      "owner": "compatible_host",
+      "status": "not_observed",
+      "claim": "browser_conformance",
+      "inputDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "freshness": "protected_record_required",
+      "limitation": "compatible_host_required"
+    },
+    {
+      "owner": "signer",
+      "status": "not_observed",
+      "claim": "owner_signature",
+      "inputDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "freshness": "protected_record_required",
+      "limitation": "signer_required"
+    },
+    {
+      "owner": "napplet_cli",
+      "status": "not_observed",
+      "claim": "promoted_cli",
+      "inputDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "freshness": "protected_record_required",
+      "limitation": "protected_cli_required"
+    },
+    {
+      "owner": "upload",
+      "status": "not_observed",
+      "claim": "sealed_upload",
+      "inputDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "freshness": "protected_record_required",
+      "limitation": "upload_required"
+    },
+    {
+      "owner": "relay",
+      "status": "not_observed",
+      "claim": "publication_relay",
+      "inputDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "freshness": "protected_record_required",
+      "limitation": "relay_required"
+    }
   ]
 }

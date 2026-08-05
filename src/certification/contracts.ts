@@ -39,6 +39,27 @@ export const ReleaseObservationBindingSchema = z.object({
 }).strict();
 
 export const CertificationClaimSchema = z.string().regex(/^[a-z][a-z0-9_.-]{2,127}$/u);
+export const ProtectedSuiteSchema = z.enum(["admission", "telemetry", "chaos", "restore", "security-host", "supply-chain", "contextvm-payment-model", "publication"]);
+export type ProtectedSuite = z.infer<typeof ProtectedSuiteSchema>;
+
+/** The only data an untrusted vendor adapter may return to the certification
+ * core.  It intentionally has no raw response, endpoint, path, or credential
+ * fields, so none of those can be persisted as evidence. */
+export const ProtectedSuiteResultSchema = z.object({
+  status: z.enum(["passed", "failed", "blocked", "not_observed"]),
+  claims: z.array(CertificationClaimSchema).max(32),
+  limitations: z.array(SafeIdSchema).max(32),
+  reasonCode: z.enum([
+    "OBSERVATION_COMPLETE", "CREDENTIALS_UNAVAILABLE", "TOPOLOGY_UNAVAILABLE", "PROVIDER_UNAVAILABLE",
+    "READINESS_FAILED", "ISOLATION_FAILED", "CLEANUP_FAILED", "SAMPLE_INSUFFICIENT", "SLO_NOT_MET",
+    "EVIDENCE_INVALID", "INPUT_UNAVAILABLE",
+  ]),
+}).strict().superRefine((value, context) => {
+  if (value.status === "passed" ? value.claims.length === 0 : value.claims.length !== 0) {
+    context.addIssue({ code: "custom", message: "only passed suite results may own claims" });
+  }
+});
+export type ProtectedSuiteResult = z.infer<typeof ProtectedSuiteResultSchema>;
 const ReasonCodeSchema = z.enum([
   "OBSERVATION_COMPLETE", "CREDENTIALS_UNAVAILABLE", "TOPOLOGY_UNAVAILABLE", "PROVIDER_UNAVAILABLE",
   "READINESS_FAILED", "ISOLATION_FAILED", "CLEANUP_FAILED", "SAMPLE_INSUFFICIENT", "SLO_NOT_MET",

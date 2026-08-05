@@ -12,7 +12,7 @@ export const verifiedPhase06SealedFiles = Object.freeze([
   Object.freeze({ path: "/index.html", mimeType: "text/html", sha256: "e1572f5549c18871efdf707d9d28292dae1b32b0b21f98c3def8ff045f540b85", size: 18 }),
 ]);
 
-export const verifiedPhase06Artifact = Object.freeze({
+const verifiedPhase06ArtifactValue: SealedArtifactIdentity = {
   accountId: "account:phase-06-owner",
   sessionId: "session:phase-06-preview",
   artifactId: "artifact:phase-06-verified",
@@ -34,7 +34,9 @@ export const verifiedPhase06Artifact = Object.freeze({
   policyIdentity: "policy:phase-06",
   toolchainIdentity: "toolchain:promoted",
   runtimeCompatibilityIdentity: "runtime:napplet-host-v1",
-}) satisfies SealedArtifactIdentity;
+};
+
+export const verifiedPhase06Artifact = Object.freeze(verifiedPhase06ArtifactValue);
 
 export class DeterministicSealedArtifactPort implements SealedArtifactPort {
   calls = 0;
@@ -64,13 +66,13 @@ export class DeterministicPreviewHostPort implements PreviewHostPort {
 
 export class DeterministicNappletDeploymentPort implements NappletDeploymentPort {
   calls = 0;
-  async deployExact() { this.calls += 1; return { state: "completed" as const, observationId: "deployment-observation" }; }
-  async publishOwnerManifest() { this.calls += 1; return { state: "completed" as const, observationId: "owner-observation" }; }
+  async deployExact({ operationId }: Parameters<NappletDeploymentPort["deployExact"]>[0]) { this.calls += 1; return { operationId, state: "completed" as const, observationId: "deployment-observation" }; }
+  async publishOwnerManifest({ operationId }: Parameters<NappletDeploymentPort["publishOwnerManifest"]>[0]) { this.calls += 1; return { operationId, state: "completed" as const, observationId: "owner-observation" }; }
 }
 
 export class DeterministicAttestationPort implements AttestationPort {
   calls = 0;
-  async publish() { this.calls += 1; return { state: "completed" as const, observationId: "attestation-observation" }; }
+  async publish({ operationId }: Parameters<AttestationPort["publish"]>[0]) { this.calls += 1; return { operationId, state: "completed" as const, observationId: "attestation-observation" }; }
 }
 
 export class DeterministicPromotedNappletCliSource implements PromotedNappletCliSourcePort {
@@ -94,9 +96,9 @@ export class DeterministicPromotedNappletCliSource implements PromotedNappletCli
     return { operationId: input.operationId, state: this.relayResult, relayObservation: this.relayResult === "complete" ? `relay:${input.operationId}` : undefined };
   }
 
-  networkDeploySucceeded(input: Parameters<PromotedNappletCliSourcePort["networkDeploySucceeded"]>[0]) {
+  networkDeploySucceeded() {
     this.networkSuccessCalls += 1;
-    return input.upload.state === "complete" && input.relay.state === "complete";
+    return true;
   }
 }
 

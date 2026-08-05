@@ -1,11 +1,12 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import fixture from "../fixtures/phase-06-cli-source-contract.json" with { type: "json" };
 import { PromotedNappletCliAdapter } from "../../src/publication/napplet-cli-adapter.js";
 import { probePromotedCliPreSignedRoute } from "../../src/publication/napplet-cli-source-contract.js";
 import { DeterministicPromotedNappletCliSource, signedPhase06EventFixture, verifiedPhase06Artifact } from "./fakes.js";
 
 const bytes = new TextEncoder().encode("sealed index bytes");
-const sha256 = async (value: Uint8Array) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", value)), (byte) => byte.toString(16).padStart(2, "0")).join("");
+const sha256 = async (value: Uint8Array) => createHash("sha256").update(value).digest("hex");
 
 test("deploys exact sealed bytes and the completed owner event through only the promoted structured source facade", async () => {
   const source = new DeterministicPromotedNappletCliSource();
@@ -36,7 +37,7 @@ test("fails closed before source calls for unavailable source, altered bytes, wr
     operationId: "deploy:intent:sealed", artifact: verifiedPhase06Artifact, target: { kind: 35129 as const, dTag: verifiedPhase06Artifact.normalizedDTag }, sealedFiles: [file], deployFiles: [file], ownerEvent: signedPhase06EventFixture, servers: ["https://blossom.example"], relays: ["wss://relay.example"], authorizeExactHashes: async (hashes: readonly string[]) => ({ hashes }),
   };
   await expect(new PromotedNappletCliAdapter({ contract: { status: "publication_unavailable", liveExecution: "not_observed", reasonCode: "SOURCE_SNAPSHOT_INVALID" }, source }).deployPreSignedNamed(input)).resolves.toMatchObject({ state: "publication_unavailable" });
-  await expect(new PromotedNappletCliAdapter({ contract: probePromotedCliPreSignedRoute(fixture), source }).deployPreSignedNamed({ ...input, target: { kind: 15129, dTag: "root" } })).rejects.toThrow("SEALED_NAMED_DEPLOY_INVALID");
+  await expect(new PromotedNappletCliAdapter({ contract: probePromotedCliPreSignedRoute(fixture), source }).deployPreSignedNamed({ ...input, target: { kind: 15129, dTag: "root" } as unknown as { kind: 35129; dTag: string } })).rejects.toThrow("SEALED_NAMED_DEPLOY_INVALID");
   expect(source.uploadCalls).toBe(0);
 });
 
@@ -84,7 +85,7 @@ test("locally fails closed when source callbacks claim success over partial or u
 
 test("converts incomplete source completion reports to unknown instead of publishing a completed result", async () => {
   const source = new DeterministicPromotedNappletCliSource();
-  source.uploadFilesToServers = async ({ operationId }) => ({ operationId, state: "complete" });
+  source.uploadFilesToServers = async ({ operationId }) => ({ operationId, state: "complete", fullServerUploadId: undefined });
   const file = { path: "/index.html", mimeType: "text/html", bytes, sha256: await sha256(bytes), size: bytes.byteLength };
   await expect(new PromotedNappletCliAdapter({ contract: probePromotedCliPreSignedRoute(fixture), source }).deployPreSignedNamed({
     operationId: "deploy:intent:missing-upload-evidence",

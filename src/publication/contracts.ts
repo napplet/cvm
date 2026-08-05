@@ -33,7 +33,7 @@ export const SealedArtifactIdentitySchema = z.object({
   verificationEvidenceSha256: sha256,
   sealedObjectGeneration: identifier,
   sealedObjectSha256: sha256,
-  sealedFiles: z.array(SealedDeployFileSchema).min(1).max(4_096),
+  sealedFiles: z.array(SealedDeployFileSchema).min(1).max(4_096).readonly(),
   entrypoint: z.string().startsWith("/"),
   normalizedDTag: z.string().min(1).max(128).regex(/^[a-z0-9][a-z0-9-]*$/),
   requiredCapabilities: z.array(identifier).max(64),

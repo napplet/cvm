@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 
-import { canonicalCapabilityReview } from "../../src/publication/capability-review.js";
 import { PreviewService } from "../../src/publication/preview-service.js";
 import {
   DeterministicAttestationPort,
@@ -11,6 +10,17 @@ import {
   verifiedPhase06Artifact,
 } from "./fakes.js";
 
+const review = Object.freeze({
+  artifactId: verifiedPhase06Artifact.artifactId,
+  aggregateSha256: verifiedPhase06Artifact.aggregateSha256,
+  normalizedDTag: verifiedPhase06Artifact.normalizedDTag,
+  runtimeVariant: "napplet-host/v1",
+  required: [{ capability: "notes.read", purpose: "Read notes", consent: "required" as const, available: true }],
+  optional: [{ capability: "notifications", purpose: "Show notifications", consent: "optional" as const, available: false }],
+  compatibility: "degraded" as const,
+  capabilityDigest: "e".repeat(64),
+});
+
 function previewHarness() {
   const sealedArtifacts = new DeterministicSealedArtifactPort();
   const host = new DeterministicPreviewHostPort();
@@ -18,7 +28,7 @@ function previewHarness() {
   const attestation = new DeterministicAttestationPort();
   return {
     sealedArtifacts, host, deployment, attestation,
-    preview: new PreviewService({ sealedArtifacts, host, clock: fixedPhase06Clock(), capabilityReview: canonicalCapabilityReview }),
+    preview: new PreviewService({ sealedArtifacts, host, clock: fixedPhase06Clock(), capabilityReview: () => review }),
   };
 }
 

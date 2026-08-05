@@ -1,16 +1,26 @@
 import { expect, test } from "bun:test";
 
 import { projectPreviewRuntimeStatus, safePreviewDenial } from "../../src/publication/public-status.js";
-import { canonicalCapabilityReview } from "../../src/publication/capability-review.js";
 import { PreviewService } from "../../src/publication/preview-service.js";
 import { DeterministicPreviewHostPort, DeterministicSealedArtifactPort, fixedPhase06Clock, verifiedPhase06Artifact } from "./fakes.js";
+
+const review = Object.freeze({
+  artifactId: verifiedPhase06Artifact.artifactId,
+  aggregateSha256: verifiedPhase06Artifact.aggregateSha256,
+  normalizedDTag: verifiedPhase06Artifact.normalizedDTag,
+  runtimeVariant: "napplet-host/v1",
+  required: [{ capability: "notes.read", purpose: "Read notes", consent: "required" as const, available: true }],
+  optional: [{ capability: "notifications", purpose: "Show notifications", consent: "optional" as const, available: false }],
+  compatibility: "degraded" as const,
+  capabilityDigest: "e".repeat(64),
+});
 
 async function descriptor() {
   return new PreviewService({
     sealedArtifacts: new DeterministicSealedArtifactPort(),
     host: new DeterministicPreviewHostPort(),
     clock: fixedPhase06Clock(),
-    capabilityReview: canonicalCapabilityReview,
+    capabilityReview: () => review,
   }).previewVerifiedArtifact({
     accountId: verifiedPhase06Artifact.accountId,
     sessionId: verifiedPhase06Artifact.sessionId,

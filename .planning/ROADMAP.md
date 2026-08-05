@@ -20,7 +20,7 @@ napplet-cvm moves from proving the permanent napplet contract to a safe, prepaid
 | 4. Metered Generation & Revision Loop | Turns approved funds into exact-usage, serialized napplet creation, revision, repair, progress, and diagnostic actions. | BILL-03–BILL-05, SESS-01, SESS-03–SESS-04, GEN-05–GEN-06 | `.planning/phases/04-metered-generation-revision-loop/` — context, discussion log, research, AI spec, patterns, validation, 7 plans and summaries, review/fix history, immutable design evidence, security audit, and passed goal verification. |
 | 5. Funding Interruption & Durable Resume | Preserves paid work across insufficient funds, the ten-minute live-worker window, explicit resume, and 30-day checkpoint retention. | CONT-01–CONT-07 | `.planning/phases/05-funding-interruption-durable-resume/` — context, research, patterns, validation, 7 plans and summaries, review/fix history, security audit, immutable design evidence, and passed goal verification. |
 | 6. Sealed Preview & User-Owned Publication | Lets the user preview the exact verified artifact, retain signing custody, and explicitly deploy a manifest plus CVM attestation. | PREV-01–PREV-04, PUB-01–PUB-05 | `.planning/phases/06-sealed-preview-user-owned-publication/` — context, approved UI spec, current research, pattern map, API/source coverage, draft validation strategy, and 7 checker-approved plans across 6 waves; execution evidence remains pending. |
-| 7. Admission SLO, Resilience & Launch Safety | Measures immediate-or-rejected admission, proves integrated failure safety, and closes the launch-hardening work deferred from Phase 1. | SESS-02, OPS-01–OPS-04 | Phase directory and phase artifacts not yet created. |
+| 7. Admission SLO, Resilience & Launch Safety | Measures immediate-or-rejected admission, proves integrated failure safety, and closes the launch-hardening work deferred from Phase 1. | SESS-02, OPS-01–OPS-04 | `.planning/phases/07-admission-slo-resilience-launch-safety/` — 13 executed plans and summaries; phase goal verification remains blocked on protected live evidence. |
 
 The phase-to-requirement assignments in this table are identical to `REQUIREMENTS.md` and the phase detail sections below. Existing paths are canonical; future phase artifacts are added to their numbered phase directories without moving or regenerating prior work.
 
@@ -303,7 +303,7 @@ Plans:
 **Validation gate**: Benchmark Modal and at least one non-AWS fallback with the production-like image, target regions, relay delay, pool misses, database contention, reclaim/failure behavior, and step load. Select a worker vendor only after receipt-to-isolated-worker-ready p95 is at most five seconds with zero durable backlog; establish the database/failover claim to match the chosen deployment scope.
 
 Phase 7 also closes the launch-hardening work intentionally deferred from Phase 1: exhaustive toolchain provenance, repeated/cross-environment reproducibility, full hostile and mutation coverage, formal golden approval, waiver drills, SBOM/provenance enforcement, and the final production promotion gate.
-**Plans**: 12/13 plans executed
+**Plans**: 13/13 plans executed
 
 - [x] 07-00-PLAN.md
 - [x] 07-01-PLAN.md
@@ -317,7 +317,7 @@ Phase 7 also closes the launch-hardening work intentionally deferred from Phase 
 - [x] 07-09-PLAN.md
 - [x] 07-10-PLAN.md
 - [x] 07-11-PLAN.md — Enforce immutable digest-bound delegated operator approval for the exact OpenTelemetry package set.
-- [ ] 07-12-PLAN.md — Dispatch typed protected live adapters and route exact release bundles through the sole promotion decision.
+- [x] 07-12-PLAN.md — Dispatch typed protected live adapters and route exact release bundles through the sole promotion decision.
 
 ## Progress
 
@@ -332,14 +332,14 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 4. Metered Generation & Revision Loop | 7/7 | Complete    | 2026-08-05 |
 | 5. Funding Interruption & Durable Resume | 7/7 | Complete    | 2026-08-05 |
 | 6. Sealed Preview & User-Owned Publication | 7/7 | Complete    | 2026-08-05 |
-| 7. Admission SLO, Resilience & Launch Safety | 12/13 | In Progress|  |
+| 7. Admission SLO, Resilience & Launch Safety | 13/13 | In Progress|  |
 
 ### Milestone Progress Roll-up
 
 - **Phases:** Phases 1–6 are verified complete; Phase 7 is active in verifier gap closure; 6/7 phases complete (86%).
-- **Known plans:** 51/53 milestone plans executed; Phase 7 Plans 07-11 and 07-12 close the three locally actionable verifier gaps.
+- **Known plans:** 53/53 milestone plans executed; Phase 7 plan execution closed the locally actionable verifier gaps.
 - **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 49 verified complete and 5 Phase 7 requirements pending.
-- **Current checkpoint:** Execute Phase 7 gap Plans 07-11 and 07-12, then re-run goal verification; unavailable protected live infrastructure remains evidence-blocked rather than inferred.
+- **Current checkpoint:** Re-run Phase 7 goal verification only after fresh exact protected-live observations are available; unavailable protected infrastructure remains evidence-blocked rather than inferred.
 - **Phase 1 preservation:** Phase 1 remains complete with its review, security, validation, verification evidence, and Phase 7 deferrals unchanged.
 
 ### Completion Reporting Contract

@@ -4,16 +4,16 @@ milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
 current_phase: 7
 current_phase_name: Admission SLO, Resilience & Launch Safety
-status: planned
-stopped_at: Completed 07-11-PLAN.md
-last_updated: "2026-08-05T19:22:00.356Z"
+status: in_progress
+stopped_at: Completed 07-12-PLAN.md; Phase 7 requires goal verification and protected live evidence
+last_updated: "2026-08-05T19:32:31.374Z"
 last_activity: 2026-08-05
 last_activity_desc: Phase 7 verifier identified three locally actionable wiring gaps
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 53
-  completed_plans: 52
+  completed_plans: 53
   percent: 86
 ---
 
@@ -30,20 +30,20 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 7 — Admission SLO, Resilience & Launch Safety
-Plan: 12 of 13
-Status: Gap closure planned after verification
-Last activity: 2026-08-05 — Phase 7 verifier identified three locally actionable wiring gaps
+Plan: 13 of 13
+Status: Plan execution complete; Phase goal verification pending protected live evidence
+Last activity: 2026-08-05 — Plan 07-12 closed local wiring gaps; protected live evidence remains unavailable
 
-Progress: [██████████] 98%
+Plan execution: [██████████] 100%; Phase verification remains pending
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 is active in gap closure (6/7, 86%).
-- Plans: 51/53 known milestone plans executed; Plans 07-11 and 07-12 remain.
-- Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain blocked pending gap closure and protected live evidence.
-- Next checkpoint: execute Plan 07-11, then 07-12, and re-run Phase 7 goal verification.
+- Plans: 53/53 known milestone plans executed; Phase 7 plan execution is complete.
+- Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
+- Next checkpoint: re-run Phase 7 goal verification after fresh exact protected-live observations are available.
 
 ## Performance Metrics
 
@@ -117,6 +117,7 @@ Progress: [██████████] 98%
 | Phase 07-admission-slo-resilience-launch-safety P09 | 11m | 2 tasks | 12 files |
 | Phase 07 P10 | 34m | 3 tasks | 39 files |
 | Phase 07-admission-slo-resilience-launch-safety P11 | 29min | 2 tasks | 6 files |
+| Phase 07-admission-slo-resilience-launch-safety P12 | 3 min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -223,6 +224,9 @@ Recent decisions affecting current work:
 - [Phase ?]: No-profile protected certification writes blocked observations and cannot promote a candidate.
 - [Phase ?]: The immutable pending OTel audit remains review evidence; a separate delegated-operator record is the only install authority.
 - [Phase ?]: Approval-dependent modes share one verifier and bind smoke evidence to the same approval, audit, and package-set digests.
+- [Phase ?]: Protected adapters require canonical trusted-root containment and profile-bound SHA-256 before import.
+- [Phase ?]: Fixture adapter passes remain deterministic evidence; only protected-live observations may satisfy live claims.
+- [Phase ?]: Exact release bundles route through evaluateReleaseCertification as the sole terminal promotion decision.
 
 ### Pending Todos
 
@@ -244,6 +248,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T19:22:00.347Z
-Stopped at: Completed 07-11-PLAN.md
+Last session: 2026-08-05T19:32:31.365Z
+Stopped at: Completed 07-12-PLAN.md; Phase 7 requires goal verification and protected live evidence
 Resume file: None

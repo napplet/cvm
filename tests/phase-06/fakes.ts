@@ -6,6 +6,7 @@ import type {
   SealedArtifactIdentity,
   SealedArtifactPort,
 } from "../../src/publication/contracts.js";
+import type { PromotedNappletCliSourcePort } from "../../src/publication/napplet-cli-adapter.js";
 
 export const verifiedPhase06Artifact = Object.freeze({
   accountId: "account:phase-06-owner",
@@ -65,6 +66,33 @@ export class DeterministicNappletDeploymentPort implements NappletDeploymentPort
 export class DeterministicAttestationPort implements AttestationPort {
   calls = 0;
   async publish() { this.calls += 1; return { state: "completed" as const, observationId: "attestation-observation" }; }
+}
+
+export class DeterministicPromotedNappletCliSource implements PromotedNappletCliSourcePort {
+  uploadCalls = 0;
+  relayCalls = 0;
+  networkSuccessCalls = 0;
+  uploaded: unknown[] = [];
+  relayed: unknown[] = [];
+  uploadResult: "complete" | "partial" | "failed" | "unknown" = "complete";
+  relayResult: "complete" | "partial" | "failed" | "unknown" = "complete";
+
+  async uploadFilesToServers(input: Parameters<PromotedNappletCliSourcePort["uploadFilesToServers"]>[0]) {
+    this.uploadCalls += 1;
+    this.uploaded.push(input);
+    return { operationId: input.operationId, state: this.uploadResult, fullServerUploadId: this.uploadResult === "complete" ? `upload:${input.operationId}` : undefined };
+  }
+
+  async publishEventWithSimplePool(input: Parameters<PromotedNappletCliSourcePort["publishEventWithSimplePool"]>[0]) {
+    this.relayCalls += 1;
+    this.relayed.push(input);
+    return { operationId: input.operationId, state: this.relayResult, relayObservation: this.relayResult === "complete" ? `relay:${input.operationId}` : undefined };
+  }
+
+  networkDeploySucceeded(input: Parameters<PromotedNappletCliSourcePort["networkDeploySucceeded"]>[0]) {
+    this.networkSuccessCalls += 1;
+    return input.upload.state === "complete" && input.relay.state === "complete";
+  }
 }
 
 export function fixedPhase06Clock(now = 1_700_000_000_000): Phase06Clock {

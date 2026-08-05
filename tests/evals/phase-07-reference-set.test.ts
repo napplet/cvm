@@ -1,29 +1,30 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
+import { executePhase07ReferenceCase, validatePhase07ReferenceSet } from "../../src/certification/phase-07-reference-set.js";
 
 const fixturePath = "tests/fixtures/phase-07-reference-set.json";
-const allowedEntryKeys = ["cases", "commands", "evidenceTier", "id", "owners", "requirement", "status", "threat"];
-const forbiddenRuntimeKeys = ["input", "expected", "observed", "schedule", "provider", "store", "service", "callback"];
 
-function assertComparatorOnlyRegistry(registry: unknown): asserts registry is Readonly<{ schema: string; version: number; entries: readonly Record<string, unknown>[] }> {
-  expect(registry).toMatchObject({ schema: "phase-07-reference-set", version: 1 });
-  const entries = (registry as { entries?: unknown }).entries;
-  expect(Array.isArray(entries)).toBe(true);
-  expect(entries).toHaveLength(5);
-  for (const entry of entries as readonly Record<string, unknown>[]) {
-    expect(Object.keys(entry).sort()).toEqual(allowedEntryKeys);
-    expect(entry.status).toBe("pending");
-    expect(entry.status).not.toBe("passed");
-    expect(Array.isArray(entry.commands) && entry.commands.length > 0).toBe(true);
-    expect(Array.isArray(entry.owners) && entry.owners.length > 0).toBe(true);
-    expect(forbiddenRuntimeKeys.some((key) => key in entry)).toBe(false);
-  }
-}
+describe("Phase 07 actual-authority reference set", () => {
+  test("contains the locked 64-case source-complete corpus", async () => {
+    const fixture = validatePhase07ReferenceSet(JSON.parse(await readFile(fixturePath, "utf8")));
+    expect(fixture.cases).toHaveLength(64);
+    expect(Object.fromEntries(Object.entries(fixture.categoryMinimums))).toEqual({ admission: 12, resilience: 16, security: 16, publication: 10, launch: 10 });
+  });
 
-test("Phase 07 registry is a strict five-row comparator-only baseline", async () => {
-  const registry = JSON.parse(await readFile(fixturePath, "utf8"));
-  assertComparatorOnlyRegistry(registry);
-  expect(registry.entries.map((entry: { id: string }) => entry.id)).toEqual(["07-W0-01", "07-W0-02", "07-W0-03", "07-W0-04", "07-W0-05"]);
+  test("executes comparator-only cases and rejects a wrong oracle", async () => {
+    const fixture = validatePhase07ReferenceSet(JSON.parse(await readFile(fixturePath, "utf8")));
+    const results = await Promise.all(fixture.cases.map(executePhase07ReferenceCase));
+    expect(results.filter((item) => item.status !== "passed")).toEqual([]);
+    const altered = structuredClone(fixture.cases[0]);
+    altered.expected.value = "wrong";
+    expect((await executePhase07ReferenceCase(altered)).status).toBe("failed");
+  }, 60_000);
+
+  test("keeps protected-live observations non-passing and rejects protected canaries", async () => {
+    const fixture = validatePhase07ReferenceSet(JSON.parse(await readFile(fixturePath, "utf8")));
+    expect(fixture.liveObservations.every((item) => item.status === "blocked" || item.status === "not_observed")).toBe(true);
+    const contaminated = structuredClone(fixture);
+    contaminated.liveObservations[0].limitation = "Bearer secret-canary";
+    expect(() => validatePhase07ReferenceSet(contaminated)).toThrow();
+  });
 });
-
-test.todo("07-W0-03 compares Plan 07-06/07-09 actual authority observations without injecting expected facts into runtime inputs");

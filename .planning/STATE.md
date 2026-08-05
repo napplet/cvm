@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 6
 current_phase_name: Sealed Preview & User-Owned Publication
 status: executing
-stopped_at: Completed 06-05-PLAN.md
-last_updated: "2026-08-05T09:24:45.705Z"
+stopped_at: Completed 06-06-PLAN.md
+last_updated: "2026-08-05T09:39:40.213Z"
 last_activity: 2026-08-05
 last_activity_desc: Phase 6 execution started
 progress:
   total_phases: 7
   completed_phases: 5
   total_plans: 40
-  completed_plans: 38
+  completed_plans: 39
   percent: 71
 ---
 
@@ -30,11 +30,11 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 6 (Sealed Preview & User-Owned Publication) — EXECUTING
-Plan: 6 of 7
+Plan: 7 of 7
 Status: Ready to execute
 Last activity: 2026-08-05 — Phase 6 execution started
 
-Progress: [██████████] 95%
+Progress: [██████████] 98%
 
 ## Milestone Progress
 
@@ -102,6 +102,7 @@ Progress: [██████████] 95%
 | Phase 06 P03 | 9m 26s | 3 tasks | 11 files |
 | Phase 06 P04 | 9 min | 2 tasks | 6 files |
 | Phase 06 P05 | 8m 27s | 3 tasks | 14 files |
+| Phase 06-sealed-preview-user-owned-publication P06 | 13m | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -179,6 +180,8 @@ Recent decisions affecting current work:
 - [Phase ?]: Publication effects use one stable durable operation identity and unknown observations remain reconciliation-pending.
 - [Phase ?]: Publication availability remains fail-closed until the exact promoted CLI source checkout and pinned source hashes verify.
 - [Phase ?]: Publication reconciliation observes only durable original operation ids; linked completion requires upload, owner relay, and attestation evidence.
+- [Phase ?]: Publication is invocable only with both a configured facade and an available Plan 05 source contract; otherwise it returns publication_unavailable without effects.
+- [Phase ?]: The host surface is a pure strict owner-safe rendering projection with no dashboard, signer, or transport authority.
 
 ### Pending Todos
 
@@ -200,6 +203,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T09:24:45.696Z
-Stopped at: Completed 06-05-PLAN.md
+Last session: 2026-08-05T09:39:40.205Z
+Stopped at: Completed 06-06-PLAN.md
 Resume file: None

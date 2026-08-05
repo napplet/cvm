@@ -87,7 +87,7 @@ export class ContinuationDeadlineReconciler {
     return run;
   }
 
-  private async #tombstoneAndDelete(candidate: RetentionCandidate, nowMs: number): Promise<RetentionReconcileResult> {
+  async #tombstoneAndDelete(candidate: RetentionCandidate, nowMs: number): Promise<RetentionReconcileResult> {
     let checkpoint;
     try {
       checkpoint = await this.options.store.transact(candidate.accountId, (transaction) => transaction.tombstoneExpiredCheckpoint({ checkpointId: candidate.checkpointId, nowMs }));

@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 05
 current_phase_name: Funding Interruption & Durable Resume
 status: executing
-stopped_at: Completed 05-02-PLAN.md
-last_updated: "2026-08-05T01:12:31.883Z"
+stopped_at: Completed 05-03-PLAN.md
+last_updated: "2026-08-05T01:22:41.157Z"
 last_activity: 2026-08-05
 last_activity_desc: Phase 05 execution started
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 33
-  completed_plans: 28
+  completed_plans: 29
   percent: 57
 ---
 
@@ -30,11 +30,11 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 05 (Funding Interruption & Durable Resume) — EXECUTING
-Plan: 3 of 7
+Plan: 4 of 7
 Status: Ready to execute
 Last activity: 2026-08-05 — Phase 05 execution started
 
-Progress: [█████████░] 85%
+Progress: [█████████░] 88%
 
 ## Milestone Progress
 
@@ -91,6 +91,7 @@ Progress: [█████████░] 85%
 | Phase 04 P07 | 28m | 3 tasks | 6 files |
 | Phase 05 P01 | 6 min | 2 tasks | 7 files |
 | Phase 05 P02 | 6 min | 2 tasks | 7 files |
+| Phase 05 P03 | 538s | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -148,6 +149,8 @@ Recent decisions affecting current work:
 - [Phase ?]: Checkpoint identity and live-lease revocation commit together in the continuation authority.
 - [Phase ?]: Explicit resume claims are replay-safe and terminally fenced at the fixed 30-day retention deadline.
 - [Phase ?]: Continuation is exposed as the existing PostgreSQL funding authority, not a separate repository.
+- [Phase ?]: Checkpoint manifests use canonical authenticated metadata plus independent archive and object digests.
+- [Phase ?]: Continuation worker lifecycle contracts are coordinator lease-bound and exclude provider authority.
 
 ### Pending Todos
 
@@ -169,6 +172,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T01:12:31.875Z
-Stopped at: Completed 05-02-PLAN.md
+Last session: 2026-08-05T01:22:41.147Z
+Stopped at: Completed 05-03-PLAN.md
 Resume file: None

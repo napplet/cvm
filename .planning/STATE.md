@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 7
 current_phase_name: Admission SLO, Resilience & Launch Safety
 status: planned
-stopped_at: Security re-audit found source and signer policy-binding gaps; 07-17 planned
-last_updated: "2026-08-05T20:46:50.907Z"
+stopped_at: Completed 07-17-PLAN.md
+last_updated: "2026-08-05T21:06:03.310Z"
 last_activity: 2026-08-05
-last_activity_desc: Security audit identified canonical admission and release supply-chain gaps
+last_activity_desc: Security re-audit found exact source and signer/issuer policy binding gaps
 progress:
   total_phases: 7
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 58
-  completed_plans: 57
+  completed_plans: 58
   percent: 100
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 7 — Admission SLO, Resilience & Launch Safety
-Plan: 17 of 18
+Plan: 18 of 18
 Status: Final security policy-binding gap closure planned
 Last activity: 2026-08-05 — Security re-audit found exact source and signer/issuer policy binding gaps
 
@@ -122,6 +122,7 @@ Plan execution: [██████████] 100%; Phase verification remain
 | Phase 07 P14 | 5m | 2 tasks | 6 files |
 | Phase 07-admission-slo-resilience-launch-safety P15 | 7m 11s | 2 tasks | 6 files |
 | Phase 07-admission-slo-resilience-launch-safety P16 | 11m | 2 tasks | 10 files |
+| Phase 07-admission-slo-resilience-launch-safety P17 | 6m 28s | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -239,6 +240,8 @@ Recent decisions affecting current work:
 - [Phase ?]: Cosign provides signature verification; the verifier only hashes the pinned executable, constructs closed argv, and parses the verified attestation payload.
 - [Phase ?]: Persisted reproducibility and supply-chain records contain only finite hashes and status facts, never raw identities, paths, documents, or command output.
 - [Phase ?]: Protected certification and release bundles require two explicit independently revalidated reproducibility and supply-chain record references.
+- [Phase ?]: Git source revision and exact source-byte SHA-256 are separate trusted release inputs.
+- [Phase ?]: Cosign and SBOM policy is manifest-owned and revalidated from redacted verification facts.
 
 ### Pending Todos
 
@@ -260,6 +263,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T20:46:50.897Z
-Stopped at: Completed 07-16-PLAN.md
+Last session: 2026-08-05T21:06:03.300Z
+Stopped at: Completed 07-17-PLAN.md
 Resume file: None

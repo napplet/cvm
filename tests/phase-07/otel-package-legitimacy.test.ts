@@ -33,7 +33,7 @@ async function sha512SRI(bytes: Uint8Array): Promise<string> {
   return `sha512-${Buffer.from(digest).toString("base64")}`;
 }
 
-async function fixtureFetch(mutator?: (metadata: Record<string, unknown>, index: number) => void): Promise<typeof fetch> {
+async function fixtureFetch(mutator?: (metadata: Record<string, unknown>, index: number) => void) {
   const tarballs = await Promise.all(OFFICIAL_OTEL_PACKAGES.map(async (item, index) => {
     const tarball = packageTarball({
       name: item.name,
@@ -45,7 +45,7 @@ async function fixtureFetch(mutator?: (metadata: Record<string, unknown>, index:
     });
     return { item, index, tarball, integrity: await sha512SRI(tarball) };
   }));
-  return (async (input: string | URL) => {
+  const fetcher = (async (input: string | URL) => {
     const url = String(input);
     const entry = tarballs.find(({ item }) => url.endsWith(`/${encodeURIComponent(item.name)}/${item.version}`));
     if (entry) {
@@ -64,14 +64,16 @@ async function fixtureFetch(mutator?: (metadata: Record<string, unknown>, index:
       return new Response(JSON.stringify(metadata), { status: 200 });
     }
     const published = tarballs.find(({ item }) => url.endsWith(`/${encodeURIComponent(item.name)}`));
-    if (published) return new Response(JSON.stringify({ time: { [published.item.version]: "2026-07-21T00:00:00.000Z" } }), { status: 200 });
+    if (published) return new Response(JSON.stringify({ time: { [published.item.version]: `${published.item.publishedOn}T00:00:00.000Z` } }), { status: 200 });
     const tarball = tarballs.find(({ item }) => url.endsWith(`/${item.name.split("/").at(-1)}-${item.version}.tgz`));
     return tarball ? new Response(tarball.tarball, { status: 200 }) : new Response("not found", { status: 404 });
   }) as typeof fetch;
+  return { fetcher, expectedPackages: tarballs.map(({ item, integrity }) => ({ ...item, integrity })) };
 }
 
 test("requires all six exact official OpenTelemetry package identities and preserves SUS", async () => {
-  const result = await verifyOfficialOtelPackageSet({ fetch: await fixtureFetch(), expectedPackages: OFFICIAL_OTEL_PACKAGES });
+  const fixture = await fixtureFetch();
+  const result = await verifyOfficialOtelPackageSet({ fetch: fixture.fetcher, expectedPackages: fixture.expectedPackages });
   expect(result.status).toBe("passed");
   expect(result.packages).toHaveLength(6);
   expect(result.packages.filter((entry) => entry.disposition === "SUS")).toHaveLength(5);
@@ -88,17 +90,20 @@ test("fails closed for identity, repository, integrity, license, lifecycle, rang
     (metadata: Record<string, unknown>) => { metadata.scripts = { postinstall: "unsafe" }; },
     (metadata: Record<string, unknown>) => { metadata.dependencies = { "@opentelemetry/resources": "latest" }; },
   ]) {
-    const result = await verifyOfficialOtelPackageSet({ fetch: await fixtureFetch(mutate), expectedPackages: OFFICIAL_OTEL_PACKAGES });
+    const fixture = await fixtureFetch(mutate);
+    const result = await verifyOfficialOtelPackageSet({ fetch: fixture.fetcher, expectedPackages: fixture.expectedPackages });
     expect(result.status).toBe("failed");
   }
   const unexpected = [...OFFICIAL_OTEL_PACKAGES, { ...OFFICIAL_OTEL_PACKAGES[0]!, name: "@opentelemetry/unexpected" }];
-  const result = await verifyOfficialOtelPackageSet({ fetch: await fixtureFetch(), expectedPackages: unexpected });
+  const fixture = await fixtureFetch();
+  const result = await verifyOfficialOtelPackageSet({ fetch: fixture.fetcher, expectedPackages: unexpected });
   expect(result.status).toBe("failed");
 });
 
 test("is no-install: repository dependency manifests and node_modules are unchanged", async () => {
   const before = await Promise.all([Bun.file(packageJsonPath).text(), Bun.file(bunLockPath).text()]);
-  const result = await verifyOfficialOtelPackageSet({ fetch: await fixtureFetch(), expectedPackages: OFFICIAL_OTEL_PACKAGES });
+  const fixture = await fixtureFetch();
+  const result = await verifyOfficialOtelPackageSet({ fetch: fixture.fetcher, expectedPackages: fixture.expectedPackages });
   const after = await Promise.all([Bun.file(packageJsonPath).text(), Bun.file(bunLockPath).text()]);
   expect(result.status).toBe("passed");
   expect(after).toEqual(before);

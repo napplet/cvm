@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { join, relative } from "node:path";
 import { evaluateReleaseCertification } from "../../src/promotion/run-promotion";
 import { verifyReleaseCertificationInput } from "../../src/promotion/candidate";
 import { parseReleaseCertificationManifest, RELEASE_CLAIM_INVENTORY } from "../../src/promotion/schema";
@@ -86,6 +87,51 @@ test("final candidate verification rejects the deterministic pointer while live 
   expect(result.exitCode).not.toBe(0);
   expect(`${result.stdout}${result.stderr}`).toContain("blocked");
   expect(`${result.stdout}${result.stderr}`).not.toContain("supersecret");
+});
+
+test("candidate verification reports promoted release evidence as a successful package command", async () => {
+  const root = await mkdtemp("tests/.tmp-phase07-release-");
+  try {
+    const rawManifest = releaseManifest();
+    const candidateId = digest("8");
+    const now = Date.now();
+    const observationDirectory = join(root, "observations");
+    const observations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation(observationDirectory, {
+      ...observation(rawManifest, candidateId, requirement.claim, requirement.live),
+      startedAtMs: now - 2_000,
+      completedAtMs: now - 1_000,
+      expiresAtMs: now + 60_000,
+    })));
+    const deterministic = await Bun.file("evidence/design/phase-07.json").json() as { contentAddressedPath: string; evidenceSha256: string };
+    const releasePath = join(root, "release.json");
+    const release = {
+      version: 1,
+      candidateId,
+      releaseManifest: rawManifest,
+      deterministicEvidence: { contentAddressedPath: deterministic.contentAddressedPath, evidenceSha256: deterministic.evidenceSha256 },
+      protectedObservations: observations.map((entry) => ({
+        contentAddressedPath: relative(process.cwd(), join(observationDirectory, `${entry.evidenceSha256}.json`)),
+        evidenceSha256: entry.evidenceSha256,
+      })),
+    };
+    await writeFile(releasePath, JSON.stringify(release), "utf8");
+    const runCandidateVerify = async () => {
+      const child = Bun.spawn(["bun", "run", "candidate:verify", "--", "--release-evidence", relative(process.cwd(), releasePath)], { stdout: "pipe", stderr: "pipe" });
+      const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      return { exitCode, stdout, stderr };
+    };
+
+    const promoted = await runCandidateVerify();
+    expect(promoted.exitCode, `${promoted.stdout}${promoted.stderr}`).toBe(0);
+    expect(`${promoted.stdout}${promoted.stderr}`).toContain('"status":"promoted"');
+
+    await writeFile(releasePath, JSON.stringify({ ...release, candidateId: digest("7") }), "utf8");
+    const blocked = await runCandidateVerify();
+    expect(blocked.exitCode).not.toBe(0);
+    expect(`${blocked.stdout}${blocked.stderr}`).toContain('"status":"blocked"');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("release evidence input uses the sole evaluator for one exact complete candidate-bound bundle", async () => {

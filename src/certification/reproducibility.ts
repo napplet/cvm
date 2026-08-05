@@ -59,6 +59,7 @@ export async function verifyReproducibilityRecord(input: unknown, options: Reado
   if (first!.outputArtifactSha256 !== parsed.expectedArtifactSha256 || second!.outputArtifactSha256 !== parsed.expectedArtifactSha256) throw new Error("REPRODUCIBILITY_OUTPUT_MISMATCH");
   const completedAtMs = Math.max(first!.completedAtMs, second!.completedAtMs);
   if (parsed.assembledAtMs < completedAtMs) throw new Error("REPRODUCIBILITY_ASSEMBLY_CHRONOLOGY_INVALID");
+  if (completedAtMs > nowMs) throw new Error("REPRODUCIBILITY_RECORD_FROM_FUTURE");
   if (nowMs - completedAtMs > maxAgeMs) throw new Error("REPRODUCIBILITY_RECORD_STALE");
   const base = {
     version: 1 as const, evidenceClass: "protected_live" as const, status: "verified" as const, candidateId: parsed.candidateId,
@@ -81,6 +82,7 @@ export async function validateReproducibilityVerificationRecord(value: unknown, 
   const releaseBinding = ReleaseObservationBindingSchema.parse(expected.releaseBinding);
   if (record.candidateId !== expected.candidateId.toLowerCase() || record.expectedArtifactSha256 !== expected.artifactSha256.toLowerCase()
     || record.measuredSourceSha256 !== releaseBinding.sourceSha256 || record.releaseBindingSha256 !== await sha256(releaseBinding)) throw new Error("REPRODUCIBILITY_RELEASE_BINDING_INVALID");
+  if (record.completedAtMs > nowMs) throw new Error("REPRODUCIBILITY_RECORD_FROM_FUTURE");
   if (nowMs - record.completedAtMs > maxAgeMs) throw new Error("REPRODUCIBILITY_RECORD_STALE");
   const { evidenceSha256, contentAddressedPath, ...base } = record;
   if (evidenceSha256 !== await sha256(base) || contentAddressedPath !== `evidence/certification/reproducibility/${evidenceSha256}.json`) throw new Error("REPRODUCIBILITY_RECORD_DIGEST_INVALID");

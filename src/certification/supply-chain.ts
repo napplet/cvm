@@ -117,6 +117,7 @@ export async function validateSupplyChainVerificationRecord(value: unknown, expe
     || record.releaseBindingSha256 !== await sha256(ReleaseObservationBindingSchema.parse(expected.releaseBinding))) throw new Error("SUPPLY_CHAIN_RELEASE_BINDING_INVALID");
   const policy = ReleaseObservationBindingSchema.parse(expected.releaseBinding).supplyChainPolicy;
   if (record.cosignExecutableSha256 !== policy.cosign.executableSha256 || record.signerIdentitySha256 !== await sha256(policy.cosign.signerIdentity) || record.issuerSha256 !== await sha256(policy.cosign.issuer) || record.predicateType !== policy.cosign.predicateType || record.sbomFormat !== policy.sbom.bomFormat || record.sbomSpecVersion !== policy.sbom.specVersion || record.sbomGeneratorSha256 !== await sha256(policy.sbom.generator)) throw new Error("SUPPLY_CHAIN_POLICY_MISMATCH");
+  if (record.verifiedAtMs > nowMs) throw new Error("SUPPLY_CHAIN_RECORD_FROM_FUTURE");
   if (nowMs - record.verifiedAtMs > maxAgeMs) throw new Error("SUPPLY_CHAIN_RECORD_STALE");
   const { evidenceSha256, contentAddressedPath, ...base } = record;
   if (evidenceSha256 !== await sha256(base) || contentAddressedPath !== `evidence/certification/supply-chain/${evidenceSha256}.json`) throw new Error("SUPPLY_CHAIN_RECORD_DIGEST_INVALID");

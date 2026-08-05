@@ -80,3 +80,8 @@ test("manifest-owned Cosign and SBOM policy rejects self-selected identities and
   const substituted = { ...substitutedBase, evidenceSha256: digest(canonicalJson(Object.fromEntries(Object.entries(substitutedBase).filter(([key]) => key !== "evidenceSha256" && key !== "contentAddressedPath")))) };
   await expect(validateSupplyChainVerificationRecord({ ...substituted, contentAddressedPath: `evidence/certification/supply-chain/${substituted.evidenceSha256}.json` }, { candidateId, releaseBinding: binding, artifactSha256, nowMs: 1_001 })).rejects.toThrow("SUPPLY_CHAIN_POLICY_MISMATCH");
 });
+
+test("verification records dated after the authority clock are rejected", async () => {
+  const verified = await verifySupplyChainCertification(input(), { readExecutable: async () => cosignBytes, run: runner().run, nowMs: () => 2_000 });
+  await expect(validateSupplyChainVerificationRecord(verified, { candidateId, releaseBinding: binding, artifactSha256, nowMs: 1_999 })).rejects.toThrow("SUPPLY_CHAIN_RECORD_FROM_FUTURE");
+});

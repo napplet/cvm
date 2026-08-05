@@ -66,6 +66,7 @@ test("duplicate, stale, swapped, malformed, deterministic, divergent, changed-in
   ];
   for (const value of variants) await expect(verifyReproducibilityRecord(value, protectedOptions)).rejects.toThrow();
   await expect(verifyReproducibilityRecord(record(), { ...protectedOptions, nowMs: 2_200 })).rejects.toThrow("REPRODUCIBILITY_RECORD_STALE");
+  await expect(verifyReproducibilityRecord(record(), { ...protectedOptions, nowMs: 1_050 })).rejects.toThrow("REPRODUCIBILITY_RECORD_FROM_FUTURE");
 });
 
 test("source revision and source bytes are independent exact release inputs", async () => {

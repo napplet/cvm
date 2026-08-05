@@ -171,6 +171,9 @@ test("the sole evaluator rejects deterministic, stale, and swapped protected ver
   const staleCandidateId = digest("e"); const stale = await protectedVerificationRecords(rawManifest, staleCandidateId, 0);
   const staleObservations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation(`/tmp/napplet-cvm-phase07-record-stale-${crypto.randomUUID()}`, bindSupplyChainObservation(observation(rawManifest, staleCandidateId, requirement.claim, requirement.live), stale))));
   await expect(evaluateReleaseCertification(manifest, staleObservations, { candidateId: staleCandidateId, nowMs: 86_400_002, verificationRecords: stale, trustRoot: permissiveTestTrustRoot })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_VERIFICATION_RECORDS_INVALID" });
+  const futureCandidateId = digest("9"); const future = await protectedVerificationRecords(rawManifest, futureCandidateId, 3_000);
+  const futureObservations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation(`/tmp/napplet-cvm-phase07-record-future-${crypto.randomUUID()}`, bindSupplyChainObservation(observation(rawManifest, futureCandidateId, requirement.claim, requirement.live), future))));
+  await expect(evaluateReleaseCertification(manifest, futureObservations, { candidateId: futureCandidateId, nowMs: 2_000, verificationRecords: future, trustRoot: permissiveTestTrustRoot })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_VERIFICATION_RECORDS_INVALID" });
 });
 
 test("release evidence rejects arbitrary claims, deterministic live relabels, and mismatched immutable inputs", async () => {

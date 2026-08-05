@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { canonicalJson } from "../promotion/schema";
-import { ImmutableObjectReferenceSchema, type ObjectStorePort } from "./object-store";
+import { ImmutableObjectReferenceSchema, type ImmutableObjectReference, type ObjectStorePort } from "./object-store";
 
 const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/iu);
 const Base64Schema = z.string().min(1).regex(/^[A-Za-z0-9+/]+={0,2}$/u);
@@ -224,5 +224,22 @@ export class CheckpointEnvelopeService {
       if (await sha256(plaintext) !== manifest.archiveSha256) throw new Error("CHECKPOINT_RESTORE_DENIED");
       return plaintext;
     } catch { throw new Error("CHECKPOINT_RESTORE_DENIED"); }
+  }
+
+  /**
+   * Retention reconciliation is the only deletion caller.  It passes the
+   * immutable identity committed with the terminal checkpoint tombstone; this
+   * wrapper intentionally exposes neither archive bytes nor mutable object
+   * names to the reaper.
+   */
+  async destroyKey(keyReference: string): Promise<void> {
+    if (!keyReference) throw new Error("CHECKPOINT_DELETE_INVALID");
+    await this.#crypto.destroy(keyReference);
+  }
+
+  async scheduleDeleteGeneration(reference: ImmutableObjectReference, deleteAfterMs: number): Promise<void> {
+    const parsed = ImmutableObjectReferenceSchema.parse(reference);
+    if (!Number.isSafeInteger(deleteAfterMs) || deleteAfterMs < 0) throw new Error("CHECKPOINT_DELETE_INVALID");
+    await this.#objectStore.scheduleExactDeletion(parsed, new Date(deleteAfterMs).toISOString());
   }
 }

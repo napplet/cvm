@@ -12,6 +12,7 @@ const RETENTION_MS = 2_592_000_000;
 function frozen<T>(value: T): T { return Object.freeze(value); }
 
 export type DeadlineCandidate = Readonly<{ accountId: string; sessionId: string; pauseGeneration: number; liveLeaseToken: string }>;
+export type RetentionCandidate = Readonly<{ accountId: string; sessionId: string; pauseGeneration: number; checkpointId: string }>;
 export type DeadlineReconcileResult = Readonly<{
   status: "not_due" | "checkpointed" | "checkpoint_retryable" | "already_checkpointed";
   code: string;
@@ -19,10 +20,17 @@ export type DeadlineReconcileResult = Readonly<{
   pauseGeneration: number;
   checkpointId?: string;
 }>;
+export type RetentionReconcileResult = Readonly<{
+  status: "not_due" | "claimed" | "expired" | "deletion_pending";
+  code: string;
+  checkpointId: string;
+}>;
 
 /** The scheduling adapter supplies durable pause candidates; no queue or worker allocation is introduced here. */
 export interface DeadlineCandidatePort {
   listDue(nowMs: number): Promise<readonly DeadlineCandidate[]>;
+  /** Durable scheduler query; candidates are hints and SQL remains the authority. */
+  listRetentionDue?(nowMs: number): Promise<readonly RetentionCandidate[]>;
 }
 
 /**
@@ -33,6 +41,8 @@ export interface DeadlineCandidatePort {
  */
 export class ContinuationDeadlineReconciler {
   #failpoint?: "before_commit" | "after_commit";
+  #retentionInFlight = new Map<string, Promise<RetentionReconcileResult>>();
+  #retentionResults = new Map<string, RetentionReconcileResult>();
 
   constructor(private readonly options: Readonly<{
     store: ContinuationFundingStore;
@@ -51,6 +61,56 @@ export class ContinuationDeadlineReconciler {
     const results: DeadlineReconcileResult[] = [];
     for (const candidate of candidates) results.push(await this.reconcile(candidate, nowMs));
     return Object.freeze(results);
+  }
+
+  /**
+   * Tombstone authority is committed before any irreversible external call.
+   * The port provides only a durable candidate list; strict `now >= deadline`
+   * comparison and claim-versus-expiry election happen in the store.
+   */
+  async scanRetention(): Promise<readonly RetentionReconcileResult[]> {
+    const nowMs = this.options.clock.nowMs();
+    const candidates = await this.options.candidates.listRetentionDue?.(nowMs) ?? [];
+    return Object.freeze(await Promise.all(candidates.map((candidate) => this.reconcileRetention(candidate, nowMs))));
+  }
+
+  private async reconcileRetention(candidate: RetentionCandidate, nowMs: number): Promise<RetentionReconcileResult> {
+    const remembered = this.#retentionResults.get(candidate.checkpointId);
+    if (remembered) return remembered;
+    const active = this.#retentionInFlight.get(candidate.checkpointId);
+    if (active) return active;
+    const run = this.#tombstoneAndDelete(candidate, nowMs).then((result) => {
+      if (result.status !== "deletion_pending") this.#retentionResults.set(candidate.checkpointId, result);
+      return result;
+    }).finally(() => this.#retentionInFlight.delete(candidate.checkpointId));
+    this.#retentionInFlight.set(candidate.checkpointId, run);
+    return run;
+  }
+
+  private async #tombstoneAndDelete(candidate: RetentionCandidate, nowMs: number): Promise<RetentionReconcileResult> {
+    let checkpoint;
+    try {
+      checkpoint = await this.options.store.transact(candidate.accountId, (transaction) => transaction.tombstoneExpiredCheckpoint({ checkpointId: candidate.checkpointId, nowMs }));
+    } catch (error) {
+      if (error instanceof Error && error.message === "CHECKPOINT_RETENTION_ACTIVE") return frozen({ status: "not_due", code: "RETENTION_DEADLINE_PENDING", checkpointId: candidate.checkpointId });
+      return frozen({ status: "deletion_pending", code: "RETENTION_TOMBSTONE_RETRYABLE", checkpointId: candidate.checkpointId });
+    }
+    if (checkpoint.state === "claimed") return frozen({ status: "claimed", code: "PRE_EXPIRY_CLAIM_WON", checkpointId: checkpoint.checkpointId });
+    if (checkpoint.state !== "expired") return frozen({ status: "deletion_pending", code: "RETENTION_TERMINAL_STATE_RETRYABLE", checkpointId: checkpoint.checkpointId });
+
+    // This committed audit intent is the recovery anchor.  Do not create or
+    // target anything from a later caller-supplied object/key value.
+    await this.options.store.transact(candidate.accountId, (transaction) => transaction.recordDeletionOutcome({ checkpointId: checkpoint.checkpointId, objectGeneration: checkpoint.objectGeneration, state: "scheduled" }));
+    const object = { key: checkpoint.objectKey, generation: Number(checkpoint.objectGeneration), checksum: checkpoint.objectChecksum };
+    try {
+      await this.options.envelope.destroyKey(checkpoint.keyReference);
+      await this.options.envelope.scheduleDeleteGeneration(object, nowMs);
+      await this.options.store.transact(candidate.accountId, (transaction) => transaction.recordDeletionOutcome({ checkpointId: checkpoint.checkpointId, objectGeneration: checkpoint.objectGeneration, state: "deleted" }));
+      return frozen({ status: "expired", code: "RETENTION_EXPIRED_AND_DELETE_SCHEDULED", checkpointId: checkpoint.checkpointId });
+    } catch {
+      await this.options.store.transact(candidate.accountId, (transaction) => transaction.recordDeletionOutcome({ checkpointId: checkpoint.checkpointId, objectGeneration: checkpoint.objectGeneration, state: "unknown" }));
+      return frozen({ status: "deletion_pending", code: "RETENTION_DELETE_RECONCILIATION", checkpointId: checkpoint.checkpointId });
+    }
   }
 
   private async reconcile(candidate: DeadlineCandidate, nowMs: number): Promise<DeadlineReconcileResult> {

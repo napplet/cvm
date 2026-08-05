@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { ContinuationDeadlineReconciler } from "../../src/continuity/deadline-reconciler";
 import type { CheckpointEnvelopeService } from "../../src/continuity/checkpoint-envelope";
+import { accountIdForPrincipal } from "../../src/domain/account-command";
+import { readSessionStatus } from "../../src/phase-04/session-status";
 import type { ContinuationWorkerPort } from "../../src/phase-02/contracts";
 import { TransactionalMemoryFundingStore, type ContinuationFundingStore } from "../../src/persistence/funding-store";
 
@@ -70,4 +72,5 @@ describe("CONT-07 retention expiry", () => {
     await expect(atExpiry.reconciler.scanRetention()).resolves.toMatchObject([{ status: "expired" }]);
     await expect(atExpiry.store.transact(accountId, (transaction) => transaction.claimResume({ ...claim, nowMs: committedAtMs + RETENTION_MS }))).rejects.toThrow("CHECKPOINT_EXPIRED");
   });
+
 });

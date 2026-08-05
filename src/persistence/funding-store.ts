@@ -44,7 +44,8 @@ export type BeginDeadlineCheckpointInput = Readonly<{ sessionId: string; pauseGe
 export type ContinuationResumeClaimInput = Readonly<{ accountId: string; sessionId: string; checkpointId: string; idempotencyKey: string; fingerprint: string; pendingFingerprint: string; expectedCheckpointVersion: number; expectedSessionVersion: number; nowMs: number; newLeaseToken: string; allocationIntentReference: string }>;
 export type ContinuationResumeClaim = Readonly<{ accountId: string; checkpointId: string; idempotencyKey: string; fingerprint: string; leaseToken: string; allocationIntentReference: string; claimed: boolean }>;
 export type RestoreObservationInput = Readonly<{ checkpointId: string; allocationIntentReference: string; state: "restored" | "refused" | "reconciliation_pending" }>;
-export type DeletionOutcomeInput = Readonly<{ checkpointId: string; objectGeneration: string; state: "scheduled" | "deleted" | "failed" }>;
+/** Coarse, immutable deletion audit; no storage key or cryptographic material is projected publicly. */
+export type DeletionOutcomeInput = Readonly<{ checkpointId: string; objectGeneration: string; state: "scheduled" | "deleted" | "failed" | "unknown" }>;
 
 /**
  * A terminal action receipt is persisted only after the serialized ledger
@@ -126,6 +127,10 @@ export interface MeteredFundingStore extends FundingStore {
 export interface ContinuationFundingStore extends FundingStore {
   findContinuation(accountId: string, idempotencyKey: string): Promise<ContinuationRecord | undefined>;
   findContinuationForSession(accountId: string, sessionId: string): Promise<ContinuationRecord | undefined>;
+  /** Owner-scoped terminal checkpoint read used only for safe status projection. */
+  findContinuationCheckpointForSession(accountId: string, sessionId: string): Promise<ContinuationCheckpoint | undefined>;
+  /** Coarse deletion audit for an exact terminal checkpoint, never archive/key metadata. */
+  findDeletionOutcome(checkpointId: string, objectGeneration: string): Promise<DeletionOutcomeInput | undefined>;
   transact<T>(accountId: string, operation: (transaction: ContinuationFundingTransaction) => Promise<T> | T): Promise<T>;
 }
 
@@ -197,6 +202,14 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
   }
   async findContinuationForSession(accountId: string, sessionId: string): Promise<ContinuationRecord | undefined> {
     const found = [...this.#state.continuations.values()].find((continuation) => continuation.intent.accountId === accountId && continuation.intent.sessionId === sessionId);
+    return found ? freeze(clone(found)) : undefined;
+  }
+  async findContinuationCheckpointForSession(accountId: string, sessionId: string): Promise<ContinuationCheckpoint | undefined> {
+    const found = [...this.#state.checkpoints.values()].find((checkpoint) => checkpoint.accountId === accountId && checkpoint.sessionId === sessionId);
+    return found ? freeze(clone(found)) : undefined;
+  }
+  async findDeletionOutcome(checkpointId: string, objectGeneration: string): Promise<DeletionOutcomeInput | undefined> {
+    const found = this.#state.deletionOutcomes.get(`${checkpointId}:${objectGeneration}`);
     return found ? freeze(clone(found)) : undefined;
   }
   async findMeteredActionByOperation(accountId: string, operationId: string): Promise<MeteredAction | undefined> {

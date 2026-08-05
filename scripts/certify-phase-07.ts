@@ -6,7 +6,7 @@ import { PROTECTED_SUITES, runProtectedCertificationProfile, type ProtectedCerti
 
 const DIGEST = /^[a-f0-9]{64}$/iu;
 const IMAGE = /^[a-z0-9][a-z0-9._/-]*(?::[a-z0-9._-]+)?@sha256:[a-f0-9]{64}$/iu;
-const RELATIVE_RECORD = /^(?!.*(?:^|\\/)\\.\\.(?:\\/|$))[a-z0-9][a-z0-9._/-]*\\.json$/iu;
+const RELATIVE_RECORD = /^(?!.*(?:^|\/)\.\.(?:\/|$))[a-z0-9][a-z0-9._/-]*\.json$/iu;
 async function digest(value: unknown): Promise<string> { const valueBytes = new TextEncoder().encode(canonicalJson(value)); const hash = await crypto.subtle.digest("SHA-256", valueBytes); return Array.from(new Uint8Array(hash), (item) => item.toString(16).padStart(2, "0")).join(""); }
 function argument(name: string): string | null { const value = Bun.argv.slice(2).find((item) => item.startsWith(`${name}=`)); return value ? value.slice(name.length + 1) : null; }
 async function blockedProfile(): Promise<ProtectedCertificationProfile> { const blocked = await digest({ phase: "07", kind: "protected-profile-unavailable" }); return { candidate: { id: blocked, provider: "modal", image: `phase07/blocked@sha256:${blocked}`, sourceSha256: blocked }, datasetSha256: blocked, topologySha256: blocked, profileSha256: await digest({ configured: false }), credentialsAvailable: false }; }

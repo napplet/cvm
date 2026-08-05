@@ -4,6 +4,19 @@ const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu);
 const SafeIdSchema = z.string().regex(/^[a-z][a-z0-9._-]{0,127}$/u);
 const CommandSchema = z.array(z.string().min(1).max(240).refine((value) => !/[\r\n\0]/u.test(value), "command value is unsafe")).min(1).max(16);
 const EpochMsSchema = z.number().int().nonnegative().finite();
+export const SupplyChainPolicySchema = z.object({
+  cosign: z.object({
+    executableSha256: DigestSchema,
+    signerIdentity: z.string().min(1).max(512),
+    issuer: z.string().url().max(512),
+    predicateType: z.literal("https://slsa.dev/provenance/v1"),
+  }).strict(),
+  sbom: z.object({
+    bomFormat: z.literal("CycloneDX"),
+    specVersion: z.literal("1.5"),
+    generator: z.object({ vendor: z.string().min(1).max(160), name: z.string().min(1).max(160), version: z.string().min(1).max(120) }).strict(),
+  }).strict(),
+}).strict();
 
 /** All certification outcomes are explicit; only passed observations can own a claim. */
 export const CertificationStatusSchema = z.enum(["passed", "failed", "blocked", "skipped", "not_observed", "stale"]);
@@ -32,6 +45,7 @@ export const ReleaseObservationBindingSchema = z.object({
   releaseId: DigestSchema,
   sourceRevision: z.string().regex(/^[a-f0-9]{40,64}$/iu),
   sourceSha256: DigestSchema,
+  supplyChainPolicy: SupplyChainPolicySchema,
   inputs: z.object({
     controlImageDigest: DigestSchema, workerImageDigest: DigestSchema, packageLockSha256: DigestSchema, toolchainSha256: DigestSchema,
     migrationSha256: DigestSchema, configSha256: DigestSchema, policySha256: DigestSchema, datasetSha256: DigestSchema,

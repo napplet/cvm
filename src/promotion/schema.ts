@@ -46,6 +46,10 @@ export type ReleaseCertificationManifest = {
   readonly releaseId: string;
   readonly sourceRevision: string;
   readonly sourceSha256: string;
+  readonly supplyChainPolicy: {
+    readonly cosign: { readonly executableSha256: string; readonly signerIdentity: string; readonly issuer: string; readonly predicateType: "https://slsa.dev/provenance/v1" };
+    readonly sbom: { readonly bomFormat: "CycloneDX"; readonly specVersion: "1.5"; readonly generator: { readonly vendor: string; readonly name: string; readonly version: string } };
+  };
   readonly inputs: {
     readonly controlImageDigest: string;
     readonly workerImageDigest: string;
@@ -173,12 +177,17 @@ function releaseClaim(value: unknown, label: string): string {
 /** Parses the single authoritative release gate input.  It deliberately accepts
  * digests and observations only; vendor output, credentials, and key material never enter it. */
 export function parseReleaseCertificationManifest(value: unknown): ReleaseCertificationManifest {
-  const record = exactRecord(value, "release manifest", ["version", "releaseId", "sourceRevision", "sourceSha256", "inputs", "requirements", "waivers"]);
+  const record = exactRecord(value, "release manifest", ["version", "releaseId", "sourceRevision", "sourceSha256", "supplyChainPolicy", "inputs", "requirements", "waivers"]);
   if (record.version !== 1) throw new Error("release manifest.version must be 1");
   const inputsRecord = exactRecord(record.inputs, "release manifest.inputs", [
     "controlImageDigest", "workerImageDigest", "packageLockSha256", "toolchainSha256", "migrationSha256", "configSha256",
     "policySha256", "datasetSha256", "goldenSha256", "sbomSha256", "provenanceSha256",
   ]);
+  const supplyChainPolicy = exactRecord(record.supplyChainPolicy, "release manifest.supplyChainPolicy", ["cosign", "sbom"]);
+  const cosignPolicy = exactRecord(supplyChainPolicy.cosign, "release manifest.supplyChainPolicy.cosign", ["executableSha256", "signerIdentity", "issuer", "predicateType"]);
+  const sbomPolicy = exactRecord(supplyChainPolicy.sbom, "release manifest.supplyChainPolicy.sbom", ["bomFormat", "specVersion", "generator"]);
+  const sbomGenerator = exactRecord(sbomPolicy.generator, "release manifest.supplyChainPolicy.sbom.generator", ["vendor", "name", "version"]);
+  if (cosignPolicy.predicateType !== "https://slsa.dev/provenance/v1" || sbomPolicy.bomFormat !== "CycloneDX" || sbomPolicy.specVersion !== "1.5") throw new Error("release manifest supply-chain policy is unsupported");
   const requirementsRaw = records(record.requirements, "release manifest.requirements");
   const requirements = requirementsRaw.map((entry) => {
     const freshnessMs = entry.freshnessMs;
@@ -202,6 +211,7 @@ export function parseReleaseCertificationManifest(value: unknown): ReleaseCertif
   if (new Set(waivers.map((item) => item.class)).size !== waivers.length) throw new Error("release waiver classes must be unique");
   return deepFreeze({
     version: 1, releaseId: sha256(record, "releaseId"), sourceRevision: revision(requiredString(record, "sourceRevision"), "release sourceRevision"), sourceSha256: sha256(record, "sourceSha256"),
+    supplyChainPolicy: { cosign: { executableSha256: sha256(cosignPolicy, "executableSha256"), signerIdentity: requiredString(cosignPolicy, "signerIdentity"), issuer: requiredString(cosignPolicy, "issuer"), predicateType: "https://slsa.dev/provenance/v1" }, sbom: { bomFormat: "CycloneDX", specVersion: "1.5", generator: { vendor: requiredString(sbomGenerator, "vendor"), name: requiredString(sbomGenerator, "name"), version: requiredString(sbomGenerator, "version") } } },
     inputs: {
       controlImageDigest: sha256(inputsRecord, "controlImageDigest"), workerImageDigest: sha256(inputsRecord, "workerImageDigest"), packageLockSha256: sha256(inputsRecord, "packageLockSha256"), toolchainSha256: sha256(inputsRecord, "toolchainSha256"), migrationSha256: sha256(inputsRecord, "migrationSha256"), configSha256: sha256(inputsRecord, "configSha256"), policySha256: sha256(inputsRecord, "policySha256"), datasetSha256: sha256(inputsRecord, "datasetSha256"), goldenSha256: sha256(inputsRecord, "goldenSha256"), sbomSha256: sha256(inputsRecord, "sbomSha256"), provenanceSha256: sha256(inputsRecord, "provenanceSha256"),
     }, requirements, waivers,

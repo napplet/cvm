@@ -70,7 +70,7 @@ async function evaluateReleaseCertificationInner(
   const blocked = (responsibleRequirement: string | null, reason: string): ReleaseCertificationDecision => ({ candidateId: input.candidateId, releaseId: manifest.releaseId, evidenceSha256: input.evidenceSha256, status: "blocked", responsibleRequirement, reason });
   if (manifest.waivers.some((waiver) => waiver.expiresAtMs <= input.nowMs)) return blocked("waiver", "RELEASE_WAIVER_EXPIRED");
   if (!input.verificationRecords) return blocked("supply-chain", "RELEASE_VERIFICATION_RECORDS_REQUIRED");
-  const releaseBinding = { releaseId: manifest.releaseId, sourceRevision: manifest.sourceRevision, sourceSha256: manifest.sourceSha256, inputs: manifest.inputs };
+  const releaseBinding = { releaseId: manifest.releaseId, sourceRevision: manifest.sourceRevision, sourceSha256: manifest.sourceSha256, supplyChainPolicy: manifest.supplyChainPolicy, inputs: manifest.inputs };
   let verificationDigests: Readonly<{ reproducibilityEvidenceSha256: string; supplyChainEvidenceSha256: string }>;
   try {
     const reproducibility = await validateReproducibilityVerificationRecord(input.verificationRecords.reproducibility, { candidateId: input.candidateId, releaseBinding, artifactSha256: manifest.inputs.workerImageDigest, nowMs: input.nowMs });
@@ -89,6 +89,7 @@ async function evaluateReleaseCertificationInner(
     const binding = observation.releaseBinding;
     if (!binding || binding.releaseId !== manifest.releaseId || binding.sourceRevision !== manifest.sourceRevision) return false;
     return binding.sourceSha256 === manifest.sourceSha256
+      && canonicalJson(binding.supplyChainPolicy) === canonicalJson(manifest.supplyChainPolicy)
       && Object.entries(manifest.inputs).every(([key, value]) => binding.inputs[key as keyof typeof binding.inputs] === value)
       && observation.candidate.image.endsWith(`@sha256:${manifest.inputs.workerImageDigest}`)
       && observation.candidate.sourceSha256 === manifest.sourceSha256;

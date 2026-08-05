@@ -17,7 +17,7 @@ const CycloneDxSchema = z.object({
 const ProvenanceSchema = z.object({
   _type: z.literal("https://in-toto.io/Statement/v1"), subject: z.array(z.object({ name: z.string().min(1), digest: z.object({ sha256: DigestSchema }).strict() }).strict()).length(1),
   predicateType: z.literal("https://slsa.dev/provenance/v1"),
-  predicate: z.object({ buildDefinition: z.object({ externalParameters: z.object({ candidateId: DigestSchema, sourceRevision: z.string().regex(/^[a-f0-9]{40,64}$/iu), lockSha256: DigestSchema, toolchainSha256: DigestSchema, datasetSha256: DigestSchema }).strict() }).strict() }).strict(),
+  predicate: z.object({ buildDefinition: z.object({ externalParameters: z.object({ candidateId: DigestSchema, sourceRevision: z.string().regex(/^[a-f0-9]{40,64}$/iu), sourceSha256: DigestSchema, lockSha256: DigestSchema, toolchainSha256: DigestSchema, datasetSha256: DigestSchema }).strict() }).strict() }).strict(),
 }).strict();
 const CosignSchema = z.object({ executable: z.string().regex(/^\/[^\0\r\n]*$/u), executableSha256: DigestSchema, signerIdentity: z.string().min(1).max(512), issuer: z.string().url().max(512), predicateType: z.literal("https://slsa.dev/provenance/v1") }).strict();
 const SupplyChainInputSchema = z.object({
@@ -30,7 +30,7 @@ const SupplyChainInputSchema = z.object({
 export const SupplyChainRecordSchema = z.object({
   version: z.literal(1), evidenceClass: z.literal("protected_live"), status: z.literal("verified"), candidateId: DigestSchema, artifactSha256: DigestSchema,
   releaseBindingSha256: DigestSchema, cosignExecutableSha256: DigestSchema, cosignCommandSha256: DigestSchema, signerIdentitySha256: DigestSchema, issuerSha256: DigestSchema,
-  predicateType: z.literal("https://slsa.dev/provenance/v1"), sbomSha256: DigestSchema, provenanceSha256: DigestSchema, reviewedComponentsSha256: DigestSchema, verifiedAtMs: z.number().int().nonnegative().finite(),
+  predicateType: z.literal("https://slsa.dev/provenance/v1"), sbomFormat: z.literal("CycloneDX"), sbomSpecVersion: z.literal("1.5"), sbomGeneratorSha256: DigestSchema, sbomSha256: DigestSchema, provenanceSha256: DigestSchema, reviewedComponentsSha256: DigestSchema, verifiedAtMs: z.number().int().nonnegative().finite(),
   evidenceSha256: DigestSchema, contentAddressedPath: z.string().regex(/^evidence\/certification\/supply-chain\/[a-f0-9]{64}\.json$/iu),
 }).strict();
 export type SupplyChainRecord = z.infer<typeof SupplyChainRecordSchema>;
@@ -51,10 +51,13 @@ function hasSensitive(value: unknown): boolean {
 }
 
 function closedArgv(input: z.infer<typeof SupplyChainInputSchema>): readonly string[] {
-  return ["verify-attestation", "--type", input.cosign.predicateType, "--certificate-identity", input.cosign.signerIdentity, "--certificate-oidc-issuer", input.cosign.issuer, "--output", "json", input.artifactReference];
+  const policy = input.releaseBinding.supplyChainPolicy.cosign;
+  return ["verify-attestation", "--type", policy.predicateType, "--certificate-identity", policy.signerIdentity, "--certificate-oidc-issuer", policy.issuer, "--output", "json", input.artifactReference];
 }
 
 function verifyDocuments(input: z.infer<typeof SupplyChainInputSchema>): void {
+  const policy = input.releaseBinding.supplyChainPolicy;
+  if (input.cosign.executableSha256 !== policy.cosign.executableSha256 || input.cosign.signerIdentity !== policy.cosign.signerIdentity || input.cosign.issuer !== policy.cosign.issuer || input.cosign.predicateType !== policy.cosign.predicateType || input.provenance.predicateType !== policy.cosign.predicateType || input.sbom.bomFormat !== policy.sbom.bomFormat || input.sbom.specVersion !== policy.sbom.specVersion || !input.sbom.metadata.tools.some((tool) => tool.vendor === policy.sbom.generator.vendor && tool.name === policy.sbom.generator.name && tool.version === policy.sbom.generator.version)) throw new Error("SUPPLY_CHAIN_POLICY_MISMATCH");
   if (hasSensitive(input.sbom) || hasSensitive(input.provenance)) throw new Error("SUPPLY_CHAIN_SENSITIVE_DOCUMENT_REJECTED");
   if (input.artifactReference.slice(-64).toLowerCase() !== input.artifactSha256) throw new Error("SUPPLY_CHAIN_ARTIFACT_REFERENCE_INVALID");
   const properties = Object.fromEntries(input.sbom.metadata.properties.map((item) => [item.name, item.value]));
@@ -65,7 +68,7 @@ function verifyDocuments(input: z.infer<typeof SupplyChainInputSchema>): void {
   if (canonicalJson(reviewed) !== canonicalJson(components) || new Set(reviewed.map((item) => item.name)).size !== reviewed.length) throw new Error("SUPPLY_CHAIN_COMPONENTS_NOT_REVIEWED");
   const subject = input.provenance.subject[0]!;
   const parameters = input.provenance.predicate.buildDefinition.externalParameters;
-  if (subject.name !== input.artifactReference || subject.digest.sha256 !== input.artifactSha256 || parameters.candidateId !== input.candidateId || parameters.sourceRevision !== input.releaseBinding.sourceRevision || parameters.lockSha256 !== input.releaseBinding.inputs.packageLockSha256 || parameters.toolchainSha256 !== input.releaseBinding.inputs.toolchainSha256 || parameters.datasetSha256 !== input.releaseBinding.inputs.datasetSha256) throw new Error("SUPPLY_CHAIN_PROVENANCE_BINDING_INVALID");
+  if (subject.name !== input.artifactReference || subject.digest.sha256 !== input.artifactSha256 || parameters.candidateId !== input.candidateId || parameters.sourceRevision !== input.releaseBinding.sourceRevision || parameters.sourceSha256 !== input.releaseBinding.sourceSha256 || parameters.lockSha256 !== input.releaseBinding.inputs.packageLockSha256 || parameters.toolchainSha256 !== input.releaseBinding.inputs.toolchainSha256 || parameters.datasetSha256 !== input.releaseBinding.inputs.datasetSha256) throw new Error("SUPPLY_CHAIN_PROVENANCE_BINDING_INVALID");
 }
 
 function parseCosignDsse(stdout: string, input: z.infer<typeof SupplyChainInputSchema>): void {
@@ -82,7 +85,8 @@ function parseCosignDsse(stdout: string, input: z.infer<typeof SupplyChainInputS
 }
 
 async function productionRunner(input: z.infer<typeof SupplyChainInputSchema>, argv: readonly string[]): Promise<Readonly<{ disposition: CommandDisposition; stdout: string; stderr: string }>> {
-  const evidence = await runHermeticCommand({ id: "phase07-cosign-verify-attestation", executable: input.cosign.executable, executableSha256: input.cosign.executableSha256, allowedExecutables: [{ path: input.cosign.executable, sha256: input.cosign.executableSha256 }], argv, cwd: input.workingDirectory, timeoutMs: 60_000, outputLimitBytes: 65_536, toolchainId: input.candidateId, imageDigest: input.releaseBinding.inputs.controlImageDigest });
+  const executableSha256 = input.releaseBinding.supplyChainPolicy.cosign.executableSha256;
+  const evidence = await runHermeticCommand({ id: "phase07-cosign-verify-attestation", executable: input.cosign.executable, executableSha256, allowedExecutables: [{ path: input.cosign.executable, sha256: executableSha256 }], argv, cwd: input.workingDirectory, timeoutMs: 60_000, outputLimitBytes: 65_536, toolchainId: input.candidateId, imageDigest: input.releaseBinding.inputs.controlImageDigest });
   return evidence;
 }
 
@@ -91,14 +95,14 @@ export async function verifySupplyChainCertification(raw: unknown, dependencies:
   const input = SupplyChainInputSchema.parse(raw);
   verifyDocuments(input);
   const executable = await (dependencies.readExecutable ?? (async (path: string) => new Uint8Array(await Bun.file(path).arrayBuffer())))(input.cosign.executable);
-  if (await sha256(executable) !== input.cosign.executableSha256) throw new Error("SUPPLY_CHAIN_COSIGN_DIGEST_INVALID");
+  if (await sha256(executable) !== input.releaseBinding.supplyChainPolicy.cosign.executableSha256) throw new Error("SUPPLY_CHAIN_COSIGN_DIGEST_INVALID");
   const argv = closedArgv(input);
   const result = await (dependencies.run ?? ((command) => productionRunner(input, command.argv)))({ executable: input.cosign.executable, argv });
   if (result.disposition !== "passed") throw new Error("SUPPLY_CHAIN_COSIGN_EXECUTION_FAILED");
   parseCosignDsse(result.stdout, input);
   const sbomSha256 = await sha256(input.sbom); const provenanceSha256 = await sha256(input.provenance);
   if (sbomSha256 !== input.releaseBinding.inputs.sbomSha256 || provenanceSha256 !== input.releaseBinding.inputs.provenanceSha256) throw new Error("SUPPLY_CHAIN_DOCUMENT_DIGEST_INVALID");
-  const base = { version: 1 as const, evidenceClass: "protected_live" as const, status: "verified" as const, candidateId: input.candidateId, artifactSha256: input.artifactSha256, releaseBindingSha256: await sha256(input.releaseBinding), cosignExecutableSha256: input.cosign.executableSha256, cosignCommandSha256: await sha256({ executable: input.cosign.executable, argv }), signerIdentitySha256: await sha256(input.cosign.signerIdentity), issuerSha256: await sha256(input.cosign.issuer), predicateType: input.cosign.predicateType, sbomSha256, provenanceSha256, reviewedComponentsSha256: await sha256([...input.reviewedComponents].sort((left, right) => left.name.localeCompare(right.name))), verifiedAtMs: dependencies.nowMs?.() ?? Date.now() };
+  const base = { version: 1 as const, evidenceClass: "protected_live" as const, status: "verified" as const, candidateId: input.candidateId, artifactSha256: input.artifactSha256, releaseBindingSha256: await sha256(input.releaseBinding), cosignExecutableSha256: input.releaseBinding.supplyChainPolicy.cosign.executableSha256, cosignCommandSha256: await sha256({ executable: input.cosign.executable, argv }), signerIdentitySha256: await sha256(input.releaseBinding.supplyChainPolicy.cosign.signerIdentity), issuerSha256: await sha256(input.releaseBinding.supplyChainPolicy.cosign.issuer), predicateType: input.releaseBinding.supplyChainPolicy.cosign.predicateType, sbomFormat: input.releaseBinding.supplyChainPolicy.sbom.bomFormat, sbomSpecVersion: input.releaseBinding.supplyChainPolicy.sbom.specVersion, sbomGeneratorSha256: await sha256(input.releaseBinding.supplyChainPolicy.sbom.generator), sbomSha256, provenanceSha256, reviewedComponentsSha256: await sha256([...input.reviewedComponents].sort((left, right) => left.name.localeCompare(right.name))), verifiedAtMs: dependencies.nowMs?.() ?? Date.now() };
   const evidenceSha256 = await sha256(base);
   return SupplyChainRecordSchema.parse({ ...base, evidenceSha256, contentAddressedPath: `evidence/certification/supply-chain/${evidenceSha256}.json` });
 }
@@ -111,6 +115,8 @@ export async function validateSupplyChainVerificationRecord(value: unknown, expe
   if (!Number.isInteger(maxAgeMs) || maxAgeMs < 1) throw new Error("SUPPLY_CHAIN_FRESHNESS_INVALID");
   if (record.candidateId !== expected.candidateId.toLowerCase() || record.artifactSha256 !== expected.artifactSha256.toLowerCase()
     || record.releaseBindingSha256 !== await sha256(ReleaseObservationBindingSchema.parse(expected.releaseBinding))) throw new Error("SUPPLY_CHAIN_RELEASE_BINDING_INVALID");
+  const policy = ReleaseObservationBindingSchema.parse(expected.releaseBinding).supplyChainPolicy;
+  if (record.cosignExecutableSha256 !== policy.cosign.executableSha256 || record.signerIdentitySha256 !== await sha256(policy.cosign.signerIdentity) || record.issuerSha256 !== await sha256(policy.cosign.issuer) || record.predicateType !== policy.cosign.predicateType || record.sbomFormat !== policy.sbom.bomFormat || record.sbomSpecVersion !== policy.sbom.specVersion || record.sbomGeneratorSha256 !== await sha256(policy.sbom.generator)) throw new Error("SUPPLY_CHAIN_POLICY_MISMATCH");
   if (nowMs - record.verifiedAtMs > maxAgeMs) throw new Error("SUPPLY_CHAIN_RECORD_STALE");
   const { evidenceSha256, contentAddressedPath, ...base } = record;
   if (evidenceSha256 !== await sha256(base) || contentAddressedPath !== `evidence/certification/supply-chain/${evidenceSha256}.json`) throw new Error("SUPPLY_CHAIN_RECORD_DIGEST_INVALID");

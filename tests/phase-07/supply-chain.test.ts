@@ -27,7 +27,7 @@ const binding = {
 };
 const provenance = {
   _type: "https://in-toto.io/Statement/v1", subject: [{ name: `registry.example/napplet@sha256:${artifactSha256}`, digest: { sha256: artifactSha256 } }], predicateType: "https://slsa.dev/provenance/v1",
-  predicate: { buildDefinition: { externalParameters: { candidateId, sourceRevision: binding.sourceRevision, lockSha256, toolchainSha256, datasetSha256: binding.inputs.datasetSha256 } } },
+  predicate: { buildDefinition: { externalParameters: { candidateId, sourceRevision: binding.sourceRevision, sourceSha256: binding.sourceSha256, lockSha256, toolchainSha256, datasetSha256: binding.inputs.datasetSha256 } } },
 };
 binding.inputs.provenanceSha256 = digest(canonicalJson(provenance));
 const cosignBytes = new TextEncoder().encode("approved cosign bytes");

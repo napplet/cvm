@@ -42,6 +42,11 @@ async function sha256(value: unknown): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-256", bytes);
   return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
+async function sha256String(value: string): Promise<string> {
+  const bytes = new TextEncoder().encode(value);
+  const hash = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 const releaseManifest = () => ({
   version: 1,
   sourceRevision: "a".repeat(40),
@@ -76,8 +81,8 @@ async function protectedVerificationRecords(manifest: ReturnType<typeof releaseM
   const reproducibilityEvidenceSha256 = await sha256(reproducibilityBase);
   const supplyChainBase = {
     version: 1 as const, evidenceClass: "protected_live" as const, status: "verified" as const, candidateId, artifactSha256: manifest.inputs.workerImageDigest,
-    releaseBindingSha256, cosignExecutableSha256: manifest.supplyChainPolicy.cosign.executableSha256, cosignCommandSha256: digest("1"), signerIdentitySha256: await sha256(manifest.supplyChainPolicy.cosign.signerIdentity), issuerSha256: await sha256(manifest.supplyChainPolicy.cosign.issuer),
-    predicateType: "https://slsa.dev/provenance/v1" as const, sbomSha256: manifest.inputs.sbomSha256, provenanceSha256: manifest.inputs.provenanceSha256, reviewedComponentsSha256: digest("4"), verifiedAtMs: atMs,
+    releaseBindingSha256, cosignExecutableSha256: manifest.supplyChainPolicy.cosign.executableSha256, cosignCommandSha256: digest("1"), signerIdentitySha256: await sha256String(manifest.supplyChainPolicy.cosign.signerIdentity), issuerSha256: await sha256String(manifest.supplyChainPolicy.cosign.issuer),
+    predicateType: "https://slsa.dev/provenance/v1" as const, sbomFormat: manifest.supplyChainPolicy.sbom.bomFormat, sbomSpecVersion: manifest.supplyChainPolicy.sbom.specVersion, sbomGeneratorSha256: await sha256(manifest.supplyChainPolicy.sbom.generator), sbomSha256: manifest.inputs.sbomSha256, provenanceSha256: manifest.inputs.provenanceSha256, reviewedComponentsSha256: digest("4"), verifiedAtMs: atMs,
   };
   const supplyChainEvidenceSha256 = await sha256(supplyChainBase);
   return {
@@ -115,6 +120,15 @@ test("the sole evaluator rejects an observation whose candidate source digest di
   const records = await protectedVerificationRecords(rawManifest, candidateId);
   const observations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation(`/tmp/napplet-cvm-phase07-source-${crypto.randomUUID()}`, bindSupplyChainObservation({ ...observation(rawManifest, candidateId, requirement.claim, requirement.live), candidate: { ...observation(rawManifest, candidateId, requirement.claim, requirement.live).candidate, sourceSha256: digest("0") } }, records))));
   await expect(evaluateReleaseCertification(manifest, observations, { candidateId, nowMs: 2_000, verificationRecords: records })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_OBSERVATION_BINDING_MISMATCH" });
+});
+
+test("the sole evaluator rejects verification records bound to a self-selected manifest signer policy", async () => {
+  const trusted = releaseManifest();
+  const candidateId = digest("3");
+  const records = await protectedVerificationRecords(trusted, candidateId);
+  const observations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation(`/tmp/napplet-cvm-phase07-policy-${crypto.randomUUID()}`, bindSupplyChainObservation(observation(trusted, candidateId, requirement.claim, requirement.live), records))));
+  const substitutedManifest = parseReleaseCertificationManifest({ ...trusted, supplyChainPolicy: { ...trusted.supplyChainPolicy, cosign: { ...trusted.supplyChainPolicy.cosign, signerIdentity: "https://github.com/attacker/release.yml@refs/heads/main" } } });
+  await expect(evaluateReleaseCertification(substitutedManifest, observations, { candidateId, nowMs: 2_000, verificationRecords: records })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_VERIFICATION_RECORDS_INVALID" });
 });
 
 test("the sole evaluator blocks complete generic claim inventory when protected verification records are absent", async () => {

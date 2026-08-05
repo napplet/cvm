@@ -38,6 +38,14 @@ test("preflight writes every selected non-pass inventory record without invoking
   expect(outcome.records.map((record) => record.status)).toEqual(["blocked", "blocked"]);
 });
 
+test("all-suite dispatch refuses a partial claim inventory even when every adapter reports passed", async () => {
+  const claims = { admission: "release.admission_slo", telemetry: "release.telemetry_policy", chaos: "release.database_failover", restore: "release.checkpoint_object", "security-host": "release.compatible_host", "supply-chain": "release.supply_chain", "contextvm-payment-model": "release.contextvm_relay", publication: "release.sealed_upload" };
+  const adapters = Object.fromEntries(Object.entries(claims).map(([suite, claim]) => [suite, async () => ({ status: "passed", claims: [claim], limitations: [], reasonCode: "OBSERVATION_COMPLETE" })]));
+  const outcome = await runProtectedCertificationProfile({ profile, evidenceDirectory: `/tmp/napplet-cvm-certification-${crypto.randomUUID()}`, registry: { evidenceClass: "deterministic", adapters }, now: () => 1_000 });
+  expect(outcome.status).toBe("blocked");
+  expect(outcome.records.every((record) => record.status === "passed")).toBe(true);
+});
+
 test("malformed, throwing, and secret-bearing adapter output cannot fabricate a pass", async () => {
   const outcome = await runProtectedCertificationProfile({
     profile, selectedSuites: ["admission", "telemetry"], evidenceDirectory: `/tmp/napplet-cvm-certification-${crypto.randomUUID()}`,

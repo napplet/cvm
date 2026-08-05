@@ -47,7 +47,12 @@ export async function runProtectedCertificationSuite(input: Readonly<{ profile: 
 }
 
 export async function runProtectedCertificationProfile(input: Readonly<{ profile: ProtectedCertificationProfile; selectedSuites?: readonly ProtectedSuite[]; evidenceDirectory: string; registry?: ProtectedCertificationAdapterRegistry; preflightOnly?: boolean; now?: () => number }>): Promise<ProtectedCertificationRun> {
+  const selectedSuites = input.selectedSuites ?? PROTECTED_SUITES;
   const records: CertificationObservation[] = [];
-  for (const suite of input.selectedSuites ?? PROTECTED_SUITES) records.push(await runProtectedCertificationSuite({ ...input, suite }));
-  return { records, status: records.every((record) => record.status === "passed") ? "passed" : records.some((record) => record.status === "failed") ? "failed" : "blocked" };
+  for (const suite of selectedSuites) records.push(await runProtectedCertificationSuite({ ...input, suite }));
+  const allRequiredClaims = Object.values(suiteClaims).flat();
+  const completeAllSuites = selectedSuites.length === PROTECTED_SUITES.length && new Set(selectedSuites).size === PROTECTED_SUITES.length;
+  const completeInventory = allRequiredClaims.every((claim) => records.flatMap((record) => record.status === "passed" ? record.claims : []).filter((item) => item === claim).length === 1);
+  const passed = records.every((record) => record.status === "passed") && (!completeAllSuites || completeInventory);
+  return { records, status: passed ? "passed" : records.some((record) => record.status === "failed") ? "failed" : "blocked" };
 }

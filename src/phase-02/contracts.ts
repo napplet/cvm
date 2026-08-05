@@ -131,6 +131,8 @@ export const ContinuationLeaseBindingSchema = CorrelationSchema.extend({
   leaseToken: z.string().min(1),
 }).strict();
 export const CheckpointExportRequestSchema = ContinuationLeaseBindingSchema;
+/** Acknowledged coordinator fence; no worker effect may begin after this succeeds. */
+export const CheckpointFenceRequestSchema = ContinuationLeaseBindingSchema;
 export const CheckpointRestoreRequestSchema = ContinuationLeaseBindingSchema.extend({
   resumeClaim: z.string().min(1),
   archive: z.instanceof(Uint8Array),
@@ -140,6 +142,10 @@ export const CheckpointTerminationRequestSchema = ContinuationLeaseBindingSchema
 
 export const CheckpointExportResultSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("exported"), code: z.literal("WORKER_CHECKPOINT_EXPORTED"), proposal: CheckpointProposalSchema }).strict(),
+  z.object({ status: z.literal("denied"), code: z.literal("WORKER_CONTINUATION_DENIED") }).strict(),
+]);
+export const CheckpointFenceResultSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("fenced"), code: z.literal("WORKER_EFFECTS_FENCED") }).strict(),
   z.object({ status: z.literal("denied"), code: z.literal("WORKER_CONTINUATION_DENIED") }).strict(),
 ]);
 export const CheckpointRestoreResultSchema = z.discriminatedUnion("status", [
@@ -184,9 +190,11 @@ export type WorkerRunResult = z.infer<typeof WorkerRunResultSchema>;
 export type CheckpointProposal = z.infer<typeof CheckpointProposalSchema>;
 export type ContinuationLeaseBinding = z.infer<typeof ContinuationLeaseBindingSchema>;
 export type CheckpointExportRequest = z.infer<typeof CheckpointExportRequestSchema>;
+export type CheckpointFenceRequest = z.infer<typeof CheckpointFenceRequestSchema>;
 export type CheckpointRestoreRequest = z.infer<typeof CheckpointRestoreRequestSchema>;
 export type CheckpointTerminationRequest = z.infer<typeof CheckpointTerminationRequestSchema>;
 export type CheckpointExportResult = z.infer<typeof CheckpointExportResultSchema>;
+export type CheckpointFenceResult = z.infer<typeof CheckpointFenceResultSchema>;
 export type CheckpointRestoreResult = z.infer<typeof CheckpointRestoreResultSchema>;
 export type CheckpointTerminationResult = z.infer<typeof CheckpointTerminationResultSchema>;
 
@@ -197,6 +205,7 @@ export interface WorkerPort {
 
 /** Lifecycle extension uses only coordinator-issued project contracts, never provider handles. */
 export interface ContinuationWorkerPort extends WorkerPort {
+  fenceCheckpoint(request: CheckpointFenceRequest): Promise<CheckpointFenceResult>;
   exportCheckpoint(request: CheckpointExportRequest): Promise<CheckpointExportResult>;
   restoreCheckpoint(request: CheckpointRestoreRequest): Promise<CheckpointRestoreResult>;
   terminateCheckpoint(request: CheckpointTerminationRequest): Promise<CheckpointTerminationResult>;

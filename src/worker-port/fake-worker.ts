@@ -3,6 +3,8 @@ import { z } from "zod";
 import {
   CheckpointExportRequestSchema,
   CheckpointExportResultSchema,
+  CheckpointFenceRequestSchema,
+  CheckpointFenceResultSchema,
   CheckpointProposalSchema,
   CheckpointRestoreRequestSchema,
   CheckpointRestoreResultSchema,
@@ -15,6 +17,8 @@ import {
   WorkerRunResultSchema,
   type CheckpointExportRequest,
   type CheckpointExportResult,
+  type CheckpointFenceRequest,
+  type CheckpointFenceResult,
   type CheckpointProposal,
   type CheckpointRestoreRequest,
   type CheckpointRestoreResult,
@@ -145,6 +149,7 @@ export class DeterministicFakeWorker implements ContinuationWorkerPort {
   #activeContinuation?: ContinuationLeaseBinding;
   #restores = new Map<string, CheckpointRestoreResult>();
   #terminatedLeases = new Set<string>();
+  #fencedLeases = new Set<string>();
   #clock: () => number;
   #barrier?: () => Promise<void>;
 
@@ -251,10 +256,17 @@ export class DeterministicFakeWorker implements ContinuationWorkerPort {
 
   async exportCheckpoint(input: CheckpointExportRequest): Promise<CheckpointExportResult> {
     const parsed = CheckpointExportRequestSchema.safeParse(input);
-    if (!parsed.success || !this.matchesActiveLease(parsed.data)) return CheckpointExportResultSchema.parse({ status: "denied", code: "WORKER_CONTINUATION_DENIED" });
+    if (!parsed.success || !this.matchesActiveLease(parsed.data) || !this.#fencedLeases.has(parsed.data.leaseToken)) return CheckpointExportResultSchema.parse({ status: "denied", code: "WORKER_CONTINUATION_DENIED" });
     const record = this.#checkpointRecords.get(parsed.data.checkpointId);
     if (!record || !this.matchesRun(record.request, parsed.data) || !await validateCheckpointProposal(record.proposal, record.request, record.events)) return CheckpointExportResultSchema.parse({ status: "denied", code: "WORKER_CONTINUATION_DENIED" });
     return CheckpointExportResultSchema.parse({ status: "exported", code: "WORKER_CHECKPOINT_EXPORTED", proposal: record.proposal });
+  }
+
+  async fenceCheckpoint(input: CheckpointFenceRequest): Promise<CheckpointFenceResult> {
+    const parsed = CheckpointFenceRequestSchema.safeParse(input);
+    if (!parsed.success || !this.matchesActiveLease(parsed.data)) return CheckpointFenceResultSchema.parse({ status: "denied", code: "WORKER_CONTINUATION_DENIED" });
+    this.#fencedLeases.add(parsed.data.leaseToken);
+    return CheckpointFenceResultSchema.parse({ status: "fenced", code: "WORKER_EFFECTS_FENCED" });
   }
 
   async restoreCheckpoint(input: CheckpointRestoreRequest): Promise<CheckpointRestoreResult> {
@@ -277,6 +289,7 @@ export class DeterministicFakeWorker implements ContinuationWorkerPort {
     if (this.#terminatedLeases.has(parsed.data.leaseToken)) return CheckpointTerminationResultSchema.parse({ status: "terminated", code: "WORKER_LEASE_TERMINATED" });
     if (!this.matchesActiveLease(parsed.data)) return CheckpointTerminationResultSchema.parse({ status: "denied", code: "WORKER_CONTINUATION_DENIED" });
     this.#activeContinuation = undefined;
+    this.#fencedLeases.delete(parsed.data.leaseToken);
     this.#terminatedLeases.add(parsed.data.leaseToken);
     return CheckpointTerminationResultSchema.parse({ status: "terminated", code: "WORKER_LEASE_TERMINATED" });
   }

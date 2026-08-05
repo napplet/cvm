@@ -3,6 +3,7 @@ import type { ContinuationFundingStore } from "../persistence/funding-store";
 import {
   CheckpointProposalSchema,
   type CheckpointExportRequest,
+  type CheckpointFenceRequest,
   type CheckpointTerminationRequest,
   type ContinuationWorkerPort,
 } from "../phase-02/contracts";
@@ -144,6 +145,11 @@ export class ContinuationDeadlineReconciler {
       leaseToken: candidate.liveLeaseToken,
     };
 
+    // Fencing is an acknowledged worker-side boundary, not merely a database
+    // state label.  Export is forbidden until the worker has stopped accepting
+    // model/tool/build/network effects for this exact lease.
+    const fence = await this.options.worker.fenceCheckpoint(binding as CheckpointFenceRequest);
+    if (fence.status !== "fenced") return frozen({ status: "checkpoint_retryable", code: "CHECKPOINT_FENCE_RETRYABLE", sessionId: candidate.sessionId, pauseGeneration: candidate.pauseGeneration });
     const exported = await this.options.worker.exportCheckpoint(binding as CheckpointExportRequest);
     if (exported.status !== "exported") return frozen({ status: "checkpoint_retryable", code: "CHECKPOINT_EXPORT_DENIED", sessionId: candidate.sessionId, pauseGeneration: candidate.pauseGeneration });
 

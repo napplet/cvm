@@ -91,6 +91,7 @@ describe("DeterministicFakeWorker", () => {
     await worker.run(request, new AbortController().signal);
     const { resumeClaim, ...lease } = lifecycle;
 
+    expect(await worker.fenceCheckpoint(lease)).toMatchObject({ status: "fenced", code: "WORKER_EFFECTS_FENCED" });
     expect(await worker.exportCheckpoint(lease)).toMatchObject({ status: "exported", code: "WORKER_CHECKPOINT_EXPORTED", proposal: { checkpointId: lifecycle.checkpointId } });
     expect(await worker.exportCheckpoint({ ...lease, leaseToken: "lease-foreign" })).toEqual({ status: "denied", code: "WORKER_CONTINUATION_DENIED" });
 

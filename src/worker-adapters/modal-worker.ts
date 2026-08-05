@@ -7,6 +7,8 @@ import { canonicalJson } from "../promotion/schema";
 import {
   CheckpointExportRequestSchema,
   CheckpointExportResultSchema,
+  CheckpointFenceRequestSchema,
+  CheckpointFenceResultSchema,
   CheckpointRestoreRequestSchema,
   CheckpointRestoreResultSchema,
   CheckpointTerminationRequestSchema,
@@ -16,6 +18,8 @@ import {
   type ContinuationWorkerPort,
   type CheckpointExportRequest,
   type CheckpointExportResult,
+  type CheckpointFenceRequest,
+  type CheckpointFenceResult,
   type CheckpointRestoreRequest,
   type CheckpointRestoreResult,
   type CheckpointTerminationRequest,
@@ -380,6 +384,11 @@ export class ModalWorkerAdapter implements ContinuationWorkerPort {
   async exportCheckpoint(input: CheckpointExportRequest): Promise<CheckpointExportResult> {
     CheckpointExportRequestSchema.safeParse(input);
     return CheckpointExportResultSchema.parse({ status: "denied", code: "WORKER_CONTINUATION_DENIED" });
+  }
+
+  async fenceCheckpoint(input: CheckpointFenceRequest): Promise<CheckpointFenceResult> {
+    CheckpointFenceRequestSchema.safeParse(input);
+    return CheckpointFenceResultSchema.parse({ status: "denied", code: "WORKER_CONTINUATION_DENIED" });
   }
 
   async restoreCheckpoint(input: CheckpointRestoreRequest): Promise<CheckpointRestoreResult> {

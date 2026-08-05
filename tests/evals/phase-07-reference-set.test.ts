@@ -21,6 +21,33 @@ describe("Phase 07 actual-authority reference set", () => {
     expect((await executePhase07ReferenceCase(altered)).status).toBe("failed");
   }, 60_000);
 
+  test("binds each named authority observation to its typed scenario, never its coverage ID", async () => {
+    const fixture = validatePhase07ReferenceSet(JSON.parse(await readFile(fixturePath, "utf8")));
+    const results = await Promise.all(fixture.cases.map(executePhase07ReferenceCase));
+    expect(results).toHaveLength(64);
+    expect(results.map((result) => result.id).sort()).toEqual(fixture.cases.map((item) => item.id).sort());
+    for (const category of ["admission", "resilience", "security", "publication", "launch"] as const) {
+      const original = fixture.cases.find((item) => item.category === category)!;
+      const changed = structuredClone(original);
+      changed.scenario.schedule = [...changed.scenario.schedule, "semantic_canary"];
+      expect((await executePhase07ReferenceCase(changed)).status).toBe("failed");
+    }
+    const unsupported = structuredClone(fixture.cases[0]);
+    unsupported.scenario.input.mode = "semantic_canary";
+    expect((await executePhase07ReferenceCase(unsupported)).status).toBe("failed");
+  }, 60_000);
+
+  test("keeps comparator expectations out of authority adapters", async () => {
+    const source = await readFile("src/certification/phase-07-reference-set.ts", "utf8");
+    const adapterSource = source.slice(source.indexOf("async function observeAdmission"), source.indexOf("/** Runs the deterministic probe"));
+    expect(adapterSource).not.toMatch(/\.expected\b/u);
+    expect(adapterSource).toContain("runAdmissionAttempt");
+    expect(adapterSource).toContain("runFaultScenario");
+    expect(adapterSource).toContain("InMemoryLifecycleExporter");
+    expect(adapterSource).toContain("projectHostPublicationSurface");
+    expect(adapterSource).toContain("createProtectedInfrastructureDrillEvidence");
+  });
+
   test("keeps protected-live observations non-passing and rejects protected canaries", async () => {
     const fixture = validatePhase07ReferenceSet(JSON.parse(await readFile(fixturePath, "utf8")));
     expect(fixture.liveObservations.every((item) => item.status === "blocked" || item.status === "not_observed")).toBe(true);

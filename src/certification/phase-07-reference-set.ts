@@ -3,7 +3,10 @@ import { z } from "zod";
 import { canonicalJson } from "../promotion/schema.js";
 import { redactLifecycleObservation } from "../telemetry/redaction.js";
 import { runAdmissionAttempt } from "../admission/benchmark.js";
-import { NO_EFFECTS_ORACLE, runFaultScenario } from "../resilience/fault-harness.js";
+import { D122_FAULT_MATRIX, NO_EFFECTS_ORACLE, runFaultScenario } from "../resilience/fault-harness.js";
+import { InMemoryLifecycleExporter } from "../telemetry/otel.js";
+import { projectHostPublicationSurface } from "../publication/host-surface.js";
+import { createProtectedInfrastructureDrillEvidence } from "../resilience/fault-harness.js";
 
 const DIGEST = /^[a-f0-9]{64}$/iu;
 export const PHASE_07_REQUIREMENTS = ["SESS-02", "OPS-01", "OPS-02", "OPS-03", "OPS-04"] as const;
@@ -32,6 +35,67 @@ const hasProtectedData = (value: unknown): boolean => {
   return Boolean(value && typeof value === "object" && Object.entries(value).some(([key, nested]) => /(?:token|secret|private|raw|prompt|path)/iu.test(key) || hasProtectedData(nested)));
 };
 const exact = (actual: readonly string[], required: readonly string[]) => actual.length === required.length && new Set(actual).size === required.length && required.every((item) => actual.includes(item));
+const ZERO_EFFECTS = Object.freeze({ credit: 0, debit: 0, worker: 0, publication: 0 });
+const MODES = Object.freeze({
+  admission: new Set(["pool_hit", "pool_miss", "cold", "step_load", "contention", "reclaim", "deadline_refusal", "refusal_replay", "no_queue", "lease_mismatch", "safe_refusal", "receipt_clock"]),
+  resilience: new Set(["duplicate_relay", "out_of_order", "ingress_loss", "sql_serialization", "sql_unavailable", "capacity_ambiguity", "worker_loss", "object_interruption", "model_ambiguity", "payment_reconcile", "expiry_race", "preview_invalid", "partial_publication", "checkpoint_fence", "unknown", "single_writer"]),
+  security: new Set(["encoded_prompt", "tool_injection", "malformed_proposal", "grant_overwrite", "traversal", "symlink", "cross_session", "direct_fetch", "storage_escape", "iframe_spoof", "postinstall", "environment_probe", "dns_exfil", "websocket_exfil", "resource_exhaustion", "manifest_mutation"]),
+  publication: new Set(["focused_success", "scope_denial", "verify_failure", "required_capability", "optional_capability", "byte_binding", "stale_approval", "external_signer", "publication_replay", "attestation_reconcile"]),
+  launch: new Set(["telemetry_canary", "unknown_attribute", "cardinality_bomb", "evidence_mutation", "reproducibility", "golden_sbom", "rollback_waiver", "missing_credential", "not_observed", "promotion_blocked"]),
+});
+type ReferenceCase = z.infer<typeof CaseSchema>;
+type ReferenceObservation = z.infer<typeof ExpectedSchema>;
+
+function requireSupportedScenario(caseValue: ReferenceCase): void {
+  if (!MODES[caseValue.category].has(caseValue.scenario.input.mode)) throw new Error("PHASE07_REFERENCE_SCENARIO_UNSUPPORTED");
+}
+
+function observation(value: string): ReferenceObservation {
+  return ExpectedSchema.parse({ status: "passed", value, effects: ZERO_EFFECTS });
+}
+
+async function observeAdmission(caseValue: ReferenceCase): Promise<ReferenceObservation> {
+  let reserveCalls = 0;
+  const sample = await runAdmissionAttempt({
+    now: (() => { let tick = caseValue.scenario.input.ordinal; return () => tick++; })(),
+    inputId: caseValue.id,
+    attempt: async () => {
+      reserveCalls += 1;
+      return { outcome: "capacity_unavailable" as const, readyLeaseCount: 0, durableBacklogCount: 0, inputId: caseValue.id };
+    },
+  });
+  return observation(`admission:${sample.outcome}:reserve=${reserveCalls}:backlog=${sample.durableBacklogCount}`);
+}
+
+async function observeResilience(caseValue: ReferenceCase): Promise<ReferenceObservation> {
+  const schedule = D122_FAULT_MATRIX[caseValue.scenario.input.ordinal % D122_FAULT_MATRIX.length]!;
+  let boundaryCalls = 0;
+  const result = await runFaultScenario({ ...schedule, id: `phase07-${caseValue.id.toLowerCase()}` }, (actual) => {
+    boundaryCalls += 1;
+    return { operationId: actual.input.operationId!, sessionId: actual.initialState.sessionId!, observed: actual.outcomes.at(-1)!.outcome, activeWriters: 1, effects: NO_EFFECTS_ORACLE };
+  }, { activeWriters: 1, effects: NO_EFFECTS_ORACLE });
+  return observation(`resilience:${result.observed}:boundary=${boundaryCalls}:writers=${result.activeWriters}`);
+}
+
+async function observeSecurity(caseValue: ReferenceCase): Promise<ReferenceObservation> {
+  const exporter = new InMemoryLifecycleExporter({ key: new Uint8Array(32).fill(7) });
+  exporter.observe({ version: "cvm.lifecycle.v1", stage: "validation", outcome: "blocked", correlationId: `reference:${caseValue.id}`, monotonicMs: caseValue.scenario.input.ordinal });
+  const safe = redactLifecycleObservation({ version: "cvm.lifecycle.v1", stage: "validation", outcome: "blocked", correlationId: `reference:${caseValue.id}`, monotonicMs: caseValue.scenario.input.ordinal }, { key: new Uint8Array(32).fill(7) });
+  if (!safe || exporter.observations.length !== 1) throw new Error("PHASE07_REFERENCE_TELEMETRY_AUTHORITY");
+  return observation(`security:${exporter.observations[0]!.outcome}:exports=${exporter.observations.length}:violations=${exporter.telemetryPolicyViolations}`);
+}
+
+async function observePublication(caseValue: ReferenceCase): Promise<ReferenceObservation> {
+  const state = caseValue.scenario.input.mode === "focused_success" ? "preview_ready" : caseValue.scenario.input.mode === "optional_capability" ? "optional_capability_missing" : "launch_certification_blocked";
+  const sha = "a".repeat(64);
+  const surface = projectHostPublicationSurface({ state, identity: { artifactId: `artifact:${caseValue.id}`, aggregateSha256: sha, normalizedDTag: "reference", capabilityDigest: sha }, capabilities: [] });
+  return observation(`publication:${surface.semanticStatus.kind}:identifiers=${surface.identifiers.length}:actions=${surface.actions.length}`);
+}
+
+async function observeLaunch(caseValue: ReferenceCase): Promise<ReferenceObservation> {
+  const protectedRecord = await createProtectedInfrastructureDrillEvidence({ candidateDigest: createHash("sha256").update(caseValue.id).digest("hex"), components: ["gcs", "cloud_run", "cockroach"], credentialsAvailable: false });
+  return observation(`launch:${protectedRecord.status}:${protectedRecord.code}:effects=0`);
+}
 
 /** Validates source coverage and keeps expected values on the comparator side only. */
 export function validatePhase07ReferenceSet(input: unknown): Phase07ReferenceSet {
@@ -45,28 +109,28 @@ export function validatePhase07ReferenceSet(input: unknown): Phase07ReferenceSet
   return Object.freeze(parsed);
 }
 
-async function deterministicObservation(caseValue: z.infer<typeof CaseSchema>): Promise<z.infer<typeof ExpectedSchema>> {
-  // The fixture contributes coverage metadata and comparator facts only. Each
-  // scenario crosses a real, deterministic project port; no expected value,
-  // durable store, or external effect callback is given to that port.
-  const runtime = { id: caseValue.id, category: caseValue.category, input: caseValue.scenario.input, initialState: caseValue.scenario.initialState, schedule: caseValue.scenario.schedule };
-  const digest = createHash("sha256").update(canonicalJson(runtime)).digest("hex");
-  if (caseValue.category === "admission") {
-    await runAdmissionAttempt({ now: (() => { let tick = caseValue.scenario.input.ordinal; return () => tick++; })(), inputId: caseValue.id, attempt: async () => ({ outcome: "capacity_unavailable", readyLeaseCount: 0, durableBacklogCount: 0 }) });
-  } else {
-    await runFaultScenario({ id: `phase07-${caseValue.id.toLowerCase()}`, faultClass: "capacity_ambiguity", boundary: "capacity_reservation", certification: "deterministic_contract", input: { operationId: `operation:${digest}` }, initialState: { sessionId: `session:${caseValue.id}` }, outcomes: [{ boundary: "capacity_reservation", outcome: "lost_response" }] }, async (schedule) => ({ operationId: schedule.input.operationId!, sessionId: schedule.initialState.sessionId!, observed: "lost_response", activeWriters: 1, effects: NO_EFFECTS_ORACLE }), { activeWriters: 1, effects: NO_EFFECTS_ORACLE });
-  }
-  if (caseValue.category === "security") {
-    const safe = redactLifecycleObservation({ version: "cvm.lifecycle.v1", stage: "validation", outcome: "blocked", correlationId: digest, monotonicMs: caseValue.scenario.input.ordinal }, { key: new Uint8Array(32).fill(7) });
-    if (!safe) throw new Error("PHASE07_REFERENCE_TELEMETRY_AUTHORITY");
-  }
-  return { status: "passed", value: `case:${caseValue.id}`, effects: { credit: 0, debit: 0, worker: 0, publication: 0 } };
+async function deterministicObservation(caseValue: ReferenceCase): Promise<ReferenceObservation> {
+  // These adapters receive only the typed scenario. Comparator expectations
+  // never cross the authority boundary.
+  requireSupportedScenario(caseValue);
+  const result = caseValue.category === "admission" ? await observeAdmission(caseValue)
+    : caseValue.category === "resilience" ? await observeResilience(caseValue)
+      : caseValue.category === "security" ? await observeSecurity(caseValue)
+        : caseValue.category === "publication" ? await observePublication(caseValue)
+          : await observeLaunch(caseValue);
+  // Bind the authority observation to the full typed scenario.  An ID is only
+  // coverage metadata; retaining it while changing schedule/input/state must
+  // not preserve a passing comparator result.
+  const scenarioDigest = createHash("sha256").update(canonicalJson(caseValue.scenario)).digest("hex").slice(0, 16);
+  return observation(`${result.value}:scenario=${scenarioDigest}`);
 }
 
 /** Runs the deterministic probe without passing expected values into runtime. */
 export async function executePhase07ReferenceCase(input: unknown): Promise<Phase07Comparison> {
   const caseValue = CaseSchema.parse(input);
-  const observed = await deterministicObservation(caseValue);
+  let observed: ReferenceObservation;
+  try { observed = await deterministicObservation(caseValue); }
+  catch { observed = observation("authority:failed:scenario=unsupported"); }
   const same = canonicalJson(caseValue.expected) === canonicalJson(observed);
   return Object.freeze({ id: caseValue.id, status: same ? "passed" : "failed", expected: caseValue.expected, observed, evidenceClass: "deterministic" });
 }

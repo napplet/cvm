@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 6
 current_phase_name: Sealed Preview & User-Owned Publication
 status: executing
-stopped_at: Completed 06-03-PLAN.md
-last_updated: "2026-08-05T09:01:07.722Z"
+stopped_at: Completed 06-04-PLAN.md
+last_updated: "2026-08-05T09:12:18.109Z"
 last_activity: 2026-08-05
 last_activity_desc: Phase 6 execution started
 progress:
   total_phases: 7
   completed_phases: 5
   total_plans: 40
-  completed_plans: 36
+  completed_plans: 37
   percent: 71
 ---
 
@@ -30,11 +30,11 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 6 (Sealed Preview & User-Owned Publication) — EXECUTING
-Plan: 4 of 7
+Plan: 5 of 7
 Status: Ready to execute
 Last activity: 2026-08-05 — Phase 6 execution started
 
-Progress: [█████████░] 90%
+Progress: [█████████░] 93%
 
 ## Milestone Progress
 
@@ -100,6 +100,7 @@ Progress: [█████████░] 90%
 | Phase 06 P01 | 5m 11s | 1 tasks | 5 files |
 | Phase 06-sealed-preview-user-owned-publication P02 | 38m 22s | 2 tasks | 8 files |
 | Phase 06 P03 | 9m 26s | 3 tasks | 11 files |
+| Phase 06 P04 | 9 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -174,6 +175,7 @@ Recent decisions affecting current work:
 - [Phase ?]: Publication intent IDs derive from complete canonical approval fingerprints; runtime compatibility remains bound by the capability digest.
 - [Phase ?]: Only nostr-tools/pure serialization, hash, and signature verification APIs enter production; owner signing remains external.
 - [Phase ?]: Publication commands must bind the durable intent fingerprint and all child operation IDs before any external effect.
+- [Phase ?]: Publication effects use one stable durable operation identity and unknown observations remain reconciliation-pending.
 
 ### Pending Todos
 
@@ -195,6 +197,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T09:01:07.714Z
-Stopped at: Completed 06-03-PLAN.md
+Last session: 2026-08-05T09:12:18.099Z
+Stopped at: Completed 06-04-PLAN.md
 Resume file: None

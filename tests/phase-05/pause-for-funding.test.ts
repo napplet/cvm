@@ -57,6 +57,14 @@ describe("funding interruption before every new effect", () => {
     expect(fixture.effects).toEqual({ dispatches: 0, workers: 0 });
     expect(fixture.store.meteredActions).toEqual([]);
     expect(fixture.store.postings).toHaveLength(1);
+    const durablePause = await fixture.store.transact(first.accountId, (transaction) => transaction.findContinuationPause(first.sessionId, 1));
+    expect(durablePause).toMatchObject({
+      state: "needs_top_up",
+      graceDeadlineMs: first.graceDeadlineMs,
+      liveLeaseToken: expect.stringMatching(/^lease:live:pending:/u),
+      intent: { reference: first.pendingActionReference, actionMaximum: first.actionMaximum, expectedSessionVersion: 0 },
+      result: first,
+    });
   });
 
   test("reports independent cap and balance shortfalls without extending the first deadline", async () => {

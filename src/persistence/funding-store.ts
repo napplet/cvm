@@ -35,8 +35,12 @@ export type MeteredFinalizationInput = MeteredFinalizeInput;
 export type MeteredFinalizationResult = MeteredAction;
 export type ContinuationRecord = Readonly<{ intent: PendingActionIntent; result: NeedsTopUpResult }>;
 export type ContinuationFundingSnapshot = Readonly<{ settledBalance: bigint; availableBalance: bigint; remainingCap: bigint }>;
-/** Durable, owner-bound pause state. The pending action is represented only by its digest. */
-export type ContinuationPauseInput = Readonly<{ accountId: string; sessionId: string; admissionReference: string; idempotencyKey: string; fingerprint: string; pendingFingerprint: string; expectedSessionVersion: number; pauseGeneration: number; graceDeadlineMs: number; liveLeaseToken: string; result: NeedsTopUpResult }>;
+/**
+ * Durable, owner-bound pause state.  The complete intent is stored with the
+ * pause rather than in a parallel compatibility record: wake, checkpoint, and
+ * explicit resume must all read the same immutable action identity.
+ */
+export type ContinuationPauseInput = Readonly<{ accountId: string; sessionId: string; admissionReference: string; idempotencyKey: string; fingerprint: string; pendingFingerprint: string; expectedSessionVersion: number; pauseGeneration: number; graceDeadlineMs: number; liveLeaseToken: string; intent: PendingActionIntent; result: NeedsTopUpResult }>;
 export type ContinuationPause = Omit<ContinuationPauseInput, "liveLeaseToken"> & Readonly<{ liveLeaseToken?: string; state: "needs_top_up" | "checkpointing" | "resume_required" | "claimed" | "expired" }>;
 export type ContinuationCheckpointInput = Readonly<{ accountId: string; sessionId: string; pauseGeneration: number; checkpointId: string; expectedSessionVersion: number; expectedArtifactVersion: number; manifestReference: string; objectKey: string; objectGeneration: string; objectChecksum: string; keyReference: string; compatibilityIdentity: string; checkpointCommittedAtMs: number }>;
 export type ContinuationCheckpoint = ContinuationCheckpointInput & Readonly<{ retentionDeadlineMs: number; state: "resume_required" | "claimed" | "expired"; liveLeaseToken?: string; claim?: ContinuationResumeClaim }>;
@@ -79,7 +83,6 @@ export interface ContinuationFundingTransaction extends FundingTransaction {
   continuationFundingSnapshot(admissionReference: string): Promise<ContinuationFundingSnapshot>;
   findContinuation(idempotencyKey: string): Promise<ContinuationRecord | undefined>;
   /** Persists the first pause deadline/result; callers replay it rather than extending grace. */
-  pauseForFunding(input: ContinuationRecord): Promise<ContinuationRecord>;
   pauseForFunding(input: ContinuationPauseInput): Promise<ContinuationPause>;
   findContinuationPause(sessionId: string, pauseGeneration: number): Promise<ContinuationPause | undefined>;
   wakePausedAction(input: Readonly<{ sessionId: string; pauseGeneration: number; nowMs: number; liveLeaseToken: string }>): Promise<ContinuationPause>;
@@ -137,7 +140,7 @@ export interface ContinuationFundingStore extends FundingStore {
 type TopUp = Readonly<{ topUpId: string; rail: "lightning" | "cashu"; unit: "sat"; amount: bigint; state: "credited"; verifiedAt: string; settlementReference: string; externalReference: string }>;
 type Hold = Readonly<{ reference: string; approvedCap: bigint; heldAmount: bigint }>;
 type Account = Readonly<{ settledAvailable: bigint; held: bigint; topUps: readonly TopUp[]; holds: readonly Hold[] }>;
-type State = { accounts: Map<string, Account>; commands: Map<string, StoredFundingCommand>; capacityIntents: Map<string, CapacityIntent>; actionBudgets: Map<string, ActionBudget>; meteredActions: Map<string, MeteredAction>; continuations: Map<string, ContinuationRecord>; continuationPauses: Map<string, ContinuationPause>; checkpoints: Map<string, ContinuationCheckpoint>; resumeClaims: Map<string, ContinuationResumeClaim>; restoreObservations: Map<string, RestoreObservationInput>; deletionOutcomes: Map<string, DeletionOutcomeInput>; externalReferences: Set<string>; settlementReferences: Set<string>; postings: LedgerPosting[]; evidence: FundingEvidence[]; outbox: FundingOutbox[]; lineItems: BillingLineItem[]; lineItemSequence: bigint };
+type State = { accounts: Map<string, Account>; commands: Map<string, StoredFundingCommand>; capacityIntents: Map<string, CapacityIntent>; actionBudgets: Map<string, ActionBudget>; meteredActions: Map<string, MeteredAction>; continuationPauses: Map<string, ContinuationPause>; checkpoints: Map<string, ContinuationCheckpoint>; resumeClaims: Map<string, ContinuationResumeClaim>; restoreObservations: Map<string, RestoreObservationInput>; deletionOutcomes: Map<string, DeletionOutcomeInput>; externalReferences: Set<string>; settlementReferences: Set<string>; postings: LedgerPosting[]; evidence: FundingEvidence[]; outbox: FundingOutbox[]; lineItems: BillingLineItem[]; lineItemSequence: bigint };
 
 function clone<T>(value: T): T { return structuredClone(value); }
 function freeze<T>(value: T): T {
@@ -171,7 +174,7 @@ function cursorAfter(accountId: string, cursor: string | undefined, items: reado
  * a durable ledger and must never be selected as production monetary storage.
  */
 export class TransactionalMemoryFundingStore implements MeteredFundingStore, ContinuationFundingStore {
-  #state: State = { accounts: new Map(), commands: new Map(), capacityIntents: new Map(), actionBudgets: new Map(), meteredActions: new Map(), continuations: new Map(), continuationPauses: new Map(), checkpoints: new Map(), resumeClaims: new Map(), restoreObservations: new Map(), deletionOutcomes: new Map(), externalReferences: new Set(), settlementReferences: new Set(), postings: [], evidence: [], outbox: [], lineItems: [], lineItemSequence: 0n };
+  #state: State = { accounts: new Map(), commands: new Map(), capacityIntents: new Map(), actionBudgets: new Map(), meteredActions: new Map(), continuationPauses: new Map(), checkpoints: new Map(), resumeClaims: new Map(), restoreObservations: new Map(), deletionOutcomes: new Map(), externalReferences: new Set(), settlementReferences: new Set(), postings: [], evidence: [], outbox: [], lineItems: [], lineItemSequence: 0n };
   #tail: Promise<void> = Promise.resolve();
 
   get postings(): readonly LedgerPosting[] { return freeze(clone(this.#state.postings)); }
@@ -197,12 +200,12 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
     return found ? freeze(clone(found)) : undefined;
   }
   async findContinuation(accountId: string, idempotencyKey: string): Promise<ContinuationRecord | undefined> {
-    const found = this.#state.continuations.get(commandKey(accountId, idempotencyKey));
-    return found ? freeze(clone(found)) : undefined;
+    const found = this.#state.continuationPauses.get(commandKey(accountId, idempotencyKey));
+    return found ? freeze({ intent: clone(found.intent), result: clone(found.result) }) : undefined;
   }
   async findContinuationForSession(accountId: string, sessionId: string): Promise<ContinuationRecord | undefined> {
-    const found = [...this.#state.continuations.values()].find((continuation) => continuation.intent.accountId === accountId && continuation.intent.sessionId === sessionId);
-    return found ? freeze(clone(found)) : undefined;
+    const found = [...this.#state.continuationPauses.values()].filter((pause) => pause.accountId === accountId && pause.sessionId === sessionId).sort((left, right) => right.pauseGeneration - left.pauseGeneration)[0];
+    return found ? freeze({ intent: clone(found.intent), result: clone(found.result) }) : undefined;
   }
   async findContinuationCheckpointForSession(accountId: string, sessionId: string): Promise<ContinuationCheckpoint | undefined> {
     const found = [...this.#state.checkpoints.values()].find((checkpoint) => checkpoint.accountId === accountId && checkpoint.sessionId === sessionId);
@@ -229,7 +232,7 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
     return freeze({ items: freeze(clone(items)), ...(last && start + items.length < all.length ? { nextCursor: cursorFor(accountId, last) } : {}) });
   }
   async sessionStatus(accountId: string, sessionId: string): Promise<MeteredSessionRecord | undefined> {
-    const continuation = [...this.#state.continuations.values()].find((item) => item.intent.accountId === accountId && item.intent.sessionId === sessionId);
+    const continuation = [...this.#state.continuationPauses.values()].filter((item) => item.intent.accountId === accountId && item.intent.sessionId === sessionId).sort((left, right) => right.pauseGeneration - left.pauseGeneration)[0];
     if (continuation) return freeze({ accountId, sessionId, version: continuation.intent.expectedSessionVersion, status: "needs_top_up" as const });
     const actions = [...this.#state.meteredActions.values()].filter((action) => action.accountId === accountId && action.sessionId === sessionId);
     const action = actions.sort((left, right) => (right.sessionVersion ?? 0) - (left.sessionVersion ?? 0))[0];
@@ -320,25 +323,17 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
           if (!hold) throw new Error("ACTIVE_ADMISSION_REQUIRED");
           return freeze({ settledBalance: account.settledAvailable, availableBalance: account.settledAvailable - account.held, remainingCap: hold.heldAmount });
         },
-        findContinuation: async (idempotencyKey) => state.continuations.get(commandKey(accountId, idempotencyKey)),
-        pauseForFunding: (async (input: ContinuationRecord | ContinuationPauseInput) => {
-          if ("intent" in input) {
-            if (input.intent.accountId !== accountId) throw new Error("ACCOUNT_SCOPE_MISMATCH");
-            const key = commandKey(accountId, input.intent.idempotencyKey);
-            const existing = state.continuations.get(key);
-            if (existing) {
-              if (existing.intent.fingerprint !== input.intent.fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
-              return existing;
-            }
-            const next = freeze(clone(input));
-            state.continuations.set(key, next);
-            return next;
-          }
+        findContinuation: async (idempotencyKey) => {
+          const pause = state.continuationPauses.get(commandKey(accountId, idempotencyKey));
+          return pause && freeze({ intent: clone(pause.intent), result: clone(pause.result) });
+        },
+        pauseForFunding: (async (input: ContinuationPauseInput) => {
           if (input.accountId !== accountId) throw new Error("ACCOUNT_SCOPE_MISMATCH");
+          if (input.intent.accountId !== accountId || input.intent.sessionId !== input.sessionId || input.intent.idempotencyKey !== input.idempotencyKey || input.intent.fingerprint !== input.pendingFingerprint) throw new Error("CONTINUATION_INTENT_BINDING_INVALID");
           const command = commandKey(accountId, input.idempotencyKey);
           const existing = state.continuationPauses.get(command);
           if (existing) {
-            if (existing.fingerprint !== input.fingerprint || existing.sessionId !== input.sessionId || existing.pauseGeneration !== input.pauseGeneration) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
+            if (existing.fingerprint !== input.fingerprint || existing.sessionId !== input.sessionId || existing.pauseGeneration !== input.pauseGeneration || existing.intent.fingerprint !== input.intent.fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
             return existing;
           }
           const generation = [...state.continuationPauses.values()].find((pause) => pause.accountId === accountId && pause.sessionId === input.sessionId && pause.pauseGeneration === input.pauseGeneration);

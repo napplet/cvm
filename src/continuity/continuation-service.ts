@@ -84,7 +84,23 @@ export class ContinuationService {
         settledBalance: decimal(funding.settledBalance), availableBalance: decimal(funding.availableBalance), remainingCap: decimal(funding.remainingCap),
         graceDeadlineMs: deadline, checkpoint: { state: "live_worker", reference: `checkpoint-pending:${intent.reference}` }, nextRequiredAction,
       });
-      await transaction.pauseForFunding({ intent, result });
+      // One durable transition owns the replay result, exact grace deadline,
+      // complete pending intent, and live-worker lease.  No secondary record
+      // may be required for wake/checkpoint/resume to work.
+      await transaction.pauseForFunding({
+        accountId: intent.accountId,
+        sessionId: intent.sessionId,
+        admissionReference: intent.admissionReference,
+        idempotencyKey: intent.idempotencyKey,
+        fingerprint: intent.fingerprint,
+        pendingFingerprint: intent.fingerprint,
+        expectedSessionVersion: intent.expectedSessionVersion,
+        pauseGeneration: 1,
+        graceDeadlineMs: deadline,
+        liveLeaseToken: `lease:live:${intent.reference}:${intent.fingerprint.slice(0, 24)}`,
+        intent,
+        result,
+      });
       return result;
     });
   }

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { CapabilityReviewSchema, SealedArtifactIdentitySchema, type CapabilityReview, type ManifestCapability } from "./contracts.js";
 
 type CapabilityDetail = Readonly<ManifestCapability & { name: string; requirement: "required" | "optional"; compatibleRuntimes: readonly string[] }>;
@@ -34,7 +36,7 @@ function compareDetail(left: CapabilityDetail, right: CapabilityDetail): number 
 function frozen<T>(value: T): T { return Object.freeze(value); }
 
 /** Produces the only capability view used for preview approval: verified manifest plus host runtime. */
-export async function canonicalCapabilityReview(artifactInput: unknown, runtimeVariant: string): Promise<CapabilityReview> {
+export function canonicalCapabilityReviewSync(artifactInput: unknown, runtimeVariant: string): CapabilityReview {
   const artifact = SealedArtifactIdentitySchema.parse(artifactInput);
   if (!artifact.manifestCapabilities) throw new Error("MANIFEST_CAPABILITIES_REQUIRED");
   const declared = artifact.manifestCapabilities.map((value) => detail(value, runtimeVariant));
@@ -60,7 +62,12 @@ export async function canonicalCapabilityReview(artifactInput: unknown, runtimeV
     toolchainIdentity: artifact.toolchainIdentity,
     runtimeCompatibilityIdentity: artifact.runtimeCompatibilityIdentity,
   } as const;
-  return frozen(CapabilityReviewSchema.parse({ ...withoutDigest, capabilityDigest: await capabilityDigestForReview(withoutDigest) }));
+  return frozen(CapabilityReviewSchema.parse({ ...withoutDigest, capabilityDigest: createHash("sha256").update(canonicalCapabilityBytes(withoutDigest)).digest("hex") }));
+}
+
+/** Async API retained for callers that use Web Crypto; the canonical result is deterministic. */
+export async function canonicalCapabilityReview(artifactInput: unknown, runtimeVariant: string): Promise<CapabilityReview> {
+  return canonicalCapabilityReviewSync(artifactInput, runtimeVariant);
 }
 
 /** Exact versioned bytes are the review's approval boundary; its digest field is deliberately excluded. */

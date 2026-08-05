@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { canonicalCapabilityBytes, canonicalCapabilityReviewSync } from "./capability-review.js";
 import { CapabilityReviewSchema, PublicationIntentSchema, SealedArtifactIdentitySchema, type CapabilityReview, type OwnerManifestTemplate, type PublicationIntent, type SealedArtifactIdentity } from "./contracts.js";
 
 const encoder = new TextEncoder();
@@ -56,12 +57,12 @@ export function normalizePublicationDTag(value: string): string {
 function parsedInput(input: PublicationIntentInput) {
   const artifact = SealedArtifactIdentitySchema.parse(input.artifact);
   const review = CapabilityReviewSchema.parse(input.review);
+  const canonicalReview = canonicalCapabilityReviewSync(artifact, input.runtimeVariant);
   const dTag = normalizePublicationDTag(artifact.normalizedDTag);
-  if (artifact.accountId !== input.accountId || artifact.sessionId !== input.sessionId || review.artifactId !== artifact.artifactId || review.aggregateSha256 !== artifact.aggregateSha256 || normalizePublicationDTag(review.normalizedDTag) !== dTag || review.capabilityDigest.length !== 64 || !SHA256.test(review.capabilityDigest) || review.runtimeVariant !== input.runtimeVariant || review.compatibility === "incompatible") throw new Error("PUBLICATION_APPROVAL_BINDING_INVALID");
-  if (review.manifestSha256 !== undefined && review.manifestSha256 !== artifact.manifestSha256) throw new Error("PUBLICATION_APPROVAL_BINDING_INVALID");
-  if (review.policyIdentity !== undefined && review.policyIdentity !== artifact.policyIdentity) throw new Error("PUBLICATION_APPROVAL_BINDING_INVALID");
-  if (review.toolchainIdentity !== undefined && review.toolchainIdentity !== artifact.toolchainIdentity) throw new Error("PUBLICATION_APPROVAL_BINDING_INVALID");
-  if (review.runtimeCompatibilityIdentity !== undefined && review.runtimeCompatibilityIdentity !== artifact.runtimeCompatibilityIdentity) throw new Error("PUBLICATION_APPROVAL_BINDING_INVALID");
+  if (artifact.accountId !== input.accountId || artifact.sessionId !== input.sessionId || review.capabilityDigest.length !== 64 || !SHA256.test(review.capabilityDigest) || review.compatibility === "incompatible" || review.manifestSha256 === undefined || review.policyIdentity === undefined || review.toolchainIdentity === undefined || review.runtimeCompatibilityIdentity === undefined || JSON.stringify(review) !== JSON.stringify(canonicalReview)) throw new Error("PUBLICATION_APPROVAL_BINDING_INVALID");
+  // Keep the digest check explicit even though canonical equality already binds it:
+  // approval data remains safe if the schema later gains a non-canonical field.
+  if (createHash("sha256").update(canonicalCapabilityBytes(review)).digest("hex") !== review.capabilityDigest) throw new Error("PUBLICATION_APPROVAL_BINDING_INVALID");
   if (!Number.isInteger(input.createdAtMs) || !Number.isInteger(input.expiresAtMs) || input.createdAtMs <= 0 || input.expiresAtMs <= input.createdAtMs) throw new Error("PUBLICATION_EXPIRY_INVALID");
   return { artifact, review, dTag };
 }

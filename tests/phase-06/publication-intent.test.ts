@@ -93,6 +93,21 @@ test("rejects malformed normalized d-tags and changed approved fences", async ()
   expect(publicationIntentFingerprint(baseline)).not.toBe(publicationIntentFingerprint(changed));
 });
 
+test("recomputes the capability approval from the sealed artifact instead of trusting caller review fields", async () => {
+  const baseline = await input();
+  const forged = {
+    artifactId: baseline.artifact.artifactId,
+    aggregateSha256: baseline.artifact.aggregateSha256,
+    normalizedDTag: baseline.artifact.normalizedDTag,
+    runtimeVariant: baseline.runtimeVariant,
+    required: [],
+    optional: [],
+    compatibility: "compatible" as const,
+    capabilityDigest: "f".repeat(64),
+  };
+  expect(() => createPublicationIntent({ ...baseline, review: forged })).toThrow("PUBLICATION_APPROVAL_BINDING_INVALID");
+});
+
 test("persists exact idempotent replay and closes changed-fence key reuse", async () => {
   const store = new TransactionalMemoryPublicationStore();
   const service = new PublicationService({

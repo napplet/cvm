@@ -6,7 +6,7 @@ import { verifyReproducibilityRecord, writeReproducibilityRecord } from "../../s
 
 const digest = (value: string) => value.repeat(64).slice(0, 64);
 const binding = {
-  releaseId: digest("1"), sourceRevision: "a".repeat(40), inputs: {
+  releaseId: digest("1"), sourceRevision: "a".repeat(40), sourceSha256: digest("source-bytes"), inputs: {
     controlImageDigest: digest("2"), workerImageDigest: digest("3"), packageLockSha256: digest("4"), toolchainSha256: digest("5"),
     migrationSha256: digest("6"), configSha256: digest("7"), policySha256: digest("8"), datasetSha256: digest("9"), goldenSha256: digest("a"), sbomSha256: digest("b"), provenanceSha256: digest("c"),
   },
@@ -17,7 +17,7 @@ const artifactSha256 = digest("e");
 function observation(isolationId: string, runId: string) {
   return {
     version: 1, evidenceClass: "protected_live" as const, status: "passed" as const, candidateId, releaseBinding: binding,
-    isolationId, runId, sourceSha256: binding.sourceRevision.padEnd(64, "a"), lockSha256: binding.inputs.packageLockSha256,
+    isolationId, runId, sourceSha256: binding.sourceSha256, lockSha256: binding.inputs.packageLockSha256,
     toolchainSha256: binding.inputs.toolchainSha256, datasetSha256: binding.inputs.datasetSha256,
     outputArtifactSha256: artifactSha256, runnerEvidenceSha256: digest(isolationId === "isolation-one" ? "f" : "0"),
     startedAtMs: 1_000, completedAtMs: 1_100,
@@ -53,4 +53,19 @@ test("duplicate, stale, swapped, malformed, deterministic, divergent, changed-in
   ];
   for (const value of variants) await expect(verifyReproducibilityRecord(value, { nowMs: 1_300, maxAgeMs: 1_000 })).rejects.toThrow();
   await expect(verifyReproducibilityRecord(record(), { nowMs: 2_200, maxAgeMs: 1_000 })).rejects.toThrow("REPRODUCIBILITY_RECORD_STALE");
+});
+
+test("source revision and source bytes are independent exact release inputs", async () => {
+  const exactButUnrelatedDigest = digest("independent-source-bytes");
+  const exactBinding = { ...binding, sourceSha256: exactButUnrelatedDigest };
+  const exactRecords = [
+    { ...observation("isolation-one", "run-one"), releaseBinding: exactBinding, sourceSha256: exactButUnrelatedDigest },
+    { ...observation("isolation-two", "run-two"), releaseBinding: exactBinding, sourceSha256: exactButUnrelatedDigest },
+  ];
+  await expect(verifyReproducibilityRecord({ ...record(exactRecords), releaseBinding: exactBinding }, { nowMs: 1_300, maxAgeMs: 1_000 })).resolves.toMatchObject({ status: "verified" });
+
+  const prefixDerived = `${exactBinding.sourceRevision}${"0".repeat(24)}`;
+  const paddedRevisionRecords = exactRecords.map((entry) => ({ ...entry, sourceSha256: prefixDerived }));
+  await expect(verifyReproducibilityRecord({ ...record(paddedRevisionRecords), releaseBinding: exactBinding }, { nowMs: 1_300, maxAgeMs: 1_000 })).rejects.toThrow("REPRODUCIBILITY_SOURCE_DIGEST_INVALID");
+  await expect(verifyReproducibilityRecord({ ...record(exactRecords), releaseBinding: { ...exactBinding, sourceSha256: undefined } }, { nowMs: 1_300, maxAgeMs: 1_000 })).rejects.toThrow();
 });

@@ -26,6 +26,7 @@ describe("Phase 05 immutable design evidence", () => {
     try {
       const written = await writePhase05DesignEvidence(directory, { fixture, comparisons: gate.comparisons });
       await validatePhase05DesignEvidence(written);
+      await expect(validatePhase05DesignEvidence({ ...written, aggregate: { ...(written as any).aggregate, passed: 0 } } as never)).rejects.toThrow();
       await writeFile(join(directory, `${written.evidenceSha256}.json`), "different", "utf8");
       await expect(writePhase05DesignEvidence(directory, { fixture, comparisons: gate.comparisons })).rejects.toThrow("collision");
     } finally {

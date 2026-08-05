@@ -58,3 +58,44 @@ test("rejects a self-consistent substituted file set that does not match the tru
   })).rejects.toThrow("SEALED_NAMED_DEPLOY_INVALID");
   expect(source.uploadCalls).toBe(0);
 });
+
+test("locally fails closed when source callbacks claim success over partial or unknown relay outcomes", async () => {
+  const file = { path: "/index.html", mimeType: "text/html", bytes, sha256: await sha256(bytes), size: bytes.byteLength };
+  const input = {
+    operationId: "deploy:intent:local-outcome",
+    artifact: verifiedPhase06Artifact,
+    target: { kind: 35129 as const, dTag: verifiedPhase06Artifact.normalizedDTag },
+    sealedFiles: [file],
+    deployFiles: [file],
+    ownerEvent: signedPhase06EventFixture,
+    servers: ["https://blossom.example"],
+    relays: ["wss://relay.example"],
+    authorizeExactHashes: async (hashes: readonly string[]) => ({ hashes }),
+  };
+  for (const relayResult of ["partial", "unknown"] as const) {
+    const source = new DeterministicPromotedNappletCliSource();
+    source.relayResult = relayResult;
+    source.networkDeploySucceeded = () => true;
+    const result = await new PromotedNappletCliAdapter({ contract: probePromotedCliPreSignedRoute(fixture), source }).deployPreSignedNamed(input);
+    expect(result.state).toBe(relayResult);
+    expect(source.networkSuccessCalls).toBe(0);
+  }
+});
+
+test("converts incomplete source completion reports to unknown instead of publishing a completed result", async () => {
+  const source = new DeterministicPromotedNappletCliSource();
+  source.uploadFilesToServers = async ({ operationId }) => ({ operationId, state: "complete" });
+  const file = { path: "/index.html", mimeType: "text/html", bytes, sha256: await sha256(bytes), size: bytes.byteLength };
+  await expect(new PromotedNappletCliAdapter({ contract: probePromotedCliPreSignedRoute(fixture), source }).deployPreSignedNamed({
+    operationId: "deploy:intent:missing-upload-evidence",
+    artifact: verifiedPhase06Artifact,
+    target: { kind: 35129, dTag: verifiedPhase06Artifact.normalizedDTag },
+    sealedFiles: [file],
+    deployFiles: [file],
+    ownerEvent: signedPhase06EventFixture,
+    servers: ["https://blossom.example"],
+    relays: ["wss://relay.example"],
+    authorizeExactHashes: async (hashes) => ({ hashes }),
+  })).resolves.toMatchObject({ state: "unknown" });
+  expect(source.relayCalls).toBe(0);
+});

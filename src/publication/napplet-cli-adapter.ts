@@ -23,7 +23,6 @@ export type StructuredSourceEffect = Readonly<{ operationId: string; state: "com
 export type PromotedNappletCliSourcePort = Readonly<{
   uploadFilesToServers(input: Readonly<{ operationId: string; target: Readonly<{ kind: 35129; dTag: string }>; files: readonly PreSignedNamedDeployFile[]; servers: readonly string[]; authorizeExactHashes: (hashes: readonly string[]) => Promise<unknown> }>): Promise<StructuredSourceEffect>;
   publishEventWithSimplePool(input: Readonly<{ operationId: string; event: SignedOwnerManifestEvent; relays: readonly string[] }>): Promise<StructuredSourceEffect>;
-  networkDeploySucceeded(input: Readonly<{ upload: StructuredSourceEffect; relay: StructuredSourceEffect }>): boolean;
 }>;
 export type PromotedDeployResult = Readonly<{ state: "completed" | "partial" | "failed" | "unknown" | "publication_unavailable"; operationId: string; fullServerUploadId?: string; relayObservation?: string; safeReasonCode?: "PUBLICATION_UNAVAILABLE" }>;
 
@@ -37,6 +36,18 @@ export function canonicalSealedDeployAggregate(files: readonly Readonly<{ path: 
   const ordered = [...files].sort((left, right) => left.path.localeCompare(right.path));
   if (!ordered.length || ordered.some((file, index) => !file.path.startsWith("/") || !file.mimeType || !SHA256.test(file.sha256) || !Number.isSafeInteger(file.size) || file.size < 0 || (index > 0 && ordered[index - 1]?.path === file.path))) throw new Error("SEALED_NAMED_DEPLOY_INVALID");
   return createHash("sha256").update(JSON.stringify({ version: 1, files: ordered.map(({ path, mimeType, sha256, size }) => ({ path, mimeType, sha256: sha256.toLowerCase(), size })) })).digest("hex");
+}
+
+/** Treat source responses as untrusted observations and require local completion evidence. */
+function checkedSourceEffect(stage: "upload" | "relay", expectedOperationId: string, effect: unknown): StructuredSourceEffect {
+  if (!effect || typeof effect !== "object") throw new Error("PUBLICATION_OBSERVATION_INVALID");
+  const candidate = effect as Partial<StructuredSourceEffect>;
+  if (candidate.operationId !== expectedOperationId) throw new Error("PUBLICATION_OBSERVATION_OPERATION_MISMATCH");
+  if (candidate.state !== "complete" && candidate.state !== "partial" && candidate.state !== "failed" && candidate.state !== "unknown") throw new Error("PUBLICATION_OBSERVATION_INVALID");
+  const fullServerUploadId = typeof candidate.fullServerUploadId === "string" && candidate.fullServerUploadId.length > 0 ? candidate.fullServerUploadId : undefined;
+  const relayObservation = typeof candidate.relayObservation === "string" && candidate.relayObservation.length > 0 ? candidate.relayObservation : undefined;
+  if (candidate.state === "complete" && ((stage === "upload" && !fullServerUploadId) || (stage === "relay" && !relayObservation))) return { operationId: expectedOperationId, state: "unknown" };
+  return { operationId: expectedOperationId, state: candidate.state, ...(fullServerUploadId ? { fullServerUploadId } : {}), ...(relayObservation ? { relayObservation } : {}) };
 }
 
 export function assertPromotedCliIdentity(identity: PromotedNappletCliIdentity): PromotedNappletCliIdentity {
@@ -88,12 +99,9 @@ export class PromotedNappletCliAdapter {
       if (!exactSet([...requested], hashes)) throw new Error("BLOSSOM_AUTHORIZATION_SCOPE_INVALID");
       return input.authorizeExactHashes(hashes);
     };
-    const upload = await this.dependencies.source.uploadFilesToServers({ operationId: input.operationId, target: input.target, files: input.sealedFiles, servers: input.servers, authorizeExactHashes });
-    if (upload.operationId !== input.operationId) throw new Error("PUBLICATION_OBSERVATION_OPERATION_MISMATCH");
+    const upload = checkedSourceEffect("upload", input.operationId, await this.dependencies.source.uploadFilesToServers({ operationId: input.operationId, target: input.target, files: input.sealedFiles, servers: input.servers, authorizeExactHashes }));
     if (upload.state !== "complete") return { state: upload.state === "partial" ? "partial" : upload.state, operationId: input.operationId, fullServerUploadId: upload.fullServerUploadId };
-    const relay = await this.dependencies.source.publishEventWithSimplePool({ operationId: input.operationId, event: input.ownerEvent, relays: input.relays });
-    if (relay.operationId !== input.operationId) throw new Error("PUBLICATION_OBSERVATION_OPERATION_MISMATCH");
-    const complete = this.dependencies.source.networkDeploySucceeded({ upload, relay });
-    return { state: complete ? "completed" : relay.state === "failed" ? "failed" : relay.state === "unknown" ? "unknown" : "partial", operationId: input.operationId, fullServerUploadId: upload.fullServerUploadId, relayObservation: relay.relayObservation };
+    const relay = checkedSourceEffect("relay", input.operationId, await this.dependencies.source.publishEventWithSimplePool({ operationId: input.operationId, event: input.ownerEvent, relays: input.relays }));
+    return { state: relay.state === "complete" ? "completed" : relay.state === "failed" ? "failed" : relay.state === "unknown" ? "unknown" : "partial", operationId: input.operationId, fullServerUploadId: upload.fullServerUploadId, relayObservation: relay.relayObservation };
   }
 }

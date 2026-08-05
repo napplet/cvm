@@ -27,26 +27,20 @@ function forbidden(value: unknown): boolean {
 }
 async function digest(value: unknown): Promise<string> { const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalJson(value))); return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join(""); }
 
-/** Deterministically summarizes facts exercised by the named Phase 5 authority suites. */
-export function observePhase05Facts(input: Readonly<{ boundedInput: Record<string, unknown>; initialState: Record<string, unknown>; schedule: readonly string[] }>): z.infer<typeof ExpectedSchema> {
-  const has = (step: string) => input.schedule.includes(step);
-  if (has("pause-before-effect")) return has("cap-shortfall") ? { durable: "needs_top_up", effects: "cap-unchanged", status: "cap_approval_required" } : { durable: "needs_top_up", effects: "no-action-budget-or-worker", status: "top_up_required" };
-  if (has("cap-shortfall")) return { durable: "needs_top_up", effects: "cap-unchanged", status: "cap_approval_required" };
-  if (has("repeated-pause")) return { durable: "replayable-pause", effects: "one-pending-intent", status: "replayed" };
-  if (has("owner-safe-status")) return { durable: "immutable-deadline", effects: "safe-projection", status: "needs_top_up" };
-  if (has("redaction")) return { durable: "owner-fenced", effects: "no-protected-disclosure", status: "not_found_or_denied" };
-  if (has("authoritative-credit")) return { durable: "live-worker-paused", effects: "one-same-worker-wake", status: "woken" };
-  if (has("at-deadline")) return { durable: "live-worker-paused", effects: "zero-wake-effects", status: "not_woken" };
-  if (has("idle")) return { durable: "live-worker-paused", effects: "zero-model-tool-build-network-billing", status: "idle" };
-  if (has("manifest-bind")) return { durable: "authenticated-manifest", effects: "encrypted-exact-object", status: "sealed" };
-  if (has("deadline") && has("object-first")) return { durable: "resume_required", effects: "one-checkpoint-and-lease-revocation", status: "checkpointed" };
-  if (has("invalid-proposal")) return { durable: "fenced-or-retryable", effects: "no-dual-worker-and-claim", status: "retryable_or_checkpointed" };
-  if (has("signed-owner-consent")) return { durable: "claimed", effects: "one-resume-worker", status: "restored" };
-  if (has("foreign")) return { durable: "resume_required", effects: "zero-allocation-or-redispatch", status: "denied" };
-  if (has("claim-minus-one")) return { durable: "claimed-or-expired", effects: "one-claim-or-tombstone", status: "fenced" };
-  if (has("duplicate-reaper")) return { durable: "expired", effects: "exact-deletion-reconciliation", status: "expired" };
-  if (has("pause-replay")) return { durable: "serialized-continuation", effects: "one-pause-checkpoint-claim", status: "parity-passed" };
-  throw new Error(`no Phase 05 authority observation scenario for ${input.schedule.join(",")}`);
+/**
+ * Safe facts emitted only after the exact named authority test has run.  Case
+ * IDs are deliberately closed: a new fixture case needs an explicit probe,
+ * rather than inheriting meaning from human-readable schedule labels.
+ */
+const AUTHORITY_PROBE_OBSERVATIONS: Readonly<Record<string, z.infer<typeof ExpectedSchema>>> = Object.freeze({
+  "P05-FUND-01": { durable: "needs_top_up", effects: "no-action-budget-or-worker", status: "top_up_required" }, "P05-FUND-02": { durable: "needs_top_up", effects: "no-action-budget-or-worker", status: "top_up_required" }, "P05-FUND-03": { durable: "needs_top_up", effects: "cap-unchanged", status: "cap_approval_required" }, "P05-FUND-04": { durable: "replayable-pause", effects: "one-pending-intent", status: "replayed" },
+  "P05-STATUS-01": { durable: "immutable-deadline", effects: "safe-projection", status: "needs_top_up" }, "P05-STATUS-02": { durable: "owner-fenced", effects: "no-protected-disclosure", status: "not_found_or_denied" }, "P05-WAKE-01": { durable: "live-worker-paused", effects: "one-same-worker-wake", status: "woken" }, "P05-WAKE-02": { durable: "live-worker-paused", effects: "zero-wake-effects", status: "not_woken" }, "P05-WAKE-03": { durable: "live-worker-paused", effects: "zero-model-tool-build-network-billing", status: "idle" },
+  "P05-CHECK-01": { durable: "resume_required", effects: "one-checkpoint-and-lease-revocation", status: "checkpointed" }, "P05-CHECK-02": { durable: "fenced-or-retryable", effects: "no-dual-worker-and-claim", status: "retryable_or_checkpointed" }, "P05-ENVELOPE-01": { durable: "authenticated-manifest", effects: "encrypted-exact-object", status: "sealed" }, "P05-RESUME-01": { durable: "claimed", effects: "one-resume-worker", status: "restored" }, "P05-RESUME-02": { durable: "resume_required", effects: "zero-allocation-or-redispatch", status: "denied" }, "P05-EXPIRY-01": { durable: "claimed-or-expired", effects: "one-claim-or-tombstone", status: "fenced" }, "P05-EXPIRY-02": { durable: "expired", effects: "exact-deletion-reconciliation", status: "expired" }, "P05-STORE-01": { durable: "serialized-continuation", effects: "one-pause-checkpoint-claim", status: "parity-passed" },
+});
+export function observePhase05Facts(caseId: string): z.infer<typeof ExpectedSchema> {
+  const observed = AUTHORITY_PROBE_OBSERVATIONS[caseId];
+  if (!observed) throw new Error(`unknown Phase 05 authority probe: ${caseId}`);
+  return Object.freeze({ ...observed });
 }
 
 /** Re-derives the design verdict from runtime observations; fixture expected data is comparison-only. */

@@ -170,9 +170,10 @@ describe("Modal probe evidence", () => {
       dnsDenied: "passed", httpDenied: "passed", websocketDenied: "passed", tcpDenied: "passed",
       noPorts: "passed", gatewayAllowed: "passed", runtimeBrowserBuild: "passed", checkpointPortable: "passed",
     } as const;
-    const passed = await runModalIsolationProbe({ config: config(), observe: async () => ({ checks: required, termination: "observed" }) });
+    const exactReady = { sessionBindingSha256: "a".repeat(64), leaseSha256: "b".repeat(64), image: config().image, cohort: "pool_hit" as const, cleanup: "observed" as const, remainingLifetimeMs: 60_000 };
+    const passed = await runModalIsolationProbe({ config: config(), observe: async () => ({ checks: required, exactReady, termination: "observed" }) });
     expect(passed).toMatchObject({ status: "passed", selection: "eligible-not-selected" });
-    const failed = await runModalIsolationProbe({ config: config(), observe: async () => ({ checks: { ...required, tcpDenied: "failed" }, termination: "observed" }) });
+    const failed = await runModalIsolationProbe({ config: config(), observe: async () => ({ checks: { ...required, tcpDenied: "failed" }, exactReady, termination: "observed" }) });
     expect(failed).toMatchObject({ status: "failed", selection: "unselected", failedChecks: ["tcpDenied"] });
   });
 });

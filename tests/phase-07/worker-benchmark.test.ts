@@ -10,6 +10,8 @@ import {
   writeCertificationObservation,
 } from "../../src/certification/evidence";
 import { mkdtemp } from "node:fs/promises";
+import { detectWorkerAuthorityDelta, evaluateAdmissionSlo, runWorkerCandidateBenchmark } from "../../src/admission/benchmark";
+import { blockedFlyProbeEvidence } from "../../src/worker-adapters/fly-worker";
 
 const digest = (char: string) => char.repeat(64);
 const candidate = { id: digest("a"), provider: "modal", image: `registry.example/worker@sha256:${digest("b")}`, sourceSha256: digest("c") };
@@ -50,4 +52,21 @@ describe("certification evidence", () => {
 test("worker candidate is provider-neutral and rejects vendor-native authority", () => {
   expect(WorkerCandidateSchema.parse(candidate)).toMatchObject({ provider: "modal", id: candidate.id });
   expect(() => WorkerCandidateSchema.parse({ ...candidate, client: { token: "no" } })).toThrow();
+});
+
+test("worker benchmark keeps candidates unselected until identical fresh live evidence meets every cohort floor", async () => {
+  const result = await runWorkerCandidateBenchmark({
+    candidate, profile: { acceptedFloor: 3, forcedPoolHitFloor: 1, forcedPoolMissColdContentionFloor: 1, bootstrapReplicates: 20 },
+    execute: async (sample) => ({ ...sample, outcome: "accepted", receiptMonotonicMs: 100, readyMonotonicMs: 200, readyLeaseCount: 1, durableBacklogCount: 0, isolation: "passed", cleanup: "passed" }),
+  });
+  const flyResult = await runWorkerCandidateBenchmark({
+    candidate: { ...candidate, provider: "fly", id: digest("f") }, profile: result.profile,
+    execute: async (sample) => ({ ...sample, outcome: "accepted", receiptMonotonicMs: 100, readyMonotonicMs: 200, readyLeaseCount: 1, durableBacklogCount: 0, isolation: "passed", cleanup: "passed" }),
+  });
+  expect(flyResult.samples.map((sample) => [sample.id, sample.cohort])).toEqual(result.samples.map((sample) => [sample.id, sample.cohort]));
+  expect(evaluateAdmissionSlo(result)).toMatchObject({ status: "passed", selection: "unselected", provider: "modal" });
+  expect(evaluateAdmissionSlo(flyResult)).toMatchObject({ status: "passed", selection: "unselected", provider: "fly" });
+  expect(detectWorkerAuthorityDelta({ workerPort: "WorkerPort", continuationPort: "ContinuationWorkerPort", evidenceIdentity: "CertificationObservation" })).toMatchObject({ status: "no_change" });
+  expect(detectWorkerAuthorityDelta({ workerPort: "ModalWorkerPort", continuationPort: "ContinuationWorkerPort", evidenceIdentity: "CertificationObservation" })).toMatchObject({ status: "blocking_failure" });
+  await expect(blockedFlyProbeEvidence()).resolves.toMatchObject({ provider: "fly", status: "blocked", selection: "unselected" });
 });

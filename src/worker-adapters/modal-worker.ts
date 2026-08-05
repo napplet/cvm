@@ -68,6 +68,11 @@ const ProbeCheckSchema = z.object({
   runtimeBrowserBuild: z.enum(["passed", "failed"]),
   checkpointPortable: z.enum(["passed", "failed"]),
 }).strict();
+export const ExactSessionProbeSchema = z.object({
+  sessionBindingSha256: z.string().regex(/^[a-f0-9]{64}$/iu), leaseSha256: z.string().regex(/^[a-f0-9]{64}$/iu),
+  image: z.string().regex(SHA256_IMAGE), cohort: z.enum(["pool_hit", "pool_miss", "cold", "step_load", "contention", "reclaim", "ambiguity", "cleanup", "failure"]),
+  cleanup: z.literal("observed"), remainingLifetimeMs: z.number().int().positive().max(PHASE_02_POLICY_INITIAL.sandbox.lifetimeMinutes * 60_000),
+}).strict();
 export type ModalProbeChecks = z.infer<typeof ProbeCheckSchema>;
 export type ModalProbeEvidence = Readonly<{
   version: 1;
@@ -80,11 +85,12 @@ export type ModalProbeEvidence = Readonly<{
   image?: string;
   regions?: readonly string[];
   checks?: ModalProbeChecks;
+  exactReady?: z.infer<typeof ExactSessionProbeSchema>;
   failedChecks: readonly string[];
   limitations: readonly ["NOT_PRODUCTION_CERTIFIED", "SLO_NOT_MEASURED"];
   evidenceSha256: string;
 }>;
-export type ModalProbeObservation = Readonly<{ checks: ModalProbeChecks; termination: "observed" | "uncertain" }>;
+export type ModalProbeObservation = Readonly<{ checks: ModalProbeChecks; termination: "observed" | "uncertain"; exactReady: z.infer<typeof ExactSessionProbeSchema> }>;
 
 export type ModalSandboxCreateOptions = Readonly<{
   cpu: number;
@@ -239,7 +245,7 @@ async function observeLiveModalIsolation(config: ModalWorkerConfig): Promise<Mod
     ]);
     const [firstOutput, secondOutput] = await Promise.all([processOutput(firstProcess), processOutput(secondProcess)]);
     if (firstOutput.exitCode !== 0 || secondOutput.exitCode !== 0) throw new Error("probe command failed");
-    const reportSchema = z.object({ checks: ProbeCheckSchema, gatewayRequest: ToolRequestSchema, checkpointSha256: z.string().regex(/^[a-f0-9]{64}$/i), checkpoint: z.object({ inventory: CheckpointInventorySchema, manifestSha256: z.string().regex(/^[a-f0-9]{64}$/i) }).strict() }).strict();
+    const reportSchema = z.object({ checks: ProbeCheckSchema, exactReady: ExactSessionProbeSchema, gatewayRequest: ToolRequestSchema, checkpointSha256: z.string().regex(/^[a-f0-9]{64}$/i), checkpoint: z.object({ inventory: CheckpointInventorySchema, manifestSha256: z.string().regex(/^[a-f0-9]{64}$/i) }).strict() }).strict();
     const report = reportSchema.parse(JSON.parse(firstOutput.stdout));
     // Both fresh sandboxes must complete the same fixed probe before a report is considered.
     reportSchema.parse(JSON.parse(secondOutput.stdout));
@@ -258,7 +264,8 @@ async function observeLiveModalIsolation(config: ModalWorkerConfig): Promise<Mod
     await first.filesystem.copyToLocal(`${config.workspaceRoot}/checkpoint.tar.zst`, checkpointPath);
     const actualCheckpointSha256 = await sha256Bytes(await Bun.file(checkpointPath).arrayBuffer());
     if (actualCheckpointSha256 !== report.checkpointSha256) throw new Error("checkpoint hash mismatch");
-    return { checks: report.checks, termination: "observed" };
+    if (report.exactReady.image !== config.image) throw new Error("probe image differs from immutable candidate");
+    return { checks: report.checks, exactReady: report.exactReady, termination: "observed" };
   } finally {
     const failures: unknown[] = [];
     for (const sandbox of [second, first]) {
@@ -279,14 +286,14 @@ export async function runModalIsolationProbe(input: Readonly<{
   const config = ModalWorkerConfigSchema.parse(input.config);
   try {
     const observation = await (input.observe ?? observeLiveModalIsolation)(config);
-    const checks = ProbeCheckSchema.parse(observation.checks);
+    const checks = ProbeCheckSchema.parse(observation.checks); const exactReady = ExactSessionProbeSchema.parse(observation.exactReady);
     const failedChecks = Object.entries(checks).filter(([, status]) => status !== "passed").map(([id]) => id);
     if (observation.termination !== "observed") failedChecks.push("termination");
     if (failedChecks.length > 0) return failedEvidence(config, checks, failedChecks, "PROBE_ASSERTION_FAILED");
     return buildEvidence({
       provider: "modal", status: "passed", selection: "eligible-not-selected", reasonCode: "PROBE_COMPLETE",
       policyVersion: config.policyVersion, appName: config.appName, image: config.image,
-      ...(config.regions ? { regions: Object.freeze([...config.regions]) } : {}), checks, failedChecks: [],
+      ...(config.regions ? { regions: Object.freeze([...config.regions]) } : {}), checks, exactReady, failedChecks: [],
       limitations: ["NOT_PRODUCTION_CERTIFIED", "SLO_NOT_MEASURED"],
     });
   } catch {

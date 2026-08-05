@@ -162,7 +162,7 @@ export type PublicationEffectIntent = Readonly<z.infer<typeof PublicationEffectI
 
 export const PublicationObservationSchema = z.object({
   operationId: identifier,
-  state: z.enum(["completed", "unknown", "failed"]),
+  state: z.enum(["completed", "partial", "unknown", "failed"]),
   observationId: identifier,
   deploymentId: identifier.optional(),
   fullServerUploadId: identifier.optional(),
@@ -203,8 +203,10 @@ export interface OwnerEventVerifierPort {
 export interface NappletDeploymentPort {
   deployExact(input: Readonly<{ operationId: string; artifact: SealedArtifactIdentity; signedOwnerManifest: SignedOwnerManifestEvent }>): Promise<PublicationObservation>;
   publishOwnerManifest(input: Readonly<{ operationId: string; event: SignedOwnerManifestEvent }>): Promise<PublicationObservation>;
+  observe?(input: Readonly<{ operationId: string }>): Promise<PublicationObservation>;
 }
 export interface AttestationPort {
   publish(input: Readonly<{ operationId: string; artifact: SealedArtifactIdentity; ownerEventId: string }>): Promise<PublicationObservation>;
+  observe?(input: Readonly<{ operationId: string }>): Promise<PublicationObservation>;
 }
 export interface Phase06Clock { nowMs(): number; }

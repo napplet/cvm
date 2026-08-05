@@ -46,6 +46,6 @@ test("claims each effect once, persists ambiguous results, and reconciles only o
 test("keeps failed and partial effect states non-complete with a safe reconciliation action", async () => {
   const { service, intent, command } = await createService("failed");
   const result = await service.submitSignedManifest({ accountId: intent.accountId, intentId: intent.intentId, command, event: signedPhase06EventFixture });
-  expect(result.status).toBe("partial");
+  expect(result.state).toBe("partial");
   expect(await service.status({ accountId: intent.accountId, intentId: intent.intentId })).toMatchObject({ state: "partial", nextAction: "reconcile_publication" });
 });

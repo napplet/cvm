@@ -57,7 +57,7 @@ const assertText = (value: string, code: string) => { if (!value || value.length
 const assertFingerprint = (value: string) => { if (!/^[a-f0-9]{64}$/iu.test(value)) throw new Error("PUBLICATION_FINGERPRINT_INVALID"); };
 const conflict = (): never => { const error = new Error("PUBLICATION_COMMAND_CONFLICT") as PublicationCommandConflict; Object.defineProperty(error, "code", { value: "PUBLICATION_COMMAND_CONFLICT" }); throw error; };
 const toExternalState = (state: PublicationEffectState): PublicationEffectIntent["state"] => state === "observed_complete" ? "completed" : state === "observed_failed" ? "failed" : state === "unknown" || state === "observed_partial" ? "unknown" : state === "dispatching" ? "claimed" : "pending";
-const toObservation = (input: RecordPublicationObservationInput): PublicationObservation => immutable({ operationId: input.operationId, observationId: input.observationId, state: input.state === "observed_complete" ? "completed" : input.state === "observed_failed" ? "failed" : "unknown", ...(input.deploymentId ? { deploymentId: input.deploymentId } : {}), ...(input.fullServerUploadId ? { fullServerUploadId: input.fullServerUploadId } : {}), ...(input.relayObservation ? { relayObservation: input.relayObservation } : {}), ...(input.attestationId ? { attestationId: input.attestationId } : {}) });
+const toObservation = (input: RecordPublicationObservationInput): PublicationObservation => immutable({ operationId: input.operationId, observationId: input.observationId, state: input.state === "observed_complete" ? "completed" : input.state === "observed_partial" ? "partial" : input.state === "observed_failed" ? "failed" : "unknown", ...(input.deploymentId ? { deploymentId: input.deploymentId } : {}), ...(input.fullServerUploadId ? { fullServerUploadId: input.fullServerUploadId } : {}), ...(input.relayObservation ? { relayObservation: input.relayObservation } : {}), ...(input.attestationId ? { attestationId: input.attestationId } : {}) });
 const terminal = (state: PublicationEffectState) => state === "observed_complete" || state === "observed_partial" || state === "observed_failed";
 
 /**
@@ -189,7 +189,7 @@ export class TransactionalMemoryPublicationStore implements DurablePublicationSt
   }
   async #observeLegacy(state: State, observation: PublicationObservation): Promise<PublicationObservation> {
     const effect = state.effects.get(observation.operationId); if (!effect) throw new Error("PUBLICATION_EFFECT_NOT_CLAIMED");
-    const durableState: RecordPublicationObservationInput["state"] = observation.state === "completed" ? "observed_complete" : observation.state === "failed" ? "observed_failed" : "unknown";
+    const durableState: RecordPublicationObservationInput["state"] = observation.state === "completed" ? "observed_complete" : observation.state === "partial" ? "observed_partial" : observation.state === "failed" ? "observed_failed" : "unknown";
     if (terminal(effect.state)) { if (effect.observation?.observationId === observation.observationId) return effect.observation; throw new Error("PUBLICATION_OBSERVATION_IMMUTABLE"); }
     const next = immutable({ ...effect, state: durableState, observation: immutable(observation) }); state.effects.set(next.operationId, next); return immutable(observation);
   }

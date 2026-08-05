@@ -5,16 +5,16 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 7
 current_phase_name: Admission SLO, Resilience & Launch Safety
 status: executing
-stopped_at: Completed 07-01-PLAN.md
-last_updated: "2026-08-05T15:44:00.831Z"
+stopped_at: Completed 07-02-PLAN.md
+last_updated: "2026-08-05T15:53:31.578Z"
 last_activity: 2026-08-05
 last_activity_desc: Phase 7 Wave 0 baseline complete
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 51
-  completed_plans: 42
-  percent: 82
+  completed_plans: 43
+  percent: 84
 ---
 
 # Project State
@@ -30,11 +30,11 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 7 — Admission SLO, Resilience & Launch Safety
-Plan: 3 of 11
+Plan: 4 of 11
 Status: Ready to execute
 Last activity: 2026-08-05 — Phase 7 Wave 0 baseline complete
 
-Progress: [████████░░] 82%
+Progress: [████████░░] 84%
 
 ## Milestone Progress
 
@@ -107,6 +107,7 @@ Progress: [████████░░] 82%
 | Phase 06 P07 | 13m | 2 tasks | 7 files |
 | Phase 07-admission-slo-resilience-launch-safety P00 | 5m | 3 tasks | 12 files |
 | Phase 07-admission-slo-resilience-launch-safety P01 | 327s | 2 tasks | 5 files |
+| Phase 07-admission-slo-resilience-launch-safety P02 | 7m 17s | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -193,6 +194,8 @@ Recent decisions affecting current work:
 - [Phase ?]: The receipt clock starts after strict ContextVM envelope correlation and ends only at the matching exact-ready proof.
 - [Phase ?]: In-flight duplicate coalescing is transient; the durable capacity intent remains the cross-process authority and no queue or retry loop is introduced.
 - [Phase ?]: Capacity refusal is externally projected as a bounded capacity_unavailable response with only a protected admission reference.
+- [Phase ?]: OpenTelemetry metadata provenance passes do not authorize installation: all non-API package pins remain SUS and pending human approval.
+- [Phase ?]: Bun and Collector compatibility remain pending runtime execution and cannot be inferred from registry or tarball provenance.
 
 ### Pending Todos
 
@@ -214,6 +217,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T15:44:00.822Z
-Stopped at: Completed 07-01-PLAN.md
+Last session: 2026-08-05T15:53:31.569Z
+Stopped at: Completed 07-02-PLAN.md
 Resume file: None

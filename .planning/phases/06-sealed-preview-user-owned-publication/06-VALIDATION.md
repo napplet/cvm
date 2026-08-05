@@ -1,15 +1,15 @@
 ---
 phase: 06-sealed-preview-user-owned-publication
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: validated
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-08-05
 updated: 2026-08-05
 ---
 
 # Phase 6 — Validation Strategy
 
-> Nyquist contract for sealed preview, owner-held signing, exact-byte publication, and original-operation reconciliation. This remains `draft` until execution creates every named test/fake/evidence surface and the final Phase 6 gate passes.
+> Nyquist contract for sealed preview, owner-held signing, exact-byte publication, and original-operation reconciliation. Validated on 2026-08-05: every named deterministic surface exists and the final Phase 6 gate passes. Phase 7 live certification remains intentionally `not_observed`, not an automated-coverage gap.
 
 ## Validation principle
 
@@ -21,21 +21,21 @@ Exact comparisons use bytes, canonical UTF-8 strings, SHA-256 values, and intege
 
 | ID | Plan/task | Surface created before dependent implementation | Requirements | Initial proof command | File exists |
 |---|---|---|---|---|---|
-| 06-W0-01 | 06-01-01 | `tests/phase-06/tracer.test.ts` with local deterministic ports | PREV-01..04, PUB-01..05 | `bun test tests/phase-06/tracer.test.ts --timeout 10000` | ❌ |
-| 06-W0-02 | 06-02-01 | `tests/phase-06/fakes.ts`, `preview-descriptor.test.ts` | PREV-01 | `bun test tests/phase-06/preview-descriptor.test.ts --timeout 10000` | ❌ |
-| 06-W0-03 | 06-02-01 | `runtime-status.test.ts` | PREV-02 | `bun test tests/phase-06/runtime-status.test.ts --timeout 10000` | ❌ |
-| 06-W0-04 | 06-02-02 | `capability-review.test.ts` | PREV-03, PREV-04 | `bun test tests/phase-06/capability-review.test.ts --timeout 10000` | ❌ |
-| 06-W0-05 | 06-03-01 | `publication-intent.test.ts` | PUB-01 | `bun test tests/phase-06/publication-intent.test.ts --timeout 10000` | ❌ |
-| 06-W0-06 | 06-03-02 | `nostr-tools-direct-dependency.test.ts` | PUB-03 | `bun test tests/phase-06/nostr-tools-direct-dependency.test.ts --timeout 10000` | ❌ |
-| 06-W0-07 | 06-03-03 | `manifest-signature.test.ts` | PUB-02, PUB-03 | `bun test tests/phase-06/manifest-signature.test.ts --timeout 10000` | ❌ |
-| 06-W0-08 | 06-04-01 / 06-04-02 | `publication-store-parity.test.ts` | PUB-01, PUB-05 | `bun test tests/phase-06/publication-store-parity.test.ts --timeout 10000` | ❌ |
-| 06-W0-09 | 06-05-01 | `src/publication/napplet-cli-source-contract.ts`, `scripts/probe-phase-06-cli-source-contract.ts`, `tests/fixtures/phase-06-cli-source-contract.json`, `tests/phase-06/cli-source-contract.test.ts` | PUB-04 | `bun test tests/phase-06/cli-source-contract.test.ts --timeout 10000 && bun run scripts/probe-phase-06-cli-source-contract.ts` | ❌ |
-| 06-W0-10 | 06-05-02 | `sealed-deployment.test.ts` plus deterministic promoted-source fake gated by the exact-source result | PUB-04 | `bun test tests/phase-06/sealed-deployment.test.ts --timeout 10000` | ❌ |
-| 06-W0-11 | 06-05-03 | `publication-reconciliation.test.ts` | PUB-05 | `bun test tests/phase-06/publication-reconciliation.test.ts --timeout 10000` | ❌ |
-| 06-W0-12 | 06-06-01 | `tests/contextvm/publication-adapter.test.ts` including unavailable-probe announcement/effect cases | PREV-01..04, PUB-01..05 | `bun test tests/contextvm/publication-adapter.test.ts --timeout 10000` | ❌ |
-| 06-W0-13 | 06-06-02 | `host-surface.test.ts` | PREV-01..04, PUB-01..05 | `bun test tests/phase-06/host-surface.test.ts --timeout 10000` | ❌ |
-| 06-W0-14 | 06-07-01 | `tests/fixtures/phase-06-reference-set.json`, `tests/evals/phase-06-reference-set.test.ts` | PREV-01..04, PUB-01..05 | `bun test tests/evals/phase-06-reference-set.test.ts --timeout 10000` | ❌ |
-| 06-W0-15 | 06-07-02 | `src/verification/phase-06-design-evidence.ts`, `scripts/verify-phase-06-design-slice.ts` | PREV-01..04, PUB-01..05 | `bun run verify:phase06-design` | ❌ |
+| 06-W0-01 | 06-01-01 | `tests/phase-06/tracer.test.ts` with local deterministic ports | PREV-01..04, PUB-01..05 | `bun test tests/phase-06/tracer.test.ts --timeout 10000` | ✓ |
+| 06-W0-02 | 06-02-01 | `tests/phase-06/fakes.ts`, `preview-descriptor.test.ts` | PREV-01 | `bun test tests/phase-06/preview-descriptor.test.ts --timeout 10000` | ✓ |
+| 06-W0-03 | 06-02-01 | `runtime-status.test.ts` | PREV-02 | `bun test tests/phase-06/runtime-status.test.ts --timeout 10000` | ✓ |
+| 06-W0-04 | 06-02-02 | `capability-review.test.ts` | PREV-03, PREV-04 | `bun test tests/phase-06/capability-review.test.ts --timeout 10000` | ✓ |
+| 06-W0-05 | 06-03-01 | `publication-intent.test.ts` | PUB-01 | `bun test tests/phase-06/publication-intent.test.ts --timeout 10000` | ✓ |
+| 06-W0-06 | 06-03-02 | `nostr-tools-direct-dependency.test.ts` | PUB-03 | `bun test tests/phase-06/nostr-tools-direct-dependency.test.ts --timeout 10000` | ✓ |
+| 06-W0-07 | 06-03-03 | `manifest-signature.test.ts` | PUB-02, PUB-03 | `bun test tests/phase-06/manifest-signature.test.ts --timeout 10000` | ✓ |
+| 06-W0-08 | 06-04-01 / 06-04-02 | `publication-store-parity.test.ts` | PUB-01, PUB-05 | `bun test tests/phase-06/publication-store-parity.test.ts --timeout 10000` | ✓ |
+| 06-W0-09 | 06-05-01 | `src/publication/napplet-cli-source-contract.ts`, `scripts/probe-phase-06-cli-source-contract.ts`, `tests/fixtures/phase-06-cli-source-contract.json`, `tests/phase-06/cli-source-contract.test.ts` | PUB-04 | `bun test tests/phase-06/cli-source-contract.test.ts --timeout 10000 && bun run scripts/probe-phase-06-cli-source-contract.ts` | ✓ |
+| 06-W0-10 | 06-05-02 | `sealed-deployment.test.ts` plus deterministic promoted-source fake gated by the exact-source result | PUB-04 | `bun test tests/phase-06/sealed-deployment.test.ts --timeout 10000` | ✓ |
+| 06-W0-11 | 06-05-03 | `publication-reconciliation.test.ts` | PUB-05 | `bun test tests/phase-06/publication-reconciliation.test.ts --timeout 10000` | ✓ |
+| 06-W0-12 | 06-06-01 | `tests/contextvm/publication-adapter.test.ts` including unavailable-probe announcement/effect cases | PREV-01..04, PUB-01..05 | `bun test tests/contextvm/publication-adapter.test.ts --timeout 10000` | ✓ |
+| 06-W0-13 | 06-06-02 | `host-surface.test.ts` | PREV-01..04, PUB-01..05 | `bun test tests/phase-06/host-surface.test.ts --timeout 10000` | ✓ |
+| 06-W0-14 | 06-07-01 | `tests/fixtures/phase-06-reference-set.json`, `tests/evals/phase-06-reference-set.test.ts` | PREV-01..04, PUB-01..05 | `bun test tests/evals/phase-06-reference-set.test.ts --timeout 10000` | ✓ |
+| 06-W0-15 | 06-07-02 | `src/verification/phase-06-design-evidence.ts`, `scripts/verify-phase-06-design-slice.ts` | PREV-01..04, PUB-01..05 | `bun run verify:phase06-design` | ✓ |
 
 ## Per-plan verification map
 
@@ -121,3 +121,37 @@ Run in order:
 - No product prohibition is violated: exact verified bytes only, no same-origin/direct authority, no user key custody, no effect recreation during reconciliation, no partial-as-complete, no preview/top-up publication effect.
 - `evidence/design/phase-06.json` points to a hash-valid immutable record and repeated verification is deterministic.
 - Live integrations remain explicitly `not_observed` until Phase 7 executes them.
+
+## Validation Audit 2026-08-05
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 15 |
+| Resolved | 15 |
+| Escalated | 0 |
+
+The 15 gaps were stale Wave 0 `File exists` rows in the pre-execution draft, not missing behavioral coverage. Each named surface exists and was executed by the Phase gate below. No new test file was needed because the existing focused tests already exercise every requirement's hard behavioral edges.
+
+### Requirement-to-task execution map
+
+| Requirement | Tasks | Behavioral tests executed | Status |
+|-------------|-------|---------------------------|--------|
+| PREV-01 | 06-01-01, 06-02-01, 06-06-01 | `tracer`, `preview-descriptor`, `publication-adapter`, reference set | green |
+| PREV-02 | 06-01-01, 06-02-01, 06-06-02 | `runtime-status`, `host-surface`, reference set | green |
+| PREV-03 | 06-01-01, 06-02-02, 06-06-02 | `capability-review`, `host-surface`, reference set | green |
+| PREV-04 | 06-01-01, 06-02-02, 06-03-01, 06-06-01 | `capability-review`, `preview-descriptor`, `publication-intent`, `publication-adapter`, reference set | green |
+| PUB-01 | 06-01-01, 06-03-01, 06-04-01 | `tracer`, `publication-intent`, `publication-store-parity`, reference set | green |
+| PUB-02 | 06-01-01, 06-03-03, 06-06-01 | `manifest-signature`, `publication-adapter`, reference set | green |
+| PUB-03 | 06-01-01, 06-03-02, 06-03-03 | `nostr-tools-direct-dependency`, `manifest-signature`, reference set | green |
+| PUB-04 | 06-01-01, 06-05-01, 06-05-02 | `tracer`, `cli-source-contract`, `sealed-deployment`, source probe, reference set | green |
+| PUB-05 | 06-01-01, 06-04-01, 06-05-03 | `tracer`, `publication-store-parity`, `publication-reconciliation`, reference set | green |
+
+### Executed gates
+
+- Focused preview gate: 12 pass, 0 fail.
+- Focused intent/signature/store gate: 16 pass, 0 fail.
+- Focused deployment/reconciliation/ContextVM/host gate: 24 pass, 0 fail.
+- `bun run probe:phase06-cli-source`: `publication_unavailable` with `SOURCE_CHECKOUT_NOT_PROVIDED`; this is the expected fail-closed, live `not_observed` result.
+- `bun run eval:phase06`: 3 pass, 0 fail.
+- `bun run verify:phase06-design` twice: both passed, retaining explicit Phase 7 live-certification deferrals.
+- `bun test --timeout 10000`: 421 pass, 0 fail.

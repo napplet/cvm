@@ -7,7 +7,7 @@ import { runProtectedCertificationProfile } from "../../src/certification/runner
 
 const digest = (value: string) => value.repeat(64).slice(0, 64);
 const binding = {
-  releaseId: digest("1"), sourceRevision: "a".repeat(40), inputs: {
+  releaseId: digest("1"), sourceRevision: "a".repeat(40), sourceSha256: digest("e"), inputs: {
     controlImageDigest: digest("2"), workerImageDigest: digest("3"), packageLockSha256: digest("4"), toolchainSha256: digest("5"),
     migrationSha256: digest("6"), configSha256: digest("7"), policySha256: digest("8"), datasetSha256: digest("9"), goldenSha256: digest("a"), sbomSha256: digest("b"), provenanceSha256: digest("c"),
   },
@@ -51,6 +51,16 @@ test("a protected supply-chain adapter cannot claim release authority without ex
   });
   expect(calls).toBe(0);
   expect(outcome.records[0]).toMatchObject({ status: "blocked", reasonCode: "INPUT_UNAVAILABLE" });
+});
+
+test("a protected adapter cannot run when candidate source bytes differ from the trusted release source digest", async () => {
+  let calls = 0;
+  const outcome = await runProtectedCertificationProfile({
+    profile: { ...profile, candidate: { ...profile.candidate, sourceSha256: digest("0") } }, selectedSuites: ["admission"], evidenceDirectory: `/tmp/napplet-cvm-certification-${crypto.randomUUID()}`,
+    registry: { evidenceClass: "protected_live", adapters: { admission: async () => { calls += 1; return { status: "passed", claims: ["release.admission_slo"], limitations: [], reasonCode: "OBSERVATION_COMPLETE" }; } } }, now: () => 1_000,
+  });
+  expect(calls).toBe(0);
+  expect(outcome.records[0]).toMatchObject({ status: "failed", reasonCode: "EVIDENCE_INVALID" });
 });
 
 test("runner rejects empty or duplicate suite selection instead of silently succeeding", async () => {

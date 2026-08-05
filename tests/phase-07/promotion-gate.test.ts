@@ -45,6 +45,7 @@ async function sha256(value: unknown): Promise<string> {
 const releaseManifest = () => ({
   version: 1,
   sourceRevision: "a".repeat(40),
+  sourceSha256: digest("e"),
   releaseId: digest("1"),
   inputs: {
     controlImageDigest: digest("2"), workerImageDigest: digest("3"), packageLockSha256: digest("4"), toolchainSha256: digest("5"),
@@ -58,11 +59,11 @@ const observation = (manifest: ReturnType<typeof releaseManifest>, candidateId: 
   version: 1 as const, evidenceClass: live ? "protected_live" as const : "deterministic" as const, status, candidate: { id: candidateId, provider: "modal" as const, image: `example/worker@sha256:${digest("3")}`, sourceSha256: digest("e") },
   input: { datasetSha256: digest("9"), profileSha256: digest("f"), topologySha256: digest("0"), command: ["certify"] },
   startedAtMs: 1_000, completedAtMs: 1_001, expiresAtMs: 61_001, claims: status === "passed" ? [claim] : [], limitations: status === "passed" ? [] : ["topology-unavailable"], reasonCode: status === "passed" ? "OBSERVATION_COMPLETE" : "TOPOLOGY_UNAVAILABLE",
-  releaseBinding: { releaseId: manifest.releaseId, sourceRevision: manifest.sourceRevision, inputs: manifest.inputs },
+  releaseBinding: { releaseId: manifest.releaseId, sourceRevision: manifest.sourceRevision, sourceSha256: manifest.sourceSha256, inputs: manifest.inputs },
 });
 
 async function protectedVerificationRecords(manifest: ReturnType<typeof releaseManifest>, candidateId: string, atMs = 1_000) {
-  const releaseBindingSha256 = await sha256({ releaseId: manifest.releaseId, sourceRevision: manifest.sourceRevision, inputs: manifest.inputs });
+  const releaseBindingSha256 = await sha256({ releaseId: manifest.releaseId, sourceRevision: manifest.sourceRevision, sourceSha256: manifest.sourceSha256, inputs: manifest.inputs });
   const reproducibilityBase = {
     version: 1 as const, evidenceClass: "protected_live" as const, status: "verified" as const, candidateId,
     releaseBindingSha256, expectedArtifactSha256: manifest.inputs.workerImageDigest,
@@ -101,6 +102,15 @@ test("evidence blocks stale, cross-candidate, non-pass, and concurrent release p
   expect(first.status).toBe("promoted");
   await expect(evaluateReleaseCertification(manifest, [...valid.slice(0, -1), { ...valid.at(-1)!, candidate: { ...valid.at(-1)!.candidate, id: digest("c") } }], { candidateId, nowMs: 2_000, verificationRecords: records })).resolves.toMatchObject({ status: "blocked" });
   await expect(evaluateReleaseCertification(manifest, [...valid.slice(0, -1), { ...valid.at(-1)!, expiresAtMs: 1_500 }], { candidateId, nowMs: 2_000, verificationRecords: records })).resolves.toMatchObject({ status: "blocked" });
+});
+
+test("the sole evaluator rejects an observation whose candidate source digest differs from the manifest", async () => {
+  const rawManifest = releaseManifest();
+  const manifest = parseReleaseCertificationManifest(rawManifest);
+  const candidateId = digest("2");
+  const records = await protectedVerificationRecords(rawManifest, candidateId);
+  const observations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation(`/tmp/napplet-cvm-phase07-source-${crypto.randomUUID()}`, bindSupplyChainObservation({ ...observation(rawManifest, candidateId, requirement.claim, requirement.live), candidate: { ...observation(rawManifest, candidateId, requirement.claim, requirement.live).candidate, sourceSha256: digest("0") } }, records))));
+  await expect(evaluateReleaseCertification(manifest, observations, { candidateId, nowMs: 2_000, verificationRecords: records })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_OBSERVATION_BINDING_MISMATCH" });
 });
 
 test("the sole evaluator blocks complete generic claim inventory when protected verification records are absent", async () => {

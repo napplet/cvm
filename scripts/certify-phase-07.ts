@@ -22,7 +22,8 @@ async function profile(): Promise<ProtectedCertificationProfile> {
       ? { relativePath: (item as Record<string, string>).relativePath, evidenceSha256: (item as Record<string, string>).contentSha256.toLowerCase() } : null;
     const reproducibility = record(protectedRecords?.reproducibilityEvidence); const supplyChain = record(protectedRecords?.supplyChainEvidence);
     const root = typeof protectedRecords?.root === "string" && protectedRecords.root.startsWith("/") ? protectedRecords.root : null;
-    return { candidate: { id: candidate.id.toLowerCase(), provider: candidate.provider, image: candidate.image, sourceSha256: candidate.sourceSha256.toLowerCase() }, datasetSha256: value.datasetSha256.toLowerCase(), topologySha256: value.topologySha256.toLowerCase(), profileSha256: await digest(source), credentialsAvailable: Boolean(process.env.PHASE07_CERTIFICATION_SECRETS_PATH), ...(binding.success ? { releaseBinding: binding.data } : {}), ...(root && reproducibility && supplyChain ? { protectedVerificationReferences: { root, reproducibility, supplyChain } } : {}) };
+    if (!binding.success || candidate.sourceSha256.toLowerCase() !== binding.data.sourceSha256) return blockedProfile();
+    return { candidate: { id: candidate.id.toLowerCase(), provider: candidate.provider, image: candidate.image, sourceSha256: candidate.sourceSha256.toLowerCase() }, datasetSha256: value.datasetSha256.toLowerCase(), topologySha256: value.topologySha256.toLowerCase(), profileSha256: await digest(source), credentialsAvailable: Boolean(process.env.PHASE07_CERTIFICATION_SECRETS_PATH), releaseBinding: binding.data, ...(root && reproducibility && supplyChain ? { protectedVerificationReferences: { root, reproducibility, supplyChain } } : {}) };
   } catch { return blockedProfile(); }
 }
 async function main(): Promise<void> {

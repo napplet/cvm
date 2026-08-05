@@ -70,7 +70,7 @@ async function evaluateReleaseCertificationInner(
   const blocked = (responsibleRequirement: string | null, reason: string): ReleaseCertificationDecision => ({ candidateId: input.candidateId, releaseId: manifest.releaseId, evidenceSha256: input.evidenceSha256, status: "blocked", responsibleRequirement, reason });
   if (manifest.waivers.some((waiver) => waiver.expiresAtMs <= input.nowMs)) return blocked("waiver", "RELEASE_WAIVER_EXPIRED");
   if (!input.verificationRecords) return blocked("supply-chain", "RELEASE_VERIFICATION_RECORDS_REQUIRED");
-  const releaseBinding = { releaseId: manifest.releaseId, sourceRevision: manifest.sourceRevision, inputs: manifest.inputs };
+  const releaseBinding = { releaseId: manifest.releaseId, sourceRevision: manifest.sourceRevision, sourceSha256: manifest.sourceSha256, inputs: manifest.inputs };
   let verificationDigests: Readonly<{ reproducibilityEvidenceSha256: string; supplyChainEvidenceSha256: string }>;
   try {
     const reproducibility = await validateReproducibilityVerificationRecord(input.verificationRecords.reproducibility, { candidateId: input.candidateId, releaseBinding, artifactSha256: manifest.inputs.workerImageDigest, nowMs: input.nowMs });
@@ -88,8 +88,10 @@ async function evaluateReleaseCertificationInner(
   const bindingMatches = (observation: NonNullable<(typeof parsed)[number]["observation"]>): boolean => {
     const binding = observation.releaseBinding;
     if (!binding || binding.releaseId !== manifest.releaseId || binding.sourceRevision !== manifest.sourceRevision) return false;
-    return Object.entries(manifest.inputs).every(([key, value]) => binding.inputs[key as keyof typeof binding.inputs] === value)
-      && observation.candidate.image.endsWith(`@sha256:${manifest.inputs.workerImageDigest}`);
+    return binding.sourceSha256 === manifest.sourceSha256
+      && Object.entries(manifest.inputs).every(([key, value]) => binding.inputs[key as keyof typeof binding.inputs] === value)
+      && observation.candidate.image.endsWith(`@sha256:${manifest.inputs.workerImageDigest}`)
+      && observation.candidate.sourceSha256 === manifest.sourceSha256;
   };
   if (parsed.some((item) => !bindingMatches(item.observation!))) return blocked(null, "RELEASE_OBSERVATION_BINDING_MISMATCH");
   const supplyObservation = parsed.map((item) => item.observation!).find((item) => item.claims.includes("release.supply_chain"));

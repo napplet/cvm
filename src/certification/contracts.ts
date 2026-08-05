@@ -31,6 +31,7 @@ export const CertificationInputSchema = z.object({
 export const ReleaseObservationBindingSchema = z.object({
   releaseId: DigestSchema,
   sourceRevision: z.string().regex(/^[a-f0-9]{40,64}$/iu),
+  sourceSha256: DigestSchema,
   inputs: z.object({
     controlImageDigest: DigestSchema, workerImageDigest: DigestSchema, packageLockSha256: DigestSchema, toolchainSha256: DigestSchema,
     migrationSha256: DigestSchema, configSha256: DigestSchema, policySha256: DigestSchema, datasetSha256: DigestSchema,

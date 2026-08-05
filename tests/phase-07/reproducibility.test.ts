@@ -6,7 +6,7 @@ import { verifyReproducibilityRecord, writeReproducibilityRecord } from "../../s
 
 const digest = (value: string) => value.repeat(64).slice(0, 64);
 const binding = {
-  releaseId: digest("1"), sourceRevision: "a".repeat(40), sourceSha256: digest("source-bytes"), inputs: {
+  releaseId: digest("1"), sourceRevision: "a".repeat(40), sourceSha256: digest("e"), inputs: {
     controlImageDigest: digest("2"), workerImageDigest: digest("3"), packageLockSha256: digest("4"), toolchainSha256: digest("5"),
     migrationSha256: digest("6"), configSha256: digest("7"), policySha256: digest("8"), datasetSha256: digest("9"), goldenSha256: digest("a"), sbomSha256: digest("b"), provenanceSha256: digest("c"),
   },
@@ -56,7 +56,7 @@ test("duplicate, stale, swapped, malformed, deterministic, divergent, changed-in
 });
 
 test("source revision and source bytes are independent exact release inputs", async () => {
-  const exactButUnrelatedDigest = digest("independent-source-bytes");
+  const exactButUnrelatedDigest = digest("b");
   const exactBinding = { ...binding, sourceSha256: exactButUnrelatedDigest };
   const exactRecords = [
     { ...observation("isolation-one", "run-one"), releaseBinding: exactBinding, sourceSha256: exactButUnrelatedDigest },

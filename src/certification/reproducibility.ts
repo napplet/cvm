@@ -15,7 +15,6 @@ export const ProtectedBuildObservationSchema = z.object({
   outputArtifactSha256: DigestSchema, runnerEvidenceSha256: DigestSchema, startedAtMs: EpochMsSchema, completedAtMs: EpochMsSchema,
 }).strict().superRefine((value, context) => {
   if (value.completedAtMs < value.startedAtMs) context.addIssue({ code: "custom", message: "build observation chronology is invalid" });
-  if (!value.sourceSha256.startsWith(value.releaseBinding.sourceRevision)) context.addIssue({ code: "custom", message: "build source does not bind the release revision" });
   if (value.lockSha256 !== value.releaseBinding.inputs.packageLockSha256 || value.toolchainSha256 !== value.releaseBinding.inputs.toolchainSha256 || value.datasetSha256 !== value.releaseBinding.inputs.datasetSha256) {
     context.addIssue({ code: "custom", message: "build inputs do not bind the release" });
   }
@@ -49,6 +48,7 @@ export async function verifyReproducibilityRecord(input: unknown, options: Reado
   if (!Number.isInteger(maxAgeMs) || maxAgeMs < 1) throw new Error("REPRODUCIBILITY_FRESHNESS_INVALID");
   const [first, second] = parsed.records;
   if (first!.candidateId !== parsed.candidateId || second!.candidateId !== parsed.candidateId || !exactBinding(first!.releaseBinding, parsed.releaseBinding) || !exactBinding(second!.releaseBinding, parsed.releaseBinding)) throw new Error("REPRODUCIBILITY_RELEASE_BINDING_INVALID");
+  if (first!.sourceSha256 !== parsed.releaseBinding.sourceSha256 || second!.sourceSha256 !== parsed.releaseBinding.sourceSha256) throw new Error("REPRODUCIBILITY_SOURCE_DIGEST_INVALID");
   if (first!.isolationId === second!.isolationId || first!.runId === second!.runId) throw new Error("REPRODUCIBILITY_IDENTITIES_NOT_DISTINCT");
   if (first!.outputArtifactSha256 !== parsed.expectedArtifactSha256 || second!.outputArtifactSha256 !== parsed.expectedArtifactSha256) throw new Error("REPRODUCIBILITY_OUTPUT_MISMATCH");
   const completedAtMs = Math.max(first!.completedAtMs, second!.completedAtMs);

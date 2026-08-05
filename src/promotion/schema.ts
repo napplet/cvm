@@ -45,6 +45,7 @@ export type ReleaseCertificationManifest = {
   readonly version: 1;
   readonly releaseId: string;
   readonly sourceRevision: string;
+  readonly sourceSha256: string;
   readonly inputs: {
     readonly controlImageDigest: string;
     readonly workerImageDigest: string;
@@ -172,7 +173,7 @@ function releaseClaim(value: unknown, label: string): string {
 /** Parses the single authoritative release gate input.  It deliberately accepts
  * digests and observations only; vendor output, credentials, and key material never enter it. */
 export function parseReleaseCertificationManifest(value: unknown): ReleaseCertificationManifest {
-  const record = exactRecord(value, "release manifest", ["version", "releaseId", "sourceRevision", "inputs", "requirements", "waivers"]);
+  const record = exactRecord(value, "release manifest", ["version", "releaseId", "sourceRevision", "sourceSha256", "inputs", "requirements", "waivers"]);
   if (record.version !== 1) throw new Error("release manifest.version must be 1");
   const inputsRecord = exactRecord(record.inputs, "release manifest.inputs", [
     "controlImageDigest", "workerImageDigest", "packageLockSha256", "toolchainSha256", "migrationSha256", "configSha256",
@@ -200,7 +201,7 @@ export function parseReleaseCertificationManifest(value: unknown): ReleaseCertif
   });
   if (new Set(waivers.map((item) => item.class)).size !== waivers.length) throw new Error("release waiver classes must be unique");
   return deepFreeze({
-    version: 1, releaseId: sha256(record, "releaseId"), sourceRevision: revision(requiredString(record, "sourceRevision"), "release sourceRevision"),
+    version: 1, releaseId: sha256(record, "releaseId"), sourceRevision: revision(requiredString(record, "sourceRevision"), "release sourceRevision"), sourceSha256: sha256(record, "sourceSha256"),
     inputs: {
       controlImageDigest: sha256(inputsRecord, "controlImageDigest"), workerImageDigest: sha256(inputsRecord, "workerImageDigest"), packageLockSha256: sha256(inputsRecord, "packageLockSha256"), toolchainSha256: sha256(inputsRecord, "toolchainSha256"), migrationSha256: sha256(inputsRecord, "migrationSha256"), configSha256: sha256(inputsRecord, "configSha256"), policySha256: sha256(inputsRecord, "policySha256"), datasetSha256: sha256(inputsRecord, "datasetSha256"), goldenSha256: sha256(inputsRecord, "goldenSha256"), sbomSha256: sha256(inputsRecord, "sbomSha256"), provenanceSha256: sha256(inputsRecord, "provenanceSha256"),
     }, requirements, waivers,

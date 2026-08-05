@@ -95,7 +95,7 @@ status: complete
 
 ## Verification
 
-- `bun test --timeout 10000` — passed (492 tests).
+- `bun test --timeout 10000` — passed (493 tests).
 - `bun run eval:phase07` and `bun run verify:phase07-evidence -- --verify-existing` — passed.
 - Credential-free `certify:phase07 -- --profile=release --preflight-only` — correctly blocked/nonzero.
 - Credential-free `candidate:verify -- --release-evidence evidence/design/phase-07.json` — correctly blocked/nonzero.

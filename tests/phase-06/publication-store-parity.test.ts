@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import type { PublicationIntent } from "../../src/publication/contracts.js";
 import { TransactionalMemoryPublicationStore, type DurablePublicationStore } from "../../src/persistence/publication-store.js";
+import { PostgresSqlPublicationStore } from "../../src/persistence/postgres-sql-funding-store.js";
 import { SqlitePublicationStore } from "../../src/persistence/sqlite-publication-store.js";
 import { verifiedPhase06Artifact } from "./fakes.js";
 
@@ -89,14 +90,22 @@ test("PostgreSQL publication authority keeps serializable, original-operation pr
     Bun.file("migrations/phase-06/001_publication.sql").text(),
   ]);
   expect(store).toContain("implements MeteredFundingStore, ContinuationFundingStore, PublicationFundingStore");
+  expect(store).toContain("class PostgresSqlPublicationStore implements DurablePublicationStore");
+  expect(store).toContain("publication_signed_events");
   expect(store).toContain("BEGIN ISOLATION LEVEL SERIALIZABLE");
   expect(store).toContain('["40001", "40P01"]');
   expect(store).toContain("WHERE operation_id=$1 FOR UPDATE");
   expect(store).toContain("PUBLICATION_COMMAND_CONFLICT");
   for (const table of ["publication_commands", "publication_intents", "publication_effect_intents", "publication_records"] as const) expect(migration).toContain(`CREATE TABLE IF NOT EXISTS ${table}`);
+  expect(migration).toContain("CREATE TABLE IF NOT EXISTS publication_signed_events");
   expect(migration).toContain("UNIQUE (principal_id, idempotency_key)");
   expect(migration).toContain("UNIQUE (intent_id, effect_kind)");
   expect(migration).toContain("operation_id text NOT NULL UNIQUE");
   expect(migration).toContain("PHASE06_PUBLICATION_OBSERVATION_IMMUTABLE");
   expect(migration).not.toMatch(/CREATE TABLE[^;]*(generation_queue|request_queue)/is);
+});
+
+test("PostgreSQL publication authority exposes the complete DurablePublicationStore surface", () => {
+  const authority: DurablePublicationStore = new PostgresSqlPublicationStore({ connect: async () => ({ query: async () => ({ rows: [] }), release: () => undefined }) });
+  for (const method of ["createOrReplayIntent", "claimPublicationEffect", "recordPublicationObservation", "completePublicationRecord", "readPublicationStatus", "transact", "getIntent", "getStatus"] as const) expect(typeof authority[method]).toBe("function");
 });

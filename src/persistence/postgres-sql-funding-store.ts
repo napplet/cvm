@@ -1,7 +1,8 @@
 import type { AccountStatus, FundedAdmission, FundingResult } from "../phase-03/contracts";
 import { AccountStatusSchema, FundingResultSchema } from "../phase-03/contracts";
 import { canonicalMeteredTerminalResult, type ActionBudget, type ActionBudgetInput, type AdmissionInput, type BeginDeadlineCheckpointInput, type BillingLineItem, type BillingLineItemPage, type BillingLineItemPageRequest, type CapacityDispatchClaim, type CapacityIntent, type CapacityIntentInput, type CapacityObservationInput, type CompleteResumedActionInput, type ContinuationCheckpoint, type ContinuationCheckpointInput, type ContinuationFundingStore, type ContinuationFundingTransaction, type ContinuationPause, type ContinuationPauseInput, type ContinuationRecord, type ContinuationResumeClaim, type ContinuationResumeClaimInput, type ContinuationWakeDispatch, type CreditInput, type DeletionOutcomeInput, type MeteredAction, type MeteredFinalizeInput, type MeteredFundingStore, type MeteredFundingTransaction, type MeteredOperationClaim, type MeteredSessionRecord, type PrepareMeteredActionInput, type PublicationFundingStore, type ReconciliationClaim, type RestoreObservationInput, type StoredFundingCommand, type UsageUnknownInput, type WakeDispatchClaim, type WakeDispatchOutcomeInput } from "./funding-store";
-import type { ClaimPublicationEffectInput, ClaimPublicationEffectResult, CreatePublicationIntentInput, CreatePublicationIntentResult, DurablePublicationEffect, PublicationEffectKind, PublicationRecord, RecordPublicationObservationInput } from "./publication-store";
+import type { ClaimPublicationEffectInput, ClaimPublicationEffectResult, CreatePublicationIntentInput, CreatePublicationIntentResult, DurablePublicationEffect, DurablePublicationStore, PublicationEffectKind, PublicationRecord, PublicationStoreTransaction, RecordPublicationObservationInput } from "./publication-store";
+import type { PublicationEffectIntent, PublicationIntent, PublicationObservation, PublicationResult, PublicationStatus, SignedOwnerManifestEvent } from "../publication/contracts";
 import { SerializationFailure } from "./postgres-funding-store";
 import { NeedsTopUpResultSchema, PendingActionIntentSchema } from "../continuity/contracts";
 
@@ -177,8 +178,8 @@ export class PostgresSqlFundingStore implements MeteredFundingStore, Continuatio
       if (input.intent.accountId !== input.principalId || !/^[a-f0-9]{64}$/iu.test(input.requestFingerprintSha256)) throw new Error("PUBLICATION_COMMAND_INVALID");
       const prior = (await client.query("SELECT request_fingerprint_sha256,intent_id FROM publication_commands WHERE principal_id=$1 AND idempotency_key=$2 FOR UPDATE", [input.principalId, input.idempotencyKey])).rows[0];
       if (prior) {
-        if (asText(prior.request_fingerprint_sha256) !== input.requestFingerprintSha256 || asText(prior.intent_id) !== input.intent.intentId) throw new Error("PUBLICATION_COMMAND_CONFLICT");
-        const row = first(await client.query("SELECT record_json FROM publication_intents WHERE intent_id=$1 FOR UPDATE", [input.intent.intentId]), "PUBLICATION_COMMAND_INTEGRITY_INVALID");
+        if (asText(prior.request_fingerprint_sha256) !== input.requestFingerprintSha256) throw new Error("PUBLICATION_COMMAND_CONFLICT");
+        const row = first(await client.query("SELECT record_json FROM publication_intents WHERE intent_id=$1 FOR UPDATE", [asText(prior.intent_id)]), "PUBLICATION_COMMAND_INTEGRITY_INVALID");
         return frozen({ intent: (typeof row.record_json === "string" ? JSON.parse(row.record_json) : row.record_json) as CreatePublicationIntentResult["intent"], replayed: true });
       }
       const existing = (await client.query("SELECT record_json,request_fingerprint_sha256 FROM publication_intents WHERE intent_id=$1 FOR UPDATE", [input.intent.intentId])).rows[0];
@@ -266,6 +267,83 @@ export class PostgresSqlFundingStore implements MeteredFundingStore, Continuatio
       const row = first(balance, "ACCOUNT_BALANCE_NOT_FOUND");
       return AccountStatusSchema.parse({ accountId, unit: "sat", available: (asBigInt(row.settled_available) - asBigInt(row.held)).toString(), held: asText(row.held), topUps: topUps.rows.map((topUp) => ({ topUpId: topUp.top_up_id, state: topUp.state, amount: asText(topUp.amount), unit: topUp.unit, rail: topUp.rail, createdAt: new Date(topUp.created_at).toISOString(), verifiedAt: new Date(topUp.created_at).toISOString(), settlementReference: topUp.settlement_reference })), admissions: admissions.rows.map((hold) => ({ reference: hold.reference, approvedCap: asText(hold.held_amount), heldAmount: asText(hold.held_amount), unit: "sat" })) });
     } finally { client.release(); }
+  }
+}
+
+/**
+ * PublicationService-compatible PostgreSQL authority. Kept separate from the
+ * funding transaction signature so publication callers cannot accidentally
+ * acquire an account-scoped funding transaction as their persistence port.
+ */
+export class PostgresSqlPublicationStore implements DurablePublicationStore {
+  readonly production = true as const;
+  readonly #authority: PostgresSqlFundingStore;
+  constructor(private readonly pool: PostgresSqlPool, private readonly options: PostgresSqlStoreOptions = {}) {
+    this.#authority = new PostgresSqlFundingStore(pool, options);
+  }
+  async createOrReplayIntent(input: CreatePublicationIntentInput): Promise<CreatePublicationIntentResult> { return this.#authority.createOrReplayPublicationIntent(input); }
+  async claimPublicationEffect(input: ClaimPublicationEffectInput): Promise<ClaimPublicationEffectResult> { return this.#authority.claimPublicationEffect(input); }
+  async recordPublicationObservation(input: RecordPublicationObservationInput): Promise<DurablePublicationEffect> { return this.#authority.recordPublicationObservation(input); }
+  async completePublicationRecord(intentId: string): Promise<PublicationRecord> { return this.#authority.completePublicationRecord(intentId); }
+  async readPublicationStatus(intentId: string): Promise<PublicationRecord> { return this.#authority.readPublicationStatus(intentId); }
+  async getIntent(intentId: string): Promise<PublicationIntent | undefined> {
+    const client = await this.pool.connect();
+    try { const row = (await client.query<{ record_json: PublicationIntent | string }>("SELECT record_json FROM publication_intents WHERE intent_id=$1", [intentId])).rows[0]; return row && frozen(typeof row.record_json === "string" ? JSON.parse(row.record_json) : row.record_json); } finally { client.release(); }
+  }
+  async getStatus(intentId: string): Promise<PublicationStatus | PublicationResult | undefined> {
+    const intent = await this.getIntent(intentId); if (!intent) return undefined;
+    const client = await this.pool.connect();
+    try {
+      const command = (await client.query<{ result_json: PublicationResult | string | null }>("SELECT result_json FROM publication_commands WHERE intent_id=$1", [intentId])).rows[0];
+      if (command?.result_json) return frozen(typeof command.result_json === "string" ? JSON.parse(command.result_json) : command.result_json);
+    } finally { client.release(); }
+    const record = await this.readPublicationStatus(intentId);
+    return frozen(record.status === "complete" ? { status: "complete" as const, intentId, nextAction: "none" as const } : record.status === "partial" ? { status: "partial" as const, intentId, nextAction: "reconcile_publication" as const } : { status: "publication_reconciliation_pending" as const, intentId, nextAction: "reconcile_publication" as const });
+  }
+  async transact<T>(operation: (transaction: PublicationStoreTransaction) => Promise<T> | T): Promise<T> {
+    // Legacy callbacks are supported for signed-event persistence. Durable
+    // intent/effect operations above remain serializable database transactions.
+    return operation({
+      putIntent: async (intent) => (await this.createOrReplayIntent({ principalId: intent.accountId, idempotencyKey: intent.idempotencyKey, requestFingerprintSha256: intent.fingerprint, intent })).intent,
+      getIntent: async (intentId) => this.getIntent(intentId),
+      putSignedEvent: async (intentId, event) => this.#putSignedEvent(intentId, event),
+      getSignedEvent: async (intentId) => this.#getSignedEvent(intentId),
+      claimEffect: async (effect) => {
+        const result = await this.claimPublicationEffect({ intentId: effect.intentId, effectKind: effect.kind, operationId: effect.operationId, requestFingerprintSha256: effect.aggregateSha256 });
+        const state = result.effect.state === "observed_complete" ? "completed" : result.effect.state === "observed_failed" ? "failed" : result.effect.state === "unknown" ? "unknown" : result.effect.state === "dispatching" ? "claimed" : "pending";
+        return frozen({ claimed: result.claimed, effect: { ...effect, state } });
+      },
+      recordObservation: async (observation) => {
+        const record = await this.readPublicationStatus(observation.operationId.split(":").slice(1).join(":"));
+        const effect = Object.values(record.effects).find((candidate) => candidate.operationId === observation.operationId); if (!effect) throw new Error("PUBLICATION_EFFECT_NOT_CLAIMED");
+        await this.recordPublicationObservation({ operationId: observation.operationId, effectKind: effect.effectKind, state: observation.state === "completed" ? "observed_complete" : observation.state === "partial" ? "observed_partial" : observation.state === "failed" ? "observed_failed" : "unknown", observationId: observation.observationId, ...(observation.deploymentId ? { deploymentId: observation.deploymentId } : {}), ...(observation.fullServerUploadId ? { fullServerUploadId: observation.fullServerUploadId } : {}), ...(observation.relayObservation ? { relayObservation: observation.relayObservation } : {}), ...(observation.attestationId ? { attestationId: observation.attestationId } : {}) });
+        return frozen(observation);
+      },
+      getObservation: async (operationId) => this.#observation(operationId),
+      putCommandResult: async (intentId, fingerprint, result) => this.#putCommandResult(intentId, fingerprint, result),
+    });
+  }
+  async #putSignedEvent(intentId: string, event: SignedOwnerManifestEvent): Promise<SignedOwnerManifestEvent> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
+      const existing = (await client.query<{ event_json: SignedOwnerManifestEvent | string }>("SELECT event_json FROM publication_signed_events WHERE intent_id=$1 FOR UPDATE", [intentId])).rows[0];
+      if (existing) { const value = typeof existing.event_json === "string" ? JSON.parse(existing.event_json) as SignedOwnerManifestEvent : existing.event_json; if (value.id !== event.id) throw new Error("PUBLICATION_SIGNED_EVENT_CONFLICT"); await client.query("COMMIT"); return frozen(value); }
+      await client.query("INSERT INTO publication_signed_events(intent_id,event_id,event_json) VALUES ($1,$2,$3)", [intentId, event.id, JSON.stringify(event)]);
+      await client.query("COMMIT"); return frozen(event);
+    } catch (error) { await client.query("ROLLBACK").catch(() => undefined); throw error; } finally { client.release(); }
+  }
+  async #getSignedEvent(intentId: string): Promise<SignedOwnerManifestEvent | undefined> {
+    const client = await this.pool.connect();
+    try { const row = (await client.query<{ event_json: SignedOwnerManifestEvent | string }>("SELECT event_json FROM publication_signed_events WHERE intent_id=$1", [intentId])).rows[0]; return row && frozen(typeof row.event_json === "string" ? JSON.parse(row.event_json) : row.event_json); } finally { client.release(); }
+  }
+  async #observation(operationId: string): Promise<PublicationObservation | undefined> {
+    const client = await this.pool.connect();
+    try { const row = (await client.query<{ observation_json: PublicationObservation | string | null }>("SELECT observation_json FROM publication_effect_intents WHERE operation_id=$1", [operationId])).rows[0]; return row?.observation_json ? frozen(typeof row.observation_json === "string" ? JSON.parse(row.observation_json) : row.observation_json) : undefined; } finally { client.release(); }
+  }
+  async #putCommandResult(intentId: string, fingerprint: string, result: PublicationResult): Promise<PublicationResult> {
+    const client = await this.pool.connect();
+    try { await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE"); const row = (await client.query<{ result_json: PublicationResult | string | null }>("SELECT result_json FROM publication_commands WHERE intent_id=$1 FOR UPDATE", [intentId])).rows[0]; if (row?.result_json) { await client.query("COMMIT"); return frozen(typeof row.result_json === "string" ? JSON.parse(row.result_json) : row.result_json); } await client.query("UPDATE publication_commands SET result_json=$1 WHERE intent_id=$2", [JSON.stringify(result), intentId]); await client.query("COMMIT"); return frozen(result); } catch (error) { await client.query("ROLLBACK").catch(() => undefined); throw error; } finally { client.release(); }
   }
 }
 

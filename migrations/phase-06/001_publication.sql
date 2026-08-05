@@ -62,6 +62,16 @@ CREATE TABLE IF NOT EXISTS publication_effect_intents (
   CHECK ((state IN ('created','dispatching')) = (observation_json IS NULL))
 );
 
+-- Signed owner events are immutable owner-controlled publication input. The
+-- coordinator stores only the signed public event, never a signer capability.
+CREATE TABLE IF NOT EXISTS publication_signed_events (
+  intent_id text PRIMARY KEY REFERENCES publication_intents(intent_id),
+  event_id char(64) NOT NULL UNIQUE CHECK (event_id ~ '^[0-9a-fA-F]{64}$'),
+  event_json jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (jsonb_typeof(event_json) = 'object')
+);
+
 CREATE TABLE IF NOT EXISTS publication_records (
   intent_id text PRIMARY KEY REFERENCES publication_intents(intent_id),
   owner_event_id char(64) NOT NULL CHECK (owner_event_id ~ '^[0-9a-fA-F]{64}$'),

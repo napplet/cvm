@@ -19,7 +19,7 @@ test("07-W0-05 corpus binds promotion coverage and keeps protected live work non
   expect(registry.liveObservations.every((entry: { status: string }) => entry.status === "blocked" || entry.status === "not_observed")).toBe(true);
 });
 
-test("Phase 07 CLI seams reject unimplemented or protected work without a release pass or secret echo", async () => {
+test("blocked protected preflight emits not_observed-safe records without a release pass or secret echo", async () => {
   const deterministic = await run("scripts/eval-phase-07.ts", ["--suite=all"]);
   const existingEvidence = await run("scripts/verify-phase-07-evidence.ts", ["--verify-existing"]);
   const protectedPreflight = await run("scripts/certify-phase-07.ts", ["--profile=release", "--preflight-only"]);
@@ -33,7 +33,6 @@ test("Phase 07 CLI seams reject unimplemented or protected work without a releas
   expect(`${protectedPreflight.stdout}${protectedPreflight.stderr}`).not.toContain("supersecret");
 });
 
-test.todo("07-W0-05 rejects missing, stale, mutated, cross-candidate, skipped, blocked, and not_observed promotion evidence atomically");
 
 const digest = (value: string) => value.repeat(64).slice(0, 64);
 const releaseManifest = () => ({

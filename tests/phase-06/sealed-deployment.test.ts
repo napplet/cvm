@@ -17,8 +17,6 @@ test("deploys exact sealed bytes and the completed owner event through only the 
     target: { kind: 35129, dTag: verifiedPhase06Artifact.normalizedDTag },
     sealedFiles: [file],
     deployFiles: [file],
-    sealedAggregateSha256: verifiedPhase06Artifact.aggregateSha256,
-    deployAggregateSha256: verifiedPhase06Artifact.aggregateSha256,
     ownerEvent: signedPhase06EventFixture,
     servers: ["https://blossom.example"],
     relays: ["wss://relay.example"],
@@ -35,9 +33,28 @@ test("fails closed before source calls for unavailable source, altered bytes, wr
   const source = new DeterministicPromotedNappletCliSource();
   const file = { path: "/index.html", mimeType: "text/html", bytes, sha256: await sha256(bytes), size: bytes.byteLength };
   const input = {
-    operationId: "deploy:intent:sealed", artifact: verifiedPhase06Artifact, target: { kind: 35129 as const, dTag: verifiedPhase06Artifact.normalizedDTag }, sealedFiles: [file], deployFiles: [file], sealedAggregateSha256: verifiedPhase06Artifact.aggregateSha256, deployAggregateSha256: verifiedPhase06Artifact.aggregateSha256, ownerEvent: signedPhase06EventFixture, servers: ["https://blossom.example"], relays: ["wss://relay.example"], authorizeExactHashes: async (hashes: readonly string[]) => ({ hashes }),
+    operationId: "deploy:intent:sealed", artifact: verifiedPhase06Artifact, target: { kind: 35129 as const, dTag: verifiedPhase06Artifact.normalizedDTag }, sealedFiles: [file], deployFiles: [file], ownerEvent: signedPhase06EventFixture, servers: ["https://blossom.example"], relays: ["wss://relay.example"], authorizeExactHashes: async (hashes: readonly string[]) => ({ hashes }),
   };
   await expect(new PromotedNappletCliAdapter({ contract: { status: "publication_unavailable", liveExecution: "not_observed", reasonCode: "SOURCE_SNAPSHOT_INVALID" }, source }).deployPreSignedNamed(input)).resolves.toMatchObject({ state: "publication_unavailable" });
   await expect(new PromotedNappletCliAdapter({ contract: probePromotedCliPreSignedRoute(fixture), source }).deployPreSignedNamed({ ...input, target: { kind: 15129, dTag: "root" } })).rejects.toThrow("SEALED_NAMED_DEPLOY_INVALID");
+  expect(source.uploadCalls).toBe(0);
+});
+
+test("rejects a self-consistent substituted file set that does not match the trusted sealed manifest", async () => {
+  const source = new DeterministicPromotedNappletCliSource();
+  const adapter = new PromotedNappletCliAdapter({ contract: probePromotedCliPreSignedRoute(fixture), source });
+  const substitutedBytes = new TextEncoder().encode("substituted payload");
+  const substituted = { path: "/index.html", mimeType: "text/html", bytes: substitutedBytes, sha256: await sha256(substitutedBytes), size: substitutedBytes.byteLength };
+  await expect(adapter.deployPreSignedNamed({
+    operationId: "deploy:intent:substituted",
+    artifact: verifiedPhase06Artifact,
+    target: { kind: 35129, dTag: verifiedPhase06Artifact.normalizedDTag },
+    sealedFiles: [substituted],
+    deployFiles: [substituted],
+    ownerEvent: signedPhase06EventFixture,
+    servers: ["https://blossom.example"],
+    relays: ["wss://relay.example"],
+    authorizeExactHashes: async (hashes) => ({ hashes }),
+  })).rejects.toThrow("SEALED_NAMED_DEPLOY_INVALID");
   expect(source.uploadCalls).toBe(0);
 });

@@ -6,18 +6,23 @@ import type {
   SealedArtifactIdentity,
   SealedArtifactPort,
 } from "../../src/publication/contracts.js";
-import type { PromotedNappletCliSourcePort } from "../../src/publication/napplet-cli-adapter.js";
+import { canonicalSealedDeployAggregate, type PromotedNappletCliSourcePort } from "../../src/publication/napplet-cli-adapter.js";
+
+export const verifiedPhase06SealedFiles = Object.freeze([
+  Object.freeze({ path: "/index.html", mimeType: "text/html", sha256: "e1572f5549c18871efdf707d9d28292dae1b32b0b21f98c3def8ff045f540b85", size: 18 }),
+]);
 
 export const verifiedPhase06Artifact = Object.freeze({
   accountId: "account:phase-06-owner",
   sessionId: "session:phase-06-preview",
   artifactId: "artifact:phase-06-verified",
   artifactVersion: 7,
-  aggregateSha256: "a".repeat(64),
+  aggregateSha256: canonicalSealedDeployAggregate(verifiedPhase06SealedFiles),
   manifestSha256: "b".repeat(64),
   verificationEvidenceSha256: "c".repeat(64),
   sealedObjectGeneration: "generation:phase-06",
   sealedObjectSha256: "d".repeat(64),
+  sealedFiles: verifiedPhase06SealedFiles,
   entrypoint: "/index.html",
   normalizedDTag: "phase-06-napplet",
   requiredCapabilities: ["notes.read"],

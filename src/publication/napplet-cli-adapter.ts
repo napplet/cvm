@@ -13,8 +13,6 @@ export type PreSignedNamedDeployInput = Readonly<{
   target: Readonly<{ kind: 35129; dTag: string }>;
   sealedFiles: readonly PreSignedNamedDeployFile[];
   deployFiles: readonly PreSignedNamedDeployFile[];
-  sealedAggregateSha256: string;
-  deployAggregateSha256: string;
   ownerEvent: SignedOwnerManifestEvent;
   servers: readonly string[];
   relays: readonly string[];
@@ -34,6 +32,13 @@ const bytesEqual = (left: Uint8Array, right: Uint8Array) => left.byteLength === 
 const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const exactSet = (left: readonly string[], right: readonly string[]) => left.length === right.length && left.every((value) => right.includes(value)) && new Set(left).size === left.length;
 
+/** Hashes the verified file-manifest facts in a deterministic path order. */
+export function canonicalSealedDeployAggregate(files: readonly Readonly<{ path: string; mimeType: string; sha256: string; size: number }>[]): string {
+  const ordered = [...files].sort((left, right) => left.path.localeCompare(right.path));
+  if (!ordered.length || ordered.some((file, index) => !file.path.startsWith("/") || !file.mimeType || !SHA256.test(file.sha256) || !Number.isSafeInteger(file.size) || file.size < 0 || (index > 0 && ordered[index - 1]?.path === file.path))) throw new Error("SEALED_NAMED_DEPLOY_INVALID");
+  return createHash("sha256").update(JSON.stringify({ version: 1, files: ordered.map(({ path, mimeType, sha256, size }) => ({ path, mimeType, sha256: sha256.toLowerCase(), size })) })).digest("hex");
+}
+
 export function assertPromotedCliIdentity(identity: PromotedNappletCliIdentity): PromotedNappletCliIdentity {
   if (identity.version !== NAPPLET_CLI_PROMOTED_IDENTITY.version || identity.sourceCommit !== NAPPLET_CLI_PROMOTED_IDENTITY.sourceCommit || identity.linuxSha256 !== NAPPLET_CLI_PROMOTED_IDENTITY.linuxSha256) throw new Error("PROMOTED_CLI_IDENTITY_MISMATCH");
   return NAPPLET_CLI_PROMOTED_IDENTITY;
@@ -46,14 +51,15 @@ export function assertAvailablePromotedCliSourceContract(contract: PromotedCliSo
 
 /** Verifies the service-owned sealed records before any external source facade is called. */
 export function assertSealedNamedDeployPlan(input: PreSignedNamedDeployInput): void {
-  if (!input.operationId || input.target.kind !== 35129 || normalizePublicationDTag(input.target.dTag) !== input.artifact.normalizedDTag || input.sealedAggregateSha256 !== input.artifact.aggregateSha256 || input.deployAggregateSha256 !== input.artifact.aggregateSha256) throw new Error("SEALED_NAMED_DEPLOY_INVALID");
+  if (!input.operationId || input.target.kind !== 35129 || normalizePublicationDTag(input.target.dTag) !== input.artifact.normalizedDTag || canonicalSealedDeployAggregate(input.artifact.sealedFiles) !== input.artifact.aggregateSha256) throw new Error("SEALED_NAMED_DEPLOY_INVALID");
   SignedOwnerManifestEventSchema.parse(input.ownerEvent);
   if (input.ownerEvent.kind !== 35129 || input.ownerEvent.tags.find((tag) => tag[0] === "d")?.[1] !== input.artifact.normalizedDTag) throw new Error("SEALED_NAMED_DEPLOY_INVALID");
-  if (!input.sealedFiles.length || input.sealedFiles.length !== input.deployFiles.length || !input.servers.length || !input.relays.length) throw new Error("SEALED_NAMED_DEPLOY_INVALID");
+  if (!input.sealedFiles.length || input.sealedFiles.length !== input.artifact.sealedFiles.length || input.sealedFiles.length !== input.deployFiles.length || !input.servers.length || !input.relays.length) throw new Error("SEALED_NAMED_DEPLOY_INVALID");
   const paths = new Set<string>();
   for (const [index, sealed] of input.sealedFiles.entries()) {
     const deploy = input.deployFiles[index];
-    if (!deploy || !sealed.path.startsWith("/") || !sealed.mimeType || !SHA256.test(sealed.sha256) || sealed.size !== sealed.bytes.byteLength || digest(sealed.bytes) !== sealed.sha256 || paths.has(sealed.path) || sealed.path !== deploy.path || sealed.mimeType !== deploy.mimeType || sealed.size !== deploy.size || sealed.sha256 !== deploy.sha256 || !bytesEqual(sealed.bytes, deploy.bytes)) throw new Error("SEALED_NAMED_DEPLOY_INVALID");
+    const trusted = input.artifact.sealedFiles.find((file) => file.path === sealed.path);
+    if (!deploy || !trusted || !sealed.path.startsWith("/") || !sealed.mimeType || !SHA256.test(sealed.sha256) || sealed.size !== sealed.bytes.byteLength || digest(sealed.bytes) !== sealed.sha256 || paths.has(sealed.path) || sealed.mimeType !== trusted.mimeType || sealed.size !== trusted.size || sealed.sha256.toLowerCase() !== trusted.sha256.toLowerCase() || sealed.path !== deploy.path || sealed.mimeType !== deploy.mimeType || sealed.size !== deploy.size || sealed.sha256 !== deploy.sha256 || !bytesEqual(sealed.bytes, deploy.bytes)) throw new Error("SEALED_NAMED_DEPLOY_INVALID");
     paths.add(sealed.path);
   }
 }

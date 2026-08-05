@@ -14,6 +14,15 @@ export const VerifiedManifestCapabilitySchema = z.object({
 }).strict();
 export type VerifiedManifestCapability = Readonly<z.infer<typeof VerifiedManifestCapabilitySchema>>;
 
+/** Immutable file facts recorded with the verified sealed artifact. */
+export const SealedDeployFileSchema = z.object({
+  path: z.string().startsWith("/").max(4_096),
+  mimeType: z.string().min(1).max(256),
+  sha256,
+  size: z.number().int().nonnegative(),
+}).strict();
+export type SealedDeployFile = Readonly<z.infer<typeof SealedDeployFileSchema>>;
+
 export const SealedArtifactIdentitySchema = z.object({
   accountId: identifier,
   sessionId: identifier,
@@ -24,6 +33,7 @@ export const SealedArtifactIdentitySchema = z.object({
   verificationEvidenceSha256: sha256,
   sealedObjectGeneration: identifier,
   sealedObjectSha256: sha256,
+  sealedFiles: z.array(SealedDeployFileSchema).min(1).max(4_096),
   entrypoint: z.string().startsWith("/"),
   normalizedDTag: z.string().min(1).max(128).regex(/^[a-z0-9][a-z0-9-]*$/),
   requiredCapabilities: z.array(identifier).max(64),

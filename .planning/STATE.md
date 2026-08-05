@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
 current_phase: 05
 current_phase_name: Funding Interruption & Durable Resume
-status: executing
-stopped_at: Completed 05-06-PLAN.md
-last_updated: "2026-08-05T01:56:49.840Z"
+status: verifying
+stopped_at: Completed 05-07-PLAN.md
+last_updated: "2026-08-05T02:11:08.923Z"
 last_activity: 2026-08-05
 last_activity_desc: Phase 05 execution started
 progress:
   total_phases: 7
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 33
-  completed_plans: 32
-  percent: 57
+  completed_plans: 33
+  percent: 71
 ---
 
 # Project State
@@ -31,10 +31,10 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 Phase: 05 (Funding Interruption & Durable Resume) — EXECUTING
 Plan: 7 of 7
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-08-05 — Phase 05 execution started
 
-Progress: [██████████] 97%
+Progress: [██████████] 100%
 
 ## Milestone Progress
 
@@ -95,6 +95,7 @@ Progress: [██████████] 97%
 | Phase 05 P04 | 10 min | 2 tasks | 5 files |
 | Phase 05 P05 | 306s | 2 tasks | 8 files |
 | Phase 05 P06 | 7 min | 2 tasks | 8 files |
+| Phase 05 P07 | 12 min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -160,6 +161,8 @@ Recent decisions affecting current work:
 - [Phase ?]: ContextVM resume_session derives its principal only from verifiedClientPubkey and returns a safe allowlisted result.
 - [Phase ?]: Retention expiry is server-authoritative at checkpointCommittedAtMs plus 30 days; tombstone wins before exact key/object cleanup and cannot be revived.
 - [Phase ?]: Expired continuation status is owner-safe and terminal, exposing no resume or top-up transition.
+- [Phase ?]: Phase 5 reference probes retain expected durable/effect values as comparator-only facts.
+- [Phase ?]: Phase 5 deterministic evidence remains provider-separated; live certification stays Phase 7 work.
 
 ### Pending Todos
 
@@ -181,6 +184,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T01:56:49.832Z
-Stopped at: Completed 05-06-PLAN.md
+Last session: 2026-08-05T02:11:08.915Z
+Stopped at: Completed 05-07-PLAN.md
 Resume file: None

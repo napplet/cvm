@@ -1,5 +1,6 @@
-import { canonicalJson } from "./schema";
-import { validatePhase07DesignEvidence } from "../certification/evidence";
+import { canonicalJson, parseReleaseCertificationManifest, type ReleaseCertificationManifest } from "./schema";
+import { validateCertificationObservation, validatePhase07DesignEvidence } from "../certification/evidence";
+import { evaluateReleaseCertification, type ReleaseCertificationDecision } from "./run-promotion";
 
 export type CandidateReadinessStatus = "unverified" | "review_ready" | "quarantined";
 
@@ -255,6 +256,53 @@ export async function verifyCandidateReviewReadiness(value: unknown): Promise<Ca
 
 type CandidateCliArguments = { readonly mode: "review"; readonly path: string; readonly reviewReady: boolean } | { readonly mode: "release-evidence"; readonly path: string };
 
+type ReleaseEvidencePointer = Readonly<{ contentAddressedPath: string; evidenceSha256: string }>;
+type ReleaseCertificationInput = Readonly<{ version: 1; candidateId: string; releaseManifest: ReleaseCertificationManifest; deterministicEvidence: ReleaseEvidencePointer; protectedObservations: readonly ReleaseEvidencePointer[] }>;
+
+function exactReleaseRecord(value: unknown, keys: readonly string[]): Record<string, unknown> {
+  if (!isRecord(value) || Object.keys(value).length !== keys.length || keys.some((key) => !(key in value))) throw new Error("RELEASE_INPUT_INVALID");
+  return value;
+}
+function parseEvidencePointer(value: unknown): ReleaseEvidencePointer {
+  const record = exactReleaseRecord(value, ["contentAddressedPath", "evidenceSha256"]);
+  if (typeof record.contentAddressedPath !== "string" || record.contentAddressedPath.length === 0 || record.contentAddressedPath.startsWith("/") || record.contentAddressedPath.split("/").includes("..") || typeof record.evidenceSha256 !== "string" || !SHA256.test(record.evidenceSha256)) throw new Error("RELEASE_INPUT_INVALID");
+  return { contentAddressedPath: record.contentAddressedPath, evidenceSha256: record.evidenceSha256.toLowerCase() };
+}
+
+/** Strictly parses the one release-bundle shape accepted by the public verifier.
+ * Evidence names are explicit pointers; it has no directory enumeration or
+ * fallback discovery authority. */
+export function parseReleaseCertificationInput(value: unknown): ReleaseCertificationInput {
+  const record = exactReleaseRecord(value, ["version", "candidateId", "releaseManifest", "deterministicEvidence", "protectedObservations"]);
+  if (record.version !== 1 || typeof record.candidateId !== "string" || !SHA256.test(record.candidateId) || !Array.isArray(record.protectedObservations) || record.protectedObservations.length === 0) throw new Error("RELEASE_INPUT_INVALID");
+  const protectedObservations = record.protectedObservations.map(parseEvidencePointer);
+  if (new Set(protectedObservations.map((item) => item.contentAddressedPath)).size !== protectedObservations.length || new Set(protectedObservations.map((item) => item.evidenceSha256)).size !== protectedObservations.length) throw new Error("RELEASE_INPUT_INVALID");
+  return { version: 1, candidateId: record.candidateId.toLowerCase(), releaseManifest: parseReleaseCertificationManifest(record.releaseManifest), deterministicEvidence: parseEvidencePointer(record.deterministicEvidence), protectedObservations };
+}
+
+function blockedReleaseDecision(candidateId: string, manifest: ReleaseCertificationManifest, reason: string): ReleaseCertificationDecision {
+  return { candidateId, releaseId: manifest.releaseId, evidenceSha256: "0".repeat(64), status: "blocked", responsibleRequirement: null, reason };
+}
+
+/** Validates deterministic provenance and the closed, explicitly named
+ * observation inventory, then delegates the only promoted/blocked decision to
+ * evaluateReleaseCertification exactly once. */
+export async function verifyReleaseCertificationInput(value: unknown, options: Readonly<{ nowMs?: number; loadDeterministic: (pointer: ReleaseEvidencePointer) => Promise<unknown>; loadObservation: (pointer: ReleaseEvidencePointer) => Promise<unknown> }>): Promise<ReleaseCertificationDecision> {
+  let input: ReleaseCertificationInput;
+  try { input = parseReleaseCertificationInput(value); }
+  catch { return { candidateId: "0".repeat(64), releaseId: "0".repeat(64), evidenceSha256: "0".repeat(64), status: "blocked", responsibleRequirement: null, reason: "RELEASE_INPUT_INVALID" }; }
+  try {
+    const deterministic = await validatePhase07DesignEvidence(await options.loadDeterministic(input.deterministicEvidence));
+    if (deterministic.evidenceSha256 !== input.deterministicEvidence.evidenceSha256 || deterministic.contentAddressedPath !== input.deterministicEvidence.contentAddressedPath) return blockedReleaseDecision(input.candidateId, input.releaseManifest, "RELEASE_DETERMINISTIC_EVIDENCE_INVALID");
+    if (input.protectedObservations.length !== input.releaseManifest.requirements.length) return blockedReleaseDecision(input.candidateId, input.releaseManifest, "RELEASE_OBSERVATION_INVENTORY_INVALID");
+    const observations = await Promise.all(input.protectedObservations.map(options.loadObservation));
+    const parsedObservations = await Promise.all(observations.map((observation) => validateCertificationObservation(observation)));
+    const allowedClaims = new Set(input.releaseManifest.requirements.map((requirement) => requirement.claim));
+    if (parsedObservations.some((observation, index) => observation.evidenceSha256 !== input.protectedObservations[index]!.evidenceSha256 || (observation.status === "passed" && (observation.claims.length !== 1 || !allowedClaims.has(observation.claims[0]!))))) return blockedReleaseDecision(input.candidateId, input.releaseManifest, "RELEASE_OBSERVATION_INVENTORY_INVALID");
+    return evaluateReleaseCertification(input.releaseManifest, parsedObservations, { candidateId: input.candidateId, nowMs: options.nowMs });
+  } catch { return blockedReleaseDecision(input.candidateId, input.releaseManifest, "RELEASE_EVIDENCE_INVALID"); }
+}
+
 function parseCliArguments(args: readonly string[]): CandidateCliArguments | null {
   if (args.length === 2 && args[0] === "--release-evidence" && !args[1]!.startsWith("-")) return { mode: "release-evidence", path: args[1]! };
   const reviewReady = args.includes("--review-ready");
@@ -263,13 +311,17 @@ function parseCliArguments(args: readonly string[]): CandidateCliArguments | nul
   return { mode: "review", path: paths[0]!, reviewReady };
 }
 
-/** Final release verification deliberately treats a deterministic record as an
- * input, never as a substitute for protected evidence. */
-async function verifyReleaseEvidence(path: string): Promise<Readonly<{ status: "blocked"; reason: string; evidenceSha256: string }>> {
-  const pointerOrEvidence = await Bun.file(path).json() as { contentAddressedPath?: unknown };
-  const source = typeof pointerOrEvidence.contentAddressedPath === "string" ? await Bun.file(pointerOrEvidence.contentAddressedPath).json() : pointerOrEvidence;
-  const evidence = await validatePhase07DesignEvidence(source);
-  return { status: "blocked", reason: "PROTECTED_LIVE_CERTIFICATION_REQUIRED", evidenceSha256: evidence.evidenceSha256 };
+async function readReleaseJson(path: string): Promise<unknown> {
+  if (path.startsWith("/") || path.split("/").includes("..")) throw new Error("RELEASE_INPUT_INVALID");
+  return Bun.file(path).json();
+}
+/** The CLI only reads explicit release-bundle paths; a lone deterministic
+ * pointer deliberately fails parsing and cannot be promoted. */
+async function verifyReleaseEvidence(path: string): Promise<ReleaseCertificationDecision> {
+  return verifyReleaseCertificationInput(await readReleaseJson(path), { loadDeterministic: async (pointer) => {
+    const source = await readReleaseJson(pointer.contentAddressedPath) as { contentAddressedPath?: unknown };
+    return typeof source.contentAddressedPath === "string" ? readReleaseJson(source.contentAddressedPath) : source;
+  }, loadObservation: (pointer) => readReleaseJson(pointer.contentAddressedPath) });
 }
 
 if (import.meta.main) {

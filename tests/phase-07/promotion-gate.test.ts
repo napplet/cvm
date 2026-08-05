@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { evaluateReleaseCertification } from "../../src/promotion/run-promotion";
+import { verifyReleaseCertificationInput } from "../../src/promotion/candidate";
 import { parseReleaseCertificationManifest, RELEASE_CLAIM_INVENTORY } from "../../src/promotion/schema";
 import { writeCertificationObservation } from "../../src/certification/evidence";
 
@@ -85,4 +86,28 @@ test("final candidate verification rejects the deterministic pointer while live 
   expect(result.exitCode).not.toBe(0);
   expect(`${result.stdout}${result.stderr}`).toContain("blocked");
   expect(`${result.stdout}${result.stderr}`).not.toContain("supersecret");
+});
+
+test("release evidence input uses the sole evaluator for one exact complete candidate-bound bundle", async () => {
+  const rawManifest = releaseManifest();
+  const candidateId = digest("8");
+  const observations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation(`/tmp/napplet-cvm-phase07-cli-${crypto.randomUUID()}`, observation(rawManifest, candidateId, requirement.claim, requirement.live))));
+  const pointer = await Bun.file("evidence/design/phase-07.json").json() as { contentAddressedPath: string; evidenceSha256: string };
+  const deterministic = await Bun.file(pointer.contentAddressedPath).json();
+  const observationPointers = observations.map((item) => ({ contentAddressedPath: `evidence/certification/test/${item.evidenceSha256}.json`, evidenceSha256: item.evidenceSha256 }));
+  const result = await verifyReleaseCertificationInput({
+    version: 1, candidateId, releaseManifest: rawManifest,
+    deterministicEvidence: { contentAddressedPath: pointer.contentAddressedPath, evidenceSha256: pointer.evidenceSha256 }, protectedObservations: observationPointers,
+  }, { nowMs: 2_000, loadDeterministic: async () => deterministic, loadObservation: async (entry) => observations.find((item) => item.evidenceSha256 === entry.evidenceSha256) });
+  expect(result).toMatchObject({ status: "promoted" });
+});
+
+test("release evidence input rejects replacement pointers and extra claim ownership before promotion", async () => {
+  const rawManifest = releaseManifest(); const candidateId = digest("7");
+  const records = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation(`/tmp/napplet-cvm-phase07-cli-${crypto.randomUUID()}`, observation(rawManifest, candidateId, requirement.claim, requirement.live))));
+  const pointer = await Bun.file("evidence/design/phase-07.json").json() as { contentAddressedPath: string; evidenceSha256: string };
+  const deterministic = await Bun.file(pointer.contentAddressedPath).json();
+  const entries = records.map((record) => ({ contentAddressedPath: `evidence/certification/test/${record.evidenceSha256}.json`, evidenceSha256: record.evidenceSha256 }));
+  const result = await verifyReleaseCertificationInput({ version: 1, candidateId, releaseManifest: rawManifest, deterministicEvidence: { contentAddressedPath: pointer.contentAddressedPath, evidenceSha256: pointer.evidenceSha256 }, protectedObservations: entries }, { nowMs: 2_000, loadDeterministic: async () => deterministic, loadObservation: async (entry) => ({ ...records.find((record) => record.evidenceSha256 === entry.evidenceSha256)!, claims: entry.evidenceSha256 === entries[0]!.evidenceSha256 ? ["release.admission_slo", "release.worker"] : records.find((record) => record.evidenceSha256 === entry.evidenceSha256)!.claims }) });
+  expect(result).toMatchObject({ status: "blocked", reason: "RELEASE_EVIDENCE_INVALID" });
 });

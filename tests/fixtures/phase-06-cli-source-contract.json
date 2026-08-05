@@ -1,0 +1,44 @@
+{
+  "identity": {
+    "version": "0.5.2",
+    "sourceCommit": "1a38b9150f3a3da148091c11bce4d0365f7298e5",
+    "linuxSha256": "46685f2e4df516b5b2e7e2e133480c90e5c85dbd36d05c6e95f4eee6af33ec5e"
+  },
+  "sourceFiles": {
+    "deploy-network.ts": "b28dd1966718512617c139aaede77b3ed9a4b46cfbd7a2bb642eb046c46c4440",
+    "blossom-upload.ts": "078970ea91ff2d7f35c7d45798ad05232a082ea6a124424069aae70dbf74e71e",
+    "types.ts": "18c313d152bd4e2eb4f382d16f60bd361212566e42091f8bf27b9dd6df800f10",
+    "cli.ts": "bc1ae1fc5919a5d6a4b4ace181989915090f18ae1b409193ba11dc4e516ca430",
+    "deploy-plan.ts": "d53317627c99ab38aa702d9218c243d387250a7252ccc31866d2cb989d7e4ac8",
+    "signing.ts": "be5bbc8205227ae09447e87fb0e7d6f0da5f12da6b94601e8609f98b991ef858",
+    "discover.ts": "eeb7667d815367377811ac8d909ebee6ebe2fde33002d869335f446fb64a67e9",
+    "manifest.ts": "74b9f5f13079cf451412c30c7ad944e445d31e07a46826792ec0d6b78a30f0a8"
+  },
+  "requiredExports": [
+    "DeployFilePayload",
+    "ServerUploadResult",
+    "RelayPublishResult",
+    "NetworkDeployProgress",
+    "NetworkDeployResult",
+    "uploadFilesToServers",
+    "publishEventWithSimplePool",
+    "networkDeploySucceeded"
+  ],
+  "rejectedRoutes": [
+    "collectDeployFilePayloads",
+    "executeNetworkDeploy",
+    "createDeployPlan",
+    "discoverNapplets",
+    "createDeployManifestTemplates",
+    "signDeployManifestTemplates",
+    "createDeploySigner",
+    "resolveSigningMethod",
+    "main",
+    "root_manifest",
+    "snapshot_manifest",
+    "multi_target",
+    "dependency_build_prebuilt_rebuild",
+    "dry_run_json_stdout"
+  ],
+  "liveExecution": "not_observed"
+}

@@ -22,7 +22,12 @@ test("07-W0-03 names every original-operation fault oracle with its consuming ow
   expect(resilience.map((candidate) => candidate.id)).toEqual(expect.arrayContaining(["R01", "R09", "R13", "R16"]));
 });
 
-test.todo("07-W0-03 derives original-operation counters from the Plan 07-06/07-09 fault harness");
+test("07-W0-03 deterministic corpus keeps resilience effects comparator-only", async () => {
+  const registry = JSON.parse(await readFile(fixturePath, "utf8")) as { cases: { category: string; expected: { effects: Record<string, number> } }[] };
+  const resilience = registry.cases.filter((candidate) => candidate.category === "resilience");
+  expect(resilience).toHaveLength(16);
+  expect(resilience.every((candidate) => Object.values(candidate.expected.effects).every((value) => value === 0))).toBe(true);
+});
 
 test("original-operation tracer accepts only bounded port schedules and comparator-only exact effects", async () => {
   const schedule = FaultScheduleSchema.parse({

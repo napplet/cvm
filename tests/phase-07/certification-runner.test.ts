@@ -38,6 +38,21 @@ test("preflight writes every selected non-pass inventory record without invoking
   expect(outcome.records.map((record) => record.status)).toEqual(["blocked", "blocked"]);
 });
 
+test("a protected supply-chain adapter cannot claim release authority without exact verified record references", async () => {
+  let calls = 0;
+  const outcome = await runProtectedCertificationProfile({
+    profile, selectedSuites: ["supply-chain"], evidenceDirectory: `/tmp/napplet-cvm-certification-${crypto.randomUUID()}`,
+    registry: { evidenceClass: "protected_live", adapters: {
+      "supply-chain": async () => {
+        calls += 1;
+        return { status: "passed", claims: ["release.supply_chain"], limitations: [], reasonCode: "OBSERVATION_COMPLETE" };
+      },
+    } }, now: () => 1_000,
+  });
+  expect(calls).toBe(0);
+  expect(outcome.records[0]).toMatchObject({ status: "blocked", reasonCode: "INPUT_UNAVAILABLE" });
+});
+
 test("runner rejects empty or duplicate suite selection instead of silently succeeding", async () => {
   await expect(runProtectedCertificationProfile({ profile, selectedSuites: [], evidenceDirectory: `/tmp/napplet-cvm-certification-${crypto.randomUUID()}` })).rejects.toThrow("CERTIFICATION_SUITE_SELECTION_INVALID");
   await expect(runProtectedCertificationProfile({ profile, selectedSuites: ["admission", "admission"], evidenceDirectory: `/tmp/napplet-cvm-certification-${crypto.randomUUID()}` })).rejects.toThrow("CERTIFICATION_SUITE_SELECTION_INVALID");

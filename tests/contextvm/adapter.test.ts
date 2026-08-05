@@ -85,7 +85,7 @@ describe("ContextVM v1 announcement", () => {
 });
 
 describe("verified ContextVM funding adapter", () => {
-  test("exposes only the signed start, revise, status, and explicit resume tools without registering repair", async () => {
+  test("exposes exactly the locked start, revise, status, and explicit resume tools without registering repair", async () => {
     const probe = await runContextVmAllowlistProbe();
     expect(probe.calls).toEqual({ start: expect.any(Array), revise: expect.any(Array), status: expect.any(Array) });
     expect(probe.calls.start).toHaveLength(1);

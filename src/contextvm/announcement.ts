@@ -24,11 +24,11 @@ const ContextVmAnnouncementInputSchema = z.object({
     name: ToolNameSchema,
     available: z.boolean(),
     planned: z.boolean(),
-  }).strict()).length(9),
+  }).strict()).min(8).max(9),
 }).strict().superRefine((value, context) => {
   if (new Set(value.pmis).size !== 2) context.addIssue({ code: "custom", message: "PMIs must be unique" });
   if (new Set(value.paymentInteraction).size !== 2) context.addIssue({ code: "custom", message: "payment interactions must be unique" });
-  if (new Set(value.tools.map((tool) => tool.name)).size !== 9) context.addIssue({ code: "custom", message: "tools must be unique" });
+  if (new Set(value.tools.map((tool) => tool.name)).size !== value.tools.length) context.addIssue({ code: "custom", message: "tools must be unique" });
   for (const tool of value.tools) {
     if (tool.available === tool.planned) context.addIssue({ code: "custom", message: `${tool.name} must be either available or planned` });
   }

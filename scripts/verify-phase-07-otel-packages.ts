@@ -94,7 +94,7 @@ const ApprovalPointerSchema = z.object({
 
 const SmokeRecordSchema = z.object({
   schemaVersion: z.literal(1), status: z.enum(["passed", "failed", "blocked"]), mode: z.literal("bun-collector-smoke"),
-  approvedAuditDigest: z.literal(APPROVED_AUDIT_DIGEST), bunVersion: z.string().min(1),
+  approvedApprovalDigest: DigestSchema, approvedAuditDigest: DigestSchema, packageSetSha256: DigestSchema, bunVersion: z.string().min(1),
   packages: z.array(z.object({ name: z.string(), version: z.string() })).length(6),
   collectorImageDigest: z.string().regex(/^otel\/opentelemetry-collector@sha256:[a-f0-9]{64}$/u).optional(),
   collectorConfigSha256: z.string().regex(/^[a-f0-9]{64}$/u), otlpEndpoint: z.literal("http/protobuf /v1/traces,/v1/metrics"),
@@ -201,7 +201,7 @@ export async function verifyApprovedOtelPackageSet(options: { readonly repositor
   if (canonicalJson(rootInputs) !== canonicalJson(approval.rootInputDigests)) throw new Error("APPROVAL_INPUT_DIGEST_DRIFT");
   return { approvalDigest: pointer.evidenceSha256, auditDigest: pointer.auditEvidenceSha256, packageSetSha256: pointer.packageSetSha256 };
 }
-async function verifyCurrentSmokeRecord(): Promise<void> {
+async function verifyCurrentSmokeRecord(approval: { readonly approvalDigest: string; readonly auditDigest: string; readonly packageSetSha256: string }): Promise<void> {
   const root = process.cwd();
   const expectedInputs = { packageJsonSha256: await snapshot(join(root, "package.json")), bunLockSha256: await snapshot(join(root, "bun.lock")) };
   const expectedConfig = await snapshot(join(root, "infra/otel/collector.yaml"));
@@ -212,6 +212,7 @@ async function verifyCurrentSmokeRecord(): Promise<void> {
       const value = SmokeRecordSchema.parse(JSON.parse(await readFile(join(SMOKE_DIRECTORY, name), "utf8")));
       const { evidenceSha256, ...payload } = value;
       if (value.status !== "passed" || !evidenceSha256 || sha256(canonicalJson(payload)) !== evidenceSha256) continue;
+      if (value.approvedApprovalDigest !== approval.approvalDigest || value.approvedAuditDigest !== approval.auditDigest || value.packageSetSha256 !== approval.packageSetSha256) continue;
       if (value.collectorImageDigest !== COLLECTOR_IMAGE || !value.outputSha256 || value.bunVersion !== Bun.version || value.collectorConfigSha256 !== expectedConfig) continue;
       if (value.inputDigests.packageJsonSha256 !== expectedInputs.packageJsonSha256 || value.inputDigests.bunLockSha256 !== expectedInputs.bunLockSha256) continue;
       if (value.packages.length !== OFFICIAL_OTEL_PACKAGES.length || OFFICIAL_OTEL_PACKAGES.some((expected) => !value.packages.some((item) => item.name === expected.name && item.version === expected.version))) continue;
@@ -232,12 +233,12 @@ async function writeSmokeRecord(record: z.input<typeof SmokeRecordSchema>): Prom
 }
 async function smoke(): Promise<{ readonly evidenceSha256: string; readonly recordPath: string }> {
   const root = process.cwd();
+  const approval = await verifyApprovedOtelPackageSet();
   const inputDigests = { packageJsonSha256: await snapshot(join(root, "package.json")), bunLockSha256: await snapshot(join(root, "bun.lock")) };
   const collectorConfigSha256 = await snapshot(join(root, "infra/otel/collector.yaml"));
-  const base = { schemaVersion: 1 as const, mode: "bun-collector-smoke" as const, approvedAuditDigest: APPROVED_AUDIT_DIGEST, bunVersion: Bun.version, packages: OFFICIAL_OTEL_PACKAGES.map(({ name, version }) => ({ name, version })), collectorConfigSha256, otlpEndpoint: "http/protobuf /v1/traces,/v1/metrics" as const, inputDigests, limitations: ["Certification smoke sends only fixed finite attributes to a local Collector debug sink.", "This is package and protocol compatibility evidence, not live service certification."], };
+  const base = { schemaVersion: 1 as const, mode: "bun-collector-smoke" as const, approvedApprovalDigest: approval.approvalDigest, approvedAuditDigest: approval.auditDigest, packageSetSha256: approval.packageSetSha256, bunVersion: Bun.version, packages: OFFICIAL_OTEL_PACKAGES.map(({ name, version }) => ({ name, version })), collectorConfigSha256, otlpEndpoint: "http/protobuf /v1/traces,/v1/metrics" as const, inputDigests, limitations: ["Certification smoke sends only fixed finite attributes to a local Collector debug sink.", "This is package and protocol compatibility evidence, not live service certification."], };
   let temp = ""; let container = "";
   try {
-    await verifyApprovedOtelPackageSet();
     const dockerReady = await run(["docker", "info", "--format", "{{.ServerVersion}}"]);
     if (dockerReady.code !== 0) throw new Error("DOCKER_UNAVAILABLE");
     const pull = await run(["docker", "pull", COLLECTOR_IMAGE]);
@@ -348,7 +349,7 @@ async function main(): Promise<void> {
   const args = Bun.argv.slice(2); const offline = args.includes("--offline-fixture"); const pointerOnly = args.includes("--verify-pointer"); const preinstall = args.includes("--mode=preinstall"); const requireApproved = args.includes("--require-approved"); const verifyRootPins = args.includes("--verify-root-pins"); const runSmoke = args.includes("--bun-collector-smoke");
   if (args.length === 0 || args.some((argument) => !["--mode=preinstall", "--offline-fixture", "--verify-pointer", "--require-approved", "--verify-root-pins", "--bun-collector-smoke"].includes(argument)) || [offline, pointerOnly, preinstall, requireApproved, verifyRootPins, runSmoke].filter(Boolean).length > 1) throw new Error("usage: --mode=preinstall | --offline-fixture | --verify-pointer | --require-approved | --verify-root-pins | --bun-collector-smoke");
   if (requireApproved) { const approval = await verifyApprovedOtelPackageSet(); console.log(JSON.stringify({ status: "passed", mode: "approved-operator", ...approval })); return; }
-  if (verifyRootPins) { await verifyApprovedOtelPackageSet(); if (!await exactRootPins()) throw new Error("ROOT_PINS_INVALID"); await verifyCurrentSmokeRecord(); console.log(JSON.stringify({ status: "passed", mode: "root-pins", collectorImageDigest: COLLECTOR_IMAGE })); return; }
+  if (verifyRootPins) { const approval = await verifyApprovedOtelPackageSet(); if (!await exactRootPins()) throw new Error("ROOT_PINS_INVALID"); await verifyCurrentSmokeRecord(approval); console.log(JSON.stringify({ status: "passed", mode: "root-pins", collectorImageDigest: COLLECTOR_IMAGE, ...approval })); return; }
   if (runSmoke) { console.log(JSON.stringify({ status: "passed", mode: "bun-collector-smoke", ...await smoke() })); return; }
   if (offline || pointerOnly) { await verifyPointer(); console.log(JSON.stringify({ status: "passed", mode: "offline-fixture", approvalStatus: "pending_human" })); return; }
   if (!preinstall) throw new Error("mode=preinstall is required");

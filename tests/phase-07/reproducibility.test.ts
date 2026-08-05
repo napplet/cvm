@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { verifyReproducibilityRecord, writeReproducibilityRecord } from "../../src/certification/reproducibility";
-import type { ReleaseCertificationTrustRoot } from "../../src/certification/trust";
+import { loadPinnedReleaseCertificationTrustRoot, type ReleaseCertificationTrustRoot } from "../../src/certification/trust";
 
 const digest = (value: string) => value.repeat(64).slice(0, 64);
 const binding = {
@@ -14,6 +15,14 @@ const binding = {
 };
 const candidateId = digest("d");
 const artifactSha256 = digest("e");
+
+const sha256Bytes = (value: Uint8Array): string => createHash("sha256").update(value).digest("hex");
+
+async function runReproducibilityCli(env: Record<string, string | undefined>) {
+  const child = Bun.spawn(["bun", "scripts/verify-phase-07-reproducibility.ts"], { stdout: "pipe", stderr: "pipe", env: { ...process.env, ...env } });
+  const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  return { exitCode, stdout, stderr };
+}
 
 function observation(isolationId: string, runId: string) {
   return {
@@ -84,4 +93,48 @@ test("source revision and source bytes are independent exact release inputs", as
   await expect(verifyReproducibilityRecord({ ...record(paddedRevisionRecords), releaseBinding: exactBinding }, exactOptions)).rejects.toThrow("REPRODUCIBILITY_SOURCE_MEASUREMENT_UNTRUSTED");
   await expect(verifyReproducibilityRecord({ ...record(exactRecords), releaseBinding: { ...exactBinding, sourceSha256: undefined } }, exactOptions)).rejects.toThrow();
   await expect(verifyReproducibilityRecord({ ...record(exactRecords), releaseBinding: exactBinding }, { nowMs: 1_300, maxAgeMs: 1_000 })).rejects.toThrow("REPRODUCIBILITY_SOURCE_MEASUREMENT_UNTRUSTED");
+});
+
+test("the reproducibility command requires a digest-pinned protected trust root and verifies measured source bytes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "napplet-cvm-repro-cli-"));
+  try {
+    const sourceBytes = new TextEncoder().encode("protected immutable source archive");
+    const sourceSha256 = sha256Bytes(sourceBytes);
+    const sourcePath = join(root, "source.tar");
+    const inputPath = join(root, "input.json");
+    const outputDirectory = join(root, "evidence");
+    const sourceReference = `git+https://github.com/acme/napplet-cvm@${binding.sourceRevision}`;
+    const releaseBinding = { ...binding, sourceSha256 };
+    const completedAtMs = Date.now() - 100;
+    const input = {
+      ...record([
+        { ...observation("isolation-one", "run-one"), releaseBinding, sourceMeasurement: { canonicalSourceReference: sourceReference, sourceSha256 }, startedAtMs: completedAtMs - 100, completedAtMs },
+        { ...observation("isolation-two", "run-two"), releaseBinding, sourceMeasurement: { canonicalSourceReference: sourceReference, sourceSha256 }, startedAtMs: completedAtMs - 100, completedAtMs },
+      ]),
+      releaseBinding,
+      assembledAtMs: completedAtMs,
+    };
+    await writeFile(sourcePath, sourceBytes);
+    await writeFile(inputPath, JSON.stringify(input));
+
+    const unconfigured = await runReproducibilityCli({ PHASE07_BUILD_RECORDS_PATH: inputPath, PHASE07_REPRODUCIBILITY_EVIDENCE_DIRECTORY: outputDirectory, PHASE07_REPRODUCIBILITY_TRUST_ROOT_DIRECTORY: undefined, PHASE07_REPRODUCIBILITY_TRUST_ROOT: undefined, PHASE07_REPRODUCIBILITY_TRUST_ROOT_SHA256: undefined });
+    expect(unconfigured.exitCode).not.toBe(0);
+    expect(`${unconfigured.stdout}${unconfigured.stderr}`).toContain("protected_configuration_unavailable");
+
+    const modulePath = join(root, "trust-root.ts");
+    await writeFile(modulePath, `import { createPinnedReleaseCertificationTrustRoot } from ${JSON.stringify(join(process.cwd(), "src/certification/trust.ts"))};\nexport const protectedReproducibilityTrustRoot = createPinnedReleaseCertificationTrustRoot({ sourceArchiveRoot: ${JSON.stringify(root)}, sourceArchives: [{ canonicalSourceReference: ${JSON.stringify(sourceReference)}, relativePath: "source.tar", sourceSha256: ${JSON.stringify(sourceSha256)} }] });\n`);
+    const moduleSha256 = sha256Bytes(await Bun.file(modulePath).arrayBuffer().then((value) => new Uint8Array(value)));
+    const trustRoot = await loadPinnedReleaseCertificationTrustRoot({ root, modulePath, sha256: moduleSha256 });
+    expect(await trustRoot.verifySourceMeasurement(input.records[0]!.sourceMeasurement)).toBe(true);
+    await writeFile(sourcePath, "changed source archive");
+    expect(await trustRoot.verifySourceMeasurement(input.records[0]!.sourceMeasurement)).toBe(false);
+    await writeFile(sourcePath, sourceBytes);
+    const configured = await runReproducibilityCli({ PHASE07_BUILD_RECORDS_PATH: inputPath, PHASE07_REPRODUCIBILITY_EVIDENCE_DIRECTORY: outputDirectory, PHASE07_REPRODUCIBILITY_TRUST_ROOT_DIRECTORY: root, PHASE07_REPRODUCIBILITY_TRUST_ROOT: modulePath, PHASE07_REPRODUCIBILITY_TRUST_ROOT_SHA256: moduleSha256 });
+    expect(configured.exitCode, `${configured.stdout}${configured.stderr}`).toBe(0);
+    expect(`${configured.stdout}${configured.stderr}`).toContain('"status":"verified"');
+    const output = JSON.parse(configured.stdout) as { evidenceSha256: string };
+    expect(await Bun.file(join(outputDirectory, `${output.evidenceSha256}.json`)).exists()).toBe(true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ImmutableObjectReferenceSchema, type ImmutableObjectReference, type ObjectStorePort } from "../continuity/object-store";
+import { canonicalJson } from "../promotion/schema";
 
 const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/iu);
 export const DURABILITY_SUBJECT_KINDS = [
@@ -14,6 +15,18 @@ export const DurabilitySubjectSchema = z.object({
   retentionUntil: z.string().datetime(),
   deletionState: z.enum(["retained", "tombstoned", "deleted"]),
 }).strict();
+
+const DurabilityInventorySchema = z.array(DurabilitySubjectSchema).length(DURABILITY_SUBJECT_KINDS.length).superRefine((subjects, context) => {
+  const kinds = new Set(subjects.map((subject) => subject.kind));
+  const identities = new Set(subjects.map((subject) => `${subject.kind}\u0000${subject.sourceIdentity}\u0000${subject.object.key}\u0000${subject.object.generation}\u0000${subject.object.checksum}`));
+  if (kinds.size !== DURABILITY_SUBJECT_KINDS.length || DURABILITY_SUBJECT_KINDS.some((kind) => !kinds.has(kind))) context.addIssue({ code: "custom", message: "durability inventory must cover every retained subject exactly once" });
+  if (identities.size !== subjects.length) context.addIssue({ code: "custom", message: "durability inventory identities must be exact and unique" });
+});
+
+/** Parses all D-125 subjects before a release drill can inspect their bytes. */
+export function validateDurabilityInventory(input: unknown): readonly z.infer<typeof DurabilitySubjectSchema>[] {
+  return Object.freeze(DurabilityInventorySchema.parse(input).map((subject) => Object.freeze(structuredClone(subject))));
+}
 
 const RestoreExpectedFactsSchema = z.object({
   ownerId: z.string().min(1),
@@ -105,6 +118,39 @@ export function validateTopologyClaim(input: Readonly<{ claimed: z.input<typeof 
   const actual = observation.topology;
   if (JSON.stringify(claimed) !== JSON.stringify(actual)) return Object.freeze({ status: "blocked" as const, code: "TOPOLOGY_CLAIM_EXCEEDS_OBSERVATION", reason: "TOPOLOGY_MISMATCH" });
   return Object.freeze({ status: "observed" as const, code: "TOPOLOGY_OBSERVED" });
+}
+
+/** Inputs owned by the protected live drill (Plan 07-10); never include credentials or client handles. */
+export const ProtectedInfrastructureDrillInputSchema = z.object({
+  candidateDigest: Sha256Schema,
+  components: z.array(z.enum(["gcs", "cloud_run", "cockroach"]))
+    .length(3)
+    .superRefine((components, context) => {
+      if (new Set(components).size !== 3) context.addIssue({ code: "custom", message: "protected components must be unique" });
+    }),
+  credentialsAvailable: z.boolean(),
+}).strict();
+
+export const ProtectedInfrastructureDrillEvidenceSchema = z.object({
+  status: z.enum(["blocked", "not_observed"]),
+  code: z.enum(["PROTECTED_INFRASTRUCTURE_UNAVAILABLE", "PROTECTED_INFRASTRUCTURE_DRILL_REQUIRED"]),
+  candidateDigest: Sha256Schema,
+  components: z.array(z.enum(["gcs", "cloud_run", "cockroach"])) .length(3),
+  releaseVerification: z.literal("required"),
+  evidenceDigest: Sha256Schema,
+}).strict();
+
+/**
+ * A deterministic process cannot certify managed continuity. This creates
+ * content-addressed non-pass evidence for the specific candidate so absence
+ * is visible to the release gate and cannot be mistaken for a fixture pass.
+ */
+export async function createProtectedInfrastructureDrillEvidence(input: unknown): Promise<z.infer<typeof ProtectedInfrastructureDrillEvidenceSchema>> {
+  const parsed = ProtectedInfrastructureDrillInputSchema.parse(input);
+  const status = parsed.credentialsAvailable ? "not_observed" as const : "blocked" as const;
+  const code = parsed.credentialsAvailable ? "PROTECTED_INFRASTRUCTURE_DRILL_REQUIRED" as const : "PROTECTED_INFRASTRUCTURE_UNAVAILABLE" as const;
+  const evidenceDigest = await digest(new TextEncoder().encode(canonicalJson({ status, code, candidateDigest: parsed.candidateDigest, components: parsed.components, releaseVerification: "required" })));
+  return ProtectedInfrastructureDrillEvidenceSchema.parse({ status, code, candidateDigest: parsed.candidateDigest, components: parsed.components, releaseVerification: "required", evidenceDigest });
 }
 
 /** Closed fault families from D-122. Schedules carry facts, never mutation handles. */

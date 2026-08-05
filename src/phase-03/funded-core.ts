@@ -95,7 +95,7 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
   // The deterministic test-only path has an explicit in-memory authority. It is
   // still offline design evidence, never a selected database/provider claim.
   const authority = store ?? (() => { throw new Error("POSTGRES_FUNDING_STORE_REQUIRED"); })();
-  const funding = new FundingService(authority);
+  const funding = new FundingService(authority, options.lifecycle);
   const railConfigurationStarted = Boolean(options.lightningReceiver || options.cashuProvider || options.cashuPolicies || options.protectedMaterialKey);
   if (railConfigurationStarted && (!database || !options.lightningReceiver || !options.cashuProvider || !options.cashuPolicies || !options.protectedMaterialKey)) throw new Error("PRODUCTION_RAIL_COMPOSITION_REQUIRED");
   const vault = database && options.protectedMaterialKey ? new ProtectedRailMaterialVault({ key: options.protectedMaterialKey, repository: database.protectedMaterials }) : undefined;

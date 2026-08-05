@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { FundingService } from "../../src/funding/funding-service";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
+import { createFundedCore } from "../../src/phase-03/funded-core";
 
 const principal = "ab".repeat(32);
 const settlement = {
@@ -77,5 +78,34 @@ describe("Phase 3 funded-account tracer", () => {
     expect(result).toMatchObject({ status: "credited", creditedAmount: "300" });
     expect(store.postings).toHaveLength(1);
     expect(store.projection(result.accountId)).toEqual({ settledAvailable: "300", held: "0", unit: "sat" });
+  });
+
+  test("funded-core forwards settlement lifecycle telemetry without making the observer authoritative", async () => {
+    const observations: unknown[] = [];
+    const collectorStore = new TransactionalMemoryFundingStore();
+    const collectorCore = createFundedCore({ testOnly: true, store: collectorStore, lifecycle: { observe: (observation) => { observations.push(observation); } } });
+    const verifiedSettlement = command("credit_settlement", "credit-funded-core-lifecycle", {
+      settlement: { ...settlement, topUpId: "topup-funded-core-lifecycle", externalReference: "external-funded-core-lifecycle", settlementReference: "settlement-funded-core-lifecycle" },
+    });
+
+    const collectedResult = await collectorCore.funding.execute(verifiedSettlement);
+    expect(observations).toHaveLength(1);
+    expect(observations[0]).toEqual({
+      version: "admission-lifecycle-v1",
+      correlationDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
+      stage: "ledger_settlement",
+      outcome: "succeeded",
+      monotonicMs: expect.any(Number),
+    });
+    const observation = observations[0] as Record<string, unknown>;
+    expect(Number.isFinite(observation.monotonicMs)).toBeTrue();
+    expect(Object.keys(observation).sort()).toEqual(["correlationDigest", "monotonicMs", "outcome", "stage", "version"]);
+    expect(JSON.stringify(observation)).not.toMatch(/topup|external|settlement-funded-core-lifecycle|ababab/i);
+
+    const throwingStore = new TransactionalMemoryFundingStore();
+    const throwingCore = createFundedCore({ testOnly: true, store: throwingStore, lifecycle: { observe: () => { throw new Error("exporter unavailable"); } } });
+    const throwingResult = await throwingCore.funding.execute(verifiedSettlement);
+    expect(throwingResult).toEqual(collectedResult);
+    expect(throwingStore.snapshot()).toEqual(collectorStore.snapshot());
   });
 });

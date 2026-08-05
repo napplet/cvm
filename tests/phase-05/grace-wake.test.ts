@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { ContinuationService } from "../../src/continuity/continuation-service";
+import { accountIdForPrincipal } from "../../src/domain/account-command";
 import { FundingService } from "../../src/funding/funding-service";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
 
-const accountId = "account:grace-wake";
 const admissionReference = "admission:grace-wake";
 const liveLeaseToken = "lease:original-worker";
 const pendingFingerprint = "a".repeat(64);
@@ -14,6 +14,7 @@ type Effects = { authorizations: number; actions: number; model: number; tool: n
 async function setup(input: Readonly<{ credited?: boolean; cap: string; nowMs?: number }> = { cap: "3250" }) {
   const store = new TransactionalMemoryFundingStore();
   const funding = new FundingService(store);
+  const accountId = await accountIdForPrincipal({ pubkey: "ab".repeat(32) });
   await funding.execute({
     principal: { pubkey: "ab".repeat(32) }, kind: "credit_settlement", idempotencyKey: "initial-credit", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1",
     payload: { settlement: { topUpId: "initial", rail: "lightning", unit: "sat", amount: input.cap, externalReference: "external:initial", settlementReference: "settlement:initial", verifiedAt: "2026-08-05T00:00:00.000Z" } },
@@ -22,6 +23,11 @@ async function setup(input: Readonly<{ credited?: boolean; cap: string; nowMs?: 
     principal: { pubkey: "ab".repeat(32) }, kind: "funded_admission", idempotencyKey: "admission", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1",
     payload: { requestedCap: input.cap, unit: "sat", capacity: { usable: true, reference: admissionReference } },
   });
+  const recordedContinuation = new ContinuationService({ store, clock: { nowMs: () => deadlineMs - 1 } });
+  await recordedContinuation.pauseForFunding({ intent: {
+    accountId, sessionId: "session:grace-wake", idempotencyKey: "pause:grace-wake", fingerprint: pendingFingerprint, reference: "pending:grace-wake", actionKind: "revise_session",
+    boundedPayloadHash: "d".repeat(64), expectedSessionVersion: 4, expectedArtifactVersion: 4, policyVersion: "policy:grace-wake", priceCardId: "price:grace-wake", profileId: "profile:grace-wake", toolchainId: "toolchain:grace-wake", actionMaximum: "3250", admissionReference,
+  } });
   await store.transact(accountId, (transaction) => transaction.pauseForFunding({
     accountId, sessionId: "session:grace-wake", admissionReference, idempotencyKey: "pause:grace-wake", fingerprint: "b".repeat(64), pendingFingerprint,
     expectedSessionVersion: 4, pauseGeneration: 1, graceDeadlineMs: deadlineMs, liveLeaseToken,
@@ -40,7 +46,7 @@ async function setup(input: Readonly<{ credited?: boolean; cap: string; nowMs?: 
     onAuthorized: async () => { effects.actions += 1; effects.model += 1; effects.tool += 1; effects.build += 1; effects.network += 1; effects.provider += 1; effects.debit += 1; },
     onAuthorization: () => { effects.authorizations += 1; }, ...overrides,
   });
-  return { effects, funding, service, store, wake };
+  return { accountId, effects, funding, service, store, wake };
 }
 
 describe("verified-credit grace wake", () => {
@@ -54,7 +60,7 @@ describe("verified-credit grace wake", () => {
     expect(first).toMatchObject({ status: "continued", leaseToken: liveLeaseToken, pendingActionReference: "pending:grace-wake" });
     expect(duplicate).toMatchObject({ status: "replayed" });
     expect(fixture.effects).toEqual({ authorizations: 1, actions: 1, model: 1, tool: 1, build: 1, network: 1, provider: 1, debit: 1 });
-    expect(fixture.store.projection(accountId)).toMatchObject({ settledAvailable: "6500", held: "3250" });
+    expect(fixture.store.projection(fixture.accountId)).toMatchObject({ settledAvailable: "6500", held: "3250" });
   });
 
   test("makes notification-only, cap-insufficient, stale, foreign, deadline, reconnect, and reordered hints stable no-effects", async () => {

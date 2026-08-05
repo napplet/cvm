@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ContinuationService } from "../continuity/continuation-service";
+import { ContinuationService, type VerifiedCreditWakeHint, type VerifiedCreditWakeResult } from "../continuity/continuation-service";
 import { NeedsTopUpResultSchema } from "../continuity/contracts";
 import { evaluateRisk, type RiskSignalDetector } from "../admission/risk-policy";
 import { accountIdForPrincipal } from "../domain/account-command";
@@ -52,7 +52,19 @@ async function hash(value: unknown): Promise<string> { const digest = await cryp
 export class MeteredGenerationService {
   #inFlight = new Map<string, Promise<SessionActionResult>>();
   #sessionTails = new Map<string, Promise<void>>();
-  constructor(private readonly options: Readonly<{ fundedAdmission: FundedAdmissionService; store: MeteredFundingStore; gateway: ModelGateway; worker: WorkerPort; artifactVerifier: ArtifactVerifier; riskDetector?: RiskSignalDetector; harness?: Readonly<{ runner: NappletHarness; toolchain: NappletHarnessRequest["toolchain"]; snapshotReference: string; priorArtifactId: string; approvedApplicationSurfaces: readonly string[] }>; continuation?: ContinuationService; clock?: Readonly<{ nowMs(): number }> }>) {}
+  constructor(private readonly options: Readonly<{ fundedAdmission: FundedAdmissionService; store: MeteredFundingStore; gateway: ModelGateway; worker: WorkerPort; artifactVerifier: ArtifactVerifier; riskDetector?: RiskSignalDetector; harness?: Readonly<{ runner: NappletHarness; toolchain: NappletHarnessRequest["toolchain"]; snapshotReference: string; priorArtifactId: string; approvedApplicationSurfaces: readonly string[] }>; continuation?: ContinuationService; clock?: Readonly<{ nowMs(): number }>; continuationWake?: Readonly<{ continueAction(input: Readonly<{ pendingActionReference: string; actionBudgetReference: string; liveLeaseToken: string }>): Promise<void> }> }>) {}
+
+  /** Internal coordinator hook for a verified-credit hint. It carries no rail payload and cannot widen the session cap. */
+  async wakePausedAction(input: VerifiedCreditWakeHint): Promise<VerifiedCreditWakeResult> {
+    const continuationStore = this.options.store as MeteredFundingStore & Partial<ContinuationFundingStore>;
+    if (typeof continuationStore.findContinuation !== "function") throw new Error("CONTINUATION_STORE_UNAVAILABLE");
+    const continuation = this.options.continuation ?? new ContinuationService({ store: continuationStore as ContinuationFundingStore, ...(this.options.clock ? { clock: this.options.clock } : {}) });
+    const result = await continuation.wakePausedAction(input);
+    if (result.status === "continued" && this.options.continuationWake && result.pendingActionReference && result.actionBudgetReference && result.leaseToken) {
+      await this.options.continuationWake.continueAction({ pendingActionReference: result.pendingActionReference, actionBudgetReference: result.actionBudgetReference, liveLeaseToken: result.leaseToken });
+    }
+    return result;
+  }
 
   async startSession(input: unknown): Promise<SessionActionResult> {
     const command = StartSessionCommandSchema.parse(input);

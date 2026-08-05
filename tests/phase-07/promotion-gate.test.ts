@@ -5,6 +5,7 @@ import { evaluateReleaseCertification } from "../../src/promotion/run-promotion"
 import { verifyReleaseCertificationInput } from "../../src/promotion/candidate";
 import { canonicalJson, parseReleaseCertificationManifest, RELEASE_CLAIM_INVENTORY } from "../../src/promotion/schema";
 import { writeCertificationObservation } from "../../src/certification/evidence";
+import type { ReleaseCertificationTrustRoot } from "../../src/certification/trust";
 
 const fixturePath = "tests/fixtures/phase-07-reference-set.json";
 
@@ -46,6 +47,25 @@ async function sha256String(value: string): Promise<string> {
   const bytes = new TextEncoder().encode(value);
   const hash = await crypto.subtle.digest("SHA-256", bytes);
   return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+const permissiveTestTrustRoot: ReleaseCertificationTrustRoot = {
+  verifyManifest: async () => true,
+  verifyObservation: async () => true,
+  verifyReproducibilityRecord: async () => true,
+  verifySupplyChainRecord: async () => true,
+  verifySourceMeasurement: async () => true,
+};
+
+function anchoredTrustRoot(manifest: unknown, observations: readonly unknown[], records: Readonly<{ reproducibility: unknown; supplyChain: unknown }>): ReleaseCertificationTrustRoot {
+  const same = (actual: unknown, expected: unknown) => canonicalJson(actual) === canonicalJson(expected);
+  return {
+    verifyManifest: async (actual) => same(actual, manifest),
+    verifyObservation: async (actual) => observations.some((expected) => same(actual, expected)),
+    verifyReproducibilityRecord: async (actual) => same(actual, records.reproducibility),
+    verifySupplyChainRecord: async (actual) => same(actual, records.supplyChain),
+    verifySourceMeasurement: async () => true,
+  };
 }
 const releaseManifest = () => ({
   version: 1,
@@ -106,11 +126,11 @@ test("evidence blocks stale, cross-candidate, non-pass, and concurrent release p
   const rawManifest = releaseManifest();
   const records = await protectedVerificationRecords(rawManifest, candidateId);
   const valid = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation("/tmp/napplet-cvm-phase07-gate", bindSupplyChainObservation(observation(rawManifest, candidateId, requirement.claim, requirement.live), records))));
-  const [first, second] = await Promise.all([evaluateReleaseCertification(manifest, valid, { candidateId, nowMs: 2_000, verificationRecords: records }), evaluateReleaseCertification(manifest, valid, { candidateId, nowMs: 2_000, verificationRecords: records })]);
+  const [first, second] = await Promise.all([evaluateReleaseCertification(manifest, valid, { candidateId, nowMs: 2_000, verificationRecords: records, trustRoot: permissiveTestTrustRoot }), evaluateReleaseCertification(manifest, valid, { candidateId, nowMs: 2_000, verificationRecords: records, trustRoot: permissiveTestTrustRoot })]);
   expect(first).toEqual(second);
   expect(first.status).toBe("promoted");
-  await expect(evaluateReleaseCertification(manifest, [...valid.slice(0, -1), { ...valid.at(-1)!, candidate: { ...valid.at(-1)!.candidate, id: digest("c") } }], { candidateId, nowMs: 2_000, verificationRecords: records })).resolves.toMatchObject({ status: "blocked" });
-  await expect(evaluateReleaseCertification(manifest, [...valid.slice(0, -1), { ...valid.at(-1)!, expiresAtMs: 1_500 }], { candidateId, nowMs: 2_000, verificationRecords: records })).resolves.toMatchObject({ status: "blocked" });
+  await expect(evaluateReleaseCertification(manifest, [...valid.slice(0, -1), { ...valid.at(-1)!, candidate: { ...valid.at(-1)!.candidate, id: digest("c") } }], { candidateId, nowMs: 2_000, verificationRecords: records, trustRoot: permissiveTestTrustRoot })).resolves.toMatchObject({ status: "blocked" });
+  await expect(evaluateReleaseCertification(manifest, [...valid.slice(0, -1), { ...valid.at(-1)!, expiresAtMs: 1_500 }], { candidateId, nowMs: 2_000, verificationRecords: records, trustRoot: permissiveTestTrustRoot })).resolves.toMatchObject({ status: "blocked" });
 });
 
 test("the sole evaluator rejects an observation whose candidate source digest differs from the manifest", async () => {
@@ -119,7 +139,7 @@ test("the sole evaluator rejects an observation whose candidate source digest di
   const candidateId = digest("2");
   const records = await protectedVerificationRecords(rawManifest, candidateId);
   const observations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation(`/tmp/napplet-cvm-phase07-source-${crypto.randomUUID()}`, bindSupplyChainObservation({ ...observation(rawManifest, candidateId, requirement.claim, requirement.live), candidate: { ...observation(rawManifest, candidateId, requirement.claim, requirement.live).candidate, sourceSha256: digest("0") } }, records))));
-  await expect(evaluateReleaseCertification(manifest, observations, { candidateId, nowMs: 2_000, verificationRecords: records })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_OBSERVATION_BINDING_MISMATCH" });
+  await expect(evaluateReleaseCertification(manifest, observations, { candidateId, nowMs: 2_000, verificationRecords: records, trustRoot: permissiveTestTrustRoot })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_OBSERVATION_BINDING_MISMATCH" });
 });
 
 test("the sole evaluator rejects verification records bound to a self-selected manifest signer policy", async () => {
@@ -128,7 +148,7 @@ test("the sole evaluator rejects verification records bound to a self-selected m
   const records = await protectedVerificationRecords(trusted, candidateId);
   const observations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation(`/tmp/napplet-cvm-phase07-policy-${crypto.randomUUID()}`, bindSupplyChainObservation(observation(trusted, candidateId, requirement.claim, requirement.live), records))));
   const substitutedManifest = parseReleaseCertificationManifest({ ...trusted, supplyChainPolicy: { ...trusted.supplyChainPolicy, cosign: { ...trusted.supplyChainPolicy.cosign, signerIdentity: "https://github.com/attacker/release.yml@refs/heads/main" } } });
-  await expect(evaluateReleaseCertification(substitutedManifest, observations, { candidateId, nowMs: 2_000, verificationRecords: records })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_VERIFICATION_RECORDS_INVALID" });
+  await expect(evaluateReleaseCertification(substitutedManifest, observations, { candidateId, nowMs: 2_000, verificationRecords: records, trustRoot: permissiveTestTrustRoot })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_VERIFICATION_RECORDS_INVALID" });
 });
 
 test("the sole evaluator blocks complete generic claim inventory when protected verification records are absent", async () => {
@@ -147,10 +167,10 @@ test("the sole evaluator rejects deterministic, stale, and swapped protected ver
     { reproducibility: { ...records.reproducibility, evidenceClass: "deterministic" }, supplyChain: records.supplyChain },
     { reproducibility: records.reproducibility, supplyChain: { ...records.supplyChain, candidateId: digest("6") } },
   ];
-  for (const verificationRecords of variants) await expect(evaluateReleaseCertification(manifest, observations, { candidateId, nowMs: 2_000, verificationRecords })).resolves.toMatchObject({ status: "blocked" });
+  for (const verificationRecords of variants) await expect(evaluateReleaseCertification(manifest, observations, { candidateId, nowMs: 2_000, verificationRecords, trustRoot: permissiveTestTrustRoot })).resolves.toMatchObject({ status: "blocked" });
   const staleCandidateId = digest("e"); const stale = await protectedVerificationRecords(rawManifest, staleCandidateId, 0);
   const staleObservations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation(`/tmp/napplet-cvm-phase07-record-stale-${crypto.randomUUID()}`, bindSupplyChainObservation(observation(rawManifest, staleCandidateId, requirement.claim, requirement.live), stale))));
-  await expect(evaluateReleaseCertification(manifest, staleObservations, { candidateId: staleCandidateId, nowMs: 86_400_002, verificationRecords: stale })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_VERIFICATION_RECORDS_INVALID" });
+  await expect(evaluateReleaseCertification(manifest, staleObservations, { candidateId: staleCandidateId, nowMs: 86_400_002, verificationRecords: stale, trustRoot: permissiveTestTrustRoot })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_VERIFICATION_RECORDS_INVALID" });
 });
 
 test("release evidence rejects arbitrary claims, deterministic live relabels, and mismatched immutable inputs", async () => {
@@ -160,7 +180,7 @@ test("release evidence rejects arbitrary claims, deterministic live relabels, an
   const candidateId = digest("d");
   const records = await protectedVerificationRecords(rawManifest, candidateId);
   const observations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation("/tmp/napplet-cvm-phase07-gate", bindSupplyChainObservation(observation(rawManifest, candidateId, requirement.claim, false), records))));
-  await expect(evaluateReleaseCertification(manifest, observations, { candidateId, nowMs: 2_000, verificationRecords: records })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_REQUIRED_CLAIM_MISSING_OR_STALE" });
+  await expect(evaluateReleaseCertification(manifest, observations, { candidateId, nowMs: 2_000, verificationRecords: records, trustRoot: permissiveTestTrustRoot })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_REQUIRED_CLAIM_MISSING_OR_STALE" });
 });
 
 test("final candidate verification rejects the deterministic pointer while live certification is blocked", async () => {
@@ -170,7 +190,7 @@ test("final candidate verification rejects the deterministic pointer while live 
   expect(`${result.stdout}${result.stderr}`).not.toContain("supersecret");
 });
 
-test("candidate verification reports promoted release evidence as a successful package command", async () => {
+test("candidate verification blocks a publicly rehashed release bundle without an operator trust root", async () => {
   const root = await mkdtemp("tests/.tmp-phase07-release-");
   try {
     const rawManifest = releaseManifest();
@@ -210,8 +230,9 @@ test("candidate verification reports promoted release evidence as a successful p
     };
 
     const promoted = await runCandidateVerify();
-    expect(promoted.exitCode, `${promoted.stdout}${promoted.stderr}`).toBe(0);
-    expect(`${promoted.stdout}${promoted.stderr}`).toContain('"status":"promoted"');
+    expect(promoted.exitCode, `${promoted.stdout}${promoted.stderr}`).not.toBe(0);
+    expect(`${promoted.stdout}${promoted.stderr}`).toContain('"status":"blocked"');
+    expect(`${promoted.stdout}${promoted.stderr}`).toContain("RELEASE_CERTIFIER_AUTHORITY_REQUIRED");
 
     await writeFile(releasePath, JSON.stringify({ ...release, candidateId: digest("7") }), "utf8");
     const blocked = await runCandidateVerify();
@@ -230,11 +251,15 @@ test("release evidence input uses the sole evaluator for one exact complete cand
   const pointer = await Bun.file("evidence/design/phase-07.json").json() as { contentAddressedPath: string; evidenceSha256: string };
   const deterministic = await Bun.file(pointer.contentAddressedPath).json();
   const observationPointers = observations.map((item) => ({ contentAddressedPath: `evidence/certification/test/${item.evidenceSha256}.json`, evidenceSha256: item.evidenceSha256 }));
-  const result = await verifyReleaseCertificationInput({
+  const releaseInput = {
     version: 1, candidateId, releaseManifest: rawManifest,
     deterministicEvidence: { contentAddressedPath: pointer.contentAddressedPath, evidenceSha256: pointer.evidenceSha256 }, protectedObservations: observationPointers,
     verificationRecords: { reproducibilityEvidence: { contentAddressedPath: "evidence/certification/test/reproducibility.json", evidenceSha256: verification.reproducibility.evidenceSha256 }, supplyChainEvidence: { contentAddressedPath: "evidence/certification/test/supply-chain.json", evidenceSha256: verification.supplyChain.evidenceSha256 } },
-  }, { nowMs: 2_000, loadDeterministic: async () => deterministic, loadObservation: async (entry) => observations.find((item) => item.evidenceSha256 === entry.evidenceSha256), loadVerificationRecord: async (entry) => entry.evidenceSha256 === verification.reproducibility.evidenceSha256 ? verification.reproducibility : verification.supplyChain });
+  };
+  const loaders = { nowMs: 2_000, loadDeterministic: async () => deterministic, loadObservation: async (entry: { evidenceSha256: string }) => observations.find((item) => item.evidenceSha256 === entry.evidenceSha256), loadVerificationRecord: async (entry: { evidenceSha256: string }) => entry.evidenceSha256 === verification.reproducibility.evidenceSha256 ? verification.reproducibility : verification.supplyChain };
+  const untrusted = await verifyReleaseCertificationInput(releaseInput, loaders);
+  expect(untrusted).toMatchObject({ status: "blocked", reason: "RELEASE_CERTIFIER_AUTHORITY_REQUIRED" });
+  const result = await verifyReleaseCertificationInput(releaseInput, { ...loaders, trustRoot: anchoredTrustRoot(parseReleaseCertificationManifest(rawManifest), observations, verification) });
   expect(result).toMatchObject({ status: "promoted" });
 });
 
@@ -245,6 +270,6 @@ test("release evidence input rejects replacement pointers and extra claim owners
   const pointer = await Bun.file("evidence/design/phase-07.json").json() as { contentAddressedPath: string; evidenceSha256: string };
   const deterministic = await Bun.file(pointer.contentAddressedPath).json();
   const entries = records.map((record) => ({ contentAddressedPath: `evidence/certification/test/${record.evidenceSha256}.json`, evidenceSha256: record.evidenceSha256 }));
-  const result = await verifyReleaseCertificationInput({ version: 1, candidateId, releaseManifest: rawManifest, deterministicEvidence: { contentAddressedPath: pointer.contentAddressedPath, evidenceSha256: pointer.evidenceSha256 }, protectedObservations: entries, verificationRecords: { reproducibilityEvidence: { contentAddressedPath: "evidence/certification/test/reproducibility.json", evidenceSha256: verification.reproducibility.evidenceSha256 }, supplyChainEvidence: { contentAddressedPath: "evidence/certification/test/supply-chain.json", evidenceSha256: verification.supplyChain.evidenceSha256 } } }, { nowMs: 2_000, loadDeterministic: async () => deterministic, loadObservation: async (entry) => ({ ...records.find((record) => record.evidenceSha256 === entry.evidenceSha256)!, claims: entry.evidenceSha256 === entries[0]!.evidenceSha256 ? ["release.admission_slo", "release.worker"] : records.find((record) => record.evidenceSha256 === entry.evidenceSha256)!.claims }), loadVerificationRecord: async (entry) => entry.evidenceSha256 === verification.reproducibility.evidenceSha256 ? verification.reproducibility : verification.supplyChain });
+  const result = await verifyReleaseCertificationInput({ version: 1, candidateId, releaseManifest: rawManifest, deterministicEvidence: { contentAddressedPath: pointer.contentAddressedPath, evidenceSha256: pointer.evidenceSha256 }, protectedObservations: entries, verificationRecords: { reproducibilityEvidence: { contentAddressedPath: "evidence/certification/test/reproducibility.json", evidenceSha256: verification.reproducibility.evidenceSha256 }, supplyChainEvidence: { contentAddressedPath: "evidence/certification/test/supply-chain.json", evidenceSha256: verification.supplyChain.evidenceSha256 } } }, { nowMs: 2_000, loadDeterministic: async () => deterministic, loadObservation: async (entry) => ({ ...records.find((record) => record.evidenceSha256 === entry.evidenceSha256)!, claims: entry.evidenceSha256 === entries[0]!.evidenceSha256 ? ["release.admission_slo", "release.worker"] : records.find((record) => record.evidenceSha256 === entry.evidenceSha256)!.claims }), loadVerificationRecord: async (entry) => entry.evidenceSha256 === verification.reproducibility.evidenceSha256 ? verification.reproducibility : verification.supplyChain, trustRoot: permissiveTestTrustRoot });
   expect(result).toMatchObject({ status: "blocked", reason: "RELEASE_EVIDENCE_INVALID" });
 });

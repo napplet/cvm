@@ -4,6 +4,7 @@ import { runSealedDenialProbes, runSealedToolchain, type CommandEvidence, type S
 import { validateCertificationObservation } from "../certification/evidence";
 import { validateReproducibilityVerificationRecord } from "../certification/reproducibility";
 import { validateSupplyChainVerificationRecord } from "../certification/supply-chain";
+import type { ReleaseCertificationTrustRoot } from "../certification/trust";
 import { emitLifecycleObservation, type LifecycleTelemetryPort } from "../telemetry/contracts";
 
 export type PromotionStageEvidence = {
@@ -37,6 +38,7 @@ export type RunPromotionOptions = {
   readonly releaseManifest?: ReleaseCertificationManifest;
   readonly releaseObservations?: readonly unknown[];
   readonly verificationRecords?: ReleaseVerificationRecords;
+  readonly trustRoot?: ReleaseCertificationTrustRoot;
   readonly telemetry?: LifecycleTelemetryPort;
 };
 
@@ -65,11 +67,22 @@ async function releaseEvidenceSha256(observations: readonly unknown[]): Promise<
 async function evaluateReleaseCertificationInner(
   manifest: ReleaseCertificationManifest,
   observations: readonly unknown[],
-  input: Readonly<{ candidateId: string; nowMs: number; evidenceSha256: string; verificationRecords?: ReleaseVerificationRecords }>,
+  input: Readonly<{ candidateId: string; nowMs: number; evidenceSha256: string; verificationRecords?: ReleaseVerificationRecords; trustRoot?: ReleaseCertificationTrustRoot }>,
 ): Promise<ReleaseCertificationDecision> {
   const blocked = (responsibleRequirement: string | null, reason: string): ReleaseCertificationDecision => ({ candidateId: input.candidateId, releaseId: manifest.releaseId, evidenceSha256: input.evidenceSha256, status: "blocked", responsibleRequirement, reason });
   if (manifest.waivers.some((waiver) => waiver.expiresAtMs <= input.nowMs)) return blocked("waiver", "RELEASE_WAIVER_EXPIRED");
   if (!input.verificationRecords) return blocked("supply-chain", "RELEASE_VERIFICATION_RECORDS_REQUIRED");
+  if (!input.trustRoot) return blocked("supply-chain", "RELEASE_CERTIFIER_AUTHORITY_REQUIRED");
+  try {
+    if (!(await input.trustRoot.verifyManifest(manifest))
+      || !(await input.trustRoot.verifyReproducibilityRecord(input.verificationRecords.reproducibility))
+      || !(await input.trustRoot.verifySupplyChainRecord(input.verificationRecords.supplyChain))
+      || !(await Promise.all(observations.map((observation) => input.trustRoot!.verifyObservation(observation)))).every(Boolean)) {
+      return blocked("supply-chain", "RELEASE_CERTIFIER_AUTHORITY_INVALID");
+    }
+  } catch {
+    return blocked("supply-chain", "RELEASE_CERTIFIER_AUTHORITY_INVALID");
+  }
   const releaseBinding = { releaseId: manifest.releaseId, sourceRevision: manifest.sourceRevision, sourceSha256: manifest.sourceSha256, supplyChainPolicy: manifest.supplyChainPolicy, inputs: manifest.inputs };
   let verificationDigests: Readonly<{ reproducibilityEvidenceSha256: string; supplyChainEvidenceSha256: string }>;
   try {
@@ -112,7 +125,7 @@ async function evaluateReleaseCertificationInner(
 export async function evaluateReleaseCertification(
   manifest: ReleaseCertificationManifest,
   observations: readonly unknown[],
-  input: Readonly<{ candidateId: string; nowMs?: number; verificationRecords?: ReleaseVerificationRecords }>,
+  input: Readonly<{ candidateId: string; nowMs?: number; verificationRecords?: ReleaseVerificationRecords; trustRoot?: ReleaseCertificationTrustRoot }>,
 ): Promise<ReleaseCertificationDecision> {
   const nowMs = input.nowMs ?? Date.now();
   const evidenceSha256 = await releaseEvidenceSha256([observations, input.verificationRecords ?? null]);
@@ -122,7 +135,7 @@ export async function evaluateReleaseCertification(
     if (existing.evidenceSha256 !== evidenceSha256) return { candidateId: input.candidateId, releaseId: manifest.releaseId, evidenceSha256, status: "blocked", responsibleRequirement: null, reason: "RELEASE_EVIDENCE_REPLACEMENT_REJECTED" };
     return existing.decision;
   }
-  const decision = evaluateReleaseCertificationInner(manifest, observations, { candidateId: input.candidateId, nowMs, evidenceSha256, verificationRecords: input.verificationRecords });
+  const decision = evaluateReleaseCertificationInner(manifest, observations, { candidateId: input.candidateId, nowMs, evidenceSha256, verificationRecords: input.verificationRecords, trustRoot: input.trustRoot });
   releaseDecisions.set(key, { evidenceSha256, decision });
   return decision;
 }

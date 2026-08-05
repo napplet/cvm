@@ -258,14 +258,14 @@ Plans:
   5. A duplicate or timed-out publication request reconciles persisted intent and exact signed events, returning linked deployment/manifest/attestation identifiers without rebuilding, re-signing, double deploying, or creating conflicting ownership.
 
 **Validation gate**: Verify the selected runtime can display and locally sign the exact manifest, resolve the promoted `@napplet/cli` deployment contract, and prove deploy-byte/hash continuity with end-to-end fixtures before calling the publication flow available.
-**Plans**: 0/7 plans executed
+**Plans**: 1/7 plans executed
 **UI hint**: yes
 
 Plans:
 
 **Wave 1**
 
-- [ ] 06-01-PLAN.md — Prove the exact sealed-artifact-to-linked-publication end-to-end tracer.
+- [x] 06-01-PLAN.md — Prove the exact sealed-artifact-to-linked-publication end-to-end tracer.
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -317,7 +317,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 3. ContextVM Funding & Funded Admission | 7/7 | Complete    | 2026-08-04 |
 | 4. Metered Generation & Revision Loop | 7/7 | Complete    | 2026-08-05 |
 | 5. Funding Interruption & Durable Resume | 7/7 | Complete    | 2026-08-05 |
-| 6. Sealed Preview & User-Owned Publication | 0/7 | Ready to execute | - |
+| 6. Sealed Preview & User-Owned Publication | 1/7 | In Progress|  |
 | 7. Admission SLO, Resilience & Launch Safety | 0/TBD | Not started | - |
 
 ### Milestone Progress Roll-up

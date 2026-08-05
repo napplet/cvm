@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 9
+open_count: 10
 waived_count: 0
 fixed_count: 0
-total_count: 9
-last_updated: 2026-08-05T01:35:26.127Z
+total_count: 10
+last_updated: 2026-08-05T08:09:03.064Z
 ---
 
 # Broken Windows Ledger
@@ -24,6 +24,7 @@ last_updated: 2026-08-05T01:35:26.127Z
 | 7 | 05 | deviation | tests/phase-05/checkpoint-envelope.test.ts |  | Corrected checkpoint envelope test setup helper shadowing. | open |  | 2026-08-05T01:22:59.800Z |  |
 | 8 | 05 | deviation | src/continuity/checkpoint-envelope.ts |  | Added strict Web Crypto BufferSource typing compatibility. | open |  | 2026-08-05T01:22:59.862Z |  |
 | 9 | 05 | deviation | tests/phase-05/grace-wake.test.ts | 16 | Corrected grace-wake test account identity to use the funding principal mapping. | open |  | 2026-08-05T01:35:26.127Z |  |
+| 10 | 06 | deviation | src/publication/publication-service.ts |  | Tracer implementation corrected strict preview input and SHA-256 template digest validation. | open |  | 2026-08-05T08:09:03.064Z |  |
 
 ````json
 [
@@ -133,6 +134,18 @@ last_updated: 2026-08-05T01:35:26.127Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-05T01:35:26.127Z",
+    "resolved_at": null
+  },
+  {
+    "id": 10,
+    "kind": "deviation",
+    "phase": "06",
+    "file": "src/publication/publication-service.ts",
+    "line": null,
+    "description": "Tracer implementation corrected strict preview input and SHA-256 template digest validation.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-05T08:09:03.064Z",
     "resolved_at": null
   }
 ]

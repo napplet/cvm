@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 6
 current_phase_name: Sealed Preview & User-Owned Publication
 status: executing
-stopped_at: Phase 6 checker-approved planning complete; execution not started
-last_updated: "2026-08-05T05:38:02.042Z"
+stopped_at: Completed 06-01-PLAN.md
+last_updated: "2026-08-05T08:09:03.422Z"
 last_activity: 2026-08-05
-last_activity_desc: Phase 06 planned and checker-approved; ready to execute Plan 06-01
+last_activity_desc: Phase 6 execution started
 progress:
   total_phases: 7
   completed_phases: 5
   total_plans: 40
-  completed_plans: 33
+  completed_plans: 34
   percent: 71
 ---
 
@@ -29,12 +29,12 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 ## Current Position
 
-Phase: 6 — Sealed Preview & User-Owned Publication
-Plan: 0 of 7
+Phase: 6 (Sealed Preview & User-Owned Publication) — EXECUTING
+Plan: 2 of 7
 Status: Ready to execute
-Last activity: 2026-08-05 — Phase 06 planned and checker-approved; ready to execute Plan 06-01
+Last activity: 2026-08-05 — Phase 6 execution started
 
-Progress: [███████░░░] 71%
+Progress: [█████████░] 85%
 
 ## Milestone Progress
 
@@ -97,6 +97,7 @@ Progress: [███████░░░] 71%
 | Phase 05 P05 | 306s | 2 tasks | 8 files |
 | Phase 05 P06 | 7 min | 2 tasks | 8 files |
 | Phase 05 P07 | 12 min | 2 tasks | 8 files |
+| Phase 06 P01 | 5m 11s | 1 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -164,6 +165,8 @@ Recent decisions affecting current work:
 - [Phase ?]: Expired continuation status is owner-safe and terminal, exposing no resume or top-up transition.
 - [Phase ?]: Phase 5 reference probes retain expected durable/effect values as comparator-only facts.
 - [Phase ?]: Phase 5 deterministic evidence remains provider-separated; live certification stays Phase 7 work.
+- [Phase ?]: Preview grants are allow-scripts-only exact-artifact read descriptors.
+- [Phase ?]: Publication effects are persist-before-effect and terminal results require three stored observations.
 
 ### Pending Todos
 
@@ -185,6 +188,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T05:38:02.042Z
-Stopped at: Phase 6 checker-approved planning complete; execution not started
+Last session: 2026-08-05T08:09:03.414Z
+Stopped at: Completed 06-01-PLAN.md
 Resume file: None

@@ -74,18 +74,18 @@ Requirements for the initial release. Each maps to exactly one roadmap phase.
 
 ### Preview and Compatibility
 
-- [ ] **PREV-01**: A user can preview only the exact immutable aggregate-hash artifact that passed all required validation gates.
-- [ ] **PREV-02**: Preview runs in a compatible NIP-5D shell using `sandbox="allow-scripts"` without `allow-same-origin`, with all sensitive actions brokered through supported NAP domains.
-- [ ] **PREV-03**: Before publication, a user can inspect the napplet's required and optional NAP capabilities, the consent implications of each, and compatibility against the selected runtime.
-- [ ] **PREV-04**: Preview reports unsupported capabilities clearly and verifies graceful degradation instead of enabling a direct-authority fallback.
+- [x] **PREV-01**: A user can preview only the exact immutable aggregate-hash artifact that passed all required validation gates.
+- [x] **PREV-02**: Preview runs in a compatible NIP-5D shell using `sandbox="allow-scripts"` without `allow-same-origin`, with all sensitive actions brokered through supported NAP domains.
+- [x] **PREV-03**: Before publication, a user can inspect the napplet's required and optional NAP capabilities, the consent implications of each, and compatibility against the selected runtime.
+- [x] **PREV-04**: Preview reports unsupported capabilities clearly and verifies graceful degradation instead of enabling a direct-authority fallback.
 
 ### Publication and Provenance
 
-- [ ] **PUB-01**: After preview, a user can explicitly create a publication intent bound to the exact artifact hash, d-tag, capability set, account, and session.
-- [ ] **PUB-02**: The trusted runtime or external signer presents the exact owning manifest to the user and returns a user-signed event without exposing the user's private key to the CVM.
-- [ ] **PUB-03**: The CVM verifies the user signature and signs a separate build attestation binding the artifact hash, toolchain/policy versions, validation evidence, timestamp, and source session.
-- [ ] **PUB-04**: Publication through the promoted `@napplet/cli` contract deploys the sealed bytes and returns links/identifiers that bind the deployment, user manifest, CVM attestation, and aggregate hash.
-- [ ] **PUB-05**: A duplicate or timed-out publication request reconciles the persisted intent and exact signed events without rebuilding, re-signing, double deploying, or emitting a conflicting ownership event.
+- [x] **PUB-01**: After preview, a user can explicitly create a publication intent bound to the exact artifact hash, d-tag, capability set, account, and session.
+- [x] **PUB-02**: The trusted runtime or external signer presents the exact owning manifest to the user and returns a user-signed event without exposing the user's private key to the CVM.
+- [x] **PUB-03**: The CVM verifies the user signature and signs a separate build attestation binding the artifact hash, toolchain/policy versions, validation evidence, timestamp, and source session.
+- [x] **PUB-04**: Publication through the promoted `@napplet/cli` contract deploys the sealed bytes and returns links/identifiers that bind the deployment, user manifest, CVM attestation, and aggregate hash.
+- [x] **PUB-05**: A duplicate or timed-out publication request reconciles the persisted intent and exact signed events without rebuilding, re-signing, double deploying, or emitting a conflicting ownership event.
 
 ### Availability and Operations
 

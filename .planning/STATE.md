@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
-current_phase: 04
-current_phase_name: Metered Generation & Revision Loop
-status: executing
-stopped_at: Completed 04-07-PLAN.md; Phase 04 awaits formal post-execution re-verification
-last_updated: "2026-08-04T23:58:43.555Z"
-last_activity: 2026-08-04
-last_activity_desc: Phase 04 execution started
+current_phase: 5
+current_phase_name: Funding Interruption & Durable Resume
+status: planning
+stopped_at: Phase 04 complete; Phase 05 ready for autonomous discussion and planning
+last_updated: "2026-08-05T00:15:42.926Z"
+last_activity: 2026-08-05
+last_activity_desc: Phase 04 complete, transitioned to Phase 5
 progress:
   total_phases: 7
   completed_phases: 4
@@ -25,31 +25,31 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 **Core value:** A user can describe one focused applet and receive a safe, conformant napplet that can be previewed and placed directly into a compatible napplet runtime.
 **Active milestone:** v1.0 — Safe Napplet Generation MVP
-**Current focus:** Phase 04 — Metered Generation & Revision Loop
+**Current focus:** Phase 5 — Funding Interruption & Durable Resume
 
 ## Current Position
 
-Phase: 04 (Metered Generation & Revision Loop) — EXECUTING
-Plan: 7 of 7
-Status: Awaiting formal post-execution re-verification
-Last activity: 2026-08-05 — Completed Plan 04-07 evidence-integrity hardening
+Phase: 5 — Funding Interruption & Durable Resume
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-05 — Phase 04 complete, transitioned to Phase 5
 
-Progress: [██████████] Phase 4 implementation plans 7/7 complete; formal Phase 4 re-verification remains pending
+Progress: [██████████] Phase 4 complete; Phase 5 is ready for discussion and planning
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
-- Phases: Phases 1–3 complete; Phase 4 implementation is complete but remains active pending formal re-verification; Phases 5–7 remain.
+- Phases: Phases 1–4 complete; Phase 5 is active; Phases 6–7 remain.
 - Plans: 26/26 currently known milestone plans executed; Phase 4 has 7 executed plans.
-- Requirements: 54/54 v1 requirements assigned; 25 verified complete and 29 pending.
-- Next checkpoint: formally re-verify Phase 4 evidence and implementation before advancing to Phase 5.
+- Requirements: 54/54 v1 requirements assigned; 33 verified complete and 21 pending.
+- Next checkpoint: discuss and plan Phase 5 without revisiting completed Phase 4 work.
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 19
+- Total plans completed: 26
 - Average duration: -
 - Total execution time: 0 hours
 
@@ -60,6 +60,7 @@ Progress: [██████████] Phase 4 implementation plans 7/7 comp
 | 1 | 6 | - | - |
 | 2 | 6 | - | - |
 | 3 | 7 | - | - |
+| 04 | 7 | - | - |
 
 **Recent Trend:**
 
@@ -142,7 +143,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Execute Phase 4 plans 04-01 through 04-06 in dependency order.
+- Discuss and plan Phase 5 funding interruption and durable resume behavior.
 
 ### Blockers/Concerns
 
@@ -160,6 +161,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-04T23:58:43.506Z
-Stopped at: Completed 04-07-PLAN.md; Phase 04 awaits formal post-execution re-verification
+Last session: 2026-08-05T00:15:42.926Z
+Stopped at: Phase 04 complete; Phase 05 ready for autonomous discussion and planning
 Resume file: None

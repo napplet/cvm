@@ -142,7 +142,7 @@ Milestone v1.0 owns every row in this table. Existing requirement IDs and phase 
 | Phase 1 | GEN-01–GEN-04, SAFE-05–SAFE-06 | 6 | Complete |
 | Phase 2 | SESS-05, SAFE-01–SAFE-04 | 5 | Complete |
 | Phase 3 | CTX-01–CTX-04, PAY-01–PAY-07, BILL-01–BILL-02, BILL-06 | 14 | Complete |
-| Phase 4 | BILL-03–BILL-05, SESS-01, SESS-03–SESS-04, GEN-05–GEN-06 | 8 | Pending |
+| Phase 4 | BILL-03–BILL-05, SESS-01, SESS-03–SESS-04, GEN-05–GEN-06 | 8 | Complete |
 | Phase 5 | CONT-01–CONT-07 | 7 | Pending |
 | Phase 6 | PREV-01–PREV-04, PUB-01–PUB-05 | 9 | Pending |
 | Phase 7 | SESS-02, OPS-01–OPS-04 | 5 | Pending |
@@ -162,21 +162,21 @@ Milestone v1.0 owns every row in this table. Existing requirement IDs and phase 
 | PAY-07 | Phase 3 | Complete |
 | BILL-01 | Phase 3 | Complete |
 | BILL-02 | Phase 3 | Complete |
-| BILL-03 | Phase 4 | Pending |
-| BILL-04 | Phase 4 | Pending |
-| BILL-05 | Phase 4 | Pending |
+| BILL-03 | Phase 4 | Complete |
+| BILL-04 | Phase 4 | Complete |
+| BILL-05 | Phase 4 | Complete |
 | BILL-06 | Phase 3 | Complete |
-| SESS-01 | Phase 4 | Pending |
+| SESS-01 | Phase 4 | Complete |
 | SESS-02 | Phase 7 | Pending |
-| SESS-03 | Phase 4 | Pending |
-| SESS-04 | Phase 4 | Pending |
+| SESS-03 | Phase 4 | Complete |
+| SESS-04 | Phase 4 | Complete |
 | SESS-05 | Phase 2 | Complete |
 | GEN-01 | Phase 1 | Complete |
 | GEN-02 | Phase 1 | Complete |
 | GEN-03 | Phase 1 | Complete |
 | GEN-04 | Phase 1 | Complete |
-| GEN-05 | Phase 4 | Pending |
-| GEN-06 | Phase 4 | Pending |
+| GEN-05 | Phase 4 | Complete |
+| GEN-06 | Phase 4 | Complete |
 | SAFE-01 | Phase 2 | Complete |
 | SAFE-02 | Phase 2 | Complete |
 | SAFE-03 | Phase 2 | Complete |

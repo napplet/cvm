@@ -6,7 +6,7 @@ import { evaluateReleaseCertification as evaluateReleaseCertificationInner } fro
 import { verifyReleaseCertificationInput } from "../../src/promotion/candidate";
 import { canonicalJson, parseReleaseCertificationManifest, RELEASE_CLAIM_INVENTORY } from "../../src/promotion/schema";
 import { writeCertificationObservation } from "../../src/certification/evidence";
-import type { ReleaseCertificationTrustRoot } from "../../src/certification/trust";
+import { createPinnedReleaseCertificationTrustRoot, type ReleaseCertificationTrustRoot } from "../../src/certification/trust";
 
 const fixturePath = "tests/fixtures/phase-07-reference-set.json";
 
@@ -161,6 +161,54 @@ test("source measurement is authenticated before cache or evaluator authority", 
   await expect(evaluateReleaseCertificationInner(manifest, observations, { candidateId, nowMs: 2_000, verificationRecords: records, trustRoot, sourceMeasurement: measurement })).resolves.toMatchObject({ status: "promoted" });
   await expect(evaluateReleaseCertificationInner(manifest, observations, { candidateId, nowMs: 2_000, verificationRecords: records, trustRoot, sourceMeasurement: { ...measurement, sourceSha256: digest("0") } })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_SOURCE_MEASUREMENT_INVALID" });
   await expect(evaluateReleaseCertificationInner(manifest, observations, { candidateId, nowMs: 2_000, verificationRecords: records, trustRoot })).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_SOURCE_MEASUREMENT_REQUIRED" });
+});
+
+test("the sole evaluator cannot cross-substitute one root-pinned source archive for another", async () => {
+  const root = await mkdtemp("tests/.tmp-phase07-source-archives-");
+  try {
+    const archiveA = join(root, "archive-a.tar");
+    const archiveB = join(root, "archive-b.tar");
+    const sourceA = new TextEncoder().encode("source archive A");
+    const sourceB = new TextEncoder().encode("source archive B");
+    await writeFile(archiveA, sourceA);
+    await writeFile(archiveB, sourceB);
+
+    const rawManifestA = { ...releaseManifest(), sourceSha256: sha256Bytes(sourceA) };
+    const manifestA = parseReleaseCertificationManifest(rawManifestA);
+    const measurementB = { version: 1 as const, sourceRevision: "b".repeat(40), sourceSha256: sha256Bytes(sourceB) };
+    const candidateId = digest("6");
+    const records = await protectedVerificationRecords(rawManifestA, candidateId);
+    const observations = await Promise.all(RELEASE_CLAIM_INVENTORY.map((requirement) => writeCertificationObservation(join(root, "observations"), bindSupplyChainObservation(observation(rawManifestA, candidateId, requirement.claim, requirement.live), records))));
+    const pinnedRoot = createPinnedReleaseCertificationTrustRoot({
+      sourceArchiveRoot: root,
+      sourceArchives: [
+        { canonicalSourceReference: `git+https://github.com/acme/napplet-cvm@${manifestA.sourceRevision}`, sourceRevision: manifestA.sourceRevision, relativePath: "archive-a.tar", sourceSha256: manifestA.sourceSha256 },
+        { canonicalSourceReference: "git+https://github.com/acme/napplet-cvm@${measurementB.sourceRevision}", sourceRevision: measurementB.sourceRevision, relativePath: "archive-b.tar", sourceSha256: measurementB.sourceSha256 },
+      ],
+      manifest: manifestA,
+      observations,
+      reproducibilityRecord: records.reproducibility,
+      supplyChainRecord: records.supplyChain,
+    });
+    let sourceMeasurementChecks = 0;
+    const trustRoot: ReleaseCertificationTrustRoot = {
+      ...pinnedRoot,
+      verifySourceMeasurement: async (measurement) => {
+        sourceMeasurementChecks += 1;
+        return pinnedRoot.verifySourceMeasurement(measurement);
+      },
+    };
+    const evaluateSubstitution = () => evaluateReleaseCertificationInner(manifestA, observations, { candidateId, nowMs: 2_000, sourceMeasurement: measurementB, verificationRecords: records, trustRoot });
+
+    await expect(evaluateSubstitution()).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_SOURCE_MEASUREMENT_INVALID" });
+    await writeFile(archiveA, "mutated source archive A");
+    await expect(evaluateSubstitution()).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_SOURCE_MEASUREMENT_INVALID" });
+    await rm(archiveA);
+    await expect(evaluateSubstitution()).resolves.toMatchObject({ status: "blocked", reason: "RELEASE_SOURCE_MEASUREMENT_INVALID" });
+    expect(sourceMeasurementChecks).toBe(0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("the sole evaluator authenticates a changed manifest before consulting a promoted cache entry", async () => {

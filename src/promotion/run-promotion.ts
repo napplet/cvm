@@ -79,6 +79,9 @@ async function authenticateReleaseCertificationInput(
   if (!verificationRecords) return "RELEASE_VERIFICATION_RECORDS_REQUIRED";
   if (!trustRoot) return "RELEASE_CERTIFIER_AUTHORITY_REQUIRED";
   try {
+    // A root can retain more than one valid archive. Bind this request to the
+    // canonical manifest fact before asking that root about any archive.
+    if (canonicalJson(sourceMeasurement) !== canonicalJson(releaseSourceMeasurement(manifest))) return "RELEASE_SOURCE_MEASUREMENT_INVALID";
     if (!(await trustRoot.verifySourceMeasurement(sourceMeasurement))) return "RELEASE_SOURCE_MEASUREMENT_INVALID";
     const trusted = await Promise.all([
       trustRoot.verifyManifest(manifest),

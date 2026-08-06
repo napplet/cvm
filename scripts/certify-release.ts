@@ -57,7 +57,10 @@ async function main(): Promise<number> {
     if (resume && resume.toLowerCase() !== result.state.stateSha256 && resume.toLowerCase() !== result.authorizationRequest.resumeStateSha256) throw new Error("RELEASE_CERTIFICATION_RESUME_MISMATCH");
     if (receipt && receipt.toLowerCase() !== result.authorizationRequest.expectedReceiptSha256) throw new Error("RELEASE_AUTHORIZATION_RECEIPT_INVALID");
     console.log(JSON.stringify(request || receipt ? {
-      authorizationRequest: result.authorizationRequest,
+      // Product output is deliberately redacted: the persisted request is the
+      // audit authority and the command exposes only the digests needed to
+      // approve, resume, or inspect that same controller run.
+      progress: result.state.status,
       authorizationRequestSha256: result.authorizationRequest.authorizationRequestSha256,
       expectedReceiptSha256: result.authorizationRequest.expectedReceiptSha256,
       receiptValidated: receipt === undefined ? false : true,

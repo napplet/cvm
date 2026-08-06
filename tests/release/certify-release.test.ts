@@ -70,3 +70,15 @@ test("workspace overrides are confined and status/resume remain candidate-bound"
   expect(unsafeCode).toBe(1);
   expect(`${unsafeStdout}${unsafeStderr}`).toContain("RELEASE_CERTIFICATION_WORKSPACE_REJECTED");
 });
+
+test("receipt confirmation reports a redacted same-run progress boundary", async () => {
+  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "NAPPLET_CVM_RELEASE_WORKSPACE")), PATH: "/nonexistent" } as Record<string, string>;
+  const requestChild = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--request"], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
+  const [requestCode, requestStdout] = await Promise.all([requestChild.exited, new Response(requestChild.stdout).text()]);
+  expect(requestCode).toBe(1);
+  const request = JSON.parse(requestStdout) as { expectedReceiptSha256: string };
+  const receiptChild = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--receipt", request.expectedReceiptSha256], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
+  const [receiptCode, receiptStdout] = await Promise.all([receiptChild.exited, new Response(receiptChild.stdout).text()]);
+  expect(receiptCode).toBe(1);
+  expect(JSON.parse(receiptStdout)).toMatchObject({ receiptValidated: true, progress: "authorization_required" });
+});

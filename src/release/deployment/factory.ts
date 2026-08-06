@@ -3,6 +3,9 @@ import type { ReleaseExecutionFactoryInput } from "../production-execution";
 import { RELEASE_PRODUCTION_PROVIDER_IDS } from "../native-registry";
 import type { ReleaseProviderRegistry } from "../providers";
 import type { GoogleAccessToken, GoogleFetch, GoogleTokenSource } from "./google-clients";
+import type { createContextVmDeploymentClient } from "./contextvm-client";
+import type { createPaymentDeploymentClients } from "./payment-clients";
+import type { createVertexDeploymentClient } from "./vertex-client";
 
 /** Bounded dependency descriptors for the concrete provider modules.  They are
  * references only: the pinned factory must receive them explicitly and cannot
@@ -10,6 +13,21 @@ import type { GoogleAccessToken, GoogleFetch, GoogleTokenSource } from "./google
 export type DeploymentClientDependencies = Readonly<{
   google?: Readonly<{ tokenSource: GoogleTokenSource; fetch: GoogleFetch; fixtureToken?: GoogleAccessToken }>;
 }>;
+
+/** Every constructed family is explicit.  This registration helper is pure:
+ * it cannot trigger transport, payment, model, or provider discovery. */
+export function registerDeploymentClientFamilies(input: Readonly<{
+  contextvm: ReturnType<typeof createContextVmDeploymentClient>;
+  payments: ReturnType<typeof createPaymentDeploymentClients>;
+  vertex: ReturnType<typeof createVertexDeploymentClient>;
+}>) {
+  return Object.freeze({
+    contextvm: input.contextvm,
+    cep8_lightning: input.payments.nwc,
+    cashu: input.payments.cashu,
+    model: input.vertex,
+  });
+}
 
 export type DeploymentFactoryRuntime = Readonly<{
   registry: ReleaseProviderRegistry;

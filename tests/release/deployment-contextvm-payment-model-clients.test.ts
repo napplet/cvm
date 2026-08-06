@@ -1,10 +1,9 @@
 import { expect, test } from "bun:test";
 
-import {
-  createContextVmDeploymentClient,
-  createPaymentDeploymentClients,
-  createVertexDeploymentClient,
-} from "../../src/release/deployment/contextvm-client";
+import { createContextVmDeploymentClient } from "../../src/release/deployment/contextvm-client";
+import { createPaymentDeploymentClients } from "../../src/release/deployment/payment-clients";
+import { createVertexDeploymentClient } from "../../src/release/deployment/vertex-client";
+import { registerDeploymentClientFamilies } from "../../src/release/deployment/factory";
 
 const digest = (letter: string) => letter.repeat(64);
 
@@ -48,4 +47,11 @@ test("vertex: binds a Gemini request to the shared loopback Google client and ne
   expect(requests).toEqual([expect.objectContaining({ operationId: "vertex-original-op", region: "europe-west1", modelReference: "gemini-2.5-pro", requestDigest: digest("d") })]);
   expect(await client.reconcileOriginal({ operationId: "vertex-original-op" })).toEqual({ status: "completed", operationId: "vertex-original-op", originalOperationOnly: true });
   expect(() => createVertexDeploymentClient({ candidateSha256: digest("c"), projectId: "napplet-cvm-run-1", location: "europe-west1", model: "gemini-2.5-pro", credentialReference: "ya29.raw-adc", vertex: { predict: async () => ({ status: "completed" as const }) } })).toThrow("DEPLOYMENT_SECRET_REFERENCE_INVALID");
+});
+
+test("contextvm: factory registers the four distinct non-infrastructure families", () => {
+  const contextvm = createContextVmDeploymentClient({ serviceKeyReference: "nostr:contextvm-service-key", relaySetReference: "relay-set:primary", relaySetSha256: digest("e") });
+  const payments = createPaymentDeploymentClients({ nwcConnectionReference: "nwc:consent:wallet-one", cashuWalletReference: "cashu:funded-wallet:one" });
+  const vertex = createVertexDeploymentClient({ candidateSha256: digest("f"), projectId: "napplet-cvm-run-1", location: "europe-west1", model: "gemini-2.5-pro", credentialReference: "gcp:adc:release", vertex: { predict: async () => ({ status: "blocked" as const }) } });
+  expect(Object.keys(registerDeploymentClientFamilies({ contextvm, payments, vertex }))).toEqual(["contextvm", "cep8_lightning", "cashu", "model"]);
 });

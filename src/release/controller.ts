@@ -35,6 +35,11 @@ export type ReleaseCertificationResult = Readonly<{
   state: ReleaseControllerState;
   authorizationRequest: ReleaseAuthorizationRequest;
 }>;
+export type ReleaseCertificationProgress = ReleaseCertificationResult & Readonly<{
+  /** This local implementation deliberately stops here. Only the later
+   * authenticated executor may progress into provider or protected operations. */
+  stage: "authorization_required";
+}>;
 export type ReleaseProvisioningResult = Readonly<{
   state: ReleaseControllerState;
   authorizationRequest: ReleaseAuthorizationRequest;
@@ -245,6 +250,17 @@ export class ReleaseCertificationController {
     return (await this.status())!;
   }
 
+  /** Candidate-only orchestration entrypoint. It persists and verifies the
+   * content-addressed admission state, then fail-closes before authorization.
+   * There is intentionally no test hook for a runner, evaluator, trust root,
+   * bundle writer, provider mutation, or cleanup effect. */
+  async certify(input: Readonly<{ onProtectedRunnerCall?: () => void }> = {}): Promise<ReleaseCertificationProgress> {
+    void input.onProtectedRunnerCall;
+    const result = await this.dryRun();
+    if (result.state.status !== "authorization_required") throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+    return { ...result, stage: "authorization_required" };
+  }
+
   /** Local-only composition path. The protected runner injects authenticated ports later;
    * this controller neither constructs them nor writes certification evidence. */
   async provision(input: Readonly<{ receipt: unknown; registry: AuthorizedProviderRegistry }>): Promise<ReleaseProvisioningResult> {
@@ -422,5 +438,6 @@ export class ReleaseCertificationController {
 }
 
 export async function runReleaseCertification(options: ControllerOptions & Readonly<{ dryRun: true }>): Promise<ReleaseCertificationResult> {
-  return new ReleaseCertificationController(options).dryRun();
+  const progress = await new ReleaseCertificationController(options).certify();
+  return progress;
 }

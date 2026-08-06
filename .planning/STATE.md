@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
-current_phase: 07
+current_phase: 7
 current_phase_name: Admission SLO, Resilience & Launch Safety
 status: executing
-stopped_at: Plan 07-19 complete; continuing local automation with Plan 07-21 before final authorization
-last_updated: "2026-08-06T11:08:41.933Z"
+stopped_at: Completed 07-21-PLAN.md
+last_updated: "2026-08-06T11:27:09.121Z"
 last_activity: 2026-08-06
-last_activity_desc: Plan 07-19 completed; authorization checkpoint reordered after local provider and certification automation
+last_activity_desc: Plan 07-19 completed; continuing with concrete provider automation
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 66
-  completed_plans: 60
+  completed_plans: 61
   percent: 86
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 7 — Admission SLO, Resilience & Launch Safety
-Plan: 21 of 26
+Plan: 22 of 26
 Status: Executing local automation; provider authentication is deferred until the complete controller can request it precisely
 Last activity: 2026-08-06 — Plan 07-19 completed; continuing with concrete provider automation
 
@@ -125,6 +125,7 @@ Plan execution: [█████████░] 60/66 milestone plans complete;
 | Phase 07-admission-slo-resilience-launch-safety P17 | 6m 28s | 2 tasks | 11 files |
 | Phase 07 P18 | 6m | 1 tasks | 5 files |
 | Phase 07 P19 | 6m 12s | 2 tasks | 5 files |
+| Phase 07-admission-slo-resilience-launch-safety P21 | 7m 16s | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -248,6 +249,9 @@ Recent decisions affecting current work:
 - [Phase ?]: Protected promotion re-hashes the manifest-bound source archive before authentication, cache lookup, or the sole evaluator.
 - [Phase ?]: Dry-run performs only finite read-only discovery and exits nonzero at authorization_required.
 - [Phase ?]: Release topology, effects, and maximum cost are project-owned inputs bound to immutable candidate identity.
+- [Phase ?]: Release provider clients remain injected-only until the Plan 07-20 receipt and Plan 07-25 protected execution.
+- [Phase ?]: Release operations persist before effect and ambiguous outcomes resume by observing the original operation identity.
+- [Phase ?]: Deployed topology claims remain limited to active ingress; database, object-store, and worker continuity require live drills.
 
 ### Pending Todos
 
@@ -276,6 +280,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-06T11:08:41.924Z
-Stopped at: Completed 07-19-PLAN.md
+Last session: 2026-08-06T11:27:09.109Z
+Stopped at: Completed 07-21-PLAN.md
 Resume file: None

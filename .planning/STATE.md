@@ -5,14 +5,14 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: executing
-stopped_at: Completed 07-44-PLAN.md; next 07-20
-last_updated: "2026-08-06T18:56:03.412Z"
+stopped_at: Runtime gap fixed; next 07-45 authoritative catalog and funding prerequisites
+last_updated: "2026-08-06T19:35:00.000Z"
 last_activity: 2026-08-06
-last_activity_desc: Completed 07-43 exact-eight protected execution composition and fake-only forced-resume coverage
+last_activity_desc: Blocked fixture-priced approval requests and appended 07-45/07-46 corrective execution plans
 progress:
   total_phases: 7
   completed_phases: 6
-  total_plans: 85
+  total_plans: 87
   completed_plans: 83
   percent: 86
 ---
@@ -30,20 +30,20 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 07 (admission-slo-resilience-launch-safety) — EXECUTING
-Plan: 43 of 45 complete
-Status: Ready to execute 07-20 official consent boundary
-Last activity: 2026-08-06 — Completed 07-44 exact sixteen-line authorization request and no-effect product review
+Plan: 43 of 47 complete
+Status: Ready to execute 07-45 authoritative catalog and service-funding prerequisite composition
+Last activity: 2026-08-06 — Fixed fixture-priced product approval and corrected funding/NIP-46 semantics
 
-Plan execution: [█████████░] 83/85 milestone plans complete; Phase 7 is 43/45 complete and verification remains pending
+Plan execution: [█████████░] 83/87 milestone plans complete; Phase 7 is 43/47 complete and verification remains pending
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 83/85 milestone plans executed. Plan 07-44 added fresh sixteen-line request composition and a no-effect product review; 07-20 official consent is next, followed by 07-26 protected execution.
+- Plans: 83/87 milestone plans executed. Plans 07-45–07-46 now close truthful live pricing/operator funding and concrete protected factory/readiness before 07-20 approval and 07-26 protected execution.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Next checkpoint: execute 07-43 through 07-44, then use 07-20 only for controller-launched NIP-46 and NWC/Cashu consent plus structured approval, followed by 07-26 protected execution; no hand-authored config/evidence or pasted secret/digest is required.
+- Next checkpoint: execute 07-45 then 07-46; 07-20 connects any missing operator NWC Lightning and funded Cashu certification rails locally and records final exact approval, followed by 07-26. Owner NIP-46 remains deferred to publication; no hand-authored config/evidence or pasted secret/digest is required.
 
 ## Performance Metrics
 
@@ -341,5 +341,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-08-06T18:56:03.401Z
-Stopped at: Completed 07-44-PLAN.md; next 07-20
+Stopped at: Runtime gap fixed; next 07-45 authoritative catalog and funding prerequisites
 Resume file: None

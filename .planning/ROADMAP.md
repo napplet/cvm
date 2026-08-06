@@ -303,7 +303,7 @@ Plans:
 **Validation gate**: Benchmark Modal and at least one non-AWS fallback with the production-like image, target regions, relay delay, pool misses, database contention, reclaim/failure behavior, and step load. Select a worker vendor only after receipt-to-isolated-worker-ready p95 is at most five seconds with zero durable backlog; establish the database/failover claim to match the chosen deployment scope.
 
 Phase 7 also closes the launch-hardening work intentionally deferred from Phase 1: exhaustive toolchain provenance, repeated/cross-environment reproducibility, full hostile and mutation coverage, formal golden approval, waiver drills, SBOM/provenance enforcement, and the final production promotion gate.
-**Plans**: 43/45 plans executed
+**Plans**: 43/47 plans executed
 **Wave 1**
 
 - [x] 07-00-PLAN.md
@@ -442,9 +442,17 @@ Phase 7 also closes the launch-hardening work intentionally deferred from Phase 
 
 **Wave 32** *(blocked on Wave 31 completion)*
 
-- [ ] 07-20-PLAN.md — Complete only controller-launched NIP-46 and NWC/Cashu consent and approve the exact structured request after production composition is complete.
+- [ ] 07-45-PLAN.md — Compose authoritative sixteen-family current pricing and service-owned funding prerequisites; keep owner NIP-46 at real publication.
 
 **Wave 33** *(blocked on Wave 32 completion)*
+
+- [ ] 07-46-PLAN.md — Generate the protected config and concrete complete factory/session, then prove one-command zero-effect readiness.
+
+**Wave 34** *(blocked on Wave 33 completion)*
+
+- [ ] 07-20-PLAN.md — Connect any missing operator NWC Lightning and funded Cashu certification rails locally, then approve the exact structured request; owner NIP-46 remains deferred to real publication.
+
+**Wave 35** *(blocked on Wave 34 completion)*
 
 - [ ] 07-26-PLAN.md — Run the authorized controller through provisioning, discovery, all eight real protected suites, trust finalization, sole evaluation, actual-cost reconciliation, immutable bundle assembly, and bounded cleanup.
 
@@ -461,14 +469,14 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 4. Metered Generation & Revision Loop | 7/7 | Complete    | 2026-08-05 |
 | 5. Funding Interruption & Durable Resume | 7/7 | Complete    | 2026-08-05 |
 | 6. Sealed Preview & User-Owned Publication | 7/7 | Complete    | 2026-08-05 |
-| 7. Admission SLO, Resilience & Launch Safety | 43/45 | In Progress|  |
+| 7. Admission SLO, Resilience & Launch Safety | 43/47 | In Progress|  |
 
 ### Milestone Progress Roll-up
 
 - **Phases:** Phases 1–6 are verified complete; Phase 7 awaits protected live evidence and goal verification; 6/7 phases complete (86%).
-- **Known plans:** 80/85 milestone plans executed. Plans 07-40 and 07-41 now provide the pinned factory/structured receipt plus shared GCP/worker clients and fresh/actual-cost contracts. Plans 07-42–07-44 own remaining client composition, exact-eight preparation, and product-command readiness before 07-20 authorization and 07-26 execution.
+- **Known plans:** 83/87 milestone plans executed. Plans 07-45–07-46 close the authoritative catalog, operator-funding prerequisite, concrete protected factory/config, and truthful one-command readiness gaps before 07-20 approval and 07-26 execution.
 - **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 49 verified complete and 5 Phase 7 requirements pending.
-- **Current checkpoint:** Execute Plan 07-42 through 07-44 in dependency order; only afterward execute 07-20 for controller-launched NIP-46/NWC/Cashu consent and structured approval, then 07-26 for the run-only protected live certification.
+- **Current checkpoint:** Execute 07-45 then 07-46; use 07-20 only to connect any missing local operator NWC Lightning and funded Cashu certification rails plus final exact approval, then run 07-26 protected live certification. Future napplet-owner NIP-46 signing occurs during publication, not candidate certification.
 - **Phase 1 preservation:** Phase 1 remains complete with its review, security, validation, verification evidence, and Phase 7 deferrals unchanged.
 
 ### Completion Reporting Contract

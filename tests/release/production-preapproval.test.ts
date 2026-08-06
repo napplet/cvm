@@ -68,6 +68,7 @@ test("rejects redirects, unrecognized official rates, wrong units, and uniform q
 });
 
 const sha256 = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
+const pin = (label: string) => sha256(label);
 
 test("materializes create-only receipt-free preapproval bytes and remeasures every pin", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "napplet-cvm-preapproval-"));
@@ -78,10 +79,10 @@ test("materializes create-only receipt-free preapproval bytes and remeasures eve
     const input = {
       workspace,
       repositoryRoot,
-      candidateId: digest("candidate"),
-      source: { sourceRevision: "a".repeat(40), sourceSha256: digest("source") },
-      topology: { candidateSha256: digest("candidate"), topologySha256: digest("topology") },
-      catalog: { catalogSha256: digest("catalog"), topologySha256: digest("topology") },
+      candidateId: pin("candidate"),
+      source: { sourceRevision: "a".repeat(40), sourceSha256: pin("source") },
+      topology: { candidateSha256: pin("candidate"), topologySha256: pin("topology") },
+      catalog: { catalogSha256: pin("catalog"), topologySha256: pin("topology") },
       publicSettings: { regions: ["europe-west1", "us-central1"] as [string, string], maximumRunDurationMs: 900_000, retentionDays: 30 },
       opaqueReferenceNames: ["cloud-run", "modal"],
       factory: {
@@ -114,13 +115,13 @@ test("rejects authority-shaped inputs, cross-bound hashes, and paths outside the
     const modulePath = resolve(repositoryRoot, "src/release/deployment/production-factory.ts");
     const configPath = resolve(repositoryRoot, "src/release/deployment/factory.ts");
     const input = {
-      workspace, repositoryRoot, candidateId: digest("candidate"), source: { sourceRevision: "a".repeat(40), sourceSha256: digest("source") },
-      topology: { candidateSha256: digest("candidate"), topologySha256: digest("topology") }, catalog: { catalogSha256: digest("catalog"), topologySha256: digest("topology") },
+      workspace, repositoryRoot, candidateId: pin("candidate"), source: { sourceRevision: "a".repeat(40), sourceSha256: pin("source") },
+      topology: { candidateSha256: pin("candidate"), topologySha256: pin("topology") }, catalog: { catalogSha256: pin("catalog"), topologySha256: pin("topology") },
       publicSettings: { regions: ["europe-west1", "us-central1"] as [string, string], maximumRunDurationMs: 900_000, retentionDays: 30 }, opaqueReferenceNames: ["modal"],
       factory: { root: repositoryRoot, modulePath, moduleSha256: sha256(await readFile(modulePath)), configPath, configSha256: sha256(await readFile(configPath)) },
     };
-    await expect(materializePreapproval({ ...input, authorizationReceiptSha256: digest("receipt") } as never)).rejects.toThrow("PREAPPROVAL_INPUT_REJECTED");
-    await expect(materializePreapproval({ ...input, catalog: { ...input.catalog, topologySha256: digest("other") } })).rejects.toThrow("PREAPPROVAL_BINDING_REJECTED");
+    await expect(materializePreapproval({ ...input, authorizationReceiptSha256: pin("receipt") } as never)).rejects.toThrow("PREAPPROVAL_INPUT_REJECTED");
+    await expect(materializePreapproval({ ...input, catalog: { ...input.catalog, topologySha256: pin("other") } })).rejects.toThrow("PREAPPROVAL_BINDING_REJECTED");
     await expect(materializePreapproval({ ...input, factory: { ...input.factory, modulePath: "/tmp/outside.ts" } })).rejects.toThrow("PREAPPROVAL_FACTORY_REJECTED");
   } finally {
     await rm(workspace, { recursive: true, force: true });

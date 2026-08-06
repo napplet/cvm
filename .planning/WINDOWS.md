@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 24
+open_count: 25
 waived_count: 0
 fixed_count: 0
-total_count: 24
-last_updated: 2026-08-06T15:08:57.132Z
+total_count: 25
+last_updated: 2026-08-06T15:11:00.370Z
 ---
 
 # Broken Windows Ledger
@@ -39,6 +39,7 @@ last_updated: 2026-08-06T15:08:57.132Z
 | 22 | 07 | deviation | scripts/certify-release.ts |  | Added an ignored controller-owned default workspace so the documented candidate-only command reaches authorization_required without environment setup. | open |  | 2026-08-06T12:18:20.750Z |  |
 | 23 | 07 | deviation | .planning/phases/07-admission-slo-resilience-launch-safety/07-32-PLAN.md |  | Plan referenced renamed worker and live-admission test paths; current equivalent contracts were verified. | open |  | 2026-08-06T14:38:44.092Z |  |
 | 24 | 07 | deviation | .planning/phases/07-admission-slo-resilience-launch-safety/07-35-PLAN.md |  | Plan references absent tests/certification/live-security-host.test.ts; existing live-integration gate was run instead. | open |  | 2026-08-06T15:08:57.132Z |  |
+| 25 | 07 | deviation | src/release/native/external-signer.ts |  | Signer inspection now requires a candidate-bound exact locally verified public authorization, not discovery alone. | open |  | 2026-08-06T15:11:00.370Z |  |
 
 ````json
 [
@@ -328,6 +329,18 @@ last_updated: 2026-08-06T15:08:57.132Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-06T15:08:57.132Z",
+    "resolved_at": null
+  },
+  {
+    "id": 25,
+    "kind": "deviation",
+    "phase": "07",
+    "file": "src/release/native/external-signer.ts",
+    "line": null,
+    "description": "Signer inspection now requires a candidate-bound exact locally verified public authorization, not discovery alone.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-06T15:11:00.370Z",
     "resolved_at": null
   }
 ]

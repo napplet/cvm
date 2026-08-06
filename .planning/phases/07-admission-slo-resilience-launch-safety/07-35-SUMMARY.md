@@ -72,7 +72,7 @@ status: complete
 ## Task Commits
 
 1. **Task 1: Render one sealed napplet in the real compatible host** - `457b9ad`, `e1adf1e` (TDD red, feat)
-2. **Task 2: Prove external signer custody without exposing a private key** - `d8cd911`, `2c7b669` (TDD red, feat)
+2. **Task 2: Prove external signer custody without exposing a private key** - `d8cd911`, `2c7b669`, `f1554e9` (TDD red, feat, security fix)
 
 ## Files Created/Modified
 
@@ -91,7 +91,15 @@ status: complete
 
 ### Auto-fixed Issues
 
-**1. [Rule 3 - Blocking] Replaced an absent planned test path with the existing live integration gate**
+**1. [Rule 2 - Missing Critical] Require a candidate-bound verified signer authorization before protected inspection can pass**
+- **Found during:** Task 2 security review
+- **Issue:** Discovery with granted consent alone could produce a passing signer-boundary observation without an exact locally verified signing result.
+- **Fix:** Retain only the public candidate-bound authorization result and require its exact signer/capabilities before inspection returns passed.
+- **Files modified:** `src/release/native/external-signer.ts`, `tests/release/host-signer-live-provider.test.ts`
+- **Verification:** Focused signer and live-integration tests passed.
+- **Committed in:** `f1554e9`
+
+**2. [Rule 3 - Blocking] Replaced an absent planned test path with the existing live integration gate**
 - **Found during:** Task 1 verification
 - **Issue:** `tests/certification/live-security-host.test.ts` does not exist in the repository.
 - **Fix:** Ran the new focused provider suite together with `tests/release/live-integration-adapters.test.ts`, which exercises the existing `runLiveSecurityHostCertification` deterministic-port rejection gate.
@@ -101,7 +109,7 @@ status: complete
 
 ---
 
-**Total deviations:** 1 auto-fixed (1 Rule 3 blocking verification-path correction)
+**Total deviations:** 2 auto-fixed (1 Rule 2 security hardening, 1 Rule 3 verification-path correction)
 **Impact on plan:** No scope expansion or live effect. The absent path remains a pre-existing planning mismatch; protected live certification is still required.
 
 ## Issues Encountered
@@ -124,4 +132,4 @@ None - no external service configuration or consent was requested in this local-
 ## Self-Check: PASSED
 
 - Confirmed all four task files exist.
-- Confirmed TDD and implementation commits `457b9ad`, `e1adf1e`, `d8cd911`, and `2c7b669` exist.
+- Confirmed TDD, implementation, and security-fix commits `457b9ad`, `e1adf1e`, `d8cd911`, `2c7b669`, and `f1554e9` exist.

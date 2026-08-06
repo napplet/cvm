@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: executing
-stopped_at: Completed 07-36-PLAN.md
-last_updated: "2026-08-06T15:45:47.058Z"
+stopped_at: Completed 07-37-PLAN.md
+last_updated: "2026-08-06T15:53:03.315Z"
 last_activity: 2026-08-06
-last_activity_desc: Completed 07-36 pinned promoted CLI, exact upload, and original-event relay publication ports
+last_activity_desc: Completed 07-37 complete native provider and exact-eight real protected-port composition
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 80
-  completed_plans: 75
+  completed_plans: 76
   percent: 86
 ---
 
@@ -30,20 +30,20 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 07 (admission-slo-resilience-launch-safety) — EXECUTING
-Plan: 35 of 40 complete
-Status: Ready to execute 07-37
-Last activity: 2026-08-06 — Completed 07-36 pinned promoted CLI, exact upload, and original-event relay publication ports
+Plan: 36 of 40 complete
+Status: Ready to execute 07-38
+Last activity: 2026-08-06 — Completed 07-37 complete native provider and exact-eight real protected-port composition
 
-Plan execution: [█████████░] 75/80 milestone plans complete; Phase 7 is 35/40 complete and verification remains pending
+Plan execution: [█████████░] 76/80 milestone plans complete; Phase 7 is 36/40 complete and verification remains pending
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 75/80 milestone plans executed; Plan 07-36 added pinned promoted CLI, exact sealed-byte upload, and original-event relay publication composition. Plan 07-37 is next before the remaining provider composition and separate authorization/protected-run checkpoints.
+- Plans: 76/80 milestone plans executed; Plan 07-37 completed the full native provider and exact-eight real protected-port composition. Plan 07-38 is next before the remaining authorization/protected-run checkpoints.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Next checkpoint: execute Plan 07-37, continue through Plan 07-39, then use Plan 07-20 for one exact provider-authentication/cost approval and Plan 07-26 for the protected live run; no hand-authored evidence or certifier files are required.
+- Next checkpoint: execute Plan 07-38, continue through Plan 07-39, then use Plan 07-20 for one exact provider-authentication/cost approval and Plan 07-26 for the protected live run; no hand-authored evidence or certifier files are required.
 
 ## Performance Metrics
 
@@ -139,6 +139,7 @@ Plan execution: [█████████░] 75/80 milestone plans complete;
 | Phase 07 P35 | 7m | 2 tasks | 4 files |
 | Phase 07 P30 | 14m | 2 tasks | 4 files |
 | Phase 07 P36 | 7m | 2 tasks | 5 files |
+| Phase 07 P37 | 5m | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -288,6 +289,8 @@ Recent decisions affecting current work:
 - [Phase ?]: Cloud Run and Collector native ports revalidate exact v2 authorization immediately before effects and resume only by original operation.
 - [Phase ?]: Collector telemetry uses the closed D-118 vocabulary, exact candidate/topology windows, and strict sensitive-field rejection.
 - [Phase ?]: Native publication composition revalidates the pinned CLI source and exact v2 receipt before each upload or relay effect, then reconciles only persisted original operations.
+- [Phase ?]: All 16 release provider families compose through injected no-effect ports; missing capability or consent is explicit blocked state.
+- [Phase ?]: Production certification accepts exactly eight real-evidence ports and reuses the sole protected-live evaluator.
 
 ### Pending Todos
 
@@ -316,6 +319,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-06T15:45:47.045Z
-Stopped at: Completed 07-36-PLAN.md
+Last session: 2026-08-06T15:53:03.306Z
+Stopped at: Completed 07-37-PLAN.md
 Resume file: None

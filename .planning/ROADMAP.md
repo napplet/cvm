@@ -20,7 +20,7 @@ napplet-cvm moves from proving the permanent napplet contract to a safe, prepaid
 | 4. Metered Generation & Revision Loop | Turns approved funds into exact-usage, serialized napplet creation, revision, repair, progress, and diagnostic actions. | BILL-03–BILL-05, SESS-01, SESS-03–SESS-04, GEN-05–GEN-06 | `.planning/phases/04-metered-generation-revision-loop/` — context, discussion log, research, AI spec, patterns, validation, 7 plans and summaries, review/fix history, immutable design evidence, security audit, and passed goal verification. |
 | 5. Funding Interruption & Durable Resume | Preserves paid work across insufficient funds, the ten-minute live-worker window, explicit resume, and 30-day checkpoint retention. | CONT-01–CONT-07 | `.planning/phases/05-funding-interruption-durable-resume/` — context, research, patterns, validation, 7 plans and summaries, review/fix history, security audit, immutable design evidence, and passed goal verification. |
 | 6. Sealed Preview & User-Owned Publication | Lets the user preview the exact verified artifact, retain signing custody, and explicitly deploy a manifest plus CVM attestation. | PREV-01–PREV-04, PUB-01–PUB-05 | `.planning/phases/06-sealed-preview-user-owned-publication/` — context, approved UI spec, current research, pattern map, API/source coverage, draft validation strategy, and 7 checker-approved plans across 6 waves; execution evidence remains pending. |
-| 7. Admission SLO, Resilience & Launch Safety | Measures immediate-or-rejected admission, proves integrated failure safety, and closes the launch-hardening work deferred from Phase 1. | SESS-02, OPS-01–OPS-04 | `.planning/phases/07-admission-slo-resilience-launch-safety/` — 35/40 plans executed and summarized; phase goal verification remains blocked on protected live evidence. |
+| 7. Admission SLO, Resilience & Launch Safety | Measures immediate-or-rejected admission, proves integrated failure safety, and closes the launch-hardening work deferred from Phase 1. | SESS-02, OPS-01–OPS-04 | `.planning/phases/07-admission-slo-resilience-launch-safety/` — 36/40 plans executed and summarized; phase goal verification remains blocked on protected live evidence. |
 
 The phase-to-requirement assignments in this table are identical to `REQUIREMENTS.md` and the phase detail sections below. Existing paths are canonical; future phase artifacts are added to their numbered phase directories without moving or regenerating prior work.
 
@@ -303,7 +303,7 @@ Plans:
 **Validation gate**: Benchmark Modal and at least one non-AWS fallback with the production-like image, target regions, relay delay, pool misses, database contention, reclaim/failure behavior, and step load. Select a worker vendor only after receipt-to-isolated-worker-ready p95 is at most five seconds with zero durable backlog; establish the database/failover claim to match the chosen deployment scope.
 
 Phase 7 also closes the launch-hardening work intentionally deferred from Phase 1: exhaustive toolchain provenance, repeated/cross-environment reproducibility, full hostile and mutation coverage, formal golden approval, waiver drills, SBOM/provenance enforcement, and the final production promotion gate.
-**Plans**: 35/40 plans executed
+**Plans**: 36/40 plans executed
 **Wave 1**
 
 - [x] 07-00-PLAN.md
@@ -410,7 +410,7 @@ Phase 7 also closes the launch-hardening work intentionally deferred from Phase 
 
 **Wave 24** *(blocked on Wave 23 completion)*
 
-- [ ] 07-37-PLAN.md — Assemble all production provider families and exactly eight real protected suite ports.
+- [x] 07-37-PLAN.md — Assemble all production provider families and exactly eight real protected suite ports.
 
 **Wave 25** *(blocked on Wave 24 completion)*
 
@@ -441,14 +441,14 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 4. Metered Generation & Revision Loop | 7/7 | Complete    | 2026-08-05 |
 | 5. Funding Interruption & Durable Resume | 7/7 | Complete    | 2026-08-05 |
 | 6. Sealed Preview & User-Owned Publication | 7/7 | Complete    | 2026-08-05 |
-| 7. Admission SLO, Resilience & Launch Safety | 35/40 | In Progress|  |
+| 7. Admission SLO, Resilience & Launch Safety | 36/40 | In Progress|  |
 
 ### Milestone Progress Roll-up
 
 - **Phases:** Phases 1–6 are verified complete; Phase 7 awaits protected live evidence and goal verification; 6/7 phases complete (86%).
-- **Known plans:** 75/80 milestone plans executed; Plans 07-19 and 07-21–07-25 completed the controller, provider, materializer, and exact-eight local foundations; Plans 07-27–07-31 established current authority, exact USD authorization, native GCP bootstrap/cost composition, Cloud Run/Collector, and GCS/Cloud SQL provider composition; Plans 07-32–07-35 added worker, ContextVM/CEP-8 payment, candidate-bound model reconciliation, compatible-host observation, and external signer composition; Plan 07-36 added pinned promoted CLI, exact upload, owner-relay, and attestation-relay composition; Plans 07-37–07-39 close the remaining production composition before authorization.
+- **Known plans:** 76/80 milestone plans executed; Plans 07-19 and 07-21–07-25 completed the controller, provider, materializer, and exact-eight local foundations; Plans 07-27–07-31 established current authority, exact USD authorization, native GCP bootstrap/cost composition, Cloud Run/Collector, and GCS/Cloud SQL provider composition; Plans 07-32–07-35 added worker, ContextVM/CEP-8 payment, candidate-bound model reconciliation, compatible-host observation, and external signer composition; Plan 07-36 added pinned promoted CLI, exact upload, owner-relay, and attestation-relay composition; Plan 07-37 added complete native provider and exact-eight real protected-port composition; Plans 07-38–07-39 remain before authorization.
 - **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 49 verified complete and 5 Phase 7 requirements pending.
-- **Current checkpoint:** Execute Plan 07-37, continue through the remaining production native composition, then Plan 07-20 for official provider consent and one exact authorization, then Plan 07-26 for the run-only protected live certification.
+- **Current checkpoint:** Execute Plan 07-38, continue through the remaining production native composition, then Plan 07-20 for official provider consent and one exact authorization, then Plan 07-26 for the run-only protected live certification.
 - **Phase 1 preservation:** Phase 1 remains complete with its review, security, validation, verification evidence, and Phase 7 deferrals unchanged.
 
 ### Completion Reporting Contract

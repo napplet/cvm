@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 27
+open_count: 28
 waived_count: 0
 fixed_count: 0
-total_count: 27
-last_updated: 2026-08-06T15:32:23.017Z
+total_count: 28
+last_updated: 2026-08-06T15:53:44.703Z
 ---
 
 # Broken Windows Ledger
@@ -42,6 +42,7 @@ last_updated: 2026-08-06T15:32:23.017Z
 | 25 | 07 | deviation | src/release/native/external-signer.ts |  | Signer inspection now requires a candidate-bound exact locally verified public authorization, not discovery alone. | open |  | 2026-08-06T15:11:00.370Z |  |
 | 26 | 07 | deviation | .planning/phases/07-admission-slo-resilience-launch-safety/07-30-SUMMARY.md |  | Plan 07-30 used the existing telemetry-policy suite because tests/certification/live-telemetry.test.ts is absent. | open |  | 2026-08-06T15:19:07.455Z |  |
 | 27 | 07 | deviation | tests/release/live-operations-adapters.test.ts |  | Plan 07-31 used existing live restore adapter suite because planned durability test path was absent | open |  | 2026-08-06T15:32:23.017Z |  |
+| 28 | 07 | deviation | src/release/controller.ts | 458 | Removed former unimplemented-family dead end; local execution now blocks for protected capability or consent. | open |  | 2026-08-06T15:53:44.703Z |  |
 
 ````json
 [
@@ -367,6 +368,18 @@ last_updated: 2026-08-06T15:32:23.017Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-06T15:32:23.017Z",
+    "resolved_at": null
+  },
+  {
+    "id": 28,
+    "kind": "deviation",
+    "phase": "07",
+    "file": "src/release/controller.ts",
+    "line": 458,
+    "description": "Removed former unimplemented-family dead end; local execution now blocks for protected capability or consent.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-06T15:53:44.703Z",
     "resolved_at": null
   }
 ]

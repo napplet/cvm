@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { canonicalJson } from "../../promotion/schema";
 import { RELEASE_COST_FAMILIES, type LiveCostCatalogPort } from "./live-estimator";
+import type { ReleaseTopologyQuantity } from "../topology";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 const ProviderSchema = z.enum(RELEASE_COST_FAMILIES);
@@ -38,6 +39,10 @@ export type OfficialPricingSourcePort = Readonly<{
 export type ProductionLiveCostCatalogOptions = Readonly<{
   google: GooglePublicCatalogPort;
   sources: OfficialPricingSourcePort;
+  /** Supplying the topology contract binds every source quote to the exact
+   * hashed unit used by release authorization. Legacy callers remain blocked
+   * from claiming topology binding until they pass this contract. */
+  quantityContract?: readonly ReleaseTopologyQuantity[];
   now?: () => number;
 }>;
 
@@ -62,6 +67,12 @@ function assertFresh(snapshot: z.infer<typeof SourceSnapshotSchema>, nowMs: numb
   if (!Number.isSafeInteger(nowMs) || nowMs <= 0 || snapshot.observedAtMs > nowMs || snapshot.freshUntilMs <= nowMs || snapshot.freshUntilMs <= snapshot.observedAtMs) {
     throw new Error("PRODUCTION_CATALOG_STALE");
   }
+}
+function quantityByProvider(contract: readonly ReleaseTopologyQuantity[] | undefined): Map<string, ReleaseTopologyQuantity> | undefined {
+  if (contract === undefined) return undefined;
+  if (contract.length !== RELEASE_COST_FAMILIES.length || contract.some((line, index) => line.provider !== RELEASE_COST_FAMILIES[index] || line.quantityNanos <= 0n || !Number.isSafeInteger(line.headroomBasisPoints) || line.headroomBasisPoints < 0 || line.headroomBasisPoints > 10_000)
+    || new Set(contract.map((line) => line.quantityNanos.toString())).size === 1) throw new Error("PRODUCTION_CATALOG_QUANTITY_CONTRACT_REJECTED");
+  return new Map(contract.map((line) => [line.provider, line]));
 }
 
 async function nonBillableFact(provider: typeof NON_BILLABLE_PROVIDERS[number], nowMs: number) {
@@ -88,6 +99,7 @@ async function nonBillableFact(provider: typeof NON_BILLABLE_PROVIDERS[number], 
  */
 export function createProductionLiveCostCatalog(options: ProductionLiveCostCatalogOptions): LiveCostCatalogPort {
   const now = options.now ?? Date.now;
+  const quantities = quantityByProvider(options.quantityContract);
   return Object.freeze({
     async listPriceFacts(input: Readonly<{ providers: readonly string[] }>) {
       if (input.providers.length !== RELEASE_COST_FAMILIES.length || input.providers.some((provider, index) => provider !== RELEASE_COST_FAMILIES[index])) {
@@ -122,12 +134,14 @@ export function createProductionLiveCostCatalog(options: ProductionLiveCostCatal
         const snapshot = snapshots.get(paidProvider);
         const quote = quotes.get(paidProvider);
         if (!snapshot || !quote) throw new Error("PRODUCTION_CATALOG_COVERAGE_REQUIRED");
+        const quantity = quantities?.get(paidProvider);
+        if (quantity && quantity.unit !== quote.unit) throw new Error("PRODUCTION_CATALOG_UNIT_MISMATCH");
         const sourceDocumentSha256 = await sha256Bytes(snapshot.bytes);
         return Object.freeze({
           provider: paidProvider,
           sourceId: snapshot.sourceId,
           sourceDocumentSha256,
-          quoteSha256: await sha256({ sourceDocumentSha256, quote }),
+          quoteSha256: await sha256({ sourceDocumentSha256, quote, ...(quantity ? { quantity: { unit: quantity.unit, quantityNanos: quantity.quantityNanos.toString(), headroomBasisPoints: quantity.headroomBasisPoints } } : {}) }),
           currency: quote.currency,
           unit: quote.unit,
           priceMicros: quote.priceMicros,

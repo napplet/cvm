@@ -11,6 +11,7 @@ import { createNativeContextVmProvider } from "../../src/release/native/contextv
 import { createNativeCep8LightningProvider } from "../../src/release/native/cep8-lightning";
 import { createNativeCashuProvider } from "../../src/release/native/cashu";
 import { createProtectedLiveContextVmPaymentObservationPort } from "../../src/certification/live/payment-ports";
+import { runLiveContextVmPaymentModelCertification } from "../../src/certification/live/contextvm-payment-model";
 
 const digest = (letter: string) => letter.repeat(64);
 const pubkey = "a".repeat(64);
@@ -109,9 +110,9 @@ test("native CEP-8 rail composition uses original operations, existing coordinat
   expect(cashuSettlement.settleCalls).toBe(0);
   const lightningInput = { principal: { pubkey }, idempotencyKey: "lightning-original-op", amount: "21", unit: "sat" as const, policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1" };
   const cashuInput = { principal: { pubkey }, idempotencyKey: "cashu-original-op", topUpId: "cashu-original-op", amount: "21", unit: "sat" as const, pmi: "bitcoin-cashu-v4-direct" as const, token: new TextEncoder().encode("cashu-private-proof-canary") };
-  await lightning.beginAfterReceipt({ receipt: { originalOperationId: "lightning-original-op", requestSha256: digest("4") }, input: lightningInput });
+  const lightningPending = await lightning.beginAfterReceipt({ receipt: { originalOperationId: "lightning-original-op", requestSha256: digest("4") }, input: lightningInput });
   lightningReceiver.queryMode = "settled";
-  const lightningSettled = await lightning.reconcileOriginal({ principal: { pubkey }, topUpId: "lightning:ffea36b588c540862346908e5059f258" });
+  const lightningSettled = await lightning.reconcileOriginal({ principal: { pubkey }, topUpId: lightningPending.topUpId });
   const cashuSettled = await cashu.submitAfterReceipt({ receipt: { originalOperationId: "cashu-original-op", requestSha256: digest("5") }, input: cashuInput });
   expect(lightningSettled).toMatchObject({ status: "credited", state: "credited" });
   expect(cashuSettled).toMatchObject({ state: "credited" });
@@ -125,5 +126,9 @@ test("native CEP-8 rail composition uses original operations, existing coordinat
     model: { reconcileOriginalModelOperation: async () => ({ status: "passed", operationId: "model-original-op", lookupUsesOriginalOperationOnly: true, dispatchCount: 1, debitCount: 1, cancellationOrAmbiguityVisible: true }) },
   });
   expect(await port.exerciseCep8Settlement({ candidateId: digest("6") })).toEqual({ status: "passed", lightningCreditedExactlyOnce: true, cashuCreditedExactlyOnce: true, ambiguityUsesOriginalSettlementOnly: true });
+  expect(await runLiveContextVmPaymentModelCertification({
+    candidate: { id: digest("6"), provider: "modal", image: `registry.example/worker@sha256:${digest("7")}`, sourceSha256: digest("8") },
+    observationPort: port,
+  })).toMatchObject({ status: "passed", reasonCode: "OBSERVATION_COMPLETE" });
   expect(JSON.stringify({ discovery: [lightning.discovery(), cashu.discovery()], evidence: await port.exerciseCep8Settlement({ candidateId: digest("6") }) })).not.toMatch(/private|proof|preimage|credential|invoice/i);
 });

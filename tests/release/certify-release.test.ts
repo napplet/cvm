@@ -53,6 +53,24 @@ test("documented no-env command reaches the candidate-bound authorization bounda
   expect(result).toMatchObject({ status: "authorization_required", candidateSha256: expect.stringMatching(/^[a-f0-9]{64}$/), topologySha256: expect.stringMatching(/^[a-f0-9]{64}$/), stateSha256: expect.stringMatching(/^[a-f0-9]{64}$/), authorizationRequestSha256: expect.stringMatching(/^[a-f0-9]{64}$/) });
   const status = await new ReleaseCertificationController({ candidatePath: "toolchains/candidates/initial.json", workspace: join(process.cwd(), ".runtime", "release-certification", "native-discovery-v1") }).status();
   expect(status).toMatchObject({ state: { stateSha256: result.stateSha256, candidate: { candidateSha256: result.candidateSha256 } } });
+  expect(status!.state.capabilities).toHaveLength(16);
+  for (const capability of status!.state.capabilities) {
+    expect(capability.capability).not.toBe("unsupported");
+    expect(capability.reasonCode).not.toBe("UNSUPPORTED_CAPABILITY");
+    expect(capability.accountScopeSha256).not.toBe("0".repeat(64));
+    expect(capability.costEstimateSha256).not.toBe("0".repeat(64));
+  }
+  expect(status!.state.capabilities.find((capability) => capability.provider === "contextvm")).toMatchObject({
+    capability: "available", authentication: "not_configured", reasonCode: "AUTHORIZATION_REQUIRED",
+  });
+  expect(status!.state.capabilities.find((capability) => capability.provider === "promoted_cli")).toMatchObject({
+    capability: "available", authentication: "authorized", reasonCode: "AVAILABLE",
+  });
+  expect(status!.authorizationRequest.providerScopes).toHaveLength(16);
+  for (const scope of status!.authorizationRequest.providerScopes) {
+    expect(scope.accountScopeSha256).not.toBe("0".repeat(64));
+    expect(scope.projectScopeSha256).not.toBe("0".repeat(64));
+  }
   expect(result.resumeStateSha256).toMatch(/^[a-f0-9]{64}$/);
 });
 

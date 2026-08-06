@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLiveProtectedCertificationRegistry } from "../../src/certification/live/registry";
@@ -35,4 +35,10 @@ test("resume digest chain fails closed before authorization, runner, trust, or c
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
+});
+
+test("one product command is registered without hand-authored certification inputs", async () => {
+  const packageJson = JSON.parse(await readFile("package.json", "utf8")) as { scripts?: Record<string, string> };
+  expect(packageJson.scripts?.["release:certify"]).toBe("bun scripts/certify-release.ts");
+  expect(packageJson.scripts?.["release:certify"]).not.toContain("--registry");
 });

@@ -23,6 +23,22 @@ const ScopeSchema = z.object({
   projectScopeSha256: DigestSchema,
 }).strict();
 
+const PriceLineSchema = z.object({
+  provider: ProviderSchema,
+  sourceId: z.string().regex(/^[a-z][a-z0-9._-]{2,127}$/u),
+  sourceDocumentSha256: DigestSchema,
+  quoteSha256: DigestSchema,
+  currency: z.literal("USD"),
+  unit: z.string().regex(/^[a-z][a-z0-9._/-]{1,63}$/u),
+  quantityNanos: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  observedAtMs: z.number().int().positive(),
+  freshUntilMs: z.number().int().positive(),
+  baseMicros: MicrosSchema,
+  headroomBasisPoints: z.number().int().min(0).max(10_000),
+  headroomMicros: MicrosSchema,
+  maximumMicros: MicrosSchema,
+}).strict();
+
 const GcpEffectsSchema = z.object({
   projectBootstrap: z.boolean(),
   billing: z.boolean(),
@@ -43,6 +59,10 @@ export const ReleaseAuthorizationRequestSchema = z.object({
   estimateSourceId: z.string().regex(/^[a-z][a-z0-9._-]{2,127}$/u),
   estimateObservedAtMs: z.number().int().positive(),
   estimateFreshUntilMs: z.number().int().positive(),
+  /** Per-family price facts are the spend authority for controller-generated
+   * requests. Older content-addressed requests legitimately lack them. */
+  estimateSourceSha256: DigestSchema.optional(),
+  priceLines: z.array(PriceLineSchema).length(16).optional(),
   maximumRunDurationMs: z.number().int().positive().max(86_400_000),
   cleanupByMs: z.number().int().positive(),
   evidenceRetentionDays: z.number().int().positive().max(3_650),
@@ -74,7 +94,7 @@ export const ReleaseAuthorizationReceiptSchema = z.object({
 export type ReleaseAuthorizationReceipt = z.infer<typeof ReleaseAuthorizationReceiptSchema>;
 
 export type AuthorizationRequestInput = Omit<ReleaseAuthorizationRequest, "version" | "currency" | "maximumAuthorizedCostMicros" | "estimateSourceId" | "estimateObservedAtMs" | "estimateFreshUntilMs" | "expectedReceiptSha256" | "authorizationRequestSha256" | "supersedesAuthorizationRequestSha256"> & Readonly<{
-  estimate: Readonly<{ currency: "USD"; maximumMicros: number; sourceId: string; observedAtMs: number; freshUntilMs: number }>;
+  estimate: Readonly<{ currency: "USD"; maximumMicros: number; sourceId: string; observedAtMs: number; freshUntilMs: number; sourceSha256?: string }>;
   supersedesAuthorizationRequestSha256?: string | null;
 }>;
 
@@ -94,8 +114,18 @@ function assertBounds(input: RequestInput): void {
     return next;
   }, 0)) throw new Error("RELEASE_AUTHORIZATION_COST_MISMATCH");
   const providers = input.providerScopes.map((scope) => scope.provider);
-  if (new Set(providers).size !== providers.length || providers.some((provider, index) => index > 0 && provider < providers[index - 1]!)) throw new Error("RELEASE_AUTHORIZATION_SCOPE_INVALID");
+  if (new Set(providers).size !== providers.length) throw new Error("RELEASE_AUTHORIZATION_SCOPE_INVALID");
   if (input.orderedEffects.some((effect) => !providers.includes(effect.provider))) throw new Error("RELEASE_AUTHORIZATION_SCOPE_INVALID");
+  if (input.priceLines) {
+    if (!input.estimateSourceSha256
+      || input.priceLines.some((line, index) => line.provider !== input.orderedEffects[index]?.provider
+        || line.observedAtMs > input.estimateObservedAtMs
+        || line.freshUntilMs < input.estimateFreshUntilMs
+        || line.maximumMicros !== input.orderedEffects[index]?.estimatedCostMicros
+        || line.baseMicros + line.headroomMicros !== line.maximumMicros)) {
+      throw new Error("RELEASE_AUTHORIZATION_PRICE_FACT_INVALID");
+    }
+  }
 }
 
 type OfficialApproval = Readonly<{
@@ -135,6 +165,7 @@ export async function createAuthorizationRequest(input: AuthorizationRequestInpu
     estimateSourceId: estimate.sourceId,
     estimateObservedAtMs: estimate.observedAtMs,
     estimateFreshUntilMs: estimate.freshUntilMs,
+    ...(estimate.sourceSha256 ? { estimateSourceSha256: estimate.sourceSha256 } : {}),
     supersedesAuthorizationRequestSha256: input.supersedesAuthorizationRequestSha256 ?? null,
   };
   assertBounds(normalized);
@@ -180,10 +211,10 @@ export async function createAuthorizationReceipt(requestInput: unknown): Promise
 
 export async function validateAuthorizationRequest(requestInput: unknown): Promise<ReleaseAuthorizationRequest> {
   const request = ReleaseAuthorizationRequestSchema.parse(requestInput);
-  const { expectedReceiptSha256, authorizationRequestSha256, version: _version, currency, maximumAuthorizedCostMicros, estimateSourceId, estimateObservedAtMs, estimateFreshUntilMs, supersedesAuthorizationRequestSha256, ...input } = request;
+  const { expectedReceiptSha256, authorizationRequestSha256, version: _version, currency, maximumAuthorizedCostMicros, estimateSourceId, estimateObservedAtMs, estimateFreshUntilMs, estimateSourceSha256, supersedesAuthorizationRequestSha256, ...input } = request;
   const expected = await createAuthorizationRequest({
     ...input,
-    estimate: { currency, maximumMicros: maximumAuthorizedCostMicros, sourceId: estimateSourceId, observedAtMs: estimateObservedAtMs, freshUntilMs: estimateFreshUntilMs },
+    estimate: { currency, maximumMicros: maximumAuthorizedCostMicros, sourceId: estimateSourceId, observedAtMs: estimateObservedAtMs, freshUntilMs: estimateFreshUntilMs, sourceSha256: estimateSourceSha256 },
     supersedesAuthorizationRequestSha256,
   });
   if (canonicalJson(expected) !== canonicalJson(request)) throw new Error("RELEASE_AUTHORIZATION_REQUEST_INVALID");

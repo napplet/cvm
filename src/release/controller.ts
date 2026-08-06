@@ -26,6 +26,7 @@ import { createProductionLiveProtectedCertificationRegistry, type LiveProtectedR
 import type { ProductionLiveProtectedCertificationPorts } from "../certification/live/production-ports";
 import { PROTECTED_SUITES, runProtectedCertificationProfile, type ProtectedCertificationRun } from "../certification/runner";
 import { validateCertificationObservation, type CertificationObservation } from "../certification/evidence";
+import { createLiveCostEstimator, RELEASE_COST_FAMILIES, type LiveCostCatalogPort } from "./costs/live-estimator";
 
 export const RELEASE_WORKSPACE_ENV = "NAPPLET_CVM_RELEASE_WORKSPACE";
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
@@ -36,6 +37,9 @@ type ControllerOptions = Readonly<{
   workspace: string;
   providers?: ReleaseProviderRegistry;
   consent?: OfficialConsentPort;
+  /** Read-only price-catalog boundary. It is injected for authenticated
+   * readiness and fake-only tests; this controller never creates a client. */
+  costCatalog?: LiveCostCatalogPort;
   now?: () => number;
 }>;
 export type ReleaseCertificationResult = Readonly<{
@@ -164,24 +168,54 @@ async function discoverProviders(registry: ReleaseProviderRegistry): Promise<Pro
       return ProviderCapabilityObservationSchema.parse({ ...defaultObservation(provider), reasonCode: "CAPABILITY_UNAVAILABLE" });
     }
   }));
-  return observations.sort((left, right) => left.provider.localeCompare(right.provider));
+  return observations;
 }
 
-async function effectPlan(candidateSha256: string, topologySha256: string) {
-  const effects = [
-    ["cloud-run-ingress", "cloud_run", "create_or_update", 5_000_000], ["gcs-retention", "gcs", "configure", 500_000],
-    ["collector", "collector", "create_or_update", 500_000], ["database", "cloud_sql_postgres", "create_or_update", 5_000_000],
-    ["modal-benchmark", "modal", "benchmark", 4_000_000], ["fly-benchmark", "fly", "benchmark", 4_000_000],
-    ["contextvm-rails", "contextvm", "verify_integration", 2_000_000], ["payments", "cep8_lightning", "verify_integration", 2_000_000],
-    ["cashu", "cashu", "verify_integration", 2_000_000], ["model", "model", "verify_integration", 5_000_000],
-    ["host-signer", "compatible_host", "verify_integration", 1_000_000], ["signer", "signer", "verify_integration", 1_000_000],
-    ["cli-asset", "promoted_cli", "verify_integration", 1_000_000], ["publication", "upload", "verify_integration", 1_000_000],
-    ["owner-relay", "owner_relay", "verify_integration", 1_000_000], ["attestation-relay", "attestation_relay", "verify_integration", 1_000_000],
-  ] as const;
+const EFFECT_DEFINITIONS = [
+  ["cloud-run-ingress", "cloud_run", "create_or_update"], ["gcs-retention", "gcs", "configure"],
+  ["collector", "collector", "create_or_update"], ["database", "cloud_sql_postgres", "create_or_update"],
+  ["modal-benchmark", "modal", "benchmark"], ["fly-benchmark", "fly", "benchmark"],
+  ["contextvm-rails", "contextvm", "verify_integration"], ["payments", "cep8_lightning", "verify_integration"],
+  ["cashu", "cashu", "verify_integration"], ["model", "model", "verify_integration"],
+  ["host-signer", "compatible_host", "verify_integration"], ["signer", "signer", "verify_integration"],
+  ["cli-asset", "promoted_cli", "verify_integration"], ["publication", "upload", "verify_integration"],
+  ["owner-relay", "owner_relay", "verify_integration"], ["attestation-relay", "attestation_relay", "verify_integration"],
+] as const;
+const RELEASE_MAX_AUTHORIZED_COST_MICROS = 100_000_000;
+
+/** The local no-credential path has no external price authority. It produces
+ * finite candidate-bound fixture facts only; authenticated readiness must
+ * inject its own schema-bounded, read-only catalog. */
+function candidateBoundFixtureCatalog(input: Readonly<{ capabilities: readonly ProviderCapabilityObservation[]; nowMs: number }>): LiveCostCatalogPort {
+  return {
+    async listPriceFacts({ providers }) {
+      if (providers.length !== RELEASE_COST_FAMILIES.length || providers.some((provider, index) => provider !== RELEASE_COST_FAMILIES[index])) throw new Error("RELEASE_CONTROLLER_PRICE_COVERAGE_REQUIRED");
+      return providers.map((provider, index) => {
+        const capability = input.capabilities[index];
+        if (!capability || capability.provider !== provider) throw new Error("RELEASE_CONTROLLER_PRICE_COVERAGE_REQUIRED");
+        return {
+          provider,
+          sourceId: `${provider}-fixture-catalog`,
+          sourceDocumentSha256: capability.costEstimateSha256,
+          quoteSha256: capability.accountScopeSha256,
+          currency: "USD",
+          unit: "operation",
+          priceMicros: index + 1,
+          observedAtMs: input.nowMs,
+          freshUntilMs: input.nowMs + 60 * 60 * 1000,
+          status: "available",
+        };
+      });
+    },
+  };
+}
+
+async function effectPlan(candidateSha256: string, topologySha256: string, estimate: Awaited<ReturnType<ReturnType<typeof createLiveCostEstimator>["estimate"]>>) {
+  if (estimate.maximumMicros > RELEASE_MAX_AUTHORIZED_COST_MICROS) throw new Error("RELEASE_CONTROLLER_PRICE_ABOVE_POLICY");
   const base = {
     version: 1 as const, candidateSha256, topologySha256,
-    effects: effects.map(([id, provider, operation, estimatedCostMicros]) => ({ id, provider, operation, estimatedCostMicros })),
-    maximumAuthorizedCostMicros: effects.reduce((total, item) => total + item[3], 0),
+    effects: EFFECT_DEFINITIONS.map(([id, provider, operation], index) => ({ id, provider, operation, estimatedCostMicros: estimate.lines[index]!.maximumMicros })),
+    maximumAuthorizedCostMicros: estimate.maximumMicros,
   };
   return ReleaseEffectPlanSchema.parse({ ...base, effectPlanSha256: await digest(base) });
 }
@@ -239,6 +273,7 @@ export class ReleaseCertificationController {
   readonly #workspace: string;
   readonly #providers: ReleaseProviderRegistry;
   readonly #consent: OfficialConsentPort | undefined;
+  readonly #costCatalog: LiveCostCatalogPort | undefined;
   readonly #now: () => number;
 
   constructor(options: ControllerOptions) {
@@ -246,6 +281,7 @@ export class ReleaseCertificationController {
     this.#workspace = resolve(options.workspace);
     this.#providers = options.providers ?? createNoCredentialReleaseProviderRegistry();
     this.#consent = options.consent;
+    this.#costCatalog = options.costCatalog;
     this.#now = options.now ?? Date.now;
   }
 
@@ -279,8 +315,17 @@ export class ReleaseCertificationController {
   async dryRun(): Promise<ReleaseCertificationResult> {
     const candidate = await candidateIdentity(this.#candidatePath);
     const topology = await deriveReleaseTopology(candidate.candidateSha256);
-    const plan = await effectPlan(candidate.candidateSha256, topology.topologySha256);
     const capabilities = await discoverProviders(this.#providers);
+    const nowMs = this.#now();
+    const estimator = createLiveCostEstimator({
+      catalog: this.#costCatalog ?? candidateBoundFixtureCatalog({ capabilities, nowMs }),
+      now: () => nowMs,
+    });
+    const estimate = await estimator.estimate({
+      topologySha256: topology.topologySha256,
+      quantities: RELEASE_COST_FAMILIES.map((provider) => ({ provider, quantityNanos: 1_000_000_000n, headroomBasisPoints: 1_000 })),
+    });
+    const plan = await effectPlan(candidate.candidateSha256, topology.topologySha256, estimate);
     let existing: ReleaseCertificationResult | undefined;
     let replaceInvalidPointer = false;
     try { existing = await this.status(); }
@@ -292,15 +337,15 @@ export class ReleaseCertificationController {
     if (existing) {
       if (existing.state.candidate.candidateSha256 !== candidate.candidateSha256) throw new Error("RELEASE_CONTROLLER_CANDIDATE_MISMATCH");
       if (existing.state.status !== "authorization_required") throw new Error("RELEASE_CONTROLLER_RESUME_INPUT_MISMATCH");
-      if (existing.state.topologySha256 !== topology.topologySha256 || existing.authorizationRequest.effectPlanSha256 !== plan.effectPlanSha256 || existing.authorizationRequest.maximumAuthorizedCostMicros !== plan.maximumAuthorizedCostMicros) {
-        throw new Error("RELEASE_CONTROLLER_RESUME_INPUT_MISMATCH");
-      }
-      if (canonicalJson(existing.state.capabilities) === canonicalJson(capabilities) && existing.authorizationRequest.expiresAtMs > this.#now()) return existing;
+      const requestStillCurrent = existing.state.topologySha256 === topology.topologySha256
+        && existing.authorizationRequest.effectPlanSha256 === plan.effectPlanSha256
+        && existing.authorizationRequest.maximumAuthorizedCostMicros === plan.maximumAuthorizedCostMicros;
+      if (requestStillCurrent && canonicalJson(existing.state.capabilities) === canonicalJson(capabilities) && existing.authorizationRequest.expiresAtMs > nowMs) return existing;
     }
     const discovering = await stateFor({
       version: 1, status: "discovering", candidate, topologySha256: topology.topologySha256, capabilities,
       priorStateSha256: null, authorizationRequestSha256: null, authorizationReceiptSha256: null,
-      providerOperationIds: [], deployedTopologySha256: null, blockReasonCode: null, createdAtMs: this.#now(),
+      providerOperationIds: [], deployedTopologySha256: null, blockReasonCode: null, createdAtMs: nowMs,
     });
     await createOrVerify(join(this.#workspace, "states", `${discovering.stateSha256}.json`), `${canonicalJson(discovering)}\n`, "RELEASE_CONTROLLER_STATE_COLLISION");
     const request = await createAuthorizationRequest({
@@ -315,13 +360,14 @@ export class ReleaseCertificationController {
         accountScopeSha256: capability.accountScopeSha256,
         projectScopeSha256: await digest({ version: 1, provider: capability.provider, topologySha256: topology.topologySha256, accountScopeSha256: capability.accountScopeSha256 }),
       }))),
-      estimate: { currency: "USD", maximumMicros: plan.maximumAuthorizedCostMicros, sourceId: "release-effect-plan-v1", observedAtMs: discovering.createdAtMs, freshUntilMs: discovering.createdAtMs + 24 * 60 * 60 * 1000 },
+      estimate: { currency: "USD", maximumMicros: plan.maximumAuthorizedCostMicros, sourceId: "live-price-catalog-v1", sourceSha256: estimate.sourceSha256, observedAtMs: estimate.observedAtMs, freshUntilMs: estimate.freshUntilMs },
+      priceLines: estimate.lines.map((line) => ({ ...line, quantityNanos: Number(line.quantityNanos) })),
       maximumRunDurationMs: 15 * 60 * 1000,
-      cleanupByMs: discovering.createdAtMs + 15 * 60 * 1000,
+      cleanupByMs: Math.min(discovering.createdAtMs + 15 * 60 * 1000, estimate.freshUntilMs - 1),
       evidenceRetentionDays: 30,
       artifactRetentionDays: 30,
       gcpEffects: { projectBootstrap: true, billing: true, apiEnablement: ["run.googleapis.com", "sqladmin.googleapis.com", "storage.googleapis.com"] },
-      expiresAtMs: discovering.createdAtMs + 60 * 60 * 1000,
+      expiresAtMs: Math.min(discovering.createdAtMs + 30 * 60 * 1000, estimate.freshUntilMs - 1),
       supersedesAuthorizationRequestSha256: existing?.authorizationRequest.authorizationRequestSha256 ?? null,
     });
     await createOrVerify(join(this.#workspace, "authorization-requests", `${request.authorizationRequestSha256}.json`), `${canonicalJson(request)}\n`, "RELEASE_CONTROLLER_AUTHORIZATION_COLLISION");

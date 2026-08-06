@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 26
+open_count: 27
 waived_count: 0
 fixed_count: 0
-total_count: 26
-last_updated: 2026-08-06T15:19:07.455Z
+total_count: 27
+last_updated: 2026-08-06T15:32:23.017Z
 ---
 
 # Broken Windows Ledger
@@ -41,6 +41,7 @@ last_updated: 2026-08-06T15:19:07.455Z
 | 24 | 07 | deviation | .planning/phases/07-admission-slo-resilience-launch-safety/07-35-PLAN.md |  | Plan references absent tests/certification/live-security-host.test.ts; existing live-integration gate was run instead. | open |  | 2026-08-06T15:08:57.132Z |  |
 | 25 | 07 | deviation | src/release/native/external-signer.ts |  | Signer inspection now requires a candidate-bound exact locally verified public authorization, not discovery alone. | open |  | 2026-08-06T15:11:00.370Z |  |
 | 26 | 07 | deviation | .planning/phases/07-admission-slo-resilience-launch-safety/07-30-SUMMARY.md |  | Plan 07-30 used the existing telemetry-policy suite because tests/certification/live-telemetry.test.ts is absent. | open |  | 2026-08-06T15:19:07.455Z |  |
+| 27 | 07 | deviation | tests/release/live-operations-adapters.test.ts |  | Plan 07-31 used existing live restore adapter suite because planned durability test path was absent | open |  | 2026-08-06T15:32:23.017Z |  |
 
 ````json
 [
@@ -354,6 +355,18 @@ last_updated: 2026-08-06T15:19:07.455Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-06T15:19:07.455Z",
+    "resolved_at": null
+  },
+  {
+    "id": 27,
+    "kind": "deviation",
+    "phase": "07",
+    "file": "tests/release/live-operations-adapters.test.ts",
+    "line": null,
+    "description": "Plan 07-31 used existing live restore adapter suite because planned durability test path was absent",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-06T15:32:23.017Z",
     "resolved_at": null
   }
 ]

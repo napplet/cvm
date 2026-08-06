@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: executing
-stopped_at: Completed 07-30-PLAN.md
-last_updated: "2026-08-06T15:19:07.939Z"
+stopped_at: Completed 07-31-PLAN.md
+last_updated: "2026-08-06T15:28:46Z"
 last_activity: 2026-08-06
-last_activity_desc: Completed 07-30 receipt-gated Cloud Run and Collector native provider composition
+last_activity_desc: Completed 07-31 receipt-gated GCS and sole-authority Cloud SQL PostgreSQL provider composition
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 80
-  completed_plans: 73
+  completed_plans: 74
   percent: 86
 ---
 
@@ -30,20 +30,20 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 07 (admission-slo-resilience-launch-safety) — EXECUTING
-Plan: 33 of 40 complete
-Status: Ready to execute 07-31
-Last activity: 2026-08-06 — Completed 07-30 receipt-gated Cloud Run and Collector native provider composition
+Plan: 34 of 40 complete
+Status: Ready to execute 07-36
+Last activity: 2026-08-06 — Completed 07-31 receipt-gated GCS and sole-authority Cloud SQL PostgreSQL provider composition
 
-Plan execution: [█████████░] 73/80 milestone plans complete; Phase 7 is 33/40 complete and verification remains pending
+Plan execution: [█████████░] 74/80 milestone plans complete; Phase 7 is 34/40 complete and verification remains pending
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 73/80 milestone plans executed; Plan 07-30 added receipt-gated Cloud Run and Collector provider composition. Plan 07-31 is next before the remaining production composition and separate authorization/protected-run checkpoints.
+- Plans: 74/80 milestone plans executed; Plan 07-31 added receipt-gated GCS and sole-authority Cloud SQL PostgreSQL provider composition. Plan 07-36 is next before the remaining production composition and separate authorization/protected-run checkpoints.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Next checkpoint: execute Plan 07-31, continue autonomously through Plan 07-39, then use Plan 07-20 for one exact provider-authentication/cost approval and Plan 07-26 for the protected live run; no hand-authored evidence or certifier files are required.
+- Next checkpoint: execute Plan 07-36, continue autonomously through Plan 07-39, then use Plan 07-20 for one exact provider-authentication/cost approval and Plan 07-26 for the protected live run; no hand-authored evidence or certifier files are required.
 
 ## Performance Metrics
 

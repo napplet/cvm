@@ -23,7 +23,10 @@ async function sha256(value: unknown): Promise<string> {
   return Array.from(new Uint8Array(result), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-async function authorizedCapability(urls: Readonly<{ dispatchUrl: string; lookupUrl: string }>) {
+async function authorizedCapability(
+  urls: Readonly<{ dispatchUrl: string; lookupUrl: string }>,
+  times: Readonly<{ capabilityFreshUntilMs?: number; authorizationFreshUntilMs?: number; authorizationExpiresAtMs?: number }> = {},
+) {
   const binding = {
     version: 1,
     candidateSha256,
@@ -39,7 +42,7 @@ async function authorizedCapability(urls: Readonly<{ dispatchUrl: string; lookup
     profileId: "code-proposal",
     priceCardId: "phase-04-deterministic-card-2026-08-04",
     priceCardSha256,
-    freshUntilMs: 2_000,
+    freshUntilMs: times.capabilityFreshUntilMs ?? 2_000,
   } as const;
   const capabilitySha256 = await sha256(binding);
   const request = await createAuthorizationRequest({
@@ -50,13 +53,13 @@ async function authorizedCapability(urls: Readonly<{ dispatchUrl: string; lookup
     providerCapabilitiesSha256: capabilitySha256,
     orderedEffects: [{ id: "model.verify", provider: "model", operation: "verify_integration", estimatedCostMicros: 1 }],
     providerScopes: [{ provider: "model", accountScopeSha256, projectScopeSha256: endpointScopeSha256 }],
-    estimate: { currency: "USD", maximumMicros: 1, sourceId: "model-capability-v1", observedAtMs: 1_000, freshUntilMs: 2_000 },
+    estimate: { currency: "USD", maximumMicros: 1, sourceId: "model-capability-v1", observedAtMs: 1_000, freshUntilMs: times.authorizationFreshUntilMs ?? 2_000 },
     maximumRunDurationMs: 1_000,
     cleanupByMs: 1_400,
     evidenceRetentionDays: 30,
     artifactRetentionDays: 30,
     gcpEffects: { projectBootstrap: false, billing: false, apiEnablement: ["run.googleapis.com"] },
-    expiresAtMs: 1_500,
+    expiresAtMs: times.authorizationExpiresAtMs ?? 1_500,
   });
   return {
     capability: { ...binding, authorizationRequestSha256: request.authorizationRequestSha256 },
@@ -207,6 +210,31 @@ test("protected model port reconciles the one persisted ambiguous operation with
     expect(dispatches).toBe(1);
     expect(lookups).toBe(1);
     expect(store.postings.filter((posting) => posting.reference === action.operationId)).toHaveLength(1);
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("protected reconciliation blocks a stale capability before lookup even when its authorization receipt remains valid", async () => {
+  const server = Bun.serve({ port: 0, fetch: async () => Response.json({ status: "unresolved", operationId: "never", providerRequestId: "never" }) });
+  try {
+    const base = `http://127.0.0.1:${server.port}`;
+    const authorization = await authorizedCapability(
+      { dispatchUrl: `${base}/dispatch`, lookupUrl: `${base}/lookup` },
+      { capabilityFreshUntilMs: 2_000, authorizationFreshUntilMs: 3_000, authorizationExpiresAtMs: 2_500 },
+    );
+    const gateway = await createNativeHttpModelGateway({ ...authorization, credentialReference: "credential-ref:model", credentialResolver: { resolve: async () => "token" }, now: () => 1_250 });
+    const port = createProtectedLiveModelPort({
+      candidateSha256,
+      request: authorization.request,
+      receipt: authorization.receipt,
+      gateway,
+      reconciliation: { reconcile: async () => ({ status: "usage_unknown", code: "RECONCILIATION_PENDING" }) } as never,
+      reconciliationCommand: { principal, sessionId: "session:model", actionId: "action:model", operationId: "model-stale" },
+      now: () => 2_100,
+    });
+    await expect(port.reconcileOriginalModelOperation({ candidateId: candidateSha256 })).rejects.toThrow("NATIVE_MODEL_CAPABILITY_STALE");
+    expect(gateway.lookupCount("model-stale")).toBe(0);
   } finally {
     server.stop(true);
   }

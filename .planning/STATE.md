@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: executing
-stopped_at: Completed 07-45-PLAN.md
-last_updated: "2026-08-06T20:14:22.479Z"
+stopped_at: Completed 07-46-PLAN.md
+last_updated: "2026-08-06T20:23:45.634Z"
 last_activity: 2026-08-06
-last_activity_desc: Completed authoritative production catalog and operator funding prerequisite composition
+last_activity_desc: Completed controller-generated protected factory and same-session no-effect readiness
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 87
-  completed_plans: 84
+  completed_plans: 85
   percent: 86
 ---
 
@@ -30,20 +30,20 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 07 (admission-slo-resilience-launch-safety) — EXECUTING
-Plan: 44 of 47 complete
-Status: Ready to execute 07-46 concrete protected factory and one-command no-effect readiness
-Last activity: 2026-08-06 — Completed 07-45 authoritative catalog and operator funding prerequisite composition
+Plan: 45 of 47 complete
+Status: Ready for 07-20 operator funding references and exact approval
+Last activity: 2026-08-06 — Completed 07-46 concrete protected factory and one-command no-effect readiness
 
-Plan execution: [█████████░] 84/87 milestone plans complete; Phase 7 is 44/47 complete and verification remains pending
+Plan execution: [█████████░] 85/87 milestone plans complete; Phase 7 is 45/47 complete and verification remains pending
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 84/87 milestone plans executed. Plan 07-45 closed truthful live pricing/operator funding; Plan 07-46 now closes the concrete protected factory/readiness gap before 07-20 approval and 07-26 protected execution.
+- Plans: 85/87 milestone plans executed. Plan 07-46 closed the controller-generated protected factory/readiness gap; 07-20 now handles any missing local NWC Lightning and funded Cashu references plus exact approval before 07-26 protected execution.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Next checkpoint: execute 07-46; 07-20 connects any missing operator NWC Lightning and funded Cashu certification rails locally and records final exact approval, followed by 07-26. Owner NIP-46 remains deferred to publication; no hand-authored config/evidence or pasted secret/digest is required.
+- Next checkpoint: 07-20 connects any missing operator NWC Lightning and funded Cashu certification rails locally and records final exact approval, followed by 07-26. Owner NIP-46 remains deferred to publication; no hand-authored config/evidence or pasted secret/digest is required.
 
 ## Performance Metrics
 
@@ -148,6 +148,7 @@ Plan execution: [█████████░] 84/87 milestone plans complete;
 | Phase 07 P43 | 9m | 2 tasks | 7 files |
 | Phase 07 P44 | 31m | 2 tasks | 8 files |
 | Phase 07 P45 | 7m 51s | 2 tasks | 8 files |
+| Phase 07-admission-slo-resilience-launch-safety P46 | 10m | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -315,6 +316,7 @@ Recent decisions affecting current work:
 - [Phase ?]: The CLI emits only bounded review facts and consent launch descriptors; it never launches consent before Plan 07-20.
 - [Phase ?]: Current price facts are accepted only from hash-bound read-only source snapshots; no future GCP project is selected for catalog access.
 - [Phase ?]: NWC Lightning and Cashu are separate service-owned readiness prerequisites; NIP-46 remains deferred to publication.
+- [Phase ?]: Protected factory readiness uses the same hash-pinned session as receipt-bound execution while remaining effect-free before approval.
 
 ### Pending Todos
 
@@ -343,6 +345,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-06T20:14:22.468Z
-Stopped at: Completed 07-45-PLAN.md
+Last session: 2026-08-06T20:23:45.624Z
+Stopped at: Completed 07-46-PLAN.md
 Resume file: None

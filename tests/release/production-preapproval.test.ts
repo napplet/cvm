@@ -51,8 +51,8 @@ test("captures only allowlisted official pricing bytes and derives ordered non-u
 
   const topology = await deriveReleaseTopology(digest("a"));
   expect(topology.quantityContract.map((line) => line.provider)).toHaveLength(16);
-  expect(new Set(topology.quantityContract.map((line) => line.quantityNanos.toString())).size).toBeGreaterThan(1);
-  expect(topology.quantityContract.find((line) => line.provider === "cloud_run")?.quantityNanos).toBe(5_400_000_000_000n);
+  expect(new Set(topology.quantityContract.map((line) => line.quantityNanos)).size).toBeGreaterThan(1);
+  expect(topology.quantityContract.find((line) => line.provider === "cloud_run")?.quantityNanos).toBe("5400000000000");
   expect(topology.topologySha256).toMatch(/^[a-f0-9]{64}$/);
 });
 

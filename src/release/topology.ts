@@ -8,6 +8,7 @@ export const RELEASE_PROVIDER_IDS = [
 ] as const;
 
 export type ReleaseTopologyQuantity = Readonly<{ provider: typeof RELEASE_PROVIDER_IDS[number]; unit: string; quantityNanos: bigint; headroomBasisPoints: number }>;
+export type ReleaseTopologyQuantityObservation = Readonly<{ provider: typeof RELEASE_PROVIDER_IDS[number]; unit: string; quantityNanos: string; headroomBasisPoints: number }>;
 
 /** All quantities are mechanical bounds, never a price-derived or uniform map.
  * Worker prices are per 100 seconds so decimal official rates remain exact USD micros. */
@@ -56,5 +57,9 @@ export async function deriveReleaseTopology(candidateSha256: string): Promise<Re
   const topologySha256 = await digest(base);
   const { quantityContract: _quantityContract, ...schemaInput } = base;
   const parsed = ReleaseTopologyObservationSchema.parse({ ...schemaInput, topologySha256 });
-  return Object.freeze({ ...parsed, quantityContract: RELEASE_TOPOLOGY_QUANTITY_CONTRACT }) as ReleaseTopologyObservation & Readonly<{ quantityContract: readonly ReleaseTopologyQuantity[] }>;
+  const quantityContract: readonly ReleaseTopologyQuantityObservation[] = Object.freeze(RELEASE_TOPOLOGY_QUANTITY_CONTRACT.map((line) => Object.freeze({ ...line, quantityNanos: line.quantityNanos.toString() })));
+  /** Retain the contract for local request construction without widening the
+   * strict persisted topology record consumed by older controller paths. */
+  Object.defineProperty(parsed, "quantityContract", { value: quantityContract, enumerable: false, configurable: false, writable: false });
+  return Object.freeze(parsed) as ReleaseTopologyObservation & Readonly<{ quantityContract: readonly ReleaseTopologyQuantityObservation[] }>;
 }

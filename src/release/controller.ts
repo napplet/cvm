@@ -184,19 +184,22 @@ export class ReleaseCertificationController {
 
   async dryRun(): Promise<ReleaseCertificationResult> {
     const candidate = await candidateIdentity(this.#candidatePath);
+    const topology = await deriveReleaseTopology(candidate.candidateSha256);
+    const plan = await effectPlan(candidate.candidateSha256, topology.topologySha256);
     const existing = await this.status();
     if (existing) {
       if (existing.state.candidate.candidateSha256 !== candidate.candidateSha256) throw new Error("RELEASE_CONTROLLER_CANDIDATE_MISMATCH");
+      if (existing.state.topologySha256 !== topology.topologySha256 || existing.authorizationRequest.effectPlanSha256 !== plan.effectPlanSha256 || existing.authorizationRequest.maximumAuthorizedCostMicros !== plan.maximumAuthorizedCostMicros) {
+        throw new Error("RELEASE_CONTROLLER_RESUME_INPUT_MISMATCH");
+      }
       return existing;
     }
-    const topology = await deriveReleaseTopology(candidate.candidateSha256);
     const capabilities = await discoverProviders(this.#providers);
     const discovering = await stateFor({
       version: 1, status: "discovering", candidate, topologySha256: topology.topologySha256, capabilities,
       priorStateSha256: null, authorizationRequestSha256: null, createdAtMs: this.#now(),
     });
     await createOrVerify(join(this.#workspace, "states", `${discovering.stateSha256}.json`), `${canonicalJson(discovering)}\n`, "RELEASE_CONTROLLER_STATE_COLLISION");
-    const plan = await effectPlan(candidate.candidateSha256, topology.topologySha256);
     const request = await requestFor({
       version: 1, candidate, topologySha256: topology.topologySha256, effectPlanSha256: plan.effectPlanSha256,
       plannedEffects: plan.effects, maximumAuthorizedCostMicros: plan.maximumAuthorizedCostMicros,

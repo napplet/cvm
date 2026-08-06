@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { CompatibleHostBrowserObservationPort } from "../../src/release/native/compatible-host";
+import { ExternalSignerBoundaryAdapter } from "../../src/release/native/external-signer";
 import { createLiveSecurityHostObservationPort } from "../../src/certification/live/host-ports";
 
 const DIGEST_A = "a".repeat(64);
@@ -93,4 +94,49 @@ test("live security bridge forwards the exact candidate identity to the compatib
 
   await expect(port.runBrowser({ sealedArtifactSha256: DIGEST_A, aggregateSha256: DIGEST_B })).resolves.toEqual({ evidence: "browser" });
   expect(identity).toEqual({ sealedArtifactSha256: DIGEST_A, aggregateSha256: DIGEST_B });
+});
+
+test("external signer returns only a locally verified exact-intent public result", async () => {
+  const ownerPubkey = "c".repeat(64);
+  const event = { id: "d".repeat(64), pubkey: ownerPubkey, created_at: 1, kind: 35129, tags: [["d", "napplet"]], content: "", sig: "e".repeat(128) };
+  const signer = new ExternalSignerBoundaryAdapter({
+    signer: {
+      async discover() { return { pubkey: ownerPubkey, capabilities: ["nip-44"], consentState: "granted" as const }; },
+      async signExactIntent(input) { expect(input.intentDigest).toBe(DIGEST_A); return { pubkey: ownerPubkey, intentDigest: input.intentDigest, authorizationReceipt: "receipt:external:1", event }; },
+    },
+    ownerEventVerifier: { async verify() { return { valid: true, accepted: true, eventId: event.id }; } },
+  });
+
+  const result = await signer.signExactIntent({
+    candidate: { sealedArtifactSha256: DIGEST_B, aggregateSha256: "f".repeat(64) },
+    intent: { ownerPubkey, fingerprint: DIGEST_A } as never,
+    requiredCapabilities: ["nip-44"],
+  });
+
+  expect(result).toEqual({
+    signerPubkey: ownerPubkey,
+    signerCapabilities: ["nip-44"],
+    intentDigest: DIGEST_A,
+    authorizationReceipt: "receipt:external:1",
+    sealedArtifactSha256: DIGEST_B,
+    aggregateSha256: "f".repeat(64),
+    signedEvent: event,
+  });
+  expect(JSON.stringify(result)).not.toContain("nsec");
+});
+
+test.each([
+  ["wrong signer", { pubkey: "0".repeat(64), capabilities: ["nip-44"], consentState: "granted" as const }, DIGEST_A],
+  ["wrong digest", { pubkey: "c".repeat(64), capabilities: ["nip-44"], consentState: "granted" as const }, DIGEST_B],
+  ["missing consent", { pubkey: "c".repeat(64), capabilities: ["nip-44"], consentState: "pending" as const }, DIGEST_A],
+] as const)("external signer rejects %s without key custody", async (_reason, discovery, intentDigest) => {
+  const signer = new ExternalSignerBoundaryAdapter({
+    signer: {
+      async discover() { return discovery; },
+      async signExactIntent() { return { pubkey: discovery.pubkey, intentDigest, authorizationReceipt: "receipt", event: { id: "d".repeat(64), pubkey: discovery.pubkey, created_at: 1, kind: 35129, tags: [["d", "napplet"]], content: "", sig: "e".repeat(128) } }; },
+    },
+    ownerEventVerifier: { async verify() { return { valid: true, accepted: true }; } },
+  });
+
+  await expect(signer.signExactIntent({ candidate: { sealedArtifactSha256: DIGEST_A, aggregateSha256: DIGEST_B }, intent: { ownerPubkey: "c".repeat(64), fingerprint: DIGEST_A } as never, requiredCapabilities: ["nip-44"] })).rejects.toThrow("EXTERNAL_SIGNER_RESULT_INVALID");
 });

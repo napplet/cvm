@@ -6,9 +6,9 @@ current_phase: 7
 current_phase_name: Admission SLO, Resilience & Launch Safety
 status: awaiting_external_evidence
 stopped_at: All local Phase 7 work complete; protected-live certification evidence unavailable
-last_updated: "2026-08-05T22:40:58Z"
-last_activity: 2026-08-05
-last_activity_desc: Review fix 2806dd5 closed cross-archive source substitution; final local audits converged
+last_updated: "2026-08-06T09:09:07Z"
+last_activity: 2026-08-06
+last_activity_desc: Completed quick task 260806-dxc; local testing now uses authority-free product-level certifier configuration
 progress:
   total_phases: 7
   completed_phases: 6
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 Phase: 7 — Admission SLO, Resilience & Launch Safety
 Plan: 19 of 19
 Status: All local plans and source-measurement closure complete; awaiting protected-live certification evidence
-Last activity: 2026-08-05 — Cross-archive substitution closed; review/security/Nyquist audits converged
+Last activity: 2026-08-06 — Local testing configuration added without changing the protected-live Phase 7 checkpoint
 
 Plan execution: [██████████] 100%; Phase verification remains pending
 
@@ -261,6 +261,7 @@ Recent decisions affecting current work:
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260805-wep | Bind protected promotion to fresh operator-authenticated source measurement before cache and evaluator | 2026-08-05 | 769fcc0 | [260805-wep](./quick/260805-wep-bind-protected-promotion-to-fresh-operat/) |
+| 260806-dxc | Replace Phase 7 env sprawl with product-level certifier configuration and safe local .env defaults | 2026-08-06 | 0041419 | [260806-dxc](./quick/260806-dxc-replace-phase-7-env-sprawl-with-product-/) |
 
 ## Deferred Items
 
@@ -272,6 +273,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-05T22:40:58Z
+Last session: 2026-08-06T09:09:07Z
 Stopped at: All local Phase 7 work complete; protected-live evidence remains required
 Resume file: None

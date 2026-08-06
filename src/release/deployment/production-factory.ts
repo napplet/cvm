@@ -32,6 +32,7 @@ export const releaseReadiness = Object.freeze({
   finalization: true as const,
   actualCost: true as const,
   cleanupOwnership: true as const,
+  authorizedExecution: "dependency_injection_required" as const,
 });
 
 export type ProductionFactoryReadiness = Readonly<{
@@ -57,6 +58,7 @@ export function assessProductionFactoryReadiness(input: ReleaseExecutionFactoryI
   const blockers = [
     ...PRODUCTION_FACTORY_SECRET_REFERENCE_NAMES.filter((name) => !(name in input.deploymentConfig.secretReferences)).map((name) => `SECRET_REFERENCE_REQUIRED:${name}`),
     ...(input.deploymentConfig.publicSettings.regions.length < 2 ? ["REGION_TOPOLOGY_REQUIRED"] : []),
+    "AUTHORIZED_EXECUTION_PORTS_REQUIRED",
   ];
   return Object.freeze({ ready: blockers.length === 0, blockers: Object.freeze(blockers) });
 }

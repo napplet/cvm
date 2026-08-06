@@ -23,7 +23,7 @@ test("local funding setup binds a one-time loopback session and keeps both walle
       listen: async (input) => {
         seen.push({ host: input.host, state: input.state, csrf: input.csrf });
         submit = input.submit;
-        return { close: async () => {} };
+        return { url: `http://127.0.0.1:43210/napplet-cvm/funding-setup?state=${input.state}`, close: async () => {} };
       },
     },
     browser: { open: async (url) => { launches.push(url); } },
@@ -67,7 +67,7 @@ test("a current request binds both opaque rail records and supersedes when fundi
     let csrf = "";
     const setup = await createLocalOperatorFundingSetup({
       candidateSha256: digest("a"), authorizationRequestSha256: digest("b"), now: () => 1_000, expiresInMs: 60_000,
-      loopback: { listen: async (input) => { submit = input.submit; state = input.state; csrf = input.csrf; return { close: async () => {} }; } },
+      loopback: { listen: async (input) => { submit = input.submit; state = input.state; csrf = input.csrf; return { url: `http://127.0.0.1:43211/napplet-cvm/funding-setup?state=${input.state}`, close: async () => {} }; } },
       browser: { open: async () => {} },
       secrets: { store: async (input) => ({ secretReference: `os-secret-ref:release-${input.rail}-02`, capabilitySha256: digest(input.rail === "cashu" ? "c" : "d"), accountScopeSha256: digest(input.rail === "cashu" ? "e" : "f") }) },
       readinessStore: { write: async (value) => { values.push(value); } },

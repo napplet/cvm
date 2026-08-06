@@ -5,8 +5,17 @@ import { loadCertifierConfig } from "../src/certification/config";
 import { loadReleaseExecutionReadiness, loadReleaseExecutionSession } from "../src/release/production-execution";
 import { preparePreApprovalPrerequisites } from "../src/release/deployment/consent";
 import { pendingOperatorFundingReadiness, validateOperatorFundingReadiness } from "../src/release/deployment/operator-funding";
+import {
+  createBunLocalFundingLoopbackPort,
+  createFileOperatorFundingReadinessStore,
+  createLocalOperatorFundingSetup,
+  createMacOsBrowserPort,
+  createMacOsKeychainSecretStore,
+} from "../src/release/deployment/local-setup";
 import { readFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { createCertificationBudgetCatalog } from "../src/release/costs/production-catalog";
+import { RELEASE_TOPOLOGY_QUANTITY_CONTRACT } from "../src/release/topology";
 
 const repositoryRoot = resolve(import.meta.dir, "..");
 const defaultWorkspace = join(repositoryRoot, ".runtime", "release-certification", "native-discovery-v1");
@@ -122,7 +131,7 @@ async function preapprovalDiscoveryRegistry(input: Readonly<{ candidateSha256: s
 }
 
 async function main(): Promise<number> {
-  const allowed = new Set(["--candidate", "--resume", "--dry-run", "--status", "--request", "--receipt"]);
+  const allowed = new Set(["--candidate", "--resume", "--dry-run", "--status", "--request", "--setup", "--receipt"]);
   const supplied = process.argv.slice(2);
   const requiredStateArguments = supplied.filter((value) => value.startsWith(requireStatePrefix));
   if (supplied.some((value) => value.startsWith("--") && !allowed.has(value) && !value.startsWith(requireStatePrefix)) || requiredStateArguments.length > 1 || requiredStateArguments.some((value) => value.length === requireStatePrefix.length)) {
@@ -132,16 +141,40 @@ async function main(): Promise<number> {
   const candidatePath = option("--candidate");
   const requiredState = requiredStateArguments[0]?.slice(requireStatePrefix.length);
   const request = process.argv.includes("--request");
+  const setupRequested = process.argv.includes("--setup");
   const receipt = option("--receipt");
   const dryRun = process.argv.includes("--dry-run") || request || receipt !== undefined;
   const status = process.argv.includes("--status");
   const resume = option("--resume");
-  if ((!status && !candidatePath) || (dryRun && status) || (requiredState !== undefined && !status) || (receipt !== undefined && !/^[a-f0-9]{64}$/iu.test(receipt)) || (resume !== undefined && !/^[a-f0-9]{64}$/iu.test(resume))) {
+  if ((!status && !candidatePath) || (dryRun && status) || (setupRequested && (status || request || receipt !== undefined || resume !== undefined || process.argv.includes("--dry-run"))) || (requiredState !== undefined && !status) || (receipt !== undefined && !/^[a-f0-9]{64}$/iu.test(receipt)) || (resume !== undefined && !/^[a-f0-9]{64}$/iu.test(resume))) {
     console.error("RELEASE_CERTIFICATION_USAGE");
     return 1;
   }
   try {
     const workspace = controllerWorkspace();
+    if (setupRequested) {
+      const candidateSha256 = await releaseCandidateSha256(candidatePath!);
+      const setup = await createLocalOperatorFundingSetup({
+        candidateSha256,
+        loopback: createBunLocalFundingLoopbackPort(),
+        browser: createMacOsBrowserPort(),
+        secrets: createMacOsKeychainSecretStore(),
+        readinessStore: createFileOperatorFundingReadinessStore(join(workspace, "operator-funding-readiness.json")),
+      });
+      await setup.launch();
+      console.log(JSON.stringify({ progress: "local_setup_opened", setup: setup.descriptor(), zeroEffectCounters: zeroEffectCounters() }));
+      const deadline = Date.now() + 10 * 60 * 1000;
+      while (Date.now() < deadline) {
+        const readiness = await setup.readiness();
+        if (readiness.status === "ready") {
+          console.log(JSON.stringify({ progress: "local_setup_complete", readiness: { status: "ready", readinessSha256: readiness.readinessSha256, rails: readiness.rails.map(({ rail, capabilitySha256, accountScopeSha256, expiresAtMs, status }) => ({ rail, capabilitySha256, accountScopeSha256, expiresAtMs, status })) }, zeroEffectCounters: zeroEffectCounters() }));
+          return 0;
+        }
+        await Bun.sleep(250);
+      }
+      console.error("LOCAL_FUNDING_SESSION_EXPIRED");
+      return 1;
+    }
     if (!status && !dryRun) {
       const config = await loadCertifierConfig();
       const session = await loadReleaseExecutionSession({ config, candidateSha256: await releaseCandidateSha256(candidatePath!), workspace });
@@ -152,6 +185,17 @@ async function main(): Promise<number> {
     const candidateSha256 = !status ? await releaseCandidateSha256(candidatePath!) : undefined;
     const funding = !status ? await operatorFundingReadinessProjection(workspace) : undefined;
     const fundingPrerequisites = funding?.status === "pending" ? undefined : funding;
+    // Funding setup is a local, effect-free prerequisite. Surface it before
+    // attempting remote catalog reads so a transient pricing outage cannot
+    // hide the one concrete action the operator can complete locally.
+    if (request && funding?.status !== "ready") {
+      console.log(JSON.stringify({
+        progress: "local_setup_required",
+        setup: localFundingSetupDescriptor({ candidateSha256: candidateSha256! }),
+        zeroEffectCounters: zeroEffectCounters(),
+      }));
+      return 1;
+    }
     let result: Awaited<ReturnType<typeof runReleaseCertification>> | undefined;
     try {
       result = status
@@ -161,6 +205,7 @@ async function main(): Promise<number> {
           workspace,
           dryRun: true,
           providers: await preapprovalDiscoveryRegistry({ candidateSha256: candidateSha256!, workspace }),
+          costCatalog: createCertificationBudgetCatalog({ quantityContract: RELEASE_TOPOLOGY_QUANTITY_CONTRACT }),
           requireCurrentPriceCatalog: true,
           operatorFundingReadiness: funding,
         });
@@ -189,13 +234,6 @@ async function main(): Promise<number> {
     if (receipt && receipt.toLowerCase() !== result.authorizationRequest.expectedReceiptSha256) throw new Error("RELEASE_AUTHORIZATION_RECEIPT_INVALID");
     const resolvedCandidateSha256 = result.state.candidate.candidateSha256;
     const executionReadiness = await executionReadinessProjection({ candidateSha256: resolvedCandidateSha256, workspace });
-    if (request && funding?.status !== "ready") {
-      console.log(JSON.stringify({
-        progress: "local_setup_required",
-        setup: localFundingSetupDescriptor({ candidateSha256: resolvedCandidateSha256, authorizationRequestSha256: result.authorizationRequest.authorizationRequestSha256 }),
-      }));
-      return 1;
-    }
     if (request && executionReadiness.status !== "ready") {
       console.log(JSON.stringify({
         progress: "preapproval_blocked",

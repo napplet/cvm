@@ -68,3 +68,69 @@ export function createProductionLiveCostCatalog(options: ProductionLiveCostCatal
   });
 }
 export const PRODUCTION_NON_BILLABLE_COST_POLICY_SHA256: Promise<string> = sha256({ version: 1, policy: "project-owned-non-billable", providers: NON_BILLABLE_PROVIDERS });
+
+const CERTIFICATION_CEILING_MICROS: Readonly<Record<typeof PAID_PROVIDERS[number], number>> = Object.freeze({
+  cloud_run: 100,
+  gcs: 2_000,
+  collector: 100,
+  cloud_sql_postgres: 1_000,
+  modal: 10_000,
+  fly: 10_000,
+  cep8_lightning: 1_000_000,
+  cashu: 1_000_000,
+  model: 10_000_000,
+});
+
+/**
+ * Product-owned maximum-spend catalog for release certification. These are
+ * deliberately conservative per-unit ceilings, not representations of vendor
+ * list prices and not the end-user metering source. Actual provider receipts
+ * are still reconciled after execution and may never exceed these bounds.
+ */
+export function createCertificationBudgetCatalog(options: Readonly<{
+  quantityContract: readonly ReleaseTopologyQuantity[];
+  now?: () => number;
+}>): LiveCostCatalogPort {
+  const quantities = componentsByProvider(options.quantityContract);
+  if (!quantities) throw new Error("PRODUCTION_CATALOG_QUANTITY_CONTRACT_REJECTED");
+  const now = options.now ?? Date.now;
+  return Object.freeze({ async listPriceFacts(input) {
+    if (input.providers.length !== RELEASE_COST_FAMILIES.length || input.providers.some((provider, index) => provider !== RELEASE_COST_FAMILIES[index])) throw new Error("PRODUCTION_CATALOG_COVERAGE_REQUIRED");
+    const readAtMs = now();
+    if (!Number.isSafeInteger(readAtMs) || readAtMs <= 0) throw new Error("PRODUCTION_CATALOG_TIME_INVALID");
+    // The controller snapshots its request clock before capability discovery.
+    // Backdate this versioned in-memory policy by one minute so that bounded
+    // discovery latency cannot make the policy appear future-dated.
+    const observedAtMs = Math.max(1, readAtMs - 60_000);
+    const policy = Object.freeze({ version: 1, policy: "release-certification-maximum-spend", ceilingsMicros: CERTIFICATION_CEILING_MICROS });
+    const sourceDocumentSha256 = await sha256(policy);
+    return Object.freeze(await Promise.all(RELEASE_COST_FAMILIES.map(async (provider) => {
+      const components = quantities.get(provider)!;
+      const paid = (PAID_PROVIDERS as readonly string[]).includes(provider);
+      const unitCeiling = paid ? CERTIFICATION_CEILING_MICROS[provider as typeof PAID_PROVIDERS[number]] : 0;
+      const provenance = components.map((component) => Object.freeze({
+        componentId: component.componentId,
+        skuId: `budget-${component.componentId}`,
+        region: component.region,
+        unit: component.unit,
+        priceMicros: unitCeiling,
+        quantityNanos: component.quantityNanos.toString(),
+        headroomBasisPoints: component.headroomBasisPoints,
+        sourceDocumentSha256,
+      }));
+      return Object.freeze({
+        provider,
+        sourceId: "napplet-cvm-certification-budget-v1",
+        sourceDocumentSha256,
+        quoteSha256: await sha256({ provider, provenance }),
+        currency: "USD" as const,
+        unit: components.length === 1 ? components[0]!.unit : "component-aggregate",
+        priceMicros: provenance.reduce((total, component) => total + component.priceMicros, 0),
+        observedAtMs,
+        freshUntilMs: observedAtMs + 24 * 60 * 60 * 1000,
+        status: "available" as const,
+        components: Object.freeze(provenance),
+      });
+    })));
+  } });
+}

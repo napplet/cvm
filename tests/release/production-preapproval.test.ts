@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createOfficialPricingSources } from "../../src/release/costs/official-sources";
-import { createProductionLiveCostCatalog } from "../../src/release/costs/production-catalog";
+import { createCertificationBudgetCatalog, createProductionLiveCostCatalog } from "../../src/release/costs/production-catalog";
 import { createLiveCostEstimator, RELEASE_COST_FAMILIES } from "../../src/release/costs/live-estimator";
 import { materializePreapproval, verifyPreapprovalMaterialization } from "../../src/release/preapproval-materializer";
 import { deriveReleaseTopology } from "../../src/release/topology";
@@ -114,6 +114,25 @@ test("aggregates component receipts into one family line with complete provenanc
   await expect(createLiveCostEstimator({ catalog: { listPriceFacts: async () => facts.map((fact) => fact.provider === "cloud_run" ? { ...fact, components: [...fact.components, fact.components[0]] } : fact) }, now }).estimate({ topologySha256: topology.topologySha256,
     quantities: RELEASE_COST_FAMILIES.map((provider) => ({ provider, quantityNanos: 1_000_000_000n, headroomBasisPoints: 1_000 })), components: topology.quantityContract.map((component) => ({ ...component, quantityNanos: BigInt(component.quantityNanos) })),
   })).rejects.toThrow("LIVE_COST_COMPONENT_COVERAGE_REQUIRED");
+});
+
+test("conservative certification ceilings remain distinct from exact user billing and bind every topology component", async () => {
+  const topology = await deriveReleaseTopology(digest("c"));
+  const now = () => 1_000_000;
+  const components = topology.quantityContract.map((component) => ({ ...component, quantityNanos: BigInt(component.quantityNanos) }));
+  const catalog = createCertificationBudgetCatalog({ quantityContract: components, now });
+  const facts = await catalog.listPriceFacts({ providers: RELEASE_COST_FAMILIES });
+  expect(facts).toHaveLength(16);
+  expect(facts.every((fact) => (fact as { sourceId: string }).sourceId === "napplet-cvm-certification-budget-v1")).toBe(true);
+  const estimate = await createLiveCostEstimator({ catalog, now }).estimate({
+    topologySha256: topology.topologySha256,
+    quantities: RELEASE_COST_FAMILIES.map((provider) => ({ provider, quantityNanos: 1_000_000_000n, headroomBasisPoints: 1_000 })),
+    components,
+  });
+  expect(estimate.lines).toHaveLength(16);
+  expect(estimate.maximumMicros).toBeGreaterThan(0);
+  expect(estimate.maximumMicros).toBeLessThanOrEqual(100_000_000);
+  expect(estimate.lines.find((line) => line.provider === "model")?.maximumMicros).toBeGreaterThan(estimate.lines.find((line) => line.provider === "cloud_run")!.maximumMicros);
 });
 
 const sha256 = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");

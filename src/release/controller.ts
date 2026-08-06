@@ -15,7 +15,7 @@ import {
   type ReleaseProviderRegistry,
   type ReleaseTopologyObservation,
 } from "./contracts";
-import { deriveReleaseTopology, RELEASE_PROVIDER_IDS } from "./topology";
+import { deriveReleaseTopology, RELEASE_PROVIDER_IDS, RELEASE_TOPOLOGY_QUANTITY_CONTRACT } from "./topology";
 import { createAuthorizationRequest, createOfficialConsentReceipt, validateAuthorizationReceipt, validateAuthorizationRequest, type ReleaseAuthorizationReceipt } from "./authorization";
 import type { OfficialConsentPort } from "./deployment/consent";
 import { ReleaseProviderOperationSchema, type ReleaseProviderOperation, type ReleaseProviderRegistry as AuthorizedProviderRegistry } from "./providers";
@@ -343,6 +343,7 @@ export class ReleaseCertificationController {
     const estimate = await estimator.estimate({
       topologySha256: topology.topologySha256,
       quantities: RELEASE_COST_FAMILIES.map((provider) => ({ provider, quantityNanos: 1_000_000_000n, headroomBasisPoints: 1_000 })),
+      components: RELEASE_TOPOLOGY_QUANTITY_CONTRACT,
     });
     const plan = await effectPlan(candidate.candidateSha256, topology.topologySha256, estimate);
     let existing: ReleaseCertificationResult | undefined;
@@ -380,7 +381,7 @@ export class ReleaseCertificationController {
         projectScopeSha256: await digest({ version: 1, provider: capability.provider, topologySha256: topology.topologySha256, accountScopeSha256: capability.accountScopeSha256 }),
       }))),
       estimate: { currency: "USD", maximumMicros: plan.maximumAuthorizedCostMicros, sourceId: "live-price-catalog-v1", sourceSha256: estimate.sourceSha256, observedAtMs: estimate.observedAtMs, freshUntilMs: estimate.freshUntilMs },
-      priceLines: estimate.lines.map((line) => ({ ...line, quantityNanos: Number(line.quantityNanos) })),
+      priceLines: estimate.lines.map(({ components: _components, ...line }) => ({ ...line, quantityNanos: Number(line.quantityNanos) })),
       ...(operatorFundingReadiness ? { operatorFundingReadiness } : {}),
       maximumRunDurationMs: 15 * 60 * 1000,
       cleanupByMs: Math.min(discovering.createdAtMs + 15 * 60 * 1000, estimate.freshUntilMs - 1),

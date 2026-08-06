@@ -71,6 +71,17 @@ const defaultObservation = (provider: ReleaseProviderId): ProviderCapabilityObse
   reasonCode: "CREDENTIALS_UNAVAILABLE",
 });
 
+/** The local controller has no implicit authority: every provider is a finite
+ * no-credential discovery port until a later authorization-gated registry is supplied. */
+export function createNoCredentialReleaseProviderRegistry(): ReleaseProviderRegistry {
+  return Object.fromEntries(RELEASE_PROVIDER_IDS.map((provider) => [provider, {
+    discover: async () => {
+      const { version: _version, provider: _provider, accountScopeSha256: _scope, costEstimateSha256: _cost, ...observation } = defaultObservation(provider);
+      return observation;
+    },
+  }])) as ReleaseProviderRegistry;
+}
+
 async function discoverProviders(registry: ReleaseProviderRegistry): Promise<ProviderCapabilityObservation[]> {
   const observations = await Promise.all(RELEASE_PROVIDER_IDS.map(async (provider) => {
     const port = registry[provider];
@@ -134,7 +145,7 @@ export class ReleaseCertificationController {
   constructor(options: ControllerOptions) {
     this.#candidatePath = resolve(options.candidatePath);
     this.#workspace = resolve(options.workspace);
-    this.#providers = options.providers ?? {};
+    this.#providers = options.providers ?? createNoCredentialReleaseProviderRegistry();
     this.#now = options.now ?? Date.now;
   }
 
@@ -151,7 +162,23 @@ export class ReleaseCertificationController {
     const state = await this.#readState(pointer.data.stateSha256);
     if (state.candidate.candidateSha256 !== pointer.data.candidateSha256 || state.status !== "authorization_required" || !state.authorizationRequestSha256) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
     const request = await this.#readRequest(state.authorizationRequestSha256);
-    if (request.resumeStateSha256 !== state.priorStateSha256 || request.candidate.candidateSha256 !== state.candidate.candidateSha256) throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID");
+    const expectedEffectPlanSha256 = await digest({
+      version: 1,
+      candidateSha256: request.candidate.candidateSha256,
+      topologySha256: request.topologySha256,
+      effects: request.plannedEffects,
+      maximumAuthorizedCostMicros: request.maximumAuthorizedCostMicros,
+    });
+    const plannedCost = request.plannedEffects.reduce((total, effect) => total + effect.estimatedCostMicros, 0);
+    if (
+      request.resumeStateSha256 !== state.priorStateSha256
+      || canonicalJson(request.candidate) !== canonicalJson(state.candidate)
+      || request.topologySha256 !== state.topologySha256
+      || request.providerCapabilitiesSha256 !== await digest(state.capabilities)
+      || request.effectPlanSha256 !== expectedEffectPlanSha256
+      || request.maximumAuthorizedCostMicros !== plannedCost
+      || request.expiresAtMs <= state.createdAtMs
+    ) throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID");
     return { exitCode: 1, state, authorizationRequest: request };
   }
 
@@ -188,12 +215,22 @@ export class ReleaseCertificationController {
     return (await this.status())!;
   }
 
-  async #readState(stateSha256: string): Promise<ReleaseControllerState> {
+  async #readState(stateSha256: string, seen = new Set<string>()): Promise<ReleaseControllerState> {
+    if (seen.has(stateSha256)) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+    seen.add(stateSha256);
     let raw: unknown;
     try { raw = JSON.parse(await readFile(join(this.#workspace, "states", `${stateSha256}.json`), "utf8")); }
     catch { throw new Error("RELEASE_CONTROLLER_STATE_INVALID"); }
     const state = ReleaseControllerStateSchema.safeParse(raw);
     if (!state.success || state.data.stateSha256 !== stateSha256 || state.data.stateSha256 !== await digest(withoutDigest(state.data, "stateSha256"))) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+    if (state.data.status === "discovering" && (state.data.priorStateSha256 !== null || state.data.authorizationRequestSha256 !== null)) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+    if (state.data.status === "authorization_required") {
+      if (!state.data.priorStateSha256 || !state.data.authorizationRequestSha256) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+      const prior = await this.#readState(state.data.priorStateSha256, seen);
+      if (prior.status !== "discovering" || prior.authorizationRequestSha256 !== null || prior.candidate.candidateSha256 !== state.data.candidate.candidateSha256 || prior.topologySha256 !== state.data.topologySha256 || prior.createdAtMs > state.data.createdAtMs || canonicalJson(prior.capabilities) !== canonicalJson(state.data.capabilities)) {
+        throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+      }
+    }
     return state.data;
   }
 

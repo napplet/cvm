@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: executing
-stopped_at: Completed 07-41-PLAN.md; next 07-42
-last_updated: "2026-08-06T18:25:42.342Z"
+stopped_at: Completed 07-42-PLAN.md; next 07-43
+last_updated: "2026-08-06T18:34:46.463Z"
 last_activity: 2026-08-06
-last_activity_desc: Added an append-only five-plan correction after proving 07-37–07-39 stopped at provider-neutral contracts/controller/session seam rather than concrete deployment composition
+last_activity_desc: Completed 07-41 shared Google/worker client and sixteen-family cost-contract coverage with effect-denied fixtures
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 85
-  completed_plans: 80
+  completed_plans: 81
   percent: 86
 ---
 
@@ -30,20 +30,20 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 07 (admission-slo-resilience-launch-safety) — EXECUTING
-Plan: 40 of 45 complete
-Status: Ready to execute 07-42 deployment client composition
-Last activity: 2026-08-06 — Completed 07-41 shared Google/worker client and sixteen-family cost-contract coverage with effect-denied fixtures
+Plan: 41 of 45 complete
+Status: Ready to execute 07-43 protected execution composition
+Last activity: 2026-08-06 — Completed 07-42 concrete protocol/publication deployment clients with effect-denied fixtures
 
-Plan execution: [█████████░] 80/85 milestone plans complete; Phase 7 is 40/45 complete and verification remains pending
+Plan execution: [█████████░] 81/85 milestone plans complete; Phase 7 is 41/45 complete and verification remains pending
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 80/85 milestone plans executed. Plan 07-41 added shared GCP/worker clients and fixture-only fresh/actual-cost contracts; Plan 07-42 is next before 07-20 consent and 07-26 protected execution.
+- Plans: 81/85 milestone plans executed. Plan 07-42 added concrete ContextVM/payment/model, host/signer, and publication clients; Plan 07-43 is next before 07-20 consent and 07-26 protected execution.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Next checkpoint: execute 07-42 through 07-44, then use 07-20 only for controller-launched NIP-46 and NWC/Cashu consent plus structured approval, followed by 07-26 protected execution; no hand-authored config/evidence or pasted secret/digest is required.
+- Next checkpoint: execute 07-43 through 07-44, then use 07-20 only for controller-launched NIP-46 and NWC/Cashu consent plus structured approval, followed by 07-26 protected execution; no hand-authored config/evidence or pasted secret/digest is required.
 
 ## Performance Metrics
 
@@ -144,6 +144,7 @@ Plan execution: [█████████░] 80/85 milestone plans complete;
 | Phase 07 P39 | 12m | 2 tasks | 5 files |
 | Phase 07-admission-slo-resilience-launch-safety P40 | 8m 18s | 2 tasks | 12 files |
 | Phase 07-admission-slo-resilience-launch-safety P41 | 8m | 2 tasks | 7 files |
+| Phase 07 P42 | 6m 24s | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -302,6 +303,9 @@ Recent decisions affecting current work:
 - [Phase ?]: Google control-plane primitives share one injected project/quota authority and fail closed outside loopback fixture transport.
 - [Phase ?]: Modal and Fly share immutable schedule/resource/network definitions and remain unselected without fresh protected evidence.
 - [Phase ?]: All sixteen provider families require fresh source and quote digests before an estimate or final actual-cost settlement is accepted.
+- [Phase ?]: All ten provider families compose through an exact complete deployment client map; partial maps are rejected.
+- [Phase ?]: ContextVM uses the installed official SDK correlation primitive while retaining only a service-key reference.
+- [Phase ?]: NIP-46 retains only a disposable client-key reference; owner and attestation relay roles remain distinct.
 
 ### Pending Todos
 
@@ -330,6 +334,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-06T18:25:42.332Z
-Stopped at: Completed 07-41-PLAN.md; next 07-42
+Last session: 2026-08-06T18:34:46.450Z
+Stopped at: Completed 07-42-PLAN.md; next 07-43
 Resume file: None

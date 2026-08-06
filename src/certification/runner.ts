@@ -6,6 +6,15 @@ import { validateSupplyChainVerificationRecord } from "./supply-chain";
 
 export const PROTECTED_SUITES = ["admission", "telemetry", "chaos", "restore", "security-host", "supply-chain", "contextvm-payment-model", "publication"] as const satisfies readonly ProtectedSuite[];
 
+function assertExactProtectedRegistry(registry: ProtectedCertificationAdapterRegistry | undefined): void {
+  if (!registry) return;
+  const keys = Object.keys(registry.adapters).sort();
+  const expected = [...PROTECTED_SUITES].sort();
+  if (registry.evidenceClass !== "protected_live" || keys.length !== expected.length || keys.some((key, index) => key !== expected[index]) || keys.some((key) => typeof registry.adapters[key as ProtectedSuite] !== "function")) {
+    throw new Error("CERTIFICATION_PROTECTED_REGISTRY_EXACT_SET_REQUIRED");
+  }
+}
+
 const suiteClaims: Readonly<Record<ProtectedSuite, readonly string[]>> = {
   admission: ["release.deterministic_fault_matrix", "release.admission_slo", "release.worker"], telemetry: ["release.telemetry_policy"],
   chaos: ["release.database_failover", "release.control_plane"], restore: ["release.checkpoint_object"], "security-host": ["release.compatible_host", "release.owner_signer"],
@@ -66,6 +75,7 @@ export async function runProtectedCertificationSuite(input: Readonly<{ profile: 
 }
 
 export async function runProtectedCertificationProfile(input: Readonly<{ profile: ProtectedCertificationProfile; selectedSuites?: readonly ProtectedSuite[]; evidenceDirectory: string; registry?: ProtectedCertificationAdapterRegistry; preflightOnly?: boolean; now?: () => number }>): Promise<ProtectedCertificationRun> {
+  assertExactProtectedRegistry(input.registry);
   const selectedSuites = input.selectedSuites ?? PROTECTED_SUITES;
   if (selectedSuites.length === 0 || new Set(selectedSuites).size !== selectedSuites.length || selectedSuites.some((suite) => !PROTECTED_SUITES.includes(suite))) throw new Error("CERTIFICATION_SUITE_SELECTION_INVALID");
   const records: CertificationObservation[] = [];

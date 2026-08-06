@@ -140,8 +140,8 @@ export async function materializeProtectedCertifier(input: MaterializeProtectedC
   await writeExclusiveCanonical(profilePath, `${canonicalJson(releaseProfile)}\n`);
   await writeExclusiveCanonical(secretReferencesPath, `${canonicalJson(secretReferences)}\n`);
   await mkdir(evidenceDirectory, { recursive: true, mode: 0o700 });
-  const source = resolve(input.repositoryRoot, "src/certification/adapters.ts");
-  if (!under(resolve(input.repositoryRoot), source) || basename(source) !== "adapters.ts") throw new Error("MATERIALIZER_ADAPTER_SOURCE_REJECTED");
+  const source = resolve(input.repositoryRoot, "src/certification/live/registry.ts");
+  if (!under(resolve(input.repositoryRoot), source) || basename(source) !== "registry.ts") throw new Error("MATERIALIZER_ADAPTER_SOURCE_REJECTED");
   const build = await Bun.build({ entrypoints: [source], outdir: adapterRoot, target: "bun", format: "esm", naming: "protected-adapters.js", sourcemap: "none", minify: true, write: false });
   if (!build.success) throw new Error("MATERIALIZER_ADAPTER_BUNDLE_REJECTED");
   const output = build.outputs.find((candidate) => candidate.kind === "entry-point");

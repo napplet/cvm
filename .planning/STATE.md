@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: executing
-stopped_at: Append-only Phase 7 execution-factory correction planned; next 07-40
-last_updated: "2026-08-06T17:51:15.000Z"
+stopped_at: Completed 07-40-PLAN.md; next 07-41
+last_updated: "2026-08-06T18:17:08.649Z"
 last_activity: 2026-08-06
-last_activity_desc: Planned 07-40 through 07-44 after proving the deployment factory and concrete live clients remained missing
+last_activity_desc: Added an append-only five-plan correction after proving 07-37–07-39 stopped at provider-neutral contracts/controller/session seam rather than concrete deployment composition
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 85
-  completed_plans: 78
+  completed_plans: 79
   percent: 86
 ---
 
@@ -30,20 +30,20 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 07 (admission-slo-resilience-launch-safety) — EXECUTING
-Plan: 38 of 45 complete
-Status: Ready to execute 07-40 pinned deployment factory/config and structured receipt
+Plan: 39 of 45 complete
+Status: Ready to execute 07-41 concrete deployment clients
 Last activity: 2026-08-06 — Added an append-only five-plan correction after proving 07-37–07-39 stopped at provider-neutral contracts/controller/session seam rather than concrete deployment composition
 
-Plan execution: [█████████░] 78/85 milestone plans complete; Phase 7 is 38/45 complete and verification remains pending
+Plan execution: [█████████░] 79/85 milestone plans complete; Phase 7 is 39/45 complete and verification remains pending
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 78/85 milestone plans executed. Plan 07-39 completed the provider-neutral finalizer/session seam; Plans 07-40–07-44 are the append-only deployment-factory/concrete-client/readiness correction. Plan 07-40 is next before 07-20 consent and 07-26 protected execution.
+- Plans: 79/85 milestone plans executed. Plan 07-40 added the hash-pinned deployment factory/configuration and structured official receipt boundary; Plans 07-41–07-44 complete concrete clients, protected composition, pricing/readiness, and product proof. Plan 07-41 is next before 07-20 consent and 07-26 protected execution.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Next checkpoint: execute 07-40 through 07-44, then use 07-20 only for controller-launched NIP-46 and NWC/Cashu consent plus structured approval, followed by 07-26 protected execution; no hand-authored config/evidence or pasted secret/digest is required.
+- Next checkpoint: execute 07-41 through 07-44, then use 07-20 only for controller-launched NIP-46 and NWC/Cashu consent plus structured approval, followed by 07-26 protected execution; no hand-authored config/evidence or pasted secret/digest is required.
 
 ## Performance Metrics
 
@@ -142,6 +142,7 @@ Plan execution: [█████████░] 78/85 milestone plans complete;
 | Phase 07 P37 | 5m | 2 tasks | 6 files |
 | Phase 07-admission-slo-resilience-launch-safety P38 | 7m | 2 tasks | 4 files |
 | Phase 07 P39 | 12m | 2 tasks | 5 files |
+| Phase 07-admission-slo-resilience-launch-safety P40 | 8m 18s | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -296,6 +297,7 @@ Recent decisions affecting current work:
 - [Phase ?]: Live execution upgrades to v2 only after an exact authorization receipt; v1 records remain decodable.
 - [Phase ?]: Fresh passed same-candidate/topology Modal or Fly comparison evidence is required for worker materialization.
 - [Phase ?]: Finalization delegates the sole release verdict to evaluateReleaseCertification after a complete protected exact-eight root.
+- [Phase ?]: Deployment sessions now require config/module hash pins, candidate/source/workspace containment, and structured official approval provenance.
 
 ### Pending Todos
 
@@ -324,6 +326,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-06T16:12:06.316Z
-Stopped at: Append-only Phase 7 execution-factory correction planned; next 07-40
+Last session: 2026-08-06T18:17:08.640Z
+Stopped at: Completed 07-40-PLAN.md; next 07-41
 Resume file: None

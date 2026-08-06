@@ -10,6 +10,7 @@ import { runLiveSupplyChainCertification, type LiveSupplyChainObservationPort } 
 import { runLiveContextVmPaymentModelCertification, type LiveContextVmPaymentModelObservationPort } from "./contextvm-payment-model";
 import { runLivePublicationCertification, type LivePublicationObservationPort } from "./publication";
 import type { ReleaseCertificationTrustRoot } from "../trust";
+import { createProductionLiveProtectedCertificationPorts, type ProductionLiveProtectedCertificationPorts } from "./production-ports";
 
 type Candidate = import("zod").infer<typeof WorkerCandidateSchema>;
 type CertificationInput = import("zod").infer<typeof CertificationInputSchema>;
@@ -66,6 +67,28 @@ export function createLiveProtectedCertificationRegistry(value: LiveProtectedReg
     },
   };
   return assertExactLiveProtectedRegistry(registry);
+}
+
+/**
+ * Production composition is a one-way translation from a checked real-port
+ * set to the legacy protected-live runner contract. The runner still owns the
+ * sole evaluation path; no deterministic or secondary registry is introduced.
+ */
+export function createProductionLiveProtectedCertificationRegistry(value: Omit<LiveProtectedRegistryInput, "ports"> & Readonly<{ ports: ProductionLiveProtectedCertificationPorts }>): ProtectedCertificationAdapterRegistry {
+  const ports = createProductionLiveProtectedCertificationPorts(value.ports);
+  return createLiveProtectedCertificationRegistry({
+    ...value,
+    ports: {
+      admission: { ...ports.admission, evidenceClass: "protected_live" },
+      telemetry: { ...ports.telemetry, evidenceClass: "protected_live" },
+      chaos: { ...ports.chaos, evidenceClass: "protected_live" },
+      restore: { ...ports.durability, evidenceClass: "protected_live" },
+      "security-host": { ...ports["security-host"], evidenceClass: "protected_live" },
+      "supply-chain": { ...ports["supply-chain"], evidenceClass: "protected_live" },
+      "contextvm-payment-model": { ...ports["ContextVM-payment-model"], evidenceClass: "protected_live" },
+      publication: { ...ports.publication, evidenceClass: "protected_live" },
+    },
+  });
 }
 
 /** Digest-pinned generated bundles export this project-owned registry shape.

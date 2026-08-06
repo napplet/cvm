@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { createAuthorizationReceipt, createAuthorizationRequest } from "../../src/release/authorization";
+import { canonicalJson } from "../../src/promotion/schema";
 import { createNativeHttpModelGateway } from "../../src/release/native/model";
 import { createProtectedLiveModelPort } from "../../src/certification/live/model-port";
 import { ModelReconciliationService } from "../../src/model/reconciliation";
@@ -17,7 +18,7 @@ const priceCardSha256 = digest("d");
 const principal = { pubkey: "ef".repeat(32) };
 
 async function sha256(value: unknown): Promise<string> {
-  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  const bytes = new TextEncoder().encode(canonicalJson(value));
   const result = await crypto.subtle.digest("SHA-256", bytes);
   return Array.from(new Uint8Array(result), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
@@ -119,7 +120,7 @@ test("native model gateway binds a candidate capability to one authorized dispat
     const result = await gateway.dispatch(intent(), new AbortController().signal);
     expect(result).toMatchObject({ status: "completed", receipt: { operationId: "model-original-op", provider: "deterministic_fixture", model: "phase-04-fixture-model" } });
     expect(calls).toEqual([expect.objectContaining({ path: "/dispatch", authorization: "Bearer private-token-canary", body: expect.objectContaining({ operationId: "model-original-op" }) })]);
-    expect(JSON.stringify({ discovery: gateway.discovery(), evidence: result })).not.toMatch(/private-token|authorization|credential|response|prompt/i);
+    expect(JSON.stringify({ discovery: gateway.discovery(), evidence: result })).not.toMatch(/private-token|authorization|response|prompt/i);
     expect(JSON.stringify(gateway.discovery())).toContain("credential-ref:model-primary");
   } finally {
     server.stop(true);
@@ -153,6 +154,9 @@ test("missing lookup, stale capability, mismatched price identity, and malformed
     await expect(createNativeHttpModelGateway({ ...authorization, capability: { ...authorization.capability, lookupUrl: "" }, credentialReference: "credential-ref:model", credentialResolver: { resolve: async () => "token" }, now: () => 1_250 })).rejects.toThrow();
     await expect(createNativeHttpModelGateway({ ...authorization, capability: { ...authorization.capability, priceCardSha256: digest("9") }, credentialReference: "credential-ref:model", credentialResolver: { resolve: async () => "token" }, now: () => 1_250 })).rejects.toThrow("NATIVE_MODEL_CAPABILITY_DIGEST_MISMATCH");
     await expect(createNativeHttpModelGateway({ ...authorization, credentialReference: "credential-ref:model", credentialResolver: { resolve: async () => "token" }, now: () => 2_000 })).rejects.toThrow("NATIVE_MODEL_CAPABILITY_STALE");
+    const missingAuthGateway = await createNativeHttpModelGateway({ ...authorization, credentialReference: "credential-ref:model", credentialResolver: { resolve: async () => "" }, now: () => 1_250 });
+    await expect(missingAuthGateway.dispatch(intent("model-missing-auth"), new AbortController().signal)).resolves.toMatchObject({ status: "definitive_not_accepted", reason: "pre_dispatch_rejected" });
+    expect(dispatches).toBe(1);
   } finally {
     server.stop(true);
   }

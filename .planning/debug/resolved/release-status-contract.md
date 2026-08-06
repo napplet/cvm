@@ -1,18 +1,18 @@
 ---
-status: awaiting_human_verify
+status: resolved
 trigger: "Diagnose and fix the blocking Plan 07-20 product CLI verification mismatch: bun run release:certify -- --status --require-state=authorization_required returns RELEASE_CERTIFICATION_ARGUMENT_REJECTED."
 created: 2026-08-06T17:14:49+01:00
-updated: 2026-08-06T18:08:00+01:00
+updated: 2026-08-06T18:11:00+01:00
 ---
 
 ## Current Focus
 <!-- OVERWRITE on each update - reflects NOW -->
 
 bug_class: "Bohrbug — both follow-on failures are deterministic CLI/test-selection contract mismatches."
-hypothesis: "Confirmed: the CLI discarded a successful explicit status assertion by returning the controller authorization-boundary code; Plan 07-20's literal filter selected no controller test names."
-test: "Completed: focused red/green/reversal testing, exact combined Plan verification, and the full Bun suite."
-expecting: "Await confirmation that the exact Plan command also succeeds in the caller's normal workflow; no provider or deployment effect is expected."
-next_action: "Await human verification of the exact Plan 07-20 command; if confirmed, archive this reopened debug session and append its follow-on prevention record."
+hypothesis: "Confirmed and resolved: the CLI discarded a successful explicit status assertion by returning the controller authorization-boundary code; Plan 07-20's literal filter selected no controller test names."
+test: "Completed: focused red/green/reversal testing, exact combined Plan verification, full Bun suite, and independent normal-workflow confirmation."
+expecting: "Satisfied: the exact Plan 07-20 command exits 0 only for a matching explicit assertion and selects its receipt-integrity regression."
+next_action: "Archived and indexed in the durable knowledge base; no further debug action remains."
 
 reasoning_checkpoint:
   hypothesis: "A matching explicit status assertion returns exit 1 because the CLI unconditionally returns result.exitCode after proving equality, while the Plan test filter has no matching controller-test name."
@@ -199,13 +199,21 @@ started: "Blocking Plan 07-20 verification; current implementation only permits 
   checked: "Final exact combined Plan 07-20 command and worktree scope"
   found: "The combined command exits 0, prints redacted authorization_required status JSON, and runs the one selected controller integrity regression. git diff --check is clean; only the assigned script/test files and reopened debug record are in scope."
   implication: "All automated fix-acceptance signals pass without provider, deployment, credential, or network activity; retain human confirmation before archiving."
+- timestamp: 2026-08-06T18:10:00+01:00
+  checked: "Independent normal-workflow confirmation"
+  found: "The caller confirmed that the exact combined Plan 07-20 command exits 0 and the named integrity regression passes."
+  implication: "The fix is verified end-to-end in the intended workflow; the session may be archived."
+- timestamp: 2026-08-06T18:11:00+01:00
+  checked: "Resolved-session archival and durable knowledge update"
+  found: "The active debug record was moved to resolved/ and the knowledge base received a follow-on entry; MemPalace remains unavailable, so the knowledge base is the durable recall path."
+  implication: "Future debugging can surface both the parser and shell-success/test-filter variants without relying on external semantic indexing."
 
 ## Resolution
 <!-- OVERWRITE as understanding evolves -->
 
 root_cause: "scripts/certify-release.ts unconditionally returns the controller's nonzero authorization-boundary exit code after a successful explicit --require-state equality check; tests/release/controller.test.ts had no test name selected by Plan 07-20's required filter."
 fix: "Return exit 0 only for a status invocation with an explicit --require-state that already matched; add a pure controller-file authorization receipt integrity regression whose name satisfies the documented Plan filter; expand the CLI regression to cover matching, unasserted, mismatch, missing, and invalid cases."
-verification: "guardrail_verdict: accepted; specified-oracle red/green test passed (1 test, 15 assertions); exact combined Plan command passed; controller filter selected the local integrity test (1 test, 5 assertions); full bun test passed (617 tests, 4,726 assertions); reverting the one-line guard restored the original failure and reapplying restored success; git diff --check passed; mutation testing is unavailable because no mutation configuration/script exists; TypeScript compiler binary is unavailable in node_modules."
+verification: "guardrail_verdict: accepted; specified-oracle red/green test passed (1 test, 15 assertions); exact combined Plan command passed; controller filter selected the local integrity test (1 test, 5 assertions); full bun test passed (617 tests, 4,726 assertions); reverting the one-line guard restored the original failure and reapplying restored success; git diff --check passed; mutation testing is unavailable because no mutation configuration/script exists; TypeScript compiler binary is unavailable in node_modules; independent normal-workflow confirmation passed the exact combined Plan command."
 files_changed:
   - "scripts/certify-release.ts"
   - "tests/release/certify-release.test.ts"

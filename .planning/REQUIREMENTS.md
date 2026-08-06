@@ -89,9 +89,9 @@ Requirements for the initial release. Each maps to exactly one roadmap phase.
 
 ### Availability and Operations
 
-- [ ] **OPS-01**: The service exposes measured request-receipt-to-worker-ready latency, capacity rejection, generation, payment, checkpoint, resume, validation, and publication telemetry without leaking prompts, keys, or payment secrets.
-- [ ] **OPS-02**: Regional, relay, database, worker, or publication failures preserve single-writer ledger/session semantics and do not lose committed progress or duplicate money and event effects.
-- [ ] **OPS-03**: Checkpoints, sealed artifacts, validation evidence, usage receipts, and attestations remain durably available for their promised retention across an infrastructure instance failure.
+- [x] **OPS-01**: The service exposes measured request-receipt-to-worker-ready latency, capacity rejection, generation, payment, checkpoint, resume, validation, and publication telemetry without leaking prompts, keys, or payment secrets.
+- [x] **OPS-02**: Regional, relay, database, worker, or publication failures preserve single-writer ledger/session semantics and do not lose committed progress or duplicate money and event effects.
+- [x] **OPS-03**: Checkpoints, sealed artifacts, validation evidence, usage receipts, and attestations remain durably available for their promised retention across an infrastructure instance failure.
 - [x] **OPS-04**: Production promotion requires pinned images/packages, SBOM and provenance evidence, adversarial prompt/escape/exfiltration tests, payment and publication reconciliation tests, and measured five-second p95 load evidence.
 
 ## v2 Requirements

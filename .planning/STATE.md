@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 7
 current_phase_name: Admission SLO, Resilience & Launch Safety
 status: executing
-stopped_at: Completed 07-24-PLAN.md
-last_updated: "2026-08-06T11:56:13.558Z"
+stopped_at: Completed 07-25-PLAN.md
+last_updated: "2026-08-06T12:11:17.288Z"
 last_activity: 2026-08-06
 last_activity_desc: Plan 07-24 completed; Plan 07-25 local orchestration is next
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 67
-  completed_plans: 64
+  completed_plans: 65
   percent: 86
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 7 — Admission SLO, Resilience & Launch Safety
-Plan: 25 of 27
+Plan: 26 of 27
 Status: Executing local automation; provider authentication is deferred until the complete controller can request it precisely
 Last activity: 2026-08-06 — Plan 07-24 completed; Plan 07-25 local orchestration is next
 
@@ -129,6 +129,7 @@ Plan execution: [█████████░] 64/67 milestone plans complete;
 | Phase 07-admission-slo-resilience-launch-safety P22 | 12m | 2 tasks | 5 files |
 | Phase 07 P23 | 7m | 2 tasks | 5 files |
 | Phase 07 P24 | 237s | 2 tasks | 5 files |
+| Phase 07 P25 | 20m | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -261,6 +262,8 @@ Recent decisions affecting current work:
 - [Phase ?]: Chaos uses original-operation observations and restore requires fresh-instance exact-object reattachment.
 - [Phase ?]: All four integration adapters reject deterministic ports before any effect; only Plan 07-25 may inject protected-live implementations after authorization.
 - [Phase ?]: Security/supply-chain records remain digest-only and payment/model/publication reconciliation is original-operation-only.
+- [Phase ?]: The local controller stops at authorization_required; Plan 07-26 alone may execute protected effects.
+- [Phase ?]: Release certification uses an exact eight-suite generated registry and candidate-only CLI inputs.
 
 ### Pending Todos
 
@@ -289,6 +292,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-06T11:56:13.549Z
-Stopped at: Completed 07-24-PLAN.md
+Last session: 2026-08-06T12:11:17.279Z
+Stopped at: Completed 07-25-PLAN.md
 Resume file: None

@@ -19,6 +19,10 @@ import { deriveReleaseTopology, RELEASE_PROVIDER_IDS } from "./topology";
 import { createAuthorizationRequest, validateAuthorizationReceipt, validateAuthorizationRequest, type ReleaseAuthorizationReceipt } from "./authorization";
 import { ReleaseProviderOperationSchema, type ReleaseProviderOperation, type ReleaseProviderRegistry as AuthorizedProviderRegistry } from "./providers";
 import { createNativeReleaseProviderRegistry } from "./native-registry";
+import { materializeProtectedCertifier, type MaterializeProtectedCertifierInput, type MaterializedCertifier } from "./materialize-certifier";
+import { createProductionLiveProtectedCertificationRegistry, type LiveProtectedRegistryInput } from "../certification/live/registry";
+import type { ProductionLiveProtectedCertificationPorts } from "../certification/live/production-ports";
+import { PROTECTED_SUITES, runProtectedCertificationProfile, type ProtectedCertificationRun } from "../certification/runner";
 
 export const RELEASE_WORKSPACE_ENV = "NAPPLET_CVM_RELEASE_WORKSPACE";
 export const RELEASE_AUTHORIZATION_SHA256_ENV = "NAPPLET_CVM_RELEASE_AUTHORIZATION_SHA256";
@@ -45,6 +49,19 @@ export type ReleaseProvisioningResult = Readonly<{
   state: ReleaseControllerState;
   authorizationRequest: ReleaseAuthorizationRequest;
   topology: ReleaseTopologyObservation & Readonly<{ deployment: NonNullable<ReleaseTopologyObservation["deployment"]> }>;
+}>;
+export type AuthorizedLiveExecutionInput = Readonly<{
+  receipt: unknown;
+  /** The one project-owned production registry from native-registry.ts. */
+  registry: AuthorizedProviderRegistry;
+  materialization: Omit<MaterializeProtectedCertifierInput, "workerSelection" | "nowMs">;
+  workerSelection: NonNullable<MaterializeProtectedCertifierInput["workerSelection"]>;
+  protected: Omit<LiveProtectedRegistryInput, "ports"> & Readonly<{ ports: ProductionLiveProtectedCertificationPorts }>;
+  protectedVerificationReferences?: Parameters<typeof runProtectedCertificationProfile>[0]["profile"]["protectedVerificationReferences"];
+}>;
+export type AuthorizedLiveExecutionResult = ReleaseProvisioningResult & Readonly<{
+  materialized: MaterializedCertifier;
+  protected: ProtectedCertificationRun;
 }>;
 
 type ProviderOperationRecord = Readonly<{
@@ -189,13 +206,13 @@ export class ReleaseCertificationController {
     const pointer = ReleaseControllerCurrentPointerSchema.safeParse(pointerRaw);
     if (!pointer.success || pointer.data.pointerSha256 !== await digest(withoutDigest(pointer.data, "pointerSha256"))) throw new Error("RELEASE_CONTROLLER_POINTER_INVALID");
     const state = await this.#readState(pointer.data.stateSha256);
-    if (state.candidate.candidateSha256 !== pointer.data.candidateSha256 || state.status !== "authorization_required" || !state.authorizationRequestSha256) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+    if (state.candidate.candidateSha256 !== pointer.data.candidateSha256 || !state.authorizationRequestSha256) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
     if ((await candidateIdentity(this.#candidatePath)).candidateSha256 !== state.candidate.candidateSha256) throw new Error("RELEASE_CONTROLLER_CANDIDATE_MISMATCH");
     const request = await this.#readRequest(state.authorizationRequestSha256);
     await validateAuthorizationRequest(request);
     const plannedCost = request.orderedEffects.reduce((total, effect) => total + effect.estimatedCostMicros, 0);
     if (
-      request.controllerStateSha256 !== state.priorStateSha256
+      (state.status === "authorization_required" && request.controllerStateSha256 !== state.priorStateSha256)
       || request.candidateSha256 !== state.candidate.candidateSha256
       || request.topologySha256 !== state.topologySha256
       || request.providerCapabilitiesSha256 !== await digest(state.capabilities)
@@ -220,6 +237,7 @@ export class ReleaseCertificationController {
     }
     if (existing) {
       if (existing.state.candidate.candidateSha256 !== candidate.candidateSha256) throw new Error("RELEASE_CONTROLLER_CANDIDATE_MISMATCH");
+      if (existing.state.status !== "authorization_required") throw new Error("RELEASE_CONTROLLER_RESUME_INPUT_MISMATCH");
       if (existing.state.topologySha256 !== topology.topologySha256 || existing.authorizationRequest.effectPlanSha256 !== plan.effectPlanSha256 || existing.authorizationRequest.maximumAuthorizedCostMicros !== plan.maximumAuthorizedCostMicros) {
         throw new Error("RELEASE_CONTROLLER_RESUME_INPUT_MISMATCH");
       }
@@ -287,10 +305,10 @@ export class ReleaseCertificationController {
     try { receipt = await validateAuthorizationReceipt({ request, receipt: input.receipt, nowMs: this.#now() }); }
     catch { throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID"); }
 
-    if (current.state.status === "topology_ready" && current.state.deployedTopologySha256) {
+    if (["topology_ready", "materializing", "protected_suite_running", "finalizing", "cleaning", "completed"].includes(current.state.status) && current.state.deployedTopologySha256) {
       return { state: current.state, authorizationRequest: request, topology: await this.#readTopology(current.state.deployedTopologySha256) };
     }
-    if (!["authorization_required", "provisioning", "discovering_deployed"].includes(current.state.status)) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+    if (!["authorization_required", "receipt_valid", "bootstrap", "provisioning", "discovering_deployed", "observing"].includes(current.state.status)) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
 
     const operations = await Promise.all(request.orderedEffects.map(async (effect) => ReleaseProviderOperationSchema.parse({
       version: 1,
@@ -313,12 +331,22 @@ export class ReleaseCertificationController {
       }
     }
     let state = current.state;
-    if (state.status === "authorization_required") state = await this.#advance(state, "provisioning", receipt.authorizationReceiptSha256, operations.map((operation) => operation.operationId), null, null);
+    if (["authorization_required", "receipt_valid", "bootstrap"].includes(state.status)) state = await this.#advance(state, "provisioning", receipt.authorizationReceiptSha256, operations.map((operation) => operation.operationId), null, null);
 
     let totalCost = 0;
     for (const operation of operations) {
       const record = await this.#readOperation(operation.operationId);
       if (record.status === "completed") { totalCost += record.actualCostMicros; continue; }
+      // The immutable operation record is written above before even the
+      // planning call.  After a process loss, the same operation ID is
+      // observed instead of creating a replacement provider action.
+      if (record.status === "pending") {
+        try { await input.registry.plan({ receipt, operation }); }
+        catch {
+          await this.#advance(state, "blocked", receipt.authorizationReceiptSha256, operations.map((item) => item.operationId), null, "PROVIDER_UNAVAILABLE");
+          throw new Error("RELEASE_CONTROLLER_PROVIDER_BLOCKED");
+        }
+      }
       const result = record.status === "unknown"
         ? await input.registry.observe({ receipt, operation, approvedMaximumCostMicros: receipt.maximumAuthorizedCostMicros })
         : await input.registry.apply({ receipt, operation, approvedMaximumCostMicros: receipt.maximumAuthorizedCostMicros });
@@ -338,7 +366,7 @@ export class ReleaseCertificationController {
       await this.#writeOperation({ ...record, status: "completed", actualCostMicros, resourceIdentitySha256: result.resourceIdentitySha256 });
     }
 
-    state = await this.#advance(state, "discovering_deployed", receipt.authorizationReceiptSha256, operations.map((operation) => operation.operationId), null, null);
+    state = await this.#advance(state, state.version === 2 ? "observing" : "discovering_deployed", receipt.authorizationReceiptSha256, operations.map((operation) => operation.operationId), null, null);
     const discovered = await Promise.all(operations.map((operation) => input.registry.discover(operation.provider)));
     if (discovered.some((item) => item.capability !== "available" || item.authentication !== "authorized")) {
       await this.#advance(state, "blocked", receipt.authorizationReceiptSha256, operations.map((operation) => operation.operationId), null, "PROVIDER_UNAVAILABLE");
@@ -368,10 +396,103 @@ export class ReleaseCertificationController {
     return { state, authorizationRequest: request, topology };
   }
 
-  async #advance(prior: ReleaseControllerState, status: Extract<ReleaseControllerState["status"], "provisioning" | "discovering_deployed" | "topology_ready" | "blocked">, authorizationReceiptSha256: string, providerOperationIds: string[], deployedTopologySha256: string | null, blockReasonCode: ReleaseControllerState["blockReasonCode"]): Promise<ReleaseControllerState> {
+  /**
+   * The only same-run live path.  It accepts project-owned native handles and
+   * real protected ports, but never creates a client, reads credentials, or
+   * substitutes an evaluator.  Each stage is content-addressed before the
+   * next external boundary, so a new controller instance reconciles the
+   * original provider operation rather than replacing it.
+   */
+  async executeAuthorized(input: AuthorizedLiveExecutionInput): Promise<AuthorizedLiveExecutionResult> {
+    const current = await this.#loadCurrent();
+    if (!current.state.authorizationRequestSha256) throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID");
+    const request = await this.#readRequest(current.state.authorizationRequestSha256);
+    let receipt: ReleaseAuthorizationReceipt;
+    try { receipt = await validateAuthorizationReceipt({ request, receipt: input.receipt, nowMs: this.#now() }); }
+    catch { throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID"); }
+
+    let state = current.state;
+    if (state.status === "authorization_required") {
+      state = await this.#advanceLive(state, "receipt_valid", receipt.authorizationReceiptSha256, [], null, null);
+    }
+    if (state.authorizationReceiptSha256 !== receipt.authorizationReceiptSha256) throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID");
+    if (state.status === "receipt_valid") {
+      // Bootstrap is journalled as a state boundary before the native registry
+      // sees any operation. No provider is called by this transition.
+      state = await this.#advanceLive(state, "bootstrap", receipt.authorizationReceiptSha256, state.providerOperationIds, null, null);
+    }
+
+    const provisioned = await this.provision({ receipt, registry: input.registry });
+    state = provisioned.state;
+    if (state.status === "topology_ready") {
+      state = await this.#advanceLive(state, "materializing", receipt.authorizationReceiptSha256, state.providerOperationIds, provisioned.topology.topologySha256, null);
+    }
+    if (state.status !== "materializing" && state.status !== "protected_suite_running" && state.status !== "finalizing" && state.status !== "cleaning" && state.status !== "completed") {
+      throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+    }
+
+    const materialized = await materializeProtectedCertifier({
+      ...input.materialization,
+      topology: provisioned.topology,
+      authorization: { authorizationReceiptSha256: receipt.authorizationReceiptSha256, authorizationRequestSha256: request.authorizationRequestSha256 },
+      workerSelection: input.workerSelection,
+      nowMs: this.#now(),
+    });
+    if (state.status === "materializing") {
+      state = await this.#advanceLive(state, "protected_suite_running", receipt.authorizationReceiptSha256, state.providerOperationIds, provisioned.topology.topologySha256, null);
+    }
+
+    const protectedRegistry = createProductionLiveProtectedCertificationRegistry(input.protected);
+    const protectedRun = await runProtectedCertificationProfile({
+      profile: {
+        candidate: input.protected.candidate,
+        datasetSha256: input.protected.input.datasetSha256,
+        topologySha256: provisioned.topology.topologySha256,
+        profileSha256: input.protected.input.profileSha256,
+        releaseBinding: input.protected.releaseBinding,
+        protectedVerificationReferences: input.protectedVerificationReferences,
+        credentialsAvailable: true,
+      },
+      evidenceDirectory: materialized.evidenceDirectory,
+      registry: protectedRegistry,
+      requireExactRegistry: true,
+      now: this.#now,
+    });
+    // The runner always emits an independent record per suite. Persist an
+    // immutable controller index without collapsing failures into a pass.
+    if (protectedRun.records.length !== PROTECTED_SUITES.length || new Set(protectedRun.records.map((record) => record.input.command[1])).size !== PROTECTED_SUITES.length) {
+      await this.#advanceLive(state, "blocked", receipt.authorizationReceiptSha256, state.providerOperationIds, provisioned.topology.topologySha256, "EVIDENCE_INVALID");
+      throw new Error("RELEASE_CONTROLLER_PROTECTED_SET_INVALID");
+    }
+    for (const record of protectedRun.records) {
+      const suite = record.input.command[1]!.replace("suite:", "");
+      await createOrVerify(join(this.#workspace, "protected-records", `${suite}.json`), `${canonicalJson({ version: 1, candidateSha256: state.candidate.candidateSha256, topologySha256: provisioned.topology.topologySha256, authorizationReceiptSha256: receipt.authorizationReceiptSha256, record })}\n`, "RELEASE_CONTROLLER_PROTECTED_RECORD_COLLISION");
+    }
+    if (protectedRun.status !== "passed") {
+      await this.#advanceLive(state, "blocked", receipt.authorizationReceiptSha256, state.providerOperationIds, provisioned.topology.topologySha256, "PROTECTED_SUITE_BLOCKED");
+      throw new Error("RELEASE_CONTROLLER_PROTECTED_SUITE_BLOCKED");
+    }
+    state = await this.#advanceLive(state, "finalizing", receipt.authorizationReceiptSha256, state.providerOperationIds, provisioned.topology.topologySha256, null);
+    state = await this.#advanceLive(state, "cleaning", receipt.authorizationReceiptSha256, state.providerOperationIds, provisioned.topology.topologySha256, null);
+    state = await this.#advanceLive(state, "completed", receipt.authorizationReceiptSha256, state.providerOperationIds, provisioned.topology.topologySha256, null);
+    return { ...provisioned, state, materialized, protected: protectedRun };
+  }
+
+  async #advance(prior: ReleaseControllerState, status: ReleaseControllerState["status"], authorizationReceiptSha256: string, providerOperationIds: string[], deployedTopologySha256: string | null, blockReasonCode: ReleaseControllerState["blockReasonCode"]): Promise<ReleaseControllerState> {
     const { stateSha256: _priorStateSha256, ...priorState } = prior;
     const next = await stateFor({
       ...priorState, status, priorStateSha256: prior.stateSha256, authorizationReceiptSha256,
+      providerOperationIds, deployedTopologySha256, blockReasonCode, createdAtMs: this.#now(),
+    });
+    await createOrVerify(join(this.#workspace, "states", `${next.stateSha256}.json`), `${canonicalJson(next)}\n`, "RELEASE_CONTROLLER_STATE_COLLISION");
+    await this.#writeCurrent(next);
+    return next;
+  }
+
+  async #advanceLive(prior: ReleaseControllerState, status: Extract<ReleaseControllerState["status"], "receipt_valid" | "bootstrap" | "materializing" | "protected_suite_running" | "finalizing" | "cleaning" | "completed" | "blocked">, authorizationReceiptSha256: string, providerOperationIds: string[], deployedTopologySha256: string | null, blockReasonCode: ReleaseControllerState["blockReasonCode"]): Promise<ReleaseControllerState> {
+    const { stateSha256: _priorStateSha256, ...priorState } = prior;
+    const next = await stateFor({
+      ...priorState, version: 2, status, priorStateSha256: prior.stateSha256, authorizationReceiptSha256,
       providerOperationIds, deployedTopologySha256, blockReasonCode, createdAtMs: this.#now(),
     });
     await createOrVerify(join(this.#workspace, "states", `${next.stateSha256}.json`), `${canonicalJson(next)}\n`, "RELEASE_CONTROLLER_STATE_COLLISION");
@@ -433,6 +554,19 @@ export class ReleaseCertificationController {
       if (!state.data.priorStateSha256 || !state.data.authorizationRequestSha256) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
       const prior = await this.#readState(state.data.priorStateSha256, seen);
       if (prior.status !== "discovering" || prior.authorizationRequestSha256 !== null || prior.candidate.candidateSha256 !== state.data.candidate.candidateSha256 || prior.topologySha256 !== state.data.topologySha256 || prior.createdAtMs > state.data.createdAtMs || canonicalJson(prior.capabilities) !== canonicalJson(state.data.capabilities)) {
+        throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+      }
+    }
+    if (state.data.version === 2) {
+      if (!state.data.priorStateSha256 || !state.data.authorizationRequestSha256 || !state.data.authorizationReceiptSha256
+        || !["receipt_valid", "bootstrap", "provisioning", "observing", "topology_ready", "materializing", "protected_suite_running", "finalizing", "cleaning", "completed", "blocked"].includes(state.data.status)) {
+        throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+      }
+      const prior = await this.#readState(state.data.priorStateSha256, seen);
+      if (prior.candidate.candidateSha256 !== state.data.candidate.candidateSha256 || prior.topologySha256 !== state.data.topologySha256
+        || prior.createdAtMs > state.data.createdAtMs || (state.data.status === "receipt_valid" && prior.status !== "authorization_required")
+        || (state.data.status !== "receipt_valid" && prior.version !== 2 && !(state.data.status === "materializing" && prior.status === "topology_ready"))
+        || (prior.authorizationReceiptSha256 !== null && prior.authorizationReceiptSha256 !== state.data.authorizationReceiptSha256)) {
         throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
       }
     }

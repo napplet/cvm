@@ -4,7 +4,7 @@ import { canonicalJson, parseReleaseCertificationManifest, type ReleaseCertifica
 
 const HEX = /^[a-f0-9]{64}$/iu;
 const REVISION = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/iu;
-const allowedInputKeys = new Set(["workspace", "repositoryRoot", "candidateId", "releaseManifest", "topology", "authorization", "source", "secretReferences", "onProviderCall", "onProtectedRunnerCall"]);
+const allowedInputKeys = new Set(["workspace", "repositoryRoot", "candidateId", "releaseManifest", "topology", "authorization", "source", "secretReferences", "workerSelection", "nowMs", "onProviderCall", "onProtectedRunnerCall"]);
 
 type Digest = string;
 type PinnedModule = Readonly<{ root: string; modulePath: string; sha256: Digest }>;
@@ -35,6 +35,18 @@ export type MaterializeProtectedCertifierInput = Readonly<{
   authorization: Readonly<{ authorizationReceiptSha256: string; authorizationRequestSha256: string }>;
   source: Readonly<{ sourceRevision: string; sourceSha256: string }>;
   secretReferences: Readonly<Record<string, string>>;
+  /** A controller may name a worker only after the same candidate/topology
+   * comparison cohort has passed and remains fresh. */
+  workerSelection?: Readonly<{
+    provider: "modal" | "fly";
+    status: "selected";
+    candidateSha256: string;
+    topologySha256: string;
+    selectionEvidenceSha256: string;
+    observedAtMs: number;
+    expiresAtMs: number;
+  }>;
+  nowMs?: number;
   /** Test-only observation seams; production never supplies these callbacks. */
   onProviderCall?: () => void;
   onProtectedRunnerCall?: () => void;
@@ -104,6 +116,17 @@ function assertInput(input: MaterializeProtectedCertifierInput): ReleaseCertific
     || !validDigest(input.authorization?.authorizationReceiptSha256) || !validDigest(input.authorization?.authorizationRequestSha256)
     || !REVISION.test(input.source?.sourceRevision ?? "") || !validDigest(input.source?.sourceSha256)) throw new Error("MATERIALIZER_INPUT_INVALID");
   if (input.topology.candidateSha256 !== undefined && input.topology.candidateSha256.toLowerCase() !== input.candidateId.toLowerCase()) throw new Error("MATERIALIZER_TOPOLOGY_REJECTED");
+  if (input.workerSelection) {
+    const selected = input.workerSelection;
+    if (selected.status !== "selected" || !["modal", "fly"].includes(selected.provider)
+      || !validDigest(selected.candidateSha256) || !validDigest(selected.topologySha256) || !validDigest(selected.selectionEvidenceSha256)
+      || selected.candidateSha256.toLowerCase() !== input.candidateId.toLowerCase()
+      || selected.topologySha256.toLowerCase() !== input.topology.topologySha256.toLowerCase()
+      || !Number.isInteger(selected.observedAtMs) || !Number.isInteger(selected.expiresAtMs)
+      || selected.expiresAtMs <= (input.nowMs ?? Date.now()) || selected.expiresAtMs <= selected.observedAtMs) {
+      throw new Error("MATERIALIZER_WORKER_SELECTION_REJECTED");
+    }
+  }
   const manifest = parseReleaseCertificationManifest(input.releaseManifest);
   if (manifest.sourceRevision !== input.source.sourceRevision.toLowerCase() || manifest.sourceSha256 !== input.source.sourceSha256.toLowerCase()) throw new Error("MATERIALIZER_SOURCE_REJECTED");
   for (const [name, reference] of Object.entries(input.secretReferences ?? {})) {
@@ -131,9 +154,11 @@ export async function materializeProtectedCertifier(input: MaterializeProtectedC
   const releaseProfile = {
     version: 1,
     candidate: { id: input.candidateId.toLowerCase(), image: `napplet-cvm/worker@sha256:${manifest.inputs.workerImageDigest}`, sourceSha256: input.source.sourceSha256.toLowerCase() },
-    // Protected cohort evidence owns the eventual provider/topology choice.
-    // Local materialization deliberately carries no default worker winner.
-    worker: { selection: "unselected", reasonCode: "PROTECTED_EVIDENCE_REQUIRED" },
+    // The worker identity is supplied only by fresh, passed, same-run evidence;
+    // do not replace this with a provider default.
+    worker: input.workerSelection
+      ? { selection: "selected", provider: input.workerSelection.provider, evidenceSha256: input.workerSelection.selectionEvidenceSha256, observedAtMs: input.workerSelection.observedAtMs, expiresAtMs: input.workerSelection.expiresAtMs }
+      : { selection: "unselected", reasonCode: "PROTECTED_EVIDENCE_REQUIRED" },
     datasetSha256: manifest.inputs.datasetSha256,
     topologySha256: input.topology.topologySha256.toLowerCase(),
     authorizationReceiptSha256: input.authorization.authorizationReceiptSha256.toLowerCase(),

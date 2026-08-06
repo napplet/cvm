@@ -84,9 +84,20 @@ const CandidateIdentitySchema = z.object({
 export { ReleaseAuthorizationRequestSchema };
 export type { ReleaseAuthorizationRequest };
 
+export const RELEASE_LIVE_CONTROLLER_STATES = [
+  "receipt_valid", "bootstrap", "provisioning", "observing", "materializing",
+  "protected_suite_running", "finalizing", "cleaning", "blocked", "completed",
+] as const;
+
 export const ReleaseControllerStateSchema = z.object({
-  version: z.literal(1),
-  status: z.enum(["initialized", "discovering", "authorization_required", "provisioning", "discovering_deployed", "topology_ready", "blocked"]),
+  /** Version 1 records are retained verbatim for dry-run and historical resume.
+   * Version 2 adds the receipt-bound live execution state machine. */
+  version: z.union([z.literal(1), z.literal(2)]),
+  status: z.enum([
+    "initialized", "discovering", "authorization_required", "provisioning", "discovering_deployed", "topology_ready",
+    "receipt_valid", "bootstrap", "observing", "materializing", "protected_suite_running", "finalizing", "cleaning",
+    "blocked", "completed",
+  ]),
   candidate: CandidateIdentitySchema,
   topologySha256: DigestSchema,
   capabilities: z.array(ProviderCapabilityObservationSchema).length(16),
@@ -95,7 +106,10 @@ export const ReleaseControllerStateSchema = z.object({
   authorizationReceiptSha256: DigestSchema.nullable(),
   providerOperationIds: z.array(z.string().regex(/^[a-z][a-z0-9_-]{2,127}$/u)).max(16),
   deployedTopologySha256: DigestSchema.nullable(),
-  blockReasonCode: z.enum(["AUTHORIZATION_REQUIRED", "PROVIDER_UNAVAILABLE", "PROVIDER_AMBIGUOUS", "TOPOLOGY_DRIFT", "COST_EXCEEDED"]).nullable(),
+  blockReasonCode: z.enum([
+    "AUTHORIZATION_REQUIRED", "PROVIDER_UNAVAILABLE", "PROVIDER_AMBIGUOUS", "TOPOLOGY_DRIFT", "COST_EXCEEDED",
+    "EVIDENCE_INVALID", "EVIDENCE_STALE", "PROTECTED_SUITE_BLOCKED", "RESUME_ATTEMPTS_EXHAUSTED",
+  ]).nullable(),
   createdAtMs: z.number().int().positive(),
   stateSha256: DigestSchema,
 }).strict();

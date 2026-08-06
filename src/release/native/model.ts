@@ -71,7 +71,7 @@ const LookupResponseSchema = z.discriminatedUnion("status", [
 export type NativeHttpModelCapability = Readonly<z.infer<typeof CapabilitySchema>>;
 export type NativeModelCredentialResolver = Readonly<{ resolve(reference: string): Promise<string> }>;
 export type NativeHttpModelGateway = ModelGateway & Readonly<{
-  discovery(): Readonly<{ candidateSha256: string; capabilitySha256: string; endpointReference: string; accountReference: string; credentialReference: string; model: string; modelVersion: string; profileId: string; priceCardId: string; priceCardSha256: string; lookupPolicy: "authoritative_original_operation_only" }>;
+  discovery(): Readonly<{ candidateSha256: string; capabilitySha256: string; endpointReference: string; accountReference: string; credentialReference: string; model: string; modelVersion: string; profileId: string; priceCardId: string; priceCardSha256: string; freshUntilMs: number; lookupPolicy: "authoritative_original_operation_only" }>;
   dispatchCount(operationId: string): number;
   lookupCount(operationId: string): number;
 }>;
@@ -173,7 +173,7 @@ class NativeHttpModelGatewayImpl implements NativeHttpModelGateway {
 
   discovery() {
     const { capability } = this.#authorized;
-    return freeze({ candidateSha256: capability.candidateSha256, capabilitySha256: this.#authorized.capabilitySha256, endpointReference: capability.endpointReference, accountReference: capability.accountReference, credentialReference: this.#input.credentialReference, model: capability.model, modelVersion: capability.modelVersion, profileId: capability.profileId, priceCardId: capability.priceCardId, priceCardSha256: capability.priceCardSha256, lookupPolicy: "authoritative_original_operation_only" as const });
+    return freeze({ candidateSha256: capability.candidateSha256, capabilitySha256: this.#authorized.capabilitySha256, endpointReference: capability.endpointReference, accountReference: capability.accountReference, credentialReference: this.#input.credentialReference, model: capability.model, modelVersion: capability.modelVersion, profileId: capability.profileId, priceCardId: capability.priceCardId, priceCardSha256: capability.priceCardSha256, freshUntilMs: capability.freshUntilMs, lookupPolicy: "authoritative_original_operation_only" as const });
   }
   dispatchCount(operationId: string): number { return this.#dispatchCounts.get(operationId) ?? 0; }
   lookupCount(operationId: string): number { return this.#lookupCounts.get(operationId) ?? 0; }

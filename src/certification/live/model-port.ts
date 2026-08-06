@@ -53,7 +53,9 @@ export function createProtectedLiveModelPort(input: Readonly<{
       } catch {
         throw new Error("NATIVE_MODEL_AUTHORIZATION_INVALID");
       }
-      if (request.candidateSha256 !== candidateSha256 || request.providerCapabilitiesSha256 !== input.gateway.discovery().capabilitySha256) throw new Error("NATIVE_MODEL_AUTHORIZATION_MISMATCH");
+      const discovery = input.gateway.discovery();
+      if (now() >= discovery.freshUntilMs) throw new Error("NATIVE_MODEL_CAPABILITY_STALE");
+      if (request.candidateSha256 !== candidateSha256 || request.providerCapabilitiesSha256 !== discovery.capabilitySha256) throw new Error("NATIVE_MODEL_AUTHORIZATION_MISMATCH");
       const result = await input.reconciliation.reconcile(command);
       if (result.status !== "failed" || result.code !== "RECONCILED_RECEIPT_FOUND" || result.operationId !== command.operationId || input.gateway.dispatchCount(command.operationId) !== 1 || input.gateway.lookupCount(command.operationId) < 1) {
         throw new Error("NATIVE_MODEL_RECONCILIATION_BLOCKED");

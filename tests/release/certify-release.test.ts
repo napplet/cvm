@@ -42,3 +42,23 @@ test("one product command is registered without hand-authored certification inpu
   expect(packageJson.scripts?.["release:certify"]).toBe("bun scripts/certify-release.ts");
   expect(packageJson.scripts?.["release:certify"]).not.toContain("--registry");
 });
+
+test("documented no-env command reaches the candidate-bound authorization boundary", async () => {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "NAPPLET_CVM_RELEASE_WORKSPACE")) as Record<string, string>;
+  const child = Bun.spawn(["bun", "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--dry-run"], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
+  const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect(code).toBe(1);
+  expect(stderr).not.toContain("RELEASE_CERTIFICATION_USAGE");
+  const result = JSON.parse(stdout);
+  expect(result).toMatchObject({ status: "authorization_required", candidateSha256: expect.stringMatching(/^[a-f0-9]{64}$/), topologySha256: expect.stringMatching(/^[a-f0-9]{64}$/), stateSha256: expect.stringMatching(/^[a-f0-9]{64}$/), authorizationRequestSha256: expect.stringMatching(/^[a-f0-9]{64}$/) });
+  const status = await new ReleaseCertificationController({ candidatePath: "toolchains/candidates/initial.json", workspace: join(process.cwd(), ".runtime", "release-certification") }).status();
+  expect(status).toMatchObject({ state: { stateSha256: result.stateSha256, candidate: { candidateSha256: result.candidateSha256 } } });
+  expect(result.resumeStateSha256).toMatch(/^[a-f0-9]{64}$/);
+});
+
+test("workspace overrides are confined and status/resume remain candidate-bound", async () => {
+  const unsafe = Bun.spawn(["bun", "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--dry-run"], { cwd: process.cwd(), env: { ...process.env, NAPPLET_CVM_RELEASE_WORKSPACE: "/tmp/unsafe-release-workspace" }, stdout: "pipe", stderr: "pipe" });
+  const [unsafeCode, unsafeStdout, unsafeStderr] = await Promise.all([unsafe.exited, new Response(unsafe.stdout).text(), new Response(unsafe.stderr).text()]);
+  expect(unsafeCode).toBe(1);
+  expect(`${unsafeStdout}${unsafeStderr}`).toContain("RELEASE_CERTIFICATION_WORKSPACE_REJECTED");
+});

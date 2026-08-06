@@ -6,6 +6,12 @@ Use one command for a candidate:
 bun run release:certify -- --candidate <candidate.json>
 ```
 
+No workspace argument or environment variable is required: controller state is
+stored under the ignored repository-local `.runtime/release-certification`
+directory. `NAPPLET_CVM_RELEASE_WORKSPACE` is an optional platform override
+only when it is an absolute path within that controller-owned directory; paths
+outside it are rejected before controller processing.
+
 The command records a content-addressed state digest. A dry run performs only
 local discovery and cost/effect planning; it cannot provision, execute a
 protected suite, write protected evidence, finalize trust, promote, or clean

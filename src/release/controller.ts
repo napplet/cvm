@@ -191,6 +191,7 @@ export class ReleaseCertificationController {
     if (!pointer.success || pointer.data.pointerSha256 !== await digest(withoutDigest(pointer.data, "pointerSha256"))) throw new Error("RELEASE_CONTROLLER_POINTER_INVALID");
     const state = await this.#readState(pointer.data.stateSha256);
     if (state.candidate.candidateSha256 !== pointer.data.candidateSha256 || state.status !== "authorization_required" || !state.authorizationRequestSha256) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+    if ((await candidateIdentity(this.#candidatePath)).candidateSha256 !== state.candidate.candidateSha256) throw new Error("RELEASE_CONTROLLER_CANDIDATE_MISMATCH");
     const request = await this.#readRequest(state.authorizationRequestSha256);
     const expectedEffectPlanSha256 = await digest({
       version: 1,

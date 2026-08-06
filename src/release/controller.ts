@@ -108,6 +108,13 @@ async function candidateIdentity(path: string): Promise<CandidateIdentity> {
   };
 }
 
+/** Canonical candidate identity is shared with local, no-effect discovery so
+ * its redacted scope/cost descriptors are bound to the same bytes as the
+ * controller state and authorization request. */
+export async function releaseCandidateSha256(path: string): Promise<string> {
+  return (await candidateIdentity(path)).candidateSha256;
+}
+
 const defaultObservation = (provider: ReleaseProviderId): ProviderCapabilityObservation => ProviderCapabilityObservationSchema.parse({
   version: 1,
   provider,

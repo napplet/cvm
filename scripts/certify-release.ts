@@ -1,4 +1,4 @@
-import { ReleaseCertificationController, RELEASE_AUTHORIZATION_SHA256_ENV, RELEASE_WORKSPACE_ENV, runReleaseCertification } from "../src/release/controller";
+import { ReleaseCertificationController, RELEASE_AUTHORIZATION_SHA256_ENV, RELEASE_WORKSPACE_ENV, releaseCandidateSha256, runReleaseCertification } from "../src/release/controller";
 import { createNativeReleaseDiscoveryRegistry } from "../src/release/native-discovery";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -53,7 +53,12 @@ async function main(): Promise<number> {
     }
     const result = status
       ? await new ReleaseCertificationController({ candidatePath: candidatePath ?? canonicalCandidatePath, workspace }).status()
-      : await runReleaseCertification({ candidatePath, workspace, dryRun: true, ...(request || receipt ? {} : { providers: createNativeReleaseDiscoveryRegistry() }) });
+      : await runReleaseCertification({
+        candidatePath,
+        workspace,
+        dryRun: true,
+        providers: createNativeReleaseDiscoveryRegistry({ candidateSha256: await releaseCandidateSha256(candidatePath!) }),
+      });
     if (!result) {
       console.error("RELEASE_CONTROLLER_STATUS_UNAVAILABLE");
       return 1;

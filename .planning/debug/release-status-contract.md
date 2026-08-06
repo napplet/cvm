@@ -1,33 +1,32 @@
 ---
-status: resolved
+status: awaiting_human_verify
 trigger: "Diagnose and fix the blocking Plan 07-20 product CLI verification mismatch: bun run release:certify -- --status --require-state=authorization_required returns RELEASE_CERTIFICATION_ARGUMENT_REJECTED."
 created: 2026-08-06T17:14:49+01:00
-updated: 2026-08-06T17:46:30+01:00
+updated: 2026-08-06T18:08:00+01:00
 ---
 
 ## Current Focus
 <!-- OVERWRITE on each update - reflects NOW -->
 
-bug_class: "Bohrbug — the exact CLI input deterministically fails before status output."
-hypothesis: "scripts/certify-release.ts rejects --require-state=<state> in its local allowlist and independently rejects status without --candidate, even though the status controller can validate a candidate against its persisted canonical state."
-test: "Complete — the exact status command was run against the canonical local workspace after all automated verification."
-expecting: "Observed: redacted authorization_required status, no argument rejection, no provider call, and no effect path."
-next_action: "Complete — source/test, resolved debug artifact, and knowledge-base entry are committed; unrelated worktree files remain untouched."
+bug_class: "Bohrbug — both follow-on failures are deterministic CLI/test-selection contract mismatches."
+hypothesis: "Confirmed: the CLI discarded a successful explicit status assertion by returning the controller authorization-boundary code; Plan 07-20's literal filter selected no controller test names."
+test: "Completed: focused red/green/reversal testing, exact combined Plan verification, and the full Bun suite."
+expecting: "Await confirmation that the exact Plan command also succeeds in the caller's normal workflow; no provider or deployment effect is expected."
+next_action: "Await human verification of the exact Plan 07-20 command; if confirmed, archive this reopened debug session and append its follow-on prevention record."
 
 reasoning_checkpoint:
-  hypothesis: "The status contract fails because the script-level argument gate omits --require-state=<state> and applies its --candidate requirement before branching to the controller's read-only status path."
+  hypothesis: "A matching explicit status assertion returns exit 1 because the CLI unconditionally returns result.exitCode after proving equality, while the Plan test filter has no matching controller-test name."
   confirming_evidence:
-    - "The exact Plan 07-20 command reproducibly exits with RELEASE_CERTIFICATION_ARGUMENT_REJECTED."
-    - "scripts/certify-release.ts permits only --candidate, --resume, --dry-run, --status, --request, and --receipt, then rejects missing --candidate before calling status."
-    - "ReleaseCertificationController.status validates a supplied candidate hash against the immutable current pointer/state chain and only reads pointer, state, and authorization-request files."
-  falsification_test: "A pre-fix regression that seeds a valid local workspace and invokes the exact command would emit status JSON instead of RELEASE_CERTIFICATION_ARGUMENT_REJECTED if the parser were not the blocking boundary."
-  fix_rationale: "Recognize one exact status-only option, resolve the canonical default candidate only for status so the controller retains its existing hash binding, and compare requested/actual state after read-only status loading."
-  blind_spots: "The exact no-candidate contract only has a repository canonical candidate path today; caller-supplied candidate status behavior and all existing release CLI modes must be regression-tested after the minimal change."
+    - "The focused pre-fix CLI test observed matchingCode=1 after correct authorization_required JSON."
+    - "The exact Plan filter originally matched zero tests; after the pure named regression it selected and passed one test."
+    - "scripts/certify-release.ts returns result.exitCode immediately after the require-state mismatch guard."
+  falsification_test: "After the return guard, a matching --status --require-state=authorization_required must still exit 1, or a nonmatching/unasserted status must exit 0."
+  fix_rationale: "Returning 0 only after a supplied require-state has matched turns the assertion into a shell-success predicate without altering the controller's authorization_required state or ordinary status exit code."
+  blind_spots: "The release state vocabulary is not syntactically validated by the parser; an unknown value still reaches the read-only status path and fails as a mismatch, which is the required fail-closed behavior."
   candidate_causes:
-    - "code: parser allowlist and unconditional candidate validation disagree with the documented status contract."
-    - "config: an invalid or missing workspace could block a routed status call, but cannot produce the observed pre-workspace argument-rejected error."
-    - "data: an invalid pointer/state could block status validation, but cannot produce the observed pre-controller argument-rejected error."
-  and_gate: "no — the parser defect alone deterministically produces the reported error before workspace or persisted state are consulted."
+    - "code: the CLI discards its successful equality result and returns the controller boundary exit code"
+    - "test-contract: controller test names omit every literal alternative required by the Plan filter"
+  and_gate: "yes — the exact Plan command uses &&, so both independent defects must be corrected for it to complete."
 
 ## Symptoms
 <!-- Written during gathering, then IMMUTABLE -->
@@ -144,18 +143,71 @@ started: "Blocking Plan 07-20 verification; current implementation only permits 
   checked: "Planning-document commits and final worktree scope"
   found: "Resolved-session artifact committed as 0088534, knowledge-base entry committed as baacf82; remaining untracked files are pre-existing unrelated research cache, lockfile, and design evidence."
   implication: "The debug lifecycle is complete without staging or altering unrelated work."
+- timestamp: 2026-08-06T17:50:00+01:00
+  checked: "Follow-on Plan 07-20 verification report"
+  found: "A matching explicit --require-state assertion still returns the controller's authorization_required exit 1, preventing the plan's && chain; the exact controller test-name filter matches zero tests."
+  implication: "Reopen the same session for two deterministic, effect-free verification-contract defects."
+- timestamp: 2026-08-06T17:52:00+01:00
+  checked: "Exact combined Plan 07-20 verification"
+  found: "The first command emits correct authorization_required JSON but exits 1, so shell && prevents the controller test command from running."
+  implication: "The CLI must distinguish a matching explicit requirement from its ordinary nonzero authorization-boundary status."
+- timestamp: 2026-08-06T17:52:00+01:00
+  checked: "Exact Plan 07-20 controller test filter"
+  found: "The filter authorization receipt|changed scope|expired|cost ceiling matches zero tests in tests/release/controller.test.ts."
+  implication: "Relevant integrity coverage must be given names that match the documented verification command."
+- timestamp: 2026-08-06T17:52:00+01:00
+  checked: "Code graph and common-pattern classification"
+  found: "ReleaseCertificationController.status is a read-only controller method; the follow-ons match deterministic API/test-contract drift rather than provider, timing, or data corruption behavior."
+  implication: "Classify as a Bohrbug; no SBFL run is eligible because the reported failures are command-contract failures rather than a failing covered test pair."
+- timestamp: 2026-08-06T17:54:00+01:00
+  checked: "Complete release CLI and controller tests"
+  found: "scripts/certify-release.ts returns result.exitCode after matching require-state; the matching CLI regression currently asserts exit 1. Existing controller test names cover changed gcloud scope but no exact authorization receipt, changed scope, expired, or cost ceiling filter token."
+  implication: "The two failures are direct code/test-contract omissions, not state or provider behavior."
+- timestamp: 2026-08-06T17:56:00+01:00
+  checked: "Complete authorization request/receipt implementation and adjacent authorization tests"
+  found: "validateAuthorizationReceipt is a local schema/canonical-hash operation that rejects expiry at nowMs >= expiresAtMs and receipt changes with RELEASE_AUTHORIZATION_RECEIPT_INVALID; request scope or cost changes invalidate the request digest before any provider interaction."
+  implication: "One controller-file regression can cover receipt integrity, changed scope, expiry, and cost ceiling without constructing a provider registry or invoking an effect."
+- timestamp: 2026-08-06T17:58:00+01:00
+  checked: "Test-first regression patch"
+  found: "The CLI regression now specifies exit 0 for the exact matching assertion and preserves nonzero expectations for unasserted, mismatched, missing, and invalid states. A separately named controller regression checks local receipt integrity, changed scope, expiration, and cost ceiling tampering."
+  implication: "The planned tests distinguish the intended narrow success override from all fail-closed cases and make Plan 07-20's literal filter meaningful."
+- timestamp: 2026-08-06T18:00:00+01:00
+  checked: "Focused red phase and exact Plan controller filter"
+  found: "The matching CLI test fails with Expected: 0, Received: 1; the exact authorization receipt|changed scope|expired|cost ceiling filter selects one pure controller test and passes with five assertions."
+  implication: "The CLI root cause is confirmed by a specified failing oracle, and the test-filter defect is resolved without provider or deployment effects."
+- timestamp: 2026-08-06T18:01:00+01:00
+  checked: "Minimal production return-code patch"
+  found: "scripts/certify-release.ts now returns 0 only when status is true and an explicit requiredState has already passed the equality guard; all other modes retain result.exitCode."
+  implication: "The patch is limited to the shell assertion contract and cannot change controller state, authorization, provider, or effect behavior."
+- timestamp: 2026-08-06T18:02:00+01:00
+  checked: "Focused green phase and exact combined Plan 07-20 command"
+  found: "The CLI regression passes with 15 assertions; the exact combined command exits 0, emits authorization_required JSON, and runs the one selected no-effect controller regression successfully."
+  implication: "The matching shell predicate is fixed while the Plan filter now exercises receipt integrity, changed scope, expiry, and cost ceiling checks."
+- timestamp: 2026-08-06T18:04:00+01:00
+  checked: "Full Bun suite and scoped diff"
+  found: "bun test passes: 617 tests, 4,726 assertions, 0 failures; git diff --check is clean and the source/test diff consists of the one-line CLI guard plus targeted test additions."
+  implication: "The planned regression and surrounding project functionality pass; no whitespace, deletion-only, or out-of-scope production change is present."
+- timestamp: 2026-08-06T18:05:00+01:00
+  checked: "Focused regression with the production return guard reversed"
+  found: "The matching assertion returns to red with Expected: 0, Received: 1."
+  implication: "The return-code guard is necessary for the specified Plan shell-success behavior."
+- timestamp: 2026-08-06T18:06:00+01:00
+  checked: "Focused regression after reapplying the production return guard"
+  found: "The matching-assertion test passes: 1 test, 15 assertions, 0 failures."
+  implication: "The re-applied guard restores the specified success predicate and completes the causality check."
+- timestamp: 2026-08-06T18:08:00+01:00
+  checked: "Final exact combined Plan 07-20 command and worktree scope"
+  found: "The combined command exits 0, prints redacted authorization_required status JSON, and runs the one selected controller integrity regression. git diff --check is clean; only the assigned script/test files and reopened debug record are in scope."
+  implication: "All automated fix-acceptance signals pass without provider, deployment, credential, or network activity; retain human confirmation before archiving."
 
 ## Resolution
 <!-- OVERWRITE as understanding evolves -->
 
-root_cause: "The release-certification CLI parser drifted from Plan 07-20: it rejects --require-state=<state> and requires --candidate before entering the read-only status branch, so the specified status verification cannot reach the controller."
-fix: "Added strict status-only --require-state=<state> parsing, a canonical repository candidate fallback only when --status omits --candidate, and a pre-output state mismatch guard. Non-status modes still require --candidate and status retains controller hash binding."
-verification:
-  target_test: { result: pass, command: "bun test tests/release/certify-release.test.ts --test-name-pattern='status accepts the documented require-state contract'" }
-  mutation_check: { result: skipped, reason_if_skipped: "No Stryker/mutation configuration or package script is present." }
-  no_op_deletion: { result: pass, deletion_justified_by_rca: true, evidence: "Scoped diff adds strict parsing, canonical candidate fallback, mismatch guard, and regression coverage; git diff --check passes." }
-  adjacent_tests: { result: pass, suites_run: ["bun test tests/release/certify-release.test.ts", "bun test tests/release/controller.test.ts", "bun test"] }
-  revert_and_reconfirm: { result: pass, bug_returned_on_revert: true, fixed_on_reapply: true }
-  guardrail_verdict: accepted
-files_changed: ["scripts/certify-release.ts", "tests/release/certify-release.test.ts"]
-oracle_type: "specified — Plan 07-20 explicitly requires the exact status command and the controller contract requires a state mismatch to fail closed."
+root_cause: "scripts/certify-release.ts unconditionally returns the controller's nonzero authorization-boundary exit code after a successful explicit --require-state equality check; tests/release/controller.test.ts had no test name selected by Plan 07-20's required filter."
+fix: "Return exit 0 only for a status invocation with an explicit --require-state that already matched; add a pure controller-file authorization receipt integrity regression whose name satisfies the documented Plan filter; expand the CLI regression to cover matching, unasserted, mismatch, missing, and invalid cases."
+verification: "guardrail_verdict: accepted; specified-oracle red/green test passed (1 test, 15 assertions); exact combined Plan command passed; controller filter selected the local integrity test (1 test, 5 assertions); full bun test passed (617 tests, 4,726 assertions); reverting the one-line guard restored the original failure and reapplying restored success; git diff --check passed; mutation testing is unavailable because no mutation configuration/script exists; TypeScript compiler binary is unavailable in node_modules."
+files_changed:
+  - "scripts/certify-release.ts"
+  - "tests/release/certify-release.test.ts"
+  - "tests/release/controller.test.ts"
+oracle_type: "specified"

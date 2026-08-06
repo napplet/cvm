@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 22
+open_count: 23
 waived_count: 0
 fixed_count: 0
-total_count: 22
-last_updated: 2026-08-06T12:18:20.750Z
+total_count: 23
+last_updated: 2026-08-06T14:38:44.092Z
 ---
 
 # Broken Windows Ledger
@@ -37,6 +37,7 @@ last_updated: 2026-08-06T12:18:20.750Z
 | 20 | 07 | deviation | tests/contextvm/adapter.test.ts |  | ContextVM transport fake now returns a canonical SHA-256-shaped invocation hash required by strict admission validation. | open |  | 2026-08-05T20:23:59.583Z |  |
 | 21 | 07 | deviation | scripts/verify-phase-07-otel-packages.ts |  | Allowed only the exact candidate-only command manifest alongside the prior approved root manifest; other input drift remains blocked. | open |  | 2026-08-06T12:14:09.784Z |  |
 | 22 | 07 | deviation | scripts/certify-release.ts |  | Added an ignored controller-owned default workspace so the documented candidate-only command reaches authorization_required without environment setup. | open |  | 2026-08-06T12:18:20.750Z |  |
+| 23 | 07 | deviation | .planning/phases/07-admission-slo-resilience-launch-safety/07-32-PLAN.md |  | Plan referenced renamed worker and live-admission test paths; current equivalent contracts were verified. | open |  | 2026-08-06T14:38:44.092Z |  |
 
 ````json
 [
@@ -302,6 +303,18 @@ last_updated: 2026-08-06T12:18:20.750Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-06T12:18:20.750Z",
+    "resolved_at": null
+  },
+  {
+    "id": 23,
+    "kind": "deviation",
+    "phase": "07",
+    "file": ".planning/phases/07-admission-slo-resilience-launch-safety/07-32-PLAN.md",
+    "line": null,
+    "description": "Plan referenced renamed worker and live-admission test paths; current equivalent contracts were verified.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-06T14:38:44.092Z",
     "resolved_at": null
   }
 ]

@@ -7,28 +7,44 @@ export const RELEASE_PROVIDER_IDS = [
   "promoted_cli", "upload", "owner_relay", "attestation_relay",
 ] as const;
 
-export type ReleaseTopologyQuantity = Readonly<{ provider: typeof RELEASE_PROVIDER_IDS[number]; unit: string; quantityNanos: bigint; headroomBasisPoints: number }>;
-export type ReleaseTopologyQuantityObservation = Readonly<{ provider: typeof RELEASE_PROVIDER_IDS[number]; unit: string; quantityNanos: string; headroomBasisPoints: number }>;
+export type ReleaseTopologyQuantity = Readonly<{
+  provider: typeof RELEASE_PROVIDER_IDS[number];
+  /** Stable, topology-owned allocation key. Catalogs cannot create one. */
+  componentId: string;
+  /** A deployment region or an explicit non-regional scope such as nam4/global. */
+  region: string;
+  unit: string;
+  quantityNanos: bigint;
+  headroomBasisPoints: number;
+}>;
+export type ReleaseTopologyQuantityObservation = Readonly<Omit<ReleaseTopologyQuantity, "quantityNanos"> & { quantityNanos: string }>;
 
-/** All quantities are mechanical bounds, never a price-derived or uniform map.
- * Worker prices are per 100 seconds so decimal official rates remain exact USD micros. */
+const component = (provider: ReleaseTopologyQuantity["provider"], componentId: string, region: string, unit: string, quantityNanos: bigint, headroomBasisPoints: number): ReleaseTopologyQuantity =>
+  Object.freeze({ provider, componentId, region, unit, quantityNanos, headroomBasisPoints });
+
+/** Every paid allocation is explicit. The 16 public authorization families are
+ * derived only after checked aggregation of this ordered contract. */
 export const RELEASE_TOPOLOGY_QUANTITY_CONTRACT: readonly ReleaseTopologyQuantity[] = Object.freeze([
-  { provider: "cloud_run", unit: "worker-second", quantityNanos: 5_400_000_000_000n, headroomBasisPoints: 1_000 },
-  { provider: "gcs", unit: "gibibyte-day", quantityNanos: 900_000_000_000n, headroomBasisPoints: 1_000 },
-  { provider: "collector", unit: "worker-second", quantityNanos: 1_800_000_000_000n, headroomBasisPoints: 1_000 },
-  { provider: "cloud_sql_postgres", unit: "database-second", quantityNanos: 900_000_000_000n, headroomBasisPoints: 1_000 },
-  { provider: "modal", unit: "worker-100-seconds", quantityNanos: 18_000_000_000n, headroomBasisPoints: 1_000 },
-  { provider: "fly", unit: "worker-100-seconds", quantityNanos: 18_000_000_000n, headroomBasisPoints: 1_000 },
-  { provider: "contextvm", unit: "operation", quantityNanos: 1_000_000_000n, headroomBasisPoints: 0 },
-  { provider: "cep8_lightning", unit: "operation", quantityNanos: 2_000_000_000n, headroomBasisPoints: 1_000 },
-  { provider: "cashu", unit: "operation", quantityNanos: 2_000_000_000n, headroomBasisPoints: 1_000 },
-  { provider: "model", unit: "operation", quantityNanos: 4_000_000_000n, headroomBasisPoints: 1_000 },
-  { provider: "compatible_host", unit: "operation", quantityNanos: 2_000_000_000n, headroomBasisPoints: 0 },
-  { provider: "signer", unit: "operation", quantityNanos: 1_000_000_000n, headroomBasisPoints: 0 },
-  { provider: "promoted_cli", unit: "operation", quantityNanos: 2_000_000_000n, headroomBasisPoints: 0 },
-  { provider: "upload", unit: "operation", quantityNanos: 2_000_000_000n, headroomBasisPoints: 0 },
-  { provider: "owner_relay", unit: "operation", quantityNanos: 2_000_000_000n, headroomBasisPoints: 0 },
-  { provider: "attestation_relay", unit: "operation", quantityNanos: 2_000_000_000n, headroomBasisPoints: 0 },
+  component("cloud_run", "cloud_run.europe-west1.cpu", "europe-west1", "worker-second", 2_700_000_000_000n, 1_000),
+  component("cloud_run", "cloud_run.us-central1.cpu", "us-central1", "worker-second", 2_700_000_000_000n, 1_000),
+  component("gcs", "gcs.nam4.storage", "nam4", "gibibyte-day", 900_000_000_000n, 1_000),
+  component("gcs", "gcs.nam4.operations", "nam4", "operation", 60_000_000_000n, 1_000),
+  component("collector", "collector.europe-west1.cpu", "europe-west1", "worker-second", 900_000_000_000n, 1_000),
+  component("collector", "collector.us-central1.cpu", "us-central1", "worker-second", 900_000_000_000n, 1_000),
+  component("cloud_sql_postgres", "cloud_sql_postgres.europe-west1.ha", "europe-west1", "database-second", 450_000_000_000n, 1_000),
+  component("cloud_sql_postgres", "cloud_sql_postgres.us-central1.ha", "us-central1", "database-second", 450_000_000_000n, 1_000),
+  component("modal", "modal.global", "global", "worker-100-seconds", 18_000_000_000n, 1_000),
+  component("fly", "fly.global", "global", "worker-100-seconds", 18_000_000_000n, 1_000),
+  component("contextvm", "contextvm.global", "global", "operation", 1_000_000_000n, 0),
+  component("cep8_lightning", "cep8_lightning.global", "global", "operation", 2_000_000_000n, 1_000),
+  component("cashu", "cashu.global", "global", "operation", 2_000_000_000n, 1_000),
+  component("model", "model.global", "global", "operation", 4_000_000_000n, 1_000),
+  component("compatible_host", "compatible_host.global", "global", "operation", 2_000_000_000n, 0),
+  component("signer", "signer.global", "global", "operation", 1_000_000_000n, 0),
+  component("promoted_cli", "promoted_cli.global", "global", "operation", 2_000_000_000n, 0),
+  component("upload", "upload.global", "global", "operation", 2_000_000_000n, 0),
+  component("owner_relay", "owner_relay.global", "global", "operation", 2_000_000_000n, 0),
+  component("attestation_relay", "attestation_relay.global", "global", "operation", 2_000_000_000n, 0),
 ]);
 
 const COLLECTOR_IMAGE = "otel/opentelemetry-collector@sha256:6ed874ea083d67a3085acfc75343f2ad11d9abe6006d7ea4a16e2dba9af14e49";
@@ -40,26 +56,20 @@ async function digest(value: unknown): Promise<string> {
 
 /** Desired topology is owned by the project. Candidate bytes bind it, but never select it. */
 export async function deriveReleaseTopology(candidateSha256: string): Promise<ReleaseTopologyObservation> {
+  const quantityContract = RELEASE_TOPOLOGY_QUANTITY_CONTRACT.map((line) => ({ ...line, quantityNanos: line.quantityNanos.toString() }));
   const base = {
     version: 1 as const,
     candidateSha256,
-    controlPlane: {
-      regions: ["europe-west1", "us-central1"] as [string, string],
-      minimumInstancesPerRegion: 3 as const,
-      collectorImage: COLLECTOR_IMAGE,
-    },
+    controlPlane: { regions: ["europe-west1", "us-central1"] as [string, string], minimumInstancesPerRegion: 3 as const, collectorImage: COLLECTOR_IMAGE },
     objectStore: { dualRegion: "nam4", versioning: true as const, retentionDays: 30 as const },
     database: { authority: "cloud_sql_postgres" as const, serializable: true as const },
     workerCandidates: ["modal", "fly"] as ["modal", "fly"],
     integrations: ["contextvm", "cep8_lightning", "cashu", "model", "compatible_host", "signer", "promoted_cli", "upload", "owner_relay", "attestation_relay"] as const,
-    quantityContract: RELEASE_TOPOLOGY_QUANTITY_CONTRACT.map((line) => ({ ...line, quantityNanos: line.quantityNanos.toString() })),
+    quantityContract,
   };
   const topologySha256 = await digest(base);
   const { quantityContract: _quantityContract, ...schemaInput } = base;
   const parsed = ReleaseTopologyObservationSchema.parse({ ...schemaInput, topologySha256 });
-  const quantityContract: readonly ReleaseTopologyQuantityObservation[] = Object.freeze(RELEASE_TOPOLOGY_QUANTITY_CONTRACT.map((line) => Object.freeze({ ...line, quantityNanos: line.quantityNanos.toString() })));
-  /** Retain the contract for local request construction without widening the
-   * strict persisted topology record consumed by older controller paths. */
-  Object.defineProperty(parsed, "quantityContract", { value: quantityContract, enumerable: false, configurable: false, writable: false });
+  Object.defineProperty(parsed, "quantityContract", { value: Object.freeze(quantityContract.map(Object.freeze)), enumerable: false, configurable: false, writable: false });
   return Object.freeze(parsed) as ReleaseTopologyObservation & Readonly<{ quantityContract: readonly ReleaseTopologyQuantityObservation[] }>;
 }

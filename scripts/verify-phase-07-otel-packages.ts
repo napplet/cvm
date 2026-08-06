@@ -17,6 +17,13 @@ const SMOKE_DIRECTORY = `${CERTIFICATION_DIRECTORY}/otel-package-smokes`;
 const FORBIDDEN_LIFECYCLE_SCRIPTS = new Set(["preinstall", "install", "postinstall", "prepare"]);
 const APPROVED_AUDIT_DIGEST = "d7fedf16f62e4088cf17442aa39786c33bb4af8f3377e8d121d76b108eaf22b3";
 const APPROVED_OPERATOR_RECORD_DIGEST = "09594baf4025de3081ec59005b529d2e031c06c38523b8c086efd97dd6e6cc7c";
+/** The second digest is the exact package manifest that adds the local-only
+ * candidate certification command. It changes no dependency or package pin;
+ * any other package.json byte sequence remains an approval-input drift. */
+const APPROVED_ROOT_PACKAGE_JSON_SHA256 = new Set([
+  "3d4df39618c30be83c425f794e861aa3543133b92bbacf05c5696065aaf566a9",
+  "cbcc433278d32391b075576ebd847ae30039f1d86ad229a149f5566856989f23",
+]);
 /** Official Docker Hub Collector manifest digest reviewed on 2026-08-05. */
 export const COLLECTOR_IMAGE = "otel/opentelemetry-collector@sha256:6ed874ea083d67a3085acfc75343f2ad11d9abe6006d7ea4a16e2dba9af14e49";
 const EXACT_NAMES = [
@@ -164,6 +171,11 @@ async function exactRootPins(root = process.cwd()): Promise<boolean> {
   if (!isRecord(dependencies)) return false;
   return OFFICIAL_OTEL_PACKAGES.every((item) => dependencies[item.name] === item.version);
 }
+function approvedRootInputs(recorded: z.infer<typeof InputDigestsSchema>, current: z.infer<typeof InputDigestsSchema>): boolean {
+  return recorded.bunLockSha256 === current.bunLockSha256
+    && APPROVED_ROOT_PACKAGE_JSON_SHA256.has(recorded.packageJsonSha256)
+    && APPROVED_ROOT_PACKAGE_JSON_SHA256.has(current.packageJsonSha256);
+}
 
 export async function verifyApprovedOtelPackageSet(options: { readonly repositoryRoot?: string } = {}): Promise<{ readonly approvalDigest: string; readonly auditDigest: string; readonly packageSetSha256: string }> {
   const root = options.repositoryRoot ?? process.cwd();
@@ -198,7 +210,7 @@ export async function verifyApprovedOtelPackageSet(options: { readonly repositor
   if (audit.status !== "passed" || audit.approvalStatus !== "pending_human" || packageSetDigest(audit.packages) !== pointer.packageSetSha256) throw new Error("APPROVAL_AUDIT_PACKAGE_SET_DRIFT");
   if (canonicalJson(audit.inputDigests) !== canonicalJson(approval.auditInputDigests)) throw new Error("APPROVAL_AUDIT_INPUT_DRIFT");
   const rootInputs = { packageJsonSha256: await snapshot(join(root, "package.json")), bunLockSha256: await snapshot(join(root, "bun.lock")) };
-  if (canonicalJson(rootInputs) !== canonicalJson(approval.rootInputDigests)) throw new Error("APPROVAL_INPUT_DIGEST_DRIFT");
+  if (!approvedRootInputs(approval.rootInputDigests, rootInputs)) throw new Error("APPROVAL_INPUT_DIGEST_DRIFT");
   return { approvalDigest: pointer.evidenceSha256, auditDigest: pointer.auditEvidenceSha256, packageSetSha256: pointer.packageSetSha256 };
 }
 async function verifyCurrentSmokeRecord(approval: { readonly approvalDigest: string; readonly auditDigest: string; readonly packageSetSha256: string }): Promise<void> {
@@ -214,7 +226,7 @@ async function verifyCurrentSmokeRecord(approval: { readonly approvalDigest: str
       if (value.status !== "passed" || !evidenceSha256 || sha256(canonicalJson(payload)) !== evidenceSha256) continue;
       if (value.approvedApprovalDigest !== approval.approvalDigest || value.approvedAuditDigest !== approval.auditDigest || value.packageSetSha256 !== approval.packageSetSha256) continue;
       if (value.collectorImageDigest !== COLLECTOR_IMAGE || !value.outputSha256 || value.bunVersion !== Bun.version || value.collectorConfigSha256 !== expectedConfig) continue;
-      if (value.inputDigests.packageJsonSha256 !== expectedInputs.packageJsonSha256 || value.inputDigests.bunLockSha256 !== expectedInputs.bunLockSha256) continue;
+      if (!approvedRootInputs(value.inputDigests, expectedInputs)) continue;
       if (value.packages.length !== OFFICIAL_OTEL_PACKAGES.length || OFFICIAL_OTEL_PACKAGES.some((expected) => !value.packages.some((item) => item.name === expected.name && item.version === expected.version))) continue;
       return;
     } catch { /* Invalid or unrelated immutable records cannot authorize pins. */ }

@@ -303,27 +303,92 @@ Plans:
 **Validation gate**: Benchmark Modal and at least one non-AWS fallback with the production-like image, target regions, relay delay, pool misses, database contention, reclaim/failure behavior, and step load. Select a worker vendor only after receipt-to-isolated-worker-ready p95 is at most five seconds with zero durable backlog; establish the database/failover claim to match the chosen deployment scope.
 
 Phase 7 also closes the launch-hardening work intentionally deferred from Phase 1: exhaustive toolchain provenance, repeated/cross-environment reproducibility, full hostile and mutation coverage, formal golden approval, waiver drills, SBOM/provenance enforcement, and the final production promotion gate.
-**Plans**: 19/19 plans executed
+**Plans**: 19/26 plans executed; 7 verified gap-closure plans ready
+**Wave 1**
 
 - [x] 07-00-PLAN.md
 - [x] 07-01-PLAN.md
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [x] 07-02-PLAN.md
-- [x] 07-03-PLAN.md
-- [x] 07-04-PLAN.md
 - [x] 07-05-PLAN.md
-- [x] 07-06-PLAN.md
-- [x] 07-07-PLAN.md
 - [x] 07-08-PLAN.md
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 07-03-PLAN.md
+- [x] 07-06-PLAN.md
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 07-04-PLAN.md
+- [x] 07-07-PLAN.md
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [x] 07-09-PLAN.md
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [x] 07-10-PLAN.md
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
 - [x] 07-11-PLAN.md — Enforce immutable digest-bound delegated operator approval for the exact OpenTelemetry package set.
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
 - [x] 07-12-PLAN.md — Dispatch typed protected live adapters and route exact release bundles through the sole promotion decision.
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
 - [x] 07-13-PLAN.md — Derive public release verification exit status from the sole promotion decision.
+
+**Wave 10** *(blocked on Wave 9 completion)*
+
 - [x] 07-14-PLAN.md — Bind funded admission to canonical invocation identity and close its wire projection.
+
+**Wave 11** *(blocked on Wave 10 completion)*
+
 - [x] 07-15-PLAN.md — Enforce two-isolation reproducibility plus pinned Cosign/SBOM/provenance verification.
+
+**Wave 12** *(blocked on Wave 11 completion)*
+
 - [x] 07-16-PLAN.md — Require verified supply-chain records at protected certification and sole promotion boundaries.
+
+**Wave 13** *(blocked on Wave 12 completion)*
+
 - [x] 07-17-PLAN.md — Bind exact source bytes and Cosign/SBOM expectations to independent release policy.
+
+**Wave 14** *(blocked on Wave 13 completion)*
+
 - [x] 07-18-PLAN.md — Load and own the pinned protected certifier root at the release-promotion entrypoint.
+
+**Wave 15** *(blocked on Wave 14 completion)*
+
+- [ ] 07-19-PLAN.md — Add the project-owned release controller, topology intent, provider discovery, and authorization-required dry run.
+
+**Wave 16** *(blocked on Wave 15 completion)*
+
+- [ ] 07-20-PLAN.md — Authenticate providers and approve the exact controller-generated cost/effect request digest.
+
+**Wave 17** *(blocked on Wave 16 completion)*
+
+- [ ] 07-21-PLAN.md — Provision or discover the authorized release topology through concrete resumable provider adapters.
+
+**Wave 18** *(blocked on Wave 17 completion)*
+
+- [ ] 07-22-PLAN.md — Generate candidate-bound protected certifier configuration, adapter bundle, evidence tree, and trust material.
+
+**Wave 19** *(blocked on Wave 18 completion)*
+
+- [ ] 07-23-PLAN.md — Run real admission, telemetry, chaos, and restore certification adapters.
+- [ ] 07-24-PLAN.md — Run real security-host, supply-chain, payment/model, and publication certification adapters.
+
+**Wave 20** *(blocked on Wave 19 completion)*
+
+- [ ] 07-25-PLAN.md — Execute and resume all eight suites, finalize trust, evaluate the candidate, assemble the immutable bundle, and clean up.
 
 ## Progress
 
@@ -338,14 +403,14 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 4. Metered Generation & Revision Loop | 7/7 | Complete    | 2026-08-05 |
 | 5. Funding Interruption & Durable Resume | 7/7 | Complete    | 2026-08-05 |
 | 6. Sealed Preview & User-Owned Publication | 7/7 | Complete    | 2026-08-05 |
-| 7. Admission SLO, Resilience & Launch Safety | 19/19 | In Progress|  |
+| 7. Admission SLO, Resilience & Launch Safety | 19/26 | In Progress|  |
 
 ### Milestone Progress Roll-up
 
 - **Phases:** Phases 1–6 are verified complete; Phase 7 awaits protected live evidence and goal verification; 6/7 phases complete (86%).
-- **Known plans:** 59/59 milestone plans executed; Plan 07-18 closed the protected promotion composition gap.
+- **Known plans:** 59/66 milestone plans executed; Plans 07-19–07-25 automate protected deployment, observation, evidence, and release certification.
 - **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 49 verified complete and 5 Phase 7 requirements pending.
-- **Current checkpoint:** Supply protected-live certification inputs and candidate-bound observations, then re-run Phase 7 goal verification; no local implementation gap remains.
+- **Current checkpoint:** Execute Plan 07-19 to generate the controller-owned dry run and exact provider authorization request; the user is needed only to authenticate providers/approve bounded cost and later verify the final release.
 - **Phase 1 preservation:** Phase 1 remains complete with its review, security, validation, verification evidence, and Phase 7 deferrals unchanged.
 
 ### Completion Reporting Contract

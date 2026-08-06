@@ -4,15 +4,15 @@ milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
 current_phase: 7
 current_phase_name: Admission SLO, Resilience & Launch Safety
-status: awaiting_external_evidence
-stopped_at: All local Phase 7 work complete; protected-live certification evidence unavailable
+status: ready_to_execute
+stopped_at: Phase 7 gap-closure plans 07-19 through 07-25 verified; ready to execute Plan 07-19
 last_updated: "2026-08-06T09:09:07Z"
 last_activity: 2026-08-06
-last_activity_desc: Completed quick task 260806-dxc; local testing now uses authority-free product-level certifier configuration
+last_activity_desc: Planned and independently verified controller-owned protected certification automation
 progress:
   total_phases: 7
   completed_phases: 6
-  total_plans: 59
+  total_plans: 66
   completed_plans: 59
   percent: 86
 ---
@@ -30,20 +30,20 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 7 — Admission SLO, Resilience & Launch Safety
-Plan: 19 of 19
-Status: All local plans and source-measurement closure complete; awaiting protected-live certification evidence
-Last activity: 2026-08-06 — Local testing configuration added without changing the protected-live Phase 7 checkpoint
+Plan: 19 of 26
+Status: Seven verified gap-closure plans are ready; execution starts with the no-credential controller and authorization-request path
+Last activity: 2026-08-06 — Plans 07-19 through 07-25 added and independently verified
 
-Plan execution: [██████████] 100%; Phase verification remains pending
+Plan execution: [█████████░] 59/66 milestone plans complete; Phase verification remains pending
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 59/59 known milestone plans executed; no local phase plan remains.
+- Plans: 59/66 milestone plans executed; seven Phase 7 automation plans remain.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Next checkpoint: run the configured protected certification profile with trusted adapters, scoped credentials, and candidate-bound live observations; then re-run Phase 7 verification.
+- Next checkpoint: execute Plan 07-19 to generate the controller-owned dry run and exact provider authorization request; protected execution resumes after that single authorization checkpoint.
 
 ## Performance Metrics
 

@@ -2,7 +2,7 @@
 status: resolved
 trigger: "Diagnose and fix the blocking Plan 07-20 product CLI verification mismatch: bun run release:certify -- --status --require-state=authorization_required returns RELEASE_CERTIFICATION_ARGUMENT_REJECTED."
 created: 2026-08-06T17:14:49+01:00
-updated: 2026-08-06T17:45:00+01:00
+updated: 2026-08-06T17:46:30+01:00
 ---
 
 ## Current Focus
@@ -12,7 +12,7 @@ bug_class: "Bohrbug — the exact CLI input deterministically fails before statu
 hypothesis: "scripts/certify-release.ts rejects --require-state=<state> in its local allowlist and independently rejects status without --candidate, even though the status controller can validate a candidate against its persisted canonical state."
 test: "Complete — the exact status command was run against the canonical local workspace after all automated verification."
 expecting: "Observed: redacted authorization_required status, no argument rejection, no provider call, and no effect path."
-next_action: "Commit the resolved debug artifact and knowledge-base entry; MemPalace indexing is skipped because the feature is disabled and its CLI is unavailable."
+next_action: "Complete — source/test, resolved debug artifact, and knowledge-base entry are committed; unrelated worktree files remain untouched."
 
 reasoning_checkpoint:
   hypothesis: "The status contract fails because the script-level argument gate omits --require-state=<state> and applies its --candidate requirement before branching to the controller's read-only status path."
@@ -140,6 +140,10 @@ started: "Blocking Plan 07-20 verification; current implementation only permits 
   checked: "Atomic source/test commit and MemPalace availability"
   found: "Commit be459d8 contains only scripts/certify-release.ts and tests/release/certify-release.test.ts; MemPalace is disabled in planning config and its CLI is unavailable."
   implication: "The code fix is committed independently; durable knowledge-base append is the retained recurrence memory."
+- timestamp: 2026-08-06T17:46:30+01:00
+  checked: "Planning-document commits and final worktree scope"
+  found: "Resolved-session artifact committed as 0088534, knowledge-base entry committed as baacf82; remaining untracked files are pre-existing unrelated research cache, lockfile, and design evidence."
+  implication: "The debug lifecycle is complete without staging or altering unrelated work."
 
 ## Resolution
 <!-- OVERWRITE as understanding evolves -->

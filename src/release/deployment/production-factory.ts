@@ -1,8 +1,12 @@
 import type { ReleaseExecutionSession } from "../controller";
 import type { ReleaseExecutionFactoryInput } from "../production-execution";
-import { RELEASE_PRODUCTION_PROVIDER_IDS, createNativeReleaseProviderRegistry } from "../native-registry";
+import { RELEASE_PRODUCTION_PROVIDER_IDS } from "../native-registry";
 import { PROTECTED_SUITES } from "../../certification/runner";
 import { createDeploymentReleaseExecutionSession, type DeploymentFactoryRuntime } from "./factory";
+import {
+  isProductionOperationalDependencies,
+  type ProductionOperationalDependencies,
+} from "./production-dependencies";
 
 /**
  * Names are controller-owned opaque locators, never environment variable names
@@ -40,62 +44,35 @@ export type ProductionFactoryReadiness = Readonly<{
   blockers: readonly string[];
 }>;
 
-function configured(input: ReleaseExecutionFactoryInput, provider: string): boolean {
-  const names: Readonly<Record<string, readonly string[]>> = {
-    cloud_run: ["googleApplicationDefaultCredentials"],
-    gcs: ["googleApplicationDefaultCredentials"],
-    collector: ["googleApplicationDefaultCredentials"],
-    cloud_sql_postgres: ["googleApplicationDefaultCredentials"],
-    modal: ["modalApiAccess"], fly: ["flyApiAccess"], contextvm: ["contextVmServiceKey"],
-    cep8_lightning: ["nwcLightningConnection"], cashu: ["cashuFundedWallet"], model: ["vertexModelCredential"],
-    compatible_host: ["compatibleHostAccess"], signer: [], promoted_cli: [], upload: [], owner_relay: [], attestation_relay: ["attestationRelayKey"],
-  };
-  return (names[provider] ?? []).every((name) => typeof input.deploymentConfig.secretReferences[name] === "string");
-}
-
 /** Finite, authority-free readiness is used before the approval review. */
-export function assessProductionFactoryReadiness(input: ReleaseExecutionFactoryInput): ProductionFactoryReadiness {
+export function assessProductionFactoryReadiness(input: ReleaseExecutionFactoryInput, dependencies?: unknown): ProductionFactoryReadiness {
   const blockers = [
     ...PRODUCTION_FACTORY_SECRET_REFERENCE_NAMES.filter((name) => !(name in input.deploymentConfig.secretReferences)).map((name) => `SECRET_REFERENCE_REQUIRED:${name}`),
     ...(input.deploymentConfig.publicSettings.regions.length < 2 ? ["REGION_TOPOLOGY_REQUIRED"] : []),
-    "AUTHORIZED_EXECUTION_PORTS_REQUIRED",
+    ...(dependencies === undefined ? ["AUTHORIZED_EXECUTION_PORTS_REQUIRED"] : !isProductionOperationalDependencies(dependencies) ? ["PRODUCTION_OPERATIONAL_DEPENDENCIES_INVALID"] : []),
   ];
   return Object.freeze({ ready: blockers.length === 0, blockers: Object.freeze(blockers) });
 }
 
-function runtime(input: ReleaseExecutionFactoryInput): DeploymentFactoryRuntime {
-  const registry = createNativeReleaseProviderRegistry({
-    candidateSha256: input.candidateSha256,
-    providers: Object.fromEntries(RELEASE_PRODUCTION_PROVIDER_IDS.map((provider) => [provider, Object.freeze({
-      async discoverCapabilities() { return Object.freeze({ capability: "available" as const }); },
-      async discoverAuthentication() {
-        return Object.freeze({ authentication: configured(input, provider) ? "authorized" as const : "not_configured" as const });
-      },
-      async plan() { throw new Error("PRODUCTION_FACTORY_APPROVAL_REQUIRED"); },
-      async apply() { throw new Error("PRODUCTION_FACTORY_APPROVAL_REQUIRED"); },
-      async observe() { throw new Error("PRODUCTION_FACTORY_APPROVAL_REQUIRED"); },
-      async cleanup() { throw new Error("PRODUCTION_FACTORY_APPROVAL_REQUIRED"); },
-    })])) as never,
-  });
+function runtime(dependencies: ProductionOperationalDependencies): DeploymentFactoryRuntime {
   return Object.freeze({
-    registry,
-    async prepareAuthorizedExecution() {
-      throw new Error("PRODUCTION_FACTORY_EXECUTION_PORTS_REQUIRED");
-    },
+    registry: dependencies.registry,
+    prepareAuthorizedExecution: dependencies.prepareAuthorizedExecution,
   });
 }
 
 /**
  * This composes the sole pre-approval session. Construction has no transport,
  * model, wallet, signer, browser, CLI, relay, or provider invocation. Effect
- * methods are intentionally unreachable until Plan 07-26 supplies the
- * receipt-bound operational ports.
+ * methods remain unreachable until a receipt-bound, project-owned dependency
+ * graph is supplied. Construction itself remains effect-free.
  */
-export function createProductionReleaseExecutionSession(input: ReleaseExecutionFactoryInput): ReleaseExecutionSession {
-  const readiness = assessProductionFactoryReadiness(input);
+export function createProductionReleaseExecutionSession(input: ReleaseExecutionFactoryInput, dependencies?: unknown): ReleaseExecutionSession {
+  const readiness = assessProductionFactoryReadiness(input, dependencies);
   if (!readiness.ready) throw new Error(`PRODUCTION_FACTORY_READINESS_BLOCKED:${readiness.blockers.join(",")}`);
   if (Object.keys(input.deploymentConfig.secretReferences).some((name) => !REQUIRED.has(name))) {
     throw new Error("PRODUCTION_FACTORY_SECRET_REFERENCE_SET_INVALID");
   }
-  return createDeploymentReleaseExecutionSession(input, runtime(input));
+  if (!isProductionOperationalDependencies(dependencies)) throw new Error("PRODUCTION_FACTORY_OPERATIONAL_DEPENDENCIES_REQUIRED");
+  return createDeploymentReleaseExecutionSession(input, runtime(dependencies));
 }

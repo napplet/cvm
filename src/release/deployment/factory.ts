@@ -12,6 +12,7 @@ import type { createCompatibleHostDeploymentClient } from "./compatible-host-cli
 import type { createNip46DeploymentClient } from "./nip46-signer-client";
 import type { createCliUploadDeploymentClients } from "./cli-upload-clients";
 import type { createRelayDeploymentClients } from "./relay-clients";
+import type { ProductionOperationalDependencies } from "./production-dependencies";
 
 /** Bounded dependency descriptors for the concrete provider modules.  They are
  * references only: the pinned factory must receive them explicitly and cannot
@@ -147,6 +148,6 @@ export function createDeploymentReleaseExecutionSession(
  * Dynamic production loading reaches this named entrypoint. Calling it without
  * explicit project-owned client constructors fails closed before any effect.
  */
-export function createReleaseExecutionSession(input: ReleaseExecutionFactoryInput): ReleaseExecutionSession {
-  return createProductionReleaseExecutionSession(input);
+export function createReleaseExecutionSession(input: ReleaseExecutionFactoryInput, dependencies?: ProductionOperationalDependencies): ReleaseExecutionSession {
+  return createProductionReleaseExecutionSession(input, dependencies);
 }

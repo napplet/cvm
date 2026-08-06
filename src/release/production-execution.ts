@@ -6,6 +6,7 @@ import type { CertifierConfig, PinnedDeploymentExecution } from "../certificatio
 import { PRODUCTION_LIVE_PROTECTED_PORT_KEYS } from "../certification/live/production-ports";
 import { PROTECTED_SUITES } from "../certification/runner";
 import type { AuthorizedLiveExecutionInput, ReleaseExecutionSession } from "./controller";
+import { validateAuthorizationReceipt, validateAuthorizationRequest } from "./authorization";
 import { createDeploymentExecutionConfig, type DeploymentExecutionConfig } from "./deployment/config";
 import { RELEASE_PRODUCTION_PROVIDER_IDS } from "./native-registry";
 
@@ -229,6 +230,12 @@ export async function loadReleaseExecutionSession(input: Readonly<{
     async prepareAuthorizedExecution(authorizedInput) {
       const prepared = await completeSession.prepareAuthorizedExecution(authorizedInput);
       if (!isCompletePreparedExecution(prepared)) throw new Error("RELEASE_PRODUCTION_EXECUTION_PREPARATION_INVALID");
+      try {
+        const request = await validateAuthorizationRequest(authorizedInput.authorizationRequest);
+        await validateAuthorizationReceipt({ request, receipt: prepared.receipt, nowMs: Date.now() });
+      } catch {
+        throw new Error("RELEASE_PRODUCTION_EXECUTION_PREPARATION_INVALID");
+      }
       return prepared;
     },
   });

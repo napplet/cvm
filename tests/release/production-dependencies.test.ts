@@ -33,7 +33,7 @@ async function requestAndReceipt() {
   return { request, receipt: await createAuthorizationReceipt(request) };
 }
 
-function dependencyGraph(receipt: unknown, counters: { operational: number; signer: number }) {
+function dependencyGraph(receipt: unknown, counters: { operational: number; signer: number; prepared: number }, now = 1_400) {
   const provider = (id: string) => Object.freeze({
     origin: "project-owned" as const,
     evidenceClass: "real" as const,
@@ -53,9 +53,9 @@ function dependencyGraph(receipt: unknown, counters: { operational: number; sign
     receipt,
     providers,
     protectedPorts,
-    now: () => 1_400,
+    now: () => now,
     async prepare({ authorizationRequest }) {
-      counters.signer += 0;
+      counters.prepared += 1;
       return {
         materialization: { candidateId: authorizationRequest.candidateSha256, topology: { topologySha256: authorizationRequest.topologySha256 } },
         workerSelection: { candidateSha256: authorizationRequest.candidateSha256, topologySha256: authorizationRequest.topologySha256 },
@@ -68,7 +68,7 @@ function dependencyGraph(receipt: unknown, counters: { operational: number; sign
 
 test("the exact receipt gates a complete, real, independently-owned production graph without pre-receipt effects", async () => {
   const { request, receipt } = await requestAndReceipt();
-  const counters = { operational: 0, signer: 0 };
+  const counters = { operational: 0, signer: 0, prepared: 0 };
   const dependencies = dependencyGraph(receipt, counters);
   const session = createProductionReleaseExecutionSession({
     candidateSha256: request.candidateSha256, workspace: "/workspace/release",
@@ -79,17 +79,17 @@ test("the exact receipt gates a complete, real, independently-owned production g
   } as never, dependencies);
 
   expect(session.registry.providers()).toEqual(RELEASE_PRODUCTION_PROVIDER_IDS);
-  expect(counters).toEqual({ operational: 0, signer: 0 });
+  expect(counters).toEqual({ operational: 0, signer: 0, prepared: 0 });
   await expect(session.prepareAuthorizedExecution({ authorizationRequest: { ...request, topologySha256: digest("f") } })).rejects.toThrow();
-  expect(counters).toEqual({ operational: 0, signer: 0 });
+  expect(counters).toEqual({ operational: 0, signer: 0, prepared: 0 });
 
   await expect(session.prepareAuthorizedExecution({ authorizationRequest: request })).resolves.toMatchObject({ receipt });
-  expect(counters).toEqual({ operational: 0, signer: 0 });
+  expect(counters).toEqual({ operational: 0, signer: 0, prepared: 1 });
 });
 
 test("aliased, incomplete, and non-real dependencies are rejected before an operational method is reachable", async () => {
   const { receipt } = await requestAndReceipt();
-  const counters = { operational: 0, signer: 0 };
+  const counters = { operational: 0, signer: 0, prepared: 0 };
   const graph = dependencyGraph(receipt, counters);
   expect(graph.registry.providers()).toEqual(RELEASE_PRODUCTION_PROVIDER_IDS);
   expect(counters.operational).toBe(0);
@@ -102,4 +102,29 @@ test("aliased, incomplete, and non-real dependencies are rejected before an oper
     prepare: async () => ({} as never),
   }))).rejects.toThrow("PRODUCTION_DEPENDENCY_PROVIDER_IDENTITY_REQUIRED");
   expect(counters.operational).toBe(0);
+
+  const nonRealProviders = Object.fromEntries(RELEASE_PRODUCTION_PROVIDER_IDS.map((id, index) => [id, Object.freeze({
+    origin: "project-owned" as const,
+    evidenceClass: index === 0 ? "fixture" : "real",
+    brokerReference: `broker:${id}:port`,
+    port: Object.freeze({ discoverCapabilities: async () => ({ capability: "available" as const }), discoverAuthentication: async () => ({ authentication: "authorized" as const }), plan: async () => ({ status: "planned" as const, estimatedCostMicros: 0 }), apply: async () => ({ status: "blocked" as const, actualCostMicros: 0 }), observe: async () => ({ status: "blocked" as const, actualCostMicros: 0 }), cleanup: async () => ({ status: "blocked" as const, actualCostMicros: 0 }) }),
+  })]));
+  await expect(Promise.resolve().then(() => createProductionOperationalDependencies({
+    receipt, providers: nonRealProviders as never,
+    protectedPorts: Object.fromEntries(PRODUCTION_LIVE_PROTECTED_PORT_KEYS.map((key) => [key, Object.freeze({ origin: "project-owned" as const, evidenceClass: "real" as const })])) as never,
+    prepare: async () => ({} as never),
+  }))).rejects.toThrow("PRODUCTION_DEPENDENCY_PROVIDER_ORIGIN_REQUIRED");
+  expect(counters).toEqual({ operational: 0, signer: 0, prepared: 0 });
+});
+
+test("a stale receipt does not invoke preparation or any provider, including the dormant signer family", async () => {
+  const { request, receipt } = await requestAndReceipt();
+  const counters = { operational: 0, signer: 0, prepared: 0 };
+  const session = createProductionReleaseExecutionSession({
+    candidateSha256: request.candidateSha256, workspace: "/workspace/release",
+    deploymentConfig: { secretReferences: Object.fromEntries(PRODUCTION_FACTORY_SECRET_REFERENCE_NAMES.map((name) => [name, `opaque:${name}`])), publicSettings: { regions: ["europe-west1", "us-central1"] } },
+  } as never, dependencyGraph(receipt, counters, 1_500));
+
+  await expect(session.prepareAuthorizedExecution({ authorizationRequest: request })).rejects.toThrow("RELEASE_AUTHORIZATION_RECEIPT_EXPIRED");
+  expect(counters).toEqual({ operational: 0, signer: 0, prepared: 0 });
 });

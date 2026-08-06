@@ -25,6 +25,7 @@ import { finalizeReleaseCertification, type ReleaseFinalizationInput, type Relea
 import { createProductionLiveProtectedCertificationRegistry, type LiveProtectedRegistryInput } from "../certification/live/registry";
 import type { ProductionLiveProtectedCertificationPorts } from "../certification/live/production-ports";
 import { PROTECTED_SUITES, runProtectedCertificationProfile, type ProtectedCertificationRun } from "../certification/runner";
+import { validateCertificationObservation, type CertificationObservation } from "../certification/evidence";
 
 export const RELEASE_WORKSPACE_ENV = "NAPPLET_CVM_RELEASE_WORKSPACE";
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
@@ -200,6 +201,36 @@ async function createOrVerify(path: string, content: string, collision: string):
     if (await readFile(path, "utf8") !== content) throw new Error(collision);
   } finally {
     await rm(temporaryPath, { force: true });
+  }
+}
+
+async function readProtectedRecord(input: Readonly<{
+  workspace: string;
+  suite: string;
+  candidateId: string;
+  topologySha256: string;
+  authorizationReceiptSha256: string;
+  nowMs: number;
+}>): Promise<CertificationObservation | undefined> {
+  const path = join(input.workspace, "protected-records", `${input.suite}.json`);
+  let value: unknown;
+  try { value = JSON.parse(await readFile(path, "utf8")); }
+  catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+    throw new Error("RELEASE_CONTROLLER_PROTECTED_RECORD_INVALID");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("RELEASE_CONTROLLER_PROTECTED_RECORD_INVALID");
+  const stored = value as Readonly<{ version?: unknown; candidateSha256?: unknown; topologySha256?: unknown; authorizationReceiptSha256?: unknown; record?: unknown }>;
+  if (stored.version !== 1 || stored.candidateSha256 !== input.candidateId || stored.topologySha256 !== input.topologySha256 || stored.authorizationReceiptSha256 !== input.authorizationReceiptSha256) {
+    throw new Error("RELEASE_CONTROLLER_PROTECTED_RECORD_INVALID");
+  }
+  try {
+    const record = await validateCertificationObservation(stored.record, { nowMs: input.nowMs, candidateId: input.candidateId });
+    if (record.input.command[1] !== `suite:${input.suite}` || record.input.topologySha256 !== input.topologySha256) throw new Error("RELEASE_CONTROLLER_PROTECTED_RECORD_INVALID");
+    return record;
+  } catch (error) {
+    if (error instanceof Error && error.message === "RELEASE_CONTROLLER_PROTECTED_RECORD_INVALID") throw error;
+    throw new Error("RELEASE_CONTROLLER_PROTECTED_RECORD_INVALID");
   }
 }
 
@@ -486,30 +517,40 @@ export class ReleaseCertificationController {
     }
 
     const protectedRegistry = createProductionLiveProtectedCertificationRegistry(input.protected);
-    const protectedRun = await runProtectedCertificationProfile({
-      profile: {
-        candidate: input.protected.candidate,
-        datasetSha256: input.protected.input.datasetSha256,
-        topologySha256: provisioned.topology.topologySha256,
-        profileSha256: input.protected.input.profileSha256,
-        releaseBinding: input.protected.releaseBinding,
-        protectedVerificationReferences: input.protectedVerificationReferences,
-        credentialsAvailable: true,
-      },
-      evidenceDirectory: materialized.evidenceDirectory,
-      registry: protectedRegistry,
-      requireExactRegistry: true,
-      now: this.#now,
-    });
-    // The runner always emits an independent record per suite. Persist an
-    // immutable controller index without collapsing failures into a pass.
+    const profile = {
+      candidate: input.protected.candidate,
+      datasetSha256: input.protected.input.datasetSha256,
+      topologySha256: provisioned.topology.topologySha256,
+      profileSha256: input.protected.input.profileSha256,
+      releaseBinding: input.protected.releaseBinding,
+      protectedVerificationReferences: input.protectedVerificationReferences,
+      credentialsAvailable: true,
+    } as const;
+    const records: CertificationObservation[] = [];
+    for (const suite of PROTECTED_SUITES) {
+      let record = await readProtectedRecord({
+        workspace: this.#workspace, suite, candidateId: state.candidate.candidateSha256,
+        topologySha256: provisioned.topology.topologySha256, authorizationReceiptSha256: receipt.authorizationReceiptSha256, nowMs: this.#now(),
+      });
+      if (!record) {
+        const run = await runProtectedCertificationProfile({
+          profile, selectedSuites: [suite], evidenceDirectory: materialized.evidenceDirectory,
+          registry: protectedRegistry, requireExactRegistry: true, now: this.#now,
+        });
+        record = run.records[0];
+        if (!record) throw new Error("RELEASE_CONTROLLER_PROTECTED_SET_INVALID");
+        await createOrVerify(join(this.#workspace, "protected-records", `${suite}.json`), `${canonicalJson({ version: 1, candidateSha256: state.candidate.candidateSha256, topologySha256: provisioned.topology.topologySha256, authorizationReceiptSha256: receipt.authorizationReceiptSha256, record })}\n`, "RELEASE_CONTROLLER_PROTECTED_RECORD_COLLISION");
+      }
+      records.push(record);
+    }
+    const protectedRun: ProtectedCertificationRun = {
+      records,
+      status: records.every((record) => record.status === "passed") ? "passed" : records.some((record) => record.status === "failed") ? "failed" : "blocked",
+    };
+    // The controller commits each suite index before the next suite dispatch.
     if (protectedRun.records.length !== PROTECTED_SUITES.length || new Set(protectedRun.records.map((record) => record.input.command[1])).size !== PROTECTED_SUITES.length) {
       await this.#advanceLive(state, "blocked", receipt.authorizationReceiptSha256, state.providerOperationIds, provisioned.topology.topologySha256, "EVIDENCE_INVALID");
       throw new Error("RELEASE_CONTROLLER_PROTECTED_SET_INVALID");
-    }
-    for (const record of protectedRun.records) {
-      const suite = record.input.command[1]!.replace("suite:", "");
-      await createOrVerify(join(this.#workspace, "protected-records", `${suite}.json`), `${canonicalJson({ version: 1, candidateSha256: state.candidate.candidateSha256, topologySha256: provisioned.topology.topologySha256, authorizationReceiptSha256: receipt.authorizationReceiptSha256, record })}\n`, "RELEASE_CONTROLLER_PROTECTED_RECORD_COLLISION");
     }
     if (protectedRun.status !== "passed") {
       await this.#advanceLive(state, "blocked", receipt.authorizationReceiptSha256, state.providerOperationIds, provisioned.topology.topologySha256, "PROTECTED_SUITE_BLOCKED");

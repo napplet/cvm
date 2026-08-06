@@ -47,6 +47,24 @@ export type ReleaseFinalizationResult = Readonly<{
   decision: ReleaseCertificationDecision | null;
 }>;
 
+/** Reconciliation never creates a second promotion operation. Unknown means
+ * the original operation must be observed by a later authenticated executor,
+ * not redispatched by a resumed local process. */
+export async function resumeFinalizationPromotion(input: Readonly<{
+  operationId: string;
+  bundleSha256: string;
+  authorizationReceiptSha256: string;
+  status: "pending" | "unknown" | "promoted";
+  persist(input: Readonly<{ operationId: string; bundleSha256: string; authorizationReceiptSha256: string }>): Promise<void>;
+  promote(input: Readonly<{ operationId: string; bundleSha256: string }>): Promise<"promoted" | "unknown">;
+}>): Promise<Readonly<{ status: "promoted" | "blocked"; operationId: string }>> {
+  if (input.status === "promoted") return Object.freeze({ status: "promoted", operationId: input.operationId });
+  if (input.status === "unknown") return Object.freeze({ status: "blocked", operationId: input.operationId });
+  await input.persist({ operationId: input.operationId, bundleSha256: input.bundleSha256, authorizationReceiptSha256: input.authorizationReceiptSha256 });
+  const result = await input.promote({ operationId: input.operationId, bundleSha256: input.bundleSha256 });
+  return Object.freeze({ status: result === "promoted" ? "promoted" : "blocked", operationId: input.operationId });
+}
+
 async function digest(value: unknown): Promise<string> {
   const bytes = new TextEncoder().encode(canonicalJson(value));
   const hash = await crypto.subtle.digest("SHA-256", bytes);
@@ -148,10 +166,20 @@ export async function finalizeReleaseCertification(input: ReleaseFinalizationInp
   const operationId = `promotion-${await digest({ candidateId: payload.candidateId, bundleSha256, authorizationReceiptSha256: payload.authorizationReceiptSha256 })}`;
   await writeImmutable(join(root, "operations", `${operationId}.json`), `${canonicalJson({ version: 1, operationId, bundleSha256, authorizationReceiptSha256: payload.authorizationReceiptSha256, status: "pending" })}\n`, "RELEASE_FINALIZATION_OPERATION_COLLISION");
   const promotedPath = join(root, "operations", `${operationId}.promoted.json`);
+  const unknownPath = join(root, "operations", `${operationId}.unknown.json`);
+  const promotion = await resumeFinalizationPromotion({
+    operationId, bundleSha256, authorizationReceiptSha256: payload.authorizationReceiptSha256,
+    status: await exists(promotedPath) ? "promoted" : await exists(unknownPath) ? "unknown" : "pending",
+    persist: input.promotion.persist,
+    promote: input.promotion.promote,
+  });
+  if (promotion.status !== "promoted") {
+    if (!await exists(unknownPath)) {
+      await writeImmutable(unknownPath, `${canonicalJson({ version: 1, operationId, bundleSha256, status: "unknown" })}\n`, "RELEASE_FINALIZATION_PROMOTION_COLLISION");
+    }
+    return { status: "blocked", bundleSha256, operationId, decision };
+  }
   if (!await exists(promotedPath)) {
-    await input.promotion.persist({ operationId, bundleSha256, authorizationReceiptSha256: payload.authorizationReceiptSha256 });
-    const promoted = await input.promotion.promote({ operationId, bundleSha256 });
-    if (promoted !== "promoted") return { status: "blocked", bundleSha256, operationId, decision };
     await writeImmutable(promotedPath, `${canonicalJson({ version: 1, operationId, bundleSha256, status: "promoted" })}\n`, "RELEASE_FINALIZATION_PROMOTION_COLLISION");
   }
   await advancePointer(join(root, "current.json"), `${canonicalJson({ version: 1, candidateId: payload.candidateId, bundleSha256, operationId })}\n`);

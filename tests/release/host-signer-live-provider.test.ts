@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { CompatibleHostBrowserObservationPort } from "../../src/release/native/compatible-host";
+import { createLiveSecurityHostObservationPort } from "../../src/certification/live/host-ports";
 
 const DIGEST_A = "a".repeat(64);
 const DIGEST_B = "b".repeat(64);
@@ -47,12 +48,9 @@ test("candidate-bound compatible host observes the full real-browser UI matrix",
     execution: "real_compatible_host_browser",
     certificationStatus: "pass",
     sealedArtifactSha256: DIGEST_A,
-    aggregateSha256: DIGEST_B,
-    hostVersion: "nip-5d-host@1.0.0",
-    packageVersion: "@napplet/sdk@0.27.2",
-    runtimeVersion: "nip-5d@4.0.0",
-    browserVersion: "Chromium 127",
-    reportSha256: DIGEST_B,
+    presentationInputSha256: DIGEST_B,
+    hostVersion: "nip-5d-host@1.0.0;@napplet/sdk@0.27.2",
+    runtimeVersion: "nip-5d@4.0.0;Chromium 127",
   });
   expect(requests).toEqual([{ sealedArtifactSha256: DIGEST_A, aggregateSha256: DIGEST_B }]);
 });
@@ -71,7 +69,7 @@ test.each([
 
   await expect(port.runBrowser({ sealedArtifactSha256: DIGEST_A, aggregateSha256: DIGEST_B })).resolves.toMatchObject({
     execution: "real_compatible_host_browser",
-    certificationStatus: "blocked",
+    certificationStatus: "non_pass",
   });
 });
 
@@ -81,5 +79,18 @@ test("compatible host blocks an exact sealed identity mismatch", async () => {
     browser: { kind: "chromium", async observe() { return { browserVersion: "b", reportSha256: DIGEST_B, consoleErrors: [], directAuthorityDenied: true, responsiveAccessible: true, capabilityMediated: true }; } },
   });
 
-  await expect(port.runBrowser({ sealedArtifactSha256: DIGEST_A, aggregateSha256: DIGEST_B })).resolves.toMatchObject({ certificationStatus: "blocked" });
+  await expect(port.runBrowser({ sealedArtifactSha256: DIGEST_A, aggregateSha256: DIGEST_B })).resolves.toMatchObject({ certificationStatus: "non_pass" });
+});
+
+test("live security bridge forwards the exact candidate identity to the compatible host", async () => {
+  let identity: unknown;
+  const port = createLiveSecurityHostObservationPort({
+    runSealedBuild: async () => ({}),
+    runHostileMatrix: async () => ({}),
+    compatibleHost: { async runBrowser(input) { identity = input; return { evidence: "browser" } as never; } },
+    inspectSignerBoundary: async () => ({}),
+  });
+
+  await expect(port.runBrowser({ sealedArtifactSha256: DIGEST_A, aggregateSha256: DIGEST_B })).resolves.toEqual({ evidence: "browser" });
+  expect(identity).toEqual({ sealedArtifactSha256: DIGEST_A, aggregateSha256: DIGEST_B });
 });

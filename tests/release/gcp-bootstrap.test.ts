@@ -23,9 +23,9 @@ async function authorized() {
   return { request, receipt: await createAuthorizationReceipt(request), scope: { ...scope, projectScopeSha256: await deriveGcpProjectScopeSha256(scope) } };
 }
 
-function port(transcript: string[], state = new Set<string>()): GcpBootstrapPort {
+function port(transcript: string[], state = new Set<string>(), persisted: Array<Record<string, string>> = []): GcpBootstrapPort {
   return {
-    persist: async ({ operationId }) => { transcript.push(`persist:${operationId}`); },
+    persist: async (input) => { persisted.push(input); transcript.push(`persist:${input.operationId}`); },
     observe: async ({ projectId, billingAccountId, service }) => {
       transcript.push(`observe:${projectId}:${billingAccountId}:${service ?? "project"}`);
       return { status: state.has(service ?? "project") ? "completed" : "missing" };
@@ -39,7 +39,8 @@ function port(transcript: string[], state = new Set<string>()): GcpBootstrapPort
 
 test("plans read-only and applies each authorized GCP bootstrap effect only after durable original-operation persistence", async () => {
   const transcript: string[] = [];
-  const adapter = createGcpBootstrapAdapter({ port: port(transcript), now: () => now });
+  const persisted: Array<Record<string, string>> = [];
+  const adapter = createGcpBootstrapAdapter({ port: port(transcript, new Set(), persisted), now: () => now });
   const { request, receipt, scope } = await authorized();
   const input = { request, receipt, operationId: "gcp-bootstrap-1", ...scope };
 
@@ -55,6 +56,8 @@ test("plans read-only and applies each authorized GCP bootstrap effect only afte
     "persist:gcp-bootstrap-1:service:sqladmin.googleapis.com", "observe:napplet-cvm-run-1:billingAccounts/abc:sqladmin.googleapis.com", "enable:napplet-cvm-run-1:sqladmin.googleapis.com",
     "persist:gcp-bootstrap-1:service:storage.googleapis.com", "observe:napplet-cvm-run-1:billingAccounts/abc:storage.googleapis.com", "enable:napplet-cvm-run-1:storage.googleapis.com",
   ]);
+  expect(persisted).toHaveLength(5);
+  expect(persisted.every((entry) => entry.authorizationRequestSha256 === request.authorizationRequestSha256 && entry.authorizationReceiptSha256 === receipt.authorizationReceiptSha256 && entry.operationId.startsWith("gcp-bootstrap-1:"))).toBeTrue();
 });
 
 test("rejects a non-exact receipt before any port interaction and observes original operations on idempotent retry", async () => {

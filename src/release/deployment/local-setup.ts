@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { chmod, mkdir, rename, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { canonicalJson } from "../../promotion/schema";
 import {
   createOperatorFundingPrerequisiteController,
@@ -13,6 +13,7 @@ import {
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 const OpaqueReferenceSchema = z.string().regex(/^os-secret-ref:[a-z][a-z0-9._-]{2,127}$/u);
 const RailSchema = z.enum(["nwc_lightning", "cashu"]);
+const macOsKeychainHelperPath = join(import.meta.dir, "macos-keychain-store.swift");
 
 type LoopbackSubmission = Readonly<{
   state: string;
@@ -154,7 +155,7 @@ async function sha256Bytes(label: string, material: Uint8Array): Promise<string>
 }
 
 /** macOS Keychain writer. Native wallet bytes cross only the subprocess stdin
- * pipe; argv contains a fixed service/account label and stdout/stderr are
+ * pipe; argv contains only fixed locator labels and stdout/stderr are
  * discarded. */
 export function createMacOsKeychainSecretStore(): OsSecretStorePort {
   requireMacOsSecretStore();
@@ -163,7 +164,7 @@ export function createMacOsKeychainSecretStore(): OsSecretStorePort {
       const rail = RailSchema.parse(input.rail);
       if (!(input.material instanceof Uint8Array) || input.material.byteLength === 0 || input.material.byteLength > 65_536) throw new Error("LOCAL_FUNDING_MATERIAL_REJECTED");
       const service = `napplet-cvm.operator-funding.${rail}`;
-      const child = Bun.spawn(["security", "add-generic-password", "-a", "operator", "-s", service, "-U", "-w"], {
+      const child = Bun.spawn(["swift", macOsKeychainHelperPath, service, "operator"], {
         stdin: "pipe", stdout: "ignore", stderr: "ignore",
       });
       child.stdin.write(input.material);

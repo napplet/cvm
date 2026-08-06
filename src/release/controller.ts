@@ -20,6 +20,7 @@ import { createAuthorizationRequest, validateAuthorizationReceipt, validateAutho
 import { ReleaseProviderOperationSchema, type ReleaseProviderOperation, type ReleaseProviderRegistry as AuthorizedProviderRegistry } from "./providers";
 import { createNativeReleaseProviderRegistry } from "./native-registry";
 import { materializeProtectedCertifier, type MaterializeProtectedCertifierInput, type MaterializedCertifier } from "./materialize-certifier";
+import { finalizeReleaseCertification, type ReleaseFinalizationInput, type ReleaseFinalizationResult } from "./finalize";
 import { createProductionLiveProtectedCertificationRegistry, type LiveProtectedRegistryInput } from "../certification/live/registry";
 import type { ProductionLiveProtectedCertificationPorts } from "../certification/live/production-ports";
 import { PROTECTED_SUITES, runProtectedCertificationProfile, type ProtectedCertificationRun } from "../certification/runner";
@@ -58,10 +59,15 @@ export type AuthorizedLiveExecutionInput = Readonly<{
   workerSelection: NonNullable<MaterializeProtectedCertifierInput["workerSelection"]>;
   protected: Omit<LiveProtectedRegistryInput, "ports"> & Readonly<{ ports: ProductionLiveProtectedCertificationPorts }>;
   protectedVerificationReferences?: Parameters<typeof runProtectedCertificationProfile>[0]["profile"]["protectedVerificationReferences"];
+  /** Supplied by the authenticated protected executor only after all eight
+   * canonical suite records are present. The controller owns the records and
+   * delegates the sole evaluator/promotion/cleanup sequence to finalization. */
+  finalization?: Omit<ReleaseFinalizationInput, "workspace" | "candidateId" | "topologySha256" | "authorizationReceiptSha256" | "protectedRecords">;
 }>;
 export type AuthorizedLiveExecutionResult = ReleaseProvisioningResult & Readonly<{
   materialized: MaterializedCertifier;
   protected: ProtectedCertificationRun;
+  finalization: ReleaseFinalizationResult;
 }>;
 
 type ProviderOperationRecord = Readonly<{
@@ -472,10 +478,26 @@ export class ReleaseCertificationController {
       await this.#advanceLive(state, "blocked", receipt.authorizationReceiptSha256, state.providerOperationIds, provisioned.topology.topologySha256, "PROTECTED_SUITE_BLOCKED");
       throw new Error("RELEASE_CONTROLLER_PROTECTED_SUITE_BLOCKED");
     }
+    if (!input.finalization) {
+      await this.#advanceLive(state, "blocked", receipt.authorizationReceiptSha256, state.providerOperationIds, provisioned.topology.topologySha256, "EVIDENCE_INVALID");
+      throw new Error("RELEASE_CONTROLLER_FINALIZATION_INPUT_REQUIRED");
+    }
     state = await this.#advanceLive(state, "finalizing", receipt.authorizationReceiptSha256, state.providerOperationIds, provisioned.topology.topologySha256, null);
+    const finalization = await finalizeReleaseCertification({
+      ...input.finalization,
+      workspace: this.#workspace,
+      candidateId: state.candidate.candidateSha256,
+      topologySha256: provisioned.topology.topologySha256,
+      authorizationReceiptSha256: receipt.authorizationReceiptSha256,
+      protectedRecords: protectedRun.records,
+    });
+    if (finalization.status !== "promoted") {
+      await this.#advanceLive(state, "blocked", receipt.authorizationReceiptSha256, state.providerOperationIds, provisioned.topology.topologySha256, finalization.status === "cleanup_incomplete" ? "PROTECTED_SUITE_BLOCKED" : "EVIDENCE_INVALID");
+      throw new Error(finalization.status === "cleanup_incomplete" ? "RELEASE_CONTROLLER_CLEANUP_INCOMPLETE" : "RELEASE_CONTROLLER_FINALIZATION_BLOCKED");
+    }
     state = await this.#advanceLive(state, "cleaning", receipt.authorizationReceiptSha256, state.providerOperationIds, provisioned.topology.topologySha256, null);
     state = await this.#advanceLive(state, "completed", receipt.authorizationReceiptSha256, state.providerOperationIds, provisioned.topology.topologySha256, null);
-    return { ...provisioned, state, materialized, protected: protectedRun };
+    return { ...provisioned, state, materialized, protected: protectedRun, finalization };
   }
 
   async #advance(prior: ReleaseControllerState, status: ReleaseControllerState["status"], authorizationReceiptSha256: string, providerOperationIds: string[], deployedTopologySha256: string | null, blockReasonCode: ReleaseControllerState["blockReasonCode"]): Promise<ReleaseControllerState> {

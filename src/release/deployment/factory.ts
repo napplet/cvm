@@ -2,6 +2,14 @@ import type { AuthorizedLiveExecutionInput, ReleaseExecutionSession } from "../c
 import type { ReleaseExecutionFactoryInput } from "../production-execution";
 import { RELEASE_PRODUCTION_PROVIDER_IDS } from "../native-registry";
 import type { ReleaseProviderRegistry } from "../providers";
+import type { GoogleAccessToken, GoogleFetch, GoogleTokenSource } from "./google-clients";
+
+/** Bounded dependency descriptors for the concrete provider modules.  They are
+ * references only: the pinned factory must receive them explicitly and cannot
+ * discover ambient ADC, metadata, or provider state during module loading. */
+export type DeploymentClientDependencies = Readonly<{
+  google?: Readonly<{ tokenSource: GoogleTokenSource; fetch: GoogleFetch; fixtureToken?: GoogleAccessToken }>;
+}>;
 
 export type DeploymentFactoryRuntime = Readonly<{
   registry: ReleaseProviderRegistry;

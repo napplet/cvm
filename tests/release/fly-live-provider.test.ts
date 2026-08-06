@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { createFlyLiveWorkerProvider } from "../../src/release/native/fly";
+import { executeIdenticalWorkerCohorts } from "../../src/certification/live/worker-ports";
 
 const digest = (letter: string) => letter.repeat(64);
 const image = `registry.example/worker@sha256:${digest("a")}`;
@@ -48,4 +49,27 @@ test("Fly readiness samples timestamp trusted receipt through exact isolated-rea
   expect(first).toMatchObject({ id: "benchmark-1", cohort: "pool_hit", outcome: "accepted", receiptMonotonicMs: 10, readyMonotonicMs: 20, readyLeaseCount: 1, durableBacklogCount: 0, isolation: "passed", cleanup: "passed" });
   expect(retry).toEqual(first);
   expect(calls.filter((entry) => entry.startsWith("create:"))).toHaveLength(1);
+});
+
+test("non-real, stale, unsafe, or slow cohort evidence cannot select a worker", async () => {
+  const candidate = (provider: "modal" | "fly", id: string) => ({ id: digest(id), provider, image, sourceSha256: digest("d") });
+  const port = (evidenceClass: "protected_live" | "deterministic", latency: number, backlog = 0) => ({
+    evidenceClass,
+    executeSample: async (sample: { id: string; cohort: string }) => ({ ...sample, outcome: "accepted", receiptMonotonicMs: 1, readyMonotonicMs: 1 + latency, readyLeaseCount: 1, durableBacklogCount: backlog, isolation: "passed", cleanup: "passed" }),
+  });
+  for (const condition of [
+    { modal: port("deterministic", 20), fly: port("protected_live", 20), observedAtMs: 100, expiresAtMs: 200, now: 150 },
+    { modal: port("protected_live", 20), fly: port("protected_live", 20), observedAtMs: 100, expiresAtMs: 150, now: 150 },
+    { modal: port("protected_live", 20, 1), fly: port("protected_live", 20), observedAtMs: 100, expiresAtMs: 200, now: 150 },
+    { modal: port("protected_live", 5_001), fly: port("protected_live", 20), observedAtMs: 100, expiresAtMs: 200, now: 150 },
+  ]) {
+    const result = await executeIdenticalWorkerCohorts({
+      candidates: [
+        { candidate: candidate("modal", "b"), topologySha256: digest("e"), observationPort: condition.modal },
+        { candidate: candidate("fly", "c"), topologySha256: digest("f"), observationPort: condition.fly },
+      ], observedAtMs: condition.observedAtMs, expiresAtMs: condition.expiresAtMs, now: () => condition.now,
+    });
+    expect(result.status).toBe("unselected");
+    expect(result.provider).toBeNull();
+  }
 });

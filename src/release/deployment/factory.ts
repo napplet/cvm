@@ -2,6 +2,7 @@ import type { AuthorizedLiveExecutionInput, ReleaseExecutionSession } from "../c
 import type { ReleaseExecutionFactoryInput } from "../production-execution";
 import { RELEASE_PRODUCTION_PROVIDER_IDS } from "../native-registry";
 import type { ReleaseProviderRegistry } from "../providers";
+import { createDeploymentProtectedPorts } from "./protected-ports";
 import type { GoogleAccessToken, GoogleFetch, GoogleTokenSource } from "./google-clients";
 import type { createContextVmDeploymentClient } from "./contextvm-client";
 import type { createPaymentDeploymentClients } from "./payment-clients";
@@ -75,6 +76,43 @@ export type DeploymentFactoryRuntime = Readonly<{
   prepareAuthorizedExecution: ReleaseExecutionSession["prepareAuthorizedExecution"];
 }>;
 
+function preparationReceiptMatches(
+  prepared: Omit<AuthorizedLiveExecutionInput, "registry">,
+  authorizationRequest: Parameters<ReleaseExecutionSession["prepareAuthorizedExecution"]>[0]["authorizationRequest"],
+): boolean {
+  if (!prepared.receipt || typeof prepared.receipt !== "object") return false;
+  const receipt = prepared.receipt as Readonly<{ authorizationRequestSha256?: unknown; candidateSha256?: unknown; topologySha256?: unknown }>;
+  return receipt.authorizationRequestSha256 === authorizationRequest.authorizationRequestSha256
+    && receipt.candidateSha256 === authorizationRequest.candidateSha256
+    && receipt.topologySha256 === authorizationRequest.topologySha256;
+}
+
+function assertPreparedExecution(
+  input: ReleaseExecutionFactoryInput,
+  authorizationRequest: Parameters<ReleaseExecutionSession["prepareAuthorizedExecution"]>[0]["authorizationRequest"],
+  prepared: Omit<AuthorizedLiveExecutionInput, "registry">,
+): Omit<AuthorizedLiveExecutionInput, "registry"> {
+  if (authorizationRequest.candidateSha256 !== input.candidateSha256.toLowerCase()) {
+    throw new Error("DEPLOYMENT_PREPARATION_CANDIDATE_BINDING_REQUIRED");
+  }
+  if (!preparationReceiptMatches(prepared, authorizationRequest)) {
+    throw new Error("DEPLOYMENT_PREPARATION_RECEIPT_BINDING_REQUIRED");
+  }
+  if (!prepared.materialization || !prepared.workerSelection || !prepared.protected || !prepared.finalization || !prepared.protectedVerificationReferences) {
+    throw new Error("DEPLOYMENT_PREPARATION_COMPLETE_INPUT_REQUIRED");
+  }
+  if (prepared.materialization.candidateId !== authorizationRequest.candidateSha256
+    || prepared.materialization.topology?.topologySha256 !== authorizationRequest.topologySha256
+    || prepared.protected.candidate?.id !== authorizationRequest.candidateSha256
+    || prepared.protected.input?.topologySha256 !== authorizationRequest.topologySha256
+    || prepared.workerSelection.candidateSha256 !== authorizationRequest.candidateSha256
+    || prepared.workerSelection.topologySha256 !== authorizationRequest.topologySha256) {
+    throw new Error("DEPLOYMENT_PREPARATION_BOUNDARY_MISMATCH");
+  }
+  createDeploymentProtectedPorts(prepared.protected.ports);
+  return Object.freeze({ ...prepared, protected: Object.freeze({ ...prepared.protected, ports: createDeploymentProtectedPorts(prepared.protected.ports) }) });
+}
+
 function exactRegistry(registry: ReleaseProviderRegistry): ReleaseProviderRegistry {
   const providers = registry.providers();
   if (providers.length !== RELEASE_PRODUCTION_PROVIDER_IDS.length
@@ -99,7 +137,7 @@ export function createDeploymentReleaseExecutionSession(
     registry,
     async prepareAuthorizedExecution(authorizationInput) {
       const prepared = await runtime.prepareAuthorizedExecution(authorizationInput);
-      return prepared as Omit<AuthorizedLiveExecutionInput, "registry">;
+      return assertPreparedExecution(input, authorizationInput.authorizationRequest, prepared);
     },
   });
 }

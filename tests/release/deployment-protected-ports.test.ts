@@ -32,5 +32,5 @@ test("deployment protected factory rejects duplicate, fixture, and incomplete su
   const distinct = ports();
   expect(() => createDeploymentProtectedPorts({ ...distinct, telemetry: distinct.admission } as never)).toThrow("DEPLOYMENT_PROTECTED_PORT_IDENTITY_REQUIRED");
   expect(() => createDeploymentProtectedPorts({ ...distinct, admission: { ...distinct.admission, evidenceClass: "deterministic" } } as never)).toThrow("PRODUCTION_LIVE_PORT_REAL_EVIDENCE_REQUIRED");
-  expect(() => createDeploymentProtectedPorts({ admission: distinct.admission } as never)).toThrow("PRODUCTION_LIVE_PORT_REAL_EVIDENCE_REQUIRED");
+  expect(() => createDeploymentProtectedPorts({ admission: distinct.admission } as never)).toThrow("PRODUCTION_LIVE_PORT_EXACT_SET_REQUIRED");
 });

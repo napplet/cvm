@@ -35,6 +35,7 @@ test("protected configuration requires absolute, digest-pinned config bytes", as
       credentials: "unavailable",
       adapter: { root, modulePath, sha256: moduleSha256 },
       trustRoot: { root, modulePath, sha256: moduleSha256 },
+      releaseExecution: { root, modulePath, sha256: moduleSha256 },
     });
     await writeFile(configPath, source);
 
@@ -43,7 +44,7 @@ test("protected configuration requires absolute, digest-pinned config bytes", as
     await expect(loadCertifierConfig({ env: { NAPPLET_CVM_CERTIFIER_CONFIG: configPath, NAPPLET_CVM_CERTIFIER_CONFIG_SHA256: "0".repeat(64) } })).rejects.toThrow("CERTIFIER_CONFIG_PIN_REJECTED");
 
     const config = await loadCertifierConfig({ env: { NAPPLET_CVM_CERTIFIER_CONFIG: configPath, NAPPLET_CVM_CERTIFIER_CONFIG_SHA256: sha256(source) } });
-    expect(config).toMatchObject({ mode: "protected", releaseProfilePath: profilePath, trustRoot: { root, modulePath, sha256: moduleSha256 } });
+    expect(config).toMatchObject({ mode: "protected", releaseProfilePath: profilePath, trustRoot: { root, modulePath, sha256: moduleSha256 }, releaseExecution: { root, modulePath, sha256: moduleSha256 } });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

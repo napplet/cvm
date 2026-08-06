@@ -1,0 +1,121 @@
+import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { runReleaseCertification } from "../../src/release/controller";
+import { loadReleaseExecutionSession } from "../../src/release/production-execution";
+import { createReleaseProviderRegistry } from "../../src/release/providers";
+import { RELEASE_PRODUCTION_PROVIDER_IDS } from "../../src/release/native-registry";
+import { RELEASE_PROVIDER_IDS } from "../../src/release/topology";
+
+const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+const candidatePath = join(import.meta.dir, "..", "..", "toolchains/candidates/initial.json");
+
+test("pinned release execution session construction makes no provider call", async () => {
+  const root = await mkdtemp(join(tmpdir(), "napplet-cvm-release-execution-"));
+  const modulePath = join(root, "release-execution.mjs");
+  const source = `
+    const calls = [];
+    const providers = ${JSON.stringify([...RELEASE_PRODUCTION_PROVIDER_IDS])};
+    export function createReleaseExecutionSession() {
+      return {
+        calls,
+        registry: {
+          providers() { calls.push("providers"); return providers; },
+          async discover() { calls.push("discover"); return {}; },
+          async plan() { calls.push("plan"); return {}; },
+          async apply() { calls.push("apply"); return {}; },
+          async observe() { calls.push("observe"); return {}; },
+          async cleanup() { calls.push("cleanup"); return {}; },
+        },
+        async prepareAuthorizedExecution() { calls.push("prepare"); return {}; },
+      };
+    }
+  `;
+  try {
+    await writeFile(modulePath, source);
+    const session = await loadReleaseExecutionSession({
+      config: {
+        version: 1,
+        mode: "protected",
+        releaseProfilePath: join(root, "release-profile.json"),
+        evidenceDirectory: join(root, "evidence"),
+        credentials: "configured",
+        adapter: { root, modulePath, sha256: digest(source) },
+        releaseExecution: { root, modulePath, sha256: digest(source) },
+      },
+      candidateSha256: "a".repeat(64),
+      workspace: root,
+    });
+    expect((session as unknown as { calls: string[] }).calls).toEqual(["providers"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("local certifier config cannot load a production execution session", async () => {
+  await expect(loadReleaseExecutionSession({
+    config: { version: 1, mode: "local", evidenceDirectory: join(tmpdir(), "local-evidence") },
+    candidateSha256: "a".repeat(64),
+    workspace: tmpdir(),
+  })).rejects.toThrow("RELEASE_PRODUCTION_EXECUTION_CONFIG_REQUIRED");
+});
+
+test("protected configuration marked credential-unavailable cannot load a production execution session", async () => {
+  const root = join(tmpdir(), "napplet-cvm-release-execution-unavailable");
+  await expect(loadReleaseExecutionSession({
+    config: {
+      version: 1,
+      mode: "protected",
+      releaseProfilePath: join(root, "release-profile.json"),
+      evidenceDirectory: join(root, "evidence"),
+      credentials: "unavailable",
+      adapter: { root, modulePath: join(root, "adapter.mjs"), sha256: "a".repeat(64) },
+      releaseExecution: { root, modulePath: join(root, "release-execution.mjs"), sha256: "b".repeat(64) },
+    },
+    candidateSha256: "a".repeat(64),
+    workspace: root,
+  })).rejects.toThrow("RELEASE_PRODUCTION_EXECUTION_CONFIG_REQUIRED");
+});
+
+test("non-dry execution reaches the same-session approval boundary before any provider plan or mutation", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "napplet-cvm-release-execution-"));
+  let discoveryCalls = 0;
+  let planCalls = 0;
+  let mutationCalls = 0;
+  let requestSha256: string | undefined;
+  const registry = createReleaseProviderRegistry({
+    now: () => 1_000,
+    ports: Object.fromEntries(RELEASE_PROVIDER_IDS.map((provider) => [provider, {
+      discoverCapabilities: async () => { discoveryCalls += 1; return { capability: "available" as const }; },
+      discoverAuthentication: async () => { discoveryCalls += 1; return { authentication: "authorized" as const }; },
+      plan: async () => { planCalls += 1; return { status: "planned" as const, estimatedCostMicros: 0 }; },
+      apply: async () => { mutationCalls += 1; return { status: "applied" as const, actualCostMicros: 0, resourceIdentity: provider }; },
+      observe: async () => { mutationCalls += 1; return { status: "completed" as const, actualCostMicros: 0, resourceIdentity: provider }; },
+      cleanup: async () => { mutationCalls += 1; return { status: "cleaned" as const, actualCostMicros: 0 }; },
+    }])) as never,
+  });
+  try {
+    await expect(runReleaseCertification({
+      candidatePath,
+      workspace,
+      dryRun: false,
+      now: () => 1_000,
+      session: {
+        registry,
+        async prepareAuthorizedExecution({ authorizationRequest }) {
+          requestSha256 = authorizationRequest.authorizationRequestSha256;
+          return { receipt: {} } as never;
+        },
+      },
+    })).rejects.toThrow("RELEASE_CONTROLLER_AUTHORIZATION_INVALID");
+    expect(requestSha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(discoveryCalls).toBe(RELEASE_PROVIDER_IDS.length * 2);
+    expect(planCalls).toBe(0);
+    expect(mutationCalls).toBe(0);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});

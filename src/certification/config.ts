@@ -41,6 +41,9 @@ const ProtectedCertifierConfigSchema = z.object({
   evidenceDirectory: AbsolutePathSchema,
   credentials: z.enum(["configured", "unavailable"]),
   adapter: PinnedModuleSchema,
+  /** One deployment-owned, hash-pinned factory for the receipt-bound release
+   * session. It supplies external handles at runtime; this config never does. */
+  releaseExecution: PinnedModuleSchema.optional(),
   trustRoot: PinnedModuleSchema.optional(),
   controller: ControllerProvenanceSchema.optional(),
   secretReferences: SecretReferencesSchema.optional(),

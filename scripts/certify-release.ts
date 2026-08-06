@@ -1,5 +1,7 @@
-import { ReleaseCertificationController, RELEASE_AUTHORIZATION_SHA256_ENV, RELEASE_WORKSPACE_ENV, releaseCandidateSha256, runReleaseCertification } from "../src/release/controller";
+import { ReleaseCertificationController, RELEASE_WORKSPACE_ENV, releaseCandidateSha256, runReleaseCertification } from "../src/release/controller";
 import { createNativeReleaseDiscoveryRegistry } from "../src/release/native-discovery";
+import { loadCertifierConfig } from "../src/certification/config";
+import { loadReleaseExecutionSession } from "../src/release/production-execution";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 const repositoryRoot = resolve(import.meta.dir, "..");
@@ -48,8 +50,11 @@ async function main(): Promise<number> {
   try {
     const workspace = controllerWorkspace();
     if (!status && !dryRun) {
-      await runReleaseCertification({ candidatePath, workspace, dryRun: false, authorizationReceiptSha256: process.env[RELEASE_AUTHORIZATION_SHA256_ENV] });
-      return 1;
+      const config = await loadCertifierConfig();
+      const session = await loadReleaseExecutionSession({ config, candidateSha256: await releaseCandidateSha256(candidatePath!), workspace });
+      const result = await runReleaseCertification({ candidatePath: candidatePath!, workspace, dryRun: false, session });
+      console.log(JSON.stringify({ status: result.state.status, candidateSha256: result.state.candidate.candidateSha256, topologySha256: result.state.topologySha256, stateSha256: result.state.stateSha256, authorizationRequestSha256: result.authorizationRequest.authorizationRequestSha256 }));
+      return result.state.status === "completed" ? 0 : 1;
     }
     const result = status
       ? await new ReleaseCertificationController({ candidatePath: candidatePath ?? canonicalCandidatePath, workspace }).status()

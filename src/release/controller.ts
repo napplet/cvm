@@ -18,7 +18,7 @@ import {
 import { deriveReleaseTopology, RELEASE_PROVIDER_IDS } from "./topology";
 import { createAuthorizationRequest, validateAuthorizationReceipt, validateAuthorizationRequest, type ReleaseAuthorizationReceipt } from "./authorization";
 import { ReleaseProviderOperationSchema, type ReleaseProviderOperation, type ReleaseProviderRegistry as AuthorizedProviderRegistry } from "./providers";
-import { createNativeReleaseProviderRegistry } from "./native-registry";
+import { createReleaseControllerProviderRegistry } from "./native-registry";
 import { materializeProtectedCertifier, type MaterializeProtectedCertifierInput, type MaterializedCertifier } from "./materialize-certifier";
 import { finalizeReleaseCertification, type ReleaseFinalizationInput, type ReleaseFinalizationResult } from "./finalize";
 import { createProductionLiveProtectedCertificationRegistry, type LiveProtectedRegistryInput } from "../certification/live/registry";
@@ -26,7 +26,6 @@ import type { ProductionLiveProtectedCertificationPorts } from "../certification
 import { PROTECTED_SUITES, runProtectedCertificationProfile, type ProtectedCertificationRun } from "../certification/runner";
 
 export const RELEASE_WORKSPACE_ENV = "NAPPLET_CVM_RELEASE_WORKSPACE";
-export const RELEASE_AUTHORIZATION_SHA256_ENV = "NAPPLET_CVM_RELEASE_AUTHORIZATION_SHA256";
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 
 type CandidateIdentity = ReleaseControllerState["candidate"];
@@ -68,6 +67,13 @@ export type AuthorizedLiveExecutionResult = ReleaseProvisioningResult & Readonly
   materialized: MaterializedCertifier;
   protected: ProtectedCertificationRun;
   finalization: ReleaseFinalizationResult;
+}>;
+/** A hash-pinned deployment module supplies the one receipt-bound session.
+ * It owns authenticated handles and official consent; the controller owns the
+ * candidate-bound state machine and receives no ambient credentials. */
+export type ReleaseExecutionSession = Readonly<{
+  registry: AuthorizedProviderRegistry;
+  prepareAuthorizedExecution(input: Readonly<{ authorizationRequest: ReleaseAuthorizationRequest }>): Promise<Omit<AuthorizedLiveExecutionInput, "registry">>;
 }>;
 
 type ProviderOperationRecord = Readonly<{
@@ -615,17 +621,19 @@ export class ReleaseCertificationController {
 }
 
 export async function runReleaseCertification(options: ControllerOptions & Readonly<{ dryRun: true }>): Promise<ReleaseCertificationResult>;
-export async function runReleaseCertification(options: ControllerOptions & Readonly<{ dryRun: false; authorizationReceiptSha256?: string }>): Promise<never>;
-export async function runReleaseCertification(options: ControllerOptions & Readonly<{ dryRun: boolean; authorizationReceiptSha256?: string }>): Promise<ReleaseCertificationResult> {
+export async function runReleaseCertification(options: ControllerOptions & Readonly<{ dryRun: false; session: ReleaseExecutionSession }>): Promise<AuthorizedLiveExecutionResult>;
+export async function runReleaseCertification(options: ControllerOptions & Readonly<{ dryRun: boolean; session?: ReleaseExecutionSession }>): Promise<ReleaseCertificationResult | AuthorizedLiveExecutionResult> {
   if (!options.dryRun) {
-    if (!options.authorizationReceiptSha256 || !DigestSchema.safeParse(options.authorizationReceiptSha256).success) throw new Error("RELEASE_AUTHORIZATION_REQUIRED");
-    // No protected runner handles, capability sessions, or exact receipt are
-    // available to the local command. Construct the complete, no-effect
-    // registry solely to prove every family has an explicit blocked path;
-    // authorization cannot silently fall through to a partial executor.
-    const candidate = await candidateIdentity(options.candidatePath);
-    createNativeReleaseProviderRegistry({ candidateSha256: candidate.candidateSha256 });
-    throw new Error("RELEASE_PRODUCTION_CAPABILITY_OR_CONSENT_REQUIRED");
+    if (!options.session) throw new Error("RELEASE_PRODUCTION_EXECUTION_CONFIG_REQUIRED");
+    const controller = new ReleaseCertificationController({
+      candidatePath: options.candidatePath,
+      workspace: options.workspace,
+      providers: createReleaseControllerProviderRegistry(options.session.registry),
+      ...(options.now ? { now: options.now } : {}),
+    });
+    const pending = await controller.dryRun();
+    const execution = await options.session.prepareAuthorizedExecution({ authorizationRequest: pending.authorizationRequest });
+    return controller.executeAuthorized({ ...execution, registry: options.session.registry });
   }
   const progress = await new ReleaseCertificationController(options).certify();
   return progress;

@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 21
+open_count: 22
 waived_count: 0
 fixed_count: 0
-total_count: 21
-last_updated: 2026-08-06T12:14:09.784Z
+total_count: 22
+last_updated: 2026-08-06T12:18:20.750Z
 ---
 
 # Broken Windows Ledger
@@ -36,6 +36,7 @@ last_updated: 2026-08-06T12:14:09.784Z
 | 19 | 07 | deviation | tests/tracer.test.ts |  | Promotion tracer assertion changed to the concrete certification-required blocker after the deferred terminal stage was removed. | open |  | 2026-08-05T17:05:44.142Z |  |
 | 20 | 07 | deviation | tests/contextvm/adapter.test.ts |  | ContextVM transport fake now returns a canonical SHA-256-shaped invocation hash required by strict admission validation. | open |  | 2026-08-05T20:23:59.583Z |  |
 | 21 | 07 | deviation | scripts/verify-phase-07-otel-packages.ts |  | Allowed only the exact candidate-only command manifest alongside the prior approved root manifest; other input drift remains blocked. | open |  | 2026-08-06T12:14:09.784Z |  |
+| 22 | 07 | deviation | scripts/certify-release.ts |  | Added an ignored controller-owned default workspace so the documented candidate-only command reaches authorization_required without environment setup. | open |  | 2026-08-06T12:18:20.750Z |  |
 
 ````json
 [
@@ -289,6 +290,18 @@ last_updated: 2026-08-06T12:14:09.784Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-06T12:14:09.784Z",
+    "resolved_at": null
+  },
+  {
+    "id": 22,
+    "kind": "deviation",
+    "phase": "07",
+    "file": "scripts/certify-release.ts",
+    "line": null,
+    "description": "Added an ignored controller-owned default workspace so the documented candidate-only command reaches authorization_required without environment setup.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-06T12:18:20.750Z",
     "resolved_at": null
   }
 ]

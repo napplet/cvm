@@ -51,7 +51,8 @@ metrics:
 - `bun test tests/release/certify-release.test.ts` — 4 passed.
 - Relevant controller/materializer/certifier coverage — 15 passed.
 - OpenTelemetry legitimacy suite — 7 passed on three consecutive verbose runs.
-- Full `bun test` — 547 passed, 0 failed.
+- `bun run release:certify -- --candidate toolchains/candidates/initial.json --dry-run` — exits 1 at `authorization_required` and prints only candidate/topology/state/request digests.
+- Full `bun test` — 549 passed, 0 failed.
 - Direct CLI negative check rejects `--registry` with `RELEASE_CERTIFICATION_ARGUMENT_REJECTED` before workspace, provider, or protected processing.
 
 ## Deviations from Plan
@@ -72,13 +73,20 @@ metrics:
 - **Files modified:** `scripts/verify-phase-07-otel-packages.ts`
 - **Commit:** `d6f2f81`
 
+**3. [Rule 1 - Product command usability] Added the controller-owned default workspace.**
+- **Found during:** Product command verification.
+- **Issue:** The documented candidate-only command incorrectly required `NAPPLET_CVM_RELEASE_WORKSPACE` and returned usage before reaching the controller.
+- **Fix:** Defaulted state to ignored `.runtime/release-certification`, reject external paths outside that root, and bind status checks to the supplied candidate.
+- **Files modified:** `scripts/certify-release.ts`, `src/release/controller.ts`, `.gitignore`, `.env.example`, `docs/runbooks/release-certification.md`, `tests/release/certify-release.test.ts`
+- **Commit:** `6362409`
+
 ## Known Stubs
 
 None. The authorization-required stop is an intentional non-authoritative state, not a protected success or UI placeholder.
 
 ## Issues Encountered
 
-The initial full-suite failure was a Plan 07-25 regression caused by the new package script. The exact pre-plan baseline (`d517594`) passes the approval verifier, while the initial Plan 07-25 manifest failed with `APPROVAL_INPUT_DIGEST_DRIFT`. The compatibility guard above resolved it without changing approved package facts or protected evidence.
+The initial full-suite failure was a Plan 07-25 regression caused by the new package script. The exact pre-plan baseline (`d517594`) passes the approval verifier, while the initial Plan 07-25 manifest failed with `APPROVAL_INPUT_DIGEST_DRIFT`. The compatibility guard above resolved it without changing approved package facts or protected evidence. A later product verification found the missing default workspace, which is now controller-owned and ignored.
 
 ## Next Phase Readiness
 
@@ -87,4 +95,4 @@ Plan 07-26 can supply the independently authorized protected execution ports. Th
 ## Self-Check: PASSED
 
 - All created/modified plan artifacts exist.
-- Task commits `0e635f0`, `00e4bd0`, `9c7a0fa`, `2eddf89`, `433ffa1`, `3209c37`, `68c756f`, and `d6f2f81` are reachable in Git history.
+- Task commits `0e635f0`, `00e4bd0`, `9c7a0fa`, `2eddf89`, `433ffa1`, `3209c37`, `68c756f`, `d6f2f81`, and `6362409` are reachable in Git history.

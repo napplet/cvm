@@ -303,7 +303,7 @@ Plans:
 **Validation gate**: Benchmark Modal and at least one non-AWS fallback with the production-like image, target regions, relay delay, pool misses, database contention, reclaim/failure behavior, and step load. Select a worker vendor only after receipt-to-isolated-worker-ready p95 is at most five seconds with zero durable backlog; establish the database/failover claim to match the chosen deployment scope.
 
 Phase 7 also closes the launch-hardening work intentionally deferred from Phase 1: exhaustive toolchain provenance, repeated/cross-environment reproducibility, full hostile and mutation coverage, formal golden approval, waiver drills, SBOM/provenance enforcement, and the final production promotion gate.
-**Plans**: 32/40 plans executed
+**Plans**: 33/40 plans executed
 **Wave 1**
 
 - [x] 07-00-PLAN.md
@@ -404,7 +404,7 @@ Phase 7 also closes the launch-hardening work intentionally deferred from Phase 
 
 **Wave 23** *(blocked on Wave 22 completion)*
 
-- [ ] 07-30-PLAN.md — Implement Cloud Run multi-region and live Collector native providers.
+- [x] 07-30-PLAN.md — Implement Cloud Run multi-region and live Collector native providers.
 - [ ] 07-31-PLAN.md — Implement versioned GCS and sole-authority Cloud SQL PostgreSQL native providers.
 - [ ] 07-36-PLAN.md — Compose promoted napplet CLI, upload, owner-relay, and attestation-relay adapters.
 
@@ -441,14 +441,14 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 4. Metered Generation & Revision Loop | 7/7 | Complete    | 2026-08-05 |
 | 5. Funding Interruption & Durable Resume | 7/7 | Complete    | 2026-08-05 |
 | 6. Sealed Preview & User-Owned Publication | 7/7 | Complete    | 2026-08-05 |
-| 7. Admission SLO, Resilience & Launch Safety | 32/40 | In Progress|  |
+| 7. Admission SLO, Resilience & Launch Safety | 33/40 | In Progress|  |
 
 ### Milestone Progress Roll-up
 
 - **Phases:** Phases 1–6 are verified complete; Phase 7 awaits protected live evidence and goal verification; 6/7 phases complete (86%).
-- **Known plans:** 72/80 milestone plans executed; Plans 07-19 and 07-21–07-25 completed the controller, provider, materializer, and exact-eight local foundations; Plans 07-27–07-29 established current authority, exact USD authorization, and native GCP bootstrap/cost composition; Plans 07-32–07-35 added worker, ContextVM/CEP-8 payment, candidate-bound model reconciliation, compatible-host observation, and external signer composition; Plans 07-36–07-39 close the remaining production composition before authorization.
+- **Known plans:** 73/80 milestone plans executed; Plans 07-19 and 07-21–07-25 completed the controller, provider, materializer, and exact-eight local foundations; Plans 07-27–07-30 established current authority, exact USD authorization, native GCP bootstrap/cost composition, and Cloud Run/Collector provider composition; Plans 07-32–07-35 added worker, ContextVM/CEP-8 payment, candidate-bound model reconciliation, compatible-host observation, and external signer composition; Plans 07-31 and 07-36–07-39 close the remaining production composition before authorization.
 - **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 49 verified complete and 5 Phase 7 requirements pending.
-- **Current checkpoint:** Execute Plan 07-30, continue through the remaining production native composition, then Plan 07-20 for official provider consent and one exact authorization, then Plan 07-26 for the run-only protected live certification.
+- **Current checkpoint:** Execute Plan 07-31, continue through the remaining production native composition, then Plan 07-20 for official provider consent and one exact authorization, then Plan 07-26 for the run-only protected live certification.
 - **Phase 1 preservation:** Phase 1 remains complete with its review, security, validation, verification evidence, and Phase 7 deferrals unchanged.
 
 ### Completion Reporting Contract

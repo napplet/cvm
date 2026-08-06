@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 25
+open_count: 26
 waived_count: 0
 fixed_count: 0
-total_count: 25
-last_updated: 2026-08-06T15:11:00.370Z
+total_count: 26
+last_updated: 2026-08-06T15:19:07.455Z
 ---
 
 # Broken Windows Ledger
@@ -40,6 +40,7 @@ last_updated: 2026-08-06T15:11:00.370Z
 | 23 | 07 | deviation | .planning/phases/07-admission-slo-resilience-launch-safety/07-32-PLAN.md |  | Plan referenced renamed worker and live-admission test paths; current equivalent contracts were verified. | open |  | 2026-08-06T14:38:44.092Z |  |
 | 24 | 07 | deviation | .planning/phases/07-admission-slo-resilience-launch-safety/07-35-PLAN.md |  | Plan references absent tests/certification/live-security-host.test.ts; existing live-integration gate was run instead. | open |  | 2026-08-06T15:08:57.132Z |  |
 | 25 | 07 | deviation | src/release/native/external-signer.ts |  | Signer inspection now requires a candidate-bound exact locally verified public authorization, not discovery alone. | open |  | 2026-08-06T15:11:00.370Z |  |
+| 26 | 07 | deviation | .planning/phases/07-admission-slo-resilience-launch-safety/07-30-SUMMARY.md |  | Plan 07-30 used the existing telemetry-policy suite because tests/certification/live-telemetry.test.ts is absent. | open |  | 2026-08-06T15:19:07.455Z |  |
 
 ````json
 [
@@ -341,6 +342,18 @@ last_updated: 2026-08-06T15:11:00.370Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-06T15:11:00.370Z",
+    "resolved_at": null
+  },
+  {
+    "id": 26,
+    "kind": "deviation",
+    "phase": "07",
+    "file": ".planning/phases/07-admission-slo-resilience-launch-safety/07-30-SUMMARY.md",
+    "line": null,
+    "description": "Plan 07-30 used the existing telemetry-policy suite because tests/certification/live-telemetry.test.ts is absent.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-06T15:19:07.455Z",
     "resolved_at": null
   }
 ]

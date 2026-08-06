@@ -27,6 +27,14 @@ export type ProtectedCertificationAdapterRegistry = Readonly<{
   adapters: Readonly<Partial<Record<ProtectedSuite, ProtectedCertificationAdapter>>>;
 }>;
 
+/** The materializer bundles this project-owned entrypoint.  It deliberately
+ * contains no provider client: protected execution injects authenticated
+ * adapters only after its independent profile and root checks have passed. */
+export const protectedCertificationAdapters: ProtectedCertificationAdapterRegistry = Object.freeze({
+  evidenceClass: "protected_live",
+  adapters: Object.freeze({}),
+});
+
 const containment = (root: string, child: string): boolean => {
   const value = relative(root, child);
   return value !== "" && !value.startsWith(`..${sep}`) && value !== ".." && !isAbsolute(value);

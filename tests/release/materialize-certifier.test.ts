@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { materializeProtectedCertifier } from "../../src/release/materialize-certifier";
+import { loadCertifierConfig } from "../../src/certification/config";
 
 const sha256 = (value: string | Uint8Array): string => createHash("sha256").update(value).digest("hex");
 const digest = (label: string): string => sha256(label);
@@ -51,10 +52,10 @@ test("materializes a candidate-bound local config, profile, adapter bundle, secr
       repositoryRoot: process.cwd(),
       candidateId: digest("candidate"),
       releaseManifest: releaseManifest(),
-      topology: { topologySha256: digest("topology"), deployment: { resources: [], limitations: ["DATABASE_CONTINUITY_NOT_CERTIFIED"] } },
+      topology: { candidateSha256: digest("candidate"), topologySha256: digest("topology"), deployment: { resources: [], limitations: ["DATABASE_CONTINUITY_NOT_CERTIFIED"] } },
       authorization: { authorizationReceiptSha256: digest("receipt"), authorizationRequestSha256: digest("request") },
       source: { sourceRevision: revision, sourceSha256: digest("source") },
-      secretReferences: { modal: "secret://modal", cloudRun: "secret://cloud-run" },
+      secretReferences: { modal: "secret://modal", "cloud-run": "secret://cloud-run" },
       onProviderCall: () => { providerCalls += 1; },
       onProtectedRunnerCall: () => { protectedRunnerCalls += 1; },
     };
@@ -69,6 +70,7 @@ test("materializes a candidate-bound local config, profile, adapter bundle, secr
     expect(await readFile(first.secretReferencesPath, "utf8")).toContain("secret://modal");
     expect(await readFile(first.secretReferencesPath, "utf8")).not.toContain("credential-value");
     expect(sha256(await readFile(first.adapter.modulePath))).toBe(first.adapter.sha256);
+    await expect(loadCertifierConfig({ env: first.env })).resolves.toMatchObject({ mode: "protected", controller: { candidateId: digest("candidate") } });
     expect(providerCalls).toBe(0);
     expect(protectedRunnerCalls).toBe(0);
   } finally {
@@ -81,15 +83,20 @@ test("materialization rejects caller authority overrides, stale topology, and ge
   try {
     const input = {
       workspace: root, repositoryRoot: process.cwd(), candidateId: digest("candidate"), releaseManifest: releaseManifest(),
-      topology: { topologySha256: digest("topology"), deployment: { resources: [], limitations: [] } },
+      topology: { candidateSha256: digest("candidate"), topologySha256: digest("topology"), deployment: { resources: [], limitations: [] } },
       authorization: { authorizationReceiptSha256: digest("receipt"), authorizationRequestSha256: digest("request") },
       source: { sourceRevision: revision, sourceSha256: digest("source") }, secretReferences: { modal: "secret://modal" },
     };
     await expect(materializeProtectedCertifier({ ...input, configPath: join(root, "operator.json") } as never)).rejects.toThrow("MATERIALIZER_OVERRIDE_REJECTED");
-    await expect(materializeProtectedCertifier({ ...input, topology: { ...input.topology, topologySha256: digest("other") } })).rejects.toThrow("MATERIALIZER_TOPOLOGY_REJECTED");
+    await expect(materializeProtectedCertifier({ ...input, topology: { ...input.topology, candidateSha256: digest("other") } })).rejects.toThrow("MATERIALIZER_TOPOLOGY_REJECTED");
     const result = await materializeProtectedCertifier(input);
     await writeFile(result.configPath, "{}\n");
     await expect(materializeProtectedCertifier(input)).rejects.toThrow("MATERIALIZER_ARTIFACT_MUTATED");
+    const cleanRoot = await mkdtemp(join(tmpdir(), "napplet-cvm-materialize-"));
+    const clean = await materializeProtectedCertifier({ ...input, workspace: cleanRoot });
+    await writeFile(clean.adapter.modulePath, "tampered adapter bundle\n");
+    await expect(materializeProtectedCertifier({ ...input, workspace: cleanRoot })).rejects.toThrow("MATERIALIZER_ARTIFACT_MUTATED");
+    await rm(cleanRoot, { recursive: true, force: true });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

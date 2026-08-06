@@ -10,6 +10,23 @@ const PinnedModuleSchema = z.object({
   modulePath: AbsolutePathSchema,
   sha256: DigestSchema,
 }).strict();
+const SecretReferencesSchema = z.object({
+  path: AbsolutePathSchema,
+  sha256: DigestSchema,
+}).strict();
+const GeneratedArtifactsSchema = z.object({
+  version: z.literal(1),
+  materializationId: DigestSchema,
+  manifestPath: AbsolutePathSchema,
+}).strict();
+const ControllerProvenanceSchema = z.object({
+  candidateId: DigestSchema,
+  releaseId: DigestSchema,
+  topologySha256: DigestSchema,
+  authorizationReceiptSha256: DigestSchema,
+  sourceRevision: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/iu).transform((value) => value.toLowerCase()),
+  sourceSha256: DigestSchema,
+}).strict();
 
 const LocalCertifierConfigSchema = z.object({
   version: z.literal(1),
@@ -24,7 +41,10 @@ const ProtectedCertifierConfigSchema = z.object({
   evidenceDirectory: AbsolutePathSchema,
   credentials: z.enum(["configured", "unavailable"]),
   adapter: PinnedModuleSchema,
-  trustRoot: PinnedModuleSchema,
+  trustRoot: PinnedModuleSchema.optional(),
+  controller: ControllerProvenanceSchema.optional(),
+  secretReferences: SecretReferencesSchema.optional(),
+  generatedArtifacts: GeneratedArtifactsSchema.optional(),
   reproducibility: z.object({
     buildRecordsPath: AbsolutePathSchema,
     evidenceDirectory: AbsolutePathSchema,

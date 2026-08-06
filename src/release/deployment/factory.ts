@@ -6,6 +6,8 @@ import type { GoogleAccessToken, GoogleFetch, GoogleTokenSource } from "./google
 import type { createContextVmDeploymentClient } from "./contextvm-client";
 import type { createPaymentDeploymentClients } from "./payment-clients";
 import type { createVertexDeploymentClient } from "./vertex-client";
+import type { createCompatibleHostDeploymentClient } from "./compatible-host-client";
+import type { createNip46DeploymentClient } from "./nip46-signer-client";
 
 /** Bounded dependency descriptors for the concrete provider modules.  They are
  * references only: the pinned factory must receive them explicitly and cannot
@@ -20,12 +22,16 @@ export function registerDeploymentClientFamilies(input: Readonly<{
   contextvm: ReturnType<typeof createContextVmDeploymentClient>;
   payments: ReturnType<typeof createPaymentDeploymentClients>;
   vertex: ReturnType<typeof createVertexDeploymentClient>;
+  host?: ReturnType<typeof createCompatibleHostDeploymentClient>;
+  signer?: ReturnType<typeof createNip46DeploymentClient>;
 }>) {
   return Object.freeze({
     contextvm: input.contextvm,
     cep8_lightning: input.payments.nwc,
     cashu: input.payments.cashu,
     model: input.vertex,
+    ...(input.host ? { compatible_host: input.host } : {}),
+    ...(input.signer ? { signer: input.signer } : {}),
   });
 }
 

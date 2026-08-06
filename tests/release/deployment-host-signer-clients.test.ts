@@ -2,6 +2,10 @@ import { expect, test } from "bun:test";
 
 import { createCompatibleHostDeploymentClient } from "../../src/release/deployment/compatible-host-client";
 import { createNip46DeploymentClient } from "../../src/release/deployment/nip46-signer-client";
+import { createContextVmDeploymentClient } from "../../src/release/deployment/contextvm-client";
+import { createPaymentDeploymentClients } from "../../src/release/deployment/payment-clients";
+import { createVertexDeploymentClient } from "../../src/release/deployment/vertex-client";
+import { registerDeploymentClientFamilies } from "../../src/release/deployment/factory";
 
 const digest = (letter: string) => letter.repeat(64);
 
@@ -30,4 +34,17 @@ test("nip46: retains only a disposable client key reference and never receives u
   expect(await client.inspect({ sealedArtifactSha256: digest("e"), aggregateSha256: digest("f") })).toMatchObject({ status: "blocked", userKeyOutsideCvm: true, keyCanaryAbsentFromCvm: true });
   expect(discoveryCalls).toBe(1);
   expect(() => createNip46DeploymentClient({ disposableClientKeyReference: "nsec1-owner-key", signer: {} as never, ownerEventVerifier: {} as never })).toThrow("DEPLOYMENT_SECRET_REFERENCE_INVALID");
+});
+
+test("host: factory preserves distinct compatible-host and NIP-46 family identities", () => {
+  const host = createCompatibleHostDeploymentClient({ referenceHostReference: "napplet:reference-host:0.3.1", chromiumReference: "chromium:fixture:123", packageHost: {} as never, browser: {} as never });
+  const signer = createNip46DeploymentClient({ disposableClientKeyReference: "nostr:nip46-disposable-client-key", signer: {} as never, ownerEventVerifier: {} as never });
+  const families = registerDeploymentClientFamilies({
+    contextvm: createContextVmDeploymentClient({ serviceKeyReference: "nostr:contextvm-service-key", relaySetReference: "relay-set:primary", relaySetSha256: digest("1") }),
+    payments: createPaymentDeploymentClients({ nwcConnectionReference: "nwc:consent:wallet-one", cashuWalletReference: "cashu:funded-wallet:one" }),
+    vertex: createVertexDeploymentClient({ candidateSha256: digest("2"), projectId: "napplet-cvm-run-1", location: "europe-west1", model: "gemini-2.5-pro", credentialReference: "gcp:adc:release", vertex: { predict: async () => ({ status: "blocked" as const }) } }),
+    host, signer,
+  });
+  expect(families.compatible_host).toBe(host);
+  expect(families.signer).toBe(signer);
 });

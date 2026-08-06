@@ -56,11 +56,12 @@ test("documented no-env command reaches the candidate-bound authorization bounda
   expect(result.resumeStateSha256).toMatch(/^[a-f0-9]{64}$/);
 });
 
-test("a non-dry-run request is explicit about the unavailable complete live executor before any provider command", async () => {
+test("a non-dry-run request constructs only capability-blocked production composition before any provider command", async () => {
   const child = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json"], { cwd: process.cwd(), env: { ...process.env, PATH: "/nonexistent", NAPPLET_CVM_RELEASE_AUTHORIZATION_SHA256: "a".repeat(64) }, stdout: "pipe", stderr: "pipe" });
   const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   expect(code).toBe(1);
-  expect(`${stdout}${stderr}`).toContain("RELEASE_LIVE_PROVIDER_FAMILY_UNIMPLEMENTED");
+  expect(`${stdout}${stderr}`).toContain("RELEASE_PRODUCTION_CAPABILITY_OR_CONSENT_REQUIRED");
+  expect(`${stdout}${stderr}`).not.toContain("RELEASE_LIVE_PROVIDER_FAMILY_UNIMPLEMENTED");
 });
 
 test("workspace overrides are confined and status/resume remain candidate-bound", async () => {

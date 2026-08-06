@@ -14,12 +14,18 @@ const provider = (calls: string[]) => ({
   cleanup: async () => { calls.push("cleanup"); return { status: "blocked" as const, actualCostMicros: 0 }; },
 });
 
+const references = Object.fromEntries(RELEASE_PRODUCTION_PROVIDER_IDS.map((id) => [id, {
+  reference: `provider:${id}:candidate`,
+  referenceSha256: digest("b"),
+}]));
+
 const real = <T extends Record<string, unknown>>(port: T) => Object.freeze({ ...port, evidenceClass: "real" as const });
 
 test("production tracer constructs all controller providers and exact real ports without effects", async () => {
   const calls: string[] = [];
   const native = createNativeReleaseProviderRegistry({
     candidateSha256: digest("a"),
+    providerReferences: references,
     providers: Object.fromEntries(RELEASE_PRODUCTION_PROVIDER_IDS.map((id) => [id, provider(calls)])),
   });
   const controller = createReleaseControllerProviderRegistry(native);
@@ -45,11 +51,19 @@ test("production tracer rejects a missing or wrong receipt before the provider a
   const calls: string[] = [];
   const registry = createNativeReleaseProviderRegistry({
     candidateSha256: digest("a"),
+    providerReferences: references,
     providers: { cloud_run: provider(calls) },
   });
 
   await expect(registry.apply({ receipt: {}, operation: {}, approvedMaximumCostMicros: 1 })).rejects.toThrow("RELEASE_PROVIDER_AUTHORIZATION_INVALID");
   expect(calls).toEqual([]);
+});
+
+test("production registry has a blocked family for absent injected capability, never an unimplemented-family fallback", async () => {
+  const registry = createNativeReleaseProviderRegistry({ candidateSha256: digest("a"), providerReferences: references });
+  await expect(registry.discover("model")).resolves.toMatchObject({
+    provider: "model", capability: "unavailable", authentication: "unavailable", reasonCode: "AUTHORIZATION_REQUIRED",
+  });
 });
 
 test("production composition rejects non-real protected ports before any suite can run", () => {

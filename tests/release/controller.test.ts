@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ReleaseCertificationController, runReleaseCertification } from "../../src/release/controller";
 import { canonicalJson } from "../../src/promotion/schema";
+import { createReleaseProviderRegistry, type ReleaseAuthorizationReceipt } from "../../src/release/providers";
+import { RELEASE_PROVIDER_IDS } from "../../src/release/topology";
 
 const repositoryRoot = join(import.meta.dir, "..", "..");
 const candidatePath = join(repositoryRoot, "toolchains/candidates/initial.json");
@@ -95,4 +97,42 @@ test("authorization-required state requires an intact monotonic prior discovery 
   const result = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000 });
   await writeFile(join(root, "states", `${result.state.priorStateSha256}.json`), "{}\n");
   await expect(new ReleaseCertificationController({ candidatePath, workspace: root }).status()).rejects.toThrow("RELEASE_CONTROLLER_STATE_INVALID");
+});
+
+test("authorized provider execution records one exact deployed topology and resumes without duplicate mutations", async () => {
+  const root = await workspace();
+  const dryRun = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000 });
+  const effects: string[] = [];
+  const registry = createReleaseProviderRegistry({
+    now: () => 1_000,
+    ports: Object.fromEntries(RELEASE_PROVIDER_IDS.map((provider) => [provider, {
+      discoverCapabilities: async () => ({ capability: "available" as const }),
+      discoverAuthentication: async () => ({ authentication: "authorized" as const }),
+      plan: async () => ({ status: "planned" as const, estimatedCostMicros: 1 }),
+      apply: async (input: { operationId: string }) => { effects.push(input.operationId); return { status: "applied" as const, actualCostMicros: 1, resourceIdentity: `${provider}:${input.operationId}` }; },
+      observe: async (input: { operationId: string }) => ({ status: "completed" as const, actualCostMicros: 1, resourceIdentity: `${provider}:${input.operationId}` }),
+      cleanup: async () => ({ status: "cleaned" as const, actualCostMicros: 0 }),
+    }])) as never,
+  });
+  const receipt: ReleaseAuthorizationReceipt = {
+    version: 1,
+    authorizationRequestSha256: dryRun.authorizationRequest.authorizationRequestSha256,
+    authorizationReceiptSha256: "a".repeat(64),
+    candidateSha256: dryRun.state.candidate.candidateSha256,
+    topologySha256: dryRun.state.topologySha256,
+    effectPlanSha256: dryRun.authorizationRequest.effectPlanSha256,
+    maximumAuthorizedCostMicros: dryRun.authorizationRequest.maximumAuthorizedCostMicros,
+    expiresAtMs: 10_000,
+  };
+
+  const controller = new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000 });
+  const first = await controller.provision({ receipt, registry });
+  expect(first.state.status).toBe("topology_ready");
+  expect(first.topology.deployment.resources).toHaveLength(16);
+  expect(first.topology.deployment.availability.limitations).toContain("DATABASE_CONTINUITY_NOT_CERTIFIED");
+  expect(effects).toHaveLength(16);
+
+  const resumed = await new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 2_000 }).provision({ receipt, registry });
+  expect(resumed.topology.topologySha256).toBe(first.topology.topologySha256);
+  expect(effects).toHaveLength(16);
 });

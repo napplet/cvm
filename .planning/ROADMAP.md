@@ -474,9 +474,9 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 ### Milestone Progress Roll-up
 
 - **Phases:** Phases 1–6 are verified complete; Phase 7 awaits protected live evidence and goal verification; 6/7 phases complete (86%).
-- **Known plans:** 83/87 milestone plans executed. Plans 07-45–07-46 close the authoritative catalog, operator-funding prerequisite, concrete protected factory/config, and truthful one-command readiness gaps before 07-20 approval and 07-26 execution.
+- **Known plans:** 84/87 milestone plans executed. Plan 07-45 closed the authoritative catalog and operator-funding prerequisite gaps; Plan 07-46 now owns the concrete protected factory/config and truthful one-command readiness before 07-20 approval and 07-26 execution.
 - **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 49 verified complete and 5 Phase 7 requirements pending.
-- **Current checkpoint:** Execute 07-45 then 07-46; use 07-20 only to connect any missing local operator NWC Lightning and funded Cashu certification rails plus final exact approval, then run 07-26 protected live certification. Future napplet-owner NIP-46 signing occurs during publication, not candidate certification.
+- **Current checkpoint:** Execute 07-46; use 07-20 only to connect any missing local operator NWC Lightning and funded Cashu certification rails plus final exact approval, then run 07-26 protected live certification. Future napplet-owner NIP-46 signing occurs during publication, not candidate certification.
 - **Phase 1 preservation:** Phase 1 remains complete with its review, security, validation, verification evidence, and Phase 7 deferrals unchanged.
 
 ### Completion Reporting Contract

@@ -8,7 +8,7 @@ status: executing
 stopped_at: Completed 07-45-PLAN.md
 last_updated: "2026-08-06T20:14:22.479Z"
 last_activity: 2026-08-06
-last_activity_desc: Fixed fixture-priced product approval and corrected funding/NIP-46 semantics
+last_activity_desc: Completed authoritative production catalog and operator funding prerequisite composition
 progress:
   total_phases: 7
   completed_phases: 6
@@ -31,19 +31,19 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 Phase: 07 (admission-slo-resilience-launch-safety) — EXECUTING
 Plan: 44 of 47 complete
-Status: Ready to execute 07-45 authoritative catalog and service-funding prerequisite composition
-Last activity: 2026-08-06 — Fixed fixture-priced product approval and corrected funding/NIP-46 semantics
+Status: Ready to execute 07-46 concrete protected factory and one-command no-effect readiness
+Last activity: 2026-08-06 — Completed 07-45 authoritative catalog and operator funding prerequisite composition
 
-Plan execution: [█████████░] 83/87 milestone plans complete; Phase 7 is 43/47 complete and verification remains pending
+Plan execution: [█████████░] 84/87 milestone plans complete; Phase 7 is 44/47 complete and verification remains pending
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 83/87 milestone plans executed. Plans 07-45–07-46 now close truthful live pricing/operator funding and concrete protected factory/readiness before 07-20 approval and 07-26 protected execution.
+- Plans: 84/87 milestone plans executed. Plan 07-45 closed truthful live pricing/operator funding; Plan 07-46 now closes the concrete protected factory/readiness gap before 07-20 approval and 07-26 protected execution.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Next checkpoint: execute 07-45 then 07-46; 07-20 connects any missing operator NWC Lightning and funded Cashu certification rails locally and records final exact approval, followed by 07-26. Owner NIP-46 remains deferred to publication; no hand-authored config/evidence or pasted secret/digest is required.
+- Next checkpoint: execute 07-46; 07-20 connects any missing operator NWC Lightning and funded Cashu certification rails locally and records final exact approval, followed by 07-26. Owner NIP-46 remains deferred to publication; no hand-authored config/evidence or pasted secret/digest is required.
 
 ## Performance Metrics
 

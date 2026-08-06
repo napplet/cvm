@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ReleaseCertificationController, runReleaseCertification } from "../../src/release/controller";
-import { createAuthorizationReceipt } from "../../src/release/authorization";
+import { createAuthorizationReceipt, createAuthorizationRequest, validateAuthorizationReceipt } from "../../src/release/authorization";
 import { canonicalJson } from "../../src/promotion/schema";
 import { createReleaseProviderRegistry, type ReleaseAuthorizationReceipt } from "../../src/release/providers";
 import { RELEASE_PROVIDER_IDS } from "../../src/release/topology";
@@ -14,6 +14,44 @@ const candidatePath = join(repositoryRoot, "toolchains/candidates/initial.json")
 async function workspace(): Promise<string> {
   return mkdtemp(join(tmpdir(), "napplet-cvm-release-controller-"));
 }
+
+test("authorization receipt integrity rejects changed scope, expired receipt, and cost ceiling tampering before effects", async () => {
+  const request = await createAuthorizationRequest({
+    candidateSha256: "a".repeat(64),
+    topologySha256: "b".repeat(64),
+    effectPlanSha256: "c".repeat(64),
+    controllerStateSha256: "d".repeat(64),
+    providerCapabilitiesSha256: "e".repeat(64),
+    orderedEffects: [{ id: "cloud-run-ingress", provider: "cloud_run", operation: "create_or_update", estimatedCostMicros: 5_000_000 }],
+    providerScopes: [{ provider: "cloud_run", accountScopeSha256: "f".repeat(64), projectScopeSha256: "1".repeat(64) }],
+    estimate: { currency: "USD", maximumMicros: 5_000_000, sourceId: "release-topology-v1", observedAtMs: 1_000, freshUntilMs: 3_000 },
+    maximumRunDurationMs: 60_000,
+    cleanupByMs: 1_500,
+    evidenceRetentionDays: 30,
+    artifactRetentionDays: 30,
+    gcpEffects: { projectBootstrap: true, billing: true, apiEnablement: ["run.googleapis.com"] },
+    expiresAtMs: 2_000,
+  });
+  const receipt = await createAuthorizationReceipt(request);
+
+  await expect(validateAuthorizationReceipt({ request, receipt, nowMs: 1_999 })).resolves.toEqual(receipt);
+  await expect(validateAuthorizationReceipt({
+    request: { ...request, providerScopes: [{ ...request.providerScopes[0]!, accountScopeSha256: "9".repeat(64) }] },
+    receipt,
+    nowMs: 1_999,
+  })).rejects.toThrow("RELEASE_AUTHORIZATION_REQUEST_INVALID");
+  await expect(validateAuthorizationReceipt({ request, receipt, nowMs: request.expiresAtMs })).rejects.toThrow("RELEASE_AUTHORIZATION_RECEIPT_EXPIRED");
+  await expect(validateAuthorizationReceipt({
+    request: { ...request, maximumAuthorizedCostMicros: request.maximumAuthorizedCostMicros + 1 },
+    receipt,
+    nowMs: 1_999,
+  })).rejects.toThrow("RELEASE_AUTHORIZATION_COST_MISMATCH");
+  await expect(validateAuthorizationReceipt({
+    request,
+    receipt: { ...receipt, candidateSha256: "9".repeat(64) },
+    nowMs: 1_999,
+  })).rejects.toThrow("RELEASE_AUTHORIZATION_RECEIPT_INVALID");
+});
 
 test("dry-run reaches an authorization-required no-effect boundary and writes only resumable controller artifacts", async () => {
   const root = await workspace();

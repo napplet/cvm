@@ -56,7 +56,7 @@ test("documented no-env command reaches the candidate-bound authorization bounda
   expect(result.resumeStateSha256).toMatch(/^[a-f0-9]{64}$/);
 });
 
-test("status accepts the documented require-state contract without a candidate and rejects mismatches", async () => {
+test("status require-state exits zero only on the documented exact match", async () => {
   const workspaceRoot = join(process.cwd(), ".runtime", "release-certification", "native-discovery-v1");
   await mkdir(workspaceRoot, { recursive: true });
   const workspace = await mkdtemp(join(workspaceRoot, "certify-status-"));
@@ -72,15 +72,32 @@ test("status accepts the documented require-state contract without a candidate a
 
     const matching = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--status", "--require-state=authorization_required"], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
     const [matchingCode, matchingStdout, matchingStderr] = await Promise.all([matching.exited, new Response(matching.stdout).text(), new Response(matching.stderr).text()]);
-    expect(matchingCode).toBe(1);
+    expect(matchingCode).toBe(0);
     expect(matchingStderr).not.toContain("RELEASE_CERTIFICATION_ARGUMENT_REJECTED");
     expect(JSON.parse(matchingStdout)).toMatchObject({ status: "authorization_required", candidateSha256: seeded.state.candidate.candidateSha256, stateSha256: seeded.state.stateSha256 });
+
+    const unasserted = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--status"], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
+    const [unassertedCode, unassertedStdout] = await Promise.all([unasserted.exited, new Response(unasserted.stdout).text()]);
+    expect(unassertedCode).toBe(1);
+    expect(JSON.parse(unassertedStdout)).toMatchObject({ status: "authorization_required" });
 
     const mismatching = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--status", "--require-state=completed"], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
     const [mismatchingCode, mismatchingStdout, mismatchingStderr] = await Promise.all([mismatching.exited, new Response(mismatching.stdout).text(), new Response(mismatching.stderr).text()]);
     expect(mismatchingCode).toBe(1);
     expect(mismatchingStdout).toBe("");
     expect(mismatchingStderr).toContain("RELEASE_CERTIFICATION_STATE_MISMATCH");
+
+    const missing = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--status", "--require-state="], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
+    const [missingCode, missingStdout, missingStderr] = await Promise.all([missing.exited, new Response(missing.stdout).text(), new Response(missing.stderr).text()]);
+    expect(missingCode).toBe(1);
+    expect(missingStdout).toBe("");
+    expect(missingStderr).toContain("RELEASE_CERTIFICATION_ARGUMENT_REJECTED");
+
+    const invalid = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--status", "--require-state=not-a-release-state"], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
+    const [invalidCode, invalidStdout, invalidStderr] = await Promise.all([invalid.exited, new Response(invalid.stdout).text(), new Response(invalid.stderr).text()]);
+    expect(invalidCode).toBe(1);
+    expect(invalidStdout).toBe("");
+    expect(invalidStderr).toContain("RELEASE_CERTIFICATION_STATE_MISMATCH");
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

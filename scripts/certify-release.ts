@@ -70,7 +70,7 @@ async function main(): Promise<number> {
       expectedReceiptSha256: result.authorizationRequest.expectedReceiptSha256,
       receiptValidated: receipt === undefined ? false : true,
     } : { status: result.state.status, candidateSha256: result.state.candidate.candidateSha256, topologySha256: result.state.topologySha256, stateSha256: result.state.stateSha256, authorizationRequestSha256: result.authorizationRequest.authorizationRequestSha256, expectedReceiptSha256: result.authorizationRequest.expectedReceiptSha256, controllerStateSha256: result.authorizationRequest.controllerStateSha256, resumeStateSha256: result.authorizationRequest.controllerStateSha256 }));
-    return result.exitCode;
+    return status && requiredState !== undefined ? 0 : result.exitCode;
   } catch (error) {
     console.error(error instanceof Error ? error.message : "RELEASE_CONTROLLER_FAILED");
     return 1;

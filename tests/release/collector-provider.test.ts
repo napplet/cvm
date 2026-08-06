@@ -19,10 +19,14 @@ async function authorized() {
 }
 
 function port(transcript: string[], records: unknown[] = []): CollectorControlPlanePort {
+  let configured = false;
   return {
     persist: async ({ operationId }) => { transcript.push(`persist:${operationId}`); },
-    observe: async ({ operationId }) => ({ status: operationId === "collector-1" ? "missing" : "completed", endpointReferenceSha256: digest("f") }),
-    configure: async ({ operationId }) => { transcript.push(`configure:${operationId}`); },
+    observe: async ({ operationId }) => {
+      if (operationId === "collector-1" && !configured) return { status: "missing" as const };
+      return { status: "completed" as const, endpointReferenceSha256: digest("f") };
+    },
+    configure: async ({ operationId }) => { transcript.push(`configure:${operationId}`); configured = true; },
     deleteCollector: async ({ operationId }) => { transcript.push(`delete:${operationId}`); },
     emit: async ({ observation }) => { records.push(observation); },
     queryWindow: async ({ binding }) => ({ status: "observed", binding, observations: records, rejectedCanaries: true, metricSeriesCount: 15 }),
@@ -63,5 +67,6 @@ test("revalidates before configure and scopes cleanup to the candidate-bound col
   const provider = createNativeCollectorProvider({ config, port: { ...base, observe: async () => { clock = 9_000; return { status: "missing" as const }; } }, now: () => clock });
   const input = { request, receipt, operationId: "collector-1" };
   await expect(provider.apply(input)).rejects.toThrow("COLLECTOR_AUTHORIZATION_INVALID");
+  clock = now;
   await expect(provider.cleanup({ ...input, runOwnedEndpointReference: "collector/other" })).rejects.toThrow("COLLECTOR_CLEANUP_SCOPE_INVALID");
 });

@@ -69,3 +69,30 @@ test("authorization-required state rejects candidate reuse, request tampering, a
   ]);
   expect(left.state.stateSha256).toBe(right.state.stateSha256);
 });
+
+test("discovery serializes only finite redacted digest facts", async () => {
+  const root = await workspace();
+  const result = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, providers: {
+    modal: { discover: async () => ({
+      capability: "available",
+      authentication: "authorized",
+      reasonCode: "AUTHORIZATION_REQUIRED",
+      accountScopeSha256: "a".repeat(64),
+      costEstimateSha256: "b".repeat(64),
+      nativeError: "provider-native-error-with-secret",
+      token: "provider-token-canary",
+    } as never) },
+  } });
+  const modal = result.state.capabilities.find((item) => item.provider === "modal")!;
+  expect(modal).toEqual(expect.objectContaining({ capability: "unavailable", reasonCode: "CAPABILITY_UNAVAILABLE" }));
+  const persisted = await readFile(join(root, "states", `${result.state.stateSha256}.json`), "utf8");
+  expect(persisted).not.toContain("provider-native-error-with-secret");
+  expect(persisted).not.toContain("provider-token-canary");
+});
+
+test("authorization-required state requires an intact monotonic prior discovery state", async () => {
+  const root = await workspace();
+  const result = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000 });
+  await writeFile(join(root, "states", `${result.state.priorStateSha256}.json`), "{}\n");
+  await expect(new ReleaseCertificationController({ candidatePath, workspace: root }).status()).rejects.toThrow("RELEASE_CONTROLLER_STATE_INVALID");
+});

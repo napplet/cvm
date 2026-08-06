@@ -1,0 +1,104 @@
+import { z } from "zod";
+
+const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
+const NonNegativeIntegerSchema = z.number().int().nonnegative();
+
+export const ReleaseProviderIdSchema = z.enum([
+  "cloud_run", "gcs", "collector", "cockroach_postgres", "modal", "fly",
+  "contextvm", "cep8_lightning", "cashu", "model", "compatible_host", "signer",
+  "promoted_cli", "upload", "owner_relay", "attestation_relay",
+]);
+export type ReleaseProviderId = z.infer<typeof ReleaseProviderIdSchema>;
+
+export const ProviderCapabilityObservationSchema = z.object({
+  version: z.literal(1),
+  provider: ReleaseProviderIdSchema,
+  capability: z.enum(["available", "unavailable", "unsupported"]),
+  authentication: z.enum(["authorized", "not_configured", "unavailable"]),
+  accountScopeSha256: DigestSchema,
+  costEstimateSha256: DigestSchema,
+  reasonCode: z.enum(["AUTHORIZATION_REQUIRED", "CAPABILITY_UNAVAILABLE", "CREDENTIALS_UNAVAILABLE", "UNSUPPORTED_CAPABILITY"]),
+}).strict();
+export type ProviderCapabilityObservation = z.infer<typeof ProviderCapabilityObservationSchema>;
+
+export const ReleaseEffectPlanSchema = z.object({
+  version: z.literal(1),
+  candidateSha256: DigestSchema,
+  topologySha256: DigestSchema,
+  effects: z.array(z.object({
+    id: z.string().regex(/^[a-z][a-z0-9_.-]{2,127}$/u),
+    provider: ReleaseProviderIdSchema,
+    operation: z.enum(["create_or_update", "benchmark", "configure", "verify_integration"]),
+    estimatedCostMicros: NonNegativeIntegerSchema,
+  }).strict()).min(1),
+  maximumAuthorizedCostMicros: NonNegativeIntegerSchema.positive(),
+  effectPlanSha256: DigestSchema,
+}).strict();
+export type ReleaseEffectPlan = z.infer<typeof ReleaseEffectPlanSchema>;
+
+export const ReleaseTopologyObservationSchema = z.object({
+  version: z.literal(1),
+  candidateSha256: DigestSchema,
+  controlPlane: z.object({
+    regions: z.tuple([z.string().min(1), z.string().min(1)]),
+    minimumInstancesPerRegion: z.literal(3),
+    collectorImage: z.string().regex(/^otel\/opentelemetry-collector@sha256:[a-f0-9]{64}$/iu),
+  }).strict(),
+  objectStore: z.object({ dualRegion: z.string().min(1), versioning: z.literal(true), retentionDays: z.literal(30) }).strict(),
+  database: z.object({ authority: z.literal("cockroach_postgres"), serializable: z.literal(true) }).strict(),
+  workerCandidates: z.tuple([z.literal("modal"), z.literal("fly")]),
+  integrations: z.array(ReleaseProviderIdSchema).length(10),
+  topologySha256: DigestSchema,
+}).strict();
+export type ReleaseTopologyObservation = z.infer<typeof ReleaseTopologyObservationSchema>;
+
+const CandidateIdentitySchema = z.object({
+  candidateSha256: DigestSchema,
+  sourceSha256: DigestSchema,
+  packageSha256: DigestSchema,
+  lockfileSha256: DigestSchema,
+  toolchainSha256: DigestSchema,
+  policySha256: DigestSchema,
+  datasetSha256: DigestSchema,
+}).strict();
+
+export const ReleaseAuthorizationRequestSchema = z.object({
+  version: z.literal(1),
+  candidate: CandidateIdentitySchema,
+  topologySha256: DigestSchema,
+  effectPlanSha256: DigestSchema,
+  plannedEffects: ReleaseEffectPlanSchema.shape.effects,
+  maximumAuthorizedCostMicros: NonNegativeIntegerSchema.positive(),
+  providerCapabilitiesSha256: DigestSchema,
+  expiresAtMs: z.number().int().positive(),
+  resumeStateSha256: DigestSchema,
+  authorizationRequestSha256: DigestSchema,
+}).strict();
+export type ReleaseAuthorizationRequest = z.infer<typeof ReleaseAuthorizationRequestSchema>;
+
+export const ReleaseControllerStateSchema = z.object({
+  version: z.literal(1),
+  status: z.enum(["initialized", "discovering", "authorization_required", "blocked"]),
+  candidate: CandidateIdentitySchema,
+  topologySha256: DigestSchema,
+  capabilities: z.array(ProviderCapabilityObservationSchema).length(16),
+  priorStateSha256: DigestSchema.nullable(),
+  authorizationRequestSha256: DigestSchema.nullable(),
+  createdAtMs: z.number().int().positive(),
+  stateSha256: DigestSchema,
+}).strict();
+export type ReleaseControllerState = z.infer<typeof ReleaseControllerStateSchema>;
+
+export const ReleaseControllerCurrentPointerSchema = z.object({
+  version: z.literal(1),
+  stateSha256: DigestSchema,
+  candidateSha256: DigestSchema,
+  pointerSha256: DigestSchema,
+}).strict();
+
+/** Read-only discovery only. Provider implementations must not expose native output. */
+export interface ReleaseProviderPort {
+  discover(): Promise<Omit<ProviderCapabilityObservation, "version" | "provider" | "accountScopeSha256" | "costEstimateSha256"> & Partial<Pick<ProviderCapabilityObservation, "accountScopeSha256" | "costEstimateSha256">>>;
+}
+
+export type ReleaseProviderRegistry = Partial<Record<ReleaseProviderId, ReleaseProviderPort>>;

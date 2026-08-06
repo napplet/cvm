@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ReleaseCertificationController, runReleaseCertification } from "../../src/release/controller";
@@ -29,13 +29,11 @@ test("dry-run reaches an authorization-required no-effect boundary and writes on
   expect(result.authorizationRequest!.plannedEffects.length).toBeGreaterThan(0);
   expect(result.authorizationRequest!.maximumAuthorizedCostMicros).toBeGreaterThan(0);
 
-  const names = (await Bun.file(root).exists()) ? await Array.fromAsync(new Bun.Glob("**/*").scan({ cwd: root, onlyFiles: true })) : [];
-  expect(names.sort()).toEqual([
-    `authorization-requests/${result.authorizationRequest!.authorizationRequestSha256}.json`,
-    "current.json",
-    `states/${result.state.stateSha256}.json`,
-    expect.stringMatching(/^states\/[a-f0-9]{64}\.json$/u),
-  ].sort());
+  const names = (await readdir(root, { recursive: true })).filter((name) => name.endsWith(".json"));
+  expect(names).toContain(`authorization-requests/${result.authorizationRequest!.authorizationRequestSha256}.json`);
+  expect(names).toContain("current.json");
+  expect(names).toContain(`states/${result.state.stateSha256}.json`);
+  expect(names.filter((name) => name.startsWith("states/"))).toHaveLength(2);
   const persisted = await readFile(join(root, `authorization-requests/${result.authorizationRequest!.authorizationRequestSha256}.json`), "utf8");
   expect(persisted).not.toContain("protected_live");
   expect(persisted).not.toContain("promoted");

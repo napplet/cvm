@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: executing
-stopped_at: Completed 07-31-PLAN.md
-last_updated: "2026-08-06T15:28:46Z"
+stopped_at: Completed 07-36-PLAN.md
+last_updated: "2026-08-06T15:45:47.058Z"
 last_activity: 2026-08-06
-last_activity_desc: Completed 07-31 receipt-gated GCS and sole-authority Cloud SQL PostgreSQL provider composition
+last_activity_desc: Completed 07-36 pinned promoted CLI, exact upload, and original-event relay publication ports
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 80
-  completed_plans: 74
+  completed_plans: 75
   percent: 86
 ---
 
@@ -30,26 +30,26 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 07 (admission-slo-resilience-launch-safety) — EXECUTING
-Plan: 34 of 40 complete
-Status: Ready to execute 07-36
-Last activity: 2026-08-06 — Completed 07-31 receipt-gated GCS and sole-authority Cloud SQL PostgreSQL provider composition
+Plan: 35 of 40 complete
+Status: Ready to execute 07-37
+Last activity: 2026-08-06 — Completed 07-36 pinned promoted CLI, exact upload, and original-event relay publication ports
 
-Plan execution: [█████████░] 74/80 milestone plans complete; Phase 7 is 34/40 complete and verification remains pending
+Plan execution: [█████████░] 75/80 milestone plans complete; Phase 7 is 35/40 complete and verification remains pending
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 74/80 milestone plans executed; Plan 07-31 added receipt-gated GCS and sole-authority Cloud SQL PostgreSQL provider composition. Plan 07-36 is next before the remaining production composition and separate authorization/protected-run checkpoints.
+- Plans: 75/80 milestone plans executed; Plan 07-36 added pinned promoted CLI, exact sealed-byte upload, and original-event relay publication composition. Plan 07-37 is next before the remaining provider composition and separate authorization/protected-run checkpoints.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Next checkpoint: execute Plan 07-36, continue autonomously through Plan 07-39, then use Plan 07-20 for one exact provider-authentication/cost approval and Plan 07-26 for the protected live run; no hand-authored evidence or certifier files are required.
+- Next checkpoint: execute Plan 07-37, continue through Plan 07-39, then use Plan 07-20 for one exact provider-authentication/cost approval and Plan 07-26 for the protected live run; no hand-authored evidence or certifier files are required.
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 73
+- Total plans completed: 75
 - Average duration: -
 - Total execution time: 0 hours
 
@@ -138,6 +138,7 @@ Plan execution: [█████████░] 74/80 milestone plans complete;
 | Phase 07 P34 | 7m 3s | 2 tasks | 3 files |
 | Phase 07 P35 | 7m | 2 tasks | 4 files |
 | Phase 07 P30 | 14m | 2 tasks | 4 files |
+| Phase 07 P36 | 7m | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -286,6 +287,7 @@ Recent decisions affecting current work:
 - [Phase ?]: External signer boundaries return public discovery and exact verified results only; protected live evidence remains required.
 - [Phase ?]: Cloud Run and Collector native ports revalidate exact v2 authorization immediately before effects and resume only by original operation.
 - [Phase ?]: Collector telemetry uses the closed D-118 vocabulary, exact candidate/topology windows, and strict sensitive-field rejection.
+- [Phase ?]: Native publication composition revalidates the pinned CLI source and exact v2 receipt before each upload or relay effect, then reconciles only persisted original operations.
 
 ### Pending Todos
 
@@ -314,6 +316,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-06T15:19:07.924Z
-Stopped at: Completed 07-30-PLAN.md
+Last session: 2026-08-06T15:45:47.045Z
+Stopped at: Completed 07-36-PLAN.md
 Resume file: None

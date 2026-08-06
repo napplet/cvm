@@ -17,6 +17,7 @@ test("security host rejects a deterministic browser and signer port before any l
     observationPort: {
       evidenceClass: "deterministic",
       runSealedBuild: async () => { effects += 1; return {}; },
+      runHostileMatrix: async () => { effects += 1; return {}; },
       runBrowser: async () => { effects += 1; return {}; },
       inspectSignerBoundary: async () => { effects += 1; return {}; },
     },
@@ -25,14 +26,14 @@ test("security host rejects a deterministic browser and signer port before any l
   expect(effects).toBe(0);
 });
 
-test("supply chain rejects deterministic builds and verifier inputs before records or commands are created", async () => {
+test("supply chain reproducibility and Cosign verification reject deterministic builds before records or commands are created", async () => {
   let effects = 0;
   const result = await runLiveSupplyChainCertification({
     candidate,
     observationPort: {
       evidenceClass: "deterministic",
       runBuild: async () => { effects += 1; return {}; },
-      verifySupplyChain: async () => { effects += 1; return {}; },
+      supplyChainInput: async () => { effects += 1; return {}; },
     },
   });
   expect(result).toEqual(expect.objectContaining({ status: "blocked", claims: [], reasonCode: "INPUT_UNAVAILABLE" }));

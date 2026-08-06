@@ -303,7 +303,7 @@ Plans:
 **Validation gate**: Benchmark Modal and at least one non-AWS fallback with the production-like image, target regions, relay delay, pool misses, database contention, reclaim/failure behavior, and step load. Select a worker vendor only after receipt-to-isolated-worker-ready p95 is at most five seconds with zero durable backlog; establish the database/failover claim to match the chosen deployment scope.
 
 Phase 7 also closes the launch-hardening work intentionally deferred from Phase 1: exhaustive toolchain provenance, repeated/cross-environment reproducibility, full hostile and mutation coverage, formal golden approval, waiver drills, SBOM/provenance enforcement, and the final production promotion gate.
-**Plans**: 24/26 plans executed
+**Plans**: 24/27 plans executed
 **Wave 1**
 
 - [x] 07-00-PLAN.md
@@ -384,11 +384,15 @@ Phase 7 also closes the launch-hardening work intentionally deferred from Phase 
 
 **Wave 19** *(blocked on Wave 18 completion)*
 
-- [ ] 07-20-PLAN.md — Authenticate providers and approve the exact controller-generated cost/effect request digest after all local automation is ready.
+- [ ] 07-25-PLAN.md — Finish the exact-eight registry, resumable controller, sole-evaluator/bundle/cleanup wiring, product command, documentation, and negative contract tests without external effects.
 
 **Wave 20** *(blocked on Wave 19 completion)*
 
-- [ ] 07-25-PLAN.md — Execute and resume all eight suites, finalize trust, evaluate the candidate, assemble the immutable bundle, and clean up.
+- [ ] 07-20-PLAN.md — Authenticate providers and approve the exact controller-generated cost/effect request digest after all local automation is ready.
+
+**Wave 21** *(blocked on Wave 20 completion)*
+
+- [ ] 07-26-PLAN.md — Run the authorized controller through provisioning, discovery, all eight protected suites, trust finalization, sole evaluation, immutable bundle assembly, and bounded cleanup.
 
 ## Progress
 
@@ -403,14 +407,14 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 4. Metered Generation & Revision Loop | 7/7 | Complete    | 2026-08-05 |
 | 5. Funding Interruption & Durable Resume | 7/7 | Complete    | 2026-08-05 |
 | 6. Sealed Preview & User-Owned Publication | 7/7 | Complete    | 2026-08-05 |
-| 7. Admission SLO, Resilience & Launch Safety | 24/26 | In Progress|  |
+| 7. Admission SLO, Resilience & Launch Safety | 24/27 | In Progress|  |
 
 ### Milestone Progress Roll-up
 
 - **Phases:** Phases 1–6 are verified complete; Phase 7 awaits protected live evidence and goal verification; 6/7 phases complete (86%).
-- **Known plans:** 60/66 milestone plans executed; Plan 07-19 produced the fail-closed controller dry run, while Plans 07-20–07-25 cover authorization through final certification.
+- **Known plans:** 64/67 milestone plans executed; Plans 07-19 and 07-21–07-24 completed the controller, provider, materializer, and eight adapter foundations.
 - **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 49 verified complete and 5 Phase 7 requirements pending.
-- **Current checkpoint:** Execute Plans 07-21–07-24 to finish provider, materialization, and live-suite automation locally; Plan 07-20 becomes the single provider-auth/cost checkpoint immediately before the end-to-end protected run.
+- **Current checkpoint:** Execute Plan 07-25 to finish local orchestration and contract tests, then Plan 07-20 for the single provider-auth/cost approval, then Plan 07-26 for the authorized live run.
 - **Phase 1 preservation:** Phase 1 remains complete with its review, security, validation, verification evidence, and Phase 7 deferrals unchanged.
 
 ### Completion Reporting Contract

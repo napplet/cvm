@@ -8,11 +8,11 @@ status: executing
 stopped_at: Completed 07-24-PLAN.md
 last_updated: "2026-08-06T11:56:13.558Z"
 last_activity: 2026-08-06
-last_activity_desc: Plan 07-19 completed; continuing with concrete provider automation
+last_activity_desc: Plan 07-24 completed; Plan 07-25 local orchestration is next
 progress:
   total_phases: 7
   completed_phases: 6
-  total_plans: 66
+  total_plans: 67
   completed_plans: 64
   percent: 86
 ---
@@ -30,20 +30,20 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 7 — Admission SLO, Resilience & Launch Safety
-Plan: 25 of 26
+Plan: 25 of 27
 Status: Executing local automation; provider authentication is deferred until the complete controller can request it precisely
-Last activity: 2026-08-06 — Plan 07-19 completed; continuing with concrete provider automation
+Last activity: 2026-08-06 — Plan 07-24 completed; Plan 07-25 local orchestration is next
 
-Plan execution: [█████████░] 60/66 milestone plans complete; Phase verification remains pending
+Plan execution: [█████████░] 64/67 milestone plans complete; Phase verification remains pending
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 60/66 milestone plans executed; Plans 07-21–07-24 finish local automation first, Plan 07-20 is the later authorization checkpoint, and Plan 07-25 performs the authorized end-to-end run.
+- Plans: 64/67 milestone plans executed; Plan 07-25 finishes local orchestration and contract tests, Plan 07-20 is the sole provider-authentication/cost-approval checkpoint, and Plan 07-26 performs the authorized end-to-end run.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Next checkpoint: complete Plans 07-21–07-24 locally, then use Plan 07-20 for one exact provider-auth/cost approval immediately before the protected end-to-end run; no hand-authored evidence or certifier files are required.
+- Next checkpoint: execute Plan 07-25 locally, then use Plan 07-20 for one exact provider-authentication/cost approval, then execute Plan 07-26 for the protected live run; no hand-authored evidence or certifier files are required.
 
 ## Performance Metrics
 

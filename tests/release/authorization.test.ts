@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  createOfficialConsentReceipt,
   createAuthorizationReceipt,
   createAuthorizationRequest,
   validateAuthorizationReceipt,
@@ -36,6 +37,24 @@ test("creates one canonical USD request and exact expected receipt", async () =>
   expect(request.authorizationRequestSha256).toBe(duplicate.authorizationRequestSha256);
   expect(request.expectedReceiptSha256).toBe(receipt.authorizationReceiptSha256);
   await expect(validateAuthorizationReceipt({ request, receipt, nowMs: 1_499 })).resolves.toEqual(receipt);
+});
+
+test("requires structured official approval provenance instead of a bare receipt digest", async () => {
+  const request = await createAuthorizationRequest(input());
+  const receipt = await createOfficialConsentReceipt({
+    request,
+    approval: {
+      approvalChannel: "loopback_fixture",
+      approverPrincipalSha256: digest("p"),
+      consentSessionReferences: ["loopback:consent:session-01"],
+      approvedAtMs: 1_001,
+      expiresAtMs: request.expiresAtMs,
+    },
+  });
+
+  await expect(validateAuthorizationReceipt({ request, receipt, nowMs: 1_200 })).resolves.toEqual(receipt);
+  await expect(validateAuthorizationReceipt({ request, receipt: request.expectedReceiptSha256, nowMs: 1_200 })).rejects.toThrow();
+  await expect(validateAuthorizationReceipt({ request, receipt: { ...receipt, approvalChannel: "environment" }, nowMs: 1_200 })).rejects.toThrow();
 });
 
 test("rejects stale estimates, unitless costs, and tampered receipt inputs", async () => {

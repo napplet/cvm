@@ -371,20 +371,20 @@ Phase 7 also closes the launch-hardening work intentionally deferred from Phase 
 
 **Wave 16** *(blocked on Wave 15 completion)*
 
-- [ ] 07-20-PLAN.md — Authenticate providers and approve the exact controller-generated cost/effect request digest.
+- [ ] 07-21-PLAN.md — Implement and contract-test concrete resumable provider adapters locally without live effects.
 
 **Wave 17** *(blocked on Wave 16 completion)*
 
-- [ ] 07-21-PLAN.md — Provision or discover the authorized release topology through concrete resumable provider adapters.
+- [ ] 07-22-PLAN.md — Implement and contract-test controller-generated certifier configuration, adapter bundles, evidence trees, and trust material in isolated non-authoritative roots.
 
 **Wave 18** *(blocked on Wave 17 completion)*
 
-- [ ] 07-22-PLAN.md — Generate candidate-bound protected certifier configuration, adapter bundle, evidence tree, and trust material.
+- [ ] 07-23-PLAN.md — Implement and contract-test admission, telemetry, chaos, and restore adapters without provider effects or protected evidence.
+- [ ] 07-24-PLAN.md — Implement and contract-test security-host, supply-chain, payment/model, and publication adapters without spend, signing, publication, or protected evidence.
 
 **Wave 19** *(blocked on Wave 18 completion)*
 
-- [ ] 07-23-PLAN.md — Run real admission, telemetry, chaos, and restore certification adapters.
-- [ ] 07-24-PLAN.md — Run real security-host, supply-chain, payment/model, and publication certification adapters.
+- [ ] 07-20-PLAN.md — Authenticate providers and approve the exact controller-generated cost/effect request digest after all local automation is ready.
 
 **Wave 20** *(blocked on Wave 19 completion)*
 
@@ -410,7 +410,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 - **Phases:** Phases 1–6 are verified complete; Phase 7 awaits protected live evidence and goal verification; 6/7 phases complete (86%).
 - **Known plans:** 60/66 milestone plans executed; Plan 07-19 produced the fail-closed controller dry run, while Plans 07-20–07-25 cover authorization through final certification.
 - **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 49 verified complete and 5 Phase 7 requirements pending.
-- **Current checkpoint:** Plan 07-20 requires provider authentication and approval of controller request `bcabbcf1c9695affb63b9a68ec8222492c639ec64bbeed9d2948fbd4706d62c9`; the project constructs all later configuration and evidence.
+- **Current checkpoint:** Execute Plans 07-21–07-24 to finish provider, materialization, and live-suite automation locally; Plan 07-20 becomes the single provider-auth/cost checkpoint immediately before the end-to-end protected run.
 - **Phase 1 preservation:** Phase 1 remains complete with its review, security, validation, verification evidence, and Phase 7 deferrals unchanged.
 
 ### Completion Reporting Contract

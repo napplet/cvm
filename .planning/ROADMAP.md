@@ -426,19 +426,19 @@ Phase 7 also closes the launch-hardening work intentionally deferred from Phase 
 
 **Wave 28** *(blocked on Wave 27 completion)*
 
-- [ ] 07-41-PLAN.md — Add shared real Google ADC/Cloud Run/GCS/Collector/Cloud SQL clients, concrete Modal/Fly clients, and fresh/actual cost sources.
+- [ ] 07-41-PLAN.md — Implement shared Google and Modal/Fly clients plus price/actual-cost contracts using fake/local verification; run no live provider or benchmark effects.
 
 **Wave 29** *(blocked on Wave 28 completion)*
 
-- [ ] 07-42-PLAN.md — Add concrete ContextVM, NWC/Cashu, Vertex Gemini, compatible-host/NIP-46, promoted CLI, upload, owner-relay, and attestation-relay clients with explicit key custody.
+- [ ] 07-42-PLAN.md — Implement separately testable ContextVM, payment, Vertex, host/NIP-46, CLI/upload, and relay clients with fake/local verification and explicit key custody.
 
 **Wave 30** *(blocked on Wave 29 completion)*
 
-- [ ] 07-43-PLAN.md — Complete the exact-eight real protected suite factory, materialization/worker-selection/finalization inputs, and every-boundary forced-resume proof.
+- [ ] 07-43-PLAN.md — Wire the exact-eight real port constructors, identical benchmark runners, complete execution inputs, and fake-only forced-resume proof without running live suites/schedules.
 
 **Wave 31** *(blocked on Wave 30 completion)*
 
-- [ ] 07-44-PLAN.md — Generate the fresh sixteen-line request and prove one-command complete no-effect readiness/config/consent behavior before approval.
+- [ ] 07-44-PLAN.md — Generate the fresh sixteen-line request and prove one-command no-effect readiness/config/consent-descriptor behavior; allow authenticated read-only scope/price discovery only.
 
 **Wave 32** *(blocked on Wave 31 completion)*
 

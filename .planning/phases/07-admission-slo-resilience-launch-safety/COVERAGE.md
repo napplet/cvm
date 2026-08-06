@@ -1,6 +1,6 @@
 # API Coverage — Phase 7 external capability authority
 
-> All external capabilities required by D-128 and D-134–D-140 are `INTEGRATE`. Plans 07-28–07-39 created provider-neutral contracts/adapters/controller/session seams; the append-only correction assigns the missing concrete clients to 07-41/07-42, the real protected consumers to 07-43, and the no-effect product proof to 07-44. The controller derives configuration, topology, cost, and evidence; no row grants a user authority to author those facts.
+> All external capabilities required by D-128 and D-134–D-140 are `INTEGRATE`. Plans 07-28–07-39 created provider-neutral contracts/adapters/controller/session seams; the append-only correction assigns the missing concrete clients to 07-41/07-42, the real protected port constructors/runners to 07-43, and the no-effect product proof to 07-44. Plans 07-40–07-44 verify with injected fakes/loopback emulators/fixture credentials only; 07-44 alone may perform authenticated read-only capability/account-scope/current-price discovery. Consent is 07-20-only and all real effects/benchmarks are 07-26-only after the exact receipt. The controller derives configuration, topology, cost, and evidence; no row grants a user authority to author those facts.
 
 | capability | decision | reason | production adapter / port owner plan | protected-suite consumer | credential discovery | absence state |
 |---|---|---|---|---|---|---|
@@ -45,4 +45,5 @@
 - Every `INTEGRATE` row is owned by a plan, consumed by a protected suite, and fails closed when credential discovery is absent.
 - Modal and Fly remain evidence-driven variants behind provider-neutral release/controller contracts; Cloud SQL is the selected database detail only.
 - Plans 07-37–07-39 own the contracts/controller/session seam; Plans 07-40–07-44 own the missing deployment factory, concrete clients, exact-eight real composition, pricing, readiness, and product-command proof.
+- Implementation Plans 07-40–07-44 create no live effects or protected evidence; they prove intended operations with fake/local harnesses. Only 07-44 may read authenticated scopes/prices, while 07-20 owns consent and 07-26 owns every real mutation, benchmark schedule, observation, promotion, and cleanup.
 - The controller derives all configuration, topology, trust inputs, fresh costs, cleanup, and evidence. The user supplies only external NIP-46 owner signing plus NWC or funded Cashu consent through the controller-launched structured approval flow.

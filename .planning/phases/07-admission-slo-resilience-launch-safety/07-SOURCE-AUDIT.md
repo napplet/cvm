@@ -4,6 +4,8 @@
 **Plan set:** Existing 07-00–07-39 plus append-only correction 07-40–07-44; checkpoint 07-20; run-only 07-26
 **Result:** COMPLETE — no unplanned in-scope source item
 
+**Implementation/effect boundary:** Plans 07-40–07-44 only implement and verify code with injected fakes, loopback emulators, fixture credentials, synthetic observations, and zero-effect guards. Only 07-44 may perform authenticated read-only capability/account-scope/current-price discovery. Actual NIP-46/NWC/Cashu consent occurs in 07-20; every provider mutation, spend, worker lifecycle/benchmark schedule, signing/model/host/publication effect, protected-suite observation, promotion, and cleanup action occurs only in 07-26 after the exact structured receipt validates.
+
 ## GOAL coverage
 
 | Source item | Required outcome | Covering plans | Status |
@@ -56,7 +58,8 @@
 | EB-05 | Exactly eight independent real suites plus complete materialization, worker-selection, verification, finalization, and cleanup inputs. | 07-43 | COVERED |
 | EB-06 | Forced resume covers original identities/effect counts at every provider, suite, promotion, and cleanup boundary. | 07-43 | COVERED |
 | EB-07 | Fresh sixteen-line price facts and actual observed costs replace the fixed 36,000,000-micro-USD source. | 07-41, 07-44 | COVERED |
-| EB-08 | Product command proves complete no-effect readiness, generates config/request, launches only NIP-46/NWC/Cashu consent, and precedes approval. | 07-44 → 07-20 → 07-26 | COVERED |
+| EB-08 | Product command proves complete no-effect readiness, generates config/request and consent launch descriptors; 07-20 launches/completes NIP-46/NWC/Cashu consent before the 07-26 run. | 07-44 → 07-20 → 07-26 | COVERED |
+| EB-09 | Implementation plans use fake/local verification only; 07-44 alone may read authenticated scopes/prices; consent is 07-20-only and every real effect/benchmark is 07-26-only. | 07-40–07-44 boundaries → 07-20 → 07-26 | COVERED |
 
 ## CONTEXT decision coverage
 

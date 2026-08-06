@@ -18,6 +18,7 @@ import {
 import { deriveReleaseTopology, RELEASE_PROVIDER_IDS } from "./topology";
 import { createAuthorizationRequest, validateAuthorizationReceipt, validateAuthorizationRequest, type ReleaseAuthorizationReceipt } from "./authorization";
 import { ReleaseProviderOperationSchema, type ReleaseProviderOperation, type ReleaseProviderRegistry as AuthorizedProviderRegistry } from "./providers";
+import { createNativeReleaseProviderRegistry } from "./native-registry";
 
 export const RELEASE_WORKSPACE_ENV = "NAPPLET_CVM_RELEASE_WORKSPACE";
 export const RELEASE_AUTHORIZATION_SHA256_ENV = "NAPPLET_CVM_RELEASE_AUTHORIZATION_SHA256";
@@ -455,7 +456,13 @@ export async function runReleaseCertification(options: ControllerOptions & Reado
 export async function runReleaseCertification(options: ControllerOptions & Readonly<{ dryRun: boolean; authorizationReceiptSha256?: string }>): Promise<ReleaseCertificationResult> {
   if (!options.dryRun) {
     if (!options.authorizationReceiptSha256 || !DigestSchema.safeParse(options.authorizationReceiptSha256).success) throw new Error("RELEASE_AUTHORIZATION_REQUIRED");
-    throw new Error("RELEASE_LIVE_PROVIDER_FAMILY_UNIMPLEMENTED");
+    // No protected runner handles, capability sessions, or exact receipt are
+    // available to the local command. Construct the complete, no-effect
+    // registry solely to prove every family has an explicit blocked path;
+    // authorization cannot silently fall through to a partial executor.
+    const candidate = await candidateIdentity(options.candidatePath);
+    createNativeReleaseProviderRegistry({ candidateSha256: candidate.candidateSha256 });
+    throw new Error("RELEASE_PRODUCTION_CAPABILITY_OR_CONSENT_REQUIRED");
   }
   const progress = await new ReleaseCertificationController(options).certify();
   return progress;

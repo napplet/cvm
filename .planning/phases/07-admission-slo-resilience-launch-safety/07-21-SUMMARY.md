@@ -68,7 +68,7 @@ status: complete
 ## Task Commits
 
 1. **Task 1: Implement the concrete provider capability and provisioning registry** — `3850354` (RED test), `dec437e` (implementation)
-2. **Task 2: Resume provisioning into one exact discovered-topology record** — `5d64fa9` (RED test), `e1459c7` (implementation)
+2. **Task 2: Resume provisioning into one exact discovered-topology record** — `5d64fa9` (RED test), `e1459c7` (implementation), `1f51c65` (concurrent writer fix)
 
 ## Files Created/Modified
 
@@ -87,6 +87,7 @@ status: complete
 ## Verification
 
 - `bun test tests/release/controller.test.ts tests/release/provider-discovery.test.ts --timeout 10000` — 10 pass, 0 fail.
+- `bun test --timeout 10000` — 532 pass, 0 fail.
 - The requested focused provision/discover/resume/ambiguity/topology/cost command passed before the final full relevant suite.
 - `bunx tsc --noEmit` still reports pre-existing unrelated repository errors; the release-only filter initially exposed and this plan corrected a legacy impossible comparison in `tests/release/controller.test.ts`.
 
@@ -110,9 +111,17 @@ status: complete
 - **Verification:** Full relevant suite passes.
 - **Committed in:** `e1459c7`
 
+**3. [Rule 1 - Concurrent write race] Published immutable controller files only after complete writes**
+- **Found during:** Post-wave integration gate
+- **Issue:** A concurrent controller could observe an exclusively created state file before its writer completed, causing a spurious `RELEASE_CONTROLLER_STATE_COLLISION`.
+- **Fix:** Write a unique temporary file completely, then atomically hard-link it into the immutable final path; competing writers compare only completed file contents. Expanded concurrent controller coverage from two to eight writers.
+- **Files modified:** `src/release/controller.ts`, `tests/release/controller.test.ts`
+- **Verification:** Exact regression test passed 30 consecutive times; full suite passed 532 tests.
+- **Committed in:** `1f51c65`
+
 ---
 
-**Total deviations:** 2 auto-fixed (Rule 1: 1, Rule 2: 1).
+**Total deviations:** 3 auto-fixed (Rule 1: 2, Rule 2: 1).
 **Impact on plan:** Required for exact topology integrity and compatibility with the expanded provider inventory; no live authority or scope expansion was introduced.
 
 ## Known Stubs

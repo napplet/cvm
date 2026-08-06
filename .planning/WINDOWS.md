@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 20
+open_count: 21
 waived_count: 0
 fixed_count: 0
-total_count: 20
-last_updated: 2026-08-05T20:23:59.583Z
+total_count: 21
+last_updated: 2026-08-06T12:14:09.784Z
 ---
 
 # Broken Windows Ledger
@@ -35,6 +35,7 @@ last_updated: 2026-08-05T20:23:59.583Z
 | 18 | 07 | deviation | scripts/verify-phase-07-otel-packages.ts |  | Docker daemon start and smoke endpoint/batch corrections were required before the passing disposable Collector compatibility record. | open |  | 2026-08-05T16:34:49.306Z |  |
 | 19 | 07 | deviation | tests/tracer.test.ts |  | Promotion tracer assertion changed to the concrete certification-required blocker after the deferred terminal stage was removed. | open |  | 2026-08-05T17:05:44.142Z |  |
 | 20 | 07 | deviation | tests/contextvm/adapter.test.ts |  | ContextVM transport fake now returns a canonical SHA-256-shaped invocation hash required by strict admission validation. | open |  | 2026-08-05T20:23:59.583Z |  |
+| 21 | 07 | deviation | scripts/verify-phase-07-otel-packages.ts |  | Allowed only the exact candidate-only command manifest alongside the prior approved root manifest; other input drift remains blocked. | open |  | 2026-08-06T12:14:09.784Z |  |
 
 ````json
 [
@@ -276,6 +277,18 @@ last_updated: 2026-08-05T20:23:59.583Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-05T20:23:59.583Z",
+    "resolved_at": null
+  },
+  {
+    "id": 21,
+    "kind": "deviation",
+    "phase": "07",
+    "file": "scripts/verify-phase-07-otel-packages.ts",
+    "line": null,
+    "description": "Allowed only the exact candidate-only command manifest alongside the prior approved root manifest; other input drift remains blocked.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-06T12:14:09.784Z",
     "resolved_at": null
   }
 ]

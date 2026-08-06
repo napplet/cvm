@@ -5,14 +5,14 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: executing
-stopped_at: Completed 07-46-PLAN.md
+stopped_at: Ready to execute bounded corrective Plans 07-47 through 07-49
 last_updated: "2026-08-06T20:23:45.634Z"
 last_activity: 2026-08-06
-last_activity_desc: Completed controller-generated protected factory and same-session no-effect readiness
+last_activity_desc: Exposed false executable readiness and appended corrective Plan 07-47
 progress:
   total_phases: 7
   completed_phases: 6
-  total_plans: 87
+  total_plans: 90
   completed_plans: 85
   percent: 86
 ---
@@ -30,20 +30,20 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 07 (admission-slo-resilience-launch-safety) — EXECUTING
-Plan: 45 of 47 complete
-Status: Ready for 07-20 operator funding references and exact approval
-Last activity: 2026-08-06 — Completed 07-46 concrete protected factory and one-command no-effect readiness
+Plan: 45 of 50 complete
+Status: Ready for 07-47 receipt-gated production dependency composition
+Last activity: 2026-08-06 — Exposed false executable readiness and appended corrective Plan 07-47
 
-Plan execution: [█████████░] 85/87 milestone plans complete; Phase 7 is 45/47 complete and verification remains pending
+Plan execution: [█████████░] 85/90 milestone plans complete; Phase 7 is 45/50 complete and verification remains pending
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 85/87 milestone plans executed. Plan 07-46 closed the controller-generated protected factory/readiness gap; 07-20 now handles any missing local NWC Lightning and funded Cashu references plus exact approval before 07-26 protected execution.
+- Plans: 85/90 milestone plans executed. Plans 07-47–07-49 close receipt-gated operational composition, current-source/preapproval materialization, and local setup/review gaps before 07-20 handles local NWC Lightning/Cashu references and exact approval, followed by 07-26 protected execution.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Next checkpoint: 07-20 connects any missing operator NWC Lightning and funded Cashu certification rails locally and records final exact approval, followed by 07-26. Owner NIP-46 remains deferred to publication; no hand-authored config/evidence or pasted secret/digest is required.
+- Next checkpoint: 07-47–07-49 complete deterministic live composition with no user setup or effects; 07-20 then connects any missing operator NWC Lightning and funded Cashu certification rails locally and records final exact approval, followed by 07-26. Owner NIP-46 remains deferred to publication; no hand-authored config/evidence or pasted secret/digest is required.
 
 ## Performance Metrics
 
@@ -346,5 +346,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-08-06T20:23:45.624Z
-Stopped at: Completed 07-46-PLAN.md
+Stopped at: Ready to execute bounded corrective Plans 07-47 through 07-49
 Resume file: None

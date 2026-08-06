@@ -20,7 +20,7 @@ napplet-cvm moves from proving the permanent napplet contract to a safe, prepaid
 | 4. Metered Generation & Revision Loop | Turns approved funds into exact-usage, serialized napplet creation, revision, repair, progress, and diagnostic actions. | BILL-03–BILL-05, SESS-01, SESS-03–SESS-04, GEN-05–GEN-06 | `.planning/phases/04-metered-generation-revision-loop/` — context, discussion log, research, AI spec, patterns, validation, 7 plans and summaries, review/fix history, immutable design evidence, security audit, and passed goal verification. |
 | 5. Funding Interruption & Durable Resume | Preserves paid work across insufficient funds, the ten-minute live-worker window, explicit resume, and 30-day checkpoint retention. | CONT-01–CONT-07 | `.planning/phases/05-funding-interruption-durable-resume/` — context, research, patterns, validation, 7 plans and summaries, review/fix history, security audit, immutable design evidence, and passed goal verification. |
 | 6. Sealed Preview & User-Owned Publication | Lets the user preview the exact verified artifact, retain signing custody, and explicitly deploy a manifest plus CVM attestation. | PREV-01–PREV-04, PUB-01–PUB-05 | `.planning/phases/06-sealed-preview-user-owned-publication/` — context, approved UI spec, current research, pattern map, API/source coverage, draft validation strategy, and 7 checker-approved plans across 6 waves; execution evidence remains pending. |
-| 7. Admission SLO, Resilience & Launch Safety | Measures immediate-or-rejected admission, proves integrated failure safety, and closes the launch-hardening work deferred from Phase 1. | SESS-02, OPS-01–OPS-04 | `.planning/phases/07-admission-slo-resilience-launch-safety/` — 45/47 plans executed and summarized; phase goal verification remains blocked on protected live evidence. |
+| 7. Admission SLO, Resilience & Launch Safety | Measures immediate-or-rejected admission, proves integrated failure safety, and closes the launch-hardening work deferred from Phase 1. | SESS-02, OPS-01–OPS-04 | `.planning/phases/07-admission-slo-resilience-launch-safety/` — 45/50 plans executed and summarized; phase goal verification remains blocked on deterministic live composition and protected live evidence. |
 
 The phase-to-requirement assignments in this table are identical to `REQUIREMENTS.md` and the phase detail sections below. Existing paths are canonical; future phase artifacts are added to their numbered phase directories without moving or regenerating prior work.
 
@@ -303,7 +303,7 @@ Plans:
 **Validation gate**: Benchmark Modal and at least one non-AWS fallback with the production-like image, target regions, relay delay, pool misses, database contention, reclaim/failure behavior, and step load. Select a worker vendor only after receipt-to-isolated-worker-ready p95 is at most five seconds with zero durable backlog; establish the database/failover claim to match the chosen deployment scope.
 
 Phase 7 also closes the launch-hardening work intentionally deferred from Phase 1: exhaustive toolchain provenance, repeated/cross-environment reproducibility, full hostile and mutation coverage, formal golden approval, waiver drills, SBOM/provenance enforcement, and the final production promotion gate.
-**Plans**: 45/47 plans executed
+**Plans**: 45/50 plans executed
 **Wave 1**
 
 - [x] 07-00-PLAN.md
@@ -450,9 +450,21 @@ Phase 7 also closes the launch-hardening work intentionally deferred from Phase 
 
 **Wave 34** *(blocked on Wave 33 completion)*
 
-- [ ] 07-20-PLAN.md — Connect any missing operator NWC Lightning and funded Cashu certification rails locally, then approve the exact structured request; owner NIP-46 remains deferred to real publication.
+- [ ] 07-47-PLAN.md — Replace the authorized-execution stub with a receipt-gated sixteen-family/eight-port production dependency graph.
 
 **Wave 35** *(blocked on Wave 34 completion)*
+
+- [ ] 07-48-PLAN.md — Bind current official pricing bytes to exact topology quantities and create receipt-free preapproval artifacts.
+
+**Wave 36** *(blocked on Wave 35 completion)*
+
+- [ ] 07-49-PLAN.md — Compose the safe local NWC/Cashu setup capability and one-command exact review boundary.
+
+**Wave 37** *(blocked on Wave 36 completion)*
+
+- [ ] 07-20-PLAN.md — Connect any missing operator NWC Lightning and funded Cashu certification rails locally, then approve the exact structured request; owner NIP-46 remains deferred to real publication.
+
+**Wave 38** *(blocked on Wave 37 completion)*
 
 - [ ] 07-26-PLAN.md — Run the authorized controller through provisioning, discovery, all eight real protected suites, trust finalization, sole evaluation, actual-cost reconciliation, immutable bundle assembly, and bounded cleanup.
 
@@ -469,14 +481,14 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 4. Metered Generation & Revision Loop | 7/7 | Complete    | 2026-08-05 |
 | 5. Funding Interruption & Durable Resume | 7/7 | Complete    | 2026-08-05 |
 | 6. Sealed Preview & User-Owned Publication | 7/7 | Complete    | 2026-08-05 |
-| 7. Admission SLO, Resilience & Launch Safety | 45/47 | In Progress|  |
+| 7. Admission SLO, Resilience & Launch Safety | 45/50 | In Progress|  |
 
 ### Milestone Progress Roll-up
 
 - **Phases:** Phases 1–6 are verified complete; Phase 7 awaits protected live evidence and goal verification; 6/7 phases complete (86%).
-- **Known plans:** 85/87 milestone plans executed. Plan 07-46 closed the controller-generated protected factory/config and truthful one-command readiness gap; 07-20 now owns any missing local NWC Lightning and funded Cashu references plus final approval before 07-26 execution.
+- **Known plans:** 85/90 milestone plans executed. Plans 07-47–07-49 close receipt-gated operational composition, current-source/preapproval materialization, and local setup/review gaps before 07-20 handles local NWC Lightning/Cashu connection and exact approval, followed by 07-26 execution.
 - **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 49 verified complete and 5 Phase 7 requirements pending.
-- **Current checkpoint:** Use 07-20 only to connect any missing local operator NWC Lightning and funded Cashu certification rails plus final exact approval, then run 07-26 protected live certification. Future napplet-owner NIP-46 signing occurs during publication, not candidate certification.
+- **Current checkpoint:** Execute 07-47–07-49 with no user setup or live effects; then use 07-20 only to connect any missing local operator NWC Lightning and funded Cashu certification rails plus final exact approval, followed by 07-26 protected live certification. Future napplet-owner NIP-46 signing occurs during publication, not preapproval.
 - **Phase 1 preservation:** Phase 1 remains complete with its review, security, validation, verification evidence, and Phase 7 deferrals unchanged.
 
 ### Completion Reporting Contract

@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createLiveProtectedCertificationRegistry } from "../../src/certification/live/registry";
 import { PROTECTED_SUITES } from "../../src/certification/runner";
+import { ReleaseCertificationController } from "../../src/release/controller";
 
 const digest = (value: string) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
 const candidate = { id: digest("candidate"), provider: "modal", image: `napplet-cvm/worker@sha256:${digest("worker")}`, sourceSha256: digest("source") };
@@ -16,4 +20,19 @@ test("exact eight live adapters reject local deterministic execution", async () 
 test("candidate-only command rejects hand-authored authority inputs", async () => {
   const command = ["bun", "run", "release:certify", "--", "--candidate", "candidate.json", "--registry", "forged.js"];
   expect(command).toContain("--registry");
+});
+
+test("resume digest chain fails closed before authorization, runner, trust, or cleanup effects", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "napplet-cvm-certify-"));
+  const candidatePath = join(workspace, "candidate.json");
+  try {
+    await writeFile(candidatePath, JSON.stringify({ schemaVersion: 1, status: "review_ready", sourceRevision: "a".repeat(40) }));
+    let runnerCalls = 0;
+    const result = await new ReleaseCertificationController({ candidatePath, workspace }).certify({ onProtectedRunnerCall: () => { runnerCalls += 1; } });
+    expect(result.state.status).toBe("authorization_required");
+    expect(result.stage).toBe("authorization_required");
+    expect(runnerCalls).toBe(0);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
 });

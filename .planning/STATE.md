@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: executing
-stopped_at: Completed 07-43-PLAN.md; next 07-44
-last_updated: "2026-08-06T18:45:31.150Z"
+stopped_at: Completed 07-44-PLAN.md; next 07-20
+last_updated: "2026-08-06T18:56:03.412Z"
 last_activity: 2026-08-06
-last_activity_desc: Completed 07-42 concrete protocol/publication deployment clients with effect-denied fixtures
+last_activity_desc: Completed 07-43 exact-eight protected execution composition and fake-only forced-resume coverage
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 85
-  completed_plans: 82
+  completed_plans: 83
   percent: 86
 ---
 
@@ -30,18 +30,18 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 07 (admission-slo-resilience-launch-safety) — EXECUTING
-Plan: 42 of 45 complete
-Status: Ready to execute 07-44 deployment configuration closure
-Last activity: 2026-08-06 — Completed 07-43 exact-eight protected execution composition and fake-only forced-resume coverage
+Plan: 43 of 45 complete
+Status: Ready to execute 07-20 official consent boundary
+Last activity: 2026-08-06 — Completed 07-44 exact sixteen-line authorization request and no-effect product review
 
-Plan execution: [█████████░] 82/85 milestone plans complete; Phase 7 is 42/45 complete and verification remains pending
+Plan execution: [█████████░] 83/85 milestone plans complete; Phase 7 is 43/45 complete and verification remains pending
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 82/85 milestone plans executed. Plan 07-43 added receipt-bound exact-eight protected-port composition and fake-only forced-resume coverage; Plan 07-44 is next before 07-20 consent and 07-26 protected execution.
+- Plans: 83/85 milestone plans executed. Plan 07-44 added fresh sixteen-line request composition and a no-effect product review; 07-20 official consent is next, followed by 07-26 protected execution.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
 - Next checkpoint: execute 07-43 through 07-44, then use 07-20 only for controller-launched NIP-46 and NWC/Cashu consent plus structured approval, followed by 07-26 protected execution; no hand-authored config/evidence or pasted secret/digest is required.
 
@@ -146,6 +146,7 @@ Plan execution: [█████████░] 82/85 milestone plans complete;
 | Phase 07-admission-slo-resilience-launch-safety P41 | 8m | 2 tasks | 7 files |
 | Phase 07 P42 | 6m 24s | 3 tasks | 11 files |
 | Phase 07 P43 | 9m | 2 tasks | 7 files |
+| Phase 07 P44 | 31m | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -309,6 +310,8 @@ Recent decisions affecting current work:
 - [Phase ?]: NIP-46 retains only a disposable client-key reference; owner and attestation relay roles remain distinct.
 - [Phase ?]: Deployment preparation rejects incomplete or cross-receipt inputs before a protected suite can receive a port.
 - [Phase ?]: A resumed controller reuses each candidate/topology/receipt-bound immutable suite record instead of rerunning that suite.
+- [Phase ?]: Authorization cost is the checked aggregate of sixteen source-attributed line maxima, never a fixed release total.
+- [Phase ?]: The CLI emits only bounded review facts and consent launch descriptors; it never launches consent before Plan 07-20.
 
 ### Pending Todos
 
@@ -337,6 +340,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-06T18:45:31.138Z
-Stopped at: Completed 07-43-PLAN.md; next 07-44
+Last session: 2026-08-06T18:56:03.401Z
+Stopped at: Completed 07-44-PLAN.md; next 07-20
 Resume file: None

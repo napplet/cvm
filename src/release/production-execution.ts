@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 
 import type { CertifierConfig, PinnedDeploymentExecution } from "../certification/config";
 import { PRODUCTION_LIVE_PROTECTED_PORT_KEYS } from "../certification/live/production-ports";
+import { PROTECTED_SUITES } from "../certification/runner";
 import type { AuthorizedLiveExecutionInput, ReleaseExecutionSession } from "./controller";
 import { createDeploymentExecutionConfig, type DeploymentExecutionConfig } from "./deployment/config";
 import { RELEASE_PRODUCTION_PROVIDER_IDS } from "./native-registry";
@@ -16,6 +17,20 @@ export type ReleaseExecutionFactoryInput = Readonly<{
 
 type ReleaseExecutionFactoryModule = Readonly<{
   createReleaseExecutionSession?: (input: ReleaseExecutionFactoryInput) => Promise<unknown> | unknown;
+  /** Static, side-effect-free inventory. It proves the pinned factory has
+   * every post-receipt input without constructing a provider client. */
+  releaseReadiness?: unknown;
+}>;
+
+export type ReleaseExecutionReadiness = Readonly<{
+  providerFamilies: readonly string[];
+  protectedSuites: readonly string[];
+  materialization: true;
+  workerSelection: true;
+  protectedVerification: true;
+  finalization: true;
+  actualCost: true;
+  cleanupOwnership: true;
 }>;
 
 function containedBy(root: string, candidate: string): boolean {
@@ -108,6 +123,47 @@ function isReleaseExecutionSession(value: unknown): value is ReleaseExecutionSes
   } catch {
     return false;
   }
+}
+
+function parseReleaseExecutionReadiness(value: unknown): ReleaseExecutionReadiness {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("RELEASE_PRODUCTION_EXECUTION_READINESS_INVALID");
+  const readiness = value as Partial<ReleaseExecutionReadiness>;
+  const providerFamilies = readiness.providerFamilies;
+  const protectedSuites = readiness.protectedSuites;
+  if (!Array.isArray(providerFamilies) || providerFamilies.length !== RELEASE_PRODUCTION_PROVIDER_IDS.length
+    || providerFamilies.some((provider, index) => provider !== RELEASE_PRODUCTION_PROVIDER_IDS[index])
+    || !Array.isArray(protectedSuites) || protectedSuites.length !== PROTECTED_SUITES.length
+    || protectedSuites.some((suite, index) => suite !== PROTECTED_SUITES[index])
+    || readiness.materialization !== true || readiness.workerSelection !== true
+    || readiness.protectedVerification !== true || readiness.finalization !== true
+    || readiness.actualCost !== true || readiness.cleanupOwnership !== true) {
+    throw new Error("RELEASE_PRODUCTION_EXECUTION_READINESS_INVALID");
+  }
+  return Object.freeze({
+    providerFamilies: Object.freeze([...providerFamilies]),
+    protectedSuites: Object.freeze([...protectedSuites]),
+    materialization: true, workerSelection: true, protectedVerification: true,
+    finalization: true, actualCost: true, cleanupOwnership: true,
+  });
+}
+
+/** Read the static inventory from the same config and module pins later used
+ * for receipt-bound execution. This intentionally does not call a factory,
+ * construct clients, or invoke any provider/suite/finalizer method. */
+export async function loadReleaseExecutionReadiness(input: Readonly<{
+  config: CertifierConfig;
+  candidateSha256: string;
+  workspace: string;
+}>): Promise<ReleaseExecutionReadiness> {
+  const modulePin = executionModule(input.config);
+  if (input.config.controller!.candidateId !== input.candidateSha256.toLowerCase()) throw new Error("RELEASE_PRODUCTION_EXECUTION_CONFIG_INVALID");
+  const deploymentConfig = await loadDeploymentConfig(modulePin, {
+    candidateSha256: input.candidateSha256,
+    workspace: input.workspace,
+    sourceRevision: input.config.controller!.sourceRevision,
+  });
+  const module = await importPinnedModule(modulePin, deploymentConfig);
+  return parseReleaseExecutionReadiness(module.releaseReadiness);
 }
 
 function isCompletePreparedExecution(value: unknown): value is Omit<AuthorizedLiveExecutionInput, "registry"> {

@@ -415,6 +415,27 @@ export class ReleaseCertificationController {
     return receipt;
   }
 
+  /** Receipt validation is a pure state transition. It accepts a structured
+   * official (or deny-effects fixture) receipt but never calls a provider,
+   * starts a worker, launches consent, or prepares live execution. */
+  async validateStructuredReceipt(receiptInput: unknown): Promise<ReleaseCertificationResult> {
+    const current = await this.#loadCurrent();
+    if (current.state.status !== "authorization_required" || !current.state.authorizationRequestSha256) {
+      throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID");
+    }
+    const request = await this.#readRequest(current.state.authorizationRequestSha256);
+    let receipt: ReleaseAuthorizationReceipt;
+    try { receipt = await validateAuthorizationReceipt({ request, receipt: receiptInput, nowMs: this.#now() }); }
+    catch { throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID"); }
+    await createOrVerify(
+      join(this.#workspace, "authorization-receipts", `${receipt.authorizationReceiptSha256}.json`),
+      `${canonicalJson(receipt)}\n`,
+      "RELEASE_CONTROLLER_AUTHORIZATION_RECEIPT_COLLISION",
+    );
+    const state = await this.#advanceLive(current.state, "receipt_valid", receipt.authorizationReceiptSha256, [], null, null);
+    return { exitCode: 1, state, authorizationRequest: request };
+  }
+
   /** Local-only composition path. The protected runner injects authenticated ports later;
    * this controller neither constructs them nor writes certification evidence. */
   async provision(input: Readonly<{ receipt: unknown; registry: AuthorizedProviderRegistry }>): Promise<ReleaseProvisioningResult> {

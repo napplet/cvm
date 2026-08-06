@@ -147,3 +147,17 @@ test("receipt confirmation reports a redacted same-run progress boundary", async
   expect(receiptCode).toBe(1);
   expect(JSON.parse(receiptStdout)).toMatchObject({ receiptValidated: true, progress: "authorization_required" });
 });
+
+test("request output is a finite review projection with consent launch descriptors only", async () => {
+  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "NAPPLET_CVM_RELEASE_WORKSPACE")), PATH: "/nonexistent", NAPPLET_CVM_TEST_EXTERNAL_EFFECTS: "deny" } as Record<string, string>;
+  const child = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--request"], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
+  const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect(code).toBe(1);
+  expect(stderr).not.toContain("token");
+  const result = JSON.parse(stdout);
+  expect(result).toMatchObject({ progress: "authorization_required", consentStatus: "consent_pending" });
+  expect(result.review.priceLines).toHaveLength(16);
+  expect(result.consentLaunches.map((entry: { channel: string }) => entry.channel)).toEqual(["nip46", "nwc", "cashu"]);
+  expect(JSON.stringify(result)).not.toContain("secret");
+  expect(JSON.stringify(result)).not.toContain("NWC");
+});

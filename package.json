@@ -6,6 +6,7 @@
     "bun": ">=1.2.0"
   },
   "scripts": {
+    "release:certify": "bun scripts/certify-release.ts",
     "test": "bun test",
     "test:design-slice": "bun run scripts/verify-design-slice.ts",
     "test:promotion": "bun run scripts/test-promotion.ts",

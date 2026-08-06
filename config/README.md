@@ -1,38 +1,12 @@
 # Certifier configuration
 
-Local development uses `certifier.local.json`. It has no credentials, adapter,
-trust root, release profile, or protected evidence authority. `bun test` also
-defaults to this authority-free mode when no environment file is present.
+Certification artifacts are created and pinned by the release controller. An
+operator must not author a certifier profile, registry module, trust root,
+observation, evidence directory, secret-bearing file, or their digest.
 
-Production certification uses one operator-owned JSON file selected by:
-
-```text
-NAPPLET_CVM_CERTIFIER_CONFIG=/absolute/path/to/certifier.json
-NAPPLET_CVM_CERTIFIER_CONFIG_SHA256=<sha256-of-exact-config-bytes>
-```
-
-The protected file has this shape:
-
-```json
-{
-  "version": 1,
-  "mode": "protected",
-  "releaseProfilePath": "/protected/release.json",
-  "evidenceDirectory": "/protected/evidence",
-  "credentials": "configured",
-  "adapter": {
-    "root": "/protected/certifier",
-    "modulePath": "/protected/certifier/adapter.js",
-    "sha256": "<64 lowercase hex characters>"
-  },
-  "trustRoot": {
-    "root": "/protected/certifier",
-    "modulePath": "/protected/certifier/trust-root.js",
-    "sha256": "<64 lowercase hex characters>"
-  }
-}
-```
-
-Optional `reproducibility` and `supplyChain` sections provide their input and
-output paths. Those values describe real release evidence and therefore belong
-in protected deployment configuration, not in a developer `.env`.
+For ordinary development, leave the local authority-free configuration in
+place. It has no credentials and cannot run protected work. For a protected
+release, authenticate the provider clients once, approve the controller-issued
+cost/effect digest, and use `bun run release:certify -- --candidate <path>`.
+The controller then emits only `NAPPLET_CVM_*` generated configuration names
+for the child process; their bytes never need to be copied into an `.env` file.

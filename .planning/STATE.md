@@ -5,14 +5,14 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: executing
-stopped_at: Completed 07-39-PLAN.md; next 07-20 exact provider authorization
-last_updated: "2026-08-06T16:12:06.326Z"
+stopped_at: Append-only Phase 7 execution-factory correction planned; next 07-40
+last_updated: "2026-08-06T17:51:15.000Z"
 last_activity: 2026-08-06
-last_activity_desc: Completed 07-38 resumable exact-receipt controller and protected evidence journal
+last_activity_desc: Planned 07-40 through 07-44 after proving the deployment factory and concrete live clients remained missing
 progress:
   total_phases: 7
   completed_phases: 6
-  total_plans: 80
+  total_plans: 85
   completed_plans: 78
   percent: 86
 ---
@@ -30,20 +30,20 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 07 (admission-slo-resilience-launch-safety) — EXECUTING
-Plan: 38 of 40 complete
-Status: Ready to execute 07-20 exact provider authorization
-Last activity: 2026-08-06 — Completed 07-39 sole-evaluator finalization, immutable bundle, cleanup journal, and redacted resume progress
+Plan: 38 of 45 complete
+Status: Ready to execute 07-40 pinned deployment factory/config and structured receipt
+Last activity: 2026-08-06 — Added an append-only five-plan correction after proving 07-37–07-39 stopped at provider-neutral contracts/controller/session seam rather than concrete deployment composition
 
-Plan execution: [█████████░] 78/80 milestone plans complete; Phase 7 is 38/40 complete and verification remains pending
+Plan execution: [█████████░] 78/85 milestone plans complete; Phase 7 is 38/45 complete and verification remains pending
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 78/80 milestone plans executed; Plan 07-39 completed sole-evaluator finalization, immutable bundle/promotion journaling, cleanup reconciliation, and redacted same-run CLI progress. Plan 07-20 is next before the protected run.
+- Plans: 78/85 milestone plans executed. Plan 07-39 completed the provider-neutral finalizer/session seam; Plans 07-40–07-44 are the append-only deployment-factory/concrete-client/readiness correction. Plan 07-40 is next before 07-20 consent and 07-26 protected execution.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Next checkpoint: use Plan 07-20 for one exact provider-authentication/cost approval, then Plan 07-26 for the protected live run; no hand-authored evidence or certifier files are required.
+- Next checkpoint: execute 07-40 through 07-44, then use 07-20 only for controller-launched NIP-46 and NWC/Cashu consent plus structured approval, followed by 07-26 protected execution; no hand-authored config/evidence or pasted secret/digest is required.
 
 ## Performance Metrics
 
@@ -265,14 +265,14 @@ Recent decisions affecting current work:
 - [Phase ?]: Protected promotion re-hashes the manifest-bound source archive before authentication, cache lookup, or the sole evaluator.
 - [Phase ?]: Dry-run performs only finite read-only discovery and exits nonzero at authorization_required.
 - [Phase ?]: Release topology, effects, and maximum cost are project-owned inputs bound to immutable candidate identity.
-- [Phase ?]: Release provider clients remain injected-only until the Plan 07-20 receipt and Plan 07-25 protected execution.
+- [Phase ?]: Plans 07-37–07-39 established provider-neutral contracts/controller/session seam only; Plans 07-40–07-44 own the missing deployment factory and concrete production clients before authorization.
 - [Phase ?]: Release operations persist before effect and ambiguous outcomes resume by observing the original operation identity.
 - [Phase ?]: Deployed topology claims remain limited to active ingress; database, object-store, and worker continuity require live drills.
 - [Phase ?]: Pre-certification materialization creates only non-authoritative candidate-addressed bytes and returns the config pin in memory.
 - [Phase ?]: Final trust bundles contain repository-owned constructor code plus independently validated material facts; fixture records never become release evidence.
 - [Phase ?]: Operational adapters reject deterministic ports before dispatch; Plan 07-25 alone may inject authenticated protected-live ports.
 - [Phase ?]: Chaos uses original-operation observations and restore requires fresh-instance exact-object reattachment.
-- [Phase ?]: All four integration adapters reject deterministic ports before any effect; only Plan 07-25 may inject protected-live implementations after authorization.
+- [Phase ?]: All protected integration adapters reject deterministic ports before any effect; only the hash-pinned deployment factory may construct the exact-eight real suite ports after structured authorization.
 - [Phase ?]: Security/supply-chain records remain digest-only and payment/model/publication reconciliation is original-operation-only.
 - [Phase ?]: The local controller stops at authorization_required; Plan 07-26 alone may execute protected effects.
 - [Phase ?]: Release certification uses an exact eight-suite generated registry and candidate-only CLI inputs.
@@ -325,5 +325,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-08-06T16:12:06.316Z
-Stopped at: Completed 07-39-PLAN.md; next 07-20 exact provider authorization
+Stopped at: Append-only Phase 7 execution-factory correction planned; next 07-40
 Resume file: None

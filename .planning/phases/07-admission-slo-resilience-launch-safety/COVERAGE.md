@@ -1,25 +1,25 @@
 # API Coverage — Phase 7 external capability authority
 
-> All external capabilities required by D-128 are `INTEGRATE`. The controller and `ReleaseProviderPort` derive configuration, topology, cost, and evidence; no row grants a user authority to author those facts. Any missing credential or topology input produces immutable `blocked` evidence, never a live pass.
+> All external capabilities required by D-128 and D-134–D-140 are `INTEGRATE`. Plans 07-28–07-39 created provider-neutral contracts/adapters/controller/session seams; the append-only correction assigns the missing concrete clients to 07-41/07-42, the real protected consumers to 07-43, and the no-effect product proof to 07-44. The controller derives configuration, topology, cost, and evidence; no row grants a user authority to author those facts.
 
 | capability | decision | reason | production adapter / port owner plan | protected-suite consumer | credential discovery | absence state |
 |---|---|---|---|---|---|---|
-| cloud_run | INTEGRATE | D-128 control-plane deployment and ingress-loss drills. | `ReleaseProviderPort` / 07-28 | chaos, restore | controller validates configured provider scope | `blocked` |
-| gcs | INTEGRATE | D-128 retained checkpoint, artifact, and evidence objects. | object-store port / 07-29 | restore | controller validates bucket binding | `blocked` |
-| collector | INTEGRATE | D-128 candidate-bound redacted lifecycle export. | telemetry exporter port / 07-30 | telemetry | controller validates collector profile | `blocked` |
-| cloud_sql_postgres | INTEGRATE | Sole D-130 database authority for ledger, lease, and publication fences. | `ReleaseProviderPort` / 07-28 | chaos, restore | controller validates Cloud SQL scope | `blocked` |
-| modal | INTEGRATE | D-131 measured worker candidate under the shared contract. | worker provider port / 07-31 | admission, chaos | controller validates protected profile | `blocked` |
-| fly | INTEGRATE | D-131 non-AWS worker variant measured under the same contract. | worker provider port / 07-31 | admission, chaos | controller validates protected profile | `blocked` |
-| contextvm | INTEGRATE | Sole v1 signed invoke, replay, and response transport. | `ContextVmAdapter` / 07-32 | contextvm-payment-model | controller validates relay profile | `blocked` |
-| cep8_lightning | INTEGRATE | D-128 Lightning prepaid top-up rail. | payment rail port / 07-32 | contextvm-payment-model | controller validates rail profile | `blocked` |
-| cashu | INTEGRATE | D-128 Cashu prepaid top-up rail. | payment rail port / 07-32 | contextvm-payment-model | controller validates rail profile | `blocked` |
-| model | INTEGRATE | D-128 exact receipt and original-operation reconciliation. | `ModelGateway` / 07-33 | contextvm-payment-model | controller validates model profile | `blocked` |
-| compatible_host | INTEGRATE | D-128 preview and Phase 6 host UI contract. | host presentation port / 07-34 | security-host | controller validates host profile | `blocked` |
-| signer | INTEGRATE | D-128 local/external user-owned manifest signing. | signer facade / 07-34 | security-host | controller validates signer profile | `blocked` |
-| promoted_cli | INTEGRATE | D-128 exact promoted CLI source and asset binding. | napplet CLI facade / 07-35 | supply-chain | controller validates promoted source pin | `blocked` |
-| upload | INTEGRATE | D-128 sealed deployment under original operation identity. | upload facade / 07-36 | publication | controller validates upload target scope | `blocked` |
-| owner_relay | INTEGRATE | D-128 user-signed owner manifest publication. | owner relay facade / 07-36 | publication | controller validates relay profile | `blocked` |
-| attestation_relay | INTEGRATE | D-128 distinct CVM build attestation publication. | attestation relay facade / 07-36 | publication | controller validates relay profile | `blocked` |
+| cloud_run | INTEGRATE | D-128 control-plane deployment and ingress-loss drills. | native adapter 07-30; concrete ADC client/test 07-41 | chaos, durability / 07-43 | service Google ADC/project | `blocked` |
+| gcs | INTEGRATE | D-128 retained checkpoint, artifact, and evidence objects. | native adapter 07-31; concrete ADC client/test 07-41 | durability / 07-43 | service Google ADC/project | `blocked` |
+| collector | INTEGRATE | D-128 candidate-bound redacted lifecycle export. | native adapter 07-30; concrete ADC client/test 07-41 | telemetry / 07-43 | service Google ADC/project | `blocked` |
+| cloud_sql_postgres | INTEGRATE | Sole D-130 database authority for ledger, lease, and publication fences. | native adapter 07-31; concrete ADC client/test 07-41 | chaos, durability / 07-43 | service Google ADC/project | `blocked` |
+| modal | INTEGRATE | D-131 measured worker candidate under the shared contract. | native adapter 07-32; concrete SDK client/test 07-41 | admission, chaos / 07-43 | deployment service reference | `blocked` |
+| fly | INTEGRATE | D-131 non-AWS worker variant measured under the same contract. | native adapter 07-32; concrete REST client/test 07-41 | admission, chaos / 07-43 | deployment service reference | `blocked` |
+| contextvm | INTEGRATE | Sole public signed invoke, replay, and response transport. | native adapter 07-33; official SDK client/test 07-42 | ContextVM-payment-model / 07-43 | service-owned ContextVM key reference | `blocked` |
+| cep8_lightning | INTEGRATE | D-128 Lightning prepaid top-up rail. | native adapter 07-33; NWC client/test 07-42 | ContextVM-payment-model / 07-43 | controller-launched user NWC consent | `blocked` |
+| cashu | INTEGRATE | D-128 Cashu prepaid top-up rail. | native adapter 07-33; funded-wallet client/test 07-42 | ContextVM-payment-model / 07-43 | controller-launched funded-wallet consent | `blocked` |
+| model | INTEGRATE | D-128 exact receipt and original-operation reconciliation. | native adapter 07-34; Vertex Gemini ADC client/test 07-42 | ContextVM-payment-model / 07-43 | service Google ADC/project | `blocked` |
+| compatible_host | INTEGRATE | D-128 preview and Phase 6 host UI contract. | native adapter 07-35; NIP-5D/reference-host/Chromium client/test 07-42 | security-host / 07-43 | promoted toolchain reference | `blocked` |
+| signer | INTEGRATE | D-128 external user-owned manifest signing. | native adapter 07-35; NIP-46 client/test 07-42 | security-host / 07-43 | controller-launched user NIP-46 consent | `blocked` |
+| promoted_cli | INTEGRATE | D-128 exact promoted CLI source and asset binding. | native adapter 07-36; concrete source client/test 07-42 | supply-chain / 07-43 | promoted source reference | `blocked` |
+| upload | INTEGRATE | D-128 sealed deployment under original operation identity. | native adapter 07-36; Blossom client/test 07-42 | publication / 07-43 | deployment target reference | `blocked` |
+| owner_relay | INTEGRATE | D-128 user-signed owner manifest publication. | native adapter 07-36; Nostr client/test 07-42 | publication / 07-43 | pre-signed owner event from NIP-46 | `blocked` |
+| attestation_relay | INTEGRATE | D-128 distinct CVM build attestation publication. | native adapter 07-36; Nostr client/test 07-42 | publication / 07-43 | service-owned attestation key reference | `blocked` |
 
 ## Explicit opt-outs
 
@@ -44,4 +44,5 @@
 
 - Every `INTEGRATE` row is owned by a plan, consumed by a protected suite, and fails closed when credential discovery is absent.
 - Modal and Fly remain evidence-driven variants behind provider-neutral release/controller contracts; Cloud SQL is the selected database detail only.
-- The controller derives all configuration, topology, trust inputs, cost, cleanup, and evidence. The user supplies only official provider login/consent and an exact digest approval or verification.
+- Plans 07-37–07-39 own the contracts/controller/session seam; Plans 07-40–07-44 own the missing deployment factory, concrete clients, exact-eight real composition, pricing, readiness, and product-command proof.
+- The controller derives all configuration, topology, trust inputs, fresh costs, cleanup, and evidence. The user supplies only external NIP-46 owner signing plus NWC or funded Cashu consent through the controller-launched structured approval flow.

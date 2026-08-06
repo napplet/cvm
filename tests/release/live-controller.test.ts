@@ -88,6 +88,9 @@ test("all protected-suite records are retained and block finalization when real 
       "admission.json", "chaos.json", "contextvm-payment-model.json", "publication.json",
       "restore.json", "security-host.json", "supply-chain.json", "telemetry.json",
     ]);
+    const materializedProfile = (await readdir(root, { recursive: true })).find((entry) => entry.endsWith("release-profile.json"));
+    expect(materializedProfile).toBeDefined();
+    expect(await Bun.file(join(root, materializedProfile!)).text()).toContain('"provider":"modal"');
     expect((await controller.status())?.state.status).toBe("blocked");
   } finally {
     await rm(root, { recursive: true, force: true });

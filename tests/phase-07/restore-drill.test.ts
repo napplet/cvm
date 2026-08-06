@@ -140,10 +140,14 @@ test("all seven retained subjects are exact-generation inventory entries and una
     kind, sourceIdentity: `${kind}-1`, object: reference, payloadSha256: checksum(archive), ownerId: "owner-1", retentionUntil: "2030-01-01T00:00:00.000Z", deletionState: "retained",
   })))).toThrow();
   const input = ProtectedInfrastructureDrillInputSchema.parse({
-    candidateDigest: "a".repeat(64), components: ["gcs", "cloud_run", "cockroach"], credentialsAvailable: false,
+    candidateDigest: "a".repeat(64), components: ["gcs", "cloud_run", "cloud_sql_postgres"], credentialsAvailable: false,
   });
+  expect(input.components).toEqual(["gcs", "cloud_run", "cloud_sql_postgres"]);
+  expect(() => ProtectedInfrastructureDrillInputSchema.parse({
+    candidateDigest: "a".repeat(64), components: ["gcs", "cloud_run", "unexpected_database"], credentialsAvailable: false,
+  })).toThrow();
   const evidence = await createProtectedInfrastructureDrillEvidence(input);
-  expect(evidence).toEqual(expect.objectContaining({ status: "blocked", code: "PROTECTED_INFRASTRUCTURE_UNAVAILABLE", candidateDigest: input.candidateDigest }));
+  expect(evidence).toEqual(expect.objectContaining({ status: "blocked", code: "PROTECTED_INFRASTRUCTURE_UNAVAILABLE", candidateDigest: input.candidateDigest, components: input.components }));
   expect(evidence.evidenceDigest).toMatch(/^[a-f0-9]{64}$/u);
 });
 

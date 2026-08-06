@@ -4,6 +4,8 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 const repositoryRoot = resolve(import.meta.dir, "..");
 const defaultWorkspace = join(repositoryRoot, ".runtime", "release-certification", "native-discovery-v1");
+const canonicalCandidatePath = join(repositoryRoot, "toolchains", "candidates", "initial.json");
+const requireStatePrefix = "--require-state=";
 
 function option(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -27,17 +29,19 @@ function controllerWorkspace(): string {
 async function main(): Promise<number> {
   const allowed = new Set(["--candidate", "--resume", "--dry-run", "--status", "--request", "--receipt"]);
   const supplied = process.argv.slice(2);
-  if (supplied.some((value) => value.startsWith("--") && !allowed.has(value))) {
+  const requiredStateArguments = supplied.filter((value) => value.startsWith(requireStatePrefix));
+  if (supplied.some((value) => value.startsWith("--") && !allowed.has(value) && !value.startsWith(requireStatePrefix)) || requiredStateArguments.length > 1 || requiredStateArguments.some((value) => value.length === requireStatePrefix.length)) {
     console.error("RELEASE_CERTIFICATION_ARGUMENT_REJECTED");
     return 1;
   }
   const candidatePath = option("--candidate");
+  const requiredState = requiredStateArguments[0]?.slice(requireStatePrefix.length);
   const request = process.argv.includes("--request");
   const receipt = option("--receipt");
   const dryRun = process.argv.includes("--dry-run") || request || receipt !== undefined;
   const status = process.argv.includes("--status");
   const resume = option("--resume");
-  if (!candidatePath || (dryRun && status) || (receipt !== undefined && !/^[a-f0-9]{64}$/iu.test(receipt)) || (resume !== undefined && !/^[a-f0-9]{64}$/iu.test(resume))) {
+  if ((!status && !candidatePath) || (dryRun && status) || (requiredState !== undefined && !status) || (receipt !== undefined && !/^[a-f0-9]{64}$/iu.test(receipt)) || (resume !== undefined && !/^[a-f0-9]{64}$/iu.test(resume))) {
     console.error("RELEASE_CERTIFICATION_USAGE");
     return 1;
   }
@@ -48,12 +52,13 @@ async function main(): Promise<number> {
       return 1;
     }
     const result = status
-      ? await new ReleaseCertificationController({ candidatePath, workspace }).status()
+      ? await new ReleaseCertificationController({ candidatePath: candidatePath ?? canonicalCandidatePath, workspace }).status()
       : await runReleaseCertification({ candidatePath, workspace, dryRun: true, ...(request || receipt ? {} : { providers: createNativeReleaseDiscoveryRegistry() }) });
     if (!result) {
       console.error("RELEASE_CONTROLLER_STATUS_UNAVAILABLE");
       return 1;
     }
+    if (requiredState !== undefined && requiredState !== result.state.status) throw new Error("RELEASE_CERTIFICATION_STATE_MISMATCH");
     if (resume && resume.toLowerCase() !== result.state.stateSha256 && resume.toLowerCase() !== result.authorizationRequest.resumeStateSha256) throw new Error("RELEASE_CERTIFICATION_RESUME_MISMATCH");
     if (receipt && receipt.toLowerCase() !== result.authorizationRequest.expectedReceiptSha256) throw new Error("RELEASE_AUTHORIZATION_RECEIPT_INVALID");
     console.log(JSON.stringify(request || receipt ? {

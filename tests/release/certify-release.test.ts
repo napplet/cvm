@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLiveProtectedCertificationRegistry } from "../../src/certification/live/registry";
@@ -54,6 +54,36 @@ test("documented no-env command reaches the candidate-bound authorization bounda
   const status = await new ReleaseCertificationController({ candidatePath: "toolchains/candidates/initial.json", workspace: join(process.cwd(), ".runtime", "release-certification", "native-discovery-v1") }).status();
   expect(status).toMatchObject({ state: { stateSha256: result.stateSha256, candidate: { candidateSha256: result.candidateSha256 } } });
   expect(result.resumeStateSha256).toMatch(/^[a-f0-9]{64}$/);
+});
+
+test("status accepts the documented require-state contract without a candidate and rejects mismatches", async () => {
+  const workspaceRoot = join(process.cwd(), ".runtime", "release-certification", "native-discovery-v1");
+  await mkdir(workspaceRoot, { recursive: true });
+  const workspace = await mkdtemp(join(workspaceRoot, "certify-status-"));
+  const candidatePath = join(process.cwd(), "toolchains", "candidates", "initial.json");
+  const env = {
+    ...Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "NAPPLET_CVM_RELEASE_WORKSPACE")),
+    NAPPLET_CVM_RELEASE_WORKSPACE: workspace,
+    PATH: "/nonexistent",
+  } as Record<string, string>;
+  try {
+    const seeded = await new ReleaseCertificationController({ candidatePath, workspace }).certify();
+    expect(seeded.state.status).toBe("authorization_required");
+
+    const matching = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--status", "--require-state=authorization_required"], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
+    const [matchingCode, matchingStdout, matchingStderr] = await Promise.all([matching.exited, new Response(matching.stdout).text(), new Response(matching.stderr).text()]);
+    expect(matchingCode).toBe(1);
+    expect(matchingStderr).not.toContain("RELEASE_CERTIFICATION_ARGUMENT_REJECTED");
+    expect(JSON.parse(matchingStdout)).toMatchObject({ status: "authorization_required", candidateSha256: seeded.state.candidate.candidateSha256, stateSha256: seeded.state.stateSha256 });
+
+    const mismatching = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--status", "--require-state=completed"], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
+    const [mismatchingCode, mismatchingStdout, mismatchingStderr] = await Promise.all([mismatching.exited, new Response(mismatching.stdout).text(), new Response(mismatching.stderr).text()]);
+    expect(mismatchingCode).toBe(1);
+    expect(mismatchingStdout).toBe("");
+    expect(mismatchingStderr).toContain("RELEASE_CERTIFICATION_STATE_MISMATCH");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
 });
 
 test("a non-dry-run request constructs only capability-blocked production composition before any provider command", async () => {

@@ -73,7 +73,7 @@ const EFFECT_OWNER: Readonly<Record<ReleaseProviderId, readonly string[]>> = Obj
   cloud_run: ["cloud-run-ingress"], gcs: ["gcs-retention"], collector: ["collector"], cockroach_postgres: ["database"],
   modal: ["modal-benchmark"], fly: ["fly-benchmark"], contextvm: ["contextvm-rails"], cep8_lightning: ["payments"],
   cashu: ["cashu"], model: ["model"], compatible_host: ["host-signer"], signer: ["signer"],
-  promoted_cli: ["promoted-cli"], upload: ["publication"], owner_relay: ["owner-relay"], attestation_relay: ["attestation-relay"],
+  promoted_cli: ["cli-asset"], upload: ["publication"], owner_relay: ["owner-relay"], attestation_relay: ["attestation-relay"],
 });
 
 async function sha256(value: string): Promise<string> {

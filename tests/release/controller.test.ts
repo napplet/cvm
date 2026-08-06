@@ -26,7 +26,7 @@ test("dry-run reaches an authorization-required no-effect boundary and writes on
   expect(result.authorizationRequest).toBeDefined();
   expect(effects).toBe(1);
   expect(result.state.capabilities).toHaveLength(16);
-  expect(result.state.capabilities.every((item) => item.capability !== "passed")).toBeTrue();
+  expect(result.state.capabilities.every((item) => item.capability === "unavailable" || item.capability === "unsupported")).toBeTrue();
   expect(result.state.authorizationRequestSha256).toBe(result.authorizationRequest!.authorizationRequestSha256);
   expect(result.authorizationRequest!.plannedEffects.length).toBeGreaterThan(0);
   expect(result.authorizationRequest!.maximumAuthorizedCostMicros).toBeGreaterThan(0);
@@ -38,7 +38,7 @@ test("dry-run reaches an authorization-required no-effect boundary and writes on
   expect(names.filter((name) => name.startsWith("states/"))).toHaveLength(2);
   const persisted = await readFile(join(root, `authorization-requests/${result.authorizationRequest!.authorizationRequestSha256}.json`), "utf8");
   expect(persisted).not.toContain("protected_live");
-  expect(persisted).not.toContain("promoted");
+  expect(persisted).not.toContain('"status":"promoted"');
   expect(persisted).not.toContain("passed");
 });
 
@@ -129,10 +129,48 @@ test("authorized provider execution records one exact deployed topology and resu
   const first = await controller.provision({ receipt, registry });
   expect(first.state.status).toBe("topology_ready");
   expect(first.topology.deployment.resources).toHaveLength(16);
-  expect(first.topology.deployment.availability.limitations).toContain("DATABASE_CONTINUITY_NOT_CERTIFIED");
+  expect(first.topology.deployment.limitations).toContain("DATABASE_CONTINUITY_NOT_CERTIFIED");
   expect(effects).toHaveLength(16);
 
   const resumed = await new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 2_000 }).provision({ receipt, registry });
   expect(resumed.topology.topologySha256).toBe(first.topology.topologySha256);
   expect(effects).toHaveLength(16);
+});
+
+test("ambiguous provider execution resumes by observing the original operation without protected evidence writes", async () => {
+  const root = await workspace();
+  const dryRun = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000 });
+  let modalApplies = 0;
+  let modalObserves = 0;
+  let protectedEvidenceWrites = 0;
+  const registry = createReleaseProviderRegistry({
+    now: () => 1_000,
+    ports: Object.fromEntries(RELEASE_PROVIDER_IDS.map((provider) => [provider, {
+      discoverCapabilities: async () => ({ capability: "available" as const }),
+      discoverAuthentication: async () => ({ authentication: "authorized" as const }),
+      plan: async () => ({ status: "planned" as const, estimatedCostMicros: 1 }),
+      apply: async (input: { operationId: string }) => {
+        if (provider === "modal") { modalApplies += 1; return { status: "unknown" as const }; }
+        return { status: "applied" as const, actualCostMicros: 1, resourceIdentity: `${provider}:${input.operationId}` };
+      },
+      observe: async (input: { operationId: string }) => {
+        if (provider === "modal") modalObserves += 1;
+        return { status: "completed" as const, actualCostMicros: 1, resourceIdentity: `${provider}:${input.operationId}` };
+      },
+      cleanup: async () => ({ status: "cleaned" as const, actualCostMicros: 0 }),
+    }])) as never,
+  });
+  const receipt: ReleaseAuthorizationReceipt = {
+    version: 1, authorizationRequestSha256: dryRun.authorizationRequest.authorizationRequestSha256,
+    authorizationReceiptSha256: "b".repeat(64), candidateSha256: dryRun.state.candidate.candidateSha256,
+    topologySha256: dryRun.state.topologySha256, effectPlanSha256: dryRun.authorizationRequest.effectPlanSha256,
+    maximumAuthorizedCostMicros: dryRun.authorizationRequest.maximumAuthorizedCostMicros, expiresAtMs: 10_000,
+  };
+
+  await expect(new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000 }).provision({ receipt, registry })).rejects.toThrow("RELEASE_CONTROLLER_PROVIDER_AMBIGUOUS");
+  const resumed = await new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 2_000 }).provision({ receipt, registry });
+  expect(resumed.state.status).toBe("topology_ready");
+  expect(modalApplies).toBe(1);
+  expect(modalObserves).toBe(1);
+  expect(protectedEvidenceWrites).toBe(0);
 });

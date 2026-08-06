@@ -48,6 +48,23 @@ export const ReleaseTopologyObservationSchema = z.object({
   database: z.object({ authority: z.literal("cockroach_postgres"), serializable: z.literal(true) }).strict(),
   workerCandidates: z.tuple([z.literal("modal"), z.literal("fly")]),
   integrations: z.array(ReleaseProviderIdSchema).length(10),
+  deployment: z.object({
+    resources: z.array(z.object({
+      provider: ReleaseProviderIdSchema,
+      operationId: z.string().regex(/^[a-z][a-z0-9_-]{2,127}$/u),
+      region: z.string().min(1).max(64),
+      desiredDigest: DigestSchema,
+      configDigest: DigestSchema,
+      resourceIdentitySha256: DigestSchema,
+      capability: z.enum(["available", "unavailable", "unsupported"]),
+      status: z.literal("observed"),
+    }).strict()).length(16),
+    routing: z.object({ activeRegions: z.tuple([z.string().min(1), z.string().min(1)]), standby: z.literal("none") }).strict(),
+    failureDomains: z.array(z.string().min(1).max(128)).min(1).max(8),
+    rtoMinutes: z.number().int().positive().max(10_080),
+    rpoMinutes: z.number().int().nonnegative().max(10_080),
+    limitations: z.array(z.enum(["DATABASE_CONTINUITY_NOT_CERTIFIED", "OBJECT_STORE_FAILOVER_NOT_CERTIFIED", "WORKER_CONTINUITY_NOT_CERTIFIED", "LIVE_DRILL_REQUIRED"])).min(1).max(4),
+  }).strict().optional(),
   topologySha256: DigestSchema,
 }).strict();
 export type ReleaseTopologyObservation = z.infer<typeof ReleaseTopologyObservationSchema>;
@@ -78,12 +95,16 @@ export type ReleaseAuthorizationRequest = z.infer<typeof ReleaseAuthorizationReq
 
 export const ReleaseControllerStateSchema = z.object({
   version: z.literal(1),
-  status: z.enum(["initialized", "discovering", "authorization_required", "blocked"]),
+  status: z.enum(["initialized", "discovering", "authorization_required", "provisioning", "discovering_deployed", "topology_ready", "blocked"]),
   candidate: CandidateIdentitySchema,
   topologySha256: DigestSchema,
   capabilities: z.array(ProviderCapabilityObservationSchema).length(16),
   priorStateSha256: DigestSchema.nullable(),
   authorizationRequestSha256: DigestSchema.nullable(),
+  authorizationReceiptSha256: DigestSchema.nullable(),
+  providerOperationIds: z.array(z.string().regex(/^[a-z][a-z0-9_-]{2,127}$/u)).max(16),
+  deployedTopologySha256: DigestSchema.nullable(),
+  blockReasonCode: z.enum(["AUTHORIZATION_REQUIRED", "PROVIDER_UNAVAILABLE", "PROVIDER_AMBIGUOUS", "TOPOLOGY_DRIFT", "COST_EXCEEDED"]).nullable(),
   createdAtMs: z.number().int().positive(),
   stateSha256: DigestSchema,
 }).strict();

@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { createOfficialPricingSources } from "../../src/release/costs/official-sources";
+import { materializePreapproval, verifyPreapprovalMaterialization } from "../../src/release/preapproval-materializer";
 import { deriveReleaseTopology } from "../../src/release/topology";
 
 const digest = (letter: string) => letter.repeat(64);
@@ -60,4 +65,64 @@ test("rejects redirects, unrecognized official rates, wrong units, and uniform q
   });
   await expect(source.google.readCatalog({ projectId: undefined, providers: ["cloud_run"] })).rejects.toThrow("OFFICIAL_SOURCE_RESPONSE_REJECTED");
   await expect(source.sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow("OFFICIAL_SOURCE_RESPONSE_REJECTED");
+});
+
+const sha256 = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
+
+test("materializes create-only receipt-free preapproval bytes and remeasures every pin", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "napplet-cvm-preapproval-"));
+  try {
+    const repositoryRoot = process.cwd();
+    const factoryModule = resolve(repositoryRoot, "src/release/deployment/production-factory.ts");
+    const factoryConfig = resolve(repositoryRoot, "src/release/deployment/factory.ts");
+    const input = {
+      workspace,
+      repositoryRoot,
+      candidateId: digest("candidate"),
+      source: { sourceRevision: "a".repeat(40), sourceSha256: digest("source") },
+      topology: { candidateSha256: digest("candidate"), topologySha256: digest("topology") },
+      catalog: { catalogSha256: digest("catalog"), topologySha256: digest("topology") },
+      publicSettings: { regions: ["europe-west1", "us-central1"] as [string, string], maximumRunDurationMs: 900_000, retentionDays: 30 },
+      opaqueReferenceNames: ["cloud-run", "modal"],
+      factory: {
+        root: repositoryRoot,
+        modulePath: factoryModule,
+        moduleSha256: sha256(await readFile(factoryModule)),
+        configPath: factoryConfig,
+        configSha256: sha256(await readFile(factoryConfig)),
+      },
+    };
+    const first = await materializePreapproval(input);
+    const second = await materializePreapproval(input);
+    expect(first).toEqual(second);
+    expect(first.artifactPath).toStartWith(workspace);
+    expect(first.artifactSha256).toBe(sha256(await readFile(first.artifactPath)));
+    expect(await verifyPreapprovalMaterialization(first)).toEqual(first);
+    const artifact = await readFile(first.artifactPath, "utf8");
+    for (const forbidden of ["receipt", "workerSelection", "evidence", "trust", "evaluator", "pass", "secret://"]) expect(artifact.toLowerCase()).not.toContain(forbidden.toLowerCase());
+    await writeFile(first.artifactPath, "{}\n");
+    await expect(verifyPreapprovalMaterialization(first)).rejects.toThrow("PREAPPROVAL_ARTIFACT_MUTATED");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("rejects authority-shaped inputs, cross-bound hashes, and paths outside the confined roots", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "napplet-cvm-preapproval-"));
+  try {
+    const repositoryRoot = process.cwd();
+    const modulePath = resolve(repositoryRoot, "src/release/deployment/production-factory.ts");
+    const configPath = resolve(repositoryRoot, "src/release/deployment/factory.ts");
+    const input = {
+      workspace, repositoryRoot, candidateId: digest("candidate"), source: { sourceRevision: "a".repeat(40), sourceSha256: digest("source") },
+      topology: { candidateSha256: digest("candidate"), topologySha256: digest("topology") }, catalog: { catalogSha256: digest("catalog"), topologySha256: digest("topology") },
+      publicSettings: { regions: ["europe-west1", "us-central1"] as [string, string], maximumRunDurationMs: 900_000, retentionDays: 30 }, opaqueReferenceNames: ["modal"],
+      factory: { root: repositoryRoot, modulePath, moduleSha256: sha256(await readFile(modulePath)), configPath, configSha256: sha256(await readFile(configPath)) },
+    };
+    await expect(materializePreapproval({ ...input, authorizationReceiptSha256: digest("receipt") } as never)).rejects.toThrow("PREAPPROVAL_INPUT_REJECTED");
+    await expect(materializePreapproval({ ...input, catalog: { ...input.catalog, topologySha256: digest("other") } })).rejects.toThrow("PREAPPROVAL_BINDING_REJECTED");
+    await expect(materializePreapproval({ ...input, factory: { ...input.factory, modulePath: "/tmp/outside.ts" } })).rejects.toThrow("PREAPPROVAL_FACTORY_REJECTED");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
 });

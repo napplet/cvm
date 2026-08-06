@@ -134,9 +134,12 @@ export function createGcpBootstrapAdapter(options: Readonly<{ port: GcpBootstrap
       for (const stage of stages(authorized)) {
         await persist(options.port, authorized, stage.operationId, stage.kind);
         if (await reconcile(options.port, authorized, stage) === "completed") continue;
-        if (stage.kind === "create_project") await options.port.createProject({ operationId: stage.operationId, projectId: authorized.projectId });
-        else if (stage.kind === "link_billing") await options.port.linkBilling({ operationId: stage.operationId, projectId: authorized.projectId, billingAccountId: authorized.billingAccountId });
-        else await options.port.enableService({ operationId: stage.operationId, projectId: authorized.projectId, service: stage.service! });
+        // Observation can take arbitrarily long. Revalidate the immutable receipt at
+        // the effect boundary, not merely when the method began.
+        const immediate = await authorize(input, now());
+        if (stage.kind === "create_project") await options.port.createProject({ operationId: stage.operationId, projectId: immediate.projectId });
+        else if (stage.kind === "link_billing") await options.port.linkBilling({ operationId: stage.operationId, projectId: immediate.projectId, billingAccountId: immediate.billingAccountId });
+        else await options.port.enableService({ operationId: stage.operationId, projectId: immediate.projectId, service: stage.service! });
       }
       return Object.freeze({ status: "completed" as const, operationId: authorized.operationId, projectScopeSha256: authorized.projectScopeSha256, resourceIdentitySha256: await sha256({ projectId: authorized.projectId, projectScopeSha256: authorized.projectScopeSha256 }) });
     },
@@ -153,7 +156,8 @@ export function createGcpBootstrapAdapter(options: Readonly<{ port: GcpBootstrap
       const existing = await options.port.observe({ operationId, projectId: authorized.projectId, billingAccountId: authorized.billingAccountId });
       if (existing.status === "missing") return Object.freeze({ status: "cleaned" as const, operationId });
       if (existing.status !== "completed") throw new Error(existing.status === "blocked" ? "GCP_BOOTSTRAP_OPERATION_BLOCKED" : "GCP_BOOTSTRAP_RECONCILIATION_PENDING");
-      await options.port.deleteProject({ operationId, projectId: authorized.projectId });
+      const immediate = await authorize(input, now());
+      await options.port.deleteProject({ operationId, projectId: immediate.projectId });
       return Object.freeze({ status: "cleaned" as const, operationId });
     },
   });

@@ -80,3 +80,22 @@ test("blocks cross-project cleanup and only deletes the authorized run-owned pro
   await adapter.cleanup({ ...input, runOwnedProjectId: input.projectId });
   expect(transcript).toEqual(["persist:gcp-bootstrap-1:cleanup", "observe:napplet-cvm-run-1:billingAccounts/abc:project", "delete:napplet-cvm-run-1"]);
 });
+
+test("rechecks receipt expiry at the mutation boundary after reconciliation", async () => {
+  const transcript: string[] = [];
+  let clock = now;
+  const delayedPort = {
+    ...port(transcript),
+    observe: async ({ projectId, billingAccountId, service }: { projectId: string; billingAccountId: string; service?: string }) => {
+      transcript.push(`observe:${projectId}:${billingAccountId}:${service ?? "project"}`);
+      clock = 9_000;
+      return { status: "missing" as const };
+    },
+  };
+  const adapter = createGcpBootstrapAdapter({ port: delayedPort, now: () => clock });
+  const { request, receipt, scope } = await authorized();
+  const input = { request, receipt, operationId: "gcp-bootstrap-1", ...scope };
+
+  await expect(adapter.apply(input)).rejects.toThrow("GCP_BOOTSTRAP_AUTHORIZATION_INVALID");
+  expect(transcript).toEqual(["persist:gcp-bootstrap-1:project", "observe:napplet-cvm-run-1:billingAccounts/abc:project"]);
+});

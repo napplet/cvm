@@ -5,14 +5,14 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 7
 current_phase_name: Admission SLO, Resilience & Launch Safety
 status: executing
-stopped_at: Completed 07-25-PLAN.md
-last_updated: "2026-08-06T12:11:17.288Z"
+stopped_at: Planned 07-27 through 07-39; next execute 07-27-PLAN.md
+last_updated: "2026-08-06T13:32:44.000Z"
 last_activity: 2026-08-06
-last_activity_desc: Plan 07-24 completed; Plan 07-25 local orchestration is next
+last_activity_desc: Native discovery repaired; production-composition gap plans 07-27 through 07-39 verified
 progress:
   total_phases: 7
   completed_phases: 6
-  total_plans: 67
+  total_plans: 80
   completed_plans: 65
   percent: 86
 ---
@@ -30,20 +30,20 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 7 — Admission SLO, Resilience & Launch Safety
-Plan: 26 of 27
-Status: Executing local automation; provider authentication is deferred until the complete controller can request it precisely
-Last activity: 2026-08-06 — Plan 07-24 completed; Plan 07-25 local orchestration is next
+Plan: 27 of 40
+Status: Ready to execute production composition; provider authorization remains deferred until all native adapters and the complete controller are ready
+Last activity: 2026-08-06 — native discovery repaired and append-only Plans 07-27 through 07-39 passed planning verification
 
-Plan execution: [█████████░] 64/67 milestone plans complete; Phase verification remains pending
+Plan execution: [████████░░] 65/80 milestone plans complete; Phase verification remains pending
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 64/67 milestone plans executed; Plan 07-25 finishes local orchestration and contract tests, Plan 07-20 is the sole provider-authentication/cost-approval checkpoint, and Plan 07-26 performs the authorized end-to-end run.
+- Plans: 65/80 milestone plans executed; Plans 07-27–07-39 complete production native composition, Plan 07-20 is the sole provider-authentication/cost-approval checkpoint, and Plan 07-26 performs the authorized end-to-end run.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Next checkpoint: execute Plan 07-25 locally, then use Plan 07-20 for one exact provider-authentication/cost approval, then execute Plan 07-26 for the protected live run; no hand-authored evidence or certifier files are required.
+- Next checkpoint: execute Plan 07-27, continue autonomously through Plan 07-39, then use Plan 07-20 for one exact provider-authentication/cost approval and Plan 07-26 for the protected live run; no hand-authored evidence or certifier files are required.
 
 ## Performance Metrics
 

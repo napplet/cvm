@@ -82,7 +82,7 @@ async function digest(value: unknown): Promise<string> {
 
 function assertBounds(input: RequestInput): void {
   if (input.estimateFreshUntilMs <= input.estimateObservedAtMs || input.expiresAtMs >= input.estimateFreshUntilMs) throw new Error("RELEASE_AUTHORIZATION_ESTIMATE_STALE");
-  if (input.cleanupByMs > input.expiresAtMs + input.maximumRunDurationMs) throw new Error("RELEASE_AUTHORIZATION_CLEANUP_UNBOUNDED");
+  if (input.cleanupByMs > input.expiresAtMs) throw new Error("RELEASE_AUTHORIZATION_CLEANUP_UNBOUNDED");
   if (input.maximumAuthorizedCostMicros !== input.orderedEffects.reduce((sum, effect) => {
     const next = sum + effect.estimatedCostMicros;
     if (!Number.isSafeInteger(next)) throw new Error("RELEASE_AUTHORIZATION_COST_OVERFLOW");

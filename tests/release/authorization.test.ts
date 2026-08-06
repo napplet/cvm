@@ -17,7 +17,7 @@ const input = (overrides: Record<string, unknown> = {}) => ({
   providerScopes: [{ provider: "cloud_run", accountScopeSha256: digest("f"), projectScopeSha256: digest("1") }],
   estimate: { currency: "USD", maximumMicros: 5_000_000, sourceId: "release-topology-v1", observedAtMs: 1_000, freshUntilMs: 2_000 },
   maximumRunDurationMs: 60_000,
-  cleanupByMs: 61_000,
+  cleanupByMs: 1_400,
   evidenceRetentionDays: 30,
   artifactRetentionDays: 30,
   gcpEffects: { projectBootstrap: true, billing: true, apiEnablement: ["run.googleapis.com", "sqladmin.googleapis.com", "storage.googleapis.com"] },
@@ -48,6 +48,10 @@ test("rejects stale estimates, unitless costs, and tampered receipt inputs", asy
   await expect(validateAuthorizationReceipt({ request, receipt, nowMs: 1_500 })).rejects.toThrow("RELEASE_AUTHORIZATION_RECEIPT_EXPIRED");
 });
 
+test("rejects cleanup that outlives the exact authorization expiry", async () => {
+  await expect(createAuthorizationRequest(input({ cleanupByMs: 1_501 }))).rejects.toThrow("RELEASE_AUTHORIZATION_CLEANUP_UNBOUNDED");
+});
+
 test("every bound authorization input changes the request digest", async () => {
   const base = await createAuthorizationRequest(input());
   const mutations = [
@@ -56,7 +60,7 @@ test("every bound authorization input changes the request digest", async () => {
     { estimate: { currency: "USD", maximumMicros: 5_000_000, sourceId: "release-topology-v2", observedAtMs: 1_000, freshUntilMs: 2_000 } },
     { providerScopes: [{ provider: "cloud_run", accountScopeSha256: digest("6"), projectScopeSha256: digest("7") }] },
     { orderedEffects: [{ id: "cloud-run-ingress", provider: "cloud_run", operation: "create_or_update", estimatedCostMicros: 5_000_001 }], estimate: { currency: "USD", maximumMicros: 5_000_001, sourceId: "release-topology-v1", observedAtMs: 1_000, freshUntilMs: 2_000 } },
-    { maximumRunDurationMs: 59_500 }, { cleanupByMs: 60_500 }, { evidenceRetentionDays: 29 }, { artifactRetentionDays: 29 },
+    { maximumRunDurationMs: 59_500 }, { cleanupByMs: 1_401 }, { evidenceRetentionDays: 29 }, { artifactRetentionDays: 29 },
     { gcpEffects: { projectBootstrap: false, billing: true, apiEnablement: ["run.googleapis.com", "sqladmin.googleapis.com", "storage.googleapis.com"] } },
     { expiresAtMs: 1_499 },
   ];

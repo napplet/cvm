@@ -207,7 +207,7 @@ Phases with established patterns (research can be focused rather than open-ended
 - **ContextVM/CEP-8 contract:** verify current endpoint names, signed-event/replay rules, payment messages, Lightning and Cashu settlement receipts against maintained fixtures before adapter implementation.
 - **Exact-usage model provider:** choose only a provider/proxy arrangement that can reserve a ceiling, identify requests, return authoritative usage, and reconcile timeouts; otherwise surface `usage_unknown` and pause rather than promise exact final charge.
 - **Five-second SLO/vendor selection:** measure receipt-to-isolated-worker-ready at declared load/regions, including pool misses, relay latency, database contention, failure/reclaim, and overload rejection. Modal is recommended for the initial benchmark, not assumed sufficient.
-- **HA scope decision:** CockroachDB multi-region is the recommended target for regional continuity; Cloud SQL single-region HA is a permissible cost-first launch alternative only if the product does not claim regional failover until later.
+- **HA scope decision:** Cloud SQL for PostgreSQL 17 HA is the selected v1 database authority. It is a single-region launch boundary and the product must not claim regional database failover until matching live drills pass; `ReleaseProviderPort` and the release controller remain provider-neutral primary abstractions.
 - **Signing/runtime integration:** validate that a compatible trusted runtime can display and locally sign the exact user manifest while preserving CVM attestation linkage and no private-key exposure.
 
 ## Sources
@@ -215,7 +215,7 @@ Phases with established patterns (research can be focused rather than open-ended
 ### Primary (HIGH confidence)
 
 - [NIP-01](https://github.com/nostr-protocol/nips/blob/master/01.md) — user-event ownership/signature model.
-- Modal Sandbox, Google Cloud Run/Storage, CockroachDB, and npm registry sources catalogued in [STACK.md](./STACK.md) — documented capabilities and version metadata, subject to implementation gates.
+- Modal Sandbox, Google Cloud Run/Storage, Cloud SQL for PostgreSQL, and npm registry sources catalogued in [STACK.md](./STACK.md) — documented capabilities and version metadata, subject to implementation gates.
 
 ### Secondary (MEDIUM confidence)
 

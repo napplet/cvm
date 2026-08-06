@@ -4,12 +4,14 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createOfficialPricingSources } from "../../src/release/costs/official-sources";
+import { createProductionLiveCostCatalog } from "../../src/release/costs/production-catalog";
+import { createLiveCostEstimator, RELEASE_COST_FAMILIES } from "../../src/release/costs/live-estimator";
 import { materializePreapproval, verifyPreapprovalMaterialization } from "../../src/release/preapproval-materializer";
 import { deriveReleaseTopology } from "../../src/release/topology";
 
 const digest = (letter: string) => letter.repeat(64);
 
-test("captures only allowlisted official pricing bytes and derives ordered non-uniform topology quantities", async () => {
+test("binds each regional Google component to one authenticated catalog SKU without exposing ADC", async () => {
   const calls: string[] = [];
   const sources = createOfficialPricingSources({
     now: () => 1_000_000,
@@ -18,30 +20,42 @@ test("captures only allowlisted official pricing bytes and derives ordered non-u
       calls.push(url);
       expect(init?.redirect).toBe("error");
       if (url === "https://cloudbilling.googleapis.com/v1/services") {
+        expect(init?.headers).toEqual(expect.objectContaining({ authorization: "Bearer opaque-adc-token-canary-value" }));
         return new Response(JSON.stringify({ services: [{ name: "services/RUN", serviceId: "RUN", displayName: "Cloud Run" }] }));
       }
       if (url.startsWith("https://cloudbilling.googleapis.com/v1/services/RUN/skus?")) {
-        return new Response(JSON.stringify({ skus: [{ skuId: "RUN-CPU", serviceRegions: ["europe-west1", "us-central1"], pricingInfo: [{ currencyConversionRate: 1, pricingExpression: { usageUnit: "seconds", tieredRates: [{ unitPrice: { currencyCode: "USD", units: "0", nanos: 1000 } }] } }] }] }));
+        expect(init?.headers).toEqual(expect.objectContaining({ authorization: "Bearer opaque-adc-token-canary-value" }));
+        return new Response(JSON.stringify({ skus: [
+          { skuId: "RUN-EU", serviceRegions: ["europe-west1"], pricingInfo: [{ currencyConversionRate: 1, pricingExpression: { usageUnit: "seconds", tieredRates: [{ unitPrice: { currencyCode: "USD", units: "0", nanos: 1000 } }] } }] },
+          { skuId: "RUN-US", serviceRegions: ["us-central1"], pricingInfo: [{ currencyConversionRate: 1, pricingExpression: { usageUnit: "seconds", tieredRates: [{ unitPrice: { currencyCode: "USD", units: "0", nanos: 2000 } }] } }] },
+        ] }));
       }
       if (url === "https://modal.com/pricing") return new Response("Modal Sandbox $0.00003942 / core / sec $0.00000667 / GiB / sec");
       if (url === "https://fly.io/docs/about/pricing/") return new Response("shared-cpu-1x 256MB $0.00000078");
       return new Response("not found", { status: 404 });
     },
     google: {
-      selectors: [{ provider: "cloud_run", serviceDisplayName: "Cloud Run", skuId: "RUN-CPU", regions: ["europe-west1", "us-central1"], usageUnit: "seconds", unit: "worker-second" }],
+      selectors: [
+        { componentId: "cloud_run.europe-west1.cpu", provider: "cloud_run", serviceDisplayName: "Cloud Run", skuId: "RUN-EU", region: "europe-west1", usageUnit: "seconds", unit: "worker-second" },
+        { componentId: "cloud_run.us-central1.cpu", provider: "cloud_run", serviceDisplayName: "Cloud Run", skuId: "RUN-US", region: "us-central1", usageUnit: "seconds", unit: "worker-second" },
+      ],
     },
+    adc: { async readAccessToken() { return "opaque-adc-token-canary-value"; } },
     workers: {
-      modal: { cpuCores: 1, memoryGiB: 1, unit: "worker-second" },
-      fly: { preset: "shared-cpu-1x", memory: "256MB", unit: "worker-second" },
+      modal: { cpuCores: 1, memoryGiB: 1, unit: "worker-100-seconds" },
+      fly: { preset: "shared-cpu-1x", memory: "256MB", unit: "worker-100-seconds" },
     },
   });
 
   const google = await sources.google.readCatalog({ projectId: undefined, providers: ["cloud_run"] });
   const modal = await sources.sources.readOfficialPricing({ provider: "modal" });
   const fly = await sources.sources.readOfficialPricing({ provider: "fly" });
-  expect(google).toMatchObject({ sourceId: "gcp-cloud-billing-catalog-v1", quotes: [{ provider: "cloud_run", unit: "worker-second", priceMicros: 1 }] });
-  expect(modal).toMatchObject({ quotes: [{ provider: "modal", unit: "worker-second" }] });
-  expect(fly).toMatchObject({ quotes: [{ provider: "fly", unit: "worker-second" }] });
+  expect(google).toMatchObject({ sourceId: "gcp-cloud-billing-catalog-v1", quotes: [
+    { componentId: "cloud_run.europe-west1.cpu", region: "europe-west1", provider: "cloud_run", skuId: "RUN-EU", unit: "worker-second", priceMicros: 1 },
+    { componentId: "cloud_run.us-central1.cpu", region: "us-central1", provider: "cloud_run", skuId: "RUN-US", unit: "worker-second", priceMicros: 2 },
+  ] });
+  expect(modal).toMatchObject({ quotes: [{ provider: "modal", unit: "worker-100-seconds" }] });
+  expect(fly).toMatchObject({ quotes: [{ provider: "fly", unit: "worker-100-seconds" }] });
   expect(calls).toEqual([
     "https://cloudbilling.googleapis.com/v1/services",
     "https://cloudbilling.googleapis.com/v1/services/RUN/skus?currencyCode=USD&pageSize=5000",
@@ -50,9 +64,9 @@ test("captures only allowlisted official pricing bytes and derives ordered non-u
   ]);
 
   const topology = await deriveReleaseTopology(digest("a"));
-  expect(topology.quantityContract.map((line) => line.provider)).toHaveLength(16);
+  expect(topology.quantityContract.map((line) => line.provider)).toHaveLength(20);
   expect(new Set(topology.quantityContract.map((line) => line.quantityNanos)).size).toBeGreaterThan(1);
-  expect(topology.quantityContract.find((line) => line.provider === "cloud_run")?.quantityNanos).toBe("5400000000000");
+  expect(topology.quantityContract.find((line) => line.componentId === "cloud_run.europe-west1.cpu")?.quantityNanos).toBe("2700000000000");
   expect(topology.topologySha256).toMatch(/^[a-f0-9]{64}$/);
 });
 
@@ -60,11 +74,46 @@ test("rejects redirects, unrecognized official rates, wrong units, and uniform q
   const source = createOfficialPricingSources({
     now: () => 1_000_000,
     fetch: async () => new Response("redirect", { status: 302, headers: { location: "https://evil.example" } }),
-    google: { selectors: [{ provider: "cloud_run", serviceDisplayName: "Cloud Run", skuId: "RUN-CPU", regions: ["europe-west1", "us-central1"], usageUnit: "seconds", unit: "worker-second" }] },
+    google: { selectors: [{ componentId: "cloud_run.europe-west1.cpu", provider: "cloud_run", serviceDisplayName: "Cloud Run", skuId: "RUN-CPU", region: "europe-west1", usageUnit: "seconds", unit: "worker-second" }] },
+    adc: { async readAccessToken() { return "opaque-adc-token-canary-value"; } },
     workers: { modal: { cpuCores: 1, memoryGiB: 1, unit: "worker-second" }, fly: { preset: "shared-cpu-1x", memory: "256MB", unit: "worker-second" } },
   });
   await expect(source.google.readCatalog({ projectId: undefined, providers: ["cloud_run"] })).rejects.toThrow("OFFICIAL_SOURCE_RESPONSE_REJECTED");
   await expect(source.sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow("OFFICIAL_SOURCE_RESPONSE_REJECTED");
+});
+
+test("aggregates component receipts into one family line with complete provenance", async () => {
+  const topology = await deriveReleaseTopology(digest("b"));
+  const now = () => 1_000_000;
+  const googleComponents = topology.quantityContract.filter((component) => ["cloud_run", "gcs", "collector", "cloud_sql_postgres", "cep8_lightning", "cashu", "model"].includes(component.provider));
+  const catalog = createProductionLiveCostCatalog({
+    now,
+    quantityContract: topology.quantityContract.map((component) => ({ ...component, quantityNanos: BigInt(component.quantityNanos) })),
+    google: { async readCatalog() {
+      return { sourceId: "gcp-cloud-billing-catalog-v1", bytes: new TextEncoder().encode("gcp-components"), observedAtMs: 999_999, freshUntilMs: 1_060_000,
+        quotes: googleComponents.map((component, index) => ({ provider: component.provider, componentId: component.componentId, skuId: `sku-${index}`, region: component.region, currency: "USD", unit: component.unit, priceMicros: index + 1 })) };
+    } },
+    sources: { async readOfficialPricing({ provider }) { return { sourceId: `${provider}-official-pricing`, bytes: new TextEncoder().encode(provider), observedAtMs: 999_999, freshUntilMs: 1_060_000,
+      quotes: [{ provider, componentId: `${provider}.global`, skuId: `${provider}-official`, region: "global", currency: "USD", unit: "worker-100-seconds", priceMicros: 3 }] }; } },
+  });
+  const facts = await catalog.listPriceFacts({ providers: RELEASE_COST_FAMILIES });
+  const cloudRun = facts.find((fact) => fact.provider === "cloud_run");
+  expect(cloudRun).toMatchObject({ components: [
+    { componentId: "cloud_run.europe-west1.cpu", region: "europe-west1" },
+    { componentId: "cloud_run.us-central1.cpu", region: "us-central1" },
+  ] });
+  const estimate = await createLiveCostEstimator({ catalog, now }).estimate({ topologySha256: topology.topologySha256,
+    quantities: RELEASE_COST_FAMILIES.map((provider) => ({ provider, quantityNanos: 1_000_000_000n, headroomBasisPoints: 1_000 })),
+    components: topology.quantityContract.map((component) => ({ ...component, quantityNanos: BigInt(component.quantityNanos) })),
+  });
+  expect(estimate.lines).toHaveLength(16);
+  expect(estimate.lines.find((line) => line.provider === "cloud_run")).toMatchObject({ components: [
+    { componentId: "cloud_run.europe-west1.cpu", skuId: "sku-0" },
+    { componentId: "cloud_run.us-central1.cpu", skuId: "sku-1" },
+  ] });
+  await expect(createLiveCostEstimator({ catalog: { listPriceFacts: async () => facts.map((fact) => fact.provider === "cloud_run" ? { ...fact, components: [...fact.components, fact.components[0]] } : fact) }, now }).estimate({ topologySha256: topology.topologySha256,
+    quantities: RELEASE_COST_FAMILIES.map((provider) => ({ provider, quantityNanos: 1_000_000_000n, headroomBasisPoints: 1_000 })), components: topology.quantityContract.map((component) => ({ ...component, quantityNanos: BigInt(component.quantityNanos) })),
+  })).rejects.toThrow("LIVE_COST_COMPONENT_COVERAGE_REQUIRED");
 });
 
 const sha256 = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");

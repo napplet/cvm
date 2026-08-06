@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: executing
-stopped_at: 07-49 paused cleanly; execute regional pricing Plan 07-50
-last_updated: "2026-08-06T22:14:23.309Z"
+stopped_at: Completed 07-50-PLAN.md; Cloud Billing probe timed out, resume 07-49
+last_updated: "2026-08-06T22:45:18.006Z"
 last_activity: 2026-08-06
 last_activity_desc: Completed official pricing and receipt-free preapproval materialization in Plan 07-48
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 91
-  completed_plans: 87
+  completed_plans: 88
   percent: 86
 ---
 
@@ -30,20 +30,20 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 07 (admission-slo-resilience-launch-safety) — EXECUTING
-Plan: 47 of 51 complete
-Status: Ready for 07-50 regional official-SKU aggregation; 07-49 resumes afterward
-Last activity: 2026-08-06 — Completed official pricing and receipt-free preapproval materialization in Plan 07-48
+Plan: 48 of 51 complete
+Status: Ready to resume partial 07-49 local setup/request composition; protected Cloud Billing probe timed out without an effect
+Last activity: 2026-08-06 — Completed regional official-SKU aggregation in Plan 07-50
 
-Plan execution: [██████████] 87/91 milestone plans complete; Phase 7 is 47/51 complete and verification remains pending
+Plan execution: [██████████] 88/91 milestone plans complete; Phase 7 is 48/51 complete and verification remains pending
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 87/91 milestone plans executed. Plans 07-47–07-48 completed receipt-gated execution and receipt-free official-source preparation; Plan 07-50 now closes regional SKU aggregation before resuming 07-49 local setup/review, 07-20 approval, and 07-26 execution.
+- Plans: 88/91 milestone plans executed. Plan 07-50 completed regional official-SKU aggregation; resume partial 07-49 local setup/review, then 07-20 approval and 07-26 execution.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Next checkpoint: execute 07-50, resume 07-49, then let 07-20 connect any missing operator NWC Lightning and funded Cashu rails locally and record final exact approval, followed by 07-26. Owner NIP-46 remains deferred to publication; no hand-authored config/evidence or pasted secret/digest is required.
+- Next checkpoint: resume partial 07-49, then let 07-20 connect any missing operator NWC Lightning and funded Cashu rails locally and record final exact approval, followed by 07-26. Owner NIP-46 remains deferred to publication; no hand-authored config/evidence or pasted secret/digest is required.
 
 ## Performance Metrics
 
@@ -151,6 +151,7 @@ Plan execution: [██████████] 87/91 milestone plans complete;
 | Phase 07-admission-slo-resilience-launch-safety P46 | 10m | 2 tasks | 7 files |
 | Phase 07-admission-slo-resilience-launch-safety P47 | 15m | 1 tasks | 5 files |
 | Phase 07-admission-slo-resilience-launch-safety P48 | 68m | 2 tasks | 5 files |
+| Phase 07 P50 | 44m | 1 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -323,6 +324,9 @@ Recent decisions affecting current work:
 - [Phase ?]: NIP-46 remains dormant during composition and receipt validation; only the authorized publication operation may invoke the owner signer.
 - [Phase ?]: Official pricing readers bind exact captured source bytes and reject redirects, parser drift, ambiguous tiers, wrong units, regions, or currencies.
 - [Phase ?]: Preapproval materialization is create-only and receipt-free; protected evidence and authorization remain on the receipt-bound path.
+- [Phase ?]: Topology owns exact regional component allocations; catalog adapters cannot invent or aggregate allocations.
+- [Phase ?]: Cloud Billing uses memory-only ADC authorization on service/SKU GETs with no project selection or bearer output.
+- [Phase ?]: Sixteen authorization families retain ordered component provenance and checked aggregate calculations.
 
 ### Pending Todos
 
@@ -351,6 +355,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-06T22:14:23.269Z
-Stopped at: 07-49 paused cleanly; execute regional pricing Plan 07-50
-Resume file: .planning/phases/07-admission-slo-resilience-launch-safety/07-50-PLAN.md
+Last session: 2026-08-06T22:45:17.996Z
+Stopped at: Completed 07-50-PLAN.md; Cloud Billing probe timed out, resume 07-49
+Resume file: .planning/phases/07-admission-slo-resilience-launch-safety/07-49-PLAN.md

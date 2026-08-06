@@ -17,10 +17,18 @@ local discovery and cost/effect planning; it cannot provision, execute a
 protected suite, write protected evidence, finalize trust, promote, or clean
 up a provider resource.
 
-Before a protected execution, authenticate the provider clients and approve the
-controller-issued cost/effect digest. Do not author or select a certifier
-profile, registry, trust root, secret file, observation, or evidence directory:
-the controller creates digest-pinned candidate-bound material itself.
+Before a protected execution, the user performs only the official provider
+login or consent requested by the provider and then approves or verifies the
+one exact controller-issued authorization digest. The controller derives the
+configuration, topology, provider scopes, trust inputs, bounded USD-micros
+cost, cleanup/retention, and candidate-bound evidence. Do not author or select
+a certifier profile, registry, trust root, secret file, observation, or evidence
+directory: the controller creates digest-pinned candidate-bound material itself
+and never persists credentials.
+
+The authorization request is regenerated when any candidate, topology, effect,
+state, estimate freshness, expiry, or expected-receipt digest changes. No live
+effect may start before that exact approval receipt validates.
 
 The protected completion contract is exact: `admission`, `telemetry`, `chaos`,
 `restore`, `security-host`, `supply-chain`, `contextvm-payment-model`, and

@@ -34,7 +34,7 @@
 
 - **D-126:** Production promotion is a single fail-closed gate over exact immutable inputs: worker/control-plane images, package/lock/toolchain identities, database migrations, configuration/policy versions, SBOM/provenance, load/SLO evidence, fault-matrix results, payment/model/publication reconciliation, hostile escape/exfiltration tests, napplet conformance, compatible-host preview/signing, and release-candidate evidence digest. Missing or stale evidence cannot be waived by a green unit suite.
 - **D-127:** Close the Phase 1 launch deferrals here: authoritative source provenance, repeated and cross-environment byte reproducibility, hostile/mutation coverage, reviewed content-addressed golden change, promotion-manifest completeness, SBOM/provenance enforcement, and exercised rollback/waiver behavior. NIP-5D and promoted napplet packages remain authoritative; fix/promote upstream package behavior instead of adding CVM protocol forks.
-- **D-128:** Live certification includes the selected ContextVM relay/SDK path, CEP-8 Lightning and Cashu rails, model receipt/reconciliation adapter, worker and checkpoint/object adapters, compatible host preview and local/external signer, promoted CLI source/asset, upload target, relay publication, PostgreSQL/Cockroach deployment, and the Phase 6 UI-review host requirements for visible copy, responsive tokens, touch/focus/dialog/live-region behavior. Credentials absent from the environment produce explicit blocked evidence, never fabricated readiness.
+- **D-128:** Live certification includes the selected ContextVM relay/SDK path, CEP-8 Lightning and Cashu rails, model receipt/reconciliation adapter, worker and checkpoint/object adapters, compatible host preview and local/external signer, promoted CLI source/asset, upload target, relay publication, Cloud SQL for PostgreSQL deployment, and the Phase 6 UI-review host requirements for visible copy, responsive tokens, touch/focus/dialog/live-region behavior. Credentials absent from the environment produce explicit blocked evidence, never fabricated readiness.
 - **D-129:** Preserve Phase 1's auditable owner-waiver capability only for time-bounded, named non-safety exceptions with evidence, expiry, rollback trigger, and affected release/artifact identity. NIP-5D conformance, sealed-byte/hash integrity, user-key custody, direct-authority escape, ledger imbalance/double charge, duplicate ownership/publication, missing five-second SLO evidence, and unexecuted required live certification are non-waivable for v1.0.
 
 ### the agent's Discretion
@@ -64,7 +64,7 @@
 |----|-------------|------------------|
 | SESS-02 | Accepted work reaches a ready isolated worker within five seconds p95 or receives immediate retryable refusal. | Receipt-to-ready clock, durable lease-before-accept, Modal/Fly benchmark protocol, and confidence gate. |
 | OPS-01 | Lifecycle telemetry is measurable without prompt/key/payment-secret disclosure. | Trusted-boundary OTel vocabulary, redaction/property tests, finite attributes, OTLP collector pattern. |
-| OPS-02 | Failures retain single-writer and exactly-once money/session/event semantics. | Original-operation fault matrix, Cockroach retry policy, lease fences, deterministic chaos schedules. |
+| OPS-02 | Failures retain single-writer and exactly-once money/session/event semantics. | Original-operation fault matrix, Cloud SQL serializable retry policy, lease fences, deterministic chaos schedules. |
 | OPS-03 | Durable state survives infrastructure-instance failure for promised retention. | Object generation/checksum restore drill, GCS lifecycle/versioning limits, explicit topology/RTO/RPO evidence. |
 | OPS-04 | Promotion requires pinned supply chain, adversarial/reconciliation, and SLO evidence. | Content-addressed evidence bundle, Sigstore attestation verification, non-waivable live-certification matrix. |
 </phase_requirements>
@@ -99,7 +99,7 @@ The production worker decision remains unselected until comparable live evidence
 |-------------------|---------|---------|--------------|
 | Existing `modal` | `0.9.0` pinned | Candidate isolated worker adapter | Existing project adapter already constrains vendor objects/errors and probes isolation; official JS Sandbox API has resource, timeout, lifecycle, filesystem, and network controls. [CITED: https://modal.com/docs/sdk/js/latest/Sandbox] |
 | Fly Machines API | API current at certification | Non-AWS fallback workspace candidate | API can create/manage Machines; region-local volume semantics make external checkpoint storage mandatory. It must meet the identical test contract before selection. [CITED: https://www.fly.io/docs/machines/api/working-with-machines-api/] [CITED: https://www.fly.io/docs/machines/api/volumes-resource/] |
-| CockroachDB PostgreSQL-wire deployment | Provisioned version pinned at deploy | Authoritative idempotency, funds, leases, and original-operation records | Default serializable behavior is correct only with bounded transaction-retry handling and no effects inside the retried transaction body. [CITED: https://www.cockroachlabs.com/docs/stable/transaction-retry-error-reference] |
+| Cloud SQL for PostgreSQL 17 HA | Provisioned version pinned at deploy | Authoritative idempotency, funds, leases, and original-operation records | Serializable transaction handling must be bounded and no external effect may occur inside a retried transaction body. [CITED: https://docs.cloud.google.com/sql/docs/postgres] |
 | Cloud Run multi-region control plane | Managed, image-digest pinned | Signed ingress/coordinator replicas | Cloud Run supports a single service deployed to multiple regions; min-instance scaling applies per region. It does not prove worker or database continuity. [CITED: https://docs.cloud.google.com/run/docs/multiple-regions] |
 | GCS dual-region object store | Managed, bucket config evidence pinned | Checkpoint/artifact/evidence archives | Object generation/versioning enables exact-object restore, but object versioning does not protect bucket deletion and requires lifecycle/soft-delete policy. [CITED: https://docs.cloud.google.com/storage/docs/object-versioning] |
 
@@ -243,7 +243,7 @@ OTLP HTTP/protobuf exports traces and metrics to a Collector; use a sink-inspect
 
 - **Vendor-created equals ready:** require an exact-session readiness probe; Modal documents a distinct Ready lifecycle event only when a readiness probe succeeds. [CITED: https://modal.com/docs/guide/sandboxes]
 - **Internal queue equals hidden backlog:** never use a durable generation queue. A worker-provider pool can maintain inventory, but its occupancy/claim state is capacity infrastructure and cannot make an accepted request wait. [VERIFIED: D-115]
-- **Transaction retry wraps an external effect:** Cockroach `40001` retry handling must only retry the serializable database transaction; external effects require their own prewritten original operation and lookup reconciliation. [CITED: https://www.cockroachlabs.com/docs/stable/transaction-retry-error-reference]
+- **Transaction retry wraps an external effect:** Cloud SQL serialization retry handling must only retry the database transaction; external effects require their own prewritten original operation and lookup reconciliation. [CITED: https://docs.cloud.google.com/sql/docs/postgres]
 - **Object exists equals restore passed:** verify exact generation, decrypt/read, checksum, owner/version/lease fence, reattachment, and expiry. [VERIFIED: D-125]
 - **Metrics are a data lake:** reject unknown/free-text attributes before export; report large split dimensions inside evidence files. [VERIFIED: D-118–D-120]
 - **Signature present equals provenance passed:** verify expected identity, artifact digest, and predicate policy; absence/hidden data must fail closed. [CITED: https://docs.sigstore.dev/cosign/verifying/attestation/]
@@ -255,7 +255,7 @@ OTLP HTTP/protobuf exports traces and metrics to a Collector; use a sink-inspect
 | Sandbox lifecycle/egress isolation | Containers or network filters in the domain layer | Modal/Fly worker adapter plus provider controls and exact-session probe | Lifecycle, network, and terminal-state behavior is provider-specific. [CITED: https://modal.com/docs/guide/sandbox-networking] |
 | Telemetry protocol/export | Custom trace wire format or unbounded JSON metrics | OpenTelemetry API/SDK + OTLP Collector | Standard exporter/data model; project retains redaction vocabulary ownership. [CITED: https://opentelemetry.io/docs/languages/js/exporters/] |
 | Attestation crypto/verification | Custom signing or hand-parsed provenance | Cosign/Sigstore in-toto verification plus policy | Signatures alone do not prove a predicate or availability. [CITED: https://docs.sigstore.dev/cosign/verifying/attestation/] |
-| Database failover semantics | Application guesses based on connection errors | Cockroach transaction retry + durable original-operation reconciliation | A connection/retry outcome does not prove whether external work happened. [CITED: https://www.cockroachlabs.com/docs/stable/transaction-retry-error-reference] |
+| Database failover semantics | Application guesses based on connection errors | Cloud SQL transaction retry + durable original-operation reconciliation | A connection/retry outcome does not prove whether external work happened. [CITED: https://docs.cloud.google.com/sql/docs/postgres] |
 | GCS recovery | Object name/object presence check | Generation-pinned object fetch plus authenticated manifest/checksum/restore drill | Versioning and soft delete have distinct guarantees/limits. [CITED: https://docs.cloud.google.com/storage/docs/object-versioning] |
 
 **Key insight:** The product’s financial/public effects already have durable identities. Phase 7 should make provider behavior observable and certifiable around those identities, not introduce a second “resilience” state machine.
@@ -324,11 +324,11 @@ OTLP HTTP/protobuf exports traces and metrics to a Collector; use a sink-inspect
 
 2. **What exact topology earns the availability claim?**
    - What we know: Cloud Run can deploy one service to multiple regions and per-region minimum instances apply. [CITED: https://docs.cloud.google.com/run/docs/multiple-regions]
-   - What's unclear: Provisioned Cockroach/GCS/worker locations, relay routing, and paid-tier configuration.
+   - What's unclear: Provisioned Cloud SQL/GCS/worker locations, relay routing, and paid-tier configuration.
    - Resolution: Availability language is bounded to the exact protected topology that passes Plan 07-10: named component and region inventory, routing, data/object/worker failure domains, active/standby behavior, executed fault/restore drills, measured RTO/RPO, and recorded limitations. Two ingress regions or structural configuration alone confer no wider database, object, relay, or worker continuity claim. Until such evidence passes, the corresponding availability claim remains blocked. This resolves claim scope; it does not assert any topology has passed.
 
 3. **Which live profiles/credentials are available?**
-   - What we know: Local audit found Bun, Node, npm, and Docker, but no Modal, Fly, gcloud, Cockroach, cosign, syft, OTel Collector, or Playwright CLI.
+   - What we know: Local audit found Bun, Node, npm, and Docker, but no Modal, Fly, gcloud, Cloud SQL profile, cosign, syft, OTel Collector, or Playwright CLI.
    - What's unclear: ContextVM relay, CEP-8 Lightning/Cashu, model, host/signer, CLI asset/upload/relay, and managed storage/database credentials.
    - Resolution: Plan 07-10 protected preflight inventories every required profile, credential reference, tool, sample, and topology input. Any absence emits candidate/input-bound `blocked` or `not_observed` evidence, exits nonzero, and blocks promotion; it is never replaced by fixture or deterministic evidence. This resolves fail-closed behavior while preserving the empirical fact that protected profile availability has not yet been observed.
 
@@ -342,7 +342,7 @@ OTLP HTTP/protobuf exports traces and metrics to a Collector; use a sink-inspect
 | Modal CLI/credentials | Modal live certification | ✗ | — | Emit `blocked`, benchmark Fly only if its credentials exist. |
 | Fly CLI/token | fallback live certification | ✗ | — | Emit `blocked`; no fallback claim. |
 | gcloud credentials | Cloud Run/GCS live drills | ✗ | — | Emit `blocked`; local object-store fake is non-claim-bearing. |
-| Cockroach/PostgreSQL target | SQL failover drill | ✗ | — | Existing SQL-shaped tests only; no availability claim. |
+| Cloud SQL for PostgreSQL target | SQL failover drill | ✗ | — | Existing SQL-shaped tests only; no availability claim. |
 | Cosign + trusted identity | provenance verification | ✗ | — | Deterministic schema tests only; no supply-chain pass. |
 | ContextVM/CEP-8/rail/model/host/signer/CLI/upload/relay credentials | end-to-end certification | ✗ | — | Explicit `not_observed` evidence; v1 promotion blocked. |
 
@@ -430,7 +430,7 @@ OTLP HTTP/protobuf exports traces and metrics to a Collector; use a sink-inspect
 | Generated code/dependency exfiltration | Information Disclosure | Default `blockNetwork`, no worker credentials, egress canaries, terminate/quarantine on violation. [CITED: https://modal.com/docs/guide/sandbox-networking] |
 | Telemetry secret/free-text leakage | Information Disclosure | Schema allowlist/redaction before exporter and canary inspection. [VERIFIED: D-118–D-119] |
 | Lost/forged provenance | Tampering | Verify signer identity, exact digest, and in-toto predicate policy; fail closed on absence. [CITED: https://docs.sigstore.dev/cosign/verifying/attestation/] |
-| Failover retries external money/publication | Tampering | SQL retry only for transaction; lookup/reconcile original external operation, never redispatch. [CITED: https://www.cockroachlabs.com/docs/stable/transaction-retry-error-reference] |
+| Failover retries external money/publication | Tampering | Cloud SQL retry only for transaction; lookup/reconcile original external operation, never redispatch. [CITED: https://docs.cloud.google.com/sql/docs/postgres] |
 
 ## Sources
 
@@ -440,7 +440,7 @@ OTLP HTTP/protobuf exports traces and metrics to a Collector; use a sink-inspect
 - [Modal Sandbox networking](https://modal.com/docs/guide/sandbox-networking) and [warm pool example](https://modal.com/docs/examples/sandbox_pool) — default outbound behavior, blocking/allowlists, health/readiness/expiry handling.
 - [Modal JavaScript Sandbox API](https://modal.com/docs/sdk/js/latest/Sandbox) — JS creation parameters and lifecycle operations.
 - [Cloud Run multi-region deployment](https://docs.cloud.google.com/run/docs/multiple-regions) and [Cloud Storage object versioning](https://docs.cloud.google.com/storage/docs/object-versioning) — per-region scaling and versioning/soft-delete limits.
-- [Cockroach transaction retry reference](https://www.cockroachlabs.com/docs/stable/transaction-retry-error-reference) — serializable `40001` retry semantics.
+- [Cloud SQL for PostgreSQL](https://docs.cloud.google.com/sql/docs/postgres) — selected database transaction and provisioning boundary.
 - [OpenTelemetry JavaScript exporters](https://opentelemetry.io/docs/languages/js/exporters/) and [OTLP exporter specification](https://opentelemetry.io/docs/specs/otel/protocol/exporter/) — Collector, OTLP exports/endpoints.
 - [Sigstore in-toto attestations](https://docs.sigstore.dev/cosign/verifying/attestation/) and [verification guidance](https://docs.sigstore.dev/cosign/verifying/verify/) — predicate/digest/identity verification and fail-closed caveat.
 - [ContextVM docs](https://docs.contextvm.org/) — ContextVM/CEP-8 documentation entry point.

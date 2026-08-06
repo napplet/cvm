@@ -303,7 +303,7 @@ Plans:
 **Validation gate**: Benchmark Modal and at least one non-AWS fallback with the production-like image, target regions, relay delay, pool misses, database contention, reclaim/failure behavior, and step load. Select a worker vendor only after receipt-to-isolated-worker-ready p95 is at most five seconds with zero durable backlog; establish the database/failover claim to match the chosen deployment scope.
 
 Phase 7 also closes the launch-hardening work intentionally deferred from Phase 1: exhaustive toolchain provenance, repeated/cross-environment reproducibility, full hostile and mutation coverage, formal golden approval, waiver drills, SBOM/provenance enforcement, and the final production promotion gate.
-**Plans**: 41/45 plans executed
+**Plans**: 42/45 plans executed
 **Wave 1**
 
 - [x] 07-00-PLAN.md
@@ -434,7 +434,7 @@ Phase 7 also closes the launch-hardening work intentionally deferred from Phase 
 
 **Wave 30** *(blocked on Wave 29 completion)*
 
-- [ ] 07-43-PLAN.md — Wire the exact-eight real port constructors, identical benchmark runners, complete execution inputs, and fake-only forced-resume proof without running live suites/schedules.
+- [x] 07-43-PLAN.md — Wire the exact-eight real port constructors, identical benchmark runners, complete execution inputs, and fake-only forced-resume proof without running live suites/schedules.
 
 **Wave 31** *(blocked on Wave 30 completion)*
 
@@ -461,7 +461,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 4. Metered Generation & Revision Loop | 7/7 | Complete    | 2026-08-05 |
 | 5. Funding Interruption & Durable Resume | 7/7 | Complete    | 2026-08-05 |
 | 6. Sealed Preview & User-Owned Publication | 7/7 | Complete    | 2026-08-05 |
-| 7. Admission SLO, Resilience & Launch Safety | 41/45 | In Progress|  |
+| 7. Admission SLO, Resilience & Launch Safety | 42/45 | In Progress|  |
 
 ### Milestone Progress Roll-up
 

@@ -91,6 +91,36 @@ test("dry-run resume reuses the exact authorization request and state", async ()
   expect(canonicalJson(second)).toBe(canonicalJson(first));
 });
 
+test("controller persists one structured loopback consent receipt without provider effects", async () => {
+  const root = await workspace();
+  let consentLaunches = 0;
+  let providerEffects = 0;
+  const controller = new ReleaseCertificationController({
+    candidatePath,
+    workspace: root,
+    now: () => 1_000,
+    providers: { cloud_run: { discover: async () => { providerEffects += 1; return { capability: "unavailable", authentication: "not_configured", reasonCode: "CREDENTIALS_UNAVAILABLE" }; } } },
+    consent: {
+      async launch({ authorizationRequest }) {
+        consentLaunches += 1;
+        return {
+          approvalChannel: "loopback_fixture",
+          approverPrincipalSha256: "f".repeat(64),
+          consentSessionReferences: ["loopback:consent:session-01"],
+          approvedAtMs: 1_000,
+          expiresAtMs: authorizationRequest.expiresAtMs,
+        };
+      },
+    },
+  });
+  await controller.dryRun();
+  const receipt = await controller.launchOfficialConsent();
+  expect(consentLaunches).toBe(1);
+  expect(providerEffects).toBe(1);
+  expect(receipt).toEqual(expect.objectContaining({ approvalChannel: "loopback_fixture", consentSessionReferences: ["loopback:consent:session-01"] }));
+  expect(await readFile(join(root, "authorization-receipts", `${receipt.authorizationReceiptSha256}.json`), "utf8")).not.toContain("token");
+});
+
 test("changed gcloud scope or revoked ADC regenerate the pending authorization request without workspace deletion", async () => {
   const root = await workspace();
   const first = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, providers: {

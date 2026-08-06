@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { canonicalJson } from "../promotion/schema";
+import { OFFICIAL_APPROVAL_CHANNELS, type OfficialApprovalChannel } from "./deployment/consent";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 const MicrosSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -55,7 +56,7 @@ export const ReleaseAuthorizationRequestSchema = z.object({
 export type ReleaseAuthorizationRequest = z.infer<typeof ReleaseAuthorizationRequestSchema>;
 
 export const ReleaseAuthorizationReceiptSchema = z.object({
-  version: z.literal(2),
+  version: z.literal(3),
   authorizationRequestSha256: DigestSchema,
   candidateSha256: DigestSchema,
   topologySha256: DigestSchema,
@@ -63,6 +64,10 @@ export const ReleaseAuthorizationReceiptSchema = z.object({
   controllerStateSha256: DigestSchema,
   currency: z.literal("USD"),
   maximumAuthorizedCostMicros: MicrosSchema.positive(),
+  approverPrincipalSha256: DigestSchema,
+  approvalChannel: z.enum(OFFICIAL_APPROVAL_CHANNELS),
+  consentSessionReferences: z.array(z.string().regex(/^[a-z][a-z0-9:._/-]{2,255}$/iu)).min(1).max(3),
+  approvedAtMs: z.number().int().positive(),
   expiresAtMs: z.number().int().positive(),
   authorizationReceiptSha256: DigestSchema,
 }).strict();
@@ -93,9 +98,17 @@ function assertBounds(input: RequestInput): void {
   if (input.orderedEffects.some((effect) => !providers.includes(effect.provider))) throw new Error("RELEASE_AUTHORIZATION_SCOPE_INVALID");
 }
 
-function receiptPayload(request: Omit<ReleaseAuthorizationRequest, "expectedReceiptSha256" | "authorizationRequestSha256"> & { authorizationRequestSha256: string }): Omit<ReleaseAuthorizationReceipt, "authorizationReceiptSha256"> {
+type OfficialApproval = Readonly<{
+  approvalChannel: OfficialApprovalChannel;
+  approverPrincipalSha256: string;
+  consentSessionReferences: readonly string[];
+  approvedAtMs: number;
+  expiresAtMs: number;
+}>;
+
+function receiptPayload(request: Omit<ReleaseAuthorizationRequest, "expectedReceiptSha256" | "authorizationRequestSha256"> & { authorizationRequestSha256: string }, approval: OfficialApproval): Omit<ReleaseAuthorizationReceipt, "authorizationReceiptSha256"> {
   return {
-    version: 2,
+    version: 3,
     authorizationRequestSha256: request.authorizationRequestSha256,
     candidateSha256: request.candidateSha256,
     topologySha256: request.topologySha256,
@@ -103,7 +116,11 @@ function receiptPayload(request: Omit<ReleaseAuthorizationRequest, "expectedRece
     controllerStateSha256: request.controllerStateSha256,
     currency: "USD",
     maximumAuthorizedCostMicros: request.maximumAuthorizedCostMicros,
-    expiresAtMs: request.expiresAtMs,
+    approverPrincipalSha256: approval.approverPrincipalSha256,
+    approvalChannel: approval.approvalChannel,
+    consentSessionReferences: [...approval.consentSessionReferences],
+    approvedAtMs: approval.approvedAtMs,
+    expiresAtMs: approval.expiresAtMs,
   };
 }
 
@@ -127,14 +144,38 @@ export async function createAuthorizationRequest(input: AuthorizationRequestInpu
     currency: "USD" as const,
   };
   const authorizationRequestSha256 = await digest(base);
-  const expectedReceiptSha256 = await digest(receiptPayload({ ...base, authorizationRequestSha256 }));
+  // Legacy request field retained for content-addressed v2 request records.
+  // It is never accepted as approval authority; only a structured receipt is.
+  const expectedReceiptSha256 = await digest({ version: 3, authorizationRequestSha256, authority: "official-consent-required" });
   return ReleaseAuthorizationRequestSchema.parse({ ...base, expectedReceiptSha256, authorizationRequestSha256 });
 }
 
-export async function createAuthorizationReceipt(requestInput: unknown): Promise<ReleaseAuthorizationReceipt> {
-  const request = await validateAuthorizationRequest(requestInput);
-  const payload = receiptPayload(request);
+export async function createOfficialConsentReceipt(input: Readonly<{ request: unknown; approval: OfficialApproval }>): Promise<ReleaseAuthorizationReceipt> {
+  const request = await validateAuthorizationRequest(input.request);
+  const approval = {
+    ...input.approval,
+    consentSessionReferences: [...input.approval.consentSessionReferences],
+  };
+  if (approval.expiresAtMs !== request.expiresAtMs || approval.approvedAtMs > approval.expiresAtMs) throw new Error("RELEASE_AUTHORIZATION_APPROVAL_INVALID");
+  const payload = receiptPayload(request, approval);
   return ReleaseAuthorizationReceiptSchema.parse({ ...payload, authorizationReceiptSha256: await digest(payload) });
+}
+
+/** Test-only fixture helper. Production execution has no call site for this
+ * function and must obtain receipt facts from OfficialConsentPort instead. */
+export async function createAuthorizationReceipt(requestInput: unknown): Promise<ReleaseAuthorizationReceipt> {
+  if (process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS !== "deny") throw new Error("RELEASE_AUTHORIZATION_OFFICIAL_CONSENT_REQUIRED");
+  const request = await validateAuthorizationRequest(requestInput);
+  return createOfficialConsentReceipt({
+    request,
+    approval: {
+      approvalChannel: "loopback_fixture",
+      approverPrincipalSha256: await digest({ fixture: "official-consent", authorizationRequestSha256: request.authorizationRequestSha256 }),
+      consentSessionReferences: [`loopback:fixture:${request.authorizationRequestSha256}`],
+      approvedAtMs: request.estimateObservedAtMs,
+      expiresAtMs: request.expiresAtMs,
+    },
+  });
 }
 
 export async function validateAuthorizationRequest(requestInput: unknown): Promise<ReleaseAuthorizationRequest> {
@@ -153,7 +194,26 @@ export async function validateAuthorizationReceipt(input: Readonly<{ request: un
   const request = await validateAuthorizationRequest(input.request);
   if (!Number.isSafeInteger(input.nowMs) || input.nowMs >= request.expiresAtMs) throw new Error("RELEASE_AUTHORIZATION_RECEIPT_EXPIRED");
   const receipt = ReleaseAuthorizationReceiptSchema.parse(input.receipt);
-  const expected = await createAuthorizationReceipt(request);
-  if (canonicalJson(receipt) !== canonicalJson(expected) || receipt.authorizationReceiptSha256 !== request.expectedReceiptSha256) throw new Error("RELEASE_AUTHORIZATION_RECEIPT_INVALID");
+  if (receipt.authorizationRequestSha256 !== request.authorizationRequestSha256
+    || receipt.candidateSha256 !== request.candidateSha256
+    || receipt.topologySha256 !== request.topologySha256
+    || receipt.effectPlanSha256 !== request.effectPlanSha256
+    || receipt.controllerStateSha256 !== request.controllerStateSha256
+    || receipt.currency !== request.currency
+    || receipt.maximumAuthorizedCostMicros !== request.maximumAuthorizedCostMicros
+    || receipt.expiresAtMs !== request.expiresAtMs
+    || receipt.approvedAtMs > input.nowMs
+    || receipt.approvedAtMs > receipt.expiresAtMs) throw new Error("RELEASE_AUTHORIZATION_RECEIPT_INVALID");
+  const expected = await createOfficialConsentReceipt({
+    request,
+    approval: {
+      approvalChannel: receipt.approvalChannel,
+      approverPrincipalSha256: receipt.approverPrincipalSha256,
+      consentSessionReferences: receipt.consentSessionReferences,
+      approvedAtMs: receipt.approvedAtMs,
+      expiresAtMs: receipt.expiresAtMs,
+    },
+  });
+  if (canonicalJson(receipt) !== canonicalJson(expected)) throw new Error("RELEASE_AUTHORIZATION_RECEIPT_INVALID");
   return receipt;
 }

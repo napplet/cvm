@@ -35,7 +35,7 @@ test("creates one canonical USD request and exact expected receipt", async () =>
   expect(request.currency).toBe("USD");
   expect(request.maximumAuthorizedCostMicros).toBe(5_000_000);
   expect(request.authorizationRequestSha256).toBe(duplicate.authorizationRequestSha256);
-  expect(request.expectedReceiptSha256).toBe(receipt.authorizationReceiptSha256);
+  expect(request.expectedReceiptSha256).not.toBe(receipt.authorizationReceiptSha256);
   await expect(validateAuthorizationReceipt({ request, receipt, nowMs: 1_499 })).resolves.toEqual(receipt);
 });
 
@@ -45,7 +45,7 @@ test("requires structured official approval provenance instead of a bare receipt
     request,
     approval: {
       approvalChannel: "loopback_fixture",
-      approverPrincipalSha256: digest("p"),
+      approverPrincipalSha256: digest("f"),
       consentSessionReferences: ["loopback:consent:session-01"],
       approvedAtMs: 1_001,
       expiresAtMs: request.expiresAtMs,

@@ -16,7 +16,8 @@ import {
   type ReleaseTopologyObservation,
 } from "./contracts";
 import { deriveReleaseTopology, RELEASE_PROVIDER_IDS } from "./topology";
-import { createAuthorizationRequest, validateAuthorizationReceipt, validateAuthorizationRequest, type ReleaseAuthorizationReceipt } from "./authorization";
+import { createAuthorizationRequest, createOfficialConsentReceipt, validateAuthorizationReceipt, validateAuthorizationRequest, type ReleaseAuthorizationReceipt } from "./authorization";
+import type { OfficialConsentPort } from "./deployment/consent";
 import { ReleaseProviderOperationSchema, type ReleaseProviderOperation, type ReleaseProviderRegistry as AuthorizedProviderRegistry } from "./providers";
 import { createReleaseControllerProviderRegistry } from "./native-registry";
 import { materializeProtectedCertifier, type MaterializeProtectedCertifierInput, type MaterializedCertifier } from "./materialize-certifier";
@@ -33,6 +34,7 @@ type ControllerOptions = Readonly<{
   candidatePath: string;
   workspace: string;
   providers?: ReleaseProviderRegistry;
+  consent?: OfficialConsentPort;
   now?: () => number;
 }>;
 export type ReleaseCertificationResult = Readonly<{
@@ -205,12 +207,14 @@ export class ReleaseCertificationController {
   readonly #candidatePath: string;
   readonly #workspace: string;
   readonly #providers: ReleaseProviderRegistry;
+  readonly #consent: OfficialConsentPort | undefined;
   readonly #now: () => number;
 
   constructor(options: ControllerOptions) {
     this.#candidatePath = resolve(options.candidatePath);
     this.#workspace = resolve(options.workspace);
     this.#providers = options.providers ?? createNoCredentialReleaseProviderRegistry();
+    this.#consent = options.consent;
     this.#now = options.now ?? Date.now;
   }
 
@@ -312,6 +316,26 @@ export class ReleaseCertificationController {
     const result = await this.dryRun();
     if (result.state.status !== "authorization_required") throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
     return { ...result, stage: "authorization_required" };
+  }
+
+  /** Launches the one official consent boundary for the current immutable
+   * request. The result is persisted by digest and contains references only;
+   * provider execution remains unreachable from this method. */
+  async launchOfficialConsent(): Promise<ReleaseAuthorizationReceipt> {
+    if (!this.#consent) throw new Error("RELEASE_CONTROLLER_CONSENT_UNAVAILABLE");
+    const current = await this.#loadCurrent();
+    if (!current.state.authorizationRequestSha256 || current.state.status !== "authorization_required") {
+      throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID");
+    }
+    const request = await this.#readRequest(current.state.authorizationRequestSha256);
+    const approval = await this.#consent.launch({ authorizationRequest: request });
+    const receipt = await createOfficialConsentReceipt({ request, approval });
+    await createOrVerify(
+      join(this.#workspace, "authorization-receipts", `${receipt.authorizationReceiptSha256}.json`),
+      `${canonicalJson(receipt)}\n`,
+      "RELEASE_CONTROLLER_AUTHORIZATION_RECEIPT_COLLISION",
+    );
+    return receipt;
   }
 
   /** Local-only composition path. The protected runner injects authenticated ports later;

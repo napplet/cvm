@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
-current_phase: 7
-current_phase_name: Admission SLO, Resilience & Launch Safety
+current_phase: 07
+current_phase_name: admission-slo-resilience-launch-safety
 status: executing
-stopped_at: Planned 07-27 through 07-39; next execute 07-27-PLAN.md
-last_updated: "2026-08-06T13:32:44.000Z"
+stopped_at: Completed 07-27-PLAN.md
+last_updated: "2026-08-06T13:54:33.510Z"
 last_activity: 2026-08-06
-last_activity_desc: Native discovery repaired; production-composition gap plans 07-27 through 07-39 verified
+last_activity_desc: Phase 07 execution started
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 80
-  completed_plans: 65
-  percent: 86
+  completed_plans: 66
+  percent: 83
 ---
 
 # Project State
@@ -25,25 +25,25 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 **Core value:** A user can describe one focused applet and receive a safe, conformant napplet that can be previewed and placed directly into a compatible napplet runtime.
 **Active milestone:** v1.0 — Safe Napplet Generation MVP
-**Current focus:** Phase 7 — Admission SLO, Resilience & Launch Safety
+**Current focus:** Phase 07 — admission-slo-resilience-launch-safety
 
 ## Current Position
 
-Phase: 7 — Admission SLO, Resilience & Launch Safety
-Plan: 27 of 40
-Status: Ready to execute production composition; provider authorization remains deferred until all native adapters and the complete controller are ready
-Last activity: 2026-08-06 — native discovery repaired and append-only Plans 07-27 through 07-39 passed planning verification
+Phase: 07 (admission-slo-resilience-launch-safety) — EXECUTING
+Plan: 2 of 40
+Status: Ready to execute
+Last activity: 2026-08-06 — Phase 07 execution started
 
-Plan execution: [████████░░] 65/80 milestone plans complete; Phase verification remains pending
+Plan execution: [████████░░] 66/80 milestone plans complete; Phase verification remains pending
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 65/80 milestone plans executed; Plans 07-27–07-39 complete production native composition, Plan 07-20 is the sole provider-authentication/cost-approval checkpoint, and Plan 07-26 performs the authorized end-to-end run.
+- Plans: 66/80 milestone plans executed; Plan 07-27 corrected the current Cloud SQL/provider authority, and Plans 07-28–07-39 complete production native composition before the separate authorization and protected-run checkpoints.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Next checkpoint: execute Plan 07-27, continue autonomously through Plan 07-39, then use Plan 07-20 for one exact provider-authentication/cost approval and Plan 07-26 for the protected live run; no hand-authored evidence or certifier files are required.
+- Next checkpoint: execute Plan 07-28, continue autonomously through Plan 07-39, then use Plan 07-20 for one exact provider-authentication/cost approval and Plan 07-26 for the protected live run; no hand-authored evidence or certifier files are required.
 
 ## Performance Metrics
 
@@ -130,6 +130,7 @@ Plan execution: [████████░░] 65/80 milestone plans complete;
 | Phase 07 P23 | 7m | 2 tasks | 5 files |
 | Phase 07 P24 | 237s | 2 tasks | 5 files |
 | Phase 07 P25 | 20m | 3 tasks | 9 files |
+| Phase 07 P27 | 5m | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -264,6 +265,8 @@ Recent decisions affecting current work:
 - [Phase ?]: Security/supply-chain records remain digest-only and payment/model/publication reconciliation is original-operation-only.
 - [Phase ?]: The local controller stops at authorization_required; Plan 07-26 alone may execute protected effects.
 - [Phase ?]: Release certification uses an exact eight-suite generated registry and candidate-only CLI inputs.
+- [Phase ?]: Cloud SQL for PostgreSQL is the sole current Phase 7 database authority; ReleaseProviderPort and the controller remain provider-neutral.
+- [Phase ?]: Every D-128 integration has a controller-owned protected-suite and immutable blocked absence state.
 
 ### Pending Todos
 
@@ -292,6 +295,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-06T12:11:17.279Z
-Stopped at: Completed 07-25-PLAN.md
+Last session: 2026-08-06T13:54:33.500Z
+Stopped at: Completed 07-27-PLAN.md
 Resume file: None

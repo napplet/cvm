@@ -61,7 +61,9 @@ test("plans with zero effects, then writes content-addressed generation-pinned o
   await expect(provider.plan(input)).resolves.toMatchObject({ status: "planned", dualRegion: "nam4", versioning: true, retentionDays: 30 });
   expect(transcript).toEqual([]);
   const object = await provider.createObject({ ...input, bytes });
-  expect(object).toMatchObject({ generation: 1, checksum: expect.stringMatching(/^[a-f0-9]{64}$/), key: expect.stringMatching(/^runs\/gcs-run-1\/[a-f0-9]{64}$/) });
+  expect(object.generation).toBe(1);
+  expect(object.checksum).toMatch(/^[a-f0-9]{64}$/);
+  expect(object.key).toMatch(/^runs\/gcs-run-1\/[a-f0-9]{64}$/);
   expect(await provider.objectStore.readExact(object)).toEqual(bytes);
   expect(transcript).toEqual(expect.arrayContaining(["persist:gcs-run-1", "bucket:gcs-run-1", `create:${object.key}`, `read:${object.key}:1`]));
 });

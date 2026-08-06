@@ -48,13 +48,17 @@ async function authorization() {
   const request = await createAuthorizationRequest({
     candidateSha256: config.candidateSha256, topologySha256: config.topologySha256, effectPlanSha256: config.effectPlanSha256,
     controllerStateSha256: digest("5"), providerCapabilitiesSha256: digest("6"),
-    orderedEffects: [{ id: "sealed-upload", provider: "upload", operation: "verify_integration", estimatedCostMicros: 1 }],
+    orderedEffects: [
+      { id: "sealed-upload", provider: "upload", operation: "verify_integration", estimatedCostMicros: 1 },
+      { id: "owner-relay", provider: "owner_relay", operation: "verify_integration", estimatedCostMicros: 1 },
+      { id: "attestation-relay", provider: "attestation_relay", operation: "verify_integration", estimatedCostMicros: 1 },
+    ],
     providerScopes: [
       { provider: "attestation_relay", accountScopeSha256: config.attestationAccountScopeSha256, projectScopeSha256: config.attestationProjectScopeSha256 },
       { provider: "owner_relay", accountScopeSha256: config.ownerAccountScopeSha256, projectScopeSha256: config.ownerProjectScopeSha256 },
       { provider: "upload", accountScopeSha256: config.accountScopeSha256, projectScopeSha256: config.projectScopeSha256 },
     ],
-    estimate: { currency: "USD", maximumMicros: 1, sourceId: "publication-fixture", observedAtMs: 1, freshUntilMs: 10_000 },
+    estimate: { currency: "USD", maximumMicros: 3, sourceId: "publication-fixture", observedAtMs: 1, freshUntilMs: 10_000 },
     maximumRunDurationMs: 1_000, cleanupByMs: 9_000, evidenceRetentionDays: 30, artifactRetentionDays: 30,
     gcpEffects: { projectBootstrap: true, billing: true, apiEnablement: ["storage.googleapis.com"] }, expiresAtMs: 9_000,
   });
@@ -85,7 +89,10 @@ test("relay persistence binds exact signed owner and attestation events and reco
   let attestationPublished = false;
   const relay = createNostrRelayPublicationAdapter({
     config: {
-      ...config, intentId: "intent:publication", sealedArtifactSha256: artifact.sealedObjectSha256, aggregateSha256,
+      candidateSha256: config.candidateSha256, topologySha256: config.topologySha256, effectPlanSha256: config.effectPlanSha256,
+      ownerAccountScopeSha256: config.ownerAccountScopeSha256, ownerProjectScopeSha256: config.ownerProjectScopeSha256,
+      attestationAccountScopeSha256: config.attestationAccountScopeSha256, attestationProjectScopeSha256: config.attestationProjectScopeSha256,
+      intentId: "intent:publication", sealedArtifactSha256: artifact.sealedObjectSha256, aggregateSha256,
       relaySetReference: "relay-set:primary", relaySetSha256: digest("b"), relays: ["wss://relay.example"],
       ownerEvent, attestationEvent, ownerSignerPubkey: ownerEvent.pubkey, attestationSignerPubkey: attestationEvent.pubkey,
     }, request, receipt, now: () => 1_000,
@@ -142,7 +149,11 @@ test("persists and uploads the exact sealed bytes once, then reconciles only the
   const { config, request, receipt } = await authorization();
   let completed = false;
   const upload = createExactSealedUploadAdapter({
-    config: { ...config, sealedArtifactSha256: artifact.sealedObjectSha256, aggregateSha256, targetReference: "blossom-target:primary", retentionDays: 30 },
+    config: {
+      candidateSha256: config.candidateSha256, topologySha256: config.topologySha256, effectPlanSha256: config.effectPlanSha256,
+      accountScopeSha256: config.accountScopeSha256, projectScopeSha256: config.projectScopeSha256,
+      sealedArtifactSha256: artifact.sealedObjectSha256, aggregateSha256, targetReference: "blossom-target:primary", retentionDays: 30,
+    },
     request, receipt, now: () => 1_000,
     port: {
       persist: async ({ operationId }) => { transcript.push(`persist:${operationId}`); },

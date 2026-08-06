@@ -166,15 +166,22 @@ export async function loadReleaseExecutionReadiness(input: Readonly<{
   });
   const module = await importPinnedModule(modulePin, deploymentConfig);
   const readiness = parseReleaseExecutionReadiness(module.releaseReadiness);
-  if (typeof module.assessProductionFactoryReadiness !== "function") return readiness;
-  const assessed = module.assessProductionFactoryReadiness({ candidateSha256: input.candidateSha256, workspace: input.workspace, deploymentConfig });
-  if (!assessed || typeof assessed !== "object" || typeof (assessed as { ready?: unknown }).ready !== "boolean" || !Array.isArray((assessed as { blockers?: unknown }).blockers)
-    || !(assessed as { blockers: unknown[] }).blockers.every((blocker) => typeof blocker === "string" && blocker.length > 0 && blocker.length <= 160)) {
-    throw new Error("RELEASE_PRODUCTION_EXECUTION_READINESS_INVALID");
+  if (typeof module.assessProductionFactoryReadiness === "function") {
+    const assessed = module.assessProductionFactoryReadiness({ candidateSha256: input.candidateSha256, workspace: input.workspace, deploymentConfig });
+    if (!assessed || typeof assessed !== "object" || typeof (assessed as { ready?: unknown }).ready !== "boolean" || !Array.isArray((assessed as { blockers?: unknown }).blockers)
+      || !(assessed as { blockers: unknown[] }).blockers.every((blocker) => typeof blocker === "string" && blocker.length > 0 && blocker.length <= 160)) {
+      throw new Error("RELEASE_PRODUCTION_EXECUTION_READINESS_INVALID");
+    }
+    const blockers = (assessed as { blockers: string[] }).blockers;
+    if ((assessed as { ready: boolean }).ready !== (blockers.length === 0)) throw new Error("RELEASE_PRODUCTION_EXECUTION_READINESS_INVALID");
+    if (blockers.length) return Object.freeze({ ...readiness, blockers: Object.freeze([...blockers]) });
   }
-  const blockers = (assessed as { blockers: string[] }).blockers;
-  if ((assessed as { ready: boolean }).ready !== (blockers.length === 0)) throw new Error("RELEASE_PRODUCTION_EXECUTION_READINESS_INVALID");
-  return Object.freeze({ ...readiness, ...(blockers.length ? { blockers: Object.freeze([...blockers]) } : {}) });
+  if (typeof module.createReleaseExecutionSession !== "function") throw new Error("RELEASE_PRODUCTION_EXECUTION_FACTORY_INVALID");
+  let session: unknown;
+  try { session = await module.createReleaseExecutionSession({ candidateSha256: input.candidateSha256, workspace: input.workspace, deploymentConfig }); }
+  catch { throw new Error("RELEASE_PRODUCTION_EXECUTION_READINESS_INVALID"); }
+  if (!isReleaseExecutionSession(session)) throw new Error("RELEASE_PRODUCTION_EXECUTION_READINESS_INVALID");
+  return readiness;
 }
 
 function isCompletePreparedExecution(value: unknown): value is Omit<AuthorizedLiveExecutionInput, "registry"> {

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runReleaseCertification } from "../../src/release/controller";
-import { loadReleaseExecutionSession } from "../../src/release/production-execution";
+import { loadReleaseExecutionReadiness, loadReleaseExecutionSession } from "../../src/release/production-execution";
 import { createReleaseProviderRegistry } from "../../src/release/providers";
 import { RELEASE_PRODUCTION_PROVIDER_IDS } from "../../src/release/native-registry";
 import { RELEASE_PROVIDER_IDS } from "../../src/release/topology";
@@ -19,7 +19,11 @@ test("pinned release execution session construction makes no provider call", asy
   const deploymentConfigPath = join(root, "deployment.json");
   const source = `
     const providers = ${JSON.stringify([...RELEASE_PRODUCTION_PROVIDER_IDS])};
+    export let factoryCalls = 0;
+    export const releaseReadiness = { providerFamilies: providers, protectedSuites: ["admission", "telemetry", "chaos", "restore", "security-host", "supply-chain", "contextvm-payment-model", "publication"], materialization: true, workerSelection: true, protectedVerification: true, finalization: true, actualCost: true, cleanupOwnership: true };
     export function createReleaseExecutionSession() {
+      factoryCalls += 1;
+      globalThis.__nappletCvmFactoryCalls = (globalThis.__nappletCvmFactoryCalls ?? 0) + 1;
       return {
         registry: {
           providers() { return providers; },
@@ -64,6 +68,17 @@ test("pinned release execution session construction makes no provider call", asy
     });
     expect(Object.isFrozen(session)).toBeTrue();
     expect(Object.keys(session).sort()).toEqual(["prepareAuthorizedExecution", "registry"]);
+    const readiness = await loadReleaseExecutionReadiness({
+      config: {
+        version: 1, mode: "protected", releaseProfilePath: join(root, "release-profile.json"), evidenceDirectory: join(root, "evidence"), credentials: "configured",
+        adapter: { root, modulePath, sha256: digest(source) },
+        releaseExecution: { root, modulePath, sha256: digest(source), configPath: deploymentConfigPath, configSha256: digest(deploymentConfig) },
+        controller: { candidateId: "a".repeat(64), releaseId: "c".repeat(64), topologySha256: "d".repeat(64), authorizationReceiptSha256: "e".repeat(64), sourceRevision: "b".repeat(40), sourceSha256: "f".repeat(64) },
+      }, candidateSha256: "a".repeat(64), workspace: root,
+    });
+    expect(readiness.providerFamilies).toEqual(RELEASE_PRODUCTION_PROVIDER_IDS);
+    expect((globalThis as Record<string, unknown>).__nappletCvmFactoryCalls).toBe(2);
+    delete (globalThis as Record<string, unknown>).__nappletCvmFactoryCalls;
   } finally {
     await rm(root, { recursive: true, force: true });
   }

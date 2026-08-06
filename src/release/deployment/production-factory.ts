@@ -1,6 +1,7 @@
 import type { ReleaseExecutionSession } from "../controller";
 import type { ReleaseExecutionFactoryInput } from "../production-execution";
 import { RELEASE_PRODUCTION_PROVIDER_IDS, createNativeReleaseProviderRegistry } from "../native-registry";
+import { PROTECTED_SUITES } from "../../certification/runner";
 import { createDeploymentReleaseExecutionSession, type DeploymentFactoryRuntime } from "./factory";
 
 /**
@@ -24,9 +25,7 @@ const REQUIRED = new Set<string>(PRODUCTION_FACTORY_SECRET_REFERENCE_NAMES);
 
 export const releaseReadiness = Object.freeze({
   providerFamilies: Object.freeze([...RELEASE_PRODUCTION_PROVIDER_IDS]),
-  protectedSuites: Object.freeze([
-    "admission", "telemetry", "chaos", "durability", "security-host", "supply-chain", "ContextVM-payment-model", "publication",
-  ]),
+  protectedSuites: Object.freeze([...PROTECTED_SUITES]),
   materialization: true as const,
   workerSelection: true as const,
   protectedVerification: true as const,

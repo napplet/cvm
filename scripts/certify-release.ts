@@ -1,5 +1,6 @@
 import { ReleaseCertificationController, RELEASE_WORKSPACE_ENV, releaseCandidateSha256, runReleaseCertification } from "../src/release/controller";
 import { createNativeReleaseDiscoveryRegistry } from "../src/release/native-discovery";
+import { createReleaseControllerProviderRegistry } from "../src/release/native-registry";
 import { loadCertifierConfig } from "../src/certification/config";
 import { loadReleaseExecutionReadiness, loadReleaseExecutionSession } from "../src/release/production-execution";
 import { preparePreApprovalPrerequisites } from "../src/release/deployment/consent";
@@ -62,9 +63,23 @@ async function executionReadinessProjection(input: Readonly<{ candidateSha256: s
   try {
     const config = await loadCertifierConfig();
     const readiness = await loadReleaseExecutionReadiness({ config, candidateSha256: input.candidateSha256, workspace: input.workspace });
-    return Object.freeze({ status: "ready" as const, ...readiness });
+    return Object.freeze({ status: readiness.blockers?.length ? "blocked" as const : "ready" as const, ...readiness });
   } catch (error) {
     return Object.freeze({ status: "blocked" as const, reasonCode: reasonCode(error, "RELEASE_PRODUCTION_EXECUTION_CONFIG_REQUIRED") });
+  }
+}
+
+/** Prefer the precise pinned execution session for read-only preapproval
+ * discovery. A missing protected config remains a bounded blocker and falls
+ * back to the existing no-credential registry; neither branch can plan,
+ * apply, observe, clean up, launch a worker, or request a signature. */
+async function preapprovalDiscoveryRegistry(input: Readonly<{ candidateSha256: string; workspace: string }>) {
+  try {
+    const config = await loadCertifierConfig();
+    const session = await loadReleaseExecutionSession({ config, candidateSha256: input.candidateSha256, workspace: input.workspace });
+    return createReleaseControllerProviderRegistry(session.registry);
+  } catch {
+    return createNativeReleaseDiscoveryRegistry({ candidateSha256: input.candidateSha256 });
   }
 }
 
@@ -105,7 +120,7 @@ async function main(): Promise<number> {
           candidatePath: candidatePath!,
           workspace,
           dryRun: true,
-          providers: createNativeReleaseDiscoveryRegistry({ candidateSha256: candidateSha256! }),
+          providers: await preapprovalDiscoveryRegistry({ candidateSha256: candidateSha256!, workspace }),
           requireCurrentPriceCatalog: true,
         });
     } catch (error) {

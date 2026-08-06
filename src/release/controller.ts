@@ -40,6 +40,10 @@ type ControllerOptions = Readonly<{
   /** Read-only price-catalog boundary. It is injected for authenticated
    * readiness and fake-only tests; this controller never creates a client. */
   costCatalog?: LiveCostCatalogPort;
+  /** Product entrypoints must provide all current, source-attributed price
+   * facts. The candidate fixture catalog is intentionally retained only for
+   * direct local controller tests and historical no-credential workflows. */
+  requireCurrentPriceCatalog?: boolean;
   now?: () => number;
 }>;
 export type ReleaseCertificationResult = Readonly<{
@@ -274,6 +278,7 @@ export class ReleaseCertificationController {
   readonly #providers: ReleaseProviderRegistry;
   readonly #consent: OfficialConsentPort | undefined;
   readonly #costCatalog: LiveCostCatalogPort | undefined;
+  readonly #requireCurrentPriceCatalog: boolean;
   readonly #now: () => number;
 
   constructor(options: ControllerOptions) {
@@ -282,6 +287,7 @@ export class ReleaseCertificationController {
     this.#providers = options.providers ?? createNoCredentialReleaseProviderRegistry();
     this.#consent = options.consent;
     this.#costCatalog = options.costCatalog;
+    this.#requireCurrentPriceCatalog = options.requireCurrentPriceCatalog ?? false;
     this.#now = options.now ?? Date.now;
   }
 
@@ -317,6 +323,9 @@ export class ReleaseCertificationController {
     const topology = await deriveReleaseTopology(candidate.candidateSha256);
     const capabilities = await discoverProviders(this.#providers);
     const nowMs = this.#now();
+    if (this.#requireCurrentPriceCatalog && !this.#costCatalog) {
+      throw new Error("RELEASE_CONTROLLER_LIVE_PRICE_CATALOG_REQUIRED");
+    }
     const estimator = createLiveCostEstimator({
       catalog: this.#costCatalog ?? candidateBoundFixtureCatalog({ capabilities, nowMs }),
       now: () => nowMs,

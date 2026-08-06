@@ -24,6 +24,30 @@ export function preparePendingConsentLaunchDescriptors(input: Readonly<{ authori
   })));
 }
 
+/** The release request cannot launch either of these boundaries. NIP-46 is a
+ * future napplet-owner signature at publication time, while NWC/Cashu is an
+ * operator-controlled funding rail that must be selected exactly once before
+ * a spend-bearing request can be authorized. Neither is an end-user consent
+ * receipt and neither carries an endpoint, wallet URI, proof, or secret. */
+export type PreApprovalPrerequisiteDescriptor =
+  | Readonly<{
+    kind: "operator_funding_rail";
+    status: "selection_required";
+    allowedChannels: readonly ["nwc", "cashu"];
+  }>
+  | Readonly<{
+    kind: "owner_manifest_signature";
+    protocol: "nip46";
+    status: "deferred_to_publication";
+  }>;
+
+export function preparePreApprovalPrerequisites(): readonly PreApprovalPrerequisiteDescriptor[] {
+  return Object.freeze([
+    Object.freeze({ kind: "operator_funding_rail" as const, status: "selection_required" as const, allowedChannels: Object.freeze(["nwc", "cashu"] as const) }),
+    Object.freeze({ kind: "owner_manifest_signature" as const, protocol: "nip46" as const, status: "deferred_to_publication" as const }),
+  ]);
+}
+
 /** An injected official-consent boundary. It returns only public hashes and
  * opaque session references; native approval tokens never enter controller state. */
 export interface OfficialConsentPort {

@@ -1,8 +1,8 @@
 ---
-status: awaiting_human_verify
+status: resolved
 trigger: "Phase 7 setup must be controller-owned, but release:certify is hard-wired to dry-run and cannot discover provider-native authentication."
 created: 2026-08-06T13:30:00Z
-updated: 2026-08-06T13:18:00Z
+updated: 2026-08-06T19:31:00Z
 ---
 
 # Debug Session: Release certifier live path
@@ -17,28 +17,28 @@ updated: 2026-08-06T13:18:00Z
 
 ## Current Focus
 
-- **bug_class:** bohrbug — the same `release:certify` invocation deterministically enters dry-run and reports every provider unavailable.
-- **hypothesis:** Plan 07-25 shipped its intentional candidate-only stub as the product command: the script always supplies `dryRun: true` and no native registry, while discovery schemas/registry cannot retain the three permitted redacted values. Thus installed authenticated CLIs cannot affect authorization discovery, and the command cannot even honestly report that the remaining live provider families are unimplemented.
-- **test:** Add agent-authored, local tests that prove an authorized native probe preserves only SHA-256/reference metadata, changed discovery metadata regenerates the pending request without manual workspace deletion, and a non-dry-run request fails closed before any mutation when the complete live executor is absent.
-- **expecting:** The tests fail before implementation: the generic factory is absent, discovery metadata is replaced, stale `authorization_required` state is reused unchanged, and the entrypoint cannot distinguish its preflight from an actual live path.
-- **next_action:** Await confirmation that the already-run read-only product dry run is the desired controller-owned authorization boundary. Do not invoke a non-dry-run provider mutation: every complete live executor remains deliberately unimplemented and fails closed.
+- **bug_class:** bohrbug — the same `release:certify --request` input deterministically emits the fixture-catalog sources and a 158-micro maximum regardless of the authenticated-readiness environment.
+- **hypothesis:** The product CLI calls `dryRun()` without a live cost catalog, so the controller's test-only candidate fixture fallback always generates 16 synthetic lines (1–16 plus 10% headroom = 158); separately, it labels non-launchable owner-signature/operator-rail prerequisites as generic consent launches and returns `null` when its pinned execution factory is unavailable.
+- **test:** Re-run the agent-authored product regression after restoring the scoped source changes, then run the TypeScript check to identify whether any diagnostics originate in these files.
+- **expecting:** The target regression passes again; any broad TypeScript diagnostic not in the changed release files is recorded as pre-existing rather than hidden.
+- **next_action:** Run the target CLI test, then `bunx tsc --noEmit --pretty false` with bounded output. Do not invoke any provider CLI, authorization callback, effect executor, publication, cleanup, or live resource command.
 - **known_pattern_candidate:** none — semantic recall unavailable; keyword fallback found no two-token match in the knowledge base.
 - **reasoning_checkpoint:**
-  **hypothesis:** "The product command cannot observe native authentication because it always invokes the controller's dry-run-only API with the no-credential default registry; when an authorized registry is used separately, its discovery layer replaces the allowed redacted metadata with constants."
+  **hypothesis:** "`scripts/certify-release.ts` does not pass a current-price catalog to the controller, and `ReleaseCertificationController.dryRun()` silently replaces that missing authority with candidate-bound fixture prices; the same CLI presentation treats future owner signing and operator funding setup as launchable consent."
   **confirming_evidence:**
-    - "`scripts/certify-release.ts` calls `runReleaseCertification({ candidatePath, workspace, dryRun: true })` on every non-status invocation and does not construct provider ports."
-    - "`runReleaseCertification` accepts only `{ dryRun: true }` and `certify()` calls `dryRun()` before returning `authorization_required`."
-    - "`src/release/providers.ts` sets `accountScopeSha256`/`costEstimateSha256` to all-zero values and `secretReferenceNames` to `[]` after parsing native outputs."
-    - "All 16 existing release tests pass because they assert the intentional candidate-only boundary rather than native discovery composition."
-  **falsification_test:** "A pre-fix injected native probe must result in its non-zero scope/cost hashes and reference name in the controller request; a non-dry-run CLI must have an authorization-gated executor path. Either observation would refute the claimed missing composition."
-  **fix_rationale:** "A controller-owned, provider-neutral read-only CLI probe registry gives the existing no-effect dry-run the authenticated, redacted facts it needs to create the exact authorization request. It may compose approved gcloud, Modal, and Fly probes while leaving all other provider families explicit and unavailable. An explicit fail-closed live-executor boundary prevents the CLI from representing this preflight as a complete live deployment until every provider family has an authorization-gated mutation port."
-  **blind_spots:** "Actual pending provider callbacks and all provider-specific login command behavior remain untested by design; tests must inject finite command output and no production CLI will run during debugging."
+    - "The controller's only fallback names every source `${provider}-fixture-catalog`, assigns `priceMicros: index + 1`, and applies a 10% headroom; those deterministic values sum to the reported 158 micros."
+    - "The product CLI provides a native capability registry but no `costCatalog`, so its `dryRun()` call necessarily selects the fallback."
+    - "`preparePendingConsentLaunchDescriptors()` emits only channel, request hash, and expiry for NIP-46, NWC, and Cashu; local config makes the top-level readiness value `null`."
+    - "The supplied redacted environment evidence shows a read-only GCP catalog prerequisite can be tested but all sixteen current authoritative price facts are not configured, so a real exact request cannot be made honestly."
+  **falsification_test:** "If a product `--request` with no injected current-price catalog already blocks before persisting/printing a request, or if its output already represents the owner-signature and operator-funding distinctions without generic launch descriptors, this diagnosis is false."
+  **fix_rationale:** "Require an injected current-price catalog on the product path and return a bounded `preapproval_blocked` projection when it is absent; retain the fixture catalog only for explicitly injected local/test controller use. Replace generic launch descriptors with explicit, non-executable prerequisite descriptors: future-owner NIP-46 signing is deferred to publication, while exactly one operator funding rail (NWC or Cashu) must be selected before approval. Return a structured blocked factory-readiness result instead of `null`."
+  **blind_spots:** "No current all-family production price catalog, pinned protected factory, operator funding rail, or future owner identity is configured; this fix must report these as blockers and cannot establish a live-ready request."
   **candidate_causes:**
-    - "code: `runReleaseCertification` and the script statically restrict execution to the candidate-only dry-run branch."
-    - "code: `ReleaseProviderRegistry.discover()` discards redacted native discovery metadata."
-    - "config: no controller-owned mapping exists from approved provider CLIs to the discovery registry, so login state is never read."
-    - "environment: provider sessions may be pending or absent, but this cannot cause the observed hard-wired dry-run because the current code never probes them."
-  **and_gate:** "yes — reaching the requested authorization checkpoint requires both an injected read-only native discovery registry and preservation of its redacted metadata; the absence of either leaves scope/cost/reference facts unusable. Full mutation remains a separate fail-closed capability gap."
+    - "code: CLI omits the current-price catalog and controller supplies synthetic fixture cost facts."
+    - "code: consent descriptor semantics conflate non-executable future signer/operator prerequisites with user consent launches."
+    - "config: local certifier mode provides no pinned protected execution factory or selected operator funding rail."
+    - "environment/data: the authenticated account may read public GCP metadata but has no configured target project, and authoritative current price facts for all sixteen families are absent."
+  **and_gate:** "no — the fixture-priced request is fully caused by the code fallback/composition defect; missing production configuration explains why the correct post-fix result is blocked rather than ready, but is not needed to reproduce the erroneous synthetic request."
 
 ## Evidence
 
@@ -137,30 +137,59 @@ updated: 2026-08-06T13:18:00Z
   **found:** `bun test` passes 555 tests across 89 files with zero failures. `git diff --check` is clean. No `cockroach_postgres` or `ccloud` identifier occurs in the changed release source/tests. No Stryker or other mutation-test configuration exists in the repository, so mutation analysis is unavailable rather than passing by inference.
   **implication:** The fix-acceptance guardrail accepts the target/adjacent/revert/no-op signals; mutation is an explicitly documented non-applicable gap. The supported product path remains a no-effect authorization preflight.
 
+- **timestamp:** 2026-08-06T19:05:00Z
+  **checked:** Product request projection, native-discovery composition, live-cost contract, and consent descriptor source.
+  **found:** `--request` directly serializes controller `priceLines` and maximum; native discovery binds every `costEstimateSha256` to the candidate and `controller-effect-plan-v1`, not a provider price source; the live estimator requires a complete 16-family available catalog but is not yet composed here; pending consent descriptors contain only `{channel, authorizationRequestSha256, expiresAtMs}`; local config produces `executionReadiness: null`.
+  **implication:** The reported fixture-catalog/158 request is explained by missing production-readiness composition rather than failed native authentication. Fixing only discovery cannot make pricing, readiness, or consent launches truthful.
+
+- **timestamp:** 2026-08-06T19:05:00Z
+  **checked:** Redacted coordinator-supplied capability and pricing evidence.
+  **found:** A Google ADC read-only Cloud Billing service probe succeeds, but the configured future GCP project is unavailable and must not be replaced with a different accessible project. Public GCP catalog reads are possible; current account-specific v1beta reads are not authoritative. Modal/Fly lack configured documented account-specific rate APIs.
+  **implication:** An authoritative source-attribution model must block unknown/non-GCP prices and project-scope mismatch; it must not reuse an unrelated project or retain fixture price facts.
+
+- **timestamp:** 2026-08-06T19:12:00Z
+  **checked:** Agent-authored fixture-free product-request regression before the fix.
+  **found:** The test failed as predicted: stdout contained `progress: authorization_required`, three generic `consentLaunches`, `executionReadiness: null`, all sixteen `*-fixture-catalog` lines, and a 158-micro maximum.
+  **implication:** The reported behavior is reproduced locally without any provider command or credential. The fixture fallback and presentation semantics are directly exercised by the regression.
+
+- **timestamp:** 2026-08-06T19:18:00Z
+  **checked:** Agent-authored regression after requiring a current price catalog on the product entry path.
+  **found:** `bun test tests/release/certify-release.test.ts --test-name-pattern 'product request fails closed'` passes. The request now reports `preapproval_blocked`, current-price and execution readiness blockers, and bounded operator-funding/future-owner-signature prerequisites; it prints no fixture catalog.
+  **implication:** The targeted behavior is fixed. Update the previous product-output expectations before adjacent-suite verification.
+
+- **timestamp:** 2026-08-06T19:22:00Z
+  **checked:** Focused product CLI and adjacent controller/pricing/readiness suites under `NAPPLET_CVM_TEST_EXTERNAL_EFFECTS=deny`.
+  **found:** `tests/release/certify-release.test.ts` passes 11/11. `controller`, `release-authorization-costs`, `production-readiness`, `production-execution`, `live-cost-estimator`, and `native-discovery` pass 27/27. The product path now blocks before request persistence when its current price catalog is absent, while direct controller tests retain explicitly injected fixture catalogs.
+  **implication:** The change is compatible with the existing no-effect controller contracts and covers the intended product-entrypoint boundary.
+
+- **timestamp:** 2026-08-06T19:24:00Z
+  **checked:** Full local test suite with deny-effects environment.
+  **found:** `NAPPLET_CVM_TEST_EXTERNAL_EFFECTS=deny bun test --timeout 10000` passed 654 tests across 117 files with zero failures.
+  **implication:** The fail-closed product path did not regress the broader application test suite.
+
+- **timestamp:** 2026-08-06T19:27:00Z
+  **checked:** Diff guardrail, mutation-tool availability, and temporary source revert/reapply.
+  **found:** `git diff --check` is clean; the scoped diff adds an explicit guard/projection rather than deleting or bypassing behavior; no Stryker/mutation configuration is present. After stashing only `scripts/certify-release.ts`, `src/release/controller.ts`, and `src/release/deployment/consent.ts`, the agent-authored product regression failed with the former fixture-priced 158-micro request and generic consent launches. Restoring that stash re-applied exactly the scoped changes; unrelated untracked files were preserved.
+  **implication:** The regression detects this fix causally. Mutation analysis is unavailable and must remain a documented skipped guardrail signal.
+
 ## Eliminated
 
 ## Resolution
 
-- **root_cause:** Plan 07-25's candidate-only implementation was exposed as the product release command: it hard-wires `dryRun: true` with no native discovery registry, and the separate authorized registry overwrites the only permitted redacted discovery metadata. Therefore provider authentication cannot influence the request and no complete live executor is represented honestly.
-- **fix:** Compose a controller-owned, read-only native discovery registry for approved gcloud, Modal, and Fly CLIs; preserve only validated scope/cost digests and reference names; bind gcloud scope to selected account plus project and require usable ADC without admitting the token. Rediscover before reusing a pending request and regenerate it when capability facts change. Permit the normal CLI to use this preflight, while a non-dry-run call first requires a syntactically valid authorization receipt and then explicitly fails with `RELEASE_LIVE_PROVIDER_FAMILY_UNIMPLEMENTED` before any provider command.
+- **root_cause:** The product command correctly used the previously repaired read-only native discovery registry, but it supplied no `LiveCostCatalogPort`. `ReleaseCertificationController.dryRun()` silently substituted its candidate-bound test catalog, deterministically producing the sixteen `*-fixture-catalog` lines and false 158-micro approval ceiling. The CLI then mislabeled future owner publication signing and operator wallet setup as launchable user consent, while an absent protected factory appeared as `null` readiness.
+- **fix:** Require a current source-attributed catalog on the product entry path and stop at a bounded `preapproval_blocked` result when it is absent. Keep candidate fixture costs available only to direct local/test controller compositions. Report protected-factory readiness as an explicit blocked result, classify NWC/Cashu as an operator funding-rail prerequisite, and defer NIP-46 owner signing to actual napplet publication. No consent or provider effect is launched.
 - **verification:**
-  - target_regression: `bun test tests/release/native-discovery.test.ts tests/release/provider-discovery.test.ts tests/release/controller.test.ts tests/release/certify-release.test.ts` — 22 passed, 0 failed
-  - adjacent_regression: `bun test` — 555 passed across 89 files, 0 failed
-  - production_preflight: authorized read-only `release:certify -- --dry-run` regenerated `authorization_required` state with six approved families available/authorized; public output and inspected projection contained only redacted digest/reference facts
-  - no_op_or_deletion: passed — the diff adds native composition, metadata propagation, scope-change invalidation, and explicit live fail-closed behavior; `git diff --check` clean
-  - revert_and_reconfirm: passed — focused tests failed with production source stashed and passed immediately after restoring it
+  - target_and_adjacent: `NAPPLET_CVM_TEST_EXTERNAL_EFFECTS=deny bun test tests/release/certify-release.test.ts tests/release/controller.test.ts tests/release/production-readiness.test.ts --timeout 10000` — 23 passed, 0 failed
+  - full_regression: `NAPPLET_CVM_TEST_EXTERNAL_EFFECTS=deny bun test --timeout 10000` — 654 passed across 117 files, 0 failed, 5041 assertions
+  - production_preflight: `bun scripts/certify-release.ts --candidate toolchains/candidates/initial.json --request` returns `preapproval_blocked`, explicit pricing/execution blockers, and bounded prerequisites without a review, receipt authority, generic consent launch, path, token, secret, or fixture-catalog value
+  - no_op_or_deletion: passed — the diff adds a required-authority guard and finite blocker projection; `git diff --check` is clean
+  - revert_and_reconfirm: passed — the focused product regression returned to the former fixture-priced 158-micro output when only the three production files were temporarily stashed, then passed after exact restoration
   - mutation: skipped — no mutation-test tool/configuration is present
-  - typecheck: changed release files have no diagnostics; broad `bunx tsc --noEmit` remains nonzero due to unrelated pre-existing diagnostics
   - guardrail_verdict: accepted
 - **files_changed:**
   - scripts/certify-release.ts
-  - src/release/contracts.ts
   - src/release/controller.ts
-  - src/release/native-discovery.ts
-  - src/release/providers.ts
-  - src/release/topology.ts
+  - src/release/deployment/consent.ts
   - tests/release/certify-release.test.ts
-  - tests/release/controller.test.ts
-  - tests/release/native-discovery.test.ts
-  - tests/release/provider-discovery.test.ts
-- **oracle_type:** specified — Plan 07-20/07-26 and the supplied acceptance context require controller-owned, read-only native authentication discovery with preserved hashes/reference names and an explicit pre-authorization/live-executor boundary.
+  - .planning/debug/release-certifier-live-path.md
+- **oracle_type:** specified — an approvable request must derive from current source-attributed price facts and real deployment prerequisites; missing authority must block rather than fabricate a price or consent surface.

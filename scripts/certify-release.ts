@@ -2,7 +2,7 @@ import { ReleaseCertificationController, RELEASE_WORKSPACE_ENV, releaseCandidate
 import { createNativeReleaseDiscoveryRegistry } from "../src/release/native-discovery";
 import { loadCertifierConfig } from "../src/certification/config";
 import { loadReleaseExecutionReadiness, loadReleaseExecutionSession } from "../src/release/production-execution";
-import { preparePendingConsentLaunchDescriptors } from "../src/release/deployment/consent";
+import { preparePreApprovalPrerequisites } from "../src/release/deployment/consent";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 const repositoryRoot = resolve(import.meta.dir, "..");
@@ -52,6 +52,22 @@ function reviewProjection(request: Awaited<ReturnType<ReleaseCertificationContro
   });
 }
 
+function reasonCode(error: unknown, fallback: "RELEASE_PRODUCTION_EXECUTION_CONFIG_REQUIRED" | "RELEASE_PRODUCTION_EXECUTION_READINESS_INVALID"): string {
+  return error instanceof Error && /^(?:RELEASE_PRODUCTION_EXECUTION_CONFIG_REQUIRED|RELEASE_PRODUCTION_EXECUTION_CONFIG_INVALID|RELEASE_PRODUCTION_EXECUTION_FACTORY_INVALID|RELEASE_PRODUCTION_EXECUTION_READINESS_INVALID)$/u.test(error.message)
+    ? error.message
+    : fallback;
+}
+
+async function executionReadinessProjection(input: Readonly<{ candidateSha256: string; workspace: string }>) {
+  try {
+    const config = await loadCertifierConfig();
+    const readiness = await loadReleaseExecutionReadiness({ config, candidateSha256: input.candidateSha256, workspace: input.workspace });
+    return Object.freeze({ status: "ready" as const, ...readiness });
+  } catch (error) {
+    return Object.freeze({ status: "blocked" as const, reasonCode: reasonCode(error, "RELEASE_PRODUCTION_EXECUTION_CONFIG_REQUIRED") });
+  }
+}
+
 async function main(): Promise<number> {
   const allowed = new Set(["--candidate", "--resume", "--dry-run", "--status", "--request", "--receipt"]);
   const supplied = process.argv.slice(2);
@@ -80,14 +96,34 @@ async function main(): Promise<number> {
       console.log(JSON.stringify({ status: result.state.status, candidateSha256: result.state.candidate.candidateSha256, topologySha256: result.state.topologySha256, stateSha256: result.state.stateSha256, authorizationRequestSha256: result.authorizationRequest.authorizationRequestSha256 }));
       return result.state.status === "completed" ? 0 : 1;
     }
-    const result = status
-      ? await new ReleaseCertificationController({ candidatePath: candidatePath ?? canonicalCandidatePath, workspace }).status()
-      : await runReleaseCertification({
-        candidatePath,
-        workspace,
-        dryRun: true,
-        providers: createNativeReleaseDiscoveryRegistry({ candidateSha256: await releaseCandidateSha256(candidatePath!) }),
-      });
+    const candidateSha256 = !status ? await releaseCandidateSha256(candidatePath!) : undefined;
+    let result: Awaited<ReturnType<typeof runReleaseCertification>> | undefined;
+    try {
+      result = status
+        ? await new ReleaseCertificationController({ candidatePath: candidatePath ?? canonicalCandidatePath, workspace }).status()
+        : await runReleaseCertification({
+          candidatePath: candidatePath!,
+          workspace,
+          dryRun: true,
+          providers: createNativeReleaseDiscoveryRegistry({ candidateSha256: candidateSha256! }),
+          requireCurrentPriceCatalog: true,
+        });
+    } catch (error) {
+      if (!status && error instanceof Error && error.message === "RELEASE_CONTROLLER_LIVE_PRICE_CATALOG_REQUIRED") {
+        console.log(JSON.stringify({
+          progress: "preapproval_blocked",
+          candidateSha256,
+          readiness: {
+            capabilityDiscovery: { status: "completed", mode: "read_only" },
+            pricing: { status: "blocked", reasonCode: "RELEASE_CONTROLLER_LIVE_PRICE_CATALOG_REQUIRED" },
+            execution: await executionReadinessProjection({ candidateSha256: candidateSha256!, workspace }),
+          },
+          prerequisites: preparePreApprovalPrerequisites(),
+        }));
+        return 1;
+      }
+      throw error;
+    }
     if (!result) {
       console.error("RELEASE_CONTROLLER_STATUS_UNAVAILABLE");
       return 1;
@@ -95,18 +131,15 @@ async function main(): Promise<number> {
     if (requiredState !== undefined && requiredState !== result.state.status) throw new Error("RELEASE_CERTIFICATION_STATE_MISMATCH");
     if (resume && resume.toLowerCase() !== result.state.stateSha256 && resume.toLowerCase() !== result.authorizationRequest.resumeStateSha256) throw new Error("RELEASE_CERTIFICATION_RESUME_MISMATCH");
     if (receipt && receipt.toLowerCase() !== result.authorizationRequest.expectedReceiptSha256) throw new Error("RELEASE_AUTHORIZATION_RECEIPT_INVALID");
-    const config = await loadCertifierConfig();
-    const candidateSha256 = result.state.candidate.candidateSha256;
-    const executionReadiness = config.mode === "protected" && config.credentials === "configured"
-      ? await loadReleaseExecutionReadiness({ config, candidateSha256, workspace })
-      : null;
+    const resolvedCandidateSha256 = result.state.candidate.candidateSha256;
+    const executionReadiness = await executionReadinessProjection({ candidateSha256: resolvedCandidateSha256, workspace });
     console.log(JSON.stringify(request || receipt ? {
       progress: result.state.status,
       authorizationRequestSha256: result.authorizationRequest.authorizationRequestSha256,
       expectedReceiptSha256: result.authorizationRequest.expectedReceiptSha256,
       receiptValidated: receipt === undefined ? false : true,
-      consentStatus: "consent_pending",
-      consentLaunches: preparePendingConsentLaunchDescriptors({ authorizationRequest: result.authorizationRequest }),
+      approvalStatus: "prerequisites_pending",
+      prerequisites: preparePreApprovalPrerequisites(),
       review: reviewProjection(result.authorizationRequest),
       executionReadiness,
     } : { status: result.state.status, candidateSha256: result.state.candidate.candidateSha256, topologySha256: result.state.topologySha256, stateSha256: result.state.stateSha256, authorizationRequestSha256: result.authorizationRequest.authorizationRequestSha256, expectedReceiptSha256: result.authorizationRequest.expectedReceiptSha256, controllerStateSha256: result.authorizationRequest.controllerStateSha256, resumeStateSha256: result.authorizationRequest.controllerStateSha256 }));

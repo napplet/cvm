@@ -43,35 +43,24 @@ test("one product command is registered without hand-authored certification inpu
   expect(packageJson.scripts?.["release:certify"]).not.toContain("--registry");
 });
 
-test("documented no-env command reaches the candidate-bound authorization boundary", async () => {
+test("documented no-env command reports the bounded pre-approval blockers", async () => {
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "NAPPLET_CVM_RELEASE_WORKSPACE")), PATH: "/nonexistent" } as Record<string, string>;
   const child = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--dry-run"], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
   const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   expect(code).toBe(1);
   expect(stderr).not.toContain("RELEASE_CERTIFICATION_USAGE");
   const result = JSON.parse(stdout);
-  expect(result).toMatchObject({ status: "authorization_required", candidateSha256: expect.stringMatching(/^[a-f0-9]{64}$/), topologySha256: expect.stringMatching(/^[a-f0-9]{64}$/), stateSha256: expect.stringMatching(/^[a-f0-9]{64}$/), authorizationRequestSha256: expect.stringMatching(/^[a-f0-9]{64}$/) });
-  const status = await new ReleaseCertificationController({ candidatePath: "toolchains/candidates/initial.json", workspace: join(process.cwd(), ".runtime", "release-certification", "native-discovery-v1") }).status();
-  expect(status).toMatchObject({ state: { stateSha256: result.stateSha256, candidate: { candidateSha256: result.candidateSha256 } } });
-  expect(status!.state.capabilities).toHaveLength(16);
-  for (const capability of status!.state.capabilities) {
-    expect(capability.capability).not.toBe("unsupported");
-    expect(capability.reasonCode).not.toBe("UNSUPPORTED_CAPABILITY");
-    expect(capability.accountScopeSha256).not.toBe("0".repeat(64));
-    expect(capability.costEstimateSha256).not.toBe("0".repeat(64));
-  }
-  expect(status!.state.capabilities.find((capability) => capability.provider === "contextvm")).toMatchObject({
-    capability: "available", authentication: "not_configured", reasonCode: "AUTHORIZATION_REQUIRED",
+  expect(result).toMatchObject({
+    progress: "preapproval_blocked",
+    candidateSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+    readiness: {
+      capabilityDiscovery: { status: "completed", mode: "read_only" },
+      pricing: { status: "blocked", reasonCode: "RELEASE_CONTROLLER_LIVE_PRICE_CATALOG_REQUIRED" },
+      execution: { status: "blocked", reasonCode: "RELEASE_PRODUCTION_EXECUTION_CONFIG_REQUIRED" },
+    },
   });
-  expect(status!.state.capabilities.find((capability) => capability.provider === "promoted_cli")).toMatchObject({
-    capability: "available", authentication: "authorized", reasonCode: "AVAILABLE",
-  });
-  expect(status!.authorizationRequest.providerScopes).toHaveLength(16);
-  for (const scope of status!.authorizationRequest.providerScopes) {
-    expect(scope.accountScopeSha256).not.toBe("0".repeat(64));
-    expect(scope.projectScopeSha256).not.toBe("0".repeat(64));
-  }
-  expect(result.resumeStateSha256).toMatch(/^[a-f0-9]{64}$/);
+  expect(JSON.stringify(result)).not.toContain("fixture-catalog");
+  expect(result).not.toHaveProperty("authorizationRequestSha256");
 });
 
 test("status require-state exits zero only on the documented exact match", async () => {
@@ -136,28 +125,66 @@ test("workspace overrides are confined and status/resume remain candidate-bound"
   expect(`${unsafeStdout}${unsafeStderr}`).toContain("RELEASE_CERTIFICATION_WORKSPACE_REJECTED");
 });
 
-test("receipt confirmation reports a redacted same-run progress boundary", async () => {
+test("a supplied receipt cannot bypass missing current price authority", async () => {
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "NAPPLET_CVM_RELEASE_WORKSPACE")), PATH: "/nonexistent" } as Record<string, string>;
-  const requestChild = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--request"], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
-  const [requestCode, requestStdout] = await Promise.all([requestChild.exited, new Response(requestChild.stdout).text()]);
-  expect(requestCode).toBe(1);
-  const request = JSON.parse(requestStdout) as { expectedReceiptSha256: string };
-  const receiptChild = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--receipt", request.expectedReceiptSha256], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
+  const receiptChild = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--receipt", "a".repeat(64)], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
   const [receiptCode, receiptStdout] = await Promise.all([receiptChild.exited, new Response(receiptChild.stdout).text()]);
   expect(receiptCode).toBe(1);
-  expect(JSON.parse(receiptStdout)).toMatchObject({ receiptValidated: true, progress: "authorization_required" });
+  const result = JSON.parse(receiptStdout);
+  expect(result).toMatchObject({ progress: "preapproval_blocked", readiness: { pricing: { status: "blocked", reasonCode: "RELEASE_CONTROLLER_LIVE_PRICE_CATALOG_REQUIRED" } } });
+  expect(result).not.toHaveProperty("receiptValidated");
 });
 
-test("request output is a finite review projection with consent launch descriptors only", async () => {
+test("request output is a finite redacted blocker projection without launchable consent", async () => {
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "NAPPLET_CVM_RELEASE_WORKSPACE")), PATH: "/nonexistent", NAPPLET_CVM_TEST_EXTERNAL_EFFECTS: "deny" } as Record<string, string>;
   const child = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--request"], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
   const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   expect(code).toBe(1);
   expect(stderr).not.toContain("token");
   const result = JSON.parse(stdout);
-  expect(result).toMatchObject({ progress: "authorization_required", consentStatus: "consent_pending" });
-  expect(result.review.priceLines).toHaveLength(16);
-  expect(result.consentLaunches.map((entry: { channel: string }) => entry.channel)).toEqual(["nip46", "nwc", "cashu"]);
+  expect(result).toMatchObject({ progress: "preapproval_blocked", readiness: { pricing: { status: "blocked" }, execution: { status: "blocked" } } });
+  expect(result).not.toHaveProperty("review");
+  expect(result).not.toHaveProperty("consentLaunches");
+  expect(result.prerequisites).toEqual([
+    { kind: "operator_funding_rail", status: "selection_required", allowedChannels: ["nwc", "cashu"] },
+    { kind: "owner_manifest_signature", protocol: "nip46", status: "deferred_to_publication" },
+  ]);
   expect(JSON.stringify(result)).not.toContain("secret");
   expect(JSON.stringify(result)).not.toContain("NWC");
+});
+
+test("product request fails closed with bounded readiness and prerequisite semantics when current price authority is absent", async () => {
+  const workspaceRoot = join(process.cwd(), ".runtime", "release-certification", "native-discovery-v1");
+  await mkdir(workspaceRoot, { recursive: true });
+  const workspace = await mkdtemp(join(workspaceRoot, "certify-preapproval-blocked-"));
+  const env = {
+    ...Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "NAPPLET_CVM_RELEASE_WORKSPACE")),
+    NAPPLET_CVM_RELEASE_WORKSPACE: workspace,
+    PATH: "/nonexistent",
+    NAPPLET_CVM_TEST_EXTERNAL_EFFECTS: "deny",
+  } as Record<string, string>;
+  try {
+    const child = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--request"], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
+    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(code).toBe(1);
+    expect(stderr).not.toContain("token");
+    const result = JSON.parse(stdout);
+    expect(result).toMatchObject({
+      progress: "preapproval_blocked",
+      readiness: {
+        pricing: { status: "blocked", reasonCode: "RELEASE_CONTROLLER_LIVE_PRICE_CATALOG_REQUIRED" },
+        execution: { status: "blocked", reasonCode: "RELEASE_PRODUCTION_EXECUTION_CONFIG_REQUIRED" },
+      },
+    });
+    expect(result.prerequisites).toEqual([
+      { kind: "operator_funding_rail", status: "selection_required", allowedChannels: ["nwc", "cashu"] },
+      { kind: "owner_manifest_signature", protocol: "nip46", status: "deferred_to_publication" },
+    ]);
+    expect(result).not.toHaveProperty("review");
+    expect(result).not.toHaveProperty("consentLaunches");
+    expect(JSON.stringify(result)).not.toContain("fixture-catalog");
+    expect(JSON.stringify(result)).not.toContain("secret");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
 });

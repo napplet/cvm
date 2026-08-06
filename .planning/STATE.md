@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: executing
-stopped_at: Completed 07-50-PLAN.md; Cloud Billing probe timed out, resume 07-49
-last_updated: "2026-08-06T22:45:18.006Z"
+stopped_at: Completed 07-49-PLAN.md; Plan 07-20 local funding setup open
+last_updated: "2026-08-06T23:22:18.000Z"
 last_activity: 2026-08-06
 last_activity_desc: Completed official pricing and receipt-free preapproval materialization in Plan 07-48
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 91
-  completed_plans: 88
+  completed_plans: 89
   percent: 86
 ---
 
@@ -30,20 +30,20 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 07 (admission-slo-resilience-launch-safety) — EXECUTING
-Plan: 48 of 51 complete
-Status: Ready to resume partial 07-49 local setup/request composition; protected Cloud Billing probe timed out without an effect
-Last activity: 2026-08-06 — Completed regional official-SKU aggregation in Plan 07-50
+Plan: 49 of 51 complete
+Status: Plan 07-20 human checkpoint active; local NWC/Cashu setup page opened with zero provider effects
+Last activity: 2026-08-06 — Completed safe local funding setup and bounded review composition in Plan 07-49
 
-Plan execution: [██████████] 88/91 milestone plans complete; Phase 7 is 48/51 complete and verification remains pending
+Plan execution: [██████████] 89/91 milestone plans complete; Phase 7 is 49/51 complete and verification remains pending
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 88/91 milestone plans executed. Plan 07-50 completed regional official-SKU aggregation; resume partial 07-49 local setup/review, then 07-20 approval and 07-26 execution.
+- Plans: 89/91 milestone plans executed. Plan 07-49 completed local setup/review composition; Plan 07-20 is active for local wallet entry and exact approval, followed by 07-26 execution.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Next checkpoint: resume partial 07-49, then let 07-20 connect any missing operator NWC Lightning and funded Cashu rails locally and record final exact approval, followed by 07-26. Owner NIP-46 remains deferred to publication; no hand-authored config/evidence or pasted secret/digest is required.
+- Next checkpoint: complete the controller-opened Plan 07-20 NWC Lightning and funded Cashu setup, regenerate and approve the exact bounded request, then execute 07-26. Owner NIP-46 remains deferred to publication; no hand-authored config/evidence or pasted secret/digest is required.
 
 ## Performance Metrics
 

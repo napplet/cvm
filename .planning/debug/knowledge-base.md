@@ -35,3 +35,13 @@ Resolved debug sessions. Used by `gsd-debugger` to surface known-pattern hypothe
 - **Recurrence guard:** `tests/release/certify-release.test.ts` — `status require-state exits zero only on the documented exact match`; `tests/release/controller.test.ts` — `authorization receipt integrity rejects changed scope, expired receipt, and cost ceiling tampering before effects`; the exact Plan 07-20 combined command is now executable.
 - **Prevention:** Code branch: a controller-level authorization boundary exit code and a CLI-level assertion-success exit code serve different contracts; test both. Test-contract branch: literal `--test-name-pattern` verification commands must select at least one relevant test. Config/environment branch: the status test confines its workspace and disables PATH, so provider availability cannot mask the contract. The AND-gate is yes: both independent defects had to be fixed for the `&&`-joined Plan command to pass.
 ---
+
+## 07-20-discovery-registry — dry-run discovery diverged from the complete provider registry
+- **Date:** 2026-08-06
+- **Error patterns:** `UNSUPPORTED_CAPABILITY`, zero account scope, unavailable discovery, non-actionable v2 authorization request, `createNativeReleaseDiscoveryRegistry`
+- **Root cause(s):** `createNativeReleaseDiscoveryRegistry` kept a legacy six-provider map after the 16-family production composition was added. Its fallback returned unsupported/zero observations for the ten implemented omitted families, and it had no canonical candidate digest from which to derive safe required-scope/cost bindings.
+- **Fix:** Replaced the fallback with immutable all-family profiles, candidate-bound redacted scope/cost descriptors, and explicit authorization blocks; retained authenticated Google/Modal/Fly account hashes; bound dry-run/request/receipt CLI discovery to the controller's canonical candidate SHA.
+- **Files changed:** `src/release/native-discovery.ts`, `src/release/controller.ts`, `scripts/certify-release.ts`, `tests/release/native-discovery.test.ts`, `tests/release/certify-release.test.ts`
+- **Why not caught:** Native discovery tested the obsolete unsupported fallback while production composition separately tested all sixteen families; no test inspected the complete persisted dry-run request.
+- **Recurrence guard:** `tests/release/native-discovery.test.ts` covers every `RELEASE_PROVIDER_IDS` member, preserves authenticated Google/Modal/Fly hashes, and proves request regeneration; `tests/release/certify-release.test.ts` asserts all sixteen persisted account/project scopes are nonzero under PATH-disabled no-effect execution.
+---

@@ -1,17 +1,17 @@
 ---
-status: awaiting_human_verify
+status: resolved
 trigger: "Diagnose and fix the Plan 07-20 authenticated discovery/runtime registry disconnect. The no-effect release-certify dry run persists unsupported/unavailable/zero-account scopes for ten implemented provider IDs (contextvm, cep8_lightning, cashu, model, compatible_host, signer, promoted_cli, upload, owner_relay, attestation_relay), while only GCP, Modal, and Fly families are discovered."
 created: 2026-08-06T16:40:46Z
-updated: 2026-08-06T17:03:00Z
+updated: 2026-08-06T17:06:00Z
 ---
 
 ## Current Focus
 <!-- OVERWRITE on each update - reflects NOW -->
 
-hypothesis: "The dry-run registry duplicates the provider inventory in its legacy six-entry NATIVE_PROBES map, so it emits `unimplemented()` observations for the ten post-07-37 families even though the 16-family injected production registry constructs an explicit blocked port for every one."
-test: "The source-only revert reproduced the zero/unsupported fallback; the exact source restoration made the agent-authored regression green. Focused and full suites then provide adjacent regression coverage."
-expecting: "A local PATH-disabled product run remains at the authorization boundary with 16 finite non-unsupported scopes and no provider effects."
-next_action: "Await confirmation that the original release-certify dry-run now produces an actionable authorization request in the user's intended environment; no provider login, consent, or mutation is requested."
+hypothesis: "Confirmed: the legacy six-provider dry-run registry diverged from the all-16-family production composition and created unsupported zero-metadata observations for implemented providers."
+test: "Independent no-effect verification regenerated the original release-certify state and inspected all sixteen persisted capability/scope facts."
+expecting: "Confirmed: all 16 are finite/nonzero and non-unsupported; authenticated hashes are preserved and external profiles remain explicit authorization blocks."
+next_action: "Resolved and archived."
 bug_class: Bohrbug
 known_pattern_candidate: none
 candidate_causes:
@@ -107,6 +107,16 @@ started: "After Plans 07-27 through 07-39; Plan 07-37 added the complete native/
   found: "git diff --check passes. The implementation replaces a 24-line unsupported fallback with explicit profiles and metadata, rather than deleting/short-circuiting behavior. No Stryker configuration or dependency exists in this repository."
   implication: "The no-op/deletion detector passes; mutation testing is explicitly unavailable rather than treated as a pass."
 
+- timestamp: 2026-08-06T17:06:00Z
+  checked: "Independent no-effect release-certify verification after the human-verify checkpoint"
+  found: "The regenerated state has all 16 capabilities available with finite nonzero account/cost scope digests and no UNSUPPORTED_CAPABILITY. Google/Modal/Fly hashes are preserved, promoted_cli is authorized, and the remaining nine external profiles are explicit AUTHORIZATION_REQUIRED blocks."
+  implication: "The original workflow is resolved without provider mutations, credential disclosure, or a fabricated external identity."
+
+- timestamp: 2026-08-06T17:06:30Z
+  checked: "MemPalace resolved-session indexing"
+  found: "The mempalace CLI is not installed in this environment."
+  implication: "Skipped semantic indexing; the committed knowledge-base entry remains the durable recall record."
+
 ## Resolution
 <!-- OVERWRITE as understanding evolves -->
 
@@ -137,9 +147,20 @@ verification:
     fixed_on_reapply: true
     evidence: "Source-only stash/revert failed the all-family regression at the legacy zero scope; exact reapply restored 6 passing native-discovery tests."
   guardrail_verdict: accepted
+  independent_human_verification:
+    result: pass
+    summary: "No-effect generated state has 16 finite, non-unsupported capabilities; authentic hashes and explicit external authorization blocks are correct."
 files_changed:
   - "src/release/native-discovery.ts"
   - "src/release/controller.ts"
   - "scripts/certify-release.ts"
   - "tests/release/native-discovery.test.ts"
   - "tests/release/certify-release.test.ts"
+
+## Prevention
+
+- **Code branch:** The dry-run registry held a separate six-provider inventory while the later production composition owned all sixteen. There was no shared/complete discovery-profile assertion, so a newly composed family could remain on the legacy fallback.
+- **Configuration/data branch:** The discovery factory was invoked without the controller's canonical candidate digest. An unconfigured provider therefore had no safe way to emit a required-scope binding and was represented by zero metadata instead.
+- **Environment branch:** Missing local CLIs or official sessions are expected deployment conditions, but the old fallback made them indistinguishable from a product capability that had never been implemented.
+- **Why not caught:** Existing native-discovery coverage asserted that unimplemented families should be unsupported/zero, while production-composition coverage separately asserted all sixteen families. No end-to-end dry-run assertion compared the persisted authorization request against the complete composition.
+- **Recurrence guard:** `tests/release/native-discovery.test.ts` now exercises every `RELEASE_PROVIDER_IDS` member under injected read-only discovery, asserts candidate-bound nonzero metadata and no unsupported result, preserves authenticated Google/Modal/Fly hashes, and proves request regeneration. `tests/release/certify-release.test.ts` inspects the persisted v2 request's sixteen nonzero account/project scopes under the PATH-disabled no-effect command.

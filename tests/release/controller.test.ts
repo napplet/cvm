@@ -52,6 +52,25 @@ test("dry-run resume reuses the exact authorization request and state", async ()
   expect(canonicalJson(second)).toBe(canonicalJson(first));
 });
 
+test("changed gcloud scope or revoked ADC regenerate the pending authorization request without workspace deletion", async () => {
+  const root = await workspace();
+  const first = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, providers: {
+    cloud_run: { discover: async () => ({ capability: "available", authentication: "authorized", accountScopeSha256: "a".repeat(64), costEstimateSha256: "b".repeat(64), secretReferenceNames: ["gcloud-adc"], reasonCode: "AVAILABLE" }) },
+  }, now: () => 1_000 });
+  const second = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, providers: {
+    cloud_run: { discover: async () => ({ capability: "available", authentication: "authorized", accountScopeSha256: "c".repeat(64), costEstimateSha256: "d".repeat(64), secretReferenceNames: ["gcloud-adc"], reasonCode: "AVAILABLE" }) },
+  }, now: () => 2_000 });
+
+  expect(second.state.stateSha256).not.toBe(first.state.stateSha256);
+  expect(second.authorizationRequest.authorizationRequestSha256).not.toBe(first.authorizationRequest.authorizationRequestSha256);
+  expect(second.state.capabilities.find((item) => item.provider === "cloud_run")).toEqual(expect.objectContaining({ accountScopeSha256: "c".repeat(64), costEstimateSha256: "d".repeat(64), secretReferenceNames: ["gcloud-adc"] }));
+  const revoked = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, providers: {
+    cloud_run: { discover: async () => ({ capability: "available", authentication: "not_configured", reasonCode: "AUTHORIZATION_REQUIRED" }) },
+  }, now: () => 3_000 });
+  expect(revoked.state.stateSha256).not.toBe(second.state.stateSha256);
+  expect(revoked.state.capabilities.find((item) => item.provider === "cloud_run")).toEqual(expect.objectContaining({ authentication: "not_configured", accountScopeSha256: "0".repeat(64) }));
+});
+
 test("authorization-required state rejects candidate reuse, request tampering, and conflicting writers", async () => {
   const root = await workspace();
   const first = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000 });

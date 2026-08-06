@@ -38,8 +38,8 @@ test("registry owns every required provider and exposes only finite redacted dis
   const registry = createReleaseProviderRegistry({
     ports: {
       cloud_run: {
-        discoverCapabilities: async () => ({ capability: "available", details: "token=canary" } as never),
-        discoverAuthentication: async () => ({ authentication: "authorized", secretReference: "cloud-run-token" } as never),
+        discoverCapabilities: async () => ({ capability: "available", accountScopeSha256: digest("a") }),
+        discoverAuthentication: async () => ({ authentication: "authorized", costEstimateSha256: digest("b"), secretReferenceNames: ["cloud-run-identity"] }),
         plan: async () => { liveCalls += 1; return { status: "planned", estimatedCostMicros: 10 }; },
         apply: async () => { liveCalls += 1; return { status: "applied", actualCostMicros: 10, resourceIdentity: "service/projects/example" }; },
         observe: async () => ({ status: "completed", actualCostMicros: 10, resourceIdentity: "service/projects/example" }),
@@ -51,9 +51,14 @@ test("registry owns every required provider and exposes only finite redacted dis
 
   expect(registry.providers()).toHaveLength(16);
   const discovery = await registry.discover("cloud_run");
-  expect(discovery).toEqual(expect.objectContaining({ capability: "unavailable", authentication: "unavailable" }));
-  expect(JSON.stringify(discovery)).not.toContain("canary");
-  expect(JSON.stringify(discovery)).not.toContain("cloud-run-token");
+  expect(discovery).toEqual(expect.objectContaining({
+    capability: "available",
+    authentication: "authorized",
+    accountScopeSha256: digest("a"),
+    costEstimateSha256: digest("b"),
+    secretReferenceNames: ["cloud-run-identity"],
+  }));
+  expect(JSON.stringify(discovery)).not.toContain("token=canary");
 
   const planned = await registry.plan({ receipt: receipt(), operation: operation() });
   expect(planned.status).toBe("planned");

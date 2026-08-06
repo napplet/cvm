@@ -1,8 +1,9 @@
-import { ReleaseCertificationController, RELEASE_WORKSPACE_ENV, runReleaseCertification } from "../src/release/controller";
+import { ReleaseCertificationController, RELEASE_AUTHORIZATION_SHA256_ENV, RELEASE_WORKSPACE_ENV, runReleaseCertification } from "../src/release/controller";
+import { createNativeReleaseDiscoveryRegistry } from "../src/release/native-discovery";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 const repositoryRoot = resolve(import.meta.dir, "..");
-const defaultWorkspace = join(repositoryRoot, ".runtime", "release-certification");
+const defaultWorkspace = join(repositoryRoot, ".runtime", "release-certification", "native-discovery-v1");
 
 function option(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -40,9 +41,13 @@ async function main(): Promise<number> {
   }
   try {
     const workspace = controllerWorkspace();
+    if (!status && !dryRun) {
+      await runReleaseCertification({ candidatePath, workspace, dryRun: false, authorizationReceiptSha256: process.env[RELEASE_AUTHORIZATION_SHA256_ENV] });
+      return 1;
+    }
     const result = status
       ? await new ReleaseCertificationController({ candidatePath, workspace }).status()
-      : await runReleaseCertification({ candidatePath, workspace, dryRun: true });
+      : await runReleaseCertification({ candidatePath, workspace, dryRun: true, providers: createNativeReleaseDiscoveryRegistry() });
     if (!result) {
       console.error("RELEASE_CONTROLLER_STATUS_UNAVAILABLE");
       return 1;

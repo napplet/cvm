@@ -2,7 +2,7 @@ import { canonicalJson } from "../promotion/schema";
 import { ReleaseTopologyObservationSchema, type ReleaseTopologyObservation } from "./contracts";
 
 export const RELEASE_PROVIDER_IDS = [
-  "cloud_run", "gcs", "collector", "cockroach_postgres", "modal", "fly",
+  "cloud_run", "gcs", "collector", "cloud_sql_postgres", "modal", "fly",
   "contextvm", "cep8_lightning", "cashu", "model", "compatible_host", "signer",
   "promoted_cli", "upload", "owner_relay", "attestation_relay",
 ] as const;
@@ -25,7 +25,7 @@ export async function deriveReleaseTopology(candidateSha256: string): Promise<Re
       collectorImage: COLLECTOR_IMAGE,
     },
     objectStore: { dualRegion: "nam4", versioning: true as const, retentionDays: 30 as const },
-    database: { authority: "cockroach_postgres" as const, serializable: true as const },
+    database: { authority: "cloud_sql_postgres" as const, serializable: true as const },
     workerCandidates: ["modal", "fly"] as ["modal", "fly"],
     integrations: ["contextvm", "cep8_lightning", "cashu", "model", "compatible_host", "signer", "promoted_cli", "upload", "owner_relay", "attestation_relay"] as const,
   };

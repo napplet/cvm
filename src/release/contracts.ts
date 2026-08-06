@@ -4,7 +4,7 @@ const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => v
 const NonNegativeIntegerSchema = z.number().int().nonnegative();
 
 export const ReleaseProviderIdSchema = z.enum([
-  "cloud_run", "gcs", "collector", "cockroach_postgres", "modal", "fly",
+  "cloud_run", "gcs", "collector", "cloud_sql_postgres", "modal", "fly",
   "contextvm", "cep8_lightning", "cashu", "model", "compatible_host", "signer",
   "promoted_cli", "upload", "owner_relay", "attestation_relay",
 ]);
@@ -17,7 +17,8 @@ export const ProviderCapabilityObservationSchema = z.object({
   authentication: z.enum(["authorized", "not_configured", "unavailable"]),
   accountScopeSha256: DigestSchema,
   costEstimateSha256: DigestSchema,
-  reasonCode: z.enum(["AUTHORIZATION_REQUIRED", "CAPABILITY_UNAVAILABLE", "CREDENTIALS_UNAVAILABLE", "UNSUPPORTED_CAPABILITY"]),
+  secretReferenceNames: z.array(z.string().regex(/^[a-z][a-z0-9_.-]{0,127}$/u)).max(8),
+  reasonCode: z.enum(["AVAILABLE", "AUTHORIZATION_REQUIRED", "CAPABILITY_UNAVAILABLE", "CREDENTIALS_UNAVAILABLE", "UNSUPPORTED_CAPABILITY"]),
 }).strict();
 export type ProviderCapabilityObservation = z.infer<typeof ProviderCapabilityObservationSchema>;
 
@@ -45,7 +46,7 @@ export const ReleaseTopologyObservationSchema = z.object({
     collectorImage: z.string().regex(/^otel\/opentelemetry-collector@sha256:[a-f0-9]{64}$/iu),
   }).strict(),
   objectStore: z.object({ dualRegion: z.string().min(1), versioning: z.literal(true), retentionDays: z.literal(30) }).strict(),
-  database: z.object({ authority: z.literal("cockroach_postgres"), serializable: z.literal(true) }).strict(),
+  database: z.object({ authority: z.literal("cloud_sql_postgres"), serializable: z.literal(true) }).strict(),
   workerCandidates: z.tuple([z.literal("modal"), z.literal("fly")]),
   integrations: z.array(ReleaseProviderIdSchema).length(10),
   deployment: z.object({
@@ -119,7 +120,7 @@ export const ReleaseControllerCurrentPointerSchema = z.object({
 
 /** Read-only discovery only. Provider implementations must not expose native output. */
 export interface ReleaseProviderPort {
-  discover(): Promise<Omit<ProviderCapabilityObservation, "version" | "provider" | "accountScopeSha256" | "costEstimateSha256"> & Partial<Pick<ProviderCapabilityObservation, "accountScopeSha256" | "costEstimateSha256">>>;
+  discover(): Promise<Omit<ProviderCapabilityObservation, "version" | "provider" | "accountScopeSha256" | "costEstimateSha256" | "secretReferenceNames"> & Partial<Pick<ProviderCapabilityObservation, "accountScopeSha256" | "costEstimateSha256" | "secretReferenceNames">>>;
 }
 
 export type ReleaseProviderRegistry = Partial<Record<ReleaseProviderId, ReleaseProviderPort>>;

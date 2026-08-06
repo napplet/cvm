@@ -42,8 +42,13 @@ export const ReleaseProviderDiscoverySchema = z.object({
 }).strict();
 export type ReleaseProviderDiscovery = z.infer<typeof ReleaseProviderDiscoverySchema>;
 
-const NativeDiscoverySchema = z.object({ capability: z.enum(["available", "unavailable", "unsupported"]) }).strict();
-const NativeAuthenticationSchema = z.object({ authentication: z.enum(["authorized", "not_configured", "unavailable"]) }).strict();
+const RedactedDiscoveryMetadataSchema = z.object({
+  accountScopeSha256: DigestSchema.optional(),
+  costEstimateSha256: DigestSchema.optional(),
+  secretReferenceNames: z.array(z.string().regex(/^[a-z][a-z0-9_.-]{0,127}$/u)).max(8).optional(),
+}).strict();
+const NativeDiscoverySchema = z.object({ capability: z.enum(["available", "unavailable", "unsupported"]) }).extend(RedactedDiscoveryMetadataSchema.shape).strict();
+const NativeAuthenticationSchema = z.object({ authentication: z.enum(["authorized", "not_configured", "unavailable"]) }).extend(RedactedDiscoveryMetadataSchema.shape).strict();
 const NativePlanSchema = z.object({ status: z.literal("planned"), estimatedCostMicros: CostSchema }).strict();
 const NativeMutationSchema = z.object({ status: z.enum(["applied", "unknown", "blocked"]), actualCostMicros: CostSchema.optional(), resourceIdentity: z.string().min(1).max(4_096).optional() }).strict();
 const NativeObservationSchema = z.object({ status: z.enum(["completed", "pending", "unknown", "missing", "blocked"]), actualCostMicros: CostSchema.optional(), resourceIdentity: z.string().min(1).max(4_096).optional() }).strict();
@@ -64,13 +69,13 @@ export type ReleaseProviderObservationResult = Readonly<{ status: "completed" | 
 export type ReleaseProviderCleanupResult = z.infer<typeof NativeCleanupSchema>;
 
 const PROVIDERS = [
-  "cloud_run", "gcs", "collector", "cockroach_postgres", "modal", "fly",
+  "cloud_run", "gcs", "collector", "cloud_sql_postgres", "modal", "fly",
   "contextvm", "cep8_lightning", "cashu", "model", "compatible_host", "signer",
   "promoted_cli", "upload", "owner_relay", "attestation_relay",
 ] as const satisfies readonly ReleaseProviderId[];
 
 const EFFECT_OWNER: Readonly<Record<ReleaseProviderId, readonly string[]>> = Object.freeze({
-  cloud_run: ["cloud-run-ingress"], gcs: ["gcs-retention"], collector: ["collector"], cockroach_postgres: ["database"],
+  cloud_run: ["cloud-run-ingress"], gcs: ["gcs-retention"], collector: ["collector"], cloud_sql_postgres: ["database"],
   modal: ["modal-benchmark"], fly: ["fly-benchmark"], contextvm: ["contextvm-rails"], cep8_lightning: ["payments"],
   cashu: ["cashu"], model: ["model"], compatible_host: ["host-signer"], signer: ["signer"],
   promoted_cli: ["cli-asset"], upload: ["publication"], owner_relay: ["owner-relay"], attestation_relay: ["attestation-relay"],
@@ -86,6 +91,11 @@ function unavailable(provider: ReleaseProviderId, reasonCode: ReleaseProviderDis
     version: 1, provider, capability: "unavailable", authentication: "unavailable",
     accountScopeSha256: "0".repeat(64), costEstimateSha256: "0".repeat(64), secretReferenceNames: [], reasonCode,
   });
+}
+
+function sameMetadata(left: string | undefined, right: string | undefined): string | undefined {
+  if (left && right && left !== right) throw new Error("RELEASE_PROVIDER_DISCOVERY_METADATA_INVALID");
+  return left ?? right;
 }
 
 function authorize(input: Readonly<{ receipt: unknown; operation: unknown; approvedMaximumCostMicros: unknown }>, now: number): { receipt: ReleaseAuthorizationReceipt; operation: ReleaseProviderOperation; approvedMaximumCostMicros: number } {
@@ -132,9 +142,12 @@ export class ReleaseProviderRegistry {
         port.discoverCapabilities().then((result) => NativeDiscoverySchema.parse(result)),
         port.discoverAuthentication().then((result) => NativeAuthenticationSchema.parse(result)),
       ]);
+      const accountScopeSha256 = sameMetadata(capability.accountScopeSha256, authentication.accountScopeSha256) ?? "0".repeat(64);
+      const costEstimateSha256 = sameMetadata(capability.costEstimateSha256, authentication.costEstimateSha256) ?? "0".repeat(64);
+      const secretReferenceNames = [...new Set([...(capability.secretReferenceNames ?? []), ...(authentication.secretReferenceNames ?? [])])].sort();
       return ReleaseProviderDiscoverySchema.parse({
         version: 1, provider, capability: capability.capability, authentication: authentication.authentication,
-        accountScopeSha256: "0".repeat(64), costEstimateSha256: "0".repeat(64), secretReferenceNames: [],
+        accountScopeSha256, costEstimateSha256, secretReferenceNames,
         reasonCode: capability.capability === "available" && authentication.authentication === "authorized" ? "AVAILABLE" : "AUTHORIZATION_REQUIRED",
       });
     } catch { return unavailable(provider, "CAPABILITY_UNAVAILABLE"); }

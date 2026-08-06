@@ -91,6 +91,7 @@ const defaultObservation = (provider: ReleaseProviderId): ProviderCapabilityObse
   authentication: "not_configured",
   accountScopeSha256: "0".repeat(64),
   costEstimateSha256: "0".repeat(64),
+  secretReferenceNames: [],
   reasonCode: "CREDENTIALS_UNAVAILABLE",
 });
 
@@ -99,7 +100,7 @@ const defaultObservation = (provider: ReleaseProviderId): ProviderCapabilityObse
 export function createNoCredentialReleaseProviderRegistry(): ReleaseProviderRegistry {
   return Object.fromEntries(RELEASE_PROVIDER_IDS.map((provider) => [provider, {
     discover: async () => {
-      const { version: _version, provider: _provider, accountScopeSha256: _scope, costEstimateSha256: _cost, ...observation } = defaultObservation(provider);
+      const { version: _version, provider: _provider, accountScopeSha256: _scope, costEstimateSha256: _cost, secretReferenceNames: _references, ...observation } = defaultObservation(provider);
       return observation;
     },
   }])) as ReleaseProviderRegistry;
@@ -117,6 +118,7 @@ async function discoverProviders(registry: ReleaseProviderRegistry): Promise<Pro
         provider,
         accountScopeSha256: discovered.accountScopeSha256 ?? "0".repeat(64),
         costEstimateSha256: discovered.costEstimateSha256 ?? "0".repeat(64),
+        secretReferenceNames: discovered.secretReferenceNames ?? [],
       });
     } catch {
       return ProviderCapabilityObservationSchema.parse({ ...defaultObservation(provider), reasonCode: "CAPABILITY_UNAVAILABLE" });
@@ -128,7 +130,7 @@ async function discoverProviders(registry: ReleaseProviderRegistry): Promise<Pro
 async function effectPlan(candidateSha256: string, topologySha256: string) {
   const effects = [
     ["cloud-run-ingress", "cloud_run", "create_or_update", 5_000_000], ["gcs-retention", "gcs", "configure", 500_000],
-    ["collector", "collector", "create_or_update", 500_000], ["database", "cockroach_postgres", "create_or_update", 5_000_000],
+    ["collector", "collector", "create_or_update", 500_000], ["database", "cloud_sql_postgres", "create_or_update", 5_000_000],
     ["modal-benchmark", "modal", "benchmark", 4_000_000], ["fly-benchmark", "fly", "benchmark", 4_000_000],
     ["contextvm-rails", "contextvm", "verify_integration", 2_000_000], ["payments", "cep8_lightning", "verify_integration", 2_000_000],
     ["cashu", "cashu", "verify_integration", 2_000_000], ["model", "model", "verify_integration", 5_000_000],
@@ -217,15 +219,15 @@ export class ReleaseCertificationController {
     const candidate = await candidateIdentity(this.#candidatePath);
     const topology = await deriveReleaseTopology(candidate.candidateSha256);
     const plan = await effectPlan(candidate.candidateSha256, topology.topologySha256);
+    const capabilities = await discoverProviders(this.#providers);
     const existing = await this.status();
     if (existing) {
       if (existing.state.candidate.candidateSha256 !== candidate.candidateSha256) throw new Error("RELEASE_CONTROLLER_CANDIDATE_MISMATCH");
       if (existing.state.topologySha256 !== topology.topologySha256 || existing.authorizationRequest.effectPlanSha256 !== plan.effectPlanSha256 || existing.authorizationRequest.maximumAuthorizedCostMicros !== plan.maximumAuthorizedCostMicros) {
         throw new Error("RELEASE_CONTROLLER_RESUME_INPUT_MISMATCH");
       }
-      return existing;
+      if (canonicalJson(existing.state.capabilities) === canonicalJson(capabilities)) return existing;
     }
-    const capabilities = await discoverProviders(this.#providers);
     const discovering = await stateFor({
       version: 1, status: "discovering", candidate, topologySha256: topology.topologySha256, capabilities,
       priorStateSha256: null, authorizationRequestSha256: null, authorizationReceiptSha256: null,
@@ -247,7 +249,8 @@ export class ReleaseCertificationController {
     await createOrVerify(join(this.#workspace, "states", `${final.stateSha256}.json`), `${canonicalJson(final)}\n`, "RELEASE_CONTROLLER_STATE_COLLISION");
     const pointerBase = { version: 1 as const, stateSha256: final.stateSha256, candidateSha256: candidate.candidateSha256 };
     const pointer = { ...pointerBase, pointerSha256: await digest(pointerBase) };
-    await createOrVerify(join(this.#workspace, "current.json"), `${canonicalJson(pointer)}\n`, "RELEASE_CONTROLLER_CONCURRENT_WRITE");
+    if (existing) await this.#writeCurrent(final);
+    else await createOrVerify(join(this.#workspace, "current.json"), `${canonicalJson(pointer)}\n`, "RELEASE_CONTROLLER_CONCURRENT_WRITE");
     return (await this.status())!;
   }
 
@@ -438,7 +441,13 @@ export class ReleaseCertificationController {
   }
 }
 
-export async function runReleaseCertification(options: ControllerOptions & Readonly<{ dryRun: true }>): Promise<ReleaseCertificationResult> {
+export async function runReleaseCertification(options: ControllerOptions & Readonly<{ dryRun: true }>): Promise<ReleaseCertificationResult>;
+export async function runReleaseCertification(options: ControllerOptions & Readonly<{ dryRun: false; authorizationReceiptSha256?: string }>): Promise<never>;
+export async function runReleaseCertification(options: ControllerOptions & Readonly<{ dryRun: boolean; authorizationReceiptSha256?: string }>): Promise<ReleaseCertificationResult> {
+  if (!options.dryRun) {
+    if (!options.authorizationReceiptSha256 || !DigestSchema.safeParse(options.authorizationReceiptSha256).success) throw new Error("RELEASE_AUTHORIZATION_REQUIRED");
+    throw new Error("RELEASE_LIVE_PROVIDER_FAMILY_UNIMPLEMENTED");
+  }
   const progress = await new ReleaseCertificationController(options).certify();
   return progress;
 }

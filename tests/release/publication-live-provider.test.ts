@@ -3,7 +3,10 @@ import { expect, test } from "bun:test";
 import { PromotedNappletCliAdapter, canonicalSealedDeployAggregate } from "../../src/publication/napplet-cli-adapter";
 import { createAuthorizationReceipt, createAuthorizationRequest } from "../../src/release/authorization";
 import { createNativePromotedNappletCliSource } from "../../src/release/native/promoted-cli";
+import { createNostrRelayPublicationAdapter } from "../../src/release/native/nostr-relay";
 import { createExactSealedUploadAdapter } from "../../src/release/native/upload";
+import { createProtectedLivePublicationObservationPort } from "../../src/certification/live/publication-ports";
+import { runLivePublicationCertification } from "../../src/certification/live/publication";
 
 const digest = (letter: string) => letter.repeat(64);
 const pubkey = "a".repeat(64);
@@ -38,12 +41,19 @@ const sourceSnapshot = {
 };
 
 async function authorization() {
-  const config = { candidateSha256: digest("f"), topologySha256: digest("1"), effectPlanSha256: digest("2"), accountScopeSha256: digest("3"), projectScopeSha256: digest("4") };
+  const config = {
+    candidateSha256: digest("f"), topologySha256: digest("1"), effectPlanSha256: digest("2"), accountScopeSha256: digest("3"), projectScopeSha256: digest("4"),
+    ownerAccountScopeSha256: digest("7"), ownerProjectScopeSha256: digest("8"), attestationAccountScopeSha256: digest("9"), attestationProjectScopeSha256: digest("a"),
+  };
   const request = await createAuthorizationRequest({
     candidateSha256: config.candidateSha256, topologySha256: config.topologySha256, effectPlanSha256: config.effectPlanSha256,
     controllerStateSha256: digest("5"), providerCapabilitiesSha256: digest("6"),
     orderedEffects: [{ id: "sealed-upload", provider: "upload", operation: "verify_integration", estimatedCostMicros: 1 }],
-    providerScopes: [{ provider: "upload", accountScopeSha256: config.accountScopeSha256, projectScopeSha256: config.projectScopeSha256 }],
+    providerScopes: [
+      { provider: "attestation_relay", accountScopeSha256: config.attestationAccountScopeSha256, projectScopeSha256: config.attestationProjectScopeSha256 },
+      { provider: "owner_relay", accountScopeSha256: config.ownerAccountScopeSha256, projectScopeSha256: config.ownerProjectScopeSha256 },
+      { provider: "upload", accountScopeSha256: config.accountScopeSha256, projectScopeSha256: config.projectScopeSha256 },
+    ],
     estimate: { currency: "USD", maximumMicros: 1, sourceId: "publication-fixture", observedAtMs: 1, freshUntilMs: 10_000 },
     maximumRunDurationMs: 1_000, cleanupByMs: 9_000, evidenceRetentionDays: 30, artifactRetentionDays: 30,
     gcpEffects: { projectBootstrap: true, billing: true, apiEnablement: ["storage.googleapis.com"] }, expiresAtMs: 9_000,
@@ -65,6 +75,66 @@ test("wrong promoted source blocks before the sealed bytes leave the controller"
   });
   expect(result).toMatchObject({ state: "publication_unavailable", safeReasonCode: "PUBLICATION_UNAVAILABLE" });
   expect(uploads).toBe(0);
+});
+
+test("relay persistence binds exact signed owner and attestation events and reconciles only original IDs", async () => {
+  const transcript: string[] = [];
+  const { config, request, receipt } = await authorization();
+  const attestationEvent = { id: digest("1"), pubkey: "b".repeat(64), created_at: 2, kind: 30382, tags: [["e", ownerEvent.id], ["a", artifact.aggregateSha256]], content: "cvm build attestation", sig: "d".repeat(128) };
+  let ownerPublished = false;
+  let attestationPublished = false;
+  const relay = createNostrRelayPublicationAdapter({
+    config: {
+      ...config, intentId: "intent:publication", sealedArtifactSha256: artifact.sealedObjectSha256, aggregateSha256,
+      relaySetReference: "relay-set:primary", relaySetSha256: digest("b"), relays: ["wss://relay.example"],
+      ownerEvent, attestationEvent, ownerSignerPubkey: ownerEvent.pubkey, attestationSignerPubkey: attestationEvent.pubkey,
+    }, request, receipt, now: () => 1_000,
+    port: {
+      persistSignedEvent: async ({ operationId, eventId }) => { transcript.push(`persist:${operationId}:${eventId}`); },
+      observeOriginalEvent: async ({ operationId, eventId }) => {
+        const published = operationId.startsWith("owner_manifest") ? ownerPublished : attestationPublished;
+        return published ? { status: "complete", operationId, eventId, relaySetReference: "relay-set:primary", relayObservation: `relay:${eventId}` } : { status: "missing" };
+      },
+      publishSignedEvent: async ({ operationId, eventId, relays }) => {
+        transcript.push(`publish:${operationId}:${eventId}`);
+        expect(relays).toEqual(["wss://relay.example"]);
+        if (operationId.startsWith("owner_manifest")) ownerPublished = true;
+        else attestationPublished = true;
+      },
+    },
+  });
+
+  const owner = await relay.publishOwnerManifest({ operationId: "owner_manifest:intent:publication", event: ownerEvent, relays: ["wss://relay.example"] });
+  const attestation = await relay.publishAttestation({ operationId: "attestation:intent:publication", event: attestationEvent, relays: ["wss://relay.example"] });
+  expect(owner).toMatchObject({ state: "completed", relayObservation: `relay:${ownerEvent.id}` });
+  expect(attestation).toMatchObject({ state: "completed", relayObservation: `relay:${attestationEvent.id}` });
+  expect(await relay.reconcileOriginalEvent({ operationId: "owner_manifest:intent:publication" })).toMatchObject({ state: "completed", relayObservation: `relay:${ownerEvent.id}` });
+  await expect(relay.publishOwnerManifest({ operationId: "owner_manifest:intent:publication", event: { ...ownerEvent, pubkey: "0".repeat(64) }, relays: ["wss://relay.example"] })).rejects.toThrow("NOSTR_RELAY_EVENT_INVALID");
+  expect(transcript).toEqual([
+    `persist:owner_manifest:intent:publication:${ownerEvent.id}`, `publish:owner_manifest:intent:publication:${ownerEvent.id}`,
+    `persist:attestation:intent:publication:${attestationEvent.id}`, `publish:attestation:intent:publication:${attestationEvent.id}`,
+  ]);
+  expect(JSON.stringify(transcript)).not.toMatch(/nsec|private|secret/i);
+});
+
+test("protected publication bridge accepts only exact source, signer, intent, and original operation evidence", async () => {
+  const calls: string[] = [];
+  const source = createNativePromotedNappletCliSource({
+    snapshot: sourceSnapshot,
+    upload: { uploadExact: async () => ({ operationId: "deploy:intent:publication", state: "complete", fullServerUploadId: "blossom:location" }), reconcileOriginalUpload: async () => ({ operationId: "deploy:intent:publication", state: "complete", fullServerUploadId: "blossom:location" }) },
+    relay: { publishOriginalEvent: async () => ({ operationId: "owner_manifest:intent:publication", state: "complete", relayObservation: "relay:owner" }), reconcileOriginalEvent: async () => ({ operationId: "owner_manifest:intent:publication", state: "complete", relayObservation: "relay:owner" }) },
+  });
+  const port = createProtectedLivePublicationObservationPort({
+    candidateId: digest("f"), sealedArtifactSha256: artifact.sealedObjectSha256, aggregateSha256, source,
+    submission: { accountId: artifact.accountId, intentId: "intent:publication", command: { commandId: "command:publication", intentId: "intent:publication", intentFingerprint: digest("c"), operationIds: { deploy: "deploy:intent:publication", ownerManifest: "owner_manifest:intent:publication", attestation: "attestation:intent:publication" } }, event: ownerEvent, signerPubkey: ownerEvent.pubkey },
+    publication: {
+      submitSignedManifest: async () => { calls.push("submit"); return { status: "partial", intentId: "intent:publication" }; },
+      reconcile: async () => { calls.push("reconcile"); return { status: "complete", intentId: "intent:publication", fullServerUploadId: "blossom:location", ownerRelayObservation: "relay:owner", attestationRelayObservation: "relay:attestation" }; },
+    },
+  });
+  const result = await runLivePublicationCertification({ candidate: { id: digest("f"), provider: "modal", image: `registry.example/worker@sha256:${digest("e")}`, sourceSha256: digest("d") }, observationPort: port });
+  expect(result).toMatchObject({ status: "passed", reasonCode: "OBSERVATION_COMPLETE" });
+  expect(calls).toEqual(["submit", "reconcile"]);
 });
 
 test("persists and uploads the exact sealed bytes once, then reconciles only the original upload operation", async () => {

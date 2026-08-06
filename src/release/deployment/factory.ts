@@ -3,6 +3,7 @@ import type { ReleaseExecutionFactoryInput } from "../production-execution";
 import { RELEASE_PRODUCTION_PROVIDER_IDS } from "../native-registry";
 import type { ReleaseProviderRegistry } from "../providers";
 import { createDeploymentProtectedPorts } from "./protected-ports";
+import { createProductionReleaseExecutionSession } from "./production-factory";
 import type { GoogleAccessToken, GoogleFetch, GoogleTokenSource } from "./google-clients";
 import type { createContextVmDeploymentClient } from "./contextvm-client";
 import type { createPaymentDeploymentClients } from "./payment-clients";
@@ -146,6 +147,6 @@ export function createDeploymentReleaseExecutionSession(
  * Dynamic production loading reaches this named entrypoint. Calling it without
  * explicit project-owned client constructors fails closed before any effect.
  */
-export function createReleaseExecutionSession(_input: ReleaseExecutionFactoryInput): never {
-  throw new Error("DEPLOYMENT_FACTORY_CLIENT_CONSTRUCTORS_REQUIRED");
+export function createReleaseExecutionSession(input: ReleaseExecutionFactoryInput): ReleaseExecutionSession {
+  return createProductionReleaseExecutionSession(input);
 }

@@ -15,6 +15,7 @@ export type MaterializedCertifier = Readonly<{
   evidenceDirectory: string;
   secretReferencesPath: string;
   adapter: PinnedModule;
+  releaseExecution: Readonly<{ root: string; modulePath: string; sha256: Digest; configPath: string; configSha256: Digest }>;
   manifestPath: string;
   env: Readonly<{ NAPPLET_CVM_CERTIFIER_CONFIG: string; NAPPLET_CVM_CERTIFIER_CONFIG_SHA256: Digest }>;
 }>;
@@ -148,6 +149,8 @@ export async function materializeProtectedCertifier(input: MaterializeProtectedC
   const secretReferencesPath = join(root, "secret-references.json");
   const adapterRoot = join(root, "adapters");
   const adapterPath = join(adapterRoot, "protected-adapters.js");
+  const executionRoot = join(root, "execution");
+  const executionPath = join(executionRoot, "release-execution.mjs");
   const configPath = join(root, "certifier.json");
   const manifestPath = join(root, "materialization.json");
   await rejectMutatedExistingConfig(configPath, adapterPath);
@@ -177,26 +180,51 @@ export async function materializeProtectedCertifier(input: MaterializeProtectedC
   const adapterBytes = new Uint8Array(await output.arrayBuffer());
   await writeExclusiveCanonical(adapterPath, new TextDecoder().decode(adapterBytes));
   const adapter: PinnedModule = { root: adapterRoot, modulePath: adapterPath, sha256: await sha256(adapterBytes) };
+  const factoryPath = resolve(input.repositoryRoot, "src/release/deployment/factory.ts");
+  const productionFactoryPath = resolve(input.repositoryRoot, "src/release/deployment/production-factory.ts");
+  if (!under(resolve(input.repositoryRoot), factoryPath) || !under(resolve(input.repositoryRoot), productionFactoryPath)) throw new Error("MATERIALIZER_FACTORY_SOURCE_REJECTED");
+  /** The generated module contains only repository-owned source locations and
+   * inert config input. It never serializes credentials or provider payloads. */
+  const executionSource = [
+    `import { createReleaseExecutionSession as createSession } from ${JSON.stringify(factoryPath)};`,
+    `export { releaseReadiness, assessProductionFactoryReadiness } from ${JSON.stringify(productionFactoryPath)};`,
+    "export function createReleaseExecutionSession(input) { return createSession(input); }",
+    "",
+  ].join("\n");
+  await writeExclusiveCanonical(executionPath, executionSource);
+  const executionSha256 = await sha256(executionSource);
+  const deploymentConfigPath = join(executionRoot, "deployment.json");
+  const deploymentConfig = {
+    version: 1, candidateSha256: input.candidateId.toLowerCase(), sourceRevision: input.source.sourceRevision.toLowerCase(), workspaceRoot: workspace,
+    factoryModuleSha256: executionSha256, publicSettings: { regions: ["europe-west1", "us-central1"] }, secretReferences: Object.fromEntries(Object.entries(input.secretReferences).sort(([left], [right]) => left.localeCompare(right))),
+  };
+  const deploymentConfigText = `${canonicalJson(deploymentConfig)}\n`;
+  await writeExclusiveCanonical(deploymentConfigPath, deploymentConfigText);
+  const deploymentConfigSha256 = await sha256(deploymentConfigText);
+  const releaseExecution = { root: executionRoot, modulePath: executionPath, sha256: executionSha256, configPath: deploymentConfigPath, configSha256: deploymentConfigSha256 } as const;
   const config = {
     version: 1, mode: "protected", releaseProfilePath: profilePath, evidenceDirectory, credentials: "configured", adapter,
     controller: { candidateId: input.candidateId.toLowerCase(), releaseId: manifest.releaseId, topologySha256: input.topology.topologySha256.toLowerCase(), authorizationReceiptSha256: input.authorization.authorizationReceiptSha256.toLowerCase(), sourceRevision: input.source.sourceRevision.toLowerCase(), sourceSha256: input.source.sourceSha256.toLowerCase() },
     secretReferences: { path: secretReferencesPath, sha256: await sha256(await readFile(secretReferencesPath)) },
+    releaseExecution,
     generatedArtifacts: { version: 1, materializationId: identity, manifestPath },
   };
   const configText = `${canonicalJson(config)}\n`;
   await writeExclusiveCanonical(configPath, configText);
   const configSha256 = await sha256(configText);
-  const artifactManifest = { version: 1, materializationId: identity, candidateId: input.candidateId.toLowerCase(), releaseId: manifest.releaseId, topologySha256: input.topology.topologySha256.toLowerCase(), authorizationReceiptSha256: input.authorization.authorizationReceiptSha256.toLowerCase(), source: input.source, profile: { path: profilePath, sha256: await sha256(await readFile(profilePath)) }, secretReferences: { path: secretReferencesPath, sha256: await sha256(await readFile(secretReferencesPath)) }, adapter, config: { path: configPath, sha256: configSha256 }, evidenceDirectory };
+  const artifactManifest = { version: 1, materializationId: identity, candidateId: input.candidateId.toLowerCase(), releaseId: manifest.releaseId, topologySha256: input.topology.topologySha256.toLowerCase(), authorizationReceiptSha256: input.authorization.authorizationReceiptSha256.toLowerCase(), source: input.source, profile: { path: profilePath, sha256: await sha256(await readFile(profilePath)) }, secretReferences: { path: secretReferencesPath, sha256: await sha256(await readFile(secretReferencesPath)) }, adapter, releaseExecution, config: { path: configPath, sha256: configSha256 }, evidenceDirectory };
   await writeExclusiveCanonical(manifestPath, `${canonicalJson(artifactManifest)}\n`);
-  return Object.freeze({ configPath, configSha256, releaseProfilePath: profilePath, evidenceDirectory, secretReferencesPath, adapter, manifestPath, env: Object.freeze({ NAPPLET_CVM_CERTIFIER_CONFIG: configPath, NAPPLET_CVM_CERTIFIER_CONFIG_SHA256: configSha256 }) });
+  return Object.freeze({ configPath, configSha256, releaseProfilePath: profilePath, evidenceDirectory, secretReferencesPath, adapter, releaseExecution, manifestPath, env: Object.freeze({ NAPPLET_CVM_CERTIFIER_CONFIG: configPath, NAPPLET_CVM_CERTIFIER_CONFIG_SHA256: configSha256 }) });
 }
 
 /** Revalidates all controller-produced bytes before a later protected command may use them. */
 export async function verifyMaterializedCertifier(value: MaterializedCertifier): Promise<MaterializedCertifier> {
   if (!isAbsolute(value.configPath) || !isAbsolute(value.manifestPath) || !validDigest(value.configSha256) || !under(dirname(dirname(dirname(value.configPath))), value.configPath)) throw new Error("MATERIALIZER_VERIFICATION_REJECTED");
   if (await sha256(await readFile(value.configPath)) !== value.configSha256.toLowerCase()) throw new Error("MATERIALIZER_ARTIFACT_MUTATED");
-  const manifest = JSON.parse(await readFile(value.manifestPath, "utf8")) as { config?: { sha256?: string }; adapter?: PinnedModule };
-  if (manifest.config?.sha256 !== value.configSha256 || !manifest.adapter || manifest.adapter.sha256 !== value.adapter.sha256 || await sha256(await readFile(value.adapter.modulePath)) !== value.adapter.sha256) throw new Error("MATERIALIZER_ARTIFACT_MUTATED");
+  const manifest = JSON.parse(await readFile(value.manifestPath, "utf8")) as { config?: { sha256?: string }; adapter?: PinnedModule; releaseExecution?: { sha256?: string; configSha256?: string } };
+  if (manifest.config?.sha256 !== value.configSha256 || !manifest.adapter || manifest.adapter.sha256 !== value.adapter.sha256 || await sha256(await readFile(value.adapter.modulePath)) !== value.adapter.sha256
+    || manifest.releaseExecution?.sha256 !== value.releaseExecution.sha256 || manifest.releaseExecution.configSha256 !== value.releaseExecution.configSha256
+    || await sha256(await readFile(value.releaseExecution.modulePath)) !== value.releaseExecution.sha256 || await sha256(await readFile(value.releaseExecution.configPath)) !== value.releaseExecution.configSha256) throw new Error("MATERIALIZER_ARTIFACT_MUTATED");
   return value;
 }
 

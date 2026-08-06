@@ -20,6 +20,7 @@ type ReleaseExecutionFactoryModule = Readonly<{
   /** Static, side-effect-free inventory. It proves the pinned factory has
    * every post-receipt input without constructing a provider client. */
   releaseReadiness?: unknown;
+  assessProductionFactoryReadiness?: (input: ReleaseExecutionFactoryInput) => unknown;
 }>;
 
 export type ReleaseExecutionReadiness = Readonly<{
@@ -31,6 +32,7 @@ export type ReleaseExecutionReadiness = Readonly<{
   finalization: true;
   actualCost: true;
   cleanupOwnership: true;
+  blockers?: readonly string[];
 }>;
 
 function containedBy(root: string, candidate: string): boolean {
@@ -163,7 +165,16 @@ export async function loadReleaseExecutionReadiness(input: Readonly<{
     sourceRevision: input.config.controller!.sourceRevision,
   });
   const module = await importPinnedModule(modulePin, deploymentConfig);
-  return parseReleaseExecutionReadiness(module.releaseReadiness);
+  const readiness = parseReleaseExecutionReadiness(module.releaseReadiness);
+  if (typeof module.assessProductionFactoryReadiness !== "function") return readiness;
+  const assessed = module.assessProductionFactoryReadiness({ candidateSha256: input.candidateSha256, workspace: input.workspace, deploymentConfig });
+  if (!assessed || typeof assessed !== "object" || typeof (assessed as { ready?: unknown }).ready !== "boolean" || !Array.isArray((assessed as { blockers?: unknown }).blockers)
+    || !(assessed as { blockers: unknown[] }).blockers.every((blocker) => typeof blocker === "string" && blocker.length > 0 && blocker.length <= 160)) {
+    throw new Error("RELEASE_PRODUCTION_EXECUTION_READINESS_INVALID");
+  }
+  const blockers = (assessed as { blockers: string[] }).blockers;
+  if ((assessed as { ready: boolean }).ready !== (blockers.length === 0)) throw new Error("RELEASE_PRODUCTION_EXECUTION_READINESS_INVALID");
+  return Object.freeze({ ...readiness, ...(blockers.length ? { blockers: Object.freeze([...blockers]) } : {}) });
 }
 
 function isCompletePreparedExecution(value: unknown): value is Omit<AuthorizedLiveExecutionInput, "registry"> {

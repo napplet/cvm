@@ -1,6 +1,9 @@
 import type { ReleaseAuthorizationRequest } from "../authorization";
+import type { OperatorFundingReadiness } from "./operator-funding";
 
-export const OFFICIAL_APPROVAL_CHANNELS = ["nip46", "nwc", "cashu", "loopback_fixture"] as const;
+/** Approval is a human review. Service wallets and the future owner signer are
+ * prerequisites, never approval transports. */
+export const OFFICIAL_APPROVAL_CHANNELS = ["human_review", "loopback_fixture"] as const;
 export type OfficialApprovalChannel = typeof OFFICIAL_APPROVAL_CHANNELS[number];
 
 export type OfficialConsentLaunchDescriptor = Readonly<{
@@ -10,30 +13,15 @@ export type OfficialConsentLaunchDescriptor = Readonly<{
 /** These are review-only launch descriptors. They deliberately omit NWC URIs,
  * Cashu proofs, signer sessions, credentials, and any transport handle. Plan
  * 07-20 owns opening the official consent surfaces. */
-export type PendingConsentLaunchDescriptor = Readonly<{
-  channel: Exclude<OfficialApprovalChannel, "loopback_fixture">;
-  authorizationRequestSha256: string;
-  expiresAtMs: number;
-}>;
-
-export function preparePendingConsentLaunchDescriptors(input: Readonly<{ authorizationRequest: ReleaseAuthorizationRequest }>): readonly PendingConsentLaunchDescriptor[] {
-  return Object.freeze((["nip46", "nwc", "cashu"] as const).map((channel) => Object.freeze({
-    channel,
-    authorizationRequestSha256: input.authorizationRequest.authorizationRequestSha256,
-    expiresAtMs: input.authorizationRequest.expiresAtMs,
-  })));
-}
-
-/** The release request cannot launch either of these boundaries. NIP-46 is a
- * future napplet-owner signature at publication time, while NWC/Cashu is an
- * operator-controlled funding rail that must be selected exactly once before
- * a spend-bearing request can be authorized. Neither is an end-user consent
- * receipt and neither carries an endpoint, wallet URI, proof, or secret. */
+/** The release request cannot launch any of these boundaries. NIP-46 is a
+ * future napplet-owner signature at publication time, while NWC and Cashu are
+ * separately-required, service-controlled funding rails. Neither carries an
+ * endpoint, wallet URI, proof, or secret. */
 export type PreApprovalPrerequisiteDescriptor =
   | Readonly<{
     kind: "operator_funding_rail";
-    status: "selection_required";
-    allowedChannels: readonly ["nwc", "cashu"];
+    rail: "nwc_lightning" | "cashu";
+    status: "readiness_required" | "ready" | "invalid";
   }>
   | Readonly<{
     kind: "owner_manifest_signature";
@@ -41,9 +29,16 @@ export type PreApprovalPrerequisiteDescriptor =
     status: "deferred_to_publication";
   }>;
 
-export function preparePreApprovalPrerequisites(): readonly PreApprovalPrerequisiteDescriptor[] {
+export function preparePreApprovalPrerequisites(input?: Readonly<{ funding?: OperatorFundingReadiness }>): readonly PreApprovalPrerequisiteDescriptor[] {
+  const fundingStatus = input?.funding?.status;
+  const railStatus = (rail: "nwc_lightning" | "cashu") => {
+    if (!fundingStatus) return "readiness_required" as const;
+    if (fundingStatus === "ready") return "ready" as const;
+    return "invalid" as const;
+  };
   return Object.freeze([
-    Object.freeze({ kind: "operator_funding_rail" as const, status: "selection_required" as const, allowedChannels: Object.freeze(["nwc", "cashu"] as const) }),
+    Object.freeze({ kind: "operator_funding_rail" as const, rail: "nwc_lightning" as const, status: railStatus("nwc_lightning") }),
+    Object.freeze({ kind: "operator_funding_rail" as const, rail: "cashu" as const, status: railStatus("cashu") }),
     Object.freeze({ kind: "owner_manifest_signature" as const, protocol: "nip46" as const, status: "deferred_to_publication" as const }),
   ]);
 }

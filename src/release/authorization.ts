@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { canonicalJson } from "../promotion/schema";
 import { OFFICIAL_APPROVAL_CHANNELS, type OfficialApprovalChannel } from "./deployment/consent";
+import { pendingOperatorFundingReadiness, type OperatorFundingReadiness } from "./deployment/operator-funding";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 const MicrosSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -44,6 +45,19 @@ const GcpEffectsSchema = z.object({
   billing: z.boolean(),
   apiEnablement: z.array(z.string().regex(/^[a-z0-9.-]{3,128}$/u)).min(1).max(16),
 }).strict();
+const OperatorFundingReadinessSchema = z.object({
+  version: z.literal(1),
+  status: z.enum(["pending", "ready", "invalid"]),
+  rails: z.array(z.object({
+    rail: z.enum(["nwc_lightning", "cashu"]),
+    secretReference: z.string().regex(/^os-secret-ref:[a-z][a-z0-9._-]{2,127}$/u),
+    capabilitySha256: DigestSchema,
+    accountScopeSha256: DigestSchema,
+    expiresAtMs: z.number().int().positive(),
+    status: z.enum(["ready", "revoked", "expired"]),
+  }).strict()).max(2),
+  readinessSha256: DigestSchema,
+}).strict();
 
 export const ReleaseAuthorizationRequestSchema = z.object({
   version: z.literal(2),
@@ -63,6 +77,7 @@ export const ReleaseAuthorizationRequestSchema = z.object({
    * requests. Older content-addressed requests legitimately lack them. */
   estimateSourceSha256: DigestSchema.optional(),
   priceLines: z.array(PriceLineSchema).length(16).optional(),
+  operatorFundingReadiness: OperatorFundingReadinessSchema,
   maximumRunDurationMs: z.number().int().positive().max(86_400_000),
   cleanupByMs: z.number().int().positive(),
   evidenceRetentionDays: z.number().int().positive().max(3_650),
@@ -84,6 +99,7 @@ export const ReleaseAuthorizationReceiptSchema = z.object({
   controllerStateSha256: DigestSchema,
   currency: z.literal("USD"),
   maximumAuthorizedCostMicros: MicrosSchema.positive(),
+  operatorFundingReadinessSha256: DigestSchema,
   approverPrincipalSha256: DigestSchema,
   approvalChannel: z.enum(OFFICIAL_APPROVAL_CHANNELS),
   consentSessionReferences: z.array(z.string().regex(/^[a-z][a-z0-9:._/-]{2,255}$/iu)).min(1).max(3),
@@ -93,8 +109,9 @@ export const ReleaseAuthorizationReceiptSchema = z.object({
 }).strict();
 export type ReleaseAuthorizationReceipt = z.infer<typeof ReleaseAuthorizationReceiptSchema>;
 
-export type AuthorizationRequestInput = Omit<ReleaseAuthorizationRequest, "version" | "currency" | "maximumAuthorizedCostMicros" | "estimateSourceId" | "estimateObservedAtMs" | "estimateFreshUntilMs" | "expectedReceiptSha256" | "authorizationRequestSha256" | "supersedesAuthorizationRequestSha256"> & Readonly<{
+export type AuthorizationRequestInput = Omit<ReleaseAuthorizationRequest, "version" | "currency" | "maximumAuthorizedCostMicros" | "estimateSourceId" | "estimateObservedAtMs" | "estimateFreshUntilMs" | "expectedReceiptSha256" | "authorizationRequestSha256" | "supersedesAuthorizationRequestSha256" | "operatorFundingReadiness"> & Readonly<{
   estimate: Readonly<{ currency: "USD"; maximumMicros: number; sourceId: string; observedAtMs: number; freshUntilMs: number; sourceSha256?: string }>;
+  operatorFundingReadiness?: OperatorFundingReadiness;
   supersedesAuthorizationRequestSha256?: string | null;
 }>;
 
@@ -126,6 +143,9 @@ function assertBounds(input: RequestInput): void {
       throw new Error("RELEASE_AUTHORIZATION_PRICE_FACT_INVALID");
     }
   }
+  if ((input.operatorFundingReadiness.status === "pending" && input.operatorFundingReadiness.rails.length !== 0)
+    || (input.operatorFundingReadiness.status === "ready" && (input.operatorFundingReadiness.rails.length !== 2 || new Set(input.operatorFundingReadiness.rails.map((rail) => rail.rail)).size !== 2 || input.operatorFundingReadiness.rails.some((rail) => rail.status !== "ready" || rail.expiresAtMs <= input.expiresAtMs)))
+    || (input.operatorFundingReadiness.status === "invalid" && input.operatorFundingReadiness.rails.length !== 2)) throw new Error("RELEASE_AUTHORIZATION_OPERATOR_FUNDING_INVALID");
 }
 
 type OfficialApproval = Readonly<{
@@ -146,6 +166,7 @@ function receiptPayload(request: Omit<ReleaseAuthorizationRequest, "expectedRece
     controllerStateSha256: request.controllerStateSha256,
     currency: "USD",
     maximumAuthorizedCostMicros: request.maximumAuthorizedCostMicros,
+    operatorFundingReadinessSha256: request.operatorFundingReadiness.readinessSha256,
     approverPrincipalSha256: approval.approverPrincipalSha256,
     approvalChannel: approval.approvalChannel,
     consentSessionReferences: [...approval.consentSessionReferences],
@@ -166,6 +187,7 @@ export async function createAuthorizationRequest(input: AuthorizationRequestInpu
     estimateObservedAtMs: estimate.observedAtMs,
     estimateFreshUntilMs: estimate.freshUntilMs,
     ...(estimate.sourceSha256 ? { estimateSourceSha256: estimate.sourceSha256 } : {}),
+    operatorFundingReadiness: input.operatorFundingReadiness ?? await pendingOperatorFundingReadiness(),
     supersedesAuthorizationRequestSha256: input.supersedesAuthorizationRequestSha256 ?? null,
   };
   assertBounds(normalized);
@@ -187,7 +209,8 @@ export async function createOfficialConsentReceipt(input: Readonly<{ request: un
     ...input.approval,
     consentSessionReferences: [...input.approval.consentSessionReferences],
   };
-  if (approval.expiresAtMs !== request.expiresAtMs || approval.approvedAtMs > approval.expiresAtMs) throw new Error("RELEASE_AUTHORIZATION_APPROVAL_INVALID");
+  const denyEffectsFixture = approval.approvalChannel === "loopback_fixture" && process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS === "deny";
+  if ((!denyEffectsFixture && request.operatorFundingReadiness.status !== "ready") || approval.expiresAtMs !== request.expiresAtMs || approval.approvedAtMs > approval.expiresAtMs) throw new Error("RELEASE_AUTHORIZATION_APPROVAL_INVALID");
   const payload = receiptPayload(request, approval);
   return ReleaseAuthorizationReceiptSchema.parse({ ...payload, authorizationReceiptSha256: await digest(payload) });
 }
@@ -197,16 +220,18 @@ export async function createOfficialConsentReceipt(input: Readonly<{ request: un
 export async function createAuthorizationReceipt(requestInput: unknown): Promise<ReleaseAuthorizationReceipt> {
   if (process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS !== "deny") throw new Error("RELEASE_AUTHORIZATION_OFFICIAL_CONSENT_REQUIRED");
   const request = await validateAuthorizationRequest(requestInput);
-  return createOfficialConsentReceipt({
-    request,
-    approval: {
-      approvalChannel: "loopback_fixture",
-      approverPrincipalSha256: await digest({ fixture: "official-consent", authorizationRequestSha256: request.authorizationRequestSha256 }),
-      consentSessionReferences: [`loopback:fixture:${request.authorizationRequestSha256}`],
-      approvedAtMs: request.estimateObservedAtMs,
-      expiresAtMs: request.expiresAtMs,
-    },
-  });
+  /** The deny-effects fixture is intentionally not an operator approval path:
+   * it supplies a deterministic receipt only to exercise downstream boundary
+   * checks. Production OfficialConsentPort remains blocked until both rails are ready. */
+  const approval = {
+    approvalChannel: "loopback_fixture" as const,
+    approverPrincipalSha256: await digest({ fixture: "official-consent", authorizationRequestSha256: request.authorizationRequestSha256 }),
+    consentSessionReferences: [`loopback:fixture:${request.authorizationRequestSha256}`],
+    approvedAtMs: request.estimateObservedAtMs,
+    expiresAtMs: request.expiresAtMs,
+  };
+  const payload = receiptPayload(request, approval);
+  return ReleaseAuthorizationReceiptSchema.parse({ ...payload, authorizationReceiptSha256: await digest(payload) });
 }
 
 export async function validateAuthorizationRequest(requestInput: unknown): Promise<ReleaseAuthorizationRequest> {
@@ -232,19 +257,20 @@ export async function validateAuthorizationReceipt(input: Readonly<{ request: un
     || receipt.controllerStateSha256 !== request.controllerStateSha256
     || receipt.currency !== request.currency
     || receipt.maximumAuthorizedCostMicros !== request.maximumAuthorizedCostMicros
+    || receipt.operatorFundingReadinessSha256 !== request.operatorFundingReadiness.readinessSha256
     || receipt.expiresAtMs !== request.expiresAtMs
     || receipt.approvedAtMs > input.nowMs
     || receipt.approvedAtMs > receipt.expiresAtMs) throw new Error("RELEASE_AUTHORIZATION_RECEIPT_INVALID");
-  const expected = await createOfficialConsentReceipt({
-    request,
-    approval: {
-      approvalChannel: receipt.approvalChannel,
-      approverPrincipalSha256: receipt.approverPrincipalSha256,
-      consentSessionReferences: receipt.consentSessionReferences,
-      approvedAtMs: receipt.approvedAtMs,
-      expiresAtMs: receipt.expiresAtMs,
-    },
-  });
+  const approval = {
+    approvalChannel: receipt.approvalChannel,
+    approverPrincipalSha256: receipt.approverPrincipalSha256,
+    consentSessionReferences: receipt.consentSessionReferences,
+    approvedAtMs: receipt.approvedAtMs,
+    expiresAtMs: receipt.expiresAtMs,
+  };
+  const expected = receipt.approvalChannel === "loopback_fixture" && process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS === "deny"
+    ? ReleaseAuthorizationReceiptSchema.parse({ ...receiptPayload(request, approval), authorizationReceiptSha256: await digest(receiptPayload(request, approval)) })
+    : await createOfficialConsentReceipt({ request, approval });
   if (canonicalJson(receipt) !== canonicalJson(expected)) throw new Error("RELEASE_AUTHORIZATION_RECEIPT_INVALID");
   return receipt;
 }

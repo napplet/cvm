@@ -146,7 +146,8 @@ test("request output is a finite redacted blocker projection without launchable 
   expect(result).not.toHaveProperty("review");
   expect(result).not.toHaveProperty("consentLaunches");
   expect(result.prerequisites).toEqual([
-    { kind: "operator_funding_rail", status: "selection_required", allowedChannels: ["nwc", "cashu"] },
+    { kind: "operator_funding_rail", rail: "nwc_lightning", status: "readiness_required" },
+    { kind: "operator_funding_rail", rail: "cashu", status: "readiness_required" },
     { kind: "owner_manifest_signature", protocol: "nip46", status: "deferred_to_publication" },
   ]);
   expect(JSON.stringify(result)).not.toContain("secret");
@@ -177,7 +178,8 @@ test("product request fails closed with bounded readiness and prerequisite seman
       },
     });
     expect(result.prerequisites).toEqual([
-      { kind: "operator_funding_rail", status: "selection_required", allowedChannels: ["nwc", "cashu"] },
+      { kind: "operator_funding_rail", rail: "nwc_lightning", status: "readiness_required" },
+      { kind: "operator_funding_rail", rail: "cashu", status: "readiness_required" },
       { kind: "owner_manifest_signature", protocol: "nip46", status: "deferred_to_publication" },
     ]);
     expect(result).not.toHaveProperty("review");

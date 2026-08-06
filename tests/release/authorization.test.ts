@@ -8,6 +8,16 @@ import {
 
 const digest = (value: string) => value.repeat(64).slice(0, 64);
 
+const operatorFundingReadiness = {
+  version: 1 as const,
+  status: "ready" as const,
+  rails: [
+    { rail: "nwc_lightning" as const, secretReference: "os-secret-ref:release-nwc-01", capabilitySha256: digest("a"), accountScopeSha256: digest("b"), expiresAtMs: 2_000, status: "ready" as const },
+    { rail: "cashu" as const, secretReference: "os-secret-ref:release-cashu-01", capabilitySha256: digest("c"), accountScopeSha256: digest("d"), expiresAtMs: 2_000, status: "ready" as const },
+  ],
+  readinessSha256: digest("e"),
+};
+
 const input = (overrides: Record<string, unknown> = {}) => ({
   candidateSha256: digest("a"),
   topologySha256: digest("b"),
@@ -21,6 +31,7 @@ const input = (overrides: Record<string, unknown> = {}) => ({
   cleanupByMs: 1_400,
   evidenceRetentionDays: 30,
   artifactRetentionDays: 30,
+  operatorFundingReadiness,
   gcpEffects: { projectBootstrap: true, billing: true, apiEnablement: ["run.googleapis.com", "sqladmin.googleapis.com", "storage.googleapis.com"] },
   expiresAtMs: 1_500,
   ...overrides,

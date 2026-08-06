@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -84,6 +84,10 @@ test("all protected-suite records are retained and block finalization when real 
     const records = await Bun.file(join(root, "protected-records", "admission.json")).text();
     expect(records).toContain('"status":"blocked"');
     expect((await new Response(Bun.file(join(root, "protected-records", "telemetry.json"))).text()).length).toBeGreaterThan(0);
+    expect((await readdir(join(root, "protected-records"))).sort()).toEqual([
+      "admission.json", "chaos.json", "contextvm-payment-model.json", "publication.json",
+      "restore.json", "security-host.json", "supply-chain.json", "telemetry.json",
+    ]);
     expect((await controller.status())?.state.status).toBe("blocked");
   } finally {
     await rm(root, { recursive: true, force: true });

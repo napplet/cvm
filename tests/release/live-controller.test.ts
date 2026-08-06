@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import { RELEASE_LIVE_CONTROLLER_STATES } from "../../src/release/contracts";
 import { ReleaseCertificationController, runReleaseCertification } from "../../src/release/controller";
+import { finalizeReleaseCertification } from "../../src/release/finalize";
 import { createAuthorizationReceipt } from "../../src/release/authorization";
 import { createReleaseProviderRegistry } from "../../src/release/providers";
 import { RELEASE_PROVIDER_IDS } from "../../src/release/topology";
@@ -92,6 +93,30 @@ test("all protected-suite records are retained and block finalization when real 
     expect(materializedProfile).toBeDefined();
     expect(await Bun.file(join(root, materializedProfile!)).text()).toContain('"provider":"modal"');
     expect((await controller.status())?.state.status).toBe("blocked");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("finalization rejects incomplete evidence before bundle or promotion effects", async () => {
+  const root = await mkdtemp(join(tmpdir(), "napplet-cvm-release-finalization-"));
+  try {
+    let persisted = 0;
+    let promoted = 0;
+    await expect(finalizeReleaseCertification({
+      workspace: root,
+      candidateId: digest("candidate"),
+      topologySha256: digest("topology"),
+      authorizationReceiptSha256: digest("receipt"),
+      protectedRecords: [],
+      promotion: {
+        persist: async () => { persisted += 1; },
+        promote: async () => { promoted += 1; },
+      },
+    } as never)).rejects.toThrow("RELEASE_FINALIZATION_EVIDENCE_INVALID");
+    expect(persisted).toBe(0);
+    expect(promoted).toBe(0);
+    expect(await readdir(root)).toEqual([]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

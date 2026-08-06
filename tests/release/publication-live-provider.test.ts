@@ -40,7 +40,8 @@ const sourceSnapshot = {
 async function authorization() {
   const config = { candidateSha256: digest("f"), topologySha256: digest("1"), effectPlanSha256: digest("2"), accountScopeSha256: digest("3"), projectScopeSha256: digest("4") };
   const request = await createAuthorizationRequest({
-    ...config, controllerStateSha256: digest("5"), providerCapabilitiesSha256: digest("6"),
+    candidateSha256: config.candidateSha256, topologySha256: config.topologySha256, effectPlanSha256: config.effectPlanSha256,
+    controllerStateSha256: digest("5"), providerCapabilitiesSha256: digest("6"),
     orderedEffects: [{ id: "sealed-upload", provider: "upload", operation: "verify_integration", estimatedCostMicros: 1 }],
     providerScopes: [{ provider: "upload", accountScopeSha256: config.accountScopeSha256, projectScopeSha256: config.projectScopeSha256 }],
     estimate: { currency: "USD", maximumMicros: 1, sourceId: "publication-fixture", observedAtMs: 1, freshUntilMs: 10_000 },

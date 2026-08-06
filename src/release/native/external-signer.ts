@@ -43,6 +43,8 @@ export type ExternalSignerAuthorization = Readonly<{
  * existing publication verifier port.
  */
 export class ExternalSignerBoundaryAdapter {
+  readonly #authorizations = new Map<string, ExternalSignerAuthorization>();
+
   constructor(private readonly dependencies: Readonly<{ signer: ExternalSignerPort; ownerEventVerifier: OwnerEventVerifierPort }>) {}
 
   async signExactIntent(input: Readonly<{ candidate: ExternalSignerCandidate; intent: PublicationIntent; requiredCapabilities: readonly string[] }>): Promise<ExternalSignerAuthorization> {
@@ -56,7 +58,7 @@ export class ExternalSignerBoundaryAdapter {
       if (result.pubkey !== expectedPubkey || result.intentDigest !== intentDigest || result.event.pubkey !== expectedPubkey) throw new Error("SIGNER_RESULT_INVALID");
       const verification = await this.dependencies.ownerEventVerifier.verify({ event: result.event, intent: input.intent });
       if (verification.valid !== true || verification.accepted === false || verification.eventId !== result.event.id) throw new Error("SIGNER_RESULT_INVALID");
-      return Object.freeze({
+      const authorization = Object.freeze({
         signerPubkey: result.pubkey,
         signerCapabilities: Object.freeze([...discovery.capabilities]),
         intentDigest,
@@ -65,6 +67,8 @@ export class ExternalSignerBoundaryAdapter {
         aggregateSha256: candidate.aggregateSha256,
         signedEvent: result.event,
       });
+      this.#authorizations.set(candidateKey(candidate), authorization);
+      return authorization;
     } catch {
       throw new Error("EXTERNAL_SIGNER_RESULT_INVALID");
     }
@@ -82,6 +86,8 @@ export class ExternalSignerBoundaryAdapter {
       parseCandidate(identity);
       const discovery = SignerDiscoverySchema.parse(await this.dependencies.signer.discover());
       if (discovery.consentState !== "granted") throw new Error("SIGNER_UNAVAILABLE");
+      const authorization = this.#authorizations.get(candidateKey(identity));
+      if (!authorization || authorization.signerPubkey !== discovery.pubkey || !authorization.signerCapabilities.every((capability) => discovery.capabilities.includes(capability))) throw new Error("SIGNER_AUTHORIZATION_UNAVAILABLE");
       return Object.freeze({ status: "passed", externalSigner: true, userKeyOutsideCvm: true, keyCanaryAbsentFromCvm: true, keyCanaryAbsentFromEvidence: true });
     } catch {
       return Object.freeze({ status: "blocked", externalSigner: true, userKeyOutsideCvm: true, keyCanaryAbsentFromCvm: true, keyCanaryAbsentFromEvidence: true });
@@ -91,4 +97,8 @@ export class ExternalSignerBoundaryAdapter {
 
 function parseCandidate(value: ExternalSignerCandidate): ExternalSignerCandidate {
   return Object.freeze({ sealedArtifactSha256: DigestSchema.parse(value.sealedArtifactSha256), aggregateSha256: DigestSchema.parse(value.aggregateSha256) });
+}
+
+function candidateKey(candidate: ExternalSignerCandidate): string {
+  return `${candidate.sealedArtifactSha256}:${candidate.aggregateSha256}`;
 }

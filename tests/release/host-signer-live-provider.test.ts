@@ -123,6 +123,7 @@ test("external signer returns only a locally verified exact-intent public result
     signedEvent: event,
   });
   expect(JSON.stringify(result)).not.toContain("nsec");
+  await expect(signer.inspectSignerBoundary({ sealedArtifactSha256: DIGEST_B, aggregateSha256: "f".repeat(64) })).resolves.toMatchObject({ status: "passed", externalSigner: true, userKeyOutsideCvm: true });
 });
 
 test.each([
@@ -139,4 +140,16 @@ test.each([
   });
 
   await expect(signer.signExactIntent({ candidate: { sealedArtifactSha256: DIGEST_A, aggregateSha256: DIGEST_B }, intent: { ownerPubkey: "c".repeat(64), fingerprint: DIGEST_A } as never, requiredCapabilities: ["nip-44"] })).rejects.toThrow("EXTERNAL_SIGNER_RESULT_INVALID");
+});
+
+test("signer boundary inspection blocks discovery without a candidate-bound authorization", async () => {
+  const signer = new ExternalSignerBoundaryAdapter({
+    signer: {
+      async discover() { return { pubkey: "c".repeat(64), capabilities: ["nip-44"], consentState: "granted" as const }; },
+      async signExactIntent() { throw new Error("must not sign"); },
+    },
+    ownerEventVerifier: { async verify() { return { valid: false }; } },
+  });
+
+  await expect(signer.inspectSignerBoundary({ sealedArtifactSha256: DIGEST_A, aggregateSha256: DIGEST_B })).resolves.toMatchObject({ status: "blocked", externalSigner: true, userKeyOutsideCvm: true });
 });

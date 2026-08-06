@@ -71,6 +71,9 @@ test("materializes a candidate-bound local config, profile, adapter bundle, secr
     expect(JSON.parse(await readFile(first.configPath, "utf8"))).toMatchObject({ mode: "protected", controller: { candidateId: digest("candidate"), topologySha256: digest("topology") } });
     expect(await readFile(first.secretReferencesPath, "utf8")).toContain("secret://modal");
     expect(await readFile(first.secretReferencesPath, "utf8")).not.toContain("credential-value");
+    const releaseProfile = JSON.parse(await readFile(first.releaseProfilePath, "utf8")) as { candidate: { provider?: unknown }; worker: { selection: string } };
+    expect(releaseProfile.candidate.provider).toBeUndefined();
+    expect(releaseProfile.worker).toEqual({ selection: "unselected", reasonCode: "PROTECTED_EVIDENCE_REQUIRED" });
     expect(sha256(await readFile(first.adapter.modulePath))).toBe(first.adapter.sha256);
     await expect(loadCertifierConfig({ env: first.env })).resolves.toMatchObject({ mode: "protected", controller: { candidateId: digest("candidate") } });
     expect(providerCalls).toBe(0);

@@ -130,7 +130,10 @@ export async function materializeProtectedCertifier(input: MaterializeProtectedC
   await rejectMutatedExistingConfig(configPath, adapterPath);
   const releaseProfile = {
     version: 1,
-    candidate: { id: input.candidateId.toLowerCase(), provider: "modal", image: `napplet-cvm/worker@sha256:${manifest.inputs.workerImageDigest}`, sourceSha256: input.source.sourceSha256.toLowerCase() },
+    candidate: { id: input.candidateId.toLowerCase(), image: `napplet-cvm/worker@sha256:${manifest.inputs.workerImageDigest}`, sourceSha256: input.source.sourceSha256.toLowerCase() },
+    // Protected cohort evidence owns the eventual provider/topology choice.
+    // Local materialization deliberately carries no default worker winner.
+    worker: { selection: "unselected", reasonCode: "PROTECTED_EVIDENCE_REQUIRED" },
     datasetSha256: manifest.inputs.datasetSha256,
     topologySha256: input.topology.topologySha256.toLowerCase(),
     authorizationReceiptSha256: input.authorization.authorizationReceiptSha256.toLowerCase(),

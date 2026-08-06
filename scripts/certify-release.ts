@@ -4,6 +4,8 @@ import { createReleaseControllerProviderRegistry } from "../src/release/native-r
 import { loadCertifierConfig } from "../src/certification/config";
 import { loadReleaseExecutionReadiness, loadReleaseExecutionSession } from "../src/release/production-execution";
 import { preparePreApprovalPrerequisites } from "../src/release/deployment/consent";
+import { pendingOperatorFundingReadiness, validateOperatorFundingReadiness } from "../src/release/deployment/operator-funding";
+import { readFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 const repositoryRoot = resolve(import.meta.dir, "..");
@@ -69,6 +71,42 @@ async function executionReadinessProjection(input: Readonly<{ candidateSha256: s
   }
 }
 
+/** Plan 07-20 owns writing this local, mode-0700 workspace record after a
+ * macOS loopback/keychain flow completes. It contains locators and hashes
+ * only. Absence is a genuine setup prerequisite, never an invitation to put
+ * NWC/Cashu material in the CLI, environment, or request output. */
+async function operatorFundingReadinessProjection(workspace: string) {
+  try {
+    return await validateOperatorFundingReadiness(JSON.parse(await readFile(join(workspace, "operator-funding-readiness.json"), "utf8")));
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return pendingOperatorFundingReadiness();
+    throw new Error("OPERATOR_FUNDING_READINESS_INVALID");
+  }
+}
+
+function localFundingSetupDescriptor(input: Readonly<{ candidateSha256: string; authorizationRequestSha256?: string }>) {
+  return Object.freeze({
+    kind: "local_operator_funding_setup" as const,
+    status: "action_required" as const,
+    plan: "07-20" as const,
+    candidateSha256: input.candidateSha256,
+    ...(input.authorizationRequestSha256 ? { authorizationRequestSha256: input.authorizationRequestSha256 } : {}),
+    rails: ["nwc_lightning", "cashu"] as const,
+  });
+}
+
+/** Counter-only proof of the preapproval boundary. These counters describe
+ * effect-capable families, not credentials or provider responses. Every one
+ * remains zero until the separate receipt-bound Plan 07-26 executor runs. */
+function zeroEffectCounters() {
+  return Object.freeze({
+    providerPlan: 0, providerApply: 0, providerObserve: 0, providerCleanup: 0,
+    workers: 0, model: 0, wallet: 0, signer: 0, host: 0, cliUpload: 0,
+    relays: 0, suites: 0, finalizer: 0, evaluator: 0, bundle: 0,
+    promotion: 0, destructiveCleanup: 0,
+  });
+}
+
 /** Prefer the precise pinned execution session for read-only preapproval
  * discovery. A missing protected config remains a bounded blocker and falls
  * back to the existing no-credential registry; neither branch can plan,
@@ -112,6 +150,8 @@ async function main(): Promise<number> {
       return result.state.status === "completed" ? 0 : 1;
     }
     const candidateSha256 = !status ? await releaseCandidateSha256(candidatePath!) : undefined;
+    const funding = !status ? await operatorFundingReadinessProjection(workspace) : undefined;
+    const fundingPrerequisites = funding?.status === "pending" ? undefined : funding;
     let result: Awaited<ReturnType<typeof runReleaseCertification>> | undefined;
     try {
       result = status
@@ -122,6 +162,7 @@ async function main(): Promise<number> {
           dryRun: true,
           providers: await preapprovalDiscoveryRegistry({ candidateSha256: candidateSha256!, workspace }),
           requireCurrentPriceCatalog: true,
+          operatorFundingReadiness: funding,
         });
     } catch (error) {
       if (!status && error instanceof Error && error.message === "RELEASE_CONTROLLER_LIVE_PRICE_CATALOG_REQUIRED") {
@@ -133,7 +174,7 @@ async function main(): Promise<number> {
             pricing: { status: "blocked", reasonCode: "RELEASE_CONTROLLER_LIVE_PRICE_CATALOG_REQUIRED" },
             execution: await executionReadinessProjection({ candidateSha256: candidateSha256!, workspace }),
           },
-          prerequisites: preparePreApprovalPrerequisites(),
+          prerequisites: preparePreApprovalPrerequisites(fundingPrerequisites ? { funding: fundingPrerequisites } : undefined),
         }));
         return 1;
       }
@@ -148,15 +189,32 @@ async function main(): Promise<number> {
     if (receipt && receipt.toLowerCase() !== result.authorizationRequest.expectedReceiptSha256) throw new Error("RELEASE_AUTHORIZATION_RECEIPT_INVALID");
     const resolvedCandidateSha256 = result.state.candidate.candidateSha256;
     const executionReadiness = await executionReadinessProjection({ candidateSha256: resolvedCandidateSha256, workspace });
+    if (request && funding?.status !== "ready") {
+      console.log(JSON.stringify({
+        progress: "local_setup_required",
+        setup: localFundingSetupDescriptor({ candidateSha256: resolvedCandidateSha256, authorizationRequestSha256: result.authorizationRequest.authorizationRequestSha256 }),
+      }));
+      return 1;
+    }
+    if (request && executionReadiness.status !== "ready") {
+      console.log(JSON.stringify({
+        progress: "preapproval_blocked",
+        candidateSha256: resolvedCandidateSha256,
+        readiness: { capabilityDiscovery: { status: "completed", mode: "read_only" }, pricing: { status: "completed", mode: "read_only" }, execution: executionReadiness },
+        prerequisites: preparePreApprovalPrerequisites({ funding: funding! }),
+      }));
+      return 1;
+    }
     console.log(JSON.stringify(request || receipt ? {
       progress: result.state.status,
       authorizationRequestSha256: result.authorizationRequest.authorizationRequestSha256,
       expectedReceiptSha256: result.authorizationRequest.expectedReceiptSha256,
       receiptValidated: receipt === undefined ? false : true,
       approvalStatus: "prerequisites_pending",
-      prerequisites: preparePreApprovalPrerequisites(),
+      prerequisites: preparePreApprovalPrerequisites(fundingPrerequisites ? { funding: fundingPrerequisites } : undefined),
       review: reviewProjection(result.authorizationRequest),
       executionReadiness,
+      zeroEffectCounters: zeroEffectCounters(),
     } : { status: result.state.status, candidateSha256: result.state.candidate.candidateSha256, topologySha256: result.state.topologySha256, stateSha256: result.state.stateSha256, authorizationRequestSha256: result.authorizationRequest.authorizationRequestSha256, expectedReceiptSha256: result.authorizationRequest.expectedReceiptSha256, controllerStateSha256: result.authorizationRequest.controllerStateSha256, resumeStateSha256: result.authorizationRequest.controllerStateSha256 }));
     return status && requiredState !== undefined ? 0 : result.exitCode;
   } catch (error) {

@@ -27,6 +27,7 @@ import type { ProductionLiveProtectedCertificationPorts } from "../certification
 import { PROTECTED_SUITES, runProtectedCertificationProfile, type ProtectedCertificationRun } from "../certification/runner";
 import { validateCertificationObservation, type CertificationObservation } from "../certification/evidence";
 import { createLiveCostEstimator, RELEASE_COST_FAMILIES, type LiveCostCatalogPort } from "./costs/live-estimator";
+import { validateOperatorFundingReadiness, type OperatorFundingReadiness } from "./deployment/operator-funding";
 
 export const RELEASE_WORKSPACE_ENV = "NAPPLET_CVM_RELEASE_WORKSPACE";
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
@@ -44,6 +45,10 @@ type ControllerOptions = Readonly<{
    * facts. The candidate fixture catalog is intentionally retained only for
    * direct local controller tests and historical no-credential workflows. */
   requireCurrentPriceCatalog?: boolean;
+  /** Explicitly supplied, opaque service-funding prerequisites from the
+   * same product request. Values are revalidated before they enter the
+   * immutable authorization request; no wallet material is accepted here. */
+  operatorFundingReadiness?: OperatorFundingReadiness;
   now?: () => number;
 }>;
 export type ReleaseCertificationResult = Readonly<{
@@ -279,6 +284,7 @@ export class ReleaseCertificationController {
   readonly #consent: OfficialConsentPort | undefined;
   readonly #costCatalog: LiveCostCatalogPort | undefined;
   readonly #requireCurrentPriceCatalog: boolean;
+  readonly #operatorFundingReadiness: OperatorFundingReadiness | undefined;
   readonly #now: () => number;
 
   constructor(options: ControllerOptions) {
@@ -288,6 +294,7 @@ export class ReleaseCertificationController {
     this.#consent = options.consent;
     this.#costCatalog = options.costCatalog;
     this.#requireCurrentPriceCatalog = options.requireCurrentPriceCatalog ?? false;
+    this.#operatorFundingReadiness = options.operatorFundingReadiness;
     this.#now = options.now ?? Date.now;
   }
 
@@ -323,6 +330,9 @@ export class ReleaseCertificationController {
     const topology = await deriveReleaseTopology(candidate.candidateSha256);
     const capabilities = await discoverProviders(this.#providers);
     const nowMs = this.#now();
+    const operatorFundingReadiness = this.#operatorFundingReadiness === undefined
+      ? undefined
+      : await validateOperatorFundingReadiness(this.#operatorFundingReadiness);
     if (this.#requireCurrentPriceCatalog && !this.#costCatalog) {
       throw new Error("RELEASE_CONTROLLER_LIVE_PRICE_CATALOG_REQUIRED");
     }
@@ -371,6 +381,7 @@ export class ReleaseCertificationController {
       }))),
       estimate: { currency: "USD", maximumMicros: plan.maximumAuthorizedCostMicros, sourceId: "live-price-catalog-v1", sourceSha256: estimate.sourceSha256, observedAtMs: estimate.observedAtMs, freshUntilMs: estimate.freshUntilMs },
       priceLines: estimate.lines.map((line) => ({ ...line, quantityNanos: Number(line.quantityNanos) })),
+      ...(operatorFundingReadiness ? { operatorFundingReadiness } : {}),
       maximumRunDurationMs: 15 * 60 * 1000,
       cleanupByMs: Math.min(discovering.createdAtMs + 15 * 60 * 1000, estimate.freshUntilMs - 1),
       evidenceRetentionDays: 30,

@@ -8,6 +8,8 @@ import type { createPaymentDeploymentClients } from "./payment-clients";
 import type { createVertexDeploymentClient } from "./vertex-client";
 import type { createCompatibleHostDeploymentClient } from "./compatible-host-client";
 import type { createNip46DeploymentClient } from "./nip46-signer-client";
+import type { createCliUploadDeploymentClients } from "./cli-upload-clients";
+import type { createRelayDeploymentClients } from "./relay-clients";
 
 /** Bounded dependency descriptors for the concrete provider modules.  They are
  * references only: the pinned factory must receive them explicitly and cannot
@@ -24,6 +26,8 @@ export function registerDeploymentClientFamilies(input: Readonly<{
   vertex: ReturnType<typeof createVertexDeploymentClient>;
   host?: ReturnType<typeof createCompatibleHostDeploymentClient>;
   signer?: ReturnType<typeof createNip46DeploymentClient>;
+  publication?: ReturnType<typeof createCliUploadDeploymentClients>;
+  relays?: ReturnType<typeof createRelayDeploymentClients>;
 }>) {
   return Object.freeze({
     contextvm: input.contextvm,
@@ -32,6 +36,8 @@ export function registerDeploymentClientFamilies(input: Readonly<{
     model: input.vertex,
     ...(input.host ? { compatible_host: input.host } : {}),
     ...(input.signer ? { signer: input.signer } : {}),
+    ...(input.publication ? { promoted_cli: input.publication.promotedCli, upload: input.publication.upload } : {}),
+    ...(input.relays ? { owner_relay: input.relays.owner, attestation_relay: input.relays.attestation } : {}),
   });
 }
 

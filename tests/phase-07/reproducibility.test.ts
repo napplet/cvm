@@ -117,7 +117,7 @@ test("the reproducibility command requires a digest-pinned protected trust root 
     await writeFile(sourcePath, sourceBytes);
     await writeFile(inputPath, JSON.stringify(input));
 
-    const unconfigured = await runReproducibilityCli({ PHASE07_BUILD_RECORDS_PATH: inputPath, PHASE07_REPRODUCIBILITY_EVIDENCE_DIRECTORY: outputDirectory, PHASE07_REPRODUCIBILITY_TRUST_ROOT_DIRECTORY: undefined, PHASE07_REPRODUCIBILITY_TRUST_ROOT: undefined, PHASE07_REPRODUCIBILITY_TRUST_ROOT_SHA256: undefined });
+    const unconfigured = await runReproducibilityCli({ NAPPLET_CVM_CERTIFIER_CONFIG: "", NAPPLET_CVM_CERTIFIER_CONFIG_SHA256: "" });
     expect(unconfigured.exitCode).not.toBe(0);
     expect(`${unconfigured.stdout}${unconfigured.stderr}`).toContain("protected_configuration_unavailable");
 
@@ -129,7 +129,15 @@ test("the reproducibility command requires a digest-pinned protected trust root 
     await writeFile(sourcePath, "changed source archive");
     expect(await trustRoot.verifySourceMeasurement(input.records[0]!.sourceMeasurement)).toBe(false);
     await writeFile(sourcePath, sourceBytes);
-    const configured = await runReproducibilityCli({ PHASE07_BUILD_RECORDS_PATH: inputPath, PHASE07_REPRODUCIBILITY_EVIDENCE_DIRECTORY: outputDirectory, PHASE07_REPRODUCIBILITY_TRUST_ROOT_DIRECTORY: root, PHASE07_REPRODUCIBILITY_TRUST_ROOT: modulePath, PHASE07_REPRODUCIBILITY_TRUST_ROOT_SHA256: moduleSha256 });
+    const configPath = join(root, "certifier.json");
+    await writeFile(configPath, JSON.stringify({
+      version: 1, mode: "protected", releaseProfilePath: inputPath, evidenceDirectory: outputDirectory, credentials: "unavailable",
+      adapter: { root, modulePath, sha256: moduleSha256 },
+      trustRoot: { root, modulePath, sha256: moduleSha256 },
+      reproducibility: { buildRecordsPath: inputPath, evidenceDirectory: outputDirectory },
+    }));
+    const configSha256 = sha256Bytes(new Uint8Array(await Bun.file(configPath).arrayBuffer()));
+    const configured = await runReproducibilityCli({ NAPPLET_CVM_CERTIFIER_CONFIG: configPath, NAPPLET_CVM_CERTIFIER_CONFIG_SHA256: configSha256 });
     expect(configured.exitCode, `${configured.stdout}${configured.stderr}`).toBe(0);
     expect(`${configured.stdout}${configured.stderr}`).toContain('"status":"verified"');
     const output = JSON.parse(configured.stdout) as { evidenceSha256: string };

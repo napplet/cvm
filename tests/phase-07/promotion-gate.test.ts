@@ -11,7 +11,7 @@ import { createPinnedReleaseCertificationTrustRoot, type ReleaseCertificationTru
 const fixturePath = "tests/fixtures/phase-07-reference-set.json";
 
 async function run(script: string, args: readonly string[]) {
-  const child = Bun.spawn(["bun", script, ...args], { stdout: "pipe", stderr: "pipe", env: { ...process.env, PHASE07_TEST_SECRET: "supersecret", PHASE07_RELEASE_PROFILE_PATH: "", PHASE07_CERTIFICATION_EVIDENCE_DIRECTORY: "/tmp/napplet-cvm-phase07-test-evidence" } });
+  const child = Bun.spawn(["bun", script, ...args], { stdout: "pipe", stderr: "pipe", env: { ...process.env, NAPPLET_CVM_TEST_SECRET: "supersecret" } });
   const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   return { exitCode, stdout, stderr };
 }
@@ -423,14 +423,23 @@ test("the protected release command owns a pinned root and rejects a freshly reh
     const counterfeitMarker = join(root, "counterfeit-root-loaded");
     await writeFile(counterfeitRootPath, `await Bun.write(${JSON.stringify(counterfeitMarker)}, "loaded");\nexport const protectedReleaseCertificationTrustRoot = { verifyManifest: async () => true, verifyObservation: async () => true, verifyReproducibilityRecord: async () => true, verifySupplyChainRecord: async () => true, verifySourceMeasurement: async () => true };\n`);
 
-    const runProtected = async (env: Record<string, string | undefined> = {}) => {
+    const baseTrustRoot = { root: operatorRoot, modulePath: join(process.cwd(), rootModulePath), sha256: rootDigest };
+    const runProtected = async (trustRootOverride: Partial<typeof baseTrustRoot> | null = {}) => {
+      const configPath = join(operatorRoot, `certifier-${crypto.randomUUID()}.json`);
+      let configSha256 = "";
+      if (trustRootOverride !== null) {
+        await writeFile(configPath, JSON.stringify({
+          version: 1, mode: "protected", releaseProfilePath: join(process.cwd(), releasePath), evidenceDirectory: join(process.cwd(), observationDirectory), credentials: "unavailable",
+          adapter: baseTrustRoot,
+          trustRoot: { ...baseTrustRoot, ...trustRootOverride },
+        }));
+        configSha256 = sha256Bytes(new Uint8Array(await Bun.file(configPath).arrayBuffer()));
+      }
       const child = Bun.spawn(["bun", "run", "release:verify:protected", "--", "--release-evidence", releasePath], { stdout: "pipe", stderr: "pipe", env: {
         ...process.env,
-        PHASE07_RELEASE_TRUST_ROOT_DIRECTORY: operatorRoot,
-        PHASE07_RELEASE_TRUST_ROOT: join(process.cwd(), rootModulePath),
-        PHASE07_RELEASE_TRUST_ROOT_SHA256: rootDigest,
-        PHASE07_RELEASE_CANDIDATE_TRUST_ROOT: counterfeitRootPath,
-        ...env,
+        NAPPLET_CVM_CERTIFIER_CONFIG: trustRootOverride === null ? "" : configPath,
+        NAPPLET_CVM_CERTIFIER_CONFIG_SHA256: configSha256,
+        NAPPLET_CVM_CANDIDATE_TRUST_ROOT: counterfeitRootPath,
       } });
       const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
       return { exitCode, stdout, stderr };
@@ -480,28 +489,28 @@ test("the protected release command owns a pinned root and rejects a freshly reh
     expect(`${rejected.stdout}${rejected.stderr}`).not.toContain("protected_live");
     expect(await Bun.file(counterfeitMarker).exists()).toBe(false);
 
-    const missing = await runProtected({ PHASE07_RELEASE_TRUST_ROOT_DIRECTORY: undefined });
+    const missing = await runProtected(null);
     expect(missing.exitCode).not.toBe(0);
     expect(`${missing.stdout}${missing.stderr}`).toContain("protected_configuration_unavailable");
-    const malformed = await runProtected({ PHASE07_RELEASE_TRUST_ROOT_SHA256: "not-a-sha256" });
+    const malformed = await runProtected({ sha256: "not-a-sha256" });
     expect(malformed.exitCode).not.toBe(0);
-    const escaped = await runProtected({ PHASE07_RELEASE_TRUST_ROOT: join(operatorRoot, "..", "operator-root.ts") });
+    const escaped = await runProtected({ modulePath: join(operatorRoot, "..", "operator-root.ts") });
     expect(escaped.exitCode).not.toBe(0);
-    const nonFile = await runProtected({ PHASE07_RELEASE_TRUST_ROOT: operatorRoot });
+    const nonFile = await runProtected({ modulePath: operatorRoot });
     expect(nonFile.exitCode).not.toBe(0);
-    const drift = await runProtected({ PHASE07_RELEASE_TRUST_ROOT_SHA256: digest("0") });
+    const drift = await runProtected({ sha256: digest("0") });
     expect(drift.exitCode).not.toBe(0);
     const missingExportPath = join(root, "missing-export.ts");
     await writeFile(missingExportPath, "export const notATrustRoot = {};\n");
-    const missingExport = await runProtected({ PHASE07_RELEASE_TRUST_ROOT: join(process.cwd(), missingExportPath), PHASE07_RELEASE_TRUST_ROOT_SHA256: sha256Bytes(new Uint8Array(await Bun.file(missingExportPath).arrayBuffer())) });
+    const missingExport = await runProtected({ modulePath: join(process.cwd(), missingExportPath), sha256: sha256Bytes(new Uint8Array(await Bun.file(missingExportPath).arrayBuffer())) });
     expect(missingExport.exitCode).not.toBe(0);
     const incompletePath = join(root, "incomplete-root.ts");
     await writeFile(incompletePath, "export const protectedReleaseCertificationTrustRoot = { verifyManifest: async () => true };\n");
-    const incomplete = await runProtected({ PHASE07_RELEASE_TRUST_ROOT: join(process.cwd(), incompletePath), PHASE07_RELEASE_TRUST_ROOT_SHA256: sha256Bytes(new Uint8Array(await Bun.file(incompletePath).arrayBuffer())) });
+    const incomplete = await runProtected({ modulePath: join(process.cwd(), incompletePath), sha256: sha256Bytes(new Uint8Array(await Bun.file(incompletePath).arrayBuffer())) });
     expect(incomplete.exitCode).not.toBe(0);
     const symlinkPath = join(root, "symlink-root.ts");
     await symlink(rootModulePath, symlinkPath);
-    const symlinked = await runProtected({ PHASE07_RELEASE_TRUST_ROOT: join(process.cwd(), symlinkPath), PHASE07_RELEASE_TRUST_ROOT_SHA256: rootDigest });
+    const symlinked = await runProtected({ modulePath: join(process.cwd(), symlinkPath), sha256: rootDigest });
     expect(symlinked.exitCode).not.toBe(0);
   } finally {
     await rm(root, { recursive: true, force: true });

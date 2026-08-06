@@ -1,14 +1,14 @@
 import { loadPinnedReleaseCertificationTrustRoot } from "../src/certification/trust.js";
+import { loadCertifierConfig } from "../src/certification/config.js";
 import { verifyReleaseCertificationBundle } from "../src/promotion/candidate.js";
 
 type ProtectedConfiguration = Readonly<{ root: string; modulePath: string; sha256: string }>;
 
-function protectedConfiguration(): ProtectedConfiguration | null {
-  const root = process.env.PHASE07_RELEASE_TRUST_ROOT_DIRECTORY;
-  const modulePath = process.env.PHASE07_RELEASE_TRUST_ROOT;
-  const sha256 = process.env.PHASE07_RELEASE_TRUST_ROOT_SHA256;
-  if (!root || !modulePath || !sha256 || !root.startsWith("/") || !modulePath.startsWith("/") || !/^[a-f0-9]{64}$/iu.test(sha256)) return null;
-  return { root, modulePath, sha256 };
+async function protectedConfiguration(): Promise<ProtectedConfiguration | null> {
+  try {
+    const config = await loadCertifierConfig();
+    return config.mode === "protected" ? config.trustRoot : null;
+  } catch { return null; }
 }
 
 function blocked(reason: "invalid_arguments" | "protected_configuration_unavailable" | "protected_trust_root_rejected"): void {
@@ -22,7 +22,7 @@ async function main(): Promise<void> {
     blocked("invalid_arguments");
     return;
   }
-  const configuration = protectedConfiguration();
+  const configuration = await protectedConfiguration();
   if (!configuration) {
     blocked("protected_configuration_unavailable");
     return;

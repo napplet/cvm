@@ -27,7 +27,7 @@ decisions:
   - Cloud SQL PostgreSQL remains the sole current D-130 database authority; only exact REGIONAL PostgreSQL 17, backup, storage, private-network, and identity observations pass.
   - Native clients and credentials remain injected-only; adapters persist and reconcile the original operation before an immediate receipt revalidation permits a mutation.
 metrics:
-  duration: 7m
+  duration: 12m
   completed_date: 2026-08-06
   tasks_completed: 2
   files_modified: 4

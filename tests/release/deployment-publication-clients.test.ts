@@ -7,7 +7,7 @@ import { createPaymentDeploymentClients } from "../../src/release/deployment/pay
 import { createVertexDeploymentClient } from "../../src/release/deployment/vertex-client";
 import { createCompatibleHostDeploymentClient } from "../../src/release/deployment/compatible-host-client";
 import { createNip46DeploymentClient } from "../../src/release/deployment/nip46-signer-client";
-import { registerDeploymentClientFamilies } from "../../src/release/deployment/factory";
+import { registerCompleteDeploymentClientFamilies } from "../../src/release/deployment/factory";
 
 const digest = (letter: string) => letter.repeat(64);
 
@@ -40,7 +40,7 @@ test("relays: keep fixture owner and service attestation authority separate", as
 test("cli-upload: factory registers all ten non-infrastructure provider families", () => {
   const publication = createCliUploadDeploymentClients({ promotedCliSourceReference: "napplet:cli:0.5.2", promotedCliSourceSha256: digest("f"), uploadTargetReference: "blossom:target:primary" });
   const relays = createRelayDeploymentClients({ ownerKeyReference: "nostr:owner-external-nip46", attestationKeyReference: "nostr:attestation-service-key", relaySetReference: "relay-set:primary", relaySetSha256: digest("1") });
-  const families = registerDeploymentClientFamilies({
+  const families = registerCompleteDeploymentClientFamilies({
     contextvm: createContextVmDeploymentClient({ serviceKeyReference: "nostr:contextvm-service-key", relaySetReference: "relay-set:primary", relaySetSha256: digest("2") }),
     payments: createPaymentDeploymentClients({ nwcConnectionReference: "nwc:consent:wallet-one", cashuWalletReference: "cashu:funded-wallet:one" }),
     vertex: createVertexDeploymentClient({ candidateSha256: digest("3"), projectId: "napplet-cvm-run-1", location: "europe-west1", model: "gemini-2.5-pro", credentialReference: "gcp:adc:release", vertex: { predict: async () => ({ status: "blocked" as const }) } }),

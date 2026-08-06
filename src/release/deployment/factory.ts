@@ -41,6 +41,35 @@ export function registerDeploymentClientFamilies(input: Readonly<{
   });
 }
 
+/** The deployment session must use this complete registration, never a
+ * partially-populated family map. It is a pure object assembly that preserves
+ * distinct rail/key/client identity and causes no construction-time effects. */
+export function registerCompleteDeploymentClientFamilies(input: Readonly<{
+  contextvm: ReturnType<typeof createContextVmDeploymentClient>;
+  payments: ReturnType<typeof createPaymentDeploymentClients>;
+  vertex: ReturnType<typeof createVertexDeploymentClient>;
+  host: ReturnType<typeof createCompatibleHostDeploymentClient>;
+  signer: ReturnType<typeof createNip46DeploymentClient>;
+  publication: ReturnType<typeof createCliUploadDeploymentClients>;
+  relays: ReturnType<typeof createRelayDeploymentClients>;
+}>) {
+  const families = registerDeploymentClientFamilies(input);
+  const expected = ["contextvm", "cep8_lightning", "cashu", "model", "compatible_host", "signer", "promoted_cli", "upload", "owner_relay", "attestation_relay"];
+  if (Object.keys(families).join(",") !== expected.join(",")) throw new Error("DEPLOYMENT_FACTORY_PROVIDER_SET_REQUIRED");
+  return families as Readonly<{
+    contextvm: ReturnType<typeof createContextVmDeploymentClient>;
+    cep8_lightning: ReturnType<typeof createPaymentDeploymentClients>["nwc"];
+    cashu: ReturnType<typeof createPaymentDeploymentClients>["cashu"];
+    model: ReturnType<typeof createVertexDeploymentClient>;
+    compatible_host: ReturnType<typeof createCompatibleHostDeploymentClient>;
+    signer: ReturnType<typeof createNip46DeploymentClient>;
+    promoted_cli: ReturnType<typeof createCliUploadDeploymentClients>["promotedCli"];
+    upload: ReturnType<typeof createCliUploadDeploymentClients>["upload"];
+    owner_relay: ReturnType<typeof createRelayDeploymentClients>["owner"];
+    attestation_relay: ReturnType<typeof createRelayDeploymentClients>["attestation"];
+  }>;
+}
+
 export type DeploymentFactoryRuntime = Readonly<{
   registry: ReleaseProviderRegistry;
   prepareAuthorizedExecution: ReleaseExecutionSession["prepareAuthorizedExecution"];

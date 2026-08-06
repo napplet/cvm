@@ -40,6 +40,12 @@ export type PinnedReleaseCertificationTrustRoot = Readonly<{
   supplyChainRecord?: unknown;
 }>;
 
+/** Generated material is data only. This repository-owned constructor remains
+ * the only code path that can turn already-validated facts into a root. */
+export function createMaterialBackedReleaseCertificationTrustRoot(material: PinnedReleaseCertificationTrustRoot): ReleaseCertificationTrustRoot {
+  return createPinnedReleaseCertificationTrustRoot(material);
+}
+
 const sha256 = async (value: Uint8Array): Promise<string> => {
   const bytes = Uint8Array.from(value);
   const digest = await crypto.subtle.digest("SHA-256", bytes.buffer);

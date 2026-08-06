@@ -18,6 +18,14 @@ export type MaterializedCertifier = Readonly<{
   manifestPath: string;
   env: Readonly<{ NAPPLET_CVM_CERTIFIER_CONFIG: string; NAPPLET_CVM_CERTIFIER_CONFIG_SHA256: Digest }>;
 }>;
+export type FinalizedProtectedTrustRoot = Readonly<{
+  configPath: string;
+  configSha256: Digest;
+  trustRoot: PinnedModule;
+  materialPath: string;
+  manifestPath: string;
+  env: Readonly<{ NAPPLET_CVM_CERTIFIER_CONFIG: string; NAPPLET_CVM_CERTIFIER_CONFIG_SHA256: Digest }>;
+}>;
 export type MaterializeProtectedCertifierInput = Readonly<{
   workspace: string;
   repositoryRoot: string;
@@ -30,6 +38,19 @@ export type MaterializeProtectedCertifierInput = Readonly<{
   /** Test-only observation seams; production never supplies these callbacks. */
   onProviderCall?: () => void;
   onProtectedRunnerCall?: () => void;
+}>;
+export type FinalizeProtectedTrustRootInput = Readonly<{
+  materialized: MaterializedCertifier;
+  workspace: string;
+  repositoryRoot: string;
+  candidateId: string;
+  releaseManifest: unknown;
+  topologySha256: string;
+  authorizationReceiptSha256: string;
+  sourceArchive: Readonly<{ root: string; relativePath: string; canonicalSourceReference: string; sourceRevision: string; sourceSha256: string }>;
+  observations: readonly unknown[];
+  reproducibilityRecord: unknown;
+  supplyChainRecord: unknown;
 }>;
 
 async function sha256(value: string | Uint8Array): Promise<Digest> {
@@ -107,7 +128,14 @@ export async function materializeProtectedCertifier(input: MaterializeProtectedC
   const configPath = join(root, "certifier.json");
   const manifestPath = join(root, "materialization.json");
   await rejectMutatedExistingConfig(configPath, adapterPath);
-  const releaseProfile = { version: 1, candidateId: input.candidateId.toLowerCase(), topologySha256: input.topology.topologySha256.toLowerCase(), authorizationReceiptSha256: input.authorization.authorizationReceiptSha256.toLowerCase(), releaseBinding: manifest };
+  const releaseProfile = {
+    version: 1,
+    candidate: { id: input.candidateId.toLowerCase(), provider: "modal", image: `napplet-cvm/worker@sha256:${manifest.inputs.workerImageDigest}`, sourceSha256: input.source.sourceSha256.toLowerCase() },
+    datasetSha256: manifest.inputs.datasetSha256,
+    topologySha256: input.topology.topologySha256.toLowerCase(),
+    authorizationReceiptSha256: input.authorization.authorizationReceiptSha256.toLowerCase(),
+    releaseBinding: manifest,
+  };
   const secretReferences = { version: 1, candidateId: input.candidateId.toLowerCase(), references: Object.fromEntries(Object.entries(input.secretReferences).sort(([left], [right]) => left.localeCompare(right))) };
   await writeExclusiveCanonical(profilePath, `${canonicalJson(releaseProfile)}\n`);
   await writeExclusiveCanonical(secretReferencesPath, `${canonicalJson(secretReferences)}\n`);
@@ -142,4 +170,83 @@ export async function verifyMaterializedCertifier(value: MaterializedCertifier):
   const manifest = JSON.parse(await readFile(value.manifestPath, "utf8")) as { config?: { sha256?: string }; adapter?: PinnedModule };
   if (manifest.config?.sha256 !== value.configSha256 || !manifest.adapter || manifest.adapter.sha256 !== value.adapter.sha256 || await sha256(await readFile(value.adapter.modulePath)) !== value.adapter.sha256) throw new Error("MATERIALIZER_ARTIFACT_MUTATED");
   return value;
+}
+
+function recordDigest(record: Record<string, unknown>): Promise<string> {
+  const { evidenceSha256: _evidenceSha256, ...contents } = record;
+  return digestJson(contents);
+}
+function expectedRecord(record: unknown, candidateId: string, binding: ReleaseCertificationManifest, status: "passed" | "verified"): record is Record<string, unknown> {
+  if (!record || typeof record !== "object" || Array.isArray(record)) return false;
+  const value = record as Record<string, unknown>;
+  return value.version === 1 && value.evidenceClass === "protected_live" && value.status === status
+    && value.candidateId === candidateId && validDigest(value.evidenceSha256)
+    && (status !== "passed" || canonicalJson(value.releaseBinding) === canonicalJson(binding));
+}
+async function assertEvidence(input: FinalizeProtectedTrustRootInput, manifest: ReleaseCertificationManifest): Promise<void> {
+  if (!Array.isArray(input.observations) || input.observations.length === 0
+    || !input.observations.every((value) => expectedRecord(value, input.candidateId, manifest, "passed"))) throw new Error("MATERIALIZER_TRUST_EVIDENCE_REJECTED");
+  const bindingSha256 = await digestJson(manifest);
+  for (const record of [input.reproducibilityRecord, input.supplyChainRecord]) {
+    if (!record || typeof record !== "object" || Array.isArray(record)) throw new Error("MATERIALIZER_TRUST_EVIDENCE_REJECTED");
+    const value = record as Record<string, unknown>;
+    if (!expectedRecord(value, input.candidateId, manifest, "verified") || value.releaseBindingSha256 !== bindingSha256 || await recordDigest(value) !== value.evidenceSha256) throw new Error("MATERIALIZER_TRUST_EVIDENCE_REJECTED");
+  }
+  for (const observation of input.observations as Record<string, unknown>[]) {
+    if (await recordDigest(observation) !== observation.evidenceSha256) throw new Error("MATERIALIZER_TRUST_EVIDENCE_REJECTED");
+  }
+}
+async function assertSourceArchive(input: FinalizeProtectedTrustRootInput, manifest: ReleaseCertificationManifest): Promise<void> {
+  const archive = input.sourceArchive;
+  if (!isAbsolute(archive.root) || !archive.relativePath || isAbsolute(archive.relativePath) || archive.relativePath.split(/[\\/]/u).includes("..")
+    || !REVISION.test(archive.sourceRevision) || !validDigest(archive.sourceSha256) || archive.sourceRevision.toLowerCase() !== manifest.sourceRevision || archive.sourceSha256.toLowerCase() !== manifest.sourceSha256) throw new Error("MATERIALIZER_SOURCE_ARCHIVE_REJECTED");
+  const root = resolve(archive.root); const path = resolve(root, archive.relativePath);
+  if (!under(root, path) || await sha256(await readFile(path)) !== archive.sourceSha256.toLowerCase()) throw new Error("MATERIALIZER_SOURCE_ARCHIVE_REJECTED");
+}
+
+/** Finalization remains local and authority-free: it validates supplied,
+ * content-addressed records, remeasures the archive, and emits data for the
+ * repository-owned root constructor. It never invokes a provider or suite. */
+export async function finalizeProtectedTrustRoot(input: FinalizeProtectedTrustRootInput): Promise<FinalizedProtectedTrustRoot> {
+  if (!input || typeof input !== "object" || !isAbsolute(input.workspace) || !isAbsolute(input.repositoryRoot) || !validDigest(input.candidateId)
+    || !validDigest(input.topologySha256) || !validDigest(input.authorizationReceiptSha256)) throw new Error("MATERIALIZER_TRUST_INPUT_INVALID");
+  const materialized = await verifyMaterializedCertifier(input.materialized);
+  const manifest = parseReleaseCertificationManifest(input.releaseManifest);
+  const initialConfig = JSON.parse(await readFile(materialized.configPath, "utf8")) as { controller?: Record<string, unknown>; adapter?: PinnedModule; secretReferences?: unknown; releaseProfilePath?: unknown; evidenceDirectory?: unknown; credentials?: unknown };
+  if (initialConfig.controller?.candidateId !== input.candidateId.toLowerCase() || initialConfig.controller?.topologySha256 !== input.topologySha256.toLowerCase() || initialConfig.controller?.authorizationReceiptSha256 !== input.authorizationReceiptSha256.toLowerCase() || initialConfig.controller?.releaseId !== manifest.releaseId) throw new Error("MATERIALIZER_TRUST_BINDING_REJECTED");
+  await assertEvidence(input, manifest);
+  await assertSourceArchive(input, manifest);
+  const workspace = resolve(input.workspace);
+  const finalId = await digestJson({ preConfigSha256: materialized.configSha256, candidateId: input.candidateId.toLowerCase(), releaseId: manifest.releaseId, topologySha256: input.topologySha256.toLowerCase(), authorizationReceiptSha256: input.authorizationReceiptSha256.toLowerCase(), sourceSha256: manifest.sourceSha256, observations: input.observations, reproducibilityRecord: input.reproducibilityRecord, supplyChainRecord: input.supplyChainRecord });
+  const root = join(workspace, "certifier-materializations", input.candidateId.toLowerCase(), finalId, "final");
+  if (!under(workspace, root)) throw new Error("MATERIALIZER_WORKSPACE_REJECTED");
+  const materialPath = join(root, "trust-material.json");
+  const trustRoot = join(root, "trust-root");
+  const trustSourcePath = join(root, "trust-root-source.ts");
+  const modulePath = join(trustRoot, "release-trust-root.js");
+  const configPath = join(root, "certifier.json");
+  const manifestPath = join(root, "finalization.json");
+  const material = {
+    sourceArchiveRoot: resolve(input.sourceArchive.root),
+    sourceArchives: [{ canonicalSourceReference: input.sourceArchive.canonicalSourceReference, sourceRevision: input.sourceArchive.sourceRevision.toLowerCase(), relativePath: input.sourceArchive.relativePath, sourceSha256: input.sourceArchive.sourceSha256.toLowerCase() }],
+    manifest,
+    observations: input.observations,
+    reproducibilityRecord: input.reproducibilityRecord,
+    supplyChainRecord: input.supplyChainRecord,
+  };
+  await writeExclusiveCanonical(materialPath, `${canonicalJson(material)}\n`);
+  const trustSource = `import { createMaterialBackedReleaseCertificationTrustRoot } from ${JSON.stringify(resolve(input.repositoryRoot, "src/certification/trust.ts"))};\nconst material = ${canonicalJson(material)};\nexport const protectedReleaseCertificationTrustRoot = createMaterialBackedReleaseCertificationTrustRoot(material);\n`;
+  await writeExclusiveCanonical(trustSourcePath, trustSource);
+  const build = await Bun.build({ entrypoints: [trustSourcePath], outdir: trustRoot, target: "bun", format: "esm", naming: "release-trust-root.js", sourcemap: "none", minify: true, write: false });
+  const output = build.outputs.find((candidate) => candidate.kind === "entry-point");
+  if (!build.success || !output) throw new Error("MATERIALIZER_TRUST_BUNDLE_REJECTED");
+  await writeExclusiveCanonical(modulePath, new TextDecoder().decode(new Uint8Array(await output.arrayBuffer())));
+  const pinnedRoot: PinnedModule = { root: trustRoot, modulePath, sha256: await sha256(await readFile(modulePath)) };
+  const finalConfig = { version: 1, mode: "protected", releaseProfilePath: initialConfig.releaseProfilePath, evidenceDirectory: initialConfig.evidenceDirectory, credentials: initialConfig.credentials, adapter: initialConfig.adapter, trustRoot: pinnedRoot, controller: initialConfig.controller, secretReferences: initialConfig.secretReferences, generatedArtifacts: { version: 1, materializationId: finalId, manifestPath } };
+  const configText = `${canonicalJson(finalConfig)}\n`;
+  await writeExclusiveCanonical(configPath, configText);
+  const configSha256 = await sha256(configText);
+  const finalManifest = { version: 1, finalizationId: finalId, preConfigSha256: materialized.configSha256, material: { path: materialPath, sha256: await sha256(await readFile(materialPath)) }, trustRoot: pinnedRoot, config: { path: configPath, sha256: configSha256 } };
+  await writeExclusiveCanonical(manifestPath, `${canonicalJson(finalManifest)}\n`);
+  return Object.freeze({ configPath, configSha256, trustRoot: pinnedRoot, materialPath, manifestPath, env: Object.freeze({ NAPPLET_CVM_CERTIFIER_CONFIG: configPath, NAPPLET_CVM_CERTIFIER_CONFIG_SHA256: configSha256 }) });
 }

@@ -175,7 +175,7 @@ async function observePublication(caseValue: ReferenceCase): Promise<ReferenceOb
 
 async function observeLaunch(caseValue: ReferenceCase): Promise<ReferenceObservation> {
   const credentialsAvailable = caseValue.scenario.initialState === "verified" && !["missing_credential", "not_observed", "promotion_blocked"].includes(caseValue.scenario.input.mode);
-  const protectedRecord = await createProtectedInfrastructureDrillEvidence({ candidateDigest: createHash("sha256").update(canonicalJson({ mode: caseValue.scenario.input.mode, initialState: caseValue.scenario.initialState, schedule: caseValue.scenario.schedule })).digest("hex"), components: ["gcs", "cloud_run", "cockroach"], credentialsAvailable });
+  const protectedRecord = await createProtectedInfrastructureDrillEvidence({ candidateDigest: createHash("sha256").update(canonicalJson({ mode: caseValue.scenario.input.mode, initialState: caseValue.scenario.initialState, schedule: caseValue.scenario.schedule })).digest("hex"), components: ["gcs", "cloud_run", "cloud_sql_postgres"], credentialsAvailable });
   const exporter = new InMemoryLifecycleExporter({ key: new Uint8Array(32).fill(7) });
   const terminal = LAUNCH_TERMINALS[caseValue.scenario.input.mode]!;
   exporter.observe({ version: "cvm.lifecycle.v1", stage: terminal.stage, outcome: terminal.outcome, correlationId: `launch:${caseValue.scenario.input.mode}`, monotonicMs: caseValue.scenario.input.ordinal });

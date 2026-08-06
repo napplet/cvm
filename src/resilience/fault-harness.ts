@@ -123,7 +123,7 @@ export function validateTopologyClaim(input: Readonly<{ claimed: z.input<typeof 
 /** Inputs owned by the protected live drill (Plan 07-10); never include credentials or client handles. */
 export const ProtectedInfrastructureDrillInputSchema = z.object({
   candidateDigest: Sha256Schema,
-  components: z.array(z.enum(["gcs", "cloud_run", "cockroach"]))
+  components: z.array(z.enum(["gcs", "cloud_run", "cloud_sql_postgres"]))
     .length(3)
     .superRefine((components, context) => {
       if (new Set(components).size !== 3) context.addIssue({ code: "custom", message: "protected components must be unique" });
@@ -135,7 +135,7 @@ export const ProtectedInfrastructureDrillEvidenceSchema = z.object({
   status: z.enum(["blocked", "not_observed"]),
   code: z.enum(["PROTECTED_INFRASTRUCTURE_UNAVAILABLE", "PROTECTED_INFRASTRUCTURE_DRILL_REQUIRED"]),
   candidateDigest: Sha256Schema,
-  components: z.array(z.enum(["gcs", "cloud_run", "cockroach"])) .length(3),
+  components: z.array(z.enum(["gcs", "cloud_run", "cloud_sql_postgres"])) .length(3),
   releaseVerification: z.literal("required"),
   evidenceDigest: Sha256Schema,
 }).strict();

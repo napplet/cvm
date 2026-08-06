@@ -5,7 +5,7 @@ const digest = (letter: string) => letter.repeat(64);
 const now = 1_000;
 
 function facts(overrides: Record<string, unknown> = {}) {
-  return RELEASE_COST_FAMILIES.map((provider, index) => ({ provider, sourceId: `${provider}-fixture`, sourceDocumentSha256: digest(String.fromCharCode(97 + index)), quoteSha256: digest(String.fromCharCode(65 + index)), currency: "USD", unit: "operation", priceMicros: index + 1, observedAtMs: 900, freshUntilMs: 2_000, status: "available", ...overrides }));
+  return RELEASE_COST_FAMILIES.map((provider, index) => ({ provider, sourceId: `${provider}-fixture`, sourceDocumentSha256: digest((index % 16).toString(16)), quoteSha256: digest(((index + 1) % 16).toString(16)), currency: "USD", unit: "operation", priceMicros: index + 1, observedAtMs: 900, freshUntilMs: 2_000, status: "available", ...overrides }));
 }
 
 function input(overrides: Record<string, unknown> = {}) {

@@ -4,7 +4,6 @@ import { z } from "zod";
 import { canonicalJson } from "../promotion/schema";
 import {
   ProviderCapabilityObservationSchema,
-  ReleaseAuthorizationRequestSchema,
   ReleaseControllerCurrentPointerSchema,
   ReleaseControllerStateSchema,
   ReleaseEffectPlanSchema,
@@ -17,7 +16,8 @@ import {
   type ReleaseTopologyObservation,
 } from "./contracts";
 import { deriveReleaseTopology, RELEASE_PROVIDER_IDS } from "./topology";
-import { ReleaseAuthorizationReceiptSchema, ReleaseProviderOperationSchema, type ReleaseAuthorizationReceipt, type ReleaseProviderOperation, type ReleaseProviderRegistry as AuthorizedProviderRegistry } from "./providers";
+import { createAuthorizationRequest, validateAuthorizationReceipt, validateAuthorizationRequest, type ReleaseAuthorizationReceipt } from "./authorization";
+import { ReleaseProviderOperationSchema, type ReleaseProviderOperation, type ReleaseProviderRegistry as AuthorizedProviderRegistry } from "./providers";
 
 export const RELEASE_WORKSPACE_ENV = "NAPPLET_CVM_RELEASE_WORKSPACE";
 export const RELEASE_AUTHORIZATION_SHA256_ENV = "NAPPLET_CVM_RELEASE_AUTHORIZATION_SHA256";
@@ -150,10 +150,6 @@ async function stateFor(input: Omit<ReleaseControllerState, "stateSha256">): Pro
   return ReleaseControllerStateSchema.parse({ ...input, stateSha256: await digest(input) });
 }
 
-async function requestFor(input: Omit<ReleaseAuthorizationRequest, "authorizationRequestSha256">): Promise<ReleaseAuthorizationRequest> {
-  return ReleaseAuthorizationRequestSchema.parse({ ...input, authorizationRequestSha256: await digest(input) });
-}
-
 async function createOrVerify(path: string, content: string, collision: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const temporaryPath = `${path}.${crypto.randomUUID()}.tmp`;
@@ -195,20 +191,13 @@ export class ReleaseCertificationController {
     if (state.candidate.candidateSha256 !== pointer.data.candidateSha256 || state.status !== "authorization_required" || !state.authorizationRequestSha256) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
     if ((await candidateIdentity(this.#candidatePath)).candidateSha256 !== state.candidate.candidateSha256) throw new Error("RELEASE_CONTROLLER_CANDIDATE_MISMATCH");
     const request = await this.#readRequest(state.authorizationRequestSha256);
-    const expectedEffectPlanSha256 = await digest({
-      version: 1,
-      candidateSha256: request.candidate.candidateSha256,
-      topologySha256: request.topologySha256,
-      effects: request.plannedEffects,
-      maximumAuthorizedCostMicros: request.maximumAuthorizedCostMicros,
-    });
-    const plannedCost = request.plannedEffects.reduce((total, effect) => total + effect.estimatedCostMicros, 0);
+    await validateAuthorizationRequest(request);
+    const plannedCost = request.orderedEffects.reduce((total, effect) => total + effect.estimatedCostMicros, 0);
     if (
-      request.resumeStateSha256 !== state.priorStateSha256
-      || canonicalJson(request.candidate) !== canonicalJson(state.candidate)
+      request.controllerStateSha256 !== state.priorStateSha256
+      || request.candidateSha256 !== state.candidate.candidateSha256
       || request.topologySha256 !== state.topologySha256
       || request.providerCapabilitiesSha256 !== await digest(state.capabilities)
-      || request.effectPlanSha256 !== expectedEffectPlanSha256
       || request.maximumAuthorizedCostMicros !== plannedCost
       || request.expiresAtMs <= state.createdAtMs
     ) throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID");
@@ -220,13 +209,20 @@ export class ReleaseCertificationController {
     const topology = await deriveReleaseTopology(candidate.candidateSha256);
     const plan = await effectPlan(candidate.candidateSha256, topology.topologySha256);
     const capabilities = await discoverProviders(this.#providers);
-    const existing = await this.status();
+    let existing: ReleaseCertificationResult | undefined;
+    let replaceInvalidPointer = false;
+    try { existing = await this.status(); }
+    catch (error) {
+      if (error instanceof Error && error.message === "RELEASE_CONTROLLER_CANDIDATE_MISMATCH") throw error;
+      replaceInvalidPointer = true;
+      existing = undefined;
+    }
     if (existing) {
       if (existing.state.candidate.candidateSha256 !== candidate.candidateSha256) throw new Error("RELEASE_CONTROLLER_CANDIDATE_MISMATCH");
       if (existing.state.topologySha256 !== topology.topologySha256 || existing.authorizationRequest.effectPlanSha256 !== plan.effectPlanSha256 || existing.authorizationRequest.maximumAuthorizedCostMicros !== plan.maximumAuthorizedCostMicros) {
         throw new Error("RELEASE_CONTROLLER_RESUME_INPUT_MISMATCH");
       }
-      if (canonicalJson(existing.state.capabilities) === canonicalJson(capabilities)) return existing;
+      if (canonicalJson(existing.state.capabilities) === canonicalJson(capabilities) && existing.authorizationRequest.expiresAtMs > this.#now()) return existing;
     }
     const discovering = await stateFor({
       version: 1, status: "discovering", candidate, topologySha256: topology.topologySha256, capabilities,
@@ -234,11 +230,26 @@ export class ReleaseCertificationController {
       providerOperationIds: [], deployedTopologySha256: null, blockReasonCode: null, createdAtMs: this.#now(),
     });
     await createOrVerify(join(this.#workspace, "states", `${discovering.stateSha256}.json`), `${canonicalJson(discovering)}\n`, "RELEASE_CONTROLLER_STATE_COLLISION");
-    const request = await requestFor({
-      version: 1, candidate, topologySha256: topology.topologySha256, effectPlanSha256: plan.effectPlanSha256,
-      plannedEffects: plan.effects, maximumAuthorizedCostMicros: plan.maximumAuthorizedCostMicros,
-      providerCapabilitiesSha256: await digest(capabilities), expiresAtMs: discovering.createdAtMs + 24 * 60 * 60 * 1000,
-      resumeStateSha256: discovering.stateSha256,
+    const request = await createAuthorizationRequest({
+      candidateSha256: candidate.candidateSha256,
+      topologySha256: topology.topologySha256,
+      effectPlanSha256: plan.effectPlanSha256,
+      controllerStateSha256: discovering.stateSha256,
+      providerCapabilitiesSha256: await digest(capabilities),
+      orderedEffects: plan.effects,
+      providerScopes: await Promise.all(capabilities.map(async (capability) => ({
+        provider: capability.provider,
+        accountScopeSha256: capability.accountScopeSha256,
+        projectScopeSha256: await digest({ version: 1, provider: capability.provider, topologySha256: topology.topologySha256, accountScopeSha256: capability.accountScopeSha256 }),
+      }))),
+      estimate: { currency: "USD", maximumMicros: plan.maximumAuthorizedCostMicros, sourceId: "release-effect-plan-v1", observedAtMs: discovering.createdAtMs, freshUntilMs: discovering.createdAtMs + 24 * 60 * 60 * 1000 },
+      maximumRunDurationMs: 15 * 60 * 1000,
+      cleanupByMs: discovering.createdAtMs + 15 * 60 * 1000,
+      evidenceRetentionDays: 30,
+      artifactRetentionDays: 30,
+      gcpEffects: { projectBootstrap: true, billing: true, apiEnablement: ["run.googleapis.com", "sqladmin.googleapis.com", "storage.googleapis.com"] },
+      expiresAtMs: discovering.createdAtMs + 60 * 60 * 1000,
+      supersedesAuthorizationRequestSha256: existing?.authorizationRequest.authorizationRequestSha256 ?? null,
     });
     await createOrVerify(join(this.#workspace, "authorization-requests", `${request.authorizationRequestSha256}.json`), `${canonicalJson(request)}\n`, "RELEASE_CONTROLLER_AUTHORIZATION_COLLISION");
     const final = await stateFor({
@@ -249,7 +260,7 @@ export class ReleaseCertificationController {
     await createOrVerify(join(this.#workspace, "states", `${final.stateSha256}.json`), `${canonicalJson(final)}\n`, "RELEASE_CONTROLLER_STATE_COLLISION");
     const pointerBase = { version: 1 as const, stateSha256: final.stateSha256, candidateSha256: candidate.candidateSha256 };
     const pointer = { ...pointerBase, pointerSha256: await digest(pointerBase) };
-    if (existing) await this.#writeCurrent(final);
+    if (existing || replaceInvalidPointer) await this.#writeCurrent(final);
     else await createOrVerify(join(this.#workspace, "current.json"), `${canonicalJson(pointer)}\n`, "RELEASE_CONTROLLER_CONCURRENT_WRITE");
     return (await this.status())!;
   }
@@ -271,20 +282,16 @@ export class ReleaseCertificationController {
     const current = await this.#loadCurrent();
     if (!current.state.authorizationRequestSha256) throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID");
     const request = await this.#readRequest(current.state.authorizationRequestSha256);
-    const receipt = ReleaseAuthorizationReceiptSchema.safeParse(input.receipt);
-    if (!receipt.success || receipt.data.expiresAtMs <= this.#now()
-      || receipt.data.authorizationRequestSha256 !== request.authorizationRequestSha256
-      || receipt.data.candidateSha256 !== current.state.candidate.candidateSha256
-      || receipt.data.topologySha256 !== current.state.topologySha256
-      || receipt.data.effectPlanSha256 !== request.effectPlanSha256
-      || receipt.data.maximumAuthorizedCostMicros !== request.maximumAuthorizedCostMicros) throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID");
+    let receipt: ReleaseAuthorizationReceipt;
+    try { receipt = await validateAuthorizationReceipt({ request, receipt: input.receipt, nowMs: this.#now() }); }
+    catch { throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID"); }
 
     if (current.state.status === "topology_ready" && current.state.deployedTopologySha256) {
       return { state: current.state, authorizationRequest: request, topology: await this.#readTopology(current.state.deployedTopologySha256) };
     }
     if (!["authorization_required", "provisioning", "discovering_deployed"].includes(current.state.status)) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
 
-    const operations = await Promise.all(request.plannedEffects.map(async (effect) => ReleaseProviderOperationSchema.parse({
+    const operations = await Promise.all(request.orderedEffects.map(async (effect) => ReleaseProviderOperationSchema.parse({
       version: 1,
       operationId: `op-${await digest({ candidateSha256: current.state.candidate.candidateSha256, authorizationRequestSha256: request.authorizationRequestSha256, provider: effect.provider, effectId: effect.id, desiredDigest: request.effectPlanSha256 })}`,
       provider: effect.provider, effectId: effect.id, operation: effect.operation,
@@ -305,15 +312,15 @@ export class ReleaseCertificationController {
       }
     }
     let state = current.state;
-    if (state.status === "authorization_required") state = await this.#advance(state, "provisioning", receipt.data.authorizationReceiptSha256, operations.map((operation) => operation.operationId), null, null);
+    if (state.status === "authorization_required") state = await this.#advance(state, "provisioning", receipt.authorizationReceiptSha256, operations.map((operation) => operation.operationId), null, null);
 
     let totalCost = 0;
     for (const operation of operations) {
       const record = await this.#readOperation(operation.operationId);
       if (record.status === "completed") { totalCost += record.actualCostMicros; continue; }
       const result = record.status === "unknown"
-        ? await input.registry.observe({ receipt: receipt.data, operation, approvedMaximumCostMicros: receipt.data.maximumAuthorizedCostMicros })
-        : await input.registry.apply({ receipt: receipt.data, operation, approvedMaximumCostMicros: receipt.data.maximumAuthorizedCostMicros });
+        ? await input.registry.observe({ receipt, operation, approvedMaximumCostMicros: receipt.maximumAuthorizedCostMicros })
+        : await input.registry.apply({ receipt, operation, approvedMaximumCostMicros: receipt.maximumAuthorizedCostMicros });
       if (result.status === "unknown" || result.status === "pending") {
         await this.#writeOperation({ ...record, status: "unknown", actualCostMicros: result.actualCostMicros, resourceIdentitySha256: result.resourceIdentitySha256 ?? null });
         throw new Error("RELEASE_CONTROLLER_PROVIDER_AMBIGUOUS");
@@ -321,19 +328,19 @@ export class ReleaseCertificationController {
       if (result.status !== "applied" && result.status !== "completed") throw new Error("RELEASE_CONTROLLER_PROVIDER_BLOCKED");
       const actualCostMicros = result.actualCostMicros;
       totalCost += actualCostMicros;
-      if (totalCost > receipt.data.maximumAuthorizedCostMicros) {
+      if (totalCost > receipt.maximumAuthorizedCostMicros) {
         await this.#writeOperation({ ...record, status: "completed", actualCostMicros, resourceIdentitySha256: result.resourceIdentitySha256 ?? null });
-        await this.#advance(state, "blocked", receipt.data.authorizationReceiptSha256, operations.map((operation) => operation.operationId), null, "COST_EXCEEDED");
+        await this.#advance(state, "blocked", receipt.authorizationReceiptSha256, operations.map((operation) => operation.operationId), null, "COST_EXCEEDED");
         throw new Error("RELEASE_CONTROLLER_COST_EXCEEDED");
       }
       if (!result.resourceIdentitySha256) throw new Error("RELEASE_CONTROLLER_PROVIDER_DRIFT");
       await this.#writeOperation({ ...record, status: "completed", actualCostMicros, resourceIdentitySha256: result.resourceIdentitySha256 });
     }
 
-    state = await this.#advance(state, "discovering_deployed", receipt.data.authorizationReceiptSha256, operations.map((operation) => operation.operationId), null, null);
+    state = await this.#advance(state, "discovering_deployed", receipt.authorizationReceiptSha256, operations.map((operation) => operation.operationId), null, null);
     const discovered = await Promise.all(operations.map((operation) => input.registry.discover(operation.provider)));
     if (discovered.some((item) => item.capability !== "available" || item.authentication !== "authorized")) {
-      await this.#advance(state, "blocked", receipt.data.authorizationReceiptSha256, operations.map((operation) => operation.operationId), null, "PROVIDER_UNAVAILABLE");
+      await this.#advance(state, "blocked", receipt.authorizationReceiptSha256, operations.map((operation) => operation.operationId), null, "PROVIDER_UNAVAILABLE");
       throw new Error("RELEASE_CONTROLLER_PROVIDER_DRIFT");
     }
     const resources = await Promise.all(operations.map(async (operation, index) => {
@@ -356,7 +363,7 @@ export class ReleaseCertificationController {
     };
     const topology = ReleaseTopologyObservationSchema.parse({ ...topologyBase, deployment, topologySha256: await digest({ ...topologyBase, deployment }) }) as ReleaseProvisioningResult["topology"];
     await createOrVerify(join(this.#workspace, "topologies", `${topology.topologySha256}.json`), `${canonicalJson(topology)}\n`, "RELEASE_CONTROLLER_TOPOLOGY_COLLISION");
-    state = await this.#advance(state, "topology_ready", receipt.data.authorizationReceiptSha256, operations.map((operation) => operation.operationId), topology.topologySha256, null);
+    state = await this.#advance(state, "topology_ready", receipt.authorizationReceiptSha256, operations.map((operation) => operation.operationId), topology.topologySha256, null);
     return { state, authorizationRequest: request, topology };
   }
 
@@ -435,9 +442,11 @@ export class ReleaseCertificationController {
     let raw: unknown;
     try { raw = JSON.parse(await readFile(join(this.#workspace, "authorization-requests", `${authorizationRequestSha256}.json`), "utf8")); }
     catch { throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID"); }
-    const request = ReleaseAuthorizationRequestSchema.safeParse(raw);
-    if (!request.success || request.data.authorizationRequestSha256 !== authorizationRequestSha256 || request.data.authorizationRequestSha256 !== await digest(withoutDigest(request.data, "authorizationRequestSha256"))) throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID");
-    return request.data;
+    try {
+      const request = await validateAuthorizationRequest(raw);
+      if (request.authorizationRequestSha256 !== authorizationRequestSha256) throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID");
+      return request;
+    } catch { throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID"); }
   }
 }
 

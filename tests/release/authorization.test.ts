@@ -14,7 +14,7 @@ const input = (overrides: Record<string, unknown> = {}) => ({
   controllerStateSha256: digest("d"),
   providerCapabilitiesSha256: digest("e"),
   orderedEffects: [{ id: "cloud-run-ingress", provider: "cloud_run", operation: "create_or_update", estimatedCostMicros: 5_000_000 }],
-  providerScopes: [{ provider: "cloud_run", accountScopeSha256: digest("f"), projectScopeSha256: digest("g") }],
+  providerScopes: [{ provider: "cloud_run", accountScopeSha256: digest("f"), projectScopeSha256: digest("1") }],
   estimate: { currency: "USD", maximumMicros: 5_000_000, sourceId: "release-topology-v1", observedAtMs: 1_000, freshUntilMs: 2_000 },
   maximumRunDurationMs: 60_000,
   cleanupByMs: 61_000,
@@ -44,7 +44,7 @@ test("rejects stale estimates, unitless costs, and tampered receipt inputs", asy
 
   const request = await createAuthorizationRequest(input());
   const receipt = await createAuthorizationReceipt(request);
-  await expect(validateAuthorizationReceipt({ request: { ...request, topologySha256: digest("9") }, receipt, nowMs: 1_499 })).rejects.toThrow("RELEASE_AUTHORIZATION_RECEIPT_INVALID");
+  await expect(validateAuthorizationReceipt({ request: { ...request, topologySha256: digest("9") }, receipt, nowMs: 1_499 })).rejects.toThrow("RELEASE_AUTHORIZATION_REQUEST_INVALID");
   await expect(validateAuthorizationReceipt({ request, receipt, nowMs: 1_500 })).rejects.toThrow("RELEASE_AUTHORIZATION_RECEIPT_EXPIRED");
 });
 
@@ -53,10 +53,10 @@ test("every bound authorization input changes the request digest", async () => {
   const mutations = [
     { candidateSha256: digest("1") }, { topologySha256: digest("2") }, { effectPlanSha256: digest("3") },
     { controllerStateSha256: digest("4") }, { providerCapabilitiesSha256: digest("5") },
-    { estimate: { currency: "USD", maximumMicros: 5_000_001, sourceId: "release-topology-v1", observedAtMs: 1_000, freshUntilMs: 2_000 } },
+    { estimate: { currency: "USD", maximumMicros: 5_000_000, sourceId: "release-topology-v2", observedAtMs: 1_000, freshUntilMs: 2_000 } },
     { providerScopes: [{ provider: "cloud_run", accountScopeSha256: digest("6"), projectScopeSha256: digest("7") }] },
-    { orderedEffects: [{ id: "cloud-run-ingress", provider: "cloud_run", operation: "create_or_update", estimatedCostMicros: 5_000_001 }] },
-    { maximumRunDurationMs: 59_000 }, { cleanupByMs: 60_500 }, { evidenceRetentionDays: 29 }, { artifactRetentionDays: 29 },
+    { orderedEffects: [{ id: "cloud-run-ingress", provider: "cloud_run", operation: "create_or_update", estimatedCostMicros: 5_000_001 }], estimate: { currency: "USD", maximumMicros: 5_000_001, sourceId: "release-topology-v1", observedAtMs: 1_000, freshUntilMs: 2_000 } },
+    { maximumRunDurationMs: 59_500 }, { cleanupByMs: 60_500 }, { evidenceRetentionDays: 29 }, { artifactRetentionDays: 29 },
     { gcpEffects: { projectBootstrap: false, billing: true, apiEnablement: ["run.googleapis.com", "sqladmin.googleapis.com", "storage.googleapis.com"] } },
     { expiresAtMs: 1_499 },
   ];

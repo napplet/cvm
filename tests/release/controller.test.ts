@@ -3,6 +3,7 @@ import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ReleaseCertificationController, runReleaseCertification } from "../../src/release/controller";
+import { createAuthorizationReceipt } from "../../src/release/authorization";
 import { canonicalJson } from "../../src/promotion/schema";
 import { createReleaseProviderRegistry, type ReleaseAuthorizationReceipt } from "../../src/release/providers";
 import { RELEASE_PROVIDER_IDS } from "../../src/release/topology";
@@ -28,7 +29,7 @@ test("dry-run reaches an authorization-required no-effect boundary and writes on
   expect(result.state.capabilities).toHaveLength(16);
   expect(result.state.capabilities.every((item) => item.capability === "unavailable" || item.capability === "unsupported")).toBeTrue();
   expect(result.state.authorizationRequestSha256).toBe(result.authorizationRequest!.authorizationRequestSha256);
-  expect(result.authorizationRequest!.plannedEffects.length).toBeGreaterThan(0);
+  expect(result.authorizationRequest!.orderedEffects.length).toBeGreaterThan(0);
   expect(result.authorizationRequest!.maximumAuthorizedCostMicros).toBeGreaterThan(0);
 
   const names = (await readdir(root, { recursive: true })).filter((name) => name.endsWith(".json"));
@@ -132,16 +133,7 @@ test("authorized provider execution records one exact deployed topology and resu
       cleanup: async () => ({ status: "cleaned" as const, actualCostMicros: 0 }),
     }])) as never,
   });
-  const receipt: ReleaseAuthorizationReceipt = {
-    version: 1,
-    authorizationRequestSha256: dryRun.authorizationRequest.authorizationRequestSha256,
-    authorizationReceiptSha256: "a".repeat(64),
-    candidateSha256: dryRun.state.candidate.candidateSha256,
-    topologySha256: dryRun.state.topologySha256,
-    effectPlanSha256: dryRun.authorizationRequest.effectPlanSha256,
-    maximumAuthorizedCostMicros: dryRun.authorizationRequest.maximumAuthorizedCostMicros,
-    expiresAtMs: 10_000,
-  };
+  const receipt = await createAuthorizationReceipt(dryRun.authorizationRequest);
 
   const controller = new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000 });
   const first = await controller.provision({ receipt, registry });
@@ -178,12 +170,7 @@ test("ambiguous provider execution resumes by observing the original operation w
       cleanup: async () => ({ status: "cleaned" as const, actualCostMicros: 0 }),
     }])) as never,
   });
-  const receipt: ReleaseAuthorizationReceipt = {
-    version: 1, authorizationRequestSha256: dryRun.authorizationRequest.authorizationRequestSha256,
-    authorizationReceiptSha256: "b".repeat(64), candidateSha256: dryRun.state.candidate.candidateSha256,
-    topologySha256: dryRun.state.topologySha256, effectPlanSha256: dryRun.authorizationRequest.effectPlanSha256,
-    maximumAuthorizedCostMicros: dryRun.authorizationRequest.maximumAuthorizedCostMicros, expiresAtMs: 10_000,
-  };
+  const receipt = await createAuthorizationReceipt(dryRun.authorizationRequest);
 
   await expect(new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000 }).provision({ receipt, registry })).rejects.toThrow("RELEASE_CONTROLLER_PROVIDER_AMBIGUOUS");
   const resumed = await new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 2_000 }).provision({ receipt, registry });

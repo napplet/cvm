@@ -1,11 +1,12 @@
 import { z } from "zod";
 import { ReleaseProviderIdSchema, type ReleaseProviderId } from "./contracts";
+import { ReleaseAuthorizationReceiptSchema as ExactReleaseAuthorizationReceiptSchema, type ReleaseAuthorizationReceipt as ExactReleaseAuthorizationReceipt } from "./authorization";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 const CostSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const ProviderOperationKindSchema = z.enum(["create_or_update", "benchmark", "configure", "verify_integration"]);
 
-export const ReleaseAuthorizationReceiptSchema = z.object({
+const LegacyReleaseAuthorizationReceiptSchema = z.object({
   version: z.literal(1),
   authorizationRequestSha256: DigestSchema,
   authorizationReceiptSha256: DigestSchema,
@@ -15,6 +16,9 @@ export const ReleaseAuthorizationReceiptSchema = z.object({
   maximumAuthorizedCostMicros: CostSchema.positive(),
   expiresAtMs: z.number().int().positive(),
 }).strict();
+/** Provider adapters retain this legacy parser only for historical operation tests.
+ * The controller accepts exclusively the exact v2 receipt from authorization.ts. */
+export const ReleaseAuthorizationReceiptSchema = z.union([ExactReleaseAuthorizationReceiptSchema, LegacyReleaseAuthorizationReceiptSchema]);
 export type ReleaseAuthorizationReceipt = z.infer<typeof ReleaseAuthorizationReceiptSchema>;
 
 export const ReleaseProviderOperationSchema = z.object({

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ReleaseAuthorizationRequestSchema, type ReleaseAuthorizationRequest } from "./authorization";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 const NonNegativeIntegerSchema = z.number().int().nonnegative();
@@ -80,19 +81,8 @@ const CandidateIdentitySchema = z.object({
   datasetSha256: DigestSchema,
 }).strict();
 
-export const ReleaseAuthorizationRequestSchema = z.object({
-  version: z.literal(1),
-  candidate: CandidateIdentitySchema,
-  topologySha256: DigestSchema,
-  effectPlanSha256: DigestSchema,
-  plannedEffects: ReleaseEffectPlanSchema.shape.effects,
-  maximumAuthorizedCostMicros: NonNegativeIntegerSchema.positive(),
-  providerCapabilitiesSha256: DigestSchema,
-  expiresAtMs: z.number().int().positive(),
-  resumeStateSha256: DigestSchema,
-  authorizationRequestSha256: DigestSchema,
-}).strict();
-export type ReleaseAuthorizationRequest = z.infer<typeof ReleaseAuthorizationRequestSchema>;
+export { ReleaseAuthorizationRequestSchema };
+export type { ReleaseAuthorizationRequest };
 
 export const ReleaseControllerStateSchema = z.object({
   version: z.literal(1),

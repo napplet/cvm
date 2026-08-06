@@ -65,11 +65,10 @@ test("authorization-required state rejects candidate reuse, request tampering, a
   await expect(new ReleaseCertificationController({ candidatePath, workspace: root }).status()).rejects.toThrow("RELEASE_CONTROLLER_AUTHORIZATION_INVALID");
 
   const concurrent = await workspace();
-  const [left, right] = await Promise.all([
+  const concurrentResults = await Promise.all(Array.from({ length: 8 }, () =>
     runReleaseCertification({ candidatePath, workspace: concurrent, dryRun: true, now: () => 1_000 }),
-    runReleaseCertification({ candidatePath, workspace: concurrent, dryRun: true, now: () => 1_000 }),
-  ]);
-  expect(left.state.stateSha256).toBe(right.state.stateSha256);
+  ));
+  expect(new Set(concurrentResults.map((result) => result.state.stateSha256)).size).toBe(1);
 });
 
 test("discovery serializes only finite redacted digest facts", async () => {

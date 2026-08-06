@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { canonicalJson } from "../promotion/schema";
@@ -149,10 +149,15 @@ async function requestFor(input: Omit<ReleaseAuthorizationRequest, "authorizatio
 
 async function createOrVerify(path: string, content: string, collision: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  try { await writeFile(path, content, { encoding: "utf8", flag: "wx" }); }
-  catch (error) {
+  const temporaryPath = `${path}.${crypto.randomUUID()}.tmp`;
+  await writeFile(temporaryPath, content, { encoding: "utf8", flag: "wx" });
+  try {
+    await link(temporaryPath, path);
+  } catch (error) {
     if (!(error instanceof Error) || !("code" in error) || error.code !== "EEXIST") throw error;
     if (await readFile(path, "utf8") !== content) throw new Error(collision);
+  } finally {
+    await rm(temporaryPath, { force: true });
   }
 }
 

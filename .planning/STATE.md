@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: executing
-stopped_at: Completed 07-47-PLAN.md; next checkpoint 07-48
-last_updated: "2026-08-06T21:03:12.703Z"
+stopped_at: Completed 07-48-PLAN.md; next checkpoint 07-49
+last_updated: "2026-08-06T22:14:23.309Z"
 last_activity: 2026-08-06
-last_activity_desc: Completed receipt-gated production dependency composition in Plan 07-47
+last_activity_desc: Completed official pricing and receipt-free preapproval materialization in Plan 07-48
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 90
-  completed_plans: 86
+  completed_plans: 87
   percent: 86
 ---
 
@@ -30,20 +30,20 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 07 (admission-slo-resilience-launch-safety) — EXECUTING
-Plan: 46 of 50 complete
-Status: Ready for 07-48 current-source and preapproval materialization
-Last activity: 2026-08-06 — Completed receipt-gated production dependency composition in Plan 07-47
+Plan: 47 of 50 complete
+Status: Ready for 07-49 safe local setup and exact review boundary
+Last activity: 2026-08-06 — Completed official pricing and receipt-free preapproval materialization in Plan 07-48
 
-Plan execution: [██████████] 86/90 milestone plans complete; Phase 7 is 46/50 complete and verification remains pending
+Plan execution: [██████████] 87/90 milestone plans complete; Phase 7 is 47/50 complete and verification remains pending
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 86/90 milestone plans executed. Plan 07-47 completed receipt-gated operational composition; Plans 07-48–07-49 next close current-source/preapproval materialization and local setup/review gaps before 07-20 handles local NWC Lightning/Cashu references and exact approval, followed by 07-26 protected execution.
+- Plans: 87/90 milestone plans executed. Plan 07-48 completed current-source/topology binding and receipt-free preapproval materialization; Plan 07-49 next closes local setup/review gaps before 07-20 handles local NWC Lightning/Cashu references and exact approval, followed by 07-26 protected execution.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Next checkpoint: 07-48 materializes current source and preapproval facts with no user setup or effects; 07-49 then closes remaining local setup/review gaps before 07-20 connects any missing operator NWC Lightning and funded Cashu certification rails locally and records final exact approval, followed by 07-26. Owner NIP-46 remains deferred to publication; no hand-authored config/evidence or pasted secret/digest is required.
+- Next checkpoint: 07-49 closes the remaining local setup/review gaps with no user setup or effects before 07-20 connects any missing operator NWC Lightning and funded Cashu certification rails locally and records final exact approval, followed by 07-26. Owner NIP-46 remains deferred to publication; no hand-authored config/evidence or pasted secret/digest is required.
 
 ## Performance Metrics
 
@@ -150,6 +150,7 @@ Plan execution: [██████████] 86/90 milestone plans complete;
 | Phase 07 P45 | 7m 51s | 2 tasks | 8 files |
 | Phase 07-admission-slo-resilience-launch-safety P46 | 10m | 2 tasks | 7 files |
 | Phase 07-admission-slo-resilience-launch-safety P47 | 15m | 1 tasks | 5 files |
+| Phase 07-admission-slo-resilience-launch-safety P48 | 68m | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -320,6 +321,8 @@ Recent decisions affecting current work:
 - [Phase ?]: Protected factory readiness uses the same hash-pinned session as receipt-bound execution while remaining effect-free before approval.
 - [Phase ?]: Production preparation accepts only a branded exact sixteen-provider/eight-real-port graph and revalidates the structured receipt before any operational callback.
 - [Phase ?]: NIP-46 remains dormant during composition and receipt validation; only the authorized publication operation may invoke the owner signer.
+- [Phase ?]: Official pricing readers bind exact captured source bytes and reject redirects, parser drift, ambiguous tiers, wrong units, regions, or currencies.
+- [Phase ?]: Preapproval materialization is create-only and receipt-free; protected evidence and authorization remain on the receipt-bound path.
 
 ### Pending Todos
 
@@ -348,6 +351,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-06T21:03:12.693Z
-Stopped at: Completed 07-47-PLAN.md; next checkpoint 07-48
-Resume file: .planning/phases/07-admission-slo-resilience-launch-safety/07-48-PLAN.md
+Last session: 2026-08-06T22:14:23.269Z
+Stopped at: Completed 07-48-PLAN.md; next checkpoint 07-49
+Resume file: .planning/phases/07-admission-slo-resilience-launch-safety/07-49-PLAN.md

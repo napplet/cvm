@@ -40,10 +40,10 @@ test("local funding setup binds a one-time loopback session and keeps both walle
   expect(launches).toHaveLength(1);
 
   await submit!({ state: seen[0]!.state, csrf: seen[0]!.csrf, rail: "nwc_lightning", material: new Uint8Array([1, 2]) });
+  await expect(submit!({ state: seen[0]!.state, csrf: seen[0]!.csrf, rail: "cashu", material: "chat-shaped-secret" })).rejects.toThrow("LOCAL_FUNDING_MATERIAL_REJECTED");
   await submit!({ state: seen[0]!.state, csrf: seen[0]!.csrf, rail: "cashu", material: new Uint8Array([3, 4]) });
   const readiness = await setup.readiness();
   expect(readiness.status).toBe("ready");
   expect(JSON.stringify(readiness)).not.toContain("1,2");
   expect(JSON.stringify(persisted)).not.toContain("1,2");
-  await expect(submit!({ state: seen[0]!.state, csrf: seen[0]!.csrf, rail: "cashu", material: "chat-shaped-secret" })).rejects.toThrow("LOCAL_FUNDING_MATERIAL_REJECTED");
 });

@@ -29,6 +29,13 @@ export type OperatorFundingReadiness = Readonly<{
   readinessSha256: string;
 }>;
 
+/** Deliberately narrow persistence seam. Values written here have already
+ * passed the opaque-locator schema; wallet material is never a serializable
+ * value in this subsystem. */
+export type OperatorFundingReadinessStore = Readonly<{
+  write(value: OperatorFundingReadiness): Promise<void>;
+}>;
+
 async function digest(value: unknown): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalJson(value)));
   return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -37,6 +44,30 @@ async function digest(value: unknown): Promise<string> {
 export async function pendingOperatorFundingReadiness(): Promise<OperatorFundingReadiness> {
   const payload = { version: 1 as const, status: "pending" as const, rails: [] as const };
   return Object.freeze({ ...payload, readinessSha256: await digest(payload) });
+}
+
+/** Rejects lookalike persisted records before a controller/request can bind
+ * them. The digest recheck prevents a caller from changing expiry, revocation,
+ * or a rail locator after it was recorded. */
+export async function validateOperatorFundingReadiness(input: unknown): Promise<OperatorFundingReadiness> {
+  const schema = z.object({
+    version: z.literal(1),
+    status: z.enum(["pending", "ready", "invalid"]),
+    rails: z.array(z.object({
+      rail: FundingRailSchema,
+      secretReference: OpaqueReferenceSchema,
+      capabilitySha256: DigestSchema,
+      accountScopeSha256: DigestSchema,
+      expiresAtMs: z.number().int().positive(),
+      status: z.enum(["ready", "revoked", "expired"]),
+    }).strict()).max(2),
+    readinessSha256: DigestSchema,
+  }).strict();
+  const parsed = schema.safeParse(input);
+  if (!parsed.success) throw new Error("OPERATOR_FUNDING_READINESS_INVALID");
+  const { readinessSha256, ...payload } = parsed.data;
+  if (readinessSha256 !== await digest(payload)) throw new Error("OPERATOR_FUNDING_READINESS_INVALID");
+  return Object.freeze({ ...payload, rails: Object.freeze(parsed.data.rails.map((rail) => Object.freeze({ ...rail }))), readinessSha256 });
 }
 
 /**

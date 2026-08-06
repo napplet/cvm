@@ -60,7 +60,7 @@ test("registry owns every required provider and exposes only finite redacted dis
   expect(liveCalls).toBe(1);
   const applied = await registry.apply({ receipt: receipt(), operation: operation(), approvedMaximumCostMicros: 100 });
   expect(applied).toEqual(expect.objectContaining({ status: "applied", actualCostMicros: 10 }));
-  expect(applied.resourceIdentitySha256).toBe(digest("0")).not;
+  expect(applied.resourceIdentitySha256).not.toBe(digest("0"));
   expect(liveCalls).toBe(2);
 });
 

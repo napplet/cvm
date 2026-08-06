@@ -4,6 +4,7 @@ import { createDeploymentExecutionConfig } from "../../src/release/deployment/co
 
 test("deployment configuration serializes only hash pins, bounded public settings, and named secret references", () => {
   const config = createDeploymentExecutionConfig({
+    version: 1,
     candidateSha256: "a".repeat(64),
     sourceRevision: "b".repeat(40),
     workspaceRoot: "/workspace/release",

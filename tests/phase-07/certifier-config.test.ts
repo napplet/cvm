@@ -35,7 +35,7 @@ test("protected configuration requires absolute, digest-pinned config bytes", as
       credentials: "unavailable",
       adapter: { root, modulePath, sha256: moduleSha256 },
       trustRoot: { root, modulePath, sha256: moduleSha256 },
-      releaseExecution: { root, modulePath, sha256: moduleSha256 },
+      releaseExecution: { root, modulePath, sha256: moduleSha256, configPath: configPath, configSha256: moduleSha256 },
     });
     await writeFile(configPath, source);
 

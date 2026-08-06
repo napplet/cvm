@@ -16,26 +16,35 @@ const candidatePath = join(import.meta.dir, "..", "..", "toolchains/candidates/i
 test("pinned release execution session construction makes no provider call", async () => {
   const root = await mkdtemp(join(tmpdir(), "napplet-cvm-release-execution-"));
   const modulePath = join(root, "release-execution.mjs");
+  const deploymentConfigPath = join(root, "deployment.json");
   const source = `
-    const calls = [];
     const providers = ${JSON.stringify([...RELEASE_PRODUCTION_PROVIDER_IDS])};
     export function createReleaseExecutionSession() {
       return {
-        calls,
         registry: {
-          providers() { calls.push("providers"); return providers; },
-          async discover() { calls.push("discover"); return {}; },
-          async plan() { calls.push("plan"); return {}; },
-          async apply() { calls.push("apply"); return {}; },
-          async observe() { calls.push("observe"); return {}; },
-          async cleanup() { calls.push("cleanup"); return {}; },
+          providers() { return providers; },
+          async discover() { return {}; },
+          async plan() { return {}; },
+          async apply() { return {}; },
+          async observe() { return {}; },
+          async cleanup() { return {}; },
         },
-        async prepareAuthorizedExecution() { calls.push("prepare"); return {}; },
+        async prepareAuthorizedExecution() { return {}; },
       };
     }
   `;
   try {
     await writeFile(modulePath, source);
+    const deploymentConfig = JSON.stringify({
+      version: 1,
+      candidateSha256: "a".repeat(64),
+      sourceRevision: "b".repeat(40),
+      workspaceRoot: root,
+      factoryModuleSha256: digest(source),
+      publicSettings: { regions: ["europe-west1"] },
+      secretReferences: { googleApplicationDefaultCredentials: "gcp:adc:release" },
+    });
+    await writeFile(deploymentConfigPath, deploymentConfig);
     const session = await loadReleaseExecutionSession({
       config: {
         version: 1,
@@ -44,12 +53,17 @@ test("pinned release execution session construction makes no provider call", asy
         evidenceDirectory: join(root, "evidence"),
         credentials: "configured",
         adapter: { root, modulePath, sha256: digest(source) },
-        releaseExecution: { root, modulePath, sha256: digest(source) },
+        releaseExecution: { root, modulePath, sha256: digest(source), configPath: deploymentConfigPath, configSha256: digest(deploymentConfig) },
+        controller: {
+          candidateId: "a".repeat(64), releaseId: "c".repeat(64), topologySha256: "d".repeat(64),
+          authorizationReceiptSha256: "e".repeat(64), sourceRevision: "b".repeat(40), sourceSha256: "f".repeat(64),
+        },
       },
       candidateSha256: "a".repeat(64),
       workspace: root,
     });
-    expect((session as unknown as { calls: string[] }).calls).toEqual(["providers"]);
+    expect(Object.isFrozen(session)).toBeTrue();
+    expect(Object.keys(session).sort()).toEqual(["prepareAuthorizedExecution", "registry"]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

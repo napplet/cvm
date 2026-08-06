@@ -10,6 +10,10 @@ const PinnedModuleSchema = z.object({
   modulePath: AbsolutePathSchema,
   sha256: DigestSchema,
 }).strict();
+const PinnedDeploymentExecutionSchema = PinnedModuleSchema.extend({
+  configPath: AbsolutePathSchema,
+  configSha256: DigestSchema,
+}).strict();
 const SecretReferencesSchema = z.object({
   path: AbsolutePathSchema,
   sha256: DigestSchema,
@@ -43,7 +47,7 @@ const ProtectedCertifierConfigSchema = z.object({
   adapter: PinnedModuleSchema,
   /** One deployment-owned, hash-pinned factory for the receipt-bound release
    * session. It supplies external handles at runtime; this config never does. */
-  releaseExecution: PinnedModuleSchema.optional(),
+  releaseExecution: PinnedDeploymentExecutionSchema.optional(),
   trustRoot: PinnedModuleSchema.optional(),
   controller: ControllerProvenanceSchema.optional(),
   secretReferences: SecretReferencesSchema.optional(),
@@ -63,6 +67,7 @@ const ProtectedCertifierConfigSchema = z.object({
 const CertifierConfigSchema = z.discriminatedUnion("mode", [LocalCertifierConfigSchema, ProtectedCertifierConfigSchema]);
 type ParsedCertifierConfig = z.infer<typeof CertifierConfigSchema>;
 export type PinnedCertifierModule = z.infer<typeof PinnedModuleSchema>;
+export type PinnedDeploymentExecution = z.infer<typeof PinnedDeploymentExecutionSchema>;
 export type ProtectedCertifierConfig = z.infer<typeof ProtectedCertifierConfigSchema>;
 export type CertifierConfig = ProtectedCertifierConfig | Readonly<{
   version: 1;

@@ -143,8 +143,12 @@ function assertBounds(input: RequestInput): void {
       throw new Error("RELEASE_AUTHORIZATION_PRICE_FACT_INVALID");
     }
   }
+  const fundingRails = input.operatorFundingReadiness.rails;
+  const fundingRailNames = new Set(fundingRails.map((rail) => rail.rail));
+  const dualRailReady = fundingRails.length === 2 && fundingRailNames.has("nwc_lightning") && fundingRailNames.has("cashu");
+  const cashuOnlyCertificationReady = fundingRails.length === 1 && fundingRailNames.has("cashu");
   if ((input.operatorFundingReadiness.status === "pending" && input.operatorFundingReadiness.rails.length !== 0)
-    || (input.operatorFundingReadiness.status === "ready" && (input.operatorFundingReadiness.rails.length !== 2 || new Set(input.operatorFundingReadiness.rails.map((rail) => rail.rail)).size !== 2 || input.operatorFundingReadiness.rails.some((rail) => rail.status !== "ready" || rail.expiresAtMs <= input.expiresAtMs)))
+    || (input.operatorFundingReadiness.status === "ready" && ((!dualRailReady && !cashuOnlyCertificationReady) || fundingRailNames.size !== fundingRails.length || fundingRails.some((rail) => rail.status !== "ready" || rail.expiresAtMs <= input.expiresAtMs)))
     || (input.operatorFundingReadiness.status === "invalid" && input.operatorFundingReadiness.rails.length !== 2)) throw new Error("RELEASE_AUTHORIZATION_OPERATOR_FUNDING_INVALID");
 }
 
@@ -178,16 +182,19 @@ function receiptPayload(request: Omit<ReleaseAuthorizationRequest, "expectedRece
 export async function createAuthorizationRequest(input: AuthorizationRequestInput): Promise<ReleaseAuthorizationRequest> {
   const { estimate, ...requestInput } = input;
   if (estimate.currency !== "USD") throw new Error("RELEASE_AUTHORIZATION_CURRENCY_INVALID");
+  const operatorFundingReadiness = input.operatorFundingReadiness ?? await pendingOperatorFundingReadiness();
   const normalized: RequestInput = {
     ...requestInput,
-    version: 2,
     currency: estimate.currency,
     maximumAuthorizedCostMicros: estimate.maximumMicros,
     estimateSourceId: estimate.sourceId,
     estimateObservedAtMs: estimate.observedAtMs,
     estimateFreshUntilMs: estimate.freshUntilMs,
     ...(estimate.sourceSha256 ? { estimateSourceSha256: estimate.sourceSha256 } : {}),
-    operatorFundingReadiness: input.operatorFundingReadiness ?? await pendingOperatorFundingReadiness(),
+    operatorFundingReadiness: {
+      ...operatorFundingReadiness,
+      rails: [...operatorFundingReadiness.rails],
+    },
     supersedesAuthorizationRequestSha256: input.supersedesAuthorizationRequestSha256 ?? null,
   };
   assertBounds(normalized);

@@ -30,11 +30,10 @@ export type PreApprovalPrerequisiteDescriptor =
   }>;
 
 export function preparePreApprovalPrerequisites(input?: Readonly<{ funding?: OperatorFundingReadiness }>): readonly PreApprovalPrerequisiteDescriptor[] {
-  const fundingStatus = input?.funding?.status;
   const railStatus = (rail: "nwc_lightning" | "cashu") => {
-    if (!fundingStatus) return "readiness_required" as const;
-    if (fundingStatus === "ready") return "ready" as const;
-    return "invalid" as const;
+    const record = input?.funding?.rails.find((value) => value.rail === rail);
+    if (!record) return "readiness_required" as const;
+    return record.status === "ready" ? "ready" as const : "invalid" as const;
   };
   return Object.freeze([
     Object.freeze({ kind: "operator_funding_rail" as const, rail: "nwc_lightning" as const, status: railStatus("nwc_lightning") }),

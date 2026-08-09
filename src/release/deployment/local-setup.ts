@@ -60,6 +60,7 @@ export type LocalOperatorFundingSetupOptions = Readonly<{
   readinessStore: OperatorFundingReadinessStore;
   now?: () => number;
   expiresInMs?: number;
+  railReadinessExpiresInMs?: number;
 }>;
 
 function entropy(): string {
@@ -93,7 +94,9 @@ export async function createLocalOperatorFundingSetup(options: LocalOperatorFund
   if (!candidate.success || (request && !request.success) || !options.loopback || !options.browser || !options.secrets || !options.readinessStore) throw new Error("LOCAL_FUNDING_SETUP_INVALID");
   const now = options.now ?? Date.now;
   const expiresInMs = options.expiresInMs ?? 10 * 60 * 1000;
+  const railReadinessExpiresInMs = options.railReadinessExpiresInMs ?? 30 * 24 * 60 * 60 * 1000;
   if (!Number.isSafeInteger(expiresInMs) || expiresInMs < 60_000 || expiresInMs > 10 * 60 * 1000 || !validTime(now())) throw new Error("LOCAL_FUNDING_SETUP_INVALID");
+  if (!Number.isSafeInteger(railReadinessExpiresInMs) || railReadinessExpiresInMs < 60_000 || railReadinessExpiresInMs > 30 * 24 * 60 * 60 * 1000) throw new Error("LOCAL_FUNDING_SETUP_INVALID");
   const prerequisites = createOperatorFundingPrerequisiteController({ now });
   let active: Readonly<{ state: string; csrf: string; expiresAtMs: number; close: () => Promise<void> }> | undefined;
   const descriptor = (): LocalFundingSetupDescriptor => Object.freeze({
@@ -113,7 +116,7 @@ export async function createLocalOperatorFundingSetup(options: LocalOperatorFund
     if (!reference.success || !capabilitySha256.success || !accountScopeSha256.success) throw new Error("LOCAL_FUNDING_SECRET_STORE_REJECTED");
     await prerequisites.capture({
       rail: submission.rail, secretReference: reference.data, capabilitySha256: capabilitySha256.data,
-      accountScopeSha256: accountScopeSha256.data, expiresAtMs: active.expiresAtMs, status: "ready",
+      accountScopeSha256: accountScopeSha256.data, expiresAtMs: now() + railReadinessExpiresInMs, status: "ready",
     });
     const readiness = await prerequisites.readiness();
     await options.readinessStore.write(readiness);

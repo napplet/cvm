@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: executing
-stopped_at: Completed 07-49-PLAN.md; Plan 07-20 local funding setup open
-last_updated: "2026-08-06T23:22:18.000Z"
-last_activity: 2026-08-06
-last_activity_desc: Completed official pricing and receipt-free preapproval materialization in Plan 07-48
+stopped_at: Plan 07-20 Cashu-only funding ready; protected execution config required
+last_updated: "2026-08-09T15:33:09.000Z"
+last_activity: 2026-08-09
+last_activity_desc: Accepted Cashu-only certification funding and advanced request to protected execution config blocker
 progress:
   total_phases: 7
   completed_phases: 6
@@ -31,8 +31,8 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 Phase: 07 (admission-slo-resilience-launch-safety) — EXECUTING
 Plan: 49 of 51 complete
-Status: Plan 07-20 human checkpoint active; local NWC/Cashu setup page opened with zero provider effects
-Last activity: 2026-08-06 — Completed safe local funding setup and bounded review composition in Plan 07-49
+Status: Plan 07-20 human checkpoint active; Cashu funding ready, NWC unavailable for this run, protected execution config required
+Last activity: 2026-08-09 — Accepted Cashu-only certification funding and advanced no-effect request to protected execution config blocker
 
 Plan execution: [██████████] 89/91 milestone plans complete; Phase 7 is 49/51 complete and verification remains pending
 
@@ -41,9 +41,9 @@ Plan execution: [██████████] 89/91 milestone plans complete;
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 89/91 milestone plans executed. Plan 07-49 completed local setup/review composition; Plan 07-20 is active for local wallet entry and exact approval, followed by 07-26 execution.
+- Plans: 89/91 milestone plans executed. Plan 07-49 completed local setup/review composition; Plan 07-20 is active with Cashu funding ready, NWC unavailable for this run, protected execution materialization required, and exact approval still pending, followed by 07-26 execution.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Next checkpoint: complete the controller-opened Plan 07-20 NWC Lightning and funded Cashu setup, regenerate and approve the exact bounded request, then execute 07-26. Owner NIP-46 remains deferred to publication; no hand-authored config/evidence or pasted secret/digest is required.
+- Next checkpoint: repair protected execution materialization so the Cashu-funded request can render the exact bounded approval, then execute 07-26. Owner NIP-46 remains deferred to publication; no hand-authored config/evidence or pasted secret/digest is required.
 
 ## Performance Metrics
 
@@ -344,6 +344,7 @@ Recent decisions affecting current work:
 |---|-------------|------|--------|-----------|
 | 260805-wep | Bind protected promotion to fresh operator-authenticated source measurement before cache and evaluator | 2026-08-05 | 769fcc0 | [260805-wep](./quick/260805-wep-bind-protected-promotion-to-fresh-operat/) |
 | 260806-dxc | Replace Phase 7 env sprawl with product-level certifier configuration and safe local .env defaults | 2026-08-06 | 0041419 | [260806-dxc](./quick/260806-dxc-replace-phase-7-env-sprawl-with-product-/) |
+| 260809-cashu-cert | Allow Cashu-only operator funding for the current release certification checkpoint | 2026-08-09 | e4959bf | [260809-cashu-cert](./quick/260809-cashu-certification-gate/) |
 
 ## Deferred Items
 
@@ -355,6 +356,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-06T23:22:18.000Z
-Stopped at: Completed 07-49-PLAN.md; Plan 07-20 local funding setup open
+Last session: 2026-08-09T15:33:09.000Z
+Stopped at: Plan 07-20 Cashu-only funding ready; protected execution config required
 Resume file: .planning/phases/07-admission-slo-resilience-launch-safety/07-20-PLAN.md

@@ -466,7 +466,7 @@ Phase 7 also closes the launch-hardening work intentionally deferred from Phase 
 
 **Wave 38** *(blocked on Wave 37 completion)*
 
-- [ ] 07-20-PLAN.md — Connect any missing operator NWC Lightning and funded Cashu certification rails locally, then approve the exact structured request; owner NIP-46 remains deferred to real publication.
+- [ ] 07-20-PLAN.md — Use the saved operator Cashu certification rail, record NWC Lightning as unavailable for this run, then approve the exact structured request; owner NIP-46 remains deferred to real publication.
 
 **Wave 39** *(blocked on Wave 38 completion)*
 
@@ -490,9 +490,9 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 ### Milestone Progress Roll-up
 
 - **Phases:** Phases 1–6 are verified complete; Phase 7 awaits protected live evidence and goal verification; 6/7 phases complete (86%).
-- **Known plans:** 89/91 milestone plans executed. Plan 07-49 completed safe local setup and bounded review composition; Plan 07-20 is active for local NWC/Cashu entry and exact approval, followed by 07-26 execution.
+- **Known plans:** 89/91 milestone plans executed. Plan 07-49 completed safe local setup and bounded review composition; Plan 07-20 is active with Cashu funding ready, NWC unavailable for this run, and exact approval still pending, followed by 07-26 execution.
 - **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 49 verified complete and 5 Phase 7 requirements pending.
-- **Current checkpoint:** Plan 07-20 local setup is open for the missing NWC Lightning/Cashu connections; regenerate and approve the exact bounded request when both opaque references are ready, then run 07-26 protected live certification. Future napplet-owner NIP-46 signing occurs during publication, not preapproval.
+- **Current checkpoint:** Plan 07-20 Cashu-only certification funding is ready and the no-effect request now reaches `RELEASE_PRODUCTION_EXECUTION_CONFIG_REQUIRED`; next repair protected execution materialization, regenerate and approve the exact bounded request, then run 07-26 protected live certification. Future napplet-owner NIP-46 signing occurs during publication, not preapproval.
 - **Phase 1 preservation:** Phase 1 remains complete with its review, security, validation, verification evidence, and Phase 7 deferrals unchanged.
 
 ### Completion Reporting Contract

@@ -7,8 +7,14 @@ import { PROTECTED_SUITES } from "../../src/certification/runner";
 import { ReleaseCertificationController } from "../../src/release/controller";
 
 const digest = (value: string) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
-const candidate = { id: digest("candidate"), provider: "modal", image: `napplet-cvm/worker@sha256:${digest("worker")}`, sourceSha256: digest("source") };
+const candidate = { id: digest("candidate"), provider: "modal" as const, image: `napplet-cvm/worker@sha256:${digest("worker")}`, sourceSha256: digest("source") };
 const input = { datasetSha256: digest("dataset"), profileSha256: digest("profile"), topologySha256: digest("topology"), command: ["bun", "test"] };
+
+async function isolatedReleaseWorkspace(prefix: string): Promise<string> {
+  const workspaceRoot = join(process.cwd(), ".runtime", "release-certification", "native-discovery-v1");
+  await mkdir(workspaceRoot, { recursive: true });
+  return await mkdtemp(join(workspaceRoot, prefix));
+}
 
 test("exact eight live adapters reject local deterministic execution", async () => {
   const registry = createLiveProtectedCertificationRegistry({ candidate, input, topology: {}, collector: { collectorDigest: `sha256:${digest("collector")}`, configSha256: digest("config") } });
@@ -44,14 +50,19 @@ test("one product command is registered without hand-authored certification inpu
 });
 
 test("documented no-env command materializes a bounded authorization request without provider effects", async () => {
-  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "NAPPLET_CVM_RELEASE_WORKSPACE")), PATH: "/nonexistent" } as Record<string, string>;
-  const child = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--dry-run"], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
-  const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-  expect(code).toBe(1);
-  expect(stderr).not.toContain("RELEASE_CERTIFICATION_USAGE");
-  const result = JSON.parse(stdout);
-  expect(result).toMatchObject({ status: "authorization_required", candidateSha256: expect.stringMatching(/^[a-f0-9]{64}$/), authorizationRequestSha256: expect.stringMatching(/^[a-f0-9]{64}$/) });
-  expect(JSON.stringify(result)).not.toContain("fixture-catalog");
+  const workspace = await isolatedReleaseWorkspace("certify-no-env-");
+  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "NAPPLET_CVM_RELEASE_WORKSPACE")), NAPPLET_CVM_RELEASE_WORKSPACE: workspace, PATH: "/nonexistent" } as Record<string, string>;
+  try {
+    const child = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--dry-run"], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
+    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(code).toBe(1);
+    expect(stderr).not.toContain("RELEASE_CERTIFICATION_USAGE");
+    const result = JSON.parse(stdout);
+    expect(result).toMatchObject({ status: "authorization_required", candidateSha256: expect.stringMatching(/^[a-f0-9]{64}$/), authorizationRequestSha256: expect.stringMatching(/^[a-f0-9]{64}$/) });
+    expect(JSON.stringify(result)).not.toContain("fixture-catalog");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
 });
 
 test("status require-state exits zero only on the documented exact match", async () => {
@@ -117,33 +128,43 @@ test("workspace overrides are confined and status/resume remain candidate-bound"
 });
 
 test("a supplied receipt cannot bypass exact request matching", async () => {
-  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "NAPPLET_CVM_RELEASE_WORKSPACE")), PATH: "/nonexistent" } as Record<string, string>;
-  const receiptChild = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--receipt", "a".repeat(64)], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
-  const [receiptCode, receiptStdout, receiptStderr] = await Promise.all([receiptChild.exited, new Response(receiptChild.stdout).text(), new Response(receiptChild.stderr).text()]);
-  expect(receiptCode).toBe(1);
-  expect(receiptStdout).toBe("");
-  expect(receiptStderr).toContain("RELEASE_AUTHORIZATION_RECEIPT_INVALID");
+  const workspace = await isolatedReleaseWorkspace("certify-receipt-");
+  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "NAPPLET_CVM_RELEASE_WORKSPACE")), NAPPLET_CVM_RELEASE_WORKSPACE: workspace, PATH: "/nonexistent" } as Record<string, string>;
+  try {
+    const receiptChild = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--receipt", "a".repeat(64)], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
+    const [receiptCode, receiptStdout, receiptStderr] = await Promise.all([receiptChild.exited, new Response(receiptChild.stdout).text(), new Response(receiptChild.stderr).text()]);
+    expect(receiptCode).toBe(1);
+    expect(receiptStdout).toBe("");
+    expect(receiptStderr).toContain("RELEASE_AUTHORIZATION_RECEIPT_INVALID");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
 });
 
 test("request surfaces local funding setup before remote readiness without launchable consent", async () => {
-  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "NAPPLET_CVM_RELEASE_WORKSPACE")), PATH: "/nonexistent", NAPPLET_CVM_TEST_EXTERNAL_EFFECTS: "deny" } as Record<string, string>;
-  const child = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--request"], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
-  const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-  expect(code).toBe(1);
-  expect(stderr).not.toContain("token");
-  const result = JSON.parse(stdout);
-  expect(result).toMatchObject({
-    progress: "local_setup_required",
-    setup: { kind: "local_operator_funding_setup", status: "action_required", plan: "07-20", rails: ["nwc_lightning", "cashu"] },
-  });
-  expect(Object.values(result.zeroEffectCounters)).toEqual(expect.arrayContaining([0]));
-  expect(Object.values(result.zeroEffectCounters).every((value) => value === 0)).toBe(true);
-  expect(result).not.toHaveProperty("review");
-  expect(result).not.toHaveProperty("consentLaunches");
-  expect(result).not.toHaveProperty("readiness");
-  expect(result).not.toHaveProperty("prerequisites");
-  expect(JSON.stringify(result)).not.toContain("secret");
-  expect(JSON.stringify(result)).not.toContain("NWC");
+  const workspace = await isolatedReleaseWorkspace("certify-setup-required-");
+  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "NAPPLET_CVM_RELEASE_WORKSPACE")), NAPPLET_CVM_RELEASE_WORKSPACE: workspace, PATH: "/nonexistent", NAPPLET_CVM_TEST_EXTERNAL_EFFECTS: "deny" } as Record<string, string>;
+  try {
+    const child = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--request"], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
+    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(code).toBe(1);
+    expect(stderr).not.toContain("token");
+    const result = JSON.parse(stdout);
+    expect(result).toMatchObject({
+      progress: "local_setup_required",
+      setup: { kind: "local_operator_funding_setup", status: "action_required", plan: "07-20", rails: ["nwc_lightning", "cashu"] },
+    });
+    expect(Object.values(result.zeroEffectCounters)).toEqual(expect.arrayContaining([0]));
+    expect(Object.values(result.zeroEffectCounters).every((value) => value === 0)).toBe(true);
+    expect(result).not.toHaveProperty("review");
+    expect(result).not.toHaveProperty("consentLaunches");
+    expect(result).not.toHaveProperty("readiness");
+    expect(result).not.toHaveProperty("prerequisites");
+    expect(JSON.stringify(result)).not.toContain("secret");
+    expect(JSON.stringify(result)).not.toContain("NWC");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
 });
 
 test("product request fails closed at local funding setup before current price authority", async () => {

@@ -4,7 +4,7 @@ import { createReleaseControllerProviderRegistry } from "../src/release/native-r
 import { loadCertifierConfig } from "../src/certification/config";
 import { loadReleaseExecutionReadiness, loadReleaseExecutionSession } from "../src/release/production-execution";
 import { preparePreApprovalPrerequisites } from "../src/release/deployment/consent";
-import { pendingOperatorFundingReadiness, validateOperatorFundingReadiness } from "../src/release/deployment/operator-funding";
+import { pendingOperatorFundingReadiness, releaseCertificationFundingReadiness, validateOperatorFundingReadiness } from "../src/release/deployment/operator-funding";
 import {
   createBunLocalFundingLoopbackPort,
   createFileOperatorFundingReadinessStore,
@@ -184,11 +184,12 @@ async function main(): Promise<number> {
     }
     const candidateSha256 = !status ? await releaseCandidateSha256(candidatePath!) : undefined;
     const funding = !status ? await operatorFundingReadinessProjection(workspace) : undefined;
-    const fundingPrerequisites = funding?.status === "pending" ? undefined : funding;
+    const certificationFunding = funding ? await releaseCertificationFundingReadiness(funding) : undefined;
+    const fundingPrerequisites = certificationFunding?.status === "pending" ? undefined : certificationFunding;
     // Funding setup is a local, effect-free prerequisite. Surface it before
     // attempting remote catalog reads so a transient pricing outage cannot
     // hide the one concrete action the operator can complete locally.
-    if (request && funding?.status !== "ready") {
+    if (request && certificationFunding?.status !== "ready") {
       console.log(JSON.stringify({
         progress: "local_setup_required",
         setup: localFundingSetupDescriptor({ candidateSha256: candidateSha256! }),
@@ -207,7 +208,7 @@ async function main(): Promise<number> {
           providers: await preapprovalDiscoveryRegistry({ candidateSha256: candidateSha256!, workspace }),
           costCatalog: createCertificationBudgetCatalog({ quantityContract: RELEASE_TOPOLOGY_QUANTITY_CONTRACT }),
           requireCurrentPriceCatalog: true,
-          operatorFundingReadiness: funding,
+          operatorFundingReadiness: certificationFunding,
         });
     } catch (error) {
       if (!status && error instanceof Error && error.message === "RELEASE_CONTROLLER_LIVE_PRICE_CATALOG_REQUIRED") {
@@ -239,7 +240,7 @@ async function main(): Promise<number> {
         progress: "preapproval_blocked",
         candidateSha256: resolvedCandidateSha256,
         readiness: { capabilityDiscovery: { status: "completed", mode: "read_only" }, pricing: { status: "completed", mode: "read_only" }, execution: executionReadiness },
-        prerequisites: preparePreApprovalPrerequisites({ funding: funding! }),
+        prerequisites: preparePreApprovalPrerequisites({ funding: certificationFunding! }),
       }));
       return 1;
     }

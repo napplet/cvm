@@ -17,6 +17,14 @@ const operatorFundingReadiness = {
   ],
   readinessSha256: digest("e"),
 };
+const cashuOnlyOperatorFundingReadiness = {
+  version: 1 as const,
+  status: "ready" as const,
+  rails: [
+    { rail: "cashu" as const, secretReference: "os-secret-ref:release-cashu-01", capabilitySha256: digest("c"), accountScopeSha256: digest("d"), expiresAtMs: 2_000, status: "ready" as const },
+  ],
+  readinessSha256: digest("9"),
+};
 
 const input = (overrides: Record<string, unknown> = {}) => ({
   candidateSha256: digest("a"),
@@ -80,6 +88,11 @@ test("rejects stale estimates, unitless costs, and tampered receipt inputs", asy
 
 test("rejects cleanup that outlives the exact authorization expiry", async () => {
   await expect(createAuthorizationRequest(input({ cleanupByMs: 1_501 }))).rejects.toThrow("RELEASE_AUTHORIZATION_CLEANUP_UNBOUNDED");
+});
+
+test("accepts Cashu-only operator funding for release certification authorization", async () => {
+  const request = await createAuthorizationRequest(input({ operatorFundingReadiness: cashuOnlyOperatorFundingReadiness }));
+  expect(request.operatorFundingReadiness).toMatchObject({ status: "ready", rails: [{ rail: "cashu" }] });
 });
 
 test("every bound authorization input changes the request digest", async () => {

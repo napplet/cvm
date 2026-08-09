@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createOperatorFundingPrerequisiteController } from "../../src/release/deployment/operator-funding";
+import { createOperatorFundingPrerequisiteController, releaseCertificationFundingReadiness } from "../../src/release/deployment/operator-funding";
 
 const digest = (letter: string) => letter.repeat(64);
 const nowMs = 10_000;
@@ -40,4 +40,15 @@ test("rejects secret-shaped inputs and invalidates ready funding when a referenc
   expect(changed.status).toBe("invalid");
   expect(changed.readinessSha256).not.toBe(original.readinessSha256);
   expect(changed.rails.some((item) => item.status === "revoked")).toBeTrue();
+});
+
+test("release certification can bind a saved Cashu rail without requiring NWC", async () => {
+  const controller = createOperatorFundingPrerequisiteController({ now: () => 1_000 });
+  await controller.capture(rail("cashu", "os-secret-ref:release-cashu-01"));
+  const stored = await controller.readiness();
+  expect(stored).toMatchObject({ status: "pending", rails: [{ rail: "cashu", status: "ready" }] });
+
+  const certification = await releaseCertificationFundingReadiness(stored);
+  expect(certification).toMatchObject({ status: "ready", rails: [{ rail: "cashu", status: "ready" }] });
+  expect(certification.readinessSha256).not.toBe(stored.readinessSha256);
 });

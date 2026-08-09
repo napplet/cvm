@@ -70,6 +70,15 @@ export async function validateOperatorFundingReadiness(input: unknown): Promise<
   return Object.freeze({ ...payload, rails: Object.freeze(parsed.data.rails.map((rail) => Object.freeze({ ...rail }))), readinessSha256 });
 }
 
+export async function releaseCertificationFundingReadiness(input: OperatorFundingReadiness): Promise<OperatorFundingReadiness> {
+  const readiness = await validateOperatorFundingReadiness(input);
+  if (readiness.status === "ready") return readiness;
+  const cashu = readiness.rails.find((rail) => rail.rail === "cashu" && rail.status === "ready");
+  if (!cashu || readiness.rails.some((rail) => rail.rail !== "cashu" && rail.status === "ready")) return readiness;
+  const payload = { version: 1 as const, status: "ready" as const, rails: [Object.freeze({ ...cashu })] };
+  return Object.freeze({ ...payload, rails: Object.freeze(payload.rails), readinessSha256: await digest(payload) });
+}
+
 /**
  * Controller-owned prerequisite state. It stores only OS-secret locator names and
  * opaque capability/account hashes; it cannot read/open an NWC URI or Cashu wallet.

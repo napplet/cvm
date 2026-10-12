@@ -6,9 +6,9 @@ current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: executing
 stopped_at: Plan 07-20 Cashu-only funding ready; protected execution config required
-last_updated: "2026-08-09T15:33:09.000Z"
-last_activity: 2026-08-09
-last_activity_desc: Accepted Cashu-only certification funding and advanced request to protected execution config blocker
+last_updated: "2026-10-12T15:58:56.801Z"
+last_activity: 2026-10-12
+last_activity_desc: Completed quick task 261012-1cg, project README and verified development guide
 progress:
   total_phases: 7
   completed_phases: 6
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 Phase: 07 (admission-slo-resilience-launch-safety) — EXECUTING
 Plan: 49 of 51 complete
 Status: Plan 07-20 human checkpoint active; Cashu funding ready, NWC unavailable for this run, protected execution config required
-Last activity: 2026-08-09 — Accepted Cashu-only certification funding and advanced no-effect request to protected execution config blocker
+Last activity: 2026-10-12 — Completed quick task 261012-1cg: project README and verified development guide
 
 Plan execution: [██████████] 89/91 milestone plans complete; Phase 7 is 49/51 complete and verification remains pending
 
@@ -345,6 +345,7 @@ Recent decisions affecting current work:
 | 260805-wep | Bind protected promotion to fresh operator-authenticated source measurement before cache and evaluator | 2026-08-05 | 769fcc0 | [260805-wep](./quick/260805-wep-bind-protected-promotion-to-fresh-operat/) |
 | 260806-dxc | Replace Phase 7 env sprawl with product-level certifier configuration and safe local .env defaults | 2026-08-06 | 0041419 | [260806-dxc](./quick/260806-dxc-replace-phase-7-env-sprawl-with-product-/) |
 | 260809-cashu-cert | Allow Cashu-only operator funding for the current release certification checkpoint | 2026-08-09 | e4959bf | [260809-cashu-cert](./quick/260809-cashu-certification-gate/) |
+| 261012-1cg | Create project README with verified developer setup and architecture | 2026-10-12 | 9da978d | [261012-1cg](./quick/261012-1cg-create-a-concise-accurate-project-readme/) |
 
 ## Deferred Items
 

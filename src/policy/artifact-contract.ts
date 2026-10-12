@@ -5,15 +5,14 @@ export type ArtifactContractInput = {
   readonly purpose: { readonly kind: "focused" | "arbitrary-site" | "full-stack"; readonly statements: readonly string[] };
   readonly surface: { readonly hasBackend: boolean; readonly hasSecondPurpose: boolean; readonly serviceWorker: boolean; readonly dynamicAuthority: boolean };
   readonly dependencies: { readonly appOwnedSignerOrRelay: boolean; readonly privateNappletImport: boolean };
-  readonly capabilities: { readonly declaredHard: readonly string[]; readonly observedDomains: readonly string[]; readonly optionalIntentPresenceRead: boolean; readonly intentUsedThroughSdk: boolean };
+  readonly capabilities: { readonly declaredHard: readonly string[]; readonly declaredOptional?: readonly string[]; readonly observedDomains: readonly string[]; readonly optionalIntentPresenceRead: boolean; readonly intentUsedThroughSdk: boolean };
   readonly upstream: { readonly scanner: { readonly verdict: UpstreamVerdict; readonly checkId?: string }; readonly conformance: { readonly verdict: UpstreamVerdict; readonly checkId?: string } };
 };
 
 export type ArtifactContractFinding = { readonly owner: "upstream" | "cvm-gap"; readonly checkId: string; readonly reason: string };
 export type ArtifactContractDecision = { readonly verdict: "pass" | "block" | "manual_review"; readonly findings: readonly ArtifactContractFinding[]; readonly evidenceSha256: string };
 
-const SHA256 = /^[a-f0-9]{64}$/i;
-const KNOWN_DOMAINS = new Set(["storage", "intent"]);
+const KNOWN_DOMAINS = new Set(["storage", "intent", "gamepad"]);
 
 async function sha256(value: unknown): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalJson(value)));
@@ -53,7 +52,11 @@ export async function evaluateArtifactContract(input: ArtifactContractInput): Pr
 
   const hard = [...input.capabilities.declaredHard];
   const observed = [...input.capabilities.observedDomains];
-  if (new Set(hard).size !== hard.length || new Set(observed).size !== observed.length || hard.some((domain) => !KNOWN_DOMAINS.has(domain)) || observed.some((domain) => !KNOWN_DOMAINS.has(domain)) || observed.some((domain) => !hard.includes(domain) && domain !== "intent")) {
+  const optional = [...(input.capabilities.declaredOptional ?? [])];
+  if (new Set(optional).size !== optional.length || optional.some((domain) => domain !== "gamepad" || hard.includes(domain))) {
+    return decision([finding("cvm-gap", "cvm:capability:necessary-hard", "optional controller declaration is unknown, duplicated, or also required")]);
+  }
+  if (new Set(hard).size !== hard.length || new Set(observed).size !== observed.length || hard.some((domain) => !KNOWN_DOMAINS.has(domain)) || observed.some((domain) => !KNOWN_DOMAINS.has(domain)) || observed.some((domain) => !hard.includes(domain) && domain !== "intent" && !optional.includes(domain))) {
     return decision([finding("cvm-gap", "cvm:capability:necessary-hard", "capability set is unknown, duplicated, or observed without declaration")]);
   }
   if (hard.some((domain) => !observed.includes(domain))) return decision([finding("cvm-gap", "cvm:capability:necessary-hard", "every hard capability must be observed in the focused path")]);

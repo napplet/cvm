@@ -113,3 +113,5 @@ The checked-in local configuration is evidence-only. It reports `RELEASE_PRODUCT
 ## Development
 
 Read [AGENTS.md](AGENTS.md) before changing the repository. Work is tracked through GSD: use `gsd-quick` for small changes, `gsd-debug` for investigations, and `gsd-execute-phase` for planned implementation. Keep the service dependencies in `bun.lock` and generated-napplet toolchains in `toolchains/` aligned with their verification evidence, and run the tests relevant to your change.
+
+Controller generation and capability review are covered in [GAMEPAD authoring](docs/gamepad.md). The sealed toolchain must include a compatible SDK/runtime release before controller artifacts can be promoted.

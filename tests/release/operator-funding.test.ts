@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createOperatorFundingPrerequisiteController, releaseCertificationFundingReadiness } from "../../src/release/deployment/operator-funding";
+import { createOperatorFundingPrerequisiteController, releaseCertificationFundingReadiness, validateOperatorFundingReadiness } from "../../src/release/deployment/operator-funding";
 
 const digest = (letter: string) => letter.repeat(64);
 const nowMs = 10_000;
@@ -48,7 +48,31 @@ test("release certification can bind a saved Cashu rail without requiring NWC", 
   const stored = await controller.readiness();
   expect(stored).toMatchObject({ status: "pending", rails: [{ rail: "cashu", status: "ready" }] });
 
-  const certification = await releaseCertificationFundingReadiness(stored);
+  const certification = await releaseCertificationFundingReadiness(stored, nowMs);
   expect(certification).toMatchObject({ status: "ready", rails: [{ rail: "cashu", status: "ready" }] });
   expect(certification.readinessSha256).not.toBe(stored.readinessSha256);
+});
+
+test.each([false, true])("saved funding readiness expires at the boundary without renewal (dual rail: %s)", async (dualRail) => {
+  const controller = createOperatorFundingPrerequisiteController({ now: () => nowMs });
+  if (dualRail) await controller.capture(rail("nwc_lightning", "os-secret-ref:release-nwc-01"));
+  await controller.capture(rail("cashu", "os-secret-ref:release-cashu-01"));
+  const stored = await controller.readiness();
+  const before = JSON.stringify(stored);
+  const expiresAtMs = nowMs + 60_000;
+  expect((await releaseCertificationFundingReadiness(stored, expiresAtMs - 1)).status).toBe("ready");
+  const expired = await releaseCertificationFundingReadiness(stored, expiresAtMs);
+  expect(expired.status).toBe("invalid");
+  expect(expired.rails.every((item) => item.status === "expired" && item.expiresAtMs === expiresAtMs)).toBeTrue();
+  expect(expired.readinessSha256).not.toBe(stored.readinessSha256);
+  expect(await validateOperatorFundingReadiness(expired)).toEqual(expired);
+  expect(JSON.stringify(stored)).toBe(before);
+});
+
+test("certification readiness rejects invalid time and still validates the stored digest", async () => {
+  const controller = createOperatorFundingPrerequisiteController({ now: () => nowMs });
+  await controller.capture(rail("cashu", "os-secret-ref:release-cashu-01"));
+  const stored = await controller.readiness();
+  await expect(releaseCertificationFundingReadiness(stored, Number.NaN)).rejects.toThrow("OPERATOR_FUNDING_TIME_INVALID");
+  await expect(releaseCertificationFundingReadiness({ ...stored, readinessSha256: digest("0") }, nowMs)).rejects.toThrow("OPERATOR_FUNDING_READINESS_INVALID");
 });

@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { canonicalJson } from "../../promotion/schema";
 import {
   createOperatorFundingPrerequisiteController,
+  releaseCertificationFundingReadiness,
   validateOperatorFundingReadiness,
   type OperatorFundingRail,
   type OperatorFundingReadiness,
@@ -118,7 +119,7 @@ export async function createLocalOperatorFundingSetup(options: LocalOperatorFund
       rail: submission.rail, secretReference: reference.data, capabilitySha256: capabilitySha256.data,
       accountScopeSha256: accountScopeSha256.data, expiresAtMs: now() + railReadinessExpiresInMs, status: "ready",
     });
-    const readiness = await prerequisites.readiness();
+    const readiness = await releaseCertificationFundingReadiness(await prerequisites.readiness(), now());
     await options.readinessStore.write(readiness);
     if (readiness.status === "ready") {
       await active.close();
@@ -137,7 +138,7 @@ export async function createLocalOperatorFundingSetup(options: LocalOperatorFund
       if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || url.searchParams.get("state") !== state) throw new Error("LOCAL_FUNDING_LOOPBACK_REJECTED");
       await options.browser.open(listener.url);
     },
-    async readiness(): Promise<OperatorFundingReadiness> { return prerequisites.readiness(); },
+    async readiness(): Promise<OperatorFundingReadiness> { return releaseCertificationFundingReadiness(await prerequisites.readiness(), now()); },
   });
 }
 
@@ -192,12 +193,12 @@ export function createMacOsBrowserPort(): LocalFundingBrowserPort {
   } });
 }
 
-const page = (state: string, csrf: string, message = "Connect both service wallets. Values go directly to macOS Keychain and are never written to this repository.") => `<!doctype html>
+const page = (state: string, csrf: string, message = "Connect the funded Cashu wallet for this certification run. NWC Lightning is optional; connect it first if available. Values go directly to macOS Keychain and are never written to this repository.") => `<!doctype html>
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta name="referrer" content="no-referrer">
 <title>napplet-cvm funding setup</title><style>body{font:16px system-ui;max-width:42rem;margin:4rem auto;padding:0 1rem;background:#10151d;color:#edf3fa}form{margin:1.5rem 0;padding:1.25rem;border:1px solid #334155;border-radius:.75rem}input,button{box-sizing:border-box;width:100%;padding:.75rem;margin-top:.6rem}button{cursor:pointer}code{color:#93c5fd}</style>
 <h1>Local funding setup</h1><p>${message}</p>
 ${(["nwc_lightning", "cashu"] as const).map((rail) => `<form method="post" action="/napplet-cvm/funding-setup"><input type="hidden" name="state" value="${state}"><input type="hidden" name="csrf" value="${csrf}"><input type="hidden" name="rail" value="${rail}"><label>${rail === "nwc_lightning" ? "NWC connection string" : "Funded Cashu wallet material"}<input required autocomplete="off" type="password" name="material"></label><button type="submit">Store ${rail === "nwc_lightning" ? "NWC" : "Cashu"} securely</button></form>`).join("")}
-<p>This page expires in ten minutes. You may close it after both entries are stored.</p></html>`;
+<p>This page expires in ten minutes. Setup completes after Cashu is stored.</p></html>`;
 
 /** A single-use loopback-only browser surface. It accepts bounded form bytes,
  * never logs requests, serves no external assets, and delays shutdown just
@@ -222,7 +223,7 @@ export function createBunLocalFundingLoopbackPort(): LocalFundingLoopbackPort {
         const material = new TextEncoder().encode(materialValue);
         try { await input.submit({ state: form.get("state"), csrf: form.get("csrf"), rail: form.get("rail"), material }); }
         finally { material.fill(0); }
-        return new Response(page(input.state, input.csrf, "Stored securely. Submit the other rail if it is still missing."), { headers: { ...headers, "content-type": "text/html; charset=utf-8" } });
+        return new Response(page(input.state, input.csrf, form.get("rail") === "cashu" ? "Cashu stored securely. Setup is complete; you may close this page." : "NWC stored securely. Submit Cashu to complete setup."), { headers: { ...headers, "content-type": "text/html; charset=utf-8" } });
       } catch { return new Response("The value was rejected. Reload the original setup page and try again.", { status: 400, headers }); }
     } });
     const url = `http://127.0.0.1:${server.port}/napplet-cvm/funding-setup?state=${input.state}`;

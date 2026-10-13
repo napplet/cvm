@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { createLiveProtectedCertificationRegistry } from "../../src/certification/live/registry";
 import { PROTECTED_SUITES } from "../../src/certification/runner";
 import { ReleaseCertificationController } from "../../src/release/controller";
+import { createOperatorFundingPrerequisiteController } from "../../src/release/deployment/operator-funding";
 
 const digest = (value: string) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
 const candidate = { id: digest("candidate"), provider: "modal" as const, image: `napplet-cvm/worker@sha256:${digest("worker")}`, sourceSha256: digest("source") };
@@ -15,6 +16,28 @@ async function isolatedReleaseWorkspace(prefix: string): Promise<string> {
   await mkdir(workspaceRoot, { recursive: true });
   return await mkdtemp(join(workspaceRoot, prefix));
 }
+
+test("expired saved Cashu readiness returns local setup before discovery or authorization", async () => {
+  const workspace = await isolatedReleaseWorkspace("certify-expired-funding-");
+  try {
+    const funding = createOperatorFundingPrerequisiteController({ now: () => 1_000 });
+    await funding.capture({ rail: "cashu", secretReference: "os-secret-ref:expired-cashu", capabilitySha256: digest("cashu"), accountScopeSha256: digest("account"), expiresAtMs: 2_000, status: "ready" });
+    const stored = JSON.stringify(await funding.readiness());
+    const path = join(workspace, "operator-funding-readiness.json");
+    await writeFile(path, stored);
+    const child = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--request"], {
+      cwd: process.cwd(), env: { ...process.env, NAPPLET_CVM_RELEASE_WORKSPACE: workspace, PATH: "/nonexistent", NAPPLET_CVM_TEST_EXTERNAL_EFFECTS: "deny" }, stdout: "pipe", stderr: "pipe",
+    });
+    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(code).toBe(1);
+    expect(stderr).not.toContain("RELEASE_AUTHORIZATION_OPERATOR_FUNDING_INVALID");
+    const result = JSON.parse(stdout);
+    expect(result.progress).toBe("local_setup_required");
+    expect(Object.values(result.zeroEffectCounters).every((value) => value === 0)).toBeTrue();
+    expect(result).not.toHaveProperty("review");
+    expect(await readFile(path, "utf8")).toBe(stored);
+  } finally { await rm(workspace, { recursive: true, force: true }); }
+});
 
 test("exact eight live adapters reject local deterministic execution", async () => {
   const registry = createLiveProtectedCertificationRegistry({ candidate, input, topology: {}, collector: { collectorDigest: `sha256:${digest("collector")}`, configSha256: digest("config") } });

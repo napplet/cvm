@@ -9,6 +9,26 @@ import { join } from "node:path";
 
 const digest = (letter: string) => letter.repeat(64);
 
+test("Cashu-only local setup completes and closes its session without NWC or secret persistence", async () => {
+  let session: Parameters<import("../../src/release/deployment/local-setup").LocalFundingLoopbackPort["listen"]>[0];
+  let closed = 0;
+  const persisted: unknown[] = [];
+  const setup = await createLocalOperatorFundingSetup({
+    candidateSha256: digest("a"), now: () => 1_000,
+    loopback: { listen: async (input) => { session = input; return { url: `http://127.0.0.1:43210/napplet-cvm/funding-setup?state=${input.state}`, close: async () => { closed += 1; } }; } },
+    browser: { open: async () => {} },
+    secrets: { store: async () => ({ secretReference: "os-secret-ref:release-cashu-01", capabilitySha256: digest("c"), accountScopeSha256: digest("d") }) },
+    readinessStore: { write: async (value) => { persisted.push(value); } },
+  });
+  await setup.launch();
+  await session!.submit({ state: session!.state, csrf: session!.csrf, rail: "cashu", material: new TextEncoder().encode("test-wallet-canary") });
+  expect(await setup.readiness()).toMatchObject({ status: "ready", rails: [{ rail: "cashu", status: "ready" }] });
+  expect(persisted.at(-1)).toMatchObject({ status: "ready", rails: [{ rail: "cashu" }] });
+  expect(JSON.stringify(persisted)).not.toContain("test-wallet-canary");
+  expect(closed).toBe(1);
+  await expect(session!.submit({ state: session!.state, csrf: session!.csrf, rail: "cashu", material: new Uint8Array([1]) })).rejects.toThrow("LOCAL_FUNDING_SESSION_REJECTED");
+});
+
 test("local funding setup binds a one-time loopback session and keeps both wallet materials out of its persisted readiness", async () => {
   const seen: Array<Readonly<{ host: string; state: string; csrf: string }>> = [];
   const launches: string[] = [];
@@ -45,6 +65,7 @@ test("local funding setup binds a one-time loopback session and keeps both walle
   expect(launches).toHaveLength(1);
 
   await submit!({ state: seen[0]!.state, csrf: seen[0]!.csrf, rail: "nwc_lightning", material: new Uint8Array([1, 2]) });
+  expect((await setup.readiness()).status).toBe("pending");
   await expect(submit!({ state: seen[0]!.state, csrf: seen[0]!.csrf, rail: "cashu", material: "chat-shaped-secret" })).rejects.toThrow("LOCAL_FUNDING_MATERIAL_REJECTED");
   await submit!({ state: seen[0]!.state, csrf: seen[0]!.csrf, rail: "cashu", material: new Uint8Array([3, 4]) });
   const readiness = await setup.readiness();

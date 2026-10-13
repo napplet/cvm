@@ -70,8 +70,20 @@ export async function validateOperatorFundingReadiness(input: unknown): Promise<
   return Object.freeze({ ...payload, rails: Object.freeze(parsed.data.rails.map((rail) => Object.freeze({ ...rail }))), readinessSha256 });
 }
 
-export async function releaseCertificationFundingReadiness(input: OperatorFundingReadiness): Promise<OperatorFundingReadiness> {
+export async function releaseCertificationFundingReadiness(input: OperatorFundingReadiness, nowMs = Date.now()): Promise<OperatorFundingReadiness> {
+  if (!Number.isSafeInteger(nowMs) || nowMs <= 0) throw new Error("OPERATOR_FUNDING_TIME_INVALID");
   const readiness = await validateOperatorFundingReadiness(input);
+  // Persisted status is a capture-time observation. Recheck expiry before
+  // presenting it as a current prerequisite; never renew the stored reference.
+  if (readiness.rails.some((rail) => rail.status === "ready" && rail.expiresAtMs <= nowMs)) {
+    const rails = Object.freeze(readiness.rails.map((rail) => Object.freeze({
+      ...rail,
+      status: rail.status === "ready" && rail.expiresAtMs <= nowMs ? "expired" as const : rail.status,
+    })));
+    const payload = { version: 1 as const, status: "invalid" as const, rails };
+    return Object.freeze({ ...payload, readinessSha256: await digest(payload) });
+  }
+  if (readiness.status === "invalid" || readiness.rails.some((rail) => rail.status !== "ready")) return readiness;
   if (readiness.status === "ready") return readiness;
   const cashu = readiness.rails.find((rail) => rail.rail === "cashu" && rail.status === "ready");
   if (!cashu || readiness.rails.some((rail) => rail.rail !== "cashu" && rail.status === "ready")) return readiness;

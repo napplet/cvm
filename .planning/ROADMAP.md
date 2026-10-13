@@ -490,9 +490,9 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 ### Milestone Progress Roll-up
 
 - **Phases:** Phases 1–6 are verified complete; Phase 7 awaits protected live evidence and goal verification; 6/7 phases complete (86%).
-- **Known plans:** 89/91 milestone plans executed. Plan 07-49 completed safe local setup and bounded review composition; Plan 07-20 is active with Cashu funding ready, NWC unavailable for this run, and exact approval still pending, followed by 07-26 execution.
+- **Known plans:** 89/91 milestone plans executed. Plan 07-49 completed safe local setup and bounded review composition; Plan 07-20 is active with expired Cashu readiness awaiting local reconnection, NWC optional for this run, and exact approval still pending, followed by 07-26 execution.
 - **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 49 verified complete and 5 Phase 7 requirements pending.
-- **Current checkpoint:** Plan 07-20 Cashu-only certification funding is ready and the no-effect request now reaches `RELEASE_PRODUCTION_EXECUTION_CONFIG_REQUIRED`; next repair protected execution materialization, regenerate and approve the exact bounded request, then run 07-26 protected live certification. Future napplet-owner NIP-46 signing occurs during publication, not preapproval.
+- **Current checkpoint:** Plan 07-20 now awaits fresh local Cashu setup after the saved readiness expired. Quick task 261012-sk1 repaired expiry handling and Cashu-only setup (677 tests passed). Next wire controller-owned production dependencies and preapproval materialization, regenerate and approve the exact bounded request, then run 07-26 protected live certification. Owner NIP-46 remains deferred to publication.
 - **Phase 1 preservation:** Phase 1 remains complete with its review, security, validation, verification evidence, and Phase 7 deferrals unchanged.
 
 ### Completion Reporting Contract

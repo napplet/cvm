@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: executing
-stopped_at: Plan 07-20 Cashu-only funding ready; protected execution config required
-last_updated: "2026-10-12T15:58:56.801Z"
+stopped_at: Plan 07-20 awaiting fresh Cashu setup; production composition gap confirmed
+last_updated: "2026-10-13T03:39:18.525Z"
 last_activity: 2026-10-12
-last_activity_desc: Completed quick task 261012-1cg, project README and verified development guide
+last_activity_desc: Repaired expired funding readiness and Cashu-only setup; 677 tests passed
 progress:
   total_phases: 7
   completed_phases: 6
@@ -31,8 +31,8 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 Phase: 07 (admission-slo-resilience-launch-safety) — EXECUTING
 Plan: 49 of 51 complete
-Status: Plan 07-20 human checkpoint active; Cashu funding ready, NWC unavailable for this run, protected execution config required
-Last activity: 2026-10-12 — Completed quick task 261012-1cg: project README and verified development guide
+Status: Plan 07-20 awaiting operator Cashu reconnection after readiness expiry; local setup opened, NWC optional, production composition still incomplete
+Last activity: 2026-10-12 — Completed quick task 261012-sk1: funding expiry and Cashu-only setup repair; 677 tests passed
 
 Plan execution: [██████████] 89/91 milestone plans complete; Phase 7 is 49/51 complete and verification remains pending
 
@@ -41,9 +41,9 @@ Plan execution: [██████████] 89/91 milestone plans complete;
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 89/91 milestone plans executed. Plan 07-49 completed local setup/review composition; Plan 07-20 is active with Cashu funding ready, NWC unavailable for this run, protected execution materialization required, and exact approval still pending, followed by 07-26 execution.
+- Plans: 89/91 milestone plans executed. Plan 07-49 completed local setup/review composition; Plan 07-20 is active with expired Cashu readiness awaiting local reconnection, NWC optional for this run, production composition/materialization incomplete, and exact approval still pending, followed by 07-26 execution.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Next checkpoint: repair protected execution materialization so the Cashu-funded request can render the exact bounded approval, then execute 07-26. Owner NIP-46 remains deferred to publication; no hand-authored config/evidence or pasted secret/digest is required.
+- Next checkpoint: complete fresh Cashu setup in the launched local page; wire controller-owned production composition and preapproval materialization, regenerate the exact bounded request, obtain local approval, then execute 07-26. Owner NIP-46 remains deferred to publication; no user-authored config/evidence or pasted secret/digest is required.
 
 ## Performance Metrics
 
@@ -330,10 +330,11 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Execute the configured protected Phase 7 certification profile and retain candidate-bound live SLO, telemetry, topology, recovery, payment/model, host/browser, upload, and relay observations.
+- Complete fresh local Cashu setup, wire the missing production dependency/materialization entrypoint, obtain exact structured authorization, and execute all eight protected Phase 7 suites.
 
 ### Blockers/Concerns
 
+- Funding readiness expired; the repaired CLI now requests local setup. The operator page was launched during autonomous resumption. Protected configuration remains local, and production dependency/preapproval builders lack CLI composition; see quick task 261012-sk1 for the source evidence.
 - No active Phase 1 blocker. Official `@napplet/cli@0.5.2` plus matching `@napplet/skills`/`@napplet/boilerplate@0.3.2` is recorded as review-ready candidate `a19fc7d283a4482c53728f4a931743576564fb3826d7f8fa1383d02578b69024` and was explicitly approved for design execution.
 - Local provenance, reproducibility, hostile/mutation, SBOM, promotion, and source-measurement gates are complete; genuine protected-live certification remains unavailable in this workspace.
 - T-07-W0-05 remains low severity and pending explicit owner acceptance; it grants no release authority.
@@ -346,6 +347,7 @@ Recent decisions affecting current work:
 | 260806-dxc | Replace Phase 7 env sprawl with product-level certifier configuration and safe local .env defaults | 2026-08-06 | 0041419 | [260806-dxc](./quick/260806-dxc-replace-phase-7-env-sprawl-with-product-/) |
 | 260809-cashu-cert | Allow Cashu-only operator funding for the current release certification checkpoint | 2026-08-09 | e4959bf | [260809-cashu-cert](./quick/260809-cashu-certification-gate/) |
 | 261012-1cg | Create project README with verified developer setup and architecture | 2026-10-12 | 9da978d | [261012-1cg](./quick/261012-1cg-create-a-concise-accurate-project-readme/) |
+| 261012-sk1 | Repair expired funding readiness and Cashu-only local setup | 2026-10-12 | a0156ce | [261012-sk1](./quick/261012-sk1-repair-expired-operator-funding-readines/) |
 
 ## Deferred Items
 
@@ -357,6 +359,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-09T15:33:09.000Z
-Stopped at: Plan 07-20 Cashu-only funding ready; protected execution config required
+Last session: 2026-10-13T03:39:18.525Z
+Stopped at: Autonomous Phase 7 reached 07-20 human action; fresh Cashu setup open, production composition gap recorded
 Resume file: .planning/phases/07-admission-slo-resilience-launch-safety/07-20-PLAN.md

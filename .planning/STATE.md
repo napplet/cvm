@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: executing
-stopped_at: Production certification deferred by user; local development is unblocked
-last_updated: "2026-10-14T22:58:02Z"
+stopped_at: Plan 07-51 complete; development funding e2e passes; production remains deferred
+last_updated: "2026-10-14T23:20:59Z"
 last_activity: 2026-10-14
-last_activity_desc: Documented production deferral and resumption criteria; development payment environment remains ready
+last_activity_desc: Completed local application funding and PostgreSQL restart/replay e2e; five-service development stack ready
 progress:
   total_phases: 7
   completed_phases: 6
-  total_plans: 91
-  completed_plans: 89
+  total_plans: 92
+  completed_plans: 90
   percent: 86
 ---
 
@@ -25,25 +25,25 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 **Core value:** A user can describe one focused applet and receive a safe, conformant napplet that can be previewed and placed directly into a compatible napplet runtime.
 **Active milestone:** v1.0 — Safe Napplet Generation MVP
-**Current focus:** Local development and application e2e integration; production certification deferred
+**Current focus:** Development funding e2e complete; production certification deferred
 
 ## Current Position
 
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
-Plan: 49 of 51 complete
+Plan: 50 of 52 complete
 Status: Local development unblocked. Production implementation and verification deferred by user on 2026-10-14; do not request production funding or approval for development work.
-Last activity: 2026-10-14 — Documented deferred production work; local payment e2e and 677 existing tests previously passed
+Last activity: 2026-10-14 — Plan 07-51 complete; two Docker e2e suites and 681 regular tests passed
 
-Plan execution: [██████████] 89/91 milestone plans complete; Phase 7 is 49/51 complete and verification remains pending
+Plan execution: [██████████] 90/92 milestone plans complete; Phase 7 is 50/52 complete and verification remains pending
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 89/91 milestone plans executed. Production-only 07-20 and 07-26 are deferred; neither is an active development prerequisite.
+- Plans: 90/92 milestone plans executed. Production-only 07-20 and 07-26 are deferred; neither is an active development prerequisite.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Next development work: application-level funding/ledger e2e using the local payment stack. Production resumption is documented in docs/runbooks/production-readiness-deferred.md and begins only when production readiness is requested.
+- Development funding coverage: real local NWC and two Cashu mints through the application coordinators into PostgreSQL, including replay and pending invoice recovery after restart. ContextVM/CEP-8 wire and full generation-session e2e remain separate follow-up work. No runnable recorded plans remain; production resumption follows docs/runbooks/production-readiness-deferred.md only when requested.
 
 ## Performance Metrics
 
@@ -330,7 +330,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Continue application-level development e2e; local payment infrastructure is ready. Production follow-up is tracked under Deferred Verification, not as a development blocker.
+- Development payment infrastructure and application funding/ledger e2e are complete (07-51). Future development coverage can extend through ContextVM/CEP-8 wire and a full generation session. Production follow-up remains under Deferred Verification.
 
 ### Blockers/Concerns
 
@@ -366,6 +366,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-14T22:58:02Z
-Stopped at: User deferred production; documented remaining work and resume criteria. Local development may continue without production gates.
-Resume file: docs/runbooks/production-readiness-deferred.md
+Last session: 2026-10-14T23:20:59Z
+Stopped at: Completed 07-51 local application funding e2e and invoice cleanup fix. All runnable recorded plans complete; production plans 07-20 and 07-26 remain deferred by user.
+Resume file: .planning/phases/07-admission-slo-resilience-launch-safety/07-51-SUMMARY.md

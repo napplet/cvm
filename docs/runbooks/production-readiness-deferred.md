@@ -11,7 +11,7 @@ This deferral does not mark Phase 7 complete or establish production readiness. 
 - Run the existing repository tests: `bun test --timeout 10000`.
 - Continue application integration using local test services. Do not request production wallet material, cloud credentials, or release authorization for development work.
 
-The payment infrastructure suite passed, including Cashu replay rejection, NWC payments and restart persistence. Application-level CEP-8 ledger integration and full generation-session e2e are separate development work; the payment suite does not establish that coverage. See [development payments](development-payments.md).
+The development tests cover payment infrastructure plus the application funding coordinators and PostgreSQL ledger, including both Cashu mints, NWC credits, exact-command/token replay and pending-invoice recovery after restart. ContextVM/CEP-8 wire negotiation and full generation-session e2e remain separate development work. See [development payments](development-payments.md).
 
 ## Work to revisit before production
 
@@ -21,6 +21,7 @@ The payment infrastructure suite passed, including Cashu replay rejection, NWC p
 | Preapproval materialization | `materializePreapproval` has no application call site. | CLI generates and measures source/config/factory inputs and produces a reviewable bounded request without operator-authored config. |
 | Google and worker transports | Deployment clients include loopback-only/injected transports. | Authenticated vendor transports with verified API contracts, durable operation reconciliation and run-owned cleanup. Removing loopback restrictions alone is insufficient. |
 | ContextVM and funding | Deployment descriptors do not perform actual protocol/settlement operations. | Real transport and settlement observations feed the funded core, with duplicate-credit and replay checks. |
+| Treasury custody and ambiguous payments | Development ledger credits do not prove persistence of newly received Cashu proofs, ownership of a spent proof after an ambiguous swap, or recovery of an NWC create response lost before its payment hash is saved. | Durable treasury proof custody/recovery, evidence tying uncertain swaps to service-owned outputs, and query-only invoice reconciliation without duplicate credit or blind reissue. Include re-encoded spent-token attempts in release tests. |
 | Protected observations | The suite factory requires concrete observation adapters; fixture success cannot stand in for them. | All eight fresh candidate-bound protected suites pass, including admission SLO, failure/recovery, telemetry, host/security, payment/model, publication and supply-chain checks. |
 | Operator checkpoint | No executable production request is ready for review; saved Cashu readiness expired. | After implementation is ready, refresh service-owned funding and obtain exact bounded approval through 07-20's local surface. Owner signing remains deferred to publication. |
 | Release finalization | 07-26 has not run. | Sole evaluator accepts real evidence, immutable release bundle is verified, and authorized resource cleanup is confirmed. |

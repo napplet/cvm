@@ -37,6 +37,8 @@ This runs the local promotion tracer and sealed-toolchain policy tests. These ch
 
 Design evidence and fixture passes establish local behavior. Release promotion additionally requires real browser, provider, payment, model, recovery, and publication observations.
 
+For local payment development, start Docker and run `bun scripts/dev-payments.ts`. This automatically provisions a Cashu mint, local relay, and funded NWC wallet with test money. Run `bun scripts/dev-payments.ts test` for an isolated, automatically cleaned-up payment test stack. See [development payments](docs/runbooks/development-payments.md) for credentials, stop/reset commands, and coverage.
+
 ## Generation contract
 
 - **One focused applet:** bounded text ideas and revisions produce a sandboxed napplet through the pinned napplet scaffold, SDK, skills, and CLI.

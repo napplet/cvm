@@ -1,0 +1,41 @@
+services:
+  mint:
+    # v1 keyset IDs are compatible with Hub's gonuts wallet.
+    image: cashubtc/nutshell:0.19.1@sha256:53e1a46f94eb8566c86ede5f67aa6884805df7c693145aaa8a04930f65c7ac39
+    command: poetry run mint
+    environment:
+      MINT_BACKEND_BOLT11_SAT: FakeWallet
+      MINT_LISTEN_HOST: 0.0.0.0
+      MINT_LISTEN_PORT: "3338"
+      MINT_PRIVATE_KEY: napplet-cvm-development-only-no-real-funds
+      MINT_DATABASE: /data/mint
+      FAKEWALLET_BRR: "true"
+      FAKEWALLET_DELAY_INCOMING_PAYMENT: "0"
+      FAKEWALLET_DELAY_OUTGOING_PAYMENT: "0"
+    volumes:
+      - mint:/data
+    ports:
+      - "127.0.0.1:${DEV_MINT_PORT:-3338}:3338"
+  relay:
+    image: scsibug/nostr-rs-relay:0.9.0@sha256:03f54bfbffff80a50db62c9287913bd25a2dec08033b56d2122bc2550363d5c5
+    platform: linux/amd64
+    ports:
+      - "127.0.0.1:${DEV_RELAY_PORT:-7777}:8080"
+  hub:
+    image: ghcr.io/getalby/hub:v1.24.1@sha256:ca9da58cafd68e91358820a20d83d328a333a8f699007a70d9aa50538da7c129
+    environment:
+      WORK_DIR: /data
+      RELAY: ws://relay:8080
+      SEND_EVENTS_TO_ALBY: "false"
+      AUTO_LINK_ALBY_ACCOUNT: "false"
+      LOG_LEVEL: "2"
+    volumes:
+      - hub:/data
+    ports:
+      - "127.0.0.1:${DEV_HUB_PORT:-8081}:8080"
+    depends_on:
+      - mint
+      - relay
+volumes:
+  mint:
+  hub:

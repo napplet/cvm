@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 Phase: 07 (admission-slo-resilience-launch-safety) — EXECUTING
 Plan: 49 of 51 complete
 Status: Plan 07-20 awaiting operator Cashu reconnection after readiness expiry; local setup opened, NWC optional, production composition still incomplete
-Last activity: 2026-10-12 — Completed quick task 261012-sk1: funding expiry and Cashu-only setup repair; 677 tests passed
+Last activity: 2026-10-14 — Completed quick task 261014-daz: automatic local Cashu/NWC setup and payment e2e; 677 existing tests and payment e2e passed
 
 Plan execution: [██████████] 89/91 milestone plans complete; Phase 7 is 49/51 complete and verification remains pending
 
@@ -348,6 +348,7 @@ Recent decisions affecting current work:
 | 260809-cashu-cert | Allow Cashu-only operator funding for the current release certification checkpoint | 2026-08-09 | e4959bf | [260809-cashu-cert](./quick/260809-cashu-certification-gate/) |
 | 261012-1cg | Create project README with verified developer setup and architecture | 2026-10-12 | 9da978d | [261012-1cg](./quick/261012-1cg-create-a-concise-accurate-project-readme/) |
 | 261012-sk1 | Repair expired funding readiness and Cashu-only local setup | 2026-10-12 | a0156ce | [261012-sk1](./quick/261012-sk1-repair-expired-operator-funding-readines/) |
+| 261014-daz | Automatic local Cashu mint and NWC wallet with isolated e2e tests | 2026-10-14 | dc17cd9 | [261014-daz](./quick/261014-daz-automatic-local-cashu-mint-and-nwc-devel/) |
 
 ## Deferred Items
 

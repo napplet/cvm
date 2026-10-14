@@ -5,8 +5,14 @@ on:
   pull_request:
     paths:
       - "infra/dev-payments/**"
-      - "scripts/dev-payments.ts"
+      - "scripts/dev-*.ts"
+      - "src/funding/**"
+      - "src/persistence/**"
+      - "src/domain/**"
+      - "src/phase-03/**"
+      - "migrations/**"
       - "tests/dev/**"
+      - "tests/funding/**"
       - "package.json"
       - "bun.lock"
       - ".github/workflows/development-payments.yml"

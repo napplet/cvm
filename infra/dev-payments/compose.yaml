@@ -1,9 +1,9 @@
 services:
-  mint:
+  mint: &mint
     # v1 keyset IDs are compatible with Hub's gonuts wallet.
     image: cashubtc/nutshell:0.19.1@sha256:53e1a46f94eb8566c86ede5f67aa6884805df7c693145aaa8a04930f65c7ac39
     command: poetry run mint
-    environment:
+    environment: &mint-environment
       MINT_BACKEND_BOLT11_SAT: FakeWallet
       MINT_LISTEN_HOST: 0.0.0.0
       MINT_LISTEN_PORT: "3338"
@@ -16,6 +16,25 @@ services:
       - mint:/data
     ports:
       - "127.0.0.1:${DEV_MINT_PORT:-3338}:3338"
+  mint-secondary:
+    <<: *mint
+    environment:
+      <<: *mint-environment
+      MINT_PRIVATE_KEY: napplet-cvm-secondary-development-only-no-real-funds
+    volumes:
+      - mint-secondary:/data
+    ports:
+      - "127.0.0.1:${DEV_SECONDARY_MINT_PORT:-3339}:3338"
+  postgres:
+    image: postgres:17.11-alpine3.24@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    environment:
+      POSTGRES_USER: napplet_dev
+      POSTGRES_PASSWORD: development-only-no-real-funds
+      POSTGRES_DB: napplet_dev
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${DEV_POSTGRES_PORT:-55432}:5432"
   relay:
     image: scsibug/nostr-rs-relay:0.9.0@sha256:03f54bfbffff80a50db62c9287913bd25a2dec08033b56d2122bc2550363d5c5
     platform: linux/amd64
@@ -38,4 +57,6 @@ services:
       - relay
 volumes:
   mint:
+  mint-secondary:
+  postgres:
   hub:

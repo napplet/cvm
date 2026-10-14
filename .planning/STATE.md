@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: executing
-stopped_at: Phase 7 implementation gaps confirmed before operator approval; see 07-EXECUTION-BLOCKERS.md
-last_updated: "2026-10-14T22:54:50Z"
+stopped_at: Production certification deferred by user; local development is unblocked
+last_updated: "2026-10-14T22:58:02Z"
 last_activity: 2026-10-14
-last_activity_desc: Autonomous readiness audit found missing concrete deployment composition; 18 refusal/readiness tests passed
+last_activity_desc: Documented production deferral and resumption criteria; development payment environment remains ready
 progress:
   total_phases: 7
   completed_phases: 6
@@ -25,14 +25,14 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 **Core value:** A user can describe one focused applet and receive a safe, conformant napplet that can be previewed and placed directly into a compatible napplet runtime.
 **Active milestone:** v1.0 — Safe Napplet Generation MVP
-**Current focus:** Phase 07 — admission-slo-resilience-launch-safety
+**Current focus:** Local development and application e2e integration; production certification deferred
 
 ## Current Position
 
-Phase: 07 (admission-slo-resilience-launch-safety) — EXECUTING
+Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
 Plan: 49 of 51 complete
-Status: Production implementation gaps prevent a reviewable 07-20 request; gap-closure planning required before operator funding/approval
-Last activity: 2026-10-14 — Completed quick task 261014-daz: automatic local Cashu/NWC setup and payment e2e; 677 existing tests and payment e2e passed
+Status: Local development unblocked. Production implementation and verification deferred by user on 2026-10-14; do not request production funding or approval for development work.
+Last activity: 2026-10-14 — Documented deferred production work; local payment e2e and 677 existing tests previously passed
 
 Plan execution: [██████████] 89/91 milestone plans complete; Phase 7 is 49/51 complete and verification remains pending
 
@@ -41,9 +41,9 @@ Plan execution: [██████████] 89/91 milestone plans complete;
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 89/91 milestone plans executed. Plan 07-49 completed local setup/review composition; Plan 07-20 is active with expired Cashu readiness awaiting local reconnection, NWC optional for this run, production composition/materialization incomplete, and exact approval still pending, followed by 07-26 execution.
+- Plans: 89/91 milestone plans executed. Production-only 07-20 and 07-26 are deferred; neither is an active development prerequisite.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Next checkpoint: close the production implementation gaps in 07-EXECUTION-BLOCKERS.md, then generate a reviewable bounded request before operator funding/approval and 07-26 execution. The prior local setup page is no longer an active resumption point. Development Cashu/NWC funds do not satisfy live certification.
+- Next development work: application-level funding/ledger e2e using the local payment stack. Production resumption is documented in docs/runbooks/production-readiness-deferred.md and begins only when production readiness is requested.
 
 ## Performance Metrics
 
@@ -330,11 +330,11 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Close production dependency/transport/materialization gaps, then complete operator funding and exact structured authorization and execute all eight protected Phase 7 suites.
+- Continue application-level development e2e; local payment infrastructure is ready. Production follow-up is tracked under Deferred Verification, not as a development blocker.
 
 ### Blockers/Concerns
 
-- Funding readiness expired; the repaired CLI now requests local setup. The operator page was launched during autonomous resumption. Protected configuration remains local, and production dependency/preapproval builders lack CLI composition; see quick task 261012-sk1 for the source evidence.
+- Production-only concerns are deferred: expired operator funding and missing concrete deployment/preapproval composition. See docs/runbooks/production-readiness-deferred.md. Do not reopen a production wallet setup page for local development.
 - No active Phase 1 blocker. Official `@napplet/cli@0.5.2` plus matching `@napplet/skills`/`@napplet/boilerplate@0.3.2` is recorded as review-ready candidate `a19fc7d283a4482c53728f4a931743576564fb3826d7f8fa1383d02578b69024` and was explicitly approved for design execution.
 - Local provenance, reproducibility, hostile/mutation, SBOM, promotion, and source-measurement gates are complete; genuine protected-live certification remains unavailable in this workspace.
 - T-07-W0-05 remains low severity and pending explicit owner acceptance; it grants no release authority.
@@ -350,6 +350,12 @@ Recent decisions affecting current work:
 | 261012-sk1 | Repair expired funding readiness and Cashu-only local setup | 2026-10-12 | a0156ce | [261012-sk1](./quick/261012-sk1-repair-expired-operator-funding-readines/) |
 | 261014-daz | Automatic local Cashu mint and NWC wallet with isolated e2e tests | 2026-10-14 | dc17cd9 | [261014-daz](./quick/261014-daz-automatic-local-cashu-mint-and-nwc-devel/) |
 
+## Deferred Verification
+
+| Phase | Status | Reason | Resume command |
+|---|---|---|---|
+| 7 | verification_deferred_gaps | User deferred production on 2026-10-14; local development and e2e are not blocked. Concrete adapters and live evidence remain outstanding. | `$gsd-plan-phase 7 --gaps` when production readiness is requested |
+
 ## Deferred Items
 
 | Category | Item | Status | Deferred At |
@@ -360,6 +366,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-14T22:54:50Z
-Stopped at: Autonomous Phase 7 readiness audit; implementation gap-closure route needed before 07-20; no operator request is ready for approval
-Resume file: .planning/phases/07-admission-slo-resilience-launch-safety/07-EXECUTION-BLOCKERS.md
+Last session: 2026-10-14T22:58:02Z
+Stopped at: User deferred production; documented remaining work and resume criteria. Local development may continue without production gates.
+Resume file: docs/runbooks/production-readiness-deferred.md

@@ -1,5 +1,7 @@
 # Local Cashu and NWC payments
 
+Production certification is deferred and does not block this development setup. The [production follow-up](production-readiness-deferred.md) records the remaining work and when to resume it.
+
 Prerequisites: Bun, installed repository dependencies (`bun install --frozen-lockfile`), and Docker with Compose v2 running. No account, real funds, faucet, Lightning channels, or manual wallet setup is required.
 
 ```sh

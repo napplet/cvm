@@ -15,6 +15,8 @@ Turn a focused text idea into a verified Nostr applet through ContextVM.
 
 **Status: in development; live release certification is pending.** The repository contains the core services, provider adapters, deterministic tests, and release controller. Production readiness, the five-second p95 admission target, and recovery across infrastructure failures still require protected live evidence. See the [current project state](.planning/STATE.md) for the remaining release gates.
 
+Production certification is [deferred until production work resumes](docs/runbooks/production-readiness-deferred.md); it does not block local development or development e2e tests.
+
 ## Quick start
 
 Use **Git and Bun 1.3.14**, matching the checked-in CI workflow. The package declares Bun ≥1.2.0.

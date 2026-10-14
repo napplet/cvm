@@ -290,6 +290,8 @@ Plans:
 
 ### Phase 7: Admission SLO, Resilience & Launch Safety
 
+**Production deferral (2026-10-14):** User prioritized local development. Remaining production implementation, funding/approval and live verification are deferred and must not block development/e2e. Preserve the success criteria below for launch; see [production follow-up](../docs/runbooks/production-readiness-deferred.md).
+
 **Goal**: The integrated service can honestly promise immediate-or-rejected work and preserve money, sessions, artifacts, and publication effects through production failures.
 **Depends on**: Phase 6
 **Requirements**: SESS-02, OPS-01, OPS-02, OPS-03, OPS-04
@@ -490,9 +492,9 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 ### Milestone Progress Roll-up
 
 - **Phases:** Phases 1–6 are verified complete; Phase 7 awaits protected live evidence and goal verification; 6/7 phases complete (86%).
-- **Known plans:** 89/91 milestone plans executed. Plan 07-49 completed safe local setup and bounded review composition; Plan 07-20 is active with expired Cashu readiness awaiting local reconnection, NWC optional for this run, and exact approval still pending, followed by 07-26 execution.
+- **Known plans:** 89/91 milestone plans executed. Production-only 07-20 and 07-26 are deferred at user direction; local payment setup and payment-infrastructure e2e are complete.
 - **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 49 verified complete and 5 Phase 7 requirements pending.
-- **Current checkpoint:** The 2026-10-14 autonomous readiness audit confirmed production implementation gaps before 07-20 can offer a reviewable request; see `phases/07-admission-slo-resilience-launch-safety/07-EXECUTION-BLOCKERS.md`. Concrete dependency composition, real transports and preapproval wiring require gap closure first. Then complete operator funding/approval and run 07-26 protected live certification. Local development Cashu/NWC setup and its payment e2e are complete; simulated funds are not live evidence. Owner NIP-46 remains deferred to publication.
+- **Current checkpoint:** Local development is unblocked. Production gaps and resumption criteria are retained in `docs/runbooks/production-readiness-deferred.md`; resume production with `$gsd-plan-phase 7 --gaps` only when production readiness is requested. Phase 7 is not certified complete.
 - **Phase 1 preservation:** Phase 1 remains complete with its review, security, validation, verification evidence, and Phase 7 deferrals unchanged.
 
 ### Completion Reporting Contract

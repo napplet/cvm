@@ -1,5 +1,7 @@
 # Phase 7 execution readiness — 2026-10-14
 
+**Scope correction:** The user subsequently deferred production readiness. These findings block production release only, not local development. See [the deferred-production runbook](../../../docs/runbooks/production-readiness-deferred.md) for the active decision and resumption conditions.
+
 Status: implementation gaps prevent the existing operator checkpoint from becoming reviewable. Phase remains incomplete; no live certification or promotion occurred.
 
 ## Reproduced result

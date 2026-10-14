@@ -135,11 +135,19 @@ export class LightningTopUpCoordinator {
     const topUp = await this.options.repository.transact((state) => this.topUp(state, topUpId));
     this.assertObservationTarget(topUp, observed);
     if (observed.amount !== topUp.amount || observed.unit !== "sat" || Date.parse(observed.expiresAt) <= Date.parse(this.#now())) throw new Error("LIGHTNING_INVOICE_MISMATCH");
-    const sealed = await this.options.vault.seal({ accountId: topUp.accountId, topUpId, rail: "lightning" }, new TextEncoder().encode(observed.invoice), observed.expiresAt);
     const invoiceIdentityDigest = await sha256(observed.invoiceIdentity); const paymentHashDigest = await sha256(observed.paymentHash);
-    return this.options.repository.transact((state) => {
+    if (topUp.protectedMaterialId) {
+      if (topUp.invoiceIdentityDigest !== invoiceIdentityDigest || topUp.paymentHashDigest !== paymentHashDigest || topUp.expiresAt !== observed.expiresAt) throw new Error("LIGHTNING_INVOICE_MISMATCH");
+      return publicResult(topUp);
+    }
+    const sealed = await this.options.vault.seal({ accountId: topUp.accountId, topUpId, rail: "lightning" }, new TextEncoder().encode(observed.invoice), observed.expiresAt);
+    return this.options.repository.transact(async (state) => {
       const current = this.topUp(state, topUpId);
-      if (current.protectedMaterialId) return publicResult(current);
+      if (current.protectedMaterialId) {
+        await this.options.vault.expire(sealed.id);
+        if (current.invoiceIdentityDigest !== invoiceIdentityDigest || current.paymentHashDigest !== paymentHashDigest || current.expiresAt !== observed.expiresAt) throw new Error("LIGHTNING_INVOICE_MISMATCH");
+        return publicResult(current);
+      }
       const next = frozen({ ...current, state: "pending" as const, providerIntent: "completed" as const, providerReference: observed.serviceReference, expiresAt: observed.expiresAt, safeDisplayReference: observed.safeDisplayReference, protectedMaterialId: sealed.id, protectedPayloadDigest: sealed.payloadDigest, invoiceIdentityDigest, paymentHashDigest });
       state.topUps.set(topUpId, next); return publicResult(next);
     });

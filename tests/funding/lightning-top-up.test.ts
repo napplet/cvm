@@ -79,6 +79,20 @@ describe("Lightning top-up initiation and protected material", () => {
     expect(receiver.queryCalls).toBe(1);
   });
 
+  test("pending invoice polling reuses protected material and settlement expires it", async () => {
+    const { coordinator, receiver, material } = fixture();
+    const first = await coordinator.begin(request());
+    const originalId = material.snapshot()[0]!.id;
+    receiver.queryMode = "created";
+    for (let poll = 0; poll < 3; poll += 1) {
+      expect(await coordinator.observeSettlement({ principal, topUpId: first.topUpId })).toEqual(first);
+    }
+    expect(material.snapshot().map((record) => record.id)).toEqual([originalId]);
+    receiver.queryMode = "settled";
+    expect((await coordinator.observeSettlement({ principal, topUpId: first.topUpId })).state).toBe("credited");
+    expect(material.snapshot()).toHaveLength(0);
+  });
+
   test("bounds receiver calls and durably reconciles without blind invoice reissue", async () => {
     let creates = 0; let queries = 0; const signals: AbortSignal[] = [];
     const never = () => new Promise<never>(() => undefined);

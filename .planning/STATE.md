@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: executing
-stopped_at: Plan 07-20 awaiting fresh Cashu setup; production composition gap confirmed
-last_updated: "2026-10-13T03:39:18.525Z"
-last_activity: 2026-10-12
-last_activity_desc: Repaired expired funding readiness and Cashu-only setup; 677 tests passed
+stopped_at: Phase 7 implementation gaps confirmed before operator approval; see 07-EXECUTION-BLOCKERS.md
+last_updated: "2026-10-14T22:54:50Z"
+last_activity: 2026-10-14
+last_activity_desc: Autonomous readiness audit found missing concrete deployment composition; 18 refusal/readiness tests passed
 progress:
   total_phases: 7
   completed_phases: 6
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 Phase: 07 (admission-slo-resilience-launch-safety) — EXECUTING
 Plan: 49 of 51 complete
-Status: Plan 07-20 awaiting operator Cashu reconnection after readiness expiry; local setup opened, NWC optional, production composition still incomplete
+Status: Production implementation gaps prevent a reviewable 07-20 request; gap-closure planning required before operator funding/approval
 Last activity: 2026-10-14 — Completed quick task 261014-daz: automatic local Cashu/NWC setup and payment e2e; 677 existing tests and payment e2e passed
 
 Plan execution: [██████████] 89/91 milestone plans complete; Phase 7 is 49/51 complete and verification remains pending
@@ -43,7 +43,7 @@ Plan execution: [██████████] 89/91 milestone plans complete;
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
 - Plans: 89/91 milestone plans executed. Plan 07-49 completed local setup/review composition; Plan 07-20 is active with expired Cashu readiness awaiting local reconnection, NWC optional for this run, production composition/materialization incomplete, and exact approval still pending, followed by 07-26 execution.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Next checkpoint: complete fresh Cashu setup in the launched local page; wire controller-owned production composition and preapproval materialization, regenerate the exact bounded request, obtain local approval, then execute 07-26. Owner NIP-46 remains deferred to publication; no user-authored config/evidence or pasted secret/digest is required.
+- Next checkpoint: close the production implementation gaps in 07-EXECUTION-BLOCKERS.md, then generate a reviewable bounded request before operator funding/approval and 07-26 execution. The prior local setup page is no longer an active resumption point. Development Cashu/NWC funds do not satisfy live certification.
 
 ## Performance Metrics
 
@@ -330,7 +330,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Complete fresh local Cashu setup, wire the missing production dependency/materialization entrypoint, obtain exact structured authorization, and execute all eight protected Phase 7 suites.
+- Close production dependency/transport/materialization gaps, then complete operator funding and exact structured authorization and execute all eight protected Phase 7 suites.
 
 ### Blockers/Concerns
 
@@ -360,6 +360,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-13T03:39:18.525Z
-Stopped at: Autonomous Phase 7 reached 07-20 human action; fresh Cashu setup open, production composition gap recorded
-Resume file: .planning/phases/07-admission-slo-resilience-launch-safety/07-20-PLAN.md
+Last session: 2026-10-14T22:54:50Z
+Stopped at: Autonomous Phase 7 readiness audit; implementation gap-closure route needed before 07-20; no operator request is ready for approval
+Resume file: .planning/phases/07-admission-slo-resilience-launch-safety/07-EXECUTION-BLOCKERS.md

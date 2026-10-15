@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LocalArtifactVerifier, type TrustedCoreArtifactFacts } from "../../src/dev/local-artifact-verifier";
+import { LocalArtifactVerifier, readVerifiedArtifactFile, type TrustedCoreArtifactFacts } from "../../src/dev/local-artifact-verifier";
 
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
@@ -62,5 +62,16 @@ describe("independent development artifact verification", () => {
     await expect(new LocalArtifactVerifier().verify({ ...facts, commandEvidence: [{ name: "build", exitCode: 1 }, ...facts.commandEvidence] })).rejects.toThrow();
     await expect(new LocalArtifactVerifier().verify({ ...facts, commandEvidence: facts.commandEvidence.map((stage) => stage.name === "conformance" ? { ...stage, stdout: "0 passed, 5 failed, 5 skipped\nRESULT: NONCONFORMANT" } : stage) })).rejects.toThrow();
     await expect(new LocalArtifactVerifier().verify(changeDry(facts, (dry) => { dry.plan.items = []; }))).rejects.toThrow();
+  });
+  test("rechecks hash and containment at the later copy/serve boundary", async () => {
+    const facts = await fixture(); const verified = await new LocalArtifactVerifier().verify(facts); const file = verified.files[0]!;
+    expect(new TextDecoder().decode(await readVerifiedArtifactFile(facts.distRoot, file))).toBe(html);
+    await writeFile(join(facts.distRoot, file.path), html.replace("Ready", "Other"));
+    await expect(readVerifiedArtifactFile(facts.distRoot, file)).rejects.toThrow("ARTIFACT_FILE_HASH_MISMATCH");
+    await expect(readVerifiedArtifactFile(facts.distRoot, { ...file, path: "../index.html" })).rejects.toThrow("ARTIFACT_FILE_REJECTED");
+  });
+  test("rejects an oversized sparse file before reading its content", async () => {
+    const facts = await fixture(); await truncate(join(facts.distRoot, "index.html"), 100_000_000);
+    await expect(new LocalArtifactVerifier().verify(facts)).rejects.toThrow("ARTIFACT_FILE_REJECTED");
   });
 });

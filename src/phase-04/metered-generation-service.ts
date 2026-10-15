@@ -15,6 +15,7 @@ import { canonicalJson } from "../promotion/schema";
 import { type NappletHarness, type NappletHarnessRequest } from "./napplet-harness";
 import { evaluateAutomaticRepair } from "./repair-policy";
 import { emitLifecycleObservation, type LifecycleTelemetryPort } from "../telemetry/contracts";
+import type { SourceProposalStore } from "../dev/source-proposal-store";
 
 const DecimalSchema = z.string().regex(/^[1-9][0-9]*$/u);
 export const StartSessionCommandSchema = z.object({
@@ -58,7 +59,7 @@ async function hash(value: unknown): Promise<string> { const digest = await cryp
 export class MeteredGenerationService {
   #inFlight = new Map<string, Promise<SessionActionResult>>();
   #sessionTails = new Map<string, Promise<void>>();
-  constructor(private readonly options: Readonly<{ fundedAdmission: FundedAdmissionService; store: MeteredFundingStore; gateway: ModelGateway; worker: WorkerPort; artifactVerifier: ArtifactVerifier; riskDetector?: RiskSignalDetector; harness?: Readonly<{ runner: NappletHarness; toolchain: NappletHarnessRequest["toolchain"]; snapshotReference: string; priorArtifactId: string; approvedApplicationSurfaces: readonly string[] }>; continuation?: ContinuationService; clock?: Readonly<{ nowMs(): number }>; continuationWake?: ContinuationWakePort; telemetry?: LifecycleTelemetryPort }>) {}
+  constructor(private readonly options: Readonly<{ fundedAdmission: FundedAdmissionService; store: MeteredFundingStore; gateway: ModelGateway; worker: WorkerPort; artifactVerifier: ArtifactVerifier; proposalStore?: SourceProposalStore; riskDetector?: RiskSignalDetector; harness?: Readonly<{ runner: NappletHarness; toolchain: NappletHarnessRequest["toolchain"]; snapshotReference: string; priorArtifactId: string; approvedApplicationSurfaces: readonly string[] }>; continuation?: ContinuationService; clock?: Readonly<{ nowMs(): number }>; continuationWake?: ContinuationWakePort; telemetry?: LifecycleTelemetryPort }>) {}
 
   #continuation(): ContinuationService {
     const continuationStore = this.options.store as MeteredFundingStore & Partial<ContinuationFundingStore>;
@@ -243,7 +244,9 @@ export class MeteredGenerationService {
     // This coordinator-generated ID is persisted with provider_operations
     // before dispatch and must be echoed by every receipt.
     const providerRequestId = operationId;
-    const intent = ProviderOperationIntentSchema.parse({ operationId, providerRequestId, accountId, sessionId, actionId, expectedVersion: command.expectedVersion, actionBudgetReference: budget.reference, profileId: profile.id, priceCardId: PHASE_04_DETERMINISTIC_PRICE_CARD.id, requestFingerprint: fingerprint, maximumUnits: profile.maximumUnits, selection: "unselected" });
+    const prompt = "repair" in command ? "Repair the charged focused napplet." : "revision" in command ? command.revision : command.idea;
+    const priorForIntent = (await this.options.store.listMeteredActionsForSession(accountId, sessionId)).filter((item) => item.artifact?.artifactId).sort((left, right) => (right.artifactVersion ?? 0) - (left.artifactVersion ?? 0))[0];
+    const intent = ProviderOperationIntentSchema.parse({ operationId, providerRequestId, accountId, sessionId, actionId, expectedVersion: command.expectedVersion, actionBudgetReference: budget.reference, profileId: profile.id, priceCardId: PHASE_04_DETERMINISTIC_PRICE_CARD.id, requestFingerprint: fingerprint, prompt, ...(priorForIntent?.artifact?.artifactId ? { authorizedPriorArtifactReference: priorForIntent.artifact.artifactId } : {}), maximumUnits: profile.maximumUnits, selection: "unselected" });
     let observation: z.infer<typeof ModelObservationSchema>;
     try {
       observation = ModelObservationSchema.parse(await this.options.gateway.dispatch(intent, new AbortController().signal));
@@ -284,6 +287,11 @@ export class MeteredGenerationService {
       return result;
     }
     await this.options.store.transact(accountId, (transaction) => transaction.recordUsageReceipt({ operationId, protectedEvidenceReference: observation.receipt.provenance.protectedEvidenceReference }));
+    const proposal = observation.sourceProposalReference && this.options.proposalStore ? await this.options.proposalStore.lookup({ intent, reference: observation.sourceProposalReference }) : undefined;
+    if (observation.sourceProposalReference && !proposal) {
+      await this.options.store.transact(accountId, (transaction) => transaction.recordUsageUnknown({ operationId, providerRequestId, protectedEvidenceReference: observation.receipt.provenance.protectedEvidenceReference, reason: "mismatched_receipt" }));
+      return SessionActionResultSchema.parse({ status: "usage_unknown", code: "USAGE_UNKNOWN", accountId, sessionId, nextAction: "billing_reconciliation", operationId });
+    }
     // Workspace/checkpoint references are coordinator-owned, action-scoped
     // identities.  Revisions inherit only the prior durable verified lineage;
     // they never read a process-wide harness default shared with another user.
@@ -302,7 +310,7 @@ export class MeteredGenerationService {
       const workspaceId = workspaceLineage;
       if (this.options.harness) {
         const harness = this.options.harness.runner;
-        const outcome = await harness.run({ principalId: accountId, sessionId, actionId, expectedVersion: command.expectedVersion, policyVersion: command.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId, idea: riskSafeIdea(idea), actionKind: "repair" in command ? "repair" : "revision" in command ? "revision" : "generation", workspaceLineage, snapshotReference, priorArtifactId: prior?.artifact?.artifactId ?? `none:${sessionId}`, approvedApplicationSurfaces: this.options.harness.approvedApplicationSurfaces, toolchain: this.options.harness.toolchain });
+        const outcome = await harness.run({ principalId: accountId, sessionId, actionId, expectedVersion: command.expectedVersion, policyVersion: command.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId, ...(proposal ? { sourceProposal: proposal.proposal } : { idea: riskSafeIdea(idea) }), actionKind: "repair" in command ? "repair" : "revision" in command ? "revision" : "generation", workspaceLineage, snapshotReference, priorArtifactId: prior?.artifact?.artifactId ?? `none:${sessionId}`, approvedApplicationSurfaces: this.options.harness.approvedApplicationSurfaces, toolchain: this.options.harness.toolchain });
         completed = outcome.status === "verified";
         if (outcome.status === "verified") {
           artifactId = outcome.artifactId;
@@ -313,7 +321,7 @@ export class MeteredGenerationService {
           validationReportReference = outcome.diagnostic.evidenceIds.at(-1);
         }
       } else {
-        const request = WorkerRunRequestSchema.parse({ sessionId, actionId, expectedVersion: command.expectedVersion, policyVersion: command.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId, idea: riskSafeIdea(idea) });
+        const request = WorkerRunRequestSchema.parse({ sessionId, actionId, expectedVersion: command.expectedVersion, policyVersion: command.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId, ...(proposal ? { sourceProposalReference: proposal.proposal.reference, sourceProposalSha256: proposal.proposal.sha256, sourceProposalFiles: proposal.proposal.files } : { idea: riskSafeIdea(idea) }) });
         const workerResult = WorkerRunResultSchema.parse(await this.options.worker.run(request, new AbortController().signal));
         if (workerResult.status !== "completed") completed = false;
         else {

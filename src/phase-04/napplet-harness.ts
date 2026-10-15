@@ -4,6 +4,7 @@ import { type ArtifactVerifier } from "../phase-02/trusted-core";
 import { evaluateArtifactContract } from "../policy/artifact-contract";
 import { canonicalToolchainId, parsePromotionManifest } from "../promotion/schema";
 import { emitLifecycleObservation, type LifecycleTelemetryPort } from "../telemetry/contracts";
+import { SourceProposalSchema } from "../model/model-gateway";
 
 const WORKFLOW = ["make-napplet", "design-napplet", "build-napplet", "test-napplet"] as const;
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu);
@@ -16,7 +17,7 @@ export const PromotedToolchainEvidenceSchema = z.object({
   evidence: z.object({ build: z.string().min(1), forbiddenAuthority: z.string().min(1), verify: z.string().min(1), conformance: z.string().min(1) }).strict(),
 }).strict();
 export const NappletHarnessRequestSchema = z.object({
-  principalId: z.string().min(1), sessionId: z.string().min(1), actionId: z.string().min(1), expectedVersion: z.number().int().nonnegative(), policyVersion: z.string().min(1), capabilityGrant: z.string().min(1), workspaceId: z.string().min(1), idea: z.string().min(1),
+  principalId: z.string().min(1), sessionId: z.string().min(1), actionId: z.string().min(1), expectedVersion: z.number().int().nonnegative(), policyVersion: z.string().min(1), capabilityGrant: z.string().min(1), workspaceId: z.string().min(1), idea: z.string().min(1).optional(), sourceProposal: SourceProposalSchema.optional(),
   actionKind: z.enum(["generation", "revision", "repair"]), workspaceLineage: z.string().min(1), snapshotReference: z.string().min(1), priorArtifactId: z.string().min(1), failedArtifactId: z.string().min(1).optional(), validationReportReference: z.string().min(1).optional(),
   approvedApplicationSurfaces: z.array(RelativeSurfaceSchema).min(1).max(1_000), toolchain: PromotedToolchainEvidenceSchema,
 }).strict();
@@ -75,7 +76,8 @@ export class ProjectNappletHarness implements NappletHarness {
     if (!workflow || await canonicalToolchainId(parsePromotionManifest(request.toolchain.manifest)) !== request.toolchain.toolchainId) {
       return NappletHarnessResultSchema.parse({ status: "blocked", code: "HARNESS_BLOCKED", priorArtifactId: request.priorArtifactId, diagnostic: safeDiagnostic("TOOLCHAIN_IDENTITY_INVALID", "promoted toolchain identity could not be verified", [request.toolchain.evidence.verify]) });
     }
-    const workerRequest = WorkerRunRequestSchema.parse({ sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion, capabilityGrant: request.capabilityGrant, workspaceId: request.workspaceId, idea: request.idea });
+    if (request.sourceProposal && (!request.sourceProposal.files.every((file) => request.approvedApplicationSurfaces.includes(file.path)) || request.sourceProposal.files.some((file) => file.path.startsWith("/")))) return NappletHarnessResultSchema.parse({ status: "blocked", code: "HARNESS_BLOCKED", priorArtifactId: request.priorArtifactId, diagnostic: safeDiagnostic("SOURCE_PROPOSAL_SURFACE_REJECTED", "charged source proposal exceeded its approved application surfaces", [request.toolchain.evidence.forbiddenAuthority]) });
+    const workerRequest = WorkerRunRequestSchema.parse({ sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion, capabilityGrant: request.capabilityGrant, workspaceId: request.workspaceId, ...(request.idea ? { idea: request.idea } : {}), ...(request.sourceProposal ? { sourceProposalReference: request.sourceProposal.reference, sourceProposalSha256: request.sourceProposal.sha256, sourceProposalFiles: request.sourceProposal.files } : {}) });
     let workerResult;
     try { workerResult = WorkerRunResultSchema.parse(await this.options.worker.run(workerRequest, signal)); }
     catch { return NappletHarnessResultSchema.parse({ status: "failed", code: "HARNESS_BOUNDARY_FAILED", priorArtifactId: request.priorArtifactId, diagnostic: safeDiagnostic("WORKER_BOUNDARY_FAILURE", "worker result could not be safely processed", [request.toolchain.evidence.verify]) }); }
@@ -88,7 +90,7 @@ export class ProjectNappletHarness implements NappletHarness {
       return NappletHarnessResultSchema.parse({ status: "validation_failed", code: "ARTIFACT_CONTRACT_BLOCKED", priorArtifactId: request.priorArtifactId, diagnostic: safeDiagnostic("WORKER_BINDING_INVALID", "candidate failed coordinator ownership or surface checks", [request.toolchain.evidence.forbiddenAuthority]) });
     }
     try {
-      const verified = await this.options.artifactVerifier.verify({ action: { principal: { id: request.principalId }, sessionId: request.sessionId, actionId: request.actionId, kind: "design", idempotencyKey: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion, idea: request.idea }, request: workerRequest, result: workerResult, events: workerResult.events });
+      const verified = await this.options.artifactVerifier.verify({ action: { principal: { id: request.principalId }, sessionId: request.sessionId, actionId: request.actionId, kind: "design", idempotencyKey: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion, idea: request.idea ?? "Charged source proposal" }, request: workerRequest, result: workerResult, events: workerResult.events });
       const contract = verified && await evaluateArtifactContract(verified.contractInput);
       if (!verified || !contract || contract.verdict !== "pass") {
         return NappletHarnessResultSchema.parse({ status: "validation_failed", code: "ARTIFACT_CONTRACT_BLOCKED", priorArtifactId: request.priorArtifactId, diagnostic: safeDiagnostic("ARTIFACT_CONTRACT_BLOCKED", "candidate did not pass all server-owned verification gates", [request.toolchain.evidence.forbiddenAuthority, request.toolchain.evidence.conformance]) });

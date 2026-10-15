@@ -29,7 +29,19 @@ export const SessionActionSchema = z.object({
 }).strict();
 export const ActionEnvelopeSchema = SessionActionSchema;
 
-export const WorkerRunRequestSchema = CorrelationSchema.extend({ idea: z.string().min(1) }).strict();
+const ProposalDigestSchema = z.string().regex(/^[a-f0-9]{64}$/u);
+const ProposalFileSchema = z.object({ path: z.string().regex(/^(?!\/)(?!.*(?:^|\/)\.\.?\/)[A-Za-z0-9._/-]+$/u), content: z.string().min(1).max(64_000) }).strict();
+/** Worker input is immutable charged source. `idea` remains only for legacy deterministic fixtures. */
+export const WorkerRunRequestSchema = CorrelationSchema.extend({
+  idea: z.string().min(1).optional(),
+  sourceProposalReference: z.string().regex(/^proposal:sha256:[a-f0-9]{64}$/u).optional(),
+  sourceProposalSha256: ProposalDigestSchema.optional(),
+  sourceProposalFiles: z.array(ProposalFileSchema).min(1).max(8).optional(),
+}).strict().superRefine((request, ctx) => {
+  const proposalFields = [request.sourceProposalReference, request.sourceProposalSha256, request.sourceProposalFiles];
+  if (proposalFields.some(Boolean) && proposalFields.some((field) => !field)) ctx.addIssue({ code: "custom", message: "source proposal fields must be complete" });
+  if (!request.idea && !request.sourceProposalReference) ctx.addIssue({ code: "custom", message: "worker requires a source proposal" });
+});
 
 const RelativePathSchema = z.string().min(1).max(PHASE_02_POLICY_INITIAL.tools.maxPathCharacters).refine(
   (path) => !path.includes("\0") && !path.startsWith("/") && !path.split("/").some((part) => part === "" || part === "." || part === ".."),

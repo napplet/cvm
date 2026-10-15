@@ -43,12 +43,15 @@ async function preAdmissionCase(): Promise<void> {
     const evidence = server.generationEvidence();
     if (evidence.result?.status !== "completed" || !evidence.result.artifactId || evidence.result.confirmedSpend !== "5") throw new Error("PRE_ADMISSION_DURABLE_RESULT_MISMATCH");
     if (!((await page.locator("#generation-facts").textContent())?.includes(evidence.result.artifactId))) throw new Error("PRE_ADMISSION_BROWSER_SQL_MISMATCH");
+  } catch (error) {
+    const safe = server.generationEvidence().error;
+    throw new Error(`PRE_ADMISSION_CASE_FAILED:${error instanceof Error ? error.message : "unknown"}${safe ? `:server=${safe}` : ""}`);
   } finally { await browser.close(); await server.close(); await stack.down(true); await rm(stateRoot, { recursive: true, force: true }); }
 }
 
 async function revisionCase(): Promise<void> {
   const stack = developmentStack(true); const config = await stack.up(); const stateRoot = await mkdtemp(join(tmpdir(), "napplet-cvm-54-revisions-"));
-  const browser = await chromium.launch({ headless: true }); const server = await createDevelopmentContextVmServer({ config, stateRoot, port: 0 });
+  const browser = await chromium.launch({ headless: true }); let server = await createDevelopmentContextVmServer({ config, stateRoot, port: 0 });
   try {
     const page = await browser.newPage(); await page.goto(server.url, { waitUntil: "networkidle" });
     await page.getByRole("button", { name: "Connect" }).click(); await page.getByText("Connected").waitFor();
@@ -65,6 +68,17 @@ async function revisionCase(): Promise<void> {
     await page.getByRole("button", { name: /Version 1:/ }).click(); await eventually(async () => !(await page.locator("#preview").isHidden()), "prior-preview");
     const evidence = server.generationEvidence(); if (evidence.result?.artifactVersion !== 3) throw new Error("REVISION_SQL_VERSION_MISMATCH");
     await server.assertGenerationSettlement();
+    // Exercise the same low-balance pending action after a populated revision
+    // lineage, then restart before explicit funding/resume.
+    await page.getByLabel("Maximum (sats)").fill("5000"); await page.getByLabel("Focused idea").fill("A second focused counter that waits for funding");
+    await page.getByRole("button", { name: "Generate napplet" }).click(); await page.getByText("Action saved; funding does not start it", { exact: true }).waitFor();
+    const stableUrl = server.url; await server.close(); server = await createDevelopmentContextVmServer({ config, stateRoot, port: Number(new URL(stableUrl).port) });
+    await page.goto(server.url, { waitUntil: "networkidle" }); await page.getByRole("button", { name: "Connect" }).click(); await page.getByText("Connected").waitFor(); await page.getByRole("button", { name: "Resume" }).waitFor();
+    await page.getByLabel("Cashu amount (sats)").fill("5000"); await page.getByRole("button", { name: "Fund with Cashu" }).click(); await page.getByText("Cashu credited", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Resume" }).click(); await page.getByText("Verified preview ready", { exact: true }).waitFor({ timeout: 120_000 });
+  } catch (error) {
+    const safe = server.generationEvidence().error;
+    throw new Error(`REVISION_CASE_FAILED:${error instanceof Error ? error.message : "unknown"}${safe ? `:server=${safe}` : ""}`);
   } finally { await browser.close(); await server.close(); await stack.down(true); await rm(stateRoot, { recursive: true, force: true }); }
 }
 

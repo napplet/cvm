@@ -12,7 +12,7 @@ const Stage = z.object({ name: z.enum(["create", "init", "skills", "install", "b
 const Report = z.object({ stages: z.array(Stage).min(1).max(8) }).strict();
 export type WorkerOutput = Readonly<{ distRoot: string; toolchainSha256: string; commandEvidence: readonly z.infer<typeof Stage>[]; cleanup(): Promise<void> }>;
 
-async function command(argv: string[], input: Readonly<{ deadlineMs: number; maxBytes: number; signal?: AbortSignal }>) {
+export async function runBoundedDevelopmentCommand(argv: string[], input: Readonly<{ deadlineMs: number; maxBytes: number; signal?: AbortSignal }>) {
   input.signal?.throwIfAborted();
   const child = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
   let total = 0;
@@ -63,7 +63,7 @@ export class LocalNappletWorker {
     if (sha256 !== inputProposal.proposalSha256 || sha256 !== proposal.sha256 || proposal.reference !== `proposal:sha256:${sha256}` || proposal.files.some((file) => file.path !== "src/main.ts" && file.path !== "src/styles.css") || Buffer.byteLength(JSON.stringify(proposal.files)) > 128_000) throw new Error("WORKER_SOURCE_PROPOSAL_INVALID");
     signal?.throwIfAborted();
     const docker = this.input.dockerBin ?? "docker";
-    const inspected = await command([docker, "image", "inspect", this.input.image ?? image, "--format", "{{.Id}}|{{.Os}}|{{.Architecture}}"], { deadlineMs: 15_000, maxBytes: 16_000, signal });
+    const inspected = await runBoundedDevelopmentCommand([docker, "image", "inspect", this.input.image ?? image, "--format", "{{.Id}}|{{.Os}}|{{.Architecture}}"], { deadlineMs: 15_000, maxBytes: 16_000, signal });
     const [imageId, os, arch] = inspected.stdout.trim().split("|");
     if (inspected.exitCode !== 0 || !/^sha256:[a-f0-9]{64}$/u.test(imageId ?? "") || os !== "linux" || arch !== "arm64") throw new Error("WORKER_IMAGE_PRECONDITION_FAILED");
     const workspace = await mkdtemp(join(tmpdir(), "napplet-cvm-worker-")); const input = resolve(workspace, "input"); const output = resolve(workspace, "output");
@@ -72,7 +72,7 @@ export class LocalNappletWorker {
       await mkdir(input); await mkdir(output); await chmod(output, 0o777);
       await writeFile(join(input, "proposal.json"), JSON.stringify({ proposalSha256: sha256, files: proposal.files }), { flag: "wx", mode: 0o444 });
       const args = ["run", "--name", containerName, "--label", "org.napplet-cvm.development-worker=true", "--rm", "--network", "none", "--read-only", "--user", "65532:65532", "--cpus", "2", "--memory", "2g", "--pids-limit", "256", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=256m", "--tmpfs", "/work:rw,exec,nosuid,nodev,size=512m", "--tmpfs", "/home/napplet:rw,exec,nosuid,nodev,size=128m", "-v", `${input}:/input:ro`, "-v", `${output}:/output:rw`, imageId!, "/usr/local/bin/run-proposal"];
-      const result = await command([docker, ...args], { deadlineMs: Math.max(1, Math.min(this.input.deadlineMs ?? 180_000, 180_000)), maxBytes: Math.max(1, Math.min(this.input.maxOutputBytes ?? 256_000, 256_000)), signal });
+      const result = await runBoundedDevelopmentCommand([docker, ...args], { deadlineMs: Math.max(1, Math.min(this.input.deadlineMs ?? 180_000, 180_000)), maxBytes: Math.max(1, Math.min(this.input.maxOutputBytes ?? 256_000, 256_000)), signal });
       let evidence: z.infer<typeof Report>;
       try { evidence = await report(join(output, "report.json")); }
       catch { throw new Error(result.exitCode === 0 ? "WORKER_EVIDENCE_MISSING" : "WORKER_COMMAND_FAILED"); }
@@ -82,7 +82,7 @@ export class LocalNappletWorker {
     } finally {
       // Killing the Docker CLI is insufficient: remove only this invocation's
       // exact container even when a build, stream, caller, or deadline fails.
-      await command([docker, "rm", "--force", containerName], { deadlineMs: 5_000, maxBytes: 8_000 }).catch(() => undefined);
+      await runBoundedDevelopmentCommand([docker, "rm", "--force", containerName], { deadlineMs: 5_000, maxBytes: 8_000 }).catch(() => undefined);
       if (!retained) await rm(workspace, { recursive: true, force: true });
     }
   }

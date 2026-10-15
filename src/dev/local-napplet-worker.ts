@@ -76,7 +76,10 @@ export class LocalNappletWorker {
       let evidence: z.infer<typeof Report>;
       try { evidence = await report(join(output, "report.json")); }
       catch { throw new Error(result.exitCode === 0 ? "WORKER_EVIDENCE_MISSING" : "WORKER_COMMAND_FAILED"); }
-      if (result.exitCode !== 0) throw new Error(`WORKER_COMMAND_FAILED:${evidence.stages.at(-1)!.name}`);
+      if (result.exitCode !== 0) {
+        const failed = evidence.stages.at(-1)!;
+        throw new Error(`WORKER_COMMAND_FAILED:${failed.name}`, { cause: { stage: failed.name, exitCode: failed.exitCode, stdout: failed.stdout?.slice(-4_000), stderr: failed.stderr?.slice(-4_000) } });
+      }
       retained = true;
       return Object.freeze({ distRoot: join(output, "dist"), toolchainSha256: imageId!.slice("sha256:".length), commandEvidence: evidence.stages, cleanup: async () => { await rm(workspace, { recursive: true, force: true }); } });
     } finally {

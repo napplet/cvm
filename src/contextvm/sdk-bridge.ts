@@ -32,9 +32,15 @@ export interface ContextVmTransportPort {
 }
 
 const InboundMessageSchema = z.object({
-  id: z.union([z.string(), z.number(), z.null()]),
+  jsonrpc: z.literal("2.0").optional(),
+  id: z.union([z.string(), z.number(), z.null()]).optional(),
   method: z.string().min(1),
-  params: z.unknown(),
+  params: z.unknown().optional(),
+}).passthrough();
+
+const RequestEventMetaSchema = z.object({
+  requestEventId: z.string().min(1).optional(),
+  contextvm: z.object({ requestEventId: z.string().min(1).optional() }).passthrough().optional(),
 }).passthrough();
 
 /**
@@ -43,21 +49,22 @@ const InboundMessageSchema = z.object({
  * never decide account authority or replay of a financial business effect.
  */
 export class ContextVmSdkBridge implements ContextVmTransportPort {
+  /**
+   * Diagnostic-only signed facts used by the development harness.  It carries
+   * no secret material and is deliberately overwritten rather than retained.
+   */
+  lastInbound?: Readonly<{ verifiedClientPubkey: string; requestEventId: string; method: string }>;
+  readonly observedMethods = new Set<string>();
+
   constructor(private readonly transport: NostrServerTransport) {}
 
   onInbound(handler: (input: ContextVmInboundEnvelope) => Promise<void>): void {
     this.transport.onmessage = undefined;
     this.transport.onmessageWithContext = (message, context) => {
-      const parsed = InboundMessageSchema.parse(message);
-      const requestEventId = this.requestEventId(parsed.params);
-      const event = this.transport.getNostrRequestEvent(requestEventId);
-      if (!event || event.id !== requestEventId) return;
-      return handler({
-        verifiedClientPubkey: context.clientPubkey,
-        requestEventId,
-        rawEvent: { id: event.id, tags: event.tags.map((tag) => [...tag]) },
-        request: { id: parsed.id, method: parsed.method, params: parsed.params },
-      });
+      // The SDK dispatches this callback without awaiting it.  Always consume
+      // malformed wire input here so parsing errors cannot become unhandled
+      // promise rejections in the Nostr event loop.
+      void this.handleInbound(message, context.clientPubkey, handler).catch(() => undefined);
     };
   }
 
@@ -81,11 +88,50 @@ export class ContextVmSdkBridge implements ContextVmTransportPort {
     return computeCanonicalInvocationIdentity(clientPubkey, method, params);
   }
 
-  private requestEventId(params: unknown): string {
-    const candidate = z.object({
-      _meta: z.object({ requestEventId: z.string().min(1) }).strict(),
-    }).passthrough().safeParse(params);
-    if (!candidate.success) throw new Error("CONTEXTVM_REQUEST_EVENT_ID_REQUIRED");
-    return candidate.data._meta.requestEventId;
+  private async handleInbound(message: unknown, clientPubkey: string, handler: (input: ContextVmInboundEnvelope) => Promise<void>): Promise<void> {
+    const parsedResult = InboundMessageSchema.safeParse(message);
+    if (!parsedResult.success) return;
+    const parsed = parsedResult.data;
+    this.observedMethods.add(parsed.method);
+    // JSON-RPC notifications intentionally have no id and therefore cannot be
+    // treated as a failed request or replied to by the bridge.
+    if (parsed.id === undefined) return;
+    const requestEventId = this.requestEventId(parsed.params);
+    if (!requestEventId) return;
+    const event = this.transport.getNostrRequestEvent(requestEventId);
+    if (!event || event.id !== requestEventId) return;
+    this.lastInbound = Object.freeze({ verifiedClientPubkey: clientPubkey, requestEventId, method: parsed.method });
+    if (parsed.method === "initialize") {
+      await this.sendResponse(clientPubkey, {
+        jsonrpc: "2.0", id: parsed.id,
+        result: { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "napplet-cvm-development", version: "0.1.0" } },
+      }, requestEventId);
+      return;
+    }
+    if (parsed.method === "tools/list") {
+      await this.sendResponse(clientPubkey, {
+        jsonrpc: "2.0", id: parsed.id,
+        result: { tools: ["account_status", "top_up", "funded_admission", "start_session", "revise_session", "resume_session", "session_status", "preview", "publication"].map((name) => ({ name })) },
+      }, requestEventId);
+      return;
+    }
+    if (parsed.method !== "tools/call") {
+      await this.sendResponse(clientPubkey, { jsonrpc: "2.0", id: parsed.id, error: { code: -32601, message: "ContextVM method unavailable" } }, requestEventId);
+      return;
+    }
+    await handler({
+      verifiedClientPubkey: clientPubkey,
+      requestEventId,
+      rawEvent: { id: event.id, tags: event.tags.map((tag) => [...tag]) },
+      request: { id: parsed.id, method: parsed.method, params: parsed.params ?? {} },
+    });
+  }
+
+  private requestEventId(params: unknown): string | undefined {
+    if (!params || typeof params !== "object") return undefined;
+    const values = params as Record<string, unknown>;
+    if (typeof values.requestEventId === "string" && values.requestEventId.length > 0) return values.requestEventId;
+    const candidate = RequestEventMetaSchema.safeParse(values._meta);
+    return candidate.success ? candidate.data.requestEventId ?? candidate.data.contextvm?.requestEventId : undefined;
   }
 }

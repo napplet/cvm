@@ -515,3 +515,28 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 ### Completion Reporting Contract
 
 Every future phase completion report must include this milestone roll-up: milestone ID/name, phases completed/active/remaining, executed plan counts, v1 requirement completion/coverage, and the next milestone checkpoint. A phase-only completion summary is insufficient for v1.0 tracking.
+
+## Backlog
+
+### Phase 999.1: Runtime and Remote CVM modes with shared service libraries (BACKLOG)
+
+**Goal:** Support interchangeable local Runtime CVM and Remote CVM modes for napplet access to third-party services, with equivalent interfaces and behavior across execution environments.
+**Requirements:** TBD (formal IDs assigned when promoted; captured requirements below)
+**Plans:** 0 plans
+**Captured:** 2026-10-15
+
+**Captured requirements:**
+
+- **Remote CVM:** Retain the existing remote mode, described by the user as mostly complete. When enabled, it connects to a remote service compliant with the supported interface version or versions. Compatibility must be established before using the service.
+- **Runtime CVM:** Accept CVM requests/messages from the napplet and handle connections to third-party services directly, including Jellyfin, Subsonic, Navidrome, and similar integrations. When enabled, intercept the relevant napplet CVM messages and dispatch them to the runtime implementation.
+- **Default behavior:** Runtime CVM is enabled by default and launched by the binary. Its local message interception is enabled by default.
+- **Runtime portability:** The CVM implementation must be equally capable of running in a browser, Node.js, Bun, or Deno.
+- **Service parity and reuse:** Each third-party service's Runtime CVM implementation must have parity with its Remote CVM implementation. Prefer putting most service logic in a shared library used by both modes, with environment/transport adapters where needed.
+- **Settings:** Provide **Local / Runtime CVM** and **Remote CVM** tabs. Selecting a tab enables that mode and disables the other; tabs control active routing, not only which settings are displayed. The Local / Runtime tab is selected by default.
+
+**Validation to plan:** Check shared service behavior across local/remote implementations, browser/Node.js/Bun/Deno execution, default binary startup and interception, remote interface-version compatibility, and mutually exclusive settings/routing transitions.
+
+**Planning questions:** Identify the owning runtime/binary/settings packages and exact interception boundary; decide whether the Local/Remote selection is global or per service. These details remain open for planning and do not block capture.
+
+Plans:
+- [ ] TBD (promote with $gsd-review-backlog when ready)

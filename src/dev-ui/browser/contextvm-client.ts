@@ -80,9 +80,21 @@ export class DevelopmentContextVmClient {
     return this.callTool("top_up", { idempotencyKey: `browser:nwc:${crypto.randomUUID()}`, pmi: "bitcoin-lightning-bolt11", mode: "transparent", amount }, [["pmi", "bitcoin-lightning-bolt11"], ["payment_interaction", "transparent"]]);
   }
 
+  async fundAdmission(requestedCap: string): Promise<any> {
+    return this.callTool("funded_admission", { idempotencyKey: `browser:admission:${crypto.randomUUID()}`, requestedCap, unit: "sat" });
+  }
+
+  async startSession(input: Readonly<{ admissionReference: string; maximum: string; idea: string }>): Promise<any> {
+    return this.callTool("start_session", { admissionReference: input.admissionReference, idempotencyKey: `browser:generation:${crypto.randomUUID()}`, maximum: input.maximum, idea: input.idea });
+  }
+
+  async preview(input: Readonly<{ sessionId: string; artifactId: string }>): Promise<any> {
+    return this.callTool("preview", { action: "descriptor", sessionId: input.sessionId, artifactId: input.artifactId, runtimeVariant: "development-paja-0.19.0" });
+  }
+
   async close(): Promise<void> { await this.#client?.close(); this.#client = undefined; this.#pending.clear(); }
 
-  private async callTool(name: string, argumentsValue: unknown, tags?: readonly PaymentTag[]): Promise<any> {
+  async callTool(name: string, argumentsValue: unknown, tags?: readonly PaymentTag[]): Promise<any> {
     return this.call("tools/call", { name, arguments: argumentsValue }, tags);
   }
 

@@ -11,9 +11,11 @@ export async function createPreviewServer(input: Readonly<{ repository: LocalArt
     const url = new URL(request.url); if (url.pathname === "/health") return Response.json({ status: "ok" });
     const match = /^\/preview\/([A-Za-z0-9]+)\/(.+)$/u.exec(url.pathname);
     if (!match) return new Response("not found", { status: 404 });
-    const grant = await input.grants.authorize({ token: match[1]!, path: decodeURIComponent(match[2]!) }); if (!grant) return new Response("not found", { status: 404 });
-    const stored = await input.repository.read({ artifactId: grant.artifactId, path: decodeURIComponent(match[2]!) }); if (!stored) return new Response("not found", { status: 404 });
-    return new Response(stored.bytes, { headers: { "content-type": mime.get(extname(stored.file.path)) ?? "application/octet-stream", "cache-control": "private, no-store", "access-control-allow-origin": "null", "cross-origin-resource-policy": "cross-origin", "x-content-type-options": "nosniff" } });
+    try {
+      const grant = await input.grants.authorize({ token: match[1]!, path: decodeURIComponent(match[2]!) }); if (!grant) return new Response("not found", { status: 404 });
+      const stored = await input.repository.read({ artifactId: grant.artifactId, path: decodeURIComponent(match[2]!) }); if (!stored) return new Response("not found", { status: 404 });
+      return new Response(stored.bytes, { headers: { "content-type": mime.get(extname(stored.file.path)) ?? "application/octet-stream", "cache-control": "private, no-store", "access-control-allow-origin": "null", "cross-origin-resource-policy": "cross-origin", "x-content-type-options": "nosniff" } });
+    } catch { return new Response("not found", { status: 404 }); }
   } });
   const url = `http://127.0.0.1:${server.port}`;
   return Object.freeze({ url, async openPaja(token: string): Promise<string> {

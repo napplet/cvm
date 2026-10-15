@@ -3,6 +3,7 @@ import { chromium } from "playwright";
 import { createDevelopmentContextVmServer } from "../../src/dev-ui/contextvm-server";
 
 const requestedCase = process.argv.find((arg) => arg.startsWith("--case="))?.slice("--case=".length) ?? "deterministic-real-worker-compatible-host";
+const allowSkipWithoutProviderCredentials = process.argv.includes("--allow-skip-without-provider-credentials");
 if (requestedCase !== "deterministic-real-worker-compatible-host" && requestedCase !== "boundaries-platform-provider-recovery") throw new Error(`Unknown generation preview case: ${requestedCase}`);
 const server = await createDevelopmentContextVmServer({ testMode: true });
 const browser = await chromium.launch({ headless: true });
@@ -24,7 +25,20 @@ try {
   const isolation = await appFrame.locator("body").evaluate(() => ({ origin: location.origin, nostr: typeof (window as any).nostr }));
   if (sandbox !== "allow-scripts" || isolation.origin !== "null" || isolation.nostr !== "undefined" || !facts?.includes(evidence.result.confirmedSpend) || !facts.includes(evidence.result.artifactId ?? "") || !facts.includes(evidence.result.generation.provider) || !facts.includes(evidence.result.generation.usage.map((line) => `${line.dimension}:${line.units}`).join(", "))) throw new Error("GENERATION_PREVIEW_FACTS_MISMATCH");
   if (requests.some((path) => /\/(?:account|balance|top_up|generation|session)\b/.test(path))) throw new Error(`HTTP product command detected: ${requests.join(",")}`);
-  console.log(JSON.stringify({ case: requestedCase, provider: evidence.provider, requests }));
+  let configuredProvider = "not_requested";
+  if (requestedCase === "boundaries-platform-provider-recovery") {
+    const boundary = await appFrame.locator("body").evaluate(async () => {
+      let parentStorageBlocked = false;
+      try { void window.parent.localStorage.length; } catch { parentStorageBlocked = true; }
+      let directFetchBlocked = false;
+      try { await fetch("http://127.0.0.1:9/napplet-cvm-canary"); } catch { directFetchBlocked = true; }
+      return { parentStorageBlocked, directFetchBlocked };
+    });
+    if (!boundary.parentStorageBlocked || !boundary.directFetchBlocked) throw new Error("PAJA_FRAME_AUTHORITY_BOUNDARY_FAILED");
+    configuredProvider = evidence.provider === "Configured OpenAI Responses" ? "exercised" : allowSkipWithoutProviderCredentials ? "skipped_without_credentials" : "missing_required_credentials";
+    if (configuredProvider === "missing_required_credentials") throw new Error("CONFIGURED_PROVIDER_CREDENTIALS_REQUIRED");
+  }
+  console.log(JSON.stringify({ case: requestedCase, provider: evidence.provider, configuredProvider, requests }));
 } catch (error) {
   console.error(JSON.stringify({ generation: await activePage?.locator("#generation-status").textContent(), facts: await activePage?.locator("#generation-facts").textContent(), evidence: server.generationEvidence() }));
   throw error;

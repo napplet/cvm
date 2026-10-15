@@ -270,20 +270,29 @@ export class MeteredGenerationService {
         : `start:${(await hash({ accountId, sessionId, key: command.idempotencyKey })).slice(0, 24)}`;
     const prepared = await this.options.store.transact(accountId, (transaction) => transaction.prepareMeteredAction({ accountId, idempotencyKey: command.idempotencyKey, fingerprint, sessionId, actionId, expectedVersion: command.expectedVersion, admissionReference: command.admissionReference, actionBudgetReference: budget.reference, maximum: BigInt(profileCeiling), operationId, profileId: profile.id, priceCardId: priceCard.id }));
     if (prepared.result) return SessionActionResultSchema.parse(prepared.result);
-    const claim = await this.options.store.transact(accountId, (transaction) => transaction.claimProviderOperation(operationId));
-    if (!claim.claimed && claim.action.result) return SessionActionResultSchema.parse(claim.action.result);
-    // A durable claim is the external-effect fence.  A different instance may
-    // already be waiting for the original provider response, so this caller
-    // must surface reconciliation rather than issue a second billable request.
-    if (!claim.claimed) return SessionActionResultSchema.parse({ status: "usage_unknown", code: "USAGE_UNKNOWN", accountId, sessionId, nextAction: "billing_reconciliation", operationId });
-    // This coordinator-generated ID is persisted with provider_operations
-    // before dispatch and must be echoed by every receipt.
+    const durableActionId = prepared.actionId;
+    // Construct the exact same coordinator intent before the durable claim so
+    // a later process can perform lookup-only recovery of this operation.  It
+    // must never invent a new prompt, profile/card, or provider request ID.
     const providerRequestId = operationId;
     const prompt = "repair" in command ? "Repair the charged focused napplet." : "revision" in command ? command.revision : command.idea;
     const priorForIntent = (await this.options.store.listMeteredActionsForSession(accountId, sessionId)).filter((item) => item.artifact?.artifactId).sort((left, right) => (right.artifactVersion ?? 0) - (left.artifactVersion ?? 0))[0];
-    const intent = ProviderOperationIntentSchema.parse({ operationId, providerRequestId, accountId, sessionId, actionId, expectedVersion: command.expectedVersion, actionBudgetReference: budget.reference, profileId: profile.id, priceCardId: priceCard.id, requestFingerprint: fingerprint, prompt, ...(priorForIntent?.artifact?.artifactId ? { authorizedPriorArtifactReference: priorForIntent.artifact.artifactId } : {}), maximumUnits: profile.maximumUnits, selection: "unselected" });
+    const intent = ProviderOperationIntentSchema.parse({ operationId, providerRequestId, accountId, sessionId, actionId: durableActionId, expectedVersion: command.expectedVersion, actionBudgetReference: budget.reference, profileId: profile.id, priceCardId: priceCard.id, requestFingerprint: fingerprint, prompt, ...(priorForIntent?.artifact?.artifactId ? { authorizedPriorArtifactReference: priorForIntent.artifact.artifactId } : {}), maximumUnits: profile.maximumUnits, selection: "unselected" });
+    const claim = await this.options.store.transact(accountId, (transaction) => transaction.claimProviderOperation(operationId));
+    if (!claim.claimed && claim.action.result) return SessionActionResultSchema.parse(claim.action.result);
     let observation: z.infer<typeof ModelObservationSchema>;
-    try {
+    if (!claim.claimed) {
+      // The durable provider-operation claim is the cross-process effect
+      // fence.  Recovery can only look up this exact persisted intent.
+      try {
+        const lookup = await this.options.gateway.lookup(intent, new AbortController().signal);
+        if (lookup.status === "receipt_found") observation = ModelObservationSchema.parse({ status: "completed", receipt: lookup.receipt, ...(lookup.sourceProposalReference ? { sourceProposalReference: lookup.sourceProposalReference } : {}) });
+        else if (lookup.status === "definitive_not_accepted") observation = ModelObservationSchema.parse(lookup);
+        else return SessionActionResultSchema.parse({ status: "usage_unknown", code: "USAGE_UNKNOWN", accountId, sessionId, nextAction: "billing_reconciliation", operationId });
+      } catch {
+        return SessionActionResultSchema.parse({ status: "usage_unknown", code: "USAGE_UNKNOWN", accountId, sessionId, nextAction: "billing_reconciliation", operationId });
+      }
+    } else try {
       observation = ModelObservationSchema.parse(await this.options.gateway.dispatch(intent, new AbortController().signal));
     } catch {
       // A transport exception cannot prove the provider rejected the request.
@@ -333,7 +342,7 @@ export class MeteredGenerationService {
     const history = await this.options.store.listMeteredActionsForSession(accountId, sessionId);
     const prior = [...history].filter((item) => item.artifact?.artifactId).sort((left, right) => (right.artifactVersion ?? 0) - (left.artifactVersion ?? 0))[0];
     const workspaceLineage = prior?.artifact?.workspaceLineage ?? `workspace:${sessionId}`;
-    const checkpointReference = `checkpoint:${sessionId}:${actionId}`;
+    const checkpointReference = `checkpoint:${sessionId}:${durableActionId}`;
     const snapshotReference = prior?.artifact?.snapshotReference ?? `snapshot:${sessionId}:initial`;
     let artifactId: string | undefined;
     let validationEvidenceReference = observation.receipt.provenance.protectedEvidenceReference;
@@ -345,7 +354,7 @@ export class MeteredGenerationService {
       const workspaceId = workspaceLineage;
       if (this.options.harness) {
         const harness = this.options.harness.runner;
-        const outcome = await harness.run({ principalId: accountId, sessionId, actionId, expectedVersion: command.expectedVersion, policyVersion: command.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId, ...(proposal ? { sourceProposal: proposal.proposal } : { idea: riskSafeIdea(idea) }), actionKind: "repair" in command ? "repair" : "revision" in command ? "revision" : "generation", workspaceLineage, snapshotReference, priorArtifactId: prior?.artifact?.artifactId ?? `none:${sessionId}`, approvedApplicationSurfaces: this.options.harness.approvedApplicationSurfaces, toolchain: this.options.harness.toolchain });
+        const outcome = await harness.run({ principalId: accountId, sessionId, actionId: durableActionId, expectedVersion: command.expectedVersion, policyVersion: command.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId, ...(proposal ? { sourceProposal: proposal.proposal } : { idea: riskSafeIdea(idea) }), actionKind: "repair" in command ? "repair" : "revision" in command ? "revision" : "generation", workspaceLineage, snapshotReference, priorArtifactId: prior?.artifact?.artifactId ?? `none:${sessionId}`, approvedApplicationSurfaces: this.options.harness.approvedApplicationSurfaces, toolchain: this.options.harness.toolchain });
         completed = outcome.status === "verified";
         if (outcome.status === "verified") {
           artifactId = outcome.artifactId;
@@ -356,11 +365,11 @@ export class MeteredGenerationService {
           validationReportReference = outcome.diagnostic.evidenceIds.at(-1);
         }
       } else {
-        const request = WorkerRunRequestSchema.parse({ sessionId, actionId, expectedVersion: command.expectedVersion, policyVersion: command.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId, ...(proposal ? { sourceProposalReference: proposal.proposal.reference, sourceProposalSha256: proposal.proposal.sha256, sourceProposalFiles: proposal.proposal.files } : { idea: riskSafeIdea(idea) }) });
+        const request = WorkerRunRequestSchema.parse({ sessionId, actionId: durableActionId, expectedVersion: command.expectedVersion, policyVersion: command.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId, ...(proposal ? { sourceProposalReference: proposal.proposal.reference, sourceProposalSha256: proposal.proposal.sha256, sourceProposalFiles: proposal.proposal.files } : { idea: riskSafeIdea(idea) }) });
         const workerResult = WorkerRunResultSchema.parse(await this.options.worker.run(request, new AbortController().signal));
         if (workerResult.status !== "completed") completed = false;
         else {
-          const verified = await this.options.artifactVerifier.verify({ action: { principal: { id: accountId }, sessionId, actionId, kind: "design", idempotencyKey: command.idempotencyKey, expectedVersion: command.expectedVersion, policyVersion: command.policyVersion, idea }, request, result: workerResult, events: workerResult.events });
+          const verified = await this.options.artifactVerifier.verify({ action: { principal: { id: accountId }, sessionId, actionId: durableActionId, kind: "design", idempotencyKey: command.idempotencyKey, expectedVersion: command.expectedVersion, policyVersion: command.policyVersion, idea }, request, result: workerResult, events: workerResult.events });
           completed = Boolean(verified && (await evaluateArtifactContract(verified.contractInput)).verdict === "pass");
           if (completed && verified) {
             artifactId = verified.artifact.artifactId;
@@ -373,7 +382,7 @@ export class MeteredGenerationService {
     const result = SessionActionResultSchema.parse(completed
       ? { status, code: "ACTION_COMMITTED", accountId, sessionId, sessionVersion: command.expectedVersion + 1, artifactVersion: command.expectedVersion + 1, artifactId: artifactId!, confirmedSpend: priced.total, remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId, generation: { provider: observation.receipt.provider, model: observation.receipt.model, profileId: observation.receipt.profileId, priceCardId: observation.receipt.priceCardId, usage: observation.receipt.usage, source: "durably recorded" as const, worker: "verified" as const } }
       : { status, code: "WORKER_OR_ARTIFACT_FAILED", accountId, sessionId, sessionVersion: command.expectedVersion, artifactVersion: command.expectedVersion, confirmedSpend: priced.total, remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId });
-    const finalized = await this.options.store.transact(accountId, (transaction) => transaction.finalizeMeteredAction({ idempotencyKey: command.idempotencyKey, operationId, receiptCharge: priced.total, providerReceiptReference: observation.receipt.provenance.protectedEvidenceReference, status, result, sessionVersion: completed ? command.expectedVersion + 1 : command.expectedVersion, artifactVersion: completed ? command.expectedVersion + 1 : command.expectedVersion, artifact: { ...(artifactId ? { artifactId } : {}), workspaceLineage, checkpointReference, snapshotReference: `snapshot:${sessionId}:${actionId}`, validationEvidenceReference, ...(failedArtifactId ? { failedArtifactId } : {}), ...(validationReportReference ? { validationReportReference } : {}) } }));
+    const finalized = await this.options.store.transact(accountId, (transaction) => transaction.finalizeMeteredAction({ idempotencyKey: command.idempotencyKey, operationId, receiptCharge: priced.total, providerReceiptReference: observation.receipt.provenance.protectedEvidenceReference, status, result, sessionVersion: completed ? command.expectedVersion + 1 : command.expectedVersion, artifactVersion: completed ? command.expectedVersion + 1 : command.expectedVersion, artifact: { ...(artifactId ? { artifactId } : {}), workspaceLineage, checkpointReference, snapshotReference: `snapshot:${sessionId}:${durableActionId}`, validationEvidenceReference, ...(failedArtifactId ? { failedArtifactId } : {}), ...(validationReportReference ? { validationReportReference } : {}) } }));
     await emitLifecycleObservation(this.options.telemetry, lifecycleCorrelation, "generation", "succeeded");
     await emitLifecycleObservation(this.options.telemetry, lifecycleCorrelation, "ledger_settlement", "succeeded");
     return SessionActionResultSchema.parse(finalized.result);

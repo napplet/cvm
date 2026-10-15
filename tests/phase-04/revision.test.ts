@@ -98,7 +98,9 @@ describe("same-lineage revisions", () => {
     expect(first).toMatchObject({ status: "completed", sessionId: initial.sessionId, sessionVersion: 2, artifactVersion: 2, nextAction: "revise_session" });
     expect(effects).toEqual({ dispatches: 2, workers: 2 });
     expect(store.meteredActions).toHaveLength(2);
-    expect(store.meteredActions.map((action) => action.actionId)).toEqual(["start:start", "revision:revision-1"]);
+    const actionIds = store.meteredActions.map((action) => action.actionId);
+    expect(actionIds).toEqual([expect.stringMatching(/^start:[a-f0-9]{24}$/u), expect.stringMatching(/^revision:[a-f0-9]{24}$/u)]);
+    expect(new Set(actionIds).size).toBe(2);
   });
 
   test("denies foreign, stale, and simultaneous writers before duplicate provider effects", async () => {

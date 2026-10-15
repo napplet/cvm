@@ -133,12 +133,13 @@ export class DeterministicModelGateway implements ModelGateway {
     const fingerprint = intent.requestFingerprint.slice(0, 12);
     const label = `Focus ${fingerprint}`;
     const main = [
+      'import "./styles.css";',
       'import { runtimeHasDomain } from "./domain-availability.js";',
       `const title = ${JSON.stringify(label)};`,
       'const root = document.querySelector("#app");',
       'if (!root) throw new Error("APP_ROOT_MISSING");',
       'let count = 0;',
-      'const heading = document.createElement("h1"); heading.textContent = title;',
+      'const heading = document.createElement("p"); heading.textContent = title;',
       'const value = document.createElement("output"); value.textContent = String(count);',
       'const button = document.createElement("button"); button.type = "button"; button.textContent = "Add";',
       'button.addEventListener("click", () => { count += 1; value.textContent = String(count); });',
@@ -148,7 +149,6 @@ export class DeterministicModelGateway implements ModelGateway {
     const stored = await this.#proposalStore.persist({ intent, provider: "deterministic_fixture", model: "phase-04-fixture-model", proposal: { files: [
       { path: "src/main.ts", content: main },
       { path: "src/styles.css", content: "body { font-family: system-ui, sans-serif; } button { margin: 0.5rem; }" },
-      { path: "src/domain-availability.js", content: "export const runtimeHasDomain = (domain) => domain === 'storage';" },
     ] } });
     this.#proposalReferences.set(intent.operationId, stored.proposal.reference);
     return stored.proposal.reference;

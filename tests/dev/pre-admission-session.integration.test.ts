@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createDevelopmentPool, type DevPayments } from "../../scripts/dev-payments";
+import { createDevelopmentPool, developmentStack, type DevPayments } from "../../scripts/dev-payments";
 import { accountIdForPrincipal } from "../../src/domain/account-command";
 import { PendingActionEnvelopeService } from "../../src/continuity/checkpoint-envelope";
 import { PreAdmissionSessionService } from "../../src/continuity/pre-admission-session-service";
@@ -69,12 +69,13 @@ test("save restart fund resume original operation", async () => {
 }, 30_000);
 
 test("pre-admission resume drives the original command through the real worker once", async () => {
-  const config = await Bun.file(`${import.meta.dir}/../../.local/napplet-cvm-dev-payments/payments.json`).json() as DevPayments;
-  const composition = await createDevelopmentModelComposition(config);
+  const stack = developmentStack(true);
+  let composition: Awaited<ReturnType<typeof createDevelopmentModelComposition>> | undefined;
   const keyRoot = await mkdtemp(join(tmpdir(), "napplet-pre-admission-real-worker-"));
   const owner = crypto.getRandomValues(new Uint8Array(32)); const ownerId = Buffer.from(owner).toString("hex"); const accountId = await accountIdForPrincipal({ pubkey: ownerId });
   const admissionReference = `admission:real:${crypto.randomUUID()}`;
   try {
+    composition = await createDevelopmentModelComposition(await stack.up());
     const readiness = await new LocalDevelopmentRuntimeReadiness().assertReady();
     const owners = new Map([[accountId, ownerId]]);
     const worker = new LocalProposalWorkerPort(new LocalNappletWorker({ image: readiness.imageDigest }));
@@ -87,6 +88,9 @@ test("pre-admission resume drives the original command through the real worker o
     const command = { idempotencyKey: `real-worker-${crypto.randomUUID()}`, maximum: "4000", idea: "A focused counter for this verified pending action", policyVersion: pins.policyVersion };
     const saved = await service.saveStart({ owner: { ownerId, accountId }, command });
     expect(saved.status).toBe("saved"); if (saved.status !== "saved") throw new Error("PENDING_ACTION_NOT_SAVED");
+    // The direct SQL credit below bypasses the ordinary settlement ledger, so
+    // seed its balancing account in this isolated test database.
+    await composition.funding.pool.query("INSERT INTO funding_accounts(account_id,unit) VALUES ('treasury:clearing','sat') ON CONFLICT DO NOTHING");
     await composition.funding.pool.query("INSERT INTO account_balance_projection(account_id,unit,settled_available,held) VALUES ($1,'sat',4000,4000)", [accountId]);
     await composition.funding.pool.query("INSERT INTO admissions(admission_id,account_id,reference,capacity_reference,state) VALUES ($1,$2,$3,'capacity:real','accepted')", [`admission:${accountId}`, accountId, admissionReference]);
     await composition.funding.pool.query("INSERT INTO session_cap_holds(hold_id,account_id,reference,requested_cap,held_amount,state) VALUES ($1,$2,$3,4000,4000,'active')", [`hold:${accountId}`, accountId, admissionReference]);
@@ -98,21 +102,7 @@ test("pre-admission resume drives the original command through the real worker o
     const effects = await composition.funding.pool.query("SELECT (SELECT count(*)::int FROM metered_actions WHERE account_id=$1) actions,(SELECT count(*)::int FROM provider_operations p JOIN metered_actions a ON a.id=p.action_id WHERE a.account_id=$1) providers,(SELECT count(*)::int FROM development_artifacts WHERE account_id=$1) artifacts", [accountId]);
     expect(effects.rows[0]).toEqual({ actions: 1, providers: 1, artifacts: 1 });
   } finally {
-    await composition.funding.pool.query("DELETE FROM development_preview_grants WHERE account_id=$1", [accountId]).catch(() => undefined);
-    await composition.funding.pool.query("DELETE FROM development_artifacts WHERE account_id=$1", [accountId]).catch(() => undefined);
-    await composition.funding.pool.query("DELETE FROM provider_observations WHERE account_id=$1", [accountId]).catch(() => undefined);
-    await composition.funding.pool.query("DELETE FROM source_proposals WHERE account_id=$1", [accountId]).catch(() => undefined);
-    await composition.funding.pool.query("DELETE FROM usage_receipts WHERE account_id=$1", [accountId]).catch(() => undefined);
-    await composition.funding.pool.query("DELETE FROM billing_line_items WHERE account_id=$1", [accountId]).catch(() => undefined);
-    await composition.funding.pool.query("DELETE FROM provider_operations WHERE account_id=$1", [accountId]).catch(() => undefined);
-    await composition.funding.pool.query("DELETE FROM metered_actions WHERE account_id=$1", [accountId]).catch(() => undefined);
-    await composition.funding.pool.query("DELETE FROM metered_sessions WHERE account_id=$1", [accountId]).catch(() => undefined);
-    await composition.funding.pool.query("DELETE FROM action_budget_reservations WHERE account_id=$1", [accountId]).catch(() => undefined);
-    await composition.funding.pool.query("DELETE FROM session_cap_holds WHERE account_id=$1", [accountId]).catch(() => undefined);
-    await composition.funding.pool.query("DELETE FROM admissions WHERE account_id=$1", [accountId]).catch(() => undefined);
-    await composition.funding.pool.query("DELETE FROM development_pending_actions WHERE account_id=$1", [accountId]).catch(() => undefined);
-    await composition.funding.pool.query("DELETE FROM account_balance_projection WHERE account_id=$1", [accountId]).catch(() => undefined);
-    await composition.funding.pool.query("DELETE FROM funding_accounts WHERE account_id=$1", [accountId]).catch(() => undefined);
-    await composition.close(); await rm(keyRoot, { recursive: true, force: true });
+    try { await composition?.close(); }
+    finally { await stack.down(true); await rm(keyRoot, { recursive: true, force: true }); }
   }
 }, 180_000);

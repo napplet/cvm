@@ -19,7 +19,7 @@ key-files:
   modified: [src/model/model-gateway.ts, src/model/deterministic-model-gateway.ts, src/model/price-card.ts, src/phase-02/contracts.ts, src/phase-04/metered-generation-service.ts, src/phase-04/napplet-harness.ts, scripts/dev-payments.ts]
 decisions:
   - "Generated sources are content-addressed and each operation remains independently bound to account, session, action, fingerprint, prior artifact, and approved paths before worker use."
-  - "Configured OpenAI Responses mode requires fresh source-attributed price/conversion bytes and matching rational profile/card ceilings; all-or-nothing configuration remains explicitly deterministic."
+  - "Configured OpenAI Responses mode requires fresh source-attributed price/conversion capture and matching operator-configured rational profile/card ceilings; all-or-nothing configuration remains explicitly deterministic."
 metrics:
   tasks_completed: 3
   files_modified: 14
@@ -36,7 +36,7 @@ status: complete
 - Extended model contracts with bounded prompts, authorized prior-artifact references, opaque proposal references, and terminal proposal correlations.
 - Made deterministic source generation produce safe vanilla TypeScript application surfaces (`src/main.ts`, `src/styles.css`) keyed by request fingerprint; it imports the original protected domain helper and no prompt text is interpolated into generated code.
 - Added action-bound proposal resolution before the worker boundary, while retaining legacy fixture input compatibility.
-- Added the strict development selector: only a fully absent server-only provider configuration yields `Deterministic fixture`; partial configuration fails with an actionable error. Configured OpenAI Responses requests use bounded output, authoring/system instructions, raw REST `output[]` parsing, normalized inclusive usage, source-backed rational pricing, and original-response GET reconciliation before replay can report a receipt.
+- Added the strict development selector: only a fully absent server-only provider configuration yields `Deterministic fixture`; partial configuration fails with an actionable error. Configured OpenAI Responses requests use bounded input/output, authoring/system instructions, owner-bound prior source injection, raw REST `output[]` parsing that ignores reasoning content, native model/metadata binding, normalized inclusive usage, operator-configured source-provenance checks, and original-response GET reconciliation before replay can report a receipt.
 
 ## Task Commits
 
@@ -75,7 +75,7 @@ The follow-up configured-provider correction is committed with the updated migra
 **3. [Rule 1 - Provider protocol and pricing] Corrected the configured OpenAI Responses adapter**
 - **Found during:** Post-plan review
 - **Issue:** It expected SDK-only `output_text`, double-counted cached/reasoning subsets, had no output ceiling or original-response verification, and accepted digest-only price provenance.
-- **Fix:** Parse raw REST `output[]` envelopes while tolerating provider extension fields; send bounded authoring/schema requests; normalize inclusive usage once; validate fresh raw price/conversion capture bytes against the card; and fetch the original response before lookup recovery reports a receipt.
+- **Fix:** Parse raw REST `output[]` envelopes while ignoring reasoning output; accept optional provider completion timestamps while persisting the first observed completion time; validate native model/metadata; send bounded input/output authoring/schema requests with owner-bound prior source data; normalize inclusive usage once; validate fresh raw price/conversion capture bytes against the operator-configured card; and fetch the original response before lookup recovery reports a receipt.
 - **Files modified:** `src/dev/development-model-gateway.ts`, `src/dev/source-proposal-store.ts`, `tests/dev/model-proposal.integration.test.ts`
 
 **4. [Rule 1 - Durable identity] Separated source digest from operation identity**

@@ -3,7 +3,7 @@ import { PrivateKeySigner } from "@contextvm/sdk/signer";
 
 type JsonRpcResponse = { id: string | number | null; result?: unknown; error?: { message?: string } };
 type PaymentTag = readonly [string, string, string?];
-export type DevelopmentBootstrap = Readonly<{ relayUrl: string; servicePubkey: string; reserveSat: string; actionCeilingSat: string; providerLabel: "Deterministic fixture" | "Configured OpenAI Responses" }>;
+export type DevelopmentBootstrap = Readonly<{ relayUrl: string; servicePubkey: string; reserveSat: string; actionCeilingSat: string; modelControlToken?: string; providerLabel: "Deterministic fixture" | "Configured OpenAI Responses" | "ChatGPT plan · test credits" }>;
 
 function browserSignerKey(servicePubkey: string): string {
   const storageKey = `napplet-cvm/dev-contextvm-key/v1/${servicePubkey}`;
@@ -129,16 +129,16 @@ export class DevelopmentContextVmClient {
   async close(): Promise<void> { await this.#client?.close(); this.#client = undefined; this.#pending.clear(); }
 
   async callTool(name: string, argumentsValue: unknown, tags?: readonly PaymentTag[]): Promise<any> {
-    return this.call("tools/call", { name, arguments: argumentsValue }, tags);
+    return this.call("tools/call", { name, arguments: argumentsValue }, tags, ["start_session", "revise_session", "resume_session"].includes(name) ? 330_000 : 30_000);
   }
 
-  private async call(method: string, params: unknown, tags?: readonly PaymentTag[]): Promise<any> {
+  private async call(method: string, params: unknown, tags?: readonly PaymentTag[], timeoutMs = 30_000): Promise<any> {
     if (!this.#client) throw new Error("CONTEXTVM_NOT_CONNECTED");
     const id = ++this.#nextId;
     if (tags) this.#client.setPaymentTags(id, tags);
     try {
       const response = await new Promise<unknown>((resolve, reject) => {
-        const timer = setTimeout(() => { this.#pending.delete(id); reject(new Error("CONTEXTVM_WIRE_TIMEOUT")); }, 30_000);
+        const timer = setTimeout(() => { this.#pending.delete(id); reject(new Error("CONTEXTVM_WIRE_TIMEOUT")); }, timeoutMs);
         this.#pending.set(id, { resolve: (value) => { clearTimeout(timer); resolve(value); }, reject: (error) => { clearTimeout(timer); reject(error); } });
         void this.#client!.send({ jsonrpc: "2.0", id, method, params } as never).catch((error) => {
           clearTimeout(timer); this.#pending.delete(id); reject(error instanceof Error ? error : new Error("CONTEXTVM_SEND_FAILED"));

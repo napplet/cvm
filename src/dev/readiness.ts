@@ -4,10 +4,10 @@ import { createDevelopmentPool, type DevPayments } from "../../scripts/dev-payme
 import { LocalDevelopmentRuntimeReadiness } from "./development-runtime-readiness";
 
 const root = resolve(import.meta.dir, "../..");
-const migrationNames = ["development/001_generation.sql", "development/002_provider_observations.sql", "development/003_artifact_preview.sql", "development/004_source_proposal_bindings.sql", "development/005_pending_actions.sql", "development/006_worker_results.sql"] as const;
+const migrationNames = ["development/001_generation.sql", "development/002_provider_observations.sql", "development/003_artifact_preview.sql", "development/004_source_proposal_bindings.sql", "development/005_pending_actions.sql", "development/006_worker_results.sql", "development/007_chatgpt_operations.sql"] as const;
 const manifestPins = { "package.json": "cbcc433278d32391b075576ebd847ae30039f1d86ad229a149f5566856989f23", "bun.lock": "8916ee4ec92924ae9e09bc4f315fd6656033812696e35a1b7785161d872c5ac3" } as const;
 
-export type DevelopmentMode = "deterministic-fixture" | "configured-openai";
+export type DevelopmentMode = "deterministic-fixture" | "configured-openai" | "chatgpt-oauth";
 export type LauncherReadiness = Readonly<{ workerImageDigest: string; readinessProbeDigest: string }>;
 
 function sha256(path: string): Promise<string> { return Bun.file(path).arrayBuffer().then((bytes) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex")); }

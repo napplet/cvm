@@ -23,7 +23,11 @@ export async function registerDevelopmentPricing(pool: PostgresSqlPool, input: R
     } catch (error) {
       await client.query("ROLLBACK");
       const code = (error as { code?: string }).code;
-      if (attempt === 2 || (code !== "40001" && code !== "40P01")) throw error;
+      // Concurrent registrations can first collide on the unique content hash
+      // rather than the targeted ID. Retry, then verify the immutable row.
+      const constraint = (error as { constraint?: string }).constraint;
+      const hashRace = code === "23505" && ["model_profile_versions_profile_hash_key", "price_card_versions_card_hash_key"].includes(constraint ?? "");
+      if (attempt === 2 || (code !== "40001" && code !== "40P01" && !hashRace)) throw error;
     } finally { client.release(); }
   }
 }

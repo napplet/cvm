@@ -73,6 +73,7 @@ async function runningMode(url: string): Promise<DevelopmentMode> {
   const bootstrap = await response.json() as { providerLabel?: unknown };
   if (bootstrap.providerLabel === "Deterministic fixture") return "deterministic-fixture";
   if (bootstrap.providerLabel === "Configured OpenAI Responses") return "configured-openai";
+  if (bootstrap.providerLabel === "ChatGPT plan · test credits") return "chatgpt-oauth";
   throw new Error("DEV_CONTEXTVM_PROVIDER_MODE_INVALID");
 }
 
@@ -162,18 +163,29 @@ async function down(): Promise<void> {
 async function reset(): Promise<void> {
   const value = scope(); await down(); await paymentStack(value).down(true);
   await rm(value.recordPath, { force: true });
-  for (const path of [resolve(value.stateRoot, "development-artifacts"), resolve(value.stateRoot, "development-checkpoints"), resolve(value.stateRoot, "development-worker-results")]) await rm(path, { recursive: true, force: true });
+  for (const path of [resolve(value.stateRoot, "development-artifacts"), resolve(value.stateRoot, "development-checkpoints"), resolve(value.stateRoot, "development-worker-results"), resolve(value.stateRoot, "development-chatgpt")]) await rm(path, { recursive: true, force: true });
 }
 
 async function test(): Promise<void> {
   const splitIndex = process.argv.indexOf("--case");
   const inline = process.argv.find((argument) => argument.startsWith("--case="))?.slice("--case=".length);
   const testCase = inline ?? (splitIndex >= 0 ? process.argv[splitIndex + 1] : "full");
+  if (testCase === "chatgpt-live") {
+    if (!process.argv.includes("--allow-chatgpt-usage")) throw new Error("CHATGPT_LIVE_USAGE_OPT_IN_REQUIRED:pass --allow-chatgpt-usage after signing in through the GUI");
+    const record = await up();
+    const output = await run([process.execPath, "run", "tests/dev-ui/chatgpt-live.e2e.ts", "--allow-chatgpt-usage"], { env: { NAPPLET_CVM_DEV_URL: record.url }, timeoutMs: 420_000 });
+    const proof = output.split("\n").some((line) => { try { const value = JSON.parse(line); return value.status === "passed" && value.case === "chatgpt-live"; } catch { return false; } });
+    if (!proof) throw new Error("CHATGPT_LIVE_COMPLETION_MISSING");
+    console.log(JSON.stringify({ status: "passed", case: "chatgpt-live" })); return;
+  }
   const cases: Record<string, Array<readonly [string, ...string[]]>> = {
+    "chatgpt-oauth": [["tests/dev-ui/chatgpt-oauth.e2e.ts"]],
     "contextvm-funding": [["tests/dev-ui/contextvm-funding.e2e.ts", "--case=both-rails-restart-replay"]],
     "generation-preview": [["tests/dev-ui/generation-preview.e2e.ts", "--case=deterministic-real-worker-compatible-host"]],
     "continuation-revision": [["tests/dev-ui/continuation-revision.e2e.ts", "--case=pre-admission-fund-restart-explicit-resume"], ["tests/dev-ui/continuation-revision.e2e.ts", "--case=revisions-duplicates-restarts"]],
     full: [
+      ["test", "tests/dev/chatgpt-oauth.test.ts", "tests/dev/chatgpt-model-gateway.test.ts"],
+      ["tests/dev-ui/chatgpt-oauth.e2e.ts"],
       ["tests/dev-ui/contextvm-funding.e2e.ts", "--case=both-rails-restart-replay"],
       ["tests/dev-ui/generation-preview.e2e.ts", "--case=deterministic-real-worker-compatible-host"],
       ["tests/dev-ui/generation-preview.e2e.ts", "--case=boundaries-platform-provider-recovery", "--allow-skip-without-provider-credentials"],
@@ -184,7 +196,7 @@ async function test(): Promise<void> {
       ["tests/dev-ui/full-flow.e2e.ts"],
     ],
   };
-  if (!testCase || !cases[testCase]) throw new Error("DEV_TEST_CASE_INVALID:contextvm-funding|generation-preview|continuation-revision|full");
+  if (!testCase || !cases[testCase]) throw new Error("DEV_TEST_CASE_INVALID:contextvm-funding|generation-preview|continuation-revision|chatgpt-oauth|chatgpt-live|full");
   const providerKeys = ["OPENAI_API_KEY", "NAPPLET_CVM_OPENAI_MODEL", "NAPPLET_CVM_OPENAI_PROFILE", "NAPPLET_CVM_OPENAI_PRICE_CARD", "NAPPLET_CVM_OPENAI_PRICE_SOURCES"] as const;
   const saved = Object.fromEntries(providerKeys.map((key) => [key, process.env[key]]));
   for (const key of providerKeys) delete process.env[key];

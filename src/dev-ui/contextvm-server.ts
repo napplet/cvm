@@ -1,3 +1,8 @@
+import { ChatGptOAuth, type ChatGptFetch, type ChatGptSettings } from "../dev/chatgpt-oauth";
+import { ChatGptModelGateway, SqlChatGptOperations } from "../dev/chatgpt-model-gateway";
+import { registerDevelopmentPricing } from "../dev/register-development-pricing";
+import { DevelopmentChatGptRoutes } from "./chatgpt-routes";
+import type { ModelGateway } from "../model/model-gateway";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Wallet, getEncodedToken } from "@cashu/cashu-ts";
@@ -110,10 +115,10 @@ async function durableTimeline(app: DevelopmentFunding, accountId: string, sessi
 }
 
 /**
- * Local development surface: static assets and non-secret bootstrap facts only.
+ * Local development surface: assets, safe bootstrap facts, and model controls.
  * Account and payment commands always pass through ContextVM over the relay.
  */
-export async function createDevelopmentContextVmServer(options: Readonly<{ testMode?: boolean; config?: DevPayments; stateRoot?: string; port?: number }> = {}): Promise<DevelopmentContextVmServer> {
+export async function createDevelopmentContextVmServer(options: Readonly<{ testMode?: boolean; config?: DevPayments; stateRoot?: string; port?: number; chatGptFetch?: ChatGptFetch }> = {}): Promise<DevelopmentContextVmServer> {
   const stack = options.testMode ? developmentStack(true) : undefined;
   const config = options.config ?? (stack ? await stack.up() : await Bun.file(resolve(root, ".local/napplet-cvm-dev-payments/payments.json")).json() as DevPayments);
   let priorSource: ((input: Readonly<{ accountId: string; sessionId: string; authorizedPriorArtifactReference: string }>) => Promise<readonly { path: "src/main.ts" | "src/styles.css"; content: string }[] | undefined>) | undefined;
@@ -122,10 +127,15 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
   // A test payment stack gets a unique state root so encrypted pending actions and
   // sealed worker/artifact bytes cannot cross test runs or touch default development state.
   const stateRoot = resolve(options.stateRoot ?? stack?.directory ?? resolve(root, ".local"));
-  const actionCeilingSat = composition.pricing
+  const readiness = await new LocalDevelopmentRuntimeReadiness().assertReady();
+  const chatgpt = await ChatGptOAuth.open(resolve(stateRoot, "development-chatgpt"), { fetch: options.chatGptFetch });
+  let providerLabel = composition.providerLabel as string;
+  let activeWork = 0;
+  let configuring = false;
+  let oauthGateway: ChatGptModelGateway | undefined;
+  let actionCeilingSat = composition.pricing
     ? maximumOperationCharge(composition.pricing)
     : maximumOperationCharge({ card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile: PHASE_04_MODEL_PROFILES["code-proposal"] });
-  const readiness = await new LocalDevelopmentRuntimeReadiness().assertReady();
   const identity = developmentServiceIdentity(config.fundingKey);
   const signer = new PrivateKeySigner(identity.signerPrivateKey);
   const transport = new NostrServerTransport({ signer, relayHandler: [config.relayUrl], encryptionMode: "required", publishRelayList: false, injectRequestEventId: true, logLevel: "silent" });
@@ -165,16 +175,40 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
   const worker = new LocalProposalWorkerPort(new LocalNappletWorker({ image: readiness.imageDigest }), { results: new DurableWorkerResultStore({ pool: app.pool, toolchainSha256: readiness.imageDigest.slice("sha256:".length), root: resolve(stateRoot, "development-worker-results") }) });
   const owners = new Map<string, string>();
   const artifactVerifier = new LocalGenerationArtifactVerifier({ worker, verifier: new LocalArtifactVerifier(), repository, ownerIdForAccount: (accountId) => owners.get(accountId) });
-  const generation = new MeteredGenerationService({ fundedAdmission, store: app.database.meteredFunding, gateway: composition.gateway, worker, artifactVerifier, proposalStore: composition.proposals, continuation: new ContinuationService({ store: app.database.meteredFunding, includeAdmissionHold: true }), ...(composition.pricing ? { pricing: composition.pricing } : {}) });
-  const pricing = composition.pricing ?? { card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile: PHASE_04_MODEL_PROFILES["code-proposal"] };
   const [packageHash, lockHash] = await Promise.all([sha256File(resolve(root, "package.json")), sha256File(resolve(root, "bun.lock"))]);
-  const preAdmission = new PreAdmissionSessionService({
-    store: app.database.meteredFunding,
-    envelope: new PendingActionEnvelopeService(new LocalCheckpointStore({ root: resolve(stateRoot, "development-checkpoints") })),
-    generation,
-    pricing,
-    pins: { policyVersion: "development-local-v1", profileId: pricing.profile.id, priceCardId: pricing.card.id, toolchainId: readiness.imageDigest, rootManifestSha256: new Bun.CryptoHasher("sha256").update(`${packageHash}:${lockHash}`).digest("hex") },
-  });
+  type Pricing = ReturnType<typeof import("../dev/chatgpt-model-gateway").chatGptDevelopmentPricing>;
+  const makeRuntime = (gateway: ModelGateway, pricing: Pricing) => {
+    const generation = new MeteredGenerationService({ fundedAdmission, store: app.database.meteredFunding, gateway, worker, artifactVerifier, proposalStore: composition.proposals, continuation: new ContinuationService({ store: app.database.meteredFunding, includeAdmissionHold: true }), pricing });
+    const preAdmission = new PreAdmissionSessionService({ store: app.database.meteredFunding, envelope: new PendingActionEnvelopeService(new LocalCheckpointStore({ root: resolve(stateRoot, "development-checkpoints") })), generation, pricing,
+      pins: { policyVersion: "development-local-v1", profileId: pricing.profile.id, priceCardId: pricing.card.id, toolchainId: readiness.imageDigest, rootManifestSha256: new Bun.CryptoHasher("sha256").update(`${packageHash}:${lockHash}`).digest("hex") } });
+    return { generation, preAdmission, pricing };
+  };
+  let runtime = makeRuntime(composition.gateway, composition.pricing ?? { card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile: PHASE_04_MODEL_PROFILES["code-proposal"] });
+  async function configureModel(settings: ChatGptSettings, persist = true) {
+    if (activeWork || configuring) throw new Error("CHATGPT_GENERATION_BUSY");
+    configuring = true;
+    try {
+      let next = runtime; let gateway: ChatGptModelGateway | undefined;
+      if (settings.mode === "chatgpt") {
+        if (!settings.accountId || !settings.model) throw new Error("CHATGPT_SELECT_AVAILABLE_MODEL");
+        gateway = new ChatGptModelGateway({ accountId: settings.accountId, model: settings.model, auth: chatgpt, store: composition.proposals, operations: new SqlChatGptOperations(app.pool), fetch: options.chatGptFetch, priorSource: async (input) => priorSource?.(input) });
+        await registerDevelopmentPricing(app.pool, { profile: gateway.pricing.profile, priceCard: gateway.pricing.card });
+        next = makeRuntime(gateway, gateway.pricing);
+      } else if (settings.mode === "default") next = makeRuntime(composition.gateway, composition.pricing ?? { card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile: PHASE_04_MODEL_PROFILES["code-proposal"] });
+      else throw new Error("CHATGPT_SELECT_AVAILABLE_MODEL");
+      if (persist) await chatgpt.select(settings);
+      runtime = next; oauthGateway = gateway;
+      providerLabel = gateway ? "ChatGPT plan · test credits" : composition.providerLabel;
+      actionCeilingSat = maximumOperationCharge(runtime.pricing);
+    } finally { configuring = false; }
+  }
+  await configureModel(chatgpt.settings(), false);
+  async function generationWork<T>(run: () => Promise<T>): Promise<T> {
+    if (configuring) throw new Error("CHATGPT_GENERATION_BUSY");
+    activeWork++;
+    try { return await run(); } finally { activeWork--; }
+  }
+  const chatgptRoutes = new DevelopmentChatGptRoutes({ auth: chatgpt, select: configureModel, busy: () => activeWork > 0 || configuring, diagnostic: () => oauthGateway?.diagnostic() });
   priorSource = async (input) => {
     const artifact = await repository.get(input.authorizedPriorArtifactReference);
     if (!artifact || artifact.accountId !== input.accountId || artifact.sessionId !== input.sessionId) return undefined;
@@ -200,16 +234,16 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
     },
   };
   const generationFacade = {
-    async startSession(input: any) { try { owners.set(await accountIdForPrincipal(input.principal), input.principal.pubkey); return latestGenerationResult = await generation.startSession(input); } catch (error) { latestGenerationError = safeGenerationDiagnostic(error); throw error; } },
-    async reviseSession(input: any) { try { owners.set(await accountIdForPrincipal(input.principal), input.principal.pubkey); return latestGenerationResult = await generation.reviseSession(input); } catch (error) { latestGenerationError = safeGenerationDiagnostic(error); throw error; } },
+    async startSession(input: any) { try { owners.set(await accountIdForPrincipal(input.principal), input.principal.pubkey); return latestGenerationResult = await generationWork(() => runtime.generation.startSession(input)); } catch (error) { latestGenerationError = safeGenerationDiagnostic(error); throw error; } },
+    async reviseSession(input: any) { try { owners.set(await accountIdForPrincipal(input.principal), input.principal.pubkey); return latestGenerationResult = await generationWork(() => runtime.generation.reviseSession(input)); } catch (error) { latestGenerationError = safeGenerationDiagnostic(error); throw error; } },
   };
   const preAdmissionFacade = {
     async saveStart(input: any) {
-      const result = await preAdmission.saveStart(input);
+      const result = await generationWork(() => runtime.preAdmission.saveStart(input));
       return result.status === "saved" ? { ...result, nextAction: "funded_admission" as const } : result;
     },
     async status(input: any) {
-      const record = await preAdmission.status(input);
+      const record = await runtime.preAdmission.status(input);
       if (!record) return { status: "not_found_or_denied" as const };
       const balance = await app.database.funding.status(record.accountId);
       const base = { checkpointId: record.checkpointId, reference: record.reference, fingerprint: record.commandFingerprint, maximum: record.maximum, version: 1 as const, expiresAtMs: record.expiresAtMs };
@@ -220,7 +254,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
     async resume(input: any) {
       try {
         owners.set(input.owner.accountId, input.owner.ownerId);
-        return latestGenerationResult = await preAdmission.resume(input);
+        return latestGenerationResult = await generationWork(() => runtime.preAdmission.resume(input));
       } catch (error) {
         latestGenerationError = safeGenerationDiagnostic(error);
         throw error;
@@ -246,10 +280,12 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
     async fetch(request) {
       const url = new URL(request.url);
       if (url.hostname !== "127.0.0.1" && url.hostname !== "localhost") return new Response("loopback only", { status: 403 });
-      if (url.pathname === "/") return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+      const chatgptResponse = await chatgptRoutes.handle(request, `http://127.0.0.1:${web.port}`);
+      if (chatgptResponse) return chatgptResponse;
+      if (url.pathname === "/") return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer", "content-security-policy": "frame-ancestors 'none'; base-uri 'none'; object-src 'none'", "x-frame-options": "DENY" } });
       if (url.pathname === "/app.js") return new Response(javascript, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });
       if (url.pathname === "/styles.css") return new Response(await Bun.file(resolve(root, "src/dev-ui/browser/styles.css")).text(), { headers: { "content-type": "text/css; charset=utf-8", "cache-control": "no-store" } });
-      if (url.pathname === "/bootstrap") return Response.json({ relayUrl: config.relayUrl, servicePubkey, reserveSat, actionCeilingSat, providerLabel: composition.providerLabel }, { headers: { "cache-control": "no-store" } });
+      if (url.pathname === "/bootstrap") return Response.json({ relayUrl: config.relayUrl, servicePubkey, reserveSat, actionCeilingSat, providerLabel, modelControlToken: chatgptRoutes.controlToken }, { headers: { "cache-control": "no-store" } });
       if (url.pathname === "/dev/faucet/cashu" && request.method === "POST") {
         try {
           const amount = Number(url.searchParams.get("amount"));
@@ -295,7 +331,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
       const row = (await app.pool.query<{ receipt_charge: string; remaining_cap_sat: string; remaining_balance_sat: string; artifact_id: string | null; terminal_result: unknown }>("SELECT receipt_charge,remaining_cap_sat,remaining_balance_sat,artifact_id,terminal_result FROM metered_actions WHERE account_id=$1 AND operation_id=$2", [result.accountId, result.operationId])).rows[0];
       if (!row || row.receipt_charge !== result.confirmedSpend || row.remaining_cap_sat !== result.remainingCap || row.remaining_balance_sat !== result.remainingBalance || (result.status === "completed" && row.artifact_id !== result.artifactId)) throw new Error("DEV_UI_GENERATION_SQL_PROJECTION_MISMATCH");
     },
-    generationEvidence: () => Object.freeze({ provider: composition.providerLabel, ...(latestGenerationResult ? { result: latestGenerationResult } : {}), ...(latestPreviewUrl ? { previewUrl: latestPreviewUrl } : {}), ...(latestGenerationError ? { error: latestGenerationError } : {}) }),
+    generationEvidence: () => Object.freeze({ provider: providerLabel, ...(latestGenerationResult ? { result: latestGenerationResult } : {}), ...(latestPreviewUrl ? { previewUrl: latestPreviewUrl } : {}), ...(latestGenerationError ? { error: latestGenerationError } : {}) }),
     async close() {
       reconciler.stop();
       try { web.stop(true); }
@@ -305,7 +341,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
         // browser evidence run holding containers forever on a lost close ACK.
         try { await Promise.race([transport.close().catch(() => undefined), Bun.sleep(1_000)]); }
         finally {
-          try { await composition.close(); }
+          try { await chatgpt.close(); await composition.close(); }
           finally { if (stack) await stack.down(true); }
         }
       }

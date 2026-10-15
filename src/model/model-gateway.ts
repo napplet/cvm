@@ -35,7 +35,7 @@ export const ProviderOperationIntentSchema = z.object({
 }).strict();
 
 export const NormalizedUsageReceiptSchema = z.object({
-  operationId: z.string().min(1), providerRequestId: z.string().min(1), provider: z.enum(["deterministic_fixture", "openai_responses"]),
+  operationId: z.string().min(1), providerRequestId: z.string().min(1), provider: z.enum(["deterministic_fixture", "openai_responses", "openai_chatgpt_development"]),
   model: z.string().min(1), profileId: z.string().min(1), priceCardId: z.string().min(1), selection: z.literal("unselected"),
   completedAt: z.iso.datetime(), provenance: ProtectedEvidenceSchema,
   usage: z.array(z.object({ dimension: UsageDimensionSchema, units: DecimalSchema }).strict()).min(1),

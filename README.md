@@ -28,7 +28,7 @@ bun install --frozen-lockfile
 bun scripts/dev.ts up
 ```
 
-Open the printed URL, click **Connect**, fund the account with local test money, and generate a napplet. The default model is a labeled deterministic fixture; cloud credentials are optional. See the [workspace walkthrough](docs/runbooks/development-gui.md#try-the-execution-flow).
+Open the printed URL, click **Connect**, fund the account with local test money, and generate a napplet. The default model is a labeled deterministic fixture. For real generation using your ChatGPT subscription, choose **Continue with ChatGPT**, select a model, and click **Use ChatGPT plan**. [Sign-in and test instructions](docs/runbooks/development-gui.md#chatgpt-subscription-sign-in-for-local-development). See the [workspace walkthrough](docs/runbooks/development-gui.md#try-the-execution-flow).
 
 | Command | Purpose |
 | --- | --- |
@@ -41,7 +41,7 @@ Design evidence and fixture passes establish local behavior. Release promotion a
 
 ## Local development workspace
 
-The development workspace starts the real local service graph: ContextVM over a relay, Cashu and NWC payment rails, PostgreSQL, the metered model boundary, the pinned isolated worker, artifact verification, and the compatible preview host. Product commands stay on ContextVM; the workspace HTTP server serves only static assets, non-secret bootstrap facts, health, preview bytes, and the development faucet.
+The development workspace starts the real local service graph: ContextVM over a relay, Cashu and NWC payment rails, PostgreSQL, the metered model boundary, the pinned isolated worker, artifact verification, and the compatible preview host. Product commands stay on ContextVM; the workspace HTTP server serves only static assets, non-secret bootstrap facts, health, preview bytes, the development faucet, and protected local model/sign-in controls.
 
 Prerequisites are Docker with Compose 2.39 or newer, Bun 1.3.14, and repository dependencies. The browser test package has its own frozen lockfile; the launcher checks it and Chromium before reporting ready.
 
@@ -60,11 +60,12 @@ bun scripts/dev.ts status
 | `bun scripts/dev.ts test --case=contextvm-funding` | Run Chromium, relay, ContextVM, Cashu/NWC, and ledger evidence. |
 | `bun scripts/dev.ts test --case=generation-preview` | Run source, metering, pinned worker, verification, and compatible-preview evidence. |
 | `bun scripts/dev.ts test --case=continuation-revision` | Run pending-action funding/restart/explicit-resume and revision/version evidence. |
+| `bun scripts/dev.ts test --case=chatgpt-oauth` | Test OAuth and streamed inference fixtures through the real local build/preview flow. |
 | `bun scripts/dev.ts test --case=full` | Run the composed browser, durable-state, security, responsive, and accessibility gate. |
 | `bun scripts/dev.ts down` | Stop the selected workspace while preserving its development data. |
 | `bun scripts/dev.ts reset --confirm` | Remove only the selected workspace's labeled containers, volumes, checkpoints, artifacts, and local state. |
 
-The default model mode is **Deterministic fixture**: only the external model response is substituted, while the relay, signed ContextVM path, rails, SQL ledger, worker, build, verifier, artifact repository, and preview host are real local boundaries. An OpenAI provider run is conditional on explicit local configuration, can incur API charges, and appears as a provider mode in `status` and the workspace; it is never silently represented as deterministic evidence. See the [development GUI runbook](docs/runbooks/development-gui.md) for setup, inspection, recovery, and limitations.
+The default model mode is **Deterministic fixture**: only the external model response is substituted, while the relay, signed ContextVM path, rails, SQL ledger, worker, build, verifier, artifact repository, and preview host are real local boundaries. ChatGPT OAuth mode uses your selected account’s plan/credits, with actual token counts and clearly synthetic local test charges. API-key mode remains available through explicit configuration and can incur API charges. Both appear as distinct provider modes in `status` and the workspace; it is never silently represented as deterministic evidence. See the [development GUI runbook](docs/runbooks/development-gui.md) for setup, inspection, recovery, and limitations.
 
 For local payment development, start Docker and run `bun scripts/dev-payments.ts`. This automatically provisions two Cashu mints, a local relay, a funded NWC wallet with test money, and a migrated PostgreSQL ledger. Run `bun scripts/dev-payments.ts test` for isolated payment and application funding tests, including ledger replay checks after restart. See [development payments](docs/runbooks/development-payments.md) for credentials, application integration, and stop/reset commands.
 

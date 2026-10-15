@@ -5,10 +5,10 @@ const DecimalSchema = z.string().regex(/^(?:0|[1-9][0-9]*)$/u);
 export { UsageDimensionSchema } from "./model-gateway";
 
 export const RationalRateSchema = z.object({ numerator: DecimalSchema.refine((value) => BigInt(value) > 0n), denominator: DecimalSchema.refine((value) => BigInt(value) > 0n) }).strict();
-const ProviderSchema = z.enum(["deterministic_fixture", "openai_responses"]);
+const ProviderSchema = z.enum(["deterministic_fixture", "openai_responses", "openai_chatgpt_development"]);
 const SourceProvenanceSchema = z.object({ url: z.string().url(), capturedBytesSha256: z.string().regex(/^[a-f0-9]{64}$/u), observedAt: z.iso.datetime(), effectiveAt: z.iso.datetime(), freshUntil: z.iso.datetime() }).strict();
 export const PriceCardSchema = z.object({
-  id: z.string().min(1), version: z.string().min(1), kind: z.enum(["deterministic_fixture", "source_attributed_provider"]), provider: ProviderSchema, currency: z.literal("sat"),
+  id: z.string().min(1), version: z.string().min(1), kind: z.enum(["deterministic_fixture", "source_attributed_provider", "development_test"]), provider: ProviderSchema, currency: z.literal("sat"),
   supportedDimensions: z.array(UsageDimensionSchema).min(1), rates: z.record(UsageDimensionSchema, RationalRateSchema), rounding: z.literal("ceil"),
   ceilings: z.object({ inputTokens: DecimalSchema.refine((value) => BigInt(value) > 0n), outputTokens: DecimalSchema.refine((value) => BigInt(value) > 0n) }).strict(),
   validity: z.object({ notBefore: z.iso.datetime(), notAfter: z.iso.datetime() }).strict(), sources: z.object({ provider: SourceProvenanceSchema, conversion: SourceProvenanceSchema }).strict().optional(),
@@ -16,7 +16,8 @@ export const PriceCardSchema = z.object({
   if (new Set(card.supportedDimensions).size !== card.supportedDimensions.length) ctx.addIssue({ code: "custom", message: "supported dimensions must be unique" });
   for (const dimension of card.supportedDimensions) if (!card.rates[dimension]) ctx.addIssue({ code: "custom", message: `missing rate for ${dimension}` });
   if (card.kind === "deterministic_fixture" && card.provider !== "deterministic_fixture") ctx.addIssue({ code: "custom", message: "fixture card provider mismatch" });
-  if (card.kind === "source_attributed_provider" && (!card.sources || card.provider === "deterministic_fixture")) ctx.addIssue({ code: "custom", message: "provider card requires source provenance" });
+  if (card.kind === "source_attributed_provider" && (!card.sources || card.provider !== "openai_responses")) ctx.addIssue({ code: "custom", message: "provider card requires source provenance" });
+  if ((card.kind === "development_test") !== (card.provider === "openai_chatgpt_development")) ctx.addIssue({ code: "custom", message: "ChatGPT development usage requires explicitly synthetic pricing" });
 });
 export const ModelProfileSchema = z.object({
   id: z.string().min(1), provider: ProviderSchema, model: z.string().min(1), priceCardId: z.string().min(1),

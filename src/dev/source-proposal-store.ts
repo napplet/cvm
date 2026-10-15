@@ -1,5 +1,5 @@
 import { canonicalJson } from "../promotion/schema";
-import { ProviderOperationIntentSchema, SourceProposalSchema, type ProviderOperationIntent, type SourceProposal } from "../model/model-gateway";
+import { NormalizedUsageReceiptSchema, ProviderOperationIntentSchema, SourceProposalSchema, type NormalizedUsageReceipt, type ProviderOperationIntent, type SourceProposal } from "../model/model-gateway";
 import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
 import { z } from "zod";
 
@@ -58,6 +58,22 @@ export class SourceProposalStore {
       if ((input.reference && input.reference !== `proposal:sha256:${proposal.proposalSha256}`) || (input.sha256 && proposal.proposalSha256 !== input.sha256)) return undefined;
       return proposal;
     } finally { client.release(); }
+  }
+
+  async recordProviderObservation(input: Readonly<{ intent: ProviderOperationIntent; providerResponseId: string; receipt: NormalizedUsageReceipt; sourceProposalReference: string }>): Promise<void> {
+    const intent = ProviderOperationIntentSchema.parse(input.intent); const receipt = NormalizedUsageReceiptSchema.parse(input.receipt);
+    const proposal = await this.lookup({ intent, reference: input.sourceProposalReference });
+    if (!proposal || receipt.operationId !== intent.operationId || receipt.providerRequestId !== intent.providerRequestId) throw new Error("PROVIDER_OBSERVATION_BINDING_INVALID");
+    const client = await this.pool.connect();
+    try { await client.query("INSERT INTO provider_observations(operation_id,provider_request_id,provider_response_id,source_proposal_sha256,receipt_json) VALUES($1,$2,$3,$4,$5) ON CONFLICT(operation_id) DO NOTHING", [intent.operationId, intent.providerRequestId, input.providerResponseId, proposal.proposalSha256, receipt]); }
+    finally { client.release(); }
+  }
+
+  async lookupProviderObservation(intentInput: ProviderOperationIntent): Promise<Readonly<{ receipt: NormalizedUsageReceipt; sourceProposalReference: string }> | undefined> {
+    const intent = ProviderOperationIntentSchema.parse(intentInput); const proposal = await this.lookup({ intent }); if (!proposal) return undefined;
+    const client = await this.pool.connect();
+    try { const row = (await client.query<{ receipt_json: unknown; source_proposal_sha256: string }>("SELECT receipt_json,source_proposal_sha256 FROM provider_observations WHERE operation_id=$1 AND provider_request_id=$2", [intent.operationId, intent.providerRequestId])).rows[0]; if (!row || row.source_proposal_sha256 !== proposal.proposalSha256) return undefined; return freeze({ receipt: NormalizedUsageReceiptSchema.parse(row.receipt_json), sourceProposalReference: proposal.proposal.reference }); }
+    finally { client.release(); }
   }
 
   private row(row: { proposal_sha256: string; operation_id: string; provider_request_id: string; account_id: string; session_id: string; action_id: string; expected_version: number; request_fingerprint_sha256: string; prior_artifact_reference: string | null; provider: string; model: string; profile_id: string; price_card_id: string; proposal_json: unknown }): StoredSourceProposal {

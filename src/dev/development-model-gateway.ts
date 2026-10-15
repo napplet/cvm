@@ -45,6 +45,7 @@ export class DevelopmentModelGateway implements ModelGateway {
         { dimension: "input_tokens", units: String(native.usage.input_tokens) }, { dimension: "output_tokens", units: String(native.usage.output_tokens) },
         { dimension: "cached_tokens", units: String(native.usage.input_tokens_details?.cached_tokens ?? 0) }, { dimension: "reasoning_tokens", units: String(native.usage.output_tokens_details?.reasoning_tokens ?? 0) },
       ] });
+      await this.store.recordProviderObservation({ intent, providerResponseId: native.id, receipt, sourceProposalReference: stored.proposal.reference });
       return ModelDispatchObservationSchema.parse({ status: "completed", receipt, sourceProposalReference: stored.proposal.reference });
     } catch {
       return ModelDispatchObservationSchema.parse({ status: "usage_unknown", operationId: intent.operationId, providerRequestId: intent.providerRequestId, reason: signal.aborted ? "aborted" : "uncertain_acceptance", provenance: { protectedEvidenceReference: `openai:response:unknown:${intent.operationId}` } });
@@ -53,10 +54,10 @@ export class DevelopmentModelGateway implements ModelGateway {
   async lookup(input: ProviderOperationIntent, signal: AbortSignal): Promise<ModelLookupObservation> {
     const intent = ProviderOperationIntentSchema.parse(input);
     if (!this.#configured) return this.#deterministic.lookup(intent, signal);
-    const proposal = await this.store.lookup({ intent });
+    const observation = await this.store.lookupProviderObservation(intent);
     // Provider ambiguity never permits a replacement dispatch. A future durable
     // provider-observation reconciler may enrich this row; until then it stays pending.
-    return ModelLookupObservationSchema.parse(proposal ? { status: "pending", operationId: intent.operationId, providerRequestId: intent.providerRequestId, provenance: { protectedEvidenceReference: `openai:response:lookup:${intent.operationId}` } } : { status: "unresolved", operationId: intent.operationId, providerRequestId: intent.providerRequestId, provenance: { protectedEvidenceReference: `openai:response:lookup:${intent.operationId}` } });
+    return ModelLookupObservationSchema.parse(observation ? { status: "receipt_found", receipt: observation.receipt, sourceProposalReference: observation.sourceProposalReference } : { status: "unresolved", operationId: intent.operationId, providerRequestId: intent.providerRequestId, provenance: { protectedEvidenceReference: `openai:response:lookup:${intent.operationId}` } });
   }
 }
 

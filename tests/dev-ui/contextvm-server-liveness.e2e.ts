@@ -2,9 +2,8 @@ import { createDevelopmentContextVmServer } from "../../src/dev-ui/contextvm-ser
 
 const server = await createDevelopmentContextVmServer({ testMode: true });
 try {
-  // Exercise the observed idle-loss boundary after a full collection. The
-  // factory's module-level listener registry must retain this endpoint until
-  // its explicit close path executes.
+  // Ensure completed startup browser probes cannot disrupt the live service
+  // after collection and an idle interval.
   Bun.gc(true);
   await Bun.sleep(65_000);
   Bun.gc(true);

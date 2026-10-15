@@ -55,16 +55,34 @@ const FundedAdmissionPortResultSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("accepted"), accountId: z.string().min(1), reference: z.string().min(1), approvedCap: z.string().regex(/^[1-9][0-9]*$/u), heldAmount: z.string().regex(/^[1-9][0-9]*$/u), unit: z.literal("sat") }).strict(),
   z.object({ status: z.enum(["refused", "reconciliation_pending"]), accountId: z.string().min(1), intentReference: z.string().min(1), retryable: z.boolean(), unit: z.literal("sat") }).strict(),
 ]);
-const StartSessionArgumentsSchema = z.object({
+const FundedStartSessionArgumentsSchema = z.object({
   admissionReference: z.string().min(1), idempotencyKey: z.string().min(1), maximum: z.string().regex(/^[1-9][0-9]*$/u), idea: z.string().min(1).max(4_000),
 }).strict();
+const PreAdmissionStartSessionArgumentsSchema = z.object({
+  mode: z.literal("pre_admission"), idempotencyKey: z.string().min(1), maximum: z.string().regex(/^[1-9][0-9]*$/u), idea: z.string().min(1).max(4_000),
+}).strict();
+const StartSessionArgumentsSchema = z.union([FundedStartSessionArgumentsSchema, PreAdmissionStartSessionArgumentsSchema]);
 const ReviseSessionArgumentsSchema = z.object({
   sessionId: z.string().min(1), admissionReference: z.string().min(1), idempotencyKey: z.string().min(1), expectedVersion: z.number().int().nonnegative(), maximum: z.string().regex(/^[1-9][0-9]*$/u), revision: z.string().min(1).max(4_000),
 }).strict();
-const ResumeSessionArgumentsSchema = ResumeSessionCommandSchema.omit({ principal: true });
-const SessionStatusArgumentsSchema = z.object({
+const LegacyResumeSessionArgumentsSchema = ResumeSessionCommandSchema.omit({ principal: true });
+const PendingActionResumeArgumentsSchema = z.object({
+  kind: z.literal("pending_action"), checkpointId: z.string().min(1), expectedCheckpointVersion: z.literal(1), expectedSessionVersion: z.literal(0),
+  idempotencyKey: z.string().min(1), approvePendingAction: z.literal(true), admissionReference: z.string().min(1),
+  pendingAction: z.object({ reference: z.string().min(1), fingerprint: z.string().regex(/^[a-f0-9]{64}$/u), kind: z.literal("start_session"), maximum: z.string().regex(/^[1-9][0-9]*$/u) }).strict(),
+}).strict();
+const ResumeSessionArgumentsSchema = z.union([LegacyResumeSessionArgumentsSchema, PendingActionResumeArgumentsSchema]);
+const MeteredSessionStatusArgumentsSchema = z.object({
   sessionId: z.string().min(1), billing: z.object({ limit: z.number().int().min(1).max(50).optional(), cursor: z.string().min(1).optional() }).strict().optional(),
 }).strict();
+const PendingActionStatusArgumentsSchema = z.object({ kind: z.literal("pending_action"), checkpointId: z.string().min(1) }).strict();
+const SessionStatusArgumentsSchema = z.union([MeteredSessionStatusArgumentsSchema, PendingActionStatusArgumentsSchema]);
+const PendingActionStatusProjectionSchema = z.union([
+  z.object({ status: z.literal("funded_admission_required"), maximum: z.string().regex(/^[1-9][0-9]*$/u) }).strict(),
+  z.object({ status: z.literal("saved"), checkpointId: z.string().min(1), reference: z.string().min(1), fingerprint: z.string().regex(/^[a-f0-9]{64}$/u), maximum: z.string().regex(/^[1-9][0-9]*$/u), shortfall: z.string().regex(/^[0-9]+$/u), version: z.literal(1), expiresAtMs: z.number().int().positive(), nextAction: z.literal("funded_admission") }).strict(),
+  z.object({ status: z.enum(["bound", "completed", "failed"]), checkpointId: z.string().min(1), reference: z.string().min(1), fingerprint: z.string().regex(/^[a-f0-9]{64}$/u), maximum: z.string().regex(/^[1-9][0-9]*$/u), version: z.literal(1), expiresAtMs: z.number().int().positive(), nextAction: z.enum(["wait_for_current_action", "revise_session", "retry_resume"]) }).strict(),
+  z.object({ status: z.literal("not_found_or_denied") }).strict(),
+]);
 const PreviewArgumentsSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("descriptor"), sessionId: z.string().min(1), artifactId: z.string().min(1), runtimeVariant: z.string().min(1) }).strict(),
   z.object({ action: z.literal("review_capabilities"), sessionId: z.string().min(1), artifactId: z.string().min(1), runtimeVariant: z.string().min(1) }).strict(),
@@ -107,6 +125,12 @@ export interface ContextVmFundingAdapterOptions {
   generation?: Readonly<{
     startSession(input: unknown): Promise<unknown>;
     reviseSession(input: unknown): Promise<unknown>;
+  }>;
+  /** Development-only pre-admission authority. Absent in the normal product composition. */
+  preAdmission?: Readonly<{
+    saveStart(input: unknown): Promise<unknown>;
+    status(input: unknown): Promise<unknown>;
+    resume(input: unknown): Promise<unknown>;
   }>;
   /** Explicit post-grace continuation only; rails and status cannot call this facade. */
   continuation?: Readonly<{ resumeSession(input: unknown): Promise<unknown> }>;
@@ -189,6 +213,12 @@ export class ContextVmFundingAdapter {
     const { name, arguments: argumentsInput } = request.params;
     if (name === "start_session") {
       const args = StartSessionArgumentsSchema.parse(argumentsInput);
+      if ("mode" in args) {
+        if (!this.options.preAdmission) throw new Error("PRE_ADMISSION_UNAVAILABLE");
+        const accountId = await accountIdForPrincipal({ pubkey: verifiedPubkey });
+        const result = PendingActionStatusProjectionSchema.parse(await this.options.preAdmission.saveStart({ owner: { ownerId: verifiedPubkey, accountId }, command: { idempotencyKey: args.idempotencyKey, maximum: args.maximum, idea: args.idea, policyVersion: this.policyVersion } }));
+        return freeze({ jsonrpc: "2.0" as const, id: request.id, result });
+      }
       if (!this.options.generation) throw new Error("METERED_GENERATION_UNAVAILABLE");
       const result = SessionActionResultSchema.parse(await this.options.generation.startSession({ principal: { pubkey: verifiedPubkey }, admissionReference: args.admissionReference, idempotencyKey: args.idempotencyKey, expectedVersion: 0, maximum: args.maximum, policyVersion: this.policyVersion, idea: args.idea }));
       return this.generationResponse("start_session", verifiedPubkey, requestEventId, request.id, result);
@@ -201,6 +231,12 @@ export class ContextVmFundingAdapter {
     }
     if (name === "resume_session") {
       const args = ResumeSessionArgumentsSchema.parse(argumentsInput);
+      if ("kind" in args && args.kind === "pending_action") {
+        if (!this.options.preAdmission) throw new Error("PRE_ADMISSION_UNAVAILABLE");
+        const accountId = await accountIdForPrincipal({ pubkey: verifiedPubkey });
+        const result = SessionActionResultSchema.parse(await this.options.preAdmission.resume({ owner: { ownerId: verifiedPubkey, accountId }, command: args }));
+        return this.generationResponse("resume_session", verifiedPubkey, requestEventId, request.id, result);
+      }
       if (!this.options.continuation) throw new Error("CONTINUATION_UNAVAILABLE");
       const accountId = await accountIdForPrincipal({ pubkey: verifiedPubkey });
       const result = ResumeSessionResultSchema.parse(await this.options.continuation.resumeSession({ ...args, principal: { id: accountId } }));
@@ -208,6 +244,13 @@ export class ContextVmFundingAdapter {
     }
     if (name === "session_status") {
       const args = SessionStatusArgumentsSchema.parse(argumentsInput);
+      if ("kind" in args && args.kind === "pending_action") {
+        if (!this.options.preAdmission) throw new Error("PRE_ADMISSION_UNAVAILABLE");
+        const accountId = await accountIdForPrincipal({ pubkey: verifiedPubkey });
+        const result = PendingActionStatusProjectionSchema.parse(await this.options.preAdmission.status({ owner: { ownerId: verifiedPubkey, accountId }, checkpointId: args.checkpointId }));
+        await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({ jsonrpc: "2.0", method: "notifications/session_status", params: result }), requestEventId);
+        return freeze({ jsonrpc: "2.0" as const, id: request.id, result });
+      }
       if (!this.options.sessionStatus) throw new Error("SESSION_STATUS_UNAVAILABLE");
       const query = SessionStatusQuerySchema.parse({ principal: { pubkey: verifiedPubkey }, sessionId: args.sessionId, ...(args.billing ? { billing: args.billing } : {}) });
       const result = SessionStatusSchema.parse(await this.options.sessionStatus.read(query));

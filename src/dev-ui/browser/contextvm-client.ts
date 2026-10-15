@@ -3,7 +3,17 @@ import { PrivateKeySigner } from "@contextvm/sdk/signer";
 
 type JsonRpcResponse = { id: string | number | null; result?: unknown; error?: { message?: string } };
 type PaymentTag = readonly [string, string, string?];
-export type DevelopmentBootstrap = Readonly<{ relayUrl: string; servicePubkey: string; reserveSat: string; actionCeilingSat: string }>;
+export type DevelopmentBootstrap = Readonly<{ relayUrl: string; servicePubkey: string; reserveSat: string; actionCeilingSat: string; providerLabel: "Deterministic fixture" | "Configured OpenAI Responses" }>;
+
+function browserSignerKey(servicePubkey: string): string {
+  const storageKey = `napplet-cvm/dev-contextvm-key/v1/${servicePubkey}`;
+  const stored = sessionStorage.getItem(storageKey);
+  if (stored && /^[a-f0-9]{64}$/u.test(stored)) return stored;
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  const generated = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  sessionStorage.setItem(storageKey, generated);
+  return generated;
+}
 
 class PaymentTaggedClient extends NostrClientTransport {
   #requestTags = new Map<string | number, readonly PaymentTag[]>();
@@ -39,7 +49,9 @@ export class DevelopmentContextVmClient {
 
   async connect(): Promise<Readonly<{ pubkey: string; account: any }>> {
     if (this.#client) return { pubkey: await this.pubkey, account: await this.callTool("account_status", {}) };
-    this.#signer = new PrivateKeySigner();
+    // This key remains in the trusted development host's session storage. It
+    // never enters bootstrap, ContextVM arguments, logs, or generated preview.
+    this.#signer = new PrivateKeySigner(browserSignerKey(this.bootstrap.servicePubkey));
     const client = new PaymentTaggedClient({ signer: this.#signer, relayHandler: [this.bootstrap.relayUrl], serverPubkey: this.bootstrap.servicePubkey, encryptionMode: "required", logLevel: "silent" });
     client.setClientPmis(["bitcoin-lightning-bolt11", "bitcoin-cashu-v4-direct"]);
     client.onmessage = (message: any) => {
@@ -80,12 +92,34 @@ export class DevelopmentContextVmClient {
     return this.callTool("top_up", { idempotencyKey: `browser:nwc:${crypto.randomUUID()}`, pmi: "bitcoin-lightning-bolt11", mode: "transparent", amount }, [["pmi", "bitcoin-lightning-bolt11"], ["payment_interaction", "transparent"]]);
   }
 
-  async fundAdmission(requestedCap: string): Promise<any> {
-    return this.callTool("funded_admission", { idempotencyKey: `browser:admission:${crypto.randomUUID()}`, requestedCap, unit: "sat" });
+  async fundAdmission(requestedCap: string, idempotencyKey = `browser:admission:${crypto.randomUUID()}`): Promise<any> {
+    return this.callTool("funded_admission", { idempotencyKey, requestedCap, unit: "sat" });
   }
 
-  async startSession(input: Readonly<{ admissionReference: string; maximum: string; idea: string }>): Promise<any> {
-    return this.callTool("start_session", { admissionReference: input.admissionReference, idempotencyKey: `browser:generation:${crypto.randomUUID()}`, maximum: input.maximum, idea: input.idea });
+  async startSession(input: Readonly<{ admissionReference: string; maximum: string; idea: string; idempotencyKey?: string }>): Promise<any> {
+    return this.callTool("start_session", { admissionReference: input.admissionReference, idempotencyKey: input.idempotencyKey ?? `browser:generation:${crypto.randomUUID()}`, maximum: input.maximum, idea: input.idea });
+  }
+
+  async savePreAdmission(input: Readonly<{ maximum: string; idea: string; idempotencyKey: string }>): Promise<any> {
+    return this.callTool("start_session", { mode: "pre_admission", idempotencyKey: input.idempotencyKey, maximum: input.maximum, idea: input.idea });
+  }
+
+  async pendingActionStatus(checkpointId: string): Promise<any> {
+    return this.callTool("session_status", { kind: "pending_action", checkpointId });
+  }
+
+  async resumePendingAction(input: Readonly<{ checkpointId: string; idempotencyKey: string; admissionReference: string; reference: string; fingerprint: string; maximum: string }>): Promise<any> {
+    return this.callTool("resume_session", {
+      kind: "pending_action", checkpointId: input.checkpointId, expectedCheckpointVersion: 1, expectedSessionVersion: 0,
+      idempotencyKey: input.idempotencyKey, approvePendingAction: true, admissionReference: input.admissionReference,
+      pendingAction: { reference: input.reference, fingerprint: input.fingerprint, kind: "start_session", maximum: input.maximum },
+    });
+  }
+
+  async sessionStatus(sessionId: string): Promise<any> { return this.callTool("session_status", { sessionId }); }
+
+  async reviseSession(input: Readonly<{ sessionId: string; admissionReference: string; expectedVersion: number; maximum: string; revision: string; idempotencyKey?: string }>): Promise<any> {
+    return this.callTool("revise_session", { ...input, idempotencyKey: input.idempotencyKey ?? `browser:revision:${crypto.randomUUID()}` });
   }
 
   async preview(input: Readonly<{ sessionId: string; artifactId: string }>): Promise<any> {

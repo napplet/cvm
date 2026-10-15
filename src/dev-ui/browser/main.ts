@@ -1,97 +1,55 @@
 import { DevelopmentContextVmClient, type DevelopmentBootstrap } from "./contextvm-client";
 
+type PendingAction = Readonly<{ checkpointId: string; reference: string; fingerprint: string; maximum: string; shortfall: string; expiresAtMs: number }>;
+type Version = Readonly<{ sessionId: string; version: number; artifactId: string; aggregate?: string }>;
 const app = document.querySelector<HTMLElement>("#app");
 if (!app) throw new Error("DEV_UI_ROOT_MISSING");
-
 const bootstrap = await (await fetch("/bootstrap", { cache: "no-store" })).json() as DevelopmentBootstrap;
+const pendingStorageKey = `napplet-cvm/dev-pending/v1/${bootstrap.servicePubkey}`;
+const sessionStorageKey = `napplet-cvm/dev-session/v1/${bootstrap.servicePubkey}`;
 let client: DevelopmentContextVmClient | undefined;
 let balance = "0";
+let pending: PendingAction | undefined;
+let selected: Version | undefined;
+const versions: Version[] = [];
 
 app.innerHTML = `
-  <style>body{font:16px system-ui;margin:0;background:#10151c;color:#eef4f8}main{max-width:960px;margin:auto;padding:24px;display:grid;gap:16px}section{background:#19232d;border-radius:10px;padding:20px}button,input{min-height:44px;font:inherit}button{padding:0 16px}input{width:100%;box-sizing:border-box}label{display:grid;gap:6px}.row{display:flex;gap:10px;align-items:end;flex-wrap:wrap}.status{min-height:24px}#preview{display:block;width:100%;min-height:640px;border:0}@media(max-width:767px){main{padding:12px}.row>*{width:100%}#preview{min-height:520px}}</style>
-  <h1>napplet-cvm development</h1>
-  <section aria-labelledby="connection-heading"><h2 id="connection-heading">Connection</h2><p id="connection-status" class="status">Disconnected</p><button id="connect">Connect</button></section>
-  <section aria-labelledby="funds-heading"><h2 id="funds-heading">Funds and limits</h2><p id="balance">Available: 0 sats · held: 0 sats · settled: 0 sats</p><p>Development test funding: <strong>${bootstrap.reserveSat} sats</strong>. Action ceiling: <strong>${bootstrap.actionCeilingSat} sats</strong>.</p><div class="row"><label>Cashu amount (sats)<input id="cashu-amount" inputmode="numeric" value="64"></label><button id="cashu" disabled>Fund with Cashu</button><button id="cashu-replay" disabled>Replay Cashu</button></div><div class="row"><label>NWC amount (sats)<input id="nwc-amount" inputmode="numeric" value="3750"></label><button id="nwc" disabled>Fund with NWC</button></div><p id="funding-status" class="status"></p></section>
-  <section aria-labelledby="generation-heading"><h2 id="generation-heading">Generate a napplet</h2><p>Source, model charge, worker build, verification, and preview are signed ContextVM projections.</p><label>Focused idea<input id="idea" maxlength="512" value="A counter for a short focused task"></label><div class="row"><label>Maximum (sats)<input id="maximum" inputmode="numeric" value="${bootstrap.actionCeilingSat}"></label><button id="generate" disabled>Generate napplet</button></div><p id="generation-status" class="status"></p><dl id="generation-facts"></dl><iframe id="preview" title="Verified napplet preview" hidden></iframe><p id="publication-status">Publication is unavailable in this development surface.</p></section>`;
+  <header class="workspace-header"><h1>Development workspace</h1><p id="connection-status" class="status" aria-live="polite" aria-atomic="true">Disconnected</p><button id="connect">Connect</button></header>
+  <div class="workspace-controls">
+    <section aria-labelledby="funds-heading"><h2 id="funds-heading">Funds and limits</h2><p id="balance">Available: 0 sats · held: 0 sats · settled: 0 sats</p><p class="supporting">Model mode: <strong id="provider-mode">Loading</strong> · action ceiling: <strong>${bootstrap.actionCeilingSat} sats</strong>.</p><div class="row"><label>Cashu amount (sats)<input id="cashu-amount" inputmode="numeric" value="64"></label><button id="cashu" disabled>Fund with Cashu</button><button id="cashu-replay" disabled>Replay Cashu</button></div><div class="row"><label>NWC amount (sats)<input id="nwc-amount" inputmode="numeric" value="3750"></label><button id="nwc" disabled>Fund with NWC</button></div><p id="funding-status" class="status" aria-live="polite" aria-atomic="true"></p></section>
+    <section aria-labelledby="generation-heading"><h2 id="generation-heading">Create or revise</h2><label>Focused idea<input id="idea" maxlength="512" value="A counter for a short focused task"></label><div class="row"><label>Maximum (sats)<input id="maximum" inputmode="numeric" value="${bootstrap.actionCeilingSat}"></label><button id="generate" class="primary" disabled>Generate napplet</button></div><label>Revision<input id="revision" maxlength="512" placeholder="Describe the bounded revision"></label><button id="revise" disabled>Revise selected version</button><p id="generation-status" class="status" aria-live="polite" aria-atomic="true"></p><p id="generation-error" role="alert" aria-live="assertive"></p><dl id="generation-facts"></dl></section>
+    <section id="continuation" aria-labelledby="continuation-heading" hidden><h2 id="continuation-heading">Paused action</h2><p id="pending-status" class="status"></p><button id="resume" class="primary">Resume</button></section>
+  </div>
+  <div class="workspace-results">
+    <section aria-labelledby="timeline-heading"><h2 id="timeline-heading">Session timeline</h2><ol id="timeline"></ol></section>
+    <section aria-labelledby="versions-heading"><h2 id="versions-heading">Versions and preview</h2><ul id="versions"></ul><iframe id="preview" title="Verified napplet preview" hidden></iframe></section>
+    <section aria-labelledby="publication-heading"><h2 id="publication-heading">Publication</h2><p id="publication-status">Publication unavailable in this development setup.</p></section>
+  </div>`;
 
 const byId = <T extends HTMLElement>(id: string) => document.querySelector<T>(`#${id}`)!;
 const connectedControls = [byId<HTMLButtonElement>("cashu"), byId<HTMLButtonElement>("cashu-replay"), byId<HTMLButtonElement>("nwc"), byId<HTMLButtonElement>("generate")];
-function setStatus(value: string): void { byId("funding-status").textContent = value; }
-function setBalance(account: Readonly<{ available: string; held?: string }>): void {
-  balance = account.available;
-  const held = account.held ?? "0";
-  byId("balance").textContent = `Available: ${balance} sats · held: ${held} sats · settled: ${BigInt(balance) + BigInt(held)} sats`;
-}
-function facts(values: Record<string, unknown>): void {
-  const list = byId<HTMLDListElement>("generation-facts");
-  list.replaceChildren(...Object.entries(values).flatMap(([key, value]) => {
-    const term = document.createElement("dt"); term.textContent = key;
-    const detail = document.createElement("dd"); detail.textContent = String(value);
-    return [term, detail];
-  }));
-}
+function setFundingStatus(value: string): void { byId("funding-status").textContent = value; }
+function setGenerationStatus(value: string): void { byId("generation-status").textContent = value; }
+function setError(value = ""): void { byId("generation-error").textContent = value; }
+function setBalance(account: Readonly<{ available: string; held?: string }>): void { balance = account.available; const held = account.held ?? "0"; byId("balance").textContent = `Available: ${balance} sats · held: ${held} sats · settled: ${BigInt(balance) + BigInt(held)} sats`; }
+function facts(values: Record<string, unknown>): void { const list = byId<HTMLDListElement>("generation-facts"); list.replaceChildren(...Object.entries(values).flatMap(([key, value]) => { const term = document.createElement("dt"); term.textContent = key; const detail = document.createElement("dd"); detail.textContent = String(value); return [term, detail]; })); }
+function appendTimeline(label: string, detail: string): void { const item = document.createElement("li"); item.textContent = `${label}: ${detail}`; byId("timeline").append(item); }
+function savePending(value: PendingAction | undefined): void { pending = value; if (value) sessionStorage.setItem(pendingStorageKey, JSON.stringify(value)); else sessionStorage.removeItem(pendingStorageKey); renderPending(); }
+function restorePending(): PendingAction | undefined { try { const value = JSON.parse(sessionStorage.getItem(pendingStorageKey) ?? "null"); return value && typeof value.checkpointId === "string" && typeof value.reference === "string" && typeof value.fingerprint === "string" && typeof value.maximum === "string" && typeof value.shortfall === "string" && Number.isSafeInteger(value.expiresAtMs) ? value : undefined; } catch { return undefined; } }
+function renderPending(): void { const section = byId("continuation"); if (!pending) { section.hidden = true; return; } section.hidden = false; byId("pending-status").textContent = `Saved action needs ${pending.shortfall} more sats before an explicit resume. Expires ${new Date(pending.expiresAtMs).toLocaleString()}.`; }
+function validMaximum(value: string): boolean { try { return BigInt(value) >= BigInt(bootstrap.actionCeilingSat); } catch { return false; } }
+async function selectVersion(version: Version): Promise<any> { selected = version; const descriptor = await client!.preview({ sessionId: version.sessionId, artifactId: version.artifactId }); if (descriptor?.status !== "ready" || typeof descriptor.previewUrl !== "string") throw new Error("PREVIEW_NOT_READY"); const frame = byId<HTMLIFrameElement>("preview"); frame.src = descriptor.previewUrl; frame.hidden = false; byId<HTMLButtonElement>("revise").disabled = false; return descriptor; }
+function renderVersions(): void { const list = byId<HTMLUListElement>("versions"); list.replaceChildren(...versions.map((version) => { const item = document.createElement("li"); const button = document.createElement("button"); button.textContent = `Version ${version.version}: ${version.artifactId}`; button.onclick = () => { void selectVersion(version).then(() => facts({ selectedVersion: version.version, artifact: version.artifactId })).catch((error) => setError(`Preview unavailable: ${error instanceof Error ? error.message : "unknown"}`)); }; item.append(button); return item; })); }
+function renderDurableTimeline(status: any): void { const timeline = byId<HTMLUListElement>("timeline"); const events = Array.isArray(status?.timeline) ? status.timeline : []; timeline.replaceChildren(...events.map((event: any) => { const item = document.createElement("li"); item.textContent = `${event.stage.replaceAll("_", " ")} · ${new Date(event.at).toLocaleTimeString()} · ${event.detail}`; return item; })); }
 async function refresh(): Promise<void> { if (client) setBalance(await client.accountStatus()); }
+async function preview(action: any): Promise<void> { if (!action?.artifactId) throw new Error("ARTIFACT_NOT_AVAILABLE"); const version = { sessionId: action.sessionId, version: action.artifactVersion, artifactId: action.artifactId }; if (!versions.some((item) => item.artifactId === version.artifactId)) versions.push(version); renderVersions(); const descriptor = await selectVersion(version); const generation = action.generation; facts({ provider: generation?.provider ?? "durably recorded", model: generation?.model ?? "recorded", usage: Array.isArray(generation?.usage) ? generation.usage.map((line: any) => `${line.dimension}:${line.units}`).join(", ") : "recorded", worker: generation?.worker ?? "verified", stage: "verified", version: action.artifactVersion, artifact: action.artifactId, aggregate: descriptor.aggregateSha256, charge: action.confirmedSpend, remainingMaximum: action.remainingCap, remainingBalance: action.remainingBalance }); appendTimeline("verified preview", `version ${action.artifactVersion} · charge ${action.confirmedSpend} sats`); }
+async function hydrateSession(sessionId: string): Promise<void> { const status = await client!.sessionStatus(sessionId); if (status?.status !== "ok") return; versions.splice(0, versions.length, ...(status.session.verifiedArtifacts ?? []).map((item: any) => ({ sessionId, version: item.version, artifactId: item.id }))); renderVersions(); renderDurableTimeline(status); const latest = versions.at(-1); if (!latest) return; selected = latest; const descriptor = await client!.preview({ sessionId, artifactId: latest.artifactId }); if (descriptor?.status === "ready" && typeof descriptor.previewUrl === "string") { const frame = byId<HTMLIFrameElement>("preview"); frame.src = descriptor.previewUrl; frame.hidden = false; } facts({ session: sessionId, state: status.session.state, version: latest.version, artifact: latest.artifactId, remainingMaximum: status.session.remainingCap, remainingBalance: status.session.remainingBalance }); }
+async function complete(action: any): Promise<void> { if (action?.status !== "completed") throw new Error(action?.code ?? "GENERATION_NOT_COMPLETED"); sessionStorage.setItem(sessionStorageKey, action.sessionId); await preview(action); const status = await client!.sessionStatus(action.sessionId); if (status?.status === "ok") renderDurableTimeline(status); await refresh(); setGenerationStatus("Verified preview ready"); }
 
-byId<HTMLButtonElement>("connect").onclick = async () => {
-  const button = byId<HTMLButtonElement>("connect"); button.disabled = true;
-  try { client = new DevelopmentContextVmClient(bootstrap); const connected = await client.connect(); byId("connection-status").textContent = `Connected: ${connected.pubkey}`; setBalance(connected.account); connectedControls.forEach((control) => control.disabled = false); }
-  catch { byId("connection-status").textContent = "Connection failed; retry Connect"; button.disabled = false; }
-};
-byId<HTMLButtonElement>("cashu").onclick = async () => {
-  try {
-    setStatus("Cashu payment pending");
-    const payment = await client!.fundCashu(byId<HTMLInputElement>("cashu-amount").value);
-    await refresh();
-    setStatus(payment?.state === "credited" ? "Cashu credited" : "Cashu credit unconfirmed; check account status before retrying");
-  } catch { setStatus("Cashu credit unconfirmed; check account status before retrying"); }
-};
-byId<HTMLButtonElement>("cashu-replay").onclick = async () => {
-  try {
-    const payment = await client!.replayCashu();
-    await refresh();
-    setStatus(payment?.state === "credited" ? "Cashu replay credited once" : "Cashu replay unconfirmed; check account status");
-  } catch { setStatus("Cashu replay unconfirmed; check account status"); }
-};
-byId<HTMLButtonElement>("nwc").onclick = async () => {
-  try {
-    setStatus("NWC settlement pending");
-    const payment = await client!.fundNwc(byId<HTMLInputElement>("nwc-amount").value);
-    if (typeof payment?.topUpId !== "string") throw new Error("NWC_TOP_UP_ID_MISSING");
-    const topUpId = payment.topUpId;
-    setStatus(`NWC settlement pending (${topUpId})`);
-    let credited = false;
-    for (let attempt = 0; attempt < 120; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      const account = await client!.accountStatus();
-      setBalance(account);
-      const topUp = account.topUps?.find((item: any) => item.topUpId === topUpId);
-      if (topUp?.state === "credited") { credited = true; break; }
-      if (topUp?.state === "failed") throw new Error("NWC_TOP_UP_FAILED");
-    }
-    setStatus(credited ? "NWC credited" : "NWC settlement unconfirmed; check account status before retrying");
-  } catch { setStatus("NWC settlement unconfirmed; check account status before retrying"); }
-};
-byId<HTMLButtonElement>("generate").onclick = async () => {
-  const button = byId<HTMLButtonElement>("generate"); button.disabled = true;
-  try {
-    const maximum = byId<HTMLInputElement>("maximum").value;
-    const idea = byId<HTMLInputElement>("idea").value.trim();
-    if (!idea) throw new Error("IDEA_REQUIRED");
-    byId("generation-status").textContent = "Reserving ready isolated capacity";
-    const admission = await client!.fundAdmission(maximum);
-    if (admission?.status !== "accepted") throw new Error("ADMISSION_NOT_ACCEPTED");
-    byId("generation-status").textContent = "Creating metered proposal and isolated build";
-    const action = await client!.startSession({ admissionReference: admission.admissionReference, maximum, idea });
-    if (action?.status !== "completed" || !action.artifactId) throw new Error(action?.code ?? "GENERATION_NOT_COMPLETED");
-    byId("generation-status").textContent = "Authorizing read-only preview";
-    const descriptor = await client!.preview({ sessionId: action.sessionId, artifactId: action.artifactId });
-    if (descriptor?.status !== "ready" || typeof descriptor.previewUrl !== "string") throw new Error("PREVIEW_NOT_READY");
-    const preview = byId<HTMLIFrameElement>("preview"); preview.src = descriptor.previewUrl; preview.hidden = false;
-    const generation = action.generation;
-    if (!generation || !Array.isArray(generation.usage)) throw new Error("GENERATION_PROJECTION_MISSING");
-    facts({ provider: generation.provider, model: generation.model, profile: generation.profileId, priceCard: generation.priceCardId, usage: generation.usage.map((line: { dimension: string; units: string }) => `${line.dimension}:${line.units}`).join(", "), source: generation.source, worker: generation.worker, stage: "verified", version: action.artifactVersion, artifact: action.artifactId, aggregate: descriptor.aggregateSha256, charge: action.confirmedSpend, remainingMaximum: action.remainingCap, remainingBalance: action.remainingBalance, grantExpiresAt: descriptor.expiresAtMs });
-    byId("generation-status").textContent = "Verified preview ready";
-    await refresh();
-  } catch (error) { byId("generation-status").textContent = `Generation unavailable: ${error instanceof Error ? error.message : "unknown"}`; }
-  finally { button.disabled = !client; }
-};
+byId<HTMLButtonElement>("connect").onclick = async () => { const button = byId<HTMLButtonElement>("connect"); button.disabled = true; try { client = new DevelopmentContextVmClient(bootstrap); const connected = await client.connect(); byId("connection-status").textContent = `Connected: ${connected.pubkey}`; setBalance(connected.account); connectedControls.forEach((control) => control.disabled = false); byId("provider-mode").textContent = bootstrap.providerLabel; const stored = restorePending(); if (stored) { const status = await client.pendingActionStatus(stored.checkpointId); if (status?.status === "saved") { savePending(status); appendTimeline("saved action", `shortfall ${status.shortfall} sats`); } else savePending(undefined); } const sessionId = sessionStorage.getItem(sessionStorageKey); if (sessionId) await hydrateSession(sessionId); } catch { byId("connection-status").textContent = "Connection failed; retry Connect"; button.disabled = false; } };
+byId<HTMLButtonElement>("cashu").onclick = async () => { try { setFundingStatus("Cashu payment pending"); const payment = await client!.fundCashu(byId<HTMLInputElement>("cashu-amount").value); await refresh(); setFundingStatus(payment?.state === "credited" ? "Cashu credited" : "Cashu credit unconfirmed; check account status before retrying"); } catch { setFundingStatus("Cashu credit unconfirmed; check account status before retrying"); } };
+byId<HTMLButtonElement>("cashu-replay").onclick = async () => { try { const payment = await client!.replayCashu(); await refresh(); setFundingStatus(payment?.state === "credited" ? "Cashu replay credited once" : "Cashu replay unconfirmed; check account status"); } catch { setFundingStatus("Cashu replay unconfirmed; check account status"); } };
+byId<HTMLButtonElement>("nwc").onclick = async () => { try { setFundingStatus("NWC settlement pending"); const payment = await client!.fundNwc(byId<HTMLInputElement>("nwc-amount").value); if (typeof payment?.topUpId !== "string") throw new Error("NWC_TOP_UP_ID_MISSING"); for (let attempt = 0; attempt < 120; attempt++) { await new Promise((resolve) => setTimeout(resolve, 500)); const account = await client!.accountStatus(); setBalance(account); if (account.topUps?.find((item: any) => item.topUpId === payment.topUpId)?.state === "credited") { setFundingStatus("NWC credited"); return; } } setFundingStatus("NWC settlement unconfirmed; check account status before retrying"); } catch { setFundingStatus("NWC settlement unconfirmed; check account status before retrying"); } };
+byId<HTMLButtonElement>("generate").onclick = async () => { const button = byId<HTMLButtonElement>("generate"); button.disabled = true; setError(); try { const maximum = byId<HTMLInputElement>("maximum").value; const idea = byId<HTMLInputElement>("idea").value.trim(); if (!idea || !validMaximum(maximum)) throw new Error("Enter a focused idea and a maximum at or above the action ceiling"); const idempotencyKey = `browser:pending-start:${crypto.randomUUID()}`; if (BigInt(balance) < BigInt(maximum)) { setGenerationStatus("Saving action for explicit funding and resume"); const saved = await client!.savePreAdmission({ maximum, idea, idempotencyKey }); if (saved?.status === "saved") { savePending(saved); appendTimeline("saved action", `shortfall ${saved.shortfall} sats`); setGenerationStatus("Action saved; funding does not start it"); return; } if (saved?.status !== "funded_admission_required") throw new Error(saved?.code ?? "PENDING_ACTION_NOT_SAVED"); } setGenerationStatus("Request status: reserving ready isolated capacity"); const admission = await client!.fundAdmission(maximum); if (admission?.status !== "accepted") throw new Error("ADMISSION_NOT_ACCEPTED"); setGenerationStatus("Request status: creating metered proposal and isolated build"); await complete(await client!.startSession({ admissionReference: admission.admissionReference, maximum, idea, idempotencyKey })); } catch (error) { setError(`Generation unavailable: ${error instanceof Error ? error.message : "unknown"}`); } finally { button.disabled = !client; } };
+byId<HTMLButtonElement>("resume").onclick = async () => { if (!pending) return; const button = byId<HTMLButtonElement>("resume"); button.disabled = true; setError(); try { setGenerationStatus("Request status: accepting original maximum"); const admission = await client!.fundAdmission(pending.maximum, `browser:pending-admission:${pending.checkpointId}`); if (admission?.status !== "accepted") throw new Error("ADMISSION_NOT_ACCEPTED"); setGenerationStatus("Request status: resuming saved action"); const action = await client!.resumePendingAction({ ...pending, admissionReference: admission.admissionReference, idempotencyKey: `browser:pending-resume:${pending.checkpointId}` }); await complete(action); appendTimeline("resumed action", "accepted admission and exact pending action completed"); savePending(undefined); } catch (error) { setError(`Resume unavailable: ${error instanceof Error ? error.message : "unknown"}`); } finally { button.disabled = !client || !pending; } };
+byId<HTMLButtonElement>("revise").onclick = async () => { if (!selected) return; const button = byId<HTMLButtonElement>("revise"); button.disabled = true; setError(); try { const revision = byId<HTMLInputElement>("revision").value.trim(); const maximum = byId<HTMLInputElement>("maximum").value; if (!revision || !validMaximum(maximum)) throw new Error("Enter a bounded revision and valid maximum"); const admission = await client!.fundAdmission(maximum); if (admission?.status !== "accepted") throw new Error("ADMISSION_NOT_ACCEPTED"); setGenerationStatus("Request status: verifying revision"); await complete(await client!.reviseSession({ sessionId: selected.sessionId, admissionReference: admission.admissionReference, expectedVersion: selected.version, maximum, revision })); } catch (error) { setError(`Revision unavailable: ${error instanceof Error ? error.message : "unknown"}`); } finally { button.disabled = !client || !selected; } };

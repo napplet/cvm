@@ -55,6 +55,8 @@ const StatusOkSchema = z.object({
     remainingBalance: DecimalSchema,
     remainingCap: DecimalSchema,
     latestVerifiedArtifact: z.object({ id: z.string().min(1), version: z.number().int().nonnegative() }).nullable(),
+    verifiedArtifacts: z.array(z.object({ id: z.string().min(1), version: z.number().int().positive() }).strict()).default([]),
+    timeline: z.array(z.object({ stage: z.enum(["source_recorded", "provider_recorded", "worker_completed", "artifact_verified", "ledger_settled"]), at: z.iso.datetime(), detail: z.string().min(1).max(160) }).strict()).default([]),
     nextAction: z.enum(["revise_session", "resume_session", "billing_reconciliation", "wait_for_current_action", "top_up", "approve_cap", "top_up_and_approve_cap", "none"]),
     continuation: z.union([ContinuationStatusSchema, z.null()]),
   }).strict(),
@@ -180,7 +182,8 @@ export async function readSessionStatus(input: Readonly<{ store: MeteredFundingS
   const checkpoint = typeof continuationStore.findContinuationCheckpointForSession === "function"
     ? await continuationStore.findContinuationCheckpointForSession(accountId, query.sessionId)
     : undefined;
-  const action = newestAction(await input.store.listMeteredActionsForSession(accountId, query.sessionId));
+  const actions = await input.store.listMeteredActionsForSession(accountId, query.sessionId);
+  const action = newestAction(actions);
   if (!action && !continuation) return freeze(SessionStatusSchema.parse({ status: "not_found_or_denied" }));
   try {
     const [account, page] = await Promise.all([input.store.status(accountId), input.store.listBillingLineItems(accountId, { limit, ...(storeCursor ? { cursor: storeCursor } : {}) })]);
@@ -197,6 +200,7 @@ export async function readSessionStatus(input: Readonly<{ store: MeteredFundingS
           id: session.sessionId, version: session.version, state: "expired", progress: "failed",
           maximum: continuation?.result.actionMaximum ?? "0", actualSpend: "0", remainingBalance: account.available, remainingCap: "0",
           latestVerifiedArtifact: null, nextAction: "none", continuation: safe,
+          verifiedArtifacts: [],
         },
         action: null,
         billing: { items: page.items.map(historyItem), nextCursor },
@@ -211,6 +215,7 @@ export async function readSessionStatus(input: Readonly<{ store: MeteredFundingS
           id: session.sessionId, version: session.version, state: "needs_top_up", progress: "waiting_for_funding",
           maximum: safe.actionMaximum, actualSpend: "0", remainingBalance: safe.availableBalance, remainingCap: safe.remainingCap,
           latestVerifiedArtifact: null, nextAction: safe.nextRequiredAction, continuation: safe,
+          verifiedArtifacts: [],
         },
         action: null,
         billing: { items: page.items.map(historyItem), nextCursor },
@@ -225,6 +230,7 @@ export async function readSessionStatus(input: Readonly<{ store: MeteredFundingS
           id: session.sessionId, version: session.version, state: "active", progress: restored ? "running" : "waiting_for_dispatch",
           maximum: continuation.result.actionMaximum, actualSpend: "0", remainingBalance: account.available, remainingCap: continuation.result.remainingCap,
           latestVerifiedArtifact: null, nextAction: safe.nextRequiredAction, continuation: safe,
+          verifiedArtifacts: [],
         },
         action: null,
         billing: { items: page.items.map(historyItem), nextCursor },
@@ -239,6 +245,7 @@ export async function readSessionStatus(input: Readonly<{ store: MeteredFundingS
           id: session.sessionId, version: session.version, state: "active", progress: "running",
           maximum: continuation.result.actionMaximum, actualSpend: "0", remainingBalance: account.available, remainingCap: continuation.result.remainingCap,
           latestVerifiedArtifact: null, nextAction: "wait_for_current_action", continuation: null,
+          verifiedArtifacts: [],
         },
         action: null,
         billing: { items: page.items.map(historyItem), nextCursor },
@@ -246,22 +253,33 @@ export async function readSessionStatus(input: Readonly<{ store: MeteredFundingS
     }
     if (continuation?.state === "wake_reconciliation") return freeze(SessionStatusSchema.parse({
       status: "ok",
-      session: { id: session.sessionId, version: session.version, state: "usage_unknown", progress: "reconciliation_required", maximum: continuation.result.actionMaximum, actualSpend: "0", remainingBalance: account.available, remainingCap: continuation.result.remainingCap, latestVerifiedArtifact: null, nextAction: "billing_reconciliation", continuation: null },
+      session: { id: session.sessionId, version: session.version, state: "usage_unknown", progress: "reconciliation_required", maximum: continuation.result.actionMaximum, actualSpend: "0", remainingBalance: account.available, remainingCap: continuation.result.remainingCap, latestVerifiedArtifact: null, verifiedArtifacts: [], nextAction: "billing_reconciliation", continuation: null },
       action: null,
       billing: { items: page.items.map(historyItem), nextCursor },
     }));
-    if (continuation?.state === "completed" && (session.status === "verified" || session.status === "failed")) return freeze(SessionStatusSchema.parse({
-      status: "ok",
-      session: {
-        id: session.sessionId, version: session.version, state: session.status, progress: safeProgress(session.status),
-        maximum: continuation.result.actionMaximum, actualSpend: "0", remainingBalance: account.available, remainingCap: continuation.result.remainingCap,
-        latestVerifiedArtifact: null, nextAction: "revise_session", continuation: null,
-      },
-      action: null,
-      billing: { items: page.items.map(historyItem), nextCursor },
-    }));
+    if (continuation?.state === "completed" && (session.status === "verified" || session.status === "failed")) {
+      // A terminal continuation records wake/recovery state, not artifact
+      // ownership. Preserve every verified artifact from the authoritative
+      // metered actions so a reconnect can select any durable revision.
+      const verifiedArtifacts = actions
+        .filter((candidate) => candidate.artifact?.artifactId && candidate.artifactVersion)
+        .sort((left, right) => (left.artifactVersion ?? 0) - (right.artifactVersion ?? 0))
+        .map((candidate) => ({ id: candidate.artifact!.artifactId!, version: candidate.artifactVersion! }));
+      const latest = verifiedArtifacts.at(-1) ?? null;
+      return freeze(SessionStatusSchema.parse({
+        status: "ok",
+        session: {
+          id: session.sessionId, version: session.version, state: session.status, progress: safeProgress(session.status),
+          maximum: continuation.result.actionMaximum, actualSpend: "0", remainingBalance: account.available, remainingCap: continuation.result.remainingCap,
+          latestVerifiedArtifact: latest, nextAction: "revise_session", continuation: null,
+          verifiedArtifacts,
+        },
+        action: null,
+        billing: { items: page.items.map(historyItem), nextCursor },
+      }));
+    }
     if (!action) return freeze(SessionStatusSchema.parse({ status: "not_found_or_denied" }));
-    const verifiedArtifact = (await input.store.listMeteredActionsForSession(accountId, query.sessionId))
+    const verifiedActions = actions
       .filter((candidate) => candidate.artifact?.artifactId)
       .sort((left, right) => (right.artifactVersion ?? 0) - (left.artifactVersion ?? 0))[0];
     const reconciliation = action.status === "usage_unknown" || action.status === "billing_invariant_failed";
@@ -273,7 +291,8 @@ export async function readSessionStatus(input: Readonly<{ store: MeteredFundingS
       session: {
         id: session.sessionId, version: session.version, state: session.status, progress: safeProgress(session.status), maximum: action.maximum.toString(10), actualSpend,
         remainingBalance: action.remainingBalance ?? account.available, remainingCap,
-        latestVerifiedArtifact: verifiedArtifact?.artifact?.artifactId && verifiedArtifact.artifactVersion ? { id: verifiedArtifact.artifact.artifactId, version: verifiedArtifact.artifactVersion } : null,
+        latestVerifiedArtifact: verifiedActions?.artifact?.artifactId && verifiedActions.artifactVersion ? { id: verifiedActions.artifact.artifactId, version: verifiedActions.artifactVersion } : null,
+        verifiedArtifacts: actions.filter((candidate) => candidate.artifact?.artifactId && candidate.artifactVersion).sort((left, right) => (left.artifactVersion ?? 0) - (right.artifactVersion ?? 0)).map((candidate) => ({ id: candidate.artifact!.artifactId!, version: candidate.artifactVersion! })),
         nextAction: reconciliation ? "billing_reconciliation" : session.status === "active" || session.status === "prepared" ? "wait_for_current_action" : "revise_session",
         continuation: null,
       },

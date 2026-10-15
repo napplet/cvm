@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: executing
-stopped_at: Plan 07-56 accepted after real signed browser generation/preview; Plan 07-57 executing
-last_updated: "2026-10-15T17:17:00Z"
+stopped_at: Plan 07-57 accepted; signed browser resume/revisions in 07-54 executing with 07-55 launcher foundation
+last_updated: "2026-10-15T17:42:00Z"
 last_activity: 2026-10-15
-last_activity_desc: Real signed browser generation/preview and SQL accounting pass; durable pre-admission pause/resume execution active
+last_activity_desc: Durable pre-admission authority verified through isolated SQL and real worker; browser recovery and launcher execution active
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 98
-  completed_plans: 93
+  completed_plans: 94
   percent: 86
 ---
 
@@ -30,20 +30,20 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
-Plan: 53 of 58 accepted; 07-57 execution active; 07-54/55 plans reviewed and ready
+Plan: 54 of 58 accepted; 07-54 execution active; independent 07-55 launcher foundation underway
 Status: Local execution GUI implementation active. Production implementation and verification deferred by user on 2026-10-14; do not request production funding or approval for development work.
-Last activity: 2026-10-15 — Plan 07-56 accepted after real signed browser funding/generation/verified interactive preview and SQL equality passed. Sandbox, immutable artifacts/grants, runtime readiness, and accounting negatives pass. Plan 07-57 executing; configured paid-provider request remains conditional without credentials.
+Last activity: 2026-10-15 — Plan 07-57 accepted after isolated SQL/real-worker saved-command resume and lookup-only provider recovery passed (14 tests, 93 assertions). Legacy continuation is unchanged by default (32 tests pass). Browser generation/preview regression passes. Plan 07-54 integrates signed browser resume/revisions; independent Plan 07-55 launcher files proceed without sharing application-file ownership. Configured paid-provider request remains conditional without credentials.
 
-Plan execution: 93/98 milestone plans complete; Phase 7 is 53/58 complete and verification remains pending
+Plan execution: 94/98 milestone plans complete; Phase 7 is 54/58 complete and verification remains pending
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 93/98 milestone plans executed. Development Plans 07-52/53/56 are complete; 07-57 → 07-54 → 07-55 implement durable pre-admission continuation, browser revisions/recovery, and one-command full-flow verification. Production-only 07-20 and 07-26 remain deferred; neither is an active development prerequisite.
+- Plans: 94/98 milestone plans executed. Development Plans 07-52/53/56/57 are complete; 07-54 → 07-55 complete browser revisions/recovery and one-command full-flow verification. Plan 55's independent launcher foundation can proceed alongside Plan 54; full Plan 55 acceptance remains dependent on Plan 54. Production-only 07-20 and 07-26 remain deferred; neither is an active development prerequisite.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Development coverage: local NWC/two-mint coordinator-to-PostgreSQL suites and real Chromium encrypted ContextVM funding pass, including Cashu replay and NWC settlement across reconciler restart. Browser and SQL balances agree (64 sats Cashu; 3,814 sats after NWC). Real generation/build/verification/interactive Paja preview now pass through signed ContextVM and SQL (5-sat deterministic charge; displayed values equal stored records). Revisions, durable pause/resume, and full service restart remain pending Plans 57/54; the launcher and complete suite remain Plan 55. The exact DEV-GUI-01–12 acceptance matrix lives in Phase 7's 07-DEV-VALIDATION.md. Production resumption follows docs/runbooks/production-readiness-deferred.md only when requested.
+- Development coverage: local NWC/two-mint coordinator-to-PostgreSQL suites and real Chromium encrypted ContextVM funding pass, including Cashu replay and NWC settlement across reconciler restart. Browser and SQL balances agree (64 sats Cashu; 3,814 sats after NWC). Real generation/build/verification/interactive Paja preview pass through signed ContextVM and SQL (5-sat deterministic charge; displayed values equal stored records). Pre-admission save/resume is verified at the service/SQL/worker boundary. Persisted worker output recovers across process recreation without a second build; an ambiguous build without a persisted result fails closed. Browser revisions, pending-action resume, and full service restart remain Plan 54; the launcher and complete suite remain Plan 55. The exact DEV-GUI-01–12 acceptance matrix lives in Phase 7's 07-DEV-VALIDATION.md. Production resumption follows docs/runbooks/production-readiness-deferred.md only when requested.
 
 ## Performance Metrics
 
@@ -366,6 +366,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-15T17:17:00Z
-Stopped at: Plan 07-56 accepted; Plan 07-57 durable pending-action execution active. Continue 07-54 → 07-55 afterward. Production plans 07-20 and 07-26 remain deferred.
-Resume file: .planning/phases/07-admission-slo-resilience-launch-safety/07-56-SUMMARY.md
+Last session: 2026-10-15T17:42:00Z
+Stopped at: Plan 07-57 accepted; Plan 07-54 browser integration executing, with independent Plan 07-55 launcher foundation. Full 55 acceptance follows 54. Production plans 07-20 and 07-26 remain deferred.
+Resume file: .planning/phases/07-admission-slo-resilience-launch-safety/07-57-SUMMARY.md

@@ -130,11 +130,18 @@ export class DeterministicModelGateway implements ModelGateway {
     const remembered = this.#proposalReferences.get(intent.operationId);
     if (remembered) return remembered;
     if (!this.#proposalStore) return undefined;
+    // A restarted deterministic gateway must replay the original paid source,
+    // even when this fixture's template changes in a later code version.
+    const durable = await this.#proposalStore.lookup({ intent });
+    if (durable) {
+      this.#proposalReferences.set(intent.operationId, durable.proposal.reference);
+      return durable.proposal.reference;
+    }
     const fingerprint = intent.requestFingerprint.slice(0, 12);
     const label = `Focus ${fingerprint}`;
     const main = [
-      'import "./styles.css";',
-      'import { runtimeHasDomain } from "./domain-availability.js";',
+      "import './styles.css';",
+      "import { runtimeHasDomain } from './domain-availability.js';",
       `const title = ${JSON.stringify(label)};`,
       'const root = document.querySelector("#app");',
       'if (!root) throw new Error("APP_ROOT_MISSING");',
@@ -148,7 +155,7 @@ export class DeterministicModelGateway implements ModelGateway {
     ].join("\n");
     const stored = await this.#proposalStore.persist({ intent, provider: "deterministic_fixture", model: "phase-04-fixture-model", proposal: { files: [
       { path: "src/main.ts", content: main },
-      { path: "src/styles.css", content: "body { font-family: system-ui, sans-serif; } button { margin: 0.5rem; }" },
+      { path: "src/styles.css", content: "html, body, #app { height: 100%; margin: 0; } body { font-family: system-ui, sans-serif; } button { margin: 0.5rem; }" },
     ] } });
     this.#proposalReferences.set(intent.operationId, stored.proposal.reference);
     return stored.proposal.reference;

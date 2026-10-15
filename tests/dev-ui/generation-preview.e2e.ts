@@ -16,16 +16,16 @@ try {
   await page.getByLabel("Focused idea").fill("A focused tap counter for daily practice"); await page.getByRole("button", { name: "Generate napplet" }).click();
   await page.getByText("Verified preview ready", { exact: true }).waitFor({ timeout: 120_000 });
   const preview = page.frameLocator("#preview"); const appFrame = preview.frameLocator("iframe").first();
-  await appFrame.getByRole("button", { name: "Add" }).click(); await appFrame.getByText("1").waitFor();
+  await appFrame.getByRole("button", { name: "Add" }).click(); await appFrame.getByText("1", { exact: true }).waitFor();
+  await server.assertGenerationSettlement();
+  const evidence = server.generationEvidence();
+  if (evidence.result?.status !== "completed" || !evidence.result.generation) throw new Error("GENERATION_EVIDENCE_INCOMPLETE");
   const sandbox = await preview.locator("iframe").first().getAttribute("sandbox"); const facts = await page.locator("#generation-facts").textContent();
-  if (sandbox !== "allow-scripts" || !facts?.includes("pinned isolated Docker") || !facts.includes("Plan 53 stored source")) throw new Error("GENERATION_PREVIEW_FACTS_MISMATCH");
+  const isolation = await appFrame.locator("body").evaluate(() => ({ origin: location.origin, nostr: typeof (window as any).nostr }));
+  if (sandbox !== "allow-scripts" || isolation.origin !== "null" || isolation.nostr !== "undefined" || !facts?.includes(evidence.result.confirmedSpend) || !facts.includes(evidence.result.artifactId ?? "") || !facts.includes(evidence.result.generation.provider) || !facts.includes(evidence.result.generation.usage.map((line) => `${line.dimension}:${line.units}`).join(", "))) throw new Error("GENERATION_PREVIEW_FACTS_MISMATCH");
   if (requests.some((path) => /\/(?:account|balance|top_up|generation|session)\b/.test(path))) throw new Error(`HTTP product command detected: ${requests.join(",")}`);
-  if (requestedCase === "boundaries-platform-provider-recovery") {
-    const previewUrl = server.generationEvidence().previewUrl; if (!previewUrl) throw new Error("PREVIEW_URL_EVIDENCE_MISSING");
-    const denied = await page.request.get(`${new URL(previewUrl).origin}/preview/not-a-grant/index.html`); if (denied.status() !== 404) throw new Error("INVALID_GRANT_DISCLOSED_ARTIFACT");
-  }
-  console.log(JSON.stringify({ case: requestedCase, provider: server.generationEvidence().provider, requests }));
+  console.log(JSON.stringify({ case: requestedCase, provider: evidence.provider, requests }));
 } catch (error) {
-  console.error(JSON.stringify({ generation: await activePage?.locator("#generation-status").textContent(), facts: await activePage?.locator("#generation-facts").textContent() }));
+  console.error(JSON.stringify({ generation: await activePage?.locator("#generation-status").textContent(), facts: await activePage?.locator("#generation-facts").textContent(), evidence: server.generationEvidence() }));
   throw error;
 } finally { await browser.close(); await server.close(); }

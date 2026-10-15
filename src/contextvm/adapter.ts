@@ -328,7 +328,7 @@ export class ContextVmFundingAdapter {
 
   private async generationResponse(name: "start_session" | "revise_session", verifiedPubkey: string, requestEventId: string, id: string | number | null, result: z.infer<typeof SessionActionResultSchema>): Promise<ContextVmWireResponse> {
     const wireResult = result.status === "completed" || result.status === "failed"
-      ? freeze({ status: result.status, code: result.code, sessionId: result.sessionId, sessionVersion: result.sessionVersion, artifactVersion: result.artifactVersion, ...(result.status === "completed" && result.artifactId ? { artifactId: result.artifactId } : {}), confirmedSpend: result.confirmedSpend, remainingCap: result.remainingCap, remainingBalance: result.remainingBalance, nextAction: result.nextAction, operationId: result.operationId })
+      ? freeze({ status: result.status, code: result.code, sessionId: result.sessionId, sessionVersion: result.sessionVersion, artifactVersion: result.artifactVersion, ...(result.status === "completed" && result.artifactId ? { artifactId: result.artifactId } : {}), ...(result.status === "completed" && result.generation ? { generation: result.generation } : {}), confirmedSpend: result.confirmedSpend, remainingCap: result.remainingCap, remainingBalance: result.remainingBalance, nextAction: result.nextAction, operationId: result.operationId })
       : result.status === "billing_invariant_failed" || result.status === "usage_unknown"
         ? freeze({ status: result.status, code: result.code, sessionId: result.sessionId, nextAction: result.nextAction, operationId: result.operationId })
         : freeze({ status: result.status, code: result.code });

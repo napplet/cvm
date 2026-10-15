@@ -11,7 +11,7 @@ import { ContextVmFundingAdapter } from "../contextvm/adapter";
 import { ContextVmSdkBridge } from "../contextvm/sdk-bridge";
 import { DevelopmentNwcSettlementReconciler } from "../dev/dev-funding-reconciler";
 import { createDevelopmentModelComposition } from "../dev/dev-composition";
-import { MeteredGenerationService } from "../phase-04/metered-generation-service";
+import { MeteredGenerationService, type SessionActionResult } from "../phase-04/metered-generation-service";
 import { LocalNappletWorker } from "../dev/local-napplet-worker";
 import { LocalArtifactVerifier } from "../dev/local-artifact-verifier";
 import { LocalArtifactRepository } from "../dev/local-artifact-repository";
@@ -20,10 +20,10 @@ import { LocalGenerationArtifactVerifier, LocalProposalWorkerPort } from "../dev
 import { createPreviewServer } from "./preview-server";
 import { accountIdForPrincipal } from "../domain/account-command";
 import { PHASE_04_DETERMINISTIC_PRICE_CARD, PHASE_04_MODEL_PROFILES, maximumOperationCharge } from "../model/price-card";
+import { LocalDevelopmentRuntimeReadiness, type DevelopmentRuntimeReadiness } from "../dev/development-runtime-readiness";
 
 const root = resolve(import.meta.dir, "../..");
 const reserveSat = "3750";
-const actionCeilingSat = maximumOperationCharge({ card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile: PHASE_04_MODEL_PROFILES["code-proposal"] });
 
 type DevelopmentFunding = Awaited<ReturnType<typeof createDevelopmentModelComposition>>["funding"];
 export type DevelopmentContextVmServer = Readonly<{
@@ -32,24 +32,26 @@ export type DevelopmentContextVmServer = Readonly<{
   restartReconciler(): void;
   assertNwcPending(): Promise<void>;
   assertFundingEvidence(caseName: "cashu-wire" | "both-rails-restart-replay"): Promise<void>;
+  /** Test-only SQL-to-projection equality check for the signed generation result. */
+  assertGenerationSettlement(): Promise<void>;
   /** Test-only durable evidence read after a signed browser run. */
-  generationEvidence(): Readonly<{ provider: string; artifactId?: string; previewUrl?: string }>;
+  generationEvidence(): Readonly<{ provider: string; result?: SessionActionResult; artifactId?: string; previewUrl?: string; error?: string }>;
   close(): Promise<void>;
 }>;
 
-function developmentCapacity(): ReadyCapacityPort {
+function developmentCapacity(readiness: DevelopmentRuntimeReadiness): ReadyCapacityPort {
   const reservations = new Map<string, Readonly<{ reference: string; expiresAt: string; binding: string }>>();
   return {
     async reserveNow(input) {
       const found = reservations.get(input.intentReference);
       const reservation = found ?? Object.freeze({ reference: `development-ready:${input.intentReference}`, expiresAt: new Date(Date.now() + 120_000).toISOString(), binding: input.expectedSessionBindingDigest });
       reservations.set(input.intentReference, reservation);
-      return { status: "available" as const, reference: reservation.reference, expiresAt: reservation.expiresAt, usable: true as const, ready: { intentReference: input.intentReference, leaseReference: reservation.reference, sessionBindingDigest: reservation.binding, imageDigest: `sha256:${"1".repeat(64)}`, readinessProbeDigest: `sha256:${"2".repeat(64)}`, readyMonotonicMs: performance.now() | 0 } };
+      return { status: "available" as const, reference: reservation.reference, expiresAt: reservation.expiresAt, usable: true as const, ready: { intentReference: input.intentReference, leaseReference: reservation.reference, sessionBindingDigest: reservation.binding, imageDigest: readiness.imageDigest, readinessProbeDigest: readiness.readinessProbeDigest, readyMonotonicMs: readiness.readyMonotonicMs } };
     },
     async observe(input) {
       const reservation = reservations.get(input.intentReference);
       if (!reservation || reservation.reference !== input.reference || reservation.binding !== input.expectedSessionBindingDigest) return { status: "unknown" as const, ...(input.reference ? { reference: input.reference } : {}) };
-      return { status: "available" as const, reference: reservation.reference, expiresAt: reservation.expiresAt, usable: true as const, ready: { intentReference: input.intentReference, leaseReference: reservation.reference, sessionBindingDigest: reservation.binding, imageDigest: `sha256:${"1".repeat(64)}`, readinessProbeDigest: `sha256:${"2".repeat(64)}`, readyMonotonicMs: performance.now() | 0 } };
+      return { status: "available" as const, reference: reservation.reference, expiresAt: reservation.expiresAt, usable: true as const, ready: { intentReference: input.intentReference, leaseReference: reservation.reference, sessionBindingDigest: reservation.binding, imageDigest: readiness.imageDigest, readinessProbeDigest: readiness.readinessProbeDigest, readyMonotonicMs: readiness.readyMonotonicMs } };
     },
     async release(input) { reservations.delete(input.intentReference); },
   };
@@ -90,6 +92,10 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
   const config = options.config ?? (stack ? await stack.up() : await Bun.file(resolve(root, ".local/napplet-cvm-dev-payments/payments.json")).json() as DevPayments);
   const composition = await createDevelopmentModelComposition(config);
   const app = composition.funding;
+  const actionCeilingSat = composition.pricing
+    ? maximumOperationCharge(composition.pricing)
+    : maximumOperationCharge({ card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile: PHASE_04_MODEL_PROFILES["code-proposal"] });
+  const readiness = await new LocalDevelopmentRuntimeReadiness().assertReady();
   const signer = new PrivateKeySigner();
   const transport = new NostrServerTransport({ signer, relayHandler: [config.relayUrl], encryptionMode: "required", publishRelayList: false, injectRequestEventId: true, logLevel: "silent" });
   const bridge = new ContextVmSdkBridge(transport);
@@ -99,16 +105,16 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
     rails: app.database.railStatuses,
   });
   const receipts = new HmacAdmissionReceiptAuthority({ secret: crypto.getRandomValues(new Uint8Array(32)) });
-  const fundedAdmission = new FundedAdmissionService({ funding: app.funding, store: app.database.funding, capacity: developmentCapacity(), receiptAuthority: receipts });
+  const fundedAdmission = new FundedAdmissionService({ funding: app.funding, store: app.database.funding, capacity: developmentCapacity(readiness), receiptAuthority: receipts });
   const repository = new LocalArtifactRepository({ objectRoot: resolve(root, ".local/development-artifacts"), pool: app.pool });
   const grants = new LocalPreviewGrantStore({ pool: app.pool });
-  const worker = new LocalProposalWorkerPort(new LocalNappletWorker());
+  const worker = new LocalProposalWorkerPort(new LocalNappletWorker({ image: readiness.imageDigest }));
   const owners = new Map<string, string>();
   const artifactVerifier = new LocalGenerationArtifactVerifier({ worker, verifier: new LocalArtifactVerifier(), repository, ownerIdForAccount: (accountId) => owners.get(accountId) });
-  const generation = new MeteredGenerationService({ fundedAdmission, store: app.database.meteredFunding, gateway: composition.gateway, worker, artifactVerifier, proposalStore: composition.proposals });
+  const generation = new MeteredGenerationService({ fundedAdmission, store: app.database.meteredFunding, gateway: composition.gateway, worker, artifactVerifier, proposalStore: composition.proposals, ...(composition.pricing ? { pricing: composition.pricing } : {}) });
   const paja = await import("../../tests/dev-ui/node_modules/@kehto/paja");
   const previewServer = await createPreviewServer({ repository, grants, paja: { startPajaServer: paja.startPajaServer, domains: paja.PAJA_SIMULATION_DOMAINS } });
-  let latestPreviewUrl: string | undefined;
+  let latestPreviewUrl: string | undefined; let latestGenerationError: string | undefined; let latestGenerationResult: SessionActionResult | undefined;
   const preview = {
     async previewVerifiedArtifact(input: Readonly<{ accountId: string; sessionId: string; artifactId: string }>) {
       const artifact = await repository.get(input.artifactId);
@@ -117,14 +123,14 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
       latestPreviewUrl = await previewServer.openPaja(grant.token);
       return { state: "ready" as const, artifactId: artifact.artifactId, aggregateSha256: artifact.aggregateSha256, previewGrantId: grant.previewGrantId, expiresAtMs: grant.expiresAtMs, previewUrl: latestPreviewUrl, nextAction: "review_capabilities" as const };
     },
-    async reviewCapabilities(input: Readonly<{ artifactId: string }>) {
+    async reviewCapabilities(input: Readonly<{ accountId: string; sessionId: string; artifactId: string }>) {
       const artifact = await repository.get(input.artifactId);
-      return artifact ? { state: "ready" as const, artifactId: artifact.artifactId, aggregateSha256: artifact.aggregateSha256, capabilityDigest: artifact.verificationEvidenceSha256, runtimeVariant: "development-paja-0.19.0", required: [], optional: [], nextAction: "sign_manifest" as const } : { state: "denied" as const, nextAction: "preview" as const, safeReasonCode: "preview_not_available" as const };
+      return artifact && artifact.accountId === input.accountId && artifact.sessionId === input.sessionId ? { state: "ready" as const, artifactId: artifact.artifactId, aggregateSha256: artifact.aggregateSha256, capabilityDigest: artifact.verificationEvidenceSha256, runtimeVariant: "development-paja-0.19.0", required: [], optional: [], nextAction: "sign_manifest" as const } : { state: "denied" as const, nextAction: "preview" as const, safeReasonCode: "preview_not_available" as const };
     },
   };
   const generationFacade = {
-    async startSession(input: any) { owners.set(await accountIdForPrincipal(input.principal), input.principal.pubkey); return generation.startSession(input); },
-    async reviseSession(input: any) { owners.set(await accountIdForPrincipal(input.principal), input.principal.pubkey); return generation.reviseSession(input); },
+    async startSession(input: any) { try { owners.set(await accountIdForPrincipal(input.principal), input.principal.pubkey); return latestGenerationResult = await generation.startSession(input); } catch (error) { latestGenerationError = error instanceof Error ? error.message : "GENERATION_UNKNOWN_ERROR"; throw error; } },
+    async reviseSession(input: any) { try { owners.set(await accountIdForPrincipal(input.principal), input.principal.pubkey); return latestGenerationResult = await generation.reviseSession(input); } catch (error) { latestGenerationError = error instanceof Error ? error.message : "GENERATION_UNKNOWN_ERROR"; throw error; } },
   };
   new ContextVmFundingAdapter({ service: app.funding, transport: bridge, admissions: fundedAdmission, admissionReceipts: receipts, accountStatus, topUps: { lightning: app.lightning, cashu: app.cashu }, generation: generationFacade, preview, policyVersion: "development-local-v1" });
   let reconciler = new DevelopmentNwcSettlementReconciler(app);
@@ -182,7 +188,13 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
       const [packageHash, lockHash] = await Promise.all([sha256File(resolve(root, "package.json")), sha256File(resolve(root, "bun.lock"))]);
       if (packageHash !== "cbcc433278d32391b075576ebd847ae30039f1d86ad229a149f5566856989f23" || lockHash !== "8916ee4ec92924ae9e09bc4f315fd6656033812696e35a1b7785161d872c5ac3") throw new Error("DEV_UI_ROOT_MANIFEST_DRIFT");
     },
-    generationEvidence: () => Object.freeze({ provider: composition.providerLabel, ...(latestPreviewUrl ? { previewUrl: latestPreviewUrl } : {}) }),
+    async assertGenerationSettlement() {
+      const result = latestGenerationResult;
+      if (!result || (result.status !== "completed" && result.status !== "failed")) throw new Error("DEV_UI_GENERATION_RESULT_MISSING");
+      const row = (await app.pool.query<{ receipt_charge: string; remaining_cap_sat: string; remaining_balance_sat: string; artifact_id: string | null; terminal_result: unknown }>("SELECT receipt_charge,remaining_cap_sat,remaining_balance_sat,artifact_id,terminal_result FROM metered_actions WHERE account_id=$1 AND operation_id=$2", [result.accountId, result.operationId])).rows[0];
+      if (!row || row.receipt_charge !== result.confirmedSpend || row.remaining_cap_sat !== result.remainingCap || row.remaining_balance_sat !== result.remainingBalance || (result.status === "completed" && row.artifact_id !== result.artifactId)) throw new Error("DEV_UI_GENERATION_SQL_PROJECTION_MISMATCH");
+    },
+    generationEvidence: () => Object.freeze({ provider: composition.providerLabel, ...(latestGenerationResult ? { result: latestGenerationResult } : {}), ...(latestPreviewUrl ? { previewUrl: latestPreviewUrl } : {}), ...(latestGenerationError ? { error: latestGenerationError } : {}) }),
     async close() {
       reconciler.stop();
       try { web.stop(true); }

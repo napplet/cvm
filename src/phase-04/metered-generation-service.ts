@@ -18,6 +18,11 @@ import { emitLifecycleObservation, type LifecycleTelemetryPort } from "../teleme
 import type { SourceProposalStore } from "../dev/source-proposal-store";
 
 const DecimalSchema = z.string().regex(/^[1-9][0-9]*$/u);
+const GenerationProjectionSchema = z.object({
+  provider: z.string().min(1), model: z.string().min(1), profileId: z.string().min(1), priceCardId: z.string().min(1),
+  usage: z.array(z.object({ dimension: z.string().min(1), units: z.string().regex(/^[0-9]+$/u) }).strict()).min(1),
+  source: z.literal("durably recorded"), worker: z.literal("verified"),
+}).strict();
 export const StartSessionCommandSchema = z.object({
   principal: PrincipalSchema, admissionReference: z.string().min(1), idempotencyKey: z.string().min(1), expectedVersion: z.literal(0),
   maximum: DecimalSchema, policyVersion: z.string().min(1), idea: z.string(),
@@ -34,7 +39,7 @@ export const TriggerValidationRepairCommandSchema = z.object({
 }).strict();
 export const SessionActionResultSchema = z.discriminatedUnion("status", [
   NeedsTopUpResultSchema,
-  z.object({ status: z.literal("completed"), code: z.literal("ACTION_COMMITTED"), accountId: z.string().min(1), sessionId: z.string().min(1), sessionVersion: z.number().int().positive(), artifactVersion: z.number().int().positive(), artifactId: z.string().min(1).optional(), confirmedSpend: z.string(), remainingCap: z.string(), remainingBalance: z.string(), nextAction: z.literal("revise_session"), operationId: z.string().min(1) }).strict(),
+  z.object({ status: z.literal("completed"), code: z.literal("ACTION_COMMITTED"), accountId: z.string().min(1), sessionId: z.string().min(1), sessionVersion: z.number().int().positive(), artifactVersion: z.number().int().positive(), artifactId: z.string().min(1).optional(), confirmedSpend: z.string(), remainingCap: z.string(), remainingBalance: z.string(), nextAction: z.literal("revise_session"), operationId: z.string().min(1), generation: GenerationProjectionSchema.optional() }).strict(),
   z.object({ status: z.literal("failed"), code: z.enum(["WORKER_OR_ARTIFACT_FAILED", "RECONCILED_RECEIPT_FOUND", "PROVIDER_NOT_ACCEPTED"]), accountId: z.string().min(1), sessionId: z.string().min(1), sessionVersion: z.number().int().nonnegative(), artifactVersion: z.number().int().nonnegative(), confirmedSpend: z.string(), remainingCap: z.string(), remainingBalance: z.string(), nextAction: z.literal("revise_session"), operationId: z.string().min(1) }).strict(),
   z.object({ status: z.literal("billing_invariant_failed"), code: z.string().min(1), accountId: z.string().min(1), sessionId: z.string().min(1), nextAction: z.literal("billing_reconciliation"), operationId: z.string().min(1) }).strict(),
   z.object({ status: z.literal("usage_unknown"), code: z.literal("USAGE_UNKNOWN"), accountId: z.string().min(1), sessionId: z.string().min(1), nextAction: z.literal("billing_reconciliation"), operationId: z.string().min(1) }).strict(),
@@ -337,7 +342,7 @@ export class MeteredGenerationService {
     } catch { completed = false; }
     const status = completed ? "completed" as const : "failed" as const;
     const result = SessionActionResultSchema.parse(completed
-      ? { status, code: "ACTION_COMMITTED", accountId, sessionId, sessionVersion: command.expectedVersion + 1, artifactVersion: command.expectedVersion + 1, artifactId: artifactId!, confirmedSpend: priced.total, remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId }
+      ? { status, code: "ACTION_COMMITTED", accountId, sessionId, sessionVersion: command.expectedVersion + 1, artifactVersion: command.expectedVersion + 1, artifactId: artifactId!, confirmedSpend: priced.total, remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId, generation: { provider: observation.receipt.provider, model: observation.receipt.model, profileId: observation.receipt.profileId, priceCardId: observation.receipt.priceCardId, usage: observation.receipt.usage, source: "durably recorded" as const, worker: "verified" as const } }
       : { status, code: "WORKER_OR_ARTIFACT_FAILED", accountId, sessionId, sessionVersion: command.expectedVersion, artifactVersion: command.expectedVersion, confirmedSpend: priced.total, remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId });
     const finalized = await this.options.store.transact(accountId, (transaction) => transaction.finalizeMeteredAction({ idempotencyKey: command.idempotencyKey, operationId, receiptCharge: priced.total, providerReceiptReference: observation.receipt.provenance.protectedEvidenceReference, status, result, sessionVersion: completed ? command.expectedVersion + 1 : command.expectedVersion, artifactVersion: completed ? command.expectedVersion + 1 : command.expectedVersion, artifact: { ...(artifactId ? { artifactId } : {}), workspaceLineage, checkpointReference, snapshotReference: `snapshot:${sessionId}:${actionId}`, validationEvidenceReference, ...(failedArtifactId ? { failedArtifactId } : {}), ...(validationReportReference ? { validationReportReference } : {}) } }));
     await emitLifecycleObservation(this.options.telemetry, lifecycleCorrelation, "generation", "succeeded");

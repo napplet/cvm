@@ -10,8 +10,9 @@ import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-s
 import { MeteredGenerationService } from "../../src/phase-04/metered-generation-service";
 import { exactReadyReservation, trustedAdmissionReceipt, trustedAdmissionReceiptAuthority } from "../fixtures/admission-ready";
 
+const testRunId = crypto.randomUUID();
 const intent = (overrides: Record<string, unknown> = {}) => ({
-  operationId: "operation:proposal-e2e-v3", providerRequestId: "operation:proposal-e2e-v3", accountId: "account:proposal-e2e", sessionId: "session:proposal-e2e", actionId: "start:proposal-e2e-v3", expectedVersion: 0,
+  operationId: `operation:proposal-e2e-v3:${testRunId}`, providerRequestId: `operation:proposal-e2e-v3:${testRunId}`, accountId: "account:proposal-e2e", sessionId: "session:proposal-e2e", actionId: `start:proposal-e2e-v3:${testRunId}`, expectedVersion: 0,
   actionBudgetReference: "budget:proposal-e2e", profileId: "code-proposal", priceCardId: "phase-04-deterministic-card-2026-08-04", requestFingerprint: "a".repeat(64), prompt: "Build a focused counter.",
   maximumUnits: [{ dimension: "input_tokens", units: "1000" }, { dimension: "output_tokens", units: "1000" }], selection: "unselected" as const, ...overrides,
 });
@@ -31,7 +32,7 @@ test("deterministic proposal SQL dispatch lookup restart replay", async () => {
     expect(persisted?.proposal.files.map((file) => file.path)).toEqual(["src/main.ts", "src/styles.css"]);
     expect(persisted?.proposal.files[0]?.content).toContain('runtimeHasDomain');
     if (!persisted) throw new Error("deterministic proposal missing");
-    const sameSourceOtherOwner = await store.persist({ intent: intent({ operationId: "operation:proposal-same-source", providerRequestId: "operation:proposal-same-source", accountId: "account:proposal-second", sessionId: "session:proposal-second", actionId: "start:proposal-second" }), provider: "deterministic_fixture", model: "phase-04-fixture-model", proposal: { files: persisted.proposal.files.map(({ path, content }) => ({ path, content })) } });
+    const sameSourceOtherOwner = await store.persist({ intent: intent({ operationId: `operation:proposal-same-source:${testRunId}`, providerRequestId: `operation:proposal-same-source:${testRunId}`, accountId: "account:proposal-second", sessionId: "session:proposal-second", actionId: `start:proposal-second:${testRunId}` }), provider: "deterministic_fixture", model: "phase-04-fixture-model", proposal: { files: persisted.proposal.files.map(({ path, content }) => ({ path, content })) } });
     expect(sameSourceOtherOwner.proposal.reference).toBe(persisted.proposal.reference);
     await expect(store.persist({ intent: intent(), provider: "deterministic_fixture", model: "phase-04-fixture-model", proposal: { files: [{ path: "src/main.ts", content: "export {};" }] } })).rejects.toThrow("SOURCE_PROPOSAL_OPERATION_CONFLICT");
     expect(await store.lookup({ intent: intent({ accountId: "account:other" }), reference: dispatched.sourceProposalReference })).toBeUndefined();
@@ -43,7 +44,7 @@ test("deterministic proposal SQL dispatch lookup restart replay", async () => {
     expect(lookedUp).toMatchObject({ status: "receipt_found", sourceProposalReference: dispatched.sourceProposalReference });
     const replay = await restarted.dispatch(intent(), new AbortController().signal);
     expect(replay).toMatchObject({ status: "completed", sourceProposalReference: dispatched.sourceProposalReference });
-    const rows = await app.pool.query<{ count: number }>("SELECT count(*)::int AS count FROM source_proposals WHERE operation_id=$1", ["operation:proposal-e2e-v3"]);
+    const rows = await app.pool.query<{ count: number }>("SELECT count(*)::int AS count FROM source_proposals WHERE operation_id=$1", [intent().operationId]);
     expect(rows.rows[0]?.count).toBe(1);
   } finally { await app?.close(); }
 }, 300_000);
@@ -81,10 +82,11 @@ test("ContextVM metered proposal handoff lookup only", async () => {
     const proposals = new SourceProposalStore(app.pool);
     const gateway = new DeterministicModelGateway({ scenario: { dispatch: "completed", lookup: "receipt_found" }, proposalStore: proposals });
     const service = new MeteredGenerationService({ fundedAdmission: admissionService, store, gateway, proposalStore: proposals, worker: { async run(request) { workerCalls += 1; proposalReference = request.sourceProposalReference ?? ""; expect(request).toMatchObject({ sourceProposalReference: expect.stringMatching(/^proposal:sha256:/u), sourceProposalFiles: expect.arrayContaining([expect.objectContaining({ path: "src/main.ts" })]) }); return { status: "unavailable", code: "WORKER_UNAVAILABLE" }; } }, artifactVerifier: { async verify() { return undefined; } } });
-    const result = await service.startSession({ principal, admissionReference: admission.reference, idempotencyKey: "proposal-action-v2", expectedVersion: 0, maximum: "3250", policyVersion: "phase-02-policy-2026-08-04", idea: "Build a focused counter." });
+    const idempotencyKey = `proposal-action-v2:${testRunId}`;
+    const result = await service.startSession({ principal, admissionReference: admission.reference, idempotencyKey, expectedVersion: 0, maximum: "3250", policyVersion: "phase-02-policy-2026-08-04", idea: "Build a focused counter." });
     expect(result).toMatchObject({ status: "failed", operationId: expect.any(String) });
     expect(workerCalls).toBe(1);
-    const replay = await service.startSession({ principal, admissionReference: admission.reference, idempotencyKey: "proposal-action-v2", expectedVersion: 0, maximum: "3250", policyVersion: "phase-02-policy-2026-08-04", idea: "Build a focused counter." });
+    const replay = await service.startSession({ principal, admissionReference: admission.reference, idempotencyKey, expectedVersion: 0, maximum: "3250", policyVersion: "phase-02-policy-2026-08-04", idea: "Build a focused counter." });
     expect(replay).toEqual(result);
     const stored = await app.pool.query<{ count: number }>("SELECT count(*)::int AS count FROM source_proposals WHERE proposal_sha256=$1", [proposalReference.slice("proposal:sha256:".length)]);
     expect(stored.rows[0]?.count).toBe(1);

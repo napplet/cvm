@@ -31,10 +31,13 @@ export class LocalProposalWorkerPort implements WorkerPort {
       const output = await this.worker.materialize({
         proposalSha256: request.sourceProposalSha256,
         proposal: { reference: request.sourceProposalReference, sha256: request.sourceProposalSha256, files: request.sourceProposalFiles },
-      });
+      }, signal);
       this.#materialized.set(key, Object.freeze({ output, request }));
       return this.completed(request);
-    } catch {
+    } catch (error) {
+      // Keep worker diagnostics server-side; the ContextVM projection remains
+      // a stable unavailable result and never exposes build output to clients.
+      console.error("development worker materialization failed", error instanceof Error ? error.message : "unknown");
       return { status: "unavailable", code: "WORKER_UNAVAILABLE" };
     }
   }
@@ -46,7 +49,7 @@ export class LocalProposalWorkerPort implements WorkerPort {
     await materialized?.output.cleanup();
   }
 
-  private key(request: WorkerRunRequest): string { return `${request.sessionId}\u0000${request.actionId}\u0000${request.expectedVersion}`; }
+  private key(request: WorkerRunRequest): string { return `${request.workspaceId}\u0000${request.sessionId}\u0000${request.actionId}\u0000${request.expectedVersion}\u0000${request.sourceProposalSha256 ?? ""}`; }
 
   private completed(request: WorkerRunRequest): WorkerRunResult {
     return {

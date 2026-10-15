@@ -19,16 +19,16 @@ Production certification is [deferred until production work resumes](docs/runboo
 
 ## Quick start
 
-Use **Git and Bun 1.3.14**, matching the checked-in CI workflow. The package declares Bun ≥1.2.0.
+Use **Git, Bun 1.3.14, and a running Docker engine with Compose 2.39 or newer**. The development worker runs Linux ARM64; the local relay runs AMD64, so Docker must support both platforms (as Docker Desktop does on Apple Silicon).
 
 ```sh
 git clone https://github.com/napplet/cvm.git napplet-cvm
 cd napplet-cvm
 bun install --frozen-lockfile
-bun run test:promotion
+bun scripts/dev.ts up
 ```
 
-This runs the local promotion tracer and sealed-toolchain policy tests. These checks use deterministic fixtures and do not need cloud credentials.
+Open the printed URL, click **Connect**, fund the account with local test money, and generate a napplet. The default model is a labeled deterministic fixture; cloud credentials are optional. See the [workspace walkthrough](docs/runbooks/development-gui.md#try-the-execution-flow).
 
 | Command | Purpose |
 | --- | --- |
@@ -43,7 +43,7 @@ Design evidence and fixture passes establish local behavior. Release promotion a
 
 The development workspace starts the real local service graph: ContextVM over a relay, Cashu and NWC payment rails, PostgreSQL, the metered model boundary, the pinned isolated worker, artifact verification, and the compatible preview host. Product commands stay on ContextVM; the workspace HTTP server serves only static assets, non-secret bootstrap facts, health, preview bytes, and the development faucet.
 
-Prerequisites are Docker with Compose v2, Bun 1.3.14, and repository dependencies. The browser test package has its own frozen lockfile; the launcher checks it and Chromium before reporting ready.
+Prerequisites are Docker with Compose 2.39 or newer, Bun 1.3.14, and repository dependencies. The browser test package has its own frozen lockfile; the launcher checks it and Chromium before reporting ready.
 
 ```sh
 bun install --frozen-lockfile

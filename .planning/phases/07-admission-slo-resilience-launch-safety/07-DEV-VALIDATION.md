@@ -155,3 +155,26 @@ Related production IDs `SESS-02` and `OPS-01` through `OPS-04` appear in plan fr
 | README/runbook/GSD state update, final URL/commands/flows/limitations, leave running | 55 |
 
 All source items are covered or explicitly scoped to deferred production work. No production requirement is declared complete by these development plans.
+
+## Executed Acceptance — 2026-10-15
+
+Plans 07-52/53/56/57/54/55 are accepted for local development. `bun scripts/dev.ts test --case=full` completed all eight cases with its final pass marker and exit 0. The independent launcher lifecycle and 65-second forced-collection/idle tracer also passed. See `07-55-SUMMARY.md` for exact commands, fixes, and limits.
+
+| Requirement | Observed acceptance |
+| --- | --- |
+| DEV-GUI-01 | PASS: disposable browser identity, signed/encrypted SDK traffic over the actual relay, reachable service |
+| DEV-GUI-02 | PASS: both local payment rails, one credit on Cashu replay, NWC reconciliation/restart, SQL/UI balance agreement |
+| DEV-GUI-03 | PASS: signed bounded idea and maximum; underfunded action saved before execution |
+| DEV-GUI-04 | PASS: durable timeline and usage/charge/budget/artifact fields match stored action results |
+| DEV-GUI-05 | PASS: real isolated build/verify/conformance, immutable verified bytes, interactive official Paja sandbox |
+| DEV-GUI-06 | PASS: three immutable initial versions, prior-version preview, signed revision replay leaves durable effect counts unchanged |
+| DEV-GUI-07 | PASS: saved action survives detached restart; top-up leaves it pending; explicit signed resume completes once |
+| DEV-GUI-08 | PASS: publication unavailable copy; no fabricated success |
+| DEV-GUI-09 | PASS: one-command startup, repeat startup, readiness, preserved state/identity, scoped confirmed reset; idle listener regression |
+| DEV-GUI-10 | PASS: ten-stage composed browser journey, four artifacts/actions/receipts/debits/workers, exactly 20 test sats charged |
+| DEV-GUI-11 | PASS for deterministic mode and configured-provider wiring; live paid-provider browser branch explicitly skipped without credentials |
+| DEV-GUI-12 | PASS for local automated boundary/accessibility checks, widths 375/768/1280, and inspected completed-flow screenshots |
+
+The final financial projection was settled **15044**, held **14730**, available **314**, with three credits and four exact 5-sat debits. All ten browser checkpoints matched PostgreSQL. The default workspace remains at `http://127.0.0.1:49371` in `deterministic-fixture` mode. Private evidence is under `.local/development-gui-evidence/`; it is not committed as public test data.
+
+The worker reports **5 passed / 0 failed / 5 skipped** conformance checks. Skipped checks and configured-provider/remote-CI runs are not claimed as passed. Production plans 20/26 and requirements SESS-02/OPS-01–04 remain pending. Development acceptance does not certify production operation.

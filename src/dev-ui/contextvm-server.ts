@@ -111,7 +111,9 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
   let priorSource: ((input: Readonly<{ accountId: string; sessionId: string; authorizedPriorArtifactReference: string }>) => Promise<readonly { path: "src/main.ts" | "src/styles.css"; content: string }[] | undefined>) | undefined;
   const composition = await createDevelopmentModelComposition(config, { priorSource: async (input) => priorSource?.(input) });
   const app = composition.funding;
-  const stateRoot = resolve(options.stateRoot ?? resolve(root, ".local"));
+  // A test payment stack gets a unique state root so encrypted pending actions and
+  // sealed worker/artifact bytes cannot cross test runs or touch default development state.
+  const stateRoot = resolve(options.stateRoot ?? stack?.directory ?? resolve(root, ".local"));
   const actionCeilingSat = composition.pricing
     ? maximumOperationCharge(composition.pricing)
     : maximumOperationCharge({ card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile: PHASE_04_MODEL_PROFILES["code-proposal"] });

@@ -113,9 +113,12 @@ export async function waitUntil(check: () => Promise<boolean>, label: string, ti
   throw new Error(`DEV_PAYMENTS_TIMEOUT:${label}`);
 }
 
-export function developmentStack(test = false) {
-  const project = test ? `napplet-cvm-payments-test-${randomBytes(6).toString("hex")}` : "napplet-cvm-dev-payments";
-  const directory = resolve(root, ".local", project);
+export function developmentStack(test = false, options: Readonly<{ instance?: string }> = {}) {
+  const instance = options.instance;
+  if (instance !== undefined && !/^[a-z0-9][a-z0-9-]{0,47}$/u.test(instance)) throw new Error("DEV_INSTANCE_INVALID");
+  if (instance !== undefined && !test) throw new Error("DEV_INSTANCE_REQUIRES_TEST_SCOPE");
+  const project = instance ? `napplet-cvm-payments-${instance}` : test ? `napplet-cvm-payments-test-${randomBytes(6).toString("hex")}` : "napplet-cvm-dev-payments";
+  const directory = instance ? resolve(root, ".local", "napplet-cvm-dev", instance, "payments") : resolve(root, ".local", project);
   // Deliberately ignore ambient endpoint/credential variables and .env files.
   const env = { ...process.env, DEV_MINT_PORT: test ? "0" : "3338", DEV_SECONDARY_MINT_PORT: test ? "0" : "3339", DEV_POSTGRES_PORT: test ? "0" : "55432", DEV_RELAY_PORT: test ? "0" : "7777", DEV_HUB_PORT: test ? "0" : "8081", COMPOSE_PROFILES: "" };
   async function compose(...args: string[]) {
@@ -146,7 +149,7 @@ export function developmentStack(test = false) {
     async up(): Promise<DevPayments> {
       await mkdir(directory, { recursive: true, mode: 0o700 });
       await chmod(directory, 0o700);
-      console.log("Starting local mints, relay, NWC wallet, and funding database…");
+      console.error("Starting local mints, relay, NWC wallet, and funding database…");
       await compose("up", "-d");
       const mintUrl = await endpoint("mint", 3338, "http");
       const secondaryMintUrl = await endpoint("mint-secondary", 3338, "http");

@@ -1,0 +1,12 @@
+services:
+  worker-image:
+    image: napplet-cvm/dev-worker:development
+    build:
+      context: .
+      dockerfile: Dockerfile
+      platforms: [linux/arm64]
+    labels:
+      com.napplet-cvm.development: "true"
+      com.napplet-cvm.component: worker-image
+    profiles: [build]
+    entrypoint: ["/bin/true"]

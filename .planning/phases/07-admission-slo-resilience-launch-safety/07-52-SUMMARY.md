@@ -19,7 +19,9 @@ key-files:
 key-decisions:
   - "Browser payment tags are frozen and retained only for the matching SDK request."
   - "NWC reconciliation scans durable pending top-ups and observes the original invoice identity."
-requirements-completed: [DEV-GUI-01, DEV-GUI-02, DEV-GUI-03, DEV-GUI-04, DEV-GUI-09, DEV-GUI-10, DEV-GUI-12, SESS-02, OPS-02, OPS-03]
+requirements-completed: [DEV-GUI-01, DEV-GUI-02]
+requirements-partial: [DEV-GUI-03, DEV-GUI-04, DEV-GUI-09, DEV-GUI-10, DEV-GUI-12]
+production-requirements-deferred: [SESS-02, OPS-02, OPS-03]
 coverage:
   - id: D1
     description: Browser-owned disposable identity traverses encrypted ContextVM lifecycle and tools calls through the local relay.

@@ -79,7 +79,7 @@ export type WakeEffectReconciliationPort = Readonly<{
 export class ContinuationService {
   #resumeInFlight = new Map<string, Promise<ResumeSessionResult>>();
   #resumeResults = new Map<string, ResumeSessionResult>();
-  constructor(private readonly options: Readonly<{ store: ContinuationFundingStore; clock?: Readonly<{ nowMs(): number }>; resume?: ResumeDependencies; wakeReconciliation?: WakeEffectReconciliationPort; telemetry?: LifecycleTelemetryPort }>) {}
+  constructor(private readonly options: Readonly<{ store: ContinuationFundingStore; clock?: Readonly<{ nowMs(): number }>; resume?: ResumeDependencies; wakeReconciliation?: WakeEffectReconciliationPort; telemetry?: LifecycleTelemetryPort; includeAdmissionHold?: boolean }>) {}
 
   async pauseForFunding(input: Readonly<{ intent: PendingActionIntent }>): Promise<NeedsTopUpResult | undefined> {
     const intent = PendingActionIntentSchema.parse(input.intent);
@@ -91,9 +91,10 @@ export class ContinuationService {
       }
       const funding = await transaction.continuationFundingSnapshot(intent.admissionReference);
       const actionMaximum = BigInt(intent.actionMaximum);
-      // The active admission hold is unavailable for unrelated UI balance
-      // reads, but it is exactly the authorized source for this action.
-      const requiredAdditionalFunding = shortfall(actionMaximum, funding.availableBalance + funding.remainingCap);
+      // The local development composition spends its own accepted hold. Keep
+      // the legacy live-worker continuation policy unchanged by default.
+      const spendable = funding.availableBalance + (this.options.includeAdmissionHold ? funding.remainingCap : 0n);
+      const requiredAdditionalFunding = shortfall(actionMaximum, spendable);
       const requiredCapApproval = shortfall(actionMaximum, funding.remainingCap);
       if (requiredAdditionalFunding === 0n && requiredCapApproval === 0n) return undefined;
       const deadline = (this.options.clock ?? { nowMs: Date.now }).nowMs() + GRACE_WINDOW_MS;
@@ -152,7 +153,7 @@ export class ContinuationService {
       const funding = await transaction.continuationFundingSnapshot(pause.admissionReference);
       const amount = BigInt(continuation.actionMaximum);
       if (funding.remainingCap < amount) return frozen({ status: "no_effect" as const, code: "APPROVED_CAP_INSUFFICIENT" });
-      if (funding.availableBalance + funding.remainingCap < amount) return frozen({ status: "no_effect" as const, code: "VERIFIED_CREDIT_REQUIRED" });
+      if (funding.availableBalance < amount) return frozen({ status: "no_effect" as const, code: "VERIFIED_CREDIT_REQUIRED" });
 
       const idempotencyKey = `continuation-wake:${pause.idempotencyKey}:${pause.pauseGeneration}`;
       // Reassert the store fence only after every coordinator predicate above.
@@ -287,7 +288,7 @@ export class ContinuationService {
       claimed = await this.options.store.transact(accountId, async (transaction) => {
         const funds = await transaction.continuationFundingSnapshot(continuation.intent.admissionReference);
         const amount = BigInt(continuation.intent.actionMaximum);
-        if (funds.availableBalance + funds.remainingCap < amount) throw new Error("RESUME_BALANCE_INSUFFICIENT");
+        if (funds.availableBalance < amount) throw new Error("RESUME_BALANCE_INSUFFICIENT");
         if (funds.remainingCap < amount) throw new Error("RESUME_CAP_INSUFFICIENT");
         const claim = await transaction.claimResume({ accountId, sessionId: command.sessionId, checkpointId: command.checkpointId, idempotencyKey: command.idempotencyKey, fingerprint: commandFingerprint, pendingFingerprint: command.pendingAction.fingerprint, expectedCheckpointVersion: command.expectedCheckpointVersion, expectedSessionVersion: command.expectedSessionVersion, nowMs, newLeaseToken: leaseToken, allocationIntentReference, actionId, operationId, actionBudgetReference });
         // Claim expiry authority before reserving budget: a terminal tombstone

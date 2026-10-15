@@ -21,6 +21,7 @@ import { createPreviewServer } from "./preview-server";
 import { accountIdForPrincipal } from "../domain/account-command";
 import { PHASE_04_DETERMINISTIC_PRICE_CARD, PHASE_04_MODEL_PROFILES, maximumOperationCharge } from "../model/price-card";
 import { LocalDevelopmentRuntimeReadiness, type DevelopmentRuntimeReadiness } from "../dev/development-runtime-readiness";
+import { ContinuationService } from "../continuity/continuation-service";
 
 const root = resolve(import.meta.dir, "../..");
 const reserveSat = "3750";
@@ -111,7 +112,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
   const worker = new LocalProposalWorkerPort(new LocalNappletWorker({ image: readiness.imageDigest }));
   const owners = new Map<string, string>();
   const artifactVerifier = new LocalGenerationArtifactVerifier({ worker, verifier: new LocalArtifactVerifier(), repository, ownerIdForAccount: (accountId) => owners.get(accountId) });
-  const generation = new MeteredGenerationService({ fundedAdmission, store: app.database.meteredFunding, gateway: composition.gateway, worker, artifactVerifier, proposalStore: composition.proposals, ...(composition.pricing ? { pricing: composition.pricing } : {}) });
+  const generation = new MeteredGenerationService({ fundedAdmission, store: app.database.meteredFunding, gateway: composition.gateway, worker, artifactVerifier, proposalStore: composition.proposals, continuation: new ContinuationService({ store: app.database.meteredFunding, includeAdmissionHold: true }), ...(composition.pricing ? { pricing: composition.pricing } : {}) });
   const paja = await import("../../tests/dev-ui/node_modules/@kehto/paja");
   const previewServer = await createPreviewServer({ repository, grants, paja: { startPajaServer: paja.startPajaServer, domains: paja.PAJA_SIMULATION_DOMAINS } });
   let latestPreviewUrl: string | undefined; let latestGenerationError: string | undefined; let latestGenerationResult: SessionActionResult | undefined;

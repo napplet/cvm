@@ -18,6 +18,7 @@ export type DevelopmentContextVmServer = Readonly<{
   url: string;
   stopReconciler(): void;
   restartReconciler(): void;
+  assertNwcPending(): Promise<void>;
   assertFundingEvidence(caseName: "cashu-wire" | "both-rails-restart-replay"): Promise<void>;
   close(): Promise<void>;
 }>;
@@ -65,7 +66,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
     rails: app.database.railStatuses,
   });
   new ContextVmFundingAdapter({ service: app.funding, transport: bridge, accountStatus, topUps: { lightning: app.lightning, cashu: app.cashu }, policyVersion: "development-local-v1" });
-  const reconciler = new DevelopmentNwcSettlementReconciler(app);
+  let reconciler = new DevelopmentNwcSettlementReconciler(app);
   const [html, javascript, servicePubkey] = await Promise.all([
     readFile(resolve(root, "src/dev-ui/browser/index.html"), "utf8"), browserBundle(), signer.getPublicKey(),
   ]);
@@ -96,7 +97,16 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
   return Object.freeze({
     url,
     stopReconciler: () => reconciler.stop(),
-    restartReconciler: () => { reconciler.stop(); reconciler.start(); },
+    restartReconciler: () => { reconciler.stop(); reconciler = new DevelopmentNwcSettlementReconciler(app); reconciler.start(); },
+    async assertNwcPending() {
+      const last = bridge.lastInbound;
+      if (!last) throw new Error("DEV_UI_SIGNED_EVENT_EVIDENCE_MISSING");
+      const topUps = await app.database.lightning.transact((state) => [...state.topUps.values()]
+        .filter((topUp) => topUp.principal.pubkey === last.verifiedClientPubkey));
+      if (topUps.length !== 1 || topUps[0]?.state !== "pending" || !topUps[0].protectedMaterialId) throw new Error("DEV_UI_NWC_PENDING_ROW_MISSING");
+      const status = await accountStatus.status({ pubkey: last.verifiedClientPubkey });
+      if (status.available !== "64") throw new Error("DEV_UI_NWC_CREDITED_BEFORE_RESTART");
+    },
     async assertFundingEvidence(caseName) {
       const last = bridge.lastInbound;
       if (!last || !/^[a-f0-9]{64}$/.test(last.verifiedClientPubkey) || !/^[a-f0-9]{64}$/.test(last.requestEventId)) throw new Error("DEV_UI_SIGNED_EVENT_EVIDENCE_MISSING");

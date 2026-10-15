@@ -24,6 +24,37 @@ byId<HTMLButtonElement>("connect").onclick = async () => {
   try { client = new DevelopmentContextVmClient(bootstrap); const connected = await client.connect(); byId("connection-status").textContent = `Connected: ${connected.pubkey}`; setBalance(connected.account.available); connectedControls.forEach((control) => control.disabled = false); }
   catch { byId("connection-status").textContent = "Connection failed; retry Connect"; button.disabled = false; }
 };
-byId<HTMLButtonElement>("cashu").onclick = async () => { try { setStatus("Cashu payment pending"); await client!.fundCashu(byId<HTMLInputElement>("cashu-amount").value); await refresh(); setStatus("Cashu credited"); } catch { setStatus("Cashu funding failed; balance unchanged"); } };
-byId<HTMLButtonElement>("cashu-replay").onclick = async () => { try { await client!.replayCashu(); await refresh(); setStatus("Cashu replay credited once"); } catch { setStatus("Cashu replay failed; balance unchanged"); } };
-byId<HTMLButtonElement>("nwc").onclick = async () => { try { setStatus("NWC settlement pending"); const before = BigInt(balance); const payment = await client!.fundNwc(byId<HTMLInputElement>("nwc-amount").value); const topUpId = typeof payment?.topUpId === "string" ? payment.topUpId : "pending"; setStatus(`NWC settlement pending (${topUpId})`); for (let attempt = 0; attempt < 120; attempt++) { await new Promise((resolve) => setTimeout(resolve, 500)); const account = await client!.accountStatus(); setBalance(account.available); const pending = account.topUps?.find((topUp: any) => topUp.topUpId === topUpId); if (pending?.state === "credited" && BigInt(balance) > before) break; } if (BigInt(balance) <= before) throw new Error("NWC_SETTLEMENT_TIMEOUT"); setStatus("NWC credited"); } catch { setStatus("NWC funding failed; balance unchanged"); } };
+byId<HTMLButtonElement>("cashu").onclick = async () => {
+  try {
+    setStatus("Cashu payment pending");
+    const payment = await client!.fundCashu(byId<HTMLInputElement>("cashu-amount").value);
+    await refresh();
+    setStatus(payment?.state === "credited" ? "Cashu credited" : "Cashu credit unconfirmed; check account status before retrying");
+  } catch { setStatus("Cashu credit unconfirmed; check account status before retrying"); }
+};
+byId<HTMLButtonElement>("cashu-replay").onclick = async () => {
+  try {
+    const payment = await client!.replayCashu();
+    await refresh();
+    setStatus(payment?.state === "credited" ? "Cashu replay credited once" : "Cashu replay unconfirmed; check account status");
+  } catch { setStatus("Cashu replay unconfirmed; check account status"); }
+};
+byId<HTMLButtonElement>("nwc").onclick = async () => {
+  try {
+    setStatus("NWC settlement pending");
+    const payment = await client!.fundNwc(byId<HTMLInputElement>("nwc-amount").value);
+    if (typeof payment?.topUpId !== "string") throw new Error("NWC_TOP_UP_ID_MISSING");
+    const topUpId = payment.topUpId;
+    setStatus(`NWC settlement pending (${topUpId})`);
+    let credited = false;
+    for (let attempt = 0; attempt < 120; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const account = await client!.accountStatus();
+      setBalance(account.available);
+      const topUp = account.topUps?.find((item: any) => item.topUpId === topUpId);
+      if (topUp?.state === "credited") { credited = true; break; }
+      if (topUp?.state === "failed") throw new Error("NWC_TOP_UP_FAILED");
+    }
+    setStatus(credited ? "NWC credited" : "NWC settlement unconfirmed; check account status before retrying");
+  } catch { setStatus("NWC settlement unconfirmed; check account status before retrying"); }
+};

@@ -86,6 +86,12 @@ status: complete
 - `bun test tests/contextvm/*.test.ts tests/dev/funding.test.ts` — 16 tests passed.
 - `sha256sum package.json bun.lock` matched the locked baseline hashes.
 
+### Review follow-up
+
+- Funding success now requires the matching top-up's credited state; another balance change cannot be reported as NWC settlement. Uncertain responses retain honest unconfirmed wording.
+- The restart case now waits for the signed begin response, asserts one durable pending invoice and the unchanged 64-sat balance, then creates a new reconciler instance. The same real Chromium case passes with a final 3,814-sat ledger/UI balance.
+- A fresh-stack rerun under concurrent Docker image construction exceeded PostgreSQL's 90-second readiness window before migrations ran. The failed disposable stack was removed; the subsequent run passed after the image build finished. This is not migration-failure evidence.
+
 ## Deviations from Plan
 
 ### Auto-fixed Issues

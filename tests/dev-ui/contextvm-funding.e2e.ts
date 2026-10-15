@@ -13,8 +13,10 @@ if (requestedCase !== "cashu-wire" && requestedCase !== "both-rails-restart-repl
 
 const server = await createDevelopmentContextVmServer({ testMode: true });
 const browser = await chromium.launch({ headless: true });
+let activePage: Awaited<ReturnType<typeof browser.newPage>> | undefined;
 try {
   const page = await browser.newPage();
+  activePage = page;
   const requests: string[] = [];
   page.on("request", (request) => requests.push(new URL(request.url()).pathname));
   await page.goto(server.url, { waitUntil: "networkidle" });
@@ -33,6 +35,8 @@ try {
     server.stopReconciler();
     await page.getByLabel("NWC amount (sats)").fill("3750");
     await page.getByRole("button", { name: "Fund with NWC" }).click();
+    await page.getByText(/^NWC settlement pending \(/).waitFor();
+    await server.assertNwcPending();
     server.restartReconciler();
     await page.getByText("NWC credited").waitFor({ timeout: 90_000 });
     await page.getByText("3814 sats").waitFor();
@@ -43,6 +47,9 @@ try {
   }
   await server.assertFundingEvidence(requestedCase);
   console.log(JSON.stringify({ case: requestedCase, url: server.url, requests }));
+} catch (error) {
+  console.error(JSON.stringify({ case: requestedCase, balance: await activePage?.locator("#balance").textContent(), funding: await activePage?.locator("#funding-status").textContent() }));
+  throw error;
 } finally {
   await browser.close();
   await server.close();

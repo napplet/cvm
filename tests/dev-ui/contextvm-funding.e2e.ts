@@ -25,11 +25,16 @@ try {
   await page.getByRole("button", { name: "Fund with Cashu" }).click();
   await page.getByText("Cashu credited").waitFor();
   await page.getByText("64 sats").waitFor();
+  await page.getByRole("button", { name: "Replay Cashu" }).click();
+  await page.getByText("Cashu replay credited once").waitFor();
+  await page.getByText("64 sats").waitFor();
 
   if (requestedCase === "both-rails-restart-replay") {
+    server.stopReconciler();
     await page.getByLabel("NWC amount (sats)").fill("3750");
     await page.getByRole("button", { name: "Fund with NWC" }).click();
-    await page.getByText("NWC credited").waitFor({ timeout: 30_000 });
+    server.restartReconciler();
+    await page.getByText("NWC credited").waitFor({ timeout: 90_000 });
     await page.getByText("3814 sats").waitFor();
   }
 

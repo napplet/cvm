@@ -8,6 +8,7 @@ import { developmentStack, type DevPayments } from "../../scripts/dev-payments";
 import { AccountStatusService } from "../funding/account-status";
 import { ContextVmFundingAdapter } from "../contextvm/adapter";
 import { ContextVmSdkBridge } from "../contextvm/sdk-bridge";
+import { DevelopmentNwcSettlementReconciler } from "../dev/dev-funding-reconciler";
 
 const root = resolve(import.meta.dir, "../..");
 const reserveSat = "3750";
@@ -64,10 +65,12 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
     rails: app.database.railStatuses,
   });
   new ContextVmFundingAdapter({ service: app.funding, transport: bridge, accountStatus, topUps: { lightning: app.lightning, cashu: app.cashu }, policyVersion: "development-local-v1" });
+  const reconciler = new DevelopmentNwcSettlementReconciler(app);
   const [html, javascript, servicePubkey] = await Promise.all([
     readFile(resolve(root, "src/dev-ui/browser/index.html"), "utf8"), browserBundle(), signer.getPublicKey(),
   ]);
   await transport.start();
+  reconciler.start();
 
   const web = Bun.serve({
     hostname: "127.0.0.1",
@@ -92,8 +95,8 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
 
   return Object.freeze({
     url,
-    stopReconciler: () => undefined,
-    restartReconciler: () => undefined,
+    stopReconciler: () => reconciler.stop(),
+    restartReconciler: () => { reconciler.stop(); reconciler.start(); },
     async assertFundingEvidence(caseName) {
       const last = bridge.lastInbound;
       if (!last || !/^[a-f0-9]{64}$/.test(last.verifiedClientPubkey) || !/^[a-f0-9]{64}$/.test(last.requestEventId)) throw new Error("DEV_UI_SIGNED_EVENT_EVIDENCE_MISSING");
@@ -109,6 +112,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
       if (packageHash !== "cbcc433278d32391b075576ebd847ae30039f1d86ad229a149f5566856989f23" || lockHash !== "8916ee4ec92924ae9e09bc4f315fd6656033812696e35a1b7785161d872c5ac3") throw new Error("DEV_UI_ROOT_MANIFEST_DRIFT");
     },
     async close() {
+      reconciler.stop();
       try { web.stop(true); }
       finally {
         // Relay shutdown is best-effort in the local SDK; do not leave a

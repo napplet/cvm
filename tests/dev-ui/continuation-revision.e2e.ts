@@ -2,7 +2,8 @@ import { chromium, type Page } from "playwright";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { developmentStack, type DevPayments } from "../../scripts/dev-payments";
+import { createDevelopmentPool, developmentStack, type DevPayments } from "../../scripts/dev-payments";
+import { accountIdForPrincipal } from "../../src/domain/account-command";
 import { createDevelopmentContextVmServer } from "../../src/dev-ui/contextvm-server";
 
 
@@ -20,6 +21,26 @@ async function waitForRevision(page: Page, expectedVersions: number, label: stri
   }, label, 120_000);
   await page.getByText("Verified preview ready", { exact: true }).waitFor({ timeout: 120_000 });
   await eventually(async () => await page.getByRole("button", { name: "Revise selected version" }).isEnabled(), `${label}-controls-ready`);
+}
+
+type DurableEffectCounts = Readonly<{ actions: number; providers: number; receipts: number; debits: number; artifacts: number; workers: number }>;
+
+async function durableEffectCounts(config: DevPayments, page: Page): Promise<DurableEffectCounts> {
+  const pubkey = (await page.locator("#connection-status").textContent())?.match(/[a-f0-9]{64}/)?.[0];
+  if (!pubkey) throw new Error("REVISION_REPLAY_IDENTITY_MISSING");
+  const pool = createDevelopmentPool(config.databaseUrl);
+  try {
+    const accountId = await accountIdForPrincipal({ pubkey });
+    const count = async (table: string, condition = ""): Promise<number> => Number((await pool.query(`SELECT count(*)::int AS count FROM ${table} WHERE account_id=$1${condition}`, [accountId])).rows[0]?.count);
+    return Object.freeze({
+      actions: await count("metered_actions"),
+      providers: await count("provider_operations"),
+      receipts: await count("usage_receipts"),
+      debits: await count("ledger_entries", " AND direction='debit'"),
+      artifacts: await count("session_artifacts", " AND verified=true"),
+      workers: await count("development_worker_results", " AND state='completed'"),
+    });
+  } finally { await pool.end(); }
 }
 
 async function preAdmissionCase(): Promise<void> {
@@ -60,6 +81,14 @@ async function revisionCase(): Promise<void> {
     for (const revision of ["Make the counter label more direct", "Make the reset control clearer"]) {
       await page.getByLabel("Revision").fill(revision); await page.getByRole("button", { name: "Revise selected version" }).click();
       await waitForRevision(page, revision.includes("label") ? 2 : 3, "revision-version");
+      if (revision.includes("label")) {
+        const beforeReplay = await durableEffectCounts(config, page);
+        await page.getByRole("button", { name: "Replay last revision request" }).click();
+        await page.getByText("Verified preview ready", { exact: true }).waitFor({ timeout: 120_000 });
+        if (await page.locator("#versions li").count() !== 2) throw new Error("REVISION_REPLAY_DUPLICATED_VERSION");
+        const afterReplay = await durableEffectCounts(config, page);
+        if (JSON.stringify(afterReplay) !== JSON.stringify(beforeReplay)) throw new Error(`REVISION_REPLAY_DUPLICATED_DURABLE_EFFECT:${JSON.stringify({ beforeReplay, afterReplay })}`);
+      }
     }
     const versionText = await page.locator("#versions").textContent();
     if (!versionText?.includes("Version 1") || !versionText.includes("Version 2") || !versionText.includes("Version 3")) throw new Error("REVISION_HISTORY_MISSING");
@@ -78,7 +107,9 @@ async function revisionCase(): Promise<void> {
     await page.getByRole("button", { name: "Resume" }).click(); await page.getByText("Verified preview ready", { exact: true }).waitFor({ timeout: 120_000 });
   } catch (error) {
     const safe = server.generationEvidence().error;
-    throw new Error(`REVISION_CASE_FAILED:${error instanceof Error ? error.message : "unknown"}${safe ? `:server=${safe}` : ""}`);
+    const status = await browser.contexts().at(0)?.pages().at(0)?.locator("#generation-status").textContent().catch(() => "") ?? "";
+    const uiError = await browser.contexts().at(0)?.pages().at(0)?.locator("#generation-error").textContent().catch(() => "") ?? "";
+    throw new Error(`REVISION_CASE_FAILED:${error instanceof Error ? error.message : "unknown"}:status=${status.trim()}:ui=${uiError.trim()}${safe ? `:server=${safe}` : ""}`);
   } finally { await browser.close(); await server.close(); await stack.down(true); await rm(stateRoot, { recursive: true, force: true }); }
 }
 

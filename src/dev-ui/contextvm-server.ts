@@ -145,8 +145,21 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
     } },
     rails: app.database.railStatuses,
   });
+  let latestPreviewUrl: string | undefined; let latestGenerationError: string | undefined; let latestGenerationResult: SessionActionResult | undefined;
   const receipts = new HmacAdmissionReceiptAuthority({ secret: identity.admissionSecret });
   const fundedAdmission = new FundedAdmissionService({ funding: app.funding, store: app.database.funding, capacity: developmentCapacity(readiness), receiptAuthority: receipts });
+  const admissions = {
+    async admit(...input: Parameters<typeof fundedAdmission.admit>) {
+      try {
+        const result = await fundedAdmission.admit(...input);
+        if (result.status !== "accepted") latestGenerationError = `FUNDED_ADMISSION_${result.status.toUpperCase()}`;
+        return result;
+      } catch (error) {
+        latestGenerationError = safeGenerationDiagnostic(error);
+        throw error;
+      }
+    },
+  };
   const repository = new LocalArtifactRepository({ objectRoot: resolve(stateRoot, "development-artifacts"), pool: app.pool });
   const grants = new LocalPreviewGrantStore({ pool: app.pool });
   const worker = new LocalProposalWorkerPort(new LocalNappletWorker({ image: readiness.imageDigest }), { results: new DurableWorkerResultStore({ pool: app.pool, toolchainSha256: readiness.imageDigest.slice("sha256:".length), root: resolve(stateRoot, "development-worker-results") }) });
@@ -173,7 +186,6 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
   };
   const paja = await import("../../tests/dev-ui/node_modules/@kehto/paja");
   const previewServer = await createPreviewServer({ repository, grants, paja: { startPajaServer: paja.startPajaServer, domains: paja.PAJA_SIMULATION_DOMAINS } });
-  let latestPreviewUrl: string | undefined; let latestGenerationError: string | undefined; let latestGenerationResult: SessionActionResult | undefined;
   const preview = {
     async previewVerifiedArtifact(input: Readonly<{ accountId: string; sessionId: string; artifactId: string }>) {
       const artifact = await repository.get(input.artifactId);
@@ -215,7 +227,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
       }
     },
   };
-  new ContextVmFundingAdapter({ service: app.funding, transport: bridge, admissions: fundedAdmission, admissionReceipts: receipts, accountStatus, topUps: { lightning: app.lightning, cashu: app.cashu }, generation: generationFacade, preAdmission: preAdmissionFacade, sessionStatus: { read: async (query: any) => {
+  new ContextVmFundingAdapter({ service: app.funding, transport: bridge, admissions, admissionReceipts: receipts, accountStatus, topUps: { lightning: app.lightning, cashu: app.cashu }, generation: generationFacade, preAdmission: preAdmissionFacade, sessionStatus: { read: async (query: any) => {
     const result = await readSessionStatus({ store: app.database.meteredFunding, query, cursorSecret: identity.cursorSecret });
     if (result.status !== "ok") return result;
     const accountId = await accountIdForPrincipal(query.principal);

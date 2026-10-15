@@ -1,0 +1,8 @@
+{
+  "developmentOnly": true,
+  "package": "@kehto/paja",
+  "version": "0.19.0",
+  "integrity": "sha512-UCUwER9thz/sP3B1BPhM/QkymesjnFKGfeNLtuIX0lT1xPH+q8Tbl149U7P2OdgAWt+p5n8p/T/WIOXTFE1CBQ==",
+  "api": "startPajaServer({ options: { host: '127.0.0.1', port: 0, targetUrl } })",
+  "policy": { "identity": "anonymous", "relays": false, "storage": false, "cache": false, "upload": false, "sign": false, "publish": false, "optionalCapabilities": false, "sandbox": "allow-scripts" }
+}

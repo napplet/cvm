@@ -1,0 +1,124 @@
+:root {
+  color-scheme: dark;
+  --host-surface: #10151c;
+  --host-surface-raised: #19232d;
+  --host-accent: #a6f0c4;
+  --host-danger: #ffb3b3;
+  --host-text: #eef4f8;
+  --host-text-secondary: #bdcbd6;
+  --host-border: #647585;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.5;
+  background: var(--host-surface);
+  color: var(--host-text);
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; }
+[hidden] { display: none !important; }
+main {
+  max-width: 1360px;
+  margin: 0 auto;
+  padding: 32px;
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 32px;
+}
+main > * { grid-column: 1 / -1; min-width: 0; }
+.workspace-header { grid-column: 1 / -1; }
+.workspace-controls { grid-column: 1 / 5; }
+.workspace-results { grid-column: 5 / -1; }
+.workspace-controls, .workspace-results { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
+section {
+  min-width: 0;
+  padding: 24px;
+  background: var(--host-surface-raised);
+  border: 1px solid #344250;
+  border-radius: 8px;
+}
+h1, h2, h3 { margin: 0 0 16px; font-weight: 600; line-height: 1.2; }
+h1 { font-size: 28px; }
+h2, h3 { font-size: 20px; }
+p { margin: 0 0 16px; overflow-wrap: anywhere; }
+p:last-child { margin-bottom: 0; }
+label { display: grid; gap: 8px; font-size: 14px; font-weight: 600; }
+label + label, label + .row, .row + .row { margin-top: 16px; }
+input, textarea, select, button {
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.5;
+  min-height: 44px;
+  min-width: 44px;
+  max-width: 100%;
+  border: 1px solid var(--host-border);
+  border-radius: 4px;
+}
+input, textarea, select {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--host-surface);
+  color: var(--host-text);
+}
+textarea { min-height: 112px; resize: vertical; }
+button {
+  padding: 8px 16px;
+  background: #293745;
+  color: var(--host-text);
+  cursor: pointer;
+  white-space: normal;
+}
+button:hover:not(:disabled) { background: #354858; }
+button:disabled { color: var(--host-text-secondary); cursor: default; opacity: 0.65; }
+button.primary:not(:disabled), #generate:not(:disabled), #resume:not(:disabled) {
+  background: var(--host-accent);
+  border-color: var(--host-accent);
+  color: var(--host-surface);
+  font-weight: 600;
+}
+:focus-visible { outline: 2px solid var(--host-accent); outline-offset: 4px; }
+a { color: var(--host-accent); text-underline-offset: 4px; }
+.row { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; }
+.row > label { flex: 1 1 160px; }
+.row > button { flex: 0 1 auto; }
+.status { min-height: 24px; margin-top: 16px; overflow-wrap: anywhere; }
+.supporting, small, time { color: var(--host-text-secondary); font-size: 14px; }
+[role="alert"] { border-left: 4px solid var(--host-danger); padding-left: 16px; color: var(--host-danger); }
+[role="alert"]:empty { border: 0; padding: 0; }
+dl { display: grid; grid-template-columns: minmax(96px, 1fr) minmax(0, 3fr); gap: 8px 16px; margin: 16px 0; }
+dt { font-size: 14px; font-weight: 600; color: var(--host-text-secondary); }
+dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+ol, ul { padding-left: 24px; margin: 16px 0; }
+li { margin: 8px 0; overflow-wrap: anywhere; }
+li button { max-width: 100%; text-align: left; overflow-wrap: anywhere; }
+#connection-status, #balance, #generation-facts, #timeline, #versions { font-variant-numeric: tabular-nums; }
+#connection-status { overflow-wrap: anywhere; }
+#preview {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  min-height: 640px;
+  border: 1px solid var(--host-border);
+  border-radius: 4px;
+  background: var(--host-surface);
+  margin-top: 16px;
+}
+
+@media (max-width: 1023px) {
+  main { grid-template-columns: minmax(0, 1fr); padding: 24px; gap: 24px; }
+  .workspace-controls, .workspace-results { grid-column: 1 / -1; }
+}
+@media (max-width: 767px) {
+  main { padding: 16px; gap: 24px; }
+  section { padding: 16px; }
+  .row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  button, .row > * { width: 100%; }
+  dl { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  dd { margin-bottom: 8px; }
+  #preview { min-height: 520px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}

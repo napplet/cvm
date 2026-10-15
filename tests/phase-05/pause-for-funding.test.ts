@@ -33,7 +33,7 @@ async function setup(input: Readonly<{ credit: string; requestedCap: string }>) 
     now: () => Date.parse("2026-08-05T00:00:00.000Z"),
   });
   const authorizeActionBudget = admissions.authorizeActionBudget.bind(admissions);
-  admissions.authorizeActionBudget = async (value) => { budgetAuthorizations += 1; return authorizeActionBudget(value); };
+  admissions.authorizeActionBudget = async (...args) => { budgetAuthorizations += 1; return authorizeActionBudget(...args); };
   const command = { principal, idempotencyKey: `admission:${input.credit}:${input.requestedCap}`, policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: input.requestedCap, unit: "sat" as const } };
   const admission = await admissions.admit(command, await trustedAdmissionReceipt(command));
   if (admission.status !== "accepted") throw new Error("test admission must be accepted");

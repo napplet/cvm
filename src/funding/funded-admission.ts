@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { accountIdForPrincipal, fingerprintAccountCommand } from "../domain/account-command";
 import { PrincipalSchema, type FundedAdmission } from "../phase-03/contracts";
-import type { FundingStore } from "../persistence/funding-store";
+import type { FundingStore, FundingTransaction } from "../persistence/funding-store";
 import { FundingService } from "./funding-service";
 import type { AdmissionReceiptAuthority, VerifiedAdmissionReceipt } from "./admission-receipt";
 import { AdmissionLifecycleContextSchema, emitLifecycleObservationWithCorrelation, type AdmissionLifecycleContext, type LifecycleTelemetryPort } from "../telemetry/contracts";
@@ -166,18 +166,20 @@ export class FundedAdmissionService {
     }
   }
 
-  async authorizeActionBudget(input: unknown): Promise<ActionBudgetAuthorization> {
+  async authorizeActionBudget(input: unknown, transaction?: FundingTransaction): Promise<ActionBudgetAuthorization> {
     const command = ActionCommandSchema.parse(input);
     const accountId = await accountIdForPrincipal(command.principal);
     const actionKey = `${intentKey(accountId, command.admissionReference)}:${command.idempotencyKey}`;
     const actionFingerprint = await hash(JSON.stringify({ accountId, command }));
-    const result = await this.options.store.transact(accountId, async (transaction) => {
+    const authorize = async (transaction: FundingTransaction) => {
       const existing = await transaction.findActionBudget(command.idempotencyKey);
       if (existing && existing.fingerprint !== actionFingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
       const action = existing ?? await transaction.reserveActionBudget({ accountId, admissionReference: command.admissionReference, idempotencyKey: command.idempotencyKey, fingerprint: actionFingerprint, reference: `action-budget:${await hash(actionKey)}`, amount: BigInt(command.maximum) });
       return freeze({ status: "authorized" as const, accountId, admissionReference: action.admissionReference, reference: action.reference, reservedAmount: action.amount.toString(), unit: "sat" as const });
-    });
-    return result;
+    };
+    // A metered action may share this transaction so a rejected/stale action
+    // cannot strand a separately committed budget reservation.
+    return transaction ? authorize(transaction) : this.options.store.transact(accountId, authorize);
   }
 
   private fundingCommand(command: z.infer<typeof AdmissionCommandSchema>, capacityReference: string) {

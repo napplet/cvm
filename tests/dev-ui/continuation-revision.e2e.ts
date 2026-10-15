@@ -67,7 +67,10 @@ async function preAdmissionCase(): Promise<void> {
   } catch (error) {
     const safe = server.generationEvidence().error;
     throw new Error(`PRE_ADMISSION_CASE_FAILED:${error instanceof Error ? error.message : "unknown"}${safe ? `:server=${safe}` : ""}`);
-  } finally { await browser.close(); await server.close(); await stack.down(true); await rm(stateRoot, { recursive: true, force: true }); }
+  } finally {
+    try { await server.close(); }
+    finally { try { await stack.down(true); } finally { try { await rm(stateRoot, { recursive: true, force: true }); } finally { await browser.close(); } } }
+  }
 }
 
 async function revisionCase(): Promise<void> {
@@ -110,7 +113,10 @@ async function revisionCase(): Promise<void> {
     const status = await browser.contexts().at(0)?.pages().at(0)?.locator("#generation-status").textContent().catch(() => "") ?? "";
     const uiError = await browser.contexts().at(0)?.pages().at(0)?.locator("#generation-error").textContent().catch(() => "") ?? "";
     throw new Error(`REVISION_CASE_FAILED:${error instanceof Error ? error.message : "unknown"}:status=${status.trim()}:ui=${uiError.trim()}${safe ? `:server=${safe}` : ""}`);
-  } finally { await browser.close(); await server.close(); await stack.down(true); await rm(stateRoot, { recursive: true, force: true }); }
+  } finally {
+    try { await server.close(); }
+    finally { try { await stack.down(true); } finally { try { await rm(stateRoot, { recursive: true, force: true }); } finally { await browser.close(); } } }
+  }
 }
 
 export async function runContinuationCase(caseName: "pre-admission-fund-restart-explicit-resume" | "revisions-duplicates-restarts"): Promise<Readonly<{ case: string; status: "passed" }>> {

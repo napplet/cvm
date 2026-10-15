@@ -1,5 +1,5 @@
 import type { AccountStatus, FundedAdmission, FundingResult, VerifiedSettlement } from "../phase-03/contracts";
-import type { NeedsTopUpResult, PendingActionIntent } from "../continuity/contracts";
+import type { NeedsTopUpResult, PendingActionIntent, PendingActionRecord } from "../continuity/contracts";
 import type { ClaimPublicationEffectInput, ClaimPublicationEffectResult, CreatePublicationIntentInput, CreatePublicationIntentResult, DurablePublicationEffect, PublicationRecord, RecordPublicationObservationInput } from "./publication-store";
 import { TransactionalMemoryPublicationStore } from "./publication-store";
 
@@ -62,6 +62,12 @@ export type RestoreObservationInput = Readonly<{ checkpointId: string; allocatio
 export type CompleteResumedActionInput = Readonly<{ checkpointId: string; allocationIntentReference: string; leaseToken: string; actionId: string; operationId: string; finalization: MeteredFinalizeInput }>;
 /** Coarse, immutable deletion audit; no storage key or cryptographic material is projected publicly. */
 export type DeletionOutcomeInput = Readonly<{ checkpointId: string; objectGeneration: string; state: "scheduled" | "deleted" | "failed" | "unknown" }>;
+
+/** Pre-admission state is deliberately independent of ContinuationFundingStore. */
+export type PendingActionCreateInput = Omit<PendingActionRecord, "state" | "admissionReference" | "resumeIdempotencyKey" | "resumeFingerprint" | "operationId" | "result">;
+export type PendingActionResumeClaimInput = Readonly<{ accountId: string; ownerId: string; checkpointId: string; idempotencyKey: string; resumeFingerprint: string; admissionReference: string; nowMs: number }>;
+export type PendingActionResumeClaim = Readonly<{ action: PendingActionRecord; claimed: boolean }>;
+export type PendingActionTerminalInput = Readonly<{ checkpointId: string; operationId: string; result: unknown; state: "completed" | "failed" }>;
 
 /**
  * A terminal action receipt is persisted only after the serialized ledger
@@ -170,6 +176,16 @@ export interface ContinuationFundingStore extends FundingStore {
   /** Coarse deletion audit for an exact terminal checkpoint, never archive/key metadata. */
   findDeletionOutcome(checkpointId: string, objectGeneration: string): Promise<DeletionOutcomeInput | undefined>;
   transact<T>(accountId: string, operation: (transaction: ContinuationFundingTransaction) => Promise<T> | T): Promise<T>;
+}
+
+export interface PreAdmissionFundingStore extends FundingStore {
+  findPendingAction(accountId: string, idempotencyKey: string): Promise<PendingActionRecord | undefined>;
+  findPendingActionByCheckpoint(accountId: string, checkpointId: string): Promise<PendingActionRecord | undefined>;
+  /** Reject silent local key replacement while active encrypted commands exist. */
+  hasPendingActionForOtherKey(accountId: string, keyId: string): Promise<boolean>;
+  createOrReplayPendingAction(input: PendingActionCreateInput): Promise<PendingActionRecord>;
+  claimPendingActionResume(input: PendingActionResumeClaimInput): Promise<PendingActionResumeClaim>;
+  completePendingAction(input: PendingActionTerminalInput): Promise<PendingActionRecord>;
 }
 
 /**

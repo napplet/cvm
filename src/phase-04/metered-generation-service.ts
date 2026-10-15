@@ -153,6 +153,26 @@ export class MeteredGenerationService {
   }
 
   /**
+   * Internal pre-admission handoff.  The caller must have already bound an
+   * owner-scoped accepted admission in durable storage.  This bypasses only
+   * the legacy live-worker pause state machine; all regular risk, admission,
+   * action-budget, provider, worker, verification, and ledger fences remain.
+   */
+  async startSessionAfterAdmission(input: unknown): Promise<SessionActionResult> {
+    const command = StartSessionCommandSchema.parse(input);
+    const risk = await evaluateRisk({ idea: command.idea }, TOKEN_COUNTER, this.options.riskDetector ?? RISK_DETECTOR, []);
+    if (risk.status !== "accepted") return SessionActionResultSchema.parse({ status: "denied", code: risk.code });
+    const accountId = await accountIdForPrincipal(command.principal);
+    const fingerprint = await hash({ accountId, command }); const key = `${accountId}\u0000${command.idempotencyKey}`;
+    const recorded = await this.options.store.findMeteredAction(accountId, command.idempotencyKey);
+    if (recorded?.fingerprint !== undefined && recorded.fingerprint !== fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
+    if (recorded?.result) return SessionActionResultSchema.parse(recorded.result);
+    const active = this.#inFlight.get(key); if (active) return active;
+    const run = this.execute(command, accountId, fingerprint, { bypassLegacyContinuation: true }).finally(() => this.#inFlight.delete(key));
+    this.#inFlight.set(key, run); return run;
+  }
+
+  /**
    * Serializes continuation admission by owner and stable session lineage. The
    * durable metered action store remains the source of replay/result truth;
    * this boundary prevents two in-process writers from reserving provider work
@@ -218,7 +238,7 @@ export class MeteredGenerationService {
     return action?.result ? SessionActionResultSchema.parse(action.result) : undefined;
   }
 
-  private async execute(command: StartSessionCommand | ReviseSessionCommand | (TriggerValidationRepairCommand & Readonly<{ repair: true }>), accountId: string, fingerprint: string): Promise<SessionActionResult> {
+  private async execute(command: StartSessionCommand | ReviseSessionCommand | (TriggerValidationRepairCommand & Readonly<{ repair: true }>), accountId: string, fingerprint: string, options: Readonly<{ bypassLegacyContinuation?: boolean }> = {}): Promise<SessionActionResult> {
     const profile = this.options.pricing?.profile ?? PHASE_04_MODEL_PROFILES["code-proposal"];
     const priceCard = this.options.pricing?.card ?? PHASE_04_DETERMINISTIC_PRICE_CARD;
     // The profile's bounded worst-case charge is the authorization ceiling.
@@ -232,13 +252,22 @@ export class MeteredGenerationService {
     const actionKind = "repair" in command ? "repair" as const : "revision" in command ? "revise_session" as const : "start_session" as const;
     const boundedPayloadHash = await hash("repair" in command ? { repair: command.originatingActionId } : "revision" in command ? { revision: command.revision } : { idea: command.idea });
     const pauseFingerprint = await hash({ accountId, sessionId, actionKind, boundedPayloadHash, expectedSessionVersion: command.expectedVersion, expectedArtifactVersion: command.expectedVersion, policyVersion: command.policyVersion, priceCardId: priceCard.id, profileId: profile.id, toolchainId: "phase-04-deterministic-toolchain", actionMaximum: profileCeiling, idempotencyKey: command.idempotencyKey });
-    const continuation = this.#continuation();
-    const paused = await continuation.pauseForFunding({ intent: { accountId, sessionId, idempotencyKey: command.idempotencyKey, fingerprint: pauseFingerprint, reference: `pending:${(await hash({ accountId, key: command.idempotencyKey, pauseFingerprint })).slice(0, 24)}`, actionKind, boundedPayloadHash, expectedSessionVersion: command.expectedVersion, expectedArtifactVersion: command.expectedVersion, policyVersion: command.policyVersion, priceCardId: priceCard.id, profileId: profile.id, toolchainId: "phase-04-deterministic-toolchain", actionMaximum: profileCeiling, admissionReference: command.admissionReference } });
-    if (paused) return SessionActionResultSchema.parse(paused);
+    if (!options.bypassLegacyContinuation) {
+      const continuation = this.#continuation();
+      const paused = await continuation.pauseForFunding({ intent: { accountId, sessionId, idempotencyKey: command.idempotencyKey, fingerprint: pauseFingerprint, reference: `pending:${(await hash({ accountId, key: command.idempotencyKey, pauseFingerprint })).slice(0, 24)}`, actionKind, boundedPayloadHash, expectedSessionVersion: command.expectedVersion, expectedArtifactVersion: command.expectedVersion, policyVersion: command.policyVersion, priceCardId: priceCard.id, profileId: profile.id, toolchainId: "phase-04-deterministic-toolchain", actionMaximum: profileCeiling, admissionReference: command.admissionReference } });
+      if (paused) return SessionActionResultSchema.parse(paused);
+    }
     const budget = await this.options.fundedAdmission.authorizeActionBudget({ principal: command.principal, admissionReference: command.admissionReference, idempotencyKey: `phase-04:${command.idempotencyKey}`, maximum: profileCeiling, unit: "sat" });
     const operationId = `operation:${(await hash({ accountId, key: command.idempotencyKey, profile: profile.id })).slice(0, 24)}`;
     const lifecycleCorrelation = [accountId, sessionId, operationId] as const;
-    const actionId = "repair" in command ? `repair:${command.originatingActionId}:${command.idempotencyKey}` : "revision" in command ? `revision:${command.idempotencyKey}` : `start:${command.idempotencyKey}`;
+    // Database action IDs are globally primary-keyed.  Include owner/session
+    // identity while retaining lookup by the existing account-scoped command
+    // key, so identical keys from different principals cannot collide.
+    const actionId = "repair" in command
+      ? `repair:${(await hash({ accountId, sessionId, origin: command.originatingActionId, key: command.idempotencyKey })).slice(0, 24)}`
+      : "revision" in command
+        ? `revision:${(await hash({ accountId, sessionId, key: command.idempotencyKey })).slice(0, 24)}`
+        : `start:${(await hash({ accountId, sessionId, key: command.idempotencyKey })).slice(0, 24)}`;
     const prepared = await this.options.store.transact(accountId, (transaction) => transaction.prepareMeteredAction({ accountId, idempotencyKey: command.idempotencyKey, fingerprint, sessionId, actionId, expectedVersion: command.expectedVersion, admissionReference: command.admissionReference, actionBudgetReference: budget.reference, maximum: BigInt(profileCeiling), operationId, profileId: profile.id, priceCardId: priceCard.id }));
     if (prepared.result) return SessionActionResultSchema.parse(prepared.result);
     const claim = await this.options.store.transact(accountId, (transaction) => transaction.claimProviderOperation(operationId));

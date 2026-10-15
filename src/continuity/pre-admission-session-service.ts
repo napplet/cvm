@@ -1,0 +1,95 @@
+import { z } from "zod";
+import { accountIdForPrincipal } from "../domain/account-command";
+import { maximumOperationCharge, type ModelProfile, type PriceCard } from "../model/price-card";
+import { canonicalJson } from "../promotion/schema";
+import type { PreAdmissionFundingStore } from "../persistence/funding-store";
+import { PendingActionEnvelopeService } from "./checkpoint-envelope";
+import { PendingActionRecordSchema, PendingStartCommandSchema, ResumePreAdmissionCommandSchema, type PendingActionRecord, type PendingStartCommand } from "./contracts";
+import { SessionActionResultSchema, type MeteredGenerationService, type SessionActionResult } from "../phase-04/metered-generation-service";
+
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1_000;
+const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
+const OwnerSchema = z.object({ ownerId: z.string().regex(/^[a-f0-9]{64}$/u), accountId: z.string().min(1) }).strict();
+const PinsSchema = z.object({ policyVersion: z.string().min(1), profileId: z.string().min(1), priceCardId: z.string().min(1), toolchainId: z.string().min(1), rootManifestSha256: Sha256Schema }).strict();
+
+export type PreAdmissionPins = z.infer<typeof PinsSchema>;
+export type PreAdmissionOwner = z.infer<typeof OwnerSchema>;
+export type PreAdmissionSaveResult = Readonly<{ status: "saved"; checkpointId: string; reference: string; fingerprint: string; maximum: string; shortfall: string; version: 1; expiresAtMs: number }> | Readonly<{ status: "funded_admission_required"; maximum: string }>;
+
+function freeze<T>(value: T): T { return Object.freeze(value); }
+async function hash(value: unknown): Promise<string> {
+  const bytes = new TextEncoder().encode(canonicalJson(value));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+function terminal(result: SessionActionResult): result is Extract<SessionActionResult, { operationId: string }> {
+  return result.status === "completed" || result.status === "failed" || result.status === "billing_invariant_failed";
+}
+
+/**
+ * Transport-neutral authority for a command that is valid but currently not
+ * admitted.  It owns no session/lease/worker effect; the only transition to
+ * generation is a separately signed resume after a same-owner accepted hold.
+ */
+export class PreAdmissionSessionService {
+  readonly #now: () => number;
+  constructor(private readonly options: Readonly<{
+    store: PreAdmissionFundingStore;
+    envelope: PendingActionEnvelopeService;
+    generation: Pick<MeteredGenerationService, "startSessionAfterAdmission">;
+    pricing: Readonly<{ card: PriceCard; profile: ModelProfile }>;
+    pins: PreAdmissionPins;
+    now?: () => number;
+  }>) { this.#now = options.now ?? Date.now; PinsSchema.parse(options.pins); }
+
+  async saveStart(input: Readonly<{ owner: PreAdmissionOwner; command: PendingStartCommand }>): Promise<PreAdmissionSaveResult> {
+    const owner = OwnerSchema.parse(input.owner); const command = PendingStartCommandSchema.parse(input.command);
+    if (await accountIdForPrincipal({ pubkey: owner.ownerId }) !== owner.accountId) throw new Error("PENDING_ACTION_OWNER_ACCOUNT_MISMATCH");
+    const ceiling = maximumOperationCharge(this.options.pricing);
+    if (BigInt(command.maximum) < BigInt(ceiling)) throw new Error("ACTION_MAXIMUM_BELOW_PROFILE_CEILING");
+    const status = await this.options.store.status(owner.accountId); const available = BigInt(status?.available ?? "0");
+    if (available >= BigInt(command.maximum)) return freeze({ status: "funded_admission_required", maximum: command.maximum });
+    const fingerprint = await hash({ owner, command });
+    const checkpointId = `pending-action:${(await hash({ accountId: owner.accountId, idempotencyKey: command.idempotencyKey })).slice(0, 32)}`;
+    const reference = `pending:${(await hash({ checkpointId, fingerprint })).slice(0, 32)}`;
+    const expiresAtMs = this.#now() + THIRTY_DAYS_MS;
+    const pins = PinsSchema.parse(this.options.pins);
+    const envelope = await this.options.envelope.seal({
+      header: { schemaVersion: "pending-action-envelope-v1", kind: "pending_action", checkpointId, checkpointVersion: 1, ownerId: owner.ownerId, accountId: owner.accountId, commandFingerprint: fingerprint, expiresAtMs, expectedSessionVersion: 0, expectedArtifactVersion: 0, ...pins },
+      command,
+    });
+    const record = await this.options.store.createOrReplayPendingAction({ checkpointId, ownerId: owner.ownerId, accountId: owner.accountId, idempotencyKey: command.idempotencyKey, commandFingerprint: fingerprint, reference, maximum: command.maximum, envelope, expiresAtMs });
+    this.#assertRecord(record, owner, command, fingerprint, pins);
+    return freeze({ status: "saved", checkpointId: record.checkpointId, reference: record.reference, fingerprint: record.commandFingerprint, maximum: record.maximum, shortfall: (BigInt(record.maximum) - available).toString(), version: 1, expiresAtMs: record.expiresAtMs });
+  }
+
+  async status(input: Readonly<{ owner: PreAdmissionOwner; checkpointId: string }>): Promise<PendingActionRecord | undefined> {
+    const owner = OwnerSchema.parse(input.owner); const record = await this.options.store.findPendingActionByCheckpoint(owner.accountId, input.checkpointId);
+    if (!record || record.ownerId !== owner.ownerId) return undefined;
+    return record;
+  }
+
+  async resume(input: Readonly<{ owner: PreAdmissionOwner; command: unknown }>): Promise<SessionActionResult> {
+    const owner = OwnerSchema.parse(input.owner); const command = ResumePreAdmissionCommandSchema.parse(input.command);
+    if (await accountIdForPrincipal({ pubkey: owner.ownerId }) !== owner.accountId) throw new Error("PENDING_ACTION_OWNER_ACCOUNT_MISMATCH");
+    const record = await this.options.store.findPendingActionByCheckpoint(owner.accountId, command.checkpointId);
+    if (!record || record.ownerId !== owner.ownerId || record.state === "saved" && this.#now() >= record.expiresAtMs) throw new Error("PENDING_ACTION_NOT_FOUND_OR_DENIED");
+    if (record.reference !== command.pendingAction.reference || record.commandFingerprint !== command.pendingAction.fingerprint || record.maximum !== command.pendingAction.maximum || command.expectedSessionVersion !== 0 || command.expectedCheckpointVersion !== 1) throw new Error("PENDING_ACTION_RESUME_CONFLICT");
+    const resumeFingerprint = await hash({ owner, checkpointId: command.checkpointId, idempotencyKey: command.idempotencyKey, admissionReference: command.admissionReference, pendingAction: command.pendingAction });
+    const claim = await this.options.store.claimPendingActionResume({ accountId: owner.accountId, ownerId: owner.ownerId, checkpointId: command.checkpointId, idempotencyKey: command.idempotencyKey, resumeFingerprint, admissionReference: command.admissionReference, nowMs: this.#now() });
+    if (claim.action.state === "completed" || claim.action.state === "failed") return SessionActionResultSchema.parse(claim.action.result);
+    const restored = await this.options.envelope.open(claim.action.envelope, this.#now());
+    const pins = PinsSchema.parse(this.options.pins);
+    if (restored.header.ownerId !== owner.ownerId || restored.header.accountId !== owner.accountId || restored.header.checkpointId !== claim.action.checkpointId || restored.header.commandFingerprint !== claim.action.commandFingerprint || restored.header.expectedSessionVersion !== 0 || restored.header.expectedArtifactVersion !== 0 || restored.header.policyVersion !== pins.policyVersion || restored.header.profileId !== pins.profileId || restored.header.priceCardId !== pins.priceCardId || restored.header.toolchainId !== pins.toolchainId || restored.header.rootManifestSha256 !== pins.rootManifestSha256 || restored.command.maximum !== claim.action.maximum) throw new Error("PENDING_ACTION_RESTORE_DENIED");
+    const exactFingerprint = await hash({ owner, command: restored.command });
+    if (exactFingerprint !== claim.action.commandFingerprint || restored.command.idempotencyKey !== claim.action.idempotencyKey) throw new Error("PENDING_ACTION_RESTORE_DENIED");
+    const result = await this.options.generation.startSessionAfterAdmission({ principal: { pubkey: owner.ownerId }, admissionReference: command.admissionReference, idempotencyKey: restored.command.idempotencyKey, expectedVersion: 0, maximum: restored.command.maximum, policyVersion: restored.command.policyVersion, idea: restored.command.idea });
+    if (terminal(result)) await this.options.store.completePendingAction({ checkpointId: claim.action.checkpointId, operationId: result.operationId, result, state: result.status === "completed" ? "completed" : "failed" });
+    return result;
+  }
+
+  #assertRecord(record: PendingActionRecord, owner: PreAdmissionOwner, command: PendingStartCommand, fingerprint: string, pins: PreAdmissionPins): void {
+    const parsed = PendingActionRecordSchema.parse(record);
+    if (parsed.ownerId !== owner.ownerId || parsed.accountId !== owner.accountId || parsed.idempotencyKey !== command.idempotencyKey || parsed.commandFingerprint !== fingerprint || parsed.maximum !== command.maximum || parsed.envelope.header.commandFingerprint !== fingerprint || parsed.envelope.header.policyVersion !== pins.policyVersion || parsed.envelope.header.profileId !== pins.profileId || parsed.envelope.header.priceCardId !== pins.priceCardId || parsed.envelope.header.toolchainId !== pins.toolchainId || parsed.envelope.header.rootManifestSha256 !== pins.rootManifestSha256) throw new Error("PENDING_ACTION_REPLAY_CONFLICT");
+  }
+}

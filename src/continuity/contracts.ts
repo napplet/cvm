@@ -114,3 +114,83 @@ export type ResumePendingApproval = z.infer<typeof ResumePendingApprovalSchema>;
 export type ResumeCompatibility = z.infer<typeof ResumeCompatibilitySchema>;
 export type ResumeSessionCommand = z.infer<typeof ResumeSessionCommandSchema>;
 export type ResumeSessionResult = z.infer<typeof ResumeSessionResultSchema>;
+
+/**
+ * A pre-admission command has deliberately not acquired a session, cap hold,
+ * worker lease, or provider operation.  Keep this type separate from
+ * PendingActionIntent, which describes an already-admitted live pause.
+ */
+export const PendingStartCommandSchema = z.object({
+  idempotencyKey: z.string().min(1).max(160),
+  maximum: CanonicalSatSchema,
+  idea: z.string().trim().min(1).max(8_000),
+  policyVersion: z.string().min(1).max(160),
+}).strict();
+
+export const PendingActionHeaderSchema = z.object({
+  schemaVersion: z.literal("pending-action-envelope-v1"),
+  kind: z.literal("pending_action"),
+  checkpointId: z.string().min(1),
+  checkpointVersion: z.literal(1),
+  ownerId: z.string().regex(/^[a-f0-9]{64}$/u),
+  accountId: z.string().min(1),
+  commandFingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
+  expiresAtMs: EpochMillisecondsSchema,
+  expectedSessionVersion: z.literal(0),
+  expectedArtifactVersion: z.literal(0),
+  policyVersion: z.string().min(1),
+  profileId: z.string().min(1),
+  priceCardId: z.string().min(1),
+  toolchainId: z.string().min(1),
+  rootManifestSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  keyId: z.string().min(1),
+}).strict();
+
+export const PendingActionEnvelopeSchema = z.object({
+  header: PendingActionHeaderSchema,
+  headerSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  ciphertextBase64: z.string().min(1).regex(/^[A-Za-z0-9+/]+={0,2}$/u),
+  ciphertextSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  nonceBase64: z.string().min(1).regex(/^[A-Za-z0-9+/]+={0,2}$/u),
+}).strict();
+
+export const PendingActionStatusSchema = z.enum(["saved", "bound", "completed", "failed"]);
+export const PendingActionRecordSchema = z.object({
+  checkpointId: z.string().min(1),
+  ownerId: z.string().regex(/^[a-f0-9]{64}$/u),
+  accountId: z.string().min(1),
+  idempotencyKey: z.string().min(1),
+  commandFingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
+  reference: z.string().min(1),
+  maximum: CanonicalSatSchema,
+  envelope: PendingActionEnvelopeSchema,
+  expiresAtMs: EpochMillisecondsSchema,
+  state: PendingActionStatusSchema,
+  admissionReference: z.string().min(1).optional(),
+  resumeIdempotencyKey: z.string().min(1).optional(),
+  resumeFingerprint: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  operationId: z.string().min(1).optional(),
+  result: z.unknown().optional(),
+}).strict();
+
+export const ResumePreAdmissionCommandSchema = z.object({
+  kind: z.literal("pending_action"),
+  checkpointId: z.string().min(1),
+  expectedCheckpointVersion: z.literal(1),
+  expectedSessionVersion: z.literal(0),
+  idempotencyKey: z.string().min(1).max(160),
+  approvePendingAction: z.literal(true),
+  admissionReference: z.string().min(1),
+  pendingAction: z.object({
+    reference: z.string().min(1),
+    fingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
+    kind: z.literal("start_session"),
+    maximum: CanonicalSatSchema,
+  }).strict(),
+}).strict();
+
+export type PendingStartCommand = z.infer<typeof PendingStartCommandSchema>;
+export type PendingActionHeader = z.infer<typeof PendingActionHeaderSchema>;
+export type PendingActionEnvelope = z.infer<typeof PendingActionEnvelopeSchema>;
+export type PendingActionRecord = z.infer<typeof PendingActionRecordSchema>;
+export type ResumePreAdmissionCommand = z.infer<typeof ResumePreAdmissionCommandSchema>;

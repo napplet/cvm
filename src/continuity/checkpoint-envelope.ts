@@ -2,6 +2,7 @@ import { z } from "zod";
 import { canonicalJson } from "../promotion/schema";
 import { ImmutableObjectReferenceSchema, type ImmutableObjectReference, type ObjectStorePort } from "./object-store";
 import { emitLifecycleObservation, type LifecycleTelemetryPort } from "../telemetry/contracts";
+import { PendingActionEnvelopeSchema, PendingActionHeaderSchema, PendingStartCommandSchema, type PendingActionEnvelope, type PendingActionHeader, type PendingStartCommand } from "./contracts";
 
 const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/iu);
 const Base64Schema = z.string().min(1).regex(/^[A-Za-z0-9+/]+={0,2}$/u);
@@ -116,6 +117,39 @@ async function sha256(bytes: Uint8Array): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 function canonicalBytes(value: unknown): Uint8Array { return new TextEncoder().encode(canonicalJson(value)); }
+
+/**
+ * Separate envelope for an intent that has not been admitted.  It never uses
+ * the workspace checkpoint object/key model: only a server-local AES key and
+ * the authenticated command header can restore this bounded command.
+ */
+export class PendingActionEnvelopeService {
+  constructor(private readonly keys: Readonly<{ loadOrCreatePendingActionKey(): Promise<Readonly<{ keyId: string; key: Uint8Array }>> }>) {}
+
+  async seal(input: Readonly<{ header: Omit<PendingActionHeader, "keyId">; command: PendingStartCommand }>): Promise<PendingActionEnvelope> {
+    const command = PendingStartCommandSchema.parse(input.command);
+    const material = await this.keys.loadOrCreatePendingActionKey();
+    if (!(material.key instanceof Uint8Array) || material.key.byteLength !== 32 || !material.keyId) throw new Error("PENDING_ACTION_KEY_UNAVAILABLE");
+    const header = PendingActionHeaderSchema.parse({ ...input.header, keyId: material.keyId });
+    const aad = canonicalBytes(header);
+    const nonce = crypto.getRandomValues(new Uint8Array(12));
+    const key = await crypto.subtle.importKey("raw", material.key, "AES-GCM", false, ["encrypt"]);
+    const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce, additionalData: aad }, key, canonicalBytes(command)));
+    return PendingActionEnvelopeSchema.parse({ header, headerSha256: await sha256(aad), ciphertextBase64: b64(ciphertext), ciphertextSha256: await sha256(ciphertext), nonceBase64: b64(nonce) });
+  }
+
+  async open(input: unknown, nowMs = Date.now()): Promise<Readonly<{ header: PendingActionHeader; command: PendingStartCommand }>> {
+    try {
+      const envelope = PendingActionEnvelopeSchema.parse(input);
+      const material = await this.keys.loadOrCreatePendingActionKey();
+      const aad = canonicalBytes(envelope.header); const ciphertext = fromB64(envelope.ciphertextBase64); const nonce = fromB64(envelope.nonceBase64);
+      if (!ciphertext || !nonce || nonce.byteLength !== 12 || material.keyId !== envelope.header.keyId || await sha256(aad) !== envelope.headerSha256 || await sha256(ciphertext) !== envelope.ciphertextSha256 || envelope.header.expiresAtMs <= nowMs) throw new Error("PENDING_ACTION_RESTORE_DENIED");
+      const key = await crypto.subtle.importKey("raw", material.key, "AES-GCM", false, ["decrypt"]);
+      const plaintext = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce, additionalData: aad }, key, ciphertext));
+      return Object.freeze({ header: envelope.header, command: PendingStartCommandSchema.parse(JSON.parse(new TextDecoder().decode(plaintext))) });
+    } catch { throw new Error("PENDING_ACTION_RESTORE_DENIED"); }
+  }
+}
 
 /** In-memory per-checkpoint keyring used only as a deterministic port adapter. */
 export class AesGcmCheckpointCrypto implements CheckpointCryptoPort {

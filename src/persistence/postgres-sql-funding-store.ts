@@ -1,11 +1,11 @@
 import type { AccountStatus, FundedAdmission, FundingResult } from "../phase-03/contracts";
 import { AccountStatusSchema, FundingResultSchema } from "../phase-03/contracts";
-import { canonicalMeteredTerminalResult, type ActionBudget, type ActionBudgetInput, type AdmissionInput, type BeginDeadlineCheckpointInput, type BillingLineItem, type BillingLineItemPage, type BillingLineItemPageRequest, type CapacityDispatchClaim, type CapacityIntent, type CapacityIntentInput, type CapacityObservationInput, type CompleteResumedActionInput, type ContinuationCheckpoint, type ContinuationCheckpointInput, type ContinuationFundingStore, type ContinuationFundingTransaction, type ContinuationPause, type ContinuationPauseInput, type ContinuationRecord, type ContinuationResumeClaim, type ContinuationResumeClaimInput, type ContinuationWakeDispatch, type CreditInput, type DeletionOutcomeInput, type MeteredAction, type MeteredFinalizeInput, type MeteredFundingStore, type MeteredFundingTransaction, type MeteredOperationClaim, type MeteredSessionRecord, type PrepareMeteredActionInput, type PublicationFundingStore, type ReconciliationClaim, type RestoreObservationInput, type StoredFundingCommand, type UsageUnknownInput, type WakeDispatchClaim, type WakeDispatchOutcomeInput } from "./funding-store";
+import { canonicalMeteredTerminalResult, type ActionBudget, type ActionBudgetInput, type AdmissionInput, type BeginDeadlineCheckpointInput, type BillingLineItem, type BillingLineItemPage, type BillingLineItemPageRequest, type CapacityDispatchClaim, type CapacityIntent, type CapacityIntentInput, type CapacityObservationInput, type CompleteResumedActionInput, type ContinuationCheckpoint, type ContinuationCheckpointInput, type ContinuationFundingStore, type ContinuationFundingTransaction, type ContinuationPause, type ContinuationPauseInput, type ContinuationRecord, type ContinuationResumeClaim, type ContinuationResumeClaimInput, type ContinuationWakeDispatch, type CreditInput, type DeletionOutcomeInput, type MeteredAction, type MeteredFinalizeInput, type MeteredFundingStore, type MeteredFundingTransaction, type MeteredOperationClaim, type MeteredSessionRecord, type PendingActionCreateInput, type PendingActionResumeClaim, type PendingActionResumeClaimInput, type PendingActionTerminalInput, type PreAdmissionFundingStore, type PrepareMeteredActionInput, type PublicationFundingStore, type ReconciliationClaim, type RestoreObservationInput, type StoredFundingCommand, type UsageUnknownInput, type WakeDispatchClaim, type WakeDispatchOutcomeInput } from "./funding-store";
 import type { ClaimPublicationEffectInput, ClaimPublicationEffectResult, CreatePublicationIntentInput, CreatePublicationIntentResult, DurablePublicationEffect, DurablePublicationStore, PublicationEffectKind, PublicationRecord, PublicationStoreTransaction, RecordPublicationObservationInput } from "./publication-store";
 import { PublicationObservationSchema } from "../publication/contracts";
 import type { PublicationEffectIntent, PublicationIntent, PublicationObservation, PublicationResult, PublicationStatus, SignedOwnerManifestEvent } from "../publication/contracts";
 import { SerializationFailure } from "./postgres-funding-store";
-import { NeedsTopUpResultSchema, PendingActionIntentSchema } from "../continuity/contracts";
+import { NeedsTopUpResultSchema, PendingActionIntentSchema, PendingActionRecordSchema, type PendingActionRecord } from "../continuity/contracts";
 
 type SqlRow = Record<string, unknown>;
 type SqlResult<Row extends SqlRow = SqlRow> = Readonly<{ rows: readonly Row[] }>;
@@ -40,6 +40,10 @@ const pauseFromRow = (row: SqlRow): ContinuationPause => {
 };
 const wakeDispatchFromRow = (row: SqlRow): ContinuationWakeDispatch => frozen({ accountId: asText(row.account_id), sessionId: asText(row.session_id), pauseGeneration: Number(row.pause_generation), pendingFingerprint: asText(row.pending_fingerprint_sha256), expectedSessionVersion: Number(row.expected_session_version), expectedArtifactVersion: Number(row.expected_artifact_version), actionBudgetReference: asText(row.action_budget_reference), operationId: asText(row.operation_id), liveLeaseToken: asText(row.live_lease_token), ...(row.claim_token ? { claimToken: asText(row.claim_token) } : {}), reconciliationAttempts: Number(row.reconciliation_attempts ?? 0), state: asText(row.state) as ContinuationWakeDispatch["state"] });
 const checkpointFromRow = (row: SqlRow): ContinuationCheckpoint => frozen({ accountId: asText(row.account_id), sessionId: asText(row.session_id), pauseGeneration: Number(row.pause_generation), checkpointId: asText(row.checkpoint_id), expectedSessionVersion: Number(row.expected_session_version), expectedArtifactVersion: Number(row.expected_artifact_version), manifestReference: asText(row.manifest_reference), objectKey: asText(row.object_key), objectGeneration: asText(row.object_generation), objectChecksum: asText(row.object_checksum), keyReference: asText(row.key_reference), compatibilityIdentity: asText(row.compatibility_identity), checkpointCommittedAtMs: Number(row.checkpoint_committed_at_ms), retentionDeadlineMs: Number(row.retention_deadline_ms), state: asText(row.state) as ContinuationCheckpoint["state"] });
+const pendingActionFromRow = (row: SqlRow): PendingActionRecord => PendingActionRecordSchema.parse({
+  checkpointId: asText(row.checkpoint_id), ownerId: asText(row.owner_id), accountId: asText(row.account_id), idempotencyKey: asText(row.idempotency_key), commandFingerprint: asText(row.command_fingerprint_sha256), reference: asText(row.action_reference), maximum: asText(row.maximum_sat), envelope: typeof row.envelope_json === "string" ? JSON.parse(row.envelope_json) : row.envelope_json,
+  expiresAtMs: Number(row.expires_at_ms), state: asText(row.state), ...(row.admission_reference ? { admissionReference: asText(row.admission_reference) } : {}), ...(row.resume_idempotency_key ? { resumeIdempotencyKey: asText(row.resume_idempotency_key) } : {}), ...(row.resume_fingerprint_sha256 ? { resumeFingerprint: asText(row.resume_fingerprint_sha256) } : {}), ...(row.operation_id ? { operationId: asText(row.operation_id) } : {}), ...(row.terminal_result ? { result: typeof row.terminal_result === "string" ? JSON.parse(row.terminal_result) : row.terminal_result } : {}),
+});
 const deadlineError = () => new Error("POSTGRES_OPERATION_DEADLINE_EXCEEDED");
 const publicationEffectFromRow = (row: SqlRow): DurablePublicationEffect => frozen({ intentId: asText(row.intent_id), effectKind: asText(row.effect_kind) as PublicationEffectKind, operationId: asText(row.operation_id), requestFingerprintSha256: asText(row.request_fingerprint_sha256), state: asText(row.state) as DurablePublicationEffect["state"], ...(row.claim_token ? { claimToken: asText(row.claim_token) } : {}), ...(row.observation_json ? { observation: typeof row.observation_json === "string" ? JSON.parse(row.observation_json) : row.observation_json } : {}) });
 const publicationRecordFromRows = (intentId: string, rows: readonly SqlRow[]): PublicationRecord => {
@@ -70,7 +74,7 @@ class DeadlineSqlClient implements PostgresSqlClient {
  * one checked-out pg client after `BEGIN ... SERIALIZABLE`; the deterministic
  * map executor remains a test double in its own module.
  */
-export class PostgresSqlFundingStore implements MeteredFundingStore, ContinuationFundingStore, PublicationFundingStore {
+export class PostgresSqlFundingStore implements MeteredFundingStore, ContinuationFundingStore, PreAdmissionFundingStore, PublicationFundingStore {
   readonly production = true as const;
   readonly #maxAttempts: number;
   readonly #deadlineMs: number;
@@ -255,6 +259,77 @@ export class PostgresSqlFundingStore implements MeteredFundingStore, Continuatio
       } finally { raw.release(); }
     }
     throw last ?? new Error("SERIALIZATION_RETRY_EXHAUSTED");
+  }
+
+  async findPendingAction(accountId: string, idempotencyKey: string): Promise<PendingActionRecord | undefined> {
+    const client = await this.pool.connect();
+    try { const row = (await client.query("SELECT checkpoint_id,owner_id,account_id,idempotency_key,command_fingerprint_sha256,action_reference,maximum_sat,envelope_json,expires_at_ms,state,admission_reference,resume_idempotency_key,resume_fingerprint_sha256,operation_id,terminal_result FROM development_pending_actions WHERE account_id=$1 AND idempotency_key=$2", [accountId, idempotencyKey])).rows[0]; return row && frozen(pendingActionFromRow(row)); } finally { client.release(); }
+  }
+  async findPendingActionByCheckpoint(accountId: string, checkpointId: string): Promise<PendingActionRecord | undefined> {
+    const client = await this.pool.connect();
+    try { const row = (await client.query("SELECT checkpoint_id,owner_id,account_id,idempotency_key,command_fingerprint_sha256,action_reference,maximum_sat,envelope_json,expires_at_ms,state,admission_reference,resume_idempotency_key,resume_fingerprint_sha256,operation_id,terminal_result FROM development_pending_actions WHERE account_id=$1 AND checkpoint_id=$2", [accountId, checkpointId])).rows[0]; return row && frozen(pendingActionFromRow(row)); } finally { client.release(); }
+  }
+  async hasPendingActionForOtherKey(accountId: string, keyId: string): Promise<boolean> {
+    const client = await this.pool.connect();
+    try { return Boolean((await client.query("SELECT 1 FROM development_pending_actions WHERE account_id=$1 AND state IN ('saved','bound') AND envelope_json->'header'->>'keyId' <> $2 LIMIT 1", [accountId, keyId])).rows[0]); } finally { client.release(); }
+  }
+  async createOrReplayPendingAction(input: PendingActionCreateInput): Promise<PendingActionRecord> {
+    return this.#pendingTransaction(input.accountId, async (client) => {
+      const existing = (await client.query("SELECT checkpoint_id,owner_id,account_id,idempotency_key,command_fingerprint_sha256,action_reference,maximum_sat,envelope_json,expires_at_ms,state,admission_reference,resume_idempotency_key,resume_fingerprint_sha256,operation_id,terminal_result FROM development_pending_actions WHERE account_id=$1 AND idempotency_key=$2 FOR UPDATE", [input.accountId, input.idempotencyKey])).rows[0];
+      if (existing) {
+        const recorded = pendingActionFromRow(existing);
+        if (recorded.ownerId !== input.ownerId || recorded.commandFingerprint !== input.commandFingerprint || recorded.reference !== input.reference || recorded.maximum !== input.maximum || recorded.checkpointId !== input.checkpointId) throw new Error("PENDING_ACTION_IDEMPOTENCY_CONFLICT");
+        return recorded;
+      }
+      const keyMismatch = (await client.query("SELECT 1 FROM development_pending_actions WHERE account_id=$1 AND state IN ('saved','bound') AND envelope_json->'header'->>'keyId' <> $2 LIMIT 1 FOR UPDATE", [input.accountId, input.envelope.header.keyId])).rows[0];
+      if (keyMismatch) throw new Error("PENDING_ACTION_KEY_ROTATION_DENIED");
+      await client.query("INSERT INTO funding_accounts(account_id,unit) VALUES ($1,'sat') ON CONFLICT (account_id) DO NOTHING", [input.accountId]);
+      await client.query("INSERT INTO development_pending_actions(checkpoint_id,owner_id,account_id,idempotency_key,command_fingerprint_sha256,action_reference,maximum_sat,envelope_json,expires_at_ms,state) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'saved')", [input.checkpointId, input.ownerId, input.accountId, input.idempotencyKey, input.commandFingerprint, input.reference, input.maximum, JSON.stringify(input.envelope), input.expiresAtMs]);
+      return PendingActionRecordSchema.parse({ ...input, state: "saved" });
+    });
+  }
+  async claimPendingActionResume(input: PendingActionResumeClaimInput): Promise<PendingActionResumeClaim> {
+    return this.#pendingTransaction(input.accountId, async (client) => {
+      const row = first(await client.query("SELECT checkpoint_id,owner_id,account_id,idempotency_key,command_fingerprint_sha256,action_reference,maximum_sat,envelope_json,expires_at_ms,state,admission_reference,resume_idempotency_key,resume_fingerprint_sha256,operation_id,terminal_result FROM development_pending_actions WHERE account_id=$1 AND checkpoint_id=$2 FOR UPDATE", [input.accountId, input.checkpointId]), "PENDING_ACTION_NOT_FOUND_OR_DENIED");
+      const action = pendingActionFromRow(row);
+      if (action.ownerId !== input.ownerId || input.nowMs >= action.expiresAtMs) throw new Error("PENDING_ACTION_NOT_FOUND_OR_DENIED");
+      if (action.state !== "saved") {
+        if (action.admissionReference !== input.admissionReference || action.resumeIdempotencyKey !== input.idempotencyKey || action.resumeFingerprint !== input.resumeFingerprint) throw new Error("PENDING_ACTION_RESUME_CONFLICT");
+        return frozen({ action, claimed: false });
+      }
+      const hold = (await client.query("SELECT h.held_amount,h.requested_cap FROM admissions a JOIN session_cap_holds h ON h.account_id=a.account_id AND h.reference=a.reference AND h.state='active' WHERE a.account_id=$1 AND a.reference=$2 AND a.state='accepted' FOR UPDATE", [input.accountId, input.admissionReference])).rows[0];
+      if (!hold || asBigInt(hold.held_amount) < BigInt(action.maximum) || asBigInt(hold.requested_cap) < BigInt(action.maximum)) throw new Error("PENDING_ACTION_ADMISSION_INSUFFICIENT");
+      await client.query("UPDATE development_pending_actions SET state='bound',admission_reference=$3,resume_idempotency_key=$4,resume_fingerprint_sha256=$5,updated_at=now() WHERE account_id=$1 AND checkpoint_id=$2 AND state='saved'", [input.accountId, input.checkpointId, input.admissionReference, input.idempotencyKey, input.resumeFingerprint]);
+      return frozen({ action: PendingActionRecordSchema.parse({ ...action, state: "bound", admissionReference: input.admissionReference, resumeIdempotencyKey: input.idempotencyKey, resumeFingerprint: input.resumeFingerprint }), claimed: true });
+    });
+  }
+  async completePendingAction(input: PendingActionTerminalInput): Promise<PendingActionRecord> {
+    const action = await this.findPendingActionByCheckpointForCompletion(input.checkpointId);
+    return this.#pendingTransaction(action.accountId, async (client) => {
+      const row = first(await client.query("SELECT checkpoint_id,owner_id,account_id,idempotency_key,command_fingerprint_sha256,action_reference,maximum_sat,envelope_json,expires_at_ms,state,admission_reference,resume_idempotency_key,resume_fingerprint_sha256,operation_id,terminal_result FROM development_pending_actions WHERE checkpoint_id=$1 FOR UPDATE", [input.checkpointId]), "PENDING_ACTION_NOT_FOUND_OR_DENIED");
+      const current = pendingActionFromRow(row);
+      if (current.state === input.state) {
+        if (current.operationId !== input.operationId || JSON.stringify(current.result) !== JSON.stringify(input.result)) throw new Error("PENDING_ACTION_TERMINAL_CONFLICT");
+        return current;
+      }
+      if (current.state !== "bound") throw new Error("PENDING_ACTION_TERMINAL_CONFLICT");
+      await client.query("UPDATE development_pending_actions SET state=$2,operation_id=$3,terminal_result=$4,updated_at=now() WHERE checkpoint_id=$1", [input.checkpointId, input.state, input.operationId, JSON.stringify(input.result)]);
+      return PendingActionRecordSchema.parse({ ...current, state: input.state, operationId: input.operationId, result: input.result });
+    });
+  }
+  async findPendingActionByCheckpointForCompletion(checkpointId: string): Promise<PendingActionRecord> {
+    const client = await this.pool.connect();
+    try { return pendingActionFromRow(first(await client.query("SELECT checkpoint_id,owner_id,account_id,idempotency_key,command_fingerprint_sha256,action_reference,maximum_sat,envelope_json,expires_at_ms,state,admission_reference,resume_idempotency_key,resume_fingerprint_sha256,operation_id,terminal_result FROM development_pending_actions WHERE checkpoint_id=$1", [checkpointId]), "PENDING_ACTION_NOT_FOUND_OR_DENIED")); } finally { client.release(); }
+  }
+  async #pendingTransaction<T>(accountId: string, operation: (client: PostgresSqlClient) => Promise<T>): Promise<T> {
+    const deadline = this.#now() + this.#deadlineMs; let last: unknown;
+    for (let attempt = 0; attempt < this.#maxAttempts && this.#now() < deadline; attempt += 1) {
+      const raw = await beforeDeadline(this.pool.connect(), deadline, this.#now); const client = new DeadlineSqlClient(raw, deadline, this.#now);
+      try { await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE"); const result = await operation(client); await client.query("COMMIT"); return frozen(result); }
+      catch (error) { await raw.query("ROLLBACK").catch(() => undefined); last = error; if ((error as { code?: string }).code !== "40001" || attempt + 1 === this.#maxAttempts) throw error; }
+      finally { raw.release(); }
+    }
+    throw last ?? new Error("PENDING_ACTION_STORE_BUSY");
   }
 
   async status(accountId: string): Promise<AccountStatus | undefined> {

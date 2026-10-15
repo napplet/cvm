@@ -1,6 +1,6 @@
 # Development GUI runbook
 
-This runbook operates the local development workspace. It is development evidence only. It does not authorize a production deployment, consume real money, complete `SESS-02` or `OPS-01` through `OPS-04`, or remove the release gates in [production-readiness-deferred.md](production-readiness-deferred.md).
+This runbook operates the local development workspace. It is development evidence only. Its Cashu and NWC rails use local test money, but enabling a configured provider can make billable model API calls. It does not authorize a production deployment, complete `SESS-02` or `OPS-01` through `OPS-04`, or remove the release gates in [production-readiness-deferred.md](production-readiness-deferred.md).
 
 ## Start and inspect
 
@@ -62,7 +62,7 @@ HTTP is deliberately narrow: static workspace assets, non-secret bootstrap facts
 
 The normal mode is **Deterministic fixture**. It substitutes only the external model result; every other local boundary listed above remains real. The UI and `status` must label that mode explicitly.
 
-An optional configured provider uses `OPENAI_API_KEY` plus the local `NAPPLET_CVM_OPENAI_MODEL`, `NAPPLET_CVM_OPENAI_PROFILE`, `NAPPLET_CVM_OPENAI_PRICE_CARD`, and `NAPPLET_CVM_OPENAI_PRICE_SOURCES` settings when supplied. Provide them only in your local environment before `up`; never put them in repository files, screenshots, logs, or issue reports. A configured-provider run is conditional evidence, and `status`/the workspace must say which mode actually ran.
+An optional configured provider requires **all** of `OPENAI_API_KEY`, `NAPPLET_CVM_OPENAI_MODEL`, `NAPPLET_CVM_OPENAI_PROFILE`, `NAPPLET_CVM_OPENAI_PRICE_CARD`, and `NAPPLET_CVM_OPENAI_PRICE_SOURCES`. The model must be an accepted Responses model (`gpt-5-mini` or `gpt-5-mini-2025-08-07`). The profile, price card, and price-source variables are JSON values, not paths to JSON files: they are parsed at startup, and their IDs, source digests, evidence freshness, price-card validity, and usage ceilings must agree. `NAPPLET_CVM_OPENAI_PRICE_SOURCES` includes the captured source bytes and their SHA-256 values. Any partial or invalid configuration fails startup instead of falling back silently. `OPENAI_API_KEY` enables outgoing, billable model API calls; provide it only in your local environment before `up`, never in repository files, screenshots, logs, or issue reports. A configured-provider run is conditional evidence, and `status`/the workspace must say which mode actually ran.
 
 Publication is unavailable unless a configured publication implementation reports durable availability. In an ordinary development run the workspace must say **“Publication unavailable in this development setup.”** Do not interpret generated artifacts or preview visibility as a publication success.
 
@@ -77,8 +77,8 @@ After `status` reports ready, use the PostgreSQL URL from the private `configPat
 ```sh
 CONFIG_PATH="$(bun scripts/dev.ts status | jq -r .configPath)"
 DB_URL="$(jq -r .databaseUrl "$CONFIG_PATH")"
-psql "$DB_URL" -c "select operation_id, state, receipt_charge, artifact_id from metered_actions order by created_at desc limit 10"
-psql "$DB_URL" -c "select checkpoint_id, state, maximum, expires_at from development_pending_actions order by created_at desc limit 10"
+psql "$DB_URL" -c "select operation_id, state, receipt_charge, artifact_id, settled_at from metered_actions order by settled_at desc nulls last, operation_id desc limit 10"
+psql "$DB_URL" -c "select checkpoint_id, state, maximum_sat, expires_at_ms from development_pending_actions order by created_at desc limit 10"
 psql "$DB_URL" -c "select artifact_id, session_id, aggregate_sha256 from development_artifacts order by created_at desc limit 10"
 ```
 

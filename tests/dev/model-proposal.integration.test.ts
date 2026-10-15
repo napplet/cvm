@@ -3,6 +3,7 @@ import { createDevelopmentFunding } from "../../scripts/dev-funding";
 import type { DevPayments } from "../../scripts/dev-payments";
 import { DeterministicModelGateway } from "../../src/model/deterministic-model-gateway";
 import { SourceProposalStore } from "../../src/dev/source-proposal-store";
+import { DevelopmentModelGateway } from "../../src/dev/development-model-gateway";
 
 const intent = (overrides: Record<string, unknown> = {}) => ({
   operationId: "operation:proposal-e2e", providerRequestId: "operation:proposal-e2e", accountId: "account:proposal-e2e", sessionId: "session:proposal-e2e", actionId: "start:proposal-e2e", expectedVersion: 0,
@@ -37,3 +38,19 @@ test("deterministic proposal SQL dispatch lookup restart replay", async () => {
     expect(rows.rows[0]?.count).toBe(1);
   } finally { await app?.close(); }
 }, 300_000);
+
+test("configured provider pricing usage proposal recovery", async () => {
+  const config = await Bun.file(`${import.meta.dir}/../../.local/napplet-cvm-dev-payments/payments.json`).json() as DevPayments;
+  const app = await createDevelopmentFunding(config);
+  try {
+    // No credential/source fixture is a deliberate unavailable state: the
+    // selector does not invent provider price or dispatch output.
+    const gateway = new DevelopmentModelGateway({ store: new SourceProposalStore(app.pool) });
+    expect(gateway.label()).toBe("Deterministic fixture");
+    await expect(Promise.resolve().then(() => new DevelopmentModelGateway({ store: new SourceProposalStore(app.pool), configured: {
+      apiKey: "server-only-test-key", model: "gpt-5-mini",
+      profile: { id: "configured", provider: "openai_responses", model: "gpt-5-mini", priceCardId: "configured-card", selection: "unselected", maximumUnits: [{ dimension: "input_tokens", units: "1" }], deadlineMs: 1_000 },
+      priceCard: { id: "configured-card", version: "1", kind: "source_attributed_provider", provider: "openai_responses", currency: "sat", supportedDimensions: ["input_tokens"], rates: { input_tokens: { numerator: "1", denominator: "1" } }, rounding: "ceil", ceilings: { inputTokens: "1", outputTokens: "1" }, validity: { notBefore: "2026-01-01T00:00:00.000Z", notAfter: "2027-01-01T00:00:00.000Z" } },
+    } }))).rejects.toThrow();
+  } finally { await app.close(); }
+});

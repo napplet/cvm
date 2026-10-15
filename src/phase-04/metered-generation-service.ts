@@ -5,7 +5,7 @@ import { evaluateRisk, type RiskSignalDetector } from "../admission/risk-policy"
 import { accountIdForPrincipal } from "../domain/account-command";
 import { FundedAdmissionService } from "../funding/funded-admission";
 import { type ModelGateway, ModelObservationSchema, ProviderOperationIntentSchema } from "../model/model-gateway";
-import { PHASE_04_DETERMINISTIC_PRICE_CARD, PHASE_04_MODEL_PROFILES, maximumOperationCharge, priceReceipt } from "../model/price-card";
+import { PHASE_04_DETERMINISTIC_PRICE_CARD, PHASE_04_MODEL_PROFILES, maximumOperationCharge, priceReceipt, type ModelProfile, type PriceCard } from "../model/price-card";
 import { type ContinuationFundingStore, type MeteredFundingStore } from "../persistence/funding-store";
 import { type WorkerPort, WorkerRunRequestSchema, WorkerRunResultSchema } from "../phase-02/contracts";
 import { evaluateArtifactContract } from "../policy/artifact-contract";
@@ -59,7 +59,7 @@ async function hash(value: unknown): Promise<string> { const digest = await cryp
 export class MeteredGenerationService {
   #inFlight = new Map<string, Promise<SessionActionResult>>();
   #sessionTails = new Map<string, Promise<void>>();
-  constructor(private readonly options: Readonly<{ fundedAdmission: FundedAdmissionService; store: MeteredFundingStore; gateway: ModelGateway; worker: WorkerPort; artifactVerifier: ArtifactVerifier; proposalStore?: SourceProposalStore; riskDetector?: RiskSignalDetector; harness?: Readonly<{ runner: NappletHarness; toolchain: NappletHarnessRequest["toolchain"]; snapshotReference: string; priorArtifactId: string; approvedApplicationSurfaces: readonly string[] }>; continuation?: ContinuationService; clock?: Readonly<{ nowMs(): number }>; continuationWake?: ContinuationWakePort; telemetry?: LifecycleTelemetryPort }>) {}
+  constructor(private readonly options: Readonly<{ fundedAdmission: FundedAdmissionService; store: MeteredFundingStore; gateway: ModelGateway; worker: WorkerPort; artifactVerifier: ArtifactVerifier; proposalStore?: SourceProposalStore; pricing?: Readonly<{ card: PriceCard; profile: ModelProfile }>; riskDetector?: RiskSignalDetector; harness?: Readonly<{ runner: NappletHarness; toolchain: NappletHarnessRequest["toolchain"]; snapshotReference: string; priorArtifactId: string; approvedApplicationSurfaces: readonly string[] }>; continuation?: ContinuationService; clock?: Readonly<{ nowMs(): number }>; continuationWake?: ContinuationWakePort; telemetry?: LifecycleTelemetryPort }>) {}
 
   #continuation(): ContinuationService {
     const continuationStore = this.options.store as MeteredFundingStore & Partial<ContinuationFundingStore>;
@@ -214,26 +214,27 @@ export class MeteredGenerationService {
   }
 
   private async execute(command: StartSessionCommand | ReviseSessionCommand | (TriggerValidationRepairCommand & Readonly<{ repair: true }>), accountId: string, fingerprint: string): Promise<SessionActionResult> {
-    const profile = PHASE_04_MODEL_PROFILES["code-proposal"];
+    const profile = this.options.pricing?.profile ?? PHASE_04_MODEL_PROFILES["code-proposal"];
+    const priceCard = this.options.pricing?.card ?? PHASE_04_DETERMINISTIC_PRICE_CARD;
     // The profile's bounded worst-case charge is the authorization ceiling.
     // Do this before creating an action or dispatching the provider: a caller
     // may approve more than this ceiling, but never less.
-    const profileCeiling = maximumOperationCharge({ card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile });
+    const profileCeiling = maximumOperationCharge({ card: priceCard, profile });
     if (BigInt(command.maximum) < BigInt(profileCeiling)) {
       return SessionActionResultSchema.parse({ status: "denied", code: "ACTION_MAXIMUM_BELOW_PROFILE_CEILING" });
     }
     const sessionId = "sessionId" in command ? command.sessionId : `session:${(await hash({ accountId, key: command.idempotencyKey })).slice(0, 24)}`;
     const actionKind = "repair" in command ? "repair" as const : "revision" in command ? "revise_session" as const : "start_session" as const;
     const boundedPayloadHash = await hash("repair" in command ? { repair: command.originatingActionId } : "revision" in command ? { revision: command.revision } : { idea: command.idea });
-    const pauseFingerprint = await hash({ accountId, sessionId, actionKind, boundedPayloadHash, expectedSessionVersion: command.expectedVersion, expectedArtifactVersion: command.expectedVersion, policyVersion: command.policyVersion, priceCardId: PHASE_04_DETERMINISTIC_PRICE_CARD.id, profileId: profile.id, toolchainId: "phase-04-deterministic-toolchain", actionMaximum: profileCeiling, idempotencyKey: command.idempotencyKey });
+    const pauseFingerprint = await hash({ accountId, sessionId, actionKind, boundedPayloadHash, expectedSessionVersion: command.expectedVersion, expectedArtifactVersion: command.expectedVersion, policyVersion: command.policyVersion, priceCardId: priceCard.id, profileId: profile.id, toolchainId: "phase-04-deterministic-toolchain", actionMaximum: profileCeiling, idempotencyKey: command.idempotencyKey });
     const continuation = this.#continuation();
-    const paused = await continuation.pauseForFunding({ intent: { accountId, sessionId, idempotencyKey: command.idempotencyKey, fingerprint: pauseFingerprint, reference: `pending:${(await hash({ accountId, key: command.idempotencyKey, pauseFingerprint })).slice(0, 24)}`, actionKind, boundedPayloadHash, expectedSessionVersion: command.expectedVersion, expectedArtifactVersion: command.expectedVersion, policyVersion: command.policyVersion, priceCardId: PHASE_04_DETERMINISTIC_PRICE_CARD.id, profileId: profile.id, toolchainId: "phase-04-deterministic-toolchain", actionMaximum: profileCeiling, admissionReference: command.admissionReference } });
+    const paused = await continuation.pauseForFunding({ intent: { accountId, sessionId, idempotencyKey: command.idempotencyKey, fingerprint: pauseFingerprint, reference: `pending:${(await hash({ accountId, key: command.idempotencyKey, pauseFingerprint })).slice(0, 24)}`, actionKind, boundedPayloadHash, expectedSessionVersion: command.expectedVersion, expectedArtifactVersion: command.expectedVersion, policyVersion: command.policyVersion, priceCardId: priceCard.id, profileId: profile.id, toolchainId: "phase-04-deterministic-toolchain", actionMaximum: profileCeiling, admissionReference: command.admissionReference } });
     if (paused) return SessionActionResultSchema.parse(paused);
     const budget = await this.options.fundedAdmission.authorizeActionBudget({ principal: command.principal, admissionReference: command.admissionReference, idempotencyKey: `phase-04:${command.idempotencyKey}`, maximum: profileCeiling, unit: "sat" });
     const operationId = `operation:${(await hash({ accountId, key: command.idempotencyKey, profile: profile.id })).slice(0, 24)}`;
     const lifecycleCorrelation = [accountId, sessionId, operationId] as const;
     const actionId = "repair" in command ? `repair:${command.originatingActionId}:${command.idempotencyKey}` : "revision" in command ? `revision:${command.idempotencyKey}` : `start:${command.idempotencyKey}`;
-    const prepared = await this.options.store.transact(accountId, (transaction) => transaction.prepareMeteredAction({ accountId, idempotencyKey: command.idempotencyKey, fingerprint, sessionId, actionId, expectedVersion: command.expectedVersion, admissionReference: command.admissionReference, actionBudgetReference: budget.reference, maximum: BigInt(profileCeiling), operationId, profileId: profile.id, priceCardId: PHASE_04_DETERMINISTIC_PRICE_CARD.id }));
+    const prepared = await this.options.store.transact(accountId, (transaction) => transaction.prepareMeteredAction({ accountId, idempotencyKey: command.idempotencyKey, fingerprint, sessionId, actionId, expectedVersion: command.expectedVersion, admissionReference: command.admissionReference, actionBudgetReference: budget.reference, maximum: BigInt(profileCeiling), operationId, profileId: profile.id, priceCardId: priceCard.id }));
     if (prepared.result) return SessionActionResultSchema.parse(prepared.result);
     const claim = await this.options.store.transact(accountId, (transaction) => transaction.claimProviderOperation(operationId));
     if (!claim.claimed && claim.action.result) return SessionActionResultSchema.parse(claim.action.result);
@@ -246,7 +247,7 @@ export class MeteredGenerationService {
     const providerRequestId = operationId;
     const prompt = "repair" in command ? "Repair the charged focused napplet." : "revision" in command ? command.revision : command.idea;
     const priorForIntent = (await this.options.store.listMeteredActionsForSession(accountId, sessionId)).filter((item) => item.artifact?.artifactId).sort((left, right) => (right.artifactVersion ?? 0) - (left.artifactVersion ?? 0))[0];
-    const intent = ProviderOperationIntentSchema.parse({ operationId, providerRequestId, accountId, sessionId, actionId, expectedVersion: command.expectedVersion, actionBudgetReference: budget.reference, profileId: profile.id, priceCardId: PHASE_04_DETERMINISTIC_PRICE_CARD.id, requestFingerprint: fingerprint, prompt, ...(priorForIntent?.artifact?.artifactId ? { authorizedPriorArtifactReference: priorForIntent.artifact.artifactId } : {}), maximumUnits: profile.maximumUnits, selection: "unselected" });
+    const intent = ProviderOperationIntentSchema.parse({ operationId, providerRequestId, accountId, sessionId, actionId, expectedVersion: command.expectedVersion, actionBudgetReference: budget.reference, profileId: profile.id, priceCardId: priceCard.id, requestFingerprint: fingerprint, prompt, ...(priorForIntent?.artifact?.artifactId ? { authorizedPriorArtifactReference: priorForIntent.artifact.artifactId } : {}), maximumUnits: profile.maximumUnits, selection: "unselected" });
     let observation: z.infer<typeof ModelObservationSchema>;
     try {
       observation = ModelObservationSchema.parse(await this.options.gateway.dispatch(intent, new AbortController().signal));
@@ -278,7 +279,7 @@ export class MeteredGenerationService {
       await emitLifecycleObservation(this.options.telemetry, lifecycleCorrelation, "generation", "pending");
       return SessionActionResultSchema.parse({ status: "usage_unknown", code: "USAGE_UNKNOWN", accountId, sessionId, nextAction: "billing_reconciliation", operationId });
     }
-    const priced = priceReceipt({ receipt: observation.receipt, card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile, reservation: profileCeiling });
+    const priced = priceReceipt({ receipt: observation.receipt, card: priceCard, profile, reservation: profileCeiling });
     if (priced.status !== "priced") {
       const result = SessionActionResultSchema.parse({ status: "billing_invariant_failed", code: priced.code, accountId, sessionId, nextAction: "billing_reconciliation", operationId });
       await this.options.store.transact(accountId, (transaction) => transaction.finalizeMeteredAction({ idempotencyKey: command.idempotencyKey, operationId, receiptCharge: "0", providerReceiptReference: observation.receipt.provenance.protectedEvidenceReference, status: "billing_invariant_failed", result, sessionVersion: 0, artifactVersion: 0 }));

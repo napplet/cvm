@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: executing
-stopped_at: Plan 07-53 deterministic proposal handoff verified; reviewing configured provider and implementing Plan 07-56 worker/preview
-last_updated: "2026-10-15T15:27:35Z"
+stopped_at: Plan 07-53 accepted; Plan 07-56 signed browser worker/preview integration active
+last_updated: "2026-10-15T16:45:00Z"
 last_activity: 2026-10-15
-last_activity_desc: Deterministic proposal SQL handoff verified; actual isolated build and Paja probe pass; configured provider corrections and worker integration active
+last_activity_desc: Configured/deterministic model handoff accepted; durable artifact/grant and bounded worker tests pass; full browser integration active
 progress:
   total_phases: 7
   completed_phases: 6
-  total_plans: 97
-  completed_plans: 91
+  total_plans: 98
+  completed_plans: 92
   percent: 86
 ---
 
@@ -25,23 +25,23 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 **Core value:** A user can describe one focused applet and receive a safe, conformant napplet that can be previewed and placed directly into a compatible napplet runtime.
 **Active milestone:** v1.0 — Safe Napplet Generation MVP
-**Current focus:** Implement the complete local execution GUI through Plans 07-52 → 07-53 → 07-56 → 07-54 → 07-55; production certification remains deferred
+**Current focus:** Implement the complete local execution GUI through Plans 07-52 → 07-53 → 07-56 → 07-57 → 07-54 → 07-55; production certification remains deferred
 
 ## Current Position
 
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
-Plan: 51 of 57 accepted; 07-53 review corrections and 07-56 execution active
+Plan: 52 of 58 accepted; 07-56 execution active; 07-57/54/55 plans reviewed and ready
 Status: Local execution GUI implementation active. Production implementation and verification deferred by user on 2026-10-14; do not request production funding or approval for development work.
-Last activity: 2026-10-15 — Plan 07-53 deterministic proposal SQL handoff passed; configured provider review corrections pending. Plan 07-56 worker integration active after actual isolated build and Paja/CSP probe passed.
+Last activity: 2026-10-15 — Plan 07-53 accepted after configured-provider recovery/preflight corrections. Plan 07-56 durable artifact/grant and worker lifecycle tests pass; signed browser execution integration active. New 07-57 foundation and revised 07-54/55 passed plan review.
 
-Plan execution: 91/97 milestone plans complete; Phase 7 is 51/57 complete and verification remains pending
+Plan execution: 92/98 milestone plans complete; Phase 7 is 52/58 complete and verification remains pending
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 91/97 milestone plans executed. Development Plan 07-52 is complete; 07-53 → 07-56 → 07-54 → 07-55 implement metered source proposals, actual worker/preview, continuation/revisions, and one-command full-flow verification. Production-only 07-20 and 07-26 remain deferred; neither is an active development prerequisite.
+- Plans: 92/98 milestone plans executed. Development Plans 07-52/53 are complete; 07-56 → 07-57 → 07-54 → 07-55 implement actual worker/preview, durable pre-admission continuation, browser revisions/recovery, and one-command full-flow verification. Production-only 07-20 and 07-26 remain deferred; neither is an active development prerequisite.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
 - Development coverage: local NWC/two-mint coordinator-to-PostgreSQL suites and real Chromium encrypted ContextVM funding pass, including Cashu replay and NWC settlement across reconciler restart. Browser and SQL balances agree (64 sats Cashu; 3,814 sats after NWC). Full generation/build/preview, revisions, and durable pause/resume remain unverified until the remaining development plans execute. The exact DEV-GUI-01–12 acceptance matrix lives in Phase 7's 07-DEV-VALIDATION.md. Production resumption follows docs/runbooks/production-readiness-deferred.md only when requested.
 
@@ -366,6 +366,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-14T23:20:59Z
-Stopped at: Completed 07-51 local application funding e2e and invoice cleanup fix. All runnable recorded plans complete; production plans 07-20 and 07-26 remain deferred by user.
-Resume file: .planning/phases/07-admission-slo-resilience-launch-safety/07-51-SUMMARY.md
+Last session: 2026-10-15T16:45:00Z
+Stopped at: Plan 07-53 accepted; Plan 07-56 signed browser generation/preview verification active. Continue 07-57 → 07-54 → 07-55 after 56. Production plans 07-20 and 07-26 remain deferred.
+Resume file: .planning/phases/07-admission-slo-resilience-launch-safety/07-53-SUMMARY.md

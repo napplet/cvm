@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { chromium } from "playwright";
 import { startPajaServer, PAJA_SIMULATION_DOMAINS } from "@kehto/paja";
-import { createDevelopmentPool, type DevPayments } from "../../scripts/dev-payments";
+import { createDevelopmentPool, developmentStack } from "../../scripts/dev-payments";
 import { accountIdForPrincipal } from "../../src/domain/account-command";
 import { LocalArtifactRepository } from "../../src/dev/local-artifact-repository";
 import { DEVELOPMENT_ARTIFACT_CSP, type VerifiedArtifactFacts } from "../../src/dev/local-artifact-verifier";
@@ -12,7 +12,8 @@ import { LocalPreviewGrantStore } from "../../src/dev/local-preview-grant-store"
 import { createPreviewServer, type PreviewServer } from "../../src/dev-ui/preview-server";
 
 test("real preview HTTP and SQL deny invalid grants, altered bytes, traversal and browser egress", async () => {
-  const config = await Bun.file(`${import.meta.dir}/../../.local/napplet-cvm-dev-payments/payments.json`).json() as DevPayments;
+  const stack = developmentStack(true);
+  const config = await stack.up();
   const pool = createDevelopmentPool(config.databaseUrl);
   const root = await mkdtemp(join(tmpdir(), "napplet-preview-http-")); const nonce = crypto.randomUUID();
   const ownerId = "e".repeat(64); const accountId = await accountIdForPrincipal({ pubkey: ownerId });
@@ -65,6 +66,6 @@ test("real preview HTTP and SQL deny invalid grants, altered bytes, traversal an
   } finally {
     await browser?.close(); canary?.stop(true); await server?.close();
     if (artifactId) { await pool.query("DELETE FROM development_preview_grants WHERE artifact_id=$1", [artifactId]); await pool.query("DELETE FROM development_artifacts WHERE artifact_id=$1", [artifactId]); }
-    await pool.end(); await rm(root, { recursive: true, force: true });
+    await pool.end(); await rm(root, { recursive: true, force: true }); await stack.down(true);
   }
-}, 30_000);
+}, 120_000);

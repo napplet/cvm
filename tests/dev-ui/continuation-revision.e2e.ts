@@ -12,6 +12,16 @@ async function eventually(action: () => Promise<boolean>, label: string, timeout
   throw new Error(`CONTINUATION_TIMEOUT:${label}`);
 }
 
+async function waitForRevision(page: Page, expectedVersions: number, label: string): Promise<void> {
+  await eventually(async () => {
+    const error = (await page.locator("#generation-error").textContent())?.trim();
+    if (error) throw new Error(`REVISION_UI_ERROR:${error}`);
+    return (await page.locator("#versions li").count()) >= expectedVersions;
+  }, label, 120_000);
+  await page.getByText("Verified preview ready", { exact: true }).waitFor({ timeout: 120_000 });
+  await eventually(async () => await page.getByRole("button", { name: "Revise selected version" }).isEnabled(), `${label}-controls-ready`);
+}
+
 async function preAdmissionCase(): Promise<void> {
   const stack = developmentStack(true); const config = await stack.up(); const stateRoot = await mkdtemp(join(tmpdir(), "napplet-cvm-54-"));
   const browser = await chromium.launch({ headless: true }); let server = await createDevelopmentContextVmServer({ config, stateRoot, port: 0 });
@@ -46,9 +56,7 @@ async function revisionCase(): Promise<void> {
     await page.getByRole("button", { name: "Generate napplet" }).click(); await page.getByText("Verified preview ready", { exact: true }).waitFor({ timeout: 120_000 });
     for (const revision of ["Make the counter label more direct", "Make the reset control clearer"]) {
       await page.getByLabel("Revision").fill(revision); await page.getByRole("button", { name: "Revise selected version" }).click();
-      await eventually(async () => (await page.locator("#versions li").count()) >= (revision.includes("label") ? 2 : 3), "revision-version", 120_000);
-      await page.getByText("Verified preview ready", { exact: true }).waitFor({ timeout: 120_000 });
-      await eventually(async () => await page.getByRole("button", { name: "Revise selected version" }).isEnabled(), "revision-controls-ready");
+      await waitForRevision(page, revision.includes("label") ? 2 : 3, "revision-version");
     }
     const versionText = await page.locator("#versions").textContent();
     if (!versionText?.includes("Version 1") || !versionText.includes("Version 2") || !versionText.includes("Version 3")) throw new Error("REVISION_HISTORY_MISSING");
@@ -77,9 +85,7 @@ export async function runFullContinuationJourney(input: Readonly<{ page: Page; c
   await page.getByRole("button", { name: "Generate napplet" }).click(); await page.getByText("Verified preview ready", { exact: true }).waitFor({ timeout: 120_000 }); await input.observe?.("generation");
   for (const revision of ["Make the counter label more direct", "Make the reset control clearer"]) {
     await page.getByLabel("Revision").fill(revision); await page.getByRole("button", { name: "Revise selected version" }).click();
-    await eventually(async () => (await page.locator("#versions li").count()) >= (revision.includes("label") ? 2 : 3), "full-flow-revision", 120_000);
-    await page.getByText("Verified preview ready", { exact: true }).waitFor({ timeout: 120_000 });
-    await eventually(async () => await page.getByRole("button", { name: "Revise selected version" }).isEnabled(), "full-flow-revision-controls-ready");
+    await waitForRevision(page, revision.includes("label") ? 2 : 3, "full-flow-revision");
     await input.observe?.(revision.includes("label") ? "revision2" : "revision3");
   }
   const initialVersions = await page.locator("#versions li").count();

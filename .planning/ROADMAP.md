@@ -20,7 +20,7 @@ napplet-cvm moves from proving the permanent napplet contract to a safe, prepaid
 | 4. Metered Generation & Revision Loop | Turns approved funds into exact-usage, serialized napplet creation, revision, repair, progress, and diagnostic actions. | BILL-03–BILL-05, SESS-01, SESS-03–SESS-04, GEN-05–GEN-06 | `.planning/phases/04-metered-generation-revision-loop/` — context, discussion log, research, AI spec, patterns, validation, 7 plans and summaries, review/fix history, immutable design evidence, security audit, and passed goal verification. |
 | 5. Funding Interruption & Durable Resume | Preserves paid work across insufficient funds, the ten-minute live-worker window, explicit resume, and 30-day checkpoint retention. | CONT-01–CONT-07 | `.planning/phases/05-funding-interruption-durable-resume/` — context, research, patterns, validation, 7 plans and summaries, review/fix history, security audit, immutable design evidence, and passed goal verification. |
 | 6. Sealed Preview & User-Owned Publication | Lets the user preview the exact verified artifact, retain signing custody, and explicitly deploy a manifest plus CVM attestation. | PREV-01–PREV-04, PUB-01–PUB-05 | `.planning/phases/06-sealed-preview-user-owned-publication/` — context, approved UI spec, current research, pattern map, API/source coverage, draft validation strategy, and 7 checker-approved plans across 6 waves; execution evidence remains pending. |
-| 7. Admission SLO, Resilience & Launch Safety | Measures immediate-or-rejected admission, proves integrated failure safety, and closes the launch-hardening work deferred from Phase 1. | SESS-02, OPS-01–OPS-04 | `.planning/phases/07-admission-slo-resilience-launch-safety/` — 50/52 plans executed and summarized; production verification remains deferred; local application funding e2e passes. |
+| 7. Admission SLO, Resilience & Launch Safety | Measures immediate-or-rejected admission, proves integrated failure safety, and closes the launch-hardening work deferred from Phase 1. | SESS-02, OPS-01–OPS-04 | `.planning/phases/07-admission-slo-resilience-launch-safety/` — 50/56 plans executed and summarized; local execution GUI implementation active; production verification remains deferred. |
 
 The phase-to-requirement assignments in this table are identical to `REQUIREMENTS.md` and the phase detail sections below. Existing paths are canonical; future phase artifacts are added to their numbered phase directories without moving or regenerating prior work.
 
@@ -305,7 +305,7 @@ Plans:
 **Validation gate**: Benchmark Modal and at least one non-AWS fallback with the production-like image, target regions, relay delay, pool misses, database contention, reclaim/failure behavior, and step load. Select a worker vendor only after receipt-to-isolated-worker-ready p95 is at most five seconds with zero durable backlog; establish the database/failover claim to match the chosen deployment scope.
 
 Phase 7 also closes the launch-hardening work intentionally deferred from Phase 1: exhaustive toolchain provenance, repeated/cross-environment reproducibility, full hostile and mutation coverage, formal golden approval, waiver drills, SBOM/provenance enforcement, and the final production promotion gate.
-**Plans**: 50/52 plans executed
+**Plans**: 50/56 plans executed
 **Wave 1**
 
 - [x] 07-00-PLAN.md
@@ -470,11 +470,20 @@ Phase 7 also closes the launch-hardening work intentionally deferred from Phase 
 
 - [x] 07-51-PLAN.md — Connect automatic local Cashu/NWC services to a migrated PostgreSQL ledger and verify replay and pending-invoice recovery after restart.
 
-**Wave 38** *(blocked on Wave 37 completion)*
+**Waves 39–42** *(development GUI; independent of deferred production execution)*
+
+- [ ] 07-52-PLAN.md — Browser-held identity and real encrypted ContextVM funding through local Cashu/NWC into SQL, with a bounded settlement reconciler and browser tests.
+- [ ] 07-53-PLAN.md — Metered source proposals, configured/deterministic model modes, isolated real build/conformance, and verified compatible-host preview.
+- [ ] 07-54-PLAN.md — Durable pending-action checkpoints, explicit funded resume, revisions, immutable artifact history, duplicate protection, and restart recovery.
+- [ ] 07-55-PLAN.md — One-command lifecycle, full browser integration/security/accessibility verification, documentation, and a running local GUI.
+
+Development acceptance is tracked by DEV-GUI-01–12 in `07-DEV-CONTEXT.md` and `07-DEV-VALIDATION.md`. These plans do not complete the deferred production requirements.
+
+**Production Wave 38** *(explicitly deferred; not a development dependency)*
 
 - [ ] 07-20-PLAN.md — Use the saved operator Cashu certification rail, record NWC Lightning as unavailable for this run, then approve the exact structured request; owner NIP-46 remains deferred to real publication.
 
-**Wave 39** *(blocked on Wave 38 completion)*
+**Production Wave 39** *(explicitly deferred; not a development dependency)*
 
 - [ ] 07-26-PLAN.md — Run the authorized controller through provisioning, discovery, all eight real protected suites, trust finalization, sole evaluation, actual-cost reconciliation, immutable bundle assembly, and bounded cleanup.
 
@@ -491,14 +500,14 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 4. Metered Generation & Revision Loop | 7/7 | Complete    | 2026-08-05 |
 | 5. Funding Interruption & Durable Resume | 7/7 | Complete    | 2026-08-05 |
 | 6. Sealed Preview & User-Owned Publication | 7/7 | Complete    | 2026-08-05 |
-| 7. Admission SLO, Resilience & Launch Safety | 50/52 | In Progress|  |
+| 7. Admission SLO, Resilience & Launch Safety | 50/56 | In Progress|  |
 
 ### Milestone Progress Roll-up
 
 - **Phases:** Phases 1–6 are verified complete; Phase 7 awaits protected live evidence and goal verification; 6/7 phases complete (86%).
-- **Known plans:** 90/92 milestone plans executed. Production-only 07-20 and 07-26 are deferred at user direction; local payment setup and application funding/ledger e2e are complete.
+- **Known plans:** 90/96 milestone plans executed. Local payment setup and application funding/ledger e2e are complete; development GUI Plans 07-52–07-55 are active. Production-only 07-20 and 07-26 remain deferred at user direction.
 - **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 49 verified complete and 5 Phase 7 requirements pending.
-- **Current checkpoint:** Local development is unblocked. Production gaps and resumption criteria are retained in `docs/runbooks/production-readiness-deferred.md`; resume production with `$gsd-plan-phase 7 --gaps` only when production readiness is requested. Phase 7 is not certified complete.
+- **Current checkpoint:** Execute development GUI Plans 07-52–07-55 and verify the complete attached user objective. Production gaps and resumption criteria remain in `docs/runbooks/production-readiness-deferred.md`; resume production only when requested. Phase 7 is not certified complete.
 - **Phase 1 preservation:** Phase 1 remains complete with its review, security, validation, verification evidence, and Phase 7 deferrals unchanged.
 
 ### Completion Reporting Contract

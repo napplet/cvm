@@ -34,4 +34,7 @@ async function main(): Promise<void> {
   } finally { await launcher("reset", "--confirm"); }
 }
 
-if (import.meta.main) await main();
+if (import.meta.main) {
+  await main();
+  console.log(JSON.stringify({ case: "clean-up-idempotent-down-persist-reset", status: "passed" }));
+}

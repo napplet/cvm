@@ -5,6 +5,9 @@ import { createDevelopmentContextVmServer } from "../../src/dev-ui/contextvm-ser
 const requestedCase = process.argv.find((arg) => arg.startsWith("--case="))?.slice("--case=".length) ?? "deterministic-real-worker-compatible-host";
 const allowSkipWithoutProviderCredentials = process.argv.includes("--allow-skip-without-provider-credentials");
 if (requestedCase !== "deterministic-real-worker-compatible-host" && requestedCase !== "boundaries-platform-provider-recovery") throw new Error(`Unknown generation preview case: ${requestedCase}`);
+let canaryRequests = 0;
+const canary = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => { canaryRequests += 1; return new Response("unexpected", { headers: { "access-control-allow-origin": "*" } }); } });
+const canaryUrl = `http://127.0.0.1:${canary.port}/napplet-cvm-canary`;
 const server = await createDevelopmentContextVmServer({ testMode: true });
 const browser = await chromium.launch({ headless: true });
 let activePage: Awaited<ReturnType<typeof browser.newPage>> | undefined;
@@ -27,14 +30,14 @@ try {
   if (requests.some((path) => /\/(?:account|balance|top_up|generation|session)\b/.test(path))) throw new Error(`HTTP product command detected: ${requests.join(",")}`);
   let configuredProvider = "not_requested";
   if (requestedCase === "boundaries-platform-provider-recovery") {
-    const boundary = await appFrame.locator("body").evaluate(async () => {
+    const boundary = await appFrame.locator("body").evaluate(async (url) => {
       let parentStorageBlocked = false;
       try { void window.parent.localStorage.length; } catch { parentStorageBlocked = true; }
       let directFetchBlocked = false;
-      try { await fetch("http://127.0.0.1:9/napplet-cvm-canary"); } catch { directFetchBlocked = true; }
+      try { await fetch(url); } catch { directFetchBlocked = true; }
       return { parentStorageBlocked, directFetchBlocked };
-    });
-    if (!boundary.parentStorageBlocked || !boundary.directFetchBlocked) throw new Error("PAJA_FRAME_AUTHORITY_BOUNDARY_FAILED");
+    }, canaryUrl);
+    if (!boundary.parentStorageBlocked || !boundary.directFetchBlocked || canaryRequests !== 0) throw new Error("PAJA_FRAME_AUTHORITY_BOUNDARY_FAILED");
     configuredProvider = evidence.provider === "Configured OpenAI Responses" ? "exercised" : allowSkipWithoutProviderCredentials ? "skipped_without_credentials" : "missing_required_credentials";
     if (configuredProvider === "missing_required_credentials") throw new Error("CONFIGURED_PROVIDER_CREDENTIALS_REQUIRED");
   }
@@ -42,4 +45,4 @@ try {
 } catch (error) {
   console.error(JSON.stringify({ generation: await activePage?.locator("#generation-status").textContent(), facts: await activePage?.locator("#generation-facts").textContent(), evidence: server.generationEvidence() }));
   throw error;
-} finally { await browser.close(); await server.close(); }
+} finally { await browser.close(); await server.close(); canary.stop(true); }

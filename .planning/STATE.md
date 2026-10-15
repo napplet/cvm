@@ -6,13 +6,13 @@ current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: executing
 stopped_at: Implementing Plan 07-52 browser ContextVM funding tracer; full GUI objective remains active
-last_updated: "2026-10-15T14:34:34Z"
+last_updated: "2026-10-15T14:53:58Z"
 last_activity: 2026-10-15
-last_activity_desc: Added development GUI plans 07-52 through 07-55; real encrypted ContextVM payment probes pass; first browser tracer executing
+last_activity_desc: Revised development GUI plans passed independent review; 07-53 model proposal and 07-56 worker preview are separate; browser funding tracer executing
 progress:
   total_phases: 7
   completed_phases: 6
-  total_plans: 96
+  total_plans: 97
   completed_plans: 90
   percent: 86
 ---
@@ -25,23 +25,23 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 **Core value:** A user can describe one focused applet and receive a safe, conformant napplet that can be previewed and placed directly into a compatible napplet runtime.
 **Active milestone:** v1.0 — Safe Napplet Generation MVP
-**Current focus:** Implement the complete local execution GUI through Plans 07-52–07-55; production certification remains deferred
+**Current focus:** Implement the complete local execution GUI through Plans 07-52 → 07-53 → 07-56 → 07-54 → 07-55; production certification remains deferred
 
 ## Current Position
 
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
-Plan: 50 of 56 complete; 07-52 executing
+Plan: 50 of 57 complete; 07-52 executing
 Status: Local execution GUI implementation active. Production implementation and verification deferred by user on 2026-10-14; do not request production funding or approval for development work.
 Last activity: 2026-10-15 — Plan 07-52 passed independent review and execution began; encrypted SDK/relay Cashu and NWC probes credited SQL exactly once
 
-Plan execution: 90/96 milestone plans complete; Phase 7 is 50/56 complete and verification remains pending
+Plan execution: 90/97 milestone plans complete; Phase 7 is 50/57 complete and verification remains pending
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 90/96 milestone plans executed. Development Plans 07-52–07-55 implement browser funding, actual generation/preview, continuation/revisions, and one-command full-flow verification. Production-only 07-20 and 07-26 remain deferred; neither is an active development prerequisite.
+- Plans: 90/97 milestone plans executed. Development Plans 07-52 → 07-53 → 07-56 → 07-54 → 07-55 implement browser funding, metered source proposals, actual worker/preview, continuation/revisions, and one-command full-flow verification. Production-only 07-20 and 07-26 remain deferred; neither is an active development prerequisite.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
 - Development coverage: existing local NWC/two-mint coordinator-to-PostgreSQL suites pass. New manual encrypted ContextVM wire probes also pass, including Cashu replay and NWC settlement. Browser funding tests, full generation/build/preview, revisions, and durable pause/resume remain unverified until the new development plans execute. The exact DEV-GUI-01–12 acceptance matrix lives in Phase 7's 07-DEV-VALIDATION.md. Production resumption follows docs/runbooks/production-readiness-deferred.md only when requested.
 

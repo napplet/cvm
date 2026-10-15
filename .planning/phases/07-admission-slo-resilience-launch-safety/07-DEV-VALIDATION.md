@@ -8,7 +8,7 @@ This contract defines the executable evidence for the development GUI. The evide
 - Root `bun.lock` SHA-256: `8916ee4ec92924ae9e09bc4f315fd6656033812696e35a1b7785161d872c5ac3`
 - ContextVM SDK: installed `@contextvm/sdk@0.13.10`, using `NostrClientTransport` in the browser and `NostrServerTransport` plus `ContextVmSdkBridge` on the server.
 - Browser/host test package: standalone `tests/dev-ui/package.json` and lockfile pin Playwright `1.62.1` with registry integrity `sha512-0M+L3LAD8/nm554LOla9Ayx0j0tmFZ0FBcoQ7F1VuVHpM/XpiC8RcDzBQB8W5+hA8L22THxELzeF+2WcUzvcLg==`; root manifests remain byte-identical.
-- Compatible host: exact reviewed official napplet source revision/package provenance for `@kehto/paja@0.19.0`, with recorded integrity hash. An arbitrary sibling checkout is not a launch dependency.
+- Compatible host: reviewed npm `@kehto/paja@0.19.0` with integrity `sha512-UCUwER9thz/sP3B1BPhM/QkymesjnFKGfeNLtuIX0lT1xPH+q8Tbl149U7P2OdgAWt+p5n8p/T/WIOXTFE1CBQ==`, invoked through the official `startPajaServer` API. An arbitrary sibling checkout is not a launch dependency.
 - Development toolchain: separate pinned local image/adapter with actual CLI/build/verify/Chromium conformance/dry-run commands and integrity evidence. It preserves the production sealed-runner guards but does not require deferred production registry promotion/operator approval.
 
 ## Required Commands
@@ -20,13 +20,33 @@ The final launcher owns these stable commands:
 | `bun scripts/dev.ts up` | Idempotently starts prerequisites, migrations, relay, ContextVM server, GUI, local rails, development worker/host, and prints the URL plus readiness. |
 | `bun scripts/dev.ts status` | Reports each dependency, schema, relay identity, browser/host/toolchain preflight, provider mode, and ready/not-ready reason without secrets. |
 | `bun scripts/dev.ts test --case=contextvm-funding` | Runs Plan 52 real Chromium -> relay -> ContextVM -> Cashu/NWC -> Postgres cases. |
-| `bun scripts/dev.ts test --case=generation-preview` | Runs Plan 53 actual source -> metered model -> isolated worker -> build/verify/conformance -> compatible preview cases. |
+| `bun scripts/dev.ts test --case=generation-preview` | Runs Plan 53 actual source/usage/proposal followed by Plan 56 isolated worker -> artifact verification/repository -> official compatible preview cases. |
 | `bun scripts/dev.ts test --case=continuation-revision` | Runs Plan 54 pause/top-up/restart/explicit-resume and revision/version duplicate/recovery cases. |
 | `bun scripts/dev.ts test --case=full` | Runs the complete browser flow plus security, ownership, responsive, keyboard, and displayed-versus-persisted assertions. |
 | `bun scripts/dev.ts down` | Stops application processes/containers and preserves durable local data. |
 | `bun scripts/dev.ts reset --confirm` | Stops the stack and removes only named development volumes/state after explicit confirmation. |
 
-Until Plan 55 supplies the stable wrapper, Plans 52–54 may run their named test files directly, but each plan must be self-contained and start its own documented prerequisites.
+Until Plan 55 supplies the stable wrapper, Plans 52–54 and 56 may run their named test files directly, but each plan must be self-contained and start its own documented prerequisites.
+
+## Development Package Legitimacy Audit
+
+| Package | Registry / source relationship | Verdict | Disposition |
+|---|---|---|---|
+| `playwright@1.62.1` | npm package already reviewed for Plan 52; exact registry integrity retained in the isolated test lock | OK | Reuse exact pin and installed Chromium only; root manifests remain unchanged. |
+| `@kehto/paja@0.19.0` | npm package verified from the official napplet compatible-host relationship; integrity `sha512-UCUwER9thz/sP3B1BPhM/QkymesjnFKGfeNLtuIX0lT1xPH+q8Tbl149U7P2OdgAWt+p5n8p/T/WIOXTFE1CBQ==` | OK | Add only to the isolated frozen `tests/dev-ui` lock; revalidate integrity and deny-by-default host policy before startup. |
+
+No `[ASSUMED]`, `[SUS]`, or `[SLOP]` package is authorized by Plans 53 or 56. Plan 53 uses built-in HTTP primitives and adds no package. Plan 56 may install only the two exact reviewed package identities above plus the already promoted napplet toolchain set inside its pinned development image.
+
+## Plan Ownership and Dependency Seams
+
+| Producer | Owned outputs | Consumers |
+|---|---|---|
+| 53 | model/price/worker request contracts; SQL proposal migration/store; deterministic/configured provider gateway | 56 worker input; 54 revision/resume; 55 readiness/reporting |
+| 56 | explicit worker Dockerfile; artifact/grant migration; worker, verifier, repository, grant store, preview server; Paja browser tracer | 54 revision/resume; 55 compose/launcher/full suite |
+| 54 | pending-action checkpoint/resume and immutable revision/version continuity | 55 full flow |
+| 55 | compose and lifecycle launcher, final browser/security/accessibility evidence, docs/state/report | final development handoff |
+
+Plan 55's compose file is launcher wiring only and must consume Plan 56's Dockerfile and host/artifact services without producing a second worker image or host implementation.
 
 ## Requirement-to-Evidence Matrix
 
@@ -35,15 +55,15 @@ Until Plan 55 supplies the stable wrapper, Plans 52–54 may run their named tes
 | DEV-GUI-01 identity/connectivity | 52, 55 | `contextvm-funding` and `full` | Chromium, browser-owned key, real relay, official encrypted SDK, bridge event identity |
 | DEV-GUI-02 Cashu/NWC funding | 52, 54 | both-rails replay/restart; pause funding | actual local Cashu and NWC services, adapter, SQL ledger; displayed balance equals SQL |
 | DEV-GUI-03 bounded idea/max/ceiling | 52, 53 | generation validation and reserve gates | signed ContextVM command, configured price card, action maximum |
-| DEV-GUI-04 progress/usage/spend/budget | 53, 54, 55 | generation and continuity browser assertions | durable session/usage/ledger projections; displayed values equal SQL/evidence |
-| DEV-GUI-05 verified sandbox preview | 53, 55 | compatible-preview and full | generated source, local isolated worker, actual CLI/build/verify/Chromium, official paja host, expiring bytes |
+| DEV-GUI-04 progress/usage/spend/budget | 53, 56, 54, 55 | generation, worker/preview, and continuity browser assertions | durable session/usage/ledger projections; displayed values equal SQL/evidence |
+| DEV-GUI-05 verified sandbox preview | 56, 55 | compatible-preview and full | generated source, local isolated worker, actual CLI/build/verify/Chromium, official paja host, expiring bytes |
 | DEV-GUI-06 revisions/versions | 54, 55 | revisions-duplicates-restarts and full | metered proposal, verified immutable artifacts, durable ordered versions |
 | DEV-GUI-07 pause/top-up/resume | 54, 55 | pause-fund-restart-explicit-resume | real pending-action checkpoint, local rail, service restart, separate signed resume |
-| DEV-GUI-08 publication honesty | 53–55 | unavailable/configured adapter assertions | durable adapter availability and evidence; no inferred success |
+| DEV-GUI-08 publication honesty | 56, 54, 55 | unavailable/configured adapter assertions | durable adapter availability and evidence; no inferred success |
 | DEV-GUI-09 one-command lifecycle | 52, 55 | launcher lifecycle cases | migrations/readiness/credentials/rails/relay/worker/host; persist and reset semantics |
-| DEV-GUI-10 full browser E2E | 52–55 | `--case=full` | GUI, ContextVM, relay, payment rail, SQL, model, worker, preview in one trace |
-| DEV-GUI-11 model modes | 53, 55 | deterministic real-boundary case; conditional configured-provider case | deterministic substitutes only model; provider returns genuine usage/proposal |
-| DEV-GUI-12 accessibility/security | 52–55 | security-accessibility browser suite | widths 375/768/1280, keyboard/focus/status, owner/expiry/iframe/key/secret negatives |
+| DEV-GUI-10 full browser E2E | 52, 53, 56, 54, 55 | `--case=full` | GUI, ContextVM, relay, payment rail, SQL, model, worker, preview in one trace |
+| DEV-GUI-11 model modes | 53, 56, 55 | deterministic real-boundary case; conditional configured-provider case | deterministic substitutes only model; provider returns genuine usage/proposal |
+| DEV-GUI-12 accessibility/security | 52, 56, 54, 55 | security-accessibility browser suite | widths 375/768/1280, keyboard/focus/status, owner/expiry/iframe/key/secret negatives |
 
 Related production IDs `SESS-02` and `OPS-01` through `OPS-04` appear in plan frontmatter for traceability. A passing development matrix records evidence only; their production status stays pending until their existing production plans and drills complete.
 
@@ -73,8 +93,8 @@ Related production IDs `SESS-02` and `OPS-01` through `OPS-04` appear in plan fr
 
 | Source item | Coverage | Status |
 |---|---|---|
-| A working local development GUI exercises the complete user journey through real service boundaries | 52 proves wire/funding; 53 generation/worker/preview; 54 continuity/revision; 55 lifecycle/full browser verification | COVERED |
-| Service remains ContextVM-public and transport-neutral with no HTTP generation API | 52/53 network assertions and route allowlists | COVERED |
+| A working local development GUI exercises the complete user journey through real service boundaries | 52 proves wire/funding; 53 metered source proposal; 56 worker/artifact/compatible preview; 54 continuity/revision; 55 lifecycle/full browser verification | COVERED |
+| Service remains ContextVM-public and transport-neutral with no HTTP generation API | 52/53/56 network assertions and route allowlists | COVERED |
 | Development setup is repeatable, inspectable, and honest about local versus production claims | 55 launcher/runbook/report; production deferral in all plans | COVERED |
 
 ### REQ
@@ -82,10 +102,10 @@ Related production IDs `SESS-02` and `OPS-01` through `OPS-04` appear in plan fr
 | Requirement item | Coverage | Status |
 |---|---|---|
 | SESS-02 continuity behavior | 54 real local pause/checkpoint/resume evidence; production completion explicitly excluded | COVERED AS DEVELOPMENT EVIDENCE |
-| OPS-01 availability/latency evidence | 53 local worker readiness + 55 measurements; no production SLO claim | COVERED AS DEVELOPMENT EVIDENCE |
+| OPS-01 availability/latency evidence | 53 provider readiness + 56 local worker/host readiness + 55 measurements; no production SLO claim | COVERED AS DEVELOPMENT EVIDENCE |
 | OPS-02 reconciliation/recovery | 52 funding reconciler + 54 duplicate/restart recovery + 55 suite | COVERED AS DEVELOPMENT EVIDENCE |
 | OPS-03 stop/reset/deletion semantics | 55 launcher persist/reset assertions; no production lifecycle claim | COVERED AS DEVELOPMENT EVIDENCE |
-| OPS-04 monitoring/runbook | 53 truthful timeline + 55 status/runbook/evidence; no production ops claim | COVERED AS DEVELOPMENT EVIDENCE |
+| OPS-04 monitoring/runbook | 56 truthful execution/preview timeline + 55 status/runbook/evidence; no production ops claim | COVERED AS DEVELOPMENT EVIDENCE |
 
 ### RESEARCH
 
@@ -96,10 +116,10 @@ Related production IDs `SESS-02` and `OPS-01` through `OPS-04` appear in plan fr
 | Real Cashu/NWC/SQL path; NWC settlement requires bounded restart-aware observer | 52 | COVERED |
 | Current 1,024-sat funding is below 3,750-sat reserve; expose ceiling and automate enough funds | 52 | COVERED |
 | Model gateway currently lacks prompt/source result and accepts fixture provider only | 53 source proposal bridge, provider/price-card generalization | COVERED |
-| Deterministic mode substitutes only external model; real provider path must exist | 53 and 55 | COVERED |
-| Actual CLI/build/verify/conformance/dry-run and source provenance are required | 53 | COVERED |
-| Published conformance package is not the full host; official paja 0.19.0 host is required | 53 | COVERED |
-| Chromium/system dependencies and Apple Silicon/x86 toolchain mismatch require an explicit supported execution path | 53 readiness and platform tests | COVERED |
+| Deterministic mode substitutes only external model; real provider path must exist | 53 provider/proposal path; 56 identical real worker/artifact/preview path; 55 final evidence | COVERED |
+| Actual CLI/build/verify/conformance/dry-run and source provenance are required | 56 explicit Dockerfile/worker/verifier | COVERED |
+| Published conformance package is not the full host; official paja 0.19.0 host is required | 56 exact reviewed package/API and policy probe | COVERED |
+| Chromium/system dependencies and Apple Silicon/x86 toolchain mismatch require an explicit supported execution path | 56 image intake, readiness, and platform tests | COVERED |
 | Pre-worker insufficient-funds pause currently has no checkpoint | 54 pending-action checkpoint and explicit resume | COVERED |
 | Root package manifests must remain immutable | 52 and 55 hash gates; isolated browser package | COVERED |
 | Production plans 20/26 remain deferred and are not a development blocker | all plans and this contract | EXCLUDED FROM DEVELOPMENT COMPLETION, NOT A GAP |
@@ -109,13 +129,13 @@ Related production IDs `SESS-02` and `OPS-01` through `OPS-04` appear in plan fr
 | Decision group | Coverage | Status |
 |---|---|---|
 | D-114–D-117 identity/admission/dedupe invariants applicable to local development | 52, 54, 55; production scale claims excluded | COVERED |
-| D-118–D-121 worker/readiness/recovery invariants applicable to local development | 53–55; production pool/region claims excluded | COVERED |
+| D-118–D-121 worker/readiness/recovery invariants applicable to local development | 56, 54, 55; production pool/region claims excluded | COVERED |
 | D-122–D-125 durable checkpoint/resume semantics | 54–55 | COVERED |
 | D-126–D-140 production rollout, monitoring, regional, restore, lifecycle, and release evidence | Existing production plans, especially deferred 20/26 | SCOPED TO PRODUCTION; NOT A DEVELOPMENT GAP |
 | D-141–D-144 SDK wire, custody, HTTP boundary, real funding/ceiling | 52 | COVERED |
-| D-145–D-147 generation/provider/worker/official host | 53 | COVERED |
-| D-148–D-150 real continuation, durable UI/recovery, publication honesty | 54 with 53/55 verification | COVERED |
-| D-151–D-155 immutable root, UI, launcher, production deferral, full real browser suite | 52 isolated tests; 53 host; 55 launcher/UI/suite; all plan deferral clauses | COVERED |
+| D-145–D-147 generation/provider/worker/official host | 53 model/proposal/pricing; 56 worker/artifact/Paja | COVERED |
+| D-148–D-150 real continuation, durable UI/recovery, publication honesty | 54 with 56/55 verification | COVERED |
+| D-151–D-155 immutable root, UI, launcher, production deferral, full real browser suite | 52 isolated tests; 56 host/artifact/worker; 55 launcher/UI/suite; all plan deferral clauses | COVERED |
 
 ## Direct User Deliverable Audit
 
@@ -124,14 +144,14 @@ Related production IDs `SESS-02` and `OPS-01` through `OPS-04` appear in plan fr
 | Disposable identity/connectivity and actual account | 52 |
 | Local Cashu/NWC funding and persisted balance | 52 |
 | Idea, maximum, start, ceiling/reserve | 52–53 |
-| Progress, stages, errors, usage, spend, remaining budget | 53–55 |
-| Real sandbox preview | 53 |
+| Progress, stages, errors, usage, spend, remaining budget | 53, 56, 54, 55 |
+| Real sandbox preview | 56 |
 | Revisions and version history | 54 |
 | Insufficient funds, top-up, explicit resume | 54 |
-| Honest publication availability | 53–55 |
+| Honest publication availability | 56, 54, 55 |
 | One command, readiness, migrations, stop/reset/persist | 55 |
-| Full browser/relay/SQL/worker/preview, duplicate, and restart tests | 52–55 |
-| Responsive accessible practical workspace | UI addendum, 52–55 |
+| Full browser/relay/SQL/worker/preview, duplicate, and restart tests | 52, 53, 56, 54, 55 |
+| Responsive accessible practical workspace | UI addendum, 52, 56, 54, 55 |
 | README/runbook/GSD state update, final URL/commands/flows/limitations, leave running | 55 |
 
 All source items are covered or explicitly scoped to deferred production work. No production requirement is declared complete by these development plans.

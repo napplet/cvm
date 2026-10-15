@@ -107,3 +107,41 @@ test("expired authorization and symlinked credential storage fail closed", async
   await symlink(join(root, "elsewhere.json"), join(root, "accounts.json"));
   await expect(ChatGptOAuth.open(root)).rejects.toThrow("PRIVATE_STORAGE_INVALID");
 });
+
+test("large model catalogs load while only compact visible model data reaches the GUI", async () => {
+  const catalog = { models: [
+    { slug: "fixture-codex", display_name: "Fixture Codex", visibility: "list", metadata: { instructions: "catalog metadata ".repeat(40_000) } },
+    { slug: "hidden", display_name: "Hidden", visibility: "hidden" },
+  ] };
+  expect(Buffer.byteLength(JSON.stringify(catalog))).toBeGreaterThan(256_000);
+  const { auth, login } = await setup((fetch) => (url, init) => String(url).endsWith("/v1/models") ? Promise.resolve(Response.json(catalog)) : fetch(url, init));
+  const id = await login();
+  const origin = "http://127.0.0.1:12345";
+  const routes = new DevelopmentChatGptRoutes({ auth, select: (settings) => auth.select(settings), busy: () => false, diagnostic: () => undefined });
+  const response = await routes.handle(new Request(`${origin}/dev/chatgpt/models`, { method: "POST", headers: { origin, "content-type": "application/json", "x-dev-model-token": routes.controlToken }, body: JSON.stringify({ accountId: id }) }), origin);
+  expect(response?.status).toBe(200);
+  expect(await response?.json()).toEqual({ models: [{ slug: "fixture-codex", displayName: "Fixture Codex" }] });
+  await auth.select({ mode: "chatgpt", accountId: id, model: "fixture-codex" });
+  expect(auth.settings().model).toBe("fixture-codex");
+});
+
+test("oversized model catalogs are cancelled with a model-specific error", async () => {
+  let cancelled = false;
+  const { auth, login } = await setup((fetch) => (url, init) => String(url).endsWith("/v1/models") ? Promise.resolve(new Response(new ReadableStream({
+    pull(controller) { controller.enqueue(new Uint8Array(64_000)); },
+    cancel() { cancelled = true; },
+  }))) : fetch(url, init));
+  const id = await login();
+  await expect(auth.models(id)).rejects.toThrow("CHATGPT_MODEL_CATALOG_TOO_LARGE");
+  expect(cancelled).toBe(true);
+  expect(auth.status().accounts[0]?.signedIn).toBe(true);
+});
+
+test("model catalog allowance does not relax the token response limit", async () => {
+  const { auth, login } = await setup((fetch) => async (url, init) => {
+    const response = await fetch(url, init);
+    return String(url).endsWith("/oauth/token") ? Response.json({ ...await response.json(), metadata: "x".repeat(300_000) }) : response;
+  });
+  await expect(login()).rejects.toThrow("CHATGPT_RESPONSE_TOO_LARGE");
+  expect(auth.status().accounts).toHaveLength(0);
+});

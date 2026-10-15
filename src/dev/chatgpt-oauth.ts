@@ -191,7 +191,12 @@ export class ChatGptOAuth {
     const token = await this.accessToken(accountId);
     const response = await this.#fetch(`${CHATGPT_RESOURCE}/models`, { redirect: "error", signal: AbortSignal.timeout(15_000), headers: { authorization: `Bearer ${token}` } });
     if (!response.ok) throw chatGptError(response.status === 401 ? "REAUTHORIZE_REQUIRED" : "MODELS_UNAVAILABLE");
-    const result = await boundedJson(response);
+    // Catalogs include verbose per-model metadata. Allow 4 MB here while
+    // retaining the smaller token/JWKS limits and returning only labels/slugs.
+    const result = await boundedJson(response, 4_000_000).catch((error) => {
+      if (safeChatGptError(error) === "CHATGPT_RESPONSE_TOO_LARGE") throw chatGptError("MODEL_CATALOG_TOO_LARGE");
+      throw error;
+    });
     const catalog = z.object({ models: z.array(z.object({ slug: z.string().regex(/^[a-zA-Z0-9._:-]{1,128}$/u), display_name: z.string().min(1).max(128), visibility: z.string() }).passthrough()).max(512) }).passthrough().parse(result);
     const models = catalog.models.filter((model) => model.visibility === "list").map((model) => ({ slug: model.slug, displayName: model.display_name }));
     this.#models.set(accountId, models); return models;

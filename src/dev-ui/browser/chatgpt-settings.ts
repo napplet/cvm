@@ -18,6 +18,7 @@ const explanations: Record<string, string> = {
   CHATGPT_SOURCE_INVALID: "ChatGPT returned an invalid source proposal. Its reported usage was recorded; try a new focused request.",
   CHATGPT_GENERATION_BUSY: "Wait for the current generation to finish before changing model settings.",
   CHATGPT_MODELS_UNAVAILABLE: "The account's model list is unavailable. Try loading models again.",
+  CHATGPT_MODEL_CATALOG_TOO_LARGE: "The model catalog exceeds this app's size limit. Your sign-in is still valid; update the local service before reloading models.",
 };
 let refreshDiagnostic: (() => Promise<void>) | undefined;
 export async function showChatGptDiagnostic(): Promise<void> { await refreshDiagnostic?.(); }

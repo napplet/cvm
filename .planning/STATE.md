@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: verification_deferred_gaps
-stopped_at: Local ChatGPT OAuth GUI integration complete with fixture e2e evidence; user sign-in enables live testing; production plans 07-20 and 07-26 deferred
-last_updated: "2026-10-15T22:48:00Z"
+stopped_at: ChatGPT live model discovery fixed and verified with seven models; real inference untested; production plans 07-20 and 07-26 deferred
+last_updated: "2026-10-15T23:36:25Z"
 last_activity: 2026-10-15
-last_activity_desc: ChatGPT OAuth sign-in, rotating refresh, model selection, test-credit accounting, and ten-case GUI suite complete
+last_activity_desc: Fixed live ChatGPT catalog response limit; seven account models reload successfully; 26 OAuth/gateway tests pass
 progress:
   total_phases: 7
   completed_phases: 6
@@ -33,6 +33,8 @@ Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION D
 Plan: 56 of 58 accepted; development Plans 07-52/53/56/57/54/55 complete
 Status: Local execution GUI accepted and running at http://127.0.0.1:49371 in deterministic-fixture mode. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
 Last activity: 2026-10-15 — Quick task 261015-leh added local ChatGPT OAuth generation and GUI controls (48f5a0f). All ten full-suite cases passed; 23 OAuth/gateway unit tests passed. The OAuth browser journey verified generation, revision, replay, restart, token boundaries, logout, and three exact user debits through real local services with fixture inference. Real ChatGPT authorization/inference awaits user sign-in; production remains deferred.
+
+Follow-up: The user signed in successfully; model reload failed because the live catalog exceeded the shared 256 KB credential-response limit. A separate 4 MB catalog limit fixes it. All 26 OAuth/gateway tests pass, and the real account loads/reloads seven models in Chromium. See `.planning/debug/resolved/chatgpt-model-catalog-size.md`. Real inference remains untested; production is unchanged.
 
 Plan execution: 96/98 milestone plans complete; Phase 7 is 56/58 complete and production verification remains pending
 
@@ -368,6 +370,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-15T22:48:00Z
-Stopped at: ChatGPT OAuth development integration and fixture acceptance complete. User can sign in through the GUI for real generation. Production plans 07-20 and 07-26 remain deferred.
-Resume file: .planning/quick/261015-leh-add-local-chatgpt-oauth-generation-with-/261015-leh-SUMMARY.md
+Last session: 2026-10-15T23:36:25Z
+Stopped at: Live model discovery fixed and verified; service restarted with the user's sign-in preserved. Real inference remains untested. Production plans 07-20 and 07-26 remain deferred.
+Resume file: .planning/debug/resolved/chatgpt-model-catalog-size.md

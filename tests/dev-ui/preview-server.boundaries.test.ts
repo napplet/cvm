@@ -64,8 +64,10 @@ test("real preview HTTP and SQL deny invalid grants, altered bytes, traversal an
     await writeFile(join(root, "objects", artifact.objectKey, "dist/index.html"), "altered artifact");
     const altered = await fetch(assetUrl); expect(altered.status).toBe(404); expect(await altered.text()).toBe("not found");
   } finally {
-    await browser?.close(); canary?.stop(true); await server?.close();
-    if (artifactId) { await pool.query("DELETE FROM development_preview_grants WHERE artifact_id=$1", [artifactId]); await pool.query("DELETE FROM development_artifacts WHERE artifact_id=$1", [artifactId]); }
-    await pool.end(); await rm(root, { recursive: true, force: true }); await stack.down(true);
+    try {
+      canary?.stop(true); await server?.close();
+      if (artifactId) { await pool.query("DELETE FROM development_preview_grants WHERE artifact_id=$1", [artifactId]); await pool.query("DELETE FROM development_artifacts WHERE artifact_id=$1", [artifactId]); }
+      await pool.end(); await rm(root, { recursive: true, force: true }); await stack.down(true);
+    } finally { await browser?.close(); }
   }
 }, 120_000);

@@ -119,12 +119,11 @@ try {
     return style.animationDuration === "0s" && (style.transitionDuration === "0s" || style.transitionDuration === "0.1s");
   }));
   requireThat(reducedMotion, "REDUCED_MOTION_NOT_HONORED");
-  console.log(JSON.stringify({ case: requestedCase, url: server.url, mode, requests: requestUrls.map((url) => new URL(url).pathname), canaryRequests }));
+  console.log(JSON.stringify({ status: "passed", case: requestedCase, url: server.url, mode, requests: requestUrls.map((url) => new URL(url).pathname), canaryRequests }));
 } catch (error) {
   console.error(JSON.stringify({ case: requestedCase, connection: await page?.locator("#connection-status").textContent(), funding: await page?.locator("#funding-status").textContent(), generation: await page?.locator("#generation-status").textContent(), error: error instanceof Error ? error.message : String(error) }));
   throw error;
 } finally {
-  await browser.close();
-  canary.stop(true);
-  await server.close();
+  try { await server.close(); }
+  finally { await browser.close(); canary.stop(true); }
 }

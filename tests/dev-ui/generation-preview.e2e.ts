@@ -41,8 +41,8 @@ try {
     configuredProvider = evidence.provider === "Configured OpenAI Responses" ? "exercised" : allowSkipWithoutProviderCredentials ? "skipped_without_credentials" : "missing_required_credentials";
     if (configuredProvider === "missing_required_credentials") throw new Error("CONFIGURED_PROVIDER_CREDENTIALS_REQUIRED");
   }
-  console.log(JSON.stringify({ case: requestedCase, provider: evidence.provider, configuredProvider, requests }));
+  console.log(JSON.stringify({ status: "passed", case: requestedCase, provider: evidence.provider, configuredProvider, requests }));
 } catch (error) {
   console.error(JSON.stringify({ generation: await activePage?.locator("#generation-status").textContent(), facts: await activePage?.locator("#generation-facts").textContent(), evidence: server.generationEvidence() }));
   throw error;
-} finally { await browser.close(); await server.close(); canary.stop(true); }
+} finally { try { await server.close(); } finally { await browser.close(); canary.stop(true); } }

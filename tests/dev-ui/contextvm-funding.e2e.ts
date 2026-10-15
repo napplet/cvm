@@ -46,11 +46,11 @@ try {
     throw new Error(`HTTP product command detected: ${requests.join(",")}`);
   }
   await server.assertFundingEvidence(requestedCase);
-  console.log(JSON.stringify({ case: requestedCase, url: server.url, requests }));
+  console.log(JSON.stringify({ status: "passed", case: requestedCase, url: server.url, requests }));
 } catch (error) {
   console.error(JSON.stringify({ case: requestedCase, balance: await activePage?.locator("#balance").textContent(), funding: await activePage?.locator("#funding-status").textContent() }));
   throw error;
 } finally {
-  await browser.close();
-  await server.close();
+  try { await server.close(); }
+  finally { await browser.close(); }
 }

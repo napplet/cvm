@@ -88,7 +88,7 @@ a { color: var(--host-accent); text-underline-offset: 4px; }
 [role="alert"] { border-left: 4px solid var(--host-danger); padding-left: 16px; color: var(--host-danger); }
 [role="alert"]:empty { border: 0; padding: 0; }
 dl { display: grid; grid-template-columns: minmax(96px, 1fr) minmax(0, 3fr); gap: 8px 16px; margin: 16px 0; }
-dt { font-size: 14px; font-weight: 600; color: var(--host-text-secondary); }
+dt { min-width: 0; overflow-wrap: anywhere; font-size: 14px; font-weight: 600; color: var(--host-text-secondary); }
 dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 ol, ul { padding-left: 24px; margin: 16px 0; }
 li { margin: 8px 0; overflow-wrap: anywhere; }

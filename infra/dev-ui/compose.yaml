@@ -5,6 +5,10 @@ services:
       context: .
       dockerfile: Dockerfile
       platforms: [linux/arm64]
+      # Local checkpoint pins must survive a cached rebuild. Timestamped build
+      # attestations change the index digest even when executable bytes match.
+      provenance: false
+      sbom: false
     labels:
       com.napplet-cvm.development: "true"
       com.napplet-cvm.component: worker-image

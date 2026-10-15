@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: verification_deferred_gaps
-stopped_at: Development GUI Plans 07-52 through 07-57 accepted; local service running; production plans 07-20 and 07-26 deferred
-last_updated: "2026-10-15T19:22:07Z"
+stopped_at: Local ChatGPT OAuth GUI integration complete with fixture e2e evidence; user sign-in enables live testing; production plans 07-20 and 07-26 deferred
+last_updated: "2026-10-15T22:48:00Z"
 last_activity: 2026-10-15
-last_activity_desc: Full local GUI suite, lifecycle, idle listener regression, SQL comparison, and responsive preview accepted
+last_activity_desc: ChatGPT OAuth sign-in, rotating refresh, model selection, test-credit accounting, and ten-case GUI suite complete
 progress:
   total_phases: 7
   completed_phases: 6
@@ -25,14 +25,14 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 **Core value:** A user can describe one focused applet and receive a safe, conformant napplet that can be previewed and placed directly into a compatible napplet runtime.
 **Active milestone:** v1.0 — Safe Napplet Generation MVP
-**Current focus:** Local execution GUI complete and running; production certification remains deferred
+**Current focus:** Local execution GUI with ChatGPT OAuth complete; live account sign-in is available; production certification remains deferred
 
 ## Current Position
 
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
 Plan: 56 of 58 accepted; development Plans 07-52/53/56/57/54/55 complete
 Status: Local execution GUI accepted and running at http://127.0.0.1:49371 in deterministic-fixture mode. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
-Last activity: 2026-10-15 — The full launcher suite passed eight cases, including a ten-stage browser/relay/Cashu/NWC/SQL/worker/Paja journey. Four exact 5-sat charges and four verified artifacts match durable records. Signed revision replay, detached restart, saved-action top-up/explicit resume, launcher persistence/reset, 65-second idle/collection, responsive layout, and preview security passed. Configured paid-provider requests remain conditional without credentials.
+Last activity: 2026-10-15 — Quick task 261015-leh added local ChatGPT OAuth generation and GUI controls (48f5a0f). All ten full-suite cases passed; 23 OAuth/gateway unit tests passed. The OAuth browser journey verified generation, revision, replay, restart, token boundaries, logout, and three exact user debits through real local services with fixture inference. Real ChatGPT authorization/inference awaits user sign-in; production remains deferred.
 
 Plan execution: 96/98 milestone plans complete; Phase 7 is 56/58 complete and production verification remains pending
 
@@ -44,6 +44,7 @@ Plan execution: 96/98 milestone plans complete; Phase 7 is 56/58 complete and pr
 - Plans: 96/98 milestone plans executed. Development Plans 07-52/53/56/57/54/55 are complete. Production-only 07-20 and 07-26 remain deferred; neither is a development prerequisite.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
 - Development coverage: the complete local execution GUI is accepted; see `07-55-SUMMARY.md`, the dated acceptance matrix in `07-DEV-VALIDATION.md`, and `docs/runbooks/development-gui.md`. Root manifests remain unchanged. Deterministic mode substitutes only the external model. Paid-provider execution and remote CI were not exercised; publication is unavailable; conformance reports five passed and five skipped checks. Production resumption follows `docs/runbooks/production-readiness-deferred.md` only when requested.
+- Local ChatGPT OAuth support is implemented and fixture-tested; see `quick/261015-leh-add-local-chatgpt-oauth-generation-with-/261015-leh-SUMMARY.md`. Subscription usage has separate synthetic test-credit pricing, and unresolved calls are never automatically resent.
 
 ## Performance Metrics
 
@@ -330,7 +331,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Development payment infrastructure and application funding/ledger e2e are complete (07-51). Future development coverage can extend through ContextVM/CEP-8 wire and a full generation session. Production follow-up remains under Deferred Verification.
+- Local payment, ContextVM, generation/preview, continuation, and OAuth fixture e2e coverage are complete. The user can sign in through the GUI and run the opt-in ChatGPT live smoke. Production follow-up remains under Deferred Verification.
 
 ### Blockers/Concerns
 
@@ -349,6 +350,7 @@ Recent decisions affecting current work:
 | 261012-1cg | Create project README with verified developer setup and architecture | 2026-10-12 | 9da978d | [261012-1cg](./quick/261012-1cg-create-a-concise-accurate-project-readme/) |
 | 261012-sk1 | Repair expired funding readiness and Cashu-only local setup | 2026-10-12 | a0156ce | [261012-sk1](./quick/261012-sk1-repair-expired-operator-funding-readines/) |
 | 261014-daz | Automatic local Cashu mint and NWC wallet with isolated e2e tests | 2026-10-14 | dc17cd9 | [261014-daz](./quick/261014-daz-automatic-local-cashu-mint-and-nwc-devel/) |
+| 261015-leh | Local ChatGPT OAuth generation, GUI sign-in, refresh, and e2e coverage | 2026-10-15 | 48f5a0f | [261015-leh](./quick/261015-leh-add-local-chatgpt-oauth-generation-with-/) |
 
 ## Deferred Verification
 
@@ -366,6 +368,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-15T19:22:07Z
-Stopped at: Development GUI accepted and left running. Production plans 07-20 and 07-26 remain deferred; no further development acceptance work is pending.
-Resume file: .planning/phases/07-admission-slo-resilience-launch-safety/07-55-SUMMARY.md
+Last session: 2026-10-15T22:48:00Z
+Stopped at: ChatGPT OAuth development integration and fixture acceptance complete. User can sign in through the GUI for real generation. Production plans 07-20 and 07-26 remain deferred.
+Resume file: .planning/quick/261015-leh-add-local-chatgpt-oauth-generation-with-/261015-leh-SUMMARY.md

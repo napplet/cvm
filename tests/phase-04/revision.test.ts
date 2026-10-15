@@ -51,7 +51,7 @@ async function setup() {
 }
 
 describe("same-lineage revisions", () => {
-  test("a fresh coordinator never re-dispatches an operation claimed by another instance", async () => {
+  test("a fresh coordinator recovers a claimed operation by lookup without a second provider post", async () => {
     const store = new TransactionalMemoryFundingStore();
     const funding = new FundingService(store);
     await funding.execute({ principal, kind: "credit_settlement", idempotencyKey: "claim-credit", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { settlement: { topUpId: "claim-topup", rail: "lightning", unit: "sat", amount: "10000", externalReference: "claim-external", settlementReference: "claim-settlement", verifiedAt: "2026-08-04T00:00:00.000Z" } } });
@@ -62,13 +62,28 @@ describe("same-lineage revisions", () => {
     let dispatches = 0;
     let release!: () => void;
     const entered = new Promise<void>((resolve) => { release = resolve; });
-    const gateway: ModelGateway = { dispatch: async () => { dispatches += 1; release(); return new Promise<never>(() => {}); }, lookup: async () => ({ status: "pending", operationId: "operation:unused", providerRequestId: "provider:unused", provenance: { protectedEvidenceReference: "evidence:unused" } }) };
-    const options = { fundedAdmission: admissions, store, gateway, worker: completedWorker({ workers: 0 }), artifactVerifier: verifier };
+    const effects = { workers: 0 };
+    const gateway: ModelGateway = {
+      dispatch: async () => { dispatches += 1; release(); return new Promise<never>(() => {}); },
+      lookup: async (intent) => ({
+        status: "receipt_found",
+        receipt: {
+          operationId: intent.operationId, providerRequestId: intent.providerRequestId,
+          provider: "deterministic_fixture", model: "phase-04-fixture-model",
+          profileId: intent.profileId, priceCardId: intent.priceCardId, selection: "unselected",
+          completedAt: "2026-08-04T00:00:01.000Z",
+          provenance: { protectedEvidenceReference: `receipt:${intent.operationId}` },
+          usage: [{ dimension: "input_tokens", units: "10" }, { dimension: "output_tokens", units: "5" }],
+        },
+      }),
+    };
+    const options = { fundedAdmission: admissions, store, gateway, worker: completedWorker(effects), artifactVerifier: verifier };
     const first = new MeteredGenerationService(options).startSession({ principal, admissionReference: admission.reference, idempotencyKey: "claimed-operation", expectedVersion: 0, maximum: "3250", policyVersion: "phase-02-policy-2026-08-04", idea: "Build one focused napplet." });
     await entered;
     const recovered = await new MeteredGenerationService(options).startSession({ principal, admissionReference: admission.reference, idempotencyKey: "claimed-operation", expectedVersion: 0, maximum: "3250", policyVersion: "phase-02-policy-2026-08-04", idea: "Build one focused napplet." });
-    expect(recovered).toMatchObject({ status: "usage_unknown", code: "USAGE_UNKNOWN" });
+    expect(recovered).toMatchObject({ status: "completed", code: "ACTION_COMMITTED" });
     expect(dispatches).toBe(1);
+    expect(effects.workers).toBe(1);
     void first;
   });
 

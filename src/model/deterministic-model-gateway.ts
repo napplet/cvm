@@ -11,6 +11,7 @@ import {
   type ProviderOperationIntent,
 } from "./model-gateway";
 import { z } from "zod";
+import type { SourceProposalStore } from "../dev/source-proposal-store";
 
 export const DeterministicGatewayScenarioSchema = z.object({
   dispatch: z.enum(["completed", "failed", "pre_dispatch_rejected", "accepted_timeout", "lost_response", "malformed_receipt", "mismatched_receipt", "uncertain_acceptance"]),
@@ -18,7 +19,7 @@ export const DeterministicGatewayScenarioSchema = z.object({
 }).strict();
 
 export type DeterministicGatewayScenario = z.infer<typeof DeterministicGatewayScenarioSchema>;
-export type DeterministicModelGatewayOptions = Readonly<{ scenario: DeterministicGatewayScenario; now?: () => string }>;
+export type DeterministicModelGatewayOptions = Readonly<{ scenario: DeterministicGatewayScenario; now?: () => string; proposalStore?: SourceProposalStore }>;
 
 function frozen<T>(value: T): T { return Object.freeze(structuredClone(value)); }
 
@@ -37,10 +38,13 @@ export class DeterministicModelGateway implements ModelGateway {
   readonly #dispatches = new Map<string, Promise<ModelDispatchObservation>>();
   readonly #dispatchCounts = new Map<string, number>();
   readonly #lookupCounts = new Map<string, number>();
+  readonly #proposalReferences = new Map<string, string>();
+  readonly #proposalStore?: SourceProposalStore;
 
   constructor(options: DeterministicModelGatewayOptions) {
     this.#scenario = frozen(DeterministicGatewayScenarioSchema.parse(options.scenario));
     this.#now = options.now ?? (() => "2026-08-04T00:00:00.000Z");
+    this.#proposalStore = options.proposalStore;
   }
 
   dispatchCount(operationId: string): number { return this.#dispatchCounts.get(operationId) ?? 0; }
@@ -62,7 +66,11 @@ export class DeterministicModelGateway implements ModelGateway {
     const provenance = await this.provenance(intent, "lookup");
     const correlation = { operationId: intent.operationId, providerRequestId: this.providerRequestId(intent), provenance };
     if (signal.aborted) return ModelLookupObservationSchema.parse({ status: "unresolved", ...correlation });
-    if (this.#scenario.lookup === "receipt_found") return ModelLookupObservationSchema.parse({ status: "receipt_found", receipt: await this.receipt(intent, "lookup") });
+    if (this.#scenario.lookup === "receipt_found") {
+      const persisted = this.#proposalStore ? await this.#proposalStore.lookup({ intent }) : undefined;
+      const sourceProposalReference = this.#proposalReferences.get(intent.operationId) ?? persisted?.proposal.reference;
+      return ModelLookupObservationSchema.parse({ status: "receipt_found", receipt: await this.receipt(intent, "lookup"), ...(sourceProposalReference ? { sourceProposalReference } : {}) });
+    }
     if (this.#scenario.lookup === "definitive_not_accepted") return ModelLookupObservationSchema.parse({ status: "definitive_not_accepted", ...correlation, reason: "pre_dispatch_rejected" });
     return ModelLookupObservationSchema.parse({ status: this.#scenario.lookup, ...correlation });
   }
@@ -71,7 +79,10 @@ export class DeterministicModelGateway implements ModelGateway {
     const provenance = await this.provenance(intent, "dispatch");
     const correlation = { operationId: intent.operationId, providerRequestId: this.providerRequestId(intent), provenance };
     if (signal.aborted) return ModelDispatchObservationSchema.parse({ status: "usage_unknown", ...correlation, reason: "aborted" });
-    if (this.#scenario.dispatch === "completed" || this.#scenario.dispatch === "failed") return ModelDispatchObservationSchema.parse({ status: this.#scenario.dispatch, receipt: await this.receipt(intent, "dispatch") });
+    if (this.#scenario.dispatch === "completed" || this.#scenario.dispatch === "failed") {
+      const sourceProposalReference = await this.persistProposal(intent);
+      return ModelDispatchObservationSchema.parse({ status: this.#scenario.dispatch, receipt: await this.receipt(intent, "dispatch"), ...(sourceProposalReference ? { sourceProposalReference } : {}) });
+    }
     if (this.#scenario.dispatch === "pre_dispatch_rejected") return ModelDispatchObservationSchema.parse({ status: "definitive_not_accepted", ...correlation, reason: "pre_dispatch_rejected" });
     if (this.#scenario.dispatch === "malformed_receipt" || this.#scenario.dispatch === "mismatched_receipt") {
       // Native fixture data remains protected. Strict normalization failure is
@@ -113,5 +124,33 @@ export class DeterministicModelGateway implements ModelGateway {
       provenance: await this.provenance(intent, stage),
       usage: intent.maximumUnits.map(({ dimension, units }) => ({ dimension, units: (BigInt(units) > 1n ? "1" : units) })),
     });
+  }
+
+  private async persistProposal(intent: ProviderOperationIntent): Promise<string | undefined> {
+    const remembered = this.#proposalReferences.get(intent.operationId);
+    if (remembered) return remembered;
+    if (!this.#proposalStore) return undefined;
+    const fingerprint = intent.requestFingerprint.slice(0, 12);
+    const label = `Focus ${fingerprint}`;
+    const main = [
+      'import { runtimeHasDomain } from "./domain-availability.js";',
+      `const title = ${JSON.stringify(label)};`,
+      'const root = document.querySelector("#app");',
+      'if (!root) throw new Error("APP_ROOT_MISSING");',
+      'let count = 0;',
+      'const heading = document.createElement("h1"); heading.textContent = title;',
+      'const value = document.createElement("output"); value.textContent = String(count);',
+      'const button = document.createElement("button"); button.type = "button"; button.textContent = "Add";',
+      'button.addEventListener("click", () => { count += 1; value.textContent = String(count); });',
+      'const availability = document.createElement("p"); availability.textContent = runtimeHasDomain("storage") ? "Storage available" : "Storage unavailable";',
+      'root.replaceChildren(heading, value, button, availability);',
+    ].join("\n");
+    const stored = await this.#proposalStore.persist({ intent, provider: "deterministic_fixture", model: "phase-04-fixture-model", proposal: { files: [
+      { path: "src/main.ts", content: main },
+      { path: "src/styles.css", content: "body { font-family: system-ui, sans-serif; } button { margin: 0.5rem; }" },
+      { path: "src/domain-availability.js", content: "export const runtimeHasDomain = (domain) => domain === 'storage';" },
+    ] } });
+    this.#proposalReferences.set(intent.operationId, stored.proposal.reference);
+    return stored.proposal.reference;
   }
 }

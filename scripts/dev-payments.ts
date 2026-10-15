@@ -82,7 +82,7 @@ async function migrate(databaseUrl: string) {
     try {
       await client.query("SELECT pg_advisory_lock(7351051)");
       await client.query("CREATE TABLE IF NOT EXISTS development_migrations (name text PRIMARY KEY, sha256 text NOT NULL)");
-      for (const file of ["phase-03/001_funding.sql", "phase-04/001_metered_generation.sql", "phase-05/001_continuation.sql", "phase-06/001_publication.sql"]) {
+      for (const file of ["phase-03/001_funding.sql", "phase-04/001_metered_generation.sql", "phase-05/001_continuation.sql", "phase-06/001_publication.sql", "development/001_generation.sql"]) {
         const sql = await readFile(resolve(root, "migrations", file), "utf8");
         const digest = new Bun.CryptoHasher("sha256").update(sql).digest("hex");
         const prior = await client.query("SELECT sha256 FROM development_migrations WHERE name=$1", [file]);

@@ -90,6 +90,11 @@ async function mintCashuToken(app: DevelopmentFunding, config: DevPayments, amou
   return new TextDecoder().decode(app.applicationToken(localToken));
 }
 
+function safeGenerationDiagnostic(error: unknown): string {
+  const message = error instanceof Error ? error.message : "GENERATION_ERROR_REDACTED";
+  return /^[A-Z][A-Z0-9_:-]{2,159}$/u.test(message) ? message : "GENERATION_ERROR_REDACTED";
+}
+
 async function durableTimeline(app: DevelopmentFunding, accountId: string, sessionId: string): Promise<readonly Readonly<{ stage: "source_recorded" | "provider_recorded" | "worker_completed" | "artifact_verified" | "ledger_settled"; at: string; detail: string }>[]> {
   const rows = await app.pool.query<{ stage: "source_recorded" | "provider_recorded" | "worker_completed" | "artifact_verified" | "ledger_settled"; at: Date | string; detail: string }>(`
     SELECT 'source_recorded'::text AS stage, sp.created_at AS at, 'Source proposal recorded' AS detail FROM source_proposals sp WHERE sp.account_id=$1 AND sp.session_id=$2
@@ -181,8 +186,8 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
     },
   };
   const generationFacade = {
-    async startSession(input: any) { try { owners.set(await accountIdForPrincipal(input.principal), input.principal.pubkey); return latestGenerationResult = await generation.startSession(input); } catch (error) { latestGenerationError = error instanceof Error ? error.message : "GENERATION_UNKNOWN_ERROR"; throw error; } },
-    async reviseSession(input: any) { try { owners.set(await accountIdForPrincipal(input.principal), input.principal.pubkey); return latestGenerationResult = await generation.reviseSession(input); } catch (error) { latestGenerationError = error instanceof Error ? error.message : "GENERATION_UNKNOWN_ERROR"; throw error; } },
+    async startSession(input: any) { try { owners.set(await accountIdForPrincipal(input.principal), input.principal.pubkey); return latestGenerationResult = await generation.startSession(input); } catch (error) { latestGenerationError = safeGenerationDiagnostic(error); throw error; } },
+    async reviseSession(input: any) { try { owners.set(await accountIdForPrincipal(input.principal), input.principal.pubkey); return latestGenerationResult = await generation.reviseSession(input); } catch (error) { latestGenerationError = safeGenerationDiagnostic(error); throw error; } },
   };
   const preAdmissionFacade = {
     async saveStart(input: any) {
@@ -203,7 +208,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
         owners.set(input.owner.accountId, input.owner.ownerId);
         return latestGenerationResult = await preAdmission.resume(input);
       } catch (error) {
-        latestGenerationError = error instanceof Error ? error.message : "GENERATION_UNKNOWN_ERROR";
+        latestGenerationError = safeGenerationDiagnostic(error);
         throw error;
       }
     },

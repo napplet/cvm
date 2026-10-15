@@ -28,7 +28,7 @@ bun install --frozen-lockfile
 bun run test:promotion
 ```
 
-This runs the local promotion tracer and sealed-toolchain policy tests. These checks use deterministic fixtures and do not need cloud credentials. The repository currently exposes development and certification commands; it does not include a `start` or `dev` server script.
+This runs the local promotion tracer and sealed-toolchain policy tests. These checks use deterministic fixtures and do not need cloud credentials.
 
 | Command | Purpose |
 | --- | --- |
@@ -38,6 +38,33 @@ This runs the local promotion tracer and sealed-toolchain policy tests. These ch
 | `bun run test:design-slice` | Write Phase 1 design evidence, including explicit native-runtime blockers. |
 
 Design evidence and fixture passes establish local behavior. Release promotion additionally requires real browser, provider, payment, model, recovery, and publication observations.
+
+## Local development workspace
+
+The development workspace starts the real local service graph: ContextVM over a relay, Cashu and NWC payment rails, PostgreSQL, the metered model boundary, the pinned isolated worker, artifact verification, and the compatible preview host. Product commands stay on ContextVM; the workspace HTTP server serves only static assets, non-secret bootstrap facts, health, preview bytes, and the development faucet.
+
+Prerequisites are Docker with Compose v2, Bun 1.3.14, and repository dependencies. The browser test package has its own frozen lockfile; the launcher checks it and Chromium before reporting ready.
+
+```sh
+bun install --frozen-lockfile
+bun scripts/dev.ts up
+bun scripts/dev.ts status
+```
+
+`up` prints the loopback workspace URL only after semantic readiness succeeds. `status` prints a redacted JSON report with the URL, model mode, and local state root. Use the exact lifecycle commands below; `down` preserves development state, while `reset` requires confirmation and removes only the selected repository-scoped instance.
+
+| Command | Purpose |
+| --- | --- |
+| `bun scripts/dev.ts up` | Start or reuse the complete local workspace and print its loopback URL. |
+| `bun scripts/dev.ts status` | Report readiness, mode, URL, and state locations without secret values. |
+| `bun scripts/dev.ts test --case=contextvm-funding` | Run Chromium, relay, ContextVM, Cashu/NWC, and ledger evidence. |
+| `bun scripts/dev.ts test --case=generation-preview` | Run source, metering, pinned worker, verification, and compatible-preview evidence. |
+| `bun scripts/dev.ts test --case=continuation-revision` | Run pending-action funding/restart/explicit-resume and revision/version evidence. |
+| `bun scripts/dev.ts test --case=full` | Run the composed browser, durable-state, security, responsive, and accessibility gate. |
+| `bun scripts/dev.ts down` | Stop the selected workspace while preserving its development data. |
+| `bun scripts/dev.ts reset --confirm` | Remove only the selected workspace's labeled containers, volumes, checkpoints, artifacts, and local state. |
+
+The default model mode is **Deterministic fixture**: only the external model response is substituted, while the relay, signed ContextVM path, rails, SQL ledger, worker, build, verifier, artifact repository, and preview host are real local boundaries. An OpenAI provider run is conditional on explicit local configuration and appears as a provider mode in `status` and the workspace; it is never silently represented as deterministic evidence. See the [development GUI runbook](docs/runbooks/development-gui.md) for setup, inspection, recovery, and limitations.
 
 For local payment development, start Docker and run `bun scripts/dev-payments.ts`. This automatically provisions two Cashu mints, a local relay, a funded NWC wallet with test money, and a migrated PostgreSQL ledger. Run `bun scripts/dev-payments.ts test` for isolated payment and application funding tests, including ledger replay checks after restart. See [development payments](docs/runbooks/development-payments.md) for credentials, application integration, and stop/reset commands.
 
@@ -113,6 +140,8 @@ The checked-in local configuration is evidence-only. It reports `RELEASE_PRODUCT
 | [Current state](.planning/STATE.md) | Progress, blockers, and the active release checkpoint. |
 | [Certifier configuration](config/README.md) | Local development and protected configuration ownership. |
 | [Release certification](docs/runbooks/release-certification.md) | Authorization, evidence, interruption recovery, and cleanup. |
+| [Development GUI](docs/runbooks/development-gui.md) | Local launcher, workspace operation, inspection, recovery, and development-only limits. |
+| [Deferred production readiness](docs/runbooks/production-readiness-deferred.md) | Production work that remains outside the local development environment. |
 
 ## Development
 

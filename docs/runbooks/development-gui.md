@@ -1,0 +1,105 @@
+# Development GUI runbook
+
+This runbook operates the local development workspace. It is development evidence only. It does not authorize a production deployment, consume real money, complete `SESS-02` or `OPS-01` through `OPS-04`, or remove the release gates in [production-readiness-deferred.md](production-readiness-deferred.md).
+
+## Start and inspect
+
+Install the repository and its frozen dependencies, then start the complete local stack:
+
+```sh
+bun install --frozen-lockfile
+bun scripts/dev.ts up
+bun scripts/dev.ts status
+```
+
+`up` owns the service graph and emits the loopback workspace URL only after its semantic readiness checks pass. Do not construct a URL from a guessed port. `status` emits a redacted JSON object containing `ready`, `url`, `mode`, `stateRoot`, and `configPath`; it never prints bearer material, private keys, database credentials, NWC connection secrets, or provider credentials.
+
+The launcher accepts the following stable commands:
+
+| Command | Result |
+| --- | --- |
+| `bun scripts/dev.ts up` | Idempotently creates or reuses one local development instance. |
+| `bun scripts/dev.ts status` | Reports redacted readiness and state locations. |
+| `bun scripts/dev.ts test --case=contextvm-funding` | Exercises browser identity, ContextVM relay, Cashu/NWC rails, and SQL funding. |
+| `bun scripts/dev.ts test --case=generation-preview` | Exercises source proposal, metering, worker build, verification, artifact storage, and compatible preview. |
+| `bun scripts/dev.ts test --case=continuation-revision` | Exercises pending-action funding, restart, explicit resume, and immutable revisions. |
+| `bun scripts/dev.ts test --case=full` | Runs the composed browser journey and security/accessibility gate. |
+| `bun scripts/dev.ts down` | Stops the instance while preserving its data. |
+| `bun scripts/dev.ts reset --confirm` | Removes only that instance after an explicit destructive confirmation. |
+
+To isolate a second local run, set a safe instance name before every command:
+
+```sh
+export NAPPLET_CVM_DEV_INSTANCE=test-review
+bun scripts/dev.ts up
+```
+
+Its state lives under `.local/napplet-cvm-dev/<instance>/`. The default instance is local development state; test invocations create their own isolated instances and do not reset it.
+
+## What runs locally
+
+The workspace is a loopback-only service graph:
+
+```mermaid
+flowchart LR
+  Browser[Browser-owned disposable key] --> Relay[Nostr relay]
+  Relay --> CVM[ContextVM server]
+  Browser --> Faucet[Local Cashu faucet]
+  CVM --> Ledger[(PostgreSQL ledger)]
+  CVM --> NWC[Local NWC wallet]
+  CVM --> Model[Model gateway]
+  Model --> Worker[Pinned Docker worker]
+  Worker --> Verify[Build, verify, Chromium conformance]
+  Verify --> Artifacts[Immutable local artifacts]
+  Artifacts --> Paja[Compatible Paja preview host]
+```
+
+The browser's disposable Nostr key stays in browser session storage. The server derives its development identity from private local funding material and exposes only its public key in bootstrap data. The browser never receives the server signer, database credentials, model-provider credentials, payment wallet material, preview-grant signing material, or the pending-action envelope key.
+
+HTTP is deliberately narrow: static workspace assets, non-secret bootstrap facts, health, expiring preview bytes, and the local Cashu faucet are served over HTTP. Account, funding, generation, revision, and resume commands travel as signed/encrypted ContextVM messages over the local relay. The preview's nested applet runs in an opaque `sandbox="allow-scripts"` context with storage, relay, Nostr extension, and network access denied by policy.
+
+## Model modes and publication
+
+The normal mode is **Deterministic fixture**. It substitutes only the external model result; every other local boundary listed above remains real. The UI and `status` must label that mode explicitly.
+
+An optional configured provider uses `OPENAI_API_KEY` plus the local `NAPPLET_CVM_OPENAI_MODEL`, `NAPPLET_CVM_OPENAI_PROFILE`, `NAPPLET_CVM_OPENAI_PRICE_CARD`, and `NAPPLET_CVM_OPENAI_PRICE_SOURCES` settings when supplied. Provide them only in your local environment before `up`; never put them in repository files, screenshots, logs, or issue reports. A configured-provider run is conditional evidence, and `status`/the workspace must say which mode actually ran.
+
+Publication is unavailable unless a configured publication implementation reports durable availability. In an ordinary development run the workspace must say **“Publication unavailable in this development setup.”** Do not interpret generated artifacts or preview visibility as a publication success.
+
+## Persistence, inspection, and recovery
+
+`down` retains the selected local payment database/wallet state, pending-action checkpoints, artifact bytes, preview grants, and durable worker outputs. A later `up` reuses that state, validates migration checksums, and recovers the same local service identity. Use `reset --confirm` only when intentionally discarding the selected instance; it scopes Docker resources and `.local` state to this repository and instance.
+
+Private development files are under `.local` and are ignored by git. `status` identifies the selected `configPath` and `stateRoot`; under that root, pending-action keys, artifacts, and worker recovery data remain local-only. Treat these files as local secrets or sensitive test material. The launcher reports paths, never contents.
+
+After `status` reports ready, use the PostgreSQL URL from the private `configPath` locally to inspect durable evidence. For example, compare action results with ledger and artifact state without copying credentials into shell history:
+
+```sh
+CONFIG_PATH="$(bun scripts/dev.ts status | jq -r .configPath)"
+DB_URL="$(jq -r .databaseUrl "$CONFIG_PATH")"
+psql "$DB_URL" -c "select operation_id, state, receipt_charge, artifact_id from metered_actions order by created_at desc limit 10"
+psql "$DB_URL" -c "select checkpoint_id, state, maximum, expires_at from development_pending_actions order by created_at desc limit 10"
+psql "$DB_URL" -c "select artifact_id, session_id, aggregate_sha256 from development_artifacts order by created_at desc limit 10"
+```
+
+Use the workspace timeline and version list as the user-facing projection. Querying SQL is diagnostic-only; it does not authorize a state transition or a preview.
+
+If `up` fails, start with `bun scripts/dev.ts status`. It checks frozen browser dependencies and Chromium, local payment services, migrations, relay and ContextVM identity, active model/price-card mode, pinned worker image/toolchain, artifact/grant stores, and compatible-host provenance. Correct the reported prerequisite, then rerun `up`; do not delete unrelated Docker resources. If the selected local instance is intentionally unrecoverable, use `reset --confirm` and start again.
+
+## Test evidence and limits
+
+The worker's current local conformance report records **5 passed, 0 failed, and 5 skipped** checks. The skips remain visible evidence and do not mean that skipped checks passed. The full launcher suite has no final result recorded in this runbook until the final integrated `bun scripts/dev.ts test --case=full` run is executed and its report is attached by the release coordinator.
+
+The named tests cover real local browser, relay, payment, SQL, worker, verifier, artifact, compatible-host, continuation, and security boundaries. They do not establish production service availability, regional failover, protected release authorization, real Lightning routing, production provider custody, or publication deployment. Those remain deferred in [production-readiness-deferred.md](production-readiness-deferred.md).
+
+## Safe cleanup
+
+```sh
+bun scripts/dev.ts down
+# State remains available for the next `up`.
+
+bun scripts/dev.ts reset --confirm
+# Only the selected repository development instance is removed.
+```
+
+Do not run broad Docker prune commands to recover this workspace. They can remove unrelated projects and are outside the launcher's scoped cleanup contract.

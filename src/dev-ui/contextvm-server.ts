@@ -92,7 +92,9 @@ async function mintCashuToken(app: DevelopmentFunding, config: DevPayments, amou
 
 function safeGenerationDiagnostic(error: unknown): string {
   const message = error instanceof Error ? error.message : "GENERATION_ERROR_REDACTED";
-  return /^[A-Z][A-Z0-9_:-]{2,159}$/u.test(message) ? message : "GENERATION_ERROR_REDACTED";
+  const cause = error instanceof Error && error.cause instanceof Error ? error.cause.message : undefined;
+  const safe = (value: string | undefined) => value && /^[A-Z][A-Z0-9_:-]{2,159}$/u.test(value) ? value : undefined;
+  return safe(cause) ?? safe(message) ?? "GENERATION_ERROR_REDACTED";
 }
 
 async function durableTimeline(app: DevelopmentFunding, accountId: string, sessionId: string): Promise<readonly Readonly<{ stage: "source_recorded" | "provider_recorded" | "worker_completed" | "artifact_verified" | "ledger_settled"; at: string; detail: string }>[]> {

@@ -139,15 +139,31 @@ export class PendingActionEnvelopeService {
   }
 
   async open(input: unknown, nowMs = Date.now()): Promise<Readonly<{ header: PendingActionHeader; command: PendingStartCommand }>> {
+    const denied = (stage: string) => new Error("PENDING_ACTION_RESTORE_DENIED", { cause: new Error(stage) });
     try {
-      const envelope = PendingActionEnvelopeSchema.parse(input);
-      const material = await this.keys.loadOrCreatePendingActionKey();
+      const parsed = PendingActionEnvelopeSchema.safeParse(input);
+      if (!parsed.success) throw denied("PENDING_ACTION_ENVELOPE_INVALID");
+      const envelope = parsed.data;
+      let material: Readonly<{ keyId: string; key: Uint8Array }>;
+      try { material = await this.keys.loadOrCreatePendingActionKey(); }
+      catch { throw denied("PENDING_ACTION_KEY_UNAVAILABLE"); }
       const aad = canonicalBytes(envelope.header); const ciphertext = fromB64(envelope.ciphertextBase64); const nonce = fromB64(envelope.nonceBase64);
-      if (!ciphertext || !nonce || nonce.byteLength !== 12 || material.keyId !== envelope.header.keyId || await sha256(aad) !== envelope.headerSha256 || await sha256(ciphertext) !== envelope.ciphertextSha256 || envelope.header.expiresAtMs <= nowMs) throw new Error("PENDING_ACTION_RESTORE_DENIED");
-      const key = await crypto.subtle.importKey("raw", material.key, "AES-GCM", false, ["decrypt"]);
-      const plaintext = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce, additionalData: aad }, key, ciphertext));
-      return Object.freeze({ header: envelope.header, command: PendingStartCommandSchema.parse(JSON.parse(new TextDecoder().decode(plaintext))) });
-    } catch { throw new Error("PENDING_ACTION_RESTORE_DENIED"); }
+      if (!ciphertext || !nonce || nonce.byteLength !== 12) throw denied("PENDING_ACTION_ENVELOPE_ENCODING_INVALID");
+      if (material.keyId !== envelope.header.keyId) throw denied("PENDING_ACTION_KEY_ID_MISMATCH");
+      if (await sha256(aad) !== envelope.headerSha256 || await sha256(ciphertext) !== envelope.ciphertextSha256) throw denied("PENDING_ACTION_ENVELOPE_INTEGRITY_INVALID");
+      if (envelope.header.expiresAtMs <= nowMs) throw denied("PENDING_ACTION_ENVELOPE_EXPIRED");
+      let plaintext: Uint8Array;
+      try {
+        const key = await crypto.subtle.importKey("raw", material.key, "AES-GCM", false, ["decrypt"]);
+        plaintext = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce, additionalData: aad }, key, ciphertext));
+      } catch { throw denied("PENDING_ACTION_ENVELOPE_DECRYPT_FAILED"); }
+      const command = PendingStartCommandSchema.safeParse(JSON.parse(new TextDecoder().decode(plaintext)));
+      if (!command.success) throw denied("PENDING_ACTION_COMMAND_INVALID");
+      return Object.freeze({ header: envelope.header, command: command.data });
+    } catch (error) {
+      if (error instanceof Error && error.message === "PENDING_ACTION_RESTORE_DENIED") throw error;
+      throw denied("PENDING_ACTION_ENVELOPE_UNEXPECTED");
+    }
   }
 }
 

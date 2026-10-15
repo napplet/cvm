@@ -4,6 +4,8 @@ import type { ArtifactContractInput } from "../policy/artifact-contract";
 import { LocalArtifactVerifier, type VerifiedArtifactFacts } from "./local-artifact-verifier";
 import { LocalArtifactRepository, type SealedArtifact } from "./local-artifact-repository";
 import { LocalNappletWorker, type WorkerOutput } from "./local-napplet-worker";
+import type { DurableWorkerResultStore } from "./durable-worker-result-store";
+import { canonicalJson } from "../promotion/schema";
 
 type Materialized = Readonly<{ output: WorkerOutput; request: WorkerRunRequest }>;
 
@@ -14,7 +16,7 @@ type Materialized = Readonly<{ output: WorkerOutput; request: WorkerRunRequest }
  */
 export class LocalProposalWorkerPort implements WorkerPort {
   readonly #materialized = new Map<string, Materialized>();
-  constructor(private readonly worker: LocalNappletWorker) {}
+  constructor(private readonly worker: LocalNappletWorker, private readonly options: Readonly<{ results?: DurableWorkerResultStore }> = {}) {}
 
   async run(request: WorkerRunRequest, signal: AbortSignal): Promise<WorkerRunResult> {
     if (signal.aborted) return { status: "unavailable", code: "WORKER_UNAVAILABLE" };
@@ -24,14 +26,15 @@ export class LocalProposalWorkerPort implements WorkerPort {
     const key = this.key(request);
     const existing = this.#materialized.get(key);
     if (existing) {
-      if (existing.request.sourceProposalSha256 !== request.sourceProposalSha256) throw new Error("WORKER_ACTION_PROPOSAL_MISMATCH");
+      if (canonicalJson(existing.request) !== canonicalJson(request)) throw new Error("WORKER_ACTION_PROPOSAL_MISMATCH");
       return this.completed(request);
     }
     try {
-      const output = await this.worker.materialize({
+      const materialize = () => this.worker.materialize({
         proposalSha256: request.sourceProposalSha256,
         proposal: { reference: request.sourceProposalReference, sha256: request.sourceProposalSha256, files: request.sourceProposalFiles },
       }, signal);
+      const output = this.options.results ? await this.options.results.materialize(request, materialize, signal) : await materialize();
       this.#materialized.set(key, Object.freeze({ output, request }));
       return this.completed(request);
     } catch (error) {

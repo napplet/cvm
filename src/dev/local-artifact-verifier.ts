@@ -76,6 +76,9 @@ async function collect(root: string): Promise<readonly ArtifactFileFacts[]> {
   return Object.freeze(files);
 }
 
+/** Bounded byte inventory only; this does not confer artifact verification. */
+export const collectArtifactFiles = collect;
+
 async function verifyHtmlPolicy(index: string): Promise<void> {
   // The pinned template owns this prefix. Requiring the first real head node
   // prevents an inert comment/script string from masquerading as a CSP.

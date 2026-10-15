@@ -209,7 +209,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
     const result = await readSessionStatus({ store: app.database.meteredFunding, query, cursorSecret: identity.cursorSecret });
     if (result.status !== "ok") return result;
     const accountId = await accountIdForPrincipal(query.principal);
-    return { ...result, timeline: await durableTimeline(app, accountId, query.sessionId) };
+    return { ...result, session: { ...result.session, timeline: await durableTimeline(app, accountId, query.sessionId) } };
   } }, preview, policyVersion: "development-local-v1" });
   let reconciler = new DevelopmentNwcSettlementReconciler(app);
   const [html, javascript, servicePubkey] = await Promise.all([

@@ -94,6 +94,7 @@ async function durableTimeline(app: DevelopmentFunding, accountId: string, sessi
   const rows = await app.pool.query<{ stage: "source_recorded" | "provider_recorded" | "worker_completed" | "artifact_verified" | "ledger_settled"; at: Date | string; detail: string }>(`
     SELECT 'source_recorded'::text AS stage, sp.created_at AS at, 'Source proposal recorded' AS detail FROM source_proposals sp WHERE sp.account_id=$1 AND sp.session_id=$2
     UNION ALL SELECT 'provider_recorded'::text, po.created_at, 'Provider receipt recorded' FROM provider_observations po JOIN source_proposals sp ON sp.operation_id=po.operation_id WHERE sp.account_id=$1 AND sp.session_id=$2
+    UNION ALL SELECT 'provider_recorded'::text, ma.settled_at, 'Provider usage receipt committed' FROM usage_receipts ur JOIN metered_actions ma ON ma.id=ur.action_id WHERE ma.account_id=$1 AND ma.session_id=$2 AND ma.settled_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM provider_observations po WHERE po.operation_id=ma.operation_id)
     UNION ALL SELECT 'worker_completed'::text, wr.completed_at, 'Isolated worker output persisted' FROM development_worker_results wr WHERE wr.account_id=$1 AND wr.session_id=$2 AND wr.completed_at IS NOT NULL
     UNION ALL SELECT 'artifact_verified'::text, da.created_at, 'Verified artifact sealed' FROM development_artifacts da WHERE da.account_id=$1 AND da.session_id=$2
     UNION ALL SELECT 'ledger_settled'::text, bli.committed_at, 'Metered ledger settled' FROM billing_line_items bli WHERE bli.account_id=$1 AND bli.session_id=$2 AND bli.kind IN ('receipt','debit')

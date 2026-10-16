@@ -114,6 +114,8 @@ If `up` fails, start with `bun scripts/dev.ts status`. It checks frozen browser 
 
 The host Chromium readiness check runs in a bounded child process. This keeps its browser pipes separate from the service's listening sockets, containing a [reported Bun 1.3.14 child-process descriptor finalization issue](https://github.com/microsoft/playwright/issues/42692). The regression command is `bun run tests/dev-ui/contextvm-server-liveness.e2e.ts`; it forces collection and checks the actual service after 65 seconds without browser activity.
 
+Paja previews open with the development console/menu collapsed. Use the chevron to expand or collapse it; toggling preserves the running napplet and its state.
+
 ## ChatGPT subscription sign-in for local development
 
 In **Generation model**, click **Continue with ChatGPT** and authorize the local app in the browser. Sign-in automatically activates your saved model if available, otherwise the first available model. Dismiss the first-use explanation, click **Connect**, fund the Nostr account with local Cashu or NWC test money, then generate or revise. Account and model dropdown changes apply immediately and persist across restarts; there is no separate activation button. **Use default provider** explicitly switches back and remains selected after reload. No API key or pricing-source configuration is needed. `status` reports `chatgpt-oauth` and the GUI displays **Using ChatGPT plan**. If model discovery fails after sign-in, your login is retained: reload models and choose one to activate it.

@@ -42,7 +42,7 @@ async function useSelectedIdentity(browserOnly = false): Promise<void> {
     byId("connection-status").textContent = `Connected: ${connected.pubkey}`;
   } catch (error) { await next.close(); throw error; }
 }
-if (publishing) new ProjectsWorkspace(bootstrap, publishing.identity, () => activity.running || !!restoreRequest(), async (project: Project, scope: ProjectScope) => {
+if (publishing) new ProjectsWorkspace(bootstrap, publishing.identity, () => activity.running || !!restoreRequest() || !!product?.checkingSession, async (project: Project, scope: ProjectScope) => {
   await useSelectedIdentity(scope === "browser");
   const current = await client!.callTool("projects", { action: "get", id: project.id });
   if (current.status !== "ok") throw new Error("Applet not found for this identity.");
@@ -87,6 +87,18 @@ async function hydrateSession(sessionId: string): Promise<void> {
   facts({ session: sessionId, state: status.session.state, version: latest.version, artifact: latest.artifactId, remainingMaximum: status.session.remainingCap, remainingBalance: status.session.remainingBalance });
   product?.completed(latest, true); product?.sessionState(status.session.state);
 }
+
+product?.onSessionStatusCheck(async () => {
+  const originalClient = client;
+  const sessionId = selected?.sessionId ?? sessionStorage.getItem(sessionStorageKey);
+  if (!originalClient || !sessionId) throw new Error("SESSION_NOT_SELECTED");
+  const status = await originalClient.sessionStatus(sessionId);
+  if (status?.status !== "ok" || client !== originalClient || (selected?.sessionId ?? sessionStorage.getItem(sessionStorageKey)) !== sessionId) throw new Error("SESSION_STATUS_UNAVAILABLE");
+  versions.splice(0, versions.length, ...(status.session.verifiedArtifacts ?? []).map((item: any) => ({ sessionId, version: item.version, artifactId: item.id })).sort((a: Version, b: Version) => a.version - b.version));
+  renderVersions(); renderDurableTimeline(status.session);
+  facts({ session: sessionId, state: status.session.state, nextAction: status.session.nextAction });
+  product.sessionState(status.session.state);
+});
 
 async function complete(action: any): Promise<void> { if (action?.status !== "completed") throw new Error(action?.code ?? "GENERATION_NOT_COMPLETED"); sessionStorage.setItem(sessionStorageKey, action.sessionId); await preview(action); const status = await client!.sessionStatus(action.sessionId); if (status?.status === "ok") renderDurableTimeline(status.session); await refresh(); setGenerationStatus("Verified preview ready"); clearRequest(); }
 

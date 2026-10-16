@@ -52,11 +52,14 @@ try {
   assert((await owner.callTool("projects",{action:"get",id:pending.checkpointId})).status==="not_found_or_denied","OTHER_PENDING_LEAK");
   await page.locator("#your-applets").click(); await page.locator('#projects-page').waitFor({state:"visible"});
   await page.locator(`.project-card[data-project-id="${id}"]`).waitFor();
+  assert(await page.locator("#your-applets").getAttribute("aria-current")==="page" && await page.locator("#workspace-home").getAttribute("aria-current")===null,"COLLECTION_NAV_CONTEXT_MISSING");
+  assert(await page.locator("#workspace-nav-status").isVisible(),"COLLECTION_HIDES_RUNNING_BUILDER");
   assert(await page.locator("#creation-workspace").isHidden() && await page.locator("#projects-dialog").count()===0,"PROJECTS_NOT_DEDICATED_PAGE");
   assert(await page.locator("#projects-live").innerText()==="Your current request continues in the workspace.","RUNNING_WORK_NOT_VISIBLE");
   await page.goBack(); await page.locator("#build-step").waitFor({state:"visible"});
   await page.goForward(); await page.locator("#projects-page").waitFor({state:"visible"});
-  await page.locator("#projects-workspace").click(); await page.locator("#build-step").waitFor({state:"visible"});
+  await page.locator("#workspace-home").click(); await page.locator("#build-step").waitFor({state:"visible"});
+  assert(await page.locator("#workspace-home").getAttribute("aria-current")==="page" && await page.locator("#workspace-nav-label").innerText()==="Builder","PRIMARY_NAV_DID_NOT_RETURN_TO_BUILDER");
   release(); await page.waitForFunction(()=>document.querySelector("#build-progress")?.getAttribute("aria-valuenow")==="5",undefined,{timeout:180000});
   const ready=await owner.callTool("projects",{action:"get",id}); assert(ready.project.stage==="verified" && ready.project.verifiedVersion===1,"VERIFIED_STAGE_MISSING");
   await owner.callTool("projects",{action:"rename",id,title:"Reading counter"});
@@ -106,6 +109,6 @@ try {
   await returning.locator("#your-applets").click(); await returning.locator("#projects-empty").waitFor({state:"visible"});
   assert(await returning.locator("#projects-list li").count()===0,"SIGN_OUT_LEFT_ACCOUNT_PROJECT_LIST");
   assert(errors.length===0,`BROWSER_ERRORS:${errors.join(";")}`);
-  console.log(JSON.stringify({status:"passed",case:"returning-projects",checks:["actual selected identity signs generation","active/pending/verified stages","cross-owner list/get/preview denial","same npub from fresh browser after CVM restart","open without inference","signout clears account list","legacy anonymous build visible after sign-in","live stages refresh without interrupting generation","dedicated static route and browser back/forward","mobile layout"]}));
+  console.log(JSON.stringify({status:"passed",case:"returning-projects",checks:["actual selected identity signs generation","active/pending/verified stages","cross-owner list/get/preview denial","same npub from fresh browser after CVM restart","open without inference","signout clears account list","legacy anonymous build visible after sign-in","live stages refresh without interrupting generation","dedicated static route and browser back/forward","mobile layout","primary navigation preserves builder context and running status"]}));
 } catch(error) { console.error(error, await page.locator("body").innerText({timeout:1000}).catch(()=>"original page closed")); throw error; }
 finally { release(); releaseAnonymous(); await owner.close(); await other.close(); await browser.close(); await pool.end(); await server.close(); await stack.down(true); await rm(root,{recursive:true,force:true}); }

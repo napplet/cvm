@@ -61,6 +61,7 @@ try {
   assert((await page.locator("#progress-title").textContent()) === "Bringing your idea to life", "MODEL_PROGRESS_NOT_VISIBLE");
   assert(await page.locator("#build-progress").getAttribute("aria-valuenow") === "1", "PREMATURE_COMPLETE_PROGRESS");
   assert(await page.locator("#revise").isDisabled(), "REVISION_ENABLED_DURING_GENERATION");
+  assert((await page.locator("#revision-blocked-reason").innerText()).includes("still running"), "RUNNING_REVISION_BLOCK_UNEXPLAINED");
   await screenshot("generating", 1440);
   // Close the page's connection while generation is still active, then recover the exact request.
   await page.reload(); await page.getByText("Workspace connected", { exact: true }).waitFor();
@@ -79,6 +80,7 @@ try {
   assert((await page.locator("#conversation-messages").textContent())?.includes("Make the counter title shorter"), "REVISION_NOT_IN_CHAT");
   await page.getByLabel("Preview version", { exact: true }).selectOption({ label: "Version 1" });
   await page.locator("#old-version-note").waitFor(); assert(await page.locator("#revision").isDisabled(), "OLD_VERSION_CAN_REVISE");
+  assert((await page.locator("#revision-blocked-reason").innerText()).includes("earlier version"), "OLD_VERSION_REVISION_BLOCK_UNEXPLAINED");
   await page.getByRole("button", { name: "Return to latest to make changes" }).click();
   await page.waitForFunction(() => (document.querySelector("#version-picker") as HTMLSelectElement).selectedOptions[0]?.textContent === "Version 2 · latest");
   await page.locator("#revision").fill("Try a softer green");
@@ -123,11 +125,18 @@ try {
   await page.reload(); await page.getByText("Workspace connected", { exact: true }).waitFor();
   assert(await page.locator("#revise").isDisabled() && await page.locator("#product-notice").isVisible(), "RELOAD_HID_UNRESOLVED_SESSION");
   assert(fixture.counts().inferences === 5, "UNRESOLVED_RELOAD_RETRIED");
+  assert((await page.locator("#revision-blocked-reason").innerText()).includes("operator must resolve"), "UNRESOLVED_REVISION_BLOCK_UNEXPLAINED");
+  const draftBeforeCheck=await page.locator("#revision").inputValue();
+  await page.getByRole("button",{name:"Check status",exact:true}).click();
+  await page.locator("#revision-status-result").filter({hasText:"Status checked"}).waitFor();
+  assert(fixture.counts().inferences===5 && await page.locator("#revise").isDisabled(),"STATUS_CHECK_REDISPATCHED_OR_BYPASSED_FENCE");
+  assert(await page.locator("#revision").inputValue()===draftBeforeCheck && await page.locator("#revision").isEnabled(),"STATUS_CHECK_LOST_OR_LOCKED_DRAFT");
+  for(const width of [390,1440]) await screenshot("revision-blocked",width);
   assert(await page.locator("#build-progress").getAttribute("aria-valuenow") !== "5", "UNRESOLVED_RELOAD_CLAIMED_COMPLETION");
   assert(errors.length === 0, `BROWSER_ERRORS:${errors.join(",")}`);
   const consolePage = await browser.newPage(); await consolePage.goto(`${server.url}/dev`);
   await consolePage.getByRole("heading", { name: "Development workspace", exact: true }).waitFor();
-  console.log(JSON.stringify({ status: "passed", case: "product-workspace", evidence: "fixture OAuth/model; real relay + Cashu + SQL + Docker + Paja", inferences: fixture.counts().inferences, counts, checks: ["guided steps", "drafts across OAuth", "automatic local funding", "live progress", "in-flight reload recovery without duplicate inference", "interactive preview", "revision chat", "version selection", "last good preview on failure", "responsive", "keyboard", "console route"] }));
+  console.log(JSON.stringify({ status: "passed", case: "product-workspace", evidence: "fixture OAuth/model; real relay + Cashu + SQL + Docker + Paja", inferences: fixture.counts().inferences, counts, checks: ["guided steps", "drafts across OAuth", "automatic local funding", "live progress", "in-flight reload recovery without duplicate inference", "interactive preview", "revision chat", "version selection", "last good preview on failure", "responsive", "keyboard", "console route", "visible revision-blocking reasons", "read-only signed session status check"] }));
 } catch (error) {
   console.error(JSON.stringify({ error: error instanceof Error ? error.message : String(error), visible: await page.locator("#notice-copy").textContent().catch(() => ""), generation: await page.locator("#generation-error").textContent().catch(() => ""), activity: await page.locator("#activity-current").textContent().catch(() => ""), errors, counts: fixture.counts() }));
   await page.screenshot({ path: join(evidence, "applet-test-failure.png"), fullPage: true }).catch(() => undefined); throw error;

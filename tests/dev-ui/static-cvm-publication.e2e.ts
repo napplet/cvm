@@ -101,6 +101,7 @@ try {
   console.log("CVM preview shared");
   // Manual fallback first, then discover the standard kind-10063 list.
   await page.locator("#publish").click(); await page.locator("#publication-discovery").filter({ hasText: "No server list found" }).waitFor({ timeout: 20000 });
+  assert(await page.locator("#workspace-nav-label").innerText() === "Publish" && await page.locator("#workspace-home").getAttribute("aria-current") === "page", "PUBLICATION_NAV_CONTEXT_MISSING");
   assert(await page.locator(".header-actions #publish").count() === 0 && await page.locator("dialog #publication-title").count() === 0, "PUBLISH_NOT_CONTEXTUAL_STEP");
   assert(await page.locator("#publish-step textarea").count() === 0, "DESTINATION_TEXTAREA_REMAINS");
   await page.locator("#publication-servers").fill("javascript:alert(1)"); await page.locator("#publication-servers").press("Enter");

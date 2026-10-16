@@ -17,8 +17,6 @@ export class ProjectsWorkspace {
   #browserPubkey: Promise<string>;
   constructor(private bootstrap: DevelopmentBootstrap, private identity: PublishingIdentity, private busy: () => boolean, private openProject: (project: Project, scope: ProjectScope) => Promise<void>) {
     this.#browserPubkey = new PrivateKeySigner(browserSignerKey(bootstrap.servicePubkey)).getPublicKey();
-    const link = document.createElement("a"); link.id = "your-applets"; link.className = "workspace-nav-link"; link.textContent = "Your applets"; link.href = "#/applets";
-    document.querySelector(".header-actions")!.prepend(link);
     const workspace = document.getElementById("creation-workspace")!;
     this.#page.id = "projects-page"; this.#page.hidden = true; this.#page.setAttribute("aria-labelledby", "projects-heading");
     this.#page.innerHTML = `<div class="projects-heading-row"><div><div class="eyebrow">YOUR COLLECTION</div><h1 id="projects-heading" tabindex="-1">Your applets</h1><p class="intro-copy">Little things you’re making. All in one place.</p></div><button id="projects-new" class="primary">New applet <span aria-hidden="true">+</span></button></div>
@@ -40,7 +38,6 @@ export class ProjectsWorkspace {
     const route = (focus = true) => {
       const visible = location.hash === "#/applets";
       workspace.hidden = visible; this.#page.hidden = !visible;
-      link.toggleAttribute("aria-current", visible); if (visible) link.setAttribute("aria-current", "page");
       const heading = visible ? this.el("projects-heading") : workspace.querySelector<HTMLElement>(".step-panel:not([hidden]) h1");
       skip.href = `#${heading?.id ?? "step-heading"}`;
       document.title = visible ? "Your applets — applet.broker" : "applet.broker — Make a little thing";

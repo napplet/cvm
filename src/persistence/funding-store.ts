@@ -332,7 +332,10 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
     if (continuation?.state === "resuming" || continuation?.state === "completed" || continuation?.state === "resume_required" || continuation?.state === "claimed" || continuation?.state === "restored") return freeze({ accountId, sessionId, version: continuation.intent.expectedSessionVersion, status: "active" as const });
     if (continuation?.state === "wake_reconciliation") return freeze({ accountId, sessionId, version: continuation.intent.expectedSessionVersion, status: "usage_unknown" as const });
     const actions = [...this.#state.meteredActions.values()].filter((action) => action.accountId === accountId && action.sessionId === sessionId);
-    const action = actions.sort((left, right) => (right.sessionVersion ?? 0) - (left.sessionVersion ?? 0))[0];
+    // A failed or unresolved action can retain the same version as its base.
+    // Match the SQL state projection by observing the newest action, not the
+    // highest completed version (which would conceal that failure).
+    const action = actions.at(-1);
     if (!action) return undefined;
     const status = action.status === "completed" ? "verified" : action.status === "dispatching" ? "active" : action.status;
     return freeze({ accountId, sessionId, version: action.sessionVersion ?? action.expectedVersion, status });

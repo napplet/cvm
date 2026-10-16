@@ -26,7 +26,7 @@ const verifier: ArtifactVerifier = { async verify(facts) {
   return { artifact: { artifactId: facts.result.artifact.artifactId, artifactSha256: "a".repeat(64), scannerReportSha256: "b".repeat(64), conformanceReportSha256: "c".repeat(64) }, contractInput: facts.result.artifact };
 } };
 
-async function setup() {
+async function setup(artifactVerifier = verifier) {
   const store = new TransactionalMemoryFundingStore();
   const funding = new FundingService(store);
   await funding.execute({ principal, kind: "credit_settlement", idempotencyKey: "credit", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { settlement: { topUpId: "topup", rail: "lightning", unit: "sat", amount: "10000", externalReference: "external", settlementReference: "settlement", verifiedAt: "2026-08-04T00:00:00.000Z" } } });
@@ -44,7 +44,7 @@ async function setup() {
     effects.dispatches += 1;
     return { status: "completed", receipt: { operationId: intent.operationId, providerRequestId: intent.providerRequestId, provider: "deterministic_fixture", model: "phase-04-fixture-model", profileId: intent.profileId, priceCardId: intent.priceCardId, selection: "unselected", completedAt: "2026-08-04T00:00:01.000Z", provenance: { protectedEvidenceReference: `receipt:${intent.operationId}` }, usage: [{ dimension: "input_tokens", units: "10" }, { dimension: "output_tokens", units: "5" }] } };
   }, async lookup() { return { status: "not_found" }; } };
-  const service = new MeteredGenerationService({ fundedAdmission: admissions, store, gateway, worker: completedWorker(effects), artifactVerifier: verifier });
+  const service = new MeteredGenerationService({ fundedAdmission: admissions, store, gateway, worker: completedWorker(effects), artifactVerifier });
   const initial = await service.startSession({ principal, admissionReference: admission.reference, idempotencyKey: "start", expectedVersion: 0, maximum: "3250", policyVersion: "phase-02-policy-2026-08-04", idea: "Build one focused counter napplet." });
   if (initial.status !== "completed") throw new Error("test start must be completed");
   return { admission, effects, gateway, initial, service, store };
@@ -97,6 +97,25 @@ describe("same-lineage revisions", () => {
     expect(result).toMatchObject({ status: "usage_unknown", code: "USAGE_UNKNOWN" });
     expect(store.meteredActions.at(-1)).toMatchObject({ status: "usage_unknown", providerReceiptReference: expect.stringContaining("dispatch-error:") });
     expect(effects.dispatches).toBe(2);
+    expect(await service.reviseSession({ principal, sessionId: initial.sessionId, admissionReference: admission.reference, idempotencyKey: "must-not-retry-unknown", expectedVersion: 1, maximum: "3250", policyVersion: "phase-02-policy-2026-08-04", revision: "Try again." })).toMatchObject({ status: "denied", code: "SESSION_NOT_REVISION_READY" });
+    expect(effects.dispatches).toBe(2);
+  });
+
+  test("a failed revision retains the verified base for a new explicit action and exact replay", async () => {
+    let fail = false;
+    const { admission, effects, initial, service, store } = await setup({ verify: async (facts) => fail ? undefined : verifier.verify(facts) });
+    const command = { principal, sessionId: initial.sessionId, admissionReference: admission.reference, idempotencyKey: "invalid-revision", expectedVersion: 1, maximum: "3250", policyVersion: "phase-02-policy-2026-08-04", revision: "Make a focused change." };
+    fail = true;
+    expect(await service.reviseSession(command)).toMatchObject({ status: "failed", artifactVersion: 1 });
+    expect(await store.sessionStatus(initial.accountId, initial.sessionId)).toMatchObject({ status: "failed", version: 1 });
+    const original = store.meteredActions[0]!.artifact;
+    fail = false;
+    const next = { ...command, idempotencyKey: "corrected-revision", revision: "Try a simpler focused change." };
+    const result = await service.reviseSession(next);
+    expect(result).toMatchObject({ status: "completed", artifactVersion: 2, sessionId: initial.sessionId });
+    expect(await service.reviseSession(next)).toEqual(result);
+    expect(store.meteredActions[0]!.artifact).toEqual(original);
+    expect(effects).toEqual({ dispatches: 3, workers: 3 });
   });
 
   test("parses exactly one bounded revision field", () => {

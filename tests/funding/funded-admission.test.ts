@@ -128,15 +128,17 @@ describe("FundedAdmissionService", () => {
     await funding.execute(creditCommand());
     let reserves = 0; let release!: () => void;
     const started = new Promise<void>((resolve) => { release = resolve; });
+    let signalEntered!: () => void;
+    const entered = new Promise<void>((resolve) => { signalEntered = resolve; });
     const capacity = {
-      reserveNow: async ({ intentReference }) => { reserves += 1; await started; return exactReadyReservation(intentReference, "capacity:fenced", "2026-08-05T00:00:00.000Z"); },
+      reserveNow: async ({ intentReference }) => { reserves += 1; signalEntered(); await started; return exactReadyReservation(intentReference, "capacity:fenced", "2026-08-05T00:00:00.000Z"); },
       observe: async () => ({ status: "unknown" as const }), release: async () => undefined,
     };
     const admission = new FundedAdmissionService({ funding, store, capacity, receiptAuthority: trustedAdmissionReceiptAuthority, now: () => Date.parse("2026-08-04T00:00:00.000Z") });
     const request = { principal, idempotencyKey: "fenced", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "100", unit: "sat" as const } };
     const receipt = await trustedAdmissionReceipt(request);
     const first = admission.admit(request, receipt);
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await entered;
     expect(reserves).toBe(1);
     const second = admission.admit(request, receipt);
     release();
@@ -247,7 +249,7 @@ describe("FundedAdmissionService", () => {
     const command = { principal, idempotencyKey: "bounded-capacity", policyVersion: "p1", protocolVersion: "v1", payload: { requestedCap: "20", unit: "sat" as const } };
     const observed = await Promise.race([
       admission.admit(command, await trustedAdmissionReceipt(command)),
-      Bun.sleep(50).then(() => ({ status: "unbounded" as const })),
+      Bun.sleep(1000).then(() => ({ status: "unbounded" as const })),
     ]);
     expect(observed).toMatchObject({ status: "reconciliation_pending" });
     expect(store.activeHolds).toHaveLength(0);

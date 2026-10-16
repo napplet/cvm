@@ -196,7 +196,15 @@ export class MeteredGenerationService {
       const session = await this.options.store.sessionStatus(accountId, command.sessionId);
       if (!session) return SessionActionResultSchema.parse({ status: "denied", code: "SESSION_LINEAGE_MISMATCH" });
       if (session.version !== command.expectedVersion) return SessionActionResultSchema.parse({ status: "denied", code: "STALE_SESSION_VERSION" });
-      if (session.status !== "verified") return SessionActionResultSchema.parse({ status: "denied", code: "SESSION_NOT_REVISION_READY" });
+      if (session.status !== "verified") {
+        // A settled failed revision does not invalidate its prior verified source.
+        // A new explicit action may use that exact version; active/unknown/billing
+        // states remain fenced, and prepareMeteredAction still locks the lineage.
+        const hasVerifiedBase = session.status === "failed" && session.version > 0 &&
+          (await this.options.store.listMeteredActionsForSession(accountId, command.sessionId)).some((action) =>
+            action.status === "completed" && action.artifactVersion === session.version && !!action.artifact?.artifactId);
+        if (!hasVerifiedBase) return SessionActionResultSchema.parse({ status: "denied", code: "SESSION_NOT_REVISION_READY" });
+      }
       return this.execute(command, accountId, fingerprint);
     }).finally(() => this.#inFlight.delete(idempotencyKey));
     this.#inFlight.set(idempotencyKey, run);

@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: verification_deferred_gaps
-stopped_at: Fixed generation helper signature and compiler feedback; live blinking-text preview verified
-last_updated: "2026-10-16T01:13:43Z"
+stopped_at: Paja preview menu collapsed by default; browser presentation and sandbox checks passed
+last_updated: "2026-10-16T01:22:45Z"
 last_activity: 2026-10-15
-last_activity_desc: Fixed missing runtimeHasDomain argument guidance; live blinking app and compiler diagnostics verified
+last_activity_desc: Paja starts with its console hidden; native toggle preserves napplet state
 progress:
   total_phases: 7
   completed_phases: 6
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
 Plan: 56 of 58 accepted; development Plans 07-52/53/56/57/54/55 complete
 Status: Local execution GUI at http://127.0.0.1:49371 in chatgpt-oauth mode with gpt-6.1-sol. Live subscription generation passed through verified interactive preview. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
-Last activity: 2026-10-15 — Fixed runtimeHasDomain signature in generation prompts and added bounded compiler details to Live execution. Fresh subscription-generated blinking-text app passed build, verification, animation and reduced-motion checks.
+Last activity: 2026-10-15 — Completed quick task 261015-pf8: Paja previews start with the menu collapsed; browser presentation and full preview boundary checks pass.
 
 Follow-up: Stream assembly/counter verification remains complete. Latest helper-signature and compiler-feedback fix passed 29 targeted unit/integration cases plus activity and composed OAuth browser journeys. Real blinking-text generation also passed. See debug/resolved/generated-typescript-check.md.
 
@@ -356,6 +356,7 @@ Recent decisions affecting current work:
 | 261015-leh | Local ChatGPT OAuth generation, GUI sign-in, refresh, and e2e coverage | 2026-10-15 | 48f5a0f | [261015-leh](./quick/261015-leh-add-local-chatgpt-oauth-generation-with-/) |
 | 261015-n91 | Granular live GUI progress, heartbeat, failed-stage feedback and local SQL budget | 2026-10-15 | b1b5fb4 | [261015-n91](./quick/261015-n91-add-granular-live-gui-progress-for-gener/) |
 | 261015-o1z | Automatic ChatGPT activation and stopped-request fixes; live interactive verification completed in debug follow-up | 2026-10-15 | 1a850d5 | [261015-o1z](./quick/261015-o1z-activate-signed-in-chatgpt-for-real-gene/) |
+| 261015-pf8 | Start Paja previews with the menu collapsed | 2026-10-15 | 6e88c24 | [261015-pf8](./quick/261015-pf8-load-paja-previews-minimized-with-the-me/) |
 
 ## Deferred Verification
 
@@ -373,6 +374,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-16T01:13:43Z
-Stopped at: Generated helper-call failure reproduced and fixed in model context; compiler diagnostics shown in GUI. Fresh subscription-generated blinking-text preview passed with reduced-motion verification. Sign-in and gpt-6.1-sol selection preserved. Production remains deferred.
-Resume file: .planning/debug/resolved/generated-typescript-check.md
+Last session: 2026-10-16T01:22:45Z
+Stopped at: Paja initial menu collapse verified, including expand/collapse with target state retained and sandbox boundary checks. Existing generation was allowed to finish before service restart. Production remains deferred.
+Resume file: .planning/quick/261015-pf8-load-paja-previews-minimized-with-the-me/261015-pf8-SUMMARY.md

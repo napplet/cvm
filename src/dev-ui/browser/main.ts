@@ -19,6 +19,7 @@ if (!/^[a-f0-9]{64}$/.test(connection.servicePubkey) || !/^wss?:\/\//.test(conne
 const bootstrap: DevelopmentBootstrap = { relayUrl: connection.relayUrl, servicePubkey: connection.servicePubkey, reserveSat: "3750", actionCeilingSat: "3750", providerLabel: "CVM generation service" };
 const pendingStorageKey = `napplet-cvm/dev-pending/v1/${bootstrap.servicePubkey}`;
 const sessionStorageKey = `napplet-cvm/dev-session/v1/${bootstrap.servicePubkey}`;
+const ownerStorageKey = `applet-broker/action-owner/v1/${bootstrap.servicePubkey}`;
 let client: DevelopmentContextVmClient | undefined;
 let balance = "0";
 let pending: PendingAction | undefined;
@@ -34,6 +35,7 @@ const byId = <T extends HTMLElement>(id: string) => document.querySelector<T>(`#
 const activity = new ExecutionActivity(byId("execution-activity"), bootstrap.providerLabel, product ? (snapshot) => product.progress(snapshot) : undefined);
 async function useSelectedIdentity(browserOnly = false): Promise<void> {
   const identity = browserOnly ? undefined : publishing?.identity;
+  await identity?.requireReady();
   const target = identity?.pubkey ?? await new PrivateKeySigner(browserSignerKey(bootstrap.servicePubkey)).getPublicKey();
   if (client && await client.pubkey === target) return;
   const next = new DevelopmentContextVmClient(bootstrap, event => activity.receive(event), identity?.pubkey ? identity.captureSigner() : undefined);
@@ -48,6 +50,7 @@ if (publishing) new ProjectsWorkspace(bootstrap, publishing.identity, () => acti
   await useSelectedIdentity(scope === "browser");
   const current = await client!.callTool("projects", { action: "get", id: project.id });
   if (current.status !== "ok") throw new Error("Applet not found for this identity.");
+  sessionStorage.setItem(ownerStorageKey, await client!.pubkey);
   selected = undefined; versions.length = 0; lastRevision = undefined; savePending(undefined); clearRequest();
   byId<HTMLIFrameElement>("preview").hidden = true; byId<HTMLIFrameElement>("preview").removeAttribute("src");
   product?.openSaved();
@@ -81,14 +84,15 @@ function renderVersions(): void { const list = byId<HTMLUListElement>("versions"
 function renderDurableTimeline(status: any): void { const timeline = byId<HTMLUListElement>("timeline"); const events = Array.isArray(status?.timeline) ? status.timeline : []; timeline.replaceChildren(...events.map((event: any) => { const item = document.createElement("li"); item.textContent = `${event.stage.replaceAll("_", " ")} · ${new Date(event.at).toLocaleTimeString()} · ${event.detail}`; return item; })); }
 async function refresh(): Promise<void> { if (client) setBalance(await client.accountStatus()); }
 async function preview(action: any): Promise<void> { if (!action?.artifactId) throw new Error("ARTIFACT_NOT_AVAILABLE"); const version = { sessionId: action.sessionId, version: action.artifactVersion, artifactId: action.artifactId }; if (versions.some((item) => item.sessionId !== version.sessionId)) versions.length = 0; if (!versions.some((item) => item.version === version.version && item.sessionId === version.sessionId)) versions.push(version); renderVersions(); const descriptor = await selectVersion(version); const generation = action.generation; facts({ provider: generation?.provider ?? "durably recorded", model: generation?.model ?? "recorded", usage: Array.isArray(generation?.usage) ? generation.usage.map((line: any) => `${line.dimension}:${line.units}`).join(", ") : "recorded", worker: generation?.worker ?? "verified", stage: "verified", version: action.artifactVersion, artifact: action.artifactId, aggregate: descriptor.aggregateSha256, charge: action.confirmedSpend, remainingMaximum: action.remainingCap, remainingBalance: action.remainingBalance }); appendTimeline("verified preview", `version ${action.artifactVersion} · charge ${action.confirmedSpend} sats`); product?.completed(version); }
-async function hydrateSession(sessionId: string): Promise<void> {
-  const status = await client!.sessionStatus(sessionId); if (status?.status !== "ok") return;
+async function hydrateSession(sessionId: string): Promise<boolean> {
+  const status = await client!.sessionStatus(sessionId); if (status?.status !== "ok") return false;
   versions.splice(0, versions.length, ...(status.session.verifiedArtifacts ?? []).map((item: any) => ({ sessionId, version: item.version, artifactId: item.id })).sort((a: Version, b: Version) => a.version - b.version));
   renderVersions(); renderDurableTimeline(status.session); const latest = versions.at(-1);
-  if (!latest) { facts({ session: sessionId, state: status.session.state, nextAction: status.session.nextAction }); setGenerationStatus(`Saved applet: ${status.session.progress.replaceAll("_", " ")}`); product?.savedStatus(status.session.state); return; }
+  if (!latest) { facts({ session: sessionId, state: status.session.state, nextAction: status.session.nextAction }); setGenerationStatus(`Saved applet: ${status.session.progress.replaceAll("_", " ")}`); product?.savedStatus(status.session.state); return true; }
   await selectVersion(latest);
   facts({ session: sessionId, state: status.session.state, version: latest.version, artifact: latest.artifactId, remainingMaximum: status.session.remainingCap, remainingBalance: status.session.remainingBalance });
   product?.completed(latest, true); product?.sessionState(status.session.state);
+  return true;
 }
 
 product?.onSessionStatusCheck(async () => {
@@ -109,7 +113,12 @@ byId<HTMLButtonElement>("connect").onclick = async () => {
   const button = byId<HTMLButtonElement>("connect"); button.disabled = true;
   try {
     await client?.close().catch(() => undefined);
-    client = new DevelopmentContextVmClient(bootstrap, (event) => activity.receive(event));
+    await publishing?.identity.ready;
+    const owner = sessionStorage.getItem(ownerStorageKey);
+    const hasSavedWork = !!(sessionStorage.getItem(sessionStorageKey) || restorePending() || restoreRequest());
+    const identity = publishing?.identity;
+    const signer = identity?.pubkey && (!hasSavedWork || owner === identity.pubkey) ? identity.captureSigner() : undefined;
+    client = new DevelopmentContextVmClient(bootstrap, (event) => activity.receive(event), signer);
     const connected = await client.connect();
     const info = await client.callTool("service_info", {});
     Object.assign(bootstrap, { reserveSat: info.reserveSat, actionCeilingSat: info.actionCeilingSat, providerLabel: info.providerLabel });
@@ -117,9 +126,20 @@ byId<HTMLButtonElement>("connect").onclick = async () => {
     if (!product && byId<HTMLInputElement>("maximum").value === "3750") byId<HTMLInputElement>("maximum").value = info.actionCeilingSat;
     byId("connection-status").textContent = `Connected: ${connected.pubkey}`; setBalance(connected.account);
     connectedControls.forEach((control) => control.disabled = false); byId("provider-mode").textContent = bootstrap.providerLabel;
+    const ownerAvailable = !owner || owner === connected.pubkey;
     const stored = restorePending();
-    if (stored) { const status = await client.pendingActionStatus(stored.checkpointId); if (status?.status === "saved") { savePending(status); appendTimeline("saved action", `shortfall ${status.shortfall} sats`); } else savePending(undefined); }
-    const sessionId = sessionStorage.getItem(sessionStorageKey); if (sessionId) { try { await hydrateSession(sessionId); } catch (error) { setError(`Preview unavailable: ${error instanceof Error ? error.message : "unknown"}`); } }
+    if (stored && ownerAvailable) { const status = await client.pendingActionStatus(stored.checkpointId); if (status?.status === "saved") { savePending(status); appendTimeline("saved action", `shortfall ${status.shortfall} sats`); } else savePending(undefined); }
+    const sessionId = sessionStorage.getItem(sessionStorageKey);
+    if (hasSavedWork && !ownerAvailable) setError("Reconnect this applet’s original Nostr signer to reopen it. Your saved work is still available in Your applets.");
+    if (sessionId && ownerAvailable) {
+      try {
+        let restored = await hydrateSession(sessionId);
+        // Older tabs did not record an owner. Try the verified saved signer if
+        // the browser key does not own this session; the CVM still checks access.
+        if (!restored && !owner && identity?.pubkey && identity.pubkey !== connected.pubkey) { await useSelectedIdentity(); restored = await hydrateSession(sessionId); }
+        if (restored) sessionStorage.setItem(ownerStorageKey, await client.pubkey);
+      } catch (error) { setError(`Preview unavailable: ${error instanceof Error ? error.message : "unknown"}`); }
+    }
     publishing?.sync(); product?.connected(true); product?.recovery(!!restoreRequest());
   } catch { await client?.close().catch(() => undefined); client = undefined; byId("connection-status").textContent = "Connection failed; retry Connect"; button.disabled = false; connectedControls.forEach((control) => control.disabled = true); product?.connected(false); }
 };
@@ -148,6 +168,7 @@ function restoreRequest(): GenerationRequest | undefined {
 }
 function clearRequest(): void { if (product) { sessionStorage.removeItem(requestStorageKey); product.recovery(false); } }
 async function runGeneration(request: GenerationRequest): Promise<any> {
+  sessionStorage.setItem(ownerStorageKey, await client!.pubkey);
   if (product) sessionStorage.setItem(requestStorageKey, JSON.stringify(request));
   const result = request.kind === "start" ? await client!.startSession(request.input) : request.kind === "revise" ? await client!.reviseSession(request.input) : await client!.resumePendingAction(request.input);
   if (typeof result?.sessionId === "string") sessionStorage.setItem(sessionStorageKey, result.sessionId);
@@ -192,7 +213,13 @@ for (const id of actionButtons) {
     byId("versions").querySelectorAll("button").forEach((item) => item.disabled = true);
     try {
       if (id === "generate") await useSelectedIdentity();
-      else if (publishing && client && await client.pubkey !== (publishing.identity.pubkey ?? await new PrivateKeySigner(browserSignerKey(bootstrap.servicePubkey)).getPublicKey()) && await client.pubkey !== await new PrivateKeySigner(browserSignerKey(bootstrap.servicePubkey)).getPublicKey()) throw new Error("Sign in with this applet’s original identity to continue it.");
+      else {
+        await publishing?.identity.ready;
+        const owner = sessionStorage.getItem(ownerStorageKey);
+        if (owner && await client!.pubkey !== owner) { await useSelectedIdentity(); if (await client!.pubkey !== owner) throw new Error("Sign in with this applet’s original identity to continue it."); }
+        if (publishing && client && await client.pubkey !== (publishing.identity.pubkey ?? await new PrivateKeySigner(browserSignerKey(bootstrap.servicePubkey)).getPublicKey()) && await client.pubkey !== await new PrivateKeySigner(browserSignerKey(bootstrap.servicePubkey)).getPublicKey()) throw new Error("Sign in with this applet’s original identity to continue it.");
+      }
+      sessionStorage.setItem(ownerStorageKey, await client!.pubkey);
       if (id !== "replay-revision" && id !== "recover") {
         const service = await client!.callTool("service_info", {});
         if (service.available === false) throw new Error("The CVM provider is unavailable. Its operator needs to reconnect the provider account.");

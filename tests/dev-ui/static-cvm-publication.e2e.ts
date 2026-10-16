@@ -162,6 +162,8 @@ try {
   await page.locator("#publication-close").click(); await page.reload(); await page.getByText("Workspace connected", { exact: true }).waitFor();
   await page.waitForFunction(() => !(document.querySelector("#preview-copy-address") as HTMLButtonElement).disabled, undefined, { timeout: 30000 });
   assert(fixture.counts().inferences === 1, "RESTART_REGENERATED");
+  assert((await page.locator("#nostr-sign-in").innerText()).includes("NIP-46"), "REMOTE_SIGNIN_NOT_RESTORED");
+  assert(await page.locator("#publish").isEnabled(), "RESTORED_REMOTE_PUBLISH_DISABLED");
   assert((await fetch(`${cvmBlob}/`)).ok, "BLOSSOM_ORIGIN_CHANGED_ON_RESTART");
   console.log(JSON.stringify({ status: "passed", case: "static-cvm-publication", checks: ["separate static origin and subdirectory", "private operator OAuth", "rate version used", "job views", "all sign-in choices during generation", "real NIP46", "CVM naddr", "CVM-only Blossom writes", "manual and discovered servers", "failed copy blocks publication", "verified mirrors and user naddr", "owner denial", "signed template tamper rejected", "exact event replay", "pending job details", "restart persistence"] }));
 } catch (error) { console.error("TEST_STAGE", error, await admin.locator("body").innerText({ timeout: 2000 }).catch(() => "admin page unavailable"), await page.locator("body").innerText({ timeout: 2000 }).catch(() => "workspace unavailable"), errors); throw error; } finally {

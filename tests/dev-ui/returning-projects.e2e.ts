@@ -62,6 +62,11 @@ try {
   assert(await page.locator("#workspace-home").getAttribute("aria-current")==="page" && await page.locator("#workspace-nav-label").innerText()==="Builder","PRIMARY_NAV_DID_NOT_RETURN_TO_BUILDER");
   release(); await page.waitForFunction(()=>document.querySelector("#build-progress")?.getAttribute("aria-valuenow")==="5",undefined,{timeout:180000});
   const ready=await owner.callTool("projects",{action:"get",id}); assert(ready.project.stage==="verified" && ready.project.verifiedVersion===1,"VERIFIED_STAGE_MISSING");
+  await page.reload();
+  await page.locator("#nostr-sign-in").filter({hasText:"NIP-07"}).waitFor();
+  await page.locator("#preview").waitFor({state:"visible",timeout:30000});
+  assert(await page.locator("#publish").isEnabled(),"RESTORED_EXTENSION_PUBLISH_DISABLED");
+  assert(fixture.counts().inferences===1,"SIGNIN_RESTORE_STARTED_GENERATION");
   await owner.callTool("projects",{action:"rename",id,title:"Reading counter"});
   const row=(await pool.query("SELECT owner_pubkey FROM development_projects WHERE id=$1",[id])).rows[0]; assert(row.owner_pubkey===pubkey,"PROJECT_OWNER_NOT_REQUEST_SIGNER");
   const artifact=(await owner.sessionStatus(id)).session.latestVerifiedArtifact.id;
@@ -104,6 +109,8 @@ try {
   assert(await returning.locator("#projects-list li").count()===1,"RETURNING_LIST_LEAK");
   await returning.getByRole("button",{name:/Reading counter/}).click(); await returning.locator("#preview").waitFor({state:"visible",timeout:30000});
   assert(await returning.locator("#publish").isEnabled(),"RETURNING_PUBLISH_UNAVAILABLE");
+  await returning.reload(); await returning.locator("#preview").waitFor({state:"visible",timeout:30000});
+  assert((await returning.locator("#nostr-sign-in").innerText()).includes("NIP-07"),"RETURNING_SIGNIN_NOT_PERSISTED");
   assert(fixture.counts().inferences===2,"LIST_OR_OPEN_STARTED_GENERATION");
   await returning.locator("#nostr-sign-in").click(); await returning.locator("#nostr-sign-out").click(); await returning.locator("#nostr-close").click();
   await returning.locator("#your-applets").click(); await returning.locator("#projects-empty").waitFor({state:"visible"});

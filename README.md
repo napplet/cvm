@@ -45,6 +45,8 @@ Choose **Remix an applet** on the homepage, paste its `naddr`, and describe your
 
 Verified builds receive a **CVM preview naddr** for testing in other shells. **Sign in** is available at every step (Anonymous, NIP-07 or NIP-46 QR). **Your applets** opens a dedicated page (`#/applets`) with live project status and saved versions. It retrieves your account’s projects and earlier applets from this browser through separate requests signed by their original owners. **Publish** is the final step beside the selected applet, enabled after sign-in and verification: sign the applet, copy its files to your discovered or manually entered Blossom servers, then publish its event to your NIP-65 write relays discovered through purplepag.es. Both destination lists use validated address chips with manual entry; relay suggestions use NIP-66. Progress and retryable failures are shown for each step.
 
+Nostr sign-in persists on the same site and CVM: NIP-07 reads the extension’s public key again, and NIP-46 reconnects using an `nbunksec` saved only in this browser. **Sign out** removes that saved session. Locked or offline signers can reconnect without losing their saved setup.
+
 ```sh
 bun scripts/open-dev-admin.ts       # Provider accounts, rates, jobs and details
 bun scripts/build-workspace.ts      # Export a static website to dist/workspace

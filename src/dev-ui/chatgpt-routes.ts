@@ -12,11 +12,18 @@ export class DevelopmentChatGptRoutes {
     if (url.pathname === "/auth/openai/callback") {
       if (request.method !== "GET" || url.origin !== origin || url.search.length > 24_000) return new Response("Invalid callback", { status: 400, headers });
       let location = "/?chatgpt=connected";
+      let account: string | undefined;
       try {
         if (this.options.busy()) throw new Error("CHATGPT_GENERATION_BUSY");
         const cookie = request.headers.get("cookie")?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${this.#cookieName}=`))?.slice(this.#cookieName.length + 1);
-        const account = await this.options.auth.callback(url, cookie); location += `&chatgpt_account=${encodeURIComponent(account)}`;
+        account = await this.options.auth.callback(url, cookie);
+        const models = await this.options.auth.models(account);
+        const saved = this.options.auth.settings().model;
+        const model = models.find((item) => item.slug === saved)?.slug ?? models[0]?.slug;
+        if (!model) throw new Error("CHATGPT_SELECT_AVAILABLE_MODEL");
+        await this.options.select({ mode: "chatgpt", accountId: account, model });
       } catch (error) { location = `/?chatgpt_error=${safeChatGptError(error)}`; }
+      if (account) location += `&chatgpt_account=${encodeURIComponent(account)}`;
       return new Response(null, { status: 303, headers: { ...headers, location, "set-cookie": `${this.#cookieName}=; HttpOnly; SameSite=Lax; Path=/auth/openai/callback; Max-Age=0` } });
     }
     if (!url.pathname.startsWith("/dev/chatgpt/")) return undefined;

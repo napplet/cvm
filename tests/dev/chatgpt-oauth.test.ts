@@ -145,3 +145,37 @@ test("model catalog allowance does not relax the token response limit", async ()
   await expect(login()).rejects.toThrow("CHATGPT_RESPONSE_TOO_LARGE");
   expect(auth.status().accounts).toHaveLength(0);
 });
+
+async function routeLogin(auth: ChatGptOAuth, fixture: ReturnType<typeof chatGptFixture>) {
+  const origin = "http://127.0.0.1:12345";
+  const routes = new DevelopmentChatGptRoutes({ auth, select: (settings) => auth.select(settings), busy: () => false, diagnostic: () => undefined });
+  const start = await routes.handle(new Request(`${origin}/dev/chatgpt/sign-in`, { method: "POST", headers: { origin, "content-type": "application/json", "x-dev-model-token": routes.controlToken }, body: JSON.stringify(auth.settings().accountId ? { accountId: auth.settings().accountId } : {}) }), origin);
+  const { url } = await start!.json();
+  return routes.handle(new Request(fixture.authorize(url), { headers: { cookie: start!.headers.get("set-cookie")!.split(";")[0]! } }), origin);
+}
+
+test("sign-in automatically activates an available model and preserves it across reauthorization", async () => {
+  const { auth, fixture } = await setup((fetch) => (url, init) => String(url).endsWith("/v1/models") ? Promise.resolve(Response.json({ models: [
+    { slug: "fixture-first", display_name: "First", visibility: "list" },
+    { slug: "fixture-second", display_name: "Second", visibility: "list" },
+  ] })) : fetch(url, init));
+  const response = await routeLogin(auth, fixture);
+  expect(response?.status).toBe(303);
+  expect(response?.headers.get("location")).toContain("chatgpt=connected");
+  expect(auth.settings()).toMatchObject({ mode: "chatgpt", model: "fixture-first" });
+  await auth.select({ ...auth.settings(), model: "fixture-second" });
+  await routeLogin(auth, fixture);
+  expect(auth.settings()).toMatchObject({ mode: "chatgpt", model: "fixture-second" });
+  expect(fixture.counts().inferences).toBe(0);
+});
+
+for (const empty of [false, true]) test(`model activation failure retains successful sign-in (${empty ? "empty catalog" : "network error"})`, async () => {
+  const { auth, fixture } = await setup((fetch) => (url, init) => String(url).endsWith("/v1/models") ? Promise.resolve(empty ? Response.json({ models: [] }) : new Response(null, { status: 503 })) : fetch(url, init));
+  const response = await routeLogin(auth, fixture);
+  expect(response?.status).toBe(303);
+  expect(response?.headers.get("location")).toContain("chatgpt_error=CHATGPT_");
+  expect(response?.headers.get("location")).toContain("chatgpt_account=");
+  expect(auth.status().accounts[0]?.signedIn).toBe(true);
+  expect(auth.settings().mode).toBe("default");
+  expect(fixture.counts().inferences).toBe(0);
+});

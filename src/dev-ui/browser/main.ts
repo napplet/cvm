@@ -35,7 +35,19 @@ const activity = new ExecutionActivity(byId("execution-activity"), bootstrap.pro
 const connectedControls = [byId<HTMLButtonElement>("cashu"), byId<HTMLButtonElement>("cashu-replay"), byId<HTMLButtonElement>("nwc"), byId<HTMLButtonElement>("generate")];
 function setFundingStatus(value: string): void { byId("funding-status").textContent = value; }
 function setGenerationStatus(value: string): void { byId("generation-status").textContent = value; }
-function setError(value = ""): void { byId("generation-error").textContent = value; if (value) { const uncertain = /UNKNOWN|UNRESOLVED|TIMEOUT|CONNECTION|SEND_FAILED/iu.test(value); activity.finish(uncertain ? "Outcome unconfirmed" : "Action stopped", uncertain ? "uncertain" : "failed"); setGenerationStatus(uncertain ? "Outcome unconfirmed; check session status" : "Action stopped; see error below"); void showChatGptDiagnostic(); } }
+function setError(value = ""): void {
+  byId("generation-error").textContent = value;
+  if (!value) return;
+  const uncertain = /UNKNOWN|UNRESOLVED|TIMEOUT|CONNECTION|SEND_FAILED/iu.test(value);
+  activity.finish(uncertain ? "Outcome unconfirmed" : "Action stopped", uncertain ? "uncertain" : "failed");
+  setGenerationStatus(uncertain ? activity.generationResponded ? "Generation stopped; provider outcome unconfirmed" : "Outcome unconfirmed; check session status" : "Action stopped; see error below");
+  void showChatGptDiagnostic().then((explanation) => {
+    if (explanation && byId("generation-error").textContent === value) {
+      byId("generation-error").textContent = `${value} · ${explanation}`;
+      activity.explainFailure(explanation);
+    }
+  });
+}
 function setBalance(account: Readonly<{ available: string; held?: string }>): void { balance = account.available; const held = account.held ?? "0"; byId("balance").textContent = `Available: ${balance} sats · held: ${held} sats · settled: ${BigInt(balance) + BigInt(held)} sats`; }
 function facts(values: Record<string, unknown>): void { const list = byId<HTMLDListElement>("generation-facts"); list.replaceChildren(...Object.entries(values).flatMap(([key, value]) => { const term = document.createElement("dt"); term.textContent = key; const detail = document.createElement("dd"); detail.textContent = String(value); return [term, detail]; })); }
 function appendTimeline(label: string, detail: string): void { const item = document.createElement("li"); item.textContent = `${label}: ${detail}`; byId("timeline").append(item); }

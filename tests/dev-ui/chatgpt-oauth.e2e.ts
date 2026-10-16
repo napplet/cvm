@@ -12,7 +12,12 @@ let releaseInference!: () => void;
 const inferenceGate = new Promise<void>((resolve) => { releaseInference = resolve; });
 let delayFirstInference = true;
 const fetchWithProgress: typeof fixture.fetch = async (input, init) => {
-  const response = await fixture.fetch(input, init);
+  if (String(input).endsWith("/v1/models")) return Response.json({ models: [
+    { slug: "fixture-codex", display_name: "Fixture Codex", visibility: "list" },
+    { slug: "fixture-alternative", display_name: "Fixture Alternative", visibility: "list" },
+  ] });
+  const fetched = await fixture.fetch(input, init);
+  const response = String(input).endsWith("/responses") ? new Response(fetched.body) : fetched;
   if (!String(input).endsWith("/responses") || !delayFirstInference) return response;
   delayFirstInference = false;
   const reader = response.body!.getReader();
@@ -47,8 +52,16 @@ try {
   await page.goto(server.url, { waitUntil: "networkidle" });
   await page.getByRole("button", { name: "Continue with ChatGPT" }).click();
   await page.getByRole("button", { name: "Got it", exact: true }).click();
+  await page.getByText("Using ChatGPT plan · fixture-codex", { exact: true }).waitFor();
+  requireThat(fixture.counts().inferences === 0, "SIGN_IN_TRIGGERED_INFERENCE");
+  await page.getByLabel("ChatGPT model", { exact: true }).selectOption("fixture-alternative");
+  await page.getByText("Using ChatGPT plan · fixture-alternative", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Use default provider", exact: true }).click();
+  await page.getByText("Active: Deterministic fixture", { exact: true }).waitFor();
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByText("Active: Deterministic fixture", { exact: true }).waitFor();
+  requireThat(await page.getByLabel("ChatGPT model", { exact: true }).inputValue() === "", "DEFAULT_PROVIDER_WAS_NOT_RETAINED");
   await page.getByLabel("ChatGPT model", { exact: true }).selectOption("fixture-codex");
-  await page.getByRole("button", { name: "Use ChatGPT plan", exact: true }).click();
   await page.getByText("Using ChatGPT plan · fixture-codex", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Connect", exact: true }).click(); await page.getByText("Connected:").waitFor();
   await page.getByLabel("Cashu amount (sats)").fill("4000"); await page.getByRole("button", { name: "Fund with Cashu", exact: true }).click(); await page.getByText("Cashu credited", { exact: true }).waitFor();
@@ -59,6 +72,9 @@ try {
   const sequence = await page.locator("#execution-activity").getAttribute("data-last-server-sequence");
   await page.waitForFunction((previous) => Number(document.querySelector<HTMLElement>("#execution-activity")?.dataset.lastServerSequence) > Number(previous), sequence, { timeout: 12000 });
   requireThat(await page.locator("#versions li").count() === 0, "HEARTBEAT_CLAIMED_COMPLETION");
+  await page.getByLabel("ChatGPT model", { exact: true }).selectOption("fixture-alternative");
+  await page.getByText("Wait for the current generation to finish before changing model settings.", { exact: true }).waitFor();
+  requireThat(await page.getByLabel("ChatGPT model", { exact: true }).inputValue() === "fixture-codex", "BUSY_SELECTION_CHANGED_MODEL");
   releaseInference(); await generated(1);
   for (const stage of ["create", "init", "skills", "install", "build", "verify", "conformance", "dry-run", "artifact", "ledger", "preview"]) requireThat(await page.locator(`#activity-events [data-stage="${stage}"][data-state="completed"]`).count() > 0, `PROGRESS_STAGE_MISSING:${stage}`); await server.assertGenerationSettlement();
   const frame = page.frameLocator("#preview").frameLocator("iframe").first(); await frame.getByRole("button", { name: "Add" }).click(); await frame.getByText("1", { exact: true }).waitFor();
@@ -94,6 +110,13 @@ try {
   const failedCounts = (await pool.query("SELECT count(*) AS requests FROM development_chatgpt_operations")).rows[0];
   requireThat(Number(failedCounts.requests) === 4 && fixture.counts().inferences === 4, "FAILED_ACTION_REDISPATCHED");
   await page.screenshot({ path: resolve(".local/development-gui-evidence/progress-failure.png"), fullPage: true });
+  fixture.setInferenceMode("limit");
+  await page.getByRole("button", { name: "Generate napplet", exact: true }).click();
+  await page.getByText("Generation stopped · provider outcome unconfirmed", { exact: true }).waitFor();
+  await page.locator("#chatgpt-status").filter({ hasText: "ChatGPT plan or app usage limit reached" }).waitFor();
+  requireThat((await page.locator("#activity-connection").textContent())?.includes("usage limit reached"), "LIVE_PROVIDER_ERROR_MISSING");
+  requireThat((await page.locator("#activity-connection").textContent())?.includes("The server finished this request"), "STOPPED_REQUEST_SHOWN_AS_RUNNING");
+  requireThat(fixture.counts().inferences === 5, "LIMIT_ACTION_REDISPATCHED");
   await page.getByRole("button", { name: "Sign out of ChatGPT" }).click(); await page.getByText("Signed out of ChatGPT. Use the default provider or sign in again.", { exact: true }).waitFor();
   const cleared = JSON.parse(await readFile(join(stateRoot, "development-chatgpt/accounts.json"), "utf8")); requireThat(!cleared.accounts[0].tokens, "OAUTH_LOGOUT_RETAINED_TOKENS");
   console.log(JSON.stringify({ status: "passed", case: "chatgpt-oauth", evidence: "fixture OAuth and inference; real relay, SQL, Docker worker and Paja", requests: fixture.counts().inferences, counts, failure: "TypeScript stage displayed; stale facts cleared; failed action settled" }));

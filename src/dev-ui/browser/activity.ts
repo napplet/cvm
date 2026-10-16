@@ -10,16 +10,19 @@ export class ExecutionActivity {
   #waitingSince = 0;
   #requests = new Set<string | number>();
   #failedStage?: string;
+  #generationResponded = false;
   #timer?: ReturnType<typeof setInterval>;
   constructor(private readonly root: HTMLElement, provider?: string) {
     root.innerHTML = `<h2 id="activity-heading">Live execution</h2><p id="activity-provider" class="supporting"></p><p id="activity-current" role="status" aria-live="polite">Ready to submit an action</p><p id="activity-clock" class="supporting"></p><p id="activity-connection" class="supporting"></p><ol id="activity-events" aria-label="Execution events"></ol><p class="supporting">Live updates describe work in progress. The session timeline below records durable results.</p>`;
     if (provider) this.provider(provider);
   }
   get running(): boolean { return this.#running; }
+  get generationResponded(): boolean { return this.#generationResponded; }
   private text(id: string, text: string): void { this.root.querySelector<HTMLElement>(`#${id}`)!.textContent = text; }
   begin(label: string, provider: string): void {
     clearInterval(this.#timer); this.#running = true; this.#started = performance.now(); this.#lastServer = 0; this.#waitingSince = this.#started; this.#requests.clear();
     this.#failedStage = undefined;
+    this.#generationResponded = false;
     this.root.dataset.state = "running";
     this.root.querySelector("#activity-events")!.replaceChildren();
     this.provider(provider); this.text("activity-current", `${label} · submitting`); this.log("Browser: action submitted"); this.tick();
@@ -42,7 +45,10 @@ export class ExecutionActivity {
     const requestId = event.kind === "progress" ? event.progress.requestId : event.requestId;
     if (!this.#requests.has(requestId)) return;
     this.#lastServer = performance.now();
-    if (event.kind === "response") { this.#requests.delete(requestId); this.log(`Server: ${toolLabels[event.tool] ?? "Request"} response received`); this.tick(); return; }
+    if (event.kind === "response") {
+      if (["start_session", "revise_session", "resume_session"].includes(event.tool)) this.#generationResponded = true;
+      this.#requests.delete(requestId); this.log(`Server: ${toolLabels[event.tool] ?? "Request"} response received`); this.tick(); return;
+    }
     const update = event.progress;
     this.root.dataset.lastServerSequence = String(update.sequence);
     if (update.provider) this.provider(update.provider, update.model);
@@ -56,9 +62,15 @@ export class ExecutionActivity {
   finish(message: string, state: "completed" | "failed" | "uncertain" = "completed"): void {
     if (!this.#running) return;
     if (state === "failed" && this.#failedStage) message += ` · ${this.#failedStage}`;
+    if (state === "uncertain" && this.#generationResponded) message = "Generation stopped · provider outcome unconfirmed";
     this.#running = false; clearInterval(this.#timer); this.#requests.clear(); this.root.dataset.state = state;
-    this.text("activity-current", message); this.text("activity-connection", state === "uncertain" ? "Outcome unconfirmed. Work may still be running; check session status before starting another action." : "");
+    this.text("activity-current", message); this.text("activity-connection", state === "uncertain" ? this.#generationResponded ? "The server finished this request. Provider completion or usage could not be confirmed; this action will not be retried automatically." : "Outcome unconfirmed. Work may still be running; check session status before starting another action." : "");
     this.log(message); this.tick();
+  }
+  explainFailure(message: string): void {
+    if (this.#running || !["failed", "uncertain"].includes(this.root.dataset.state ?? "")) return;
+    const detail = this.root.querySelector<HTMLElement>("#activity-connection")!;
+    detail.textContent = [detail.textContent, message].filter(Boolean).join(" ");
   }
   private log(message: string, stage?: string, state?: string): void {
     const item = document.createElement("li"); item.textContent = `${Math.floor((performance.now() - this.#started) / 1000)}s · ${message}`;

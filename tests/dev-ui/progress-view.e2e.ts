@@ -38,5 +38,16 @@ try {
   await page.evaluate(() => { const activity = (window as any).activity; activity.begin("Revise", "ChatGPT plan"); activity.finish("Outcome unconfirmed", "uncertain"); });
   assert((await page.locator("#activity-connection").textContent())?.includes("may still be running"), "UNCERTAINTY_NOT_VISIBLE");
   assert(!(await page.locator("#activity-events").textContent())?.includes("TypeScript"), "OLD_ACTION_EVENTS_RETAINED");
-  console.log(JSON.stringify({ status: "passed", case: "progress-view", checks: ["fixture", "stale", "recovery", "isolation", "failed-stage", "late-events", "uncertain"] }));
+  await page.evaluate(() => {
+    const activity = (window as any).activity;
+    activity.begin("Generate", "ChatGPT plan");
+    activity.receive({ kind: "sent", requestId: "finished", tool: "start_session" });
+    activity.receive({ kind: "response", requestId: "finished", tool: "start_session" });
+    activity.finish("Outcome unconfirmed", "uncertain");
+    activity.explainFailure("ChatGPT plan or app usage limit reached.");
+  });
+  assert((await page.locator("#activity-current").textContent()) === "Generation stopped · provider outcome unconfirmed", "FINISHED_REQUEST_SHOWN_AS_RUNNING");
+  assert((await page.locator("#activity-connection").textContent())?.includes("The server finished this request"), "FINISHED_REQUEST_DETAIL_MISSING");
+  assert((await page.locator("#activity-connection").textContent())?.includes("usage limit reached"), "PROVIDER_ERROR_NOT_VISIBLE");
+  console.log(JSON.stringify({ status: "passed", case: "progress-view", checks: ["fixture", "stale", "recovery", "isolation", "failed-stage", "late-events", "uncertain", "server-finished", "provider-error"] }));
 } finally { await browser.close(); }

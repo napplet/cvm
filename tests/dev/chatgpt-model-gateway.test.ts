@@ -79,6 +79,38 @@ test("stream enforces abort, size and terminal completion", async () => {
   await expect(readChatGptResponse(new Response("x".repeat(2_000_001), { headers: { "content-type": "text/event-stream" } }), signal())).rejects.toThrow("TOO_LARGE");
 });
 
+test("a missing content type still parses SSE completion and preserves the replay fence", async () => {
+  const { options, intent, fixture } = setup();
+  const gateway = new ChatGptModelGateway({ ...options, fetch: async (url, init) => {
+    expect(new Headers(init?.headers).get("accept")).toBe("text/event-stream");
+    const response = await fixture.fetch(url, init);
+    return new Response(response.body);
+  } });
+  const result = await gateway.dispatch(intent, signal());
+  expect(result.status).toBe("completed");
+  expect(await gateway.dispatch(intent, signal())).toEqual(result);
+  expect(fixture.counts().inferences).toBe(1);
+});
+
+test("headerless SSE usage-limit errors remain visible and are never redispatched", async () => {
+  const { options, intent, fixture } = setup(); fixture.setInferenceMode("limit");
+  const gateway = new ChatGptModelGateway({ ...options, fetch: async (url, init) => new Response((await fixture.fetch(url, init)).body) });
+  expect((await gateway.dispatch(intent, signal())).status).toBe("usage_unknown");
+  expect(gateway.diagnostic()).toBe("CHATGPT_USAGE_LIMIT_REACHED");
+  expect((await gateway.dispatch(intent, signal())).status).toBe("usage_unknown");
+  expect(fixture.counts().inferences).toBe(1);
+});
+
+test("headerless JSON, partial streams and malformed receipts cannot claim completion", async () => {
+  for (const body of [JSON.stringify({ status: "completed", usage: { input_tokens: 1, output_tokens: 1 } }), 'data: {"type":"response.output_text.delta","delta":"partial"}\n\n', 'data: {"type":"response.completed","response":{"status":"completed"}}\n\n']) {
+    await expect(readChatGptResponse(new Response(new TextEncoder().encode(body)), signal())).rejects.toThrow();
+  }
+  let cancelled = false;
+  const response = new Response(new ReadableStream({ cancel() { cancelled = true; } }), { headers: { "content-type": "application/json" } });
+  await expect(readChatGptResponse(response, signal())).rejects.toThrow("STREAM_REQUIRED");
+  expect(cancelled).toBe(true);
+});
+
 
 test("stream observations expose byte counts only and observer failure cannot interrupt completion", async () => {
   const { options, intent } = setup(); const bytes: number[] = [];

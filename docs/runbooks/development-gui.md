@@ -116,7 +116,7 @@ The host Chromium readiness check runs in a bounded child process. This keeps it
 
 ## ChatGPT subscription sign-in for local development
 
-In **Generation model**, click **Continue with ChatGPT** and authorize the local app in the browser. Dismiss the first-use explanation, choose an available model, and click **Use ChatGPT plan**. The workspace reloads; click **Connect**, fund the Nostr account with local Cashu or NWC test money, then generate or revise. No API key or pricing-source configuration is needed. `status` reports `chatgpt-oauth` and the GUI displays **Using ChatGPT plan**.
+In **Generation model**, click **Continue with ChatGPT** and authorize the local app in the browser. Sign-in automatically activates your saved model if available, otherwise the first available model. Dismiss the first-use explanation, click **Connect**, fund the Nostr account with local Cashu or NWC test money, then generate or revise. Account and model dropdown changes apply immediately and persist across restarts; there is no separate activation button. **Use default provider** explicitly switches back and remains selected after reload. No API key or pricing-source configuration is needed. `status` reports `chatgpt-oauth` and the GUI displays **Using ChatGPT plan**. If model discovery fails after sign-in, your login is retained: reload models and choose one to activate it.
 
 This uses OpenAI's [local/open-source OAuth registration flow](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) and [public Responses endpoint](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference). The account model catalog is fetched after sign-in; eligibility is confirmed by a successful inference request. An unavailable account/model does not silently fall back to another provider. Use **Use default provider** to explicitly return to the deterministic fixture (or the API provider configured when the service started).
 
@@ -128,7 +128,9 @@ Accounts and model selection persist across `down`/`up`. Reauthorize an existing
 
 **Limits and recovery:** OpenAI's [preview route](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations) requires streaming and `store:false`, and does not support `max_output_tokens`. The displayed maximum limits local test debits, not upstream subscription consumption. The adapter applies a two-minute local timeout and bounded response bytes; only a completed event can produce a verified proposal. Requests have a durable SQL fence before dispatch. A disconnected or uncertain request is left unresolved, never automatically sent again, and its local reservation remains held. A stored completion can be recovered without calling OpenAI. Automatic recovery cannot retrieve an unrecorded response from this route. Start a new explicit action after checking Manage usage; use the scoped development reset to discard abandoned local test state when appropriate.
 
-Model/account changes are disabled while generation is running. Saved pending actions retain their original profile/account/model pins; select those again before explicit resume. Subscription mode is development-only and does not supply production provider-cost evidence. Production certification remains deferred.
+Model/account changes are rejected while generation is running. Saved pending actions retain their original profile/account/model pins; select those again before explicit resume. Subscription mode is development-only and does not supply production provider-cost evidence. Production certification remains deferred.
+
+If the server returns an uncertain result, **Live execution** says **Generation stopped · provider outcome unconfirmed** and shows the provider explanation. A relay timeout without a server response still warns that work may be running. **ChatGPT plan or app usage limit reached** means the provider reported `subscription_sharing_usage_limit_exceeded`: open **Manage usage** to inspect plan/app limits; local Cashu/NWC funds do not resolve it. The original uncertain action is never automatically retried.
 
 ```sh
 # OAuth protocol, streaming, replay and secret-boundary tests; no live credentials
@@ -137,7 +139,7 @@ bun test tests/dev/chatgpt-oauth.test.ts tests/dev/chatgpt-model-gateway.test.ts
 # Fixture OAuth/inference, real browser + relay + SQL + Docker build + Paja
 bun scripts/dev.ts test --case=chatgpt-oauth
 
-# After signing in and selecting a model in the running GUI:
+# After signing in (the model activates automatically) in the running GUI:
 # Sends one real generation request, consuming your ChatGPT plan/credits.
 bun scripts/dev.ts test --case=chatgpt-live --allow-chatgpt-usage
 ```
@@ -150,7 +152,9 @@ On 2026-10-15, `bun scripts/dev.ts test --case=full` passed all ten cases: OAuth
 
 The OAuth browser journey used fixture authorization and inference with the real local relay, SQL database, Docker worker, verifier, and Paja host. It recorded exactly three inference requests, three provider observations, and three user debits across generation, revision, replay, and a service restart. Credentials were absent from browser traffic, storage, DOM, and console; logout removed the stored token set. The initial OAuth/gateway unit run passed 23 tests with 97 assertions, including invalid signatures, claims/state validation, rotating refresh, transient refresh failure, interrupted streams, and original-operation replay.
 
-Follow-up on 2026-10-15: the user's live sign-in exposed the catalog-size regression above. The fixed service and Chromium **Reload models** both returned seven models from the real signed-in account. The expanded OAuth/gateway suite passed 26 tests with 106 assertions, including a 680 KB catalog and over-limit cancellation. Real inference and remote CI remain untested; model discovery made no generation requests. See `.planning/debug/resolved/chatgpt-model-catalog-size.md`.
+Follow-up on 2026-10-15: the user's live sign-in exposed the catalog-size regression above. The fixed service and Chromium **Reload models** both returned seven models from the real signed-in account. The expanded OAuth/gateway suite passed 26 tests with 106 assertions, including a 680 KB catalog and over-limit cancellation. At that point real inference and remote CI remained untested; model discovery made no generation requests. See `.planning/debug/resolved/chatgpt-model-catalog-size.md`.
+
+A subsequent live request stopped with `CHATGPT_STREAM_REQUIRED` and zero active actions. Bounded diagnostic requests confirmed HTTP 200 SSE responses without a Content-Type header; the actual event reported `subscription_sharing_usage_limit_exceeded`. The adapter now accepts a missing header while still requiring valid SSE, a terminal completed response, matching model and bounded usage. JSON, partial streams and malformed receipts cannot claim completion. Live generation through to a verified artifact remains unproven until the account/app usage limit permits inference. No original uncertain action was replayed. Automatic activation, headerless completion/error handling, replay fences and the real local worker/preview flow are covered by the OAuth fixture tests.
 
 The ten-stage deterministic full journey compared the UI with PostgreSQL after every action. It produced three initial versions and one resumed artifact: exactly four actions, provider operations, receipts, debit entries, worker results, and verified artifacts, charging 20 test sats in total. Cashu replay added no credit; funding alone left the saved action pending. Launcher persistence/reset and the 65-second idle/collection regression passed during the earlier GUI acceptance. Responsive screenshots at 375, 768, and 1280 pixels have no page overflow. Private reports and screenshots are in `.local/development-gui-evidence/`; the earlier eight-case suite log is `.local/gui-full-suite-accepted.log`.
 

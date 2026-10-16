@@ -47,7 +47,10 @@ export const CHATGPT_SOURCE_SCHEMA = { type: "object", additionalProperties: fal
 
 /** HTTP/SSE requires a terminal completed event. Deltas never prove success. */
 export async function readChatGptResponse(response: Response, signal: AbortSignal, onBytes?: (bytes: number) => void): Promise<z.infer<typeof NativeResponse>> {
-  if (!response.headers.get("content-type")?.includes("text/event-stream")) throw chatGptError("STREAM_REQUIRED");
+  // Some intermediaries omit Content-Type. The bounded SSE parser and terminal
+  // response schema still prove completion; a missing header alone cannot reject it.
+  const contentType = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
+  if (contentType && contentType !== "text/event-stream") { await response.body?.cancel().catch(() => undefined); throw chatGptError("STREAM_REQUIRED"); }
   const reader = response.body?.getReader(); if (!reader) throw chatGptError("EMPTY_RESPONSE");
   const decoder = new TextDecoder(); let buffer = ""; let bytes = 0;
   let lastReported = -Infinity;
@@ -111,7 +114,7 @@ export class ChatGptModelGateway implements ModelGateway {
     let observation: ModelDispatchObservation;
     try {
       const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(this.pricing.profile.deadlineMs)]);
-      const response = await (this.options.fetch ?? fetch)(`${CHATGPT_RESOURCE}/responses`, { method: "POST", redirect: "error", signal: requestSignal, headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
+      const response = await (this.options.fetch ?? fetch)(`${CHATGPT_RESOURCE}/responses`, { method: "POST", redirect: "error", signal: requestSignal, headers: { authorization: `Bearer ${token}`, "content-type": "application/json", accept: "text/event-stream" }, body: JSON.stringify(body) });
       if (!response.ok) {
         // Even HTTP failures are retained as ambiguous; no automatic paid retry.
         const error = await boundedJson(response).catch(() => undefined);

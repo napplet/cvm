@@ -1,4 +1,5 @@
 import { progressStages } from "../progress-contract";
+import { formatWorkerDiagnostic } from "../../dev/worker-diagnostic";
 import type { ClientActivity } from "./contextvm-client";
 
 const toolLabels: Record<string, string> = { funded_admission: "Reserve capacity and funds", start_session: "Start generation", revise_session: "Revise napplet", resume_session: "Resume saved action", preview: "Open verified preview" };
@@ -10,6 +11,7 @@ export class ExecutionActivity {
   #waitingSince = 0;
   #requests = new Set<string | number>();
   #failedStage?: string;
+  #failureDetail?: string;
   #generationResponded = false;
   #timer?: ReturnType<typeof setInterval>;
   constructor(private readonly root: HTMLElement, provider?: string) {
@@ -22,6 +24,7 @@ export class ExecutionActivity {
   begin(label: string, provider: string): void {
     clearInterval(this.#timer); this.#running = true; this.#started = performance.now(); this.#lastServer = 0; this.#waitingSince = this.#started; this.#requests.clear();
     this.#failedStage = undefined;
+    this.#failureDetail = undefined;
     this.#generationResponded = false;
     this.root.dataset.state = "running";
     this.root.querySelector("#activity-events")!.replaceChildren();
@@ -54,7 +57,9 @@ export class ExecutionActivity {
     if (update.provider) this.provider(update.provider, update.model);
     if (update.kind === "stage") {
       if (update.state === "failed") this.#failedStage ??= progressStages[update.stage];
-      const label = `${progressStages[update.stage]} · ${update.state}${update.bytes === undefined ? "" : ` · ${update.bytes.toLocaleString()} bytes received`}`;
+      const diagnostic = update.state === "failed" && update.diagnostic ? formatWorkerDiagnostic(update.diagnostic) : undefined;
+      if (diagnostic) this.#failureDetail = diagnostic;
+      const label = `${progressStages[update.stage]} · ${update.state}${update.bytes === undefined ? "" : ` · ${update.bytes.toLocaleString()} bytes received`}${diagnostic ? ` · ${diagnostic}` : ""}`;
       this.text("activity-current", label); this.log(`Server: ${label}`, update.stage, update.state);
     }
     this.tick();
@@ -65,6 +70,7 @@ export class ExecutionActivity {
     if (state === "uncertain" && this.#generationResponded) message = "Generation stopped · provider outcome unconfirmed";
     this.#running = false; clearInterval(this.#timer); this.#requests.clear(); this.root.dataset.state = state;
     this.text("activity-current", message); this.text("activity-connection", state === "uncertain" ? this.#generationResponded ? "The server finished this request. Provider completion or usage could not be confirmed; this action will not be retried automatically." : "Outcome unconfirmed. Work may still be running; check session status before starting another action." : "");
+    if (state === "failed" && this.#failureDetail) this.explainFailure(this.#failureDetail);
     this.log(message); this.tick();
   }
   explainFailure(message: string): void {

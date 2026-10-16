@@ -105,6 +105,8 @@ try {
   await page.waitForFunction(() => document.querySelector("#generation-error")?.textContent?.includes("WORKER_OR_ARTIFACT_FAILED"), undefined, { timeout: 180000 });
   requireThat((await page.locator("#activity-current").textContent())?.includes("Check guidance and TypeScript"), "FAILED_WORKER_STAGE_NOT_VISIBLE");
   requireThat(await page.locator('#activity-events [data-stage="verify"][data-state="failed"]').count() === 1, "FAILED_WORKER_EVENT_MISSING");
+  requireThat((await page.locator("#activity-connection").textContent())?.includes("TS2322: Incompatible value type."), "FAILED_COMPILER_DIAGNOSTIC_MISSING");
+  requireThat(!(await page.locator("#execution-activity").textContent())?.includes("deliberate type error"), "RAW_COMPILER_OUTPUT_EXPOSED");
   requireThat(await page.locator("#generation-facts").textContent() === "", "FAILED_ACTION_SHOWS_STALE_ARTIFACT");
   requireThat(await page.locator("#generation-status").textContent() === "Action stopped; see error below", "FAILED_ACTION_STILL_SHOWS_RUNNING");
   await server.assertGenerationSettlement();

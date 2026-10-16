@@ -30,6 +30,8 @@ test("streamed completion records real usage, synthetic pricing, supported reque
   expect(priceReceipt({ receipt: result.receipt, ...gateway.pricing })).toMatchObject({ status: "priced", total: "3" }); expect(maximumOperationCharge(gateway.pricing)).toBe("395");
   const request = JSON.parse(String(fixture.calls.find((call) => call.url.endsWith("/responses"))!.init!.body));
   expect(request).toMatchObject({ store: false, stream: true, model: "fixture-codex" });
+  expect(request.input[0].content).toContain("runtimeHasDomain(domain: string): boolean");
+  expect(request.input[0].content).toContain("void runtimeHasDomain('storage');");
   for (const field of ["metadata", "max_output_tokens", "previous_response_id", "temperature", "background"]) expect(request[field]).toBeUndefined();
   expect(proposals).toHaveLength(1); expect(proposals[0].provider).toBe("openai_chatgpt_development");
   const restarted = new ChatGptModelGateway({ ...options, auth: { accessToken: async () => { throw new Error("must not need token for replay"); } } });

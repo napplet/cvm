@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: verification_deferred_gaps
-stopped_at: ChatGPT subscription generation verified through real Docker build and interactive preview
-last_updated: "2026-10-16T00:57:00Z"
+stopped_at: Fixed generation helper signature and compiler feedback; live blinking-text preview verified
+last_updated: "2026-10-16T01:13:43Z"
 last_activity: 2026-10-15
-last_activity_desc: Fixed subscription stream assembly; real generation and interactive counter preview passed
+last_activity_desc: Fixed missing runtimeHasDomain argument guidance; live blinking app and compiler diagnostics verified
 progress:
   total_phases: 7
   completed_phases: 6
@@ -32,9 +32,9 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
 Plan: 56 of 58 accepted; development Plans 07-52/53/56/57/54/55 complete
 Status: Local execution GUI at http://127.0.0.1:49371 in chatgpt-oauth mode with gpt-6.1-sol. Live subscription generation passed through verified interactive preview. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
-Last activity: 2026-10-15 — Fixed empty-terminal subscription stream assembly and verified a real generated counter; quick task 261015-o1z live acceptance is complete.
+Last activity: 2026-10-15 — Fixed runtimeHasDomain signature in generation prompts and added bounded compiler details to Live execution. Fresh subscription-generated blinking-text app passed build, verification, animation and reduced-motion checks.
 
-Follow-up: 35 OAuth/gateway tests (148 assertions), composed OAuth browser journey, and real subscription smoke pass. Live source completed Docker build, verification and ledger settlement; clicking Add changed the preview count to 1. Provider usage was 220 input / 705 output tokens. See debug/resolved/chatgpt-live-subscription.md.
+Follow-up: Stream assembly/counter verification remains complete. Latest helper-signature and compiler-feedback fix passed 29 targeted unit/integration cases plus activity and composed OAuth browser journeys. Real blinking-text generation also passed. See debug/resolved/generated-typescript-check.md.
 
 Plan execution: 96/98 milestone plans complete; Phase 7 is 56/58 complete and production verification remains pending
 
@@ -373,6 +373,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-16T00:57:00Z
-Stopped at: Live subscription generation, real Docker build/verification and interactive preview passed. Sign-in and gpt-6.1-sol selection preserved. Production remains deferred.
-Resume file: .planning/debug/resolved/chatgpt-live-subscription.md
+Last session: 2026-10-16T01:13:43Z
+Stopped at: Generated helper-call failure reproduced and fixed in model context; compiler diagnostics shown in GUI. Fresh subscription-generated blinking-text preview passed with reduced-motion verification. Sign-in and gpt-6.1-sol selection preserved. Production remains deferred.
+Resume file: .planning/debug/resolved/generated-typescript-check.md

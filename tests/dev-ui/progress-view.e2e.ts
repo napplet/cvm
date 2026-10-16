@@ -29,15 +29,17 @@ try {
   assert((await page.locator("#activity-connection").textContent())?.includes("Server update 0s ago"), "LIVENESS_NOT_RESTORED");
   await page.evaluate(() => {
     const activity = (window as any).activity;
-    activity.receive({ kind: "progress", progress: { requestId: "current", sequence: 2, stage: "verify", state: "failed", kind: "stage" } });
+    activity.receive({ kind: "progress", progress: { requestId: "current", sequence: 2, stage: "verify", state: "failed", kind: "stage", diagnostic: { file: "src/main.ts", line: 4, column: 1, code: "TS2554", arguments: { expected: 1, received: 0 } } } });
     activity.finish("Action stopped", "failed");
     activity.receive({ kind: "progress", progress: { requestId: "current", sequence: 3, stage: "preview", state: "completed", kind: "stage" } });
   });
   assert((await page.locator("#activity-current").textContent()) === "Action stopped · Check guidance and TypeScript", "FAILED_STAGE_LOST");
+  assert((await page.locator("#activity-connection").textContent()) === "src/main.ts:4:1 · TS2554: Expected 1 arguments, received 0.", "COMPILER_DIAGNOSTIC_LOST");
   assert(await page.locator("#activity").getAttribute("data-state") === "failed", "LATE_EVENT_REOPENED_ACTION");
   await page.evaluate(() => { const activity = (window as any).activity; activity.begin("Revise", "ChatGPT plan"); activity.finish("Outcome unconfirmed", "uncertain"); });
   assert((await page.locator("#activity-connection").textContent())?.includes("may still be running"), "UNCERTAINTY_NOT_VISIBLE");
   assert(!(await page.locator("#activity-events").textContent())?.includes("TypeScript"), "OLD_ACTION_EVENTS_RETAINED");
+  assert(!(await page.locator("#activity-connection").textContent())?.includes("TS2554"), "OLD_DIAGNOSTIC_RETAINED");
   await page.evaluate(() => {
     const activity = (window as any).activity;
     activity.begin("Generate", "ChatGPT plan");

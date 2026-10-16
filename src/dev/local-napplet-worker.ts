@@ -6,6 +6,7 @@ import { z } from "zod";
 import { SourceProposalSchema } from "../model/model-gateway";
 import { canonicalJson } from "../promotion/schema";
 import type { StoredSourceProposal } from "./source-proposal-store";
+import { parseWorkerDiagnostic, type WorkerDiagnostic } from "./worker-diagnostic";
 
 const image = process.env.NAPPLET_CVM_DEV_WORKER_IMAGE ?? "napplet-cvm/dev-worker:development";
 const Stage = z.object({ name: z.enum(["create", "init", "skills", "install", "build", "verify", "conformance", "dry-run"]), exitCode: z.number().int(), stdout: z.string().max(40_000).optional(), stderr: z.string().max(20_000).optional() }).strict();
@@ -63,13 +64,13 @@ async function report(path: string): Promise<z.infer<typeof Report>> {
 
 /** Model-free closed-command worker, with independently bounded host and container lifetimes. */
 export class LocalNappletWorker {
-  constructor(private readonly input: Readonly<{ dockerBin?: string; image?: string; deadlineMs?: number; maxOutputBytes?: number; onProgress?: (stage: z.infer<typeof Stage>["name"] | "worker", state: "running" | "completed" | "failed") => void }> = {}) {
+  constructor(private readonly input: Readonly<{ dockerBin?: string; image?: string; deadlineMs?: number; maxOutputBytes?: number; onProgress?: (stage: z.infer<typeof Stage>["name"] | "worker", state: "running" | "completed" | "failed", diagnostic?: WorkerDiagnostic) => void }> = {}) {
     for (const value of [input.deadlineMs, input.maxOutputBytes]) {
       if (value !== undefined && (!Number.isSafeInteger(value) || value < 1)) throw new Error("WORKER_LIMIT_INVALID");
     }
   }
-  private progress(stage: z.infer<typeof Stage>["name"] | "worker", state: "running" | "completed" | "failed"): void {
-    try { this.input.onProgress?.(stage, state); } catch { /* Progress cannot affect execution. */ }
+  private progress(stage: z.infer<typeof Stage>["name"] | "worker", state: "running" | "completed" | "failed", diagnostic?: WorkerDiagnostic): void {
+    try { this.input.onProgress?.(stage, state, diagnostic); } catch { /* Progress cannot affect execution. */ }
   }
   async materialize(inputProposal: Pick<StoredSourceProposal, "proposalSha256" | "proposal">, signal?: AbortSignal): Promise<WorkerOutput> {
     const proposal = SourceProposalSchema.parse(inputProposal.proposal);
@@ -91,7 +92,8 @@ export class LocalNappletWorker {
         if (!line.startsWith("NAPPLET_STAGE ")) return;
         try {
           const event = z.object({ name: Stage.shape.name, state: z.enum(["running", "completed", "failed"]) }).strict().parse(JSON.parse(line.slice(14)));
-          this.progress(event.name, event.state);
+          // Failed stages are emitted with their bounded diagnostic after the report is read.
+          if (event.state !== "failed") this.progress(event.name, event.state);
         } catch { /* Untrusted runner output cannot expand the projection. */ }
       } });
       let evidence: z.infer<typeof Report>;
@@ -99,6 +101,7 @@ export class LocalNappletWorker {
       catch { throw new Error(result.exitCode === 0 ? "WORKER_EVIDENCE_MISSING" : "WORKER_COMMAND_FAILED"); }
       if (result.exitCode !== 0) {
         const failed = evidence.stages.at(-1)!;
+        this.progress(failed.name, "failed", failed.name === "verify" ? parseWorkerDiagnostic(failed.stdout ?? "") : undefined);
         throw new Error(`WORKER_COMMAND_FAILED:${failed.name}`, { cause: { stage: failed.name, exitCode: failed.exitCode, stdout: failed.stdout?.slice(-4_000), stderr: failed.stderr?.slice(-4_000) } });
       }
       retained = true;

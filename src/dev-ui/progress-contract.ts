@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { WorkerDiagnosticSchema } from "../dev/worker-diagnostic";
 
 export const progressMethod = "notifications/development_progress";
 export const progressTools = ["funded_admission", "start_session", "revise_session", "resume_session", "preview"] as const;
@@ -19,6 +20,7 @@ export const DevelopmentProgressSchema = z.object({
   kind: z.enum(["stage", "heartbeat"]), stage: z.enum(Object.keys(progressStages) as [ProgressStage, ...ProgressStage[]]),
   state: z.enum(["running", "completed", "failed", "uncertain"]),
   bytes: z.number().int().min(0).max(2_000_000).optional(),
+  diagnostic: WorkerDiagnosticSchema.optional(),
   provider: z.enum(["deterministic_fixture", "openai_responses", "openai_chatgpt_development"]).optional(),
   model: z.string().min(1).max(128).regex(/^[a-zA-Z0-9._:/-]+$/u).optional(),
 }).strict();

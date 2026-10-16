@@ -4,7 +4,7 @@ import type { ModelGateway } from "../model/model-gateway";
 import { DevelopmentProgressSchema, progressMethod, progressTools, type DevelopmentProgress, type ProgressStage, type ProgressState } from "./progress-contract";
 
 type Scope = { input: ContextVmInboundEnvelope; progressId: string | number; tool: DevelopmentProgress["tool"]; started: number; sequence: number; active: boolean; stage: ProgressStage; state: ProgressState; queue: Promise<void>; queued: number };
-type Details = Pick<DevelopmentProgress, "bytes" | "provider" | "model">;
+type Details = Pick<DevelopmentProgress, "bytes" | "provider" | "model" | "diagnostic">;
 
 /** Development-only, best-effort observations. Async scope is bound to the
  * authenticated envelope, never caller-supplied pubkeys or session IDs. */

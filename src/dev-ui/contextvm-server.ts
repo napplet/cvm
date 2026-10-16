@@ -177,7 +177,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
   };
   const repository = new LocalArtifactRepository({ objectRoot: resolve(stateRoot, "development-artifacts"), pool: app.pool });
   const grants = new LocalPreviewGrantStore({ pool: app.pool });
-  const worker = new LocalProposalWorkerPort(new LocalNappletWorker({ image: readiness.imageDigest, onProgress: (stage, state) => progress.emit(stage, state) }), { results: new DurableWorkerResultStore({ pool: app.pool, toolchainSha256: readiness.imageDigest.slice("sha256:".length), root: resolve(stateRoot, "development-worker-results") }) });
+  const worker = new LocalProposalWorkerPort(new LocalNappletWorker({ image: readiness.imageDigest, onProgress: (stage, state, diagnostic) => progress.emit(stage, state, diagnostic ? { diagnostic } : {}) }), { results: new DurableWorkerResultStore({ pool: app.pool, toolchainSha256: readiness.imageDigest.slice("sha256:".length), root: resolve(stateRoot, "development-worker-results") }) });
   const owners = new Map<string, string>();
   const artifactVerifier = new LocalGenerationArtifactVerifier({ worker, verifier: new LocalArtifactVerifier(), repository, ownerIdForAccount: (accountId) => owners.get(accountId) });
   const [packageHash, lockHash] = await Promise.all([sha256File(resolve(root, "package.json")), sha256File(resolve(root, "bun.lock"))]);

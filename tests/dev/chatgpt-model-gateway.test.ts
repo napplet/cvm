@@ -206,3 +206,31 @@ for (const failure of ["network", "malformed", "persistence"] as const) test(`${
   const diagnostic = await operations.diagnostic!(intent);
   for (const secret of ["private", "Bearer", "fixture-access", "https://", "SQL"]) expect(JSON.stringify(diagnostic)).not.toContain(secret);
 });
+
+test("large SSE delta traffic can finish with bounded source without a second model request", async () => {
+  const { options, intent, fixture } = setup();
+  const gateway = new ChatGptModelGateway({ ...options, fetch: async (url, init) => {
+    const response = await fixture.fetch(url, init);
+    const terminal = await response.text();
+    const delta = 'data: ' + JSON.stringify({ type: 'response.reasoning_summary_text.delta', delta: 'x'.repeat(1000) }) + '\n\n';
+    let count = 0;
+    return new Response(new ReadableStream({ pull(controller) {
+      if (count++ < 2400) controller.enqueue(new TextEncoder().encode(delta));
+      else { controller.enqueue(new TextEncoder().encode(terminal)); controller.close(); }
+    } }), { headers: { 'content-type': 'text/event-stream' } });
+  } });
+  expect((await gateway.dispatch(intent, signal())).status).toBe("completed");
+  expect((await gateway.dispatch(intent, signal())).status).toBe("completed");
+  expect(fixture.counts().inferences).toBe(1);
+});
+
+test("stream bounds repeated completed items and total traffic even without terminal output", async () => {
+  const event = (value: unknown) => 'data: ' + JSON.stringify(value) + '\n\n';
+  const items = Array.from({ length: 3 }, (_, output_index) => event({ type: 'response.output_item.done', output_index, item: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'x'.repeat(800_000) }] } })).join('');
+  await expect(readChatGptResponse(new Response(items), signal())).rejects.toThrow("RESPONSE_TOO_LARGE");
+  let count = 0;
+  const delta = new TextEncoder().encode(event({ type: 'response.output_text.delta', delta: 'x'.repeat(100_000) }));
+  await expect(readChatGptResponse(new Response(new ReadableStream({ pull(controller) {
+    if (count++ < 330) controller.enqueue(delta); else controller.close();
+  } })), signal())).rejects.toThrow("RESPONSE_TOO_LARGE");
+});

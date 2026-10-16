@@ -240,7 +240,7 @@ export class ProductWorkspace {
       label = "Check previous request"; help = () => this.el<HTMLButtonElement>("recover").click();
     } else if (this.#sessionBlocked) {
       reason = this.#sessionState === "usage_unknown"
-        ? "The last model request ended without a confirmed outcome. The CVM operator must resolve it before this applet can accept another revision. Your draft and verified preview are saved."
+        ? "The connection ended before we received a complete result. Check the saved request to recover it and continue. Your draft and verified preview are saved."
         : this.#sessionState === "billing_invariant_failed"
           ? "The last request has an accounting problem. The CVM operator must resolve it before revisions can continue. Your draft and verified preview are saved."
           : this.#sessionState === "active"

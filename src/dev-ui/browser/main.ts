@@ -59,7 +59,7 @@ function setGenerationStatus(value: string): void { byId("generation-status").te
 function setError(value = ""): void {
   byId("generation-error").textContent = value;
   if (!value) return;
-  const uncertain = /UNKNOWN|UNRESOLVED|TIMEOUT|CONNECTION|SEND_FAILED/iu.test(value);
+  const uncertain = !/MODEL_RESPONSE_INTERRUPTED/u.test(value) && /UNKNOWN|UNRESOLVED|TIMEOUT|CONNECTION|SEND_FAILED/iu.test(value);
   product?.failed(value, uncertain);
   activity.finish(uncertain ? "Outcome unconfirmed" : "Action stopped", uncertain ? "uncertain" : "failed");
   activity.explainFailure(value);
@@ -147,6 +147,9 @@ function clearRequest(): void { if (product) { sessionStorage.removeItem(request
 async function runGeneration(request: GenerationRequest): Promise<any> {
   if (product) sessionStorage.setItem(requestStorageKey, JSON.stringify(request));
   const result = request.kind === "start" ? await client!.startSession(request.input) : request.kind === "revise" ? await client!.reviseSession(request.input) : await client!.resumePendingAction(request.input);
+  if (typeof result?.sessionId === "string") sessionStorage.setItem(sessionStorageKey, result.sessionId);
+  const interrupted = result?.code === "MODEL_RESPONSE_INTERRUPTED";
+  if (interrupted) product?.sessionState("failed");
   // A terminal failure is a confirmed response, even when provider usage remains unknown.
   if (["failed", "denied", "billing_invariant_failed", "usage_unknown"].includes(result?.status)) {
     clearRequest();
@@ -156,6 +159,7 @@ async function runGeneration(request: GenerationRequest): Promise<any> {
         if (details.diagnostic?.code) result.code = `${result.code} · ${/SIGN_IN|REAUTHORIZE|PLAN_PERMISSION/.test(details.diagnostic.code) ? "The CVM provider account needs operator attention." : chatGptErrorMessage(details.diagnostic.code)}`;
       } catch { /* The original generation result remains authoritative. */ }
     }
+    if (interrupted) result.code += " · This attempt couldn’t finish. Your saved version and draft are safe. You can send your change again or edit it first. No local test charge was taken for this attempt; your subscription may still have counted its usage.";
   }
   return result;
 }

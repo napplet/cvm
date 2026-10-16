@@ -5,7 +5,7 @@ export const ChatGptDiagnosticSchema = z.object({
   code: z.string().regex(/^CHATGPT_[A-Z0-9_]{1,100}$/u),
   phase: z.enum(["request", "stream", "receipt", "persistence"]),
   elapsedMs: z.number().int().nonnegative().max(3_600_000),
-  receivedBytes: z.number().int().nonnegative().max(2_000_000),
+  receivedBytes: z.number().int().nonnegative().max(32_000_000),
   httpStatus: z.number().int().min(100).max(599).optional(),
 }).strict();
 export type ChatGptDiagnostic = z.infer<typeof ChatGptDiagnosticSchema>;

@@ -19,7 +19,7 @@ export const DevelopmentProgressSchema = z.object({
   at: z.number().int().nonnegative().safe(), elapsedMs: z.number().int().min(0).max(3600000),
   kind: z.enum(["stage", "heartbeat"]), stage: z.enum(Object.keys(progressStages) as [ProgressStage, ...ProgressStage[]]),
   state: z.enum(["running", "completed", "failed", "uncertain"]),
-  bytes: z.number().int().min(0).max(2_000_000).optional(),
+  bytes: z.number().int().min(0).max(32_000_000).optional(),
   diagnostic: WorkerDiagnosticSchema.optional(),
   provider: z.enum(["deterministic_fixture", "openai_responses", "openai_chatgpt_development"]).optional(),
   model: z.string().min(1).max(128).regex(/^[a-zA-Z0-9._:/-]+$/u).optional(),

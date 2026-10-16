@@ -1,4 +1,5 @@
 import { DevelopmentProjects } from "../dev/projects";
+import { InterruptedDevelopmentGeneration } from "../dev/interrupted-generation";
 import { finalizeEvent } from "nostr-tools/pure";
 import { LocalPublication } from "../dev/local-publication";
 import { z } from "zod";
@@ -26,7 +27,7 @@ import { ContextVmFundingAdapter } from "../contextvm/adapter";
 import { ContextVmSdkBridge } from "../contextvm/sdk-bridge";
 import { DevelopmentNwcSettlementReconciler } from "../dev/dev-funding-reconciler";
 import { createDevelopmentModelComposition } from "../dev/dev-composition";
-import { MeteredGenerationService, type SessionActionResult } from "../phase-04/metered-generation-service";
+import { MeteredGenerationService, SessionActionResultSchema, type SessionActionResult } from "../phase-04/metered-generation-service";
 import { LocalNappletWorker } from "../dev/local-napplet-worker";
 import { LocalArtifactVerifier } from "../dev/local-artifact-verifier";
 import { LocalArtifactRepository } from "../dev/local-artifact-repository";
@@ -289,11 +290,18 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
     return result;
   }
   const projects = new DevelopmentProjects(app.pool);
+  const interrupted = new InterruptedDevelopmentGeneration(app.pool, app.database.meteredFunding);
+  async function recoverInterrupted(result: SessionActionResult): Promise<SessionActionResult> {
+    if (result.status !== "usage_unknown") return result;
+    await interrupted.recover(result.accountId, result.sessionId);
+    const action = await app.database.meteredFunding.findMeteredActionByOperation(result.accountId, result.operationId);
+    return action?.result ? SessionActionResultSchema.parse(action.result) : result;
+  }
   const generationFacade = {
-    async startSession(input: any) { try { await projects.bind(input.principal.pubkey); owners.set(await accountIdForPrincipal(input.principal), input.principal.pubkey); const result = await generationWork(async () => shareVerified(await runtime.generation.startSession(input)));
+    async startSession(input: any) { try { await projects.bind(input.principal.pubkey); owners.set(await accountIdForPrincipal(input.principal), input.principal.pubkey); const result = await generationWork(async () => shareVerified(await recoverInterrupted(await runtime.generation.startSession(input))));
       if ("sessionId" in result) { try { await projects.name(input.principal.pubkey,result.sessionId,input.idea); } catch { /* Display metadata cannot change the metered outcome. */ } }
       return latestGenerationResult = result; } catch (error) { latestGenerationError = safeGenerationDiagnostic(error); throw error; } },
-    async reviseSession(input: any) { try { await projects.bind(input.principal.pubkey); owners.set(await accountIdForPrincipal(input.principal), input.principal.pubkey); return latestGenerationResult = await generationWork(async () => shareVerified(await runtime.generation.reviseSession(input))); } catch (error) { latestGenerationError = safeGenerationDiagnostic(error); throw error; } },
+    async reviseSession(input: any) { try { await projects.bind(input.principal.pubkey); owners.set(await accountIdForPrincipal(input.principal), input.principal.pubkey); return latestGenerationResult = await generationWork(async () => shareVerified(await recoverInterrupted(await runtime.generation.reviseSession(input)))); } catch (error) { latestGenerationError = safeGenerationDiagnostic(error); throw error; } },
   };
   const preAdmissionFacade = {
     async saveStart(input: any) {
@@ -314,7 +322,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
       try {
         await projects.bind(input.owner.ownerId);
         owners.set(input.owner.accountId, input.owner.ownerId);
-        return latestGenerationResult = await generationWork(async () => shareVerified(await runtime.preAdmission.resume(input)));
+        return latestGenerationResult = await generationWork(async () => shareVerified(await recoverInterrupted(await runtime.preAdmission.resume(input))));
       } catch (error) {
         latestGenerationError = safeGenerationDiagnostic(error);
         throw error;
@@ -322,6 +330,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
     },
   };
   new ContextVmFundingAdapter({ service: app.funding, transport: progress, admissions, admissionReceipts: receipts, accountStatus, topUps: { lightning: app.lightning, cashu: app.cashu }, generation: generationFacade, preAdmission: preAdmissionFacade, sessionStatus: { read: async (query: any) => {
+    await interrupted.recover(await accountIdForPrincipal(query.principal), query.sessionId);
     const result = await readSessionStatus({ store: app.database.meteredFunding, query, cursorSecret: identity.cursorSecret });
     if (result.status !== "ok") return result;
     const accountId = await accountIdForPrincipal(query.principal);

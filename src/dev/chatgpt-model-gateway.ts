@@ -63,6 +63,7 @@ export async function readChatGptResponse(response: Response, signal: AbortSigna
   const reader = response.body?.getReader(); if (!reader) throw chatGptError("EMPTY_RESPONSE");
   const decoder = new TextDecoder(); let buffer = ""; let bytes = 0;
   const completedItems = new Map<number, z.infer<typeof NativeResponse>["output"][number]>();
+  let completedBytes = 0;
   let responseId: string | undefined;
   let lastReported = -Infinity;
   const abort = () => { void reader.cancel().catch(() => undefined); };
@@ -71,11 +72,14 @@ export async function readChatGptResponse(response: Response, signal: AbortSigna
     for (;;) {
       signal.throwIfAborted(); const { done, value } = await reader.read(); signal.throwIfAborted();
       buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
-      bytes += value?.byteLength ?? 0; if (bytes > 2_000_000) throw chatGptError("RESPONSE_TOO_LARGE");
+      // SSE repeats output across deltas, completed items and the terminal
+      // envelope. Bound transport traffic separately from retained output.
+      bytes += value?.byteLength ?? 0; if (bytes > 32_000_000) throw chatGptError("RESPONSE_TOO_LARGE");
       if (value && performance.now() - lastReported >= 1000) { lastReported = performance.now(); try { onBytes?.(bytes); } catch { /* Observations never interrupt inference. */ } }
       let match: RegExpExecArray | null;
       while ((match = /\r?\n\r?\n/u.exec(buffer))) {
         const block = buffer.slice(0, match.index); buffer = buffer.slice(match.index + match[0].length);
+        if (Buffer.byteLength(block) > 2_000_000) throw chatGptError("RESPONSE_TOO_LARGE");
         const data = block.split(/\r?\n/u).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).replace(/^ /u, "")).join("\n");
         if (!data || data === "[DONE]") continue;
         const event = JSON.parse(data);
@@ -89,6 +93,8 @@ export async function readChatGptResponse(response: Response, signal: AbortSigna
           const item = NativeResponse.shape.output.element.parse(event.item);
           const previous = completedItems.get(event.output_index);
           if (previous && canonicalJson(previous) !== canonicalJson(item)) throw chatGptError("STREAM_FAILED");
+          if (!previous) completedBytes += Buffer.byteLength(JSON.stringify(item));
+          if (completedBytes > 2_000_000) throw chatGptError("RESPONSE_TOO_LARGE");
           completedItems.set(event.output_index, item);
         }
         if (event.type === "response.completed") {
@@ -99,6 +105,7 @@ export async function readChatGptResponse(response: Response, signal: AbortSigna
           return completed.output.length ? completed : { ...completed, output: [...completedItems].sort(([left], [right]) => left - right).map(([, item]) => item) };
         }
       }
+      if (Buffer.byteLength(buffer) > 2_000_000) throw chatGptError("RESPONSE_TOO_LARGE");
       if (done) throw chatGptError("STREAM_INTERRUPTED");
     }
   } finally { signal.removeEventListener("abort", abort); await reader.cancel().catch(() => undefined); }

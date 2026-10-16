@@ -54,7 +54,7 @@ try {
   await page.locator("#revision-help").click(); await page.locator("#workspace-settings").waitFor({state:"visible"}); await page.keyboard.press("Escape");
   await page.evaluate(()=>{const w=window as any;w.workspace.connected(true);w.workspace.sessionState("usage_unknown");w.workspace.onSessionStatusCheck(async()=>{});});
   assert(await page.locator("#revise").isDisabled() && await page.locator("#revision").isEnabled(),"UNKNOWN_OUTCOME_DRAFT_UNAVAILABLE");
-  assert((await page.locator("#revision-blocked-reason").innerText()).includes("operator must resolve"),"UNKNOWN_OUTCOME_UNEXPLAINED_AT_COMPOSER");
+  assert((await page.locator("#revision-blocked-reason").innerText()).includes("Check the saved request"),"UNKNOWN_OUTCOME_UNEXPLAINED_AT_COMPOSER");
   await page.locator("#revision").press("Control+Enter");
   await page.locator("#revision-help").click();
   assert((await page.locator("#revision-status-result").innerText()).includes("still waiting"),"UNCHANGED_STATUS_UNEXPLAINED");

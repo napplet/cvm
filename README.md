@@ -28,7 +28,7 @@ bun install --frozen-lockfile
 bun scripts/dev.ts up
 ```
 
-Open the printed URL, click **Connect**, fund the account with local test money, and generate a napplet. The default model is a labeled deterministic fixture. For real generation using your ChatGPT subscription, choose **Continue with ChatGPT**, select a model, and click **Use ChatGPT plan**. [Sign-in and test instructions](docs/runbooks/development-gui.md#chatgpt-subscription-sign-in-for-local-development). See the [workspace walkthrough](docs/runbooks/development-gui.md#try-the-execution-flow).
+Open the printed URL, click **Connect**, fund the account with local test money, and generate a napplet. The default model is a labeled deterministic fixture. For real generation using your ChatGPT subscription, choose **Continue with ChatGPT**; sign-in activates a model automatically. Model changes apply immediately, and your sign-in and selection persist across restarts. [Sign-in and test instructions](docs/runbooks/development-gui.md#chatgpt-subscription-sign-in-for-local-development). See the [workspace walkthrough](docs/runbooks/development-gui.md#try-the-execution-flow).
 
 | Command | Purpose |
 | --- | --- |
@@ -65,7 +65,7 @@ bun scripts/dev.ts status
 | `bun scripts/dev.ts down` | Stop the selected workspace while preserving its development data. |
 | `bun scripts/dev.ts reset --confirm` | Remove only the selected workspace's labeled containers, volumes, checkpoints, artifacts, and local state. |
 
-The default model mode is **Deterministic fixture**: only the external model response is substituted, while the relay, signed ContextVM path, rails, SQL ledger, worker, build, verifier, artifact repository, and preview host are real local boundaries. ChatGPT OAuth mode uses your selected account’s plan/credits, with actual token counts and clearly synthetic local test charges. API-key mode remains available through explicit configuration and can incur API charges. Both appear as distinct provider modes in `status` and the workspace; it is never silently represented as deterministic evidence. See the [development GUI runbook](docs/runbooks/development-gui.md) for setup, inspection, recovery, and limitations.
+The default model mode is **Deterministic fixture**: only the external model response is substituted, while the relay, signed ContextVM path, rails, SQL ledger, worker, build, verifier, artifact repository, and preview host are real local boundaries. ChatGPT OAuth mode uses your selected account’s subscription allowance, with actual token counts and synthetic local test sats. API-key mode remains available through explicit configuration and can incur API charges. Both appear as distinct provider modes in `status` and the workspace; it is never silently represented as deterministic evidence. See the [development GUI runbook](docs/runbooks/development-gui.md) for setup, inspection, recovery, and limitations.
 
 For local payment development, start Docker and run `bun scripts/dev-payments.ts`. This automatically provisions two Cashu mints, a local relay, a funded NWC wallet with test money, and a migrated PostgreSQL ledger. Run `bun scripts/dev-payments.ts test` for isolated payment and application funding tests, including ledger replay checks after restart. See [development payments](docs/runbooks/development-payments.md) for credentials, application integration, and stop/reset commands.
 

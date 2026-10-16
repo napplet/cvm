@@ -9,7 +9,7 @@ const explanations: Record<string, string> = {
   CHATGPT_SIGN_IN_REQUIRED: "Sign in to ChatGPT before generating.",
   CHATGPT_REAUTHORIZE_REQUIRED: "Your ChatGPT session needs a new sign-in.",
   CHATGPT_REMOTE_REVOCATION_UNCONFIRMED: "Signed out locally. Remote disconnection could not be confirmed; disconnect this app in ChatGPT settings.",
-  CHATGPT_USAGE_LIMIT_REACHED: "ChatGPT plan or app usage limit reached. Open Manage usage to review it.",
+  CHATGPT_USAGE_LIMIT_REACHED: "ChatGPT subscription request blocked by a usage limit. In ChatGPT Settings → Usage → App limits, check napplet-cvm development. OpenAI has not identified which limit was reached.",
   CHATGPT_USAGE_UNAVAILABLE: "ChatGPT usage availability could not be checked. Try a new action later.",
   CHATGPT_PLAN_ACCESS_DENIED: "Your account or workspace did not allow this request. Check ChatGPT plan access.",
   CHATGPT_STREAM_INTERRUPTED: "The model connection ended before completion. This action will not be sent again automatically.",
@@ -25,30 +25,43 @@ const explanations: Record<string, string> = {
 let refreshDiagnostic: (() => Promise<string | undefined>) | undefined;
 export async function showChatGptDiagnostic(): Promise<string | undefined> { return refreshDiagnostic?.(); }
 
+async function controlRequest(bootstrap: DevelopmentBootstrap, path: string, body?: unknown): Promise<any> {
+  const response = await fetch(`/dev/chatgpt/${path}`, { method: body === undefined ? "GET" : "POST", cache: "no-store", headers: { "x-dev-model-token": bootstrap.modelControlToken!, ...(body === undefined ? {} : { "content-type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const result = await response.json(); if (!response.ok) throw new Error(result.code ?? "CHATGPT_REQUEST_FAILED"); return result;
+}
+
+/** Check local sign-in before reserving capacity or funds for a new action. */
+export async function ensureChatGptReady(bootstrap: DevelopmentBootstrap): Promise<void> {
+  if (!bootstrap.modelControlToken) return;
+  const status: Status = await controlRequest(bootstrap, "status");
+  if (status.settings.mode !== "chatgpt") return;
+  const account = status.accounts.find((item) => item.id === status.settings.accountId);
+  if (!account?.signedIn) throw new Error("CHATGPT_SIGN_IN_REQUIRED");
+  if (!account.planEnabled) throw new Error("CHATGPT_PLAN_PERMISSION_REQUIRED");
+}
+
 export async function mountChatGptSettings(bootstrap: DevelopmentBootstrap): Promise<void> {
   if (!bootstrap.modelControlToken) return;
   const panel = document.createElement("section"); panel.setAttribute("aria-labelledby", "chatgpt-heading");
   panel.innerHTML = `<h2 id="chatgpt-heading">Generation model</h2>
     <p id="chatgpt-active" class="supporting"></p>
-    <p class="supporting">Use your ChatGPT plan for real generation. Cashu/NWC balances and charges here are local test sats, separate from your ChatGPT plan or credits.</p>
+    <p class="supporting">Your ChatGPT subscription powers model requests. Cashu/NWC amounts are local test sats for exercising this app's payments.</p>
     <label for="chatgpt-account">ChatGPT account</label><select id="chatgpt-account"><option value="">Add a ChatGPT account</option></select>
     <div class="row"><button id="chatgpt-sign-in">Continue with ChatGPT</button><button id="chatgpt-sign-out" disabled>Sign out of ChatGPT</button></div>
     <label for="chatgpt-model">ChatGPT model</label><select id="chatgpt-model" disabled><option value="">Sign in to load available models</option></select>
     <div class="row"><button id="chatgpt-models" disabled>Reload models</button><button id="chatgpt-default">Use default provider</button></div>
     <p id="chatgpt-status" class="status" role="status" aria-live="polite"></p>
-    <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">Manage usage</a>
-    <p class="supporting">The maximum below caps test charges. ChatGPT plan usage is controlled in Manage usage; this preview API cannot enforce a per-request output-token cap. Model/account changes apply to new actions. Resume a saved action with its original model and account.</p>
-    <dialog id="chatgpt-welcome" aria-labelledby="chatgpt-welcome-title"><h2 id="chatgpt-welcome-title">You're using your ChatGPT plan</h2><p>Eligible generation requests use your ChatGPT plan or credits. Manage access and limits in ChatGPT settings. Local test sats are separate.</p><button id="chatgpt-got-it">Got it</button></dialog>`;
+    <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">Manage subscription usage</a>
+    <p class="supporting">In ChatGPT, open Settings → Usage → App limits and find napplet-cvm development. Use the same ChatGPT account and workspace you authorized here. If the link shows only API credit billing, open ChatGPT's settings from its account menu instead.</p>
+    <p class="supporting">The maximum below caps local test charges. Subscription allowance and app limits are managed in ChatGPT; this app cannot set a per-request output-token cap. Model/account changes apply to new actions. Resume a saved action with its original model and account.</p>
+    <dialog id="chatgpt-welcome" aria-labelledby="chatgpt-welcome-title"><h2 id="chatgpt-welcome-title">You're using your ChatGPT plan</h2><p>Eligible generation requests use your ChatGPT subscription allowance. Manage this app's access and limits in ChatGPT settings. Local test sats exercise the payment flow.</p><button id="chatgpt-got-it">Got it</button></dialog>`;
   document.querySelector(".workspace-controls")!.prepend(panel);
   const element = <T extends HTMLElement>(id: string) => panel.querySelector<T>(`#${id}`)!;
   const accountSelect = element<HTMLSelectElement>("chatgpt-account"); const modelSelect = element<HTMLSelectElement>("chatgpt-model");
   let status: Status;
   const message = (text: string) => { element("chatgpt-status").textContent = text; };
   const errorMessage = (code: string) => explanations[code] ?? `ChatGPT setup could not complete (${code}). Try again from Continue with ChatGPT.`;
-  const control = async (path: string, body?: unknown) => {
-    const response = await fetch(`/dev/chatgpt/${path}`, { method: body === undefined ? "GET" : "POST", cache: "no-store", headers: { "x-dev-model-token": bootstrap.modelControlToken!, ...(body === undefined ? {} : { "content-type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-    const result = await response.json(); if (!response.ok) throw new Error(result.code ?? "CHATGPT_REQUEST_FAILED"); return result;
-  };
+  const control = (path: string, body?: unknown) => controlRequest(bootstrap, path, body);
   const report = (error: unknown) => message(errorMessage(error instanceof Error ? error.message : "CHATGPT_REQUEST_FAILED"));
   const refresh = async () => {
     status = await control("status");
@@ -56,7 +69,8 @@ export async function mountChatGptSettings(bootstrap: DevelopmentBootstrap): Pro
     accountSelect.replaceChildren(new Option("Add a ChatGPT account", ""), ...status.accounts.map((account) => new Option(`${account.label} · ${account.id.slice(0, 6)}${account.signedIn ? "" : " · signed out"}`, account.id)));
     if (previous && status.accounts.some((account) => account.id === previous)) accountSelect.value = previous;
     else if (status.accounts.length) accountSelect.value = status.accounts.at(-1)!.id;
-    element("chatgpt-active").textContent = status.settings.mode === "chatgpt" ? `Using ChatGPT plan · ${status.settings.model}` : `Active: ${bootstrap.providerLabel}`;
+    const selectedAccount = status.accounts.find((item) => item.id === status.settings.accountId);
+    element("chatgpt-active").textContent = status.settings.mode === "chatgpt" ? selectedAccount?.signedIn ? `Using ChatGPT plan · ${status.settings.model}` : "ChatGPT selected · sign in to generate" : `Active: ${bootstrap.providerLabel}`;
     element<HTMLButtonElement>("chatgpt-default").textContent = bootstrap.providerLabel === "Configured OpenAI Responses" ? "Use configured API provider" : "Use default provider";
     const account = status.accounts.find((item) => item.id === accountSelect.value);
     element<HTMLButtonElement>("chatgpt-sign-out").disabled = !account?.signedIn;
@@ -110,6 +124,6 @@ export async function mountChatGptSettings(bootstrap: DevelopmentBootstrap): Pro
   element<HTMLButtonElement>("chatgpt-sign-out").onclick = async () => { try { const result = await control("logout", { accountId: accountSelect.value }); await refresh(); await loadModels(); message(result.revoked ? "Signed out of ChatGPT. Use the default provider or sign in again." : explanations.CHATGPT_REMOTE_REVOCATION_UNCONFIRMED!); } catch (error) { report(error); } };
   const welcome = element<HTMLDialogElement>("chatgpt-welcome");
   element<HTMLButtonElement>("chatgpt-got-it").onclick = async () => { try { await control("welcome", { accountId: accountSelect.value }); welcome.close(); } catch (error) { report(error); } };
-  refreshDiagnostic = async () => { try { const current: Status = await control("status"); if (current.diagnostic || current.notice) { const explanation = errorMessage(current.diagnostic ?? current.notice!); message(explanation); return explanation; } } catch { /* Keep generation's own error visible. */ } };
+  refreshDiagnostic = async () => { try { const current: Status = await control("status"); const selected = current.accounts.find((item) => item.id === current.settings.accountId); const code = current.settings.mode === "chatgpt" && !selected?.signedIn ? "CHATGPT_SIGN_IN_REQUIRED" : current.diagnostic ?? current.notice; if (code) { const explanation = errorMessage(code); message(explanation); return explanation; } } catch { /* Keep generation's own error visible. */ } };
   try { await refresh(); await loadModels(); const error = new URL(location.href).searchParams.get("chatgpt_error"); if (error) message(errorMessage(error)); history.replaceState(null, "", "/"); } catch (error) { report(error); }
 }

@@ -53,6 +53,8 @@ export async function readChatGptResponse(response: Response, signal: AbortSigna
   if (contentType && contentType !== "text/event-stream") { await response.body?.cancel().catch(() => undefined); throw chatGptError("STREAM_REQUIRED"); }
   const reader = response.body?.getReader(); if (!reader) throw chatGptError("EMPTY_RESPONSE");
   const decoder = new TextDecoder(); let buffer = ""; let bytes = 0;
+  const completedItems = new Map<number, z.infer<typeof NativeResponse>["output"][number]>();
+  let responseId: string | undefined;
   let lastReported = -Infinity;
   const abort = () => { void reader.cancel().catch(() => undefined); };
   signal.addEventListener("abort", abort, { once: true });
@@ -68,11 +70,25 @@ export async function readChatGptResponse(response: Response, signal: AbortSigna
         const data = block.split(/\r?\n/u).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).replace(/^ /u, "")).join("\n");
         if (!data || data === "[DONE]") continue;
         const event = JSON.parse(data);
+        if (event.type === "response.created" && typeof event.response?.id === "string") responseId = event.response.id;
         if (["error", "response.failed", "response.incomplete"].includes(event.type)) {
           const code = event.response?.error?.code ?? event.error?.code ?? event.code;
           throw chatGptError(code === "subscription_sharing_usage_limit_exceeded" ? "USAGE_LIMIT_REACHED" : code === "subscription_sharing_usage_unavailable" ? "USAGE_UNAVAILABLE" : "STREAM_FAILED");
         }
-        if (event.type === "response.completed") return NativeResponse.parse(event.response);
+        if (event.type === "response.output_item.done") {
+          if (!Number.isSafeInteger(event.output_index) || event.output_index < 0 || event.output_index >= 128) throw chatGptError("STREAM_FAILED");
+          const item = NativeResponse.shape.output.element.parse(event.item);
+          const previous = completedItems.get(event.output_index);
+          if (previous && canonicalJson(previous) !== canonicalJson(item)) throw chatGptError("STREAM_FAILED");
+          completedItems.set(event.output_index, item);
+        }
+        if (event.type === "response.completed") {
+          const completed = NativeResponse.parse(event.response);
+          if (responseId && responseId !== completed.id) throw chatGptError("STREAM_FAILED");
+          // The subscription route can omit output from its terminal envelope.
+          // Completed item events carry the source; deltas alone never suffice.
+          return completed.output.length ? completed : { ...completed, output: [...completedItems].sort(([left], [right]) => left - right).map(([, item]) => item) };
+        }
       }
       if (done) throw chatGptError("STREAM_INTERRUPTED");
     }

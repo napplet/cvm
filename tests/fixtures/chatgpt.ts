@@ -8,6 +8,7 @@ export function chatGptFixture(now: () => number = Date.now) {
   const authorization = new Map<string, URL>();
   const calls: { url: string; init?: RequestInit }[] = [];
   let refreshes = 0; let inferences = 0;
+  let sparseCompletion = false;
   let refreshError: string | undefined; let inferenceMode: "complete" | "cut" | "limit" | "bad-source" | "invalid-typescript" = "complete";
   let claimsOverride: Record<string, unknown> = {}; let grantedScope = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct";
   const token = (claims: Record<string, unknown>) => {
@@ -39,13 +40,15 @@ export function chatGptFixture(now: () => number = Date.now) {
       inferences++;
       const body = JSON.parse(String(init?.body));
       const event = inferenceMode === "limit" ? { type: "response.failed", response: { error: { code: "subscription_sharing_usage_limit_exceeded" } } } : { type: "response.completed", response: { id: `resp_fixture_${inferences}`, model: body.model, status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: inferenceMode === "bad-source" ? "invalid" : JSON.stringify({ files: files(inferences).map((file) => inferenceMode === "invalid-typescript" && file.path === "src/main.ts" ? { ...file, content: file.content + '\nconst invalid: number = "deliberate type error";' } : file) }) }] }], usage: { input_tokens: 1200, output_tokens: 800 } } };
-      const data = `: comment\r\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: "partial" })}\r\n\r\n${inferenceMode === "cut" ? "" : `data: ${JSON.stringify(event)}\r\n\r\n`}`;
+      const items = sparseCompletion && event.type === "response.completed" ? (event.response as any).output.map((item: any, output_index: number) => `data: ${JSON.stringify({ type: "response.output_item.done", output_index, item })}\r\n\r\n`).join("") : "";
+      const terminal = sparseCompletion && event.type === "response.completed" ? { ...event, response: { ...event.response, output: [] } } : event;
+      const data = `: comment\r\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: "partial" })}\r\n\r\n${items}${inferenceMode === "cut" ? "" : `data: ${JSON.stringify(terminal)}\r\n\r\n`}`;
       const encoded = new TextEncoder().encode(data);
       return new Response(new ReadableStream({ start(controller) { for (let i = 0; i < encoded.length; i += 17) controller.enqueue(encoded.slice(i, i + 17)); controller.close(); } }), { headers: { "content-type": "text/event-stream" } });
     }
     throw new Error("FIXTURE_UNEXPECTED_NETWORK");
   };
-  return { fetch, calls, files, token, setClaims: (claims: Record<string, unknown>) => { claimsOverride = claims; }, setScope: (value: string) => { grantedScope = value; }, setRefreshError: (value?: string) => { refreshError = value; }, setInferenceMode: (value: typeof inferenceMode) => { inferenceMode = value; }, counts: () => ({ refreshes, inferences }), authorize(url: string) {
+  return { fetch, calls, files, token, setSparseCompletion: (value: boolean) => { sparseCompletion = value; }, setClaims: (claims: Record<string, unknown>) => { claimsOverride = claims; }, setScope: (value: string) => { grantedScope = value; }, setRefreshError: (value?: string) => { refreshError = value; }, setInferenceMode: (value: typeof inferenceMode) => { inferenceMode = value; }, counts: () => ({ refreshes, inferences }), authorize(url: string) {
     const auth = new URL(url); const code = crypto.randomUUID(); authorization.set(code, auth);
     const callback = new URL(auth.searchParams.get("redirect_uri")!);
     callback.search = new URLSearchParams({ code, state: auth.searchParams.get("state")!, client_id: auth.searchParams.get("client_id") === "dynamic_agent_client" ? "oaiapp_fixture" : auth.searchParams.get("client_id")! }).toString();

@@ -6,7 +6,7 @@ export type ClientActivity = { kind: "sent"; requestId: string | number; tool: s
 
 type JsonRpcResponse = { id: string | number | null; result?: unknown; error?: { message?: string } };
 type PaymentTag = readonly [string, string, string?];
-export type DevelopmentBootstrap = Readonly<{ relayUrl: string; servicePubkey: string; reserveSat: string; actionCeilingSat: string; modelControlToken?: string; providerLabel: "Deterministic fixture" | "Configured OpenAI Responses" | "ChatGPT plan · test credits" }>;
+export type DevelopmentBootstrap = Readonly<{ relayUrl: string; servicePubkey: string; reserveSat: string; actionCeilingSat: string; modelControlToken?: string; providerLabel: "Deterministic fixture" | "Configured OpenAI Responses" | "ChatGPT subscription · local test sats" }>;
 
 function browserSignerKey(servicePubkey: string): string {
   const storageKey = `napplet-cvm/dev-contextvm-key/v1/${servicePubkey}`;

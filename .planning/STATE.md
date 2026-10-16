@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: verification_deferred_gaps
-stopped_at: ChatGPT automatic activation and headerless SSE fixes verified; live artifact verification blocked by ChatGPT usage limit
-last_updated: "2026-10-16T00:30:10Z"
+stopped_at: ChatGPT subscription generation verified through real Docker build and interactive preview
+last_updated: "2026-10-16T00:57:00Z"
 last_activity: 2026-10-15
-last_activity_desc: Automatic ChatGPT activation and stopped-request feedback verified; live provider reports usage limit exceeded
+last_activity_desc: Fixed subscription stream assembly; real generation and interactive counter preview passed
 progress:
   total_phases: 7
   completed_phases: 6
@@ -25,16 +25,16 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 **Core value:** A user can describe one focused applet and receive a safe, conformant napplet that can be previewed and placed directly into a compatible napplet runtime.
 **Active milestone:** v1.0 — Safe Napplet Generation MVP
-**Current focus:** ChatGPT selected automatically with persistent sign-in; live artifact verification awaits account/app usage allowance; production remains deferred
+**Current focus:** ChatGPT subscription generation verified end to end with persistent sign-in; production remains deferred
 
 ## Current Position
 
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
 Plan: 56 of 58 accepted; development Plans 07-52/53/56/57/54/55 complete
-Status: Local execution GUI running at http://127.0.0.1:49371 in chatgpt-oauth mode with gpt-6.1-sol. Current live requests report subscription_sharing_usage_limit_exceeded. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
-Last activity: 2026-10-15 — Implemented quick task 261015-o1z: automatic activation, headerless SSE and stopped-request feedback (1a850d5); live artifact verification remains blocked by account/app usage limits.
+Status: Local execution GUI at http://127.0.0.1:49371 in chatgpt-oauth mode with gpt-6.1-sol. Live subscription generation passed through verified interactive preview. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
+Last activity: 2026-10-15 — Fixed empty-terminal subscription stream assembly and verified a real generated counter; quick task 261015-o1z live acceptance is complete.
 
-Follow-up: Model catalog reload is fixed (seven live models). The latest 33 OAuth/gateway tests and composed browser journey pass, including automatic activation and usage-limit feedback. Live diagnostics identified absent SSE Content-Type and an upstream usage-limit error; no completed live artifact is claimed. See the current quick-task summary.
+Follow-up: 35 OAuth/gateway tests (148 assertions), composed OAuth browser journey, and real subscription smoke pass. Live source completed Docker build, verification and ledger settlement; clicking Add changed the preview count to 1. Provider usage was 220 input / 705 output tokens. See debug/resolved/chatgpt-live-subscription.md.
 
 Plan execution: 96/98 milestone plans complete; Phase 7 is 56/58 complete and production verification remains pending
 
@@ -46,7 +46,7 @@ Plan execution: 96/98 milestone plans complete; Phase 7 is 56/58 complete and pr
 - Plans: 96/98 milestone plans executed. Development Plans 07-52/53/56/57/54/55 are complete. Production-only 07-20 and 07-26 remain deferred; neither is a development prerequisite.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
 - Development coverage: the complete local execution GUI is accepted; see `07-55-SUMMARY.md`, the dated acceptance matrix in `07-DEV-VALIDATION.md`, and `docs/runbooks/development-gui.md`. Root manifests remain unchanged. Deterministic mode substitutes only the external model. Paid-provider execution and remote CI were not exercised; publication is unavailable; conformance reports five passed and five skipped checks. Production resumption follows `docs/runbooks/production-readiness-deferred.md` only when requested.
-- Local ChatGPT OAuth support is implemented and fixture-tested; see `quick/261015-leh-add-local-chatgpt-oauth-generation-with-/261015-leh-SUMMARY.md`. Subscription usage has separate synthetic test-credit pricing, and unresolved calls are never automatically resent.
+- Local ChatGPT OAuth support is implemented and verified with a real subscription-generated interactive artifact; see `debug/resolved/chatgpt-live-subscription.md`. Subscription usage has separate synthetic local-test-sat accounting, and unresolved calls are never automatically resent.
 
 ## Performance Metrics
 
@@ -333,11 +333,11 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Local payment, ContextVM, generation/preview, continuation, and OAuth fixture e2e coverage are complete. Finish the opt-in live ChatGPT artifact smoke after plan/app usage allowance is available; do not replay the original uncertain operation. Production follow-up remains under Deferred Verification.
+- Local payment, ContextVM, generation/preview, continuation, OAuth fixture e2e, and opt-in live ChatGPT interactive preview verification are complete. Production follow-up remains under Deferred Verification.
 
 ### Blockers/Concerns
 
-- Live ChatGPT generation currently reports subscription_sharing_usage_limit_exceeded. Sign-in, catalog and selected model work; Manage usage must resolve the allowance before live artifact verification can proceed. No active generation action remains.
+- Live ChatGPT generation is verified after reauthorization and stream assembly repair. Original uncertain operations retain their replay fences; no automatic redispatch was performed.
 - Production-only concerns are deferred: expired operator funding and missing concrete deployment/preapproval composition. See docs/runbooks/production-readiness-deferred.md. Do not reopen a production wallet setup page for local development.
 - No active Phase 1 blocker. Official `@napplet/cli@0.5.2` plus matching `@napplet/skills`/`@napplet/boilerplate@0.3.2` is recorded as review-ready candidate `a19fc7d283a4482c53728f4a931743576564fb3826d7f8fa1383d02578b69024` and was explicitly approved for design execution.
 - Local provenance, reproducibility, hostile/mutation, SBOM, promotion, and source-measurement gates are complete; genuine protected-live certification remains unavailable in this workspace.
@@ -355,7 +355,7 @@ Recent decisions affecting current work:
 | 261014-daz | Automatic local Cashu mint and NWC wallet with isolated e2e tests | 2026-10-14 | dc17cd9 | [261014-daz](./quick/261014-daz-automatic-local-cashu-mint-and-nwc-devel/) |
 | 261015-leh | Local ChatGPT OAuth generation, GUI sign-in, refresh, and e2e coverage | 2026-10-15 | 48f5a0f | [261015-leh](./quick/261015-leh-add-local-chatgpt-oauth-generation-with-/) |
 | 261015-n91 | Granular live GUI progress, heartbeat, failed-stage feedback and local SQL budget | 2026-10-15 | b1b5fb4 | [261015-n91](./quick/261015-n91-add-granular-live-gui-progress-for-gener/) |
-| 261015-o1z | Automatic ChatGPT activation and stopped-request fixes; live artifact verification blocked by usage limit | 2026-10-15 | 1a850d5 | [261015-o1z](./quick/261015-o1z-activate-signed-in-chatgpt-for-real-gene/) |
+| 261015-o1z | Automatic ChatGPT activation and stopped-request fixes; live interactive verification completed in debug follow-up | 2026-10-15 | 1a850d5 | [261015-o1z](./quick/261015-o1z-activate-signed-in-chatgpt-for-real-gene/) |
 
 ## Deferred Verification
 
@@ -373,6 +373,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-16T00:30:10Z
-Stopped at: Automatic ChatGPT activation and headerless SSE/stopped-state fixes verified. Service restarted with sign-in and gpt-6.1-sol preserved. Live diagnostics return a usage-limit error; no live artifact completed. Production remains deferred.
-Resume file: .planning/quick/261015-o1z-activate-signed-in-chatgpt-for-real-gene/261015-o1z-SUMMARY.md
+Last session: 2026-10-16T00:57:00Z
+Stopped at: Live subscription generation, real Docker build/verification and interactive preview passed. Sign-in and gpt-6.1-sol selection preserved. Production remains deferred.
+Resume file: .planning/debug/resolved/chatgpt-live-subscription.md

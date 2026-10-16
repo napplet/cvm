@@ -8,6 +8,7 @@ import { createDevelopmentContextVmServer } from "../../src/dev-ui/contextvm-ser
 import { chatGptFixture } from "../fixtures/chatgpt";
 
 const fixture = chatGptFixture();
+fixture.setSparseCompletion(true);
 let releaseInference!: () => void;
 const inferenceGate = new Promise<void>((resolve) => { releaseInference = resolve; });
 let delayFirstInference = true;
@@ -113,12 +114,17 @@ try {
   fixture.setInferenceMode("limit");
   await page.getByRole("button", { name: "Generate napplet", exact: true }).click();
   await page.getByText("Generation stopped · provider outcome unconfirmed", { exact: true }).waitFor();
-  await page.locator("#chatgpt-status").filter({ hasText: "ChatGPT plan or app usage limit reached" }).waitFor();
-  requireThat((await page.locator("#activity-connection").textContent())?.includes("usage limit reached"), "LIVE_PROVIDER_ERROR_MISSING");
+  await page.locator("#chatgpt-status").filter({ hasText: "ChatGPT subscription request blocked by a usage limit" }).waitFor();
+  requireThat((await page.locator("#activity-connection").textContent())?.includes("App limits"), "LIVE_PROVIDER_ERROR_MISSING");
   requireThat((await page.locator("#activity-connection").textContent())?.includes("The server finished this request"), "STOPPED_REQUEST_SHOWN_AS_RUNNING");
   requireThat(fixture.counts().inferences === 5, "LIMIT_ACTION_REDISPATCHED");
   await page.getByRole("button", { name: "Sign out of ChatGPT" }).click(); await page.getByText("Signed out of ChatGPT. Use the default provider or sign in again.", { exact: true }).waitFor();
   const cleared = JSON.parse(await readFile(join(stateRoot, "development-chatgpt/accounts.json"), "utf8")); requireThat(!cleared.accounts[0].tokens, "OAUTH_LOGOUT_RETAINED_TOKENS");
+  await page.getByText("ChatGPT selected · sign in to generate", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Generate napplet", exact: true }).click();
+  await page.locator("#generation-error").filter({ hasText: "Sign in to ChatGPT before generating" }).waitFor();
+  requireThat(await page.locator('#activity-events [data-stage="admission"]').count() === 0, "SIGNED_OUT_ACTION_RESERVED_FUNDS");
+  requireThat(fixture.counts().inferences === 5, "SIGNED_OUT_ACTION_DISPATCHED");
   console.log(JSON.stringify({ status: "passed", case: "chatgpt-oauth", evidence: "fixture OAuth and inference; real relay, SQL, Docker worker and Paja", requests: fixture.counts().inferences, counts, failure: "TypeScript stage displayed; stale facts cleared; failed action settled" }));
 } catch (error) {
   console.error(JSON.stringify({ code: error instanceof Error ? error.message : "OAUTH_E2E_FAILED", model: await page.locator("#chatgpt-status").textContent().catch(() => "unavailable"), generation: server.generationEvidence(), activity: await page.locator("#execution-activity").textContent(), error: await page.locator("#generation-error").textContent(), counts: fixture.counts() })); throw error;

@@ -1,5 +1,5 @@
 import { ExecutionActivity } from "./activity";
-import { mountChatGptSettings, showChatGptDiagnostic } from "./chatgpt-settings";
+import { ensureChatGptReady, mountChatGptSettings, showChatGptDiagnostic } from "./chatgpt-settings";
 import { DevelopmentContextVmClient, type DevelopmentBootstrap } from "./contextvm-client";
 
 type PendingAction = Readonly<{ checkpointId: string; reference: string; fingerprint: string; maximum: string; shortfall: string; expiresAtMs: number }>;
@@ -82,7 +82,7 @@ for (const id of actionButtons) {
     byId("generation-facts").replaceChildren();
     for (const name of actionButtons) byId<HTMLButtonElement>(name).disabled = true;
     byId("versions").querySelectorAll("button").forEach((item) => item.disabled = true);
-    try { await run.call(button, event); activity.finish(byId("generation-status").textContent === "Verified preview ready" ? "Completed · verified preview ready" : "Paused · saved action awaits funding and Resume"); }
+    try { if (id !== "replay-revision") await ensureChatGptReady(bootstrap); await run.call(button, event); activity.finish(byId("generation-status").textContent === "Verified preview ready" ? "Completed · verified preview ready" : "Paused · saved action awaits funding and Resume"); }
     catch (error) { setError(error instanceof Error ? error.message : "Action failed"); }
     finally {
       byId<HTMLButtonElement>("generate").disabled = !client;

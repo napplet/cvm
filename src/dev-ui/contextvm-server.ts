@@ -224,7 +224,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
       else throw new Error("CHATGPT_SELECT_AVAILABLE_MODEL");
       if (persist) await chatgpt.select(settings);
       runtime = next; oauthGateway = gateway;
-      providerLabel = gateway ? "ChatGPT plan · test credits" : composition.providerLabel;
+      providerLabel = gateway ? "ChatGPT subscription · local test sats" : composition.providerLabel;
       actionCeilingSat = maximumOperationCharge(runtime.pricing);
     } finally { configuring = false; }
   }

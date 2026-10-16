@@ -101,6 +101,29 @@ test("headerless SSE usage-limit errors remain visible and are never redispatche
   expect(fixture.counts().inferences).toBe(1);
 });
 
+test("subscription completion assembles completed output items when the terminal output is empty", async () => {
+  const { options, intent, fixture, proposals } = setup(); fixture.setSparseCompletion(true);
+  const gateway = new ChatGptModelGateway({ ...options, fetch: async (url, init) => new Response((await fixture.fetch(url, init)).body) });
+  const result = await gateway.dispatch(intent, signal());
+  expect(result.status).toBe("completed");
+  expect(proposals[0].proposal.files).toEqual(fixture.files(1));
+  expect(await gateway.dispatch(intent, signal())).toEqual(result);
+  expect(fixture.counts().inferences).toBe(1);
+});
+
+test("completed items require a matching terminal response and valid usage", async () => {
+  const item = { type: "message", role: "assistant", content: [{ type: "output_text", text: "{}" }] };
+  const terminal = { id: "resp_one", model: "fixture-codex", status: "completed", output: [], usage: { input_tokens: 1, output_tokens: 1 } };
+  const itemEvent = { type: "response.output_item.done", output_index: 1, item };
+  const response = (events: unknown[]) => new Response(new TextEncoder().encode(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")));
+  await expect(readChatGptResponse(response([itemEvent]), signal())).rejects.toThrow("STREAM_INTERRUPTED");
+  await expect(readChatGptResponse(response([itemEvent, { type: "response.completed", response: { ...terminal, usage: undefined } }]), signal())).rejects.toThrow();
+  await expect(readChatGptResponse(response([{ type: "response.created", response: { id: "resp_other" } }, itemEvent, { type: "response.completed", response: terminal }]), signal())).rejects.toThrow("STREAM_FAILED");
+  await expect(readChatGptResponse(response([itemEvent, { ...itemEvent, item: { ...item, role: "user" } }]), signal())).rejects.toThrow("STREAM_FAILED");
+  const result = await readChatGptResponse(response([itemEvent, { type: "response.completed", response: { ...terminal, output: [item] } }]), signal());
+  expect(result.output).toEqual([item]);
+});
+
 test("headerless JSON, partial streams and malformed receipts cannot claim completion", async () => {
   for (const body of [JSON.stringify({ status: "completed", usage: { input_tokens: 1, output_tokens: 1 } }), 'data: {"type":"response.output_text.delta","delta":"partial"}\n\n', 'data: {"type":"response.completed","response":{"status":"completed"}}\n\n']) {
     await expect(readChatGptResponse(new Response(new TextEncoder().encode(body)), signal())).rejects.toThrow();

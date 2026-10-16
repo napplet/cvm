@@ -73,7 +73,7 @@ async function runningMode(url: string): Promise<DevelopmentMode> {
   const bootstrap = await response.json() as { providerLabel?: unknown };
   if (bootstrap.providerLabel === "Deterministic fixture") return "deterministic-fixture";
   if (bootstrap.providerLabel === "Configured OpenAI Responses") return "configured-openai";
-  if (bootstrap.providerLabel === "ChatGPT plan · test credits") return "chatgpt-oauth";
+  if (bootstrap.providerLabel === "ChatGPT subscription · local test sats" || bootstrap.providerLabel === "ChatGPT plan · test credits") return "chatgpt-oauth";
   throw new Error("DEV_CONTEXTVM_PROVIDER_MODE_INVALID");
 }
 

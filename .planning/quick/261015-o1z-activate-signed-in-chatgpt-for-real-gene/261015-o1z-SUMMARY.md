@@ -1,9 +1,9 @@
 ---
-status: incomplete
+status: complete
 task: 261015-o1z
 date: 2026-10-15
 commit: 1a850d5
-remaining: Live generation to verified artifact blocked by ChatGPT account/app usage limit
+remaining: None; live interactive verification completed by chatgpt-live-subscription debug follow-up
 ---
 
 # Automatic ChatGPT activation and truthful stopped-request feedback
@@ -12,7 +12,7 @@ Implementation is complete. Successful sign-in automatically discovers models an
 
 The user's screenshot was not an active background build: SQL showed zero active metered actions, and its recorded operation was usage_unknown with CHATGPT_STREAM_REQUIRED in the gateway. Live diagnostics confirmed HTTP 200 SSE without Content-Type. The parser now accepts absent metadata while retaining bounded SSE parsing, terminal completion/schema, model and usage checks. Explicit non-SSE types, JSON, partial streams and malformed receipts cannot claim success.
 
-Three short diagnostic requests were made using the app-owned selected account (no credential output). The first inspected headers only; the next inspected stream structure; the last confirmed error and response.failed events with subscription_sharing_usage_limit_exceeded. These were new diagnostics, not replays of the original uncertain operation. No successful live generated artifact is claimed. Further inference is deferred until the account/app usage limit changes.
+Three initial diagnostic requests were made using the app-owned selected account (no credential output). The first inspected headers only; the next inspected stream structure; the last confirmed error and response.failed events with subscription_sharing_usage_limit_exceeded. These were new diagnostics, not replays of the original uncertain operation. Live artifact verification was initially deferred; the follow-up below completed it after the user signed in again.
 
 The GUI now distinguishes a returned uncertain server result from a relay timeout: the former says Generation stopped and explains provider uncertainty/no automatic retry; the latter retains the warning that work may still be running. Provider explanations appear in Live execution and the generation error as well as model settings.
 
@@ -24,6 +24,8 @@ The GUI now distinguishes a returned uncertain server result from a relay timeou
 - git diff --check passed; package.json and bun.lock retain their original SHA-256 digests.
 - Default service restarted at http://127.0.0.1:49371 in chatgpt-oauth mode, selected gpt-6.1-sol, existing sign-in retained. Production behavior unchanged.
 
-## Remaining live verification
+## Completed live verification
 
-Open Manage usage to inspect ChatGPT plan/app limits. After allowance is available, run the explicitly opted-in chatgpt-live browser smoke (a new request) and verify the generated preview. Do not redispatch the original uncertain action. Fixture success demonstrates the local path but does not certify a completed live ChatGPT generation.
+After the user signed in again, real inference completed but exposed a stream assembly bug: source arrived in response.output_item.done events while the terminal output list was empty. The debug follow-up fixed that parser and passed the live browser smoke with gpt-6.1-sol: real source, isolated Docker build, verification, ledger settlement and interactive sandboxed preview. Clicking Add changed the count to 1. The provider reported 220 input and 705 output tokens. No original uncertain action was replayed.
+
+The expanded suite passed 35 unit tests (148 assertions) and the composed browser journey with sparse terminal responses, revision replay/restart, failed-build feedback, usage-limit feedback and signed-out preflight rejection. Details: [resolved debug record](../../debug/resolved/chatgpt-live-subscription.md).

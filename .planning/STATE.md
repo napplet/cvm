@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: verification_deferred_gaps
-stopped_at: Paja preview menu collapsed by default; browser presentation and sandbox checks passed
-last_updated: "2026-10-16T01:22:45Z"
+stopped_at: Current napplet skills loaded before generation; live subscription and composed OAuth e2e passed
+last_updated: "2026-10-16T01:54:53Z"
 last_activity: 2026-10-15
-last_activity_desc: Paja starts with its console hidden; native toggle preserves napplet state
+last_activity_desc: Development uses pinned skills CLI snapshot in model requests and offline workers
 progress:
   total_phases: 7
   completed_phases: 6
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
 Plan: 56 of 58 accepted; development Plans 07-52/53/56/57/54/55 complete
 Status: Local execution GUI at http://127.0.0.1:49371 in chatgpt-oauth mode with gpt-6.1-sol. Live subscription generation passed through verified interactive preview. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
-Last activity: 2026-10-15 — Completed quick task 261015-pf8: Paja previews start with the menu collapsed; browser presentation and full preview boundary checks pass.
+Last activity: 2026-10-15 — Completed quick task 261015-pqb: current napplet skills installed via skills CLI, included before generation and matched to the offline worker. Live subscription and composed OAuth e2e passed.
 
 Follow-up: Stream assembly/counter verification remains complete. Latest helper-signature and compiler-feedback fix passed 29 targeted unit/integration cases plus activity and composed OAuth browser journeys. Real blinking-text generation also passed. See debug/resolved/generated-typescript-check.md.
 
@@ -357,6 +357,7 @@ Recent decisions affecting current work:
 | 261015-n91 | Granular live GUI progress, heartbeat, failed-stage feedback and local SQL budget | 2026-10-15 | b1b5fb4 | [261015-n91](./quick/261015-n91-add-granular-live-gui-progress-for-gener/) |
 | 261015-o1z | Automatic ChatGPT activation and stopped-request fixes; live interactive verification completed in debug follow-up | 2026-10-15 | 1a850d5 | [261015-o1z](./quick/261015-o1z-activate-signed-in-chatgpt-for-real-gene/) |
 | 261015-pf8 | Start Paja previews with the menu collapsed | 2026-10-15 | 6e88c24 | [261015-pf8](./quick/261015-pf8-load-paja-previews-minimized-with-the-me/) |
+| 261015-pqb | Current skills CLI snapshot in model requests and offline development workers | 2026-10-15 | 544d953 | [261015-pqb](./quick/261015-pqb-update-the-napplet-authoring-skills-used/) |
 
 ## Deferred Verification
 
@@ -374,6 +375,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-16T01:22:45Z
-Stopped at: Paja initial menu collapse verified, including expand/collapse with target state retained and sandbox boundary checks. Existing generation was allowed to finish before service restart. Production remains deferred.
-Resume file: .planning/quick/261015-pf8-load-paja-previews-minimized-with-the-me/261015-pf8-SUMMARY.md
+Last session: 2026-10-16T01:54:53Z
+Stopped at: Current authoring skills active in the model and worker. Real subscription generation and final OAuth e2e passed. Optional SDK initialization fallback is covered; upstream conformance theme stub and Paja theme-domain injection limitations are documented. Production remains deferred.
+Resume file: .planning/quick/261015-pqb-update-the-napplet-authoring-skills-used/261015-pqb-SUMMARY.md

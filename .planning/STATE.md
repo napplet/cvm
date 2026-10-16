@@ -363,6 +363,8 @@ Recent decisions affecting current work:
 | 261016-jn3 | Contextual app navigation, stronger controls and visible revision-blocking feedback | 2026-10-16 | 3a12c93 | [261016-jn3](./quick/261016-jn3-make-workspace-navigation-feel-like-an-a/) |
 | 261016-lx6 | Responsive application frame, contained scrolling and 266 viewport checks | 2026-10-16 | 8023241 | [261016-lx6](./quick/261016-lx6-create-a-consistent-framed-application-s/) |
 
+| 261016-maj | Recover interrupted subscription revisions without retries; fix SSE traffic limit | 2026-10-16 | 8805328 | [261016-maj](./quick/261016-maj-recover-uncertain-generation-actions-wit/) |
+
 ## Deferred Verification
 
 | Phase | Status | Reason | Resume command |
@@ -379,6 +381,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-16T22:58:58Z
-Stopped at: Default service ready at http://127.0.0.1:49371 in saved chatgpt-oauth mode. Waited for the active generation before a zero-active-action restart. Public views share framed navigation/status and a contained scroll region. Responsive matrix passes 266 checks, including 280px width and 320px height stress cases; supported minimum width is 320 CSS pixels. Four composed/presentation browser suites and live smoke pass. Reload the existing tab to preserve its original key. Historical unknown requests were not redispatched or cleared; production remains deferred.
-Resume file: .planning/quick/261016-lx6-create-a-consistent-framed-application-s/261016-lx6-SUMMARY.md
+Last session: 2026-10-16T23:30:00Z
+Stopped at: Interrupted revision recovery is complete and live at http://127.0.0.1:49371, PID 92825. Current version-5 project recovered with zero local charge and zero model calls. No new typecheck errors; SQL, browser, model and accounting tests pass. Continuing naddr remix, isolated source import and applesauce outbox browsing under quick task 261016-m8c.
+Resume file: .planning/quick/261016-m8c-remix-nip-5d-napplets-from-naddr-with-is/261016-m8c-PLAN.md

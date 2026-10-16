@@ -180,6 +180,7 @@ async function test(): Promise<void> {
     console.log(JSON.stringify({ status: "passed", case: "chatgpt-live" })); return;
   }
   const cases: Record<string, Array<readonly [string, ...string[]]>> = {
+    "responsive": [["tests/dev-ui/responsive-workspace.e2e.ts"]],
     "product": [["tests/dev-ui/product-view.e2e.ts"], ["tests/dev-ui/product-workspace.e2e.ts"]],
     "progress": [["test", "tests/dev-ui/development-progress.test.ts"], ["tests/dev-ui/progress-view.e2e.ts"], ["tests/dev-ui/chatgpt-oauth.e2e.ts"]],
     "chatgpt-oauth": [["tests/dev-ui/chatgpt-oauth.e2e.ts"]],
@@ -191,6 +192,7 @@ async function test(): Promise<void> {
     "continuation-revision": [["tests/dev-ui/continuation-revision.e2e.ts", "--case=pre-admission-fund-restart-explicit-resume"], ["tests/dev-ui/continuation-revision.e2e.ts", "--case=revisions-duplicates-restarts"]],
     full: [
       ["tests/dev-ui/product-view.e2e.ts"],
+      ["tests/dev-ui/responsive-workspace.e2e.ts"],
       ["tests/dev-ui/product-workspace.e2e.ts"],
       ["test", "tests/dev-ui/development-progress.test.ts"],
       ["tests/dev-ui/progress-view.e2e.ts"],
@@ -210,12 +212,12 @@ async function test(): Promise<void> {
       ["tests/dev-ui/full-flow.e2e.ts"],
     ],
   };
-  if (!testCase || !cases[testCase]) throw new Error("DEV_TEST_CASE_INVALID:contextvm-funding|generation-preview|continuation-revision|product|progress|chatgpt-oauth|chatgpt-timeout|chatgpt-live|publication|projects|full");
+  if (!testCase || !cases[testCase]) throw new Error("DEV_TEST_CASE_INVALID:contextvm-funding|generation-preview|continuation-revision|product|responsive|progress|chatgpt-oauth|chatgpt-timeout|chatgpt-live|publication|projects|full");
   const providerKeys = ["OPENAI_API_KEY", "NAPPLET_CVM_OPENAI_MODEL", "NAPPLET_CVM_OPENAI_PROFILE", "NAPPLET_CVM_OPENAI_PRICE_CARD", "NAPPLET_CVM_OPENAI_PRICE_SOURCES"] as const;
   const saved = Object.fromEntries(providerKeys.map((key) => [key, process.env[key]]));
   for (const key of providerKeys) delete process.env[key];
   try {
-    await up();
+    if (testCase !== "responsive") await up();
     for (const command of cases[testCase]!) {
       const [verb, ...args] = command;
       const output = await run([process.execPath, verb === "test" ? "test" : "run", ...(verb === "test" ? args : command)], { env: { NAPPLET_CVM_DEV_INSTANCE: scope().instance, ...Object.fromEntries(providerKeys.map((key) => [key, undefined])) }, timeoutMs: 600_000 });

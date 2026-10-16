@@ -41,7 +41,7 @@ export class ProjectsWorkspace {
       const heading = visible ? this.el("projects-heading") : workspace.querySelector<HTMLElement>(".step-panel:not([hidden]) h1");
       skip.href = `#${heading?.id ?? "step-heading"}`;
       document.title = visible ? "Your applets — applet.broker" : "applet.broker — Make a little thing";
-      if (focus) { heading?.focus(); window.scrollTo(0, 0); }
+      if (focus) { heading?.focus({ preventScroll: true }); document.getElementById("app-content")!.scrollTo(0, 0); }
       if (visible) { this.identityNote(); void this.load(); } else this.resetSources();
     };
     window.addEventListener("hashchange", () => route());
@@ -121,7 +121,7 @@ export class ProjectsWorkspace {
     for (const { source, project } of entries) {
       const li = document.createElement("li"); const button = document.createElement("button"); button.className = "project-card"; button.dataset.projectId = project.id;
       const badge = document.createElement("span"); badge.className = "project-stage"; badge.dataset.stage = project.stage; badge.textContent = stages[project.stage] ?? project.stage;
-      const title = document.createElement("strong"); title.textContent = project.title;
+      const title = document.createElement("strong"); title.textContent = project.title; title.title = project.title;
       const detail = document.createElement("span"); detail.className = "project-detail"; detail.textContent = `${source.scope === "browser" ? "This browser" : "Your account"} · ${new Date(project.createdAt).toLocaleDateString()}${project.verifiedVersion ? ` · Version ${project.verifiedVersion}` : ""}`;
       const open = document.createElement("span"); open.className = "project-open"; open.textContent = "Open applet →";
       button.append(badge, title, detail, open);

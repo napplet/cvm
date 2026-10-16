@@ -24,6 +24,7 @@ The launcher accepts the following stable commands:
 | `bun scripts/dev.ts test --case=generation-preview` | Exercises source proposal, metering, worker build, verification, artifact storage, and compatible preview. |
 | `bun scripts/dev.ts test --case=continuation-revision` | Exercises pending-action funding, restart, explicit resume, and immutable revisions. |
 | `bun scripts/dev.ts test --case=product` | Exercises guided applet.broker creation, OAuth/draft continuity, automatic test funding, in-flight recovery, revision chat, version history and failure feedback. |
+| `bun scripts/dev.ts test --case=responsive` | Checks all public workspace views and dialogs across 19 viewport sizes, including long content, control reachability, preview containment and resize continuity. |
 | `bun scripts/dev.ts test --case=progress` | Checks live progress before completion, heartbeats, stale connections, failed worker stages, and the composed OAuth browser flow. |
 | `bun scripts/dev.ts test --case=chatgpt-oauth` | Exercises local sign-in, models, generation, revision, restart, and sign-out with fixture OAuth/inference. |
 | `bun scripts/dev.ts test --case=projects` | Verifies signed identity ownership, private lists and reopening from a fresh browser after restart. |
@@ -44,6 +45,10 @@ Its state lives under `.local/napplet-cvm-dev/<instance>/`. The default instance
 ## Try the execution flow
 
 The root URL is the **applet.broker** product workspace. It uses the same browser client and generation controller as the diagnostic console. The persistent header separates primary navigation from account/settings controls. **Create**, **Builder**, or **Publish** returns to the current workspace context; **Your applets** opens the collection. Active location is highlighted and a **Working** indicator stays visible while browsing during generation. Both routes remain visible on mobile. Navigation preserves the current request, preview and draft.
+
+All public views share one application frame, with the header and connection-status bar outside the scrolling content region. Scroll within the workspace; the parent document stays fixed without horizontal scrolling. Detailed progress scrolls with the content so it cannot cover controls. The builder stacks preview and revision panels on narrower screens; dialogs scroll within the available height, address chips wrap, and long project titles use three lines while retaining their full accessible text and tooltip. Compact layouts remove decorative copy before reducing action sizes.
+
+The supported minimum width is **320 CSS pixels**. Responsive regression coverage also exercises 280 pixels, 320-pixel heights, landscape viewports and desktop widths through 2560 pixels. The 266 view/viewport checks assert actual content widths and reachable controls, including deliberately oversized content inside the preview iframe. The standalone responsive case uses browser fixtures and needs no running CVM or Docker services. It performs no generation, signing or publication; the composed product/publication tests separately cover real local services. Screenshots are written to `.local/development-gui-evidence/responsive/`. The responsive suite is included in `--case=full`.
 
 1. Describe one focused applet, or select an example, then choose **Shape my idea**.
 2. Review the idea and generation service. The CVM operator manages its provider privately with `bun scripts/open-dev-admin.ts`. The default deterministic mode explicitly says it builds a sample counter without a model request.

@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: verification_deferred_gaps
-stopped_at: ChatGPT live model discovery fixed and verified with seven models; real inference untested; production plans 07-20 and 07-26 deferred
-last_updated: "2026-10-15T23:36:25Z"
+stopped_at: Granular live execution progress verified and running locally; historical worker failure unreproduced; production remains deferred
+last_updated: "2026-10-16T00:03:56Z"
 last_activity: 2026-10-15
-last_activity_desc: Fixed live ChatGPT catalog response limit; seven account models reload successfully; 26 OAuth/gateway tests pass
+last_activity_desc: Added live GUI stages, heartbeats and failure feedback; 46 tests and composed browser journeys pass
 progress:
   total_phases: 7
   completed_phases: 6
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
 Plan: 56 of 58 accepted; development Plans 07-52/53/56/57/54/55 complete
 Status: Local execution GUI accepted and running at http://127.0.0.1:49371 in deterministic-fixture mode. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
-Last activity: 2026-10-15 — Quick task 261015-leh added local ChatGPT OAuth generation and GUI controls (48f5a0f). All ten full-suite cases passed; 23 OAuth/gateway unit tests passed. The OAuth browser journey verified generation, revision, replay, restart, token boundaries, logout, and three exact user debits through real local services with fixture inference. Real ChatGPT authorization/inference awaits user sign-in; production remains deferred.
+Last activity: 2026-10-15 — Completed quick task 261015-n91: granular live GUI progress, failed-stage feedback and development SQL timeout fix (b1b5fb4).
 
 Follow-up: The user signed in successfully; model reload failed because the live catalog exceeded the shared 256 KB credential-response limit. A separate 4 MB catalog limit fixes it. All 26 OAuth/gateway tests pass, and the real account loads/reloads seven models in Chromium. See `.planning/debug/resolved/chatgpt-model-catalog-size.md`. Real inference remains untested; production is unchanged.
 
@@ -353,6 +353,7 @@ Recent decisions affecting current work:
 | 261012-sk1 | Repair expired funding readiness and Cashu-only local setup | 2026-10-12 | a0156ce | [261012-sk1](./quick/261012-sk1-repair-expired-operator-funding-readines/) |
 | 261014-daz | Automatic local Cashu mint and NWC wallet with isolated e2e tests | 2026-10-14 | dc17cd9 | [261014-daz](./quick/261014-daz-automatic-local-cashu-mint-and-nwc-devel/) |
 | 261015-leh | Local ChatGPT OAuth generation, GUI sign-in, refresh, and e2e coverage | 2026-10-15 | 48f5a0f | [261015-leh](./quick/261015-leh-add-local-chatgpt-oauth-generation-with-/) |
+| 261015-n91 | Granular live GUI progress, heartbeat, failed-stage feedback and local SQL budget | 2026-10-15 | b1b5fb4 | [261015-n91](./quick/261015-n91-add-granular-live-gui-progress-for-gener/) |
 
 ## Deferred Verification
 
@@ -370,6 +371,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-15T23:36:25Z
-Stopped at: Live model discovery fixed and verified; service restarted with the user's sign-in preserved. Real inference remains untested. Production plans 07-20 and 07-26 remain deferred.
-Resume file: .planning/debug/resolved/chatgpt-model-catalog-size.md
+Last session: 2026-10-16T00:03:56Z
+Stopped at: Live execution feedback verified and service restarted with sign-in preserved. Active mode remains deterministic fixture. Historical worker failure did not reproduce; no live model inference performed. Production remains deferred.
+Resume file: .planning/quick/261015-n91-add-granular-live-gui-progress-for-gener/261015-n91-SUMMARY.md

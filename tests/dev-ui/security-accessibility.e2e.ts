@@ -74,7 +74,7 @@ try {
     socket.on("framesent", (event: { payload: string | Buffer }) => relayFrames.push(String(event.payload)));
     socket.on("framereceived", (event: { payload: string | Buffer }) => relayFrames.push(String(event.payload)));
   });
-  await page.goto(server.url, { waitUntil: "networkidle" });
+  await page.goto(`${server.url}/dev`, { waitUntil: "networkidle" });
 
   for (const selector of ["#connection-status[aria-live='polite']", "#funding-status[aria-live='polite']", "#generation-status[aria-live='polite']", "#generation-error[role='alert']"]) {
     requireThat(await page.locator(selector).count() === 1, `STATUS_A11Y_CONTRACT_MISSING:${selector}`);

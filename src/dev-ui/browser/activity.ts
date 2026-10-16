@@ -1,10 +1,14 @@
-import { progressStages } from "../progress-contract";
+import { progressStages, type ProgressStage } from "../progress-contract";
 import { formatWorkerDiagnostic } from "../../dev/worker-diagnostic";
 import type { ClientActivity } from "./contextvm-client";
 
 const toolLabels: Record<string, string> = { funded_admission: "Reserve capacity and funds", start_session: "Start generation", revise_session: "Revise napplet", resume_session: "Resume saved action", preview: "Open verified preview" };
 
+export type ActivitySnapshot = Readonly<{ state: string; stage?: ProgressStage; stageState?: string; current: string; detail: string; elapsed: number; stale: boolean }>;
+
 export class ExecutionActivity {
+  #stage?: ProgressStage;
+  #stageState?: string;
   #running = false;
   #started = 0;
   #lastServer = 0;
@@ -14,7 +18,7 @@ export class ExecutionActivity {
   #failureDetail?: string;
   #generationResponded = false;
   #timer?: ReturnType<typeof setInterval>;
-  constructor(private readonly root: HTMLElement, provider?: string) {
+  constructor(private readonly root: HTMLElement, provider?: string, private readonly onChange?: (snapshot: ActivitySnapshot) => void) {
     root.innerHTML = `<h2 id="activity-heading">Live execution</h2><p id="activity-provider" class="supporting"></p><p id="activity-current" role="status" aria-live="polite">Ready to submit an action</p><p id="activity-clock" class="supporting"></p><p id="activity-connection" class="supporting"></p><ol id="activity-events" aria-label="Execution events"></ol><p class="supporting">Live updates describe work in progress. The session timeline below records durable results.</p>`;
     if (provider) this.provider(provider);
   }
@@ -23,6 +27,7 @@ export class ExecutionActivity {
   private text(id: string, text: string): void { this.root.querySelector<HTMLElement>(`#${id}`)!.textContent = text; }
   begin(label: string, provider: string): void {
     clearInterval(this.#timer); this.#running = true; this.#started = performance.now(); this.#lastServer = 0; this.#waitingSince = this.#started; this.#requests.clear();
+    this.#stage = undefined; this.#stageState = undefined;
     this.#failedStage = undefined;
     this.#failureDetail = undefined;
     this.#generationResponded = false;
@@ -30,7 +35,7 @@ export class ExecutionActivity {
     this.root.querySelector("#activity-events")!.replaceChildren();
     this.provider(provider); this.text("activity-current", `${label} · submitting`); this.log("Browser: action submitted"); this.tick();
     this.#timer = setInterval(() => this.tick(), 1000);
-    this.root.scrollIntoView({ block: "nearest" });
+    if (!this.onChange) this.root.scrollIntoView({ block: "nearest" });
   }
   private provider(provider: string, model?: string): void {
     const fixture = provider === "Deterministic fixture" || provider === "deterministic_fixture";
@@ -56,6 +61,7 @@ export class ExecutionActivity {
     this.root.dataset.lastServerSequence = String(update.sequence);
     if (update.provider) this.provider(update.provider, update.model);
     if (update.kind === "stage") {
+      this.#stage = update.stage; this.#stageState = update.state;
       if (update.state === "failed") this.#failedStage ??= progressStages[update.stage];
       const diagnostic = update.state === "failed" && update.diagnostic ? formatWorkerDiagnostic(update.diagnostic) : undefined;
       if (diagnostic) this.#failureDetail = diagnostic;
@@ -77,6 +83,7 @@ export class ExecutionActivity {
     if (this.#running || !["failed", "uncertain"].includes(this.root.dataset.state ?? "")) return;
     const detail = this.root.querySelector<HTMLElement>("#activity-connection")!;
     detail.textContent = [detail.textContent, message].filter(Boolean).join(" ");
+    this.emit();
   }
   private log(message: string, stage?: string, state?: string): void {
     const item = document.createElement("li"); item.textContent = `${Math.floor((performance.now() - this.#started) / 1000)}s · ${message}`;
@@ -85,11 +92,15 @@ export class ExecutionActivity {
     while (list.children.length > 160) list.firstElementChild!.remove();
     list.scrollTop = list.scrollHeight;
   }
+  private emit(): void {
+    this.onChange?.({ state: this.root.dataset.state ?? "idle", stage: this.#stage, stageState: this.#stageState, current: this.root.querySelector("#activity-current")!.textContent ?? "", detail: this.root.querySelector("#activity-connection")!.textContent ?? "", elapsed: Math.floor((performance.now() - this.#started) / 1000), stale: this.#running && this.root.dataset.stale === "true" });
+  }
   private tick(): void {
     this.text("activity-clock", `${Math.floor((performance.now() - this.#started) / 1000)}s elapsed`);
-    if (!this.#running) return;
+    if (!this.#running) { this.emit(); return; }
     const seconds = Math.floor((performance.now() - (this.#lastServer || this.#waitingSince)) / 1000);
     this.root.dataset.stale = String(seconds >= 15);
     this.text("activity-connection", seconds >= 15 ? `No server update for ${seconds}s. Connection or work may be stalled; waiting for the original request.` : this.#lastServer ? `Server update ${seconds}s ago · heartbeat every 5s while processing` : `Waiting for server acknowledgement · ${seconds}s`);
+    this.emit();
   }
 }

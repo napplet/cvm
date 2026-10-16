@@ -296,8 +296,8 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
     return { ...result, session: { ...result.session, timeline: await durableTimeline(app, accountId, query.sessionId) } };
   } }, preview, policyVersion: "development-local-v1" });
   let reconciler = new DevelopmentNwcSettlementReconciler(app);
-  const [html, javascript, servicePubkey] = await Promise.all([
-    readFile(resolve(root, "src/dev-ui/browser/index.html"), "utf8"), browserBundle(), signer.getPublicKey(),
+  const [html, javascript, servicePubkey, consoleHtml] = await Promise.all([
+    readFile(resolve(root, "src/dev-ui/browser/index.html"), "utf8"), browserBundle(), signer.getPublicKey(), readFile(resolve(root, "src/dev-ui/browser/console.html"), "utf8"),
   ]);
   await transport.start();
   reconciler.start();
@@ -310,8 +310,9 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
       if (url.hostname !== "127.0.0.1" && url.hostname !== "localhost") return new Response("loopback only", { status: 403 });
       const chatgptResponse = await chatgptRoutes.handle(request, `http://127.0.0.1:${web.port}`);
       if (chatgptResponse) return chatgptResponse;
-      if (url.pathname === "/") return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer", "content-security-policy": "frame-ancestors 'none'; base-uri 'none'; object-src 'none'", "x-frame-options": "DENY" } });
+      if (url.pathname === "/" || url.pathname === "/dev") return new Response(url.pathname === "/dev" ? consoleHtml : html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer", "content-security-policy": "frame-ancestors 'none'; base-uri 'none'; object-src 'none'", "x-frame-options": "DENY" } });
       if (url.pathname === "/app.js") return new Response(javascript, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });
+      if (url.pathname === "/product.css") return new Response(await Bun.file(resolve(root, "src/dev-ui/browser/product.css")).text(), { headers: { "content-type": "text/css; charset=utf-8", "cache-control": "no-store" } });
       if (url.pathname === "/styles.css") return new Response(await Bun.file(resolve(root, "src/dev-ui/browser/styles.css")).text(), { headers: { "content-type": "text/css; charset=utf-8", "cache-control": "no-store" } });
       if (url.pathname === "/bootstrap") return Response.json({ relayUrl: config.relayUrl, servicePubkey, reserveSat, actionCeilingSat, providerLabel, modelControlToken: chatgptRoutes.controlToken }, { headers: { "cache-control": "no-store" } });
       if (url.pathname === "/dev/faucet/cashu" && request.method === "POST") {

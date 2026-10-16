@@ -83,12 +83,14 @@ export class LocalDevelopmentRuntimeReadiness {
     // Isolate the reported Bun 1.3.14/Playwright child-pipe finalization issue
     // from listener and subprocess descriptors in the service process.
     // https://github.com/microsoft/playwright/issues/42692
+    // Chromium can spend 30s in its own bounded shutdown before killing a
+    // stalled child. Allow that cleanup after the 20s launch deadline.
     const hostProbe = await runBoundedDevelopmentCommand([process.execPath, "-e", `
       const { chromium } = await import(${JSON.stringify(join(projectRoot, "tests/dev-ui/node_modules/playwright"))});
       const browser = await chromium.launch({ headless: true, timeout: 20_000 });
       try { console.log(JSON.stringify({ browserVersion: browser.version() })); }
       finally { await browser.close(); }
-    `], { deadlineMs: 30_000, maxBytes: 8_000 });
+    `], { deadlineMs: 55_000, maxBytes: 8_000 });
     if (hostProbe.exitCode !== 0) throw new Error("DEV_HOST_BROWSER_NOT_READY:install the pinned host Chromium");
     let hostBrowserVersion: unknown;
     try { hostBrowserVersion = JSON.parse(hostProbe.stdout.trim()).browserVersion; }

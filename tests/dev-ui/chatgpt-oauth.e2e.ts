@@ -50,7 +50,7 @@ async function generated(version: number) {
 }
 try {
   await page.route("https://auth.openai.com/api/accounts/authorize?*", async (route) => { await route.fulfill({ status: 302, headers: { location: fixture.authorize(route.request().url()).href } }); });
-  await page.goto(server.url, { waitUntil: "networkidle" });
+  await page.goto(`${server.url}/dev`, { waitUntil: "networkidle" });
   await page.getByRole("button", { name: "Continue with ChatGPT" }).click();
   await page.getByRole("button", { name: "Got it", exact: true }).click();
   await page.getByText("Using ChatGPT plan · fixture-codex", { exact: true }).waitFor();
@@ -86,7 +86,7 @@ try {
   requireThat(fixture.counts().inferences === 2, "OAUTH_REVISION_REDISPATCHED");
   const calls = fixture.calls.filter((call) => call.url.endsWith("/responses")); requireThat(String(calls[1]?.init?.body).includes("authorizedPriorSource"), "OAUTH_REVISION_SOURCE_MISSING");
   const oldUrl = server.url; await server.close(); server = await createDevelopmentContextVmServer({ config, stateRoot, port: Number(new URL(oldUrl).port), chatGptFetch: fetchWithProgress });
-  await page.goto(server.url, { waitUntil: "networkidle" }); await page.getByText("Using ChatGPT plan · fixture-codex", { exact: true }).waitFor();
+  await page.goto(`${server.url}/dev`, { waitUntil: "networkidle" }); await page.getByText("Using ChatGPT plan · fixture-codex", { exact: true }).waitFor();
   requireThat(!await page.locator("#chatgpt-welcome").isVisible(), "OAUTH_WELCOME_REPEATED");
   await page.getByRole("button", { name: "Connect", exact: true }).click(); await page.getByText("Connected:").waitFor(); await page.locator("#versions li").nth(1).getByRole("button").click();
   await page.getByLabel("Revision", { exact: true }).fill("Make the counter easier to read"); await page.getByRole("button", { name: "Revise selected version" }).click(); await generated(3); await server.assertGenerationSettlement();

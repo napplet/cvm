@@ -11,7 +11,7 @@ const authStatus = await (await fetch(controlUrl("/dev/chatgpt/status"), { cache
 if (!authStatus.accounts.some((account: any) => account.id === authStatus.settings.accountId && account.signedIn && account.planEnabled)) throw new Error("CHATGPT_SIGN_IN_REQUIRED_BEFORE_LIVE_TEST");
 const browser = await chromium.launch({ headless: true });
 try {
-  const page = await browser.newPage(); await page.goto(url.href, { waitUntil: "networkidle" });
+  const page = await browser.newPage(); await page.goto(new URL("/dev", url).href, { waitUntil: "networkidle" });
   await page.getByRole("button", { name: "Connect", exact: true }).click(); await page.getByText("Connected:").waitFor();
   await page.getByLabel("Cashu amount (sats)").fill("4000"); await page.getByRole("button", { name: "Fund with Cashu", exact: true }).click(); await page.getByText("Cashu credited", { exact: true }).waitFor();
   await page.getByLabel("Focused idea").fill(blink ? "Show only the word test blinking in the center of the screen using CSS animation. Respect reduced motion." : "Build a single-purpose tap counter with one Add button and a visible count, using DOM creation and textContent.");

@@ -23,6 +23,7 @@ The launcher accepts the following stable commands:
 | `bun scripts/dev.ts test --case=contextvm-funding` | Exercises browser identity, ContextVM relay, Cashu/NWC rails, and SQL funding. |
 | `bun scripts/dev.ts test --case=generation-preview` | Exercises source proposal, metering, worker build, verification, artifact storage, and compatible preview. |
 | `bun scripts/dev.ts test --case=continuation-revision` | Exercises pending-action funding, restart, explicit resume, and immutable revisions. |
+| `bun scripts/dev.ts test --case=product` | Exercises guided applet.broker creation, OAuth/draft continuity, automatic test funding, in-flight recovery, revision chat, version history and failure feedback. |
 | `bun scripts/dev.ts test --case=progress` | Checks live progress before completion, heartbeats, stale connections, failed worker stages, and the composed OAuth browser flow. |
 | `bun scripts/dev.ts test --case=chatgpt-oauth` | Exercises local sign-in, models, generation, revision, restart, and sign-out with fixture OAuth/inference. |
 | `bun scripts/dev.ts test --case=full` | Runs the composed browser journey and security/accessibility gate. |
@@ -40,7 +41,22 @@ Its state lives under `.local/napplet-cvm-dev/<instance>/`. The default instance
 
 ## Try the execution flow
 
-1. Open the URL from `up` and click **Connect**. The disposable identity survives reloads and service restarts in this browser tab. Closing the tab can discard that identity.
+The root URL is the **applet.broker** product workspace. It uses the same browser client and generation controller as the diagnostic console.
+
+1. Describe one focused applet, or select an example, then choose **Shape my idea**.
+2. Review the idea and generation model. In **Settings**, reuse your saved ChatGPT account or choose **Continue with ChatGPT**. Sign-in/model changes preserve your draft. The default deterministic mode explicitly says it builds a sample counter without a model request.
+3. Choose **Create my applet**. The browser connects automatically and prepares only the missing local Cashu test funds as part of this explicit action. The maximum is under **Test budget**. No generation or funding starts just by opening the page or signing in.
+4. Follow **Preparing → Generating → Building → Checking → Preview** at the top. This bar reflects observed stages, not a time estimate; it reaches the end only after a verified preview is opened. **Execution details** exposes the full granular activity, checks and receipts. A missing heartbeat is shown as stale, not successful progress.
+5. Try the preview, then send a change from the chat beside it (below it on a phone). **Ctrl/⌘ + Enter** sends the revision. Each verified revision becomes a selectable version. Earlier versions are viewable; return to the latest before editing. Failed revisions retain the last good preview and the revision text. After a settled validation failure, a new explicit revision can use that verified base; unresolved usage or billing still blocks editing that session, including after reload.
+6. Reloading restores this tab’s idea, revision draft, conversation and verified artifacts. If a request was interrupted, **Check original request** joins/replays its exact authorized request, admission and idempotency key. It does not create another admission or model request. Other generation buttons remain disabled until that request returns a confirmed result. A terminal provider-usage uncertainty is shown separately and is never automatically retried.
+
+The product preview hides Paja’s developer toolbar, drawer and status footer through a presentation-only URL flag. Its opaque sandbox, disabled capabilities, network policy, grant checks and pinned runtime remain identical. The console at `/dev` retains its collapsed-but-expandable Paja controls.
+
+**Brand/release boundary:** `applet.broker` is the first deployment brand. The transport-neutral service remains reusable for the eventual `@napplet/cvm` open-source package. This local interface does not implement public hosting, production onboarding/payments or publication. Those release tasks remain documented under [production readiness](production-readiness-deferred.md) and are not prerequisites for trying the product locally.
+
+### Use the diagnostic console
+
+1. Open `/dev` on the URL from `up` and click **Connect**. The disposable identity survives reloads and service restarts in this browser tab. Closing the tab can discard that identity.
 2. Enter `10000` under **Cashu amount (sats)** and click **Fund with Cashu**. To exercise the other rail, enter `64` under **NWC amount (sats)** and click **Fund with NWC**. These are local test funds.
 3. Enter a focused idea, keep the displayed maximum at or above the active action ceiling, and click **Generate napplet**. Wait for **Verified preview ready**, then use the counter in the sandboxed preview. Deterministic mode exercises execution with a request-dependent counter fixture; configure the model provider for open-ended generation.
 4. Enter a revision and click **Revise selected version**. Each revision requests a new approved maximum and creates an immutable version. Select a version to load its verified preview.
@@ -48,11 +64,11 @@ Its state lives under `.local/napplet-cvm-dev/<instance>/`. The default instance
 
 ### Live execution feedback
 
-Submitting Generate, Revise, Resume or Replay immediately opens **Live execution**. It shows the active provider (including an explicit **no model request** warning in deterministic fixture mode), elapsed time, server acknowledgement, and an ordered activity log. ChatGPT response bytes update while streaming; these are transport bytes, not billed tokens or a completion percentage.
+In `/dev`, submitting Generate, Revise, Resume or Replay immediately opens **Live execution**. The product workspace presents the same updates in its top progress bar and expandable **Execution details**. It shows the active provider (including an explicit **no model request** warning in deterministic fixture mode), elapsed time, server acknowledgement, and an ordered activity log. ChatGPT response bytes update while streaming; these are transport bytes, not billed tokens or a completion percentage.
 
 The backend reports model completion/source persistence, Docker startup, scaffolding, manifest initialization, skills installation, offline dependency installation, Vite build, guidance/TypeScript checks, real Chromium conformance, deployment dry run, artifact verification/sealing, ledger settlement and preview preparation. Five-second heartbeats indicate server liveness without claiming that a stage advanced. After 15 seconds without an update, the GUI flags possible connection or execution delay. Failed stages remain visible; TypeScript failures in generated `src/main.ts` include a file location, compiler code and a bounded explanation (for example, `TS2554: Expected 1 arguments, received 0.`). An uncertain outcome never appears as success. A new action clears previous artifact facts and failure details, while earlier verified versions remain selectable after the action ends.
 
-Updates use the existing encrypted ContextVM relay connection and MCP progress tokens (the SDK rewrites server-side request IDs). They are bounded, best effort and scoped to the authenticated caller and pending browser request. They carry stage names, counters and structured compiler identifiers/locations, never raw source, model text/reasoning, stdout/stderr, prompts or credentials. Compiler explanations use fixed text; arbitrary compiler messages are excluded. Progress delivery cannot change billing or execution, and is not replayed after reload; reconnect to recover the durable session timeline and verified artifacts. A timeout can leave work running: inspect session state before submitting another action. Keep the tab open while a request is active.
+Updates use the existing encrypted ContextVM relay connection and MCP progress tokens (the SDK rewrites server-side request IDs). They are bounded, best effort and scoped to the authenticated caller and pending browser request. They carry stage names, counters and structured compiler identifiers/locations, never raw source, model text/reasoning, stdout/stderr, prompts or credentials. Compiler explanations use fixed text; arbitrary compiler messages are excluded. Progress delivery cannot change billing or execution, and is not replayed after reload; reconnect to recover the durable session timeline and verified artifacts. A timeout can leave work running: inspect session state before submitting another action. In the product workspace, use **Check original request** when offered; the console retains its explicit replay and session tools.
 
 Development SQL operations have a five-second budget because PostgreSQL shares the workstation with Docker/Chromium. Production timing remains unchanged. Updating the closed worker runner rebuilds its pinned image automatically during `up`; previously saved pending actions bound to an older image cannot be resumed under the new pin. Existing verified artifacts remain available.
 
@@ -78,7 +94,7 @@ The updater runs `npx --yes skills@1.7.2 add https://github.com/napplet/napplet/
 
 The deterministic profile currently requires a 3,250-sat authorization ceiling and charges 5 test sats per successful model operation. The UI distinguishes settled funds, held funds, and funds available for new admissions. Unspent admission holds remain reserved; the available balance therefore falls by the approved maximum even though the exact charge is smaller. Confirmed reset discards this development account state.
 
-Publication currently displays **Publication unavailable in this development setup**.
+Publication is unavailable. The product footer states **Publishing later**; the console displays **Publication unavailable in this development setup**.
 
 ## What runs locally
 
@@ -108,7 +124,7 @@ The normal mode is **Deterministic fixture**. It substitutes only the external m
 
 An optional configured provider requires **all** of `OPENAI_API_KEY`, `NAPPLET_CVM_OPENAI_MODEL`, `NAPPLET_CVM_OPENAI_PROFILE`, `NAPPLET_CVM_OPENAI_PRICE_CARD`, and `NAPPLET_CVM_OPENAI_PRICE_SOURCES`. The model must be an accepted Responses model (`gpt-5-mini` or `gpt-5-mini-2025-08-07`). The profile, price card, and price-source variables are JSON values, not paths to JSON files: they are parsed at startup, and their IDs, source digests, evidence freshness, price-card validity, and usage ceilings must agree. `NAPPLET_CVM_OPENAI_PRICE_SOURCES` includes the captured source bytes and their SHA-256 values. Any partial or invalid configuration fails startup instead of falling back silently. `OPENAI_API_KEY` enables outgoing, billable model API calls; provide it only in your local environment before `up`, never in repository files, screenshots, logs, or issue reports. A configured-provider run is conditional evidence, and `status`/the workspace must say which mode actually ran.
 
-Publication is unavailable unless a configured publication implementation reports durable availability. In an ordinary development run the workspace must say **“Publication unavailable in this development setup.”** Do not interpret generated artifacts or preview visibility as a publication success.
+Publication is unavailable unless a configured publication implementation reports durable availability. The product footer says publishing is coming later, and `/dev` explicitly reports **“Publication unavailable in this development setup.”** Do not interpret generated artifacts or preview visibility as a publication success.
 
 ## Persistence, inspection, and recovery
 
@@ -132,13 +148,13 @@ Use the workspace timeline and version list as the user-facing projection. Query
 
 If `up` fails, start with `bun scripts/dev.ts status`. It checks frozen browser dependencies and Chromium, local payment services, migrations, relay and ContextVM identity, active model/price-card mode, pinned worker image/toolchain, artifact/grant stores, and compatible-host provenance. Correct the reported prerequisite, then rerun `up`; do not delete unrelated Docker resources. If the selected local instance is intentionally unrecoverable, use `reset --confirm` and start again.
 
-The host Chromium readiness check runs in a bounded child process. This keeps its browser pipes separate from the service's listening sockets, containing a [reported Bun 1.3.14 child-process descriptor finalization issue](https://github.com/microsoft/playwright/issues/42692). The regression command is `bun run tests/dev-ui/contextvm-server-liveness.e2e.ts`; it forces collection and checks the actual service after 65 seconds without browser activity.
+The host Chromium readiness check runs in a bounded child process. Its 55-second outer budget includes the browser’s 20-second launch limit and Chromium’s own 30-second forced-cleanup fallback on a slow shutdown; the launcher allows up to 120 seconds for the complete startup probes. Generation and admission limits are unchanged. This keeps its browser pipes separate from the service's listening sockets, containing a [reported Bun 1.3.14 child-process descriptor finalization issue](https://github.com/microsoft/playwright/issues/42692). The regression command is `bun run tests/dev-ui/contextvm-server-liveness.e2e.ts`; it forces collection and checks the actual service after 65 seconds without browser activity.
 
 Paja previews open with the development console/menu collapsed. Use the chevron to expand or collapse it; toggling preserves the running napplet and its state.
 
 ## ChatGPT subscription sign-in for local development
 
-In **Generation model**, click **Continue with ChatGPT** and authorize the local app in the browser. Sign-in automatically activates your saved model if available, otherwise the first available model. Dismiss the first-use explanation, click **Connect**, fund the Nostr account with local Cashu or NWC test money, then generate or revise. Account and model dropdown changes apply immediately and persist across restarts; there is no separate activation button. **Use default provider** explicitly switches back and remains selected after reload. No API key or pricing-source configuration is needed. `status` reports `chatgpt-oauth` and the GUI displays **Using ChatGPT plan**. If model discovery fails after sign-in, your login is retained: reload models and choose one to activate it.
+In **Settings → Generation model** (or **Generation model** in `/dev`), click **Continue with ChatGPT** and authorize the local app in the browser. Sign-in automatically activates your saved model if available, otherwise the first available model. Dismiss the first-use explanation, then create or revise. The product workspace connects and prepares local test funds automatically. In `/dev`, click **Connect** and fund with Cashu or NWC manually. Account and model dropdown changes apply immediately and persist across restarts; there is no separate activation button. **Use default provider** explicitly switches back and remains selected after reload. No API key or pricing-source configuration is needed. `status` reports `chatgpt-oauth` and the GUI displays **Using ChatGPT plan**. If model discovery fails after sign-in, your login is retained: reload models and choose one to activate it.
 
 This uses OpenAI's [local/open-source OAuth registration flow](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) and [public Responses endpoint](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference). The account model catalog is fetched after sign-in; eligibility is confirmed by a successful inference request. An unavailable account/model does not silently fall back to another provider. Use **Use default provider** to explicitly return to the deterministic fixture (or the API provider configured when the service started).
 

@@ -40,7 +40,7 @@ export async function ensureChatGptReady(bootstrap: DevelopmentBootstrap): Promi
   if (!account.planEnabled) throw new Error("CHATGPT_PLAN_PERMISSION_REQUIRED");
 }
 
-export async function mountChatGptSettings(bootstrap: DevelopmentBootstrap): Promise<void> {
+export async function mountChatGptSettings(bootstrap: DevelopmentBootstrap, onStatus?: (summary: string) => void): Promise<void> {
   if (!bootstrap.modelControlToken) return;
   const panel = document.createElement("section"); panel.setAttribute("aria-labelledby", "chatgpt-heading");
   panel.innerHTML = `<h2 id="chatgpt-heading">Generation model</h2>
@@ -56,7 +56,8 @@ export async function mountChatGptSettings(bootstrap: DevelopmentBootstrap): Pro
     <p class="supporting">The maximum below caps local test charges. Subscription allowance and app limits are managed in ChatGPT; this app cannot set a per-request output-token cap. Model/account changes apply to new actions. Resume a saved action with its original model and account.</p>
     <dialog id="chatgpt-welcome" aria-labelledby="chatgpt-welcome-title"><h2 id="chatgpt-welcome-title">You're using your ChatGPT plan</h2><p>Eligible generation requests use your ChatGPT subscription allowance. Manage this app's access and limits in ChatGPT settings. Local test sats exercise the payment flow.</p><button id="chatgpt-got-it">Got it</button></dialog>`;
   document.querySelector(".workspace-controls")!.prepend(panel);
-  const element = <T extends HTMLElement>(id: string) => panel.querySelector<T>(`#${id}`)!;
+  document.body.append(panel.querySelector("#chatgpt-welcome")!);
+  const element = <T extends HTMLElement>(id: string) => document.querySelector<T>(`#${id}`)!;
   const accountSelect = element<HTMLSelectElement>("chatgpt-account"); const modelSelect = element<HTMLSelectElement>("chatgpt-model");
   let status: Status;
   const message = (text: string) => { element("chatgpt-status").textContent = text; };
@@ -71,6 +72,7 @@ export async function mountChatGptSettings(bootstrap: DevelopmentBootstrap): Pro
     else if (status.accounts.length) accountSelect.value = status.accounts.at(-1)!.id;
     const selectedAccount = status.accounts.find((item) => item.id === status.settings.accountId);
     element("chatgpt-active").textContent = status.settings.mode === "chatgpt" ? selectedAccount?.signedIn ? `Using ChatGPT plan · ${status.settings.model}` : "ChatGPT selected · sign in to generate" : `Active: ${bootstrap.providerLabel}`;
+    onStatus?.(element("chatgpt-active").textContent ?? bootstrap.providerLabel);
     element<HTMLButtonElement>("chatgpt-default").textContent = bootstrap.providerLabel === "Configured OpenAI Responses" ? "Use configured API provider" : "Use default provider";
     const account = status.accounts.find((item) => item.id === accountSelect.value);
     element<HTMLButtonElement>("chatgpt-sign-out").disabled = !account?.signedIn;
@@ -83,7 +85,7 @@ export async function mountChatGptSettings(bootstrap: DevelopmentBootstrap): Pro
     message("Activating ChatGPT model…");
     try {
       await control("select", { mode: "chatgpt", accountId: accountSelect.value, model: modelSelect.value });
-      location.replace("/");
+      location.replace(location.pathname === "/dev" ? "/dev" : "/");
     } catch (error) {
       await refresh();
       if (status.settings.accountId === accountSelect.value || status.settings.mode === "default") {
@@ -118,12 +120,12 @@ export async function mountChatGptSettings(bootstrap: DevelopmentBootstrap): Pro
   modelSelect.onchange = () => { void activate().catch(report); };
   element<HTMLButtonElement>("chatgpt-models").onclick = () => { void loadModels().catch(report); };
   element<HTMLButtonElement>("chatgpt-sign-in").onclick = async () => {
-    try { const result = await control("sign-in", accountSelect.value ? { accountId: accountSelect.value } : {}); const url = new URL(result.url); if (url.origin !== "https://auth.openai.com") throw new Error("CHATGPT_SIGN_IN_URL_INVALID"); location.assign(url.href); } catch (error) { report(error); }
+    try { sessionStorage.setItem("napplet-cvm/auth-surface", location.pathname === "/dev" ? "/dev" : "/"); const result = await control("sign-in", accountSelect.value ? { accountId: accountSelect.value } : {}); const url = new URL(result.url); if (url.origin !== "https://auth.openai.com") throw new Error("CHATGPT_SIGN_IN_URL_INVALID"); location.assign(url.href); } catch (error) { report(error); }
   };
-  element<HTMLButtonElement>("chatgpt-default").onclick = async () => { try { await control("select", { mode: "default" }); location.replace("/"); } catch (error) { report(error); } };
+  element<HTMLButtonElement>("chatgpt-default").onclick = async () => { try { await control("select", { mode: "default" }); location.replace(location.pathname === "/dev" ? "/dev" : "/"); } catch (error) { report(error); } };
   element<HTMLButtonElement>("chatgpt-sign-out").onclick = async () => { try { const result = await control("logout", { accountId: accountSelect.value }); await refresh(); await loadModels(); message(result.revoked ? "Signed out of ChatGPT. Use the default provider or sign in again." : explanations.CHATGPT_REMOTE_REVOCATION_UNCONFIRMED!); } catch (error) { report(error); } };
   const welcome = element<HTMLDialogElement>("chatgpt-welcome");
   element<HTMLButtonElement>("chatgpt-got-it").onclick = async () => { try { await control("welcome", { accountId: accountSelect.value }); welcome.close(); } catch (error) { report(error); } };
   refreshDiagnostic = async () => { try { const current: Status = await control("status"); const selected = current.accounts.find((item) => item.id === current.settings.accountId); const code = current.settings.mode === "chatgpt" && !selected?.signedIn ? "CHATGPT_SIGN_IN_REQUIRED" : current.diagnostic ?? current.notice; if (code) { const explanation = errorMessage(code); message(explanation); return explanation; } } catch { /* Keep generation's own error visible. */ } };
-  try { await refresh(); await loadModels(); const error = new URL(location.href).searchParams.get("chatgpt_error"); if (error) message(errorMessage(error)); history.replaceState(null, "", "/"); } catch (error) { report(error); }
+  try { await refresh(); await loadModels(); const error = new URL(location.href).searchParams.get("chatgpt_error"); if (error) message(errorMessage(error)); history.replaceState(null, "", location.pathname); } catch (error) { report(error); }
 }

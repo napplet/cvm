@@ -5,6 +5,9 @@ import type { LocalPreviewGrantStore } from "../dev/local-preview-grant-store";
 const mime = new Map([[".html", "text/html; charset=utf-8"], [".js", "text/javascript; charset=utf-8"], [".css", "text/css; charset=utf-8"], [".json", "application/json; charset=utf-8"], [".svg", "image/svg+xml"]]);
 const pajaRoutes = new Set(["/", "/__kehto/config.json", "/__kehto/target.html", "/__kehto/target-cors.json", "/__kehto/browser-host.js"]);
 const collapsedConsole = `<script>try { localStorage.setItem('kehto:paja:console:v1', 'collapsed'); } catch {} window.addEventListener('load', () => { const toggle = document.getElementById('paja-console-toggle'); if (toggle?.getAttribute('aria-expanded') === 'true') toggle.click(); }, { once: true });</script>`;
+// A presentation switch for the product workspace. It changes no sandbox,
+// simulation, grant, capability or message policy; /dev keeps Paja controls.
+const workspaceChrome = `<style>html[data-preview-presentation="workspace"] body { grid-template-rows: minmax(0, 1fr); } html[data-preview-presentation="workspace"] .bar, html[data-preview-presentation="workspace"] .console { display: none !important; } html[data-preview-presentation="workspace"] main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }</style>`;
 export type PreviewServer = Readonly<{ url: string; openPaja(token: string): Promise<string>; close(): Promise<void> }>;
 /** Static/opaque-grant boundary only. There are deliberately no application commands here. */
 export async function createPreviewServer(input: Readonly<{ repository: LocalArtifactRepository; grants: LocalPreviewGrantStore; paja: Readonly<{ startPajaServer(options: unknown): Promise<{ url: string; close(): Promise<void> }>; domains: readonly string[] }> }>): Promise<PreviewServer> {
@@ -28,13 +31,15 @@ export async function createPreviewServer(input: Readonly<{ repository: LocalArt
     const upstream = new URL(host.url);
     if (upstream.protocol !== "http:" || upstream.hostname !== "127.0.0.1") { await host.close(); throw new Error("PAJA_LOOPBACK_REQUIRED"); }
     const minimized = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
-      const path = new URL(request.url).pathname;
+      const requestUrl = new URL(request.url);
+      const path = requestUrl.pathname;
+      const workspace = requestUrl.searchParams.get("presentation") === "workspace";
       if (request.method !== "GET" || !pajaRoutes.has(path)) return new Response("not found", { status: 404 });
       try {
         const response = await fetch(new URL(path, upstream), { redirect: "error" });
         const forwarded = new Response(response.body, { status: response.status, headers: { "content-type": response.headers.get("content-type") ?? "application/octet-stream", "cache-control": "no-store", "x-content-type-options": "nosniff" } });
         if (path !== "/" || !response.ok) return forwarded;
-        return new HTMLRewriter().on("html", { element(element) { element.setAttribute("data-paja-console", "collapsed"); } }).on("head", { element(element) { element.prepend(collapsedConsole, { html: true }); } }).transform(forwarded);
+        return new HTMLRewriter().on("html", { element(element) { element.setAttribute("data-paja-console", "collapsed"); if (workspace) element.setAttribute("data-preview-presentation", "workspace"); } }).on("head", { element(element) { element.prepend(collapsedConsole + (workspace ? workspaceChrome : ""), { html: true }); } }).transform(forwarded);
       } catch { return new Response("preview unavailable", { status: 502 }); }
     } });
     hosts.push({ async close() { minimized.stop(true); await host.close(); } });

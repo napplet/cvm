@@ -28,7 +28,7 @@ bun install --frozen-lockfile
 bun scripts/dev.ts up
 ```
 
-Open the printed URL, click **Connect**, fund the account with local test money, and generate a napplet. The default model is a labeled deterministic fixture. For real generation using your ChatGPT subscription, choose **Continue with ChatGPT**; sign-in activates a model automatically. Model changes apply immediately, and your sign-in and selection persist across restarts. [Sign-in and test instructions](docs/runbooks/development-gui.md#chatgpt-subscription-sign-in-for-local-development). See the [workspace walkthrough](docs/runbooks/development-gui.md#try-the-execution-flow).
+Open the printed URL for the **applet.broker** workspace: describe an idea, review the model and test budget, then create. Connection and local test funding are automatic. Follow real progress at the top and send revisions in the chat beside the preview. The original development console is available at `/dev`. The default model is a labeled deterministic fixture. For real generation using your ChatGPT subscription, open **Settings → Continue with ChatGPT**; sign-in activates a model automatically. Model changes apply immediately, and your sign-in and selection persist across restarts. [Sign-in and test instructions](docs/runbooks/development-gui.md#chatgpt-subscription-sign-in-for-local-development). See the [workspace walkthrough](docs/runbooks/development-gui.md#try-the-execution-flow).
 
 | Command | Purpose |
 | --- | --- |
@@ -38,6 +38,8 @@ Open the printed URL, click **Connect**, fund the account with local test money,
 | `bun run test:design-slice` | Write Phase 1 design evidence, including explicit native-runtime blockers. |
 
 Design evidence and fixture passes establish local behavior. Release promotion additionally requires real browser, provider, payment, model, recovery, and publication observations.
+
+The first user-facing deployment will be branded **applet.broker**. The reusable service is intended for an eventual open-source **@napplet/cvm** release; this repository has not published that package or deployed the public site.
 
 ## Local development workspace
 
@@ -62,6 +64,7 @@ bun scripts/dev.ts status
 | `bun scripts/dev.ts test --case=continuation-revision` | Run pending-action funding/restart/explicit-resume and revision/version evidence. |
 | `bun scripts/dev.ts test --case=chatgpt-oauth` | Test OAuth and streamed inference fixtures through the real local build/preview flow. |
 | `bun scripts/dev.ts test --case=full` | Run the composed browser, durable-state, security, responsive, and accessibility gate. |
+| `bun scripts/dev.ts test --case=product` | Exercise guided creation, OAuth, reload recovery, revisions and failures through the real local services. |
 | `bun scripts/dev.ts down` | Stop the selected workspace while preserving its development data. |
 | `bun scripts/dev.ts reset --confirm` | Remove only the selected workspace's labeled containers, volumes, checkpoints, artifacts, and local state. |
 

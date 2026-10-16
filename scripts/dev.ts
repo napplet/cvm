@@ -115,12 +115,14 @@ async function startServer(value: Scope, port: number): Promise<LaunchRecord> {
   child.unref();
   const record: LaunchRecord = { version: 1, instance: value.instance, port, pid: child.pid, url: `http://127.0.0.1:${port}`, stateRoot: value.stateRoot, configPath: value.configPath };
   await writeRecord(value, record);
-  for (let attempts = 0; attempts < 120; attempts += 1) {
+  // Startup includes the bounded worker and host-browser readiness probes.
+  const startupDeadline = Date.now() + 120_000;
+  while (Date.now() < startupDeadline) {
     if (await alive(record)) return record;
     await Bun.sleep(250);
   }
   if (record.pid && await ownedProcessAlive(record.pid)) process.kill(record.pid, "SIGTERM");
-  throw new Error("DEV_CONTEXTVM_START_FAILED:server did not expose /health within 30 seconds");
+  throw new Error("DEV_CONTEXTVM_START_FAILED:server did not expose /health within 120 seconds");
 }
 
 async function up(): Promise<LaunchRecord> {
@@ -179,12 +181,15 @@ async function test(): Promise<void> {
     console.log(JSON.stringify({ status: "passed", case: "chatgpt-live" })); return;
   }
   const cases: Record<string, Array<readonly [string, ...string[]]>> = {
+    "product": [["tests/dev-ui/product-view.e2e.ts"], ["tests/dev-ui/product-workspace.e2e.ts"]],
     "progress": [["test", "tests/dev-ui/development-progress.test.ts"], ["tests/dev-ui/progress-view.e2e.ts"], ["tests/dev-ui/chatgpt-oauth.e2e.ts"]],
     "chatgpt-oauth": [["tests/dev-ui/chatgpt-oauth.e2e.ts"]],
     "contextvm-funding": [["tests/dev-ui/contextvm-funding.e2e.ts", "--case=both-rails-restart-replay"]],
     "generation-preview": [["tests/dev-ui/generation-preview.e2e.ts", "--case=deterministic-real-worker-compatible-host"]],
     "continuation-revision": [["tests/dev-ui/continuation-revision.e2e.ts", "--case=pre-admission-fund-restart-explicit-resume"], ["tests/dev-ui/continuation-revision.e2e.ts", "--case=revisions-duplicates-restarts"]],
     full: [
+      ["tests/dev-ui/product-view.e2e.ts"],
+      ["tests/dev-ui/product-workspace.e2e.ts"],
       ["test", "tests/dev-ui/development-progress.test.ts"],
       ["tests/dev-ui/progress-view.e2e.ts"],
       ["test", "tests/dev/chatgpt-oauth.test.ts", "tests/dev/chatgpt-model-gateway.test.ts"],
@@ -199,7 +204,7 @@ async function test(): Promise<void> {
       ["tests/dev-ui/full-flow.e2e.ts"],
     ],
   };
-  if (!testCase || !cases[testCase]) throw new Error("DEV_TEST_CASE_INVALID:contextvm-funding|generation-preview|continuation-revision|progress|chatgpt-oauth|chatgpt-live|full");
+  if (!testCase || !cases[testCase]) throw new Error("DEV_TEST_CASE_INVALID:contextvm-funding|generation-preview|continuation-revision|product|progress|chatgpt-oauth|chatgpt-live|full");
   const providerKeys = ["OPENAI_API_KEY", "NAPPLET_CVM_OPENAI_MODEL", "NAPPLET_CVM_OPENAI_PROFILE", "NAPPLET_CVM_OPENAI_PRICE_CARD", "NAPPLET_CVM_OPENAI_PRICE_SOURCES"] as const;
   const saved = Object.fromEntries(providerKeys.map((key) => [key, process.env[key]]));
   for (const key of providerKeys) delete process.env[key];

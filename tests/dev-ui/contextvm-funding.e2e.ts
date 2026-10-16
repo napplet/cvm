@@ -19,7 +19,7 @@ try {
   activePage = page;
   const requests: string[] = [];
   page.on("request", (request) => requests.push(new URL(request.url()).pathname));
-  await page.goto(server.url, { waitUntil: "networkidle" });
+  await page.goto(`${server.url}/dev`, { waitUntil: "networkidle" });
   await page.getByRole("button", { name: "Connect" }).click();
   await page.getByText("Connected").waitFor();
 

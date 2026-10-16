@@ -14,7 +14,7 @@ let activePage: Awaited<ReturnType<typeof browser.newPage>> | undefined;
 try {
   const page = await browser.newPage(); activePage = page; const requests: string[] = [];
   page.on("request", (request) => requests.push(new URL(request.url()).pathname));
-  await page.goto(server.url, { waitUntil: "networkidle" });
+  await page.goto(`${server.url}/dev`, { waitUntil: "networkidle" });
   await page.getByRole("button", { name: "Connect" }).click(); await page.getByText("Connected").waitFor();
   await page.getByLabel("Cashu amount (sats)").fill("4000"); await page.getByRole("button", { name: "Fund with Cashu" }).click(); await page.getByText("Cashu credited").waitFor();
   await page.getByLabel("Focused idea").fill("A focused tap counter for daily practice"); await page.getByRole("button", { name: "Generate napplet" }).click();

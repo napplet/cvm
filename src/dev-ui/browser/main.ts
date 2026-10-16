@@ -41,6 +41,7 @@ function setError(value = ""): void {
     if (explanation && byId("generation-error").textContent === value) {
       byId("generation-error").textContent = `${value} · ${explanation}`;
       activity.explainFailure(explanation);
+      product?.explainFailure(explanation);
     }
   });
 }

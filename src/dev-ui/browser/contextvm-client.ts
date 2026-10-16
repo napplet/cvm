@@ -142,7 +142,8 @@ export class DevelopmentContextVmClient {
   async close(): Promise<void> { for (const pending of this.#pending.values()) pending.reject(new Error("CONTEXTVM_CONNECTION_CLOSED")); this.#pending.clear(); await this.#client?.close(); this.#client = undefined; }
 
   async callTool(name: string, argumentsValue: unknown, tags?: readonly PaymentTag[]): Promise<any> {
-    return this.call("tools/call", { name, arguments: argumentsValue }, tags, ["start_session", "revise_session", "resume_session"].includes(name) ? 330_000 : 30_000);
+    // Five-minute model budget + three-minute worker + startup/settlement margin.
+    return this.call("tools/call", { name, arguments: argumentsValue }, tags, ["start_session", "revise_session", "resume_session"].includes(name) ? 540_000 : 30_000);
   }
 
   private async call(method: string, params: unknown, tags?: readonly PaymentTag[], timeoutMs = 30_000): Promise<any> {

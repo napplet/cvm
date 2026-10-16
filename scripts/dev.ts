@@ -184,6 +184,7 @@ async function test(): Promise<void> {
     "product": [["tests/dev-ui/product-view.e2e.ts"], ["tests/dev-ui/product-workspace.e2e.ts"]],
     "progress": [["test", "tests/dev-ui/development-progress.test.ts"], ["tests/dev-ui/progress-view.e2e.ts"], ["tests/dev-ui/chatgpt-oauth.e2e.ts"]],
     "chatgpt-oauth": [["tests/dev-ui/chatgpt-oauth.e2e.ts"]],
+    "chatgpt-timeout": [["tests/dev-ui/chatgpt-timeout.e2e.ts"]],
     "contextvm-funding": [["tests/dev-ui/contextvm-funding.e2e.ts", "--case=both-rails-restart-replay"]],
     "generation-preview": [["tests/dev-ui/generation-preview.e2e.ts", "--case=deterministic-real-worker-compatible-host"]],
     "continuation-revision": [["tests/dev-ui/continuation-revision.e2e.ts", "--case=pre-admission-fund-restart-explicit-resume"], ["tests/dev-ui/continuation-revision.e2e.ts", "--case=revisions-duplicates-restarts"]],
@@ -192,8 +193,9 @@ async function test(): Promise<void> {
       ["tests/dev-ui/product-workspace.e2e.ts"],
       ["test", "tests/dev-ui/development-progress.test.ts"],
       ["tests/dev-ui/progress-view.e2e.ts"],
-      ["test", "tests/dev/chatgpt-oauth.test.ts", "tests/dev/chatgpt-model-gateway.test.ts"],
+      ["test", "tests/dev/chatgpt-oauth.test.ts", "tests/dev/chatgpt-model-gateway.test.ts", "tests/dev/chatgpt-diagnostic.test.ts"],
       ["tests/dev-ui/chatgpt-oauth.e2e.ts"],
+      ["tests/dev-ui/chatgpt-timeout.e2e.ts"],
       ["tests/dev-ui/contextvm-funding.e2e.ts", "--case=both-rails-restart-replay"],
       ["tests/dev-ui/generation-preview.e2e.ts", "--case=deterministic-real-worker-compatible-host"],
       ["tests/dev-ui/generation-preview.e2e.ts", "--case=boundaries-platform-provider-recovery", "--allow-skip-without-provider-credentials"],
@@ -204,7 +206,7 @@ async function test(): Promise<void> {
       ["tests/dev-ui/full-flow.e2e.ts"],
     ],
   };
-  if (!testCase || !cases[testCase]) throw new Error("DEV_TEST_CASE_INVALID:contextvm-funding|generation-preview|continuation-revision|product|progress|chatgpt-oauth|chatgpt-live|full");
+  if (!testCase || !cases[testCase]) throw new Error("DEV_TEST_CASE_INVALID:contextvm-funding|generation-preview|continuation-revision|product|progress|chatgpt-oauth|chatgpt-timeout|chatgpt-live|full");
   const providerKeys = ["OPENAI_API_KEY", "NAPPLET_CVM_OPENAI_MODEL", "NAPPLET_CVM_OPENAI_PROFILE", "NAPPLET_CVM_OPENAI_PRICE_CARD", "NAPPLET_CVM_OPENAI_PRICE_SOURCES"] as const;
   const saved = Object.fromEntries(providerKeys.map((key) => [key, process.env[key]]));
   for (const key of providerKeys) delete process.env[key];

@@ -6,20 +6,23 @@ import { ModelProfileSchema, PriceCardSchema } from "../model/price-card";
 import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
 import type { SourceProposalStore } from "./source-proposal-store";
 import { CHATGPT_RESOURCE, boundedJson, chatGptError, safeChatGptError, type ChatGptFetch, type ChatGptOAuth } from "./chatgpt-oauth";
+import { ChatGptDiagnosticSchema, classifyChatGptFailure, type ChatGptDiagnostic } from "./chatgpt-diagnostic";
 
 const digest = (value: unknown) => new Bun.CryptoHasher("sha256").update(canonicalJson(value)).digest("hex");
 export function chatGptDevelopmentPricing(accountId: string, model: string) {
-  const id = `development-chatgpt-v1-${digest({ accountId, model }).slice(0, 24)}`;
+  // Profile IDs are immutable in SQL. A new deadline requires a new version.
+  const id = `development-chatgpt-v2-${digest({ accountId, model }).slice(0, 24)}`;
   // Synthetic local test sats, never an assertion about a subscription's dollar cost.
   const card = PriceCardSchema.parse({ id: `${id}-card`, version: "development-chatgpt-v1", kind: "development_test", provider: "openai_chatgpt_development", currency: "sat", rounding: "ceil", supportedDimensions: ["input_tokens", "output_tokens"], rates: { input_tokens: { numerator: "1", denominator: "1000" }, output_tokens: { numerator: "1", denominator: "1000" }, cached_tokens: { numerator: "1", denominator: "1000" }, reasoning_tokens: { numerator: "1", denominator: "1000" } }, ceilings: { inputTokens: "262144", outputTokens: "131072" }, validity: { notBefore: "2026-10-15T00:00:00.000Z", notAfter: "2030-10-15T00:00:00.000Z" } });
-  const profile = ModelProfileSchema.parse({ id, provider: card.provider, model, priceCardId: card.id, selection: "unselected", maximumUnits: [{ dimension: "input_tokens", units: card.ceilings.inputTokens }, { dimension: "output_tokens", units: card.ceilings.outputTokens }], deadlineMs: 120_000 });
+  const profile = ModelProfileSchema.parse({ id, provider: card.provider, model, priceCardId: card.id, selection: "unselected", maximumUnits: [{ dimension: "input_tokens", units: card.ceilings.inputTokens }, { dimension: "output_tokens", units: card.ceilings.outputTokens }], deadlineMs: 300_000 });
   return Object.freeze({ card, profile });
 }
 
 export interface ChatGptOperations {
   claim(intent: ProviderOperationIntent): Promise<boolean>;
   read(intent: ProviderOperationIntent): Promise<ModelDispatchObservation | undefined>;
-  complete(intent: ProviderOperationIntent, observation: ModelDispatchObservation): Promise<void>;
+  complete(intent: ProviderOperationIntent, observation: ModelDispatchObservation, diagnostic?: ChatGptDiagnostic): Promise<void>;
+  diagnostic?(intent: ProviderOperationIntent): Promise<ChatGptDiagnostic | undefined>;
 }
 export class SqlChatGptOperations implements ChatGptOperations {
   constructor(private readonly pool: PostgresSqlPool) {}
@@ -36,8 +39,12 @@ export class SqlChatGptOperations implements ChatGptOperations {
     if (row && row.intent_sha256 !== digest(intent)) throw chatGptError("OPERATION_BINDING_MISMATCH");
     return row?.observation_json ? ModelDispatchObservationSchema.parse(row.observation_json) : undefined;
   }
-  async complete(intent: ProviderOperationIntent, observation: ModelDispatchObservation): Promise<void> {
-    const result = await this.query("UPDATE development_chatgpt_operations SET observation_json=$3 WHERE operation_id=$1 AND intent_sha256=$2 AND (observation_json IS NULL OR observation_json=$3::jsonb) RETURNING operation_id", [intent.operationId, digest(intent), JSON.stringify(ModelDispatchObservationSchema.parse(observation))]);
+  async diagnostic(intent: ProviderOperationIntent): Promise<ChatGptDiagnostic | undefined> {
+    const row = (await this.query<{ diagnostic_json: unknown }>("SELECT diagnostic_json FROM development_chatgpt_operations WHERE operation_id=$1 AND intent_sha256=$2", [intent.operationId, digest(intent)])).rows[0];
+    return row?.diagnostic_json ? ChatGptDiagnosticSchema.parse(row.diagnostic_json) : undefined;
+  }
+  async complete(intent: ProviderOperationIntent, observation: ModelDispatchObservation, diagnostic?: ChatGptDiagnostic): Promise<void> {
+    const result = await this.query("UPDATE development_chatgpt_operations SET observation_json=$3,diagnostic_json=COALESCE(diagnostic_json,$4::jsonb) WHERE operation_id=$1 AND intent_sha256=$2 AND (observation_json IS NULL OR observation_json=$3::jsonb) RETURNING operation_id", [intent.operationId, digest(intent), JSON.stringify(ModelDispatchObservationSchema.parse(observation)), diagnostic ? JSON.stringify(ChatGptDiagnosticSchema.parse(diagnostic)) : null]);
     if (result.rows.length !== 1) throw chatGptError("OPERATION_BINDING_MISMATCH");
   }
 }
@@ -103,10 +110,14 @@ export class ChatGptModelGateway implements ModelGateway {
     this.pricing = chatGptDevelopmentPricing(options.accountId, options.model);
   }
   diagnostic(): string | undefined { return this.#lastError; }
-  #unknown(intent: ProviderOperationIntent): ModelDispatchObservation { return { status: "usage_unknown", operationId: intent.operationId, providerRequestId: intent.providerRequestId, reason: "uncertain_acceptance", provenance: { protectedEvidenceReference: `development:chatgpt:unknown:${intent.operationId}` } }; }
+  #unknown(intent: ProviderOperationIntent, code?: string): ModelDispatchObservation {
+    const reason = code === "CHATGPT_GENERATION_TIMEOUT" ? "accepted_timeout" : code === "CHATGPT_GENERATION_ABORTED" ? "aborted" : ["CHATGPT_CONNECTION_FAILED", "CHATGPT_STREAM_INTERRUPTED"].includes(code ?? "") ? "lost_response" : code === "CHATGPT_RESPONSE_INVALID" ? "malformed_receipt" : "uncertain_acceptance";
+    return { status: "usage_unknown", operationId: intent.operationId, providerRequestId: intent.providerRequestId, reason, provenance: { protectedEvidenceReference: `development:chatgpt:unknown:${intent.operationId}` } };
+  }
   async dispatch(input: ProviderOperationIntent, signal: AbortSignal): Promise<ModelDispatchObservation> {
     const intent = ProviderOperationIntentSchema.parse(input);
-    const previous = await this.options.operations.read(intent); if (previous) return previous;
+    const previous = await this.options.operations.read(intent);
+    if (previous) { this.#lastError = (await this.options.operations.diagnostic?.(intent))?.code; return previous; }
     let token: string; let body: unknown;
     try {
       signal.throwIfAborted();
@@ -129,15 +140,22 @@ export class ChatGptModelGateway implements ModelGateway {
     if (!await this.options.operations.claim(intent)) return await this.options.operations.read(intent) ?? this.#unknown(intent);
     this.#lastError = undefined;
     let observation: ModelDispatchObservation;
+    let diagnostic: ChatGptDiagnostic | undefined;
+    let phase: ChatGptDiagnostic["phase"] = "request";
+    let receivedBytes = 0; let httpStatus: number | undefined;
+    const started = performance.now();
+    const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(this.pricing.profile.deadlineMs)]);
     try {
-      const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(this.pricing.profile.deadlineMs)]);
       const response = await (this.options.fetch ?? fetch)(`${CHATGPT_RESOURCE}/responses`, { method: "POST", redirect: "error", signal: requestSignal, headers: { authorization: `Bearer ${token}`, "content-type": "application/json", accept: "text/event-stream" }, body: JSON.stringify(body) });
+      httpStatus = response.status;
       if (!response.ok) {
         // Even HTTP failures are retained as ambiguous; no automatic paid retry.
         const error = await boundedJson(response).catch(() => undefined);
         throw chatGptError(error?.error?.code === "subscription_sharing_usage_limit_exceeded" ? "USAGE_LIMIT_REACHED" : response.status === 401 ? "REAUTHORIZE_REQUIRED" : response.status === 403 ? "PLAN_ACCESS_DENIED" : "INFERENCE_UNAVAILABLE");
       }
-      const native = await readChatGptResponse(response, requestSignal, this.options.onResponseBytes);
+      phase = "stream";
+      const native = await readChatGptResponse(response, requestSignal, (bytes) => { receivedBytes = bytes; this.options.onResponseBytes?.(bytes); });
+      phase = "receipt";
       // A catalog alias may resolve to a dated snapshot; persist the actual model in provenance.
       if (native.model !== this.options.model && !native.model.startsWith(`${this.options.model}-`)) throw chatGptError("MODEL_MISMATCH");
       const receipt = NormalizedUsageReceiptSchema.parse({ operationId: intent.operationId, providerRequestId: intent.providerRequestId, provider: "openai_chatgpt_development", model: this.options.model, profileId: intent.profileId, priceCardId: intent.priceCardId, selection: intent.selection, completedAt: new Date().toISOString(), provenance: { protectedEvidenceReference: `development:chatgpt:${native.id}`, protectedEvidenceDigest: digest({ model: native.model, usage: native.usage, responseId: native.id }) }, usage: [{ dimension: "input_tokens", units: String(native.usage.input_tokens) }, { dimension: "output_tokens", units: String(native.usage.output_tokens) }] });
@@ -148,17 +166,23 @@ export class ChatGptModelGateway implements ModelGateway {
       } catch { proposal = undefined; this.#lastError = "CHATGPT_SOURCE_INVALID"; }
       if (!proposal) observation = { status: "failed", receipt };
       else {
+        phase = "persistence";
         const stored = await this.options.store.persist({ intent, provider: receipt.provider, model: receipt.model, proposal });
         await this.options.store.recordProviderObservation({ intent, providerResponseId: native.id, receipt, sourceProposalReference: stored.proposal.reference });
         observation = { status: "completed", receipt, sourceProposalReference: stored.proposal.reference };
       }
-    } catch (error) { this.#lastError = safeChatGptError(error); observation = this.#unknown(intent); }
-    await this.options.operations.complete(intent, observation);
+    } catch (error) {
+      this.#lastError = classifyChatGptFailure(error, phase, requestSignal);
+      diagnostic = ChatGptDiagnosticSchema.parse({ code: this.#lastError, phase, elapsedMs: Math.min(3_600_000, Math.floor(performance.now() - started)), receivedBytes, ...(httpStatus ? { httpStatus } : {}) });
+      observation = this.#unknown(intent, this.#lastError);
+    }
+    await this.options.operations.complete(intent, observation, diagnostic);
     return observation;
   }
   async lookup(input: ProviderOperationIntent, _signal: AbortSignal) {
     const intent = ProviderOperationIntentSchema.parse(input);
     const observation = await this.options.operations.read(intent);
+    this.#lastError = (await this.options.operations.diagnostic?.(intent))?.code;
     if (observation?.status === "completed" || observation?.status === "failed") return ModelLookupObservationSchema.parse({ ...observation, status: "receipt_found" });
     if (observation?.status === "definitive_not_accepted") return observation;
     // Recover a crash between immutable observation persistence and fence completion.

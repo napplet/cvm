@@ -96,6 +96,16 @@ The deterministic profile currently requires a 3,250-sat authorization ceiling a
 
 Publication is unavailable. The product footer states **Publishing later**; the console displays **Publication unavailable in this development setup**.
 
+### Model timeouts and unconfirmed outcomes
+
+ChatGPT generation has a five-minute local model deadline. The browser allows nine minutes for the whole action, including the separate three-minute worker budget and settlement. The earlier two-minute model deadline could interrupt otherwise valid long revisions. Profile IDs are versioned for this change; existing operation records and price profiles remain immutable.
+
+`CHATGPT_GENERATION_TIMEOUT` means the local model deadline expired before a complete result was recorded. It does not mean OAuth expired. `USAGE_UNKNOWN` means the service cannot establish the submitted operation's final usage/outcome, so it preserves its dispatch fence and does not retry automatically. Your previous verified preview remains available, but that session cannot accept another revision until reconciliation establishes the outcome. Signing in again does not recover an interrupted request. A new applet is a separate explicit request, not recovery of the old revision.
+
+Connection failure, invalid response and local result-recording failure also have distinct messages. Bounded failure diagnostics (code, phase, elapsed time, observed byte count and HTTP status) are stored with the development ChatGPT operation. They contain no raw provider error, prompt, generated source, credentials or URL. Historical operations created before this change do not gain missing diagnostics retroactively.
+
+Run `bun scripts/dev.ts test --case=chatgpt-timeout` for the browser/relay/SQL failure regression with fixture inference and no live subscription usage.
+
 ## What runs locally
 
 The workspace is a loopback-only service graph:

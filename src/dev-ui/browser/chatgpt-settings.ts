@@ -21,7 +21,14 @@ const explanations: Record<string, string> = {
   CHATGPT_GENERATION_BUSY: "Wait for the current generation to finish before changing model settings.",
   CHATGPT_MODELS_UNAVAILABLE: "The account's model list is unavailable. Try loading models again.",
   CHATGPT_MODEL_CATALOG_TOO_LARGE: "The model catalog exceeds this app's size limit. Your sign-in is still valid; update the local service before reloading models.",
+  CHATGPT_REQUEST_FAILED: "The ChatGPT request could not be confirmed. This error does not establish a sign-in problem. A submitted generation will not be retried automatically.",
+  CHATGPT_GENERATION_TIMEOUT: "The local service reached its model time limit before receiving a complete result. Signing in again will not recover this request. Your last verified version is safe; this session needs usage reconciliation before another revision.",
+  CHATGPT_GENERATION_ABORTED: "The model request was interrupted locally before its outcome was confirmed. It will not be retried automatically. Your last verified version is safe.",
+  CHATGPT_CONNECTION_FAILED: "The model connection failed before a complete result was confirmed. Signing in again will not recover this request. It will not be retried automatically.",
+  CHATGPT_RESPONSE_INVALID: "The model response could not be validated. Its outcome is unconfirmed; the original request will not be retried automatically.",
+  CHATGPT_RESULT_RECORDING_FAILED: "The model returned a result, but the local service could not save it. Its outcome needs reconciliation; the original request will not be retried automatically.",
 };
+export const chatGptErrorMessage = (code: string): string => explanations[code] ?? `The ChatGPT request could not complete (${/^CHATGPT_[A-Z0-9_]{1,100}$/u.test(code) ? code : "CHATGPT_REQUEST_FAILED"}). Check execution details; signing in again is only needed when an authentication error is reported.`;
 let refreshDiagnostic: (() => Promise<string | undefined>) | undefined;
 export async function showChatGptDiagnostic(): Promise<string | undefined> { return refreshDiagnostic?.(); }
 
@@ -61,7 +68,7 @@ export async function mountChatGptSettings(bootstrap: DevelopmentBootstrap, onSt
   const accountSelect = element<HTMLSelectElement>("chatgpt-account"); const modelSelect = element<HTMLSelectElement>("chatgpt-model");
   let status: Status;
   const message = (text: string) => { element("chatgpt-status").textContent = text; };
-  const errorMessage = (code: string) => explanations[code] ?? `ChatGPT setup could not complete (${code}). Try again from Continue with ChatGPT.`;
+  const errorMessage = chatGptErrorMessage;
   const control = (path: string, body?: unknown) => controlRequest(bootstrap, path, body);
   const report = (error: unknown) => message(errorMessage(error instanceof Error ? error.message : "CHATGPT_REQUEST_FAILED"));
   const refresh = async () => {

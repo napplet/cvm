@@ -1,16 +1,18 @@
 import { loadAuthoringSkills } from "../../infra/dev-ui/authoring-skills";
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+import type { ChatGptDiagnostic } from "../../src/dev/chatgpt-diagnostic";
 import { ChatGptModelGateway, readChatGptResponse, type ChatGptOperations } from "../../src/dev/chatgpt-model-gateway";
 import { priceReceipt, PriceCardSchema, maximumOperationCharge } from "../../src/model/price-card";
 import { ProviderOperationIntentSchema, type ModelDispatchObservation } from "../../src/model/model-gateway";
 import { chatGptFixture } from "../fixtures/chatgpt";
 
 function setup() {
-  const fixture = chatGptFixture(); const records = new Map<string, { intent: string; observation?: ModelDispatchObservation }>(); const proposals: any[] = []; const observations: any[] = [];
+  const fixture = chatGptFixture(); const records = new Map<string, { intent: string; observation?: ModelDispatchObservation; diagnostic?: ChatGptDiagnostic }>(); const proposals: any[] = []; const observations: any[] = [];
   const operations: ChatGptOperations = {
     async claim(intent) { if (records.has(intent.operationId)) return false; records.set(intent.operationId, { intent: JSON.stringify(intent) }); return true; },
     async read(intent) { const row = records.get(intent.operationId); if (row && row.intent !== JSON.stringify(intent)) throw new Error("OPERATION_BINDING_MISMATCH"); return row?.observation; },
-    async complete(intent, observation) { records.get(intent.operationId)!.observation = observation; },
+    async complete(intent, observation, diagnostic) { Object.assign(records.get(intent.operationId)!, { observation, diagnostic }); },
+    async diagnostic(intent) { return records.get(intent.operationId)?.diagnostic; },
   };
   const store = {
     async persist(input: any) { const proposal = { reference: `proposal:sha256:${"a".repeat(64)}`, sha256: "a".repeat(64), ...input.proposal }; proposals.push(input); return { proposal } as any; },
@@ -145,4 +147,62 @@ test("stream observations expose byte counts only and observer failure cannot in
   const gateway = new ChatGptModelGateway({ ...options, onResponseBytes: (count) => { bytes.push(count); throw new Error("observer unavailable"); } });
   expect((await gateway.dispatch(intent, signal())).status).toBe("completed");
   expect(bytes.length).toBeGreaterThan(0); expect(bytes.every((value) => Number.isSafeInteger(value) && value > 0 && value <= 2000000)).toBe(true);
+});
+
+test("a slow model can complete after the old two-minute cutoff", async () => {
+  const controller = new AbortController(); let deadline = 0;
+  const clock = spyOn(AbortSignal, "timeout").mockImplementation((ms) => { deadline = ms; return controller.signal; });
+  try {
+    const { options, intent, fixture } = setup();
+    const gateway = new ChatGptModelGateway({ ...options, fetch: async (url, init) => {
+      // Advance a virtual provider clock past two minutes, without a wall-clock wait.
+      if (deadline <= 121_000) controller.abort(new DOMException("private timeout detail", "TimeoutError"));
+      init?.signal?.throwIfAborted(); return fixture.fetch(url, init);
+    } });
+    expect((await gateway.dispatch(intent, signal())).status).toBe("completed");
+    expect(deadline).toBe(300_000);
+    expect(gateway.pricing.profile.id).toStartWith("development-chatgpt-v2-");
+  } finally { clock.mockRestore(); }
+});
+
+test("deadline expiry is classified, retained across restart, and never redispatched", async () => {
+  const controller = new AbortController();
+  const clock = spyOn(AbortSignal, "timeout").mockImplementation(() => controller.signal);
+  try {
+    const { options, intent, operations } = setup(); let calls = 0;
+    const gateway = new ChatGptModelGateway({ ...options, fetch: async () => {
+      calls++;
+      return new Response(new ReadableStream({ start(stream) {
+        stream.enqueue(new TextEncoder().encode('data: {"type":"response.created","response":{"id":"fixture"}}\n\n'));
+        setTimeout(() => controller.abort(new DOMException("private timeout body", "TimeoutError")), 5);
+      } }), { headers: { "content-type": "text/event-stream" } });
+    } });
+    expect(await gateway.dispatch(intent, signal())).toMatchObject({ status: "usage_unknown", reason: "accepted_timeout" });
+    expect(gateway.diagnostic()).toBe("CHATGPT_GENERATION_TIMEOUT");
+    const diagnostic = await operations.diagnostic!(intent);
+    expect(diagnostic).toMatchObject({ code: "CHATGPT_GENERATION_TIMEOUT", phase: "stream", httpStatus: 200 });
+    expect(diagnostic!.receivedBytes).toBeGreaterThan(0);
+    expect(JSON.stringify(diagnostic)).not.toContain("private");
+    const restarted = new ChatGptModelGateway({ ...options, fetch: async () => { calls++; throw new Error("must not redispatch"); } });
+    expect((await restarted.dispatch(intent, signal())).status).toBe("usage_unknown");
+    expect(restarted.diagnostic()).toBe("CHATGPT_GENERATION_TIMEOUT");
+    expect((await restarted.lookup(intent, signal())).status).toBe("unresolved");
+    expect(calls).toBe(1);
+  } finally { clock.mockRestore(); }
+});
+
+for (const failure of ["network", "malformed", "persistence"] as const) test(`${failure} failures retain only safe operational diagnostics`, async () => {
+  const { options, intent, operations, fixture } = setup();
+  const gateway = new ChatGptModelGateway({ ...options,
+    fetch: async (url, init) => {
+      if (failure === "network") throw new TypeError("secret Bearer fixture-access https://private.invalid");
+      if (failure === "malformed") return new Response(new TextEncoder().encode('data: {private-not-json}\n\n'));
+      return fixture.fetch(url, init);
+    },
+    store: { ...options.store, persist: async (input) => { if (failure === "persistence") throw new Error("private SQL with source"); return options.store.persist(input); } },
+  });
+  expect((await gateway.dispatch(intent, signal())).status).toBe("usage_unknown");
+  expect(gateway.diagnostic()).toBe({ network: "CHATGPT_CONNECTION_FAILED", malformed: "CHATGPT_RESPONSE_INVALID", persistence: "CHATGPT_RESULT_RECORDING_FAILED" }[failure]);
+  const diagnostic = await operations.diagnostic!(intent);
+  for (const secret of ["private", "Bearer", "fixture-access", "https://", "SQL"]) expect(JSON.stringify(diagnostic)).not.toContain(secret);
 });

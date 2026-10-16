@@ -154,6 +154,12 @@ export class ProductWorkspace {
     if (!this.#version) { this.text("preview-empty-copy", "A verified preview will appear here after a successful build."); this.text("build-heading", "Let’s get your idea working."); }
   }
   settled(): void { this.#running = false; this.el("chat-working").hidden = true; this.syncControls(); this.persist(); }
+  explainFailure(explanation: string): void {
+    if (this.#running || this.el("product-notice").hidden) return;
+    this.text("notice-copy", explanation);
+    const last = this.#messages.at(-1);
+    if (last?.role === "assistant" && last.state) { last.text = explanation; this.renderMessages(); this.persist(); }
+  }
   recovery(needed: boolean): void { this.#recovering = needed; this.el("recovery").hidden = !needed; if (needed) { this.showStep(3, false); this.#progress = 0; this.text("progress-title", "Your last request needs checking."); this.el("build-progress").setAttribute("aria-valuenow", "0"); this.el("build-progress").setAttribute("aria-valuetext", "Outcome unconfirmed"); this.el("progress-fill").style.width = "0%"; this.text("progress-detail", "The previous request has not been confirmed. Your saved preview remains available."); } this.syncControls(); }
   versions(versions: readonly WorkspaceVersion[], selected: WorkspaceVersion | undefined, change: (version: WorkspaceVersion) => Promise<unknown>): void {
     this.#changeVersion = change;

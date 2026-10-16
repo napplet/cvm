@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: verification_deferred_gaps
-stopped_at: Guided applet.broker workspace verified; saved ChatGPT sign-in retained; production deferred
-last_updated: "2026-10-16T17:37:26Z"
+stopped_at: ChatGPT revision deadline and misleading auth error fixed; original unknown revision preserved
+last_updated: "2026-10-16T19:11:00Z"
 last_activity: 2026-10-16
-last_activity_desc: Guided product UI, live progress, revision chat and exact-request recovery verified
+last_activity_desc: Five-minute model deadline and persisted failure diagnostics verified through product browser tests
 progress:
   total_phases: 7
   completed_phases: 6
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
 Plan: 56 of 58 accepted; development Plans 07-52/53/56/57/54/55 complete
 Status: Guided applet.broker workspace at http://127.0.0.1:49371; diagnostic console at /dev. Saved chatgpt-oauth mode with gpt-6.1-sol retained. Product/console browser journeys and recovery passed through real local services. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
-Last activity: 2026-10-16 — Completed quick task 261016-coz: warm guided applet.broker UI with top progress, preview-adjacent revision chat, exact-request reload recovery and failed-revision continuity.
+Last activity: 2026-10-16 — Debugged revision stopping at 120.016 seconds: five-minute versioned model deadline, nine-minute browser budget, safe SQL failure diagnostics and truthful product feedback. 42 unit tests and timeout/full-product browser journeys passed. Deployment is still unavailable in the local UI; user's interrupted revision remains fenced as usage_unknown.
 
 Follow-up: Stream assembly/counter verification remains complete. Latest helper-signature and compiler-feedback fix passed 29 targeted unit/integration cases plus activity and composed OAuth browser journeys. Real blinking-text generation also passed. See debug/resolved/generated-typescript-check.md.
 
@@ -376,6 +376,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-16T17:37:26Z
-Stopped at: Product workspace and original console verified; local service runs the latest UI with saved ChatGPT sign-in. Failed-revision recovery and unknown-usage fencing are covered. Existing upstream optional-domain limitations and production release tasks remain documented/deferred.
-Resume file: .planning/quick/261016-coz-build-the-applet-broker-guided-user-expe/261016-coz-SUMMARY.md
+Last session: 2026-10-16T19:11:00Z
+Stopped at: Local service restarted with five-minute ChatGPT deadline and persisted safe failure diagnostics. Saved subscription sign-in retained. Historical timed-out revision was not redispatched or cleared; previous verified version remains available. Deployment/publication is not wired into the development UI.
+Resume file: .planning/debug/resolved/chatgpt-request-failure.md

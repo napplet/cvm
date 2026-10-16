@@ -46,10 +46,11 @@ const Generated = z.object({ files: z.array(z.object({ path: z.enum(["src/main.t
 export const CHATGPT_SOURCE_SCHEMA = { type: "object", additionalProperties: false, required: ["files"], properties: { files: { type: "array", minItems: 1, maxItems: 2, items: { type: "object", additionalProperties: false, required: ["path", "content"], properties: { path: { type: "string", enum: ["src/main.ts", "src/styles.css"] }, content: { type: "string" } } } } } };
 
 /** HTTP/SSE requires a terminal completed event. Deltas never prove success. */
-export async function readChatGptResponse(response: Response, signal: AbortSignal): Promise<z.infer<typeof NativeResponse>> {
+export async function readChatGptResponse(response: Response, signal: AbortSignal, onBytes?: (bytes: number) => void): Promise<z.infer<typeof NativeResponse>> {
   if (!response.headers.get("content-type")?.includes("text/event-stream")) throw chatGptError("STREAM_REQUIRED");
   const reader = response.body?.getReader(); if (!reader) throw chatGptError("EMPTY_RESPONSE");
   const decoder = new TextDecoder(); let buffer = ""; let bytes = 0;
+  let lastReported = -Infinity;
   const abort = () => { void reader.cancel().catch(() => undefined); };
   signal.addEventListener("abort", abort, { once: true });
   try {
@@ -57,6 +58,7 @@ export async function readChatGptResponse(response: Response, signal: AbortSigna
       signal.throwIfAborted(); const { done, value } = await reader.read(); signal.throwIfAborted();
       buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
       bytes += value?.byteLength ?? 0; if (bytes > 2_000_000) throw chatGptError("RESPONSE_TOO_LARGE");
+      if (value && performance.now() - lastReported >= 1000) { lastReported = performance.now(); try { onBytes?.(bytes); } catch { /* Observations never interrupt inference. */ } }
       let match: RegExpExecArray | null;
       while ((match = /\r?\n\r?\n/u.exec(buffer))) {
         const block = buffer.slice(0, match.index); buffer = buffer.slice(match.index + match[0].length);
@@ -77,7 +79,7 @@ export async function readChatGptResponse(response: Response, signal: AbortSigna
 export class ChatGptModelGateway implements ModelGateway {
   readonly pricing: ReturnType<typeof chatGptDevelopmentPricing>;
   #lastError?: string;
-  constructor(private readonly options: { accountId: string; model: string; auth: Pick<ChatGptOAuth, "accessToken">; store: Pick<SourceProposalStore, "persist" | "recordProviderObservation" | "lookupProviderObservation">; operations: ChatGptOperations; fetch?: ChatGptFetch; priorSource?: (input: { accountId: string; sessionId: string; authorizedPriorArtifactReference: string }) => Promise<readonly SourceProposalFile[] | undefined> }) {
+  constructor(private readonly options: { accountId: string; model: string; auth: Pick<ChatGptOAuth, "accessToken">; store: Pick<SourceProposalStore, "persist" | "recordProviderObservation" | "lookupProviderObservation">; operations: ChatGptOperations; fetch?: ChatGptFetch; onResponseBytes?: (bytes: number) => void; priorSource?: (input: { accountId: string; sessionId: string; authorizedPriorArtifactReference: string }) => Promise<readonly SourceProposalFile[] | undefined> }) {
     this.pricing = chatGptDevelopmentPricing(options.accountId, options.model);
   }
   diagnostic(): string | undefined { return this.#lastError; }
@@ -115,7 +117,7 @@ export class ChatGptModelGateway implements ModelGateway {
         const error = await boundedJson(response).catch(() => undefined);
         throw chatGptError(error?.error?.code === "subscription_sharing_usage_limit_exceeded" ? "USAGE_LIMIT_REACHED" : response.status === 401 ? "REAUTHORIZE_REQUIRED" : response.status === 403 ? "PLAN_ACCESS_DENIED" : "INFERENCE_UNAVAILABLE");
       }
-      const native = await readChatGptResponse(response, requestSignal);
+      const native = await readChatGptResponse(response, requestSignal, this.options.onResponseBytes);
       // A catalog alias may resolve to a dated snapshot; persist the actual model in provenance.
       if (native.model !== this.options.model && !native.model.startsWith(`${this.options.model}-`)) throw chatGptError("MODEL_MISMATCH");
       const receipt = NormalizedUsageReceiptSchema.parse({ operationId: intent.operationId, providerRequestId: intent.providerRequestId, provider: "openai_chatgpt_development", model: this.options.model, profileId: intent.profileId, priceCardId: intent.priceCardId, selection: intent.selection, completedAt: new Date().toISOString(), provenance: { protectedEvidenceReference: `development:chatgpt:${native.id}`, protectedEvidenceDigest: digest({ model: native.model, usage: native.usage, responseId: native.id }) }, usage: [{ dimension: "input_tokens", units: String(native.usage.input_tokens) }, { dimension: "output_tokens", units: String(native.usage.output_tokens) }] });

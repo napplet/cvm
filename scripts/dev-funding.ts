@@ -105,7 +105,9 @@ export async function createDevelopmentFunding(config: DevPayments) {
     return body as T;
   };
   const pool = createDevelopmentPool(config.databaseUrl);
-  const database = new PostgresFundingDatabase(pool);
+  // Docker builds and Chromium share this workstation with PostgreSQL. The
+  // production 250ms budget can expire while settling an otherwise valid build.
+  const database = new PostgresFundingDatabase(pool, { deadlineMs: 5_000 });
   const funding = new FundingService(database.funding);
   const vault = new ProtectedRailMaterialVault({ key: Uint8Array.from(Buffer.from(config.fundingKey, "hex")), repository: database.protectedMaterials });
   return {

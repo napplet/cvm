@@ -78,3 +78,11 @@ test("stream enforces abort, size and terminal completion", async () => {
   await expect(readChatGptResponse(new Response("data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } }), signal())).rejects.toThrow("STREAM_INTERRUPTED");
   await expect(readChatGptResponse(new Response("x".repeat(2_000_001), { headers: { "content-type": "text/event-stream" } }), signal())).rejects.toThrow("TOO_LARGE");
 });
+
+
+test("stream observations expose byte counts only and observer failure cannot interrupt completion", async () => {
+  const { options, intent } = setup(); const bytes: number[] = [];
+  const gateway = new ChatGptModelGateway({ ...options, onResponseBytes: (count) => { bytes.push(count); throw new Error("observer unavailable"); } });
+  expect((await gateway.dispatch(intent, signal())).status).toBe("completed");
+  expect(bytes.length).toBeGreaterThan(0); expect(bytes.every((value) => Number.isSafeInteger(value) && value > 0 && value <= 2000000)).toBe(true);
+});

@@ -179,11 +179,14 @@ async function test(): Promise<void> {
     console.log(JSON.stringify({ status: "passed", case: "chatgpt-live" })); return;
   }
   const cases: Record<string, Array<readonly [string, ...string[]]>> = {
+    "progress": [["test", "tests/dev-ui/development-progress.test.ts"], ["tests/dev-ui/progress-view.e2e.ts"], ["tests/dev-ui/chatgpt-oauth.e2e.ts"]],
     "chatgpt-oauth": [["tests/dev-ui/chatgpt-oauth.e2e.ts"]],
     "contextvm-funding": [["tests/dev-ui/contextvm-funding.e2e.ts", "--case=both-rails-restart-replay"]],
     "generation-preview": [["tests/dev-ui/generation-preview.e2e.ts", "--case=deterministic-real-worker-compatible-host"]],
     "continuation-revision": [["tests/dev-ui/continuation-revision.e2e.ts", "--case=pre-admission-fund-restart-explicit-resume"], ["tests/dev-ui/continuation-revision.e2e.ts", "--case=revisions-duplicates-restarts"]],
     full: [
+      ["test", "tests/dev-ui/development-progress.test.ts"],
+      ["tests/dev-ui/progress-view.e2e.ts"],
       ["test", "tests/dev/chatgpt-oauth.test.ts", "tests/dev/chatgpt-model-gateway.test.ts"],
       ["tests/dev-ui/chatgpt-oauth.e2e.ts"],
       ["tests/dev-ui/contextvm-funding.e2e.ts", "--case=both-rails-restart-replay"],
@@ -196,7 +199,7 @@ async function test(): Promise<void> {
       ["tests/dev-ui/full-flow.e2e.ts"],
     ],
   };
-  if (!testCase || !cases[testCase]) throw new Error("DEV_TEST_CASE_INVALID:contextvm-funding|generation-preview|continuation-revision|chatgpt-oauth|chatgpt-live|full");
+  if (!testCase || !cases[testCase]) throw new Error("DEV_TEST_CASE_INVALID:contextvm-funding|generation-preview|continuation-revision|progress|chatgpt-oauth|chatgpt-live|full");
   const providerKeys = ["OPENAI_API_KEY", "NAPPLET_CVM_OPENAI_MODEL", "NAPPLET_CVM_OPENAI_PROFILE", "NAPPLET_CVM_OPENAI_PRICE_CARD", "NAPPLET_CVM_OPENAI_PRICE_SOURCES"] as const;
   const saved = Object.fromEntries(providerKeys.map((key) => [key, process.env[key]]));
   for (const key of providerKeys) delete process.env[key];

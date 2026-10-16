@@ -1,5 +1,8 @@
 import { NostrClientTransport } from "@contextvm/sdk/transport";
 import { PrivateKeySigner } from "@contextvm/sdk/signer";
+import { acceptDevelopmentProgress, progressMethod, progressTools, type DevelopmentProgress } from "../progress-contract";
+
+export type ClientActivity = { kind: "sent"; requestId: string | number; tool: string } | { kind: "progress"; progress: DevelopmentProgress } | { kind: "response"; requestId: string | number; tool: string };
 
 type JsonRpcResponse = { id: string | number | null; result?: unknown; error?: { message?: string } };
 type PaymentTag = readonly [string, string, string?];
@@ -37,10 +40,12 @@ export class DevelopmentContextVmClient {
   #client?: PaymentTaggedClient;
   #signer?: PrivateKeySigner;
   #nextId = 0;
-  #pending = new Map<string | number, { resolve(value: unknown): void; reject(reason: Error): void }>();
+  #prefix = crypto.randomUUID();
+  #pending = new Map<string | number, { tool: string; sequence: number; resolve(value: unknown): void; reject(reason: Error): void }>();
   #lastCashu?: Readonly<{ arguments: Record<string, string>; token: string }>;
 
-  constructor(readonly bootstrap: DevelopmentBootstrap) {}
+  constructor(readonly bootstrap: DevelopmentBootstrap, private readonly onActivity?: (event: ClientActivity) => void) {}
+  private activity(event: ClientActivity): void { try { this.onActivity?.(event); } catch { /* UI observation cannot alter a request. */ } }
 
   get pubkey(): Promise<string> {
     if (!this.#signer) throw new Error("CONTEXTVM_NOT_CONNECTED");
@@ -55,10 +60,18 @@ export class DevelopmentContextVmClient {
     const client = new PaymentTaggedClient({ signer: this.#signer, relayHandler: [this.bootstrap.relayUrl], serverPubkey: this.bootstrap.servicePubkey, encryptionMode: "required", logLevel: "silent" });
     client.setClientPmis(["bitcoin-lightning-bolt11", "bitcoin-cashu-v4-direct"]);
     client.onmessage = (message: any) => {
+      if (message?.method === progressMethod && !("id" in message)) {
+        const pending = this.#pending.get(message.params?.requestId);
+        if (!pending) return;
+        const progress = acceptDevelopmentProgress(message.params, { id: message.params.requestId, tool: pending.tool, sequence: pending.sequence });
+        if (progress) { pending.sequence = progress.sequence; this.activity({ kind: "progress", progress }); }
+        return;
+      }
       if (!message || typeof message !== "object" || !("id" in message)) return;
       const pending = this.#pending.get(message.id);
       if (!pending) return;
       this.#pending.delete(message.id);
+      this.activity({ kind: "response", requestId: message.id, tool: pending.tool });
       const response = message as JsonRpcResponse;
       if (response.error) pending.reject(new Error(response.error.message ?? "ContextVM request failed"));
       else pending.resolve(response.result);
@@ -126,7 +139,7 @@ export class DevelopmentContextVmClient {
     return this.callTool("preview", { action: "descriptor", sessionId: input.sessionId, artifactId: input.artifactId, runtimeVariant: "development-paja-0.19.0" });
   }
 
-  async close(): Promise<void> { await this.#client?.close(); this.#client = undefined; this.#pending.clear(); }
+  async close(): Promise<void> { for (const pending of this.#pending.values()) pending.reject(new Error("CONTEXTVM_CONNECTION_CLOSED")); this.#pending.clear(); await this.#client?.close(); this.#client = undefined; }
 
   async callTool(name: string, argumentsValue: unknown, tags?: readonly PaymentTag[]): Promise<any> {
     return this.call("tools/call", { name, arguments: argumentsValue }, tags, ["start_session", "revise_session", "resume_session"].includes(name) ? 330_000 : 30_000);
@@ -134,17 +147,20 @@ export class DevelopmentContextVmClient {
 
   private async call(method: string, params: unknown, tags?: readonly PaymentTag[], timeoutMs = 30_000): Promise<any> {
     if (!this.#client) throw new Error("CONTEXTVM_NOT_CONNECTED");
-    const id = ++this.#nextId;
+    const id = `${this.#prefix}:${++this.#nextId}`;
+    const tool = method === "tools/call" ? String((params as { name?: unknown })?.name ?? "") : method;
+    if (progressTools.includes(tool as never)) params = { ...(params as object), _meta: { progressToken: id } };
     if (tags) this.#client.setPaymentTags(id, tags);
     try {
       const response = await new Promise<unknown>((resolve, reject) => {
         const timer = setTimeout(() => { this.#pending.delete(id); reject(new Error("CONTEXTVM_WIRE_TIMEOUT")); }, timeoutMs);
-        this.#pending.set(id, { resolve: (value) => { clearTimeout(timer); resolve(value); }, reject: (error) => { clearTimeout(timer); reject(error); } });
+        this.#pending.set(id, { tool, sequence: 0, resolve: (value) => { clearTimeout(timer); resolve(value); }, reject: (error) => { clearTimeout(timer); reject(error); } });
+        if (progressTools.includes(tool as never)) this.activity({ kind: "sent", requestId: id, tool });
         void this.#client!.send({ jsonrpc: "2.0", id, method, params } as never).catch((error) => {
           clearTimeout(timer); this.#pending.delete(id); reject(error instanceof Error ? error : new Error("CONTEXTVM_SEND_FAILED"));
         });
       });
       return response;
-    } finally { this.#client.clearPaymentTags(id); }
+    } finally { this.#client?.clearPaymentTags(id); }
   }
 }

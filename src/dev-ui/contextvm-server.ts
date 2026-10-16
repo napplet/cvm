@@ -1,3 +1,4 @@
+import { DevelopmentProgressTransport } from "./development-progress";
 import { ChatGptOAuth, type ChatGptFetch, type ChatGptSettings } from "../dev/chatgpt-oauth";
 import { ChatGptModelGateway, SqlChatGptOperations } from "../dev/chatgpt-model-gateway";
 import { registerDevelopmentPricing } from "../dev/register-development-pricing";
@@ -140,6 +141,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
   const signer = new PrivateKeySigner(identity.signerPrivateKey);
   const transport = new NostrServerTransport({ signer, relayHandler: [config.relayUrl], encryptionMode: "required", publishRelayList: false, injectRequestEventId: true, logLevel: "silent" });
   const bridge = new ContextVmSdkBridge(transport);
+  const progress = new DevelopmentProgressTransport(bridge);
   const accountStatus = new AccountStatusService({
     store: app.database.funding,
     sessions: { list: async ({ accountId }) => {
@@ -161,10 +163,13 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
   const admissions = {
     async admit(...input: Parameters<typeof fundedAdmission.admit>) {
       try {
+        progress.emit("admission", "running");
         const result = await fundedAdmission.admit(...input);
+        progress.emit("admission", result.status === "accepted" ? "completed" : "failed");
         if (result.status !== "accepted") latestGenerationError = `FUNDED_ADMISSION_${result.status.toUpperCase()}`;
         return result;
       } catch (error) {
+        progress.emit("admission", "failed");
         latestGenerationError = safeGenerationDiagnostic(error);
         throw error;
       }
@@ -172,13 +177,34 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
   };
   const repository = new LocalArtifactRepository({ objectRoot: resolve(stateRoot, "development-artifacts"), pool: app.pool });
   const grants = new LocalPreviewGrantStore({ pool: app.pool });
-  const worker = new LocalProposalWorkerPort(new LocalNappletWorker({ image: readiness.imageDigest }), { results: new DurableWorkerResultStore({ pool: app.pool, toolchainSha256: readiness.imageDigest.slice("sha256:".length), root: resolve(stateRoot, "development-worker-results") }) });
+  const worker = new LocalProposalWorkerPort(new LocalNappletWorker({ image: readiness.imageDigest, onProgress: (stage, state) => progress.emit(stage, state) }), { results: new DurableWorkerResultStore({ pool: app.pool, toolchainSha256: readiness.imageDigest.slice("sha256:".length), root: resolve(stateRoot, "development-worker-results") }) });
   const owners = new Map<string, string>();
   const artifactVerifier = new LocalGenerationArtifactVerifier({ worker, verifier: new LocalArtifactVerifier(), repository, ownerIdForAccount: (accountId) => owners.get(accountId) });
   const [packageHash, lockHash] = await Promise.all([sha256File(resolve(root, "package.json")), sha256File(resolve(root, "bun.lock"))]);
   type Pricing = ReturnType<typeof import("../dev/chatgpt-model-gateway").chatGptDevelopmentPricing>;
   const makeRuntime = (gateway: ModelGateway, pricing: Pricing) => {
-    const generation = new MeteredGenerationService({ fundedAdmission, store: app.database.meteredFunding, gateway, worker, artifactVerifier, proposalStore: composition.proposals, continuation: new ContinuationService({ store: app.database.meteredFunding, includeAdmissionHold: true }), pricing });
+    const generation = new MeteredGenerationService({
+      fundedAdmission, store: app.database.meteredFunding,
+      gateway: progress.gateway(gateway, { provider: pricing.profile.provider, model: pricing.profile.model }),
+      worker: { run: async (...args) => {
+        const result = await worker.run(...args);
+        if (result.status !== "completed") progress.emit("worker", "failed");
+        return result;
+      } },
+      artifactVerifier: { verify: async (facts) => {
+        progress.emit("artifact", "running");
+        try {
+          const result = await artifactVerifier.verify(facts);
+          progress.emit("artifact", result ? "completed" : "failed");
+          return result;
+        } catch (error) { progress.emit("artifact", "failed"); throw error; }
+      } },
+      telemetry: { observe(event) {
+        if (event.stage === "ledger_settlement" && event.outcome === "succeeded") progress.emit("ledger", "completed");
+      } },
+      proposalStore: composition.proposals,
+      continuation: new ContinuationService({ store: app.database.meteredFunding, includeAdmissionHold: true }), pricing,
+    });
     const preAdmission = new PreAdmissionSessionService({ store: app.database.meteredFunding, envelope: new PendingActionEnvelopeService(new LocalCheckpointStore({ root: resolve(stateRoot, "development-checkpoints") })), generation, pricing,
       pins: { policyVersion: "development-local-v1", profileId: pricing.profile.id, priceCardId: pricing.card.id, toolchainId: readiness.imageDigest, rootManifestSha256: new Bun.CryptoHasher("sha256").update(`${packageHash}:${lockHash}`).digest("hex") } });
     return { generation, preAdmission, pricing };
@@ -191,7 +217,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
       let next = runtime; let gateway: ChatGptModelGateway | undefined;
       if (settings.mode === "chatgpt") {
         if (!settings.accountId || !settings.model) throw new Error("CHATGPT_SELECT_AVAILABLE_MODEL");
-        gateway = new ChatGptModelGateway({ accountId: settings.accountId, model: settings.model, auth: chatgpt, store: composition.proposals, operations: new SqlChatGptOperations(app.pool), fetch: options.chatGptFetch, priorSource: async (input) => priorSource?.(input) });
+        gateway = new ChatGptModelGateway({ accountId: settings.accountId, model: settings.model, auth: chatgpt, store: composition.proposals, operations: new SqlChatGptOperations(app.pool), fetch: options.chatGptFetch, onResponseBytes: (bytes) => progress.emit("model_stream", "running", { bytes }), priorSource: async (input) => priorSource?.(input) });
         await registerDevelopmentPricing(app.pool, { profile: gateway.pricing.profile, priceCard: gateway.pricing.card });
         next = makeRuntime(gateway, gateway.pricing);
       } else if (settings.mode === "default") next = makeRuntime(composition.gateway, composition.pricing ?? { card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile: PHASE_04_MODEL_PROFILES["code-proposal"] });
@@ -222,10 +248,12 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
   const previewServer = await createPreviewServer({ repository, grants, paja: { startPajaServer: paja.startPajaServer, domains: paja.PAJA_SIMULATION_DOMAINS } });
   const preview = {
     async previewVerifiedArtifact(input: Readonly<{ accountId: string; sessionId: string; artifactId: string }>) {
+      progress.emit("preview", "running");
       const artifact = await repository.get(input.artifactId);
       if (!artifact || artifact.accountId !== input.accountId || artifact.sessionId !== input.sessionId) return { state: "denied" as const, nextAction: "preview" as const, safeReasonCode: "preview_not_available" as const };
       const grant = await grants.create({ ownerId: artifact.ownerId, accountId: artifact.accountId, sessionId: artifact.sessionId, artifact });
       latestPreviewUrl = await previewServer.openPaja(grant.token);
+      progress.emit("preview", "completed");
       return { state: "ready" as const, artifactId: artifact.artifactId, aggregateSha256: artifact.aggregateSha256, previewGrantId: grant.previewGrantId, expiresAtMs: grant.expiresAtMs, previewUrl: latestPreviewUrl, nextAction: "review_capabilities" as const };
     },
     async reviewCapabilities(input: Readonly<{ accountId: string; sessionId: string; artifactId: string }>) {
@@ -261,7 +289,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
       }
     },
   };
-  new ContextVmFundingAdapter({ service: app.funding, transport: bridge, admissions, admissionReceipts: receipts, accountStatus, topUps: { lightning: app.lightning, cashu: app.cashu }, generation: generationFacade, preAdmission: preAdmissionFacade, sessionStatus: { read: async (query: any) => {
+  new ContextVmFundingAdapter({ service: app.funding, transport: progress, admissions, admissionReceipts: receipts, accountStatus, topUps: { lightning: app.lightning, cashu: app.cashu }, generation: generationFacade, preAdmission: preAdmissionFacade, sessionStatus: { read: async (query: any) => {
     const result = await readSessionStatus({ store: app.database.meteredFunding, query, cursorSecret: identity.cursorSecret });
     if (result.status !== "ok") return result;
     const accountId = await accountIdForPrincipal(query.principal);

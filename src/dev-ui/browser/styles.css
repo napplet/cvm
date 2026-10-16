@@ -127,3 +127,14 @@ select { display: block; width: 100%; min-height: 44px; padding: .65rem; border:
 select:focus-visible { outline: 3px solid #8fc8ff; outline-offset: 3px; }
 dialog { max-width: min(32rem, calc(100vw - 2rem)); padding: 1.5rem; border: 1px solid #526078; border-radius: .75rem; background: #151b28; color: #f0f4fc; }
 dialog::backdrop { background: #000a; }
+
+#execution-activity { border-top: 3px solid var(--host-border); }
+#execution-activity[data-state="running"] { border-top-color: var(--host-accent); }
+#execution-activity[data-state="failed"], #execution-activity[data-state="uncertain"] { border-top-color: var(--host-danger); }
+#activity-current { font-weight: 600; font-size: 18px; }
+#activity-provider { padding: 8px 12px; border: 1px solid var(--host-border); border-radius: 4px; }
+#execution-activity[data-fixture="true"] #activity-provider { color: #ffe29a; }
+#execution-activity[data-stale="true"] #activity-connection { color: #ffe29a; }
+#activity-events { max-height: 320px; overflow-y: auto; font-size: 14px; font-variant-numeric: tabular-nums; }
+#activity-events li[data-state="completed"] { color: var(--host-accent); }
+#activity-events li[data-state="failed"], #activity-events li[data-state="uncertain"] { color: var(--host-danger); }

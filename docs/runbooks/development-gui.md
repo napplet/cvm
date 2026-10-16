@@ -23,6 +23,7 @@ The launcher accepts the following stable commands:
 | `bun scripts/dev.ts test --case=contextvm-funding` | Exercises browser identity, ContextVM relay, Cashu/NWC rails, and SQL funding. |
 | `bun scripts/dev.ts test --case=generation-preview` | Exercises source proposal, metering, worker build, verification, artifact storage, and compatible preview. |
 | `bun scripts/dev.ts test --case=continuation-revision` | Exercises pending-action funding, restart, explicit resume, and immutable revisions. |
+| `bun scripts/dev.ts test --case=progress` | Checks live progress before completion, heartbeats, stale connections, failed worker stages, and the composed OAuth browser flow. |
 | `bun scripts/dev.ts test --case=chatgpt-oauth` | Exercises local sign-in, models, generation, revision, restart, and sign-out with fixture OAuth/inference. |
 | `bun scripts/dev.ts test --case=full` | Runs the composed browser journey and security/accessibility gate. |
 | `bun scripts/dev.ts down` | Stops the instance while preserving its data. |
@@ -44,6 +45,16 @@ Its state lives under `.local/napplet-cvm-dev/<instance>/`. The default instance
 3. Enter a focused idea, keep the displayed maximum at or above the active action ceiling, and click **Generate napplet**. Wait for **Verified preview ready**, then use the counter in the sandboxed preview. Deterministic mode exercises execution with a request-dependent counter fixture; configure the model provider for open-ended generation.
 4. Enter a revision and click **Revise selected version**. Each revision requests a new approved maximum and creates an immutable version. Select a version to load its verified preview.
 5. To test funding recovery after two revisions, enter a new idea and maximum `5000`, then click **Generate napplet**. When the account cannot cover that maximum, the action is saved. Reload or restart the service, connect again, add `5000` Cashu test sats, and click **Resume**. Funding alone never starts the saved action.
+
+### Live execution feedback
+
+Submitting Generate, Revise, Resume or Replay immediately opens **Live execution**. It shows the active provider (including an explicit **no model request** warning in deterministic fixture mode), elapsed time, server acknowledgement, and an ordered activity log. ChatGPT response bytes update while streaming; these are transport bytes, not billed tokens or a completion percentage.
+
+The backend reports model completion/source persistence, Docker startup, scaffolding, manifest initialization, skills installation, offline dependency installation, Vite build, guidance/TypeScript checks, real Chromium conformance, deployment dry run, artifact verification/sealing, ledger settlement and preview preparation. Five-second heartbeats indicate server liveness without claiming that a stage advanced. After 15 seconds without an update, the GUI flags possible connection or execution delay. Failed stages remain visible; an uncertain outcome never appears as success. A new action clears previous artifact facts, while earlier verified versions remain selectable after the action ends.
+
+Updates use the existing encrypted ContextVM relay connection and MCP progress tokens (the SDK rewrites server-side request IDs). They are bounded, best effort and scoped to the authenticated caller and pending browser request. They carry stage names and counters, never raw source, model text/reasoning, stdout/stderr, prompts or credentials. Progress delivery cannot change billing or execution, and is not replayed after reload; reconnect to recover the durable session timeline and verified artifacts. A timeout can leave work running: inspect session state before submitting another action. Keep the tab open while a request is active.
+
+Development SQL operations have a five-second budget because PostgreSQL shares the workstation with Docker/Chromium. Production timing remains unchanged. Updating the closed worker runner rebuilds its pinned image automatically during `up`; previously saved pending actions bound to an older image cannot be resumed under the new pin. Existing verified artifacts remain available.
 
 The deterministic profile currently requires a 3,250-sat authorization ceiling and charges 5 test sats per successful model operation. The UI distinguishes settled funds, held funds, and funds available for new admissions. Unspent admission holds remain reserved; the available balance therefore falls by the approved maximum even though the exact charge is smaller. Confirmed reset discards this development account state.
 

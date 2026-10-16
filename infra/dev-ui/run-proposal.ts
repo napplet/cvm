@@ -1,6 +1,13 @@
 import { cp, readFile, writeFile } from "node:fs/promises";
 const stages: any[] = [];
-async function run(name: string, argv: string[], cwd = "/work/project") { const child = Bun.spawn(argv, { cwd, stdout: "pipe", stderr: "pipe", env: { HOME: "/home/napplet", CI: "1", PLAYWRIGHT_BROWSERS_PATH: "/opt/ms-playwright", PATH: process.env.PATH! } }); const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]); stages.push({ name, exitCode, stdout: stdout.slice(-40_000), stderr: stderr.slice(-20_000) }); if (exitCode !== 0) throw new Error(name); }
+async function run(name: string, argv: string[], cwd = "/work/project") {
+  console.log(`NAPPLET_STAGE ${JSON.stringify({ name, state: "running" })}`);
+  const child = Bun.spawn(argv, { cwd, stdout: "pipe", stderr: "pipe", env: { HOME: "/home/napplet", CI: "1", PLAYWRIGHT_BROWSERS_PATH: "/opt/ms-playwright", PATH: process.env.PATH! } });
+  const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  stages.push({ name, exitCode, stdout: stdout.slice(-40_000), stderr: stderr.slice(-20_000) });
+  console.log(`NAPPLET_STAGE ${JSON.stringify({ name, state: exitCode === 0 ? "completed" : "failed" })}`);
+  if (exitCode !== 0) throw new Error(name);
+}
 try {
   const proposal = await Bun.file("/input/proposal.json").json() as { files: { path: string; content: string }[] };
   await run("create", ["napplet", "create", "/work/project", "--template", "/opt/template"], "/work");

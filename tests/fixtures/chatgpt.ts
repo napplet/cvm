@@ -8,7 +8,7 @@ export function chatGptFixture(now: () => number = Date.now) {
   const authorization = new Map<string, URL>();
   const calls: { url: string; init?: RequestInit }[] = [];
   let refreshes = 0; let inferences = 0;
-  let refreshError: string | undefined; let inferenceMode: "complete" | "cut" | "limit" | "bad-source" = "complete";
+  let refreshError: string | undefined; let inferenceMode: "complete" | "cut" | "limit" | "bad-source" | "invalid-typescript" = "complete";
   let claimsOverride: Record<string, unknown> = {}; let grantedScope = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct";
   const token = (claims: Record<string, unknown>) => {
     const content = `${Buffer.from(JSON.stringify({ alg: "RS256", kid: jwk.kid })).toString("base64url")}.${Buffer.from(JSON.stringify(claims)).toString("base64url")}`;
@@ -38,7 +38,7 @@ export function chatGptFixture(now: () => number = Date.now) {
     if (url.endsWith("/v1/responses")) {
       inferences++;
       const body = JSON.parse(String(init?.body));
-      const event = inferenceMode === "limit" ? { type: "response.failed", response: { error: { code: "subscription_sharing_usage_limit_exceeded" } } } : { type: "response.completed", response: { id: `resp_fixture_${inferences}`, model: body.model, status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: inferenceMode === "bad-source" ? "invalid" : JSON.stringify({ files: files(inferences) }) }] }], usage: { input_tokens: 1200, output_tokens: 800 } } };
+      const event = inferenceMode === "limit" ? { type: "response.failed", response: { error: { code: "subscription_sharing_usage_limit_exceeded" } } } : { type: "response.completed", response: { id: `resp_fixture_${inferences}`, model: body.model, status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: inferenceMode === "bad-source" ? "invalid" : JSON.stringify({ files: files(inferences).map((file) => inferenceMode === "invalid-typescript" && file.path === "src/main.ts" ? { ...file, content: file.content + '\nconst invalid: number = "deliberate type error";' } : file) }) }] }], usage: { input_tokens: 1200, output_tokens: 800 } } };
       const data = `: comment\r\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: "partial" })}\r\n\r\n${inferenceMode === "cut" ? "" : `data: ${JSON.stringify(event)}\r\n\r\n`}`;
       const encoded = new TextEncoder().encode(data);
       return new Response(new ReadableStream({ start(controller) { for (let i = 0; i < encoded.length; i += 17) controller.enqueue(encoded.slice(i, i + 17)); controller.close(); } }), { headers: { "content-type": "text/event-stream" } });

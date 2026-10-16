@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: verification_deferred_gaps
-stopped_at: Contextual application navigation and inline revision blocking feedback verified and running locally
-last_updated: "2026-10-16T21:13:38Z"
+stopped_at: Responsive application frame verified across 266 view/viewport checks and running locally
+last_updated: "2026-10-16T22:58:58Z"
 last_activity: 2026-10-16
-last_activity_desc: Persistent primary navigation, contextual workspace controls and read-only revision status feedback verified through local browser journeys
+last_activity_desc: Consistent application chrome, contained scrolling, compact responsive views and standalone responsive regression command verified
 progress:
   total_phases: 7
   completed_phases: 6
@@ -25,14 +25,14 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 **Core value:** A user can describe one focused applet and receive a safe, conformant napplet that can be previewed and placed directly into a compatible napplet runtime.
 **Active milestone:** v1.0 — Safe Napplet Generation MVP
-**Current focus:** Static applet.broker application with contextual primary navigation, private CVM admin, signed publication and clear revision availability; production remains deferred
+**Current focus:** Static applet.broker application with a consistent responsive frame, private CVM admin, signed publication and clear revision availability; production remains deferred
 
 ## Current Position
 
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
 Plan: 56 of 58 accepted; development Plans 07-52/53/56/57/54/55 complete
 Status: Guided applet.broker workspace at http://127.0.0.1:49371; diagnostic console at /dev. Saved chatgpt-oauth mode with gpt-6.1-sol retained. Product/console browser journeys and recovery passed through real local services. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
-Last activity: 2026-10-16 — Completed quick task 261016-jn3 and revision-send-feedback debug fix: persistent primary navigation with Create/Builder/Publish contexts and Your applets, separate account/settings controls, stronger actions, mobile navigation and visible running status. Disabled revisions explain their reason beside the draft with a relevant next action; signed Check status does not invoke generation. Four browser suites, static build and live default-service smoke passed. TypeScript retains the existing 424 diagnostics with no additions. Historical unknown revisions remain fenced.
+Last activity: 2026-10-16 — Completed quick task 261016-lx6: one responsive application frame with persistent navigation/status, shared scrolling content, contained previews, wrapping addresses/diagnostics, compact mobile views and responsive dialogs. New standalone responsive command passes 266 checks across 19 viewports. Four other browser suites, static build and live service smoke passed. Waited for active generation to settle before restarting at the same URL. TypeScript retains its 424 baseline diagnostics. Historical unknown revisions remain fenced.
 
 Follow-up: Stream assembly/counter verification remains complete. Latest helper-signature and compiler-feedback fix passed 29 targeted unit/integration cases plus activity and composed OAuth browser journeys. Real blinking-text generation also passed. See debug/resolved/generated-typescript-check.md.
 
@@ -361,6 +361,7 @@ Recent decisions affecting current work:
 | 261016-coz | Guided applet.broker workspace, top progress, revision chat and safe recovery | 2026-10-16 | 73e350d | [261016-coz](./quick/261016-coz-build-the-applet-broker-guided-user-expe/) |
 | 261016-hh8 | Static CVM client, private admin, signed publishing and integrated project recovery | 2026-10-16 | f75c8ed, 1f22c4d | [261016-hh8](./quick/261016-hh8-add-working-publish-flow-to-applet-broke/) |
 | 261016-jn3 | Contextual app navigation, stronger controls and visible revision-blocking feedback | 2026-10-16 | 3a12c93 | [261016-jn3](./quick/261016-jn3-make-workspace-navigation-feel-like-an-a/) |
+| 261016-lx6 | Responsive application frame, contained scrolling and 266 viewport checks | 2026-10-16 | 8023241 | [261016-lx6](./quick/261016-lx6-create-a-consistent-framed-application-s/) |
 
 ## Deferred Verification
 
@@ -378,6 +379,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-16T21:13:38Z
-Stopped at: Default service ready at http://127.0.0.1:49371 in saved chatgpt-oauth mode after a zero-active-action restart. Persistent navigation connects Your applets with the current Create/Builder/Publish workspace on desktop and mobile; drafts and in-flight work survive navigation. Revision blockers and signed read-only status checks are visible beside Send. Four browser suites and the running-service smoke pass. Reload the existing tab to preserve its original key. Historical unknown requests were not redispatched or cleared; production remains deferred.
-Resume file: .planning/quick/261016-jn3-make-workspace-navigation-feel-like-an-a/261016-jn3-SUMMARY.md
+Last session: 2026-10-16T22:58:58Z
+Stopped at: Default service ready at http://127.0.0.1:49371 in saved chatgpt-oauth mode. Waited for the active generation before a zero-active-action restart. Public views share framed navigation/status and a contained scroll region. Responsive matrix passes 266 checks, including 280px width and 320px height stress cases; supported minimum width is 320 CSS pixels. Four composed/presentation browser suites and live smoke pass. Reload the existing tab to preserve its original key. Historical unknown requests were not redispatched or cleared; production remains deferred.
+Resume file: .planning/quick/261016-lx6-create-a-consistent-framed-application-s/261016-lx6-SUMMARY.md

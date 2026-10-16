@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: verification_deferred_gaps
-stopped_at: Current napplet skills loaded before generation; live subscription and composed OAuth e2e passed
-last_updated: "2026-10-16T01:54:53Z"
-last_activity: 2026-10-15
-last_activity_desc: Development uses pinned skills CLI snapshot in model requests and offline workers
+stopped_at: Guided applet.broker workspace verified; saved ChatGPT sign-in retained; production deferred
+last_updated: "2026-10-16T17:37:26Z"
+last_activity: 2026-10-16
+last_activity_desc: Guided product UI, live progress, revision chat and exact-request recovery verified
 progress:
   total_phases: 7
   completed_phases: 6
@@ -25,14 +25,14 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 **Core value:** A user can describe one focused applet and receive a safe, conformant napplet that can be previewed and placed directly into a compatible napplet runtime.
 **Active milestone:** v1.0 — Safe Napplet Generation MVP
-**Current focus:** ChatGPT subscription generation verified end to end with persistent sign-in; production remains deferred
+**Current focus:** Guided applet.broker product UX verified with persistent ChatGPT sign-in; production remains deferred
 
 ## Current Position
 
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
 Plan: 56 of 58 accepted; development Plans 07-52/53/56/57/54/55 complete
-Status: Local execution GUI at http://127.0.0.1:49371 in chatgpt-oauth mode with gpt-6.1-sol. Live subscription generation passed through verified interactive preview. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
-Last activity: 2026-10-15 — Completed quick task 261015-pqb: current napplet skills installed via skills CLI, included before generation and matched to the offline worker. Live subscription and composed OAuth e2e passed.
+Status: Guided applet.broker workspace at http://127.0.0.1:49371; diagnostic console at /dev. Saved chatgpt-oauth mode with gpt-6.1-sol retained. Product/console browser journeys and recovery passed through real local services. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
+Last activity: 2026-10-16 — Completed quick task 261016-coz: warm guided applet.broker UI with top progress, preview-adjacent revision chat, exact-request reload recovery and failed-revision continuity.
 
 Follow-up: Stream assembly/counter verification remains complete. Latest helper-signature and compiler-feedback fix passed 29 targeted unit/integration cases plus activity and composed OAuth browser journeys. Real blinking-text generation also passed. See debug/resolved/generated-typescript-check.md.
 
@@ -358,6 +358,7 @@ Recent decisions affecting current work:
 | 261015-o1z | Automatic ChatGPT activation and stopped-request fixes; live interactive verification completed in debug follow-up | 2026-10-15 | 1a850d5 | [261015-o1z](./quick/261015-o1z-activate-signed-in-chatgpt-for-real-gene/) |
 | 261015-pf8 | Start Paja previews with the menu collapsed | 2026-10-15 | 6e88c24 | [261015-pf8](./quick/261015-pf8-load-paja-previews-minimized-with-the-me/) |
 | 261015-pqb | Current skills CLI snapshot in model requests and offline development workers | 2026-10-15 | 544d953 | [261015-pqb](./quick/261015-pqb-update-the-napplet-authoring-skills-used/) |
+| 261016-coz | Guided applet.broker workspace, top progress, revision chat and safe recovery | 2026-10-16 | 73e350d | [261016-coz](./quick/261016-coz-build-the-applet-broker-guided-user-expe/) |
 
 ## Deferred Verification
 
@@ -375,6 +376,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-16T01:54:53Z
-Stopped at: Current authoring skills active in the model and worker. Real subscription generation and final OAuth e2e passed. Optional SDK initialization fallback is covered; upstream conformance theme stub and Paja theme-domain injection limitations are documented. Production remains deferred.
-Resume file: .planning/quick/261015-pqb-update-the-napplet-authoring-skills-used/261015-pqb-SUMMARY.md
+Last session: 2026-10-16T17:37:26Z
+Stopped at: Product workspace and original console verified; local service runs the latest UI with saved ChatGPT sign-in. Failed-revision recovery and unknown-usage fencing are covered. Existing upstream optional-domain limitations and production release tasks remain documented/deferred.
+Resume file: .planning/quick/261016-coz-build-the-applet-broker-guided-user-expe/261016-coz-SUMMARY.md

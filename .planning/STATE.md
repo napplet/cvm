@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: verification_deferred_gaps
-stopped_at: Responsive application frame verified across 266 view/viewport checks and running locally
-last_updated: "2026-10-16T22:58:58Z"
+stopped_at: Remix and Explore verified and live; interrupted subscription revisions recover without redispatch
+last_updated: "2026-10-16T23:33:46Z"
 last_activity: 2026-10-16
-last_activity_desc: Consistent application chrome, contained scrolling, compact responsive views and standalone responsive regression command verified
+last_activity_desc: Signed naddr remix, isolated source import, applesauce outbox discovery and 304 responsive checks complete
 progress:
   total_phases: 7
   completed_phases: 6
@@ -25,14 +25,14 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 **Core value:** A user can describe one focused applet and receive a safe, conformant napplet that can be previewed and placed directly into a compatible napplet runtime.
 **Active milestone:** v1.0 — Safe Napplet Generation MVP
-**Current focus:** Static applet.broker application with a consistent responsive frame, private CVM admin, signed publication and clear revision availability; production remains deferred
+**Current focus:** Static applet.broker application with naddr remix, isolated source import, applesauce outbox discovery, private admin and signed publication; production remains deferred
 
 ## Current Position
 
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
 Plan: 56 of 58 accepted; development Plans 07-52/53/56/57/54/55 complete
 Status: Guided applet.broker workspace at http://127.0.0.1:49371; diagnostic console at /dev. Saved chatgpt-oauth mode with gpt-6.1-sol retained. Product/console browser journeys and recovery passed through real local services. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
-Last activity: 2026-10-16 — Completed quick task 261016-lx6: one responsive application frame with persistent navigation/status, shared scrolling content, contained previews, wrapping addresses/diagnostics, compact mobile views and responsive dialogs. New standalone responsive command passes 266 checks across 19 viewports. Four other browser suites, static build and live service smoke passed. Waited for active generation to settle before restarting at the same URL. TypeScript retains its 424 baseline diagnostics. Historical unknown revisions remain fenced.
+Last activity: 2026-10-16 — Completed quick task 261016-m8c (fe48e1e): homepage Remix, Explore, immutable owner-bound CVM imports and isolated source handling. Real-service browser journey and SQL/Docker boundaries passed with fixture inference; 304 responsive checks passed. Live at the same URL after an idle restart, with ChatGPT mode retained. Prior interruption fix 261016-maj is also complete. Typecheck retains 424 existing diagnostics.
 
 Follow-up: Stream assembly/counter verification remains complete. Latest helper-signature and compiler-feedback fix passed 29 targeted unit/integration cases plus activity and composed OAuth browser journeys. Real blinking-text generation also passed. See debug/resolved/generated-typescript-check.md.
 
@@ -45,7 +45,7 @@ Plan execution: 96/98 milestone plans complete; Phase 7 is 56/58 complete and pr
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
 - Plans: 96/98 milestone plans executed. Development Plans 07-52/53/56/57/54/55 are complete. Production-only 07-20 and 07-26 remain deferred; neither is a development prerequisite.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Development coverage: the complete local execution GUI is accepted; see `07-55-SUMMARY.md`, the dated acceptance matrix in `07-DEV-VALIDATION.md`, and `docs/runbooks/development-gui.md`. Root manifests remain unchanged. Deterministic mode substitutes only the external model. This quick-task verification used a model fixture; real local publication, signed ownership and cross-browser project recovery are now covered. Remote CI was not exercised; conformance reports five passed and five skipped checks. Production resumption follows `docs/runbooks/production-readiness-deferred.md` only when requested.
+- Development coverage: the complete local execution GUI is accepted; see `07-55-SUMMARY.md`, the dated acceptance matrix in `07-DEV-VALIDATION.md`, and `docs/runbooks/development-gui.md`. Applesauce dependencies and matching launcher manifest pins were added in quick task 261016-m8c; generated-app toolchain pins remain unchanged. Deterministic mode substitutes only the external model. This quick-task verification used a model fixture; real local publication, signed ownership and cross-browser project recovery are now covered. Remote CI was not exercised; conformance reports five passed and five skipped checks. Production resumption follows `docs/runbooks/production-readiness-deferred.md` only when requested.
 - Local ChatGPT OAuth support is implemented and verified with a real subscription-generated interactive artifact; see `debug/resolved/chatgpt-live-subscription.md`. Subscription usage has separate synthetic local-test-sat accounting, and unresolved calls are never automatically resent.
 
 ## Performance Metrics
@@ -362,8 +362,9 @@ Recent decisions affecting current work:
 | 261016-hh8 | Static CVM client, private admin, signed publishing and integrated project recovery | 2026-10-16 | f75c8ed, 1f22c4d | [261016-hh8](./quick/261016-hh8-add-working-publish-flow-to-applet-broke/) |
 | 261016-jn3 | Contextual app navigation, stronger controls and visible revision-blocking feedback | 2026-10-16 | 3a12c93 | [261016-jn3](./quick/261016-jn3-make-workspace-navigation-feel-like-an-a/) |
 | 261016-lx6 | Responsive application frame, contained scrolling and 266 viewport checks | 2026-10-16 | 8023241 | [261016-lx6](./quick/261016-lx6-create-a-consistent-framed-application-s/) |
-
 | 261016-maj | Recover interrupted subscription revisions without retries; fix SSE traffic limit | 2026-10-16 | 8805328 | [261016-maj](./quick/261016-maj-recover-uncertain-generation-actions-wit/) |
+
+| 261016-m8c | Signed naddr remix, isolated source import and applesauce outbox browsing | 2026-10-16 | fe48e1e | [261016-m8c](./quick/261016-m8c-remix-nip-5d-napplets-from-naddr-with-is/) |
 
 ## Deferred Verification
 
@@ -376,11 +377,11 @@ Recent decisions affecting current work:
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
 | Adapter | Public x402 and L402 interfaces | v2 | 2026-08-03 |
-| Input | Images, files, URLs, repositories, and existing code | Deferred pending separate controls | 2026-08-03 |
+| Input | Arbitrary images/files/URLs/repositories; bounded signed-naddr remix is now supported | Other inputs deferred pending separate controls | 2026-08-03 |
 | Collaboration | Multi-principal sessions | v2 | 2026-08-03 |
 
 ## Session Continuity
 
-Last session: 2026-10-16T23:30:00Z
-Stopped at: Interrupted revision recovery is complete and live at http://127.0.0.1:49371, PID 92825. Current version-5 project recovered with zero local charge and zero model calls. No new typecheck errors; SQL, browser, model and accounting tests pass. Continuing naddr remix, isolated source import and applesauce outbox browsing under quick task 261016-m8c.
-Resume file: .planning/quick/261016-m8c-remix-nip-5d-napplets-from-naddr-with-is/261016-m8c-PLAN.md
+Last session: 2026-10-16T23:33:46Z
+Stopped at: Remix/Explore and interrupted revision recovery are complete and live at http://127.0.0.1:49371, PID 40521. Zero active actions before restart; ChatGPT mode retained. All targeted checks pass; existing 424 TypeScript diagnostics unchanged. No remaining work for these quick tasks; production remains deferred.
+Resume file: .planning/quick/261016-m8c-remix-nip-5d-napplets-from-naddr-with-is/SUMMARY.md

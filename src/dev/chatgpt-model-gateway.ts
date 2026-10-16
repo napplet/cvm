@@ -9,11 +9,12 @@ import { CHATGPT_RESOURCE, boundedJson, chatGptError, safeChatGptError, type Cha
 import { ChatGptDiagnosticSchema, classifyChatGptFailure, type ChatGptDiagnostic } from "./chatgpt-diagnostic";
 
 const digest = (value: unknown) => new Bun.CryptoHasher("sha256").update(canonicalJson(value)).digest("hex");
-export function chatGptDevelopmentPricing(accountId: string, model: string) {
+export function chatGptDevelopmentPricing(accountId: string, model: string, rates?: Record<string, { numerator: string; denominator: string }>) {
   // Profile IDs are immutable in SQL. A new deadline requires a new version.
-  const id = `development-chatgpt-v2-${digest({ accountId, model }).slice(0, 24)}`;
+  const id = `development-chatgpt-v2-${digest({ accountId, model, ...(rates ? { rates } : {}) }).slice(0, 24)}`;
   // Synthetic local test sats, never an assertion about a subscription's dollar cost.
   const card = PriceCardSchema.parse({ id: `${id}-card`, version: "development-chatgpt-v1", kind: "development_test", provider: "openai_chatgpt_development", currency: "sat", rounding: "ceil", supportedDimensions: ["input_tokens", "output_tokens"], rates: { input_tokens: { numerator: "1", denominator: "1000" }, output_tokens: { numerator: "1", denominator: "1000" }, cached_tokens: { numerator: "1", denominator: "1000" }, reasoning_tokens: { numerator: "1", denominator: "1000" } }, ceilings: { inputTokens: "262144", outputTokens: "131072" }, validity: { notBefore: "2026-10-15T00:00:00.000Z", notAfter: "2030-10-15T00:00:00.000Z" } });
+  if (rates) card.rates = PriceCardSchema.shape.rates.parse(rates);
   const profile = ModelProfileSchema.parse({ id, provider: card.provider, model, priceCardId: card.id, selection: "unselected", maximumUnits: [{ dimension: "input_tokens", units: card.ceilings.inputTokens }, { dimension: "output_tokens", units: card.ceilings.outputTokens }], deadlineMs: 300_000 });
   return Object.freeze({ card, profile });
 }
@@ -106,8 +107,8 @@ export async function readChatGptResponse(response: Response, signal: AbortSigna
 export class ChatGptModelGateway implements ModelGateway {
   readonly pricing: ReturnType<typeof chatGptDevelopmentPricing>;
   #lastError?: string;
-  constructor(private readonly options: { accountId: string; model: string; auth: Pick<ChatGptOAuth, "accessToken">; store: Pick<SourceProposalStore, "persist" | "recordProviderObservation" | "lookupProviderObservation">; operations: ChatGptOperations; fetch?: ChatGptFetch; onResponseBytes?: (bytes: number) => void; priorSource?: (input: { accountId: string; sessionId: string; authorizedPriorArtifactReference: string }) => Promise<readonly SourceProposalFile[] | undefined> }) {
-    this.pricing = chatGptDevelopmentPricing(options.accountId, options.model);
+  constructor(private readonly options: { rates?: Record<string, { numerator: string; denominator: string }>; accountId: string; model: string; auth: Pick<ChatGptOAuth, "accessToken">; store: Pick<SourceProposalStore, "persist" | "recordProviderObservation" | "lookupProviderObservation">; operations: ChatGptOperations; fetch?: ChatGptFetch; onResponseBytes?: (bytes: number) => void; priorSource?: (input: { accountId: string; sessionId: string; authorizedPriorArtifactReference: string }) => Promise<readonly SourceProposalFile[] | undefined> }) {
+    this.pricing = chatGptDevelopmentPricing(options.accountId, options.model, options.rates);
   }
   diagnostic(): string | undefined { return this.#lastError; }
   #unknown(intent: ProviderOperationIntent, code?: string): ModelDispatchObservation {

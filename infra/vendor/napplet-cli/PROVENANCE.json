@@ -1,0 +1,14 @@
+{
+  "repository": "https://github.com/napplet/web",
+  "commit": "1a38b9150f3a3da148091c11bce4d0365f7298e5",
+  "version": "@napplet/cli@0.5.2",
+  "license": "Upstream package metadata: MIT; repository has no standalone license file at this revision.",
+  "files": {
+    "manifest.ts": "74b9f5f13079cf451412c30c7ad944e445d31e07a46826792ec0d6b78a30f0a8",
+    "manifest-metadata.ts": "895c0e24595c53f285c29ee27cf67b1a38fa4e4874d0e64772cc5a4ddf4c886c",
+    "path.ts": "0672896e4ca1004047e7e41a94e9947ec1a0fbe33daa0247eb0e3e42a0594eb9",
+    "types.ts": "18c313d152bd4e2eb4f382d16f60bd361212566e42091f8bf27b9dd6df800f10",
+    "deploy-network.ts": "b28dd1966718512617c139aaede77b3ed9a4b46cfbd7a2bb642eb046c46c4440",
+    "blossom-upload.ts": "078970ea91ff2d7f35c7d45798ad05232a082ea6a124424069aae70dbf74e71e"
+  }
+}

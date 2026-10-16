@@ -1,3 +1,4 @@
+import { finalizeEvent, generateSecretKey } from "nostr-tools/pure";
 import { describe, expect, test } from "bun:test";
 import fixture from "../fixtures/contextvm-phase-03.json";
 import { buildContextVmAnnouncement } from "../../src/contextvm/announcement";
@@ -136,10 +137,8 @@ describe("verified ContextVM funding adapter", () => {
 
   test("forwards only an SDK-correlated signed event and preserves the SDK-verified sender", async () => {
     let inbound: ((message: unknown, context: { clientPubkey: string }) => Promise<void> | void) | undefined;
-    let event: { id: string; tags: string[][] } | undefined = {
-      id: "signed-event-001",
-      tags: [["pmi", fixture.requests.cashuPmi]],
-    };
+    const signed = finalizeEvent({ kind:25910, created_at:1000, content:"{}", tags:[["pmi",fixture.requests.cashuPmi]] },generateSecretKey());
+    let event: typeof signed | undefined = signed;
     const bridge = new ContextVmSdkBridge({
       setAnnouncementExtraTags: () => undefined,
       setAnnouncementPricingTags: () => undefined,
@@ -154,20 +153,20 @@ describe("verified ContextVM funding adapter", () => {
     await inbound?.({
       id: "rpc-001",
       method: "tools/call",
-      params: { _meta: { requestEventId: "signed-event-001" }, name: "account_status", arguments: {} },
-    }, { clientPubkey: fixture.requests.verifiedPubkey });
+      params: { _meta: { requestEventId: signed.id }, name: "account_status", arguments: {} },
+    }, { clientPubkey: signed.pubkey });
     expect(delivered).toEqual([{
-      verifiedClientPubkey: fixture.requests.verifiedPubkey,
-      requestEventId: "signed-event-001",
-      rawEvent: event,
-      request: { id: "rpc-001", method: "tools/call", params: { _meta: { requestEventId: "signed-event-001" }, name: "account_status", arguments: {} } },
+      verifiedClientPubkey: signed.pubkey,
+      requestEventId: signed.id,
+      rawEvent: { id:signed.id, tags:signed.tags },
+      request: { id: "rpc-001", method: "tools/call", params: { _meta: { requestEventId: signed.id }, name: "account_status", arguments: {} } },
     }]);
 
-    event = { id: "different-event", tags: [] };
+    event = { ...signed, id: "different-event" };
     await inbound?.({
       id: "rpc-002",
       method: "tools/call",
-      params: { _meta: { requestEventId: "signed-event-001" }, name: "account_status", arguments: {} },
+      params: { _meta: { requestEventId: signed.id }, name: "account_status", arguments: {} },
     }, { clientPubkey: fixture.requests.forgedPubkey });
     expect(delivered).toHaveLength(1);
   });

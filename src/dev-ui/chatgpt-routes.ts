@@ -1,48 +1,50 @@
 import { randomBytes } from "node:crypto";
-import { boundedJson, safeChatGptError, type ChatGptOAuth, type ChatGptSettings } from "../dev/chatgpt-oauth";
+import { z } from "zod";
+import { safeChatGptError, type ChatGptOAuth, type ChatGptSettings } from "../dev/chatgpt-oauth";
 
-/** Local operator controls only. Generation/account/payment commands stay on ContextVM. */
+/** Operator commands arrive over encrypted ContextVM. HTTP is used only for
+ * the provider's browser redirect/callback, protected by a one-use ticket,
+ * HttpOnly browser binding, OAuth state, nonce and PKCE. */
 export class DevelopmentChatGptRoutes {
-  readonly controlToken = randomBytes(32).toString("hex");
   readonly #cookieName = `napplet_chatgpt_${randomBytes(8).toString("hex")}`;
+  #tickets = new Map<string, { url: string; cookie: string; expires: number }>();
   constructor(private readonly options: { auth: ChatGptOAuth; select: (settings: ChatGptSettings) => Promise<void>; busy: () => boolean; diagnostic: () => string | undefined }) {}
+  async command(operation: string, input: unknown, origin: string): Promise<unknown> {
+    const body = z.object({ accountId: z.string().min(1).max(240).optional(), mode: z.enum(["default", "chatgpt"]).optional(), model: z.string().max(128).optional() }).strict().parse(input);
+    if (operation === "status") return { ...this.options.auth.status(), diagnostic: this.options.diagnostic() };
+    if (operation === "sign-in") {
+      const flow = await this.options.auth.begin(origin, body.accountId);
+      this.#tickets.clear();
+      const ticket = randomBytes(32).toString("hex"); this.#tickets.set(ticket, { ...flow, expires: Date.now() + 600000 });
+      return { url: `${origin}/admin/oauth/start?ticket=${ticket}` };
+    }
+    if (operation === "models" && body.accountId) return { models: await this.options.auth.models(body.accountId) };
+    if (operation === "welcome" && body.accountId) { await this.options.auth.welcome(body.accountId); return { saved: true }; }
+    if (this.options.busy()) throw new Error("CHATGPT_GENERATION_BUSY");
+    if (operation === "select") { await this.options.select(body as ChatGptSettings); return { selected: true }; }
+    if (operation === "logout" && body.accountId) return this.options.auth.logout(body.accountId);
+    throw new Error("CHATGPT_INVALID_CONTROL_REQUEST");
+  }
   async handle(request: Request, origin: string): Promise<Response | undefined> {
     const url = new URL(request.url);
-    const headers = { "cache-control": "no-store", "referrer-policy": "no-referrer", "x-content-type-options": "nosniff", "x-frame-options": "DENY" };
-    if (url.pathname === "/auth/openai/callback") {
-      if (request.method !== "GET" || url.origin !== origin || url.search.length > 24_000) return new Response("Invalid callback", { status: 400, headers });
-      let location = "/?chatgpt=connected";
-      let account: string | undefined;
-      try {
-        if (this.options.busy()) throw new Error("CHATGPT_GENERATION_BUSY");
-        const cookie = request.headers.get("cookie")?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${this.#cookieName}=`))?.slice(this.#cookieName.length + 1);
-        account = await this.options.auth.callback(url, cookie);
-        const models = await this.options.auth.models(account);
-        const saved = this.options.auth.settings().model;
-        const model = models.find((item) => item.slug === saved)?.slug ?? models[0]?.slug;
-        if (!model) throw new Error("CHATGPT_SELECT_AVAILABLE_MODEL");
-        await this.options.select({ mode: "chatgpt", accountId: account, model });
-      } catch (error) { location = `/?chatgpt_error=${safeChatGptError(error)}`; }
-      if (account) location += `&chatgpt_account=${encodeURIComponent(account)}`;
-      return new Response(null, { status: 303, headers: { ...headers, location, "set-cookie": `${this.#cookieName}=; HttpOnly; SameSite=Lax; Path=/auth/openai/callback; Max-Age=0` } });
+    if (!["/admin/oauth/start", "/auth/openai/callback"].includes(url.pathname)) return undefined;
+    const headers = { "cache-control": "no-store", "referrer-policy": "no-referrer", "x-content-type-options": "nosniff", "x-frame-options": "DENY", "content-security-policy": "default-src 'none'; frame-ancestors 'none'" };
+    if (request.method !== "GET" || url.origin !== origin || url.search.length > 24000) return new Response("Invalid callback", { status: 400, headers });
+    if (url.pathname === "/admin/oauth/start") {
+      const ticket = url.searchParams.get("ticket") ?? ""; const flow = this.#tickets.get(ticket); this.#tickets.delete(ticket);
+      if (!flow || flow.expires < Date.now()) return new Response("Operator sign-in expired. Start again in CVM admin.", { status: 403, headers });
+      return new Response(null, { status: 303, headers: { ...headers, location: flow.url, "set-cookie": `${this.#cookieName}=${flow.cookie}; HttpOnly; SameSite=Lax; Path=/auth/openai/callback; Max-Age=600` } });
     }
-    if (!url.pathname.startsWith("/dev/chatgpt/")) return undefined;
-    if (url.origin !== origin || request.headers.get("x-dev-model-token") !== this.controlToken || (request.headers.get("origin") && request.headers.get("origin") !== origin) || request.headers.get("sec-fetch-site") === "cross-site") return Response.json({ code: "CHATGPT_LOCAL_CONTROL_REQUIRED" }, { status: 403, headers });
+    let location = "/admin?chatgpt=connected";
     try {
-      if (url.pathname === "/dev/chatgpt/status" && request.method === "GET") return Response.json({ ...this.options.auth.status(), diagnostic: this.options.diagnostic() }, { headers });
-      if (request.method !== "POST" || request.headers.get("content-type") !== "application/json" || request.headers.get("origin") !== origin) return Response.json({ code: "CHATGPT_INVALID_CONTROL_REQUEST" }, { status: 405, headers });
-      if (this.options.busy()) return Response.json({ code: "CHATGPT_GENERATION_BUSY" }, { status: 409, headers });
-      const body = await boundedJson(new Response(request.body), 4096);
-      if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("CHATGPT_INVALID_CONTROL_REQUEST");
-      if (url.pathname === "/dev/chatgpt/sign-in") {
-        const flow = await this.options.auth.begin(origin, typeof body.accountId === "string" ? body.accountId : undefined);
-        return Response.json({ url: flow.url }, { headers: { ...headers, "set-cookie": `${this.#cookieName}=${flow.cookie}; HttpOnly; SameSite=Lax; Path=/auth/openai/callback; Max-Age=600` } });
-      }
-      if (url.pathname === "/dev/chatgpt/models" && typeof body.accountId === "string") return Response.json({ models: await this.options.auth.models(body.accountId) }, { headers });
-      if (url.pathname === "/dev/chatgpt/select") { await this.options.select(body); return Response.json({ selected: true }, { headers }); }
-      if (url.pathname === "/dev/chatgpt/welcome" && typeof body.accountId === "string") { await this.options.auth.welcome(body.accountId); return Response.json({ saved: true }, { headers }); }
-      if (url.pathname === "/dev/chatgpt/logout" && typeof body.accountId === "string") return Response.json(await this.options.auth.logout(body.accountId), { headers });
-      return Response.json({ code: "CHATGPT_CONTROL_NOT_FOUND" }, { status: 404, headers });
-    } catch (error) { return Response.json({ code: safeChatGptError(error) }, { status: 400, headers }); }
+      const cookie = request.headers.get("cookie")?.split(";").map(part => part.trim()).find(part => part.startsWith(`${this.#cookieName}=`))?.slice(this.#cookieName.length + 1);
+      const account = await this.options.auth.callback(url, cookie);
+      const models = await this.options.auth.models(account);
+      const saved = this.options.auth.settings().model;
+      const model = models.find(item => item.slug === saved)?.slug ?? models[0]?.slug;
+      if (!model) throw new Error("CHATGPT_SELECT_AVAILABLE_MODEL");
+      if (!this.options.busy()) await this.options.select({ mode: "chatgpt", accountId: account, model });
+    } catch (error) { location = `/admin?chatgpt_error=${safeChatGptError(error)}`; }
+    return new Response(null, { status: 303, headers: { ...headers, location, "set-cookie": `${this.#cookieName}=; HttpOnly; SameSite=Lax; Path=/auth/openai/callback; Max-Age=0` } });
   }
 }

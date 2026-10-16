@@ -1,13 +1,16 @@
 /** Opt-in smoke: one real generation using the locally selected ChatGPT account. */
 import { chromium } from "playwright";
+import { DevelopmentContextVmClient } from "../../src/dev-ui/browser/contextvm-client";
+import { resolve } from "node:path";
 if (!process.argv.includes("--allow-chatgpt-usage")) throw new Error("CHATGPT_LIVE_USAGE_OPT_IN_REQUIRED");
 const blink = process.argv.includes("--blink");
 const url = new URL(process.env.NAPPLET_CVM_DEV_URL ?? "http://invalid");
 if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || url.username || url.password) throw new Error("CHATGPT_LOCAL_GUI_REQUIRED");
-const controlUrl = (path: string) => { const target = new URL(path, url); target.searchParams.set("inspect", String(Date.now())); return target; };
-const bootstrap = await (await fetch(controlUrl("/bootstrap"), { cache: "no-store" })).json() as any;
-if (bootstrap.providerLabel !== "ChatGPT subscription · local test sats") throw new Error("CHATGPT_SIGN_IN_AND_SELECT_MODEL_IN_GUI_FIRST");
-const authStatus = await (await fetch(controlUrl("/dev/chatgpt/status"), { cache: "no-store", headers: { "x-dev-model-token": bootstrap.modelControlToken } })).json();
+const connection = await (await fetch(new URL("/cvm.json", url))).json() as any;
+const operator = await Bun.file(resolve(process.env.NAPPLET_CVM_STATE_ROOT ?? ".local", "cvm-operator/operator.json")).json();
+const admin = new DevelopmentContextVmClient({ ...connection, reserveSat: "0", actionCeilingSat: "0", providerLabel: "test" }, undefined, operator.adminKey);
+await admin.connect({ accountStatus: false });
+const authStatus = await admin.callTool("cvm_admin", { action: "chatgpt", operation: "status" });
 if (!authStatus.accounts.some((account: any) => account.id === authStatus.settings.accountId && account.signedIn && account.planEnabled)) throw new Error("CHATGPT_SIGN_IN_REQUIRED_BEFORE_LIVE_TEST");
 const browser = await chromium.launch({ headless: true });
 try {
@@ -19,7 +22,7 @@ try {
   const deadline = Date.now() + 330_000;
   while (Date.now() < deadline) {
     if ((await page.locator("#generation-error").textContent())?.trim()) {
-      const status = await (await fetch(controlUrl("/dev/chatgpt/status"), { cache: "no-store", headers: { "x-dev-model-token": bootstrap.modelControlToken } })).json();
+      const status = await admin.callTool("cvm_admin", { action: "chatgpt", operation: "status" });
       throw new Error(typeof status.diagnostic === "string" && /^CHATGPT_[A-Z0-9_]+$/u.test(status.diagnostic) ? status.diagnostic : "CHATGPT_LIVE_GENERATION_FAILED_CHECK_GUI");
     }
     if ((await page.locator("#generation-status").textContent()) === "Verified preview ready") break;
@@ -41,4 +44,4 @@ try {
     await napplet.getByText("1", { exact: true }).waitFor();
   }
   console.log(JSON.stringify({ status: "passed", case: "chatgpt-live", evidence: blink ? "live generated blinking text, verified preview, animation and reduced-motion behavior" : "live ChatGPT generation, verified local preview, and Add increments count to 1", automaticRetries: 0 }));
-} finally { await browser.close(); }
+} finally { await browser.close(); await admin.close(); }

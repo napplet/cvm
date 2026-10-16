@@ -8,7 +8,7 @@ const collapsedConsole = `<script>try { localStorage.setItem('kehto:paja:console
 // A presentation switch for the product workspace. It changes no sandbox,
 // simulation, grant, capability or message policy; /dev keeps Paja controls.
 const workspaceChrome = `<style>html[data-preview-presentation="workspace"] body { grid-template-rows: minmax(0, 1fr); } html[data-preview-presentation="workspace"] .bar, html[data-preview-presentation="workspace"] .console { display: none !important; } html[data-preview-presentation="workspace"] main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }</style>`;
-export type PreviewServer = Readonly<{ url: string; openPaja(token: string): Promise<string>; close(): Promise<void> }>;
+export type PreviewServer = Readonly<{ url: string; openPaja(token: string): Promise<string>; openTarget(targetUrl: string): Promise<string>; close(): Promise<void> }>;
 /** Static/opaque-grant boundary only. There are deliberately no application commands here. */
 export async function createPreviewServer(input: Readonly<{ repository: LocalArtifactRepository; grants: LocalPreviewGrantStore; paja: Readonly<{ startPajaServer(options: unknown): Promise<{ url: string; close(): Promise<void> }>; domains: readonly string[] }> }>): Promise<PreviewServer> {
   const hosts: Array<{ close(): Promise<void> }> = [];
@@ -23,8 +23,7 @@ export async function createPreviewServer(input: Readonly<{ repository: LocalArt
     } catch { return new Response("not found", { status: 404 }); }
   } });
   const url = `http://127.0.0.1:${server.port}`;
-  return Object.freeze({ url, async openPaja(token: string): Promise<string> {
-    const targetUrl = `${url}/preview/${encodeURIComponent(token)}/index.html`;
+  async function openTarget(targetUrl: string): Promise<string> {
     const host = await input.paja.startPajaServer({ options: { host: "127.0.0.1", port: 0, targetUrl, simulation: { capabilities: { domains: Object.fromEntries(input.paja.domains.map((domain) => [domain, false])) }, acl: { mode: "deny" }, firewall: { mode: "deny" }, identity: { mode: "anonymous" }, relay: { mode: "disabled" }, storage: { mode: "disabled" }, cache: { mode: "disabled" }, upload: { mode: "disabled" }, media: { enabled: false }, notifications: { enabled: false, grant: false }, intent: { enabled: false }, cvm: { enabled: false } } } });
     // Paja 0.19 has a persisted drawer preference but no initial-state option.
     // Initialize it before its module runs, on a separate loopback preview origin.
@@ -44,5 +43,6 @@ export async function createPreviewServer(input: Readonly<{ repository: LocalArt
     } });
     hosts.push({ async close() { minimized.stop(true); await host.close(); } });
     return `http://127.0.0.1:${minimized.port}`;
-  }, async close(): Promise<void> { await Promise.all(hosts.map((host) => host.close())); server.stop(true); } });
+  }
+  return Object.freeze({ url, openTarget, openPaja: (token: string) => openTarget(`${url}/preview/${encodeURIComponent(token)}/index.html`), async close(): Promise<void> { await Promise.all(hosts.map((host) => host.close())); server.stop(true); } });
 }

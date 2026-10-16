@@ -65,7 +65,8 @@ try {
     const response = await fetch(`${server.url}${route}`);
     requireThat(response.status === 404, `HTTP_APPLICATION_ROUTE_EXPOSED:${route}:${response.status}`);
   }
-  requireThat((await fetch(`${server.url}/bootstrap`)).status === 200, "BOOTSTRAP_UNAVAILABLE");
+  requireThat((await fetch(`${server.url}/bootstrap`)).status === 404, "PUBLIC_CONTROL_ROUTE");
+  requireThat(Object.keys(await (await fetch(`${server.url}/cvm.json`)).json()).sort().join(",") === "relayUrl,servicePubkey", "PUBLIC_CONFIG_LEAK");
 
   page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   page.on("console", (message) => consoleMessages.push(message.text()));

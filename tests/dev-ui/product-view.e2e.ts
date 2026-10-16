@@ -18,8 +18,7 @@ try {
     const live = new events.ExecutionActivity(document.querySelector("#execution-activity"), "Deterministic fixture", (snapshot: unknown) => workspace.progress(snapshot));
     Object.assign(window, { workspace, live }); workspace.connected(true);
   }, { product: source("product-workspace.js"), activity: source("activity.js") });
-  assert(await page.locator("#workspace-settings").isVisible(), "AUTH_ERROR_HIDDEN_IN_SETTINGS");
-  await page.keyboard.press("Escape");
+  assert(await page.locator("#workspace-settings").isHidden() && await page.locator("#chatgpt-account").count() === 0, "PUBLIC_PROVIDER_CONTROLS_EXPOSED");
   await page.locator("#idea").fill('<img src=x onerror="alert(1)"> A focused counter');
   await page.getByRole("button", { name: "Shape my idea" }).click();
   assert(await page.locator("#idea-review img").count() === 0, "DRAFT_INTERPRETED_AS_HTML");

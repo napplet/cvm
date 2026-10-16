@@ -1,3 +1,12 @@
+import { DevelopmentProjects } from "../dev/projects";
+import { finalizeEvent } from "nostr-tools/pure";
+import { LocalPublication } from "../dev/local-publication";
+import { z } from "zod";
+import { ChatGptDiagnosticSchema } from "../dev/chatgpt-diagnostic";
+import { CvmOperator } from "../dev/cvm-operator";
+import { DevelopmentModelGateway, configuredProviderFromEnvironment } from "../dev/development-model-gateway";
+import { buildStaticWorkspace } from "./static-assets";
+import { mkdir, writeFile } from "node:fs/promises";
 import { DevelopmentProgressTransport } from "./development-progress";
 import { ChatGptOAuth, type ChatGptFetch, type ChatGptSettings } from "../dev/chatgpt-oauth";
 import { ChatGptModelGateway, SqlChatGptOperations } from "../dev/chatgpt-model-gateway";
@@ -74,18 +83,6 @@ async function sha256File(path: string): Promise<string> {
   return new Bun.CryptoHasher("sha256").update(await Bun.file(path).arrayBuffer()).digest("hex");
 }
 
-async function browserBundle(): Promise<string> {
-  const pinoShim = resolve(root, "src/dev-ui/browser/pino-browser-shim.ts");
-  const build = await Bun.build({
-    entrypoints: [resolve(root, "src/dev-ui/browser/main.ts")], target: "browser", format: "esm", minify: true, write: false,
-    plugins: [{ name: "contextvm-browser-pino", setup(builder) { builder.onResolve({ filter: /^pino$/ }, () => ({ path: pinoShim })); } }],
-  });
-  if (!build.success) throw new Error(`DEV_UI_BROWSER_BUILD_FAILED:${build.logs.map((item) => item.message).join(";")}`);
-  const output = build.outputs.find((file) => file.path.endsWith(".js"));
-  if (!output) throw new Error("DEV_UI_BROWSER_BUNDLE_MISSING");
-  return output.text();
-}
-
 async function mintCashuToken(app: DevelopmentFunding, config: DevPayments, amount: number): Promise<string> {
   if (!Number.isSafeInteger(amount) || amount < 1 || amount > 10_000) throw new Error("DEV_CASHU_FAUCET_AMOUNT_INVALID");
   const wallet = new Wallet(config.mintUrl);
@@ -120,6 +117,7 @@ async function durableTimeline(app: DevelopmentFunding, accountId: string, sessi
  * Account and payment commands always pass through ContextVM over the relay.
  */
 export async function createDevelopmentContextVmServer(options: Readonly<{ testMode?: boolean; config?: DevPayments; stateRoot?: string; port?: number; chatGptFetch?: ChatGptFetch }> = {}): Promise<DevelopmentContextVmServer> {
+  if (!Bun.which("node")) throw new Error("DEV_PUBLICATION_NODE_REQUIRED");
   const stack = options.testMode ? developmentStack(true) : undefined;
   const config = options.config ?? (stack ? await stack.up() : await Bun.file(resolve(root, ".local/napplet-cvm-dev-payments/payments.json")).json() as DevPayments);
   let priorSource: ((input: Readonly<{ accountId: string; sessionId: string; authorizedPriorArtifactReference: string }>) => Promise<readonly { path: "src/main.ts" | "src/styles.css"; content: string }[] | undefined>) | undefined;
@@ -140,7 +138,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
   const identity = developmentServiceIdentity(config.fundingKey);
   const signer = new PrivateKeySigner(identity.signerPrivateKey);
   const transport = new NostrServerTransport({ signer, relayHandler: [config.relayUrl], encryptionMode: "required", publishRelayList: false, injectRequestEventId: true, logLevel: "silent" });
-  const bridge = new ContextVmSdkBridge(transport);
+  const bridge = new ContextVmSdkBridge(transport, ["service_info", "development_faucet", "development_publication", "cvm_admin", "operation_diagnostic", "projects"]);
   const progress = new DevelopmentProgressTransport(bridge);
   const accountStatus = new AccountStatusService({
     store: app.database.funding,
@@ -210,31 +208,52 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
     return { generation, preAdmission, pricing };
   };
   let runtime = makeRuntime(composition.gateway, composition.pricing ?? { card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile: PHASE_04_MODEL_PROFILES["code-proposal"] });
+  let operator: CvmOperator | undefined;
+  let webOrigin = "";
   async function configureModel(settings: ChatGptSettings, persist = true) {
     if (activeWork || configuring) throw new Error("CHATGPT_GENERATION_BUSY");
     configuring = true;
     try {
       let next = runtime; let gateway: ChatGptModelGateway | undefined;
-      if (settings.mode === "chatgpt") {
+      const api = operator?.selectedApi();
+      if (api && !persist) {
+        const configured = await configuredProviderFromEnvironment(api);
+        const apiGateway = new DevelopmentModelGateway({ store: composition.proposals, configured, priorSource: async input => priorSource?.(input) });
+        await registerDevelopmentPricing(app.pool, { profile: api.profile, priceCard: api.priceCard });
+        next = makeRuntime(apiGateway, { card: api.priceCard, profile: api.profile });
+      } else if (settings.mode === "chatgpt") {
         if (!settings.accountId || !settings.model) throw new Error("CHATGPT_SELECT_AVAILABLE_MODEL");
-        gateway = new ChatGptModelGateway({ accountId: settings.accountId, model: settings.model, auth: chatgpt, store: composition.proposals, operations: new SqlChatGptOperations(app.pool), fetch: options.chatGptFetch, onResponseBytes: (bytes) => progress.emit("model_stream", "running", { bytes }), priorSource: async (input) => priorSource?.(input) });
+        gateway = new ChatGptModelGateway({ rates: operator?.rates(), accountId: settings.accountId, model: settings.model, auth: chatgpt, store: composition.proposals, operations: new SqlChatGptOperations(app.pool), fetch: options.chatGptFetch, onResponseBytes: (bytes) => progress.emit("model_stream", "running", { bytes }), priorSource: async (input) => priorSource?.(input) });
         await registerDevelopmentPricing(app.pool, { profile: gateway.pricing.profile, priceCard: gateway.pricing.card });
         next = makeRuntime(gateway, gateway.pricing);
       } else if (settings.mode === "default") next = makeRuntime(composition.gateway, composition.pricing ?? { card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile: PHASE_04_MODEL_PROFILES["code-proposal"] });
       else throw new Error("CHATGPT_SELECT_AVAILABLE_MODEL");
+      if (!api && settings.mode === "default" && operator?.rates() && !composition.pricing) {
+        const rates = operator.rates()!;
+        const suffix = new Bun.CryptoHasher("sha256").update(JSON.stringify(rates)).digest("hex").slice(0, 24);
+        const card = { ...PHASE_04_DETERMINISTIC_PRICE_CARD, id: `operator-fixture-card-${suffix}`, version: suffix, rates };
+        const profile = { ...PHASE_04_MODEL_PROFILES["code-proposal"], id: `operator-fixture-profile-${suffix}`, priceCardId: card.id };
+        await registerDevelopmentPricing(app.pool, { profile, priceCard: card });
+        next = makeRuntime(composition.gateway, { card, profile });
+      }
       if (persist) await chatgpt.select(settings);
       runtime = next; oauthGateway = gateway;
-      providerLabel = gateway ? "ChatGPT subscription · local test sats" : composition.providerLabel;
+      providerLabel = api && !persist ? "Configured OpenAI Responses" : gateway ? "ChatGPT subscription · local test sats" : composition.providerLabel;
       actionCeilingSat = maximumOperationCharge(runtime.pricing);
     } finally { configuring = false; }
   }
+  operator = await CvmOperator.open(resolve(stateRoot, "cvm-operator"), {
+    pool: app.pool, busy: () => activeWork > 0 || configuring, pricing: () => runtime.pricing,
+    configure: () => configureModel(chatgpt.settings(), false),
+    chatgpt: (operation, body) => chatgptRoutes.command(operation, body, webOrigin),
+  });
   await configureModel(chatgpt.settings(), false);
   async function generationWork<T>(run: () => Promise<T>): Promise<T> {
     if (configuring) throw new Error("CHATGPT_GENERATION_BUSY");
     activeWork++;
     try { return await run(); } finally { activeWork--; }
   }
-  const chatgptRoutes = new DevelopmentChatGptRoutes({ auth: chatgpt, select: configureModel, busy: () => activeWork > 0 || configuring, diagnostic: () => oauthGateway?.diagnostic() });
+  const chatgptRoutes = new DevelopmentChatGptRoutes({ auth: chatgpt, select: async settings => { await configureModel(settings); await operator!.clearApiSelection(); }, busy: () => activeWork > 0 || configuring, diagnostic: () => oauthGateway?.diagnostic() });
   priorSource = async (input) => {
     const artifact = await repository.get(input.authorizedPriorArtifactReference);
     if (!artifact || artifact.accountId !== input.accountId || artifact.sessionId !== input.sessionId) return undefined;
@@ -246,6 +265,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
   };
   const paja = await import("../../tests/dev-ui/node_modules/@kehto/paja");
   const previewServer = await createPreviewServer({ repository, grants, paja: { startPajaServer: paja.startPajaServer, domains: paja.PAJA_SIMULATION_DOMAINS } });
+  const publication = await LocalPublication.open({ pubkey: await signer.getPublicKey(), sign: async template => finalizeEvent(template, Uint8Array.from(Buffer.from(identity.signerPrivateKey, "hex"))), publicOrigin: process.env.NAPPLET_CVM_BLOSSOM_PUBLIC_URL, publicRelay: process.env.NAPPLET_CVM_PUBLIC_RELAY_URL, pool: app.pool, repository, root: resolve(stateRoot, "development-published"), workerResultsRoot: resolve(stateRoot, "development-worker-results"), relay: config.relayUrl, openTarget: target => previewServer.openTarget(target) });
   const preview = {
     async previewVerifiedArtifact(input: Readonly<{ accountId: string; sessionId: string; artifactId: string }>) {
       progress.emit("preview", "running");
@@ -261,12 +281,23 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
       return artifact && artifact.accountId === input.accountId && artifact.sessionId === input.sessionId ? { state: "ready" as const, artifactId: artifact.artifactId, aggregateSha256: artifact.aggregateSha256, capabilityDigest: artifact.verificationEvidenceSha256, runtimeVariant: "development-paja-0.19.0", required: [], optional: [], nextAction: "sign_manifest" as const } : { state: "denied" as const, nextAction: "preview" as const, safeReasonCode: "preview_not_available" as const };
     },
   };
+  async function shareVerified(result: SessionActionResult): Promise<SessionActionResult> {
+    if (result.status === "completed" && result.artifactId) {
+      progress.emit("cvm_share", "running");
+      try { const artifact = await repository.get(result.artifactId); const shared = artifact ? await publication.ensurePreview(artifact) as { status: string } : undefined; progress.emit("cvm_share", shared?.status === "published" ? "completed" : "uncertain"); } catch { progress.emit("cvm_share", "uncertain"); /* Retry sharing without regenerating. */ }
+    }
+    return result;
+  }
+  const projects = new DevelopmentProjects(app.pool);
   const generationFacade = {
-    async startSession(input: any) { try { owners.set(await accountIdForPrincipal(input.principal), input.principal.pubkey); return latestGenerationResult = await generationWork(() => runtime.generation.startSession(input)); } catch (error) { latestGenerationError = safeGenerationDiagnostic(error); throw error; } },
-    async reviseSession(input: any) { try { owners.set(await accountIdForPrincipal(input.principal), input.principal.pubkey); return latestGenerationResult = await generationWork(() => runtime.generation.reviseSession(input)); } catch (error) { latestGenerationError = safeGenerationDiagnostic(error); throw error; } },
+    async startSession(input: any) { try { await projects.bind(input.principal.pubkey); owners.set(await accountIdForPrincipal(input.principal), input.principal.pubkey); const result = await generationWork(async () => shareVerified(await runtime.generation.startSession(input)));
+      if ("sessionId" in result) { try { await projects.name(input.principal.pubkey,result.sessionId,input.idea); } catch { /* Display metadata cannot change the metered outcome. */ } }
+      return latestGenerationResult = result; } catch (error) { latestGenerationError = safeGenerationDiagnostic(error); throw error; } },
+    async reviseSession(input: any) { try { await projects.bind(input.principal.pubkey); owners.set(await accountIdForPrincipal(input.principal), input.principal.pubkey); return latestGenerationResult = await generationWork(async () => shareVerified(await runtime.generation.reviseSession(input))); } catch (error) { latestGenerationError = safeGenerationDiagnostic(error); throw error; } },
   };
   const preAdmissionFacade = {
     async saveStart(input: any) {
+      await projects.bind(input.owner.ownerId);
       const result = await generationWork(() => runtime.preAdmission.saveStart(input));
       return result.status === "saved" ? { ...result, nextAction: "funded_admission" as const } : result;
     },
@@ -281,8 +312,9 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
     },
     async resume(input: any) {
       try {
+        await projects.bind(input.owner.ownerId);
         owners.set(input.owner.accountId, input.owner.ownerId);
-        return latestGenerationResult = await generationWork(() => runtime.preAdmission.resume(input));
+        return latestGenerationResult = await generationWork(async () => shareVerified(await runtime.preAdmission.resume(input)));
       } catch (error) {
         latestGenerationError = safeGenerationDiagnostic(error);
         throw error;
@@ -294,11 +326,27 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
     if (result.status !== "ok") return result;
     const accountId = await accountIdForPrincipal(query.principal);
     return { ...result, session: { ...result.session, timeline: await durableTimeline(app, accountId, query.sessionId) } };
-  } }, preview, policyVersion: "development-local-v1" });
+  } }, preview, extensions: {
+    projects: (input, pubkey) => projects.handle(input, pubkey),
+    service_info: async input => { z.object({}).strict().parse(input); const settings = chatgpt.settings(); const account = chatgpt.status().accounts.find(item => item.id === settings.accountId); return { reserveSat, actionCeilingSat, providerLabel, available: !!operator?.selectedApi() || settings.mode !== "chatgpt" || !!(account?.signedIn && account.planEnabled), development: true }; },
+    development_faucet: async input => { const { amount } = z.object({ amount: z.string().regex(/^[1-9][0-9]{0,4}$/u) }).strict().parse(input); return { token: await mintCashuToken(app, config, Number(amount)) }; },
+    development_publication: (input, pubkey) => publication.handle(input, pubkey),
+    operation_diagnostic: async (input, pubkey) => {
+      const { operationId } = z.object({ operationId: z.string().min(1).max(240) }).strict().parse(input);
+      const account = await accountIdForPrincipal({ pubkey });
+      const row = (await app.pool.query("SELECT c.diagnostic_json FROM development_chatgpt_operations c JOIN metered_actions a ON a.operation_id=c.operation_id WHERE a.operation_id=$1 AND a.account_id=$2", [operationId, account])).rows[0];
+      const diagnostic = ChatGptDiagnosticSchema.safeParse(row?.diagnostic_json);
+      return diagnostic.success ? { status: "ok", diagnostic: diagnostic.data } : { status: "unavailable" };
+    },
+    cvm_admin: (input, pubkey) => operator!.handle(input, pubkey),
+  }, policyVersion: "development-local-v1" });
   let reconciler = new DevelopmentNwcSettlementReconciler(app);
-  const [html, javascript, servicePubkey, consoleHtml] = await Promise.all([
-    readFile(resolve(root, "src/dev-ui/browser/index.html"), "utf8"), browserBundle(), signer.getPublicKey(), readFile(resolve(root, "src/dev-ui/browser/console.html"), "utf8"),
-  ]);
+  const servicePubkey = await signer.getPublicKey();
+  const publicRelay = process.env.NAPPLET_CVM_PUBLIC_RELAY_URL ?? config.relayUrl;
+  if (!["ws:", "wss:"].includes(new URL(publicRelay).protocol)) throw new Error("PUBLIC_RELAY_URL_INVALID");
+  const assets = await buildStaticWorkspace({ relayUrl: publicRelay, servicePubkey });
+  await mkdir(resolve(stateRoot, "workspace"), { recursive: true });
+  await writeFile(resolve(stateRoot, "workspace/cvm.json"), assets.get("cvm.json")!);
   await transport.start();
   reconciler.start();
 
@@ -310,22 +358,20 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
       if (url.hostname !== "127.0.0.1" && url.hostname !== "localhost") return new Response("loopback only", { status: 403 });
       const chatgptResponse = await chatgptRoutes.handle(request, `http://127.0.0.1:${web.port}`);
       if (chatgptResponse) return chatgptResponse;
-      if (url.pathname === "/" || url.pathname === "/dev") return new Response(url.pathname === "/dev" ? consoleHtml : html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer", "content-security-policy": "frame-ancestors 'none'; base-uri 'none'; object-src 'none'", "x-frame-options": "DENY" } });
-      if (url.pathname === "/app.js") return new Response(javascript, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });
-      if (url.pathname === "/product.css") return new Response(await Bun.file(resolve(root, "src/dev-ui/browser/product.css")).text(), { headers: { "content-type": "text/css; charset=utf-8", "cache-control": "no-store" } });
-      if (url.pathname === "/styles.css") return new Response(await Bun.file(resolve(root, "src/dev-ui/browser/styles.css")).text(), { headers: { "content-type": "text/css; charset=utf-8", "cache-control": "no-store" } });
-      if (url.pathname === "/bootstrap") return Response.json({ relayUrl: config.relayUrl, servicePubkey, reserveSat, actionCeilingSat, providerLabel, modelControlToken: chatgptRoutes.controlToken }, { headers: { "cache-control": "no-store" } });
-      if (url.pathname === "/dev/faucet/cashu" && request.method === "POST") {
-        try {
-          const amount = Number(url.searchParams.get("amount"));
-          return Response.json({ token: await mintCashuToken(app, config, amount) }, { headers: { "cache-control": "no-store" } });
-        } catch { return Response.json({ code: "faucet_rejected" }, { status: 400 }); }
+      if (request.method === "GET" || request.method === "HEAD") {
+        const name = ({ "/": "index.html", "/dev": "console.html", "/admin": "admin.html" } as Record<string,string>)[url.pathname] ?? url.pathname.slice(1);
+        const asset = assets.get(name);
+        if (asset !== undefined) {
+          const type = name.endsWith(".html") ? "text/html" : name.endsWith(".css") ? "text/css" : name.endsWith(".json") ? "application/json" : "text/javascript";
+          return new Response(request.method === "HEAD" ? null : asset, { headers: { "content-type": `${type}; charset=utf-8`, "cache-control": "no-cache", "referrer-policy": "no-referrer", "content-security-policy": "frame-ancestors 'none'; base-uri 'none'; object-src 'none'", "x-frame-options": "DENY", "x-content-type-options": "nosniff" } });
+        }
       }
       if (url.pathname === "/health") return Response.json({ status: "ok" });
       return new Response("not found", { status: 404 });
     },
   });
   const url = `http://127.0.0.1:${web.port}`;
+  webOrigin = url;
 
   return Object.freeze({
     url,
@@ -365,6 +411,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
       reconciler.stop();
       try { web.stop(true); }
       finally {
+        publication.close();
         await previewServer.close();
         // Relay shutdown is best-effort in the local SDK; do not leave a
         // browser evidence run holding containers forever on a lost close ACK.

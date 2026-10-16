@@ -1,0 +1,170 @@
+/** Separate static origin → encrypted CVM → real SQL/relay/worker, with browser
+ * signing, real NIP-46 handshake, Blossom mirroring and private operator UI. */
+import { chromium } from "playwright";
+import { openFixtureAdmin } from "./operator-fixture";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure";
+import { SimplePool } from "nostr-tools/pool";
+import { nip44 } from "nostr-tools";
+import { developmentStack, createDevelopmentPool } from "../../scripts/dev-payments";
+import { createDevelopmentContextVmServer } from "../../src/dev-ui/contextvm-server";
+import { buildStaticWorkspace } from "../../src/dev-ui/static-assets";
+import { DevelopmentContextVmClient } from "../../src/dev-ui/browser/contextvm-client";
+import { CvmBlossom } from "../../src/dev/cvm-blossom";
+import { chatGptFixture } from "../fixtures/chatgpt";
+const assert = (value: unknown, code: string) => { if (!value) throw new Error(code); };
+const fixture = chatGptFixture(); fixture.setSparseCompletion(true);
+let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+const modelFetch: typeof fixture.fetch = async (url, init) => {
+  const response = await fixture.fetch(url, init); if (!String(url).endsWith("/responses")) return response;
+  const reader = response.body!.getReader();
+  return new Response(new ReadableStream({ async start(controller) { try { const first = await reader.read(); if (first.value) controller.enqueue(first.value); await gate; for (;;) { const part = await reader.read(); if (part.done) break; controller.enqueue(part.value); } controller.close(); } catch (error) { controller.error(error); } } }), { headers: response.headers });
+};
+const stack = developmentStack(true); const config = await stack.up(); const root = await mkdtemp(join(tmpdir(), "static-cvm-e2e-"));
+let server = await createDevelopmentContextVmServer({ config, stateRoot: root, chatGptFetch: modelFetch });
+const connection = await (await fetch(`${server.url}/cvm.json`)).json() as { relayUrl: string; servicePubkey: string };
+const assets = await buildStaticWorkspace(connection);
+const site = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) { const pathname = new URL(request.url).pathname; if (!pathname.startsWith("/hosted/")) return new Response("not found", { status: 404 }); const path = pathname.slice("/hosted/".length) || "index.html"; const body = assets.get(path); return body === undefined ? new Response("not found", { status: 404 }) : new Response(body, { headers: { "content-type": path.endsWith(".js") ? "text/javascript" : path.endsWith(".css") ? "text/css" : path.endsWith(".json") ? "application/json" : "text/html" } }); } });
+const staticUrl = `http://127.0.0.1:${site.port}/hosted/`;
+const browser = await chromium.launch(); const context = await browser.newContext({ permissions: ["clipboard-read", "clipboard-write"] }); const page = await context.newPage(); const admin = await context.newPage();
+const pool = createDevelopmentPool(config.databaseUrl); const relay = new SimplePool();
+const userKey = generateSecretKey(); const signerKey = generateSecretKey();
+let discoveredRelayList: ReturnType<typeof finalizeEvent> | undefined;
+await context.routeWebSocket("wss://purplepag.es/", socket => { socket.onMessage(message => { const data = JSON.parse(String(message)); if (data[0] === "REQ") { if (discoveredRelayList && data.slice(2).some((filter: any) => filter.kinds?.includes(10002) && filter.authors?.includes(discoveredRelayList!.pubkey))) socket.send(JSON.stringify(["EVENT", data[1], discoveredRelayList])); socket.send(JSON.stringify(["EOSE",data[1]])); } }); });
+await context.routeWebSocket("wss://relay.nostr.watch/", socket => { socket.onMessage(message => { const data = JSON.parse(String(message)); if (data[0] === "REQ") socket.send(JSON.stringify(["EOSE",data[1]])); }); });
+const userPubkey = getPublicKey(userKey); const signerPubkey = getPublicKey(signerKey);
+let userBlossom!: CvmBlossom; let rejectCopies = true; let mirrors = 0;
+const destination = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+  if (request.method === "PUT") { if (rejectCopies) return new Response("test outage", { status: 503, headers: { "access-control-allow-origin": "*" } }); if (new URL(request.url).pathname === "/mirror") mirrors++; }
+  return userBlossom.handle(request);
+} });
+const destinationUrl = `http://127.0.0.1:${destination.port}`; userBlossom = new CvmBlossom(join(root, "user-blossom"), userPubkey, () => destinationUrl);
+const errors: string[] = []; const traffic: string[] = []; let signerRequests = 0; let remoteSubscription: { close(): void } | undefined;
+page.on("pageerror", error => errors.push(error.message)); admin.on("pageerror", error => errors.push(error.message));
+page.on("request", request => traffic.push(request.url()));
+const unauthorized = new DevelopmentContextVmClient({ ...connection, reserveSat: "0", actionCeilingSat: "0", providerLabel: "test" }, undefined, Buffer.from(generateSecretKey()).toString("hex"));
+try {
+  assert(Object.keys(connection).sort().join(",") === "relayUrl,servicePubkey", "PUBLIC_CONFIG_LEAK");
+  for (const path of ["/bootstrap", "/dev/chatgpt/status", "/dev/faucet/cashu"]) assert((await fetch(`${server.url}${path}`)).status === 404, "HTTP_CONTROL_STILL_EXPOSED");
+  await unauthorized.connect({ accountStatus: false });
+  assert((await unauthorized.callTool("cvm_admin", { action: "status" })).status === "denied", "UNAUTHENTICATED_ADMIN");
+  const operator = JSON.parse(await readFile(join(root, "cvm-operator/operator.json"), "utf8"));
+  await openFixtureAdmin(admin, server.url, root, fixture); console.log("Admin OAuth ready");
+  await admin.getByText("Using ChatGPT plan · fixture-codex", { exact: true }).waitFor();
+  await admin.getByLabel("input_tokens denominator", { exact: true }).fill("2000"); assert(await admin.getByLabel("input_tokens denominator", { exact: true }).inputValue() === "2000", "RATE_EDIT_LOST"); await admin.getByRole("button", { name: "Save rates", exact: true }).click();
+  await admin.getByText("New rates saved. Existing jobs retain their price versions.", { exact: true }).waitFor();
+  console.log("Rates saved");
+  await page.goto(staticUrl); await page.getByText("Workspace connected", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  assert(await page.locator("#chatgpt-account").count() === 0 && !(await page.content()).includes("fixture@example"), "PUBLIC_PROVIDER_CONTROLS");
+  await page.getByRole("button", { name: "Close settings" }).click();
+  assert(await page.locator("#publish").isDisabled(), "PUBLISH_BEFORE_AUTH");
+  await page.locator("#idea").fill("A counter for daily practice"); await page.locator("#idea-next").click(); await page.locator("#generate").click();
+  await page.locator('#activity-events [data-stage="model_stream"]').waitFor({ state: "attached", timeout: 30000 });
+  const generationKey = await page.evaluate(() => Object.entries(sessionStorage).find(([key]) => key.includes("dev-contextvm-key"))?.[1]);
+  await page.locator("#nostr-sign-in").click();
+  assert(await page.locator("#nostr-extension").isDisabled(), "MISSING_EXTENSION_NOT_DISABLED");
+  assert(await page.locator("#nostr-qr svg").count() === 1, "DEFAULT_QR_MISSING");
+  await page.locator("#nostr-anonymous").click(); assert(await page.locator("#nostr-sign-in").textContent() !== "Sign in", "ANONYMOUS_SIGN_IN_FAILED");
+  await page.exposeFunction("testPubkey", () => userPubkey); await page.exposeFunction("testSign", (template: any) => finalizeEvent(template, userKey));
+  await page.evaluate(() => { (window as any).nostr = { getPublicKey: () => (window as any).testPubkey(), signEvent: (template: any) => (window as any).testSign(template) }; });
+  await page.locator("#nostr-sign-in").click(); await page.locator("#nostr-extension").click(); await page.locator("#nostr-sign-in").filter({ hasText: "NIP-07" }).waitFor();
+  await page.locator("#nostr-sign-in").click(); await page.locator("#nostr-remote").click(); await page.locator("#nostr-connect summary").click(); await page.locator("#nostr-relay").fill(config.relayUrl); await page.locator("#nostr-retry").click();
+  const uri = new URL((await page.locator("#nostr-open").getAttribute("href"))!); const clientPubkey = uri.hostname; const conversation = nip44.v2.utils.getConversationKey(signerKey, clientPubkey);
+  remoteSubscription = relay.subscribeMany([config.relayUrl], { kinds: [24133], "#p": [signerPubkey] }, { onevent(event) { void (async () => {
+    const request = JSON.parse(nip44.v2.decrypt(event.content, conversation)); let result: string;
+    if (request.method === "get_public_key") result = userPubkey;
+    else if (request.method === "switch_relays") result = JSON.stringify([config.relayUrl]);
+    else if (request.method === "nip44_decrypt") result = nip44.v2.decrypt(request.params[1], nip44.v2.utils.getConversationKey(userKey,request.params[0]));
+    else if (request.method === "nip44_encrypt") result = nip44.v2.encrypt(request.params[1], nip44.v2.utils.getConversationKey(userKey,request.params[0]));
+    else if (request.method === "sign_event") { signerRequests++; result = JSON.stringify(finalizeEvent(JSON.parse(request.params[0]), userKey)); }
+    else result = "ack";
+    await Promise.all(relay.publish([config.relayUrl], finalizeEvent({ kind: 24133, created_at: Math.floor(Date.now() / 1000), tags: [["p", clientPubkey]], content: nip44.v2.encrypt(JSON.stringify({ id: request.id, result }), conversation) }, signerKey)));
+  })().catch(error => errors.push(`Signer fixture: ${error.message}`)); } });
+  await Promise.all(relay.publish([config.relayUrl], finalizeEvent({ kind: 24133, created_at: Math.floor(Date.now() / 1000), tags: [["p", clientPubkey]], content: nip44.v2.encrypt(JSON.stringify({ id: "connect", result: uri.searchParams.get("secret") }), conversation) }, signerKey)));
+  await page.locator("#nostr-sign-in").filter({ hasText: "NIP-46" }).waitFor({ timeout: 15000 });
+  assert((await page.evaluate(() => Object.entries(sessionStorage).find(([key]) => key.includes("dev-contextvm-key"))?.[1])) === generationKey, "SIGN_IN_CHANGED_GENERATION_OWNER");
+  assert(await page.locator("#publish").isDisabled(), "PUBLISH_UNVERIFIED_ARTIFACT");
+  await admin.getByRole("button", { name: "Active", exact: true }).click(); await admin.locator("#jobs button").first().waitFor(); await admin.locator("#jobs button").first().click(); await admin.locator("#job-detail").waitFor();
+  assert((await admin.locator("#job-facts").textContent())?.includes("active"), "ACTIVE_JOB_DETAIL_MISSING"); await admin.locator("#job-close").click();
+  console.log("Signers checked; releasing generation");
+  release();
+  await page.waitForFunction(() => document.querySelector("#build-progress")?.getAttribute("aria-valuenow") === "5", undefined, { timeout: 180000 });
+  await page.waitForFunction(() => !(document.querySelector("#preview-copy-address") as HTMLButtonElement).disabled, undefined, { timeout: 30000 });
+  assert(await page.locator("#publish").isEnabled(), "AUTHENTICATED_PUBLISH_DISABLED");
+  await page.locator("#preview-copy-address").click(); const previewAddress = await page.evaluate(() => navigator.clipboard.readText()); assert(previewAddress.startsWith("naddr1"), "CVM_PREVIEW_NADDR_MISSING");
+  const events = await relay.querySync([config.relayUrl], { kinds: [35129], authors: [connection.servicePubkey] }, { maxWait: 3000 }); assert(events.length === 1, "CVM_PREVIEW_EVENT_MISSING");
+  const cvmBlob = events[0]!.tags.find(tag => tag[0] === "server")![1]!;
+  assert((await fetch(`${cvmBlob}/upload`, { method: "PUT", body: "untrusted" })).status === 403, "CVM_BLOSSOM_ACCEPTED_PUBLIC_UPLOAD");
+  console.log("CVM preview shared");
+  // Manual fallback first, then discover the standard kind-10063 list.
+  await page.locator("#publish").click(); await page.locator("#publication-discovery").filter({ hasText: "No server list found" }).waitFor({ timeout: 20000 });
+  assert(await page.locator(".header-actions #publish").count() === 0 && await page.locator("dialog #publication-title").count() === 0, "PUBLISH_NOT_CONTEXTUAL_STEP");
+  assert(await page.locator("#publish-step textarea").count() === 0, "DESTINATION_TEXTAREA_REMAINS");
+  await page.locator("#publication-servers").fill("javascript:alert(1)"); await page.locator("#publication-servers").press("Enter");
+  assert(await page.locator("#publication-servers").getAttribute("aria-invalid") === "true", "INVALID_BLOSSOM_ACCEPTED");
+  await page.locator("#publication-servers").fill(destinationUrl); await page.locator("#publication-servers").press("Enter");
+  await page.getByRole("button", { name: `Remove ${destinationUrl}`, exact: true }).click();
+  await page.locator("#publication-relays").fill(config.relayUrl); await page.locator("#publication-relays").press("Enter");
+  assert(await page.locator("#publication-relay-editor .destination-chip").count() === 1, "MANUAL_RELAY_NOT_ADDED");
+  await page.locator("#publication-close").click();
+  discoveredRelayList = finalizeEvent({ kind: 10002, created_at: Math.floor(Date.now()/1000), tags: [["r",config.relayUrl,"write"],["r","wss://read-only.invalid","read"]], content: "" },userKey);
+  await Promise.all(relay.publish([config.relayUrl], finalizeEvent({ kind: 10063, created_at: Math.floor(Date.now() / 1000), tags: [["server", destinationUrl]], content: "" }, userKey)));
+  await page.locator("#publish").click(); await page.getByRole("button", { name: `Remove ${destinationUrl}`, exact: true }).waitFor({ timeout: 20000 });
+  await page.getByRole("button", { name: `Remove ${config.relayUrl}`, exact: true }).waitFor();
+  assert(await page.locator("#publication-relay-editor .destination-chip").count() === 1, "READ_ONLY_RELAY_USED");
+  await page.locator("#publication-title").fill("My daily counter"); await page.locator("#publication-review").click(); await page.locator("#publication-confirm").click();
+  await page.locator("#publication-status").filter({ hasText: "Some files could not be copied" }).waitFor({ timeout: 60000 });
+  assert((await relay.querySync([config.relayUrl], { kinds: [35129], authors: [userPubkey] }, { maxWait: 3000 })).length === 0, "EVENT_PUBLISHED_WITH_MISSING_FILES");
+  rejectCopies = false; await page.locator("#publication-confirm").click(); await page.locator("#publication-result").waitFor({ timeout: 60000 });
+  await page.screenshot({ path:"/tmp/cvm-publication-desktop.png", fullPage:true });
+  await page.setViewportSize({width:390,height:844});
+  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),"PUBLISH_MOBILE_OVERFLOW");
+  await page.screenshot({ path:"/tmp/cvm-publication-mobile.png", fullPage:true });
+  await page.setViewportSize({width:1280,height:900});
+  assert(mirrors > 0 && signerRequests >= 2, "SIGNATURE_OR_MIRROR_MISSING");
+  await page.locator("#publication-copy").click(); const address = await page.evaluate(() => navigator.clipboard.readText()); assert(address.startsWith("naddr1") && address !== previewAddress, "USER_NADDR_MISSING");
+  const published = await relay.querySync([config.relayUrl], { kinds: [35129], authors: [userPubkey] }, { maxWait: 3000 }); assert(published.length === 1, "USER_EVENT_COUNT_INVALID");
+  for (const tag of published[0]!.tags.filter(tag => tag[0] === "path")) { const response = await fetch(`${destinationUrl}/${tag[2]}`); assert(new Bun.CryptoHasher("sha256").update(await response.arrayBuffer()).digest("hex") === tag[2], "DESTINATION_BYTES_MISMATCH"); }
+  const intent = (await pool.query("SELECT id FROM development_publications WHERE publisher=$1", [userPubkey])).rows[0].id;
+  assert((await unauthorized.callTool("development_publication", { action: "status", id: intent })).status === "denied", "CROSS_OWNER_PUBLICATION_READ");
+  const owner = new DevelopmentContextVmClient({ ...connection, reserveSat: "0", actionCeilingSat: "0", providerLabel: "test" }, undefined, generationKey);
+  await owner.connect({ accountStatus: false });
+  try {
+    const mine = await owner.callTool("projects", { action: "list" });
+    assert(mine.projects.length === 1 && mine.projects[0].verifiedVersion === 1, "PROJECT_REGISTRY_MISSING");
+    const projectId = mine.projects[0].id;
+    for (const args of [{ action: "get", id: projectId }, { action: "rename", id: projectId, title: "stolen" }, { action: "list", after: projectId }]) assert((await unauthorized.callTool("projects",args)).status === "not_found_or_denied", "CROSS_IDENTITY_PROJECT_ACCESS");
+    let spoofRejected = false; try { await unauthorized.callTool("projects", { action: "list", pubkey: await owner.pubkey }); } catch { spoofRejected = true; }
+    assert(spoofRejected, "CALLER_SUPPLIED_PROJECT_IDENTITY_ACCEPTED");
+    assert((await owner.callTool("projects", { action: "rename", id: projectId, title: "Daily counter" })).project.title === "Daily counter", "OWNER_RENAME_FAILED");
+    const saved = await owner.callTool("development_publication", { action: "status", id: intent });
+    const changed = finalizeEvent({ ...saved.template, tags: [...saved.template.tags, ["title", "tampered"]] }, userKey);
+    assert((await owner.callTool("development_publication", { action: "submit", id: intent, event: changed })).status === "rejected", "SIGNED_TEMPLATE_TAMPER_ACCEPTED");
+    assert((await owner.callTool("development_publication", { action: "submit", id: intent, event: published[0] })).status === "published", "EXACT_PUBLICATION_REPLAY_FAILED");
+  } finally { await owner.close(); }
+  const pending = await unauthorized.savePreAdmission({ maximum: "4000", idea: "A saved idea", idempotencyKey: crypto.randomUUID() });
+  assert(pending.status === "saved", "PENDING_FIXTURE_MISSING");
+  const ownPending = await unauthorized.callTool("projects", { action: "list" }); assert(ownPending.projects.length === 1 && ownPending.projects[0].checkpointId === pending.checkpointId && ownPending.projects[0].stage === "pending", "PENDING_PROJECT_NOT_OWNER_SCOPED");
+  await admin.locator('[data-state="pending"]').click(); await admin.getByRole("button", { name: pending.checkpointId, exact: true }).click(); await admin.locator("#job-detail").waitFor();
+  assert((await admin.locator("#job-facts").textContent())?.includes("saved"), "PENDING_JOB_DETAIL_MISSING"); await admin.locator("#job-close").click();
+  await admin.locator('[data-state="finished"]').click(); await admin.locator("#jobs button").first().waitFor(); await admin.locator("#jobs button").first().click(); await admin.locator("#job-detail").waitFor();
+  assert((await admin.locator("#job-facts").textContent())?.includes("verified"), "FINISHED_JOB_DETAIL_MISSING");
+  const currentPricing: any = (await pool.query("SELECT normalized_card FROM price_card_versions WHERE id=(SELECT price_card_id FROM metered_actions LIMIT 1)")).rows[0].normalized_card;
+  assert(currentPricing.rates.input_tokens.denominator === "2000", `ADMIN_RATES_NOT_USED:${JSON.stringify(currentPricing)}`);
+  assert(!traffic.some(url => new URL(url).origin === server.url), "PUBLIC_SITE_CALLED_CVM_HTTP");
+  assert(!(await page.content()).includes(operator.adminKey), "OPERATOR_KEY_IN_PRODUCT");
+  assert(errors.length === 0, `BROWSER_ERRORS:${errors.join(";")}`);
+  const old = server.url; await server.close(); server = await createDevelopmentContextVmServer({ config, stateRoot: root, port: Number(new URL(old).port), chatGptFetch: modelFetch });
+  await page.locator("#publication-close").click(); await page.reload(); await page.getByText("Workspace connected", { exact: true }).waitFor();
+  await page.waitForFunction(() => !(document.querySelector("#preview-copy-address") as HTMLButtonElement).disabled, undefined, { timeout: 30000 });
+  assert(fixture.counts().inferences === 1, "RESTART_REGENERATED");
+  assert((await fetch(`${cvmBlob}/`)).ok, "BLOSSOM_ORIGIN_CHANGED_ON_RESTART");
+  console.log(JSON.stringify({ status: "passed", case: "static-cvm-publication", checks: ["separate static origin and subdirectory", "private operator OAuth", "rate version used", "job views", "all sign-in choices during generation", "real NIP46", "CVM naddr", "CVM-only Blossom writes", "manual and discovered servers", "failed copy blocks publication", "verified mirrors and user naddr", "owner denial", "signed template tamper rejected", "exact event replay", "pending job details", "restart persistence"] }));
+} catch (error) { console.error("TEST_STAGE", error, await admin.locator("body").innerText({ timeout: 2000 }).catch(() => "admin page unavailable"), await page.locator("body").innerText({ timeout: 2000 }).catch(() => "workspace unavailable"), errors); throw error; } finally {
+  release(); remoteSubscription?.close(); relay.close([config.relayUrl]); relay.destroy(); await unauthorized.close();
+  await browser.close(); site.stop(true); destination.stop(true); await pool.end();
+  try { await server.close(); } finally { await stack.down(true); await rm(root, { recursive: true, force: true }); }
+}

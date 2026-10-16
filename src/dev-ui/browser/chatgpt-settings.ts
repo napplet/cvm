@@ -2,53 +2,12 @@ import type { DevelopmentBootstrap } from "./contextvm-client";
 
 type Account = { id: string; label: string; signedIn: boolean; planEnabled: boolean; welcomed: boolean };
 type Status = { settings: { mode: "default" | "chatgpt"; accountId?: string; model?: string }; accounts: Account[]; notice?: string; diagnostic?: string };
-const explanations: Record<string, string> = {
-  CHATGPT_SIGN_IN_DECLINED: "Sign-in was cancelled. You can continue with the local fixture or sign in again.",
-  CHATGPT_SIGN_IN_STATE_INVALID: "This sign-in expired or belongs to a different browser. Start sign-in again.",
-  CHATGPT_PLAN_PERMISSION_REQUIRED: "Enable ChatGPT plan usage by signing in again and granting that permission.",
-  CHATGPT_SIGN_IN_REQUIRED: "Sign in to ChatGPT before generating.",
-  CHATGPT_REAUTHORIZE_REQUIRED: "Your ChatGPT session needs a new sign-in.",
-  CHATGPT_REMOTE_REVOCATION_UNCONFIRMED: "Signed out locally. Remote disconnection could not be confirmed; disconnect this app in ChatGPT settings.",
-  CHATGPT_USAGE_LIMIT_REACHED: "ChatGPT subscription request blocked by a usage limit. In ChatGPT Settings → Usage → App limits, check napplet-cvm development. OpenAI has not identified which limit was reached.",
-  CHATGPT_USAGE_UNAVAILABLE: "ChatGPT usage availability could not be checked. Try a new action later.",
-  CHATGPT_PLAN_ACCESS_DENIED: "Your account or workspace did not allow this request. Check ChatGPT plan access.",
-  CHATGPT_STREAM_INTERRUPTED: "The model connection ended before completion. This action will not be sent again automatically.",
-  CHATGPT_STREAM_FAILED: "The model did not complete. This action will not be sent again automatically.",
-  CHATGPT_STREAM_REQUIRED: "ChatGPT returned an unexpected response format. Local generation stopped; the original action will not be retried automatically.",
-  CHATGPT_SELECT_AVAILABLE_MODEL: "Signed in, but no available model could be activated. Reload models and choose one to use ChatGPT.",
-  CHATGPT_INFERENCE_UNAVAILABLE: "ChatGPT inference is unavailable. The original action will not be retried automatically.",
-  CHATGPT_SOURCE_INVALID: "ChatGPT returned an invalid source proposal. Its reported usage was recorded; try a new focused request.",
-  CHATGPT_GENERATION_BUSY: "Wait for the current generation to finish before changing model settings.",
-  CHATGPT_MODELS_UNAVAILABLE: "The account's model list is unavailable. Try loading models again.",
-  CHATGPT_MODEL_CATALOG_TOO_LARGE: "The model catalog exceeds this app's size limit. Your sign-in is still valid; update the local service before reloading models.",
-  CHATGPT_REQUEST_FAILED: "The ChatGPT request could not be confirmed. This error does not establish a sign-in problem. A submitted generation will not be retried automatically.",
-  CHATGPT_GENERATION_TIMEOUT: "The local service reached its model time limit before receiving a complete result. Signing in again will not recover this request. Your last verified version is safe; this session needs usage reconciliation before another revision.",
-  CHATGPT_GENERATION_ABORTED: "The model request was interrupted locally before its outcome was confirmed. It will not be retried automatically. Your last verified version is safe.",
-  CHATGPT_CONNECTION_FAILED: "The model connection failed before a complete result was confirmed. Signing in again will not recover this request. It will not be retried automatically.",
-  CHATGPT_RESPONSE_INVALID: "The model response could not be validated. Its outcome is unconfirmed; the original request will not be retried automatically.",
-  CHATGPT_RESULT_RECORDING_FAILED: "The model returned a result, but the local service could not save it. Its outcome needs reconciliation; the original request will not be retried automatically.",
-};
-export const chatGptErrorMessage = (code: string): string => explanations[code] ?? `The ChatGPT request could not complete (${/^CHATGPT_[A-Z0-9_]{1,100}$/u.test(code) ? code : "CHATGPT_REQUEST_FAILED"}). Check execution details; signing in again is only needed when an authentication error is reported.`;
+import { explanations, chatGptErrorMessage } from "./chatgpt-errors";
+export { chatGptErrorMessage } from "./chatgpt-errors";
 let refreshDiagnostic: (() => Promise<string | undefined>) | undefined;
 export async function showChatGptDiagnostic(): Promise<string | undefined> { return refreshDiagnostic?.(); }
 
-async function controlRequest(bootstrap: DevelopmentBootstrap, path: string, body?: unknown): Promise<any> {
-  const response = await fetch(`/dev/chatgpt/${path}`, { method: body === undefined ? "GET" : "POST", cache: "no-store", headers: { "x-dev-model-token": bootstrap.modelControlToken!, ...(body === undefined ? {} : { "content-type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-  const result = await response.json(); if (!response.ok) throw new Error(result.code ?? "CHATGPT_REQUEST_FAILED"); return result;
-}
-
-/** Check local sign-in before reserving capacity or funds for a new action. */
-export async function ensureChatGptReady(bootstrap: DevelopmentBootstrap): Promise<void> {
-  if (!bootstrap.modelControlToken) return;
-  const status: Status = await controlRequest(bootstrap, "status");
-  if (status.settings.mode !== "chatgpt") return;
-  const account = status.accounts.find((item) => item.id === status.settings.accountId);
-  if (!account?.signedIn) throw new Error("CHATGPT_SIGN_IN_REQUIRED");
-  if (!account.planEnabled) throw new Error("CHATGPT_PLAN_PERMISSION_REQUIRED");
-}
-
-export async function mountChatGptSettings(bootstrap: DevelopmentBootstrap, onStatus?: (summary: string) => void): Promise<void> {
-  if (!bootstrap.modelControlToken) return;
+export async function mountChatGptSettings(bootstrap: DevelopmentBootstrap, control: (operation: string, body?: unknown) => Promise<any>, onStatus?: (summary: string) => void): Promise<void> {
   const panel = document.createElement("section"); panel.setAttribute("aria-labelledby", "chatgpt-heading");
   panel.innerHTML = `<h2 id="chatgpt-heading">Generation model</h2>
     <p id="chatgpt-active" class="supporting"></p>
@@ -69,7 +28,6 @@ export async function mountChatGptSettings(bootstrap: DevelopmentBootstrap, onSt
   let status: Status;
   const message = (text: string) => { element("chatgpt-status").textContent = text; };
   const errorMessage = chatGptErrorMessage;
-  const control = (path: string, body?: unknown) => controlRequest(bootstrap, path, body);
   const report = (error: unknown) => message(errorMessage(error instanceof Error ? error.message : "CHATGPT_REQUEST_FAILED"));
   const refresh = async () => {
     status = await control("status");
@@ -92,7 +50,7 @@ export async function mountChatGptSettings(bootstrap: DevelopmentBootstrap, onSt
     message("Activating ChatGPT model…");
     try {
       await control("select", { mode: "chatgpt", accountId: accountSelect.value, model: modelSelect.value });
-      location.replace(location.pathname === "/dev" ? "/dev" : "/");
+      location.reload();
     } catch (error) {
       await refresh();
       if (status.settings.accountId === accountSelect.value || status.settings.mode === "default") {
@@ -127,9 +85,9 @@ export async function mountChatGptSettings(bootstrap: DevelopmentBootstrap, onSt
   modelSelect.onchange = () => { void activate().catch(report); };
   element<HTMLButtonElement>("chatgpt-models").onclick = () => { void loadModels().catch(report); };
   element<HTMLButtonElement>("chatgpt-sign-in").onclick = async () => {
-    try { sessionStorage.setItem("napplet-cvm/auth-surface", location.pathname === "/dev" ? "/dev" : "/"); const result = await control("sign-in", accountSelect.value ? { accountId: accountSelect.value } : {}); const url = new URL(result.url); if (url.origin !== "https://auth.openai.com") throw new Error("CHATGPT_SIGN_IN_URL_INVALID"); location.assign(url.href); } catch (error) { report(error); }
+    try { const result = await control("sign-in", accountSelect.value ? { accountId: accountSelect.value } : {}); const url = new URL(result.url); if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || url.pathname !== "/admin/oauth/start") throw new Error("CHATGPT_SIGN_IN_URL_INVALID"); location.assign(url.href); } catch (error) { report(error); }
   };
-  element<HTMLButtonElement>("chatgpt-default").onclick = async () => { try { await control("select", { mode: "default" }); location.replace(location.pathname === "/dev" ? "/dev" : "/"); } catch (error) { report(error); } };
+  element<HTMLButtonElement>("chatgpt-default").onclick = async () => { try { await control("select", { mode: "default" }); location.reload(); } catch (error) { report(error); } };
   element<HTMLButtonElement>("chatgpt-sign-out").onclick = async () => { try { const result = await control("logout", { accountId: accountSelect.value }); await refresh(); await loadModels(); message(result.revoked ? "Signed out of ChatGPT. Use the default provider or sign in again." : explanations.CHATGPT_REMOTE_REVOCATION_UNCONFIRMED!); } catch (error) { report(error); } };
   const welcome = element<HTMLDialogElement>("chatgpt-welcome");
   element<HTMLButtonElement>("chatgpt-got-it").onclick = async () => { try { await control("welcome", { accountId: accountSelect.value }); welcome.close(); } catch (error) { report(error); } };

@@ -9,7 +9,7 @@ export const progressStages = {
   worker: "Isolated Docker worker", create: "Scaffold napplet", init: "Initialize manifest", skills: "Install authoring guidance",
   install: "Install pinned dependencies offline", build: "Build napplet", verify: "Check guidance and TypeScript",
   conformance: "Chromium conformance", "dry-run": "Deployment dry run", artifact: "Verify and seal artifact",
-  ledger: "Settle metered ledger", preview: "Prepare sandboxed preview",
+  cvm_share: "Share CVM preview", ledger: "Settle metered ledger", preview: "Prepare sandboxed preview",
 } as const;
 export type ProgressStage = keyof typeof progressStages;
 export type ProgressState = "running" | "completed" | "failed" | "uncertain";

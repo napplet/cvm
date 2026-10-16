@@ -12,6 +12,6 @@ return `
     <section id="execution-activity" aria-labelledby="activity-heading"></section>
     <section aria-labelledby="timeline-heading"><h2 id="timeline-heading">Session timeline</h2><ol id="timeline"></ol></section>
     <section aria-labelledby="versions-heading"><h2 id="versions-heading">Versions and preview</h2><ul id="versions"></ul><iframe id="preview" title="Verified napplet preview" hidden></iframe></section>
-    <section aria-labelledby="publication-heading"><h2 id="publication-heading">Publication</h2><p id="publication-status">Publication unavailable in this development setup.</p></section>
+    <section aria-labelledby="publication-heading"><h2 id="publication-heading">Publication</h2><p id="publication-status">Open the applet.broker workspace to sign in, copy preview naddrs, and publish to your Blossom servers.</p></section>
   </div>`;
 }

@@ -19,7 +19,7 @@ Production certification is [deferred until production work resumes](docs/runboo
 
 ## Quick start
 
-Use **Git, Bun 1.3.14, and a running Docker engine with Compose 2.39 or newer**. The development worker runs Linux ARM64; the local relay runs AMD64, so Docker must support both platforms (as Docker Desktop does on Apple Silicon).
+Use **Git, Bun 1.3.14, Node.js 22 or newer, and a running Docker engine with Compose 2.39 or newer**. The development worker runs Linux ARM64; the local relay runs AMD64, so Docker must support both platforms (as Docker Desktop does on Apple Silicon).
 
 ```sh
 git clone https://github.com/napplet/cvm.git napplet-cvm
@@ -28,7 +28,7 @@ bun install --frozen-lockfile
 bun scripts/dev.ts up
 ```
 
-Open the printed URL for the **applet.broker** workspace: describe an idea, review the model and test budget, then create. Connection and local test funding are automatic. Follow real progress at the top and send revisions in the chat beside the preview. The original development console is available at `/dev`. The default model is a labeled deterministic fixture. For real generation using your ChatGPT subscription, open **Settings → Continue with ChatGPT**; sign-in activates a model automatically. Model changes apply immediately, and your sign-in and selection persist across restarts. [Sign-in and test instructions](docs/runbooks/development-gui.md#chatgpt-subscription-sign-in-for-local-development). See the [workspace walkthrough](docs/runbooks/development-gui.md#try-the-execution-flow).
+Open the printed URL for the **applet.broker** workspace: describe an idea, review the model and test budget, then create. Connection and local test funding are automatic. Follow real progress at the top and send revisions in the chat beside the preview. The original development console is available at `/dev`. The default model is a labeled deterministic fixture. For real generation using your ChatGPT subscription, run `bun scripts/open-dev-admin.ts` and choose **Continue with ChatGPT** in the private admin; sign-in activates a model automatically. Model changes apply immediately, and your sign-in and selection persist across restarts. [Sign-in and test instructions](docs/runbooks/development-gui.md#chatgpt-subscription-sign-in-for-local-development). See the [workspace walkthrough](docs/runbooks/development-gui.md#try-the-execution-flow).
 
 | Command | Purpose |
 | --- | --- |
@@ -39,11 +39,21 @@ Open the printed URL for the **applet.broker** workspace: describe an idea, revi
 
 Design evidence and fixture passes establish local behavior. Release promotion additionally requires real browser, provider, payment, model, recovery, and publication observations.
 
+Verified builds receive a **CVM preview naddr** for testing in other shells. **Sign in** is available at every step (Anonymous, NIP-07 or NIP-46 QR). **Your applets** retrieves only projects owned by the verified CVM request signer, including work in progress and saved versions. **Publish** is the final step beside the selected applet, enabled after sign-in and verification: sign the applet, copy its files to your discovered or manually entered Blossom servers, then publish its event to your NIP-65 write relays discovered through purplepag.es. Both destination lists use validated address chips with manual entry; relay suggestions use NIP-66. Progress and retryable failures are shown for each step.
+
+```sh
+bun scripts/open-dev-admin.ts       # Provider accounts, rates, jobs and details
+bun scripts/build-workspace.ts      # Export a static website to dist/workspace
+bun scripts/dev.ts test --case=publication
+```
+
+The built site can be served independently; copy `cvm.json` with it. Local naddrs require access to the development relay and Blossom server. [Static hosting and publishing](docs/runbooks/development-gui.md#static-hosting-and-publishing) explains network configuration.
+
 The first user-facing deployment will be branded **applet.broker**. The reusable service is intended for an eventual open-source **@napplet/cvm** release; this repository has not published that package or deployed the public site.
 
 ## Local development workspace
 
-The development workspace starts the real local service graph: ContextVM over a relay, Cashu and NWC payment rails, PostgreSQL, the metered model boundary, the pinned isolated worker, artifact verification, and the compatible preview host. Product commands stay on ContextVM; the workspace HTTP server serves only static assets, non-secret bootstrap facts, health, preview bytes, the development faucet, and protected local model/sign-in controls.
+The development workspace starts the real local service graph: ContextVM over a relay, Cashu and NWC payment rails, PostgreSQL, the metered model boundary, the pinned isolated worker, artifact verification, and the compatible preview host. Product and operator commands use signed/encrypted ContextVM. The public website is static; `cvm.json` contains only the relay URL and CVM public key. Provider accounts/keys stay in CVM admin. HTTP serves static assets, preview/Blossom bytes and the private OAuth redirect/callback.
 
 Prerequisites are Docker with Compose 2.39 or newer, Bun 1.3.14, and repository dependencies. The browser test package has its own frozen lockfile; the launcher checks it and Chromium before reporting ready.
 

@@ -1,0 +1,14 @@
+#app { max-width: 1200px; margin: 2rem auto; padding: 1rem; }
+.admin-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; align-items: start; }
+.admin-grid section, .admin-jobs { padding: 1.5rem; border: 1px solid #d8dccf; border-radius: 1rem; margin: 1rem 0; }
+label, input, select, textarea { display: block; width: 100%; }
+input, select, textarea { margin: .5rem 0 1rem; }
+.row, .job-tabs { display: flex; gap: .5rem; flex-wrap: wrap; margin: .8rem 0; }
+.rate-row { display: grid; grid-template-columns: 1fr 5rem 5rem; gap: .7rem; align-items: center; }
+table { width: 100%; border-collapse: collapse; }
+td, th { padding: .6rem; text-align: left; border-bottom: 1px solid #d8dccf; overflow-wrap: anywhere; }
+dl { display: grid; grid-template-columns: minmax(6rem, 1fr) 3fr; gap: .5rem; }
+dd { margin: 0; overflow-wrap: anywhere; }
+#job-detail { max-width: 850px; width: calc(100% - 2rem); }
+#admin-status { min-height: 1.5em; }
+@media(max-width: 780px) { .admin-grid { grid-template-columns: 1fr; } }

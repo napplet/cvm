@@ -66,13 +66,14 @@ test("missing plan permission never permits inference; sign-out revokes and clea
   expect(JSON.parse(saved).accounts[0].clientId).toBe("oaiapp_fixture");
 });
 
-test("local operator routes deny cross-origin, missing token, non-JSON and spoofed host requests", async () => {
+test("HTTP has no provider control routes; OAuth requires a private one-use operator ticket", async () => {
   const { auth } = await setup(); const origin = "http://127.0.0.1:12345";
   const routes = new DevelopmentChatGptRoutes({ auth, select: async () => {}, busy: () => false, diagnostic: () => undefined });
-  for (const headers of [{}, { "x-dev-model-token": routes.controlToken, origin: "https://evil.test" }, { "x-dev-model-token": routes.controlToken, "sec-fetch-site": "cross-site" }]) expect((await routes.handle(new Request(`${origin}/dev/chatgpt/status`, { headers }), origin))?.status).toBe(403);
-  expect((await routes.handle(new Request(`${origin}/dev/chatgpt/status`, { headers: { "x-dev-model-token": routes.controlToken } }), origin))?.status).toBe(200);
-  expect((await routes.handle(new Request(`${origin}/dev/chatgpt/sign-in`, { method: "POST", headers: { "x-dev-model-token": routes.controlToken, origin }, body: "{}" }), origin))?.status).toBe(405);
-  expect((await routes.handle(new Request("http://attacker.test/dev/chatgpt/status", { headers: { "x-dev-model-token": routes.controlToken } }), origin))?.status).toBe(403);
+  expect(await routes.handle(new Request(`${origin}/dev/chatgpt/status`), origin)).toBeUndefined();
+  expect((await routes.handle(new Request(`${origin}/admin/oauth/start?ticket=wrong`), origin))?.status).toBe(403);
+  const { url } = await routes.command("sign-in", {}, origin) as { url: string };
+  expect((await routes.handle(new Request(url), origin))?.status).toBe(303);
+  expect((await routes.handle(new Request(url), origin))?.status).toBe(403);
 });
 
 test("a valid-looking ID token signed by a different key is rejected", async () => {
@@ -118,9 +119,8 @@ test("large model catalogs load while only compact visible model data reaches th
   const id = await login();
   const origin = "http://127.0.0.1:12345";
   const routes = new DevelopmentChatGptRoutes({ auth, select: (settings) => auth.select(settings), busy: () => false, diagnostic: () => undefined });
-  const response = await routes.handle(new Request(`${origin}/dev/chatgpt/models`, { method: "POST", headers: { origin, "content-type": "application/json", "x-dev-model-token": routes.controlToken }, body: JSON.stringify({ accountId: id }) }), origin);
-  expect(response?.status).toBe(200);
-  expect(await response?.json()).toEqual({ models: [{ slug: "fixture-codex", displayName: "Fixture Codex" }] });
+  const response = await routes.command("models", { accountId: id }, origin);
+  expect(response).toEqual({ models: [{ slug: "fixture-codex", displayName: "Fixture Codex" }] });
   await auth.select({ mode: "chatgpt", accountId: id, model: "fixture-codex" });
   expect(auth.settings().model).toBe("fixture-codex");
 });
@@ -149,9 +149,9 @@ test("model catalog allowance does not relax the token response limit", async ()
 async function routeLogin(auth: ChatGptOAuth, fixture: ReturnType<typeof chatGptFixture>) {
   const origin = "http://127.0.0.1:12345";
   const routes = new DevelopmentChatGptRoutes({ auth, select: (settings) => auth.select(settings), busy: () => false, diagnostic: () => undefined });
-  const start = await routes.handle(new Request(`${origin}/dev/chatgpt/sign-in`, { method: "POST", headers: { origin, "content-type": "application/json", "x-dev-model-token": routes.controlToken }, body: JSON.stringify(auth.settings().accountId ? { accountId: auth.settings().accountId } : {}) }), origin);
-  const { url } = await start!.json();
-  return routes.handle(new Request(fixture.authorize(url), { headers: { cookie: start!.headers.get("set-cookie")!.split(";")[0]! } }), origin);
+  const { url } = await routes.command("sign-in", auth.settings().accountId ? { accountId: auth.settings().accountId } : {}, origin) as { url: string };
+  const start = await routes.handle(new Request(url), origin);
+  return routes.handle(new Request(fixture.authorize(start!.headers.get("location")!), { headers: { cookie: start!.headers.get("set-cookie")!.split(";")[0]! } }), origin);
 }
 
 test("sign-in automatically activates an available model and preserves it across reauthorization", async () => {
@@ -174,7 +174,7 @@ for (const empty of [false, true]) test(`model activation failure retains succes
   const response = await routeLogin(auth, fixture);
   expect(response?.status).toBe(303);
   expect(response?.headers.get("location")).toContain("chatgpt_error=CHATGPT_");
-  expect(response?.headers.get("location")).toContain("chatgpt_account=");
+  expect(response?.headers.get("location")).not.toContain("chatgpt_account=");
   expect(auth.status().accounts[0]?.signedIn).toBe(true);
   expect(auth.settings().mode).toBe("default");
   expect(fixture.counts().inferences).toBe(0);

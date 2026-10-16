@@ -4,7 +4,7 @@ import { createDevelopmentPool, type DevPayments } from "../../scripts/dev-payme
 import { LocalDevelopmentRuntimeReadiness } from "./development-runtime-readiness";
 
 const root = resolve(import.meta.dir, "../..");
-const migrationNames = ["development/001_generation.sql", "development/002_provider_observations.sql", "development/003_artifact_preview.sql", "development/004_source_proposal_bindings.sql", "development/005_pending_actions.sql", "development/006_worker_results.sql", "development/007_chatgpt_operations.sql", "development/008_chatgpt_diagnostics.sql"] as const;
+const migrationNames = ["development/001_generation.sql", "development/002_provider_observations.sql", "development/003_artifact_preview.sql", "development/004_source_proposal_bindings.sql", "development/005_pending_actions.sql", "development/006_worker_results.sql", "development/007_chatgpt_operations.sql", "development/008_chatgpt_diagnostics.sql", "development/009_operator_publication.sql", "development/010_projects.sql", "development/011_publication_relays.sql"] as const;
 const manifestPins = { "package.json": "cbcc433278d32391b075576ebd847ae30039f1d86ad229a149f5566856989f23", "bun.lock": "8916ee4ec92924ae9e09bc4f315fd6656033812696e35a1b7785161d872c5ac3" } as const;
 
 export type DevelopmentMode = "deterministic-fixture" | "configured-openai" | "chatgpt-oauth";
@@ -45,6 +45,7 @@ async function hubReady(url: string): Promise<void> {
 
 /** Read-only development launcher gate. No credential material is returned. */
 export async function assertLauncherReadiness(input: Readonly<{ config: DevPayments; configPath: string; url?: string; stateRoot: string }>): Promise<LauncherReadiness> {
+  if (!Bun.which("node")) throw new Error("DEV_PUBLICATION_NODE_REQUIRED");
   for (const [path, expected] of Object.entries(manifestPins)) if (await sha256(resolve(root, path)) !== expected) throw new Error(`DEV_ROOT_MANIFEST_DRIFT:${path}`);
   const configStat = await stat(input.configPath);
   if (!configStat.isFile() || (configStat.mode & 0o077) !== 0) throw new Error("DEV_PRIVATE_CONFIG_INVALID");

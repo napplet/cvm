@@ -3,3 +3,4 @@
 .local/
 .runtime/
 node_modules/
+dist/workspace/

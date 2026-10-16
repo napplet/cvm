@@ -1,14 +1,16 @@
 import { NostrClientTransport } from "@contextvm/sdk/transport";
 import { PrivateKeySigner } from "@contextvm/sdk/signer";
+import type { NostrSigner } from "@contextvm/sdk/core";
+export type ContextVmSigner = NostrSigner & { release?(): void };
 import { acceptDevelopmentProgress, progressMethod, progressTools, type DevelopmentProgress } from "../progress-contract";
 
 export type ClientActivity = { kind: "sent"; requestId: string | number; tool: string } | { kind: "progress"; progress: DevelopmentProgress } | { kind: "response"; requestId: string | number; tool: string };
 
 type JsonRpcResponse = { id: string | number | null; result?: unknown; error?: { message?: string } };
 type PaymentTag = readonly [string, string, string?];
-export type DevelopmentBootstrap = Readonly<{ relayUrl: string; servicePubkey: string; reserveSat: string; actionCeilingSat: string; modelControlToken?: string; providerLabel: "Deterministic fixture" | "Configured OpenAI Responses" | "ChatGPT subscription · local test sats" }>;
+export type DevelopmentBootstrap = Readonly<{ relayUrl: string; servicePubkey: string; reserveSat: string; actionCeilingSat: string; providerLabel: string }>;
 
-function browserSignerKey(servicePubkey: string): string {
+export function browserSignerKey(servicePubkey: string): string {
   const storageKey = `napplet-cvm/dev-contextvm-key/v1/${servicePubkey}`;
   const stored = sessionStorage.getItem(storageKey);
   if (stored && /^[a-f0-9]{64}$/u.test(stored)) return stored;
@@ -38,13 +40,13 @@ class PaymentTaggedClient extends NostrClientTransport {
 
 export class DevelopmentContextVmClient {
   #client?: PaymentTaggedClient;
-  #signer?: PrivateKeySigner;
+  #signer?: ContextVmSigner;
   #nextId = 0;
   #prefix = crypto.randomUUID();
   #pending = new Map<string | number, { tool: string; sequence: number; resolve(value: unknown): void; reject(reason: Error): void }>();
   #lastCashu?: Readonly<{ arguments: Record<string, string>; token: string }>;
 
-  constructor(readonly bootstrap: DevelopmentBootstrap, private readonly onActivity?: (event: ClientActivity) => void) {}
+  constructor(readonly bootstrap: DevelopmentBootstrap, private readonly onActivity?: (event: ClientActivity) => void, private readonly signingKey?: string | ContextVmSigner) {}
   private activity(event: ClientActivity): void { try { this.onActivity?.(event); } catch { /* UI observation cannot alter a request. */ } }
 
   get pubkey(): Promise<string> {
@@ -52,11 +54,11 @@ export class DevelopmentContextVmClient {
     return this.#signer.getPublicKey();
   }
 
-  async connect(): Promise<Readonly<{ pubkey: string; account: any }>> {
-    if (this.#client) return { pubkey: await this.pubkey, account: await this.callTool("account_status", {}) };
+  async connect(options: { accountStatus?: boolean } = {}): Promise<Readonly<{ pubkey: string; account: any }>> {
+    if (this.#client) return { pubkey: await this.pubkey, account: options.accountStatus === false ? undefined : await this.callTool("account_status", {}) };
     // This key remains in the trusted development host's session storage. It
     // never enters bootstrap, ContextVM arguments, logs, or generated preview.
-    this.#signer = new PrivateKeySigner(browserSignerKey(this.bootstrap.servicePubkey));
+    this.#signer = typeof this.signingKey === "object" ? this.signingKey : new PrivateKeySigner(this.signingKey ?? browserSignerKey(this.bootstrap.servicePubkey));
     const client = new PaymentTaggedClient({ signer: this.#signer, relayHandler: [this.bootstrap.relayUrl], serverPubkey: this.bootstrap.servicePubkey, encryptionMode: "required", logLevel: "silent" });
     client.setClientPmis(["bitcoin-lightning-bolt11", "bitcoin-cashu-v4-direct"]);
     client.onmessage = (message: any) => {
@@ -81,15 +83,14 @@ export class DevelopmentContextVmClient {
     await this.call("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "napplet-cvm-dev-ui", version: "0.1.0" } });
     await this.call("tools/list", {});
     await client.send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} } as never);
-    return { pubkey: await this.pubkey, account: await this.callTool("account_status", {}) };
+    return { pubkey: await this.pubkey, account: options.accountStatus === false ? undefined : await this.callTool("account_status", {}) };
   }
 
   async accountStatus(): Promise<any> { return this.callTool("account_status", {}); }
 
   async fundCashu(amount: string): Promise<any> {
-    const faucet = await fetch(`/dev/faucet/cashu?amount=${encodeURIComponent(amount)}`, { method: "POST" });
-    if (!faucet.ok) throw new Error("LOCAL_CASHU_FAUCET_UNAVAILABLE");
-    const { token } = await faucet.json() as { token: string };
+    const { token } = await this.callTool("development_faucet", { amount });
+    if (typeof token !== "string") throw new Error("LOCAL_CASHU_FAUCET_UNAVAILABLE");
     const args = { idempotencyKey: `browser:cashu:${crypto.randomUUID()}`, topUpId: `browser:cashu:${crypto.randomUUID()}`, pmi: "bitcoin-cashu-v4-direct", mode: "transparent", amount };
     this.#lastCashu = Object.freeze({ arguments: Object.freeze(args), token });
     return this.callTool("top_up", args, [["pmi", args.pmi], ["payment_interaction", args.mode], ["direct_payment", args.pmi, token]]);
@@ -139,11 +140,11 @@ export class DevelopmentContextVmClient {
     return this.callTool("preview", { action: "descriptor", sessionId: input.sessionId, artifactId: input.artifactId, runtimeVariant: "development-paja-0.19.0" });
   }
 
-  async close(): Promise<void> { for (const pending of this.#pending.values()) pending.reject(new Error("CONTEXTVM_CONNECTION_CLOSED")); this.#pending.clear(); await this.#client?.close(); this.#client = undefined; }
+  async close(): Promise<void> { for (const pending of this.#pending.values()) pending.reject(new Error("CONTEXTVM_CONNECTION_CLOSED")); this.#pending.clear(); try { await this.#client?.close(); } finally { this.#client = undefined; this.#signer?.release?.(); this.#signer = undefined; } }
 
   async callTool(name: string, argumentsValue: unknown, tags?: readonly PaymentTag[]): Promise<any> {
     // Five-minute model budget + three-minute worker + startup/settlement margin.
-    return this.call("tools/call", { name, arguments: argumentsValue }, tags, ["start_session", "revise_session", "resume_session"].includes(name) ? 540_000 : 30_000);
+    return this.call("tools/call", { name, arguments: argumentsValue }, tags, ["start_session", "revise_session", "resume_session"].includes(name) ? 540_000 : name === "development_publication" || name === "cvm_admin" ? 120_000 : 30_000);
   }
 
   private async call(method: string, params: unknown, tags?: readonly PaymentTag[], timeoutMs = 30_000): Promise<any> {

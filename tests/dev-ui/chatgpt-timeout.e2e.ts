@@ -1,5 +1,6 @@
 /** A failed subscription stream through the real browser, relay and SQL authority. */
 import { chromium } from "playwright";
+import { openFixtureAdmin } from "./operator-fixture";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,14 +28,10 @@ const server = await createDevelopmentContextVmServer({ config, stateRoot, chatG
 const pool = createDevelopmentPool(config.databaseUrl);
 const browser = await chromium.launch(); const page = await browser.newPage();
 try {
-  await page.route("https://auth.openai.com/api/accounts/authorize?*", async (route) => route.fulfill({ status: 302, headers: { location: fixture.authorize(route.request().url()).href } }));
+  const admin = await browser.newPage(); await openFixtureAdmin(admin, server.url, stateRoot, fixture);
   await page.goto(server.url); await page.getByText("Workspace connected", { exact: true }).waitFor();
   await page.locator("#idea").fill("A quiet focus timer");
   await page.getByRole("button", { name: "Shape my idea" }).click();
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("button", { name: "Continue with ChatGPT", exact: true }).click();
-  await page.getByRole("button", { name: "Got it", exact: true }).click();
-  await page.locator("#model-summary").filter({ hasText: "Using ChatGPT plan" }).waitFor();
   await page.getByRole("button", { name: "Create my applet" }).click();
   await page.locator("#notice-copy").filter({ hasText: "model time limit" }).waitFor({ timeout: 30000 });
   assert((await page.locator("#conversation-messages").textContent())?.includes("model time limit"), "CHAT_TIMEOUT_EXPLANATION_MISSING");
@@ -47,9 +44,7 @@ try {
   const diagnostic = ChatGptDiagnosticSchema.parse(record.diagnostic_json);
   assert(observation.status === "usage_unknown" && observation.reason === "accepted_timeout" && diagnostic.code === "CHATGPT_GENERATION_TIMEOUT" && diagnostic.phase === "stream", "SQL_TIMEOUT_DETAILS_MISSING");
   assert(diagnostic.httpStatus === 200 && diagnostic.receivedBytes > 0, "SQL_RESPONSE_DETAILS_MISSING");
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-  assert(await page.getByRole("button", { name: "Sign out of ChatGPT", exact: true }).isEnabled(), "TIMEOUT_CLEARED_SIGN_IN");
-  await page.keyboard.press("Escape");
+  assert(await admin.getByRole("button", { name: "Sign out of ChatGPT", exact: true }).isEnabled(), "TIMEOUT_CLEARED_SIGN_IN");
   await page.reload(); await page.getByText("Workspace connected", { exact: true }).waitFor();
   assert(fixture.counts().inferences === 1 && await page.locator("#revise").isDisabled(), "RELOAD_RETRIED_UNKNOWN_ACTION");
 
@@ -64,7 +59,7 @@ try {
   assert((await restarted.dispatch(intent, new AbortController().signal)).status === "usage_unknown" && restarted.diagnostic() === "CHATGPT_GENERATION_TIMEOUT", "SQL_DIAGNOSTIC_NOT_RESTORED");
   assert(fixture.counts().inferences === 2, "SQL_REPLAY_CREATED_REQUEST");
   console.log(JSON.stringify({ status: "passed", case: "chatgpt-timeout", checks: ["visible timeout cause", "sign-in retained", "private error redacted", "SQL diagnostics", "reload fence", "restart replay without dispatch"] }));
-} finally {
+} catch (error) { console.error("TIMEOUT_TEST", error, await page.locator("#generation-error").textContent().catch(() => ""), await page.locator("#notice-copy").textContent().catch(() => ""), server.generationEvidence().result, (await pool.query("SELECT operation_id,diagnostic_json FROM development_chatgpt_operations")).rows); throw error; } finally {
   await browser.close(); await pool.end();
   try { await server.close(); } finally { await stack.down(true); await rm(stateRoot, { recursive: true, force: true }); }
 }

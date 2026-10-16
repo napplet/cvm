@@ -23,7 +23,7 @@ const RequestSchema = z.object({
   id: z.union([z.string(), z.number(), z.null()]),
   method: z.literal("tools/call"),
   params: z.object({
-    name: z.enum(["account_status", "top_up", "funded_admission", "start_session", "revise_session", "resume_session", "session_status", "preview", "publication"]),
+    name: z.enum(["account_status", "top_up", "funded_admission", "start_session", "revise_session", "resume_session", "session_status", "preview", "publication", "service_info", "development_faucet", "development_publication", "cvm_admin", "operation_diagnostic", "projects"]),
     arguments: z.unknown(),
     _meta: z.unknown().optional(),
   }).strict(),
@@ -110,6 +110,9 @@ export interface ProtectedMaterialPort {
 }
 
 export interface ContextVmFundingAdapterOptions {
+  /** Explicit composition-owned tools. Each validates input and projects its result;
+   * admin authority is checked against the verified envelope, never an argument. */
+  extensions?: Partial<Record<"service_info" | "development_faucet" | "development_publication" | "cvm_admin" | "operation_diagnostic" | "projects", (input: unknown, verifiedPubkey: string) => Promise<unknown>>>;
   service: FundingService;
   transport: ContextVmTransportPort;
   /** Server-owned facades. Their absence makes their public tool unavailable. */
@@ -211,6 +214,11 @@ export class ContextVmFundingAdapter {
 
   private async dispatch(verifiedPubkey: string, requestEventId: string, rawEvent: z.infer<typeof EventSchema>, request: z.infer<typeof RequestSchema>): Promise<ContextVmWireResponse> {
     const { name, arguments: argumentsInput } = request.params;
+    if (["service_info", "development_faucet", "development_publication", "cvm_admin", "operation_diagnostic", "projects"].includes(name)) {
+      const handler = this.options.extensions?.[name as keyof NonNullable<ContextVmFundingAdapterOptions["extensions"]>];
+      if (!handler) throw new Error("CONTEXTVM_TOOL_UNAVAILABLE");
+      return freeze({ jsonrpc: "2.0" as const, id: request.id, result: await handler(argumentsInput, verifiedPubkey) });
+    }
     if (name === "start_session") {
       const args = StartSessionArgumentsSchema.parse(argumentsInput);
       if ("mode" in args) {

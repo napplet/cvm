@@ -1,3 +1,4 @@
+import { verifyEvent } from "nostr-tools/pure";
 import { computeCanonicalInvocationIdentity } from "@contextvm/sdk/payments/canonical-identity";
 import type { NostrServerTransport } from "@contextvm/sdk/transport";
 import { z } from "zod";
@@ -56,7 +57,7 @@ export class ContextVmSdkBridge implements ContextVmTransportPort {
   lastInbound?: Readonly<{ verifiedClientPubkey: string; requestEventId: string; method: string }>;
   readonly observedMethods = new Set<string>();
 
-  constructor(private readonly transport: NostrServerTransport) {}
+  constructor(private readonly transport: NostrServerTransport, private readonly extraTools: readonly string[] = []) {}
 
   onInbound(handler: (input: ContextVmInboundEnvelope) => Promise<void>): void {
     this.transport.onmessage = undefined;
@@ -99,7 +100,7 @@ export class ContextVmSdkBridge implements ContextVmTransportPort {
     const requestEventId = this.requestEventId(parsed.params);
     if (!requestEventId) return;
     const event = this.transport.getNostrRequestEvent(requestEventId);
-    if (!event || event.id !== requestEventId) return;
+    if (!event || event.id !== requestEventId || event.pubkey !== clientPubkey || !verifyEvent(event)) return;
     this.lastInbound = Object.freeze({ verifiedClientPubkey: clientPubkey, requestEventId, method: parsed.method });
     if (parsed.method === "initialize") {
       await this.sendResponse(clientPubkey, {
@@ -111,7 +112,7 @@ export class ContextVmSdkBridge implements ContextVmTransportPort {
     if (parsed.method === "tools/list") {
       await this.sendResponse(clientPubkey, {
         jsonrpc: "2.0", id: parsed.id,
-        result: { tools: ["account_status", "top_up", "funded_admission", "start_session", "revise_session", "resume_session", "session_status", "preview", "publication"].map((name) => ({ name })) },
+        result: { tools: ["account_status", "top_up", "funded_admission", "start_session", "revise_session", "resume_session", "session_status", "preview", "publication", ...this.extraTools].map((name) => ({ name })) },
       }, requestEventId);
       return;
     }

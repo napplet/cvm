@@ -1,5 +1,6 @@
 /** Product UI → OAuth fixture → real relay, SQL, Docker worker and sandboxed Paja. */
 import { chromium } from "playwright";
+import { openFixtureAdmin } from "./operator-fixture";
 import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -41,7 +42,7 @@ async function screenshot(name: string, width: number) {
   await page.screenshot({ path: join(evidence, `applet-${name}-${width}.png`), fullPage: true });
 }
 try {
-  await page.route("https://auth.openai.com/api/accounts/authorize?*", async (route) => route.fulfill({ status: 302, headers: { location: fixture.authorize(route.request().url()).href } }));
+  const admin = await browser.newPage(); await openFixtureAdmin(admin, server.url, stateRoot, fixture);
   await page.goto(server.url); await page.getByText("Workspace connected", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Shape my idea" }).click();
   assert(await page.locator("#idea-step").isVisible() && await page.locator("#idea-validation").textContent(), "EMPTY_IDEA_ADVANCED");
@@ -51,10 +52,7 @@ try {
   await page.locator("#setup-step").waitFor();
   await page.reload(); await page.locator("#setup-step").waitFor();
   assert((await page.locator("#idea-review").textContent())?.includes("daily practice counter"), "DRAFT_LOST_ON_RELOAD");
-  await page.getByRole("button", { name: "Change", exact: true }).click();
-  await page.getByRole("button", { name: "Continue with ChatGPT", exact: true }).click();
-  await page.getByRole("button", { name: "Got it", exact: true }).click();
-  await page.locator("#model-summary").filter({ hasText: "Using ChatGPT plan" }).waitFor();
+  await page.locator("#model-summary").filter({ hasText: "ChatGPT subscription" }).waitFor();
   assert(await page.locator("#setup-step").isVisible(), "OAUTH_LOST_GUIDED_STEP");
   assert(fixture.counts().inferences === 0, "SIGN_IN_STARTED_GENERATION");
   for (const width of [390, 768, 1440]) await screenshot("setup", width);

@@ -104,7 +104,7 @@ try {
   const preview = page.frameLocator("#preview").frameLocator("iframe").first();
   await preview.getByRole("button", { name: "Add", exact: true }).click();
   await preview.getByText("1", { exact: true }).waitFor();
-  check((await page.locator("#publication-status").textContent())?.includes("Publication unavailable"), "FULL_FLOW_PUBLICATION_MODE_MISREPRESENTED");
+  check((await page.locator("#publication-status").textContent())?.includes("publish to your Blossom servers"), "FULL_FLOW_PUBLICATION_MODE_MISREPRESENTED");
   for (const width of [1280, 768, 375]) {
     await page.setViewportSize({ width, height: 1000 });
     check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `FULL_FLOW_COMPLETED_LAYOUT_OVERFLOW:${width}`);

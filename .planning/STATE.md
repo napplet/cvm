@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: verification_deferred_gaps
-stopped_at: ChatGPT revision deadline and misleading auth error fixed; original unknown revision preserved
-last_updated: "2026-10-16T19:11:00Z"
+stopped_at: Static CVM workspace, private admin, signed publishing and dedicated project collection verified
+last_updated: "2026-10-16T21:00:18Z"
 last_activity: 2026-10-16
-last_activity_desc: Five-minute model deadline and persisted failure diagnostics verified through product browser tests
+last_activity_desc: Private CVM administration, publication and legacy browser-project recovery verified through real local services
 progress:
   total_phases: 7
   completed_phases: 6
@@ -25,14 +25,14 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 **Core value:** A user can describe one focused applet and receive a safe, conformant napplet that can be previewed and placed directly into a compatible napplet runtime.
 **Active milestone:** v1.0 — Safe Napplet Generation MVP
-**Current focus:** Guided applet.broker product UX verified with persistent ChatGPT sign-in; production remains deferred
+**Current focus:** Static applet.broker workspace with private CVM admin, identity-owned publication and integrated project collection; production remains deferred
 
 ## Current Position
 
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
 Plan: 56 of 58 accepted; development Plans 07-52/53/56/57/54/55 complete
 Status: Guided applet.broker workspace at http://127.0.0.1:49371; diagnostic console at /dev. Saved chatgpt-oauth mode with gpt-6.1-sol retained. Product/console browser journeys and recovery passed through real local services. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
-Last activity: 2026-10-16 — Debugged revision stopping at 120.016 seconds: five-minute versioned model deadline, nine-minute browser budget, safe SQL failure diagnostics and truthful product feedback. 42 unit tests and timeout/full-product browser journeys passed. Deployment is still unavailable in the local UI; user's interrupted revision remains fenced as usage_unknown.
+Last activity: 2026-10-16 — Completed quick task 261016-hh8: static public CVM client, private operator admin/rates/jobs, CVM Blossom preview sharing, contextual signed publication with NIP-65 destinations, and private durable projects. Your applets is a dedicated page that recovers earlier anonymous work using its original browser key. Focused tests and static-publication, returning-user and product browser journeys passed. Historical unknown revisions remain fenced.
 
 Follow-up: Stream assembly/counter verification remains complete. Latest helper-signature and compiler-feedback fix passed 29 targeted unit/integration cases plus activity and composed OAuth browser journeys. Real blinking-text generation also passed. See debug/resolved/generated-typescript-check.md.
 
@@ -45,7 +45,7 @@ Plan execution: 96/98 milestone plans complete; Phase 7 is 56/58 complete and pr
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
 - Plans: 96/98 milestone plans executed. Development Plans 07-52/53/56/57/54/55 are complete. Production-only 07-20 and 07-26 remain deferred; neither is a development prerequisite.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Development coverage: the complete local execution GUI is accepted; see `07-55-SUMMARY.md`, the dated acceptance matrix in `07-DEV-VALIDATION.md`, and `docs/runbooks/development-gui.md`. Root manifests remain unchanged. Deterministic mode substitutes only the external model. Paid-provider execution and remote CI were not exercised; publication is unavailable; conformance reports five passed and five skipped checks. Production resumption follows `docs/runbooks/production-readiness-deferred.md` only when requested.
+- Development coverage: the complete local execution GUI is accepted; see `07-55-SUMMARY.md`, the dated acceptance matrix in `07-DEV-VALIDATION.md`, and `docs/runbooks/development-gui.md`. Root manifests remain unchanged. Deterministic mode substitutes only the external model. This quick-task verification used a model fixture; real local publication, signed ownership and cross-browser project recovery are now covered. Remote CI was not exercised; conformance reports five passed and five skipped checks. Production resumption follows `docs/runbooks/production-readiness-deferred.md` only when requested.
 - Local ChatGPT OAuth support is implemented and verified with a real subscription-generated interactive artifact; see `debug/resolved/chatgpt-live-subscription.md`. Subscription usage has separate synthetic local-test-sat accounting, and unresolved calls are never automatically resent.
 
 ## Performance Metrics
@@ -359,6 +359,7 @@ Recent decisions affecting current work:
 | 261015-pf8 | Start Paja previews with the menu collapsed | 2026-10-15 | 6e88c24 | [261015-pf8](./quick/261015-pf8-load-paja-previews-minimized-with-the-me/) |
 | 261015-pqb | Current skills CLI snapshot in model requests and offline development workers | 2026-10-15 | 544d953 | [261015-pqb](./quick/261015-pqb-update-the-napplet-authoring-skills-used/) |
 | 261016-coz | Guided applet.broker workspace, top progress, revision chat and safe recovery | 2026-10-16 | 73e350d | [261016-coz](./quick/261016-coz-build-the-applet-broker-guided-user-expe/) |
+| 261016-hh8 | Static CVM client, private admin, signed publishing and integrated project recovery | 2026-10-16 | f75c8ed, 1f22c4d | [261016-hh8](./quick/261016-hh8-add-working-publish-flow-to-applet-broke/) |
 
 ## Deferred Verification
 
@@ -376,6 +377,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-16T19:11:00Z
-Stopped at: Local service restarted with five-minute ChatGPT deadline and persisted safe failure diagnostics. Saved subscription sign-in retained. Historical timed-out revision was not redispatched or cleared; previous verified version remains available. Deployment/publication is not wired into the development UI.
-Resume file: .planning/debug/resolved/chatgpt-request-failure.md
+Last session: 2026-10-16T21:00:18Z
+Stopped at: Default service ready at http://127.0.0.1:49371 in chatgpt-oauth mode after an idle-only restart. Public site is static, provider controls are private admin, publishing is inline step 4, and #/applets lists account plus proven browser-owned projects. Anonymous recovery and returning-user browser tests pass. Reload the existing browser tab to keep its original key. Historical unknown requests were not redispatched or cleared; production remains deferred.
+Resume file: .planning/quick/261016-hh8-add-working-publish-flow-to-applet-broke/261016-hh8-SUMMARY.md

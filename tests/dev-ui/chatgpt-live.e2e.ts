@@ -37,7 +37,7 @@ try {
     await page.waitForTimeout(100);
     if (await word.evaluate((node) => node.getAnimations().some((animation) => animation.playState === "running"))) throw new Error("CHATGPT_LIVE_REDUCED_MOTION_IGNORED");
   } else {
-    await napplet.getByRole("button", { name: "Add", exact: true }).click();
+    await napplet.getByRole("button", { name: /^(?:\+\s*)?Add$/u }).click();
     await napplet.getByText("1", { exact: true }).waitFor();
   }
   console.log(JSON.stringify({ status: "passed", case: "chatgpt-live", evidence: blink ? "live generated blinking text, verified preview, animation and reduced-motion behavior" : "live ChatGPT generation, verified local preview, and Add increments count to 1", automaticRetries: 0 }));

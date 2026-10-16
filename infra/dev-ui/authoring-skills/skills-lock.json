@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "skills": {
+    "napplet-build": {
+      "source": "napplet/napplet",
+      "ref": "efc647642c9bd80aed58af139bf90910e68e962c",
+      "sourceType": "github",
+      "skillPath": "skills/napplet-build/SKILL.md",
+      "computedHash": "d8499237b6fa3cb977693745b6f5ebfd0a7fb939d21e8207de983a409f042dfe"
+    },
+    "napplet-design": {
+      "source": "napplet/napplet",
+      "ref": "efc647642c9bd80aed58af139bf90910e68e962c",
+      "sourceType": "github",
+      "skillPath": "skills/napplet-design/SKILL.md",
+      "computedHash": "709c5e9a6ee25d63da51cb1bfa78d9023cc75024c23d56aa9ec67d49c102bfd0"
+    },
+    "napplet-make": {
+      "source": "napplet/napplet",
+      "ref": "efc647642c9bd80aed58af139bf90910e68e962c",
+      "sourceType": "github",
+      "skillPath": "skills/napplet-make/SKILL.md",
+      "computedHash": "a0e7052fe85b1d1dfb4f64420ff0773f5a6d8243a968a0f819d766937195f3ba"
+    },
+    "napplet-sdk": {
+      "source": "napplet/napplet",
+      "ref": "efc647642c9bd80aed58af139bf90910e68e962c",
+      "sourceType": "github",
+      "skillPath": "skills/napplet-sdk/SKILL.md",
+      "computedHash": "000bb7a83d9c41984da8921c350dd55ea06de7c8a0cb527b85b9f0d813fd7b85"
+    },
+    "napplet-test": {
+      "source": "napplet/napplet",
+      "ref": "efc647642c9bd80aed58af139bf90910e68e962c",
+      "sourceType": "github",
+      "skillPath": "skills/napplet-test/SKILL.md",
+      "computedHash": "42ae91ada53b59cad779bb9afb16cc9f023bbc55cd0cc889ce1746178a7ff6f1"
+    },
+    "napplet-ui": {
+      "source": "napplet/napplet",
+      "ref": "efc647642c9bd80aed58af139bf90910e68e962c",
+      "sourceType": "github",
+      "skillPath": "skills/napplet-ui/SKILL.md",
+      "computedHash": "85ac4bf4dc0152d2d41a5e01524606737dff6d8bf244902707d7e3b794fe1020"
+    }
+  }
+}

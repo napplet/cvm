@@ -12,7 +12,7 @@ try {
   const proposal = await Bun.file("/input/proposal.json").json() as { files: { path: string; content: string }[] };
   await run("create", ["napplet", "create", "/work/project", "--template", "/opt/template"], "/work");
   await run("init", ["napplet", "init", "--root", "--force", "--source-dir", "dist", "--title", "Generated development napplet"]);
-  await run("skills", ["bun", "/opt/skills/dist/cli.js", "install", "--to", "codex"], "/work");
+  await run("skills", ["bun", "/opt/authoring-skills.ts", "--install"], "/work");
   const html = await readFile("/work/project/index.html", "utf8"); await writeFile("/work/project/index.html", html.replace("<head>", "<head><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'\">"));
   for (const file of proposal.files) await writeFile(`/work/project/${file.path}`, file.content);
   const pnpm = ["node", "/opt/pnpm/bin/pnpm.cjs"];

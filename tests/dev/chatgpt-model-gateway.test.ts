@@ -1,3 +1,4 @@
+import { loadAuthoringSkills } from "../../infra/dev-ui/authoring-skills";
 import { expect, test } from "bun:test";
 import { ChatGptModelGateway, readChatGptResponse, type ChatGptOperations } from "../../src/dev/chatgpt-model-gateway";
 import { priceReceipt, PriceCardSchema, maximumOperationCharge } from "../../src/model/price-card";
@@ -30,6 +31,8 @@ test("streamed completion records real usage, synthetic pricing, supported reque
   expect(priceReceipt({ receipt: result.receipt, ...gateway.pricing })).toMatchObject({ status: "priced", total: "3" }); expect(maximumOperationCharge(gateway.pricing)).toBe("395");
   const request = JSON.parse(String(fixture.calls.find((call) => call.url.endsWith("/responses"))!.init!.body));
   expect(request).toMatchObject({ store: false, stream: true, model: "fixture-codex" });
+  expect(request.input[0].content).toContain((await loadAuthoringSkills()).guidance);
+  expect(request.input[0].content).toContain("SERVICE EXECUTION CONTRACT");
   expect(request.input[0].content).toContain("runtimeHasDomain(domain: string): boolean");
   expect(request.input[0].content).toContain("void runtimeHasDomain('storage');");
   for (const field of ["metadata", "max_output_tokens", "previous_response_id", "temperature", "background"]) expect(request[field]).toBeUndefined();

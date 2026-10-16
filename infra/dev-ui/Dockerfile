@@ -6,9 +6,11 @@ RUN test "$TARGETARCH" = arm64
 ADD --checksum=sha256:35ffb0d21e75877e749d63569b4369e5b467967e48034c2ee7d0ae958ed5ee54 https://github.com/napplet/web/releases/download/%40napplet/cli%400.5.2/napplet-linux-aarch64 /usr/local/bin/napplet
 ADD --checksum=sha256:7d66183c30454ec40ca2458d38dedde827fa1f8b58a2fbcd25a3b7d1c3bf538b https://codeload.github.com/napplet/boilerplate/tar.gz/cbbebe9bd56271277b054535c0a8d720a588f61d /tmp/boilerplate.tgz
 RUN chmod 0555 /usr/local/bin/napplet && mkdir -p /opt/template /work /output /home/napplet && tar -xzf /tmp/boilerplate.tgz -C /opt/template --strip-components=1 && chmod -R a+rX /opt/template && chmod 0777 /work /output /home/napplet
-RUN corepack enable && corepack prepare pnpm@10.8.0 --activate && bun install --global --exact @napplet/skills@0.3.2 && cp -a /root/.bun/install/global/node_modules/@napplet/skills /opt/skills && chmod -R a+rX /opt/skills
+RUN corepack enable && corepack prepare pnpm@10.8.0 --activate
 RUN cp -a /root/.cache/node/corepack/v1/pnpm/10.8.0 /opt/pnpm && cd /opt/template && node /opt/pnpm/bin/pnpm.cjs install --frozen-lockfile --ignore-scripts --store-dir /opt/pnpm-store && chmod -R a+rx /opt/pnpm /opt/pnpm-store
 RUN cd /opt/template && PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright node -e 'const {realpathSync}=require("node:fs");const {execFileSync}=require("node:child_process");const {dirname,join}=require("node:path");const pkg=require.resolve("playwright/package.json",{paths:[realpathSync("node_modules/@napplet/conformance-cli")]});execFileSync(process.execPath,[join(dirname(pkg),"cli.js"),"install","chromium"],{stdio:"inherit"})' && chmod -R a+rx /opt/ms-playwright
+COPY authoring-skills /opt/authoring-skills
+COPY authoring-skills.ts /opt/authoring-skills.ts
 COPY run-proposal.ts /usr/local/bin/run-proposal
 RUN chmod 0555 /usr/local/bin/run-proposal
 ENV HOME=/home/napplet CI=1 PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright

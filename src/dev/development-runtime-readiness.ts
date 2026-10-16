@@ -1,3 +1,4 @@
+import { loadAuthoringSkills } from "../../infra/dev-ui/authoring-skills";
 import { lstat, readFile, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { runBoundedDevelopmentCommand } from "./local-napplet-worker";
@@ -49,6 +50,7 @@ export class LocalDevelopmentRuntimeReadiness {
   async assertReady(): Promise<DevelopmentRuntimeReadiness> {
     const projectRoot = this.options.projectRoot ?? root;
     const hostSha256 = await verifyDevelopmentHostFiles(projectRoot);
+    const skills = await loadAuthoringSkills(join(projectRoot, "infra/dev-ui/authoring-skills"));
     const docker = this.options.dockerBin ?? "docker";
     const image = this.options.image ?? process.env.NAPPLET_CVM_DEV_WORKER_IMAGE ?? "napplet-cvm/dev-worker:development";
     const inspected = await runBoundedDevelopmentCommand([docker, "image", "inspect", image, "--format", "{{.Id}}|{{.Os}}|{{.Architecture}}"], { deadlineMs: 15_000, maxBytes: 16_000 });
@@ -60,18 +62,20 @@ export class LocalDevelopmentRuntimeReadiness {
       const req=createRequire('/opt/template/package.json');
       const cliHash=new Bun.CryptoHasher('sha256').update(await Bun.file('/usr/local/bin/napplet').arrayBuffer()).digest('hex');
       const runnerHash=new Bun.CryptoHasher('sha256').update(await Bun.file('/usr/local/bin/run-proposal').arrayBuffer()).digest('hex');
+      const skills=await (await import('/opt/authoring-skills.ts')).loadAuthoringSkills();
+      const skillsLoaderHash=new Bun.CryptoHasher('sha256').update(await Bun.file('/opt/authoring-skills.ts').arrayBuffer()).digest('hex');
       const conf=req.resolve('@napplet/conformance-cli/package.json');
       const playwrightPath=req.resolve('playwright/package.json',{paths:[realpathSync(conf)]});
       const pw=createRequire(playwrightPath)('./index.js');
       const browser=await pw.chromium.launch({headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
-      try { const page=await browser.newPage(); await page.setContent('<button>ready</button>'); await page.getByRole('button',{name:'ready'}).click(); console.log(JSON.stringify({cliHash,runnerHash,browserVersion:browser.version(),playwright:require(playwrightPath).version,typescript:req('typescript/package.json').version,conformance:require(conf).version})); } finally {await browser.close();}
+      try { const page=await browser.newPage(); await page.setContent('<button>ready</button>'); await page.getByRole('button',{name:'ready'}).click(); console.log(JSON.stringify({cliHash,runnerHash,skillsSha256:skills.sha256,skillsLoaderHash,browserVersion:browser.version(),playwright:require(playwrightPath).version,typescript:req('typescript/package.json').version,conformance:require(conf).version})); } finally {await browser.close();}
     `;
-    let probe: { cliHash: string; runnerHash: string; browserVersion: string; playwright: string; typescript: string; conformance: string };
+    let probe: { cliHash: string; runnerHash: string; skillsSha256: string; skillsLoaderHash: string; browserVersion: string; playwright: string; typescript: string; conformance: string };
     try {
       const result = await runBoundedDevelopmentCommand([docker, "run", "--name", name, "--rm", "--network", "none", "--read-only", "--user", "65532:65532", "--cpus", "2", "--memory", "1g", "--pids-limit", "256", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=256m", "--tmpfs", "/home/napplet:rw,nosuid,nodev,size=64m", "--entrypoint", "bun", imageDigest!, "-e", script], { deadlineMs: 45_000, maxBytes: 32_000 });
       if (result.exitCode !== 0) throw new Error("DEV_WORKER_BROWSER_NOT_READY:rebuild the development worker image");
       probe = JSON.parse(result.stdout.trim());
-      if (probe.cliHash !== "35ffb0d21e75877e749d63569b4369e5b467967e48034c2ee7d0ae958ed5ee54" || probe.runnerHash !== hash(await readFile(join(projectRoot, "infra/dev-ui/run-proposal.ts"))) || probe.playwright !== "1.61.0" || probe.typescript !== "5.9.3" || probe.conformance !== "0.2.15" || !/^\d+\.\d+\.\d+\.\d+$/u.test(probe.browserVersion)) throw new Error("DEV_WORKER_TOOLCHAIN_MISMATCH:rebuild the development worker image");
+      if (probe.skillsSha256 !== skills.sha256 || probe.skillsLoaderHash !== hash(await readFile(join(projectRoot, "infra/dev-ui/authoring-skills.ts"))) || probe.cliHash !== "35ffb0d21e75877e749d63569b4369e5b467967e48034c2ee7d0ae958ed5ee54" || probe.runnerHash !== hash(await readFile(join(projectRoot, "infra/dev-ui/run-proposal.ts"))) || probe.playwright !== "1.61.0" || probe.typescript !== "5.9.3" || probe.conformance !== "0.2.15" || !/^\d+\.\d+\.\d+\.\d+$/u.test(probe.browserVersion)) throw new Error("DEV_WORKER_TOOLCHAIN_MISMATCH:rebuild the development worker image");
     } finally {
       await runBoundedDevelopmentCommand([docker, "rm", "--force", name], { deadlineMs: 5_000, maxBytes: 8_000 }).catch(() => undefined);
     }

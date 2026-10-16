@@ -56,6 +56,26 @@ Updates use the existing encrypted ContextVM relay connection and MCP progress t
 
 Development SQL operations have a five-second budget because PostgreSQL shares the workstation with Docker/Chromium. Production timing remains unchanged. Updating the closed worker runner rebuilds its pinned image automatically during `up`; previously saved pending actions bound to an older image cannot be resumed under the new pin. Existing verified artifacts remain available.
 
+### Authoring skills
+
+Development uses the current [napplet skills](https://napplet.run/docs/guide/agent-skills.html), distributed with `npx skills add napplet/napplet`. The retired npm skills package is no longer installed in the development worker. The make, design, UI, build, SDK and test skills are pinned to upstream commit `efc647642c9bd80aed58af139bf90910e68e962c` in `infra/dev-ui/authoring-skills/`, with the installer lockfile, MIT license and per-file SHA-256 hashes.
+
+Both model gateways include the installed skill text in the developer message **before generation**. Installing files in a Docker container alone does not make them available to a Responses request. The service's bounded source-only contract takes precedence: the model returns `src/main.ts` and `src/styles.css`; the worker owns scaffolding, dependencies, verification and conformance. Guidance for newer optional SDK domains does not upgrade the pinned toolchain or authorize additional files. The request-size check includes the skill text; configured API profiles with too little input capacity fail before dispatch. ChatGPT subscription development retains its existing ceiling.
+
+The worker copies the same skills into `/work/.agents/skills` offline. Readiness checks every skill hash and compares the host and image snapshot before admission. The snapshot is committed, so normal `up` and e2e runs need no skills download.
+
+Known upstream conformance limitation: the reference mock exposes a theme domain without the methods used by `themeGet()` / `themeOnChanged()`. This reproduced with CLI 0.2.15 and a disposable 0.3.4 candidate, so the existing toolchain is retained. Optional SDK initialization must handle synchronous failures as well as rejected Promises and preserve local UI fallbacks. The browser e2e exercises optional-theme code with those fallbacks and a working counter. Real theme integration remains a separate preview limitation: this preview disables domains by default, and the Paja 0.19 theme toggle did not inject the theme domain in the probe (the target exposed only `shell`). A green conformance pass does not prove enabled theme integration; do not remove the fallback or broaden preview capabilities to conceal this.
+
+To deliberately update the snapshot, select a full commit SHA from `napplet/napplet`, then run:
+
+```sh
+bun scripts/update-dev-skills.ts <full-commit-sha>
+bun scripts/dev.ts down
+bun scripts/dev.ts up
+```
+
+The updater runs `npx --yes skills@1.7.2 add https://github.com/napplet/napplet/tree/<full-commit-sha>/skills --skill napplet-make napplet-design napplet-ui napplet-build napplet-sdk napplet-test --agent codex --copy --yes` in a temporary directory. Review and commit the changed snapshot, then restart after active work finishes. No skills are fetched during a metered action. Historical production promotion evidence remains tied to its original compatibility set; updating that evidence is a separate production task.
+
 The deterministic profile currently requires a 3,250-sat authorization ceiling and charges 5 test sats per successful model operation. The UI distinguishes settled funds, held funds, and funds available for new admissions. Unspent admission holds remain reserved; the available balance therefore falls by the approved maximum even though the exact charge is smaller. Confirmed reset discards this development account state.
 
 Publication currently displays **Publication unavailable in this development setup**.

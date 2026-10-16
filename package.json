@@ -25,9 +25,9 @@
     "probe:phase06-cli-source": "bun run scripts/probe-phase-06-cli-source-contract.ts",
     "eval:phase06": "bun test tests/evals/phase-06-reference-set.test.ts --timeout 10000",
     "verify:phase06-design": "bun run scripts/verify-phase-06-design-slice.ts",
-  "eval:phase07": "bun run scripts/eval-phase-07.ts -- --suite=all",
-  "verify:phase07-evidence": "bun run scripts/verify-phase-07-evidence.ts",
-  "certify:phase07": "bun run scripts/certify-phase-07.ts",
+    "eval:phase07": "bun run scripts/eval-phase-07.ts -- --suite=all",
+    "verify:phase07-evidence": "bun run scripts/verify-phase-07-evidence.ts",
+    "certify:phase07": "bun run scripts/certify-phase-07.ts",
     "test:phase-03-design-slice": "bun run scripts/verify-phase-03-design-slice.ts",
     "test:phase-02-design-slice": "bun run scripts/verify-phase-02-design-slice.ts"
   },
@@ -40,10 +40,14 @@
     "@opentelemetry/resources": "2.10.0",
     "@opentelemetry/sdk-metrics": "2.10.0",
     "@opentelemetry/sdk-trace-base": "2.10.0",
+    "applesauce-core": "6.2.0",
+    "applesauce-loaders": "6.2.0",
+    "applesauce-relay": "6.2.1",
     "kysely": "0.29.4",
     "modal": "0.9.0",
     "nostr-tools": "2.24.1",
     "pg": "8.22.0",
+    "rxjs": "7.8.2",
     "zod": "4.4.3"
   },
   "devDependencies": {

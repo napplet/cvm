@@ -37,11 +37,11 @@ export class ProjectsWorkspace {
     document.querySelector<HTMLAnchorElement>(".brand")!.href = "#/workspace";
     const route = (focus = true) => {
       const visible = location.hash === "#/applets";
-      workspace.hidden = visible; this.#page.hidden = !visible;
+      workspace.hidden = visible || location.hash === "#/explore"; this.#page.hidden = !visible;
       const heading = visible ? this.el("projects-heading") : workspace.querySelector<HTMLElement>(".step-panel:not([hidden]) h1");
       skip.href = `#${heading?.id ?? "step-heading"}`;
       document.title = visible ? "Your applets — applet.broker" : "applet.broker — Make a little thing";
-      if (focus) { heading?.focus({ preventScroll: true }); document.getElementById("app-content")!.scrollTo(0, 0); }
+      if (focus && location.hash !== "#/explore") { heading?.focus({ preventScroll: true }); document.getElementById("app-content")!.scrollTo(0, 0); }
       if (visible) { this.identityNote(); void this.load(); } else this.resetSources();
     };
     window.addEventListener("hashchange", () => route());

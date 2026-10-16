@@ -1,3 +1,4 @@
+import { RemixReferenceSchema } from "../remix/reference";
 import { z } from "zod";
 
 export const UsageDimensionSchema = z.enum(["input_tokens", "output_tokens", "cached_tokens", "reasoning_tokens"]);
@@ -30,6 +31,7 @@ export const ProviderOperationIntentSchema = z.object({
   // The default keeps historical reconciliation fixtures decodable. All new
   // dispatch callers supply a bounded prompt before crossing the provider seam.
   prompt: PromptSchema.optional().default("legacy-recovery"), authorizedPriorArtifactReference: z.string().min(1).max(256).optional(),
+  remixReference: RemixReferenceSchema.optional(),
   maximumUnits: z.array(z.object({ dimension: UsageDimensionSchema, units: DecimalSchema }).strict()).min(1),
   selection: z.literal("unselected"),
 }).strict();

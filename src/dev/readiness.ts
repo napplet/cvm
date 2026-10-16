@@ -4,8 +4,8 @@ import { createDevelopmentPool, type DevPayments } from "../../scripts/dev-payme
 import { LocalDevelopmentRuntimeReadiness } from "./development-runtime-readiness";
 
 const root = resolve(import.meta.dir, "../..");
-const migrationNames = ["development/001_generation.sql", "development/002_provider_observations.sql", "development/003_artifact_preview.sql", "development/004_source_proposal_bindings.sql", "development/005_pending_actions.sql", "development/006_worker_results.sql", "development/007_chatgpt_operations.sql", "development/008_chatgpt_diagnostics.sql", "development/009_operator_publication.sql", "development/010_projects.sql", "development/011_publication_relays.sql"] as const;
-const manifestPins = { "package.json": "cbcc433278d32391b075576ebd847ae30039f1d86ad229a149f5566856989f23", "bun.lock": "8916ee4ec92924ae9e09bc4f315fd6656033812696e35a1b7785161d872c5ac3" } as const;
+const migrationNames = ["development/001_generation.sql", "development/002_provider_observations.sql", "development/003_artifact_preview.sql", "development/004_source_proposal_bindings.sql", "development/005_pending_actions.sql", "development/006_worker_results.sql", "development/007_chatgpt_operations.sql", "development/008_chatgpt_diagnostics.sql", "development/009_operator_publication.sql", "development/010_projects.sql", "development/011_publication_relays.sql", "development/012_remix_imports.sql"] as const;
+const manifestPins = { "package.json": "8a13f836f2fcf9f856ab92806cbd43c4da44e77ddb155eecdf9214268b108479", "bun.lock": "576577ec77b4b50f58677595aef1f666973a7a189720c61c416cadc95d2114c8" } as const;
 
 export type DevelopmentMode = "deterministic-fixture" | "configured-openai" | "chatgpt-oauth";
 export type LauncherReadiness = Readonly<{ workerImageDigest: string; readinessProbeDigest: string }>;

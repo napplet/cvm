@@ -5,11 +5,11 @@ import { DevelopmentModelGateway, configuredProviderFromEnvironment } from "./de
 import { registerDevelopmentPricing } from "./register-development-pricing";
 
 /** Development-only source proposal composition. No provider credential is exported to browser code. */
-export async function createDevelopmentModelComposition(config: DevPayments, options: Readonly<{ priorSource?: ConstructorParameters<typeof DevelopmentModelGateway>[0]["priorSource"] }> = {}) {
+export async function createDevelopmentModelComposition(config: DevPayments, options: Readonly<{ priorSource?: ConstructorParameters<typeof DevelopmentModelGateway>[0]["priorSource"]; remixSource?: ConstructorParameters<typeof DevelopmentModelGateway>[0]["remixSource"] }> = {}) {
   const funding = await createDevelopmentFunding(config);
   const proposals = new SourceProposalStore(funding.pool);
   const configured = await configuredProviderFromEnvironment({ apiKey: process.env.OPENAI_API_KEY, model: process.env.NAPPLET_CVM_OPENAI_MODEL, profile: process.env.NAPPLET_CVM_OPENAI_PROFILE ? JSON.parse(process.env.NAPPLET_CVM_OPENAI_PROFILE) : undefined, priceCard: process.env.NAPPLET_CVM_OPENAI_PRICE_CARD ? JSON.parse(process.env.NAPPLET_CVM_OPENAI_PRICE_CARD) : undefined, priceSources: process.env.NAPPLET_CVM_OPENAI_PRICE_SOURCES ? JSON.parse(process.env.NAPPLET_CVM_OPENAI_PRICE_SOURCES) : undefined });
-  const gateway = new DevelopmentModelGateway({ store: proposals, ...(configured ? { configured } : {}), ...(options.priorSource ? { priorSource: options.priorSource } : {}) });
+  const gateway = new DevelopmentModelGateway({ store: proposals, remixSource: options.remixSource, ...(configured ? { configured } : {}), ...(options.priorSource ? { priorSource: options.priorSource } : {}) });
   const pricing = configured && typeof configured === "object" && "priceCard" in configured && "profile" in configured
     ? { card: (configured as any).priceCard, profile: (configured as any).profile }
     : undefined;

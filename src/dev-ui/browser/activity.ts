@@ -2,7 +2,7 @@ import { progressStages, type ProgressStage } from "../progress-contract";
 import { formatWorkerDiagnostic } from "../../dev/worker-diagnostic";
 import type { ClientActivity } from "./contextvm-client";
 
-const toolLabels: Record<string, string> = { funded_admission: "Reserve capacity and funds", start_session: "Start generation", revise_session: "Revise napplet", resume_session: "Resume saved action", preview: "Open verified preview" };
+const toolLabels: Record<string, string> = { remix_import: "Prepare remix", funded_admission: "Reserve capacity and funds", start_session: "Start generation", revise_session: "Revise napplet", resume_session: "Resume saved action", preview: "Open verified preview" };
 
 export type ActivitySnapshot = Readonly<{ state: string; stage?: ProgressStage; stageState?: string; current: string; detail: string; elapsed: number; stale: boolean }>;
 

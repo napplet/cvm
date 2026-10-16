@@ -1,3 +1,4 @@
+import { RemixReferenceSchema } from "../remix/reference";
 import { z } from "zod";
 import { FundingService } from "../funding/funding-service";
 import type { AccountStatusService } from "../funding/account-status";
@@ -23,7 +24,7 @@ const RequestSchema = z.object({
   id: z.union([z.string(), z.number(), z.null()]),
   method: z.literal("tools/call"),
   params: z.object({
-    name: z.enum(["account_status", "top_up", "funded_admission", "start_session", "revise_session", "resume_session", "session_status", "preview", "publication", "service_info", "development_faucet", "development_publication", "cvm_admin", "operation_diagnostic", "projects"]),
+    name: z.enum(["account_status", "top_up", "funded_admission", "start_session", "revise_session", "resume_session", "session_status", "preview", "publication", "service_info", "development_faucet", "development_publication", "cvm_admin", "operation_diagnostic", "projects", "remix_import"]),
     arguments: z.unknown(),
     _meta: z.unknown().optional(),
   }).strict(),
@@ -56,9 +57,11 @@ const FundedAdmissionPortResultSchema = z.discriminatedUnion("status", [
   z.object({ status: z.enum(["refused", "reconciliation_pending"]), accountId: z.string().min(1), intentReference: z.string().min(1), retryable: z.boolean(), unit: z.literal("sat") }).strict(),
 ]);
 const FundedStartSessionArgumentsSchema = z.object({
+  remixReference: RemixReferenceSchema.optional(),
   admissionReference: z.string().min(1), idempotencyKey: z.string().min(1), maximum: z.string().regex(/^[1-9][0-9]*$/u), idea: z.string().min(1).max(4_000),
 }).strict();
 const PreAdmissionStartSessionArgumentsSchema = z.object({
+  remixReference: RemixReferenceSchema.optional(),
   mode: z.literal("pre_admission"), idempotencyKey: z.string().min(1), maximum: z.string().regex(/^[1-9][0-9]*$/u), idea: z.string().min(1).max(4_000),
 }).strict();
 const StartSessionArgumentsSchema = z.union([FundedStartSessionArgumentsSchema, PreAdmissionStartSessionArgumentsSchema]);
@@ -112,7 +115,7 @@ export interface ProtectedMaterialPort {
 export interface ContextVmFundingAdapterOptions {
   /** Explicit composition-owned tools. Each validates input and projects its result;
    * admin authority is checked against the verified envelope, never an argument. */
-  extensions?: Partial<Record<"service_info" | "development_faucet" | "development_publication" | "cvm_admin" | "operation_diagnostic" | "projects", (input: unknown, verifiedPubkey: string) => Promise<unknown>>>;
+  extensions?: Partial<Record<"service_info" | "development_faucet" | "development_publication" | "cvm_admin" | "operation_diagnostic" | "projects" | "remix_import", (input: unknown, verifiedPubkey: string) => Promise<unknown>>>;
   service: FundingService;
   transport: ContextVmTransportPort;
   /** Server-owned facades. Their absence makes their public tool unavailable. */
@@ -214,7 +217,7 @@ export class ContextVmFundingAdapter {
 
   private async dispatch(verifiedPubkey: string, requestEventId: string, rawEvent: z.infer<typeof EventSchema>, request: z.infer<typeof RequestSchema>): Promise<ContextVmWireResponse> {
     const { name, arguments: argumentsInput } = request.params;
-    if (["service_info", "development_faucet", "development_publication", "cvm_admin", "operation_diagnostic", "projects"].includes(name)) {
+    if (["service_info", "development_faucet", "development_publication", "cvm_admin", "operation_diagnostic", "projects", "remix_import"].includes(name)) {
       const handler = this.options.extensions?.[name as keyof NonNullable<ContextVmFundingAdapterOptions["extensions"]>];
       if (!handler) throw new Error("CONTEXTVM_TOOL_UNAVAILABLE");
       return freeze({ jsonrpc: "2.0" as const, id: request.id, result: await handler(argumentsInput, verifiedPubkey) });
@@ -224,11 +227,11 @@ export class ContextVmFundingAdapter {
       if ("mode" in args) {
         if (!this.options.preAdmission) throw new Error("PRE_ADMISSION_UNAVAILABLE");
         const accountId = await accountIdForPrincipal({ pubkey: verifiedPubkey });
-        const result = PendingActionStatusProjectionSchema.parse(await this.options.preAdmission.saveStart({ owner: { ownerId: verifiedPubkey, accountId }, command: { idempotencyKey: args.idempotencyKey, maximum: args.maximum, idea: args.idea, policyVersion: this.policyVersion } }));
+        const result = PendingActionStatusProjectionSchema.parse(await this.options.preAdmission.saveStart({ owner: { ownerId: verifiedPubkey, accountId }, command: { idempotencyKey: args.idempotencyKey, maximum: args.maximum, idea: args.idea, ...(args.remixReference ? { remixReference: args.remixReference } : {}), policyVersion: this.policyVersion } }));
         return freeze({ jsonrpc: "2.0" as const, id: request.id, result });
       }
       if (!this.options.generation) throw new Error("METERED_GENERATION_UNAVAILABLE");
-      const result = SessionActionResultSchema.parse(await this.options.generation.startSession({ principal: { pubkey: verifiedPubkey }, admissionReference: args.admissionReference, idempotencyKey: args.idempotencyKey, expectedVersion: 0, maximum: args.maximum, policyVersion: this.policyVersion, idea: args.idea }));
+      const result = SessionActionResultSchema.parse(await this.options.generation.startSession({ principal: { pubkey: verifiedPubkey }, admissionReference: args.admissionReference, idempotencyKey: args.idempotencyKey, expectedVersion: 0, maximum: args.maximum, policyVersion: this.policyVersion, idea: args.idea, ...(args.remixReference ? { remixReference: args.remixReference } : {}) }));
       return this.generationResponse("start_session", verifiedPubkey, requestEventId, request.id, result);
     }
     if (name === "revise_session") {

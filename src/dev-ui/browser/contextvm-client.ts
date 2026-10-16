@@ -110,12 +110,12 @@ export class DevelopmentContextVmClient {
     return this.callTool("funded_admission", { idempotencyKey, requestedCap, unit: "sat" });
   }
 
-  async startSession(input: Readonly<{ admissionReference: string; maximum: string; idea: string; idempotencyKey?: string }>): Promise<any> {
-    return this.callTool("start_session", { admissionReference: input.admissionReference, idempotencyKey: input.idempotencyKey ?? `browser:generation:${crypto.randomUUID()}`, maximum: input.maximum, idea: input.idea });
+  async startSession(input: Readonly<{ admissionReference: string; maximum: string; idea: string; remixReference?: string; idempotencyKey?: string }>): Promise<any> {
+    return this.callTool("start_session", { admissionReference: input.admissionReference, idempotencyKey: input.idempotencyKey ?? `browser:generation:${crypto.randomUUID()}`, maximum: input.maximum, idea: input.idea, ...(input.remixReference ? { remixReference: input.remixReference } : {}) });
   }
 
-  async savePreAdmission(input: Readonly<{ maximum: string; idea: string; idempotencyKey: string }>): Promise<any> {
-    return this.callTool("start_session", { mode: "pre_admission", idempotencyKey: input.idempotencyKey, maximum: input.maximum, idea: input.idea });
+  async savePreAdmission(input: Readonly<{ maximum: string; idea: string; remixReference?: string; idempotencyKey: string }>): Promise<any> {
+    return this.callTool("start_session", { mode: "pre_admission", idempotencyKey: input.idempotencyKey, maximum: input.maximum, idea: input.idea, ...(input.remixReference ? { remixReference: input.remixReference } : {}) });
   }
 
   async pendingActionStatus(checkpointId: string): Promise<any> {
@@ -144,7 +144,7 @@ export class DevelopmentContextVmClient {
 
   async callTool(name: string, argumentsValue: unknown, tags?: readonly PaymentTag[]): Promise<any> {
     // Five-minute model budget + three-minute worker + startup/settlement margin.
-    return this.call("tools/call", { name, arguments: argumentsValue }, tags, ["start_session", "revise_session", "resume_session"].includes(name) ? 540_000 : name === "development_publication" || name === "cvm_admin" ? 120_000 : 30_000);
+    return this.call("tools/call", { name, arguments: argumentsValue }, tags, ["start_session", "revise_session", "resume_session"].includes(name) ? 540_000 : name === "development_publication" || name === "cvm_admin" || name === "remix_import" ? 120_000 : 30_000);
   }
 
   private async call(method: string, params: unknown, tags?: readonly PaymentTag[], timeoutMs = 30_000): Promise<any> {

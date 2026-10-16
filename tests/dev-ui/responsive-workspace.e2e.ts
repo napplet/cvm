@@ -4,7 +4,7 @@ import { chromium } from "playwright";
 import { resolve } from "node:path";
 import { mkdir } from "node:fs/promises";
 
-const modules = ["product-workspace", "activity", "publication-workspace", "projects-workspace"];
+const modules = ["product-workspace", "activity", "publication-workspace", "projects-workspace", "remix-workspace"];
 const built = await Bun.build({ entrypoints: modules.map(name => resolve(`src/dev-ui/browser/${name}.ts`)), target: "browser", format: "esm", plugins: [{ name: "responsive-read-only-fixture", setup(builder) {
   builder.onLoad({ filter: /\/contextvm-client\.ts$/ }, () => ({ loader: "js", contents: `
     export const browserSignerKey = () => "1".repeat(64);
@@ -77,7 +77,7 @@ try {
   await page.addStyleTag({content:await Bun.file("src/dev-ui/browser/product.css").text()});
   await page.evaluate(async scripts => {
     const module = async (name: string) => import(URL.createObjectURL(new Blob([scripts[`${name}.js`]],{type:"text/javascript"})));
-    const [{ProductWorkspace},{ExecutionActivity},{PublicationWorkspace},{ProjectsWorkspace}] = await Promise.all(["product-workspace","activity","publication-workspace","projects-workspace"].map(module));
+    const [{ProductWorkspace},{ExecutionActivity},{PublicationWorkspace},{ProjectsWorkspace},{RemixWorkspace}] = await Promise.all(["product-workspace","activity","publication-workspace","projects-workspace","remix-workspace"].map(module));
     const bootstrap = {servicePubkey:"a".repeat(64),relayUrl:"ws://127.0.0.1:1",providerLabel:"CVM generation service",actionCeilingSat:"3750"};
     const w=window as any;
     const workspace = new ProductWorkspace(document.getElementById("app"),bootstrap);
@@ -89,9 +89,12 @@ try {
     }}),()=>v);
     w.fixtureProjects = ["active","verified","published","unconfirmed","pending"].map((stage,i)=>({id:`project:${i}`,title:i===0?"A".repeat(512):`My ${stage} applet`,stage,verifiedVersion:i,createdAt:new Date().toISOString()}));
     new ProjectsWorkspace(bootstrap,publication.identity,()=>live.running,async()=>{});
+    new RemixWorkspace({ resolve: async () => { throw new Error("Not found"); }, browse: async () => [{ naddr:"naddr1"+"q".repeat(220), title:"A".repeat(512),description:"D".repeat(512),event:{pubkey:"b".repeat(64),created_at:1} }] }, publication.identity, bootstrap.servicePubkey,()=>live.running);
     Object.assign(w,{workspace,live,publication,v}); workspace.connected(true);
   },scripts);
   await layout("idea","#idea-next");
+  await page.locator("#remix-mode").click(); await page.locator("#remix-address").fill("naddr1"+"x".repeat(2048));
+  await layout("remix-address","#remix-address"); await page.locator("#create-mode").click();
   await page.locator("#idea").fill("A".repeat(512)); await page.getByRole("button",{name:"Shape my idea"}).click();
   await layout("setup","#generate");
   await page.evaluate(()=>{const w=window as any;w.workspace.begin("generate");w.live.begin("Create","CVM generation service");w.live.receive({kind:"sent",requestId:"view",tool:"start_session"});});
@@ -113,6 +116,7 @@ try {
   await page.locator("#nostr-sign-in").click(); await page.locator("#nostr-qr svg").waitFor();
   await layout("sign-in","#nostr-copy","#nostr-identity");
   await page.locator("#nostr-anonymous").click(); await page.locator("#nostr-identity").waitFor({state:"hidden"});
+  await page.locator("#browse-applets").click(); await page.locator(".discovery-card").first().waitFor(); await layout("explore","#explore-refresh");
   await page.locator("#your-applets").click(); await page.locator(".project-card").first().waitFor();
   await layout("collection","#projects-refresh");
   await page.evaluate(()=>{(window as any).fixtureProjects=[];});await page.locator("#projects-refresh").click();await page.locator("#projects-empty").waitFor();

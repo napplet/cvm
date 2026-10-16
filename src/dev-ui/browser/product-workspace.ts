@@ -271,9 +271,9 @@ export class ProductWorkspace {
     this.el("revision-status-result").hidden = !this.el("revision-status-result").textContent;
   }
   private navigation(): void {
-    const collection = location.hash === "#/applets";
+    const collection = location.hash === "#/applets"; const exploring = location.hash === "#/explore";
     const workspace = this.el("workspace-home"); const projects = this.el("your-applets");
-    for (const [link, active] of [[workspace, !collection], [projects, collection]] as const) {
+    for (const [link, active] of [[workspace, !collection && !exploring], [projects, collection]] as const) {
       if (active) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current");
     }
     const label = this.#step === 4 ? "Publish" : this.#step === 3 ? "Builder" : "Create";

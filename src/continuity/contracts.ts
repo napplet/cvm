@@ -1,3 +1,4 @@
+import { RemixReferenceSchema } from "../remix/reference";
 import { z } from "zod";
 
 export const CanonicalSatSchema = z.string().regex(/^(0|[1-9][0-9]*)$/u);
@@ -121,6 +122,7 @@ export type ResumeSessionResult = z.infer<typeof ResumeSessionResultSchema>;
  * PendingActionIntent, which describes an already-admitted live pause.
  */
 export const PendingStartCommandSchema = z.object({
+  remixReference: RemixReferenceSchema.optional(),
   idempotencyKey: z.string().min(1).max(160),
   maximum: CanonicalSatSchema,
   idea: z.string().trim().min(1).max(8_000),

@@ -2,9 +2,9 @@ import { z } from "zod";
 import { WorkerDiagnosticSchema } from "../dev/worker-diagnostic";
 
 export const progressMethod = "notifications/development_progress";
-export const progressTools = ["funded_admission", "start_session", "revise_session", "resume_session", "preview"] as const;
+export const progressTools = ["funded_admission", "start_session", "revise_session", "resume_session", "preview", "remix_import"] as const;
 export const progressStages = {
-  request: "Server request", admission: "Capacity and funds reservation",
+  source_import: "Prepare remix source", request: "Server request", admission: "Capacity and funds reservation",
   model: "Model operation", model_stream: "Receiving model response", model_recorded: "Source and usage receipt recorded",
   worker: "Isolated Docker worker", create: "Scaffold napplet", init: "Initialize manifest", skills: "Install authoring guidance",
   install: "Install pinned dependencies offline", build: "Build napplet", verify: "Check guidance and TypeScript",

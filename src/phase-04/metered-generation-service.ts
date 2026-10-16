@@ -1,3 +1,4 @@
+import { RemixReferenceSchema } from "../remix/reference";
 import { z } from "zod";
 import { ContinuationService, type VerifiedCreditWakeHint, type VerifiedCreditWakeResult } from "../continuity/continuation-service";
 import { NeedsTopUpResultSchema } from "../continuity/contracts";
@@ -24,6 +25,7 @@ const GenerationProjectionSchema = z.object({
   source: z.literal("durably recorded"), worker: z.literal("verified"),
 }).strict();
 export const StartSessionCommandSchema = z.object({
+  remixReference: RemixReferenceSchema.optional(),
   principal: PrincipalSchema, admissionReference: z.string().min(1), idempotencyKey: z.string().min(1), expectedVersion: z.literal(0),
   maximum: DecimalSchema, policyVersion: z.string().min(1), idea: z.string(),
 }).strict();
@@ -258,7 +260,7 @@ export class MeteredGenerationService {
     }
     const sessionId = "sessionId" in command ? command.sessionId : `session:${(await hash({ accountId, key: command.idempotencyKey })).slice(0, 24)}`;
     const actionKind = "repair" in command ? "repair" as const : "revision" in command ? "revise_session" as const : "start_session" as const;
-    const boundedPayloadHash = await hash("repair" in command ? { repair: command.originatingActionId } : "revision" in command ? { revision: command.revision } : { idea: command.idea });
+    const boundedPayloadHash = await hash("repair" in command ? { repair: command.originatingActionId } : "revision" in command ? { revision: command.revision } : { idea: command.idea, ...("remixReference" in command && command.remixReference ? { remixReference: command.remixReference } : {}) });
     const pauseFingerprint = await hash({ accountId, sessionId, actionKind, boundedPayloadHash, expectedSessionVersion: command.expectedVersion, expectedArtifactVersion: command.expectedVersion, policyVersion: command.policyVersion, priceCardId: priceCard.id, profileId: profile.id, toolchainId: "phase-04-deterministic-toolchain", actionMaximum: profileCeiling, idempotencyKey: command.idempotencyKey });
     if (!options.bypassLegacyContinuation) {
       const continuation = this.#continuation();
@@ -288,7 +290,7 @@ export class MeteredGenerationService {
     const providerRequestId = operationId;
     const prompt = "repair" in command ? "Repair the charged focused napplet." : "revision" in command ? command.revision : command.idea;
     const priorForIntent = (await this.options.store.listMeteredActionsForSession(accountId, sessionId)).filter((item) => item.artifact?.artifactId).sort((left, right) => (right.artifactVersion ?? 0) - (left.artifactVersion ?? 0))[0];
-    const intent = ProviderOperationIntentSchema.parse({ operationId, providerRequestId, accountId, sessionId, actionId: durableActionId, expectedVersion: command.expectedVersion, actionBudgetReference: budget.reference, profileId: profile.id, priceCardId: priceCard.id, requestFingerprint: fingerprint, prompt, ...(priorForIntent?.artifact?.artifactId ? { authorizedPriorArtifactReference: priorForIntent.artifact.artifactId } : {}), maximumUnits: profile.maximumUnits, selection: "unselected" });
+    const intent = ProviderOperationIntentSchema.parse({ operationId, providerRequestId, accountId, sessionId, actionId: durableActionId, expectedVersion: command.expectedVersion, actionBudgetReference: budget.reference, profileId: profile.id, priceCardId: priceCard.id, requestFingerprint: fingerprint, prompt, ...("remixReference" in command && command.remixReference ? { remixReference: command.remixReference } : {}), ...(priorForIntent?.artifact?.artifactId ? { authorizedPriorArtifactReference: priorForIntent.artifact.artifactId } : {}), maximumUnits: profile.maximumUnits, selection: "unselected" });
     const claim = await this.options.store.transact(accountId, (transaction) => transaction.claimProviderOperation(operationId));
     if (!claim.claimed && claim.action.result) return SessionActionResultSchema.parse(claim.action.result);
     let observation: z.infer<typeof ModelObservationSchema>;

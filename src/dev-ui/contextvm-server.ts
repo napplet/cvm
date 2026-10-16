@@ -1,3 +1,5 @@
+import { DevelopmentRemixImports } from "../dev/remix-imports";
+import { LocalRemixSourceImporter } from "../dev/remix-source-import";
 import { DevelopmentProjects } from "../dev/projects";
 import { InterruptedDevelopmentGeneration } from "../dev/interrupted-generation";
 import { finalizeEvent } from "nostr-tools/pure";
@@ -121,8 +123,10 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
   if (!Bun.which("node")) throw new Error("DEV_PUBLICATION_NODE_REQUIRED");
   const stack = options.testMode ? developmentStack(true) : undefined;
   const config = options.config ?? (stack ? await stack.up() : await Bun.file(resolve(root, ".local/napplet-cvm-dev-payments/payments.json")).json() as DevPayments);
+  let remixImports: DevelopmentRemixImports | undefined;
+  const remixSource = async (account: string, reference: string) => remixImports?.load(account, reference);
   let priorSource: ((input: Readonly<{ accountId: string; sessionId: string; authorizedPriorArtifactReference: string }>) => Promise<readonly { path: "src/main.ts" | "src/styles.css"; content: string }[] | undefined>) | undefined;
-  const composition = await createDevelopmentModelComposition(config, { priorSource: async (input) => priorSource?.(input) });
+  const composition = await createDevelopmentModelComposition(config, { remixSource, priorSource: async (input) => priorSource?.(input) });
   const app = composition.funding;
   // A test payment stack gets a unique state root so encrypted pending actions and
   // sealed worker/artifact bytes cannot cross test runs or touch default development state.
@@ -139,8 +143,9 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
   const identity = developmentServiceIdentity(config.fundingKey);
   const signer = new PrivateKeySigner(identity.signerPrivateKey);
   const transport = new NostrServerTransport({ signer, relayHandler: [config.relayUrl], encryptionMode: "required", publishRelayList: false, injectRequestEventId: true, logLevel: "silent" });
-  const bridge = new ContextVmSdkBridge(transport, ["service_info", "development_faucet", "development_publication", "cvm_admin", "operation_diagnostic", "projects"]);
+  const bridge = new ContextVmSdkBridge(transport, ["service_info", "development_faucet", "development_publication", "cvm_admin", "operation_diagnostic", "projects", "remix_import"]);
   const progress = new DevelopmentProgressTransport(bridge);
+  remixImports = new DevelopmentRemixImports(app.pool, new LocalRemixSourceImporter(readiness.imageDigest), state => progress.emit("source_import", state));
   const accountStatus = new AccountStatusService({
     store: app.database.funding,
     sessions: { list: async ({ accountId }) => {
@@ -219,12 +224,12 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
       const api = operator?.selectedApi();
       if (api && !persist) {
         const configured = await configuredProviderFromEnvironment(api);
-        const apiGateway = new DevelopmentModelGateway({ store: composition.proposals, configured, priorSource: async input => priorSource?.(input) });
+        const apiGateway = new DevelopmentModelGateway({ store: composition.proposals, configured, remixSource, priorSource: async input => priorSource?.(input) });
         await registerDevelopmentPricing(app.pool, { profile: api.profile, priceCard: api.priceCard });
         next = makeRuntime(apiGateway, { card: api.priceCard, profile: api.profile });
       } else if (settings.mode === "chatgpt") {
         if (!settings.accountId || !settings.model) throw new Error("CHATGPT_SELECT_AVAILABLE_MODEL");
-        gateway = new ChatGptModelGateway({ rates: operator?.rates(), accountId: settings.accountId, model: settings.model, auth: chatgpt, store: composition.proposals, operations: new SqlChatGptOperations(app.pool), fetch: options.chatGptFetch, onResponseBytes: (bytes) => progress.emit("model_stream", "running", { bytes }), priorSource: async (input) => priorSource?.(input) });
+        gateway = new ChatGptModelGateway({ rates: operator?.rates(), accountId: settings.accountId, model: settings.model, auth: chatgpt, remixSource, store: composition.proposals, operations: new SqlChatGptOperations(app.pool), fetch: options.chatGptFetch, onResponseBytes: (bytes) => progress.emit("model_stream", "running", { bytes }), priorSource: async (input) => priorSource?.(input) });
         await registerDevelopmentPricing(app.pool, { profile: gateway.pricing.profile, priceCard: gateway.pricing.card });
         next = makeRuntime(gateway, gateway.pricing);
       } else if (settings.mode === "default") next = makeRuntime(composition.gateway, composition.pricing ?? { card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile: PHASE_04_MODEL_PROFILES["code-proposal"] });
@@ -337,6 +342,21 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
     return { ...result, session: { ...result.session, timeline: await durableTimeline(app, accountId, query.sessionId) } };
   } }, preview, extensions: {
     projects: (input, pubkey) => projects.handle(input, pubkey),
+    remix_import: (input, pubkey) => generationWork(async () => {
+      try { return await remixImports!.prepare(input, pubkey); }
+      catch (error) {
+        progress.emit("source_import", "failed");
+        const details: Record<string,string> = {
+          REMIX_CONTEXT_TOO_LARGE: "The starting applet is too large for the model input. Choose a smaller applet to remix.",
+          REMIX_IMPORT_BUSY: "Another source import is running. Try again shortly; no generation was started.",
+          REMIX_IMPORT_LIMIT: "This identity has reached the temporary import limit. Try again in an hour.",
+          REMIX_SOURCE_UNAVAILABLE: "The linked source could not be imported, and the published HTML is too large for a remix. Choose an applet with accessible source or HTML under 128 KB.",
+          REMIX_ASSET_INCOMPLETE: "The starting file was not fully transferred. Try creating the remix again.",
+        };
+        const code = error instanceof Error && error.message in details ? error.message : "REMIX_IMPORT_INVALID";
+        return { status: "failed", code, detail: details[code] ?? "The starting applet could not be verified. Check its address and try again; no generation was started." };
+      }
+    }),
     service_info: async input => { z.object({}).strict().parse(input); const settings = chatgpt.settings(); const account = chatgpt.status().accounts.find(item => item.id === settings.accountId); return { reserveSat, actionCeilingSat, providerLabel, available: !!operator?.selectedApi() || settings.mode !== "chatgpt" || !!(account?.signedIn && account.planEnabled), development: true }; },
     development_faucet: async input => { const { amount } = z.object({ amount: z.string().regex(/^[1-9][0-9]{0,4}$/u) }).strict().parse(input); return { token: await mintCashuToken(app, config, Number(amount)) }; },
     development_publication: (input, pubkey) => publication.handle(input, pubkey),

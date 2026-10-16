@@ -33,6 +33,7 @@ export class ProductWorkspace {
     root.innerHTML = `
       <a class="skip-link" href="#step-heading">Skip to workspace</a>
       <header class="brand-header"><a class="brand" href="./" aria-label="applet.broker home"><span class="brand-mark" aria-hidden="true">a<span>·</span></span>applet<span class="brand-light">.broker</span></a><div class="header-actions"><span class="environment"><i aria-hidden="true"></i>Local development</span><button id="open-settings" class="quiet">Settings</button></div></header>
+      <div id="creation-workspace">
       <nav class="step-nav" aria-label="Creation steps"><ol><li data-step="1" aria-current="step"><span>01</span> Your idea</li><li data-step="2"><span>02</span> Ready to build</li><li data-step="3"><span>03</span> Make it yours</li><li data-step="4"><span>04</span> Publish</li></ol><p id="connection-summary" role="status">Connecting…</p></nav>
       <div id="product-progress" hidden><div class="progress-heading"><p id="progress-title" role="status" aria-live="polite">Preparing your workspace</p><div class="progress-meta"><span id="progress-provider"></span><span id="progress-time"></span></div></div><div id="build-progress" role="progressbar" aria-label="Applet creation progress" aria-valuemin="0" aria-valuemax="5" aria-valuenow="0"><div id="progress-fill"></div></div><ol class="build-stages">${steps.map((step) => `<li>${step}</li>`).join("")}</ol><p id="progress-detail" class="supporting"></p></div>
       <section id="idea-step" class="intro step-panel" aria-labelledby="step-heading"><div class="eyebrow">SMALL TOOLS. YOUR IDEAS.</div><h1 id="step-heading" tabindex="-1">Make a little thing.<br><span>Make it yours.</span></h1><p class="intro-copy">A tracker, a timer, a tiny useful tool.<br>Describe one thing you want your applet to do.</p>
@@ -49,6 +50,7 @@ export class ProductWorkspace {
       <section id="continuation" class="notice" hidden><div><h2>Ready when you are</h2><p id="pending-status"></p></div><button id="resume" class="primary">Resume saved action</button></section>
       <section id="recovery" class="notice" hidden><div><h2>Let’s check your last request</h2><p>The page closed before its outcome was confirmed. Check the original request before starting another.</p></div><button id="recover" class="primary" disabled>Check original request</button></section>
       <details id="execution-details" class="execution-details" hidden><summary>Execution details <span>Live activity, checks and receipts</span></summary><section id="execution-activity" aria-labelledby="activity-heading"></section><p id="generation-status" aria-live="polite"></p><p id="generation-error" role="alert"></p><dl id="generation-facts"></dl><h3>Session timeline</h3><ol id="timeline"></ol></details>
+      </div>
       <footer class="site-footer"><span>A little idea goes a long way.</span><div><span>Connected through ContextVM.</span><a href="./console.html">Development console <span aria-hidden="true">↗</span></a></div></footer>
       <dialog id="workspace-settings" aria-labelledby="settings-heading"><div class="dialog-header"><h2 id="settings-heading">Workspace settings</h2><button id="close-settings" class="icon-button" aria-label="Close settings">×</button></div><div class="workspace-controls"></div><details><summary>Connection and test balance</summary><p id="connection-status" aria-live="polite">Connecting</p><button id="connect">Reconnect</button><p id="balance"></p><p id="provider-mode"></p><p id="funding-status" aria-live="polite"></p></details><p class="supporting settings-note">This website connects through encrypted ContextVM. Your signing keys stay in your browser or signer. The CVM operator manages model credentials.</p></dialog>
       <div hidden><input id="cashu-amount"><button id="cashu"></button><button id="cashu-replay"></button><input id="nwc-amount"><button id="nwc"></button><button id="replay-revision"></button><ul id="versions"></ul></div>`;
@@ -86,14 +88,14 @@ export class ProductWorkspace {
   private persist(): void { sessionStorage.setItem(this.#key, JSON.stringify({ idea: this.field("idea").value, revision: this.field("revision").value, maximum: this.field("maximum").value, step: this.#step, messages: this.#messages.slice(-60), sessionId: this.#sessionId } satisfies Draft)); }
   private showStep(step: number, focus = true): void {
     this.#step = step;
-    this.root.querySelector<HTMLAnchorElement>(".skip-link")!.href = `#${["step-heading", "setup-heading", "build-heading", "publication-heading"][step - 1]}`;
+    if (!this.el("creation-workspace").hidden) this.root.querySelector<HTMLAnchorElement>(".skip-link")!.href = `#${["step-heading", "setup-heading", "build-heading", "publication-heading"][step - 1]}`;
     ["idea-step", "setup-step", "build-step", "publish-step"].forEach((id, index) => { const panel = this.el(id); if (panel) panel.hidden = index + 1 !== step; });
     this.root.querySelectorAll<HTMLElement>("[data-step]").forEach((item) => { if (Number(item.dataset.step) === step) item.setAttribute("aria-current", "step"); else item.removeAttribute("aria-current"); item.dataset.complete = String(Number(item.dataset.step) < step); });
     this.text("idea-review", this.field("idea").value);
     this.el("product-progress").hidden = step !== 3;
     if (step === 3 && !this.#running && !this.#version && this.#lastState === "idle") this.text("progress-title", "Restoring your workspace…");
     if (step === 3) requestAnimationFrame(() => { const messages = this.el("conversation-messages"); messages.scrollTop = messages.scrollHeight; });
-    if (focus) this.el(["step-heading", "setup-heading", "build-heading", "publication-heading"][step - 1]!).focus();
+    if (focus && !this.el("creation-workspace").hidden) this.el(["step-heading", "setup-heading", "build-heading", "publication-heading"][step - 1]!).focus();
     this.persist();
   }
   savedStatus(state: string): void { this.text("build-heading", state === "active" ? "Your applet is still building." : state === "needs_top_up" ? "Your applet is waiting for funds." : "Your saved applet."); this.text("progress-title", `Saved status: ${state.replaceAll("_", " ")}`); this.text("preview-empty-copy", "Refresh Your applets to check for a verified version. No new generation has been started."); this.el("execution-details").hidden = false; this.sessionState(state); }

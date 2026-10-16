@@ -1,4 +1,4 @@
-import { ProjectsWorkspace, type Project } from "./projects-workspace";
+import { ProjectsWorkspace, type Project, type ProjectScope } from "./projects-workspace";
 import { browserSignerKey } from "./contextvm-client";
 import { PrivateKeySigner } from "@contextvm/sdk/signer";
 import { chatGptErrorMessage } from "./chatgpt-errors";
@@ -30,8 +30,8 @@ const publishing = product ? new PublicationWorkspace(bootstrap, () => client, (
 
 const byId = <T extends HTMLElement>(id: string) => document.querySelector<T>(`#${id}`)!;
 const activity = new ExecutionActivity(byId("execution-activity"), bootstrap.providerLabel, product ? (snapshot) => product.progress(snapshot) : undefined);
-async function useSelectedIdentity(): Promise<void> {
-  const identity = publishing?.identity;
+async function useSelectedIdentity(browserOnly = false): Promise<void> {
+  const identity = browserOnly ? undefined : publishing?.identity;
   const target = identity?.pubkey ?? await new PrivateKeySigner(browserSignerKey(bootstrap.servicePubkey)).getPublicKey();
   if (client && await client.pubkey === target) return;
   const next = new DevelopmentContextVmClient(bootstrap, event => activity.receive(event), identity?.pubkey ? identity.captureSigner() : undefined);
@@ -42,8 +42,8 @@ async function useSelectedIdentity(): Promise<void> {
     byId("connection-status").textContent = `Connected: ${connected.pubkey}`;
   } catch (error) { await next.close(); throw error; }
 }
-if (publishing) new ProjectsWorkspace(bootstrap, publishing.identity, () => activity.running, async (project: Project) => {
-  await useSelectedIdentity();
+if (publishing) new ProjectsWorkspace(bootstrap, publishing.identity, () => activity.running || !!restoreRequest(), async (project: Project, scope: ProjectScope) => {
+  await useSelectedIdentity(scope === "browser");
   const current = await client!.callTool("projects", { action: "get", id: project.id });
   if (current.status !== "ok") throw new Error("Applet not found for this identity.");
   selected = undefined; versions.length = 0; lastRevision = undefined; savePending(undefined); clearRequest();

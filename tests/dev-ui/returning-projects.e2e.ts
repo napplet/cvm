@@ -47,6 +47,9 @@ try {
   const active = await owner.callTool("projects",{action:"list",stage:"active"});
   assert(active.projects.length === 1,"SIGNED_USER_ACTIVE_PROJECT_MISSING"); const id=active.projects[0].id;
   assert((await other.callTool("projects",{action:"list"})).projects.length===0,"OTHER_USER_LIST_LEAK");
+  const liveCosts = await owner.callTool("projects",{action:"costs",id});
+  assert(liveCosts.costs.total.confirmed==="0" && liveCosts.costs.total.pending===1 && liveCosts.costs.requests[0].charge===null,"ACTIVE_COST_SHOWN_AS_FREE");
+  assert((await other.callTool("projects",{action:"costs",id})).status==="not_found_or_denied","CROSS_OWNER_COST_LEAK");
   assert((await other.sessionStatus(id)).status==="not_found_or_denied","OTHER_USER_SESSION_LEAK");
   const pending = await other.savePreAdmission({ maximum:"4000",idea:"An unrelated private idea",idempotencyKey:crypto.randomUUID() });
   assert((await other.callTool("projects",{action:"list"})).projects[0].checkpointId===pending.checkpointId,"OTHER_PENDING_MISSING");
@@ -67,13 +70,22 @@ try {
   assert(estimates.create?.samples===1 && estimates.create?.basis==="create" && estimates.revise?.basis==="all","COMPLETED_WORK_NOT_ESTIMATED");
   assert((await other.callTool("service_info",{})).estimates.create===null,"OTHER_USER_ESTIMATE_LEAK");
   assert((await page.locator("#progress-estimate").innerText()).includes("Actual charge:"),"ACTUAL_CHARGE_NOT_IN_GUI");
+
+  const firstCosts=(await owner.callTool("projects",{action:"costs",id})).costs;
+  assert(firstCosts.requests[0].prompt==="A simple counter for reading sessions","REQUEST_TEXT_NOT_SAVED");
+  assert(firstCosts.requests[0].lines.length>0,"RECEIPT_BREAKDOWN_MISSING");
+  assert(firstCosts.total.confirmed===firstCosts.requests[0].charge && firstCosts.total.pending===0,"FIRST_TOTAL_INCORRECT");
+  await page.locator('.request-charge strong').filter({hasText:'test sats'}).waitFor();
+  assert((await page.locator('[data-spend="workspace"] strong').innerText()).includes(firstCosts.total.confirmed),"WORKSPACE_TOTAL_MISSING");
   await page.reload();
   await page.locator("#nostr-sign-in").filter({hasText:"NIP-07"}).waitFor();
   await page.locator("#preview").waitFor({state:"visible",timeout:30000});
   assert(await page.locator("#publish").isEnabled(),"RESTORED_EXTENSION_PUBLISH_DISABLED");
-  await page.locator("#revise-estimate-basis").filter({hasText:"1 recent build"}).waitFor();
+  await page.locator("#revise-estimate-basis").filter({hasText:"1 recent build"}).waitFor({state:"attached"});
   assert(await page.locator("#progress-estimate").innerText()==="","RESTORE_SHOWS_FAKE_ACTUAL_DURATION_OR_CHARGE");
   assert(fixture.counts().inferences===1,"SIGNIN_RESTORE_STARTED_GENERATION");
+  await page.locator('.request-message').filter({hasText:"A simple counter for reading sessions"}).waitFor();
+  assert(await page.locator('.request-message').count()===1,"COST_HISTORY_DUPLICATED_ON_RELOAD");
   await owner.callTool("projects",{action:"rename",id,title:"Reading counter"});
   const row=(await pool.query("SELECT owner_pubkey FROM development_projects WHERE id=$1",[id])).rows[0]; assert(row.owner_pubkey===pubkey,"PROJECT_OWNER_NOT_REQUEST_SIGNER");
   const artifact=(await owner.sessionStatus(id)).session.latestVerifiedArtifact.id;
@@ -107,6 +119,39 @@ try {
   await page.screenshot({path:"/tmp/cvm-projects-desktop.png",fullPage:true});
   await page.setViewportSize({width:390,height:844}); await page.screenshot({path:"/tmp/cvm-projects-mobile.png",fullPage:true});
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),"PROJECTS_MOBILE_OVERFLOW");
+
+  // A second actual request, then an idempotent replay: totals count both once.
+  await page.locator(`.project-card[data-project-id="${id}"]`).click();
+  await page.locator("#revision").fill("Make the counter button larger"); await page.locator("#revise").click();
+  await page.waitForFunction(()=>document.querySelectorAll('.request-message').length===2 && document.querySelector('.request-message:last-child .request-outcome')?.textContent==='Version 2 ready',undefined,{timeout:180000});
+  const costs=(await owner.callTool("projects",{action:"costs",id})).costs;
+  assert(costs.requests.length===2 && BigInt(costs.total.confirmed)===costs.requests.reduce((sum:bigint,r:any)=>sum+BigInt(r.charge),0n),"TOTAL_DOES_NOT_SUM_ALL_REQUESTS");
+  assert(costs.requests[0].prompt==="Make the counter button larger","REVISION_PROMPT_MISSING");
+  const latest=(await pool.query<{admission_reference:string;expected_session_version:number;reservation_sat:string;idempotency_key:string}>("SELECT admission_reference,expected_session_version,reservation_sat,idempotency_key FROM metered_actions WHERE id=$1",[costs.requests[0].id])).rows[0];
+  await owner.reviseSession({sessionId:id,admissionReference:latest.admission_reference,expectedVersion:latest.expected_session_version,maximum:latest.reservation_sat,idempotencyKey:latest.idempotency_key,revision:costs.requests[0].prompt});
+  const pageOne=(await owner.callTool("projects",{action:"costs",id,limit:1})).costs;
+  const pageTwo=(await owner.callTool("projects",{action:"costs",id,limit:1,after:pageOne.nextCursor})).costs;
+  assert(pageOne.total.confirmed===costs.total.confirmed && pageTwo.total.confirmed===costs.total.confirmed && pageTwo.requests[0].number===1,"PAGINATION_OR_REPLAY_CHANGED_TOTAL");
+  assert((await other.callTool("projects",{action:"costs",id,after:pageOne.nextCursor})).status==="not_found_or_denied","CURSOR_LEAK");
+  assert((await owner.callTool("projects",{action:"get",id})).project.spend.confirmed===costs.total.confirmed,"PROJECT_CARD_TOTAL_MISMATCH");
+  await page.reload(); await page.locator('.request-message').nth(1).waitFor();
+  assert((await page.locator('[data-spend="conversation"] strong').innerText()).includes(costs.total.confirmed),"RELOAD_LOST_TOTAL");
+
+  // A failed build still pays for completed model usage; interrupted output has
+  // a separately confirmed zero local charge. Neither becomes a fake free run.
+  await owner.fundCashu("1000");
+  fixture.setInferenceMode("invalid-typescript");
+  const failedAdmission=await owner.fundAdmission("395");
+  const failed=await owner.reviseSession({sessionId:id,admissionReference:failedAdmission.admissionReference,expectedVersion:2,maximum:"395",idempotencyKey:"costs:failed",revision:"Test a change that fails its checks"});
+  assert(failed.status==="failed" && BigInt(failed.confirmedSpend)>0n,"FAILED_TEST_DID_NOT_INCUR_USAGE");
+  const paidFailure=(await owner.callTool("projects",{action:"costs",id})).costs;
+  assert(paidFailure.requests[0].charge===failed.confirmedSpend && paidFailure.requests[0].lines.length>0 && BigInt(paidFailure.total.confirmed)===BigInt(costs.total.confirmed)+BigInt(failed.confirmedSpend),"FAILED_CHARGE_NOT_IN_TOTAL");
+  fixture.setInferenceMode("cut");
+  const cutAdmission=await owner.fundAdmission("395");
+  const cut=await owner.reviseSession({sessionId:id,admissionReference:cutAdmission.admissionReference,expectedVersion:failed.sessionVersion,maximum:"395",idempotencyKey:"costs:cut",revision:"Test interrupted output"});
+  const zero=(await owner.callTool("projects",{action:"costs",id})).costs;
+  assert(cut.status==="failed" && zero.requests[0].charge==="0" && zero.total.confirmed===paidFailure.total.confirmed && zero.total.pending===0,"ZERO_CHARGE_NOT_DISTINCT_FROM_UNKNOWN");
+  fixture.setInferenceMode("complete");
   await anonymous.close(); await owner.close(); await other.close(); await context.close();
   const port=Number(new URL(server.url).port); await server.close(); server=await createDevelopmentContextVmServer({config,stateRoot:root,port,chatGptFetch:modelFetch});
   const fresh=await browser.newContext(); const returning=await fresh.newPage(); await signer(returning,key); await returning.goto(`${server.url}/#/applets`); await returning.getByText("Workspace connected",{exact:true}).waitFor({state:"attached"});
@@ -118,11 +163,11 @@ try {
   assert(await returning.locator("#publish").isEnabled(),"RETURNING_PUBLISH_UNAVAILABLE");
   await returning.reload(); await returning.locator("#preview").waitFor({state:"visible",timeout:30000});
   assert((await returning.locator("#nostr-sign-in").innerText()).includes("NIP-07"),"RETURNING_SIGNIN_NOT_PERSISTED");
-  assert(fixture.counts().inferences===2,"LIST_OR_OPEN_STARTED_GENERATION");
+  assert(fixture.counts().inferences===5,"LIST_OR_OPEN_STARTED_GENERATION");
   await returning.locator("#nostr-sign-in").click(); await returning.locator("#nostr-sign-out").click(); await returning.locator("#nostr-close").click();
   await returning.locator("#your-applets").click(); await returning.locator("#projects-empty").waitFor({state:"visible"});
   assert(await returning.locator("#projects-list li").count()===0,"SIGN_OUT_LEFT_ACCOUNT_PROJECT_LIST");
   assert(errors.length===0,`BROWSER_ERRORS:${errors.join(";")}`);
-  console.log(JSON.stringify({status:"passed",case:"returning-projects",checks:["actual selected identity signs generation","active/pending/verified stages","cross-owner list/get/preview denial","same npub from fresh browser after CVM restart","open without inference","signout clears account list","legacy anonymous build visible after sign-in","live stages refresh without interrupting generation","dedicated static route and browser back/forward","mobile layout","primary navigation preserves builder context and running status","signed caller-only cost/time estimates","active jobs excluded from estimates","history survives reload without inference"]}));
+  console.log(JSON.stringify({status:"passed",case:"returning-projects",checks:["actual selected identity signs generation","active/pending/verified stages","cross-owner list/get/preview denial","same npub from fresh browser after CVM restart","open without inference","signout clears account list","legacy anonymous build visible after sign-in","live stages refresh without interrupting generation","dedicated static route and browser back/forward","mobile layout","primary navigation preserves builder context and running status","signed caller-only cost/time estimates","active jobs excluded from estimates","history survives reload without inference","exact per-request breakdown and cumulative totals","owner-only costs and cursor","pagination and replay do not change totals","failed paid requests included; confirmed zero distinct from pending"]}));
 } catch(error) { console.error(error, await page.locator("body").innerText({timeout:1000}).catch(()=>"original page closed")); throw error; }
 finally { release(); releaseAnonymous(); await owner.close(); await other.close(); await browser.close(); await pool.end(); await server.close(); await stack.down(true); await rm(root,{recursive:true,force:true}); }

@@ -1,8 +1,10 @@
+import { formatCost } from "./request-costs";
+import type { ProjectSpend } from "../project-costs-contract";
 import { PrivateKeySigner } from "@contextvm/sdk/signer";
 import { browserSignerKey, DevelopmentContextVmClient, type DevelopmentBootstrap } from "./contextvm-client";
 import type { PublishingIdentity } from "./nostr-identity";
 
-export type Project = { id: string; title: string; sessionId: string | null; checkpointId: string | null; stage: string; verifiedVersion: number; createdAt: string; publication?: { id: string; version: number; publisher: string; publishedAt?: string; eventId: string } | null; unpublishedChanges?: boolean };
+export type Project = { spend?: ProjectSpend; id: string; title: string; sessionId: string | null; checkpointId: string | null; stage: string; verifiedVersion: number; createdAt: string; publication?: { id: string; version: number; publisher: string; publishedAt?: string; eventId: string } | null; unpublishedChanges?: boolean };
 export type ProjectScope = "account" | "browser";
 type Source = { scope: ProjectScope; client?: DevelopmentContextVmClient; ready?: Promise<unknown>; projects: Project[]; after?: string; pages: number; error?: string };
 const stages: Record<string, string> = { pending: "Waiting to start", active: "Building", verified: "Ready", published: "Published", failed: "Needs changes", unconfirmed: "Needs checking", expired: "Expired" };
@@ -124,7 +126,9 @@ export class ProjectsWorkspace {
       const title = document.createElement("strong"); title.textContent = project.title; title.title = project.title;
       const detail = document.createElement("span"); detail.className = "project-detail"; detail.textContent = `${source.scope === "browser" ? "This browser" : "Your account"} · ${new Date(project.createdAt).toLocaleDateString()}${project.verifiedVersion ? ` · Version ${project.verifiedVersion}` : ""}`;
       const open = document.createElement("span"); open.className = "project-open"; open.textContent = "Open applet →";
-      button.append(badge, title, detail, open);
+      const spend = document.createElement("span"); spend.className = "project-card-spend";
+      spend.textContent = project.spend ? `${formatCost(project.spend.confirmed)} spent${project.spend.pending ? " · cost pending" : ""}` : "Cost unavailable";
+      button.append(badge, title, detail, spend, open);
       if (project.publication) { const published = document.createElement("span"); published.className = "project-publication"; published.textContent = `Published · Version ${project.publication.version}${project.unpublishedChanges ? ` · Version ${project.verifiedVersion} ready to publish` : ""}`; detail.after(published); }
       button.onclick = async () => {
         if (!this.#sources.includes(source) || this.#opening) return;

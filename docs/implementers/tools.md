@@ -15,13 +15,21 @@ This is the tool surface of the current repository. **Core** means a transport-n
 | `publication` | Promoted publication workflow | Intent/consent, signed manifest submission, status/reconcile; unavailable in default development composition |
 | `service_info` | Development availability, ceilings and estimates | `{}`; provider label, current ceilings, availability, caller-scoped `estimates` |
 | `development_faucet` | Local test Cashu | `amount`; runtime cap is 10,000 test sats, no real value |
-| `projects` | Private project list/read/rename | `action`; list accepts stage, limit 1–50, cursor; get/rename use ID |
+| `projects` | Private project list/read/rename/costs | `action`; list accepts stage, limit 1–50, cursor; get/rename/costs use ID; costs accepts limit and cursor |
 | `remix_import` | Prepare a verified remix basis | Signed `event`, `naddr`, optional `assetUploaded`; or `action: "asset_part"` for bounded staging; returns owned remix reference |
 | `development_publication` | Local publishing implementation | `preview`, `lookup`, `metadata`, `prepare`, `save`, `submit`, `status`, `reconcile`, `republish` |
 | `operation_diagnostic` | Bounded owned operation failure | `operationId`; safe diagnostic or unavailable |
 | `cvm_admin` | Operator configuration and jobs | Operator signer only; status, accounts, rates, jobs and job details |
 
 See [complete structural input schemas](./schemas) for unions, required fields and bounds. Ordinary callers must not pass `principal` or an owner override. `publisher` in a publication preparation selects the eventual event signer; it does not grant access to someone else's artifact.
+
+## Project and request costs
+
+Call `projects` with `{ "action": "costs", "id": "<session ID>", "limit": 20 }`. The signed request identity must own the session; there is no owner override. Pass `after: nextCursor` for older requests. Cursors are valid only within the same owned session. The response is `{ status: "ok", costs }` or `not_found_or_denied`.
+
+`costs` contains `unit: "test_sat"`, `sessionId`, `total: { confirmed, pending, requests }`, newest-first `requests`, and `nextCursor`. The total is cumulative committed session spend, independent of page size. `pending` counts actions without a confirmed charge. Request `charge` is a decimal string or `null`; never coerce `null` to zero. Failed actions with a charge remain in the total. Replay, list and status reads do not charge again.
+
+Each request includes a stable ID and request key, ordinal, kind, bounded prompt (nullable for old records), outcome, verified version, creation time, maximum, and usage lines. Lines contain token dimension, units, saved rational rate (`numerator`/`denominator`) and integer charge. They are returned only when their sum matches the committed debit. Missing breakdowns do not invalidate the recorded charge. Provider account identifiers, credentials and raw provider responses are omitted. Project `list`/`get` also return the same `spend` summary for cards.
 
 ## Generation estimates
 

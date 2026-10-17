@@ -12,6 +12,18 @@ The local Cashu and NWC services use test money. The workspace can fund these au
 
 The service advertises the current action ceiling. Review the maximum shown for your action rather than relying on a number from an old screenshot; operator settings can change rates for new work.
 
+## What each request costs
+
+**Total spent** appears above your workspace, at the top of the revision conversation, and on each card in **Your applets**. It includes all confirmed generation and revision charges for that applet, including charged attempts that did not pass their checks. Publishing and reopening a saved applet do not add a generation charge.
+
+Each request in the conversation shows its **actual cost**. Open **Cost breakdown** to see the input, output, cached and reasoning token categories reported for that request, with their saved rates and individual charges. A request and its result share one charge. Each category rounds up to a whole test sat.
+
+<GuideScreenshot name="request-cost" alt="Revision request showing its actual cost of 160 test sats, with input and output token charges and the approved maximum" caption="See what a specific change cost. These documentation amounts are illustrative." />
+
+**Awaiting confirmation** means the charge is not known yet; it does not mean free. The total explicitly says when pending charges are excluded. A confirmed **0 test sats** is different: no local charge was taken, although the model provider may still count subscription usage.
+
+Costs are saved by the CVM and return when you reopen the applet with its original identity. Use **Earlier requests** for older history; the total always includes the entire project. Older requests may lack their original prompt or a token breakdown, but their recorded charges still appear. If loading fails, **Refresh costs** checks again without generating or charging for a new version.
+
 ## Estimates before you send
 
 The build review and revision composer show **estimated cost** and **estimated time** separately from your maximum. These rough ranges come from your recent successful builds on the connected CVM with its current model configuration and rates. No extra model request is made to calculate them.

@@ -21,6 +21,8 @@ const pendingStorageKey = `napplet-cvm/dev-pending/v1/${bootstrap.servicePubkey}
 const sessionStorageKey = `napplet-cvm/dev-session/v1/${bootstrap.servicePubkey}`;
 const ownerStorageKey = `applet-broker/action-owner/v1/${bootstrap.servicePubkey}`;
 let client: DevelopmentContextVmClient | undefined;
+let costSessionId: string | undefined;
+let costRead = 0;
 let balance = "0";
 let pending: PendingAction | undefined;
 let selected: Version | undefined;
@@ -53,7 +55,7 @@ if (publishing) new ProjectsWorkspace(bootstrap, publishing.identity, () => acti
   sessionStorage.setItem(ownerStorageKey, await client!.pubkey);
   selected = undefined; versions.length = 0; lastRevision = undefined; savePending(undefined); clearRequest();
   byId<HTMLIFrameElement>("preview").hidden = true; byId<HTMLIFrameElement>("preview").removeAttribute("src");
-  product?.openSaved();
+  costSessionId = undefined; ++costRead; product?.openSaved();
   if (project.sessionId) { sessionStorage.setItem(sessionStorageKey, project.sessionId); await hydrateSession(project.sessionId); }
   else if (project.checkpointId) { const pending = await client!.pendingActionStatus(project.checkpointId); if (pending.status === "saved") savePending(pending); else facts({ state: project.stage }); }
   publishing.sync();
@@ -82,6 +84,17 @@ function validMaximum(value: string): boolean { try { return BigInt(value) >= Bi
 async function selectVersion(version: Version): Promise<any> { const descriptor = await client!.preview({ sessionId: version.sessionId, artifactId: version.artifactId }); if (descriptor?.status !== "ready" || typeof descriptor.previewUrl !== "string") throw new Error("PREVIEW_NOT_READY"); const frame = byId<HTMLIFrameElement>("preview"); const previewUrl = new URL(descriptor.previewUrl); if (product) previewUrl.searchParams.set("presentation", "workspace"); frame.src = previewUrl.href; frame.hidden = false; selected = version; void publishing?.version(); byId<HTMLButtonElement>("revise").disabled = activity.running; product?.selected(version); renderVersions(); return descriptor; }
 function renderVersions(): void { const list = byId<HTMLUListElement>("versions"); list.replaceChildren(...versions.map((version) => { const item = document.createElement("li"); const button = document.createElement("button"); button.disabled = activity.running; button.textContent = `Version ${version.version}: ${version.artifactId}`; button.onclick = () => { void selectVersion(version).then(() => facts({ selectedVersion: version.version, artifact: version.artifactId })).catch((error) => setError(`Preview unavailable: ${error instanceof Error ? error.message : "unknown"}`)); }; item.append(button); return item; })); product?.versions(versions, selected, async (version) => { try { await selectVersion(version); facts({ selectedVersion: version.version, artifact: version.artifactId }); } catch (error) { setError(`Preview unavailable: ${error instanceof Error ? error.message : "unknown"}`); } }); }
 function renderDurableTimeline(status: any): void { const timeline = byId<HTMLUListElement>("timeline"); const events = Array.isArray(status?.timeline) ? status.timeline : []; timeline.replaceChildren(...events.map((event: any) => { const item = document.createElement("li"); item.textContent = `${event.stage.replaceAll("_", " ")} · ${new Date(event.at).toLocaleTimeString()} · ${event.detail}`; return item; })); }
+async function refreshCosts(after?: string): Promise<void> {
+  const reader = client, sessionId = costSessionId, read = ++costRead;
+  if (!reader || !product || !sessionId) return;
+  try {
+    const result = await reader.callTool("projects", { action: "costs", id: sessionId, ...(after ? { after } : {}) });
+    if (read !== costRead || reader !== client || costSessionId !== sessionId) return;
+    if (result.status !== "ok") throw new Error("COSTS_UNAVAILABLE");
+    product.costs(result.costs,!!after);
+  } catch { if (read === costRead && reader === client && costSessionId === sessionId) product.costsUnavailable(); }
+}
+product?.onCostsLoad(refreshCosts);
 async function refreshEstimates(): Promise<void> {
   const current = client;
   if (!current || !product) return;
@@ -120,13 +133,14 @@ if (product) {
 async function refresh(): Promise<void> { if (client) setBalance(await client.accountStatus()); }
 async function preview(action: any): Promise<void> { if (!action?.artifactId) throw new Error("ARTIFACT_NOT_AVAILABLE"); const version = { sessionId: action.sessionId, version: action.artifactVersion, artifactId: action.artifactId }; if (versions.some((item) => item.sessionId !== version.sessionId)) versions.length = 0; if (!versions.some((item) => item.version === version.version && item.sessionId === version.sessionId)) versions.push(version); renderVersions(); const descriptor = await selectVersion(version); const generation = action.generation; facts({ provider: generation?.provider ?? "durably recorded", model: generation?.model ?? "recorded", usage: Array.isArray(generation?.usage) ? generation.usage.map((line: any) => `${line.dimension}:${line.units}`).join(", ") : "recorded", worker: generation?.worker ?? "verified", stage: "verified", version: action.artifactVersion, artifact: action.artifactId, aggregate: descriptor.aggregateSha256, charge: action.confirmedSpend, remainingMaximum: action.remainingCap, remainingBalance: action.remainingBalance }); appendTimeline("verified preview", `version ${action.artifactVersion} · charge ${action.confirmedSpend} sats`); product?.actionCharge(action.confirmedSpend); product?.completed(version); }
 async function hydrateSession(sessionId: string): Promise<boolean> {
+  costSessionId = sessionId;
   const status = await client!.sessionStatus(sessionId); if (status?.status !== "ok") return false;
   versions.splice(0, versions.length, ...(status.session.verifiedArtifacts ?? []).map((item: any) => ({ sessionId, version: item.version, artifactId: item.id })).sort((a: Version, b: Version) => a.version - b.version));
   renderVersions(); renderDurableTimeline(status.session); const latest = versions.at(-1);
-  if (!latest) { facts({ session: sessionId, state: status.session.state, nextAction: status.session.nextAction }); setGenerationStatus(`Saved applet: ${status.session.progress.replaceAll("_", " ")}`); product?.savedStatus(status.session.state); return true; }
+  if (!latest) { facts({ session: sessionId, state: status.session.state, nextAction: status.session.nextAction }); setGenerationStatus(`Saved applet: ${status.session.progress.replaceAll("_", " ")}`); product?.savedStatus(status.session.state); await refreshCosts(); return true; }
   await selectVersion(latest);
   facts({ session: sessionId, state: status.session.state, version: latest.version, artifact: latest.artifactId, remainingMaximum: status.session.remainingCap, remainingBalance: status.session.remainingBalance });
-  product?.completed(latest, true); product?.sessionState(status.session.state); void refreshEstimates();
+  product?.completed(latest, true); product?.sessionState(status.session.state); await refreshCosts(); void refreshEstimates();
   return true;
 }
 
@@ -139,7 +153,7 @@ product?.onSessionStatusCheck(async () => {
   versions.splice(0, versions.length, ...(status.session.verifiedArtifacts ?? []).map((item: any) => ({ sessionId, version: item.version, artifactId: item.id })).sort((a: Version, b: Version) => a.version - b.version));
   renderVersions(); renderDurableTimeline(status.session);
   facts({ session: sessionId, state: status.session.state, nextAction: status.session.nextAction });
-  product.sessionState(status.session.state);
+  product.sessionState(status.session.state); costSessionId = sessionId; await refreshCosts();
 });
 
 async function complete(action: any): Promise<void> { if (action?.status !== "completed") throw new Error(action?.code ?? "GENERATION_NOT_COMPLETED"); sessionStorage.setItem(sessionStorageKey, action.sessionId); await preview(action); const status = await client!.sessionStatus(action.sessionId); if (status?.status === "ok") renderDurableTimeline(status.session); await refresh(); setGenerationStatus("Verified preview ready"); clearRequest(); void refreshEstimates(); }
@@ -205,9 +219,9 @@ function restoreRequest(): GenerationRequest | undefined {
 function clearRequest(): void { if (product) { sessionStorage.removeItem(requestStorageKey); product.recovery(false); } }
 async function runGeneration(request: GenerationRequest): Promise<any> {
   sessionStorage.setItem(ownerStorageKey, await client!.pubkey);
-  if (product) sessionStorage.setItem(requestStorageKey, JSON.stringify(request));
+  if (product) { sessionStorage.setItem(requestStorageKey, JSON.stringify(request)); if (request.input.idempotencyKey) product.requestKey(request.input.idempotencyKey); }
   const result = request.kind === "start" ? await client!.startSession(request.input) : request.kind === "revise" ? await client!.reviseSession(request.input) : await client!.resumePendingAction(request.input);
-  if (typeof result?.sessionId === "string") sessionStorage.setItem(sessionStorageKey, result.sessionId);
+  if (typeof result?.sessionId === "string") { sessionStorage.setItem(sessionStorageKey, result.sessionId); costSessionId = result.sessionId; }
   const interrupted = result?.code === "MODEL_RESPONSE_INTERRUPTED";
   if (interrupted) product?.sessionState("failed");
   // A terminal failure is a confirmed response, even when provider usage remains unknown.
@@ -242,6 +256,7 @@ for (const id of actionButtons) {
   const button = byId<HTMLButtonElement>(id); const run = button.onclick!;
   button.onclick = async (event) => {
     if (!client || activity.running || publishing?.running || (product && id !== "recover" && restoreRequest()) || product?.validate(id) === false || remix?.validate(id) === false) return;
+    if (id === "generate") { costSessionId = undefined; ++costRead; }
     product?.begin(id === "recover" ? `recover-${restoreRequest()?.kind}` : id);
     activity.begin(button.textContent ?? "Action", bootstrap.providerLabel);
     byId("generation-facts").replaceChildren(); setGenerationStatus(""); setError();
@@ -270,7 +285,7 @@ for (const id of actionButtons) {
       byId<HTMLButtonElement>("resume").disabled = !client || !pending;
       byId<HTMLButtonElement>("revise").disabled = !client || !selected;
       byId<HTMLButtonElement>("replay-revision").disabled = !client || !lastRevision;
-      product?.settled(); const explanation = byId("generation-error").textContent?.split(" · ").slice(1).join(" · "); if (explanation) product?.explainFailure(explanation); product?.recovery(!!restoreRequest()); renderVersions();
+      product?.settled(); const explanation = byId("generation-error").textContent?.split(" · ").slice(1).join(" · "); if (explanation) product?.explainFailure(explanation); product?.recovery(!!restoreRequest()); renderVersions(); await refreshCosts();
     }
   };
 }

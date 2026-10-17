@@ -1,3 +1,4 @@
+import { readProjectCosts } from "./project-costs";
 import { z } from "zod";
 import type { PostgresSqlClient } from "../persistence/postgres-sql-funding-store";
 import { accountIdForPrincipal } from "../domain/account-command";
@@ -6,15 +7,16 @@ const Stage = z.enum(["pending", "active", "verified", "published", "failed", "u
 const Id = z.string().min(1).max(240);
 export const ProjectsArgumentsSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("list"), limit: z.number().int().min(1).max(50).default(20), after: Id.optional(), stage: Stage.optional() }).strict(),
+  z.object({ action: z.literal("costs"), id: Id, limit: z.number().int().min(1).max(50).default(20), after: Id.optional() }).strict(),
   z.object({ action: z.literal("get"), id: Id }).strict(),
   z.object({ action: z.literal("rename"), id: Id, title: z.string().trim().min(1).max(120) }).strict(),
 ]);
 const Pubkey = z.string().regex(/^[a-f0-9]{64}$/);
-type Row = { id: string; title: string; created_at: Date; session_id: string | null; checkpoint_id: string | null; version: number; verified_version: number; stage: z.infer<typeof Stage>; published_version: number | null; publication_id: string | null; published_by: string | null; published_at: Date | null; event_id: string | null };
-const project = (row: Row) => ({ id: row.id, title: row.title, createdAt: row.created_at.toISOString(), sessionId: row.session_id, checkpointId: row.checkpoint_id, version: row.version, verifiedVersion: row.verified_version, stage: row.stage,
+type Row = { confirmed: string; pending: number; requests: number; id: string; title: string; created_at: Date; session_id: string | null; checkpoint_id: string | null; version: number; verified_version: number; stage: z.infer<typeof Stage>; published_version: number | null; publication_id: string | null; published_by: string | null; published_at: Date | null; event_id: string | null };
+const project = (row: Row) => ({ spend: { confirmed: row.confirmed, pending: row.pending, requests: row.requests }, id: row.id, title: row.title, createdAt: row.created_at.toISOString(), sessionId: row.session_id, checkpointId: row.checkpoint_id, version: row.version, verifiedVersion: row.verified_version, stage: row.stage,
   publication: row.publication_id ? { id: row.publication_id, version: row.published_version, publisher: row.published_by, publishedAt: row.published_at?.toISOString(), eventId: row.event_id } : null,
   unpublishedChanges: !!row.published_version && row.verified_version > row.published_version });
-const columns = "id,title,created_at,session_id,checkpoint_id,version,verified_version,stage,published_version,publication_id,published_by,published_at,event_id";
+const columns = "id,title,created_at,session_id,checkpoint_id,version,verified_version,stage,published_version,publication_id,published_by,published_at,event_id, coalesce((SELECT confirmed_spend_sat::text FROM metered_sessions s WHERE s.id=development_project_listing.session_id),'0') AS confirmed, (SELECT count(*)::int FROM metered_actions a WHERE a.session_id=development_project_listing.session_id AND receipt_charge IS NULL) AS pending, (SELECT count(*)::int FROM metered_actions a WHERE a.session_id=development_project_listing.session_id) AS requests";
 const denied = () => ({ status: "not_found_or_denied" as const });
 
 /** Called only after the ContextVM SDK verifies the signed inner request.
@@ -42,6 +44,7 @@ export class DevelopmentProjects {
     const pubkey = Pubkey.parse(verifiedPubkey);
     const command = ProjectsArgumentsSchema.parse(input);
     await this.bind(pubkey);
+    if (command.action === "costs") return readProjectCosts(this.pool,pubkey,command.id,command.limit,command.after);
     if (command.action === "rename") {
       const result = await this.pool.query("UPDATE development_projects SET title=$3 WHERE id=$1 AND owner_pubkey=$2 RETURNING id", [command.id, pubkey, command.title]);
       if (!result.rows.length) return denied();

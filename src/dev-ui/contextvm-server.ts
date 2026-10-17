@@ -191,7 +191,18 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
   const makeRuntime = (gateway: ModelGateway, pricing: Pricing) => {
     const generation = new MeteredGenerationService({
       fundedAdmission, store: app.database.meteredFunding,
-      gateway: progress.gateway(gateway, { provider: pricing.profile.provider, model: pricing.profile.model }),
+      gateway: progress.gateway({
+        dispatch: async (intent, signal) => {
+          // Only a coordinator-authorized dispatch can record this display text.
+          // Conflicting replays never reach this point; resumes use the saved prompt.
+          if (intent.prompt.length <= 512) await app.pool.query(
+            "UPDATE metered_actions SET request_text=$4 WHERE account_id=$1 AND id=$2 AND operation_id=$3 AND request_text IS NULL",
+            [intent.accountId,intent.actionId,intent.operationId,intent.prompt],
+          ).catch(() => undefined); // Display metadata cannot change the metered result.
+          return gateway.dispatch(intent,signal);
+        },
+        lookup: (intent,signal) => gateway.lookup(intent,signal),
+      }, { provider: pricing.profile.provider, model: pricing.profile.model }),
       worker: { run: async (...args) => {
         const result = await worker.run(...args);
         if (result.status !== "completed") progress.emit("worker", "failed");

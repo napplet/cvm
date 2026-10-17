@@ -107,7 +107,7 @@ try {
       { title: "Reading-session counter", stage: "verified", verifiedVersion: 2, account: true },
       { title: "Quiet focus timer", stage: "active", verifiedVersion: 0, account: true },
       { title: "Morning checklist", stage: "verified", verifiedVersion: 1, account: false },
-    ].map((p, i) => ({ ...p, id: `project:docs-${i}`, createdAt: `2026-10-${16 - i}T10:00:00Z` }));
+    ].map((p, i) => ({ ...p, spend:{confirmed:i===0?"400":i===1?"0":"120",pending:i===1?1:0,requests:i===0?2:1}, id: `project:docs-${i}`, createdAt: `2026-10-${16 - i}T10:00:00Z` }));
     new ProjectsWorkspace(bootstrap, publication.identity, () => live.running, async () => {});
     const manifest = { naddr: address, title: "Reading-session counter", description: "A quiet place to count a little daily reading.", event: { pubkey, created_at: 1792144800 }, artifactHash: "b".repeat(64), servers: [], schema: "artifact" };
     new RemixWorkspace({ resolve: async () => ({ manifest, html: "<p>Sample applet</p>" }), browse: async () => [manifest,
@@ -140,6 +140,10 @@ try {
   await page.evaluate(async () => {
     const w = window as any; w.selectedVersion = w.version;
     w.workspace.actionCharge("160"); w.workspace.completed(w.version); w.workspace.versions([{ ...w.version, artifactId: "artifact:" + "b".repeat(64), version: 1 }, w.version], w.version, async () => {});
+    w.workspace.requestKey("docs-2"); w.workspace.costs({sessionId:w.version.sessionId,unit:"test_sat",total:{confirmed:"400",pending:0,requests:2},nextCursor:null,requests:[
+      {id:"cost:docs-2",requestKey:"docs-2",number:2,kind:"revise",prompt:"Make today’s reading total easier to see.",state:"verified",version:2,createdAt:"2026-10-16T11:59:00Z",charge:"160",maximum:"3250",lines:[{dimension:"input_tokens",units:"1000",numerator:"1",denominator:"10",charge:"100"},{dimension:"output_tokens",units:"300",numerator:"1",denominator:"5",charge:"60"}]},
+      {id:"cost:docs-1",requestKey:"docs-1",number:1,kind:"create",prompt:"A reading-session counter with Add and Reset buttons.",state:"verified",version:1,createdAt:"2026-10-16T11:50:00Z",charge:"240",maximum:"3250",lines:[]}
+    ]});
     w.workspace.settled(); w.live.finish("Preview ready", "completed"); await w.publication.version();
     // A sample applet inside the real preview frame, not a generated build claim.
     const frame = document.querySelector<HTMLIFrameElement>("#preview")!; frame.hidden = false;
@@ -151,6 +155,10 @@ try {
   await page.frameLocator("#preview").getByRole("heading").waitFor();
   await capture("revise");
   await capture("revision-composer", ".conversation");
+  await page.locator('.request-message:last-child summary').click();
+  await page.locator('.request-message:last-child').evaluate(el=>el.scrollIntoView({block:"end"}));
+  await capture("request-cost", ".request-message:last-child");
+  await page.locator('.request-message:last-child summary').click();
   await page.setViewportSize({ width: 1280, height: 960 });
 
   await page.locator("#nostr-sign-in").click();

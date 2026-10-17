@@ -1,3 +1,5 @@
+import { ProjectCostsSchema, type ProjectCosts } from "../project-costs-contract";
+import { renderSpend, requestCostElement, spendMarkup } from "./request-costs";
 import { estimateMarkup, GenerationEstimatesView } from "./generation-estimates";
 import type { ActivitySnapshot } from "./activity";
 import type { DevelopmentBootstrap } from "./contextvm-client";
@@ -11,6 +13,10 @@ const stageIndex: Record<string, number> = { request: 0, admission: 0, model: 1,
 
 /** Product presentation only. The shared controller owns every service operation. */
 export class ProductWorkspace {
+  #costs?: ProjectCosts;
+  #pendingFrom?: number;
+  #requestKey?: string;
+  #loadCosts?: (after?: string) => Promise<void>;
   #key: string;
   #estimates: GenerationEstimatesView;
   #step = 1;
@@ -51,9 +57,10 @@ export class ProductWorkspace {
         <div class="intro-note"><span aria-hidden="true">✳</span><p>From a thought to something you can use.<br><span>Build, try it out, and make it better.</span></p></div>
       </section>
       <section id="setup-step" class="setup step-panel" hidden aria-labelledby="setup-heading"><button id="back-idea" class="text-button">← Back to your idea</button><div class="eyebrow">A QUICK CHECK</div><h1 id="setup-heading" tabindex="-1">Let’s bring it to life.</h1><p class="intro-copy">We’ll build your first version, check it, and open it here.</p><div class="setup-card"><div class="setup-row"><span class="setup-icon" aria-hidden="true">✳</span><div><h2>Your idea</h2><p id="idea-review"></p></div><button id="edit-idea" class="quiet">Edit</button></div><div class="setup-row"><span class="setup-icon" aria-hidden="true">↗</span><div><h2>Connected CVM</h2><p id="model-summary">${bootstrap.providerLabel}</p><p id="model-explanation" class="supporting"></p></div><button id="setup-settings" class="quiet">Connection</button></div><div class="setup-row"><span class="setup-icon" aria-hidden="true">◎</span><div><h2>A local test run</h2><p>Test funds are prepared automatically when you create.</p><p class="supporting">No real sats are charged in this development CVM. Model access is managed by its operator.</p></div></div>${estimateMarkup("create")}<details class="budget-details"><summary>Test budget</summary><label for="maximum">Maximum per action (test sats)</label><input id="maximum" inputmode="numeric" value="${bootstrap.actionCeilingSat}" aria-describedby="budget-help"><p id="budget-help" class="supporting">At least ${bootstrap.actionCeilingSat} test sats. This caps local test charges for this CVM.</p></details></div><p id="setup-validation" class="form-error" role="alert"></p><div class="setup-footer"><span class="supporting">Your first version is a starting point.</span><button id="generate" class="primary" disabled>Create my applet ${arrow}</button></div></section>
+      ${spendMarkup("workspace")}
       <section id="build-step" class="step-panel" hidden aria-labelledby="build-heading"><div class="workspace-title"><div><div class="eyebrow">YOUR WORKSPACE</div><h1 id="build-heading" tabindex="-1">A little work in progress.</h1></div><button id="new-applet" class="quiet">New applet <span aria-hidden="true">+</span></button></div>
         <div class="making-grid"><section class="preview-panel" aria-labelledby="preview-heading"><div class="preview-toolbar"><h2 id="preview-heading"><span class="preview-dot" aria-hidden="true"></span>Preview</h2><div class="preview-tools"><label class="sr-only" for="version-picker">Preview version</label><select id="version-picker" disabled><option value="">No version yet</option></select><button id="preview-expand" class="icon-button" aria-label="Expand preview" aria-pressed="false">⤢</button></div></div><div class="preview-stage"><div id="preview-empty" data-state="idle"><div class="preview-status-art" aria-hidden="true"><svg viewBox="0 0 160 160" fill="none" focusable="false"><circle class="preview-orbit" cx="80" cy="80" r="65"/><g class="preview-shape"><rect x="40" y="40" width="80" height="80" rx="24"/><rect class="preview-shape-line" x="40" y="40" width="80" height="80" rx="24" pathLength="100"/></g><circle class="preview-center" cx="80" cy="80" r="5"/></svg></div><p id="preview-status-label" class="preview-status-label">YOUR FIRST VERSION</p><h3 id="preview-status-title" role="status" aria-live="polite">Your idea takes shape here.</h3><p id="preview-empty-copy">The preview opens after your applet passes its checks.</p><dl id="preview-status-metrics" hidden><div><dt>Time elapsed</dt><dd id="preview-status-elapsed"></dd></div><div id="preview-remaining-metric"><dt>Estimated remaining</dt><dd id="preview-status-remaining"></dd></div><div id="preview-cost-metric"><dt>Estimated cost</dt><dd id="preview-status-cost"></dd></div></dl><p id="preview-status-note" hidden>Your preview will appear here when it’s ready.</p></div><iframe id="preview" title="Verified napplet preview" hidden></iframe></div><div class="preview-caption"><span id="preview-caption">A sandboxed space to try your applet.</span><span id="preview-verified" hidden>✓ Verified</span></div></section>
-        <section class="conversation" aria-labelledby="conversation-heading"><div class="conversation-header"><div class="small-mark" aria-hidden="true">a·</div><div><h2 id="conversation-heading">Make it yours</h2><p>Small changes. Better every time.</p></div></div><ol id="conversation-messages" aria-label="Your requests and build results"></ol><p id="chat-working" role="status" hidden>Working on your request…</p><div id="old-version-note" hidden><p>You’re viewing an earlier version.</p><button id="return-latest" class="text-button">Return to latest to make changes →</button></div><div class="composer"><label for="revision">What would you like to change?</label><textarea id="revision" maxlength="512" rows="3" placeholder="Make the buttons bigger, try a softer colour…" aria-describedby="revision-hint revision-blocked-reason revision-status-result"></textarea><div class="composer-footer"><span id="revision-hint">⌘ / Ctrl + Enter to send</span><button id="revise" class="send-button" disabled aria-label="Send revision" aria-describedby="revision-blocked-reason">${arrow}</button></div><div id="revision-availability" hidden><p id="revision-blocked-reason" role="status"></p><button id="revision-help" class="text-button" hidden></button></div><p id="revision-status-result" class="supporting" role="status" hidden></p></div>${estimateMarkup("revise")}<p class="chat-footnote">Each change creates a new verified version.</p></section></div>
+        <section class="conversation" aria-labelledby="conversation-heading"><div class="conversation-header"><div class="small-mark" aria-hidden="true">a·</div><div><h2 id="conversation-heading">Make it yours</h2><p>Small changes. Better every time.</p></div></div>${spendMarkup("conversation")}<p id="cost-history-status" class="request-note" role="status"></p><button id="cost-history-refresh" class="quiet" hidden>Refresh costs</button><button id="cost-history-more" class="quiet" hidden>Earlier requests</button><ol id="conversation-messages" aria-label="Your requests and build results"></ol><p id="chat-working" role="status" hidden>Working on your request…</p><div id="old-version-note" hidden><p>You’re viewing an earlier version.</p><button id="return-latest" class="text-button">Return to latest to make changes →</button></div><div class="composer"><label for="revision">What would you like to change?</label><textarea id="revision" maxlength="512" rows="3" placeholder="Make the buttons bigger, try a softer colour…" aria-describedby="revision-hint revision-blocked-reason revision-status-result"></textarea><div class="composer-footer"><span id="revision-hint">⌘ / Ctrl + Enter to send</span><button id="revise" class="send-button" disabled aria-label="Send revision" aria-describedby="revision-blocked-reason">${arrow}</button></div><div id="revision-availability" hidden><p id="revision-blocked-reason" role="status"></p><button id="revision-help" class="text-button" hidden></button></div><p id="revision-status-result" class="supporting" role="status" hidden></p></div>${estimateMarkup("revise")}<p class="chat-footnote">Each change creates a new verified version.</p></section></div>
       </section>
       <section id="product-notice" class="notice" hidden aria-labelledby="notice-heading"><div><h2 id="notice-heading">Something needs a look</h2><p id="notice-copy" role="alert"></p></div><button id="review-request" class="quiet">Review request</button><button id="notice-settings" class="quiet" hidden>Open settings</button></section>
       <section id="continuation" class="notice" hidden><div><h2>Ready when you are</h2><p id="pending-status"></p></div><button id="resume" class="primary">Resume saved action</button></section>
@@ -72,9 +79,8 @@ export class ProductWorkspace {
     this.#messages = Array.isArray(draft.messages) ? draft.messages.filter((m) => m && ["user", "assistant"].includes(m.role) && typeof m.text === "string" && m.text.length <= 1000).slice(-60) : [];
     this.#sessionId = typeof draft.sessionId === "string" ? draft.sessionId : undefined;
     this.renderMessages(); this.count();
-    // Keep the newest reply beside the composer when the responsive layout changes.
-    const conversation = this.el("conversation-messages");
-    new ResizeObserver(() => { conversation.scrollTop = conversation.scrollHeight; }).observe(conversation);
+    this.el("cost-history-refresh").onclick = () => { void this.loadCosts(); };
+    this.el("cost-history-more").onclick = () => { void this.loadCosts(this.#costs?.nextCursor ?? undefined); };
     this.showStep(draft.step === 2 ? 2 : draft.step === 3 || draft.step === 4 ? 3 : 1, false);
     this.el<HTMLButtonElement>("idea-next").onclick = () => { if (!this.field("idea").value.trim()) { this.text("idea-validation", "Start with one thing you’d like your applet to do."); this.field("idea").focus(); return; } this.text("idea-validation", ""); this.showStep(2); };
     for (const id of ["back-idea", "edit-idea"]) this.el<HTMLButtonElement>(id).onclick = () => this.showStep(1);
@@ -101,6 +107,7 @@ export class ProductWorkspace {
   private persist(): void { sessionStorage.setItem(this.#key, JSON.stringify({ idea: this.field("idea").value, revision: this.field("revision").value, maximum: this.field("maximum").value, step: this.#step, messages: this.#messages.slice(-60), sessionId: this.#sessionId } satisfies Draft)); }
   private showStep(step: number, focus = true): void {
     this.#step = step; this.navigation();
+    this.el("creation-workspace").dataset.step = String(step);
     if (!this.el("creation-workspace").hidden) this.root.querySelector<HTMLAnchorElement>(".skip-link")!.href = `#${["step-heading", "setup-heading", "build-heading", "publication-heading"][step - 1]}`;
     ["idea-step", "setup-step", "build-step", "publish-step"].forEach((id, index) => { const panel = this.el(id); if (panel) panel.hidden = index + 1 !== step; });
     this.root.querySelectorAll<HTMLElement>("[data-step]").forEach((item) => { if (Number(item.dataset.step) === step) item.setAttribute("aria-current", "step"); else item.removeAttribute("aria-current"); item.dataset.complete = String(Number(item.dataset.step) < step); });
@@ -112,7 +119,31 @@ export class ProductWorkspace {
     this.persist();
   }
   savedStatus(state: string): void { this.text("build-heading", state === "active" ? "Your applet is still building." : state === "needs_top_up" ? "Your applet is waiting for funds." : "Your saved applet."); this.text("progress-title", `Saved status: ${state.replaceAll("_", " ")}`); this.text("preview-empty-copy", "Refresh Your applets to check for a verified version. No new generation has been started."); this.el("execution-details").hidden = false; this.sessionState(state); this.previewStatus({state:"saved",current:"",detail:"",elapsed:0,stale:false}, state === "active" ? "Your applet is still building" : "Your saved request", ""); }
-  openSaved(): void { this.#estimates.reset(); this.#hasDraft = false; this.#version = undefined; this.#sessionBlocked = false; this.#sessionState = undefined; this.text("revision-status-result", ""); this.#messages = []; this.renderMessages(); this.el("preview-empty").hidden = false; this.el("preview-verified").hidden = true; this.previewStatus({state:"saved",current:"",detail:"",elapsed:0,stale:false}, "Opening your saved applet", ""); this.showStep(3); }
+  openSaved(): void { this.resetCosts(); this.#sessionId = undefined; this.#estimates.reset(); this.#hasDraft = false; this.#version = undefined; this.#sessionBlocked = false; this.#sessionState = undefined; this.text("revision-status-result", ""); this.#messages = []; this.renderMessages(); this.el("preview-empty").hidden = false; this.el("preview-verified").hidden = true; this.previewStatus({state:"saved",current:"",detail:"",elapsed:0,stale:false}, "Opening your saved applet", ""); this.showStep(3); }
+  onCostsLoad(load: (after?: string) => Promise<void>): void { this.#loadCosts = load; }
+  private async loadCosts(after?: string): Promise<void> {
+    const button = this.el<HTMLButtonElement>(after ? "cost-history-more" : "cost-history-refresh"); button.disabled = true;
+    try { await this.#loadCosts?.(after); } finally { button.disabled = false; }
+  }
+  requestKey(key: string): void { this.#requestKey = key; }
+  costs(value: unknown, append = false): void {
+    const data = ProjectCostsSchema.parse(value);
+    if (append && this.#costs?.sessionId === data.sessionId) data.requests = [...new Map([...this.#costs.requests,...data.requests].map(r => [r.id,r])).values()];
+    this.#costs = data; this.#sessionId = data.sessionId;
+    if (data.requests.some(r => r.requestKey === this.#requestKey)) this.#pendingFrom = undefined;
+    renderSpend(this.root,data.total); this.text("cost-history-status", ""); this.el("cost-history-refresh").hidden = true;
+    this.el("cost-history-more").hidden = !data.nextCursor;
+    this.renderMessages(!append); this.persist();
+  }
+  costsUnavailable(): void {
+    this.text("cost-history-status", this.#costs ? "Showing saved costs. Refresh to check the latest charges." : "Costs unavailable. Refresh to check recorded charges.");
+    this.el("cost-history-refresh").hidden = false;
+  }
+  private resetCosts(): void {
+    this.#costs = undefined; this.#pendingFrom = undefined; this.#requestKey = undefined;
+    renderSpend(this.root); this.text("cost-history-status", "");
+    this.el("cost-history-more").hidden = true; this.el("cost-history-refresh").hidden = true;
+  }
   estimates(value: unknown, forCurrentAction = false, placement?: "create" | "revise"): void { this.#estimates.set(value, forCurrentAction, placement); }
   actionCharge(value: unknown): void { this.#estimates.charge(value); }
   configuration(): void {
@@ -132,6 +163,9 @@ export class ProductWorkspace {
     return kind !== "revise" || !!this.field("revision").value.trim();
   }
   begin(kind: string): void {
+    if (kind === "generate") { this.resetCosts(); this.#sessionId = undefined; }
+    this.#pendingFrom = kind === "generate" ? 0 : this.#messages.length; this.#requestKey = undefined;
+    if (this.#costs) renderSpend(this.root, { ...this.#costs.total, pending: Math.max(1,this.#costs.total.pending) });
     this.#estimates.begin(kind);
     this.#revisionRequest = kind === "revise" || kind === "recover-revise";
     this.text("revision-status-result", "");
@@ -321,10 +355,14 @@ export class ProductWorkspace {
     this.el<HTMLButtonElement>("new-applet").disabled = this.#running || this.#recovering || this.#checkingSession;
     this.el<HTMLButtonElement>("open-settings").disabled = false;
   }
-  private addMessage(message: Message): void { this.#messages.push(message); this.#messages = this.#messages.slice(-60); this.renderMessages(); this.persist(); }
-  private renderMessages(): void {
+  private addMessage(message: Message): void { this.#messages.push(message); if (this.#pendingFrom !== undefined) this.#pendingFrom = Math.max(0,this.#pendingFrom - Math.max(0,this.#messages.length - 60)); this.#messages = this.#messages.slice(-60); this.renderMessages(); this.persist(); }
+  private renderMessages(scroll = true): void {
     const list = this.el("conversation-messages");
-    list.replaceChildren(...this.#messages.map((message) => { const item = document.createElement("li"); item.className = `message ${message.role}`; if (message.state) item.dataset.state = message.state; const label = document.createElement("span"); label.className = "message-author"; label.textContent = message.role === "user" ? "You" : "applet.broker"; const body = document.createElement("p"); body.textContent = message.text; item.append(label, body); return item; }));
-    list.scrollTop = list.scrollHeight;
+    const messages = this.#costs ? (this.#pendingFrom === undefined ? [] : this.#messages.slice(this.#pendingFrom)) : this.#messages;
+    const receipts = this.#costs ? [...this.#costs.requests].sort((a,b) => a.number - b.number).map(requestCostElement) : [];
+    const open = new Set([...list.querySelectorAll<HTMLDetailsElement>(".request-cost-details[open]")].map(el => el.closest<HTMLElement>("[data-request-id]")!.dataset.requestId));
+    for (const receipt of receipts) if (open.has(receipt.dataset.requestId)) receipt.querySelector("details")!.open = true;
+    list.replaceChildren(...receipts,...messages.map((message) => { const item = document.createElement("li"); item.className = `message ${message.role}`; if (message.state) item.dataset.state = message.state; const label = document.createElement("span"); label.className = "message-author"; label.textContent = message.role === "user" ? "You" : "applet.broker"; const body = document.createElement("p"); body.textContent = message.text; item.append(label, body); const cost = document.createElement("p"); cost.className = "request-note"; cost.textContent = message.role === "user" ? "Cost awaits confirmation" : "Cost included with your request"; item.append(cost); return item; }));
+    if (scroll) list.scrollTop = list.scrollHeight;
   }
 }

@@ -35,7 +35,12 @@
     {
       "file": "revision-composer.png",
       "width": 360,
-      "height": 756
+      "height": 949
+    },
+    {
+      "file": "request-cost.png",
+      "width": 322,
+      "height": 543
     },
     {
       "file": "sign-in.png",
@@ -55,27 +60,27 @@
     {
       "file": "publish-destinations.png",
       "width": 840,
-      "height": 1758
+      "height": 1759
     },
     {
       "file": "publish-review.png",
       "width": 840,
-      "height": 1474
+      "height": 1475
     },
     {
       "file": "publish-advanced.png",
       "width": 840,
-      "height": 1700
+      "height": 1701
     },
     {
       "file": "publish-confirmed.png",
       "width": 840,
-      "height": 1358
+      "height": 1359
     },
     {
       "file": "publish-edit.png",
       "width": 840,
-      "height": 1729
+      "height": 1730
     },
     {
       "file": "remix.png",

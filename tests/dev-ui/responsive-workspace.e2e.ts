@@ -91,7 +91,7 @@ try {
       return w.preparedFixture = {id:"publication:view",status:"prepared",artifactId:v.artifactId,publisher:publication.identity.pubkey,screenshot:location.origin+"/sample-screenshot.png",application:{template:{kind:32267,tags:[],content:input.description,created_at:1}},title:input.title,description:input.description,capabilitiesKnown:true,template:{tags:[["R","storage"],["O","theme"],...input.hashtags.map((tag:string)=>["t",tag])]},servers:input.servers,relays:input.relays,files:[],version:1,expiresAt:Date.now()+60000};
     }};
     const publication = new PublicationWorkspace(bootstrap,()=>publicationClient,()=>v);
-    w.fixtureProjects = ["active","verified","published","unconfirmed","pending"].map((stage,i)=>({id:`project:${i}`,title:i===0?"A".repeat(512):`My ${stage} applet`,stage,verifiedVersion:i,createdAt:new Date().toISOString()}));
+    w.fixtureProjects = ["active","verified","published","unconfirmed","pending"].map((stage,i)=>({id:`project:${i}`,title:i===0?"A".repeat(512):`My ${stage} applet`,stage,spend:{confirmed:"9007199254740993",pending:i===0?1:0,requests:2},verifiedVersion:i,createdAt:new Date().toISOString()}));
     new ProjectsWorkspace(bootstrap,publication.identity,()=>live.running,async()=>{});
     new RemixWorkspace({ resolve: async () => { throw new Error("Not found"); }, browse: async () => [{ naddr:"naddr1"+"q".repeat(220), title:"A".repeat(512),description:"D".repeat(512),event:{pubkey:"b".repeat(64),created_at:1} }] }, publication.identity, bootstrap.servicePubkey,()=>live.running);
     Object.assign(w,{workspace,live,publication,v}); workspace.connected(true);
@@ -110,6 +110,14 @@ try {
   });
   await page.frameLocator("#preview").getByRole("button").click();
   await page.locator("#revision").fill("Keep this draft across resize and navigation");
+  await page.evaluate(()=>{const w=window as any; w.workspace.costs({sessionId:w.v.sessionId,unit:"test_sat",total:{confirmed:"9007199254740993",pending:1,requests:3},nextCursor:"older",
+    requests:[{id:"cost:2",requestKey:"key:2",number:2,kind:"revise",prompt:"Make the button larger",state:"failed",version:null,createdAt:"2026-10-17T12:00:00Z",charge:"9007199254740993",maximum:"9007199254740993",lines:[{dimension:"input_tokens",units:"9007199254740993",numerator:"1",denominator:"1",charge:"9007199254740993"}]},
+      {id:"cost:3",requestKey:"key:3",number:3,kind:"revise",prompt:"Try a softer colour",state:"usage_unknown",version:null,createdAt:"2026-10-17T12:01:00Z",charge:null,maximum:"3750",lines:[]}]}); });
+  assert((await page.locator('[data-spend="workspace"] strong').innerText()).includes("9,007,199,254,740,993"),"MONEY_LOST_PRECISION");
+  assert((await page.locator('.request-charge strong').last().innerText())==="Awaiting confirmation","UNKNOWN_SHOWN_AS_ZERO");
+  await page.locator('.request-cost-details summary').first().click();
+  await layout("cost-breakdown",".request-message:first-child .request-cost-details summary");
+  await page.locator('.request-cost-details summary').first().click();
   await layout("builder","#revise");
   await page.locator("#preview-expand").click(); await layout("expanded","#preview-expand"); await page.locator("#preview-expand").click();
   await page.evaluate(()=>{const w=window as any;w.workspace.sessionState("usage_unknown");w.workspace.onSessionStatusCheck(async()=>{});document.getElementById("generation-error")!.textContent="REQUEST_"+"X".repeat(512);document.getElementById("generation-facts")!.innerHTML='<dt>remainingMaximum</dt><dd>'+"a".repeat(128)+'</dd>';document.querySelector<HTMLDetailsElement>("#execution-details")!.open=true;});
@@ -165,6 +173,10 @@ try {
   await layout("published-edit","#publication-review");
   await page.locator("#publication-close").click();
   await layout("published-builder","#republish");
+  // Long-lived conversations keep the newly submitted request visible even
+  // after the local draft cache reaches its bounded history limit.
+  await page.evaluate(()=>{const w=window as any;for(let i=0;i<31;i++){w.workspace.begin("revise");w.workspace.completed({...w.v,version:i+2});w.workspace.settled();} (document.getElementById("revision") as HTMLTextAreaElement).value="This latest request must remain visible";w.workspace.begin("revise");});
+  assert((await page.locator('#conversation-messages').innerText()).includes("This latest request must remain visible"),"LONG_HISTORY_HID_PENDING_MESSAGE");
   assert(errors.length===0,errors.join(";"));
   console.log(JSON.stringify({status:"passed",case:"responsive-workspace",viewports:sizes,checks,evidence,coverage:["bounded application frame","no parent/content horizontal overflow","readable reachable controls","short landscape","long titles/errors/addresses","identity QR and settings dialogs","expanded sandbox preview","resize/route draft and preview continuity","publication prepare/review/failure/completion"]}));
 } catch(error) {await page.screenshot({path:resolve(evidence,"failure.png")});throw error;}

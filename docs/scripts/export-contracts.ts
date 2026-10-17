@@ -1,3 +1,4 @@
+import { ProjectCostsSchema } from "../../src/dev-ui/project-costs-contract";
 import { PublicationMetadataSchema } from "../../src/dev-ui/publication-metadata";
 import { GenerationEstimatesSchema } from "../../src/dev-ui/generation-estimates-contract";
 import { z } from "zod";
@@ -24,7 +25,7 @@ const entries: [string, string, z.ZodType, string][] = [
   ["publication", "Coordinate owner-signed publication when the promoted facade is installed.", core.PublicationArgumentsSchema, "core-optional"],
   ["service_info", "Read development mode, availability, required ceilings and caller-scoped historical estimates.", extra.ServiceInfoArgumentsSchema, "development"],
   ["development_faucet", "Mint local test Cashu; never real money.", extra.DevelopmentFaucetArgumentsSchema, "development"],
-  ["projects", "List, read or rename projects belonging to the signed request identity.", ProjectsArgumentsSchema, "development"],
+  ["projects", "List, read, rename or inspect paginated costs for projects belonging to the signed request identity.", ProjectsArgumentsSchema, "development"],
   ["remix_import", "Validate a signed applet and import isolated source or staged HTML.", RemixImportArgumentsSchema, "development"],
   ["development_publication", "Suggest metadata, prepare, edit publication metadata, submit and explicitly republish user-signed development publications.", DevelopmentPublicationArgumentsSchema, "development"],
   ["operation_diagnostic", "Read bounded diagnostics for an owned model operation.", extra.OperationDiagnosticArgumentsSchema, "development"],
@@ -35,7 +36,7 @@ const value = {
   format: "napplet-cvm-contract-catalog-v1", sdkVersion: "0.13.10", mcpSdkVersion: "1.30.0",
   note: "Generated structural input schemas. Runtime refinements, signatures, ownership, availability, money ceilings, URL policy and durable state remain authoritative. A listed tool is not proof its facade is installed. This catalog format is not a wire protocol negotiation version.",
   tools: entries.map(([name, description, schema, scope]) => ({ name, description, scope, inputSchema: json(schema) })),
-  results: { publicationMetadata: json(PublicationMetadataSchema), generationEstimates: json(GenerationEstimatesSchema), sessionAction: json(SessionActionResultSchema), sessionStatus: json(SessionStatusSchema), developmentProgress: json(DevelopmentProgressSchema) },
+  results: { projectCosts: json(ProjectCostsSchema), publicationMetadata: json(PublicationMetadataSchema), generationEstimates: json(GenerationEstimatesSchema), sessionAction: json(SessionActionResultSchema), sessionStatus: json(SessionStatusSchema), developmentProgress: json(DevelopmentProgressSchema) },
   operatorConfiguration: { modelProfile: json(ModelProfileSchema), priceCard: json(PriceCardSchema) },
 };
 const path = new URL("../public/contracts/napplet-cvm-v1.json", import.meta.url);

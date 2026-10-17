@@ -390,6 +390,8 @@ Recent decisions affecting current work:
 | 261017-eou | CLI screenshots and user-signed Zapstore listings; isolated capture, verified mirroring and durable independent delivery | 2026-10-17 | see task history | [261017-eou](./quick/261017-eou-use-current-napplet-cli-screenshot-and-z/) |
 | 261017-fq0 | Editable publication metadata, hashtags, current R/O capabilities, pinned upstream skills PR #254 | 2026-10-17 | see task history | [261017-fq0](./quick/261017-fq0-preserve-required-and-optional-capabilit/) |
 
+| 261017-gev | Per-request receipts, pinned usage breakdowns and prominent cumulative project spending | 2026-10-17 | see task history | [261017-gev](./quick/261017-gev-show-per-message-cost-breakdowns-and-pro/) |
+
 ## Deferred Verification
 
 | Phase | Status | Reason | Resume command |
@@ -406,6 +408,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-17T17:50:33Z
-Stopped at: Screenshot and Zapstore publication complete and active at http://127.0.0.1:49371. Illustrated docs at http://127.0.0.1:4173/docs/. New publications include both signed events; existing published envelopes remain unchanged. Production remains deferred.
-Resume file: .planning/quick/261017-eou-use-current-napplet-cli-screenshot-and-z/SUMMARY.md
+Last session: 2026-10-17T19:05:00Z
+Stopped at: Per-request costs and project totals implemented and verified. Local app http://127.0.0.1:49371; illustrated costs guide http://127.0.0.1:4173/docs/users/costs-and-limits. Costs are owner-scoped over signed CVM; provider accounts remain private. Production remains deferred.
+Resume file: .planning/quick/261017-gev-show-per-message-cost-breakdowns-and-pro/SUMMARY.md

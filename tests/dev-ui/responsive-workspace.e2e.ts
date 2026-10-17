@@ -86,8 +86,9 @@ try {
     const v={sessionId:"session:view",artifactId:"artifact:"+"a".repeat(64),version:1};
     const publicationClient = {callTool:async(name:string,input:any)=>{
       if(name==="development_publication"&&input.action==="lookup")return {status:"ok",current:w.publishedFixture??null,latestPublished:w.publishedFixture??null};
+      if(name==="development_publication"&&input.action==="metadata")return {status:"ok",artifactId:v.artifactId,version:1,title:"Suggested title",description:"Suggested description for an older draft.",basis:"project",tags:[],files:[]};
       if(name!=="development_publication"||input.action!=="prepare")throw new Error("Unexpected publication effect");
-      return w.preparedFixture = {id:"publication:view",status:"prepared",artifactId:v.artifactId,publisher:publication.identity.pubkey,template:{tags:[]},servers:input.servers,relays:input.relays,files:[],version:1,expiresAt:Date.now()+60000};
+      return w.preparedFixture = {id:"publication:view",status:"prepared",artifactId:v.artifactId,publisher:publication.identity.pubkey,title:input.title,description:input.description,template:{tags:[["R","storage"],["O","theme"]]},servers:input.servers,relays:input.relays,files:[],version:1,expiresAt:Date.now()+60000};
     }};
     const publication = new PublicationWorkspace(bootstrap,()=>publicationClient,()=>v);
     w.fixtureProjects = ["active","verified","published","unconfirmed","pending"].map((stage,i)=>({id:`project:${i}`,title:i===0?"A".repeat(512):`My ${stage} applet`,stage,verifiedVersion:i,createdAt:new Date().toISOString()}));
@@ -134,11 +135,19 @@ try {
   for(const [id,scheme] of [["publication-servers","https"],["publication-relays","wss"]]){
     await page.locator(`#${id}`).fill(`${scheme}://${"a".repeat(60)}.${"b".repeat(60)}.example.test`); await page.locator(`#${id}`).press("Enter");
   }
+  await page.locator("#publication-title").fill("A long applet title"); await page.locator("#publication-description").fill("D".repeat(500));
   await layout("publish","#publication-review");
   await page.locator("#publication-servers").fill("https://backup.example.com"); await page.locator("#publication-servers").press("Enter");
   await page.locator("#publication-review").click(); await page.locator("#publication-review-panel").waitFor();
   await page.locator("#publication-review-panel details").evaluate((el:HTMLDetailsElement)=>el.open=true);
   await layout("publish-review","#publication-confirm");
+  await page.locator("#publication-advanced").evaluate((el:HTMLDetailsElement)=>el.open=true);
+  await page.locator("#publication-advanced details").evaluate((el:HTMLDetailsElement)=>el.open=true);
+  await layout("publish-advanced","#publication-edit");
+  await page.locator("#publication-description").evaluate((el:HTMLTextAreaElement)=>el.value="");
+  await page.locator("#publication-edit").click();
+  await page.waitForFunction(()=> (document.querySelector("#publication-description") as HTMLTextAreaElement).value==="Suggested description for an older draft.");
+  await page.locator("#publication-review").click(); await page.locator("#publication-review-panel").waitFor();
   await page.evaluate(()=>{
     document.getElementById("publication-status")!.textContent="Some files could not be copied. "+"a".repeat(256);
     document.getElementById("publication-files")!.innerHTML='<li data-state="failed">'+"f".repeat(512)+'</li>';

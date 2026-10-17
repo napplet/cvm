@@ -1,6 +1,7 @@
 import { publishOnUserRelays, type RelayReceipt } from "./publication-relays";
 import { relayUrl } from "../dev-ui/destinations";
 import { MIN_PUBLICATION_SERVERS, verifiedPublicationServers } from "../dev-ui/publication-copies";
+import { suggestPublicationMetadata } from "./publication-suggestions";
 import { CvmBlossom } from "./cvm-blossom";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { resolve, extname } from "node:path";
@@ -21,12 +22,13 @@ const FileResult = z.object({ server: ServerUrl, file: z.string().max(512), stat
 export const DevelopmentPublicationArgumentsSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("lookup"), sessionId: z.string().max(240), artifactId: z.string().max(100), publisher: Hex }).strict(),
   z.object({ action: z.literal("preview"), artifactId: z.string().max(100), sessionId: z.string().max(240) }).strict(),
-  z.object({ action: z.literal("prepare"), servers: z.array(ServerUrl).min(1).max(5), relays: z.array(z.string().max(512).transform(value => relayUrl(value))).min(1).max(5), artifactId: z.string().max(100), sessionId: z.string().max(240), publisher: Hex, requestKey: z.string().uuid(), title: z.string().trim().min(1).max(120) }).strict(),
+  z.object({ action: z.literal("metadata"), artifactId: z.string().max(100), sessionId: z.string().max(240) }).strict(),
+  z.object({ action: z.literal("prepare"), servers: z.array(ServerUrl).min(1).max(5), relays: z.array(z.string().max(512).transform(value => relayUrl(value))).min(1).max(5), artifactId: z.string().max(100), sessionId: z.string().max(240), publisher: Hex, requestKey: z.string().uuid(), title: z.string().trim().min(1).max(120), description: z.string().trim().min(1).max(500).optional(), replaces: z.string().uuid().optional() }).strict(),
   z.object({ action: z.literal("submit"), id: z.string().uuid(), event: SignedEvent }).strict(),
   z.object({ action: z.literal("save"), id: z.string().uuid(), event: SignedEvent, fileResults: z.array(FileResult).max(2560).optional() }).strict(),
   z.object({ action: z.enum(["status", "reconcile"]), id: z.string().uuid() }).strict(),
 ]);
-type Prepared = { preview?: boolean; relays?: string[]; template: EventTemplate; expiresAt: number; files: SealedArtifact["files"]; version: number; title: string; aggregate: string; dTag: string };
+type Prepared = { supersededBy?: string; supersedes?: string; preview?: boolean; relays?: string[]; template: EventTemplate; expiresAt: number; files: SealedArtifact["files"]; version: number; title: string; description?: string; aggregate: string; dTag: string };
 type Row = { file_results: z.infer<typeof FileResult>[]; published_at: Date | null; relay_results: RelayReceipt[]; id: string; account_id: string; session_id: string; artifact_id: string; publisher: string; fingerprint: string; prepared: Prepared; signed_event: Event | null; state: "prepared" | "publishing" | "published" | "unconfirmed" };
 type Options = { pubkey: string; sign(template: EventTemplate): Promise<Event>; publicOrigin?: string; publicRelay?: string; pool: Pick<PostgresSqlClient, "query">; repository: LocalArtifactRepository; root: string; workerResultsRoot: string; relay: string; openTarget(target: string): Promise<string> };
 const hash = (value: string | Uint8Array) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
@@ -67,42 +69,61 @@ export class LocalPublication {
         if (!session.rows.length) return { status: "denied" };
         const current = (await this.query<Row>(`SELECT * FROM development_publications
           WHERE account_id=$1 AND session_id=$2 AND artifact_id=$3 AND publisher=$4
-            AND NOT coalesce((prepared->>'preview')::boolean,false)
+            AND NOT coalesce((prepared->>'preview')::boolean,false) AND prepared->>'supersededBy' IS NULL
             AND (signed_event IS NOT NULL OR (prepared->>'expiresAt')::bigint > $5)
           ORDER BY (state='published') DESC,(signed_event IS NOT NULL) DESC,created_at DESC,id DESC LIMIT 1`, [account, command.sessionId, command.artifactId, command.publisher, Date.now()])).rows[0];
         const latest = (await this.query<Row>(`SELECT * FROM development_publications
           WHERE account_id=$1 AND session_id=$2 AND publisher=$3 AND state='published'
-            AND NOT coalesce((prepared->>'preview')::boolean,false)
+            AND NOT coalesce((prepared->>'preview')::boolean,false) AND prepared->>'supersededBy' IS NULL
           ORDER BY (prepared->>'version')::integer DESC,published_at DESC,id DESC LIMIT 1`, [account, command.sessionId, command.publisher])).rows[0];
         return { status: "ok", current: current ? this.projection(current) : null, latestPublished: latest ? this.projection(latest) : null };
       }
-      if (command.action === "prepare" || command.action === "preview") {
+      if (command.action === "prepare" || command.action === "preview" || command.action === "metadata") {
         const artifact = await this.options.repository.get(command.artifactId);
         if (!artifact || artifact.accountId !== account || artifact.sessionId !== command.sessionId || artifact.ownerId !== principal) return { status: "denied" };
+        if (command.action === "metadata") {
+          const tags = await this.metadata(artifact);
+          return { status: "ok", artifactId: artifact.artifactId, version: artifact.version, ...await this.suggestions(artifact, tags), tags, files: artifact.files };
+        }
         if (command.action === "preview") return this.ensurePreview(artifact);
         const preview = await this.ensurePreview(artifact);
         if ((preview as any).status !== "published") return { status: "rejected", code: "CVM_PREVIEW_NOT_SHARED" };
         const fingerprint = hash(canonicalJson(command));
         const existing = (await this.query<Row>("SELECT * FROM development_publications WHERE account_id=$1 AND request_key=$2", [account, command.requestKey])).rows[0];
-        if (existing) { if (existing.fingerprint !== fingerprint) return { status: "rejected", code: "PUBLICATION_REQUEST_CHANGED" }; return this.projection(existing); }
+        if (existing) { if (existing.fingerprint !== fingerprint) return { status: "rejected", code: "PUBLICATION_REQUEST_CHANGED" }; if (existing.prepared.supersededBy) return { status: "rejected", code: "PUBLICATION_SUPERSEDED" }; return this.projection(existing); }
         const signed = (await this.query<Row>(`SELECT * FROM development_publications
           WHERE account_id=$1 AND session_id=$2 AND artifact_id=$3 AND publisher=$4 AND signed_event IS NOT NULL
-            AND NOT coalesce((prepared->>'preview')::boolean,false)
+            AND NOT coalesce((prepared->>'preview')::boolean,false) AND prepared->>'supersededBy' IS NULL
           ORDER BY (state='published') DESC,created_at DESC,id DESC LIMIT 1`, [account, artifact.sessionId, artifact.artifactId, command.publisher])).rows[0];
-        if (signed) return this.projection(signed);
+        if (signed && !command.replaces) return this.projection(signed);
+        if (command.replaces && (!signed || signed.id !== command.replaces || !["prepared", "unconfirmed"].includes(signed.state))) return { status: "rejected", code: "PUBLICATION_EDIT_UNAVAILABLE" };
         if (new Set(command.servers.map(server => new URL(server).origin)).size < MIN_PUBLICATION_SERVERS) return { status: "rejected", code: "PUBLICATION_NEEDS_TWO_SERVERS" };
         const metadata = await this.metadata(artifact);
+        const description = command.description ?? (await this.suggestions(artifact, metadata)).description;
         const id = crypto.randomUUID(); const dTag = `applet-${artifact.artifactId.slice(-20)}-${command.publisher.slice(0, 8)}`;
-        const template = await createSiteManifestTemplate({ target: "named", dTag }, artifact.files.map(file => ({ path: `/${file.path}`, sha256: file.sha256 })), { servers: [...new Set(command.servers.map(server => new URL(server).origin))], metadataTags: [...metadata.filter(tag => tag[0] !== "title"), ["title", command.title]] });
+        const template = await createSiteManifestTemplate({ target: "named", dTag }, artifact.files.map(file => ({ path: `/${file.path}`, sha256: file.sha256 })), { servers: [...new Set(command.servers.map(server => new URL(server).origin))], metadataTags: [...metadata.filter(tag => !["title", "description"].includes(tag[0]!)), ["title", command.title], ["description", description]] });
         if (template.tags.find(tag => tag[0] === "x" && tag[2] === "aggregate")?.[1] !== artifact.aggregateSha256) throw new Error("PUBLICATION_AGGREGATE_MISMATCH");
-        const prepared: Prepared = { relays: [...new Set(command.relays)], template, expiresAt: Date.now() + 600000, files: artifact.files, version: artifact.version, title: command.title, aggregate: artifact.aggregateSha256, dTag };
-        await this.query("INSERT INTO development_publications(id,account_id,session_id,artifact_id,publisher,request_key,fingerprint,prepared,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'prepared') ON CONFLICT(account_id,request_key) DO NOTHING", [id, account, artifact.sessionId, artifact.artifactId, command.publisher, command.requestKey, fingerprint, JSON.stringify(prepared)]);
+        const prepared: Prepared = { ...(command.replaces ? { supersedes: command.replaces } : {}), relays: [...new Set(command.relays)], template, expiresAt: Date.now() + 600000, files: artifact.files, version: artifact.version, title: command.title, description, aggregate: artifact.aggregateSha256, dTag };
+        const parameters = [id, account, artifact.sessionId, artifact.artifactId, command.publisher, command.requestKey, fingerprint, JSON.stringify(prepared)];
+        if (command.replaces) {
+          // Replace only an unfinished envelope. The conditional update races
+          // safely against submit's own claim; the prior signature stays stored.
+          await this.query(`WITH replaced AS (
+            UPDATE development_publications SET prepared=jsonb_set(prepared,'{supersededBy}',to_jsonb($1::text)),updated_at=now()
+            WHERE id=$9 AND account_id=$2 AND session_id=$3 AND artifact_id=$4 AND publisher=$5
+              AND state IN ('prepared','unconfirmed') AND prepared->>'supersededBy' IS NULL
+            RETURNING id
+          ) INSERT INTO development_publications(id,account_id,session_id,artifact_id,publisher,request_key,fingerprint,prepared,state,file_results)
+            SELECT $1,$2,$3,$4,$5,$6,$7,$8::jsonb,'prepared',$10::jsonb FROM replaced`, [...parameters, command.replaces, JSON.stringify((signed!.file_results ?? []).filter(receipt => command.servers.map(server => new URL(server).origin).includes(receipt.server)))]);
+        } else await this.query("INSERT INTO development_publications(id,account_id,session_id,artifact_id,publisher,request_key,fingerprint,prepared,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'prepared') ON CONFLICT(account_id,request_key) DO NOTHING", parameters);
         const row = (await this.query<Row>("SELECT * FROM development_publications WHERE account_id=$1 AND request_key=$2", [account, command.requestKey])).rows[0]!;
+        if (!row) return { status: "rejected", code: "PUBLICATION_EDIT_UNAVAILABLE" };
         if (row.fingerprint !== fingerprint) return { status: "rejected", code: "PUBLICATION_REQUEST_CHANGED" };
         return this.projection(row);
       }
       const row = (await this.query<Row>("SELECT * FROM development_publications WHERE id=$1 AND account_id=$2", [command.id, account])).rows[0];
       if (!row) return { status: "denied" };
+      if (row.prepared.supersededBy) return { status: "rejected", code: "PUBLICATION_SUPERSEDED" };
       if (command.action === "status") return this.projection(row);
       if (command.action === "reconcile") {
         if (row.signed_event && await this.observe(row)) { await this.setState(row.id, "published"); return this.projection((await this.query<Row>("SELECT * FROM development_publications WHERE id=$1", [row.id])).rows[0]!); }
@@ -119,7 +140,8 @@ export class LocalPublication {
         if (command.fileResults?.some(result => !servers.includes(result.server) || !row.prepared.files.some(file => file.path === result.file))) return { status: "rejected", code: "PUBLICATION_DESTINATION_CHANGED" };
         // Save before the browser begins copying. Resuming on another tab can
         // reuse this exact signature without re-signing or generating anything.
-        await this.query("UPDATE development_publications SET signed_event=coalesce(signed_event,$2::jsonb),file_results=coalesce($3::jsonb,file_results),updated_at=now() WHERE id=$1", [row.id, JSON.stringify(event), command.fileResults ? JSON.stringify(command.fileResults) : null]);
+        const saved = await this.query("UPDATE development_publications SET signed_event=coalesce(signed_event,$2::jsonb),file_results=coalesce($3::jsonb,file_results),updated_at=now() WHERE id=$1 AND prepared->>'supersededBy' IS NULL RETURNING id", [row.id, JSON.stringify(event), command.fileResults ? JSON.stringify(command.fileResults) : null]);
+        if (!saved.rows.length) return { status: "rejected", code: "PUBLICATION_SUPERSEDED" };
         row.signed_event ??= event; if (command.fileResults) row.file_results = command.fileResults;
         return this.projection(row);
       }
@@ -150,8 +172,12 @@ export class LocalPublication {
     try { return await operation; } finally { this.#active.delete(row.id); }
   }
   private projection(row: Row) {
-    return { status: row.state, id: row.id, artifactId: row.artifact_id, publisher: row.publisher, version: row.prepared.version, title: row.prepared.title, aggregate: row.prepared.aggregate, template: row.prepared.template, expiresAt: row.prepared.expiresAt, destination: row.prepared.preview ? "CVM preview" : "Your Blossom servers", relay: this.options.publicRelay ?? this.options.relay, relays: row.prepared.relays ?? [this.options.publicRelay ?? this.options.relay], relayResults: row.relay_results ?? [], fileResults: row.file_results ?? [], signedEvent: row.signed_event ?? undefined, publishedAt: row.published_at?.toISOString(), files: row.prepared.files.map(file => ({ ...file, url: `${this.origin}/${file.sha256}`, type: mime(file.path) })), servers: row.prepared.template.tags.filter(tag => tag[0] === "server").map(tag => tag[1]), preview: !!row.prepared.preview,
+    return { status: row.state, id: row.id, artifactId: row.artifact_id, publisher: row.publisher, version: row.prepared.version, title: row.prepared.title, description: row.prepared.description ?? row.prepared.template.tags.find(tag => tag[0] === "description")?.[1] ?? "", aggregate: row.prepared.aggregate, template: row.prepared.template, expiresAt: row.prepared.expiresAt, destination: row.prepared.preview ? "CVM preview" : "Your Blossom servers", relay: this.options.publicRelay ?? this.options.relay, relays: row.prepared.relays ?? [this.options.publicRelay ?? this.options.relay], relayResults: row.relay_results ?? [], fileResults: row.file_results ?? [], signedEvent: row.signed_event ?? undefined, publishedAt: row.published_at?.toISOString(), files: row.prepared.files.map(file => ({ ...file, url: `${this.origin}/${file.sha256}`, type: mime(file.path) })), servers: row.prepared.template.tags.filter(tag => tag[0] === "server").map(tag => tag[1]), preview: !!row.prepared.preview,
       ...(row.state === "published" && row.signed_event ? { eventId: row.signed_event.id, url: `${this.origin}/open/${row.id}`, address: naddrEncode({ identifier: row.prepared.dTag, pubkey: row.publisher, kind: 35129, relays: row.prepared.relays ?? [this.options.publicRelay ?? this.options.relay] }) } : {}) };
+  }
+  private async suggestions(artifact: SealedArtifact, tags: string[][]) {
+    const project = (await this.query<{ title: string }>("SELECT title FROM development_projects WHERE id=$1 AND owner_pubkey=$2", [artifact.sessionId, artifact.ownerId])).rows[0];
+    return suggestPublicationMetadata(tags, project?.title, artifact.version);
   }
   private async metadata(artifact: SealedArtifact): Promise<string[][]> {
     const row = (await this.query<{ request_sha256: string; manifest_sha256: string }>("SELECT request_sha256,manifest_sha256 FROM development_worker_results WHERE action_id=$1 AND account_id=$2 AND state='completed'", [artifact.actionId, artifact.accountId])).rows[0];
@@ -169,7 +195,8 @@ export class LocalPublication {
   private async publish(row: Row, event: Event) {
     // Durable signed envelope before any file/relay effect. Restarts may only
     // observe or replay this same event; they never create a new signature.
-    await this.query("UPDATE development_publications SET signed_event=$2,state='publishing',updated_at=now() WHERE id=$1 AND (signed_event IS NULL OR signed_event=$2::jsonb)", [row.id, JSON.stringify(event)]);
+    const claimed = await this.query("UPDATE development_publications SET signed_event=$2,state='publishing',updated_at=now() WHERE id=$1 AND prepared->>'supersededBy' IS NULL AND (signed_event IS NULL OR signed_event=$2::jsonb) RETURNING id", [row.id, JSON.stringify(event)]);
+    if (!claimed.rows.length) return { status: "rejected", code: "PUBLICATION_SUPERSEDED" };
     row.signed_event = event;
     try {
       if (row.prepared.preview) for (const file of row.prepared.files) {

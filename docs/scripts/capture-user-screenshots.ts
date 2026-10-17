@@ -97,9 +97,10 @@ try {
       if (name !== "development_publication") throw new Error("Unexpected CVM effect");
       if (input.action === "preview") return { address };
       if (input.action === "lookup") return { status: "ok", current: w.samplePublication ?? null, latestPublished: w.samplePublication ?? null };
+      if (input.action === "metadata") return {status:"ok", ...version, title:"Reading-session counter", description:"Count your daily reading sessions with a simple, focused counter.", basis:"project", tags:[["requires","storage"]], files:[]};
       if (input.action !== "prepare") throw new Error("Publication is disabled in screenshots");
       return w.samplePrepared = { id: "publication:docs", status: "prepared", artifactId: version.artifactId, publisher: publication.identity.pubkey,
-        template: { tags: [] }, servers: input.servers, relays: input.relays, files: [], version: 2, expiresAt: Date.now() + 60000 };
+        title:input.title, description:input.description, template: { tags: [["title",input.title],["description",input.description],["requires","storage"]] }, servers: input.servers, relays: input.relays, files: [], version: 2, expiresAt: Date.now() + 60000 };
     } };
     const publication = new PublicationWorkspace(bootstrap, () => client, () => w.selectedVersion);
     w.sampleProjects = [
@@ -185,6 +186,9 @@ try {
   await page.locator("#publication-review").click();
   await page.locator("#publication-review-panel details").evaluate((el: HTMLDetailsElement) => el.open = true);
   await capture("publish-review", "#publish-step");
+  await page.locator("#publication-advanced").evaluate((el:HTMLDetailsElement)=>el.open=true);
+  await capture("publish-advanced", "#publish-step");
+  await page.locator("#publication-advanced").evaluate((el:HTMLDetailsElement)=>el.open=false);
   await page.locator("#publication-close").click();
   await page.evaluate(({ address, origin }) => {
     const w = window as any;

@@ -957,7 +957,7 @@
     },
     {
       "name": "development_publication",
-      "description": "Prepare and submit the user-signed development publication flow.",
+      "description": "Suggest metadata, prepare, replace unfinished drafts and submit user-signed development publications.",
       "scope": "development",
       "inputSchema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -996,6 +996,29 @@
               "action": {
                 "type": "string",
                 "const": "preview"
+              },
+              "artifactId": {
+                "type": "string",
+                "maxLength": 100
+              },
+              "sessionId": {
+                "type": "string",
+                "maxLength": 240
+              }
+            },
+            "required": [
+              "action",
+              "artifactId",
+              "sessionId"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "metadata"
               },
               "artifactId": {
                 "type": "string",
@@ -1060,6 +1083,16 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 120
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              },
+              "replaces": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
               }
             },
             "required": [
@@ -1884,6 +1917,85 @@
     }
   ],
   "results": {
+    "publicationMetadata": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "artifactId": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "basis": {
+          "type": "string",
+          "enum": [
+            "manifest",
+            "project",
+            "fallback"
+          ]
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "sha256": {
+                "type": "string"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "path",
+              "sha256",
+              "bytes"
+            ]
+          }
+        }
+      },
+      "required": [
+        "status",
+        "artifactId",
+        "version",
+        "title",
+        "description",
+        "basis",
+        "tags",
+        "files"
+      ]
+    },
     "generationEstimates": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "type": "object",

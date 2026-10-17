@@ -12,7 +12,7 @@ An `naddr` identifies a replaceable Nostr event. A shell still needs access to t
 ## Publish your selected version
 
 1. Select a verified version. **Publish** appears beside the applet and stays disabled until a signing identity is selected.
-2. Open the final **Publish** step. Give the applet a name and review its destinations.
+2. Open the final **Publish** step. Review the title and description suggested by the CVM, edit them if needed, and choose destinations.
 3. Approve signing in your extension or remote signer.
 4. Follow file propagation. The browser mirrors the CVM’s verified files to your Blossom servers, falling back to verified upload where necessary.
 5. Wait for relay confirmation, then **Copy naddr**.
@@ -20,6 +20,14 @@ An `naddr` identifies a replaceable Nostr event. A shell still needs access to t
 The applet event is signed before file propagation. It is published once all files have verified copies on at least **two distinct Blossom servers**. An extra server failing does not block publication. The CVM prepares the event, but your signer owns the publication signature.
 
 <GuideScreenshot name="publish-review" alt="Publication review for Version 2 with destinations expanded and the Sign and publish button above three publication stages" caption="Review the version and destinations before approving your signer. Preparing this review does not publish anything." />
+
+## Review applet details
+
+The CVM suggests a title and description from verified manifest metadata, falling back to your saved project for older builds. This uses no extra model request. Both fields stay editable until signing; the review shows the exact text you will sign.
+
+Open **Advanced applet details** to see **Required** and **Optional** shell capabilities, plus the manifest and file hashes. Older builds cannot declare optional capabilities, so they show **Not declared by this build**. This does not mean the applet has no optional integrations. These declarations come from the verified build and are read-only here.
+
+<GuideScreenshot name="publish-advanced" alt="Publication review with Required and Optional capability sections expanded under Advanced applet details" caption="Check capability declarations before signing. Older manifests explicitly identify missing optional declarations." />
 
 ## Choose destinations
 
@@ -33,9 +41,11 @@ Choose two to five Blossom servers and at least one publishing relay. Type a URL
 
 Progress shows the current destination and copy operation, signing, verification, and each relay result. If at least two servers have complete verified copies, publishing continues and additional failures remain visible as warnings. The completion summary counts verified servers only.
 
-With fewer than two complete copies, publishing waits. For example, HTTP 401 means that server rejected the copy authorization; its address can be valid even though it does not accept your upload. **Retry remaining steps** checks existing copies and reuses the signed applet event. It does not ask the model to rebuild the applet.
+With fewer than two complete copies, publishing waits. For example, HTTP 401 means that server rejected the copy authorization; its address can be valid even though it does not accept your upload. **Retry file copies** checks existing copies and reuses the signed applet event. You can also choose **Edit details and destinations** to remove an unusable server and add another. It does not ask the model to rebuild the applet.
 
-If relay confirmation is uncertain, use **Check publication**. **Destination details** shows which copies or relays need attention. **Retry remaining steps** rechecks existing files and resends the same signed event where needed.
+If relay confirmation is uncertain, use **Check publication**. **Destination details** shows which copies or relays need attention. **Continue publishing with 2 verified copies** sends the saved event to relays without repeating uploads or requesting another applet signature. A failed extra Blossom server does not hold up this action.
+
+Editing an unfinished signed publication creates a replacement draft and requires a **fresh signature**. The CVM retains the previous signed event in history and reuses verified copies for unchanged destinations. A previous event may already have reached a relay when confirmation was lost; editing cannot retract it.
 
 The CVM saves your applet signature before copying starts, along with file-copy results and relay confirmations as each attempt finishes. You can reload or reopen the project and continue publishing. You may still need to approve file-copy permission in your signer; the applet itself keeps its original signature.
 

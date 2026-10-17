@@ -8,6 +8,7 @@
   "scripts": {
     "release:certify": "bun scripts/certify-release.ts",
     "test": "bun test",
+    "pricing:sync": "bun scripts/sync-development-rates.ts",
     "test:design-slice": "bun run scripts/verify-design-slice.ts",
     "test:promotion": "bun run scripts/test-promotion.ts",
     "toolchain:image-build": "bun run scripts/build-toolchain-image.ts",

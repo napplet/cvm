@@ -136,7 +136,11 @@ try {
   assert((await page.locator("#publication-title").inputValue()).includes("daily practice"), "CVM_TITLE_NOT_SUGGESTED");
   assert((await page.locator("#publication-description").inputValue()).includes("daily practice"), "CVM_DESCRIPTION_NOT_SUGGESTED");
   await page.locator("#publication-advanced").evaluate((el:HTMLDetailsElement)=>el.open=true);
-  assert((await page.locator("#publication-optional").innerText()).includes("Not declared"), "LEGACY_OPTIONAL_MISREPRESENTED");
+  assert((await page.locator("#publication-optional").innerText()).includes("theme") && (await page.locator("#publication-required").innerText()).includes("storage"), "CAPABILITY_DECLARATIONS_MISSING");
+  await page.locator("#publication-hashtags").fill("#Games"); await page.locator("#publication-hashtags").press("Enter");
+  await page.locator("#publication-hashtags").fill("bad tag"); await page.locator("#publication-hashtags").press("Enter");
+  assert(await page.locator("#publication-hashtags").getAttribute("aria-invalid")==="true", "INVALID_HASHTAG_ACCEPTED");
+  await page.locator("#publication-hashtags").fill("");
   await page.locator("#publication-description").fill("Count daily practice, one step at a time.");
   await page.locator("#publication-servers").fill("javascript:alert(1)"); await page.locator("#publication-servers").press("Enter");
   assert(await page.locator("#publication-servers").getAttribute("aria-invalid") === "true", "INVALID_BLOSSOM_ACCEPTED");
@@ -195,8 +199,18 @@ try {
   assert(mirrors > 0 && signerRequests >= 2, "SIGNATURE_OR_MIRROR_MISSING");
   await page.locator("#publication-copy").click(); const address = await page.evaluate(() => navigator.clipboard.readText()); assert(address.startsWith("naddr1") && address !== previewAddress, "USER_NADDR_MISSING");
   const published = await relay.querySync([config.relayUrl], { kinds: [35129], authors: [userPubkey] }, { maxWait: 3000 }); assert(published.length === 1, "USER_EVENT_COUNT_INVALID");
-  for (const tag of published[0]!.tags.filter(tag => tag[0] === "path")) { const response = await fetch(`${destinationUrl}/${tag[2]}`); assert(new Bun.CryptoHasher("sha256").update(await response.arrayBuffer()).digest("hex") === tag[2], "DESTINATION_BYTES_MISMATCH"); }
+  assert(!published[0]!.tags.some(tag=>["path","requires"].includes(tag[0]!)), "LEGACY_PUBLICATION_EMITTED");
+  const digest = published[0]!.tags.find(tag=>tag[0]==="x")!;
+  assert(digest.length===2, "CURRENT_HASH_INVALID");
+  const artifactResponse = await fetch(`${destinationUrl}/${digest[1]}`);
+  const artifactBytes = await artifactResponse.arrayBuffer();
+  assert(new Bun.CryptoHasher("sha256").update(artifactBytes).digest("hex")===digest[1], "DESTINATION_BYTES_MISMATCH");
+  const artifactHtml = new TextDecoder().decode(artifactBytes);
+  assert(artifactHtml.includes('name="napplet-requires" content="storage"') && artifactHtml.includes('name="napplet-optional" content="theme"'), "HTML_CAPABILITIES_MISSING");
+  assert(published[0]!.tags.some(tag=>tag[0]==="R"&&tag[1]==="storage")&&published[0]!.tags.some(tag=>tag[0]==="O"&&tag[1]==="theme"), "SIGNED_CAPABILITIES_MISSING");
+  assert(published[0]!.tags.some(tag=>tag[0]==="t"&&tag[1]==="games"), "SIGNED_HASHTAG_MISSING");
   const applications = await relay.querySync([config.relayUrl], { kinds: [32267], authors: [userPubkey] }, { maxWait: 3000 });
+  assert(applications[0]?.tags.some(tag=>tag[0]==="t"&&tag[1]==="games"), "LISTING_HASHTAG_MISSING");
   assert(applications.length===1 && applications[0].tags.some(tag=>tag[0]==="name"&&tag[1]==="My daily counter") && applications[0].content.includes(`nostr:${address}`), "APPLICATION_NOT_PUBLISHED");
   assert((await page.locator("#publication-listing").innerText()).includes("shared with screenshot"), "APPLICATION_RESULT_MISSING");
   for (const image of applications[0].tags.filter(tag=>tag[0]==="image"&&[destinationUrl,backupUrl].some(server=>tag[1].startsWith(server+"/")))) {
@@ -204,7 +218,7 @@ try {
     assert(response.ok && response.headers.get("content-type")?.includes("image/png") && new Bun.CryptoHasher("sha256").update(png).digest("hex")===new URL(image[1]).pathname.slice(1), "SCREENSHOT_NOT_MIRRORED");
   }
   const intent = (await pool.query("SELECT id FROM development_publications WHERE publisher=$1", [userPubkey])).rows[0].id;
-  assert(published[0]!.tags.some(tag=>tag[0]==="description"&&tag[1]==="Count daily practice, one step at a time."), "DESCRIPTION_NOT_SIGNED");
+  assert(published[0]!.content==="Count daily practice, one step at a time.", "DESCRIPTION_NOT_SIGNED");
   assert((await unauthorized.callTool("development_publication", {action:"republish",id:intent})).status==="denied", "CROSS_OWNER_REPUBLICATION");
   const beforeRepublish = {copies:copyRequests,signatures:signerRequests,inferences:fixture.counts().inferences};
   await page.locator("#publication-close").click(); await page.locator("#republish").click();
@@ -296,7 +310,8 @@ try {
   const copiesBefore = mirrors;
   await page.locator("#publication-close").click();
   await page.locator("#revision").fill("Add a reset button to the daily counter."); await page.locator("#revise").click();
-  await page.locator("#publish-hint").filter({ hasText: "Version 2 is ready" }).waitFor({ timeout: 180000 });
+  await page.waitForFunction(() => document.querySelector("#publish-hint")?.textContent?.includes("Version 2 is ready") || document.querySelector("#execution-activity")?.textContent?.includes("Action stopped"), undefined, {timeout:180000});
+  assert((await page.locator("#publish-hint").innerText()).includes("Version 2 is ready"), "REVISION_FAILED:"+await page.locator("#execution-activity").innerText());
   assert(await page.locator("#publish").textContent() === "Publish", "NEW_VERSION_WRONGLY_PUBLISHED");
   await page.locator("#your-applets").click();
   await page.locator(".project-card").filter({ hasText: "Version 2 ready to publish" }).waitFor();
@@ -337,7 +352,27 @@ try {
   assert(appletSignatures===3 && fixture.counts().inferences===2, "REPLACEMENT_SIGNATURE_OR_GENERATION_COUNT");
   assert(!(await page.locator("#publication-copy-warning").isVisible()), "REMOVED_SERVER_STILL_BLOCKS");
   assert((await fetch(`${cvmBlob}/`)).ok, "BLOSSOM_ORIGIN_CHANGED_ON_RESTART");
-  console.log(JSON.stringify({ status: "passed", case: "static-cvm-publication", checks: ["offline CLI screenshot and kind-32267 application publication", "screenshot hash verified on two destinations", "both signatures persist and republish without model or copy work", "tampered and missing application signatures rejected", "separate static origin and subdirectory", "private operator OAuth", "rate version used", "job views", "all sign-in choices during generation", "real NIP46", "CVM naddr", "CVM-only Blossom writes", "manual and discovered servers", "one complete copy blocks publication in browser and CVM", "two complete copies publish despite third server HTTP 401", "warnings and verified count survive reopen", "saved signature and failures restored without browser journal", "copy retry uses one signature", "verified mirrors and user naddr", "owner-scoped publication lookup", "signed template tamper rejected", "exact event replay and repeated preparation", "pending job details", "published builder and project after CVM restart", "reopen retains address without generation", "revision shows unpublished changes", "CVM metadata ownership and editable signed description", "continue with saved two copies skips uploads and signing", "signed draft destination editing preserves history and rejects stale submission", "one relay confirms despite extra relay failure", "legacy partial success repairs on lookup and startup without republishing", "zero confirmations remain retryable", "compact success with collapsed failure details", "explicit republish from builder and result reuses event, address and files", "republish ownership and last-attempt persistence", "failed resend retains earlier publication"] }));
+  const addressBeforeEdit = await page.locator("#publication-address").inputValue();
+  const generationsBeforeEdit = fixture.counts().inferences;
+  await page.locator("#publication-edit-published").click();
+  await page.locator("#publication-title").fill("Daily counter, shared");
+  await page.locator("#publication-description").fill("An updated public description.");
+  await page.locator("#publication-hashtags").fill("#Practice"); // Pending input is committed by Review.
+  await page.locator("#publication-review").click();
+  await page.locator("#publication-review-title").filter({hasText:"Daily counter, shared"}).waitFor();
+  assert((await page.locator("#publication-review-hashtags").innerText()).includes("#practice"), "EDIT_HASHTAG_NOT_REVIEWED");
+  await page.locator("#publication-confirm").click(); await page.locator("#publication-result").waitFor({timeout:60000});
+  assert(await page.locator("#publication-address").inputValue()===addressBeforeEdit, "EDIT_CHANGED_NADDR");
+  assert(fixture.counts().inferences===generationsBeforeEdit && appletSignatures===4 && applicationSignatures===4, "EDIT_REGENERATED_OR_DID_NOT_RESIGN");
+  const edited = (await pool.query<{signed_event:ReturnType<typeof finalizeEvent>;prepared:unknown}>("SELECT signed_event,prepared FROM development_publications WHERE publisher=$1 AND prepared->>'supersededBy' IS NULL AND (prepared->>'version')::int=2",[userPubkey])).rows[0];
+  assert(edited.signed_event.content==="An updated public description." && edited.signed_event.tags.some((tag:string[])=>tag[0]==="t"&&tag[1]==="practice"), "EDIT_METADATA_NOT_SAVED");
+  const deliveredEdit = await relay.get([config.relayUrl], { ids:[edited.signed_event.id] }, {maxWait:3000});
+  assert(deliveredEdit?.id===edited.signed_event.id, "EDIT_NOT_DELIVERED");
+  await page.reload(); await page.getByText("Workspace connected", {exact:true}).waitFor();
+  await page.locator("#publish").filter({hasText:"View publication"}).click(); await page.locator("#publication-result").waitFor();
+  await page.locator("#publication-edit-published").click();
+  assert(await page.locator("#publication-title").inputValue()==="Daily counter, shared" && await page.getByRole("button",{name:"Remove practice",exact:true}).count()===1, "EDIT_NOT_RESTORED");
+  console.log(JSON.stringify({ status: "passed", case: "static-cvm-publication", checks: ["required and optional domains preserved from generated source into signed current-format events", "normalized hashtag chips and both event kinds", "published metadata editing keeps address, uses fresh signatures and no model calls", "edits survive reload", "offline CLI screenshot and kind-32267 application publication", "screenshot hash verified on two destinations", "both signatures persist and republish without model or copy work", "tampered and missing application signatures rejected", "separate static origin and subdirectory", "private operator OAuth", "rate version used", "job views", "all sign-in choices during generation", "real NIP46", "CVM naddr", "CVM-only Blossom writes", "manual and discovered servers", "one complete copy blocks publication in browser and CVM", "two complete copies publish despite third server HTTP 401", "warnings and verified count survive reopen", "saved signature and failures restored without browser journal", "copy retry uses one signature", "verified mirrors and user naddr", "owner-scoped publication lookup", "signed template tamper rejected", "exact event replay and repeated preparation", "pending job details", "published builder and project after CVM restart", "reopen retains address without generation", "revision shows unpublished changes", "CVM metadata ownership and editable signed description", "continue with saved two copies skips uploads and signing", "signed draft destination editing preserves history and rejects stale submission", "one relay confirms despite extra relay failure", "legacy partial success repairs on lookup and startup without republishing", "zero confirmations remain retryable", "compact success with collapsed failure details", "explicit republish from builder and result reuses event, address and files", "republish ownership and last-attempt persistence", "failed resend retains earlier publication"] }));
 } catch (error) { console.error("TEST_STAGE", error, await admin.locator("body").innerText({ timeout: 2000 }).catch(() => "admin page unavailable"), await page.locator("body").innerText({ timeout: 2000 }).catch(() => "workspace unavailable"), errors); throw error; } finally {
   release(); remoteSubscription?.close(); relay.close([config.relayUrl]); relay.destroy(); await unauthorized.close();
   await browser.close(); site.stop(true); destination.stop(true); backup.stop(true); unavailable.stop(true); await pool.end();

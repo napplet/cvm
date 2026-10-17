@@ -1,15 +1,15 @@
 {
   "repository": "https://github.com/napplet/napplet",
-  "revision": "efc647642c9bd80aed58af139bf90910e68e962c",
+  "revision": "a958687c5a93449c950ef32cdf169ad100c9ed63",
   "installer": "skills@1.7.2",
   "skills": [
     {
       "name": "napplet-make",
-      "sha256": "cf15916cc927ea232e633ad4a322d55a8c7173cd5c7bee61b544a5db3a19efa9"
+      "sha256": "e4e50256b79e940ab5c9190935b821081a8c284729d819674c139707fe359aeb"
     },
     {
       "name": "napplet-design",
-      "sha256": "ded486b1284964746c3d3e5c33fc50c37f706c612616eb77fce68a908f47a2d4"
+      "sha256": "d09887f587da30503fc8828881318f77941f0206d375205efd320b698bca6287"
     },
     {
       "name": "napplet-ui",
@@ -17,15 +17,15 @@
     },
     {
       "name": "napplet-build",
-      "sha256": "e70e4619f8f22409b7477bd0ae44fa7138bbb632b10e19e315e663405c0a1e1e"
+      "sha256": "6e3c2108189c1e6edd017791c821c32289e103352e755eeddcbdc38bc5c5b995"
     },
     {
       "name": "napplet-sdk",
-      "sha256": "d0b3ef74295d81d76c70e210e54752eeb35f5bdeda475c6ddc59bdb010492e41"
+      "sha256": "9ef3a9c5408371058c80080e3e06a5059820e02a8938dadd6467edab44ef72f0"
     },
     {
       "name": "napplet-test",
-      "sha256": "69252fb39edcb86250507751e238ae71402cf82840fd5ee8290c5b298c65566f"
+      "sha256": "379075f316244711f6e7ef2a8c35231ff2a12d78ba565d5e9514e9451b1f6f3a"
     }
   ]
 }

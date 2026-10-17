@@ -1,10 +1,11 @@
+import { sourceCapabilities } from "../../infra/dev-ui/source-capabilities";
 import { canonicalJson } from "../promotion/schema";
 import { NormalizedUsageReceiptSchema, ProviderOperationIntentSchema, SourceProposalSchema, type NormalizedUsageReceipt, type ProviderOperationIntent, type SourceProposal } from "../model/model-gateway";
 import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
 import { z } from "zod";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/u);
-const ApprovedPathSchema = z.enum(["src/app.ts", "src/main.ts", "src/styles.css"]);
+const ApprovedPathSchema = z.enum(["src/app.ts", "src/main.ts", "src/styles.css", "src/capabilities.json"]);
 const StoredProposalSchema = z.object({
   proposalSha256: DigestSchema, operationId: z.string().min(1), providerRequestId: z.string().min(1), accountId: z.string().min(1), sessionId: z.string().min(1), actionId: z.string().min(1), expectedVersion: z.number().int().nonnegative(), requestFingerprint: DigestSchema,
   authorizedPriorArtifactReference: z.string().min(1).max(256).optional(), provider: z.string().min(1), model: z.string().min(1), profileId: z.string().min(1), priceCardId: z.string().min(1), proposal: SourceProposalSchema,
@@ -18,6 +19,7 @@ async function sha256(value: string): Promise<string> {
 function freeze<T>(value: T): T { return Object.freeze(structuredClone(value)); }
 function sameReceipt(left: NormalizedUsageReceipt, right: NormalizedUsageReceipt): boolean { return canonicalJson(left) === canonicalJson(right); }
 function validFiles(proposal: SourceProposal): boolean {
+  sourceCapabilities(proposal.files);
   const bytes = proposal.files.reduce((sum, file) => sum + new TextEncoder().encode(file.content).byteLength, 0);
   return bytes <= 128_000 && proposal.files.every((file) => ApprovedPathSchema.safeParse(file.path).success);
 }

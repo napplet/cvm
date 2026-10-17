@@ -55,22 +55,27 @@
     {
       "file": "publish-destinations.png",
       "width": 840,
-      "height": 1533
+      "height": 1758
     },
     {
       "file": "publish-review.png",
       "width": 840,
-      "height": 1409
+      "height": 1474
     },
     {
       "file": "publish-advanced.png",
       "width": 840,
-      "height": 1660
+      "height": 1700
     },
     {
       "file": "publish-confirmed.png",
       "width": 840,
       "height": 1358
+    },
+    {
+      "file": "publish-edit.png",
+      "width": 840,
+      "height": 1729
     },
     {
       "file": "remix.png",

@@ -154,6 +154,7 @@ export class DeterministicModelGateway implements ModelGateway {
       'root.replaceChildren(heading, value, button, availability);',
     ].join("\n");
     const stored = await this.#proposalStore.persist({ intent, provider: "deterministic_fixture", model: "phase-04-fixture-model", proposal: { files: [
+      { path: "src/capabilities.json", content: JSON.stringify({ required: [], optional: [] }) },
       { path: "src/main.ts", content: main },
       { path: "src/styles.css", content: "html, body, #app { height: 100%; margin: 0; } body { font-family: system-ui, sans-serif; } button { margin: 0.5rem; }" },
     ] } });

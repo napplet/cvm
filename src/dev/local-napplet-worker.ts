@@ -1,3 +1,4 @@
+import { sourceCapabilities } from "../../infra/dev-ui/source-capabilities";
 import { constants } from "node:fs";
 import { chmod, mkdir, mkdtemp, open, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -75,7 +76,8 @@ export class LocalNappletWorker {
   async materialize(inputProposal: Pick<StoredSourceProposal, "proposalSha256" | "proposal">, signal?: AbortSignal): Promise<WorkerOutput> {
     const proposal = SourceProposalSchema.parse(inputProposal.proposal);
     const sha256 = new Bun.CryptoHasher("sha256").update(canonicalJson({ files: proposal.files })).digest("hex");
-    if (sha256 !== inputProposal.proposalSha256 || sha256 !== proposal.sha256 || proposal.reference !== `proposal:sha256:${sha256}` || proposal.files.some((file) => file.path !== "src/main.ts" && file.path !== "src/styles.css") || Buffer.byteLength(JSON.stringify(proposal.files)) > 128_000) throw new Error("WORKER_SOURCE_PROPOSAL_INVALID");
+    if (sha256 !== inputProposal.proposalSha256 || sha256 !== proposal.sha256 || proposal.reference !== `proposal:sha256:${sha256}` || proposal.files.some((file) => !["src/main.ts", "src/styles.css", "src/capabilities.json"].includes(file.path)) || Buffer.byteLength(JSON.stringify(proposal.files)) > 128_000) throw new Error("WORKER_SOURCE_PROPOSAL_INVALID");
+    sourceCapabilities(proposal.files);
     signal?.throwIfAborted();
     this.progress("worker", "running");
     const docker = this.input.dockerBin ?? "docker";

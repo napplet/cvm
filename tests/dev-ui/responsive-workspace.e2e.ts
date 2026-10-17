@@ -88,7 +88,7 @@ try {
       if(name==="development_publication"&&input.action==="lookup")return {status:"ok",current:w.publishedFixture??null,latestPublished:w.publishedFixture??null};
       if(name==="development_publication"&&input.action==="metadata")return {status:"ok",artifactId:v.artifactId,version:1,title:"Suggested title",description:"Suggested description for an older draft.",basis:"project",tags:[],files:[]};
       if(name!=="development_publication"||input.action!=="prepare")throw new Error("Unexpected publication effect");
-      return w.preparedFixture = {id:"publication:view",status:"prepared",artifactId:v.artifactId,publisher:publication.identity.pubkey,screenshot:location.origin+"/sample-screenshot.png",application:{template:{kind:32267,tags:[],content:input.description,created_at:1}},title:input.title,description:input.description,template:{tags:[["R","storage"],["O","theme"]]},servers:input.servers,relays:input.relays,files:[],version:1,expiresAt:Date.now()+60000};
+      return w.preparedFixture = {id:"publication:view",status:"prepared",artifactId:v.artifactId,publisher:publication.identity.pubkey,screenshot:location.origin+"/sample-screenshot.png",application:{template:{kind:32267,tags:[],content:input.description,created_at:1}},title:input.title,description:input.description,capabilitiesKnown:true,template:{tags:[["R","storage"],["O","theme"],...input.hashtags.map((tag:string)=>["t",tag])]},servers:input.servers,relays:input.relays,files:[],version:1,expiresAt:Date.now()+60000};
     }};
     const publication = new PublicationWorkspace(bootstrap,()=>publicationClient,()=>v);
     w.fixtureProjects = ["active","verified","published","unconfirmed","pending"].map((stage,i)=>({id:`project:${i}`,title:i===0?"A".repeat(512):`My ${stage} applet`,stage,verifiedVersion:i,createdAt:new Date().toISOString()}));
@@ -136,6 +136,7 @@ try {
     await page.locator(`#${id}`).fill(`${scheme}://${"a".repeat(60)}.${"b".repeat(60)}.example.test`); await page.locator(`#${id}`).press("Enter");
   }
   await page.locator("#publication-title").fill("A long applet title"); await page.locator("#publication-description").fill("D".repeat(500));
+  for(let i=0;i<10;i++){await page.locator("#publication-hashtags").fill("t".repeat(63)+i);await page.locator("#publication-hashtags").press("Enter");}
   await layout("publish","#publication-review");
   await page.locator("#publication-servers").fill("https://backup.example.com"); await page.locator("#publication-servers").press("Enter");
   await page.locator("#publication-review").click(); await page.locator("#publication-review-panel").waitFor();
@@ -160,6 +161,8 @@ try {
   await layout("publish-complete","#publication-copy");
   await page.locator("#publication-delivery-summary").click();
   await layout("publish-delivery","#publication-copy");
+  await page.locator("#publication-edit-published").click();
+  await layout("published-edit","#publication-review");
   await page.locator("#publication-close").click();
   await layout("published-builder","#republish");
   assert(errors.length===0,errors.join(";"));

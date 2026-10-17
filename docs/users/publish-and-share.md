@@ -12,7 +12,7 @@ An `naddr` identifies a replaceable Nostr event. A shell still needs access to t
 ## Publish your selected version
 
 1. Select a verified version. **Publish** appears beside the applet and stays disabled until a signing identity is selected.
-2. Open the final **Publish** step. Review the title and description suggested by the CVM, edit them if needed, and choose destinations.
+2. Open the final **Publish** step. Review the title and description suggested by the CVM, edit them if needed, add hashtags, and choose destinations.
 3. Review the captured screenshot, then approve the applet and its application listing in your extension or remote signer (two signing requests).
 4. Follow file propagation. The browser mirrors the applet and screenshot to your Blossom servers, falling back to verified upload where necessary.
 5. Once any selected relay confirms, choose **Copy naddr**. Other relays can remain unavailable.
@@ -31,11 +31,15 @@ Your applet can be published even when the listing has no relay confirmation. Us
 
 ## Review applet details
 
-The CVM suggests a title and description from verified manifest metadata, falling back to your saved project for older builds. This uses no extra model request. Both fields stay editable until signing; the review shows the exact text you will sign.
+The CVM suggests a title and description from verified manifest metadata, falling back to your saved project for older builds. This uses no extra model request. The review shows the exact text you will sign. After publishing, **Edit publication** lets you change it and sign an update.
 
-Open **Advanced applet details** to see **Required** and **Optional** shell capabilities, plus the manifest and file hashes. Older builds cannot declare optional capabilities, so they show **Not declared by this build**. This does not mean the applet has no optional integrations. These declarations come from the verified build and are read-only here.
+Open **Advanced applet details** to see **Required** and **Optional** shell capabilities, plus the manifest and file hashes. New builds carry separate required and optional declarations into the signed event. Older builds without this metadata show **Not declared by this build** for optional capabilities. This does not mean the applet has no optional integrations. These declarations come from the verified build and are read-only here. Create a revision to update them; changing publication text does not change the applet’s code or capabilities.
 
 <GuideScreenshot name="publish-advanced" alt="Publication review with Required and Optional capability sections expanded under Advanced applet details" caption="Check capability declarations before signing. Older manifests explicitly identify missing optional declarations." />
+
+## Add hashtags
+
+Type a topic, such as `games`, and press **Enter** to add it. You can add up to ten hashtags and remove any with its × button. Spaces and URL characters are rejected; tags are normalized to lowercase and duplicates are removed. Hashtags appear on both the applet event and its application listing.
 
 ## Choose destinations
 
@@ -53,7 +57,7 @@ With fewer than two complete copies, publishing waits. For example, HTTP 401 mea
 
 If no relay has confirmed, use **Retry publication** or edit your relays. Saved file copies and your signature are reused. **Check publication** looks for the existing event. Once one relay confirms, the applet is published; unavailable extras remain in collapsed **Delivery details**. Older attempts with saved confirmations are corrected automatically when the CVM starts or the attempt is reopened.
 
-Editing an unfinished signed publication creates a replacement draft and requires a **fresh signature**. The CVM retains the previous signed event in history and reuses verified copies for unchanged destinations. A previous event may already have reached a relay when confirmation was lost; editing cannot retract it.
+Editing a signed publication creates a replacement draft and requires a **fresh signature**. The CVM retains the previous signed event in history and reuses verified copies for unchanged destinations. A previous event may already have reached a relay when confirmation was lost; editing cannot retract it.
 
 The CVM saves your applet signature before copying starts, along with file-copy results and relay confirmations as each attempt finishes. You can reload or reopen the project and continue publishing. You may still need to approve file-copy permission in your signer; the applet itself keeps its original signature.
 
@@ -63,9 +67,13 @@ The development server’s own Blossom store accepts writes only from the CVM. P
 
 The builder shows **Published · Version N** and changes **Publish** to **View publication**. Open it to see the saved confirmations or copy the same naddr. Publication status comes from the CVM, so it survives a page reload or service restart.
 
-<GuideScreenshot name="publish-confirmed" alt="Published applet with Copy naddr and Republish buttons, two file copies and one confirmed relay; unavailable destinations are in collapsed delivery details" caption="Two file copies and one confirmed relay are enough. Extra failures stay in delivery details; your applet is ready to share." />
+<GuideScreenshot name="publish-confirmed" alt="Published applet with Copy naddr, Edit publication and Republish buttons, two file copies and one confirmed relay; unavailable destinations are in collapsed delivery details" caption="Two file copies and one confirmed relay are enough. Extra failures stay in delivery details; your applet is ready to share." />
 
 **Republish** is available beside **View publication** and on the publication result. It sends the saved application listing (when present) and the same signed applet to your saved relays again, keeping the same naddr. Files, signatures and model generation are reused. Progress changes to **Republishing…**, then reports the new confirmations. If the resend cannot confirm, your earlier publication remains saved.
+
+**Edit publication** opens the saved title, description, hashtags and destinations. Change them, review, and approve fresh signatures. The update keeps the **same naddr** and applet version; it does not use model tokens. Until the update succeeds, the earlier publication remains available.
+
+<GuideScreenshot name="publish-edit" alt="Edit publication form showing editable title, description, hashtag chips, and destinations for a published applet" caption="Change how your applet is presented, then review and sign the update." />
 
 **Your applets** also shows the published version. After a successful revision, it shows **Unpublished changes** and identifies both the published version and the newer version ready to publish. Revising does not publish automatically. You can select an older version above the preview to return to its publication.
 

@@ -957,7 +957,7 @@
     },
     {
       "name": "development_publication",
-      "description": "Suggest metadata, prepare, replace unfinished drafts, submit and explicitly republish user-signed development publications.",
+      "description": "Suggest metadata, prepare, edit publication metadata, submit and explicitly republish user-signed development publications.",
       "scope": "development",
       "inputSchema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -1089,6 +1089,14 @@
                 "minLength": 1,
                 "maxLength": 500
               },
+              "hashtags": {
+                "maxItems": 10,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 128
+                }
+              },
               "replaces": {
                 "type": "string",
                 "format": "uuid",
@@ -1157,7 +1165,7 @@
                   },
                   "content": {
                     "type": "string",
-                    "const": ""
+                    "maxLength": 4000
                   }
                 },
                 "required": [
@@ -1229,7 +1237,7 @@
                   },
                   "content": {
                     "type": "string",
-                    "const": ""
+                    "maxLength": 4000
                   }
                 },
                 "required": [
@@ -1995,6 +2003,9 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 500
+        },
+        "capabilitiesKnown": {
+          "type": "boolean"
         },
         "basis": {
           "type": "string",

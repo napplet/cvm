@@ -11,6 +11,7 @@ RUN cp -a /root/.cache/node/corepack/v1/pnpm/10.8.0 /opt/pnpm && cd /opt/templat
 RUN cd /opt/template && PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright node -e 'const {realpathSync}=require("node:fs");const {execFileSync}=require("node:child_process");const {dirname,join}=require("node:path");const pkg=require.resolve("playwright/package.json",{paths:[realpathSync("node_modules/@napplet/conformance-cli")]});execFileSync(process.execPath,[join(dirname(pkg),"cli.js"),"install","chromium"],{stdio:"inherit"})' && chmod -R a+rx /opt/ms-playwright
 COPY authoring-skills /opt/authoring-skills
 COPY authoring-skills.ts /opt/authoring-skills.ts
+COPY source-capabilities.ts /opt/source-capabilities.ts
 COPY run-proposal.ts /usr/local/bin/run-proposal
 RUN chmod 0555 /usr/local/bin/run-proposal
 ENV HOME=/home/napplet CI=1 PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright

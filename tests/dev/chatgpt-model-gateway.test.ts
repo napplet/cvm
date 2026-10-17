@@ -257,5 +257,5 @@ test("source-based remix carries the pinned snapshot as data without changing ge
   expect((await gateway.dispatch({ ...intent, remixReference: `remix:${"a".repeat(64)}` }, signal())).status).toBe("completed");
   const request = JSON.parse(String(fixture.calls.find(call => call.url.endsWith("/responses"))!.init!.body));
   expect(JSON.parse(request.input[1].content).remixReferenceData).toEqual(source);
-  expect(request.text.format.schema.properties.files.items.properties.path.enum).toEqual(["src/main.ts","src/styles.css"]);
+  expect(request.text.format.schema.properties.files.items.properties.path.enum).toEqual(["src/main.ts","src/styles.css","src/capabilities.json"]);
 });

@@ -97,10 +97,10 @@ try {
       if (name !== "development_publication") throw new Error("Unexpected CVM effect");
       if (input.action === "preview") return { address };
       if (input.action === "lookup") return { status: "ok", current: w.samplePublication ?? null, latestPublished: w.samplePublication ?? null };
-      if (input.action === "metadata") return {status:"ok", ...version, title:"Reading-session counter", description:"Count your daily reading sessions with a simple, focused counter.", basis:"project", tags:[["requires","storage"]], files:[]};
+      if (input.action === "metadata") return {status:"ok", ...version, title:"Reading-session counter", description:"Count your daily reading sessions with a simple, focused counter.", basis:"project", capabilitiesKnown:true, tags:[["R","storage"],["O","theme"]], files:[]};
       if (input.action !== "prepare") throw new Error("Publication is disabled in screenshots");
       return w.samplePrepared = { id: "publication:docs", status: "prepared", artifactId: version.artifactId, publisher: publication.identity.pubkey,
-        screenshot: location.origin+"/sample-screenshot.png", application: {template:{kind:32267,tags:[],content:input.description,created_at:1}}, title:input.title, description:input.description, template: { tags: [["title",input.title],["description",input.description],["requires","storage"]] }, servers: input.servers, relays: input.relays, files: [], version: 2, expiresAt: Date.now() + 60000 };
+        screenshot: location.origin+"/sample-screenshot.png", application: {template:{kind:32267,tags:[],content:input.description,created_at:1}}, title:input.title, description:input.description, capabilitiesKnown:true, template: { content:input.description, tags: [["title",input.title],["R","storage"],["O","theme"],...input.hashtags.map((tag:string)=>["t",tag])] }, servers: input.servers, relays: input.relays, files: [], version: 2, expiresAt: Date.now() + 60000 };
     } };
     const publication = new PublicationWorkspace(bootstrap, () => client, () => w.selectedVersion);
     w.sampleProjects = [
@@ -182,6 +182,7 @@ try {
   for (const [id, value] of [["publication-servers", "https://blossom.example.com"], ["publication-servers", "https://backup.example.com"], ["publication-servers", "https://unavailable.example.com"], ["publication-relays", "wss://relay.example.com"]]) {
     await page.locator(`#${id}`).fill(value); await page.locator(`#${id}`).press("Enter");
   }
+  await page.locator("#publication-hashtags").fill("reading"); await page.locator("#publication-hashtags").press("Enter");
   await capture("publish-destinations", "#publish-step");
   await page.locator("#publication-review").click();
   await page.locator("#publication-review-panel details").evaluate((el: HTMLDetailsElement) => el.open = true);
@@ -194,13 +195,15 @@ try {
     const w = window as any;
     // Read-only presentation fixture for a completed publication; no signing,
     // file upload or relay publication is performed by this capture.
-    w.samplePublication = { ...w.samplePrepared, application:{...w.samplePrepared.application,relayResults:[{relay:"wss://relay.example.com",state:"published"}]}, status: "published", address, url: origin,
+    w.samplePublication = { ...w.samplePrepared, application:{...w.samplePrepared.application,relayResults:[{relay:"wss://relay.example.com",state:"published"}]}, status: "published", signedEvent:{...w.samplePrepared.template,id:"a".repeat(64),pubkey:"b".repeat(64),sig:"c".repeat(128)}, address, url: origin,
       publishedAt: "2026-10-16T12:00:00Z", files: [{ path: "index.html", sha256: "a".repeat(64), bytes: 2048, url: origin, type: "text/html" }],
       fileResults: [{ server: "https://blossom.example.com", file: "index.html", state: "verified" }, { server: "https://backup.example.com", file: "index.html", state: "verified" }, { server: "https://unavailable.example.com", file: "index.html", state: "failed", detail: "Server declined upload (401)" }],
       relays:["wss://relay.example.com","wss://unavailable.example.com"], relayResults: [{ relay: "wss://relay.example.com", state: "published" },{relay:"wss://unavailable.example.com",state:"failed",detail:"No confirmation received."}] };
   }, { address, origin });
   await page.locator("#publish").click(); await page.locator("#publication-result").waitFor();
   await capture("publish-confirmed", "#publish-step");
+  await page.locator("#publication-edit-published").click();
+  await capture("publish-edit", "#publish-step");
   await page.locator("#publication-close").click();
   await page.locator("#new-applet").click();
   await page.locator("#remix-mode").click();

@@ -1,5 +1,7 @@
+import { sourceCapabilities } from "../../infra/dev-ui/source-capabilities";
+import { PublicationHashtagsSchema } from "../dev-ui/publication-hashtags";
 import { publicationScreenshot } from "./publication-media";
-import { prepareZapstorePublication } from "../../infra/vendor/napplet-publication/bundle/zapstore.js";
+import { prepareZapstorePublication, createSiteManifestTemplate } from "../../infra/vendor/napplet-publication/bundle/entry.js";
 import { publishOnUserRelays, type RelayReceipt } from "./publication-relays";
 import { relayUrl } from "../dev-ui/destinations";
 import { MIN_PUBLICATION_SERVERS, verifiedPublicationServers } from "../dev-ui/publication-copies";
@@ -11,14 +13,14 @@ import { z } from "zod";
 import { getEventHash, verifyEvent, type Event, type EventTemplate } from "nostr-tools/pure";
 import { SimplePool } from "nostr-tools/pool";
 import { naddrEncode } from "nostr-tools/nip19";
-import { createSiteManifestTemplate, publishEventWithSimplePool, createUploadAuthorization } from "../../infra/vendor/napplet-cli/bundle/entry.js";
+import { publishEventWithSimplePool, createUploadAuthorization } from "../../infra/vendor/napplet-cli/bundle/entry.js";
 import { accountIdForPrincipal } from "../domain/account-command";
 import { canonicalJson } from "../promotion/schema";
 import type { PostgresSqlClient } from "../persistence/postgres-sql-funding-store";
 import type { LocalArtifactRepository, SealedArtifact } from "./local-artifact-repository";
 
 const Hex = z.string().regex(/^[a-f0-9]{64}$/u);
-const SignedEvent = z.object({ id: Hex, pubkey: Hex, sig: z.string().regex(/^[a-f0-9]{128}$/u), kind: z.literal(35129), created_at: z.number().int().positive(), tags: z.array(z.array(z.string().max(1024)).max(8)).max(512), content: z.literal("") }).strict();
+const SignedEvent = z.object({ id: Hex, pubkey: Hex, sig: z.string().regex(/^[a-f0-9]{128}$/u), kind: z.literal(35129), created_at: z.number().int().positive(), tags: z.array(z.array(z.string().max(1024)).max(8)).max(512), content: z.string().max(4000) }).strict();
 const ApplicationEvent = SignedEvent.extend({ kind: z.literal(32267), content: z.string().max(4000) });
 const ServerUrl = z.string().url().max(512).refine(value => { const url = new URL(value); return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash && url.pathname === "/"; });
 const FileResult = z.object({ server: ServerUrl, file: z.string().max(512), state: z.enum(["checking", "signing", "mirroring", "uploading", "verified", "failed"]), detail: z.string().max(1000).optional() }).strict();
@@ -26,14 +28,14 @@ export const DevelopmentPublicationArgumentsSchema = z.discriminatedUnion("actio
   z.object({ action: z.literal("lookup"), sessionId: z.string().max(240), artifactId: z.string().max(100), publisher: Hex }).strict(),
   z.object({ action: z.literal("preview"), artifactId: z.string().max(100), sessionId: z.string().max(240) }).strict(),
   z.object({ action: z.literal("metadata"), artifactId: z.string().max(100), sessionId: z.string().max(240) }).strict(),
-  z.object({ action: z.literal("prepare"), servers: z.array(ServerUrl).min(1).max(5), relays: z.array(z.string().max(512).transform(value => relayUrl(value))).min(1).max(5), artifactId: z.string().max(100), sessionId: z.string().max(240), publisher: Hex, requestKey: z.string().uuid(), title: z.string().trim().min(1).max(120), description: z.string().trim().min(1).max(500).optional(), replaces: z.string().uuid().optional() }).strict(),
+  z.object({ action: z.literal("prepare"), servers: z.array(ServerUrl).min(1).max(5), relays: z.array(z.string().max(512).transform(value => relayUrl(value))).min(1).max(5), artifactId: z.string().max(100), sessionId: z.string().max(240), publisher: Hex, requestKey: z.string().uuid(), title: z.string().trim().min(1).max(120), description: z.string().trim().min(1).max(500).optional(), hashtags: PublicationHashtagsSchema.optional(), replaces: z.string().uuid().optional() }).strict(),
   z.object({ action: z.literal("submit"), id: z.string().uuid(), event: SignedEvent }).strict(),
   z.object({ action: z.literal("save"), id: z.string().uuid(), event: SignedEvent, applicationEvent: ApplicationEvent.optional(), fileResults: z.array(FileResult).max(2560).optional() }).strict(),
   z.object({ action: z.enum(["status", "reconcile", "republish"]), id: z.string().uuid() }).strict(),
 ]);
 type Republication = { attemptedAt: string; relayResults: RelayReceipt[] };
 type Application = { template: EventTemplate; signedEvent?: Event; relayResults?: RelayReceipt[] };
-type Prepared = { application?: Application; screenshot?: string; republication?: Republication; supersededBy?: string; supersedes?: string; preview?: boolean; relays?: string[]; template: EventTemplate; expiresAt: number; files: SealedArtifact["files"]; version: number; title: string; description?: string; aggregate: string; dTag: string };
+type Prepared = { capabilitiesKnown?: boolean; application?: Application; screenshot?: string; republication?: Republication; supersededBy?: string; supersedes?: string; preview?: boolean; relays?: string[]; template: EventTemplate; expiresAt: number; files: SealedArtifact["files"]; version: number; title: string; description?: string; aggregate: string; dTag: string };
 type Row = { file_results: z.infer<typeof FileResult>[]; published_at: Date | null; relay_results: RelayReceipt[]; id: string; account_id: string; session_id: string; artifact_id: string; publisher: string; fingerprint: string; prepared: Prepared; signed_event: Event | null; state: "prepared" | "publishing" | "published" | "unconfirmed" };
 type Options = { pubkey: string; sign(template: EventTemplate): Promise<Event>; publicOrigin?: string; publicRelay?: string; pool: Pick<PostgresSqlClient, "query">; repository: LocalArtifactRepository; root: string; workerResultsRoot: string; relay: string; openTarget(target: string): Promise<string> };
 const hash = (value: string | Uint8Array) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
@@ -84,7 +86,7 @@ export class LocalPublication {
         if (current) await this.restoreConfirmed(current);
         const latest = (await this.query<Row>(`SELECT * FROM development_publications
           WHERE account_id=$1 AND session_id=$2 AND publisher=$3 AND state='published'
-            AND NOT coalesce((prepared->>'preview')::boolean,false) AND prepared->>'supersededBy' IS NULL
+            AND NOT coalesce((prepared->>'preview')::boolean,false)
           ORDER BY (prepared->>'version')::integer DESC,published_at DESC,id DESC LIMIT 1`, [account, command.sessionId, command.publisher])).rows[0];
         return { status: "ok", current: current ? this.projection(current) : null, latestPublished: latest ? this.projection(latest) : null };
       }
@@ -92,8 +94,8 @@ export class LocalPublication {
         const artifact = await this.options.repository.get(command.artifactId);
         if (!artifact || artifact.accountId !== account || artifact.sessionId !== command.sessionId || artifact.ownerId !== principal) return { status: "denied" };
         if (command.action === "metadata") {
-          const tags = await this.metadata(artifact);
-          return { status: "ok", artifactId: artifact.artifactId, version: artifact.version, ...await this.suggestions(artifact, tags), tags, files: artifact.files };
+          const { tags, capabilitiesKnown } = await this.metadata(artifact);
+          return { status: "ok", artifactId: artifact.artifactId, version: artifact.version, ...await this.suggestions(artifact, tags), tags, capabilitiesKnown, files: artifact.files };
         }
         if (command.action === "preview") return this.ensurePreview(artifact);
         const preview = await this.ensurePreview(artifact);
@@ -106,13 +108,14 @@ export class LocalPublication {
             AND NOT coalesce((prepared->>'preview')::boolean,false) AND prepared->>'supersededBy' IS NULL
           ORDER BY (state='published') DESC,created_at DESC,id DESC LIMIT 1`, [account, artifact.sessionId, artifact.artifactId, command.publisher])).rows[0];
         if (signed && !command.replaces) return this.projection(signed);
-        if (command.replaces && (!signed || signed.id !== command.replaces || !["prepared", "unconfirmed"].includes(signed.state))) return { status: "rejected", code: "PUBLICATION_EDIT_UNAVAILABLE" };
+        if (command.replaces && (!signed || signed.id !== command.replaces || !["prepared", "unconfirmed", "published"].includes(signed.state))) return { status: "rejected", code: "PUBLICATION_EDIT_UNAVAILABLE" };
         if (new Set(command.servers.map(server => new URL(server).origin)).size < MIN_PUBLICATION_SERVERS) return { status: "rejected", code: "PUBLICATION_NEEDS_TWO_SERVERS" };
-        const metadata = await this.metadata(artifact);
+        const { tags: metadata, capabilitiesKnown } = await this.metadata(artifact);
+        const hashtags = command.hashtags ?? metadata.filter(tag => tag[0] === "t").map(tag => tag[1]!);
         const description = command.description ?? (await this.suggestions(artifact, metadata)).description;
         const id = crypto.randomUUID(); const dTag = `applet-${artifact.artifactId.slice(-20)}-${command.publisher.slice(0, 8)}`;
-        const template = await createSiteManifestTemplate({ target: "named", dTag }, artifact.files.map(file => ({ path: `/${file.path}`, sha256: file.sha256 })), { servers: [...new Set(command.servers.map(server => new URL(server).origin))], metadataTags: [...metadata.filter(tag => !["title", "description"].includes(tag[0]!)), ["title", command.title], ["description", description]] });
-        if (template.tags.find(tag => tag[0] === "x" && tag[2] === "aggregate")?.[1] !== artifact.aggregateSha256) throw new Error("PUBLICATION_AGGREGATE_MISMATCH");
+        const template = await createSiteManifestTemplate({ target: "named", dTag }, artifact.files.map(file => ({ path: `/${file.path}`, sha256: file.sha256 })), { createdAt: Math.max(Math.floor(Date.now() / 1000), (signed?.signed_event?.created_at ?? 0) + 1), servers: [...new Set(command.servers.map(server => new URL(server).origin))], metadataTags: [...metadata.filter(tag => !["title", "description", "t"].includes(tag[0]!)), ["title", command.title], ["description", description], ...hashtags.map(topic => ["t", topic])] });
+        if (template.tags.find(tag => tag[0] === "x")?.[1] !== artifact.files.find(file => file.path === "index.html")?.sha256) throw new Error("PUBLICATION_ARTIFACT_HASH_MISMATCH");
         const screenshot = await publicationScreenshot(this.options.root, this.options.repository, artifact);
         await this.uploadCvmBlob(screenshot.file.sha256, "image/png", screenshot.bytes);
         const servers = [...new Set(command.servers.map(server => new URL(server).origin))];
@@ -120,17 +123,17 @@ export class LocalPublication {
         // Use the exact CLI --zapstore implementation. Remote media URLs need
         // no filesystem access; all local bytes were captured in isolation.
         const listing = await prepareZapstorePublication({ version: 1, sourceDir: ".", defaultTarget: "named", relays: command.relays, blossomServers: servers,
-          zapstore: { id: `applet-${hash(artifact.sessionId).slice(0, 32)}`, name: command.title, summary: description, description: `${description}\n\nOpen in a compatible napplet shell: nostr:${address}`, images: servers.map(server => `${server}/${screenshot.file.sha256}`) } }, servers, { enabled: true, cwd: "/", createdAt: template.created_at });
+          zapstore: { id: `applet-${hash(artifact.sessionId).slice(0, 32)}`, name: command.title, summary: description, description: `${description}\n\nOpen in a compatible napplet shell: nostr:${address}`, tags: hashtags, images: servers.map(server => `${server}/${screenshot.file.sha256}`) } }, servers, { enabled: true, cwd: "/", createdAt: template.created_at });
         if (!listing) throw new Error("PUBLICATION_APPLICATION_MISSING");
-        const prepared: Prepared = { ...(command.replaces ? { supersedes: command.replaces } : {}), relays: [...new Set(command.relays)], template, expiresAt: Date.now() + 600000, files: [...artifact.files, screenshot.file], screenshot: screenshot.file.sha256, application: { template: listing.template }, version: artifact.version, title: command.title, description, aggregate: artifact.aggregateSha256, dTag };
+        const prepared: Prepared = { capabilitiesKnown, ...(command.replaces ? { supersedes: command.replaces } : {}), relays: [...new Set(command.relays)], template, expiresAt: Date.now() + 600000, files: [...artifact.files, screenshot.file], screenshot: screenshot.file.sha256, application: { template: listing.template }, version: artifact.version, title: command.title, description, aggregate: artifact.aggregateSha256, dTag };
         const parameters = [id, account, artifact.sessionId, artifact.artifactId, command.publisher, command.requestKey, fingerprint, JSON.stringify(prepared)];
         if (command.replaces) {
-          // Replace only an unfinished envelope. The conditional update races
+          // Replace the selected envelope while preserving its signed publication history. The conditional update races
           // safely against submit's own claim; the prior signature stays stored.
           await this.query(`WITH replaced AS (
             UPDATE development_publications SET prepared=jsonb_set(prepared,'{supersededBy}',to_jsonb($1::text)),updated_at=now()
             WHERE id=$9 AND account_id=$2 AND session_id=$3 AND artifact_id=$4 AND publisher=$5
-              AND state IN ('prepared','unconfirmed') AND prepared->>'supersededBy' IS NULL
+              AND state IN ('prepared','unconfirmed','published') AND prepared->>'supersededBy' IS NULL
             RETURNING id
           ) INSERT INTO development_publications(id,account_id,session_id,artifact_id,publisher,request_key,fingerprint,prepared,state,file_results)
             SELECT $1,$2,$3,$4,$5,$6,$7,$8::jsonb,'prepared',$10::jsonb FROM replaced`, [...parameters, command.replaces, JSON.stringify((signed!.file_results ?? []).filter(receipt => command.servers.map(server => new URL(server).origin).includes(receipt.server)))]);
@@ -190,13 +193,13 @@ export class LocalPublication {
     } catch (error) { const code = error instanceof Error && /^PUBLICATION_SCREENSHOT_(BUSY|FAILED|TOOLCHAIN_MISSING)$/.test(error.message) ? error.message : "PUBLICATION_UNAVAILABLE"; return { status: "rejected", code }; }
   }
   async ensurePreview(artifact: SealedArtifact): Promise<unknown> {
-    const key = `cvm-preview:${artifact.artifactId}:${hash(this.origin).slice(0, 16)}`;
+    const key = `cvm-preview-v2:${artifact.artifactId}:${hash(this.origin).slice(0, 16)}`;
     let row = (await this.query<Row>("SELECT * FROM development_publications WHERE account_id=$1 AND request_key=$2", [artifact.accountId, key])).rows[0];
     if (!row) {
-      const metadata = await this.metadata(artifact); const id = crypto.randomUUID(); const dTag = `preview-${artifact.artifactId.slice(-32)}`;
-      const template = await createSiteManifestTemplate({ target: "named", dTag }, artifact.files.map(file => ({ path: `/${file.path}`, sha256: file.sha256 })), { servers: [this.origin], metadataTags: metadata });
-      if (template.tags.find(tag => tag[0] === "x" && tag[2] === "aggregate")?.[1] !== artifact.aggregateSha256) throw new Error("PUBLICATION_AGGREGATE_MISMATCH");
-      const prepared: Prepared = { preview: true, template, expiresAt: Date.now() + 600000, files: artifact.files, version: artifact.version, title: "CVM preview", aggregate: artifact.aggregateSha256, dTag };
+      const { tags: metadata, capabilitiesKnown } = await this.metadata(artifact); const suggested = await this.suggestions(artifact, metadata); const id = crypto.randomUUID(); const dTag = `preview-${artifact.artifactId.slice(-32)}`;
+      const template = await createSiteManifestTemplate({ target: "named", dTag }, artifact.files.map(file => ({ path: `/${file.path}`, sha256: file.sha256 })), { servers: [this.origin], metadataTags: metadata, content: suggested.description });
+      if (template.tags.find(tag => tag[0] === "x")?.[1] !== artifact.files.find(file => file.path === "index.html")?.sha256) throw new Error("PUBLICATION_ARTIFACT_HASH_MISMATCH");
+      const prepared: Prepared = { capabilitiesKnown, preview: true, template, expiresAt: Date.now() + 600000, files: artifact.files, version: artifact.version, title: "CVM preview", aggregate: artifact.aggregateSha256, dTag };
       const event = await this.options.sign(template);
       await this.query("INSERT INTO development_publications(id,account_id,session_id,artifact_id,publisher,request_key,fingerprint,prepared,signed_event,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'prepared') ON CONFLICT(account_id,request_key) DO NOTHING", [id, artifact.accountId, artifact.sessionId, artifact.artifactId, this.options.pubkey, key, hash(key), JSON.stringify(prepared), JSON.stringify(event)]);
       row = (await this.query<Row>("SELECT * FROM development_publications WHERE account_id=$1 AND request_key=$2", [artifact.accountId, key])).rows[0]!;
@@ -207,14 +210,14 @@ export class LocalPublication {
     try { return await operation; } finally { this.#active.delete(row.id); }
   }
   private projection(row: Row) {
-    return { status: row.state, application: row.prepared.application, screenshot: row.prepared.screenshot ? `${this.origin}/${row.prepared.screenshot}` : undefined, republication: row.prepared.republication, id: row.id, artifactId: row.artifact_id, publisher: row.publisher, version: row.prepared.version, title: row.prepared.title, description: row.prepared.description ?? row.prepared.template.tags.find(tag => tag[0] === "description")?.[1] ?? "", aggregate: row.prepared.aggregate, template: row.prepared.template, expiresAt: row.prepared.expiresAt, destination: row.prepared.preview ? "CVM preview" : "Your Blossom servers", relay: this.options.publicRelay ?? this.options.relay, relays: row.prepared.relays ?? [this.options.publicRelay ?? this.options.relay], relayResults: row.relay_results ?? [], fileResults: row.file_results ?? [], signedEvent: row.signed_event ?? undefined, publishedAt: row.published_at?.toISOString(), files: row.prepared.files.map(file => ({ ...file, url: `${this.origin}/${file.sha256}`, type: mime(file.path) })), servers: row.prepared.template.tags.filter(tag => tag[0] === "server").map(tag => tag[1]), preview: !!row.prepared.preview,
+    return { status: row.state, capabilitiesKnown: row.prepared.capabilitiesKnown, application: row.prepared.application, screenshot: row.prepared.screenshot ? `${this.origin}/${row.prepared.screenshot}` : undefined, republication: row.prepared.republication, id: row.id, artifactId: row.artifact_id, publisher: row.publisher, version: row.prepared.version, title: row.prepared.title, description: row.prepared.description ?? row.prepared.template.tags.find(tag => tag[0] === "description")?.[1] ?? "", aggregate: row.prepared.aggregate, template: row.prepared.template, expiresAt: row.prepared.expiresAt, destination: row.prepared.preview ? "CVM preview" : "Your Blossom servers", relay: this.options.publicRelay ?? this.options.relay, relays: row.prepared.relays ?? [this.options.publicRelay ?? this.options.relay], relayResults: row.relay_results ?? [], fileResults: row.file_results ?? [], signedEvent: row.signed_event ?? undefined, publishedAt: row.published_at?.toISOString(), files: row.prepared.files.map(file => ({ ...file, url: `${this.origin}/${file.sha256}`, type: mime(file.path) })), servers: row.prepared.template.tags.filter(tag => tag[0] === "server").map(tag => tag[1]), preview: !!row.prepared.preview,
       ...(row.state === "published" && row.signed_event ? { eventId: row.signed_event.id, url: `${this.origin}/open/${row.id}`, address: naddrEncode({ identifier: row.prepared.dTag, pubkey: row.publisher, kind: 35129, relays: row.prepared.relays ?? [this.options.publicRelay ?? this.options.relay] }) } : {}) };
   }
   private async suggestions(artifact: SealedArtifact, tags: string[][]) {
     const project = (await this.query<{ title: string }>("SELECT title FROM development_projects WHERE id=$1 AND owner_pubkey=$2", [artifact.sessionId, artifact.ownerId])).rows[0];
     return suggestPublicationMetadata(tags, project?.title, artifact.version);
   }
-  private async metadata(artifact: SealedArtifact): Promise<string[][]> {
+  private async metadata(artifact: SealedArtifact): Promise<{ tags: string[][]; capabilitiesKnown: boolean }> {
     const row = (await this.query<{ request_sha256: string; manifest_sha256: string }>("SELECT request_sha256,manifest_sha256 FROM development_worker_results WHERE action_id=$1 AND account_id=$2 AND state='completed'", [artifact.actionId, artifact.accountId])).rows[0];
     if (!row || !Hex.safeParse(row.request_sha256).success) throw new Error("PUBLICATION_BUILD_EVIDENCE_MISSING");
     const bytes = await readFile(resolve(this.options.workerResultsRoot, row.request_sha256, "result.json"));
@@ -225,7 +228,15 @@ export class LocalPublication {
     const deploy = JSON.parse(dryRun.stdout);
     const site = deploy.manifests.find((item: any) => item.aggregateHash === artifact.aggregateSha256);
     if (!site || site.template.kind !== 15129) throw new Error("PUBLICATION_CLI_MANIFEST_MISSING");
-    return z.array(z.array(z.string()).min(1)).parse(site.template.tags).filter(tag => !["path", "x", "server", "d"].includes(tag[0]!));
+    const tags = z.array(z.array(z.string()).min(1)).parse(site.template.tags).filter(tag => !["path", "x", "server", "d"].includes(tag[0]!));
+    // Source declarations are data, bound to the same verified proposal and owner.
+    const source = (await this.query<{ proposal_json: { files: { path: string; content: string }[] } }>("SELECT proposal_json FROM source_proposals WHERE proposal_sha256=$1 AND account_id=$2 AND action_id=$3", [artifact.proposalSha256, artifact.accountId, artifact.actionId])).rows[0];
+    const files = source?.proposal_json.files;
+    if (files && hash(canonicalJson({ files })) !== artifact.proposalSha256) throw new Error("PUBLICATION_SOURCE_CHANGED");
+    const capabilities = files ? sourceCapabilities(files) : undefined;
+    const normalized = tags.flatMap(tag => tag[0] === "requires" ? [["R", tag[1]!]] : tag[0] === "archetype" ? [["z", tag[1]!], ["i", tag[2]!]] : [tag]);
+    if (!capabilities) return { tags: normalized, capabilitiesKnown: false }; // Old builds retain known requirements; never guess optional usage.
+    return { tags: [...normalized.filter(tag => !["R", "O"].includes(tag[0]!)), ...capabilities.required.map(domain => ["R", domain]), ...capabilities.optional.map(domain => ["O", domain])], capabilitiesKnown: true };
   }
   private async publish(row: Row, event: Event) {
     // Durable signed envelope before any file/relay effect. Restarts may only

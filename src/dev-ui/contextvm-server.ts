@@ -127,7 +127,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
   const config = options.config ?? (stack ? await stack.up() : await Bun.file(resolve(root, ".local/napplet-cvm-dev-payments/payments.json")).json() as DevPayments);
   let remixImports: DevelopmentRemixImports | undefined;
   const remixSource = async (account: string, reference: string) => remixImports?.load(account, reference);
-  let priorSource: ((input: Readonly<{ accountId: string; sessionId: string; authorizedPriorArtifactReference: string }>) => Promise<readonly { path: "src/main.ts" | "src/styles.css"; content: string }[] | undefined>) | undefined;
+  let priorSource: ((input: Readonly<{ accountId: string; sessionId: string; authorizedPriorArtifactReference: string }>) => Promise<readonly { path: "src/main.ts" | "src/styles.css" | "src/capabilities.json"; content: string }[] | undefined>) | undefined;
   const composition = await createDevelopmentModelComposition(config, { remixSource, priorSource: async (input) => priorSource?.(input) });
   const app = composition.funding;
   // A test payment stack gets a unique state root so encrypted pending actions and
@@ -268,7 +268,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
     const source = (await app.pool.query<{ proposal_json: { files?: unknown } }>("SELECT proposal_json FROM source_proposals WHERE proposal_sha256=$1 AND account_id=$2 AND session_id=$3 AND action_id=$4", [artifact.proposalSha256, input.accountId, input.sessionId, artifact.actionId])).rows[0]?.proposal_json;
     const files = source && typeof source === "object" && Array.isArray((source as { files?: unknown }).files) ? (source as { files: unknown[] }).files : undefined;
     if (!files) return undefined;
-    const parsed = files.filter((file): file is { path: "src/main.ts" | "src/styles.css"; content: string } => typeof file === "object" && file !== null && ((file as { path?: unknown }).path === "src/main.ts" || (file as { path?: unknown }).path === "src/styles.css") && typeof (file as { content?: unknown }).content === "string");
+    const parsed = files.filter((file): file is { path: "src/main.ts" | "src/styles.css" | "src/capabilities.json"; content: string } => typeof file === "object" && file !== null && (["src/main.ts", "src/styles.css", "src/capabilities.json"].includes(String((file as { path?: unknown }).path))) && typeof (file as { content?: unknown }).content === "string");
     return parsed.length === files.length ? parsed : undefined;
   };
   const paja = await import("../../tests/dev-ui/node_modules/@kehto/paja");

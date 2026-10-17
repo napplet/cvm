@@ -11,8 +11,12 @@ for (const name of ["napplet-cli", "napplet-publication", "qrcode"]) {
 }
 const result = await Bun.build({ entrypoints: [resolve(root, "infra/vendor/napplet-cli/entry.ts")], target: "bun", format: "esm", external: ["nostr-tools/*", "@scure/base", "@std/*"], outdir: resolve(root, "infra/vendor/napplet-cli/bundle") });
 if (!result.success) throw new Error("CLI_LIBRARY_BUILD_FAILED");
-const publication = await Bun.build({ entrypoints: [resolve(root, "infra/vendor/napplet-publication/zapstore.ts")], target: "bun", format: "esm", outdir: resolve(root, "infra/vendor/napplet-publication/bundle") });
+const publication = await Bun.build({ external: ["parse5"], entrypoints: [resolve(root, "infra/vendor/napplet-publication/entry.ts")], target: "bun", format: "esm", outdir: resolve(root, "infra/vendor/napplet-publication/bundle") });
 if (!publication.success) throw new Error("CLI_PUBLICATION_LIBRARY_BUILD_FAILED");
+const publicationPath = resolve(root, "infra/vendor/napplet-publication/bundle/entry.js");
+const publicationCode = (await Bun.file(publicationPath).text()).replace(/^import \{ parse \} from "parse5";\n/m, "");
+if (/\bparse\b/.test(publicationCode)) throw new Error("CLI_UNEXPECTED_HTML_PARSER_DEPENDENCY");
+await Bun.write(publicationPath, publicationCode);
 // Bun preserves two unused external imports from the Deno file collector. Our
 // exports accept verified bytes and never collect files; remove only imports
 // proven unused in the generated bundle, leaving upstream source unchanged.

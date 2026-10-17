@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: verification_deferred_gaps
-stopped_at: Screenshot and Zapstore publication verified and active locally
-last_updated: "2026-10-17T17:49:56Z"
+stopped_at: Editable publication metadata, capabilities and hashtags verified and active locally
+last_updated: "2026-10-17T18:40:06.314766+00:00"
 last_activity: 2026-10-17
-last_activity_desc: New publications capture screenshots and publish user-signed application listings with durable delivery
+last_activity_desc: Published metadata editing, capability declarations and hashtags shipped; upstream skills PR 254 opened
 progress:
   total_phases: 7
   completed_phases: 6
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
 Plan: 56 of 58 accepted; development Plans 07-52/53/56/57/54/55 complete
 Status: Guided applet.broker workspace at http://127.0.0.1:49371; diagnostic console at /dev. Saved chatgpt-oauth mode with gpt-6.1-sol retained. Product/console browser journeys and recovery passed through real local services. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
-Last activity: 2026-10-17 — Completed quick task 261017-eou: isolated CLI 0.10.0 screenshot and Zapstore listing publication, two user signatures, durable mirroring and relay receipts, independent partial success and republication. Full browser/service journey, 54 targeted assertions, 380 responsive checks and illustrated docs verified. Active at http://127.0.0.1:49371 with saved ChatGPT OAuth. Existing published envelopes and sealed generation toolchain retained; TypeScript baseline 424 diagnostics.
+Last activity: 2026-10-17 — Completed quick task 261017-fq0: editable published title/description/hashtags/destinations at the same address with fresh signatures; R/O preserved through generation and current-format CLI publication; upstream skills PR #254 pinned via npx skills add. Full browser/service journey, 40 targeted tests, 399 responsive checks and illustrated docs passed. Active at http://127.0.0.1:49371 with saved ChatGPT OAuth. TypeScript baseline remains 424 diagnostics with no new errors.
 
 Follow-up: Stream assembly/counter verification remains complete. Latest helper-signature and compiler-feedback fix passed 29 targeted unit/integration cases plus activity and composed OAuth browser journeys. Real blinking-text generation also passed. See debug/resolved/generated-typescript-check.md.
 
@@ -388,6 +388,7 @@ Recent decisions affecting current work:
 
 | 261017-eji | Explicit Republish with saved event/signature and durable resend feedback; preserves earlier success | 2026-10-17 | see task history | [261017-eji](./quick/261017-eji-allow-explicit-republication-of-publishe/) |
 | 261017-eou | CLI screenshots and user-signed Zapstore listings; isolated capture, verified mirroring and durable independent delivery | 2026-10-17 | see task history | [261017-eou](./quick/261017-eou-use-current-napplet-cli-screenshot-and-z/) |
+| 261017-fq0 | Editable publication metadata, hashtags, current R/O capabilities, pinned upstream skills PR #254 | 2026-10-17 | see task history | [261017-fq0](./quick/261017-fq0-preserve-required-and-optional-capabilit/) |
 
 ## Deferred Verification
 

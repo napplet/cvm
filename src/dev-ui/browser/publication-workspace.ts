@@ -1,3 +1,4 @@
+import { normalizeHashtag } from "../publication-hashtags";
 import { DestinationInput } from "./destination-input";
 import { discoverWriteRelays, suggestRelays } from "./relay-discovery";
 import { relayUrl } from "../destinations";
@@ -8,17 +9,18 @@ import type { DevelopmentBootstrap, DevelopmentContextVmClient } from "./context
 import { PublishingIdentity } from "./nostr-identity";
 import { blossomServer, discoverBlossom, propagateBlobs, type BlobFile, type Propagation } from "./blossom-client";
 type Version = { sessionId: string; artifactId: string; version: number };
-type Publication = { screenshot?: string; application?: { template: EventTemplate; signedEvent?: Event; relayResults?: { relay: string; state: string }[] }; republication?: { attemptedAt: string; relayResults: {relay:string;state:string}[] }; id: string; status: string; artifactId: string; publisher: string; template: EventTemplate; files: BlobFile[]; servers: string[]; relays: string[]; relayResults?: { relay: string; state: string; detail?: string }[]; fileResults?: Propagation[]; signedEvent?: Event; publishedAt?: string; title?: string; description?: string; address?: string; url?: string; version: number; expiresAt: number };
+type Publication = { capabilitiesKnown?: boolean; screenshot?: string; application?: { template: EventTemplate; signedEvent?: Event; relayResults?: { relay: string; state: string }[] }; republication?: { attemptedAt: string; relayResults: {relay:string;state:string}[] }; id: string; status: string; artifactId: string; publisher: string; template: EventTemplate; files: BlobFile[]; servers: string[]; relays: string[]; relayResults?: { relay: string; state: string; detail?: string }[]; fileResults?: Propagation[]; signedEvent?: Event; publishedAt?: string; title?: string; description?: string; address?: string; url?: string; version: number; expiresAt: number };
 type Journal = { prepared: Publication; event?: Event; applicationEvent?: Event; propagated?: boolean };
 export class PublicationWorkspace {
   readonly identity: PublishingIdentity;
   readonly #panel: HTMLElement;
   readonly #servers: DestinationInput;
   readonly #relays: DestinationInput;
+  readonly #hashtags: DestinationInput;
   #busy = false;
   #republishing = false;
   #replacement?: string;
-  #drafts = new Map<string, { title: string; description: string }>();
+  #drafts = new Map<string, { title: string; description: string; hashtags: string[]; pendingHashtag: string }>();
   #journal?: Journal;
   #opening = 0;
   #preview?: Publication;
@@ -38,17 +40,18 @@ export class PublicationWorkspace {
     this.identity = new PublishingIdentity(bootstrap.servicePubkey, () => { this.#opening++; ++this.#lookupEpoch; this.#current = this.#latest = undefined; if (!this.#busy) this.#journal = undefined; this.sync(); void this.lookup().catch(() => undefined); });
     this.#panel = document.createElement("section"); this.#panel.id = "publish-step"; this.#panel.hidden = true; this.#panel.className = "step-panel publication-step"; this.#panel.setAttribute("aria-labelledby", "publication-heading");
     this.#panel.innerHTML = `<button id="publication-close" class="text-button">← Back to your applet</button><header class="publication-heading"><span class="small-mark" aria-hidden="true">a·</span><div><div class="eyebrow">THE FINAL STEP</div><h1 id="publication-heading" tabindex="-1">Ready for the world.</h1><p id="publication-version" class="supporting"></p></div></header><p id="publication-history" class="supporting" hidden></p>
-      <form id="publication-prepare"><label for="publication-title">Applet name</label><input id="publication-title" maxlength="120" required aria-describedby="publication-metadata-note"><label for="publication-description">Description</label><textarea id="publication-description" rows="3" maxlength="500" required aria-describedby="publication-metadata-note"></textarea><p id="publication-metadata-note" class="supporting" role="status"></p><p id="publication-discovery" role="status"></p><div id="publication-server-editor"></div><p class="supporting">Two verified copies are enough.</p><p id="publication-relay-discovery" role="status"></p><div id="publication-relay-editor"></div><p id="publication-relay-hint" class="supporting">One relay confirmation is enough to publish.</p><button id="publication-review" class="primary">Review publication</button></form>
-      <figure id="publication-media" hidden><img id="publication-screenshot" alt="Screenshot of this applet" width="1200" height="750"><figcaption>Screenshot included in your application listing</figcaption></figure><section id="publication-review-panel" hidden><h2 id="publication-review-title"></h2><p id="publication-review-description"></p><p id="publication-review-copy"></p><details><summary>Destinations</summary><ul id="publication-destinations"></ul></details><button id="publication-confirm" class="primary">Sign and publish</button><button id="publication-edit">Edit details and destinations</button></section>
+      <form id="publication-prepare"><label for="publication-title">Applet name</label><input id="publication-title" maxlength="120" required aria-describedby="publication-metadata-note"><label for="publication-description">Description</label><textarea id="publication-description" rows="3" maxlength="500" required aria-describedby="publication-metadata-note"></textarea><p id="publication-metadata-note" class="supporting" role="status"></p><div id="publication-hashtag-editor"></div><p id="publication-discovery" role="status"></p><div id="publication-server-editor"></div><p class="supporting">Two verified copies are enough.</p><p id="publication-relay-discovery" role="status"></p><div id="publication-relay-editor"></div><p id="publication-relay-hint" class="supporting">One relay confirmation is enough to publish.</p><button id="publication-review" class="primary">Review publication</button></form>
+      <figure id="publication-media" hidden><img id="publication-screenshot" alt="Screenshot of this applet" width="1200" height="750"><figcaption>Screenshot included in your application listing</figcaption></figure><section id="publication-review-panel" hidden><h2 id="publication-review-title"></h2><p id="publication-review-description"></p><div id="publication-review-hashtags" class="destination-chips" aria-label="Publication hashtags"></div><p id="publication-review-copy"></p><details><summary>Destinations</summary><ul id="publication-destinations"></ul></details><button id="publication-confirm" class="primary">Sign and publish</button><button id="publication-edit">Edit details and destinations</button></section>
       <details id="publication-advanced" class="publication-advanced" hidden><summary>Advanced applet details</summary><p class="supporting">Capabilities declared by this build. Your shell decides which permissions to grant.</p><div class="publication-capability-grid"><section><h3>Required</h3><ul id="publication-required" class="publication-capabilities"></ul></section><section><h3>Optional</h3><ul id="publication-optional" class="publication-capabilities"></ul></section></div><p id="publication-optional-note" class="supporting"></p><details><summary>Manifest and files</summary><pre id="publication-manifest" tabindex="0"></pre></details></details>
       <ol id="publication-stages" class="publication-stages" aria-label="Publication progress"><li id="publication-signing">Sign your applet</li><li id="publication-propagating">Copy to your servers</li><li id="publication-announcing">Publish to Nostr</li></ol><p id="publication-status" role="status" aria-live="polite"></p><p id="publication-copy-warning" class="publication-copy-warning" role="status" hidden></p><details id="publication-receipts" hidden><summary id="publication-delivery-summary">Delivery details</summary><div class="publication-delivery-grid"><section><h3>Files</h3><ul id="publication-files" aria-label="File propagation progress"></ul></section><section><h3>Relays</h3><ul id="publication-relay-results" aria-label="Relay publication progress"></ul></section><section id="publication-application-delivery" hidden><h3>Application listing</h3><ul id="publication-application-results" aria-label="Application listing delivery"></ul></section></div></details><button id="publication-check" hidden>Check publication</button>
-      <div id="publication-result" role="status" hidden><span class="publication-success" aria-hidden="true">✓</span><h2 id="publication-result-title">Your applet</h2><p id="publication-completion"></p><p id="publication-listing" hidden></p><div class="publication-actions"><button id="publication-copy" class="primary">Copy naddr</button><a id="publication-open" class="quiet" target="_blank" rel="noopener noreferrer">Open applet ↗</a><button id="publication-republish">Republish</button></div><p id="publication-share-feedback" class="supporting" aria-live="polite">Paste its naddr into any compatible shell.</p><details class="publication-address-details"><summary>Applet address</summary><input id="publication-address" aria-label="Applet address" readonly></details></div>`;
+      <div id="publication-result" role="status" hidden><span class="publication-success" aria-hidden="true">✓</span><h2 id="publication-result-title">Your applet</h2><p id="publication-completion"></p><p id="publication-listing" hidden></p><div class="publication-actions"><button id="publication-copy" class="primary">Copy naddr</button><a id="publication-open" class="quiet" target="_blank" rel="noopener noreferrer">Open applet ↗</a><button id="publication-edit-published">Edit publication</button><button id="publication-republish">Republish</button></div><p id="publication-share-feedback" class="supporting" aria-live="polite">Paste its naddr into any compatible shell.</p><details class="publication-address-details"><summary>Applet address</summary><input id="publication-address" aria-label="Applet address" readonly></details></div>`;
     this.el("publication-history").after(this.el("publication-result"));
     this.el("publication-receipts").querySelector("summary")!.after(this.el("publication-copy-warning"));
     this.#panel.append(this.el("publication-advanced"));
     document.querySelector("#build-step")!.after(this.#panel);
     this.#servers = new DestinationInput(this.el("publication-server-editor"), "publication-servers", "Blossom servers", "https://blossom.example.com", blossomServer);
     this.#relays = new DestinationInput(this.el("publication-relay-editor"), "publication-relays", "Publishing relays", "wss://relay.example.com", relayUrl);
+    this.#hashtags = new DestinationInput(this.el("publication-hashtag-editor"), "publication-hashtags", "Hashtags", "Add a topic, e.g. games", normalizeHashtag, 10, { noun: "hashtag", hint: "Press Enter to add a topic. Up to 10; remove with ×.", onChange: () => this.rememberDraft() });
     const previewShare = document.createElement("div"); previewShare.className = "preview-sharing";
     previewShare.innerHTML = `<span id="preview-share-status" role="status">A shareable CVM preview appears after verification.</span><button id="preview-copy-address" disabled>Copy preview naddr</button>`;
     document.querySelector(".preview-panel")!.append(previewShare);
@@ -56,12 +59,17 @@ export class PublicationWorkspace {
     this.el("publication-close").onclick = () => { ++this.#opening; document.dispatchEvent(new CustomEvent("applet:step", { detail: 3 })); };
     this.el<HTMLFormElement>("publication-prepare").onsubmit = event => { event.preventDefault(); void this.prepare().catch(error => this.error(error)); };
     this.el("publication-confirm").onclick = () => { void this.publish().catch(error => this.error(error)); };
-    this.el("publication-edit").onclick = () => {
-      if (this.#busy || !this.#journal || !["prepared", "unconfirmed"].includes(this.#journal.prepared.status)) return;
+    const edit = () => {
+      if (this.#busy || !this.#journal || !["prepared", "unconfirmed", "published"].includes(this.#journal.prepared.status)) return;
       this.#replacement = this.#journal.event ? this.#journal.prepared.id : undefined;
-      this.el("publication-metadata-note").textContent = this.#replacement ? "Editing creates a new publication draft. You’ll approve a fresh signature; your previous signed event stays in history." : "Edit these details before signing.";
+      this.el("publication-metadata-note").textContent = this.#replacement ? "Editing creates a new publication draft. You’ll approve fresh signatures; your previous publication stays available." : "Edit these details before signing.";
       this.el("publication-prepare").hidden = false; this.el("publication-review-panel").hidden = true;
+      this.el("publication-result").hidden = true; this.el("publication-media").hidden = true; this.el("publication-receipts").hidden = true; this.el("publication-stages").hidden = true;
+      this.#panel.dataset.published = "false"; this.el("publication-heading").textContent = "Edit your publication.";
       this.el("publication-check").hidden = true;
+      this.el("publication-discovery").textContent = "Saved Blossom destinations. Change them below.";
+      this.el("publication-relay-discovery").textContent = "Saved publishing relays. Change them below.";
+      this.el("publication-status").textContent = "";
       this.el("publication-title").focus();
       const journal = this.#journal; const opening = this.#opening;
       // Earlier signed drafts may lack descriptions. Suggest missing fields
@@ -77,14 +85,17 @@ export class PublicationWorkspace {
         }).catch(() => { /* Manual entry remains available. */ });
       }
     };
-    for (const id of ["publication-title", "publication-description"]) this.el(id).addEventListener("input", () => {
-      const version = this.selected(); if (version) this.#drafts.set(this.key(version), { title: this.el<HTMLInputElement>("publication-title").value, description: this.el<HTMLTextAreaElement>("publication-description").value });
-    });
+    this.el("publication-edit").onclick = edit;
+    this.el("publication-edit-published").onclick = edit;
+    for (const id of ["publication-title", "publication-description"]) this.el(id).addEventListener("input", () => this.rememberDraft());
     this.el("publication-check").onclick = () => { void (this.#journal ? this.check() : this.open()).catch(error => this.error(error)); };
     document.getElementById("preview-copy-address")!.onclick = () => { if (this.#preview?.address) void this.copy(this.#preview.address, document.getElementById("preview-share-status")!); };
     this.el("publication-copy").onclick = () => { if (this.#journal?.prepared.address) void this.copy(this.#journal.prepared.address, this.el("publication-share-feedback")); };
     this.el("publication-republish").onclick = () => { void this.republish(); };
     this.sync();
+  }
+  private rememberDraft() {
+    const version = this.selected(); if (version) this.#drafts.set(this.key(version), { title: this.el<HTMLInputElement>("publication-title").value, description: this.el<HTMLTextAreaElement>("publication-description").value, hashtags: this.#hashtags.values, pendingHashtag: this.#hashtags.input.value });
   }
   private el<T extends HTMLElement = HTMLElement>(id: string) { return this.#panel.querySelector<T>(`#${id}`)!; }
   private key(version: Version, publisher = this.identity.pubkey) { return `applet-broker/publication/v1/${this.bootstrap.servicePubkey}/${version.artifactId}/${publisher}`; }
@@ -152,13 +163,15 @@ export class PublicationWorkspace {
     const draft = this.#drafts.get(this.key(version));
     this.el<HTMLInputElement>("publication-title").value = draft?.title ?? "";
     this.el<HTMLTextAreaElement>("publication-description").value = draft?.description ?? "";
+    this.#hashtags.reset(draft?.hashtags ?? []); this.#hashtags.input.value = draft?.pendingHashtag ?? "";
     try {
       const metadata = PublicationMetadataSchema.parse(await this.call({ action: "metadata", sessionId: version.sessionId, artifactId: version.artifactId }));
       if (opening !== this.#opening || version.artifactId !== this.selected()?.artifactId || pubkey !== this.identity.pubkey) return;
       if (metadata.artifactId !== version.artifactId || metadata.version !== version.version) throw new Error("Metadata version changed");
       if (!draft) { this.el<HTMLInputElement>("publication-title").value = metadata.title; this.el<HTMLTextAreaElement>("publication-description").value = metadata.description; }
       this.el("publication-metadata-note").textContent = draft ? "Your edits are saved." : metadata.basis === "manifest" ? "Suggested from your verified build." : "Suggested from your project. Edit as you like.";
-      this.advanced(metadata.tags, metadata.files);
+      if (!draft && this.#hashtags.values.length === 0 && !this.#hashtags.input.value) this.#hashtags.reset(metadata.tags.filter(tag => tag[0] === "t").map(tag => tag[1]!));
+      this.advanced(metadata.tags, metadata.files, undefined, undefined, metadata.capabilitiesKnown);
     } catch {
       if (opening !== this.#opening || version.artifactId !== this.selected()?.artifactId || pubkey !== this.identity.pubkey) return;
       this.el("publication-metadata-note").textContent = "Suggestions could not be loaded. Enter a title and description to continue; the signing review will show the build’s capabilities.";
@@ -187,7 +200,7 @@ export class PublicationWorkspace {
   }
   private async prepare() {
     if (this.#busy) return; const version = this.selected(); const pubkey = this.identity.pubkey; if (!version || !pubkey) throw new Error("Sign in and select a verified version.");
-    if (!this.#servers.commit() || !this.#relays.commit()) return;
+    if (!this.#hashtags.commit() || !this.#servers.commit() || !this.#relays.commit()) return;
     const servers = this.#servers.values; const relays = this.#relays.values;
     if (!relays.length) throw new Error("Add at least one publishing relay.");
     if (servers.length < MIN_PUBLICATION_SERVERS || servers.length > 5) throw new Error("Add at least two Blossom servers so your applet has a backup. You can choose up to five.");
@@ -195,7 +208,7 @@ export class PublicationWorkspace {
     try {
       this.el("publication-status").textContent = "Capturing your applet and preparing its application listing…";
       this.el("publication-review").textContent = "Preparing screenshot…";
-      const prepared = await this.call({ action: "prepare", artifactId: version.artifactId, sessionId: version.sessionId, publisher: pubkey, requestKey: crypto.randomUUID(), title: this.el<HTMLInputElement>("publication-title").value, description: this.el<HTMLTextAreaElement>("publication-description").value, ...(this.#replacement ? { replaces: this.#replacement } : {}), servers, relays });
+      const prepared = await this.call({ action: "prepare", artifactId: version.artifactId, sessionId: version.sessionId, publisher: pubkey, requestKey: crypto.randomUUID(), hashtags: this.#hashtags.values, title: this.el<HTMLInputElement>("publication-title").value, description: this.el<HTMLTextAreaElement>("publication-description").value, ...(this.#replacement ? { replaces: this.#replacement } : {}), servers, relays });
       if (this.identity.pubkey !== pubkey || this.selected()?.artifactId !== version.artifactId) throw new Error("Identity or version changed. Review publication again.");
       this.#journal = { prepared, event: prepared.signedEvent }; this.#replacement = undefined; this.#current = prepared; this.save(); this.review();
       if (prepared.signedEvent || prepared.status === "published") this.result(); else this.el("publication-status").textContent = "Ready for your approval. Nothing has been published under your identity.";
@@ -203,6 +216,8 @@ export class PublicationWorkspace {
   }
   private review() {
     const journal = this.#journal!;
+    this.#hashtags.reset(journal.prepared.template.tags.filter(tag => tag[0] === "t").map(tag => tag[1]!));
+    this.el("publication-review-hashtags").replaceChildren(...this.#hashtags.values.map(topic => { const chip = document.createElement("span"); chip.className = "destination-chip"; const label = document.createElement("span"); label.textContent = `#${topic}`; chip.append(label); return chip; }));
     this.#servers.reset(journal.prepared.servers); this.#relays.reset(journal.prepared.relays); this.el<HTMLInputElement>("publication-title").value = journal.prepared.title ?? "";
     this.el<HTMLTextAreaElement>("publication-description").value = journal.prepared.description ?? journal.prepared.template.tags.find(tag => tag[0] === "description")?.[1] ?? "";
     this.el("publication-review-title").textContent = this.el<HTMLInputElement>("publication-title").value; this.el("publication-review-description").textContent = this.el<HTMLTextAreaElement>("publication-description").value || "This saved publication has no description. Edit details to add one before publishing.";
@@ -211,17 +226,17 @@ export class PublicationWorkspace {
     this.media(journal.prepared);
     this.el("publication-review-copy").textContent = journal.prepared.application ? "Approve your applet and application listing in your signer (two requests)." : "Approve the applet in your signer.";
     this.el("publication-review-copy").hidden = !!journal.event && (!journal.prepared.application || !!journal.prepared.application.signedEvent);
-    this.advanced(journal.prepared.template.tags, journal.prepared.files, journal.prepared.template, journal.prepared.application?.template);
+    this.advanced(journal.prepared.template.tags, journal.prepared.files, journal.prepared.template, journal.prepared.application?.template, journal.prepared.capabilitiesKnown);
     this.el("publication-destinations").replaceChildren(...[...journal.prepared.servers, ...journal.prepared.relays].map(server => { const item = document.createElement("li"); item.textContent = server; return item; }));
     this.el<HTMLButtonElement>("publication-confirm").disabled = false; this.el("publication-confirm").textContent = this.continueLabel(journal);
   }
-  private advanced(tags: string[][], files: { path: string; sha256: string; bytes: number }[], template?: EventTemplate, application?: EventTemplate) {
-    const capabilities = publicationCapabilities(tags);
+  private advanced(tags: string[][], files: { path: string; sha256: string; bytes: number }[], template?: EventTemplate, application?: EventTemplate, capabilitiesKnown?: boolean) {
+    const capabilities = publicationCapabilities(tags, capabilitiesKnown);
     for (const kind of ["required", "optional"] as const) {
       const values = capabilities[kind];
       this.el(`publication-${kind}`).replaceChildren(...(values.length ? values : [kind === "optional" && capabilities.legacy ? "Not declared by this build" : "None declared"]).map(value => { const li = document.createElement("li"); li.textContent = value; return li; }));
     }
-    this.el("publication-optional-note").textContent = capabilities.legacy ? "This build uses an older manifest format that does not declare optional capabilities. Runtime integrations may still be present." : "Optional capabilities enhance the applet when your shell provides them.";
+    this.el("publication-optional-note").textContent = capabilities.legacy ? "This older build did not record optional capabilities. A new revision will include explicit declarations." : "Optional capabilities enhance the applet when your shell provides them.";
     this.el("publication-manifest").textContent = JSON.stringify({ ...(template ? { template } : { tags }), ...(application ? { application } : {}), files: files.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })) }, null, 2);
     this.el("publication-advanced").hidden = false;
   }

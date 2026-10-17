@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: verification_deferred_gaps
-stopped_at: Publication metadata and editable destination recovery verified and running locally
-last_updated: "2026-10-17T16:50:28Z"
+stopped_at: Partial Nostr publication accepted and simplified success UI running locally
+last_updated: "2026-10-17T17:21:16Z"
 last_activity: 2026-10-17
-last_activity_desc: CVM publication suggestions, advanced capabilities and editable destination recovery; saved two-copy continuation verified
+last_activity_desc: One confirmed relay completes publication; saved outcomes repaired and success UI simplified
 progress:
   total_phases: 7
   completed_phases: 6
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
 Plan: 56 of 58 accepted; development Plans 07-52/53/56/57/54/55 complete
 Status: Guided applet.broker workspace at http://127.0.0.1:49371; diagnostic console at /dev. Saved chatgpt-oauth mode with gpt-6.1-sol retained. Product/console browser journeys and recovery passed through real local services. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
-Last activity: 2026-10-17 — Completed quick task 261017-d8h: CVM-suggested publication title/description, advanced capabilities, continue with saved verified copies and owner-signed replacement drafts for destination edits. Eleven focused tests, full static CVM publication e2e, 342 responsive checks, docs build/1,310 links/90 layouts/140 images passed. Active at http://127.0.0.1:49371 with chatgpt-oauth preserved; no live model use. TypeScript retains 424 existing diagnostics.
+Last activity: 2026-10-17 — Completed quick task 261017-e8h: one selected relay confirmation completes publication; extra failures remain collapsed delivery details. Saved three-of-four relay outcome corrected without republishing. Larger typography, prominent Copy naddr, fewer paragraphs. Full publication e2e, eight focused tests, 361 responsive checks and refreshed screenshot docs passed. Active at http://127.0.0.1:49371 with chatgpt-oauth preserved; no live model use. TypeScript retains 424 existing diagnostics.
 
 Follow-up: Stream assembly/counter verification remains complete. Latest helper-signature and compiler-feedback fix passed 29 targeted unit/integration cases plus activity and composed OAuth browser journeys. Real blinking-text generation also passed. See debug/resolved/generated-typescript-check.md.
 
@@ -384,6 +384,8 @@ Recent decisions affecting current work:
 
 | 261017-d8h | CVM publication metadata, advanced capabilities and editable destination recovery with saved-copy continuation | 2026-10-17 | see task history | [261017-d8h](./quick/261017-d8h-suggest-publication-metadata-through-cvm/) |
 
+| 261017-e8h | One confirmed relay completes publication; saved outcome repair and simplified readable success UI | 2026-10-17 | see task history | [261017-e8h](./quick/261017-e8h-accept-partial-nostr-publication-and-sim/) |
+
 ## Deferred Verification
 
 | Phase | Status | Reason | Resume command |
@@ -402,4 +404,4 @@ Recent decisions affecting current work:
 
 Last session: 2026-10-17T16:30:48Z
 Stopped at: Preview status, compact estimates and two-server publication threshold complete and active at http://127.0.0.1:49371. Docs preview at http://127.0.0.1:4173/docs/. User can refresh and retry saved publication. Production remains deferred.
-Resume file: .planning/quick/261017-d8h-suggest-publication-metadata-through-cvm/SUMMARY.md
+Resume file: .planning/quick/261017-e8h-accept-partial-nostr-publication-and-sim/SUMMARY.md

@@ -25,8 +25,8 @@ export async function publishOnUserRelays(relays: string[], event: Event, develo
       timer = setTimeout(() => child?.kill(), 22000);
       const output = await new Response(spawned.stdout).text(); const exit = await spawned.exited;
       const confirmed = exit === 0 && output.length < 100 && JSON.parse(output).confirmed === true;
-      return confirmed ? { relay:normalized,state:"published" as const } : { relay:normalized,state:"failed" as const,detail:"Relay has not confirmed the event. Retry to check and resend the same signature." };
-    } catch { return { relay:value,state:"failed" as const,detail:"Could not connect or relay declined publication." }; }
+      return confirmed ? { relay:normalized,state:"published" as const } : { relay:normalized,state:"failed" as const,detail:"No confirmation received." };
+    } catch { return { relay:value,state:"failed" as const,detail:"Connection failed or publication declined." }; }
     finally { clearTimeout(timer); child?.kill(); }
   }));
 }

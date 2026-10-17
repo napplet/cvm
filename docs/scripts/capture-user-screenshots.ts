@@ -197,7 +197,7 @@ try {
     w.samplePublication = { ...w.samplePrepared, status: "published", address, url: origin,
       publishedAt: "2026-10-16T12:00:00Z", files: [{ path: "index.html", sha256: "a".repeat(64), bytes: 2048, url: origin, type: "text/html" }],
       fileResults: [{ server: "https://blossom.example.com", file: "index.html", state: "verified" }, { server: "https://backup.example.com", file: "index.html", state: "verified" }, { server: "https://unavailable.example.com", file: "index.html", state: "failed", detail: "Server declined upload (401)" }],
-      relayResults: [{ relay: "wss://relay.example.com", state: "published" }] };
+      relays:["wss://relay.example.com","wss://unavailable.example.com"], relayResults: [{ relay: "wss://relay.example.com", state: "published" },{relay:"wss://unavailable.example.com",state:"failed",detail:"No confirmation received."}] };
   }, { address, origin });
   await page.locator("#publish").click(); await page.locator("#publication-result").waitFor();
   await capture("publish-confirmed", "#publish-step");

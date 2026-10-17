@@ -15,9 +15,9 @@ An `naddr` identifies a replaceable Nostr event. A shell still needs access to t
 2. Open the final **Publish** step. Review the title and description suggested by the CVM, edit them if needed, and choose destinations.
 3. Approve signing in your extension or remote signer.
 4. Follow file propagation. The browser mirrors the CVM’s verified files to your Blossom servers, falling back to verified upload where necessary.
-5. Wait for relay confirmation, then **Copy naddr**.
+5. Once any selected relay confirms, choose **Copy naddr**. Other relays can remain unavailable.
 
-The applet event is signed before file propagation. It is published once all files have verified copies on at least **two distinct Blossom servers**. An extra server failing does not block publication. The CVM prepares the event, but your signer owns the publication signature.
+The applet event is signed before file propagation. It is published once all files have verified copies on at least **two distinct Blossom servers**. An extra server failing does not block publication. **One confirmed relay is enough**; every selected relay does not need to succeed. The CVM prepares the event, but your signer owns the publication signature.
 
 <GuideScreenshot name="publish-review" alt="Publication review for Version 2 with destinations expanded and the Sign and publish button above three publication stages" caption="Review the version and destinations before approving your signer. Preparing this review does not publish anything." />
 
@@ -39,11 +39,11 @@ Choose two to five Blossom servers and at least one publishing relay. Type a URL
 
 ## If a step fails
 
-Progress shows the current destination and copy operation, signing, verification, and each relay result. If at least two servers have complete verified copies, publishing continues and additional failures remain visible as warnings. The completion summary counts verified servers only.
+Progress shows signing, file copies and relay delivery. **Delivery details** contains individual results. If at least two servers have complete verified copies, publishing continues and additional failures remain visible as warnings. The completion summary counts verified file copies and confirmed relays only.
 
 With fewer than two complete copies, publishing waits. For example, HTTP 401 means that server rejected the copy authorization; its address can be valid even though it does not accept your upload. **Retry file copies** checks existing copies and reuses the signed applet event. You can also choose **Edit details and destinations** to remove an unusable server and add another. It does not ask the model to rebuild the applet.
 
-If relay confirmation is uncertain, use **Check publication**. **Destination details** shows which copies or relays need attention. **Continue publishing with 2 verified copies** sends the saved event to relays without repeating uploads or requesting another applet signature. A failed extra Blossom server does not hold up this action.
+If no relay has confirmed, use **Retry publication** or edit your relays. Saved file copies and your signature are reused. **Check publication** looks for the existing event. Once one relay confirms, the applet is published; unavailable extras remain in collapsed **Delivery details**. Older attempts with saved confirmations are corrected automatically when the CVM starts or the attempt is reopened.
 
 Editing an unfinished signed publication creates a replacement draft and requires a **fresh signature**. The CVM retains the previous signed event in history and reuses verified copies for unchanged destinations. A previous event may already have reached a relay when confirmation was lost; editing cannot retract it.
 
@@ -55,7 +55,7 @@ The development server’s own Blossom store accepts writes only from the CVM. P
 
 The builder shows **Published · Version N** and changes **Publish** to **View publication**. Open it to see the saved confirmations or copy the same naddr. Publication status comes from the CVM, so it survives a page reload or service restart.
 
-<GuideScreenshot name="publish-confirmed" alt="Completed publication with three confirmed stages, Version 2 destination counts, an applet address, Copy naddr button and a warning for an additional server that rejected its upload" caption="Two verified servers are enough. An additional server’s failure remains visible without blocking publication. Reopen this result from View publication." />
+<GuideScreenshot name="publish-confirmed" alt="Published applet with a prominent Copy naddr button, two file copies and one confirmed relay; unavailable destinations are in collapsed delivery details" caption="Two file copies and one confirmed relay are enough. Extra failures stay in delivery details; your applet is ready to share." />
 
 **Your applets** also shows the published version. After a successful revision, it shows **Unpublished changes** and identifies both the published version and the newer version ready to publish. Revising does not publish automatically. You can select an older version above the preview to return to its publication.
 

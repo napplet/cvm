@@ -55,6 +55,10 @@ export class LocalPublication {
     service.origin = options.publicOrigin ? ServerUrl.parse(options.publicOrigin).replace(/\/$/, "") : service.#localOrigin;
     service.#blossom = new CvmBlossom(options.root, options.pubkey, () => service.origin);
     if (!port) await writeFile(originPath, JSON.stringify({ port: service.#server.port }), { flag: "wx", mode: 0o600 });
+    // Upgrade earlier all-relay outcomes using their stored evidence only.
+    // No network request, signature or publication is issued by this repair.
+    const incomplete = await service.query<Row>("SELECT * FROM development_publications WHERE state='unconfirmed' AND signed_event IS NOT NULL AND prepared->>'supersededBy' IS NULL", []);
+    for (const row of incomplete.rows) await service.restoreConfirmed(row);
     return service;
   }
   close() { this.#server.stop(true); }
@@ -72,6 +76,7 @@ export class LocalPublication {
             AND NOT coalesce((prepared->>'preview')::boolean,false) AND prepared->>'supersededBy' IS NULL
             AND (signed_event IS NOT NULL OR (prepared->>'expiresAt')::bigint > $5)
           ORDER BY (state='published') DESC,(signed_event IS NOT NULL) DESC,created_at DESC,id DESC LIMIT 1`, [account, command.sessionId, command.artifactId, command.publisher, Date.now()])).rows[0];
+        if (current) await this.restoreConfirmed(current);
         const latest = (await this.query<Row>(`SELECT * FROM development_publications
           WHERE account_id=$1 AND session_id=$2 AND publisher=$3 AND state='published'
             AND NOT coalesce((prepared->>'preview')::boolean,false) AND prepared->>'supersededBy' IS NULL
@@ -124,8 +129,10 @@ export class LocalPublication {
       const row = (await this.query<Row>("SELECT * FROM development_publications WHERE id=$1 AND account_id=$2", [command.id, account])).rows[0];
       if (!row) return { status: "denied" };
       if (row.prepared.supersededBy) return { status: "rejected", code: "PUBLICATION_SUPERSEDED" };
+      await this.restoreConfirmed(row);
       if (command.action === "status") return this.projection(row);
       if (command.action === "reconcile") {
+        if (row.state === "published") return this.projection(row);
         if (row.signed_event && await this.observe(row)) { await this.setState(row.id, "published"); return this.projection((await this.query<Row>("SELECT * FROM development_publications WHERE id=$1", [row.id])).rows[0]!); }
         return this.projection(row);
       }
@@ -209,7 +216,7 @@ export class LocalPublication {
       if (row.prepared.relays && !row.prepared.preview) {
         row.relay_results = await publishOnUserRelays(row.prepared.relays, event, this.options.relay, true);
         await this.query("UPDATE development_publications SET relay_results=$2,updated_at=now() WHERE id=$1", [row.id, JSON.stringify(row.relay_results)]);
-        row.state = row.relay_results.every(result => result.state === "published") ? "published" : "unconfirmed";
+        row.state = row.relay_results.some(result => result.state === "published") ? "published" : "unconfirmed";
       } else {
         const published = await publishEventWithSimplePool([this.options.relay], event);
         row.state = published.every(result => result.success) && await this.observe(row) ? "published" : "unconfirmed";
@@ -219,13 +226,21 @@ export class LocalPublication {
     const saved = (await this.query<Row>("SELECT * FROM development_publications WHERE id=$1", [row.id])).rows[0]!;
     return this.projection(saved);
   }
+  private async restoreConfirmed(row: Row) {
+    if (row.state !== "unconfirmed" || row.prepared.preview || row.prepared.supersededBy || !row.signed_event) return;
+    if (!row.relay_results?.some(receipt => receipt.state === "published" && row.prepared.relays?.includes(receipt.relay))) return;
+    const servers = row.prepared.template.tags.filter(tag => tag[0] === "server").map(tag => tag[1]!);
+    if (verifiedPublicationServers(row.prepared.files, servers, row.file_results ?? []).length < MIN_PUBLICATION_SERVERS) return;
+    const saved = await this.query<Row>("UPDATE development_publications SET state='published',published_at=coalesce(published_at,updated_at),updated_at=now() WHERE id=$1 AND state='unconfirmed' AND prepared->>'supersededBy' IS NULL RETURNING *", [row.id]);
+    if (saved.rows[0]) Object.assign(row, saved.rows[0]);
+  }
   private setState(id: string, state: Row["state"]) { return this.query("UPDATE development_publications SET state=$2,published_at=CASE WHEN $2='published' THEN coalesce(published_at,now()) ELSE published_at END,updated_at=now() WHERE id=$1", [id, state]); }
   private async observe(row: Row): Promise<boolean> {
     if (!row.signed_event) return false;
     if (row.prepared.relays && !row.prepared.preview) {
       row.relay_results = await publishOnUserRelays(row.prepared.relays, row.signed_event, this.options.relay, false);
       await this.query("UPDATE development_publications SET relay_results=$2,updated_at=now() WHERE id=$1", [row.id, JSON.stringify(row.relay_results)]);
-      return row.relay_results.every(result => result.state === "published");
+      return row.relay_results.some(result => result.state === "published");
     }
     const pool = new SimplePool();
     try {

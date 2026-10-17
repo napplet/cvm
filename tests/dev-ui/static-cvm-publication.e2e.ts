@@ -150,8 +150,9 @@ try {
   await page.locator("#publish").click(); await page.getByRole("button", { name: `Remove ${destinationUrl}`, exact: true }).waitFor({ timeout: 20000 });
   await page.getByRole("button", { name: `Remove ${config.relayUrl}`, exact: true }).waitFor();
   assert(await page.locator("#publication-relay-editor .destination-chip").count() === 1, "READ_ONLY_RELAY_USED");
+  await page.locator("#publication-relays").fill("wss://unreachable.invalid"); await page.locator("#publication-relays").press("Enter");
   await page.locator("#publication-title").fill("My daily counter"); await page.locator("#publication-review").click(); await page.locator("#publication-review-description").filter({hasText:"Count daily practice, one step at a time."}).waitFor(); await page.locator("#publication-confirm").click();
-  await page.locator("#publication-status").filter({ hasText: "Some files could not be copied" }).waitFor({ timeout: 60000 });
+  await page.locator("#publication-status").filter({ hasText: "copies ready. Retry or change destinations." }).waitFor({ timeout: 60000 });
   assert((await relay.querySync([config.relayUrl], { kinds: [35129], authors: [userPubkey] }, { maxWait: 3000 })).length === 0, "EVENT_PUBLISHED_WITH_MISSING_FILES");
   const failedCopy = (await pool.query<{ signed_event: { id: string }; file_results: { state: string }[]; state: string }>("SELECT signed_event,file_results,state FROM development_publications WHERE publisher=$1", [userPubkey])).rows[0]!;
   assert(failedCopy.signed_event && failedCopy.file_results.some((result: any) => result.state === "failed") && failedCopy.state === "prepared", "FAILED_COPY_NOT_DURABLE");
@@ -168,13 +169,19 @@ try {
   await page.evaluate(() => { for (const key of Object.keys(sessionStorage)) if (key.startsWith("applet-broker/publication/")) sessionStorage.removeItem(key); });
   await page.reload(); await page.getByText("Workspace connected", { exact: true }).waitFor();
   await page.locator("#publish").filter({ hasText: "Continue publishing" }).waitFor({ timeout: 30000 });
-  await page.locator("#publish").click(); await page.locator("#publication-status").filter({ hasText: "Your signature is saved" }).waitFor();
+  await page.locator("#publish").click(); await page.locator("#publication-status").filter({ hasText: "Signature saved" }).waitFor();
   assert(await page.locator('#publication-files [data-state="failed"]').count() > 0, "COPY_FAILURES_NOT_RESTORED");
   assert(fixture.counts().inferences === 1, "COPY_RETRY_REGENERATED");
   rejectCopies = false; await page.locator("#publication-confirm").click(); await page.locator("#publication-result").waitFor({ timeout: 60000 });
   assert(appletSignatures === 1, "COPY_RETRY_REQUESTED_NEW_APPLET_SIGNATURE");
-  assert((await page.locator("#publication-completion").innerText()).includes("2 verified file servers"), "FAILED_SERVER_COUNTED_AS_VERIFIED");
-  assert(await page.locator("#publication-copy-warning").isVisible() && (await page.locator("#publication-copy-warning").innerText()).includes("401"), "PARTIAL_SUCCESS_WARNING_MISSING");
+  assert((await page.locator("#publication-completion").innerText()).includes("2 file copies"), "FAILED_SERVER_COUNTED_AS_VERIFIED");
+  assert((await page.locator("#publication-completion").innerText()).includes("1 relay confirmed"), "PARTIAL_RELAY_SUCCESS_NOT_COUNTED");
+  assert(await page.locator("#publication-heading").innerText()==="Published.", "PARTIAL_SUCCESS_HEADING");
+  assert(!(await page.locator("#publication-stages").isVisible()) && !(await page.locator("#publication-copy-warning").isVisible()), "SUCCESS_CLUTTER_VISIBLE");
+  assert(!(await page.locator("#publication-receipts").getAttribute("open")), "SUCCESS_DETAILS_NOT_COLLAPSED");
+  await page.locator("#publication-delivery-summary").click();
+  assert((await page.locator("#publication-files").innerText()).includes("401") && await page.locator('#publication-relay-results [data-state="failed"]').count()===1, "PARTIAL_FAILURE_DETAILS_MISSING");
+  await page.locator("#publication-delivery-summary").click();
   assert(await page.locator("#publication-propagating").getAttribute("data-state") === "complete", "PARTIAL_SUCCESS_STAGE_FAILED");
   assert(await page.locator("#publish").textContent() === "View publication", "BUILDER_PUBLICATION_NOT_UPDATED");
   await page.screenshot({ path:"/tmp/cvm-publication-desktop.png", fullPage:true });
@@ -188,11 +195,18 @@ try {
   for (const tag of published[0]!.tags.filter(tag => tag[0] === "path")) { const response = await fetch(`${destinationUrl}/${tag[2]}`); assert(new Bun.CryptoHasher("sha256").update(await response.arrayBuffer()).digest("hex") === tag[2], "DESTINATION_BYTES_MISMATCH"); }
   const intent = (await pool.query("SELECT id FROM development_publications WHERE publisher=$1", [userPubkey])).rows[0].id;
   assert(published[0]!.tags.some(tag=>tag[0]==="description"&&tag[1]==="Count daily practice, one step at a time."), "DESCRIPTION_NOT_SIGNED");
-  // Simulate a lost relay confirmation in this isolated fixture database.
+  // Old all-relay policy records are repaired from existing receipts on lookup.
+  const beforeRepair = {copies:copyRequests, signatures:signerRequests};
   await pool.query("UPDATE development_publications SET state='unconfirmed' WHERE id=$1", [intent]);
   await page.reload(); await page.getByText("Workspace connected", {exact:true}).waitFor();
+  await page.locator("#publish").filter({hasText:"View publication"}).click(); await page.locator("#publication-result").waitFor();
+  assert(copyRequests===beforeRepair.copies && signerRequests===beforeRepair.signatures, "SAVED_RECEIPT_REPAIR_REPEATED_EFFECTS");
+  assert((await pool.query("SELECT state FROM development_publications WHERE id=$1",[intent])).rows[0].state==="published", "LEGACY_OUTCOME_NOT_PERSISTED");
+  // No confirmation must remain retryable, never be presented as success.
+  await pool.query("UPDATE development_publications SET state='unconfirmed',relay_results=$2 WHERE id=$1", [intent,JSON.stringify([{relay:config.relayUrl,state:"failed"},{relay:"wss://unreachable.invalid",state:"failed"}])]);
+  await page.reload(); await page.getByText("Workspace connected", {exact:true}).waitFor();
   await page.locator("#publish").filter({hasText:"Continue publishing"}).click();
-  await page.getByRole("button", {name:"Continue publishing with 2 verified copies", exact:true}).waitFor();
+  await page.getByRole("button", {name:"Retry publication", exact:true}).waitFor();
   const copiesBeforeContinue = copyRequests; const signaturesBeforeContinue = signerRequests;
   await page.locator("#publication-confirm").click(); await page.locator("#publication-result").waitFor();
   assert(copyRequests===copiesBeforeContinue && signerRequests===signaturesBeforeContinue, "CONTINUE_REPEATED_COPY_OR_SIGNATURE");
@@ -235,6 +249,7 @@ try {
   assert(!traffic.some(url => new URL(url).origin === server.url), "PUBLIC_SITE_CALLED_CVM_HTTP");
   assert(!(await page.content()).includes(operator.adminKey), "OPERATOR_KEY_IN_PRODUCT");
   assert(errors.length === 0, `BROWSER_ERRORS:${errors.join(";")}`);
+  await pool.query("UPDATE development_publications SET state='unconfirmed' WHERE id=$1", [intent]);
   const old = server.url; await server.close(); server = await createDevelopmentContextVmServer({ config, stateRoot: root, port: Number(new URL(old).port), chatGptFetch: modelFetch });
   await page.evaluate(() => { for (const key of Object.keys(sessionStorage)) if (key.startsWith("applet-broker/publication/")) sessionStorage.removeItem(key); });
   await page.locator("#publication-close").click(); await page.reload(); await page.getByText("Workspace connected", { exact: true }).waitFor();
@@ -249,7 +264,7 @@ try {
   await page.locator(".project-card").filter({ hasText: "Daily counter" }).click();
   await page.locator("#publish").filter({ hasText: "View publication" }).click(); await page.locator("#publication-result").waitFor();
   assert(await page.locator("#publication-address").inputValue() === address, "REOPENED_PUBLICATION_ADDRESS_CHANGED");
-  assert(await page.locator("#publication-copy-warning").isVisible() && (await page.locator("#publication-completion").innerText()).includes("2 verified file servers"), "PARTIAL_SUCCESS_NOT_RESTORED");
+  assert((await page.locator("#publication-delivery-summary").innerText()).includes("unavailable") && (await page.locator("#publication-completion").innerText()).includes("2 file copies"), "PARTIAL_SUCCESS_NOT_RESTORED");
   assert(appletSignatures === 1 && fixture.counts().inferences === 1, "REOPEN_REPEATED_GENERATION_OR_SIGNING");
   const copiesBefore = mirrors;
   await page.locator("#publication-close").click();
@@ -266,7 +281,7 @@ try {
   rejectCopies = true;
   await page.locator("#publish").click(); await page.getByRole("button", {name:`Remove ${unavailableUrl}`,exact:true}).waitFor();
   await page.locator("#publication-review").click(); await page.locator("#publication-confirm").click();
-  await page.locator("#publication-status").filter({hasText:"Some files could not be copied"}).waitFor({timeout:60000});
+  await page.locator("#publication-status").filter({hasText:"copies ready. Retry or change destinations."}).waitFor({timeout:60000});
   const prior = (await pool.query<{id:string; artifact_id:string; session_id:string; signed_event:ReturnType<typeof finalizeEvent>}>("SELECT * FROM development_publications WHERE publisher=$1 AND (prepared->>'version')::int=2 ORDER BY created_at DESC LIMIT 1",[userPubkey])).rows[0];
   assert(prior.signed_event && appletSignatures===2, "SECOND_VERSION_NOT_SIGNED");
   await page.locator("#publication-edit").click();
@@ -291,7 +306,7 @@ try {
   assert(appletSignatures===3 && fixture.counts().inferences===2, "REPLACEMENT_SIGNATURE_OR_GENERATION_COUNT");
   assert(!(await page.locator("#publication-copy-warning").isVisible()), "REMOVED_SERVER_STILL_BLOCKS");
   assert((await fetch(`${cvmBlob}/`)).ok, "BLOSSOM_ORIGIN_CHANGED_ON_RESTART");
-  console.log(JSON.stringify({ status: "passed", case: "static-cvm-publication", checks: ["separate static origin and subdirectory", "private operator OAuth", "rate version used", "job views", "all sign-in choices during generation", "real NIP46", "CVM naddr", "CVM-only Blossom writes", "manual and discovered servers", "one complete copy blocks publication in browser and CVM", "two complete copies publish despite third server HTTP 401", "warnings and verified count survive reopen", "saved signature and failures restored without browser journal", "copy retry uses one signature", "verified mirrors and user naddr", "owner-scoped publication lookup", "signed template tamper rejected", "exact event replay and repeated preparation", "pending job details", "published builder and project after CVM restart", "reopen retains address without generation", "revision shows unpublished changes", "CVM metadata ownership and editable signed description", "continue with saved two copies skips uploads and signing", "signed draft destination editing preserves history and rejects stale submission"] }));
+  console.log(JSON.stringify({ status: "passed", case: "static-cvm-publication", checks: ["separate static origin and subdirectory", "private operator OAuth", "rate version used", "job views", "all sign-in choices during generation", "real NIP46", "CVM naddr", "CVM-only Blossom writes", "manual and discovered servers", "one complete copy blocks publication in browser and CVM", "two complete copies publish despite third server HTTP 401", "warnings and verified count survive reopen", "saved signature and failures restored without browser journal", "copy retry uses one signature", "verified mirrors and user naddr", "owner-scoped publication lookup", "signed template tamper rejected", "exact event replay and repeated preparation", "pending job details", "published builder and project after CVM restart", "reopen retains address without generation", "revision shows unpublished changes", "CVM metadata ownership and editable signed description", "continue with saved two copies skips uploads and signing", "signed draft destination editing preserves history and rejects stale submission", "one relay confirms despite extra relay failure", "legacy partial success repairs on lookup and startup without republishing", "zero confirmations remain retryable", "compact success with collapsed failure details"] }));
 } catch (error) { console.error("TEST_STAGE", error, await admin.locator("body").innerText({ timeout: 2000 }).catch(() => "admin page unavailable"), await page.locator("body").innerText({ timeout: 2000 }).catch(() => "workspace unavailable"), errors); throw error; } finally {
   release(); remoteSubscription?.close(); relay.close([config.relayUrl]); relay.destroy(); await unauthorized.close();
   await browser.close(); site.stop(true); destination.stop(true); backup.stop(true); unavailable.stop(true); await pool.end();

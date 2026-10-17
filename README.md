@@ -17,6 +17,17 @@ Turn a focused text idea into a verified Nostr applet through ContextVM.
 
 Production certification is [deferred until production work resumes](docs/runbooks/production-readiness-deferred.md); it does not block local development or development e2e tests.
 
+## Documentation
+
+The [documentation site](docs/index.md) covers [using applet.broker](docs/users/index.md), [self-hosting and provider accounts](docs/operators/index.md), [CVM and MCP integration](docs/implementers/index.md), and [contributing or implementing a CVM](docs/developers/index.md). It builds as a static VitePress site at **`/docs/`**, with local search and a generated schema reference.
+
+```sh
+bun install --cwd docs --frozen-lockfile
+bun run --cwd docs dev
+```
+
+Open the printed origin at `/docs/`. For a static build, use `bun run --cwd docs build`; [hosting instructions](docs/operators/static-hosting.md) explain the prefix. [Schema amendments](docs/developers/schema-changes.md) have a dedicated GitHub issue form.
+
 ## Quick start
 
 Use **Git, Bun 1.3.14, Node.js 22 or newer, and a running Docker engine with Compose 2.39 or newer**. The development worker runs Linux ARM64; the local relay runs AMD64, so Docker must support both platforms (as Docker Desktop does on Apple Silicon).

@@ -4,3 +4,5 @@
 .runtime/
 node_modules/
 dist/workspace/
+docs/.vitepress/cache/
+docs/.vitepress/dist/

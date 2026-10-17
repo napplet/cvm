@@ -36,15 +36,15 @@ const EnvelopeSchema = z.object({
   request: RequestSchema,
 }).strict();
 
-const AccountStatusArgumentsSchema = z.object({}).strict();
-const TopUpArgumentsSchema = z.object({
+export const AccountStatusArgumentsSchema = z.object({}).strict();
+export const TopUpArgumentsSchema = z.object({
   idempotencyKey: z.string().min(1),
   pmi: SupportedPmiSchema,
   mode: InteractionModeSchema,
   amount: z.string().regex(/^[1-9][0-9]*$/u).refine((value) => BigInt(value) <= BigInt(Number.MAX_SAFE_INTEGER)),
   topUpId: z.string().min(1).optional(),
 }).strict();
-const FundedAdmissionArgumentsSchema = z.object({
+export const FundedAdmissionArgumentsSchema = z.object({
   idempotencyKey: z.string().min(1),
   requestedCap: z.string().regex(/^[1-9][0-9]*$/u),
   unit: z.literal("sat"),
@@ -64,8 +64,8 @@ const PreAdmissionStartSessionArgumentsSchema = z.object({
   remixReference: RemixReferenceSchema.optional(),
   mode: z.literal("pre_admission"), idempotencyKey: z.string().min(1), maximum: z.string().regex(/^[1-9][0-9]*$/u), idea: z.string().min(1).max(4_000),
 }).strict();
-const StartSessionArgumentsSchema = z.union([FundedStartSessionArgumentsSchema, PreAdmissionStartSessionArgumentsSchema]);
-const ReviseSessionArgumentsSchema = z.object({
+export const StartSessionArgumentsSchema = z.union([FundedStartSessionArgumentsSchema, PreAdmissionStartSessionArgumentsSchema]);
+export const ReviseSessionArgumentsSchema = z.object({
   sessionId: z.string().min(1), admissionReference: z.string().min(1), idempotencyKey: z.string().min(1), expectedVersion: z.number().int().nonnegative(), maximum: z.string().regex(/^[1-9][0-9]*$/u), revision: z.string().min(1).max(4_000),
 }).strict();
 const LegacyResumeSessionArgumentsSchema = ResumeSessionCommandSchema.omit({ principal: true });
@@ -74,23 +74,23 @@ const PendingActionResumeArgumentsSchema = z.object({
   idempotencyKey: z.string().min(1), approvePendingAction: z.literal(true), admissionReference: z.string().min(1),
   pendingAction: z.object({ reference: z.string().min(1), fingerprint: z.string().regex(/^[a-f0-9]{64}$/u), kind: z.literal("start_session"), maximum: z.string().regex(/^[1-9][0-9]*$/u) }).strict(),
 }).strict();
-const ResumeSessionArgumentsSchema = z.union([LegacyResumeSessionArgumentsSchema, PendingActionResumeArgumentsSchema]);
+export const ResumeSessionArgumentsSchema = z.union([LegacyResumeSessionArgumentsSchema, PendingActionResumeArgumentsSchema]);
 const MeteredSessionStatusArgumentsSchema = z.object({
   sessionId: z.string().min(1), billing: z.object({ limit: z.number().int().min(1).max(50).optional(), cursor: z.string().min(1).optional() }).strict().optional(),
 }).strict();
 const PendingActionStatusArgumentsSchema = z.object({ kind: z.literal("pending_action"), checkpointId: z.string().min(1) }).strict();
-const SessionStatusArgumentsSchema = z.union([MeteredSessionStatusArgumentsSchema, PendingActionStatusArgumentsSchema]);
+export const SessionStatusArgumentsSchema = z.union([MeteredSessionStatusArgumentsSchema, PendingActionStatusArgumentsSchema]);
 const PendingActionStatusProjectionSchema = z.union([
   z.object({ status: z.literal("funded_admission_required"), maximum: z.string().regex(/^[1-9][0-9]*$/u) }).strict(),
   z.object({ status: z.literal("saved"), checkpointId: z.string().min(1), reference: z.string().min(1), fingerprint: z.string().regex(/^[a-f0-9]{64}$/u), maximum: z.string().regex(/^[1-9][0-9]*$/u), shortfall: z.string().regex(/^[0-9]+$/u), version: z.literal(1), expiresAtMs: z.number().int().positive(), nextAction: z.literal("funded_admission") }).strict(),
   z.object({ status: z.enum(["bound", "completed", "failed"]), checkpointId: z.string().min(1), reference: z.string().min(1), fingerprint: z.string().regex(/^[a-f0-9]{64}$/u), maximum: z.string().regex(/^[1-9][0-9]*$/u), version: z.literal(1), expiresAtMs: z.number().int().positive(), nextAction: z.enum(["wait_for_current_action", "revise_session", "retry_resume"]) }).strict(),
   z.object({ status: z.literal("not_found_or_denied") }).strict(),
 ]);
-const PreviewArgumentsSchema = z.discriminatedUnion("action", [
+export const PreviewArgumentsSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("descriptor"), sessionId: z.string().min(1), artifactId: z.string().min(1), runtimeVariant: z.string().min(1) }).strict(),
   z.object({ action: z.literal("review_capabilities"), sessionId: z.string().min(1), artifactId: z.string().min(1), runtimeVariant: z.string().min(1) }).strict(),
 ]);
-const PublicationArgumentsSchema = z.discriminatedUnion("action", [
+export const PublicationArgumentsSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("create_intent"), sessionId: z.string().min(1), artifactId: z.string().min(1), runtimeVariant: z.string().min(1), idempotencyKey: z.string().min(1), purpose: z.string().min(1).max(512), consent: z.literal("approved") }).strict(),
   z.object({ action: z.literal("submit_signed_manifest"), intentId: z.string().min(1), command: SignedPublicationCommandSchema, event: SignedOwnerManifestEventSchema }).strict(),
   z.object({ action: z.literal("status"), intentId: z.string().min(1) }).strict(),

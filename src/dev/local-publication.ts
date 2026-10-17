@@ -16,7 +16,7 @@ import type { LocalArtifactRepository, SealedArtifact } from "./local-artifact-r
 const Hex = z.string().regex(/^[a-f0-9]{64}$/u);
 const SignedEvent = z.object({ id: Hex, pubkey: Hex, sig: z.string().regex(/^[a-f0-9]{128}$/u), kind: z.literal(35129), created_at: z.number().int().positive(), tags: z.array(z.array(z.string().max(1024)).max(8)).max(512), content: z.literal("") }).strict();
 const ServerUrl = z.string().url().max(512).refine(value => { const url = new URL(value); return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash && url.pathname === "/"; });
-const Commands = z.discriminatedUnion("action", [
+export const DevelopmentPublicationArgumentsSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("preview"), artifactId: z.string().max(100), sessionId: z.string().max(240) }).strict(),
   z.object({ action: z.literal("prepare"), servers: z.array(ServerUrl).min(1).max(5), relays: z.array(z.string().max(512).transform(value => relayUrl(value))).min(1).max(5), artifactId: z.string().max(100), sessionId: z.string().max(240), publisher: Hex, requestKey: z.string().uuid(), title: z.string().trim().min(1).max(120) }).strict(),
   z.object({ action: z.literal("submit"), id: z.string().uuid(), event: SignedEvent }).strict(),
@@ -55,7 +55,7 @@ export class LocalPublication {
   private async query<RowType extends Record<string, unknown> = Record<string, unknown>>(sql: string, values: unknown[]) { return this.options.pool.query<RowType>(sql, values); }
   async handle(input: unknown, principal: string): Promise<unknown> {
     try {
-      const command = Commands.parse(input); const account = await accountIdForPrincipal({ pubkey: principal });
+      const command = DevelopmentPublicationArgumentsSchema.parse(input); const account = await accountIdForPrincipal({ pubkey: principal });
       if (command.action === "prepare" || command.action === "preview") {
         const artifact = await this.options.repository.get(command.artifactId);
         if (!artifact || artifact.accountId !== account || artifact.sessionId !== command.sessionId || artifact.ownerId !== principal) return { status: "denied" };

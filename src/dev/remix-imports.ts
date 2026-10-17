@@ -6,14 +6,16 @@ import { REMIX_HTML_CONTEXT_LIMIT, RemixEventSchema, RemixReferenceSchema, remix
 import type { PostgresSqlClient } from "../persistence/postgres-sql-funding-store";
 import type { LocalRemixSourceImporter } from "./remix-source-import";
 
-const Command = z.object({ naddr: z.string().max(4096), event: RemixEventSchema, assetUploaded: z.boolean().optional() }).strict();
+const RemixPrepareArgumentsSchema = z.object({ naddr: z.string().max(4096), event: RemixEventSchema, assetUploaded: z.boolean().optional() }).strict();
+const RemixAssetPartArgumentsSchema = z.object({ action: z.literal("asset_part"), eventId: z.string().regex(/^[a-f0-9]{64}$/u), artifactHash: z.string().regex(/^[a-f0-9]{64}$/u), index: z.number().int().min(0).max(15), total: z.number().int().min(1).max(16), data: z.string().min(1).max(10668).regex(/^[A-Za-z0-9+/]+={0,2}$/u) }).strict();
+export const RemixImportArgumentsSchema = z.union([RemixPrepareArgumentsSchema, RemixAssetPartArgumentsSchema]);
 export class DevelopmentRemixImports {
   #active = new Map<string, Promise<unknown>>();
   constructor(private readonly pool: Pick<PostgresSqlClient,"query">, private readonly source: Pick<LocalRemixSourceImporter,"import">, private readonly progress: (state: "running" | "completed") => void = () => {}) {}
   async prepare(input: unknown, verifiedPubkey: string) {
     const account = await accountIdForPrincipal({ pubkey: verifiedPubkey });
     if ((input as { action?: unknown })?.action === "asset_part") {
-      const part = z.object({ action: z.literal("asset_part"), eventId: z.string().regex(/^[a-f0-9]{64}$/u), artifactHash: z.string().regex(/^[a-f0-9]{64}$/u), index: z.number().int().min(0).max(15), total: z.number().int().min(1).max(16), data: z.string().min(1).max(10668).regex(/^[A-Za-z0-9+/]+={0,2}$/u) }).strict().parse(input);
+      const part = RemixAssetPartArgumentsSchema.parse(input);
       if (part.index >= part.total || Buffer.from(part.data, "base64").length > 8000 || Buffer.from(part.data, "base64").toString("base64") !== part.data) throw new Error("REMIX_PART_INVALID");
       await this.pool.query("DELETE FROM development_remix_parts WHERE created_at < now() - interval '1 hour'");
       const count = Number((await this.pool.query("SELECT count(*) AS count FROM development_remix_parts WHERE account_id=$1", [account])).rows[0]?.count);
@@ -21,7 +23,7 @@ export class DevelopmentRemixImports {
       await this.pool.query("INSERT INTO development_remix_parts(account_id,event_id,artifact_hash,part_index,part_count,data) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING", [account,part.eventId,part.artifactHash,part.index,part.total,part.data]);
       return { status: "part_saved" };
     }
-    const command = Command.parse(input); const manifest = remixManifest(command.event, command.naddr);
+    const command = RemixPrepareArgumentsSchema.parse(input); const manifest = remixManifest(command.event, command.naddr);
     const saved = (await this.pool.query("SELECT reference,context_json FROM development_remix_imports WHERE account_id=$1 AND event_id=$2", [account, manifest.event.id])).rows[0];
     const summary = (reference: string, context: RemixContext) => ({ status: "ready", reference, title: manifest.title, naddr: manifest.naddr, basis: context.basis.kind, ...(context.basis.kind === "source" ? { commit: context.basis.commit } : {}), detail: context.basis.kind === "source" ? "Using the linked source. It may differ from the published applet." : manifest.source ? "Source wasn’t available in a supported form. Using the verified applet file." : "Using the verified applet file." });
     if (saved) return summary(String(saved.reference), RemixContextSchema.parse(saved.context_json));

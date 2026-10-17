@@ -1,3 +1,4 @@
+import { ServiceInfoArgumentsSchema, DevelopmentFaucetArgumentsSchema, OperationDiagnosticArgumentsSchema } from "./extension-schemas";
 import { DevelopmentRemixImports } from "../dev/remix-imports";
 import { LocalRemixSourceImporter } from "../dev/remix-source-import";
 import { DevelopmentProjects } from "../dev/projects";
@@ -357,11 +358,11 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
         return { status: "failed", code, detail: details[code] ?? "The starting applet could not be verified. Check its address and try again; no generation was started." };
       }
     }),
-    service_info: async input => { z.object({}).strict().parse(input); const settings = chatgpt.settings(); const account = chatgpt.status().accounts.find(item => item.id === settings.accountId); return { reserveSat, actionCeilingSat, providerLabel, available: !!operator?.selectedApi() || settings.mode !== "chatgpt" || !!(account?.signedIn && account.planEnabled), development: true }; },
-    development_faucet: async input => { const { amount } = z.object({ amount: z.string().regex(/^[1-9][0-9]{0,4}$/u) }).strict().parse(input); return { token: await mintCashuToken(app, config, Number(amount)) }; },
+    service_info: async input => { ServiceInfoArgumentsSchema.parse(input); const settings = chatgpt.settings(); const account = chatgpt.status().accounts.find(item => item.id === settings.accountId); return { reserveSat, actionCeilingSat, providerLabel, available: !!operator?.selectedApi() || settings.mode !== "chatgpt" || !!(account?.signedIn && account.planEnabled), development: true }; },
+    development_faucet: async input => { const { amount } = DevelopmentFaucetArgumentsSchema.parse(input); return { token: await mintCashuToken(app, config, Number(amount)) }; },
     development_publication: (input, pubkey) => publication.handle(input, pubkey),
     operation_diagnostic: async (input, pubkey) => {
-      const { operationId } = z.object({ operationId: z.string().min(1).max(240) }).strict().parse(input);
+      const { operationId } = OperationDiagnosticArgumentsSchema.parse(input);
       const account = await accountIdForPrincipal({ pubkey });
       const row = (await app.pool.query("SELECT c.diagnostic_json FROM development_chatgpt_operations c JOIN metered_actions a ON a.operation_id=c.operation_id WHERE a.operation_id=$1 AND a.account_id=$2", [operationId, account])).rows[0];
       const diagnostic = ChatGptDiagnosticSchema.safeParse(row?.diagnostic_json);

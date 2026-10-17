@@ -11,7 +11,7 @@ const Id = z.string().min(1).max(240);
 export const OperatorRates = z.object({ input_tokens: RationalRateSchema, output_tokens: RationalRateSchema, cached_tokens: RationalRateSchema, reasoning_tokens: RationalRateSchema }).strict();
 const ApiAccount = z.object({ id: z.string().uuid(), label: z.string().min(1).max(80), apiKey: z.string().min(1).max(4096), model: z.string().min(1).max(128), profile: ModelProfileSchema, priceCard: PriceCardSchema, priceSources: z.unknown() }).strict();
 const State = z.object({ version: z.literal(1), adminKey: z.string().regex(/^[a-f0-9]{64}$/u), apiAccounts: z.array(ApiAccount).max(16), selectedApi: z.string().uuid().optional(), rates: OperatorRates.optional() }).strict();
-const Command = z.discriminatedUnion("action", [
+export const CvmAdminArgumentsSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("status") }).strict(),
   z.object({ action: z.literal("chatgpt"), operation: z.enum(["status", "sign-in", "models", "select", "welcome", "logout"]), body: z.unknown().optional() }).strict(),
   z.object({ action: z.literal("save_rates"), rates: OperatorRates }).strict(),
@@ -55,7 +55,7 @@ export class CvmOperator {
   }
   async handle(input: unknown, principal: string): Promise<unknown> {
     if (principal !== this.pubkey) return { status: "denied", code: "OPERATOR_REQUIRED" };
-    const parsed = Command.safeParse(input);
+    const parsed = CvmAdminArgumentsSchema.safeParse(input);
     if (!parsed.success) return { status: "rejected", code: "INVALID_ADMIN_COMMAND" };
     const command = parsed.data;
     const run = async () => {

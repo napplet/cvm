@@ -1,0 +1,51 @@
+name: Schema amendment
+description: Propose a change to CVM tools, results, state or compatibility contracts.
+title: "[Schema]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe a concrete contract change. Use synthetic examples; never include keys, tokens, private prompts or user data.
+        Review docs/developers/schema-changes.md before implementing a breaking change.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and affected users
+      description: What cannot an existing client or CVM implementation express today?
+    validations:
+      required: true
+  - type: input
+    id: contract
+    attributes:
+      label: Affected contract and current revision
+      placeholder: "Tool/schema name, source file, Git revision, SDK/client versions"
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed shape and semantics
+      description: Include before/after requests and responses with synthetic values, and alternatives considered.
+    validations:
+      required: true
+  - type: textarea
+    id: authority
+    attributes:
+      label: Authority, spending and recovery
+      description: Explain verified identity, approval, caps, idempotency, unknown outcomes and crash recovery.
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and migration
+      description: Which strict clients or saved records break? Explain version negotiation, migration, coexistence and rollback.
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Acceptance tests and documentation
+      description: Specify interop, isolation, duplicate-delivery and recovery checks. Link related ContextVM CEP or Nostr NIP discussions if applicable.
+    validations:
+      required: true

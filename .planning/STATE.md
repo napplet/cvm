@@ -6,7 +6,7 @@ current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: verification_deferred_gaps
 stopped_at: Explore geometric loading experience verified and live
-last_updated: "2026-10-17T00:20:35Z"
+last_updated: "2026-10-17T01:14:01Z"
 last_activity: 2026-10-16
 last_activity_desc: Low-contrast geometric discovery loader with smooth transitions, responsive body fill and reduced motion
 progress:
@@ -370,6 +370,8 @@ Recent decisions affecting current work:
 
 | 261016-nxl | Geometric Explore results loader with responsive transitions and reduced motion | 2026-10-16 | 881aa55 | [261016-nxl](./quick/261016-nxl-design-an-animated-geometric-loader-for-/) |
 
+| 261016-opy | VitePress /docs/ for users, operators, implementers and developers; schemas, MCP example and amendment process | 2026-10-16 | see summary | [261016-opy](./quick/261016-opy-build-audience-based-vitepress-documenta/) |
+
 ## Deferred Verification
 
 | Phase | Status | Reason | Resume command |
@@ -386,6 +388,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-17T00:20:35Z
-Stopped at: Explore geometric loader complete and live at http://127.0.0.1:49371, PID 37207. Smooth morph and entry/exit, reduced motion, result/pagination/error/cancellation states visually verified; all 304 responsive checks pass. Existing 424 TypeScript diagnostics unchanged. Zero active actions before restart, ChatGPT OAuth mode retained. Production remains deferred.
-Resume file: .planning/quick/261016-nxl-design-an-animated-geometric-loader-for-/SUMMARY.md
+Last session: 2026-10-17T01:14:01Z
+Stopped at: Audience documentation complete and verified at http://127.0.0.1:4173/docs/. Next user task: track successful publications durably and update publishing UI. User prioritized finishing docs first. Existing CVM remains running unchanged.
+Resume file: .planning/quick/261016-opy-build-audience-based-vitepress-documenta/SUMMARY.md

@@ -4,7 +4,7 @@ import { accountIdForPrincipal } from "../domain/account-command";
 
 const Stage = z.enum(["pending", "active", "verified", "published", "failed", "unconfirmed", "expired"]);
 const Id = z.string().min(1).max(240);
-const Command = z.discriminatedUnion("action", [
+export const ProjectsArgumentsSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("list"), limit: z.number().int().min(1).max(50).default(20), after: Id.optional(), stage: Stage.optional() }).strict(),
   z.object({ action: z.literal("get"), id: Id }).strict(),
   z.object({ action: z.literal("rename"), id: Id, title: z.string().trim().min(1).max(120) }).strict(),
@@ -38,7 +38,7 @@ export class DevelopmentProjects {
   }
   async handle(input: unknown, verifiedPubkey: string) {
     const pubkey = Pubkey.parse(verifiedPubkey);
-    const command = Command.parse(input);
+    const command = ProjectsArgumentsSchema.parse(input);
     await this.bind(pubkey);
     if (command.action === "rename") {
       const result = await this.pool.query("UPDATE development_projects SET title=$3 WHERE id=$1 AND owner_pubkey=$2 RETURNING id", [command.id, pubkey, command.title]);

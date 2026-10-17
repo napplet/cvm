@@ -1,0 +1,3274 @@
+{
+  "format": "napplet-cvm-contract-catalog-v1",
+  "sdkVersion": "0.13.10",
+  "mcpSdkVersion": "1.30.0",
+  "note": "Generated structural input schemas. Runtime refinements, signatures, ownership, availability, money ceilings, URL policy and durable state remain authoritative. A listed tool is not proof its facade is installed. This catalog format is not a wire protocol negotiation version.",
+  "tools": [
+    {
+      "name": "account_status",
+      "description": "Read balances for the signed request identity.",
+      "scope": "core",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "top_up",
+      "description": "Start or submit a separate CEP-8 funding operation.",
+      "scope": "core",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1
+          },
+          "pmi": {
+            "type": "string",
+            "enum": [
+              "bitcoin-lightning-bolt11",
+              "bitcoin-cashu-v4-direct"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "transparent",
+              "explicit_gating"
+            ]
+          },
+          "amount": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$"
+          },
+          "topUpId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "idempotencyKey",
+          "pmi",
+          "mode",
+          "amount"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "funded_admission",
+      "description": "Reserve capacity and a sat-denominated cap before work.",
+      "scope": "core",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1
+          },
+          "requestedCap": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$"
+          },
+          "unit": {
+            "type": "string",
+            "const": "sat"
+          }
+        },
+        "required": [
+          "idempotencyKey",
+          "requestedCap",
+          "unit"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "start_session",
+      "description": "Generate an applet after admission, or save a development pending action.",
+      "scope": "core",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "remixReference": {
+                "type": "string",
+                "pattern": "^remix:[a-f0-9]{64}$"
+              },
+              "admissionReference": {
+                "type": "string",
+                "minLength": 1
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "minLength": 1
+              },
+              "maximum": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]*$"
+              },
+              "idea": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              }
+            },
+            "required": [
+              "admissionReference",
+              "idempotencyKey",
+              "maximum",
+              "idea"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "remixReference": {
+                "type": "string",
+                "pattern": "^remix:[a-f0-9]{64}$"
+              },
+              "mode": {
+                "type": "string",
+                "const": "pre_admission"
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "minLength": 1
+              },
+              "maximum": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]*$"
+              },
+              "idea": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              }
+            },
+            "required": [
+              "mode",
+              "idempotencyKey",
+              "maximum",
+              "idea"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "revise_session",
+      "description": "Create a metered revision of an owned session at the expected version.",
+      "scope": "core",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "admissionReference": {
+            "type": "string",
+            "minLength": 1
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "maximum": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$"
+          },
+          "revision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        },
+        "required": [
+          "sessionId",
+          "admissionReference",
+          "idempotencyKey",
+          "expectedVersion",
+          "maximum",
+          "revision"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "resume_session",
+      "description": "Explicitly approve continuation of one exact pending action.",
+      "scope": "core",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "checkpointId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "expectedSessionVersion": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "expectedCheckpointVersion": {
+                "type": "number",
+                "const": 1
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "minLength": 1
+              },
+              "approvePendingAction": {
+                "type": "boolean",
+                "const": true
+              },
+              "capApprovalReference": {
+                "type": "string",
+                "minLength": 1
+              },
+              "pendingAction": {
+                "type": "object",
+                "properties": {
+                  "reference": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "fingerprint": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "start_session",
+                      "revise_session",
+                      "repair"
+                    ]
+                  },
+                  "maximum": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]*)$"
+                  }
+                },
+                "required": [
+                  "reference",
+                  "fingerprint",
+                  "kind",
+                  "maximum"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "sessionId",
+              "checkpointId",
+              "expectedSessionVersion",
+              "expectedCheckpointVersion",
+              "idempotencyKey",
+              "approvePendingAction",
+              "capApprovalReference",
+              "pendingAction"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "pending_action"
+              },
+              "checkpointId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "expectedCheckpointVersion": {
+                "type": "number",
+                "const": 1
+              },
+              "expectedSessionVersion": {
+                "type": "number",
+                "const": 0
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "minLength": 1
+              },
+              "approvePendingAction": {
+                "type": "boolean",
+                "const": true
+              },
+              "admissionReference": {
+                "type": "string",
+                "minLength": 1
+              },
+              "pendingAction": {
+                "type": "object",
+                "properties": {
+                  "reference": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "fingerprint": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "start_session"
+                  },
+                  "maximum": {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]*$"
+                  }
+                },
+                "required": [
+                  "reference",
+                  "fingerprint",
+                  "kind",
+                  "maximum"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "kind",
+              "checkpointId",
+              "expectedCheckpointVersion",
+              "expectedSessionVersion",
+              "idempotencyKey",
+              "approvePendingAction",
+              "admissionReference",
+              "pendingAction"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "session_status",
+      "description": "Read owner-scoped session state and billing, or a pending action.",
+      "scope": "core",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "billing": {
+                "type": "object",
+                "properties": {
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50
+                  },
+                  "cursor": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "sessionId"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "pending_action"
+              },
+              "checkpointId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "kind",
+              "checkpointId"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "preview",
+      "description": "Read a verified artifact descriptor or its capability review.",
+      "scope": "core",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "descriptor"
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "artifactId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "runtimeVariant": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "action",
+              "sessionId",
+              "artifactId",
+              "runtimeVariant"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "review_capabilities"
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "artifactId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "runtimeVariant": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "action",
+              "sessionId",
+              "artifactId",
+              "runtimeVariant"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "publication",
+      "description": "Coordinate owner-signed publication when the promoted facade is installed.",
+      "scope": "core-optional",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "create_intent"
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "artifactId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "runtimeVariant": {
+                "type": "string",
+                "minLength": 1
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "minLength": 1
+              },
+              "purpose": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "consent": {
+                "type": "string",
+                "const": "approved"
+              }
+            },
+            "required": [
+              "action",
+              "sessionId",
+              "artifactId",
+              "runtimeVariant",
+              "idempotencyKey",
+              "purpose",
+              "consent"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "submit_signed_manifest"
+              },
+              "intentId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "command": {
+                "type": "object",
+                "properties": {
+                  "commandId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "intentId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "intentFingerprint": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "operationIds": {
+                    "type": "object",
+                    "properties": {
+                      "deploy": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256
+                      },
+                      "ownerManifest": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256
+                      },
+                      "attestation": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256
+                      }
+                    },
+                    "required": [
+                      "deploy",
+                      "ownerManifest",
+                      "attestation"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "commandId",
+                  "intentId",
+                  "intentFingerprint",
+                  "operationIds"
+                ],
+                "additionalProperties": false
+              },
+              "event": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "pubkey": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "created_at": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "kind": {
+                    "type": "number",
+                    "const": 35129
+                  },
+                  "tags": {
+                    "maxItems": 128,
+                    "type": "array",
+                    "items": {
+                      "minItems": 1,
+                      "maxItems": 16,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 4096
+                      }
+                    }
+                  },
+                  "content": {
+                    "type": "string",
+                    "maxLength": 64000
+                  },
+                  "sig": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{128}$"
+                  }
+                },
+                "required": [
+                  "id",
+                  "pubkey",
+                  "created_at",
+                  "kind",
+                  "tags",
+                  "content",
+                  "sig"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "action",
+              "intentId",
+              "command",
+              "event"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "status"
+              },
+              "intentId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "action",
+              "intentId"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "reconcile"
+              },
+              "intentId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "action",
+              "intentId"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "service_info",
+      "description": "Read development mode, availability and required ceilings.",
+      "scope": "development",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "development_faucet",
+      "description": "Mint local test Cashu; never real money.",
+      "scope": "development",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,4}$"
+          }
+        },
+        "required": [
+          "amount"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "projects",
+      "description": "List, read or rename projects belonging to the signed request identity.",
+      "scope": "development",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "list"
+              },
+              "limit": {
+                "default": 20,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 50
+              },
+              "after": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 240
+              },
+              "stage": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "active",
+                  "verified",
+                  "published",
+                  "failed",
+                  "unconfirmed",
+                  "expired"
+                ]
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "get"
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 240
+              }
+            },
+            "required": [
+              "action",
+              "id"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "rename"
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 240
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              }
+            },
+            "required": [
+              "action",
+              "id",
+              "title"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "remix_import",
+      "description": "Validate a signed applet and import isolated source or staged HTML.",
+      "scope": "development",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "naddr": {
+                "type": "string",
+                "maxLength": 4096
+              },
+              "event": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "pubkey": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "sig": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{128}$"
+                  },
+                  "kind": {
+                    "anyOf": [
+                      {
+                        "type": "number",
+                        "const": 15129
+                      },
+                      {
+                        "type": "number",
+                        "const": 35129
+                      }
+                    ]
+                  },
+                  "created_at": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "content": {
+                    "type": "string",
+                    "maxLength": 8000
+                  },
+                  "tags": {
+                    "maxItems": 256,
+                    "type": "array",
+                    "items": {
+                      "maxItems": 8,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 2048
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "id",
+                  "pubkey",
+                  "sig",
+                  "kind",
+                  "created_at",
+                  "content",
+                  "tags"
+                ],
+                "additionalProperties": false
+              },
+              "assetUploaded": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "naddr",
+              "event"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "asset_part"
+              },
+              "eventId": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "artifactHash": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "index": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 15
+              },
+              "total": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16
+              },
+              "data": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 10668,
+                "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+              }
+            },
+            "required": [
+              "action",
+              "eventId",
+              "artifactHash",
+              "index",
+              "total",
+              "data"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "development_publication",
+      "description": "Prepare and submit the user-signed development publication flow.",
+      "scope": "development",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "preview"
+              },
+              "artifactId": {
+                "type": "string",
+                "maxLength": 100
+              },
+              "sessionId": {
+                "type": "string",
+                "maxLength": 240
+              }
+            },
+            "required": [
+              "action",
+              "artifactId",
+              "sessionId"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "prepare"
+              },
+              "servers": {
+                "minItems": 1,
+                "maxItems": 5,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "format": "uri"
+                }
+              },
+              "relays": {
+                "minItems": 1,
+                "maxItems": 5,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 512
+                }
+              },
+              "artifactId": {
+                "type": "string",
+                "maxLength": 100
+              },
+              "sessionId": {
+                "type": "string",
+                "maxLength": 240
+              },
+              "publisher": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "requestKey": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              }
+            },
+            "required": [
+              "action",
+              "servers",
+              "relays",
+              "artifactId",
+              "sessionId",
+              "publisher",
+              "requestKey",
+              "title"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "submit"
+              },
+              "id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "event": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "pubkey": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "sig": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{128}$"
+                  },
+                  "kind": {
+                    "type": "number",
+                    "const": 35129
+                  },
+                  "created_at": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "tags": {
+                    "maxItems": 512,
+                    "type": "array",
+                    "items": {
+                      "maxItems": 8,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 1024
+                      }
+                    }
+                  },
+                  "content": {
+                    "type": "string",
+                    "const": ""
+                  }
+                },
+                "required": [
+                  "id",
+                  "pubkey",
+                  "sig",
+                  "kind",
+                  "created_at",
+                  "tags",
+                  "content"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "action",
+              "id",
+              "event"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "status",
+                  "reconcile"
+                ]
+              },
+              "id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              }
+            },
+            "required": [
+              "action",
+              "id"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "operation_diagnostic",
+      "description": "Read bounded diagnostics for an owned model operation.",
+      "scope": "development",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          }
+        },
+        "required": [
+          "operationId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "cvm_admin",
+      "description": "Private operator configuration and job inspection; operator key required.",
+      "scope": "operator",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "status"
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "chatgpt"
+              },
+              "operation": {
+                "type": "string",
+                "enum": [
+                  "status",
+                  "sign-in",
+                  "models",
+                  "select",
+                  "welcome",
+                  "logout"
+                ]
+              },
+              "body": {}
+            },
+            "required": [
+              "action",
+              "operation"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "save_rates"
+              },
+              "rates": {
+                "type": "object",
+                "properties": {
+                  "input_tokens": {
+                    "type": "object",
+                    "properties": {
+                      "numerator": {
+                        "type": "string",
+                        "pattern": "^(?:0|[1-9][0-9]*)$"
+                      },
+                      "denominator": {
+                        "type": "string",
+                        "pattern": "^(?:0|[1-9][0-9]*)$"
+                      }
+                    },
+                    "required": [
+                      "numerator",
+                      "denominator"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "output_tokens": {
+                    "type": "object",
+                    "properties": {
+                      "numerator": {
+                        "type": "string",
+                        "pattern": "^(?:0|[1-9][0-9]*)$"
+                      },
+                      "denominator": {
+                        "type": "string",
+                        "pattern": "^(?:0|[1-9][0-9]*)$"
+                      }
+                    },
+                    "required": [
+                      "numerator",
+                      "denominator"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "cached_tokens": {
+                    "type": "object",
+                    "properties": {
+                      "numerator": {
+                        "type": "string",
+                        "pattern": "^(?:0|[1-9][0-9]*)$"
+                      },
+                      "denominator": {
+                        "type": "string",
+                        "pattern": "^(?:0|[1-9][0-9]*)$"
+                      }
+                    },
+                    "required": [
+                      "numerator",
+                      "denominator"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "reasoning_tokens": {
+                    "type": "object",
+                    "properties": {
+                      "numerator": {
+                        "type": "string",
+                        "pattern": "^(?:0|[1-9][0-9]*)$"
+                      },
+                      "denominator": {
+                        "type": "string",
+                        "pattern": "^(?:0|[1-9][0-9]*)$"
+                      }
+                    },
+                    "required": [
+                      "numerator",
+                      "denominator"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "input_tokens",
+                  "output_tokens",
+                  "cached_tokens",
+                  "reasoning_tokens"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "action",
+              "rates"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "add_api"
+              },
+              "account": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "label": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  },
+                  "apiKey": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "profile": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "provider": {
+                        "type": "string",
+                        "enum": [
+                          "deterministic_fixture",
+                          "openai_responses",
+                          "openai_chatgpt_development"
+                        ]
+                      },
+                      "model": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "priceCardId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "selection": {
+                        "type": "string",
+                        "const": "unselected"
+                      },
+                      "maximumUnits": {
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "dimension": {
+                              "type": "string",
+                              "enum": [
+                                "input_tokens",
+                                "output_tokens",
+                                "cached_tokens",
+                                "reasoning_tokens"
+                              ]
+                            },
+                            "units": {
+                              "type": "string",
+                              "pattern": "^(?:0|[1-9][0-9]*)$"
+                            }
+                          },
+                          "required": [
+                            "dimension",
+                            "units"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "deadlineMs": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "provider",
+                      "model",
+                      "priceCardId",
+                      "selection",
+                      "maximumUnits",
+                      "deadlineMs"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "priceCard": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "version": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "deterministic_fixture",
+                          "source_attributed_provider",
+                          "development_test"
+                        ]
+                      },
+                      "provider": {
+                        "type": "string",
+                        "enum": [
+                          "deterministic_fixture",
+                          "openai_responses",
+                          "openai_chatgpt_development"
+                        ]
+                      },
+                      "currency": {
+                        "type": "string",
+                        "const": "sat"
+                      },
+                      "supportedDimensions": {
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "input_tokens",
+                            "output_tokens",
+                            "cached_tokens",
+                            "reasoning_tokens"
+                          ]
+                        }
+                      },
+                      "rates": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string",
+                          "enum": [
+                            "input_tokens",
+                            "output_tokens",
+                            "cached_tokens",
+                            "reasoning_tokens"
+                          ]
+                        },
+                        "additionalProperties": {
+                          "type": "object",
+                          "properties": {
+                            "numerator": {
+                              "type": "string",
+                              "pattern": "^(?:0|[1-9][0-9]*)$"
+                            },
+                            "denominator": {
+                              "type": "string",
+                              "pattern": "^(?:0|[1-9][0-9]*)$"
+                            }
+                          },
+                          "required": [
+                            "numerator",
+                            "denominator"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "required": [
+                          "input_tokens",
+                          "output_tokens",
+                          "cached_tokens",
+                          "reasoning_tokens"
+                        ]
+                      },
+                      "rounding": {
+                        "type": "string",
+                        "const": "ceil"
+                      },
+                      "ceilings": {
+                        "type": "object",
+                        "properties": {
+                          "inputTokens": {
+                            "type": "string",
+                            "pattern": "^(?:0|[1-9][0-9]*)$"
+                          },
+                          "outputTokens": {
+                            "type": "string",
+                            "pattern": "^(?:0|[1-9][0-9]*)$"
+                          }
+                        },
+                        "required": [
+                          "inputTokens",
+                          "outputTokens"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "validity": {
+                        "type": "object",
+                        "properties": {
+                          "notBefore": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                          },
+                          "notAfter": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                          }
+                        },
+                        "required": [
+                          "notBefore",
+                          "notAfter"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "sources": {
+                        "type": "object",
+                        "properties": {
+                          "provider": {
+                            "type": "object",
+                            "properties": {
+                              "url": {
+                                "type": "string",
+                                "format": "uri"
+                              },
+                              "capturedBytesSha256": {
+                                "type": "string",
+                                "pattern": "^[a-f0-9]{64}$"
+                              },
+                              "observedAt": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                              },
+                              "effectiveAt": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                              },
+                              "freshUntil": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                              }
+                            },
+                            "required": [
+                              "url",
+                              "capturedBytesSha256",
+                              "observedAt",
+                              "effectiveAt",
+                              "freshUntil"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "conversion": {
+                            "type": "object",
+                            "properties": {
+                              "url": {
+                                "type": "string",
+                                "format": "uri"
+                              },
+                              "capturedBytesSha256": {
+                                "type": "string",
+                                "pattern": "^[a-f0-9]{64}$"
+                              },
+                              "observedAt": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                              },
+                              "effectiveAt": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                              },
+                              "freshUntil": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                              }
+                            },
+                            "required": [
+                              "url",
+                              "capturedBytesSha256",
+                              "observedAt",
+                              "effectiveAt",
+                              "freshUntil"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "provider",
+                          "conversion"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "version",
+                      "kind",
+                      "provider",
+                      "currency",
+                      "supportedDimensions",
+                      "rates",
+                      "rounding",
+                      "ceilings",
+                      "validity"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "priceSources": {}
+                },
+                "required": [
+                  "id",
+                  "label",
+                  "apiKey",
+                  "model",
+                  "profile",
+                  "priceCard",
+                  "priceSources"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "action",
+              "account"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "select_api"
+              },
+              "id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              }
+            },
+            "required": [
+              "action",
+              "id"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "remove_api"
+              },
+              "id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              }
+            },
+            "required": [
+              "action",
+              "id"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "jobs"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "active",
+                  "finished"
+                ]
+              },
+              "offset": {
+                "default": 0,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100000
+              }
+            },
+            "required": [
+              "action",
+              "status"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "job"
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 240
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "action",
+                  "pending"
+                ]
+              }
+            },
+            "required": [
+              "action",
+              "id",
+              "kind"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    }
+  ],
+  "results": {
+    "sessionAction": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "needs_top_up"
+            },
+            "code": {
+              "type": "string",
+              "const": "ACTION_AFFORDABILITY_REQUIRED"
+            },
+            "accountId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sessionId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "pendingActionReference": {
+              "type": "string",
+              "minLength": 1
+            },
+            "pendingActionFingerprint": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "pendingActionKind": {
+              "type": "string",
+              "enum": [
+                "start_session",
+                "revise_session",
+                "repair"
+              ]
+            },
+            "actionMaximum": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$"
+            },
+            "requiredAdditionalFunding": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$"
+            },
+            "requiredCapApproval": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$"
+            },
+            "settledBalance": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$"
+            },
+            "availableBalance": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$"
+            },
+            "remainingCap": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$"
+            },
+            "graceDeadlineMs": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "checkpoint": {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "const": "live_worker"
+                },
+                "reference": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "state",
+                "reference"
+              ],
+              "additionalProperties": false
+            },
+            "nextRequiredAction": {
+              "type": "string",
+              "enum": [
+                "top_up",
+                "approve_cap",
+                "top_up_and_approve_cap"
+              ]
+            }
+          },
+          "required": [
+            "status",
+            "code",
+            "accountId",
+            "sessionId",
+            "pendingActionReference",
+            "pendingActionFingerprint",
+            "pendingActionKind",
+            "actionMaximum",
+            "requiredAdditionalFunding",
+            "requiredCapApproval",
+            "settledBalance",
+            "availableBalance",
+            "remainingCap",
+            "graceDeadlineMs",
+            "checkpoint",
+            "nextRequiredAction"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "completed"
+            },
+            "code": {
+              "type": "string",
+              "const": "ACTION_COMMITTED"
+            },
+            "accountId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sessionId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sessionVersion": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "artifactVersion": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "artifactId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "confirmedSpend": {
+              "type": "string"
+            },
+            "remainingCap": {
+              "type": "string"
+            },
+            "remainingBalance": {
+              "type": "string"
+            },
+            "nextAction": {
+              "type": "string",
+              "const": "revise_session"
+            },
+            "operationId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "generation": {
+              "type": "object",
+              "properties": {
+                "provider": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "model": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "profileId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "priceCardId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "usage": {
+                  "minItems": 1,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "dimension": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "units": {
+                        "type": "string",
+                        "pattern": "^[0-9]+$"
+                      }
+                    },
+                    "required": [
+                      "dimension",
+                      "units"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "source": {
+                  "type": "string",
+                  "const": "durably recorded"
+                },
+                "worker": {
+                  "type": "string",
+                  "const": "verified"
+                }
+              },
+              "required": [
+                "provider",
+                "model",
+                "profileId",
+                "priceCardId",
+                "usage",
+                "source",
+                "worker"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "status",
+            "code",
+            "accountId",
+            "sessionId",
+            "sessionVersion",
+            "artifactVersion",
+            "confirmedSpend",
+            "remainingCap",
+            "remainingBalance",
+            "nextAction",
+            "operationId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "failed"
+            },
+            "code": {
+              "type": "string",
+              "enum": [
+                "WORKER_OR_ARTIFACT_FAILED",
+                "RECONCILED_RECEIPT_FOUND",
+                "PROVIDER_NOT_ACCEPTED",
+                "MODEL_RESPONSE_INTERRUPTED"
+              ]
+            },
+            "accountId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sessionId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sessionVersion": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "artifactVersion": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "confirmedSpend": {
+              "type": "string"
+            },
+            "remainingCap": {
+              "type": "string"
+            },
+            "remainingBalance": {
+              "type": "string"
+            },
+            "nextAction": {
+              "type": "string",
+              "const": "revise_session"
+            },
+            "operationId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "status",
+            "code",
+            "accountId",
+            "sessionId",
+            "sessionVersion",
+            "artifactVersion",
+            "confirmedSpend",
+            "remainingCap",
+            "remainingBalance",
+            "nextAction",
+            "operationId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "billing_invariant_failed"
+            },
+            "code": {
+              "type": "string",
+              "minLength": 1
+            },
+            "accountId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sessionId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "nextAction": {
+              "type": "string",
+              "const": "billing_reconciliation"
+            },
+            "operationId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "status",
+            "code",
+            "accountId",
+            "sessionId",
+            "nextAction",
+            "operationId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "usage_unknown"
+            },
+            "code": {
+              "type": "string",
+              "const": "USAGE_UNKNOWN"
+            },
+            "accountId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sessionId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "nextAction": {
+              "type": "string",
+              "const": "billing_reconciliation"
+            },
+            "operationId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "status",
+            "code",
+            "accountId",
+            "sessionId",
+            "nextAction",
+            "operationId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "denied"
+            },
+            "code": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "status",
+            "code"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "sessionStatus": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "ok"
+            },
+            "session": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "version": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "prepared",
+                    "active",
+                    "failed",
+                    "usage_unknown",
+                    "billing_invariant_failed",
+                    "verified",
+                    "needs_top_up",
+                    "expired"
+                  ]
+                },
+                "progress": {
+                  "type": "string",
+                  "enum": [
+                    "waiting_for_dispatch",
+                    "waiting_for_funding",
+                    "running",
+                    "verified",
+                    "failed",
+                    "reconciliation_required"
+                  ]
+                },
+                "maximum": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]*)$"
+                },
+                "actualSpend": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]*)$"
+                },
+                "remainingBalance": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]*)$"
+                },
+                "remainingCap": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]*)$"
+                },
+                "latestVerifiedArtifact": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "version": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "version"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "verifiedArtifacts": {
+                  "default": [],
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "version": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "version"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "timeline": {
+                  "default": [],
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "stage": {
+                        "type": "string",
+                        "enum": [
+                          "source_recorded",
+                          "provider_recorded",
+                          "worker_completed",
+                          "artifact_verified",
+                          "ledger_settled"
+                        ]
+                      },
+                      "at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                      },
+                      "detail": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 160
+                      }
+                    },
+                    "required": [
+                      "stage",
+                      "at",
+                      "detail"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "nextAction": {
+                  "type": "string",
+                  "enum": [
+                    "revise_session",
+                    "resume_session",
+                    "billing_reconciliation",
+                    "wait_for_current_action",
+                    "top_up",
+                    "approve_cap",
+                    "top_up_and_approve_cap",
+                    "none"
+                  ]
+                },
+                "continuation": {
+                  "anyOf": [
+                    {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "const": "needs_top_up"
+                            },
+                            "pendingAction": {
+                              "type": "object",
+                              "properties": {
+                                "reference": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "fingerprint": {
+                                  "type": "string",
+                                  "pattern": "^[a-f0-9]{64}$"
+                                },
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "start_session",
+                                    "revise_session",
+                                    "repair"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "reference",
+                                "fingerprint",
+                                "kind"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "actionMaximum": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]*)$"
+                            },
+                            "requiredAdditionalFunding": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]*)$"
+                            },
+                            "requiredCapApproval": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]*)$"
+                            },
+                            "settledBalance": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]*)$"
+                            },
+                            "availableBalance": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]*)$"
+                            },
+                            "remainingCap": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]*)$"
+                            },
+                            "graceDeadlineMs": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "checkpoint": {
+                              "type": "object",
+                              "properties": {
+                                "state": {
+                                  "type": "string",
+                                  "const": "live_worker"
+                                },
+                                "reference": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "required": [
+                                "state",
+                                "reference"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "nextRequiredAction": {
+                              "type": "string",
+                              "enum": [
+                                "top_up",
+                                "approve_cap",
+                                "top_up_and_approve_cap"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "status",
+                            "pendingAction",
+                            "actionMaximum",
+                            "requiredAdditionalFunding",
+                            "requiredCapApproval",
+                            "settledBalance",
+                            "availableBalance",
+                            "remainingCap",
+                            "graceDeadlineMs",
+                            "checkpoint",
+                            "nextRequiredAction"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "const": "expired"
+                            },
+                            "checkpoint": {
+                              "type": "object",
+                              "properties": {
+                                "reference": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "required": [
+                                "reference"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "retentionDeadlineMs": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "deletionState": {
+                              "type": "string",
+                              "enum": [
+                                "scheduled",
+                                "deleted",
+                                "failed",
+                                "unknown",
+                                "not_recorded"
+                              ]
+                            },
+                            "nextRequiredAction": {
+                              "type": "string",
+                              "const": "none"
+                            }
+                          },
+                          "required": [
+                            "status",
+                            "checkpoint",
+                            "retentionDeadlineMs",
+                            "deletionState",
+                            "nextRequiredAction"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "resume_required",
+                                "restore_pending",
+                                "restored"
+                              ]
+                            },
+                            "checkpoint": {
+                              "type": "object",
+                              "properties": {
+                                "reference": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "required": [
+                                "reference"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "nextRequiredAction": {
+                              "type": "string",
+                              "enum": [
+                                "resume_session",
+                                "wait_for_current_action"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "status",
+                            "checkpoint",
+                            "nextRequiredAction"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "version",
+                "state",
+                "progress",
+                "maximum",
+                "actualSpend",
+                "remainingBalance",
+                "remainingCap",
+                "latestVerifiedArtifact",
+                "nextAction",
+                "continuation"
+              ],
+              "additionalProperties": false
+            },
+            "action": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "operationId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "prepared",
+                        "dispatching",
+                        "usage_unknown",
+                        "completed",
+                        "failed",
+                        "billing_invariant_failed"
+                      ]
+                    },
+                    "authorization": {
+                      "type": "object",
+                      "properties": {
+                        "reference": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "maximum": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]*)$"
+                        }
+                      },
+                      "required": [
+                        "reference",
+                        "maximum"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "price": {
+                      "type": "object",
+                      "properties": {
+                        "cardId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "profileId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "cardId",
+                        "profileId"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "reconciliation": {
+                      "type": "object",
+                      "properties": {
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "not_required",
+                            "pending",
+                            "claimed"
+                          ]
+                        },
+                        "evidenceId": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "state",
+                        "evidenceId"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "diagnostic": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "none",
+                            "action_failed",
+                            "usage_unknown",
+                            "billing_invariant_failed"
+                          ]
+                        },
+                        "evidenceId": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "evidenceId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "operationId",
+                    "state",
+                    "authorization",
+                    "price",
+                    "reconciliation",
+                    "diagnostic"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "billing": {
+              "type": "object",
+              "properties": {
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "sequence": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9][0-9]*)$"
+                      },
+                      "sessionId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "actionId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "operationId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "credit",
+                          "cap_hold",
+                          "action_reservation",
+                          "receipt",
+                          "debit",
+                          "release",
+                          "reconciliation"
+                        ]
+                      },
+                      "unit": {
+                        "type": "string",
+                        "const": "sat"
+                      },
+                      "amount": {
+                        "type": "string",
+                        "pattern": "^-?(0|[1-9][0-9]*)$"
+                      },
+                      "settledAvailable": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9][0-9]*)$"
+                      },
+                      "held": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9][0-9]*)$"
+                      },
+                      "sessionSpend": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9][0-9]*)$"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "sequence",
+                      "kind",
+                      "unit",
+                      "amount",
+                      "settledAvailable",
+                      "held",
+                      "sessionSpend"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "nextCursor": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "items",
+                "nextCursor"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "status",
+            "session",
+            "action",
+            "billing"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "not_found_or_denied"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "invalid_cursor"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "service_unavailable"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "developmentProgress": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "number",
+          "const": 1
+        },
+        "requestId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            }
+          ]
+        },
+        "tool": {
+          "type": "string",
+          "enum": [
+            "funded_admission",
+            "start_session",
+            "revise_session",
+            "resume_session",
+            "preview",
+            "remix_import"
+          ]
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "at": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "elapsedMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3600000
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "stage",
+            "heartbeat"
+          ]
+        },
+        "stage": {
+          "type": "string",
+          "enum": [
+            "source_import",
+            "request",
+            "admission",
+            "model",
+            "model_stream",
+            "model_recorded",
+            "worker",
+            "create",
+            "init",
+            "skills",
+            "install",
+            "build",
+            "verify",
+            "conformance",
+            "dry-run",
+            "artifact",
+            "cvm_share",
+            "ledger",
+            "preview"
+          ]
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "running",
+            "completed",
+            "failed",
+            "uncertain"
+          ]
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 32000000
+        },
+        "diagnostic": {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string",
+              "const": "src/main.ts"
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64000
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64000
+            },
+            "code": {
+              "type": "string",
+              "pattern": "^TS[0-9]{4,5}$"
+            },
+            "arguments": {
+              "type": "object",
+              "properties": {
+                "expected": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "received": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                }
+              },
+              "required": [
+                "expected",
+                "received"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "file",
+            "line",
+            "column",
+            "code"
+          ],
+          "additionalProperties": false
+        },
+        "provider": {
+          "type": "string",
+          "enum": [
+            "deterministic_fixture",
+            "openai_responses",
+            "openai_chatgpt_development"
+          ]
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9._:/-]+$"
+        }
+      },
+      "required": [
+        "version",
+        "requestId",
+        "tool",
+        "sequence",
+        "at",
+        "elapsedMs",
+        "kind",
+        "stage",
+        "state"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "operatorConfiguration": {
+    "modelProfile": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provider": {
+          "type": "string",
+          "enum": [
+            "deterministic_fixture",
+            "openai_responses",
+            "openai_chatgpt_development"
+          ]
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "priceCardId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "selection": {
+          "type": "string",
+          "const": "unselected"
+        },
+        "maximumUnits": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "dimension": {
+                "type": "string",
+                "enum": [
+                  "input_tokens",
+                  "output_tokens",
+                  "cached_tokens",
+                  "reasoning_tokens"
+                ]
+              },
+              "units": {
+                "type": "string",
+                "pattern": "^(?:0|[1-9][0-9]*)$"
+              }
+            },
+            "required": [
+              "dimension",
+              "units"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "deadlineMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "id",
+        "provider",
+        "model",
+        "priceCardId",
+        "selection",
+        "maximumUnits",
+        "deadlineMs"
+      ],
+      "additionalProperties": false
+    },
+    "priceCard": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "deterministic_fixture",
+            "source_attributed_provider",
+            "development_test"
+          ]
+        },
+        "provider": {
+          "type": "string",
+          "enum": [
+            "deterministic_fixture",
+            "openai_responses",
+            "openai_chatgpt_development"
+          ]
+        },
+        "currency": {
+          "type": "string",
+          "const": "sat"
+        },
+        "supportedDimensions": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "input_tokens",
+              "output_tokens",
+              "cached_tokens",
+              "reasoning_tokens"
+            ]
+          }
+        },
+        "rates": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "enum": [
+              "input_tokens",
+              "output_tokens",
+              "cached_tokens",
+              "reasoning_tokens"
+            ]
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "numerator": {
+                "type": "string",
+                "pattern": "^(?:0|[1-9][0-9]*)$"
+              },
+              "denominator": {
+                "type": "string",
+                "pattern": "^(?:0|[1-9][0-9]*)$"
+              }
+            },
+            "required": [
+              "numerator",
+              "denominator"
+            ],
+            "additionalProperties": false
+          },
+          "required": [
+            "input_tokens",
+            "output_tokens",
+            "cached_tokens",
+            "reasoning_tokens"
+          ]
+        },
+        "rounding": {
+          "type": "string",
+          "const": "ceil"
+        },
+        "ceilings": {
+          "type": "object",
+          "properties": {
+            "inputTokens": {
+              "type": "string",
+              "pattern": "^(?:0|[1-9][0-9]*)$"
+            },
+            "outputTokens": {
+              "type": "string",
+              "pattern": "^(?:0|[1-9][0-9]*)$"
+            }
+          },
+          "required": [
+            "inputTokens",
+            "outputTokens"
+          ],
+          "additionalProperties": false
+        },
+        "validity": {
+          "type": "object",
+          "properties": {
+            "notBefore": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+            },
+            "notAfter": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+            }
+          },
+          "required": [
+            "notBefore",
+            "notAfter"
+          ],
+          "additionalProperties": false
+        },
+        "sources": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": "object",
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "format": "uri"
+                },
+                "capturedBytesSha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "observedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                },
+                "effectiveAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                },
+                "freshUntil": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                }
+              },
+              "required": [
+                "url",
+                "capturedBytesSha256",
+                "observedAt",
+                "effectiveAt",
+                "freshUntil"
+              ],
+              "additionalProperties": false
+            },
+            "conversion": {
+              "type": "object",
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "format": "uri"
+                },
+                "capturedBytesSha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "observedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                },
+                "effectiveAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                },
+                "freshUntil": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                }
+              },
+              "required": [
+                "url",
+                "capturedBytesSha256",
+                "observedAt",
+                "effectiveAt",
+                "freshUntil"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "provider",
+            "conversion"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "kind",
+        "provider",
+        "currency",
+        "supportedDimensions",
+        "rates",
+        "rounding",
+        "ceilings",
+        "validity"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

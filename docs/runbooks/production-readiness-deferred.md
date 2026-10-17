@@ -11,7 +11,7 @@ This deferral does not mark Phase 7 complete or establish production readiness. 
 - Run the existing repository tests: `bun test --timeout 10000`.
 - Continue application integration using local test services. Do not request production wallet material, cloud credentials, or release authorization for development work.
 
-The development tests cover payment infrastructure plus the application funding coordinators and PostgreSQL ledger, including both Cashu mints, NWC credits, exact-command/token replay and pending-invoice recovery after restart. ContextVM/CEP-8 wire negotiation and full generation-session e2e remain separate development work. See [development payments](development-payments.md).
+The development tests cover payment infrastructure plus the application funding coordinators and PostgreSQL ledger, including both Cashu mints, NWC credits, exact-command/token replay and pending-invoice recovery after restart. The composed [development workspace tests](development-gui.md) additionally cover ContextVM/CEP-8 and generation/preview boundaries; these do not certify production. See [development payments](development-payments.md).
 
 ## Work to revisit before production
 
@@ -26,7 +26,7 @@ The development tests cover payment infrastructure plus the application funding 
 | Operator checkpoint | No executable production request is ready for review; saved Cashu readiness expired. | After implementation is ready, refresh service-owned funding and obtain exact bounded approval through 07-20's local surface. Owner signing remains deferred to publication. |
 | Release finalization | 07-26 has not run. | Sole evaluator accepts real evidence, immutable release bundle is verified, and authorized resource cleanup is confirmed. |
 
-Detailed source findings and the last no-effect readiness check are retained in [07-EXECUTION-BLOCKERS.md](../../.planning/phases/07-admission-slo-resilience-launch-safety/07-EXECUTION-BLOCKERS.md). Its blockers apply to production release only.
+Detailed source findings and the last no-effect readiness check are retained in [07-EXECUTION-BLOCKERS.md](https://github.com/napplet/cvm/blob/main/.planning/phases/07-admission-slo-resilience-launch-safety/07-EXECUTION-BLOCKERS.md). Its blockers apply to production release only.
 
 ## Resumption
 

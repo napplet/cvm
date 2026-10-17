@@ -26,6 +26,12 @@ input,select,textarea { margin:.5rem 0 1rem; }
 .rate-control input { font-size:1.2rem; font-weight:650; padding:.65rem .8rem; margin:0 0 .3rem; }
 .rate-control input[readonly] { background:#f0f1e9; border-color:transparent; }
 .rate-control span { font-size:.75rem; color:#64726c; display:block; }
+.usd-equivalent,.rate-control .usd-equivalent { display:block; color:#53684e; font-size:.9rem; font-weight:500; line-height:1.5; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
+.money-value { display:block; overflow-wrap:anywhere; }
+.money-value > span:first-child { font-weight:650; }
+#rates-exchange,#jobs-exchange { font-size:.85rem; line-height:1.6; }
+#rates-currency-note { font-size:.85rem; line-height:1.6; }
+#jobs-exchange { margin-top:-.75rem; margin-bottom:1.5rem; }
 .rate-field-help { grid-column:1/-1; font-size:.85rem; margin:0; color:#875020; }
 .rate-field-help:empty,#rates-included:empty,#rates-feedback:empty { display:none; }
 .rates-example { background:#edf1e4; border:1px solid #d8e0ca; border-radius:.85rem; padding:1rem; margin:1.25rem 0 .75rem; display:flex; flex-wrap:wrap; justify-content:space-between; gap:.75rem; align-items:center; }

@@ -1,9 +1,11 @@
+import { quoteCaption, usdEquivalent, type ExchangeRate } from "../../currency/btc-usd";
 type Command = (args: unknown) => Promise<any>;
 const labels: Record<string, string> = { all: "All", pending: "Pending", active: "Active", review: "Needs review", finished: "Finished" };
 const states: Record<string, string> = { saved: "Awaiting funds", bound: "Check admission", prepared: "Preparing", active: "Running", usage_unknown: "Receipt missing", billing_invariant_failed: "Billing mismatch", verified: "Ready", failed: "Stopped", completed: "Completed", expired: "Expired" };
 export const jobsMarkup = `<section class="admin-jobs" aria-labelledby="jobs-heading">
   <div class="jobs-heading"><div><p class="eyebrow">Operations</p><h2 id="jobs-heading">Jobs</h2></div><button id="jobs-refresh">Refresh</button></div>
   <div id="jobs-overview" class="jobs-overview"></div>
+  <p id="jobs-exchange" class="supporting"></p>
   <div class="jobs-toolbar"><div class="job-tabs" role="group" aria-label="Job state">${Object.entries(labels).map(([state, label]) => `<button data-state="${state}" aria-label="${label}" aria-pressed="${state === "all"}">${label}<span aria-hidden="true" data-count="${state}">0</span></button>`).join("")}</div>
   <label class="job-search"><span class="sr-only">Search jobs</span><input id="jobs-search" type="search" maxlength="160" placeholder="Search applet, request or ID"></label></div>
   <p id="jobs-status" role="status"></p><div class="job-table"><table><thead><tr><th>Applet / request</th><th>Status</th><th>Cost</th><th>Recorded</th></tr></thead><tbody id="jobs"></tbody></table></div>
@@ -15,10 +17,21 @@ const amount = (value: unknown) => { try { return BigInt(String(value)).toLocale
 const unit = (row: any) => ["development_test", "deterministic_fixture"].includes(row.price_kind) ? "test sats" : "sats";
 const money = (value: unknown, row: any) => `${amount(value)} ${unit(row)}`;
 const date = (value: unknown) => value ? new Date(String(value)).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—";
-function metric(label: string, value: string, note?: string) { const root = node("div", "", "job-metric"); root.append(node("span", label), node("strong", value)); if (note) root.append(node("small", note)); return root; }
+function metric(label: string, value: string | HTMLElement, note?: string) { const root = node("div", "", "job-metric"); const strong = node("strong"); strong.append(value); root.append(node("span", label), strong); if (note) root.append(node("small", note)); return root; }
 function facts(entries: [string, unknown][]) { const root = node("dl"); for (const [label, value] of entries) root.append(node("dt", label), node("dd", value == null ? "—" : String(value))); return root; }
 
 export function mountAdminJobs(command: Command) {
+  let exchangeRate: ExchangeRate | undefined;
+  function moneyValue(value: unknown, row: any) {
+    const root = node("span", "", "money-value");
+    root.append(node("span", money(value, row)));
+    const usd = node("span", usdEquivalent(String(value), exchangeRate), "usd-equivalent"); usd.dataset.usdSats = String(value); root.append(usd);
+    return root;
+  }
+  function updateCurrency() {
+    document.querySelectorAll<HTMLElement>("[data-usd-sats]").forEach(item => item.textContent = usdEquivalent(item.dataset.usdSats!, exchangeRate));
+    el("jobs-exchange").textContent = `${quoteCaption(exchangeRate)} USD values use today’s quote; test-sat equivalents are illustrative.`;
+  }
   let state = "all", offset = 0, search = "", request = 0, rendered = "", searchTimer: ReturnType<typeof setTimeout>;
   let selectedJob = 0;
   async function job(id: string, kind: string) {
@@ -36,9 +49,9 @@ export function mountAdminJobs(command: Command) {
       const badge = node("span", states[row.state] ?? row.state, `job-badge ${row.category ?? "pending"}`); root.append(badge);
       if (row.request_text) root.append(node("p", row.request_text, "job-prompt"));
       const metrics = node("div", "", "job-detail-metrics");
-      if (kind === "pending") metrics.append(metric("Approved maximum", `${amount(row.maximum_sat)} sats`), metric("Reserved", "Nothing yet"));
+      if (kind === "pending") metrics.append(metric("Approved maximum", moneyValue(row.maximum_sat, row)), metric("Reserved", "Nothing yet"));
       else {
-        metrics.append(metric(row.billing_status === "waived" ? "Test charge waived" : "Confirmed charge", row.receipt_charge == null || row.billing_status === "unresolved" ? "Not settled" : money(row.receipt_charge, row)), metric("Still reserved", money(row.held_sat, row)), metric("Action maximum", money(row.reservation_sat, row)));
+        metrics.append(metric(row.billing_status === "waived" ? "Test charge waived" : "Confirmed charge", row.receipt_charge == null || row.billing_status === "unresolved" ? "Not settled" : moneyValue(row.receipt_charge, row)), metric("Still reserved", moneyValue(row.held_sat, row)), metric("Action maximum", moneyValue(row.reservation_sat, row)));
       }
       root.append(metrics);
       if (row.billing_status === "unresolved") {
@@ -70,7 +83,7 @@ export function mountAdminJobs(command: Command) {
       technical.append(facts([["Job", row.id], ["Session", row.session_id], ["Account", row.account_id], ["Operation", row.operation_id], ["Profile", row.profile_id], ["Price version", row.price_card_id], ["Receipt", row.provider_receipt_reference]]));
       if (row.billing?.length) {
         const list = node("ul", "", "job-ledger");
-        for (const line of row.billing) list.append(node("li", `${line.kind.replaceAll("_", " ")} · ${money(line.amount_sat, row)} · ${date(line.committed_at)}`));
+        for (const line of row.billing) { const item = node("li", `${line.kind.replaceAll("_", " ")} · ${date(line.committed_at)}`); item.append(moneyValue(line.amount_sat, row)); list.append(item); }
         technical.append(list);
       }
       root.append(technical);
@@ -93,7 +106,10 @@ export function mountAdminJobs(command: Command) {
         const totalText = (field: string) => {
           const sums = new Map<string, bigint>();
           for (const row of totals) sums.set(unit(row), (sums.get(unit(row)) ?? 0n) + BigInt(row[field]));
-          return [...sums].map(([label, value]) => `${amount(value)} ${label}`).join(" · ") || "—";
+          const root = node("span");
+          for (const [label, value] of sums) root.append(moneyValue(value, { price_kind: label === "test sats" ? "development_test" : "source_attributed_provider" }));
+          if (!sums.size) root.textContent = "—";
+          return root;
         };
         el("jobs-overview").replaceChildren(metric("Confirmed charges", totalText("charged_sat"), search ? "Matching jobs" : "All recorded jobs"), metric("Reserved for review", totalText("review_held_sat"), `${counts.review ?? 0} ${counts.review === 1 ? "job needs" : "jobs need"} attention`), metric("Active actions", String(counts.active ?? 0), `${counts.pending ?? 0} pending`));
         el("jobs").replaceChildren(...result.jobs.map((row: any) => {
@@ -105,9 +121,9 @@ export function mountAdminJobs(command: Command) {
           const status = node("td"); status.dataset.label = "Status"; status.append(node("span", states[row.state] ?? row.state, `job-badge ${row.category}`));
           const cost = node("td", "", "job-cost"); cost.dataset.label = "Cost";
           if (row.kind === "pending") cost.append(node("strong", "Not charged"), node("span", "Awaiting admission", "job-secondary"));
-          else if (row.billing_status === "unresolved") cost.append(node("strong", money(row.held_sat, row)), node("span", "Reserved · unsettled", "job-secondary"));
-          else if (row.receipt_charge != null) cost.append(node("strong", money(row.receipt_charge, row)), node("span", row.billing_status === "waived" ? "Operator absorbed" : "Settled", "job-secondary"));
-          else cost.append(node("strong", money(row.held_sat, row)), node("span", "Reserved", "job-secondary"));
+          else if (row.billing_status === "unresolved") cost.append(moneyValue(row.held_sat, row), node("span", "Reserved · unsettled", "job-secondary"));
+          else if (row.receipt_charge != null) cost.append(moneyValue(row.receipt_charge, row), node("span", row.billing_status === "waived" ? "Operator absorbed" : "Settled", "job-secondary"));
+          else cost.append(moneyValue(row.held_sat, row), node("span", "Reserved", "job-secondary"));
           const recorded = node("td", date(row.created_at), "job-recorded"); recorded.dataset.label = "Recorded";
           tr.append(name, status, cost, recorded); return tr;
         }));
@@ -126,5 +142,6 @@ export function mountAdminJobs(command: Command) {
   el("jobs-prev").onclick = () => { offset = Math.max(0, offset - 50); void refresh(); };
   el("jobs-next").onclick = () => { offset += 50; void refresh(); };
   el("job-close").onclick = () => { ++selectedJob; el<HTMLDialogElement>("job-detail").close(); };
-  return { refresh };
+  updateCurrency();
+  return { refresh, setExchangeRate(next: ExchangeRate) { exchangeRate = next; updateCurrency(); } };
 }

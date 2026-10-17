@@ -14,7 +14,13 @@ test("operator authority, secret projection, replay, busy guard and private rest
     configure: async () => { if (fail) throw new Error("provider failed with private-api-key"); }, chatgpt: async () => ({ accounts: ["private-account"] }) };
   try {
     const operator = await CvmOperator.open(directory, options);
-    for (const action of ["status", "jobs", "job", "check_receipt", "chatgpt", "add_api"]) expect(await operator.handle({ action }, "f".repeat(64))).toEqual({ status: "denied", code: "OPERATOR_REQUIRED" });
+    let quoteCalls = 0;
+    operator.exchangeRates.read = async () => { quoteCalls++; return { status: "unavailable" }; };
+    for (const action of ["status", "exchange_rate", "jobs", "job", "check_receipt", "chatgpt", "add_api"]) expect(await operator.handle({ action }, "f".repeat(64))).toEqual({ status: "denied", code: "OPERATOR_REQUIRED" });
+    expect(quoteCalls).toBe(0);
+    busy = true;
+    expect(await operator.handle({ action: "exchange_rate" }, operator.pubkey)).toEqual({ status: "ok", exchangeRate: { status: "unavailable" } });
+    expect(quoteCalls).toBe(1); busy = false;
     expect(queries).toBe(0); expect(receiptChecks).toBe(0);
     expect(await operator.handle({ action: "check_receipt", id: "some-job" }, operator.pubkey)).toEqual({ status: "ok", recovery: { outcome: "missing" } });
     expect(receiptChecks).toBe(1);

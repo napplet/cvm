@@ -1487,6 +1487,19 @@
             "properties": {
               "action": {
                 "type": "string",
+                "const": "exchange_rate"
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
                 "const": "chatgpt"
               },
               "operation": {

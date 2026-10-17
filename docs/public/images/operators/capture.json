@@ -15,47 +15,47 @@
     {
       "file": "rates.png",
       "width": 509,
-      "height": 683
+      "height": 816
     },
     {
       "file": "api-account.png",
       "width": 509,
-      "height": 557
+      "height": 556
     },
     {
       "file": "jobs-all.png",
       "width": 1180,
-      "height": 873
+      "height": 925
     },
     {
       "file": "jobs-active.png",
       "width": 1180,
-      "height": 542
+      "height": 594
     },
     {
       "file": "jobs-review.png",
       "width": 1180,
-      "height": 542
+      "height": 594
     },
     {
       "file": "jobs-pending.png",
       "width": 1180,
-      "height": 542
+      "height": 594
     },
     {
       "file": "jobs-finished.png",
       "width": 1180,
-      "height": 542
+      "height": 594
     },
     {
       "file": "job-details.png",
       "width": 800,
-      "height": 702
+      "height": 722
     },
     {
       "file": "jobs-mobile.png",
       "width": 345,
-      "height": 1512
+      "height": 1685
     }
   ]
 }

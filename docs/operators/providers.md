@@ -66,8 +66,16 @@ Enter one price per **1,000 tokens** for each billed category. For example, Inpu
 
 The **Example request** updates as you edit: 10,000 input tokens plus 2,000 output tokens at those prices costs 12 test sats. Each billed category rounds up independently to a whole sat. Decimal prices such as `0.5` are supported. Select **Save rates** to apply changes to new actions; an unsuccessful save keeps your draft.
 
+Rates, the example request, job totals and job details also show **approximate USD**. The CVM fetches the free [Kraken BTC/USD ticker](https://docs.kraken.com/api-reference/market-data/get-ticker-information), which needs no API key, and returns it through encrypted ContextVM. The browser does not contact the exchange. The source, BTC price and time checked appear beside the conversion. Quotes are cached for five minutes; a failed refresh uses a labelled **last known** quote for up to one hour, then shows **USD unavailable**. Sat prices and controls continue working.
+
+USD equivalents use the current quote, including when viewing old jobs; they are not historical dollar receipts. For test sats, they are illustrative amounts, not subscription charges or redeemable balances. Billing remains in exact sats, and quote refreshes never change saved rates or unsaved edits.
+
 Only categories billed separately by the selected provider appear. For ChatGPT, cached input and reasoning are included in input/output totals. These are local test charges; changing them does not alter your subscription price or usage limits. API-account rates are read-only in this editor and require updated pricing evidence.
 
-<GuideScreenshot audience="operators" name="rates" alt="Generation pricing form with labelled input and output prices per 1,000 tokens and a twelve-test-sat example request" caption="One price per token category, with explicit units and an example. Price version identifiers are tucked into the expandable section below." />
+<GuideScreenshot audience="operators" name="rates" alt="Generation prices per 1,000 tokens in test sats and approximate USD, with a twelve-test-sat example and its dollar equivalent" caption="Sat prices stay authoritative. Approximate USD and the quote source make small token prices easier to compare. This illustration uses a sample BTC price of $80,000." />
 
 The CVM keeps exact fractions internally. Rates with more than six decimal places per 1,000 tokens are labelled as rounded for display; untouched values retain their original precision when another field is saved.
+
+## OpenAI price discovery
+
+OpenAI's documented [Models API](https://developers.openai.com/api/reference/resources/models/methods/list) returns model metadata, without list prices. Its [Costs API](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage/methods/costs) reports incurred API spending. No official model list-price API was found in the documentation reviewed on October 17, 2026; use the [published pricing table](https://developers.openai.com/api/docs/pricing) for API price-card evidence. The live BTC quote above is for display and does not replace the conversion evidence pinned to a billable API price card.

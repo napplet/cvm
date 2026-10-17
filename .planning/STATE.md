@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: verification_deferred_gaps
-stopped_at: Clear per-thousand-token admin rates verified and active locally
-last_updated: "2026-10-17T20:16:39.958799+00:00"
+stopped_at: Cached CVM BTC/USD quotes and dual-currency admin verified and active locally
+last_updated: "2026-10-17T20:37:29.858897+00:00"
 last_activity: 2026-10-17
-last_activity_desc: Labelled admin prices, exact decimal editing, examples and updated illustrated provider guide
+last_activity_desc: Free Kraken BTC/USD via CVM; sats plus USD across admin rates and jobs; illustrated docs refreshed
 progress:
   total_phases: 7
   completed_phases: 6
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
 Plan: 56 of 58 accepted; development Plans 07-52/53/56/57/54/55 complete
 Status: Guided applet.broker workspace at http://127.0.0.1:49371; diagnostic console at /dev. Saved chatgpt-oauth mode with gpt-6.1-sol retained. Product/console browser journeys and recovery passed through real local services. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
-Last activity: 2026-10-17 — Completed quick task 261017-iba: labelled prices per 1,000 tokens, live cost example, exact decimal conversion, billed categories only and API read-only guidance. Unit/browser checks and illustrated docs passed; local CVM refreshed without changing rates. Existing TypeScript baseline remains 411 diagnostics.
+Last activity: 2026-10-17 — Completed quick task 261017-irc: cached Kraken BTC/USD quote through signed CVM; dual-currency admin rates, examples, job totals and details. Unit/browser/live checks and illustrated docs passed. Saved rates and OAuth unchanged; no model usage. Existing TypeScript baseline has no new diagnostics.
 
 Follow-up: Stream assembly/counter verification remains complete. Latest helper-signature and compiler-feedback fix passed 29 targeted unit/integration cases plus activity and composed OAuth browser journeys. Real blinking-text generation also passed. See debug/resolved/generated-typescript-check.md.
 
@@ -398,6 +398,8 @@ Recent decisions affecting current work:
 
 | 261017-iba | Clear per-thousand-token pricing, live cost example and exact decimal rate editing | 2026-10-17 | see task history | [261017-iba](./quick/261017-iba-clarify-cvm-operator-rates-with-labelled/) |
 
+| 261017-irc | Free cached BTC/USD via CVM, dual-currency admin pricing and jobs, freshness/failure UX and illustrated docs | 2026-10-17 | see task history | [261017-irc](./quick/261017-irc-add-cached-btc-usd-quotes-and-show-usd-a/) |
+
 ## Deferred Verification
 
 | Phase | Status | Reason | Resume command |
@@ -414,6 +416,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-17T20:16:39.958799+00:00
-Stopped at: Admin pricing clarified and verified. Live admin http://127.0.0.1:49371/admin; guide http://127.0.0.1:4173/docs/operators/providers. Rates and saved OAuth preserved. Previous missing-receipt holds remain intact; production deferred.
-Resume file: .planning/quick/261017-iba-clarify-cvm-operator-rates-with-labelled/SUMMARY.md
+Last session: 2026-10-17T20:37:29.858897+00:00
+Stopped at: Dual-currency admin verified and active. Live admin http://127.0.0.1:49371/admin; guide http://127.0.0.1:4173/docs/operators/providers. Free Kraken quote through CVM only; rates and saved OAuth unchanged. Production deferred.
+Resume file: .planning/quick/261017-irc-add-cached-btc-usd-quotes-and-show-usd-a/SUMMARY.md

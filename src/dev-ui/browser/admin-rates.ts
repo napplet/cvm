@@ -1,3 +1,4 @@
+import { quoteCaption, usdEquivalent, type ExchangeRate } from "../../currency/btc-usd";
 export type Rate = { numerator: string; denominator: string };
 type Pricing = { card: { id: string; kind: string; rates: Record<string, Rate>; supportedDimensions: string[] }; profile: { provider: string } };
 const titles: Record<string, [string, string]> = {
@@ -25,12 +26,12 @@ export function rateFromPerThousand(value: string): Rate {
   numerator /= a; denominator /= a;
   return { numerator: numerator.toString(), denominator: denominator.toString() };
 }
-export function exampleCharge(rates: Record<string, Rate>, dimensions: readonly string[]): string {
+export function exampleCharge(rates: Record<string, Rate>, dimensions: readonly string[], grouped = true): string {
   return Object.entries({ input_tokens: 10000n, output_tokens: 2000n }).reduce((sum, [dimension, tokens]) => {
     if (!dimensions.includes(dimension) || !rates[dimension]) return sum;
     const rate = rates[dimension]!;
     return sum + (tokens * BigInt(rate.numerator) + BigInt(rate.denominator) - 1n) / BigInt(rate.denominator);
-  }, 0n).toLocaleString();
+  }, 0n)[grouped ? "toLocaleString" : "toString"]();
 }
 
 export const ratesMarkup = `<div id="rates-panel"><div class="rates-heading"><h2>Generation pricing</h2><span id="rates-mode" class="rates-mode"></span></div>
@@ -38,7 +39,8 @@ export const ratesMarkup = `<div id="rates-panel"><div class="rates-heading"><h2
 <form id="rates-form" novalidate>
   <div class="rates-unit-heading"><h3>Price per 1,000 tokens</h3><p class="supporting">Tokens are small pieces of text or code.</p></div>
   <div id="rate-fields"></div><p id="rates-included" class="supporting"></p>
-  <div class="rates-example"><div><strong>Example request</strong><p>10,000 input + 2,000 output tokens</p></div><output id="rates-example-cost" aria-live="polite"></output></div>
+  <div class="rates-example"><div><strong>Example request</strong><p>10,000 input + 2,000 output tokens</p></div><div><output id="rates-example-cost" aria-live="polite"></output><span id="rates-example-usd" class="usd-equivalent"></span></div></div>
+  <p id="rates-exchange" class="supporting"></p><p id="rates-currency-note" class="supporting"></p>
   <p id="rates-rounding" class="supporting"></p>
   <div class="rates-save"><button id="rates-save" class="primary" disabled>Save rates</button><span id="rates-dirty" hidden>Unsaved changes</span></div>
   <p id="rates-feedback" role="status"></p>
@@ -48,11 +50,12 @@ export const ratesMarkup = `<div id="rates-panel"><div class="rates-heading"><h2
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 function node<K extends keyof HTMLElementTagNameMap>(tag: K, text: string, className = "") { const value = document.createElement(tag); value.textContent = text; value.className = className; return value; }
 
-export function mountAdminRates(pricing: Pricing, save: (rates: Record<string, Rate>) => Promise<Pricing>) {
+export function mountAdminRates(pricing: Pricing, save: (rates: Record<string, Rate>) => Promise<Pricing>, exchangeRate?: ExchangeRate): { setExchangeRate(next: ExchangeRate): void } {
   const original = structuredClone(pricing.card.rates);
   const editable = pricing.card.kind !== "source_attributed_provider";
   const unit = editable ? "test sats" : "sats";
-  const fields: { name: string; input: HTMLInputElement; initial: string; help: HTMLElement }[] = [];
+  const fields: { name: string; input: HTMLInputElement; initial: string; help: HTMLElement; usd: HTMLElement }[] = [];
+  let successor: ReturnType<typeof mountAdminRates> | undefined;
   let saving = false;
   el("rates-mode").textContent = editable ? "Local test pricing" : "API price card";
   el("rates-explanation").textContent = editable
@@ -72,13 +75,16 @@ export function mountAdminRates(pricing: Pricing, save: (rates: Record<string, R
     const suffix = node("span", `${unit} / 1,000 tokens`); suffix.id = `rate-unit-${name}`;
     const help = node("p", display.approximate ? "Rounded for display. Your exact saved rate is kept unless you edit this field." : "", "rate-field-help"); help.id = `rate-help-${name}`;
     input.setAttribute("aria-describedby", `${suffix.id} ${help.id}`);
-    control.append(input, suffix); row.append(text, control, help); el("rate-fields").append(row);
-    fields.push({ name, input, initial: display.value, help }); input.oninput = () => update();
+    const usd = node("span", "", "usd-equivalent"); usd.id = `rate-usd-${name}`;
+    input.setAttribute("aria-describedby", `${suffix.id} ${usd.id} ${help.id}`);
+    control.append(input, suffix, usd); row.append(text, control, help); el("rate-fields").append(row);
+    fields.push({ name, input, initial: display.value, help, usd }); input.oninput = () => update();
   }
   el("rates-included").textContent = pricing.profile.provider === "openai_chatgpt_development" ? "Cached input and reasoning are included in the input and output totals for this provider." : "";
   el("rates-rounding").textContent = `Each billed token category rounds up to a whole ${editable ? "test sat" : "sat"}.`;
   el("price-version").textContent = pricing.card.id;
   el("rates-save").hidden = !editable;
+  el("rates-currency-note").textContent = editable ? "USD is an illustrative equivalent of test sats, not a subscription charge. Billing stays in sats." : "USD is an approximate equivalent at the current BTC price. Billing stays in sats.";
   function draft() {
     const rates = structuredClone(original); let valid = true, dirty = false;
     for (const field of fields) {
@@ -95,10 +101,19 @@ export function mountAdminRates(pricing: Pricing, save: (rates: Record<string, R
   }
   function update() {
     const value = draft();
+    updateCurrency(value);
     el("rates-example-cost").textContent = value.valid ? `${exampleCharge(value.rates, pricing.card.supportedDimensions)} ${unit}` : "Enter valid prices";
     el<HTMLButtonElement>("rates-save").disabled = !editable || !value.dirty || !value.valid || saving;
     el("rates-dirty").hidden = !value.dirty;
     el("rates-feedback").textContent = "";
+  }
+  function updateCurrency(value = draft()) {
+    for (const field of fields) {
+      const rate = value.rates[field.name]!;
+      field.usd.textContent = field.input.validity.valid ? usdEquivalent((BigInt(rate.numerator) * 1000n).toString(), exchangeRate, rate.denominator) : "—";
+    }
+    el("rates-example-usd").textContent = value.valid ? usdEquivalent(exampleCharge(value.rates, pricing.card.supportedDimensions, false), exchangeRate) : "—";
+    el("rates-exchange").textContent = quoteCaption(exchangeRate);
   }
   el<HTMLFormElement>("rates-form").onsubmit = async event => {
     event.preventDefault(); const value = draft();
@@ -107,7 +122,7 @@ export function mountAdminRates(pricing: Pricing, save: (rates: Record<string, R
     fields.forEach(field => field.input.disabled = true);
     el("rates-feedback").textContent = "Saving rates…";
     try {
-      const next = await save(value.rates); mountAdminRates(next, save);
+      const next = await save(value.rates); successor = mountAdminRates(next, save, exchangeRate);
       el("rates-feedback").textContent = "Rates saved for new actions.";
     } catch (error) {
       saving = false; fields.forEach(field => field.input.disabled = false); update();
@@ -115,4 +130,5 @@ export function mountAdminRates(pricing: Pricing, save: (rates: Record<string, R
     }
   };
   update();
+  return { setExchangeRate(next: ExchangeRate) { exchangeRate = next; if (successor) successor.setExchangeRate(next); else updateCurrency(); } };
 }

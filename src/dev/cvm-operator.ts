@@ -7,6 +7,7 @@ import { configuredProviderFromEnvironment } from "./development-model-gateway";
 import { PriceCardSchema, ModelProfileSchema, RationalRateSchema } from "../model/price-card";
 import { listOperatorJobs, readOperatorJob } from "./operator-jobs";
 import { safeChatGptError } from "./chatgpt-oauth";
+import { KrakenQuoteReader } from "../currency/kraken-quote";
 
 const Id = z.string().min(1).max(240);
 export const OperatorRates = z.object({ input_tokens: RationalRateSchema, output_tokens: RationalRateSchema, cached_tokens: RationalRateSchema, reasoning_tokens: RationalRateSchema }).strict();
@@ -14,6 +15,7 @@ const ApiAccount = z.object({ id: z.string().uuid(), label: z.string().min(1).ma
 const State = z.object({ version: z.literal(1), adminKey: z.string().regex(/^[a-f0-9]{64}$/u), apiAccounts: z.array(ApiAccount).max(16), selectedApi: z.string().uuid().optional(), rates: OperatorRates.optional() }).strict();
 export const CvmAdminArgumentsSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("status") }).strict(),
+  z.object({ action: z.literal("exchange_rate") }).strict(),
   z.object({ action: z.literal("chatgpt"), operation: z.enum(["status", "sign-in", "models", "select", "welcome", "logout"]), body: z.unknown().optional() }).strict(),
   z.object({ action: z.literal("save_rates"), rates: OperatorRates }).strict(),
   z.object({ action: z.literal("add_api"), account: ApiAccount }).strict(),
@@ -28,6 +30,7 @@ type OperatorOptions = { checkReceipt?(id: string): Promise<unknown>; pool: Pick
 /** CVM-local vault. Only a signed request from the allowlisted operator can read
  * redacted configuration or jobs. Secret fields have no read operation. */
 export class CvmOperator {
+  readonly exchangeRates = new KrakenQuoteReader();
   #state: z.infer<typeof State>;
   #tail: Promise<unknown> = Promise.resolve();
   readonly pubkey: string;
@@ -62,6 +65,7 @@ export class CvmOperator {
     const command = parsed.data;
     const run = async () => {
       try {
+        if (command.action === "exchange_rate") return { status: "ok", exchangeRate: await this.exchangeRates.read() };
         if (command.action === "status") return { status: "ok", pricing: this.options.pricing(), rates: this.rates(), selectedApi: this.#state.selectedApi, apiAccounts: this.#state.apiAccounts.map(a => ({ id: a.id, label: a.label, model: a.model, keyConfigured: true })), busy: this.options.busy() };
         if (command.action === "jobs") return { status: "ok", ...await listOperatorJobs(this.options.pool, command.status, command.offset, command.search) };
         if (command.action === "job") return { status: "ok", job: await readOperatorJob(this.options.pool, command.id, command.kind) };
@@ -100,7 +104,7 @@ export class CvmOperator {
       }
     };
     // Read-only job/status views remain responsive while OAuth/provider calls run.
-    if (["status", "jobs", "job"].includes(command.action)) return run();
+    if (["status", "jobs", "job", "exchange_rate"].includes(command.action)) return run();
     const result = this.#tail.then(run); this.#tail = result.catch(() => undefined); return result;
   }
 }

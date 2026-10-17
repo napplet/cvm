@@ -59,6 +59,7 @@ const built = await Bun.build({ entrypoints: [resolve(root, "src/dev-ui/browser/
           if (name !== "cvm_admin") throw new Error("Unexpected tool in documentation capture");
           const samples = window.documentationFixtures;
           if (input.action === "status") return samples.status;
+          if (input.action === "exchange_rate") return { status: "ok", exchangeRate: { status: "fresh", quote: { source: "Kraken", usdPerBtc: "80000.00000", fetchedAt: Date.now() } } };
           if (input.action === "jobs") {
             if (window.failJobRefresh) throw new Error("Fixture disconnected");
             const all = Object.values(samples.jobs).flat().filter(row => !input.search || (row.title + row.request_text + row.id).toLowerCase().includes(input.search.toLowerCase()));
@@ -120,6 +121,9 @@ try {
   await page.getByRole("button", { name: "Connect to CVM", exact: true }).click();
   await page.locator("[data-state=all][aria-pressed=true]").waitFor();
   await page.locator("#jobs tr").first().waitFor();
+  await page.waitForFunction(() => document.querySelector("#jobs-exchange")?.textContent?.includes("Kraken"));
+  assert((await page.locator("#jobs-overview").innerText()).includes("$0.004 USD"));
+  assert((await page.locator("#jobs").innerText()).includes("$0.316 USD"));
   await page.locator("#provider-navigation").click();
   await page.locator("#chatgpt-model").waitFor();
   await page.waitForFunction(() => document.querySelector<HTMLSelectElement>("#chatgpt-model")?.value === "gpt-6.1-sol");
@@ -127,6 +131,7 @@ try {
   await page.setViewportSize({ width: 1280, height: 1800 });
   await capture("subscription", ".workspace-controls", "#chatgpt-status");
   await capture("rates", "#rates-panel");
+  assert((await page.locator("#rates-example-usd").innerText()).includes("$0.0096 USD"));
   await page.getByText("Add an API account", { exact: true }).click();
   await page.locator("#api-label").fill("Development API account");
   await capture("api-account", "#api-form");
@@ -139,6 +144,7 @@ try {
   }
   await page.locator('[data-job-id="action:demo-completed"]').click();
   await page.locator("#job-detail").waitFor();
+  assert((await page.locator("#job-detail").innerText()).includes("$0.004 USD"));
   await capture("job-details", "#job-detail");
   await page.getByRole("button", { name: "Close job details" }).click();
   await page.locator('[data-state="all"]').click();
@@ -176,7 +182,7 @@ try {
   await page.waitForFunction(() => document.querySelector("#jobs-range")?.textContent === "1–50 of 55 jobs");
   // Every recorded command must remain read-only, including component startup calls.
   const calls = await page.evaluate(() => (window as any).documentationCalls as { action: string; operation?: string }[]);
-  assert(calls.every(call => ["status", "jobs", "job"].includes(call.action) || call.action === "chatgpt" && ["status", "models"].includes(call.operation!)));
+  assert(calls.every(call => ["status", "exchange_rate", "jobs", "job"].includes(call.action) || call.action === "chatgpt" && ["status", "models"].includes(call.operation!)));
   assert.deepEqual(errors, []);
   await page.getByRole("button", { name: "Lock admin" }).click();
   await page.locator("#admin-login").waitFor();

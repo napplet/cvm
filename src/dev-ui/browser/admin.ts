@@ -2,6 +2,7 @@ import { ratesMarkup, mountAdminRates } from "./admin-rates";
 import { jobsMarkup, mountAdminJobs } from "./admin-jobs";
 import { DevelopmentContextVmClient, type DevelopmentBootstrap } from "./contextvm-client";
 import { mountChatGptSettings } from "./chatgpt-settings";
+import type { ExchangeRate } from "../../currency/btc-usd";
 
 const connection = await (await fetch("./cvm.json")).json();
 const bootstrap: DevelopmentBootstrap = { relayUrl: connection.relayUrl, servicePubkey: connection.servicePubkey, reserveSat: "0", actionCeilingSat: "0", providerLabel: "CVM default provider" };
@@ -23,6 +24,9 @@ settingsPanel.ontoggle = () => { if (settingsPanel.open) sessionStorage.setItem(
 let client: DevelopmentContextVmClient | undefined;
 let status: any;
 let refreshTimer: ReturnType<typeof setInterval> | undefined;
+let exchangeTimer: ReturnType<typeof setInterval> | undefined;
+let exchangeRate: ExchangeRate = { status: "unavailable" };
+let ratesView: ReturnType<typeof mountAdminRates> | undefined;
 const message = (value: string) => { el("admin-status").textContent = value; };
 async function command(args: unknown) {
   const result = await client!.callTool("cvm_admin", args);
@@ -34,12 +38,12 @@ async function refreshConfig() {
   status = await command({ action: "status" });
   el("operator-provider").textContent = `Active provider: ${status.pricing.profile.provider} · ${status.pricing.profile.model}`;
   Object.assign(bootstrap, { providerLabel: status.selectedApi ? "Configured OpenAI Responses" : status.pricing.profile.provider === "deterministic_fixture" ? "Deterministic fixture" : "ChatGPT subscription" });
-  mountAdminRates(status.pricing, async rates => {
+  ratesView = mountAdminRates(status.pricing, async rates => {
     await command({ action: "save_rates", rates });
     status = await command({ action: "status" });
     message("New rates saved. Existing jobs retain their price versions.");
     return status.pricing;
-  });
+  }, exchangeRate);
   el("api-accounts").replaceChildren(...status.apiAccounts.map((account: any) => {
     const item = document.createElement("li"); const name = document.createElement("span"); name.textContent = `${account.label} · ${account.model} · key configured${status.selectedApi === account.id ? " · active" : ""}`; item.append(name);
     for (const action of ["select_api", "remove_api"]) { const button = document.createElement("button"); button.textContent = action === "select_api" ? "Use account" : "Remove"; button.disabled = status.selectedApi === account.id; button.onclick = () => void command({ action, id: account.id }).then(() => action === "select_api" ? location.reload() : refreshConfig()).catch(report); item.append(button); }
@@ -47,6 +51,11 @@ async function refreshConfig() {
   }));
 }
 const jobs = mountAdminJobs(command);
+async function refreshExchangeRate() {
+  try { exchangeRate = (await command({ action: "exchange_rate" })).exchangeRate ?? { status: "unavailable" }; }
+  catch { exchangeRate = exchangeRate.quote ? { ...exchangeRate, status: "stale" } : { status: "unavailable" }; }
+  ratesView?.setExchangeRate(exchangeRate); jobs.setExchangeRate(exchangeRate);
+}
 async function connect(key: string) {
   if (!/^[a-f0-9]{64}$/u.test(key)) throw new Error("Enter the operator’s 64-character access key.");
   await client?.close(); client = new DevelopmentContextVmClient(bootstrap, undefined, key); await client.connect({ accountStatus: false });
@@ -54,9 +63,10 @@ async function connect(key: string) {
   el("admin-login").hidden = true; el("admin-content").hidden = false; el("admin-lock").hidden = false; message("Connected as CVM operator.");
   await mountChatGptSettings(bootstrap, async (operation, body) => command({ action: "chatgpt", operation, ...(body === undefined ? {} : { body }) }), () => { if (status.selectedApi) el("chatgpt-active").textContent = "Saved ChatGPT selection · API account is currently active"; });
   await jobs.refresh(); clearInterval(refreshTimer); refreshTimer = setInterval(() => { void jobs.refresh(); }, 5000);
+  void refreshExchangeRate(); clearInterval(exchangeTimer); exchangeTimer = setInterval(() => { if (!document.hidden) void refreshExchangeRate(); }, 60_000);
 }
 el<HTMLFormElement>("admin-login").onsubmit = event => { event.preventDefault(); void connect(el<HTMLInputElement>("operator-key").value.trim()).catch(report); };
-el("admin-lock").onclick = () => { sessionStorage.removeItem(storageKey); sessionStorage.removeItem(storageKey + "/settings"); clearInterval(refreshTimer); void client?.close(); location.reload(); };
+el("admin-lock").onclick = () => { sessionStorage.removeItem(storageKey); sessionStorage.removeItem(storageKey + "/settings"); clearInterval(refreshTimer); clearInterval(exchangeTimer); void client?.close(); location.reload(); };
 el<HTMLFormElement>("api-form").onsubmit = event => { event.preventDefault(); void (async () => { const configuration = JSON.parse(el<HTMLTextAreaElement>("api-config").value); await command({ action: "add_api", account: { ...configuration, id: crypto.randomUUID(), label: el<HTMLInputElement>("api-label").value, apiKey: el<HTMLInputElement>("api-key").value } }); el<HTMLInputElement>("api-key").value = ""; await refreshConfig(); message("API account saved privately on the CVM."); })().catch(report); };
 el("provider-navigation").onclick = () => { el<HTMLDetailsElement>("provider-settings").open = true; };
 const saved = sessionStorage.getItem(storageKey); if (saved) void connect(saved).catch(report);

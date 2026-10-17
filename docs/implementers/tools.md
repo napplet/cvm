@@ -19,7 +19,7 @@ This is the tool surface of the current repository. **Core** means a transport-n
 | `remix_import` | Prepare a verified remix basis | Signed `event`, `naddr`, optional `assetUploaded`; or `action: "asset_part"` for bounded staging; returns owned remix reference |
 | `development_publication` | Local publishing implementation | `preview`, `lookup`, `metadata`, `prepare`, `save`, `submit`, `status`, `reconcile`, `republish` |
 | `operation_diagnostic` | Bounded owned operation failure | `operationId`; safe diagnostic or unavailable |
-| `cvm_admin` | Operator configuration and jobs | Operator signer only; status, accounts, rates, jobs and job details |
+| `cvm_admin` | Operator configuration and jobs | Operator signer only; status, accounts, rates, BTC/USD quote, jobs and job details |
 
 See [complete structural input schemas](./schemas) for unions, required fields and bounds. Ordinary callers must not pass `principal` or an owner override. `publisher` in a publication preparation selects the eventual event signer; it does not grant access to someone else's artifact.
 
@@ -68,6 +68,8 @@ Project results include a nullable `publication` summary and `unpublishedChanges
 ## Operator API
 
 `cvm_admin` is intentionally excluded from the MCP example. Its verified caller must match the local operator key before any command is evaluated. Account responses are redacted; there is no key-read operation. See [private admin](../operators/providers) and [its source validator](https://github.com/napplet/cvm/blob/main/src/dev/cvm-operator.ts) before building an operator client.
+
+`{ "action": "exchange_rate" }` returns `{ "status": "ok", "exchangeRate": { "status": "fresh" | "stale" | "unavailable", "quote"?: { "source": "Kraken", "usdPerBtc": "decimal string", "fetchedAt": 0 } } }`. `fetchedAt` is the CVM's fetch time in Unix milliseconds, not the exchange's trade time. The quote is display-only and must not change sat balances, saved rates or settlement. See [conversion freshness and failure behavior](../operators/providers#change-rates-or-models).
 
 ## Remix HTML staging
 

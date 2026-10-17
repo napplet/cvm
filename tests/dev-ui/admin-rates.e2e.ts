@@ -11,7 +11,8 @@ import {ratesMarkup,mountAdminRates} from '/rates.js';
 window.calls=[]; window.failSave=false;
 const pricing=${JSON.stringify(pricing)};
 window.savedPricing=structuredClone(pricing);
-window.render=(next=pricing)=>{ document.querySelector('#rates').innerHTML=ratesMarkup; mountAdminRates(next,async rates=>{window.calls.push(structuredClone(rates)); if(window.failSave)throw Error('CONFIGURATION_BUSY'); window.savedPricing={...next,card:{...next.card,rates}};return window.savedPricing;}); };
+window.quote={status:'fresh',quote:{source:'Kraken',usdPerBtc:'80000.00000',fetchedAt:Date.now()}};
+window.render=(next=pricing)=>{ document.querySelector('#rates').innerHTML=ratesMarkup; window.ratesView=mountAdminRates(next,async rates=>{window.calls.push(structuredClone(rates)); if(window.failSave)throw Error('CONFIGURATION_BUSY'); window.savedPricing={...next,card:{...next.card,rates}};return window.savedPricing;},window.quote); };
 window.render();
 </script></body></html>`;
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
@@ -30,11 +31,23 @@ try {
   assert(await page.locator("#rate-fields input").count() === 2);
   assert(await page.locator("#rates-save").isDisabled());
   assert(await page.locator("#rates-example-cost").innerText() === "12 test sats");
+  assert(await page.locator("#rates-example-usd").innerText() === "≈ $0.0096 USD");
+  assert(await page.locator("#rate-usd-input_tokens").innerText() === "≈ $0.0008 USD");
   await input.fill("0.5");
   assert(await page.locator("#rates-example-cost").innerText() === "7 test sats");
   assert(await page.locator("#rates-dirty").isVisible());
+  await page.evaluate(() => { const w = window as any; w.ratesView.setExchangeRate({ ...w.quote, quote: { ...w.quote.quote, usdPerBtc: '100000' } }); });
+  assert(await input.inputValue() === "0.5" && await page.locator("#rates-save").isEnabled());
+  assert(await page.locator("#rate-usd-input_tokens").innerText() === "≈ $0.0005 USD");
+  assert(await page.locator("#rates-example-usd").innerText() === "≈ $0.007 USD");
   await page.locator("#rates-save").click(); await page.getByText("Rates saved for new actions.", { exact: true }).waitFor();
   assert(await input.inputValue() === "0.5" && await page.locator("#rates-save").isDisabled());
+  await page.evaluate(() => { const w = window as any; w.ratesView.setExchangeRate({ ...w.quote, status: 'stale' }); });
+  assert((await page.locator("#rates-example-usd").innerText()).includes("last known"));
+  assert(await page.locator("#rates-feedback").innerText() === "Rates saved for new actions.");
+  await page.evaluate(() => { (window as any).ratesView.setExchangeRate({ status: 'unavailable' }); });
+  assert(await page.locator("#rates-example-usd").innerText() === "USD unavailable");
+  assert(await input.inputValue() === "0.5");
   let calls = await page.evaluate(() => (window as any).calls);
   assert.deepEqual(calls, [{ ...pricing.card.rates, input_tokens: { numerator: "1", denominator: "2000" } }]);
   for (const invalid of ["0", "-1", "1e3", ""]) {

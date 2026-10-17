@@ -79,7 +79,7 @@ try {
   const operator = JSON.parse(await readFile(join(root, "cvm-operator/operator.json"), "utf8"));
   await openFixtureAdmin(admin, server.url, root, fixture); console.log("Admin OAuth ready");
   await admin.getByText("Using ChatGPT plan · fixture-codex", { exact: true }).waitFor();
-  await admin.getByLabel("input_tokens denominator", { exact: true }).fill("2000"); assert(await admin.getByLabel("input_tokens denominator", { exact: true }).inputValue() === "2000", "RATE_EDIT_LOST"); await admin.getByRole("button", { name: "Save rates", exact: true }).click();
+  await admin.getByLabel("Input price (test sats per 1,000 tokens)", { exact: true }).fill("0.5"); assert(await admin.getByLabel("Input price (test sats per 1,000 tokens)", { exact: true }).inputValue() === "0.5", "RATE_EDIT_LOST"); await admin.getByRole("button", { name: "Save rates", exact: true }).click();
   await admin.getByText("New rates saved. Existing jobs retain their price versions.", { exact: true }).waitFor();
   console.log("Rates saved");
   await page.goto(staticUrl); await page.getByText("Workspace connected", { exact: true }).waitFor();

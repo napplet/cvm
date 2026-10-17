@@ -16,7 +16,7 @@ Local Cashu/NWC test sats are separate from provider usage in every mode. An API
 ## Use your ChatGPT subscription
 
 1. Start the CVM, then run `bun scripts/open-dev-admin.ts` from the repository root. For a named instance, prefix it with the same `NAPPLET_CVM_DEV_INSTANCE` value.
-2. In private admin, choose **Continue with ChatGPT** and complete the browser authorization.
+2. In private admin, open **Provider & rates**, then choose **Continue with ChatGPT** and complete the browser authorization.
 3. Select the account and an available model. Selection applies automatically. Check the workspace provider label before generating.
 4. Use the jobs view to inspect pending, active and finished actions, including individual job details.
 
@@ -32,7 +32,7 @@ Model availability is confirmed by a successful request. A listed model is not a
 
 Private admin accepts an account label/key, model, model profile, price card and captured price sources. The current adapter accepts `gpt-5-mini` or `gpt-5-mini-2025-08-07` at the fixed OpenAI Responses endpoint. It does not accept arbitrary OpenAI-compatible endpoints.
 
-Open **Add an API account** beneath Rates. Enter a label and your key, then supply the complete provider configuration. The JSON placeholder only shows the required top-level structure; its empty objects are not a valid configuration.
+Open **Add an API account** beneath Generation pricing. Enter a label and your key, then supply the complete provider configuration. The JSON placeholder only shows the required top-level structure; its empty objects are not a valid configuration.
 
 <GuideScreenshot audience="operators" name="api-account" alt="Expanded Add an API account form with a sample label, empty API key field and Provider configuration JSON field" caption="The key is entered only in private admin. Prepare the profile, price card and evidence described below before adding the account." />
 
@@ -62,4 +62,12 @@ Do not reuse fixture rates as real-provider price evidence. The validator checks
 
 Private admin allows synthetic development rates. Real API pricing requires a new validated price card/evidence set. Active work blocks configuration changes, and saved actions retain their original pricing/model pins. An update is not permission to change an existing operation's accounting.
 
-<GuideScreenshot audience="operators" name="rates" alt="Rates form with numerator and denominator inputs for input, output, cached and reasoning tokens, plus Save rates" caption="Each row is a numerator divided by a denominator. These are example local test rates, not ChatGPT subscription prices or API price evidence." />
+Enter one price per **1,000 tokens** for each billed category. For example, Input `1` and Output `1` mean one test sat per 1,000 input tokens and one test sat per 1,000 output tokens. Tokens are pieces of text or code; input includes the prompt and context, and output includes generated code.
+
+The **Example request** updates as you edit: 10,000 input tokens plus 2,000 output tokens at those prices costs 12 test sats. Each billed category rounds up independently to a whole sat. Decimal prices such as `0.5` are supported. Select **Save rates** to apply changes to new actions; an unsuccessful save keeps your draft.
+
+Only categories billed separately by the selected provider appear. For ChatGPT, cached input and reasoning are included in input/output totals. These are local test charges; changing them does not alter your subscription price or usage limits. API-account rates are read-only in this editor and require updated pricing evidence.
+
+<GuideScreenshot audience="operators" name="rates" alt="Generation pricing form with labelled input and output prices per 1,000 tokens and a twelve-test-sat example request" caption="One price per token category, with explicit units and an example. Price version identifiers are tucked into the expandable section below." />
+
+The CVM keeps exact fractions internally. Rates with more than six decimal places per 1,000 tokens are labelled as rounded for display; untouched values retain their original precision when another field is saved.

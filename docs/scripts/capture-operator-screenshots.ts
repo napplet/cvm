@@ -126,7 +126,7 @@ try {
   assert(await page.locator("#operator-key").inputValue() === "");
   await page.setViewportSize({ width: 1280, height: 1800 });
   await capture("subscription", ".workspace-controls", "#chatgpt-status");
-  await capture("rates", ".admin-grid > section:nth-child(2)", "#price-version");
+  await capture("rates", "#rates-panel");
   await page.getByText("Add an API account", { exact: true }).click();
   await page.locator("#api-label").fill("Development API account");
   await capture("api-account", "#api-form");

@@ -17,7 +17,7 @@ This is the tool surface of the current repository. **Core** means a transport-n
 | `development_faucet` | Local test Cashu | `amount`; runtime cap is 10,000 test sats, no real value |
 | `projects` | Private project list/read/rename | `action`; list accepts stage, limit 1–50, cursor; get/rename use ID |
 | `remix_import` | Prepare a verified remix basis | Signed `event`, `naddr`, optional `assetUploaded`; or `action: "asset_part"` for bounded staging; returns owned remix reference |
-| `development_publication` | Local publishing implementation | `preview`, `prepare`, `submit`, `status`, `reconcile` |
+| `development_publication` | Local publishing implementation | `preview`, `lookup`, `prepare`, `save`, `submit`, `status`, `reconcile` |
 | `operation_diagnostic` | Bounded owned operation failure | `operationId`; safe diagnostic or unavailable |
 | `cvm_admin` | Operator configuration and jobs | Operator signer only; status, accounts, rates, jobs and job details |
 
@@ -35,7 +35,13 @@ A successful result contains `projects` and nullable `nextCursor`. Supply that c
 
 ## Development publication preparation
 
-Required fields are `action: "prepare"`, `sessionId`, `artifactId`, `publisher` (hex pubkey), UUID `requestKey`, `title` and one to five `servers` and `relays`. Read the resulting template and files; do not construct a competing manifest. `submit` carries the returned UUID `id` and exact signed event. Retry status/reconciliation for the same publication rather than assuming another preparation is harmless.
+First call `lookup` with `sessionId`, `artifactId` and `publisher`. Its `current` and `latestPublished` records restore this version’s attempt and the most recent published version for that signer. The CVM checks session ownership using the signed request identity; `publisher` is only a filter. CVM previews are excluded.
+
+Required preparation fields are `action: "prepare"`, `sessionId`, `artifactId`, `publisher` (hex pubkey), UUID `requestKey`, `title` and one to five `servers` and `relays`. Read the resulting template and files; do not construct a competing manifest. An existing signed attempt is reused for the same artifact and publisher.
+
+After the client signs the template, call `save` with the returned UUID `id` and exact `event` before copying files. The CVM validates and durably retains that signature. Call `save` again with optional `fileResults` after the copy attempt; these are browser-reported receipts tied to the prepared servers and file paths, not independent server-side file checks. Recheck destination bytes before retrying. `submit` carries the same `id` and signed event after all copies pass. `status` reads the saved record; `reconcile` checks relay confirmation. Results include `signedEvent`, `fileResults`, `relayResults` and, on success, `publishedAt`, `address`, `eventId` and `url`.
+
+Project results include a nullable `publication` summary and `unpublishedChanges`. Publishing through another signer does not transfer the project to that signer. Only the identity proven by the signed CVM request can list its projects.
 
 ## Operator API
 

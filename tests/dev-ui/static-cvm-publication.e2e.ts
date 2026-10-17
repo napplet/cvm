@@ -41,7 +41,26 @@ const destination = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
   return userBlossom.handle(request);
 } });
 const destinationUrl = `http://127.0.0.1:${destination.port}`; userBlossom = new CvmBlossom(join(root, "user-blossom"), userPubkey, () => destinationUrl);
-const errors: string[] = []; const traffic: string[] = []; let signerRequests = 0; let remoteSubscription: { close(): void } | undefined;
+const errors: string[] = []; const traffic: string[] = []; let signerRequests = 0; let appletSignatures = 0; let remoteSubscription: { close(): void } | undefined;
+await page.addInitScript(() => {
+  const Original = window.WebSocket; (window as any).listeningSigners = [];
+  window.WebSocket = class extends Original {
+    subscriptions = new Map<string, string>();
+    constructor(url: string | URL, protocols?: string | string[]) { super(url, protocols); this.addEventListener("message", ({ data }) => { const message = JSON.parse(String(data)); if (message[0] === "EOSE" && this.subscriptions.has(message[1])) { (window as any).listeningSigners.push(this.subscriptions.get(message[1])); super.send(JSON.stringify(["CLOSE", message[1]])); } }); }
+    send(data: string | ArrayBufferLike | Blob | ArrayBufferView) {
+      super.send(data);
+      if (typeof data === "string") {
+        const message = JSON.parse(data);
+        if (message[0] === "REQ" && message[2]?.kinds?.includes(24133) && message[2]?.["#p"]?.[0]) {
+          // This relay omits EOSE for limit:0. A second read on the same socket
+          // gives us an ordering barrier without changing the signer filter.
+          const barrier = `ready-${message[1]}`; this.subscriptions.set(barrier, message[2]["#p"][0]);
+          super.send(JSON.stringify(["REQ", barrier, { ...message[2], limit: 1 }]));
+        }
+      }
+    }
+  };
+});
 page.on("pageerror", error => errors.push(error.message)); admin.on("pageerror", error => errors.push(error.message));
 page.on("request", request => traffic.push(request.url()));
 const unauthorized = new DevelopmentContextVmClient({ ...connection, reserveSat: "0", actionCeilingSat: "0", providerLabel: "test" }, undefined, Buffer.from(generateSecretKey()).toString("hex"));
@@ -73,13 +92,16 @@ try {
   await page.locator("#nostr-sign-in").click(); await page.locator("#nostr-extension").click(); await page.locator("#nostr-sign-in").filter({ hasText: "NIP-07" }).waitFor();
   await page.locator("#nostr-sign-in").click(); await page.locator("#nostr-remote").click(); await page.locator("#nostr-connect summary").click(); await page.locator("#nostr-relay").fill(config.relayUrl); await page.locator("#nostr-retry").click();
   const uri = new URL((await page.locator("#nostr-open").getAttribute("href"))!); const clientPubkey = uri.hostname; const conversation = nip44.v2.utils.getConversationKey(signerKey, clientPubkey);
+  // NostrConnect subscribes with limit:0. Wait for EOSE so the handshake is
+  // delivered live; publishing before REQ arrives is intentionally not replayed.
+  await page.waitForFunction(pubkey => (window as any).listeningSigners.includes(pubkey), clientPubkey, { timeout: 10000 });
   remoteSubscription = relay.subscribeMany([config.relayUrl], { kinds: [24133], "#p": [signerPubkey] }, { onevent(event) { void (async () => {
     const request = JSON.parse(nip44.v2.decrypt(event.content, conversation)); let result: string;
     if (request.method === "get_public_key") result = userPubkey;
     else if (request.method === "switch_relays") result = JSON.stringify([config.relayUrl]);
     else if (request.method === "nip44_decrypt") result = nip44.v2.decrypt(request.params[1], nip44.v2.utils.getConversationKey(userKey,request.params[0]));
     else if (request.method === "nip44_encrypt") result = nip44.v2.encrypt(request.params[1], nip44.v2.utils.getConversationKey(userKey,request.params[0]));
-    else if (request.method === "sign_event") { signerRequests++; result = JSON.stringify(finalizeEvent(JSON.parse(request.params[0]), userKey)); }
+    else if (request.method === "sign_event") { signerRequests++; const template = JSON.parse(request.params[0]); if (template.kind === 35129) appletSignatures++; result = JSON.stringify(finalizeEvent(template, userKey)); }
     else result = "ack";
     await Promise.all(relay.publish([config.relayUrl], finalizeEvent({ kind: 24133, created_at: Math.floor(Date.now() / 1000), tags: [["p", clientPubkey]], content: nip44.v2.encrypt(JSON.stringify({ id: request.id, result }), conversation) }, signerKey)));
   })().catch(error => errors.push(`Signer fixture: ${error.message}`)); } });
@@ -119,7 +141,20 @@ try {
   await page.locator("#publication-title").fill("My daily counter"); await page.locator("#publication-review").click(); await page.locator("#publication-confirm").click();
   await page.locator("#publication-status").filter({ hasText: "Some files could not be copied" }).waitFor({ timeout: 60000 });
   assert((await relay.querySync([config.relayUrl], { kinds: [35129], authors: [userPubkey] }, { maxWait: 3000 })).length === 0, "EVENT_PUBLISHED_WITH_MISSING_FILES");
+  const failedCopy = (await pool.query<{ signed_event: { id: string }; file_results: { state: string }[]; state: string }>("SELECT signed_event,file_results,state FROM development_publications WHERE publisher=$1", [userPubkey])).rows[0]!;
+  assert(failedCopy.signed_event && failedCopy.file_results.some((result: any) => result.state === "failed") && failedCopy.state === "prepared", "FAILED_COPY_NOT_DURABLE");
+  assert(appletSignatures === 1, "APPLET_SIGNED_MORE_THAN_ONCE");
+  // Lose the browser publication journal. Restore the signature and failures
+  // through the signed CVM owner request, then retry without a second event.
+  await page.evaluate(() => { for (const key of Object.keys(sessionStorage)) if (key.startsWith("applet-broker/publication/")) sessionStorage.removeItem(key); });
+  await page.reload(); await page.getByText("Workspace connected", { exact: true }).waitFor();
+  await page.locator("#publish").filter({ hasText: "Continue publishing" }).waitFor({ timeout: 30000 });
+  await page.locator("#publish").click(); await page.locator("#publication-status").filter({ hasText: "Your signature is saved" }).waitFor();
+  assert(await page.locator('#publication-files [data-state="failed"]').count() > 0, "COPY_FAILURES_NOT_RESTORED");
+  assert(fixture.counts().inferences === 1, "COPY_RETRY_REGENERATED");
   rejectCopies = false; await page.locator("#publication-confirm").click(); await page.locator("#publication-result").waitFor({ timeout: 60000 });
+  assert(appletSignatures === 1, "COPY_RETRY_REQUESTED_NEW_APPLET_SIGNATURE");
+  assert(await page.locator("#publish").textContent() === "View publication", "BUILDER_PUBLICATION_NOT_UPDATED");
   await page.screenshot({ path:"/tmp/cvm-publication-desktop.png", fullPage:true });
   await page.setViewportSize({width:390,height:844});
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),"PUBLISH_MOBILE_OVERFLOW");
@@ -136,12 +171,19 @@ try {
   try {
     const mine = await owner.callTool("projects", { action: "list" });
     assert(mine.projects.length === 1 && mine.projects[0].verifiedVersion === 1, "PROJECT_REGISTRY_MISSING");
+    assert(mine.projects[0].stage === "published" && mine.projects[0].publication.version === 1 && !mine.projects[0].unpublishedChanges, "CROSS_SIGNER_PUBLICATION_STAGE_MISSING");
     const projectId = mine.projects[0].id;
+    assert((await unauthorized.callTool("development_publication", { action: "lookup", sessionId: projectId, artifactId: mine.projects[0].publication.id, publisher: userPubkey })).status === "denied", "CROSS_OWNER_PUBLICATION_LOOKUP");
     for (const args of [{ action: "get", id: projectId }, { action: "rename", id: projectId, title: "stolen" }, { action: "list", after: projectId }]) assert((await unauthorized.callTool("projects",args)).status === "not_found_or_denied", "CROSS_IDENTITY_PROJECT_ACCESS");
     let spoofRejected = false; try { await unauthorized.callTool("projects", { action: "list", pubkey: await owner.pubkey }); } catch { spoofRejected = true; }
     assert(spoofRejected, "CALLER_SUPPLIED_PROJECT_IDENTITY_ACCEPTED");
     assert((await owner.callTool("projects", { action: "rename", id: projectId, title: "Daily counter" })).project.title === "Daily counter", "OWNER_RENAME_FAILED");
     const saved = await owner.callTool("development_publication", { action: "status", id: intent });
+    assert(saved.signedEvent.id === published[0]!.id && saved.publishedAt && saved.fileResults.every((result: any) => result.state === "verified"), "PUBLISHED_RECEIPTS_MISSING");
+    const lookup = await owner.callTool("development_publication", { action: "lookup", sessionId: projectId, artifactId: saved.artifactId, publisher: userPubkey });
+    assert(lookup.current.id === intent && lookup.latestPublished.address === address, "OWNER_PUBLICATION_LOOKUP_MISSING");
+    const repeated = await owner.callTool("development_publication", { action: "prepare", sessionId: projectId, artifactId: saved.artifactId, publisher: userPubkey, requestKey: crypto.randomUUID(), title: "My daily counter", servers: saved.servers, relays: saved.relays });
+    assert(repeated.id === intent && repeated.signedEvent.id === saved.signedEvent.id, "REPEATED_PREPARATION_CREATED_NEW_EVENT");
     const changed = finalizeEvent({ ...saved.template, tags: [...saved.template.tags, ["title", "tampered"]] }, userKey);
     assert((await owner.callTool("development_publication", { action: "submit", id: intent, event: changed })).status === "rejected", "SIGNED_TEMPLATE_TAMPER_ACCEPTED");
     assert((await owner.callTool("development_publication", { action: "submit", id: intent, event: published[0] })).status === "published", "EXACT_PUBLICATION_REPLAY_FAILED");
@@ -159,13 +201,32 @@ try {
   assert(!(await page.content()).includes(operator.adminKey), "OPERATOR_KEY_IN_PRODUCT");
   assert(errors.length === 0, `BROWSER_ERRORS:${errors.join(";")}`);
   const old = server.url; await server.close(); server = await createDevelopmentContextVmServer({ config, stateRoot: root, port: Number(new URL(old).port), chatGptFetch: modelFetch });
+  await page.evaluate(() => { for (const key of Object.keys(sessionStorage)) if (key.startsWith("applet-broker/publication/")) sessionStorage.removeItem(key); });
   await page.locator("#publication-close").click(); await page.reload(); await page.getByText("Workspace connected", { exact: true }).waitFor();
   await page.waitForFunction(() => !(document.querySelector("#preview-copy-address") as HTMLButtonElement).disabled, undefined, { timeout: 30000 });
   assert(fixture.counts().inferences === 1, "RESTART_REGENERATED");
   assert((await page.locator("#nostr-sign-in").innerText()).includes("NIP-46"), "REMOTE_SIGNIN_NOT_RESTORED");
   assert(await page.locator("#publish").isEnabled(), "RESTORED_REMOTE_PUBLISH_DISABLED");
+  await page.locator("#publish").filter({ hasText: "View publication" }).waitFor();
+  assert((await page.locator("#publish-hint").innerText()).includes("Published · Version 1"), "PUBLISHED_BUILDER_NOT_RESTORED");
+  await page.locator("#your-applets").click(); await page.locator(".project-card").filter({ hasText: "Daily counter" }).waitFor();
+  assert((await page.locator(".project-card").filter({ hasText: "Daily counter" }).innerText()).includes("Published · Version 1"), "PUBLISHED_PROJECT_BADGE_MISSING");
+  await page.locator(".project-card").filter({ hasText: "Daily counter" }).click();
+  await page.locator("#publish").filter({ hasText: "View publication" }).click(); await page.locator("#publication-result").waitFor();
+  assert(await page.locator("#publication-address").inputValue() === address, "REOPENED_PUBLICATION_ADDRESS_CHANGED");
+  assert(appletSignatures === 1 && fixture.counts().inferences === 1, "REOPEN_REPEATED_GENERATION_OR_SIGNING");
+  const copiesBefore = mirrors;
+  await page.locator("#publication-close").click();
+  await page.locator("#revision").fill("Add a reset button to the daily counter."); await page.locator("#revise").click();
+  await page.locator("#publish-hint").filter({ hasText: "Version 2 is ready" }).waitFor({ timeout: 180000 });
+  assert(await page.locator("#publish").textContent() === "Publish", "NEW_VERSION_WRONGLY_PUBLISHED");
+  await page.locator("#your-applets").click();
+  await page.locator(".project-card").filter({ hasText: "Version 2 ready to publish" }).waitFor();
+  assert((await page.locator(".project-card").filter({ hasText: "Daily counter" }).innerText()).includes("Unpublished changes"), "NEW_REVISION_PUBLICATION_BADGE_MISSING");
+  assert(mirrors === copiesBefore && appletSignatures === 1 && fixture.counts().inferences === 2, "REVISION_PUBLISHED_AUTOMATICALLY");
+  assert((await pool.query("SELECT count(*)::int AS count FROM development_publications WHERE publisher=$1", [userPubkey])).rows[0].count === 1, "RESTORE_CREATED_DUPLICATE_PUBLICATION");
   assert((await fetch(`${cvmBlob}/`)).ok, "BLOSSOM_ORIGIN_CHANGED_ON_RESTART");
-  console.log(JSON.stringify({ status: "passed", case: "static-cvm-publication", checks: ["separate static origin and subdirectory", "private operator OAuth", "rate version used", "job views", "all sign-in choices during generation", "real NIP46", "CVM naddr", "CVM-only Blossom writes", "manual and discovered servers", "failed copy blocks publication", "verified mirrors and user naddr", "owner denial", "signed template tamper rejected", "exact event replay", "pending job details", "restart persistence"] }));
+  console.log(JSON.stringify({ status: "passed", case: "static-cvm-publication", checks: ["separate static origin and subdirectory", "private operator OAuth", "rate version used", "job views", "all sign-in choices during generation", "real NIP46", "CVM naddr", "CVM-only Blossom writes", "manual and discovered servers", "failed copy blocks publication", "saved signature and failures restored without browser journal", "copy retry uses one signature", "verified mirrors and user naddr", "owner-scoped publication lookup", "signed template tamper rejected", "exact event replay and repeated preparation", "pending job details", "published builder and project after CVM restart", "reopen retains address without generation", "revision shows unpublished changes"] }));
 } catch (error) { console.error("TEST_STAGE", error, await admin.locator("body").innerText({ timeout: 2000 }).catch(() => "admin page unavailable"), await page.locator("body").innerText({ timeout: 2000 }).catch(() => "workspace unavailable"), errors); throw error; } finally {
   release(); remoteSubscription?.close(); relay.close([config.relayUrl]); relay.destroy(); await unauthorized.close();
   await browser.close(); site.stop(true); destination.stop(true); await pool.end();

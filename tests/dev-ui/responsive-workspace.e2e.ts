@@ -83,10 +83,12 @@ try {
     const workspace = new ProductWorkspace(document.getElementById("app"),bootstrap);
     const live = new ExecutionActivity(document.getElementById("execution-activity"),bootstrap.providerLabel,(value:unknown)=>workspace.progress(value));
     const v={sessionId:"session:view",artifactId:"artifact:"+"a".repeat(64),version:1};
-    const publication = new PublicationWorkspace(bootstrap,()=>({callTool:async(name:string,input:any)=>{
+    const publicationClient = {callTool:async(name:string,input:any)=>{
+      if(name==="development_publication"&&input.action==="lookup")return {status:"ok",current:w.publishedFixture??null,latestPublished:w.publishedFixture??null};
       if(name!=="development_publication"||input.action!=="prepare")throw new Error("Unexpected publication effect");
-      return {id:"publication:view",status:"prepared",artifactId:v.artifactId,publisher:publication.identity.pubkey,template:{tags:[]},servers:input.servers,relays:input.relays,files:[],version:1,expiresAt:Date.now()+60000};
-    }}),()=>v);
+      return w.preparedFixture = {id:"publication:view",status:"prepared",artifactId:v.artifactId,publisher:publication.identity.pubkey,template:{tags:[]},servers:input.servers,relays:input.relays,files:[],version:1,expiresAt:Date.now()+60000};
+    }};
+    const publication = new PublicationWorkspace(bootstrap,()=>publicationClient,()=>v);
     w.fixtureProjects = ["active","verified","published","unconfirmed","pending"].map((stage,i)=>({id:`project:${i}`,title:i===0?"A".repeat(512):`My ${stage} applet`,stage,verifiedVersion:i,createdAt:new Date().toISOString()}));
     new ProjectsWorkspace(bootstrap,publication.identity,()=>live.running,async()=>{});
     new RemixWorkspace({ resolve: async () => { throw new Error("Not found"); }, browse: async () => [{ naddr:"naddr1"+"q".repeat(220), title:"A".repeat(512),description:"D".repeat(512),event:{pubkey:"b".repeat(64),created_at:1} }] }, publication.identity, bootstrap.servicePubkey,()=>live.running);
@@ -100,6 +102,7 @@ try {
   await page.evaluate(()=>{const w=window as any;w.workspace.begin("generate");w.live.begin("Create","CVM generation service");w.live.receive({kind:"sent",requestId:"view",tool:"start_session"});});
   await layout("generating","#preview-expand");
   await page.evaluate(()=>{
+    const receipts=document.getElementById("publication-receipts") as HTMLDetailsElement; receipts.hidden=false;receipts.open=true;
     const w=window as any; w.workspace.completed(w.v);w.workspace.versions([w.v],w.v,async()=>{});w.workspace.settled();w.live.finish("Preview ready","completed");
     const frame=document.querySelector<HTMLIFrameElement>("#preview")!;frame.hidden=false;frame.srcdoc='<button onclick="this.textContent=Number(this.textContent)+1">0</button><div style="width:1800px">Oversized preview remains inside its frame</div>';
   });
@@ -140,7 +143,11 @@ try {
     document.getElementById("publication-relay-results")!.innerHTML='<li>'+"wss://"+"r".repeat(256)+'</li>';
   });
   await layout("publish-failure","#publication-confirm");
+  await page.locator("#publication-close").click();
+  await page.evaluate(()=>{const w=window as any;w.publishedFixture={...w.preparedFixture,status:"published",address:"naddr1"+"q".repeat(512),url:location.origin,publishedAt:new Date().toISOString(),relayResults:w.preparedFixture.relays.map((relay:string)=>({relay,state:"published"}))};});
+  await page.locator("#publish").click(); await page.locator("#publication-result").waitFor();
+  await layout("publish-complete","#publication-copy");
   assert(errors.length===0,errors.join(";"));
-  console.log(JSON.stringify({status:"passed",case:"responsive-workspace",viewports:sizes,checks,evidence,coverage:["bounded application frame","no parent/content horizontal overflow","readable reachable controls","short landscape","long titles/errors/addresses","identity QR and settings dialogs","expanded sandbox preview","resize/route draft and preview continuity","publication prepare/review/failure"]}));
+  console.log(JSON.stringify({status:"passed",case:"responsive-workspace",viewports:sizes,checks,evidence,coverage:["bounded application frame","no parent/content horizontal overflow","readable reachable controls","short landscape","long titles/errors/addresses","identity QR and settings dialogs","expanded sandbox preview","resize/route draft and preview continuity","publication prepare/review/failure/completion"]}));
 } catch(error) {await page.screenshot({path:resolve(evidence,"failure.png")});throw error;}
 finally {await browser.close();server.stop(true);}

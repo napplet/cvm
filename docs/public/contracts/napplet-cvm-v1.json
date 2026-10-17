@@ -967,6 +967,34 @@
             "properties": {
               "action": {
                 "type": "string",
+                "const": "lookup"
+              },
+              "sessionId": {
+                "type": "string",
+                "maxLength": 240
+              },
+              "artifactId": {
+                "type": "string",
+                "maxLength": 100
+              },
+              "publisher": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            },
+            "required": [
+              "action",
+              "sessionId",
+              "artifactId",
+              "publisher"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
                 "const": "preview"
               },
               "artifactId": {
@@ -1109,6 +1137,117 @@
                   "content"
                 ],
                 "additionalProperties": false
+              }
+            },
+            "required": [
+              "action",
+              "id",
+              "event"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "save"
+              },
+              "id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "event": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "pubkey": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "sig": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{128}$"
+                  },
+                  "kind": {
+                    "type": "number",
+                    "const": 35129
+                  },
+                  "created_at": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "tags": {
+                    "maxItems": 512,
+                    "type": "array",
+                    "items": {
+                      "maxItems": 8,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 1024
+                      }
+                    }
+                  },
+                  "content": {
+                    "type": "string",
+                    "const": ""
+                  }
+                },
+                "required": [
+                  "id",
+                  "pubkey",
+                  "sig",
+                  "kind",
+                  "created_at",
+                  "tags",
+                  "content"
+                ],
+                "additionalProperties": false
+              },
+              "fileResults": {
+                "maxItems": 2560,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "server": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "format": "uri"
+                    },
+                    "file": {
+                      "type": "string",
+                      "maxLength": 512
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "checking",
+                        "signing",
+                        "mirroring",
+                        "uploading",
+                        "verified",
+                        "failed"
+                      ]
+                    },
+                    "detail": {
+                      "type": "string",
+                      "maxLength": 1000
+                    }
+                  },
+                  "required": [
+                    "server",
+                    "file",
+                    "state"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [

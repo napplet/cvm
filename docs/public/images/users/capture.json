@@ -49,13 +49,18 @@
     },
     {
       "file": "publish-destinations.png",
-      "width": 780,
-      "height": 1119
+      "width": 840,
+      "height": 1245
     },
     {
       "file": "publish-review.png",
-      "width": 780,
-      "height": 663
+      "width": 840,
+      "height": 848
+    },
+    {
+      "file": "publish-confirmed.png",
+      "width": 840,
+      "height": 909
     },
     {
       "file": "remix.png",

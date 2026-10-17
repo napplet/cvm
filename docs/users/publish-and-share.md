@@ -33,10 +33,18 @@ Type a URL and press **Enter** to turn it into a removable chip. Use `https://` 
 
 Progress shows signing, each file copy, verification, and each relay result. **Retry remaining steps** checks existing copies and reuses the signed applet event. It does not ask the model to rebuild the applet.
 
-If relay confirmation is uncertain, use **Check publication**. Avoid creating a different publication just because a relay response was delayed.
+If relay confirmation is uncertain, use **Check publication**. **Destination details** shows which copies or relays need attention. **Retry remaining steps** rechecks existing files and resends the same signed event where needed.
+
+The CVM saves your applet signature before copying starts, along with file-copy results and relay confirmations as each attempt finishes. You can reload or reopen the project and continue publishing. You may still need to approve file-copy permission in your signer; the applet itself keeps its original signature.
 
 The development server’s own Blossom store accepts writes only from the CVM. Publishing to your own servers is what makes the final files independent of that store.
 
 ## Returning to a published applet
 
-A current UI issue can leave the builder/project display unchanged after a successful publication. Keep the confirmed naddr and open it in a compatible shell to check the published version. Repeating publication just to change the builder's label is unnecessary. Persistent publication tracking and the publishing section's design are follow-up work; the status shown in the builder is not yet a reliable publication history.
+The builder shows **Published · Version N** and changes **Publish** to **View publication**. Open it to see the saved confirmations or copy the same naddr. Publication status comes from the CVM, so it survives a page reload or service restart.
+
+<GuideScreenshot name="publish-confirmed" alt="Completed publication with three confirmed stages, Version 2 destination counts, an applet address and Copy naddr button" caption="A completed publication stays available from View publication. Copy naddr opens the same published version in another compatible shell." />
+
+**Your applets** also shows the published version. After a successful revision, it shows **Unpublished changes** and identifies both the published version and the newer version ready to publish. Revising does not publish automatically. You can select an older version above the preview to return to its publication.
+
+An applet started anonymously stays with its original browser identity even if you publish it using another signer. Signing a publication does not transfer ownership of the saved project; return with the identity that created it, or the same browser tab for an anonymous build.

@@ -72,7 +72,7 @@ export class ProductWorkspace {
     // Keep the newest reply beside the composer when the responsive layout changes.
     const conversation = this.el("conversation-messages");
     new ResizeObserver(() => { conversation.scrollTop = conversation.scrollHeight; }).observe(conversation);
-    this.showStep(draft.step === 2 ? 2 : draft.step === 3 ? 3 : 1, false);
+    this.showStep(draft.step === 2 ? 2 : draft.step === 3 || draft.step === 4 ? 3 : 1, false);
     this.el<HTMLButtonElement>("idea-next").onclick = () => { if (!this.field("idea").value.trim()) { this.text("idea-validation", "Start with one thing you’d like your applet to do."); this.field("idea").focus(); return; } this.text("idea-validation", ""); this.showStep(2); };
     for (const id of ["back-idea", "edit-idea"]) this.el<HTMLButtonElement>(id).onclick = () => this.showStep(1);
     this.root.querySelectorAll<HTMLButtonElement>("[data-example]").forEach((button) => button.onclick = () => { this.field("idea").value = button.dataset.example!; this.count(); this.persist(); this.field("idea").focus(); });

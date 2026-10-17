@@ -16,14 +16,17 @@ import type { LocalArtifactRepository, SealedArtifact } from "./local-artifact-r
 const Hex = z.string().regex(/^[a-f0-9]{64}$/u);
 const SignedEvent = z.object({ id: Hex, pubkey: Hex, sig: z.string().regex(/^[a-f0-9]{128}$/u), kind: z.literal(35129), created_at: z.number().int().positive(), tags: z.array(z.array(z.string().max(1024)).max(8)).max(512), content: z.literal("") }).strict();
 const ServerUrl = z.string().url().max(512).refine(value => { const url = new URL(value); return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash && url.pathname === "/"; });
+const FileResult = z.object({ server: ServerUrl, file: z.string().max(512), state: z.enum(["checking", "signing", "mirroring", "uploading", "verified", "failed"]), detail: z.string().max(1000).optional() }).strict();
 export const DevelopmentPublicationArgumentsSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("lookup"), sessionId: z.string().max(240), artifactId: z.string().max(100), publisher: Hex }).strict(),
   z.object({ action: z.literal("preview"), artifactId: z.string().max(100), sessionId: z.string().max(240) }).strict(),
   z.object({ action: z.literal("prepare"), servers: z.array(ServerUrl).min(1).max(5), relays: z.array(z.string().max(512).transform(value => relayUrl(value))).min(1).max(5), artifactId: z.string().max(100), sessionId: z.string().max(240), publisher: Hex, requestKey: z.string().uuid(), title: z.string().trim().min(1).max(120) }).strict(),
   z.object({ action: z.literal("submit"), id: z.string().uuid(), event: SignedEvent }).strict(),
+  z.object({ action: z.literal("save"), id: z.string().uuid(), event: SignedEvent, fileResults: z.array(FileResult).max(2560).optional() }).strict(),
   z.object({ action: z.enum(["status", "reconcile"]), id: z.string().uuid() }).strict(),
 ]);
 type Prepared = { preview?: boolean; relays?: string[]; template: EventTemplate; expiresAt: number; files: SealedArtifact["files"]; version: number; title: string; aggregate: string; dTag: string };
-type Row = { relay_results: RelayReceipt[]; id: string; account_id: string; session_id: string; artifact_id: string; publisher: string; fingerprint: string; prepared: Prepared; signed_event: Event | null; state: "prepared" | "publishing" | "published" | "unconfirmed" };
+type Row = { file_results: z.infer<typeof FileResult>[]; published_at: Date | null; relay_results: RelayReceipt[]; id: string; account_id: string; session_id: string; artifact_id: string; publisher: string; fingerprint: string; prepared: Prepared; signed_event: Event | null; state: "prepared" | "publishing" | "published" | "unconfirmed" };
 type Options = { pubkey: string; sign(template: EventTemplate): Promise<Event>; publicOrigin?: string; publicRelay?: string; pool: Pick<PostgresSqlClient, "query">; repository: LocalArtifactRepository; root: string; workerResultsRoot: string; relay: string; openTarget(target: string): Promise<string> };
 const hash = (value: string | Uint8Array) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
 const mime = (path: string) => ({ ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".svg": "image/svg+xml" } as Record<string,string>)[extname(path)] ?? "application/octet-stream";
@@ -56,6 +59,22 @@ export class LocalPublication {
   async handle(input: unknown, principal: string): Promise<unknown> {
     try {
       const command = DevelopmentPublicationArgumentsSchema.parse(input); const account = await accountIdForPrincipal({ pubkey: principal });
+      if (command.action === "lookup") {
+        // The publisher is a filter, never proof of ownership. Only the signed
+        // CVM caller can read the session and its saved publication envelopes.
+        const session = await this.query("SELECT id FROM metered_sessions WHERE id=$1 AND account_id=$2", [command.sessionId, account]);
+        if (!session.rows.length) return { status: "denied" };
+        const current = (await this.query<Row>(`SELECT * FROM development_publications
+          WHERE account_id=$1 AND session_id=$2 AND artifact_id=$3 AND publisher=$4
+            AND NOT coalesce((prepared->>'preview')::boolean,false)
+            AND (signed_event IS NOT NULL OR (prepared->>'expiresAt')::bigint > $5)
+          ORDER BY (state='published') DESC,(signed_event IS NOT NULL) DESC,created_at DESC,id DESC LIMIT 1`, [account, command.sessionId, command.artifactId, command.publisher, Date.now()])).rows[0];
+        const latest = (await this.query<Row>(`SELECT * FROM development_publications
+          WHERE account_id=$1 AND session_id=$2 AND publisher=$3 AND state='published'
+            AND NOT coalesce((prepared->>'preview')::boolean,false)
+          ORDER BY (prepared->>'version')::integer DESC,published_at DESC,id DESC LIMIT 1`, [account, command.sessionId, command.publisher])).rows[0];
+        return { status: "ok", current: current ? this.projection(current) : null, latestPublished: latest ? this.projection(latest) : null };
+      }
       if (command.action === "prepare" || command.action === "preview") {
         const artifact = await this.options.repository.get(command.artifactId);
         if (!artifact || artifact.accountId !== account || artifact.sessionId !== command.sessionId || artifact.ownerId !== principal) return { status: "denied" };
@@ -65,6 +84,11 @@ export class LocalPublication {
         const fingerprint = hash(canonicalJson(command));
         const existing = (await this.query<Row>("SELECT * FROM development_publications WHERE account_id=$1 AND request_key=$2", [account, command.requestKey])).rows[0];
         if (existing) { if (existing.fingerprint !== fingerprint) return { status: "rejected", code: "PUBLICATION_REQUEST_CHANGED" }; return this.projection(existing); }
+        const signed = (await this.query<Row>(`SELECT * FROM development_publications
+          WHERE account_id=$1 AND session_id=$2 AND artifact_id=$3 AND publisher=$4 AND signed_event IS NOT NULL
+            AND NOT coalesce((prepared->>'preview')::boolean,false)
+          ORDER BY (state='published') DESC,created_at DESC,id DESC LIMIT 1`, [account, artifact.sessionId, artifact.artifactId, command.publisher])).rows[0];
+        if (signed) return this.projection(signed);
         const metadata = await this.metadata(artifact);
         const id = crypto.randomUUID(); const dTag = `applet-${artifact.artifactId.slice(-20)}-${command.publisher.slice(0, 8)}`;
         const template = await createSiteManifestTemplate({ target: "named", dTag }, artifact.files.map(file => ({ path: `/${file.path}`, sha256: file.sha256 })), { servers: [...new Set(command.servers.map(server => server.replace(/\/$/, "")))], metadataTags: [...metadata.filter(tag => tag[0] !== "title"), ["title", command.title]] });
@@ -79,15 +103,24 @@ export class LocalPublication {
       if (!row) return { status: "denied" };
       if (command.action === "status") return this.projection(row);
       if (command.action === "reconcile") {
-        if (row.signed_event && await this.observe(row)) { await this.setState(row.id, "published"); row.state = "published"; }
+        if (row.signed_event && await this.observe(row)) { await this.setState(row.id, "published"); return this.projection((await this.query<Row>("SELECT * FROM development_publications WHERE id=$1", [row.id])).rows[0]!); }
         return this.projection(row);
       }
-      if (command.action !== "submit") throw new Error("PUBLICATION_COMMAND_INVALID");
+      if (command.action !== "submit" && command.action !== "save") throw new Error("PUBLICATION_COMMAND_INVALID");
       const event = SignedEvent.parse(command.event);
       if (event.pubkey !== row.publisher || event.id !== getEventHash({ ...row.prepared.template, pubkey: row.publisher }) || !verifyEvent(event)) return { status: "rejected", code: "PUBLICATION_SIGNATURE_MISMATCH" };
       if (row.signed_event && row.signed_event.id !== event.id) return { status: "rejected", code: "PUBLICATION_EVENT_CHANGED" };
       if (row.state === "published") return this.projection(row);
       if (!row.signed_event && row.prepared.expiresAt < Date.now()) return { status: "expired", id: row.id };
+      if (command.action === "save") {
+        const servers = row.prepared.template.tags.filter(tag => tag[0] === "server").map(tag => tag[1]);
+        if (command.fileResults?.some(result => !servers.includes(result.server) || !row.prepared.files.some(file => file.path === result.file))) return { status: "rejected", code: "PUBLICATION_DESTINATION_CHANGED" };
+        // Save before the browser begins copying. Resuming on another tab can
+        // reuse this exact signature without re-signing or generating anything.
+        await this.query("UPDATE development_publications SET signed_event=coalesce(signed_event,$2::jsonb),file_results=coalesce($3::jsonb,file_results),updated_at=now() WHERE id=$1", [row.id, JSON.stringify(event), command.fileResults ? JSON.stringify(command.fileResults) : null]);
+        row.signed_event ??= event; if (command.fileResults) row.file_results = command.fileResults;
+        return this.projection(row);
+      }
       const running = this.#active.get(row.id); if (running) return running;
       const operation = this.publish(row, event); this.#active.set(row.id, operation);
       try { return await operation; } finally { this.#active.delete(row.id); }
@@ -111,7 +144,7 @@ export class LocalPublication {
     try { return await operation; } finally { this.#active.delete(row.id); }
   }
   private projection(row: Row) {
-    return { status: row.state, id: row.id, artifactId: row.artifact_id, publisher: row.publisher, version: row.prepared.version, title: row.prepared.title, aggregate: row.prepared.aggregate, template: row.prepared.template, expiresAt: row.prepared.expiresAt, destination: row.prepared.preview ? "CVM preview" : "Your Blossom servers", relay: this.options.publicRelay ?? this.options.relay, relays: row.prepared.relays ?? [this.options.publicRelay ?? this.options.relay], relayResults: row.relay_results ?? [], files: row.prepared.files.map(file => ({ ...file, url: `${this.origin}/${file.sha256}`, type: mime(file.path) })), servers: row.prepared.template.tags.filter(tag => tag[0] === "server").map(tag => tag[1]), preview: !!row.prepared.preview,
+    return { status: row.state, id: row.id, artifactId: row.artifact_id, publisher: row.publisher, version: row.prepared.version, title: row.prepared.title, aggregate: row.prepared.aggregate, template: row.prepared.template, expiresAt: row.prepared.expiresAt, destination: row.prepared.preview ? "CVM preview" : "Your Blossom servers", relay: this.options.publicRelay ?? this.options.relay, relays: row.prepared.relays ?? [this.options.publicRelay ?? this.options.relay], relayResults: row.relay_results ?? [], fileResults: row.file_results ?? [], signedEvent: row.signed_event ?? undefined, publishedAt: row.published_at?.toISOString(), files: row.prepared.files.map(file => ({ ...file, url: `${this.origin}/${file.sha256}`, type: mime(file.path) })), servers: row.prepared.template.tags.filter(tag => tag[0] === "server").map(tag => tag[1]), preview: !!row.prepared.preview,
       ...(row.state === "published" && row.signed_event ? { eventId: row.signed_event.id, url: `${this.origin}/open/${row.id}`, address: naddrEncode({ identifier: row.prepared.dTag, pubkey: row.publisher, kind: 35129, relays: row.prepared.relays ?? [this.options.publicRelay ?? this.options.relay] }) } : {}) };
   }
   private async metadata(artifact: SealedArtifact): Promise<string[][]> {
@@ -149,9 +182,11 @@ export class LocalPublication {
         row.state = published.every(result => result.success) && await this.observe(row) ? "published" : "unconfirmed";
       }
     } catch { row.state = "unconfirmed"; }
-    await this.setState(row.id, row.state); return this.projection(row);
+    await this.setState(row.id, row.state);
+    const saved = (await this.query<Row>("SELECT * FROM development_publications WHERE id=$1", [row.id])).rows[0]!;
+    return this.projection(saved);
   }
-  private setState(id: string, state: Row["state"]) { return this.query("UPDATE development_publications SET state=$2,updated_at=now() WHERE id=$1", [id, state]); }
+  private setState(id: string, state: Row["state"]) { return this.query("UPDATE development_publications SET state=$2,published_at=CASE WHEN $2='published' THEN coalesce(published_at,now()) ELSE published_at END,updated_at=now() WHERE id=$1", [id, state]); }
   private async observe(row: Row): Promise<boolean> {
     if (!row.signed_event) return false;
     if (row.prepared.relays && !row.prepared.preview) {

@@ -46,7 +46,7 @@ async function useSelectedIdentity(browserOnly = false): Promise<void> {
     byId("connection-status").textContent = `Connected: ${connected.pubkey}`;
   } catch (error) { await next.close(); throw error; }
 }
-if (publishing) new ProjectsWorkspace(bootstrap, publishing.identity, () => activity.running || !!restoreRequest() || !!product?.checkingSession, async (project: Project, scope: ProjectScope) => {
+if (publishing) new ProjectsWorkspace(bootstrap, publishing.identity, () => activity.running || !!publishing?.running || !!restoreRequest() || !!product?.checkingSession, async (project: Project, scope: ProjectScope) => {
   await useSelectedIdentity(scope === "browser");
   const current = await client!.callTool("projects", { action: "get", id: project.id });
   if (current.status !== "ok") throw new Error("Applet not found for this identity.");
@@ -58,7 +58,7 @@ if (publishing) new ProjectsWorkspace(bootstrap, publishing.identity, () => acti
   else if (project.checkpointId) { const pending = await client!.pendingActionStatus(project.checkpointId); if (pending.status === "saved") savePending(pending); else facts({ state: project.stage }); }
   publishing.sync();
 });
-const remix = product && publishing ? new RemixWorkspace(new NappletDiscovery([bootstrap.relayUrl]), publishing.identity, bootstrap.servicePubkey, () => activity.running || !!restoreRequest() || !!product.checkingSession) : undefined;
+const remix = product && publishing ? new RemixWorkspace(new NappletDiscovery([bootstrap.relayUrl]), publishing.identity, bootstrap.servicePubkey, () => activity.running || !!publishing?.running || !!restoreRequest() || !!product.checkingSession) : undefined;
 const connectedControls = [byId<HTMLButtonElement>("cashu"), byId<HTMLButtonElement>("cashu-replay"), byId<HTMLButtonElement>("nwc"), byId<HTMLButtonElement>("generate")];
 function setFundingStatus(value: string): void { byId("funding-status").textContent = value; }
 function setGenerationStatus(value: string): void { byId("generation-status").textContent = value; }
@@ -205,7 +205,7 @@ const actionButtons = ["generate", "resume", "revise", "replay-revision", ...(pr
 for (const id of actionButtons) {
   const button = byId<HTMLButtonElement>(id); const run = button.onclick!;
   button.onclick = async (event) => {
-    if (!client || activity.running || (product && id !== "recover" && restoreRequest()) || product?.validate(id) === false || remix?.validate(id) === false) return;
+    if (!client || activity.running || publishing?.running || (product && id !== "recover" && restoreRequest()) || product?.validate(id) === false || remix?.validate(id) === false) return;
     product?.begin(id === "recover" ? `recover-${restoreRequest()?.kind}` : id);
     activity.begin(button.textContent ?? "Action", bootstrap.providerLabel);
     byId("generation-facts").replaceChildren(); setGenerationStatus(""); setError();

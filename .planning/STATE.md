@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: verification_deferred_gaps
-stopped_at: User and operator documentation illustrated with 20 screenshots and verified at /docs/
-last_updated: "2026-10-17T02:13:48Z"
+stopped_at: Publication tracking, contextual publishing UI and screenshot documentation verified and running locally
+last_updated: "2026-10-17T05:00:18Z"
 last_activity: 2026-10-16
-last_activity_desc: Added eight operator screenshots and job-state guidance; verified 90 responsive documentation layouts
+last_activity_desc: Persisted publication signatures and receipts; restored published versions and unpublished revisions; verified real-service e2e and responsive UI
 progress:
   total_phases: 7
   completed_phases: 6
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
 Plan: 56 of 58 accepted; development Plans 07-52/53/56/57/54/55 complete
 Status: Guided applet.broker workspace at http://127.0.0.1:49371; diagnostic console at /dev. Saved chatgpt-oauth mode with gpt-6.1-sol retained. Product/console browser journeys and recovery passed through real local services. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
-Last activity: 2026-10-16 — Completed quick task 261016-qkz: eight operator screenshots across five guides, in addition to the 12 user screenshots. Read-only offline capture, accessible captions and full-size views documented. Build, 1,296 local links, 90 responsive layouts and 125 image loads passed. Docs preview remains at http://127.0.0.1:4173/docs/. User CVM and application behavior unchanged. Publication-state tracking and publishing UI refresh remain next. Typecheck retains the previously verified 424 existing diagnostics.
+Last activity: 2026-10-16 — Completed quick task 261016-u9q: owner-scoped publication lookup, durable signatures/copy results/relay confirmations, Published and Unpublished changes in the builder and project list, and responsive final Publish step. Real-service publication/restart/reopen/revision and returning-projects e2e passed; 12 targeted tests, 323 responsive app checks, docs build/1,300 links/catalog/90 browser layouts/130 images passed. Migration 013 applied; local CVM restarted at http://127.0.0.1:49371 with saved chatgpt-oauth configuration; no live model usage. Docs now include 21 screenshots. Typecheck retains 424 existing diagnostics.
 
 Follow-up: Stream assembly/counter verification remains complete. Latest helper-signature and compiler-feedback fix passed 29 targeted unit/integration cases plus activity and composed OAuth browser journeys. Real blinking-text generation also passed. See debug/resolved/generated-typescript-check.md.
 
@@ -376,6 +376,8 @@ Recent decisions affecting current work:
 
 | 261016-qkz | Eight private-admin screenshots across operator guides; job-state explanations and 90 responsive docs checks | 2026-10-16 | see task history | [261016-qkz](./quick/261016-qkz-illustrate-operator-documentation-with-p/) |
 
+| 261016-u9q | Durable publication tracking, contextual publishing progress/completion, project publication state and refreshed screenshot docs | 2026-10-16 | see task history | [261016-u9q](./quick/261016-u9q-persist-publication-state-and-finish-con/) |
+
 ## Deferred Verification
 
 | Phase | Status | Reason | Resume command |
@@ -392,6 +394,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-17T02:13:48Z
-Stopped at: User and operator screenshot guides complete and verified at http://127.0.0.1:4173/docs/. Next application task: track successful publications durably and update publishing UI. User prioritized docs, user screenshots, then continued to operator screenshots. Existing CVM was not modified or restarted.
-Resume file: .planning/quick/261016-qkz-illustrate-operator-documentation-with-p/SUMMARY.md
+Last session: 2026-10-17T05:00:18Z
+Stopped at: Publication tracking and final publishing UI complete and active at http://127.0.0.1:49371. Docs preview at http://127.0.0.1:4173/docs/. All authorized publication work is verified; production remains deferred.
+Resume file: .planning/quick/261016-u9q-persist-publication-state-and-finish-con/SUMMARY.md

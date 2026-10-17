@@ -96,8 +96,9 @@ try {
     const client = { callTool: async (name: string, input: any) => {
       if (name !== "development_publication") throw new Error("Unexpected CVM effect");
       if (input.action === "preview") return { address };
+      if (input.action === "lookup") return { status: "ok", current: w.samplePublication ?? null, latestPublished: w.samplePublication ?? null };
       if (input.action !== "prepare") throw new Error("Publication is disabled in screenshots");
-      return { id: "publication:docs", status: "prepared", artifactId: version.artifactId, publisher: publication.identity.pubkey,
+      return w.samplePrepared = { id: "publication:docs", status: "prepared", artifactId: version.artifactId, publisher: publication.identity.pubkey,
         template: { tags: [] }, servers: input.servers, relays: input.relays, files: [], version: 2, expiresAt: Date.now() + 60000 };
     } };
     const publication = new PublicationWorkspace(bootstrap, () => client, () => w.selectedVersion);
@@ -179,6 +180,18 @@ try {
   await page.locator("#publication-review").click();
   await page.locator("#publication-review-panel details").evaluate((el: HTMLDetailsElement) => el.open = true);
   await capture("publish-review", "#publish-step");
+  await page.locator("#publication-close").click();
+  await page.evaluate(({ address, origin }) => {
+    const w = window as any;
+    // Read-only presentation fixture for a completed publication; no signing,
+    // file upload or relay publication is performed by this capture.
+    w.samplePublication = { ...w.samplePrepared, status: "published", address, url: origin,
+      publishedAt: "2026-10-16T12:00:00Z", files: [{ path: "index.html", sha256: "a".repeat(64), bytes: 2048, url: origin, type: "text/html" }],
+      fileResults: [{ server: "https://blossom.example.com", file: "index.html", state: "verified" }],
+      relayResults: [{ relay: "wss://relay.example.com", state: "published" }] };
+  }, { address, origin });
+  await page.locator("#publish").click(); await page.locator("#publication-result").waitFor();
+  await capture("publish-confirmed", "#publish-step");
   await page.locator("#publication-close").click();
   await page.locator("#new-applet").click();
   await page.locator("#remix-mode").click();

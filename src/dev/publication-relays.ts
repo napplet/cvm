@@ -9,7 +9,7 @@ for (const [ip, prefix] of [["0.0.0.0",8],["10.0.0.0",8],["100.64.0.0",10],["127
 const globalV6 = new BlockList(); globalV6.addSubnet("2000::",3,"ipv6"); blocked.addSubnet("2001:db8::",32,"ipv6");
 export function publicRelayAddress(address: string): boolean { const family = isIP(address); return family === 4 ? !blocked.check(address,"ipv4") : family === 6 && globalV6.check(address,"ipv6") && !blocked.check(address,"ipv6"); }
 export type RelayReceipt = { relay: string; state: "published" | "failed"; detail?: string };
-export async function publishOnUserRelays(relays: string[], event: Event, developmentRelay: string, send: boolean): Promise<RelayReceipt[]> {
+export async function publishOnUserRelays(relays: string[], event: Event, developmentRelay: string, send: boolean | "always"): Promise<RelayReceipt[]> {
   return Promise.all(relays.map(async value => {
     let child: ReturnType<typeof Bun.spawn> | undefined; let timer: ReturnType<typeof setTimeout> | undefined;
     try {

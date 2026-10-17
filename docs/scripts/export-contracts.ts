@@ -26,7 +26,7 @@ const entries: [string, string, z.ZodType, string][] = [
   ["development_faucet", "Mint local test Cashu; never real money.", extra.DevelopmentFaucetArgumentsSchema, "development"],
   ["projects", "List, read or rename projects belonging to the signed request identity.", ProjectsArgumentsSchema, "development"],
   ["remix_import", "Validate a signed applet and import isolated source or staged HTML.", RemixImportArgumentsSchema, "development"],
-  ["development_publication", "Suggest metadata, prepare, replace unfinished drafts and submit user-signed development publications.", DevelopmentPublicationArgumentsSchema, "development"],
+  ["development_publication", "Suggest metadata, prepare, replace unfinished drafts, submit and explicitly republish user-signed development publications.", DevelopmentPublicationArgumentsSchema, "development"],
   ["operation_diagnostic", "Read bounded diagnostics for an owned model operation.", extra.OperationDiagnosticArgumentsSchema, "development"],
   ["cvm_admin", "Private operator configuration and job inspection; operator key required.", CvmAdminArgumentsSchema, "operator"],
 ];

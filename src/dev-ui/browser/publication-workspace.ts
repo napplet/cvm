@@ -8,7 +8,7 @@ import type { DevelopmentBootstrap, DevelopmentContextVmClient } from "./context
 import { PublishingIdentity } from "./nostr-identity";
 import { blossomServer, discoverBlossom, propagateBlobs, type BlobFile, type Propagation } from "./blossom-client";
 type Version = { sessionId: string; artifactId: string; version: number };
-type Publication = { id: string; status: string; artifactId: string; publisher: string; template: EventTemplate; files: BlobFile[]; servers: string[]; relays: string[]; relayResults?: { relay: string; state: string; detail?: string }[]; fileResults?: Propagation[]; signedEvent?: Event; publishedAt?: string; title?: string; description?: string; address?: string; url?: string; version: number; expiresAt: number };
+type Publication = { republication?: { attemptedAt: string; relayResults: {relay:string;state:string}[] }; id: string; status: string; artifactId: string; publisher: string; template: EventTemplate; files: BlobFile[]; servers: string[]; relays: string[]; relayResults?: { relay: string; state: string; detail?: string }[]; fileResults?: Propagation[]; signedEvent?: Event; publishedAt?: string; title?: string; description?: string; address?: string; url?: string; version: number; expiresAt: number };
 type Journal = { prepared: Publication; event?: Event; propagated?: boolean };
 export class PublicationWorkspace {
   readonly identity: PublishingIdentity;
@@ -16,6 +16,7 @@ export class PublicationWorkspace {
   readonly #servers: DestinationInput;
   readonly #relays: DestinationInput;
   #busy = false;
+  #republishing = false;
   #replacement?: string;
   #drafts = new Map<string, { title: string; description: string }>();
   #journal?: Journal;
@@ -31,6 +32,8 @@ export class PublicationWorkspace {
   constructor(private readonly bootstrap: DevelopmentBootstrap, private readonly client: () => DevelopmentContextVmClient | undefined, private readonly selected: () => Version | undefined) {
     const button = document.createElement("button"); button.id = "publish"; button.className = "primary"; button.textContent = "Publish"; button.disabled = true; const footer = document.createElement("div"); footer.className = "publish-next"; const hint = document.createElement("p"); hint.id = "publish-hint"; hint.className = "supporting"; footer.append(hint,button); document.querySelector("#build-step")!.append(footer);
     const publishedCopy = document.createElement("button"); publishedCopy.id = "published-copy-address"; publishedCopy.className = "quiet"; publishedCopy.textContent = "Copy published naddr"; publishedCopy.hidden = true; footer.append(publishedCopy);
+    const republish = document.createElement("button"); republish.id = "republish"; republish.textContent = "Republish"; republish.hidden = true; footer.insertBefore(republish, publishedCopy);
+    republish.onclick = () => { void this.open().then(() => this.republish()).catch(error => this.error(error)); };
     publishedCopy.onclick = () => { if (this.#current?.address) void this.copy(this.#current.address, hint); };
     this.identity = new PublishingIdentity(bootstrap.servicePubkey, () => { this.#opening++; ++this.#lookupEpoch; this.#current = this.#latest = undefined; if (!this.#busy) this.#journal = undefined; this.sync(); void this.lookup().catch(() => undefined); });
     this.#panel = document.createElement("section"); this.#panel.id = "publish-step"; this.#panel.hidden = true; this.#panel.className = "step-panel publication-step"; this.#panel.setAttribute("aria-labelledby", "publication-heading");
@@ -39,7 +42,7 @@ export class PublicationWorkspace {
       <section id="publication-review-panel" hidden><h2 id="publication-review-title"></h2><p id="publication-review-description"></p><p id="publication-review-copy"></p><details><summary>Destinations</summary><ul id="publication-destinations"></ul></details><button id="publication-confirm" class="primary">Sign and publish</button><button id="publication-edit">Edit details and destinations</button></section>
       <details id="publication-advanced" class="publication-advanced" hidden><summary>Advanced applet details</summary><p class="supporting">Capabilities declared by this build. Your shell decides which permissions to grant.</p><div class="publication-capability-grid"><section><h3>Required</h3><ul id="publication-required" class="publication-capabilities"></ul></section><section><h3>Optional</h3><ul id="publication-optional" class="publication-capabilities"></ul></section></div><p id="publication-optional-note" class="supporting"></p><details><summary>Manifest and files</summary><pre id="publication-manifest" tabindex="0"></pre></details></details>
       <ol id="publication-stages" class="publication-stages" aria-label="Publication progress"><li id="publication-signing">Sign your applet</li><li id="publication-propagating">Copy to your servers</li><li id="publication-announcing">Publish to Nostr</li></ol><p id="publication-status" role="status" aria-live="polite"></p><p id="publication-copy-warning" class="publication-copy-warning" role="status" hidden></p><details id="publication-receipts" hidden><summary id="publication-delivery-summary">Delivery details</summary><div class="publication-delivery-grid"><section><h3>Files</h3><ul id="publication-files" aria-label="File propagation progress"></ul></section><section><h3>Relays</h3><ul id="publication-relay-results" aria-label="Relay publication progress"></ul></section></div></details><button id="publication-check" hidden>Check publication</button>
-      <div id="publication-result" role="status" hidden><span class="publication-success" aria-hidden="true">✓</span><h2 id="publication-result-title">Your applet</h2><p id="publication-completion"></p><div class="publication-actions"><button id="publication-copy" class="primary">Copy naddr</button><a id="publication-open" class="quiet" target="_blank" rel="noopener noreferrer">Open applet ↗</a></div><p id="publication-share-feedback" class="supporting" aria-live="polite">Paste its naddr into any compatible shell.</p><details class="publication-address-details"><summary>Applet address</summary><input id="publication-address" aria-label="Applet address" readonly></details></div>`;
+      <div id="publication-result" role="status" hidden><span class="publication-success" aria-hidden="true">✓</span><h2 id="publication-result-title">Your applet</h2><p id="publication-completion"></p><div class="publication-actions"><button id="publication-copy" class="primary">Copy naddr</button><a id="publication-open" class="quiet" target="_blank" rel="noopener noreferrer">Open applet ↗</a><button id="publication-republish">Republish</button></div><p id="publication-share-feedback" class="supporting" aria-live="polite">Paste its naddr into any compatible shell.</p><details class="publication-address-details"><summary>Applet address</summary><input id="publication-address" aria-label="Applet address" readonly></details></div>`;
     this.el("publication-history").after(this.el("publication-result"));
     this.el("publication-receipts").querySelector("summary")!.after(this.el("publication-copy-warning"));
     this.#panel.append(this.el("publication-advanced"));
@@ -80,6 +83,7 @@ export class PublicationWorkspace {
     this.el("publication-check").onclick = () => { void (this.#journal ? this.check() : this.open()).catch(error => this.error(error)); };
     document.getElementById("preview-copy-address")!.onclick = () => { if (this.#preview?.address) void this.copy(this.#preview.address, document.getElementById("preview-share-status")!); };
     this.el("publication-copy").onclick = () => { if (this.#journal?.prepared.address) void this.copy(this.#journal.prepared.address, this.el("publication-share-feedback")); };
+    this.el("publication-republish").onclick = () => { void this.republish(); };
     this.sync();
   }
   private el<T extends HTMLElement = HTMLElement>(id: string) { return this.#panel.querySelector<T>(`#${id}`)!; }
@@ -95,6 +99,10 @@ export class PublicationWorkspace {
     document.getElementById("publish-hint")!.textContent = !this.identity?.pubkey ? "Sign in to publish this applet under your Nostr identity." : !this.selected() ? "Publishing opens after this applet passes its checks." : published ? `Published · Version ${this.selected()!.version} · Ready to share` : this.#lookupError ? "Publication status could not be checked. Open publishing to try again." : changes ? `Unpublished changes · Version ${this.#latest!.version} is published. Version ${this.selected()!.version} is ready.` : this.#current?.signedEvent ? "Publication in progress · Your signature is saved. Continue the remaining steps." : `Ready to share version ${this.selected()!.version}?`;
     button.textContent = published ? "View publication" : this.#current?.signedEvent ? "Continue publishing" : "Publish";
     document.getElementById("published-copy-address")!.hidden = !published || !this.#current?.address;
+    const republish = document.getElementById("republish") as HTMLButtonElement;
+    republish.hidden = !published; republish.disabled = this.#busy || button.disabled;
+    for (const control of [republish, this.el<HTMLButtonElement>("publication-republish")]) { control.disabled = button.disabled; control.textContent = this.#republishing ? "Republishing…" : "Republish"; }
+
     button.title = !this.identity?.pubkey ? "Sign in to publish" : !this.selected() ? "A verified applet is needed before publication" : "Publish this version under your identity";
   }
   private async lookup(): Promise<Publication | undefined> {
@@ -282,6 +290,19 @@ export class PublicationWorkspace {
       await this.announce(journal);
     } finally { this.#busy = false; this.sync(); this.el<HTMLButtonElement>("publication-confirm").disabled = false; this.el<HTMLButtonElement>("publication-edit").disabled = false; this.el("publication-confirm").textContent = this.continueLabel(); }
   }
+  private async republish() {
+    if (this.#busy || !this.#journal || this.#journal.prepared.status !== "published") return;
+    const journal = this.#journal; const client = this.client();
+    if (!client || journal.prepared.publisher !== this.identity.pubkey || journal.prepared.artifactId !== this.selected()?.artifactId) return;
+    this.#busy = this.#republishing = true; this.sync();
+    const feedback = this.el("publication-share-feedback"); feedback.textContent = "Republishing to Nostr…";
+    try {
+      const result = await this.call({ action: "republish", id: journal.prepared.id });
+      if (this.#journal !== journal || this.client() !== client || this.identity.pubkey !== journal.prepared.publisher || this.selected()?.artifactId !== journal.prepared.artifactId) return;
+      journal.prepared = result; this.save(); this.result();
+    } catch { feedback.textContent = "Republish could not be confirmed. Your earlier publication is still saved."; }
+    finally { this.#busy = this.#republishing = false; this.sync(); }
+  }
   private async check() { if (this.#busy || !this.#journal) return; const journal = this.#journal; this.#busy = true; this.sync(); this.el<HTMLButtonElement>("publication-check").disabled = true; try { journal.prepared = await this.call({ action: "reconcile", id: journal.prepared.id }); this.save(); if (this.#journal === journal) this.result(); } finally { this.#busy = false; this.sync(); this.el<HTMLButtonElement>("publication-check").disabled = false; } }
   private result() {
     const result = this.#journal!.prepared;
@@ -308,7 +329,8 @@ export class PublicationWorkspace {
       this.el("publication-version").hidden = true; this.el("publication-history").hidden = true;
       this.el("publication-status").hidden = true;
       this.el("publication-result-title").textContent = result.title || "Your applet";
-      this.el("publication-share-feedback").textContent = "Paste its naddr into any compatible shell.";
+      const resent = result.republication?.relayResults.filter(receipt => receipt.state === "published").length ?? 0;
+      this.el("publication-share-feedback").textContent = result.republication ? resent ? `Republished · ${resent} relay${resent === 1 ? "" : "s"} confirmed.` : "No new confirmations. Your earlier publication is still saved." : "Paste its naddr into any compatible shell.";
       this.el<HTMLDetailsElement>("publication-receipts").open = false;
       this.el<HTMLInputElement>("publication-address").value = result.address;
       this.el("publication-completion").textContent = `Version ${result.version} · ${verified} file copies · ${relayCount} relay${relayCount === 1 ? "" : "s"} confirmed`;

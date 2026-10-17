@@ -160,6 +160,8 @@ try {
   await layout("publish-complete","#publication-copy");
   await page.locator("#publication-delivery-summary").click();
   await layout("publish-delivery","#publication-copy");
+  await page.locator("#publication-close").click();
+  await layout("published-builder","#republish");
   assert(errors.length===0,errors.join(";"));
   console.log(JSON.stringify({status:"passed",case:"responsive-workspace",viewports:sizes,checks,evidence,coverage:["bounded application frame","no parent/content horizontal overflow","readable reachable controls","short landscape","long titles/errors/addresses","identity QR and settings dialogs","expanded sandbox preview","resize/route draft and preview continuity","publication prepare/review/failure/completion"]}));
 } catch(error) {await page.screenshot({path:resolve(evidence,"failure.png")});throw error;}

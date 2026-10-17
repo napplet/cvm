@@ -163,6 +163,7 @@ try {
   try {
     const savedRow = (await pool.query("SELECT id,signed_event FROM development_publications WHERE publisher=$1", [userPubkey])).rows[0];
     assert((await earlyOwner.callTool("development_publication", {action:"submit",id:savedRow.id,event:savedRow.signed_event})).code === "PUBLICATION_NEEDS_TWO_VERIFIED_SERVERS", "CVM_ACCEPTED_INSUFFICIENT_COPIES");
+    assert((await earlyOwner.callTool("development_publication", {action:"republish",id:savedRow.id})).code === "PUBLICATION_NOT_PUBLISHED", "UNPUBLISHED_APPLET_REPUBLISHED");
   } finally { await earlyOwner.close(); }
   // Lose the browser publication journal. Restore the signature and failures
   // through the signed CVM owner request, then retry without a second event.
@@ -195,6 +196,16 @@ try {
   for (const tag of published[0]!.tags.filter(tag => tag[0] === "path")) { const response = await fetch(`${destinationUrl}/${tag[2]}`); assert(new Bun.CryptoHasher("sha256").update(await response.arrayBuffer()).digest("hex") === tag[2], "DESTINATION_BYTES_MISMATCH"); }
   const intent = (await pool.query("SELECT id FROM development_publications WHERE publisher=$1", [userPubkey])).rows[0].id;
   assert(published[0]!.tags.some(tag=>tag[0]==="description"&&tag[1]==="Count daily practice, one step at a time."), "DESCRIPTION_NOT_SIGNED");
+  assert((await unauthorized.callTool("development_publication", {action:"republish",id:intent})).status==="denied", "CROSS_OWNER_REPUBLICATION");
+  const beforeRepublish = {copies:copyRequests,signatures:signerRequests,inferences:fixture.counts().inferences};
+  await page.locator("#publication-close").click(); await page.locator("#republish").click();
+  await page.locator("#publication-share-feedback").filter({hasText:"Republished · 1 relay confirmed"}).waitFor({timeout:60000});
+  assert(copyRequests===beforeRepublish.copies && signerRequests===beforeRepublish.signatures && fixture.counts().inferences===beforeRepublish.inferences, "REPUBLICATION_REBUILT_COPIED_OR_SIGNED");
+  assert(await page.locator("#publication-address").inputValue()===address, "REPUBLICATION_CHANGED_ADDRESS");
+  assert((await pool.query("SELECT count(*)::int AS count FROM development_publications WHERE publisher=$1",[userPubkey])).rows[0].count===1, "REPUBLICATION_CREATED_RECORD");
+  await page.locator("#publication-republish").click();
+  await page.waitForFunction(()=>!(document.querySelector("#publication-republish") as HTMLButtonElement).disabled);
+  assert((await page.locator("#publication-share-feedback").innerText()).includes("Republished"), "RESULT_REPUBLICATION_FAILED");
   // Old all-relay policy records are repaired from existing receipts on lookup.
   const beforeRepair = {copies:copyRequests, signatures:signerRequests};
   await pool.query("UPDATE development_publications SET state='unconfirmed' WHERE id=$1", [intent]);
@@ -229,6 +240,12 @@ try {
     assert(metadata.status==="ok" && metadata.title==="Daily counter" && metadata.description, "OWNER_METADATA_MISSING");
     assert((await unauthorized.callTool("development_publication", {action:"metadata",sessionId:projectId,artifactId:saved.artifactId})).status==="denied", "CROSS_OWNER_METADATA");
     assert((await owner.callTool("development_publication", {action:"metadata",sessionId:"wrong",artifactId:saved.artifactId})).status==="denied", "WRONG_SESSION_METADATA");
+    assert(saved.republication?.relayResults.some((receipt:any)=>receipt.state==="published"), "REPUBLICATION_NOT_SAVED");
+    // A later resend with no responding destinations cannot revoke success.
+    await pool.query("UPDATE development_publications SET prepared=jsonb_set(prepared,'{relays}',$2::jsonb) WHERE id=$1",[intent,JSON.stringify(["wss://unreachable.invalid"])]);
+    const noReplies = await owner.callTool("development_publication", {action:"republish",id:intent});
+    assert(noReplies.status==="published" && noReplies.eventId===saved.eventId && noReplies.publishedAt===saved.publishedAt && noReplies.republication.relayResults.every((receipt:any)=>receipt.state==="failed") && noReplies.relayResults.some((receipt:any)=>receipt.state==="published"), "RESEND_REVOKED_PUBLICATION");
+    await pool.query("UPDATE development_publications SET prepared=jsonb_set(prepared,'{relays}',$2::jsonb) WHERE id=$1",[intent,JSON.stringify(saved.relays)]);
     const lookup = await owner.callTool("development_publication", { action: "lookup", sessionId: projectId, artifactId: saved.artifactId, publisher: userPubkey });
     assert(lookup.current.id === intent && lookup.latestPublished.address === address, "OWNER_PUBLICATION_LOOKUP_MISSING");
     const repeated = await owner.callTool("development_publication", { action: "prepare", sessionId: projectId, artifactId: saved.artifactId, publisher: userPubkey, requestKey: crypto.randomUUID(), title: "My daily counter", servers: saved.servers, relays: saved.relays });
@@ -306,7 +323,7 @@ try {
   assert(appletSignatures===3 && fixture.counts().inferences===2, "REPLACEMENT_SIGNATURE_OR_GENERATION_COUNT");
   assert(!(await page.locator("#publication-copy-warning").isVisible()), "REMOVED_SERVER_STILL_BLOCKS");
   assert((await fetch(`${cvmBlob}/`)).ok, "BLOSSOM_ORIGIN_CHANGED_ON_RESTART");
-  console.log(JSON.stringify({ status: "passed", case: "static-cvm-publication", checks: ["separate static origin and subdirectory", "private operator OAuth", "rate version used", "job views", "all sign-in choices during generation", "real NIP46", "CVM naddr", "CVM-only Blossom writes", "manual and discovered servers", "one complete copy blocks publication in browser and CVM", "two complete copies publish despite third server HTTP 401", "warnings and verified count survive reopen", "saved signature and failures restored without browser journal", "copy retry uses one signature", "verified mirrors and user naddr", "owner-scoped publication lookup", "signed template tamper rejected", "exact event replay and repeated preparation", "pending job details", "published builder and project after CVM restart", "reopen retains address without generation", "revision shows unpublished changes", "CVM metadata ownership and editable signed description", "continue with saved two copies skips uploads and signing", "signed draft destination editing preserves history and rejects stale submission", "one relay confirms despite extra relay failure", "legacy partial success repairs on lookup and startup without republishing", "zero confirmations remain retryable", "compact success with collapsed failure details"] }));
+  console.log(JSON.stringify({ status: "passed", case: "static-cvm-publication", checks: ["separate static origin and subdirectory", "private operator OAuth", "rate version used", "job views", "all sign-in choices during generation", "real NIP46", "CVM naddr", "CVM-only Blossom writes", "manual and discovered servers", "one complete copy blocks publication in browser and CVM", "two complete copies publish despite third server HTTP 401", "warnings and verified count survive reopen", "saved signature and failures restored without browser journal", "copy retry uses one signature", "verified mirrors and user naddr", "owner-scoped publication lookup", "signed template tamper rejected", "exact event replay and repeated preparation", "pending job details", "published builder and project after CVM restart", "reopen retains address without generation", "revision shows unpublished changes", "CVM metadata ownership and editable signed description", "continue with saved two copies skips uploads and signing", "signed draft destination editing preserves history and rejects stale submission", "one relay confirms despite extra relay failure", "legacy partial success repairs on lookup and startup without republishing", "zero confirmations remain retryable", "compact success with collapsed failure details", "explicit republish from builder and result reuses event, address and files", "republish ownership and last-attempt persistence", "failed resend retains earlier publication"] }));
 } catch (error) { console.error("TEST_STAGE", error, await admin.locator("body").innerText({ timeout: 2000 }).catch(() => "admin page unavailable"), await page.locator("body").innerText({ timeout: 2000 }).catch(() => "workspace unavailable"), errors); throw error; } finally {
   release(); remoteSubscription?.close(); relay.close([config.relayUrl]); relay.destroy(); await unauthorized.close();
   await browser.close(); site.stop(true); destination.stop(true); backup.stop(true); unavailable.stop(true); await pool.end();

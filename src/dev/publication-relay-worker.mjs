@@ -27,7 +27,8 @@ try {
   relay = new AbstractRelay(url, { verifyEvent, websocketImplementation: PinnedSocket });
   relay.publishTimeout = 7000; relay.baseEoseTimeout = 4000;
   await relay.connect({ timeout: 7000 });
-  let confirmed = await observe(event);
+  // Explicit republication must resend even when the relay already has it.
+  let confirmed = send === "always" ? false : await observe(event);
   if (!confirmed && send) { try { await relay.publish(event); } catch { /* Read back ambiguous acknowledgements. */ } confirmed = await observe(event); }
   process.stdout.write(JSON.stringify({ confirmed }));
 } catch { process.stdout.write(JSON.stringify({ confirmed:false })); }

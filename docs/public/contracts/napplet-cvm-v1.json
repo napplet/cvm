@@ -957,7 +957,7 @@
     },
     {
       "name": "development_publication",
-      "description": "Suggest metadata, prepare, replace unfinished drafts and submit user-signed development publications.",
+      "description": "Suggest metadata, prepare, replace unfinished drafts, submit and explicitly republish user-signed development publications.",
       "scope": "development",
       "inputSchema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -1297,7 +1297,8 @@
                 "type": "string",
                 "enum": [
                   "status",
-                  "reconcile"
+                  "reconcile",
+                  "republish"
                 ]
               },
               "id": {

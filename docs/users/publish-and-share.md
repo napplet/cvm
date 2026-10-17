@@ -55,7 +55,9 @@ The development server’s own Blossom store accepts writes only from the CVM. P
 
 The builder shows **Published · Version N** and changes **Publish** to **View publication**. Open it to see the saved confirmations or copy the same naddr. Publication status comes from the CVM, so it survives a page reload or service restart.
 
-<GuideScreenshot name="publish-confirmed" alt="Published applet with a prominent Copy naddr button, two file copies and one confirmed relay; unavailable destinations are in collapsed delivery details" caption="Two file copies and one confirmed relay are enough. Extra failures stay in delivery details; your applet is ready to share." />
+<GuideScreenshot name="publish-confirmed" alt="Published applet with Copy naddr and Republish buttons, two file copies and one confirmed relay; unavailable destinations are in collapsed delivery details" caption="Two file copies and one confirmed relay are enough. Extra failures stay in delivery details; your applet is ready to share." />
+
+**Republish** is available beside **View publication** and on the publication result. It sends the same signed applet to your saved relays again, keeping the same naddr. Files, signatures and model generation are reused. Progress changes to **Republishing…**, then reports the new confirmations. If the resend cannot confirm, your earlier publication remains saved.
 
 **Your applets** also shows the published version. After a successful revision, it shows **Unpublished changes** and identifies both the published version and the newer version ready to publish. Revising does not publish automatically. You can select an older version above the preview to return to its publication.
 

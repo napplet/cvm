@@ -1624,6 +1624,147 @@
             "properties": {
               "action": {
                 "type": "string",
+                "const": "save_model_rates"
+              },
+              "modelRates": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+                },
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "input_tokens": {
+                      "type": "object",
+                      "properties": {
+                        "numerator": {
+                          "type": "string",
+                          "pattern": "^(?:0|[1-9][0-9]*)$"
+                        },
+                        "denominator": {
+                          "type": "string",
+                          "pattern": "^(?:0|[1-9][0-9]*)$"
+                        }
+                      },
+                      "required": [
+                        "numerator",
+                        "denominator"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "output_tokens": {
+                      "type": "object",
+                      "properties": {
+                        "numerator": {
+                          "type": "string",
+                          "pattern": "^(?:0|[1-9][0-9]*)$"
+                        },
+                        "denominator": {
+                          "type": "string",
+                          "pattern": "^(?:0|[1-9][0-9]*)$"
+                        }
+                      },
+                      "required": [
+                        "numerator",
+                        "denominator"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "cached_tokens": {
+                      "type": "object",
+                      "properties": {
+                        "numerator": {
+                          "type": "string",
+                          "pattern": "^(?:0|[1-9][0-9]*)$"
+                        },
+                        "denominator": {
+                          "type": "string",
+                          "pattern": "^(?:0|[1-9][0-9]*)$"
+                        }
+                      },
+                      "required": [
+                        "numerator",
+                        "denominator"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "reasoning_tokens": {
+                      "type": "object",
+                      "properties": {
+                        "numerator": {
+                          "type": "string",
+                          "pattern": "^(?:0|[1-9][0-9]*)$"
+                        },
+                        "denominator": {
+                          "type": "string",
+                          "pattern": "^(?:0|[1-9][0-9]*)$"
+                        }
+                      },
+                      "required": [
+                        "numerator",
+                        "denominator"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "input_tokens",
+                    "output_tokens",
+                    "cached_tokens",
+                    "reasoning_tokens"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "action",
+              "modelRates"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "save_profit"
+              },
+              "setting": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "percentage",
+                      "sats",
+                      "usd"
+                    ]
+                  },
+                  "value": {
+                    "type": "string",
+                    "pattern": "^(?:0|[1-9]\\d{0,8})(?:\\.\\d{1,6})?$"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "value"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "action",
+              "setting"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
                 "const": "add_api"
               },
               "account": {
@@ -1923,6 +2064,77 @@
                           "conversion"
                         ],
                         "additionalProperties": false
+                      },
+                      "profit": {
+                        "type": "object",
+                        "properties": {
+                          "setting": {
+                            "type": "object",
+                            "properties": {
+                              "mode": {
+                                "type": "string",
+                                "enum": [
+                                  "percentage",
+                                  "sats",
+                                  "usd"
+                                ]
+                              },
+                              "value": {
+                                "type": "string",
+                                "pattern": "^(?:0|[1-9]\\d{0,8})(?:\\.\\d{1,6})?$"
+                              }
+                            },
+                            "required": [
+                              "mode",
+                              "value"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "satsPerThousand": {
+                            "type": "object",
+                            "properties": {
+                              "numerator": {
+                                "type": "string",
+                                "pattern": "^\\d{1,40}$"
+                              },
+                              "denominator": {
+                                "type": "string",
+                                "pattern": "^[1-9]\\d{0,40}$"
+                              }
+                            },
+                            "required": [
+                              "numerator",
+                              "denominator"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "conversion": {
+                            "type": "object",
+                            "properties": {
+                              "source": {
+                                "type": "string",
+                                "const": "Kraken"
+                              },
+                              "usdPerBtc": {
+                                "type": "string",
+                                "pattern": "^[0-9]{1,12}(?:\\.[0-9]{1,8})?$"
+                              },
+                              "fetchedAt": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "source",
+                              "usdPerBtc",
+                              "fetchedAt"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "setting"
+                        ],
+                        "additionalProperties": false
                       }
                     },
                     "required": [
@@ -2197,7 +2409,8 @@
                         "input_tokens",
                         "output_tokens",
                         "cached_tokens",
-                        "reasoning_tokens"
+                        "reasoning_tokens",
+                        "service_fee"
                       ]
                     },
                     "units": {
@@ -4011,6 +4224,77 @@
           "required": [
             "provider",
             "conversion"
+          ],
+          "additionalProperties": false
+        },
+        "profit": {
+          "type": "object",
+          "properties": {
+            "setting": {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "percentage",
+                    "sats",
+                    "usd"
+                  ]
+                },
+                "value": {
+                  "type": "string",
+                  "pattern": "^(?:0|[1-9]\\d{0,8})(?:\\.\\d{1,6})?$"
+                }
+              },
+              "required": [
+                "mode",
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            "satsPerThousand": {
+              "type": "object",
+              "properties": {
+                "numerator": {
+                  "type": "string",
+                  "pattern": "^\\d{1,40}$"
+                },
+                "denominator": {
+                  "type": "string",
+                  "pattern": "^[1-9]\\d{0,40}$"
+                }
+              },
+              "required": [
+                "numerator",
+                "denominator"
+              ],
+              "additionalProperties": false
+            },
+            "conversion": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "const": "Kraken"
+                },
+                "usdPerBtc": {
+                  "type": "string",
+                  "pattern": "^[0-9]{1,12}(?:\\.[0-9]{1,8})?$"
+                },
+                "fetchedAt": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "source",
+                "usdPerBtc",
+                "fetchedAt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "setting"
           ],
           "additionalProperties": false
         }

@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: verification_deferred_gaps
-stopped_at: All available ChatGPT models have model-specific development rates synced and active locally
-last_updated: "2026-10-17T20:53:02+00:00"
+stopped_at: Admin profit margin in percentage sats or USD per thousand billed tokens verified and active locally
+last_updated: "2026-10-17T23:18:04+00:00"
 last_activity: 2026-10-17
-last_activity_desc: All seven available ChatGPT models synced atomically to model-specific test-sat rates; switching models activates matching card
+last_activity_desc: Profit editor, pinned fee accounting and authorization ceilings verified; margin remains zero
 progress:
   total_phases: 7
   completed_phases: 6
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
 Plan: 56 of 58 accepted; development Plans 07-52/53/56/57/54/55 complete
 Status: Guided applet.broker workspace at http://127.0.0.1:49371; diagnostic console at /dev. Saved chatgpt-oauth mode with gpt-6.1-sol retained. Product/console browser journeys and recovery passed through real local services. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
-Last activity: 2026-10-17 — Completed quick task 261017-j7a: pricing sync now covers all seven models available to the signed-in ChatGPT account, saves model-specific rates atomically and activates the correct card on model switch. Live apply/switch/repeat checks, tests and docs build passed. No model usage; existing TypeScript baseline has no new diagnostics.
+Last activity: 2026-10-17 — Completed quick task 261017-ma7: admin profit supports percentage markup or sats/USD per 1,000 billed tokens. Immutable policies feed authorization ceilings, receipt charges and separate customer service-fee lines. Unit/browser/composed signed CVM billing/restart checks and illustrated docs passed. Live margin is zero; existing TypeScript baseline has no added diagnostics. Diagnostic-console low-funds continuation issue documented in the task FOLLOWUP.md.
 
 Follow-up: Stream assembly/counter verification remains complete. Latest helper-signature and compiler-feedback fix passed 29 targeted unit/integration cases plus activity and composed OAuth browser journeys. Real blinking-text generation also passed. See debug/resolved/generated-typescript-check.md.
 
@@ -404,6 +404,8 @@ Recent decisions affecting current work:
 
 | 261017-j7a | Atomic sync of all available ChatGPT model rates and model-specific price-card selection | 2026-10-17 | see task history | [261017-j7a](./quick/261017-j7a-sync-pricing-for-all-available-chatgpt-m/) |
 
+| 261017-ma7 | Global percentage or sats/USD profit per thousand billed tokens, immutable fees, admin examples and exact settlement | 2026-10-17 | see task history | [261017-ma7](./quick/261017-ma7-add-admin-profit-margin-in-percentage-sa/) |
+
 ## Deferred Verification
 
 | Phase | Status | Reason | Resume command |
@@ -420,6 +422,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-17T20:53:02+00:00
-Stopped at: All seven available ChatGPT models have individual OpenAI-benchmarked development rates. Live admin http://127.0.0.1:49371/admin; original `gpt-6.1-sol` selection and saved OAuth retained. Production deferred.
-Resume file: .planning/quick/261017-j7a-sync-pricing-for-all-available-chatgpt-m/SUMMARY.md
+Last session: 2026-10-17T23:18:04+00:00
+Stopped at: Profit controls active at http://127.0.0.1:49371/admin under Provider & rates. Percentage markup or sats/USD per 1,000 billed tokens; margin still zero. Original `gpt-6.1-sol`, model rates and saved OAuth retained. Production deferred.
+Resume file: .planning/quick/261017-ma7-add-admin-profit-margin-in-percentage-sa/SUMMARY.md

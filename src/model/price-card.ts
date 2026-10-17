@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { NormalizedUsageReceiptSchema, UsageDimensionSchema, type NormalizedUsageReceipt } from "./model-gateway";
+import { ProfitPolicySchema, profitCharge } from "./profit";
 
 const DecimalSchema = z.string().regex(/^(?:0|[1-9][0-9]*)$/u);
 export { UsageDimensionSchema } from "./model-gateway";
@@ -12,6 +13,7 @@ export const PriceCardSchema = z.object({
   supportedDimensions: z.array(UsageDimensionSchema).min(1), rates: z.record(UsageDimensionSchema, RationalRateSchema), rounding: z.literal("ceil"),
   ceilings: z.object({ inputTokens: DecimalSchema.refine((value) => BigInt(value) > 0n), outputTokens: DecimalSchema.refine((value) => BigInt(value) > 0n) }).strict(),
   validity: z.object({ notBefore: z.iso.datetime(), notAfter: z.iso.datetime() }).strict(), sources: z.object({ provider: SourceProvenanceSchema, conversion: SourceProvenanceSchema }).strict().optional(),
+  profit: ProfitPolicySchema.optional(),
 }).strict().superRefine((card, ctx) => {
   if (new Set(card.supportedDimensions).size !== card.supportedDimensions.length) ctx.addIssue({ code: "custom", message: "supported dimensions must be unique" });
   for (const dimension of card.supportedDimensions) if (!card.rates[dimension]) ctx.addIssue({ code: "custom", message: `missing rate for ${dimension}` });
@@ -46,7 +48,7 @@ export const PHASE_04_MODEL_PROFILES = immutable({
 
 export type PriceCard = z.infer<typeof PriceCardSchema>;
 export type ModelProfile = z.infer<typeof ModelProfileSchema>;
-export type PricedUsageLine = Readonly<{ dimension: z.infer<typeof UsageDimensionSchema>; units: string; numerator: string; denominator: string; quotient: string; remainder: string; charge: string }>;
+export type PricedUsageLine = Readonly<{ dimension: z.infer<typeof UsageDimensionSchema> | "service_fee"; units: string; numerator: string; denominator: string; quotient: string; remainder: string; charge: string }>;
 export type ReceiptPricing = Readonly<{ status: "priced"; profileId: string; priceCardId: string; lines: readonly PricedUsageLine[]; total: string }> | Readonly<{ status: "billing_invariant_failed"; code: string }>;
 
 function freeze<T>(value: T): T { return Object.freeze(value); }
@@ -65,7 +67,10 @@ export function priceReceipt(input: Readonly<{ receipt: NormalizedUsageReceipt; 
     const [quotient, remainder, charge] = ceilDivide(units * numerator, denominator);
     lines.push(freeze({ dimension: item.dimension, units: item.units, numerator: rate.numerator, denominator: rate.denominator, quotient: quotient.toString(), remainder: remainder.toString(), charge: charge.toString() }));
   }
-  const total = lines.reduce((sum, line) => sum + BigInt(line.charge), 0n);
+  const base = lines.reduce((sum, line) => sum + BigInt(line.charge), 0n);
+  const fee = profitCharge(base, receipt.usage.reduce((sum, line) => sum + BigInt(line.units), 0n), card.profit);
+  if (fee) lines.push(freeze({ dimension: "service_fee", units: "1", numerator: fee.toString(), denominator: "1", quotient: fee.toString(), remainder: "0", charge: fee.toString() }));
+  const total = base + fee;
   if (input.reservation !== undefined && total > BigInt(input.reservation)) return freeze({ status: "billing_invariant_failed", code: "RECEIPT_EXCEEDS_RESERVATION" });
   return freeze({ status: "priced", profileId: profile.id, priceCardId: card.id, lines: freeze(lines), total: total.toString() });
 }
@@ -73,8 +78,9 @@ export function priceReceipt(input: Readonly<{ receipt: NormalizedUsageReceipt; 
 export function maximumOperationCharge(input: Readonly<{ card: PriceCard; profile: ModelProfile }>): string {
   const card = PriceCardSchema.parse(input.card); const profile = ModelProfileSchema.parse(input.profile);
   if (profile.priceCardId !== card.id) throw new Error("PROFILE_CARD_MISMATCH");
-  return profile.maximumUnits.reduce((sum, item) => {
+  const base = profile.maximumUnits.reduce((sum, item) => {
     const rate = card.rates[item.dimension]; if (!rate) throw new Error("PROFILE_DIMENSION_UNPRICED");
     const [, , charge] = ceilDivide(BigInt(item.units) * BigInt(rate.numerator), BigInt(rate.denominator)); return sum + charge;
-  }, 0n).toString();
+  }, 0n);
+  return (base + profitCharge(base, profile.maximumUnits.reduce((sum, line) => sum + BigInt(line.units), 0n), card.profit)).toString();
 }

@@ -181,7 +181,7 @@ export class DevelopmentModelGateway implements ModelGateway {
   }
 }
 
-export async function configuredProviderFromEnvironment(input: Readonly<{ apiKey?: string; model?: string; profile?: unknown; priceCard?: unknown; priceSources?: unknown }>): Promise<unknown | undefined> {
+export async function configuredProviderFromEnvironment(input: Readonly<{ apiKey?: string; model?: string; profile?: unknown; priceCard?: unknown; priceSources?: unknown }>): Promise<ConfiguredProvider | undefined> {
   if (!input.apiKey && !input.model && !input.profile && !input.priceCard && !input.priceSources) return undefined;
   if (!input.apiKey || !input.model || !input.profile || !input.priceCard || !input.priceSources) throw new Error("DEVELOPMENT_MODEL_CONFIGURATION_INCOMPLETE");
   const configured = ConfiguredProviderSchema.parse({ apiKey: input.apiKey, model: input.model, profile: input.profile, priceCard: input.priceCard, priceSources: input.priceSources });

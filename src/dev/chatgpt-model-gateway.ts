@@ -5,6 +5,8 @@ import { nappletAuthoringInstructions } from "./napplet-authoring";
 import { canonicalJson } from "../promotion/schema";
 import { ModelDispatchObservationSchema, ModelLookupObservationSchema, NormalizedUsageReceiptSchema, ProviderOperationIntentSchema, SourceProposalFileSchema, type NormalizedUsageReceipt, type ModelDispatchObservation, type ModelGateway, type ProviderOperationIntent, type SourceProposalFile } from "../model/model-gateway";
 import { ModelProfileSchema, PriceCardSchema } from "../model/price-card";
+import { withOperatorProfit } from "../model/operator-pricing";
+import type { ProfitPolicy } from "../model/profit";
 import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
 import type { SourceProposalStore } from "./source-proposal-store";
 import { CHATGPT_RESOURCE, boundedJson, chatGptError, safeChatGptError, type ChatGptFetch, type ChatGptOAuth } from "./chatgpt-oauth";
@@ -116,8 +118,8 @@ export async function readChatGptResponse(response: Response, signal: AbortSigna
 export class ChatGptModelGateway implements ModelGateway {
   readonly pricing: ReturnType<typeof chatGptDevelopmentPricing>;
   #lastError?: string;
-  constructor(private readonly options: { rates?: Record<string, { numerator: string; denominator: string }>; accountId: string; model: string; auth: Pick<ChatGptOAuth, "accessToken">; store: Pick<SourceProposalStore, "persist" | "recordProviderObservation" | "lookupProviderObservation" | "recordUsageEvidence" | "lookupUsageEvidence">; operations: ChatGptOperations; fetch?: ChatGptFetch; onResponseBytes?: (bytes: number) => void; remixSource?: RemixContextLoader; priorSource?: (input: { accountId: string; sessionId: string; authorizedPriorArtifactReference: string }) => Promise<readonly SourceProposalFile[] | undefined> }) {
-    this.pricing = chatGptDevelopmentPricing(options.accountId, options.model, options.rates);
+  constructor(private readonly options: { profit?: ProfitPolicy; rates?: Record<string, { numerator: string; denominator: string }>; accountId: string; model: string; auth: Pick<ChatGptOAuth, "accessToken">; store: Pick<SourceProposalStore, "persist" | "recordProviderObservation" | "lookupProviderObservation" | "recordUsageEvidence" | "lookupUsageEvidence">; operations: ChatGptOperations; fetch?: ChatGptFetch; onResponseBytes?: (bytes: number) => void; remixSource?: RemixContextLoader; priorSource?: (input: { accountId: string; sessionId: string; authorizedPriorArtifactReference: string }) => Promise<readonly SourceProposalFile[] | undefined> }) {
+    this.pricing = withOperatorProfit(chatGptDevelopmentPricing(options.accountId, options.model, options.rates), options.profit);
   }
   diagnostic(): string | undefined { return this.#lastError; }
   #unknown(intent: ProviderOperationIntent, code?: string): ModelDispatchObservation {

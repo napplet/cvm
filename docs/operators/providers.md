@@ -76,6 +76,16 @@ Only categories billed separately by the selected provider appear. For ChatGPT, 
 
 The CVM keeps exact fractions internally. Rates with more than six decimal places per 1,000 tokens are labelled as rounded for display; untouched values retain their original precision when another field is saved.
 
+## Set a profit margin
+
+Open **Provider & rates → Profit margin** in private admin. Choose **Percentage of base cost**, **Sats per 1,000 billed tokens**, or **USD per 1,000 billed tokens**, enter the amount, review the base/profit/customer-total example, then select **Save margin**. This one setting applies across all models, including models updated by `bun run pricing:sync`. Use `0` to disable it.
+
+Percentage means **markup on base cost**: `20%` turns 100 sats of model cost into a 120-sat customer charge. It is not a percentage of the final selling price. Fixed sats or USD is **prorated over all billed tokens** in each generation or revision, including attempts whose build later fails. At 5 sats per 1,000 tokens, 1,200 input plus 800 output tokens add 10 sats of profit. Separately billed cached/reasoning tokens count once; tokens already included in input/output totals are not counted again. Rejected requests and zero-cost receipts have no service fee. Model usage categories and the total service fee each round up to whole sats; the authorized maximum includes both.
+
+USD requires a fresh CVM Kraken quote when saved. The converted sat amount and source quote stay pinned to the price version until you save again, so currency movements cannot change an accepted request's fee. The editor shows the saved conversion; its live example previews the latest quote before saving. Profit changes create new price-card/profile versions, while old requests retain their original versions. Active work blocks saving and keeps your editor draft. The user's request breakdown lists the service fee separately.
+
+<GuideScreenshot audience="operators" name="profit" alt="Profit margin editor with percentage, sats and USD options and an example separating base cost, operator profit and customer total" caption="A 20% markup on a 12-test-sat example adds 3 test sats after whole-sat rounding. Sats and USD options specify profit per 1,000 billed tokens." />
+
 ## OpenAI price discovery
 
 OpenAI's documented [Models API](https://developers.openai.com/api/reference/resources/models/methods/list) returns model metadata, without list prices. Its [Costs API](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage/methods/costs) reports incurred API spending. No official model list-price API was found in the documentation reviewed on October 17, 2026; use the [published pricing table](https://developers.openai.com/api/docs/pricing) for API price-card evidence. The live BTC quote above is for display and does not replace the conversion evidence pinned to a billable API price card.

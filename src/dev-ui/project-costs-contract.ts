@@ -7,7 +7,7 @@ export const RequestCostSchema = z.object({
   kind: z.enum(["create", "revise"]), prompt: z.string().max(512).nullable(),
   state: z.string(), version: z.number().int().nullable(), createdAt: z.string(),
   charge: Money.nullable(), maximum: Money,
-  lines: z.array(z.object({ dimension: z.enum(["input_tokens", "output_tokens", "cached_tokens", "reasoning_tokens"]), units: Money, numerator: Money, denominator: Money, charge: Money })),
+  lines: z.array(z.object({ dimension: z.enum(["input_tokens", "output_tokens", "cached_tokens", "reasoning_tokens", "service_fee"]), units: Money, numerator: Money, denominator: Money, charge: Money })),
 });
 export const ProjectCostsSchema = z.object({
   sessionId: z.string(), unit: z.literal("test_sat"), total: ProjectSpendSchema,

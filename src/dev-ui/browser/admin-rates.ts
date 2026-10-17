@@ -1,6 +1,7 @@
 import { quoteCaption, usdEquivalent, type ExchangeRate } from "../../currency/btc-usd";
+import { profitCharge, type ProfitPolicy } from "../../model/profit";
 export type Rate = { numerator: string; denominator: string };
-type Pricing = { card: { id: string; kind: string; rates: Record<string, Rate>; supportedDimensions: string[] }; profile: { provider: string } };
+type Pricing = { card: { id: string; kind: string; rates: Record<string, Rate>; supportedDimensions: string[]; profit?: ProfitPolicy }; profile: { provider: string } };
 const titles: Record<string, [string, string]> = {
   input_tokens: ["Input", "Your prompt, instructions and context sent to the model."],
   output_tokens: ["Output", "Generated code and other text returned by the model."],
@@ -37,7 +38,7 @@ export function exampleCharge(rates: Record<string, Rate>, dimensions: readonly 
 export const ratesMarkup = `<div id="rates-panel"><div class="rates-heading"><h2>Generation pricing</h2><span id="rates-mode" class="rates-mode"></span></div>
 <p id="rates-explanation" class="supporting"></p>
 <form id="rates-form" novalidate>
-  <div class="rates-unit-heading"><h3>Price per 1,000 tokens</h3><p class="supporting">Tokens are small pieces of text or code.</p></div>
+  <div class="rates-unit-heading"><h3>Base price per 1,000 tokens</h3><p class="supporting">Before the service fee. Tokens are small pieces of text or code.</p></div>
   <div id="rate-fields"></div><p id="rates-included" class="supporting"></p>
   <div class="rates-example"><div><strong>Example request</strong><p>10,000 input + 2,000 output tokens</p></div><div><output id="rates-example-cost" aria-live="polite"></output><span id="rates-example-usd" class="usd-equivalent"></span></div></div>
   <p id="rates-exchange" class="supporting"></p><p id="rates-currency-note" class="supporting"></p>
@@ -102,7 +103,7 @@ export function mountAdminRates(pricing: Pricing, save: (rates: Record<string, R
   function update() {
     const value = draft();
     updateCurrency(value);
-    el("rates-example-cost").textContent = value.valid ? `${exampleCharge(value.rates, pricing.card.supportedDimensions)} ${unit}` : "Enter valid prices";
+    el("rates-example-cost").textContent = value.valid ? `${customerExample(value.rates).toLocaleString()} ${unit}` : "Enter valid prices";
     el<HTMLButtonElement>("rates-save").disabled = !editable || !value.dirty || !value.valid || saving;
     el("rates-dirty").hidden = !value.dirty;
     el("rates-feedback").textContent = "";
@@ -112,9 +113,10 @@ export function mountAdminRates(pricing: Pricing, save: (rates: Record<string, R
       const rate = value.rates[field.name]!;
       field.usd.textContent = field.input.validity.valid ? usdEquivalent((BigInt(rate.numerator) * 1000n).toString(), exchangeRate, rate.denominator) : "—";
     }
-    el("rates-example-usd").textContent = value.valid ? usdEquivalent(exampleCharge(value.rates, pricing.card.supportedDimensions, false), exchangeRate) : "—";
+    el("rates-example-usd").textContent = value.valid ? usdEquivalent(customerExample(value.rates).toString(), exchangeRate) : "—";
     el("rates-exchange").textContent = quoteCaption(exchangeRate);
   }
+  function customerExample(rates: Record<string, Rate>) { const base = BigInt(exampleCharge(rates, pricing.card.supportedDimensions, false)); const tokens = (pricing.card.supportedDimensions.includes("input_tokens") ? 10000n : 0n) + (pricing.card.supportedDimensions.includes("output_tokens") ? 2000n : 0n); return base + profitCharge(base, tokens, pricing.card.profit); }
   el<HTMLFormElement>("rates-form").onsubmit = async event => {
     event.preventDefault(); const value = draft();
     if (!editable || saving || !value.dirty || !value.valid) { if (!value.valid) fields.find(field => !field.input.validity.valid)?.input.focus(); return; }

@@ -14,5 +14,5 @@ export async function createDevelopmentModelComposition(config: DevPayments, opt
     ? { card: (configured as any).priceCard, profile: (configured as any).profile }
     : undefined;
   if (pricing) await registerDevelopmentPricing(funding.pool, { profile: pricing.profile, priceCard: pricing.card });
-  return Object.freeze({ funding, proposals, gateway, ...(pricing ? { pricing } : {}), providerLabel: gateway.label(), close: funding.close });
+  return Object.freeze({ funding, proposals, gateway, configured, ...(pricing ? { pricing } : {}), providerLabel: gateway.label(), close: funding.close });
 }

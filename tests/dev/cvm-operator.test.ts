@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CvmOperator } from "../../src/dev/cvm-operator";
 import { chatGptDevelopmentPricing } from "../../src/dev/chatgpt-model-gateway";
+import { withOperatorProfit } from "../../src/model/operator-pricing";
 
 test("operator authority, secret projection, replay, busy guard and private restart", async () => {
   const directory = await mkdtemp(join(tmpdir(), "cvm-admin-unit-"));
@@ -64,5 +65,35 @@ test("operator authority, secret projection, replay, busy guard and private rest
     await restored.clearApiSelection();
     expect(await restored.handle({ action: "remove_api", id: account.id }, restored.pubkey)).toEqual({ status: "ok" });
     expect(await readFile(join(directory, "operator.json"), "utf8")).not.toContain(account.apiKey);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("signed profit settings pin USD, persist, survive rate sync and roll back rejected configuration", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cvm-profit-unit-"));
+  const base = chatGptDevelopmentPricing("fixture-account", "fixture-model");
+  let pricing = base, busy = false, failOnce = false;
+  let operator: CvmOperator;
+  const options = { pool: { query: async () => ({ rows: [] }) }, busy: () => busy, pricing: () => pricing, chatgpt: async () => ({}),
+    configure: async () => { if (failOnce) { failOnce = false; throw new Error("rejected"); } pricing = withOperatorProfit(base, operator.profit()); } };
+  try {
+    operator = await CvmOperator.open(directory, options);
+    const command = { action: "save_profit", setting: { mode: "percentage" as const, value: "20" } };
+    expect(await operator.handle(command, "f".repeat(64))).toEqual({ status: "denied", code: "OPERATOR_REQUIRED" });
+    busy = true;
+    expect(await operator.handle(command, operator.pubkey)).toEqual({ status: "rejected", code: "CONFIGURATION_BUSY" }); busy = false;
+    expect(await operator.handle(command, operator.pubkey)).toEqual({ status: "ok" });
+    const previous = pricing.card.id;
+    failOnce = true;
+    expect(await operator.handle({ ...command, setting: { mode: "sats", value: "30" } }, operator.pubkey)).toMatchObject({ status: "rejected" });
+    expect(operator.profit()?.setting).toEqual(command.setting); expect(pricing.card.id).toBe(previous);
+    operator.exchangeRates.read = async () => ({ status: "unavailable" });
+    expect(await operator.handle({ ...command, setting: { mode: "usd", value: "0.01" } }, operator.pubkey)).toEqual({ status: "rejected", code: "FRESH_BTC_USD_QUOTE_REQUIRED" });
+    operator.exchangeRates.read = async () => ({ status: "fresh", quote: { source: "Kraken", usdPerBtc: "80000", fetchedAt: Date.now() } });
+    expect(await operator.handle({ ...command, setting: { mode: "usd", value: "0.01" } }, operator.pubkey)).toEqual({ status: "ok" });
+    const policy = operator.profit();
+    expect(await operator.handle({ action: "save_model_rates", modelRates: { "fixture-model": base.card.rates } }, operator.pubkey)).toEqual({ status: "ok" });
+    expect(operator.profit()).toEqual(policy);
+    const restored = await CvmOperator.open(directory, options);
+    expect(restored.profit()).toEqual(policy); expect(pricing.card.profit).toEqual(policy);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

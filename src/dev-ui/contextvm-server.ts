@@ -42,6 +42,7 @@ import { LocalGenerationArtifactVerifier, LocalProposalWorkerPort } from "../dev
 import { createPreviewServer } from "./preview-server";
 import { accountIdForPrincipal } from "../domain/account-command";
 import { PHASE_04_DETERMINISTIC_PRICE_CARD, PHASE_04_MODEL_PROFILES, maximumOperationCharge } from "../model/price-card";
+import { withOperatorProfit } from "../model/operator-pricing";
 import { LocalDevelopmentRuntimeReadiness, type DevelopmentRuntimeReadiness } from "../dev/development-runtime-readiness";
 import { ContinuationService } from "../continuity/continuation-service";
 import { developmentServiceIdentity } from "../dev/local-service-identity";
@@ -237,26 +238,27 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
     try {
       let next = runtime; let gateway: ChatGptModelGateway | undefined;
       const api = operator?.selectedApi();
-      if (api && !persist) {
-        const configured = await configuredProviderFromEnvironment(api);
+      const baseApi = api && !persist ? api : settings.mode === "default" ? composition.configured : undefined;
+      if (baseApi) {
+        const customer = withOperatorProfit({ card: baseApi.priceCard, profile: baseApi.profile }, operator?.profit());
+        const configured = await configuredProviderFromEnvironment({ ...baseApi, profile: customer.profile, priceCard: customer.card });
         const apiGateway = new DevelopmentModelGateway({ store: composition.proposals, configured, remixSource, priorSource: async input => priorSource?.(input) });
-        await registerDevelopmentPricing(app.pool, { profile: api.profile, priceCard: api.priceCard });
-        next = makeRuntime(apiGateway, { card: api.priceCard, profile: api.profile });
+        await registerDevelopmentPricing(app.pool, { profile: customer.profile, priceCard: customer.card });
+        next = makeRuntime(apiGateway, customer);
       } else if (settings.mode === "chatgpt") {
         if (!settings.accountId || !settings.model) throw new Error("CHATGPT_SELECT_AVAILABLE_MODEL");
-        gateway = new ChatGptModelGateway({ rates: operator?.rates(settings.model), accountId: settings.accountId, model: settings.model, auth: chatgpt, remixSource, store: composition.proposals, operations: new SqlChatGptOperations(app.pool), fetch: options.chatGptFetch, onResponseBytes: (bytes) => progress.emit("model_stream", "running", { bytes }), priorSource: async (input) => priorSource?.(input) });
+        gateway = new ChatGptModelGateway({ profit: operator?.profit(), rates: operator?.rates(settings.model), accountId: settings.accountId, model: settings.model, auth: chatgpt, remixSource, store: composition.proposals, operations: new SqlChatGptOperations(app.pool), fetch: options.chatGptFetch, onResponseBytes: (bytes) => progress.emit("model_stream", "running", { bytes }), priorSource: async (input) => priorSource?.(input) });
         await registerDevelopmentPricing(app.pool, { profile: gateway.pricing.profile, priceCard: gateway.pricing.card });
         next = makeRuntime(gateway, gateway.pricing);
-      } else if (settings.mode === "default") next = makeRuntime(composition.gateway, composition.pricing ?? { card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile: PHASE_04_MODEL_PROFILES["code-proposal"] });
-      else throw new Error("CHATGPT_SELECT_AVAILABLE_MODEL");
-      if (!api && settings.mode === "default" && operator?.rates() && !composition.pricing) {
-        const rates = operator.rates()!;
-        const suffix = new Bun.CryptoHasher("sha256").update(JSON.stringify(rates)).digest("hex").slice(0, 24);
-        const card = { ...PHASE_04_DETERMINISTIC_PRICE_CARD, id: `operator-fixture-card-${suffix}`, version: suffix, rates };
-        const profile = { ...PHASE_04_MODEL_PROFILES["code-proposal"], id: `operator-fixture-profile-${suffix}`, priceCardId: card.id };
-        await registerDevelopmentPricing(app.pool, { profile, priceCard: card });
-        next = makeRuntime(composition.gateway, { card, profile });
-      }
+      } else if (settings.mode === "default") {
+        const rates = operator?.rates();
+        const suffix = rates && new Bun.CryptoHasher("sha256").update(JSON.stringify(rates)).digest("hex").slice(0, 24);
+        const card = rates ? { ...PHASE_04_DETERMINISTIC_PRICE_CARD, id: `operator-fixture-card-${suffix}`, version: suffix!, rates } : PHASE_04_DETERMINISTIC_PRICE_CARD;
+        const profile = rates ? { ...PHASE_04_MODEL_PROFILES["code-proposal"], id: `operator-fixture-profile-${suffix}`, priceCardId: card.id } : PHASE_04_MODEL_PROFILES["code-proposal"];
+        const customer = withOperatorProfit({ card, profile }, operator?.profit());
+        await registerDevelopmentPricing(app.pool, { profile: customer.profile, priceCard: customer.card });
+        next = makeRuntime(composition.gateway, customer);
+      } else throw new Error("CHATGPT_SELECT_AVAILABLE_MODEL");
       if (persist) await chatgpt.select(settings);
       runtime = next; oauthGateway = gateway;
       providerLabel = api && !persist ? "Configured OpenAI Responses" : gateway ? "ChatGPT subscription · local test sats" : composition.providerLabel;

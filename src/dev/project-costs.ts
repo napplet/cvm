@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { PostgresSqlClient } from "../persistence/postgres-sql-funding-store";
 import { accountIdForPrincipal } from "../domain/account-command";
 import { PriceCardSchema } from "../model/price-card";
+import { profitCharge } from "../model/profit";
 import { ProjectCostsSchema, type RequestCost } from "../dev-ui/project-costs-contract";
 
 /** Reproduce the pinned receipt's integer rounding, never infer money from tokens
@@ -18,7 +19,9 @@ export function costLines(usage: unknown, card: unknown, charge: string | null):
     const amount = (BigInt(item.units) * BigInt(rate.numerator) + BigInt(rate.denominator) - 1n) / BigInt(rate.denominator);
     lines.push({ ...item, ...rate, charge: amount.toString() });
   }
-  return lines.reduce((sum, line) => sum + BigInt(line.charge), 0n) === BigInt(charge) ? lines : [];
+  const base = lines.reduce((sum, line) => sum + BigInt(line.charge), 0n), fee = profitCharge(base, parsed.data.reduce((sum, line) => sum + BigInt(line.units), 0n), priced.data.profit);
+  if (fee) lines.push({ dimension: "service_fee", units: "1", numerator: fee.toString(), denominator: "1", charge: fee.toString() });
+  return base + fee === BigInt(charge) ? lines : [];
 }
 
 export async function readProjectCosts(pool: Pick<PostgresSqlClient, "query">, pubkey: string, id: string, limit: number, after?: string) {

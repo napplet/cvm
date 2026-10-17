@@ -16,6 +16,17 @@ input,select,textarea { margin:.5rem 0 1rem; }
 .row { display:flex; gap:.5rem; flex-wrap:wrap; margin:.8rem 0; }
 .rates-heading { display:flex; align-items:center; flex-wrap:wrap; gap:.65rem; }
 .rates-heading h2 { margin:0; }
+.admin-grid .profit-panel { border:0; border-top:1px solid #d8dccf; border-radius:0; padding:1.5rem 0; margin:1.5rem 0; }
+.profit-controls { display:grid; grid-template-columns:minmax(0,1.5fr) minmax(0,1fr); gap:1rem; align-items:end; }
+.profit-controls label { font-weight:650; }
+.profit-example { border:1px solid #d8e0ca; background:#edf1e4; border-radius:1rem; padding:1rem; }
+.profit-example > p { font-size:.9rem; color:#64726c; margin:0 0 1rem; }
+.profit-example dl { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1rem; margin:0; }
+.profit-example dt { font-size:.85rem; color:#64726c; margin-bottom:.4rem; }
+.profit-example dd { margin:0; font-size:1.15rem; font-weight:750; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+.profit-example small { display:block; color:#53684e; margin-top:.35rem; overflow-wrap:anywhere; }
+#profit-error { color:#9b3d26; } #profit-error:empty { display:none; }
+@media(max-width:600px) { .profit-controls { grid-template-columns:1fr; gap:0; } .profit-example dl { grid-template-columns:1fr; gap:1rem; } .profit-example dl > div { display:grid; grid-template-columns:1fr 1.5fr; column-gap:1rem; } .profit-example small { grid-column:2; } }
 .rates-mode { background:#edf1e4; color:#526947; border-radius:1rem; padding:.25rem .6rem; font-size:.75rem; font-weight:650; }
 .rates-unit-heading { border-top:1px solid #e0e3d8; padding-top:1.25rem; margin-top:1.25rem; }
 .rates-unit-heading h3 { font-size:1.1rem; margin:0; }

@@ -17,7 +17,7 @@ function text<K extends keyof HTMLElementTagNameMap>(tag: K, value: string, clas
   if (className) element.className = className;
   return element;
 }
-const labels = { input_tokens: "Input", output_tokens: "Output", cached_tokens: "Cached input", reasoning_tokens: "Reasoning" };
+const labels = { input_tokens: "Input", output_tokens: "Output", cached_tokens: "Cached input", reasoning_tokens: "Reasoning", service_fee: "Service fee" };
 
 /** A request and its result share one receipt. Showing that receipt once avoids
  * implying that the status reply is a second paid model request. */
@@ -38,8 +38,8 @@ export function requestCostElement(request: RequestCost): HTMLLIElement {
   if (request.lines.length) {
     const list = document.createElement("dl");
     for (const line of request.lines) {
-      const row = document.createElement("div"); const term = text("dt",`${labels[line.dimension]} · ${BigInt(line.units).toLocaleString()} tokens`);
-      term.append(text("small",`${BigInt(line.numerator).toLocaleString()} test sats / ${BigInt(line.denominator).toLocaleString()} tokens`));
+      const row = document.createElement("div"); const term = text("dt",line.dimension === "service_fee" ? "Service fee" : `${labels[line.dimension]} · ${BigInt(line.units).toLocaleString()} tokens`);
+      term.append(text("small",line.dimension === "service_fee" ? "Calculated from usage at the profit rate saved for this request" : `${BigInt(line.numerator).toLocaleString()} test sats / ${BigInt(line.denominator).toLocaleString()} tokens`));
       row.append(term,text("dd",formatCost(line.charge))); list.append(row);
     }
     details.append(list,text("p","Each usage category is rounded up to a whole test sat at the rate saved for this request.","request-note"));

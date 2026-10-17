@@ -132,6 +132,9 @@ try {
   await capture("subscription", ".workspace-controls", "#chatgpt-status");
   await capture("rates", "#rates-panel");
   assert((await page.locator("#rates-example-usd").innerText()).includes("$0.0096 USD"));
+  await page.locator("#profit-value").fill("20");
+  await capture("profit", ".profit-panel");
+  await page.locator("#profit-value").fill("0");
   await page.getByText("Add an API account", { exact: true }).click();
   await page.locator("#api-label").fill("Development API account");
   await capture("api-account", "#api-form");

@@ -1,0 +1,5 @@
+# Existing diagnostic-console low-funds continuation conflict
+
+During the composed OAuth fixture, a 5-sat/1,000-token profit raised the action ceiling from 395 to 2,362 sats. The old 4,000-sat fixture balance covered the first admission but not another full hold. The diagnostic console requested another admission and its revision reached `PgFundingTransaction.pauseForFunding`, which rejects a session whose original admission differs from the new action's admission (`CONTINUATION_SESSION_IDENTITY_CONFLICT`). No second model request or charge occurred.
+
+This is an existing low-balance continuation/session-binding problem exposed by larger authorization maxima; the billing/profit implementation does not change that policy. The profit execution journey now funds six ceilings in faucet-supported batches to exercise replay, persisted margin, build failure and interrupted request accounting under funded conditions. Follow up with an isolated reproduction for insufficient revision funding/new admission, and align the pause binding with the per-action admission/price pins without weakening caller ownership or stale-version checks.

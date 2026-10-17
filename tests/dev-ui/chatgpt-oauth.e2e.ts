@@ -61,9 +61,18 @@ try {
   requireThat(await admin.getByLabel("ChatGPT model", { exact: true }).inputValue() === "", "DEFAULT_PROVIDER_WAS_NOT_RETAINED");
   await admin.getByLabel("ChatGPT model", { exact: true }).selectOption("fixture-codex");
   await admin.getByText("Using ChatGPT plan · fixture-codex", { exact: true }).waitFor();
+  await admin.locator("#profit-mode").selectOption("sats"); await admin.locator("#profit-value").fill("5");
+  await admin.locator("#profit-save").click(); await admin.getByText("Margin saved for new requests.", { exact: true }).waitFor();
   await page.goto(`${server.url}/dev`, { waitUntil: "networkidle" });
   await page.getByRole("button", { name: "Connect", exact: true }).click(); await page.getByText("Connected:").waitFor();
-  await page.getByLabel("Cashu amount (sats)").fill("4000"); await page.getByRole("button", { name: "Fund with Cashu", exact: true }).click(); await page.getByText("Cashu credited", { exact: true }).waitFor();
+  // Each explicit admission holds its maximum. Include the profit ceiling in
+  // fixture funding so this journey tests execution, rather than low funds.
+  let needed = BigInt(await page.getByLabel("Maximum (sats)", { exact: true }).inputValue()) * 6n;
+  while (needed > 0n) {
+    const amount = needed > 10_000n ? 10_000n : needed;
+    await page.getByLabel("Cashu amount (sats)").fill(amount.toString()); await page.getByRole("button", { name: "Fund with Cashu", exact: true }).click(); await page.getByText("Cashu credited", { exact: true }).waitFor();
+    needed -= amount;
+  }
   await page.getByRole("button", { name: "Generate napplet", exact: true }).click();
   await page.locator('#activity-events [data-stage="model_stream"]').waitFor();
   requireThat(await page.locator("#versions li").count() === 0 && fixture.counts().inferences === 1, "PROGRESS_NOT_LIVE");
@@ -74,6 +83,8 @@ try {
   await admin.getByLabel("ChatGPT model", { exact: true }).selectOption("fixture-alternative");
   await admin.getByText("Wait for the current generation to finish before changing model settings.", { exact: true }).waitFor();
   requireThat(await admin.getByLabel("ChatGPT model", { exact: true }).inputValue() === "fixture-codex", "BUSY_SELECTION_CHANGED_MODEL");
+  await admin.locator("#profit-value").fill("6"); await admin.locator("#profit-save").click();
+  await admin.getByText("A job is running. Your draft is kept; save when it finishes.", { exact: true }).waitFor();
   releaseInference(); await generated(1);
   for (const stage of ["create", "init", "skills", "install", "build", "verify", "conformance", "dry-run", "artifact", "ledger", "preview"]) requireThat(await page.locator(`#activity-events [data-stage="${stage}"][data-state="completed"]`).count() > 0, `PROGRESS_STAGE_MISSING:${stage}`); await server.assertGenerationSettlement();
   const frame = page.frameLocator("#preview").frameLocator("iframe").first(); await frame.getByRole("button", { name: "Add" }).click(); await frame.getByText("1", { exact: true }).waitFor();
@@ -92,6 +103,9 @@ try {
   await frame.getByRole("button", { name: "Add", exact: true }).click(); await frame.getByText("1", { exact: true }).waitFor();
   const counts = (await pool.query("SELECT (SELECT count(*) FROM development_chatgpt_operations) AS requests, (SELECT count(*) FROM provider_observations) AS observations, (SELECT count(*) FROM ledger_entries WHERE direction='debit' AND account_id=$1) AS debits", [(server.generationEvidence().result as any).accountId])).rows[0];
   requireThat(Number(counts.requests) === 3 && Number(counts.observations) === 3 && Number(counts.debits) === 3 && fixture.counts().inferences === 3, `OAUTH_SQL_REPLAY_COUNTS_INVALID:${JSON.stringify({ counts, inferences: fixture.counts().inferences })}`);
+  const charges = (await pool.query("SELECT receipt_charge::text FROM metered_actions WHERE account_id=$1 ORDER BY created_at", [(server.generationEvidence().result as any).accountId])).rows;
+  requireThat(charges.length === 3 && charges.every(row => row.receipt_charge === "13"), "PROFIT_NOT_PINNED_SETTLED_ONCE_OR_RESTORED");
+  requireThat(await admin.locator("#profit-value").inputValue() === "5", "PROFIT_NOT_RESTORED_AFTER_RESTART");
   const records = JSON.parse(await readFile(join(stateRoot, "development-chatgpt/accounts.json"), "utf8")); const tokens = records.accounts[0].tokens;
   const visible = [await page.content(), JSON.stringify(browserTraffic), JSON.stringify(browserLogs), await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }))].join("\n");
   for (const secret of [tokens.access, tokens.refresh, tokens.id]) requireThat(!visible.includes(secret), "OAUTH_SECRET_REACHED_BROWSER");
@@ -113,10 +127,11 @@ try {
   await page.screenshot({ path: resolve(".local/development-gui-evidence/progress-failure.png"), fullPage: true });
   fixture.setInferenceMode("limit");
   await page.getByRole("button", { name: "Generate napplet", exact: true }).click();
-  await page.getByText("Generation stopped · provider outcome unconfirmed", { exact: true }).waitFor();
+  await page.locator("#generation-error").filter({ hasText: "MODEL_RESPONSE_INTERRUPTED" }).waitFor();
   await page.locator("#generation-error").filter({ hasText: "ChatGPT subscription request blocked by a usage limit" }).waitFor();
   requireThat((await page.locator("#activity-connection").textContent())?.includes("App limits"), "LIVE_PROVIDER_ERROR_MISSING");
-  requireThat((await page.locator("#activity-connection").textContent())?.includes("The server finished this request"), "STOPPED_REQUEST_SHOWN_AS_RUNNING");
+  requireThat((await page.locator("#activity-current").textContent())?.includes("Action stopped"), "STOPPED_REQUEST_SHOWN_AS_RUNNING");
+  requireThat((server.generationEvidence().result as any)?.confirmedSpend === "0", "UNCONFIRMED_RESPONSE_CHARGED_PROFIT");
   requireThat(fixture.counts().inferences === 5, "LIMIT_ACTION_REDISPATCHED");
   await admin.getByRole("button", { name: "Sign out of ChatGPT" }).click(); await admin.getByText("Signed out of ChatGPT. Use the default provider or sign in again.", { exact: true }).waitFor();
   const cleared = JSON.parse(await readFile(join(stateRoot, "development-chatgpt/accounts.json"), "utf8")); requireThat(!cleared.accounts[0].tokens, "OAUTH_LOGOUT_RETAINED_TOKENS");

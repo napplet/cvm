@@ -16,6 +16,8 @@ Useful revisions describe the defect and the desired result:
 
 Avoid resending the entire original idea unless you intend a broader redesign. Revisions start from authorized, verified prior source.
 
+<GuideScreenshot name="revision-composer" alt="Revision conversation with Version 2 ready and a filled change request beside the send arrow" caption="Write your change in the bottom field, then use the arrow or ⌘/Ctrl + Enter." />
+
 ## Read the execution state
 
 | State | What to do |
@@ -27,6 +29,8 @@ Avoid resending the entire original idea unless you intend a broader redesign. R
 | Outcome unconfirmed | Check status before retrying; work or its usage may still need reconciliation. |
 
 The development subscription path can close a durably ended, unrecoverable attempt without a local test charge. When the UI says you can send again, the next submission is a new attempt; it is not an automatic retry of the old one.
+
+<GuideScreenshot name="execution-details" alt="Expanded live execution showing reservation and build completion followed by guidance and TypeScript checks running" caption="Open Execution details beneath the builder for individual stages and their results." />
 
 ## Disabled controls
 

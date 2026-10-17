@@ -19,11 +19,15 @@ An `naddr` identifies a replaceable Nostr event. A shell still needs access to t
 
 The applet event is signed before file propagation. It is published only after the required copies are verified. The CVM prepares the event, but your signer owns the publication signature.
 
+<GuideScreenshot name="publish-review" alt="Publication review for Version 2 with destinations expanded and the Sign and publish button above three publication stages" caption="Review the version and destinations before approving your signer. Preparing this review does not publish anything." />
+
 ## Choose destinations
 
 The workspace discovers your Blossom server list and your NIP-65 publishing relays. Relay-list discovery uses purplepag.es. If a list is missing or unusable, enter destinations manually.
 
 Type a URL and press **Enter** to turn it into a removable chip. Use `https://` for public Blossom servers and `wss://` for public relays. Relay suggestions are advisory; review and select your own destinations.
+
+<GuideScreenshot name="publish-destinations" alt="Final Publish step with an applet name and removable Blossom-server and relay URL chips" caption="When discovery finds no list, add your own destinations. The example.com addresses shown here are placeholders; replace them with your servers." />
 
 ## If a step fails
 

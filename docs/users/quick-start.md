@@ -12,11 +12,17 @@ Choose **New idea**, then enter a focused request:
 
 > A reading-session counter with Add and Reset buttons. Show today’s total in large text and use a quiet green theme.
 
+<GuideScreenshot name="create" alt="Creation page with the reading-counter prompt entered and the Shape my idea button" caption="Start with one focused idea. Your applets and Explore remain available in the top navigation." />
+
 Choose **Shape my idea**, review the setup and maximum, then **Create my applet**. Local development prepares test funds automatically. You do not need a real wallet for those test sats.
+
+<GuideScreenshot name="setup" alt="Ready to build step showing the idea, connected CVM, expanded test budget and Create my applet button" caption="Review the connected CVM and open the test-budget details before creating. The example uses fixture mode." />
 
 ## 3. Follow the build
 
 The workspace reports admission, model work, response receipt, the isolated build, checks, and preview readiness. Keep the tab open while it works. You can sign in or visit your collection during a build; those actions do not move the build to another identity.
+
+<GuideScreenshot name="build-progress" alt="Build progress at Checking, following Preparing, Generating and Building, with Preview still ahead" caption="The stage strip tells you what is happening now. This example is checking the applet." />
 
 If it stops, read the explanation beside the action or open the execution details. See [troubleshooting](./troubleshooting) before starting another request.
 
@@ -25,6 +31,8 @@ If it stops, read the explanation beside the action or open the execution detail
 Use the preview as you would the applet. In the revision box, describe a specific change, such as “Ask before resetting the counter.” Send it with the arrow or **⌘/Ctrl + Enter**.
 
 A successful revision creates a new verified version. You can select an earlier version without asking the model to generate it again.
+
+<GuideScreenshot name="revise" alt="Reading counter preview beside a request to ask for confirmation before resetting, with Version 2 selected" caption="Test the preview, then send one specific change. The version picker is above the preview." />
 
 ## 5. Keep or share your work
 

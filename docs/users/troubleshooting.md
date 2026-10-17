@@ -15,6 +15,8 @@ Start with the visible status and execution details. Keep the project/session an
 
 ## Generation failures
 
+<GuideScreenshot name="execution-details" alt="Live execution detail listing completed stages and a currently running TypeScript check" caption="Execution details separates completed stages from the current stage. This example is still checking, not reporting a failure." />
+
 **`CHATGPT_RESPONSE_TOO_LARGE`** is a response-processing limit, not evidence that OAuth expired. Check the operation details. An operator running an older build should update and restart it; signing in again is only useful when an authentication error is reported.
 
 **`CHATGPT_GENERATION_TIMEOUT`** means the local model deadline elapsed. It does not mean sign-in expired.

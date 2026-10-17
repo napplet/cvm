@@ -9,6 +9,8 @@
 
 Validation and browsing do not make model requests. Generation starts when you explicitly create the remix.
 
+<GuideScreenshot name="remix" alt="Remix mode with an naddr, File verified status and a prompt to adapt the counter for sketching" caption="Wait for the address check, then describe your changes. The sample address is illustrative and is not a published applet." />
+
 ## What gets reused?
 
 The client checks the signed applet event and the file’s hash. If the applet includes a supported source link, the CVM attempts to retrieve it in an isolated worker. The current importer supports public GitHub repositories. If source cannot be used, verified HTML is the fallback when it fits the input limit.
@@ -22,6 +24,8 @@ Published HTML can be fetched up to 2 MB. HTML supplied as model context is limi
 Open **Explore** and choose **Your published applets** or **Your network**. Network browsing considers up to 100 people you directly follow. Discovery searches authors’ publishing relays, so unavailable relays or missing relay lists can leave results incomplete.
 
 Use **Refresh** or **Show older applets** to make another lookup. Select **Remix this** to bring an address into the creation flow, or **Copy naddr** to use it elsewhere.
+
+<GuideScreenshot name="explore" alt="Explore page with Your published applets and Your network controls plus sample counter and timer cards" caption="Explore public applets and bring one into the remix flow. These cards are sample discovery results." />
 
 Explore shows public published events. **Your applets** shows private CVM project records, including drafts and unfinished work. An unpublished draft belongs in Your applets, not Explore.
 

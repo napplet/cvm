@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: verification_deferred_gaps
-stopped_at: Explore geometric loading experience verified and live
-last_updated: "2026-10-17T01:14:01Z"
+stopped_at: User documentation illustrated with 12 screenshots and verified at /docs/
+last_updated: "2026-10-17T01:50:39Z"
 last_activity: 2026-10-16
-last_activity_desc: Low-contrast geometric discovery loader with smooth transitions, responsive body fill and reduced motion
+last_activity_desc: Added user-guide screenshots, safe repeatable capture and 70 responsive documentation checks
 progress:
   total_phases: 7
   completed_phases: 6
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
 Plan: 56 of 58 accepted; development Plans 07-52/53/56/57/54/55 complete
 Status: Guided applet.broker workspace at http://127.0.0.1:49371; diagnostic console at /dev. Saved chatgpt-oauth mode with gpt-6.1-sol retained. Product/console browser journeys and recovery passed through real local services. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
-Last activity: 2026-10-16 — Completed quick task 261016-m8c (fe48e1e): homepage Remix, Explore, immutable owner-bound CVM imports and isolated source handling. Real-service browser journey and SQL/Docker boundaries passed with fixture inference; 304 responsive checks passed. Live at the same URL after an idle restart, with ChatGPT mode retained. Prior interruption fix 261016-maj is also complete. Typecheck retains 424 existing diagnostics.
+Last activity: 2026-10-16 — Completed quick task 261016-q0k: 12 screenshots across eight user guides, with safe offline capture, accessible captions and full-size views. Documentation build, 1,258 local links and 70 responsive layouts passed. Docs preview remains at http://127.0.0.1:4173/docs/. User CVM and application behavior unchanged. Publication-state tracking and publishing UI refresh remain next. Typecheck retains the previously verified 424 existing diagnostics.
 
 Follow-up: Stream assembly/counter verification remains complete. Latest helper-signature and compiler-feedback fix passed 29 targeted unit/integration cases plus activity and composed OAuth browser journeys. Real blinking-text generation also passed. See debug/resolved/generated-typescript-check.md.
 
@@ -372,6 +372,8 @@ Recent decisions affecting current work:
 
 | 261016-opy | VitePress /docs/ for users, operators, implementers and developers; schemas, MCP example and amendment process | 2026-10-16 | see summary | [261016-opy](./quick/261016-opy-build-audience-based-vitepress-documenta/) |
 
+| 261016-q0k | Twelve screenshots across eight user guides, repeatable offline capture and responsive image checks | 2026-10-16 | see task history | [261016-q0k](./quick/261016-q0k-add-current-workspace-screenshots-to-use/) |
+
 ## Deferred Verification
 
 | Phase | Status | Reason | Resume command |
@@ -388,6 +390,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-17T01:14:01Z
-Stopped at: Audience documentation complete and verified at http://127.0.0.1:4173/docs/. Next user task: track successful publications durably and update publishing UI. User prioritized finishing docs first. Existing CVM remains running unchanged.
-Resume file: .planning/quick/261016-opy-build-audience-based-vitepress-documenta/SUMMARY.md
+Last session: 2026-10-17T01:50:39Z
+Stopped at: User documentation screenshots complete and verified at http://127.0.0.1:4173/docs/users/. Next application task: track successful publications durably and update publishing UI. User prioritized docs and then user-guide screenshots. Existing CVM remains running unchanged.
+Resume file: .planning/quick/261016-q0k-add-current-workspace-screenshots-to-use/SUMMARY.md

@@ -4,6 +4,10 @@ Make one small app that does something useful: a reading counter, a focused time
 
 You need a workspace connected to a running CVM. If you already have its website address, open it. If you are setting up the service yourself, follow [local installation](/operators/quick-start).
 
+<GuideScreenshot name="revise" alt="Applet workspace with a reading counter preview, version picker and revision composer" caption="Try your applet on the left and describe your next change on the right." />
+
+Screenshots throughout these guides show the current interface with sample projects and simulated service states. They contain no real accounts. Open any image at full size to inspect the controls; names, amounts and generated applet designs will vary in your workspace.
+
 ## Start with a task
 
 | I want to… | Read |

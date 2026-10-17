@@ -12,6 +12,8 @@ The local Cashu and NWC services use test money. The workspace can fund these au
 
 The service advertises the current action ceiling. Review the maximum shown for your action rather than relying on a number from an old screenshot; operator settings can change rates for new work.
 
+<GuideScreenshot name="setup" alt="Creation review with test-budget details expanded under the local test-run explanation" caption="Open the budget details during setup to review your maximum. This fixture example uses local test sats." />
+
 ## Available, held, and spent
 
 Admission reserves capacity and holds funds before generation. A held maximum is not the same as a settled charge. The available balance can fall by more than the final model charge while a hold remains in place.

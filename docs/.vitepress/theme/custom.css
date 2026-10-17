@@ -45,3 +45,10 @@ body { min-width: 280px; }
 .vp-doc table { max-width: 100%; }
 .vp-doc :is(th, td) { min-width: 128px; overflow-wrap: break-word; }
 .vp-doc :is(th, td) code { overflow-wrap: anywhere; }
+
+.guide-screenshot { margin: 28px 0 32px; }
+.guide-screenshot > a { display: block; width: fit-content; max-width: 100%; margin-inline: auto; border: 1px solid var(--vp-c-divider); border-radius: 12px; overflow: hidden; }
+.guide-screenshot img { display: block; max-width: 100%; height: auto; }
+.guide-screenshot figcaption { margin-top: 10px; color: var(--vp-c-text-2); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.guide-screenshot figcaption a { margin-inline-start: .35em; white-space: nowrap; }
+.screenshot-example { font-style: italic; }

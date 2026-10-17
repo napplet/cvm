@@ -10,6 +10,8 @@
 
 NIP-07 is disabled when no extension is detected. For private CVM requests, the extension also needs NIP-44 support. With NIP-46, scan the QR code or use **Open signer**, then approve the connection in your signer.
 
+<GuideScreenshot name="sign-in" alt="Sign-in dialog offering Anonymous, a disabled NIP-07 extension option and NIP-46 remote signer" caption="Choose a signing method. NIP-46 opens a QR code below these controls; use the code in your own workspace." />
+
 ## Returning to the workspace
 
 On the same site and CVM, NIP-07 and NIP-46 sign-in survive reloads and browser restarts. If an extension is locked or a remote signer is offline, unlock/open it and use **Reconnect saved signer**. You normally do not need another QR pairing.
@@ -22,6 +24,8 @@ Open **Your applets** in the primary navigation. Filter by stage or refresh the 
 
 - **Your account** contains projects created by the selected signed identity.
 - **This browser** contains projects owned by the original anonymous browser key.
+
+<GuideScreenshot name="projects" alt="Your applets page showing Ready and Building projects, with Your account and This browser ownership labels" caption="Find unfinished and ready applets together. Each card shows its stage and the identity scope that owns it." />
 
 Signing in during an anonymous build does not transfer ownership. That build continues under its original key, while new builds use your selected identity. Sign in before starting a new project when cross-browser recovery matters.
 

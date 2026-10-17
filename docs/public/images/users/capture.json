@@ -1,0 +1,66 @@
+{
+  "source": "Current workspace components and CSS; offline sample data, simulated service states and sample iframe content.",
+  "regeneration": "bun docs/scripts/capture-user-screenshots.ts",
+  "screenshots": [
+    {
+      "file": "create.png",
+      "width": 1280,
+      "height": 960
+    },
+    {
+      "file": "setup.png",
+      "width": 720,
+      "height": 879
+    },
+    {
+      "file": "build-progress.png",
+      "width": 1190,
+      "height": 115
+    },
+    {
+      "file": "execution-details.png",
+      "width": 1190,
+      "height": 430
+    },
+    {
+      "file": "revise.png",
+      "width": 1280,
+      "height": 1120
+    },
+    {
+      "file": "revision-composer.png",
+      "width": 360,
+      "height": 753
+    },
+    {
+      "file": "sign-in.png",
+      "width": 570,
+      "height": 231
+    },
+    {
+      "file": "projects.png",
+      "width": 1280,
+      "height": 960
+    },
+    {
+      "file": "explore.png",
+      "width": 1280,
+      "height": 960
+    },
+    {
+      "file": "publish-destinations.png",
+      "width": 780,
+      "height": 1119
+    },
+    {
+      "file": "publish-review.png",
+      "width": 780,
+      "height": 663
+    },
+    {
+      "file": "remix.png",
+      "width": 714,
+      "height": 896
+    }
+  ]
+}

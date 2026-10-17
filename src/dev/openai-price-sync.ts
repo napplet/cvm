@@ -89,48 +89,62 @@ async function fetchPrices(fetcher: typeof fetch): Promise<{ markdown: string; s
   return { markdown, sha256: createHash("sha256").update(markdown, "utf8").digest("hex") };
 }
 
-/** Uses only signed CVM admin calls to read quote and set synthetic rates. */
+const Model = z.string().regex(/^[a-z0-9][a-z0-9._:-]{0,127}$/u);
+const defaultRates = OperatorRates.parse(Object.fromEntries(["input_tokens", "output_tokens", "cached_tokens", "reasoning_tokens"].map(dimension => [dimension, { numerator: "1", denominator: "1000" }])));
+function sameRates(a: z.infer<typeof OperatorRates>, b: z.infer<typeof OperatorRates>): boolean {
+  return (Object.keys(defaultRates) as (keyof typeof defaultRates)[]).every(dimension => sameRate(a[dimension], b[dimension]));
+}
+
+/** Uses only signed CVM admin calls to read the OAuth catalog, quote and synthetic rates. */
 export async function syncDevelopmentRates(client: AdminClient, options: { dryRun?: boolean; fetcher?: typeof fetch; now?: () => number } = {}) {
   const now = options.now ?? Date.now;
   const status = await client.callTool("cvm_admin", { action: "status" });
   if (status?.status !== "ok") throw new Error("ADMIN_STATUS_UNAVAILABLE");
-  if (status.selectedApi || status.pricing?.profile?.provider !== "openai_chatgpt_development" || status.pricing?.card?.kind !== "development_test") throw new Error("SYNTHETIC_CHATGPT_MODE_REQUIRED");
-  const model = z.string().regex(/^[a-z0-9][a-z0-9._:-]{0,127}$/u).parse(status.pricing.profile.model);
-  const maximum = status.pricing.profile.maximumUnits?.find((line: { dimension: string }) => line.dimension === "input_tokens")?.units;
-  if (!maximum || BigInt(maximum) > 272_000n) throw new Error("SHORT_CONTEXT_PRICE_NOT_APPLICABLE");
-  const original = OperatorRates.parse(status.pricing.card.rates);
-  const [quoteResult, source] = await Promise.all([
+  const auth = await client.callTool("cvm_admin", { action: "chatgpt", operation: "status" });
+  const accounts = z.array(z.object({ id: z.string().min(1), signedIn: z.boolean(), planEnabled: z.boolean() }).passthrough()).max(16).parse(auth?.accounts)
+    .filter(account => account.signedIn && account.planEnabled);
+  if (!accounts.length) throw new Error("SIGNED_IN_CHATGPT_ACCOUNT_REQUIRED");
+  const [quoteResult, source, catalogs] = await Promise.all([
     client.callTool("cvm_admin", { action: "exchange_rate" }), fetchPrices(options.fetcher ?? fetch),
+    Promise.all(accounts.map(account => client.callTool("cvm_admin", { action: "chatgpt", operation: "models", body: { accountId: account.id } }))),
   ]);
+  const models = [...new Set(catalogs.flatMap(catalog => z.array(z.object({ slug: Model }).passthrough()).max(512).parse(catalog?.models).map(model => model.slug)))].sort();
+  if (!models.length || models.length > 128) throw new Error("CHATGPT_MODEL_CATALOG_INVALID");
   const exchangeRate = quoteResult?.exchangeRate as ExchangeRate | undefined;
   if (quoteResult?.status !== "ok" || quoteStatus(exchangeRate, now()) !== "fresh" || now() - exchangeRate!.quote!.fetchedAt >= QUOTE_FRESH_MS) throw new Error("FRESH_BTC_USD_QUOTE_REQUIRED");
   const quote = exchangeRate!.quote!;
-  const prices = extractStandardPrices(source.markdown, model);
-  const rates = OperatorRates.parse({ ...original,
-    input_tokens: satsPerToken(prices.inputUsdPerMillion, quote.usdPerBtc),
-    output_tokens: satsPerToken(prices.outputUsdPerMillion, quote.usdPerBtc),
+  const existing = z.record(Model, OperatorRates).parse(status.modelRates ?? {});
+  const modelRates: Record<string, z.infer<typeof OperatorRates>> = {};
+  const entries = models.map(model => {
+    const prices = extractStandardPrices(source.markdown, model);
+    const previous = existing[model] ?? defaultRates;
+    const rates = OperatorRates.parse({ ...previous,
+      input_tokens: satsPerToken(prices.inputUsdPerMillion, quote.usdPerBtc),
+      output_tokens: satsPerToken(prices.outputUsdPerMillion, quote.usdPerBtc),
+    });
+    modelRates[model] = rates;
+    return { model, change: existing[model] && sameRates(existing[model], rates) ? "unchanged" : "updated",
+      input: { usdPerMillionTokens: prices.inputUsdPerMillion, testSatsPerThousandTokens: perThousand(rates.input_tokens) },
+      output: { usdPerMillionTokens: prices.outputUsdPerMillion, testSatsPerThousandTokens: perThousand(rates.output_tokens) } };
   });
-  const changed = !sameRate(original.input_tokens, rates.input_tokens) || !sameRate(original.output_tokens, rates.output_tokens);
+  const changed = entries.some(entry => entry.change === "updated");
   const result = {
     result: !changed ? "unchanged" : options.dryRun ? "dry_run" : "updated",
-    model, basis: "OpenAI Standard API prices · synthetic local test sats, not ChatGPT subscription billing",
+    modelCount: models.length, updatedCount: entries.filter(entry => entry.change === "updated").length,
+    basis: "OpenAI Standard API prices · synthetic local test sats, not ChatGPT subscription billing",
     source: { url: OPENAI_PRICING_MARKDOWN, sha256: source.sha256 },
     conversion: { source: quote.source, usdPerBtc: quote.usdPerBtc, fetchedAt: new Date(quote.fetchedAt).toISOString() },
-    prices: {
-      input: { usdPerMillionTokens: prices.inputUsdPerMillion, testSatsPerThousandTokens: perThousand(rates.input_tokens) },
-      output: { usdPerMillionTokens: prices.outputUsdPerMillion, testSatsPerThousandTokens: perThousand(rates.output_tokens) },
-    },
-    previousPriceCardId: status.pricing.card.id,
+    models: entries,
   };
   if (changed && !options.dryRun) {
     const current = await client.callTool("cvm_admin", { action: "status" });
-    if (current?.status !== "ok" || current.selectedApi || current.pricing?.card?.id !== status.pricing.card.id || current.pricing?.profile?.id !== status.pricing.profile.id || quoteStatus(exchangeRate, now()) !== "fresh") throw new Error("PRICING_CONTEXT_CHANGED_RETRY");
-    const saved = await client.callTool("cvm_admin", { action: "save_rates", rates });
+    if (current?.status !== "ok" || current.pricing?.card?.id !== status.pricing?.card?.id || JSON.stringify(current.modelRates ?? {}) !== JSON.stringify(existing) || quoteStatus(exchangeRate, now()) !== "fresh") throw new Error("PRICING_CONTEXT_CHANGED_RETRY");
+    const saved = await client.callTool("cvm_admin", { action: "save_model_rates", modelRates });
     if (saved?.status !== "ok") throw new Error(saved?.code === "CONFIGURATION_BUSY" ? "CONFIGURATION_BUSY_TRY_LATER" : "RATE_SAVE_REJECTED");
     const verified = await client.callTool("cvm_admin", { action: "status" });
-    const applied = OperatorRates.parse(verified?.pricing?.card?.rates);
-    if (verified?.pricing?.profile?.model !== model || !sameRate(applied.input_tokens, rates.input_tokens) || !sameRate(applied.output_tokens, rates.output_tokens)) throw new Error("RATE_SAVE_NOT_CONFIRMED");
-    return { ...result, priceCardId: verified.pricing.card.id };
+    const applied = z.record(Model, OperatorRates).parse(verified?.modelRates);
+    if (!models.every(model => applied[model] && sameRates(applied[model], modelRates[model]!))) throw new Error("RATE_SAVE_NOT_CONFIRMED");
+    return { ...result, activePriceCardId: verified.pricing.card.id };
   }
   return result;
 }

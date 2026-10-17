@@ -244,7 +244,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
         next = makeRuntime(apiGateway, { card: api.priceCard, profile: api.profile });
       } else if (settings.mode === "chatgpt") {
         if (!settings.accountId || !settings.model) throw new Error("CHATGPT_SELECT_AVAILABLE_MODEL");
-        gateway = new ChatGptModelGateway({ rates: operator?.rates(), accountId: settings.accountId, model: settings.model, auth: chatgpt, remixSource, store: composition.proposals, operations: new SqlChatGptOperations(app.pool), fetch: options.chatGptFetch, onResponseBytes: (bytes) => progress.emit("model_stream", "running", { bytes }), priorSource: async (input) => priorSource?.(input) });
+        gateway = new ChatGptModelGateway({ rates: operator?.rates(settings.model), accountId: settings.accountId, model: settings.model, auth: chatgpt, remixSource, store: composition.proposals, operations: new SqlChatGptOperations(app.pool), fetch: options.chatGptFetch, onResponseBytes: (bytes) => progress.emit("model_stream", "running", { bytes }), priorSource: async (input) => priorSource?.(input) });
         await registerDevelopmentPricing(app.pool, { profile: gateway.pricing.profile, priceCard: gateway.pricing.card });
         next = makeRuntime(gateway, gateway.pricing);
       } else if (settings.mode === "default") next = makeRuntime(composition.gateway, composition.pricing ?? { card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile: PHASE_04_MODEL_PROFILES["code-proposal"] });

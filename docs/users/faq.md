@@ -26,7 +26,7 @@ Yes. The application keeps the builder mounted and shows running work in its nav
 
 ## Does refreshing regenerate my applet?
 
-Opening a saved project or restoring its preview does not generate another version. If an action was interrupted, use the offered recovery/status action and read its outcome before sending a new request.
+Opening a saved project, viewing an older build, or restoring it as current does not call the model or add a charge. Use **Version history → View → Restore this version** to edit from a previous build; later versions remain saved. If an action was interrupted, use the offered recovery/status action and read its outcome before sending a new request.
 
 ## Why can’t I publish?
 

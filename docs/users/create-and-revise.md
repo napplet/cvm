@@ -8,7 +8,7 @@ The workspace accepts text ideas and revisions up to 512 characters. Direct CVM 
 
 ## Revise the version you can see
 
-Return to the latest verified version, then send a revision. Older versions are available for comparison; the current workspace does not branch a revision from an older selection. The service checks the expected version so two conflicting edits cannot silently overwrite each other. If the version changed, refresh the project and review the latest result before resubmitting.
+Send revisions from the version marked **current**. Each successful build adds a saved version. The service checks the saved project state so conflicting edits cannot silently overwrite each other.
 
 Useful revisions describe the defect and the desired result:
 
@@ -17,6 +17,18 @@ Useful revisions describe the defect and the desired result:
 Avoid resending the entire original idea unless you intend a broader redesign. Revisions start from authorized, verified prior source. Review the compact **Next revision** cost and time footer below the composer before sending. Open **How this is estimated** for the history behind the range; [costs and limits](./costs-and-limits) explains how they are calculated.
 
 <GuideScreenshot name="revision-composer" alt="Revision conversation with Version 2 ready and a filled change request beside the send arrow" caption="Write your change in the bottom field, then use the arrow or ⌘/Ctrl + Enter." />
+
+## Load or restore an earlier revision
+
+Open **Version history** above the preview, then choose **View** beside any saved version. The version picker also lets you switch previews. Viewing a version does not change your saved current version.
+
+To continue from that revision, choose **Restore this version**. It becomes current immediately and stays current when you return to the applet. Your next revision uses its saved source. **Return to current** leaves comparison mode without restoring anything.
+
+<GuideScreenshot name="revision-history" alt="Version history with version 2 marked Current, version 1 being previewed, and Restore this version and Return to current actions" caption="Compare any saved build, then choose which version your next edit should start from." />
+
+Restoring makes no model request and adds no charge. It keeps later versions, unsent draft text, and the full cost history. Past charges are unchanged. You can restore another saved version again whenever you want.
+
+Restoration is saved as a project change, so version numbers can skip: restoring version 1 after version 2 can make the next generated build version 4. Published events are unchanged until you explicitly publish again. Finish or check any running request before restoring.
 
 ## Read the execution state
 

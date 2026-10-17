@@ -106,7 +106,7 @@ export class PublicationWorkspace {
     const button = document.getElementById("publish") as HTMLButtonElement;
     button.disabled = !this.identity?.pubkey || !this.selected() || !this.client() || this.#busy;
     const published = this.#current?.status === "published";
-    const changes = this.#latest && this.selected() && this.#latest.version < this.selected()!.version;
+    const changes = this.#latest && this.selected() && this.#latest.artifactId !== this.selected()!.artifactId;
     document.getElementById("publish-hint")!.textContent = !this.identity?.pubkey ? "Sign in to publish this applet under your Nostr identity." : !this.selected() ? "Publishing opens after this applet passes its checks." : published ? `Published · Version ${this.selected()!.version} · Ready to share` : this.#lookupError ? "Publication status could not be checked. Open publishing to try again." : changes ? `Unpublished changes · Version ${this.#latest!.version} is published. Version ${this.selected()!.version} is ready.` : this.#current?.signedEvent ? "Publication in progress · Your signature is saved. Continue the remaining steps." : `Ready to share version ${this.selected()!.version}?`;
     button.textContent = published ? "View publication" : this.#current?.signedEvent ? "Continue publishing" : "Publish";
     document.getElementById("published-copy-address")!.hidden = !published || !this.#current?.address;
@@ -332,7 +332,7 @@ export class PublicationWorkspace {
   private result() {
     const result = this.#journal!.prepared;
     this.#current = result; this.media(result);
-    if (result.status === "published" && (!this.#latest || result.version >= this.#latest.version)) this.#latest = result;
+    if (result.status === "published" && (!this.#latest || (result.publishedAt ?? "") >= (this.#latest.publishedAt ?? ""))) this.#latest = result;
     this.#propagation.clear(); for (const entry of result.fileResults ?? []) this.progress(entry);
     const verified = this.verifiedCopies();
     const copied = verified >= MIN_PUBLICATION_SERVERS;

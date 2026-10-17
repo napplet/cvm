@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: verification_deferred_gaps
-stopped_at: Editable publication metadata, capabilities and hashtags verified and active locally
-last_updated: "2026-10-17T18:40:06.314766+00:00"
+stopped_at: Revision history and durable no-charge restoration verified and active locally
+last_updated: "2026-10-17T19:18:58.980550+00:00"
 last_activity: 2026-10-17
-last_activity_desc: Published metadata editing, capability declarations and hashtags shipped; upstream skills PR 254 opened
+last_activity_desc: Saved revision viewing and restoration shipped with source continuity, publication tracking and illustrated docs
 progress:
   total_phases: 7
   completed_phases: 6
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
 Plan: 56 of 58 accepted; development Plans 07-52/53/56/57/54/55 complete
 Status: Guided applet.broker workspace at http://127.0.0.1:49371; diagnostic console at /dev. Saved chatgpt-oauth mode with gpt-6.1-sol retained. Product/console browser journeys and recovery passed through real local services. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
-Last activity: 2026-10-17 — Completed quick task 261017-fq0: editable published title/description/hashtags/destinations at the same address with fresh signatures; R/O preserved through generation and current-format CLI publication; upstream skills PR #254 pinned via npx skills add. Full browser/service journey, 40 targeted tests, 399 responsive checks and illustrated docs passed. Active at http://127.0.0.1:49371 with saved ChatGPT OAuth. TypeScript baseline remains 424 diagnostics with no new errors.
+Last activity: 2026-10-17 — Completed quick task 261017-gsu: load, view and restore saved revisions without model charges; subsequent edits use restored source. Real-service and publication journeys, 437 responsive checks and illustrated docs passed. Local preview refreshed with saved ChatGPT OAuth. Existing TypeScript baseline: 425 diagnostics, no new errors.
 
 Follow-up: Stream assembly/counter verification remains complete. Latest helper-signature and compiler-feedback fix passed 29 targeted unit/integration cases plus activity and composed OAuth browser journeys. Real blinking-text generation also passed. See debug/resolved/generated-typescript-check.md.
 
@@ -392,6 +392,8 @@ Recent decisions affecting current work:
 
 | 261017-gev | Per-request receipts, pinned usage breakdowns and prominent cumulative project spending | 2026-10-17 | see task history | [261017-gev](./quick/261017-gev-show-per-message-cost-breakdowns-and-pro/) |
 
+| 261017-gsu | Version history, durable no-charge restore, source lineage and restored-version publication tracking | 2026-10-17 | see task history | [261017-gsu](./quick/261017-gsu-browse-load-and-restore-earlier-applet-r/) |
+
 ## Deferred Verification
 
 | Phase | Status | Reason | Resume command |
@@ -408,6 +410,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-17T19:05:00Z
-Stopped at: Per-request costs and project totals implemented and verified. Local app http://127.0.0.1:49371; illustrated costs guide http://127.0.0.1:4173/docs/users/costs-and-limits. Costs are owner-scoped over signed CVM; provider accounts remain private. Production remains deferred.
-Resume file: .planning/quick/261017-gev-show-per-message-cost-breakdowns-and-pro/SUMMARY.md
+Last session: 2026-10-17T19:18:58.980550+00:00
+Stopped at: Revision history and durable restore implemented and verified. Local app http://127.0.0.1:49371; illustrated guide http://127.0.0.1:4173/docs/users/create-and-revise. Prior cost visibility preserved. Production remains deferred.
+Resume file: .planning/quick/261017-gsu-browse-load-and-restore-earlier-applet-r/SUMMARY.md

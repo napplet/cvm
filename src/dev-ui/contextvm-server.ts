@@ -2,6 +2,7 @@ import { readGenerationEstimates } from "../dev/generation-estimates";
 import { ServiceInfoArgumentsSchema, DevelopmentFaucetArgumentsSchema, OperationDiagnosticArgumentsSchema } from "./extension-schemas";
 import { DevelopmentRemixImports } from "../dev/remix-imports";
 import { LocalRemixSourceImporter } from "../dev/remix-source-import";
+import { ProjectRevisions } from "../dev/project-revisions";
 import { DevelopmentProjects } from "../dev/projects";
 import { InterruptedDevelopmentGeneration } from "../dev/interrupted-generation";
 import { finalizeEvent } from "nostr-tools/pure";
@@ -307,7 +308,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
     }
     return result;
   }
-  const projects = new DevelopmentProjects(app.pool);
+  const projects = new DevelopmentProjects(app.pool, new ProjectRevisions(app.pool, repository));
   const interrupted = new InterruptedDevelopmentGeneration(app.pool, app.database.meteredFunding);
   async function recoverInterrupted(result: SessionActionResult): Promise<SessionActionResult> {
     if (result.status !== "usage_unknown") return result;

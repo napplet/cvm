@@ -74,3 +74,11 @@ Project results include a nullable `publication` summary and `unpublishedChanges
 When the verified HTML fits the 128 KB context limit, send `remix_import` parts with `action: "asset_part"`, `eventId`, `artifactHash`, zero-based `index`, `total` and canonical base64 `data`. Each decoded part is at most 8,000 bytes, with at most 16 parts; `index` must be less than `total`. Staged parts are owner-scoped, bounded and expired. Then send the signed manifest/naddr with `assetUploaded: true`. The service reassembles and verifies the bytes; staging alone is not acceptance of an applet.
 
 The browser implementation in [remix-workspace.ts](https://github.com/napplet/cvm/blob/main/src/dev-ui/browser/remix-workspace.ts) shows the complete resolve, stage and prepare sequence. Prefer that flow over sending an arbitrary repository URL to the CVM.
+
+### Restore a saved revision
+
+The development `projects` tool accepts `{ action: "restore", id, artifactId, expectedVersion, idempotencyKey }`. Identity comes exclusively from the verified signed CVM request. Obtain `expectedVersion` from `session_status.session.version`; it is the concurrency version, not the selected artifact’s version.
+
+A successful response has `status: "restored"`, `sessionVersion`, `artifactVersion`, `artifactId`, and `charge: "0"`. The command selects an owned, verified artifact with retained source, advances the session version, and records an immutable restoration. It makes no model call and creates no metered action. Retry with the same key and exact arguments to recover the same result. Stale commands return `STALE_SESSION_VERSION`; active or unresolved work returns `SESSION_NOT_REVISION_READY`.
+
+After restoration, `session_status.session.latestVerifiedArtifact` identifies the **current** build, which may be older than other entries in `verifiedArtifacts`. Keep all those entries available for browsing. A subsequent `revise_session` uses the current build’s source. Reload status after restoring to obtain the authoritative current state; another client may already have changed it. Publication remains a separate explicit action.

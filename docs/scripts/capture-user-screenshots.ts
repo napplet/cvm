@@ -161,6 +161,19 @@ try {
   await page.locator('.request-message:last-child summary').click();
   await page.setViewportSize({ width: 1280, height: 960 });
 
+  await page.evaluate(() => {
+    const w = window as any; const earlier = { ...w.version, artifactId:"artifact:" + "b".repeat(64), version:1 };
+    w.workspace.onRestoreVersion(async () => {});
+    w.workspace.versions([earlier,w.version],earlier,async () => {},w.version);
+    w.workspace.selected(earlier);
+    (document.getElementById("revision-history") as HTMLDetailsElement).open=true;
+  });
+  await capture("revision-history", ".preview-panel");
+  await page.evaluate(() => {
+    const w=window as any; w.workspace.versions([{...w.version,artifactId:"artifact:"+"b".repeat(64),version:1},w.version],w.version,async()=>{});
+    w.workspace.selected(w.version); (document.getElementById("revision-history") as HTMLDetailsElement).open=false;
+  });
+
   await page.locator("#nostr-sign-in").click();
   await page.locator("#nostr-qr svg").waitFor();
   // Crop above the QR: no connection URI, pairing secret or live account in docs.

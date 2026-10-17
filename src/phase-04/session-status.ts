@@ -265,7 +265,7 @@ export async function readSessionStatus(input: Readonly<{ store: MeteredFundingS
         .filter((candidate) => candidate.artifact?.artifactId && candidate.artifactVersion)
         .sort((left, right) => (left.artifactVersion ?? 0) - (right.artifactVersion ?? 0))
         .map((candidate) => ({ id: candidate.artifact!.artifactId!, version: candidate.artifactVersion! }));
-      const latest = verifiedArtifacts.at(-1) ?? null;
+      const latest = (session.currentVerifiedArtifactVersion === undefined ? verifiedArtifacts.at(-1) : verifiedArtifacts.find(item => item.version === session.currentVerifiedArtifactVersion)) ?? null;
       return freeze(SessionStatusSchema.parse({
         status: "ok",
         session: {
@@ -280,7 +280,7 @@ export async function readSessionStatus(input: Readonly<{ store: MeteredFundingS
     }
     if (!action) return freeze(SessionStatusSchema.parse({ status: "not_found_or_denied" }));
     const verifiedActions = actions
-      .filter((candidate) => candidate.artifact?.artifactId)
+      .filter((candidate) => candidate.artifact?.artifactId && (session.currentVerifiedArtifactVersion === undefined || candidate.artifactVersion === session.currentVerifiedArtifactVersion))
       .sort((left, right) => (right.artifactVersion ?? 0) - (left.artifactVersion ?? 0))[0];
     const reconciliation = action.status === "usage_unknown" || action.status === "billing_invariant_failed";
     const failed = action.status === "failed";

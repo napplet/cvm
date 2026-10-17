@@ -33,6 +33,8 @@ export class ProductWorkspace {
   #checkSession?: () => Promise<void>;
   #revisionHelp?: () => void;
   #selectingVersion = false;
+  #restoringVersion = false;
+  #restoreVersion?: (version: WorkspaceVersion) => Promise<void>;
   #progress = 0;
   #lastState = "idle";
   #version?: WorkspaceVersion;
@@ -59,8 +61,8 @@ export class ProductWorkspace {
       <section id="setup-step" class="setup step-panel" hidden aria-labelledby="setup-heading"><button id="back-idea" class="text-button">← Back to your idea</button><div class="eyebrow">A QUICK CHECK</div><h1 id="setup-heading" tabindex="-1">Let’s bring it to life.</h1><p class="intro-copy">We’ll build your first version, check it, and open it here.</p><div class="setup-card"><div class="setup-row"><span class="setup-icon" aria-hidden="true">✳</span><div><h2>Your idea</h2><p id="idea-review"></p></div><button id="edit-idea" class="quiet">Edit</button></div><div class="setup-row"><span class="setup-icon" aria-hidden="true">↗</span><div><h2>Connected CVM</h2><p id="model-summary">${bootstrap.providerLabel}</p><p id="model-explanation" class="supporting"></p></div><button id="setup-settings" class="quiet">Connection</button></div><div class="setup-row"><span class="setup-icon" aria-hidden="true">◎</span><div><h2>A local test run</h2><p>Test funds are prepared automatically when you create.</p><p class="supporting">No real sats are charged in this development CVM. Model access is managed by its operator.</p></div></div>${estimateMarkup("create")}<details class="budget-details"><summary>Test budget</summary><label for="maximum">Maximum per action (test sats)</label><input id="maximum" inputmode="numeric" value="${bootstrap.actionCeilingSat}" aria-describedby="budget-help"><p id="budget-help" class="supporting">At least ${bootstrap.actionCeilingSat} test sats. This caps local test charges for this CVM.</p></details></div><p id="setup-validation" class="form-error" role="alert"></p><div class="setup-footer"><span class="supporting">Your first version is a starting point.</span><button id="generate" class="primary" disabled>Create my applet ${arrow}</button></div></section>
       ${spendMarkup("workspace")}
       <section id="build-step" class="step-panel" hidden aria-labelledby="build-heading"><div class="workspace-title"><div><div class="eyebrow">YOUR WORKSPACE</div><h1 id="build-heading" tabindex="-1">A little work in progress.</h1></div><button id="new-applet" class="quiet">New applet <span aria-hidden="true">+</span></button></div>
-        <div class="making-grid"><section class="preview-panel" aria-labelledby="preview-heading"><div class="preview-toolbar"><h2 id="preview-heading"><span class="preview-dot" aria-hidden="true"></span>Preview</h2><div class="preview-tools"><label class="sr-only" for="version-picker">Preview version</label><select id="version-picker" disabled><option value="">No version yet</option></select><button id="preview-expand" class="icon-button" aria-label="Expand preview" aria-pressed="false">⤢</button></div></div><div class="preview-stage"><div id="preview-empty" data-state="idle"><div class="preview-status-art" aria-hidden="true"><svg viewBox="0 0 160 160" fill="none" focusable="false"><circle class="preview-orbit" cx="80" cy="80" r="65"/><g class="preview-shape"><rect x="40" y="40" width="80" height="80" rx="24"/><rect class="preview-shape-line" x="40" y="40" width="80" height="80" rx="24" pathLength="100"/></g><circle class="preview-center" cx="80" cy="80" r="5"/></svg></div><p id="preview-status-label" class="preview-status-label">YOUR FIRST VERSION</p><h3 id="preview-status-title" role="status" aria-live="polite">Your idea takes shape here.</h3><p id="preview-empty-copy">The preview opens after your applet passes its checks.</p><dl id="preview-status-metrics" hidden><div><dt>Time elapsed</dt><dd id="preview-status-elapsed"></dd></div><div id="preview-remaining-metric"><dt>Estimated remaining</dt><dd id="preview-status-remaining"></dd></div><div id="preview-cost-metric"><dt>Estimated cost</dt><dd id="preview-status-cost"></dd></div></dl><p id="preview-status-note" hidden>Your preview will appear here when it’s ready.</p></div><iframe id="preview" title="Verified napplet preview" hidden></iframe></div><div class="preview-caption"><span id="preview-caption">A sandboxed space to try your applet.</span><span id="preview-verified" hidden>✓ Verified</span></div></section>
-        <section class="conversation" aria-labelledby="conversation-heading"><div class="conversation-header"><div class="small-mark" aria-hidden="true">a·</div><div><h2 id="conversation-heading">Make it yours</h2><p>Small changes. Better every time.</p></div></div>${spendMarkup("conversation")}<p id="cost-history-status" class="request-note" role="status"></p><button id="cost-history-refresh" class="quiet" hidden>Refresh costs</button><button id="cost-history-more" class="quiet" hidden>Earlier requests</button><ol id="conversation-messages" aria-label="Your requests and build results"></ol><p id="chat-working" role="status" hidden>Working on your request…</p><div id="old-version-note" hidden><p>You’re viewing an earlier version.</p><button id="return-latest" class="text-button">Return to latest to make changes →</button></div><div class="composer"><label for="revision">What would you like to change?</label><textarea id="revision" maxlength="512" rows="3" placeholder="Make the buttons bigger, try a softer colour…" aria-describedby="revision-hint revision-blocked-reason revision-status-result"></textarea><div class="composer-footer"><span id="revision-hint">⌘ / Ctrl + Enter to send</span><button id="revise" class="send-button" disabled aria-label="Send revision" aria-describedby="revision-blocked-reason">${arrow}</button></div><div id="revision-availability" hidden><p id="revision-blocked-reason" role="status"></p><button id="revision-help" class="text-button" hidden></button></div><p id="revision-status-result" class="supporting" role="status" hidden></p></div>${estimateMarkup("revise")}<p class="chat-footnote">Each change creates a new verified version.</p></section></div>
+        <div class="making-grid"><section class="preview-panel" aria-labelledby="preview-heading"><div class="preview-toolbar"><h2 id="preview-heading"><span class="preview-dot" aria-hidden="true"></span>Preview</h2><div class="preview-tools"><label class="sr-only" for="version-picker">Preview version</label><select id="version-picker" disabled><option value="">No version yet</option></select><button id="preview-expand" class="icon-button" aria-label="Expand preview" aria-pressed="false">⤢</button></div></div><details id="revision-history" class="revision-history" hidden><summary>Version history <span id="revision-count"></span></summary><ol id="revision-history-list" aria-label="Saved revisions"></ol></details><div id="revision-selection" class="revision-selection" hidden><div><strong id="revision-selection-title"></strong><p>Your next edit can start here. Later versions stay saved.</p></div><div class="revision-actions"><button id="restore-version" class="primary">Restore this version</button><button id="return-current" class="quiet">Return to current</button></div><span class="supporting">No model request · No charge</span></div><p id="restore-status" class="restore-status" role="status" hidden></p><div class="preview-stage"><div id="preview-empty" data-state="idle"><div class="preview-status-art" aria-hidden="true"><svg viewBox="0 0 160 160" fill="none" focusable="false"><circle class="preview-orbit" cx="80" cy="80" r="65"/><g class="preview-shape"><rect x="40" y="40" width="80" height="80" rx="24"/><rect class="preview-shape-line" x="40" y="40" width="80" height="80" rx="24" pathLength="100"/></g><circle class="preview-center" cx="80" cy="80" r="5"/></svg></div><p id="preview-status-label" class="preview-status-label">YOUR FIRST VERSION</p><h3 id="preview-status-title" role="status" aria-live="polite">Your idea takes shape here.</h3><p id="preview-empty-copy">The preview opens after your applet passes its checks.</p><dl id="preview-status-metrics" hidden><div><dt>Time elapsed</dt><dd id="preview-status-elapsed"></dd></div><div id="preview-remaining-metric"><dt>Estimated remaining</dt><dd id="preview-status-remaining"></dd></div><div id="preview-cost-metric"><dt>Estimated cost</dt><dd id="preview-status-cost"></dd></div></dl><p id="preview-status-note" hidden>Your preview will appear here when it’s ready.</p></div><iframe id="preview" title="Verified napplet preview" hidden></iframe></div><div class="preview-caption"><span id="preview-caption">A sandboxed space to try your applet.</span><span id="preview-verified" hidden>✓ Verified</span></div></section>
+        <section class="conversation" aria-labelledby="conversation-heading"><div class="conversation-header"><div class="small-mark" aria-hidden="true">a·</div><div><h2 id="conversation-heading">Make it yours</h2><p>Small changes. Better every time.</p></div></div>${spendMarkup("conversation")}<p id="cost-history-status" class="request-note" role="status"></p><button id="cost-history-refresh" class="quiet" hidden>Refresh costs</button><button id="cost-history-more" class="quiet" hidden>Earlier requests</button><ol id="conversation-messages" aria-label="Your requests and build results"></ol><p id="chat-working" role="status" hidden>Working on your request…</p><div id="old-version-note" hidden><p>Previewing a saved version. Restore it to make changes.</p><button id="return-latest" class="text-button">Return to current →</button></div><div class="composer"><label for="revision">What would you like to change?</label><textarea id="revision" maxlength="512" rows="3" placeholder="Make the buttons bigger, try a softer colour…" aria-describedby="revision-hint revision-blocked-reason revision-status-result"></textarea><div class="composer-footer"><span id="revision-hint">⌘ / Ctrl + Enter to send</span><button id="revise" class="send-button" disabled aria-label="Send revision" aria-describedby="revision-blocked-reason">${arrow}</button></div><div id="revision-availability" hidden><p id="revision-blocked-reason" role="status"></p><button id="revision-help" class="text-button" hidden></button></div><p id="revision-status-result" class="supporting" role="status" hidden></p></div>${estimateMarkup("revise")}<p class="chat-footnote">Each change creates a new verified version.</p></section></div>
       </section>
       <section id="product-notice" class="notice" hidden aria-labelledby="notice-heading"><div><h2 id="notice-heading">Something needs a look</h2><p id="notice-copy" role="alert"></p></div><button id="review-request" class="quiet">Review request</button><button id="notice-settings" class="quiet" hidden>Open settings</button></section>
       <section id="continuation" class="notice" hidden><div><h2>Ready when you are</h2><p id="pending-status"></p></div><button id="resume" class="primary">Resume saved action</button></section>
@@ -119,7 +121,8 @@ export class ProductWorkspace {
     this.persist();
   }
   savedStatus(state: string): void { this.text("build-heading", state === "active" ? "Your applet is still building." : state === "needs_top_up" ? "Your applet is waiting for funds." : "Your saved applet."); this.text("progress-title", `Saved status: ${state.replaceAll("_", " ")}`); this.text("preview-empty-copy", "Refresh Your applets to check for a verified version. No new generation has been started."); this.el("execution-details").hidden = false; this.sessionState(state); this.previewStatus({state:"saved",current:"",detail:"",elapsed:0,stale:false}, state === "active" ? "Your applet is still building" : "Your saved request", ""); }
-  openSaved(): void { this.resetCosts(); this.#sessionId = undefined; this.#estimates.reset(); this.#hasDraft = false; this.#version = undefined; this.#sessionBlocked = false; this.#sessionState = undefined; this.text("revision-status-result", ""); this.#messages = []; this.renderMessages(); this.el("preview-empty").hidden = false; this.el("preview-verified").hidden = true; this.previewStatus({state:"saved",current:"",detail:"",elapsed:0,stale:false}, "Opening your saved applet", ""); this.showStep(3); }
+  openSaved(): void {
+    this.el("restore-status").hidden = true; this.resetCosts(); this.#sessionId = undefined; this.#estimates.reset(); this.#hasDraft = false; this.#version = undefined; this.#sessionBlocked = false; this.#sessionState = undefined; this.text("revision-status-result", ""); this.#messages = []; this.renderMessages(); this.el("preview-empty").hidden = false; this.el("preview-verified").hidden = true; this.previewStatus({state:"saved",current:"",detail:"",elapsed:0,stale:false}, "Opening your saved applet", ""); this.showStep(3); }
   onCostsLoad(load: (after?: string) => Promise<void>): void { this.#loadCosts = load; }
   private async loadCosts(after?: string): Promise<void> {
     const button = this.el<HTMLButtonElement>(after ? "cost-history-more" : "cost-history-refresh"); button.disabled = true;
@@ -163,6 +166,7 @@ export class ProductWorkspace {
     return kind !== "revise" || !!this.field("revision").value.trim();
   }
   begin(kind: string): void {
+    this.el("restore-status").hidden = true;
     if (kind === "generate") { this.resetCosts(); this.#sessionId = undefined; }
     this.#pendingFrom = kind === "generate" ? 0 : this.#messages.length; this.#requestKey = undefined;
     if (this.#costs) renderSpend(this.root, { ...this.#costs.total, pending: Math.max(1,this.#costs.total.pending) });
@@ -243,21 +247,49 @@ export class ProductWorkspace {
     if (last?.role === "assistant" && last.state) { last.text = explanation; this.renderMessages(); this.persist(); }
   }
   recovery(needed: boolean): void { this.#recovering = needed; this.el("recovery").hidden = !needed; if (needed) { this.showStep(3, false); this.#progress = 0; this.text("progress-title", "Your last request needs checking."); this.el("build-progress").setAttribute("aria-valuenow", "0"); this.el("build-progress").setAttribute("aria-valuetext", "Outcome unconfirmed"); this.el("progress-fill").style.width = "0%"; this.text("progress-detail", "The previous request has not been confirmed. Your saved preview remains available."); this.previewStatus({state:"uncertain",current:"",detail:"",elapsed:0,stale:false}, "Your last request needs checking", ""); } this.syncControls(); }
-  versions(versions: readonly WorkspaceVersion[], selected: WorkspaceVersion | undefined, change: (version: WorkspaceVersion) => Promise<unknown>): void {
+  onRestoreVersion(restore: (version: WorkspaceVersion) => Promise<void>): void { this.#restoreVersion = restore; }
+  versions(versions: readonly WorkspaceVersion[], selected: WorkspaceVersion | undefined, change: (version: WorkspaceVersion) => Promise<unknown>, current = versions.at(-1)): void {
     this.#changeVersion = change;
     const picker = this.el<HTMLSelectElement>("version-picker");
-    picker.replaceChildren(...versions.map((version, index) => new Option(`Version ${version.version}${index === versions.length - 1 ? " · latest" : ""}`, version.artifactId)));
+    picker.replaceChildren(...versions.map(version => new Option(`Version ${version.version}${version.artifactId === current?.artifactId ? " · current" : ""}`, version.artifactId)));
     if (!versions.length) picker.add(new Option("No version yet", ""));
     if (selected) picker.value = selected.artifactId;
-    picker.disabled = this.#running || this.#selectingVersion || !versions.length;
-    const latest = versions.at(-1); const old = !!selected && !!latest && selected.artifactId !== latest.artifactId;
-    this.el("old-version-note").hidden = !old;
-    picker.onchange = () => { const version = versions.find((v) => v.artifactId === picker.value); if (version) void this.switchVersion(version); };
-    this.el<HTMLButtonElement>("return-latest").onclick = () => { if (latest) void this.switchVersion(latest); };
+    const viewingOther = !!selected && !!current && selected.artifactId !== current.artifactId;
+    this.el("old-version-note").hidden = !viewingOther;
+    this.el("revision-selection").hidden = !viewingOther;
+    this.text("revision-selection-title", `Viewing version ${selected?.version} · Current is version ${current?.version}`);
+    this.text("revision-count", `${versions.length}`);
+    this.el("revision-history").hidden = !versions.length;
+    this.el("revision-history-list").replaceChildren(...[...versions].reverse().map(version => {
+      const item = document.createElement("li"); const label = document.createElement("div");
+      const title = document.createElement("strong"); title.textContent = `Version ${version.version}`;
+      const badge = document.createElement("span"); badge.className = "revision-badge";
+      badge.textContent = version.artifactId === current?.artifactId ? "Current" : "Saved";
+      const button = document.createElement("button"); button.className = "quiet";
+      button.dataset.previewRevision = version.artifactId;
+      button.textContent = version.artifactId === selected?.artifactId ? "Viewing" : "View";
+      button.setAttribute("aria-label", `View version ${version.version}`);
+      button.setAttribute("aria-pressed", String(version.artifactId === selected?.artifactId));
+      button.onclick = () => { void this.switchVersion(version); };
+      label.append(title, badge); item.append(label, button); return item;
+    }));
+    picker.onchange = () => { const version = versions.find(v => v.artifactId === picker.value); if (version) void this.switchVersion(version); };
+    for (const id of ["return-latest", "return-current"]) this.el<HTMLButtonElement>(id).onclick = () => { if (current) void this.switchVersion(current); };
+    this.el<HTMLButtonElement>("restore-version").onclick = () => { if (selected && viewingOther) void this.restoreVersion(selected); };
     this.syncControls();
   }
+  private async restoreVersion(version: WorkspaceVersion): Promise<void> {
+    if (!this.#restoreVersion || this.#restoringVersion || this.#running || this.#recovering || this.#sessionBlocked) return;
+    this.#restoringVersion = true; this.text("restore-status", `Restoring version ${version.version}…`); this.el("restore-status").hidden = false; this.syncControls();
+    try {
+      await this.#restoreVersion(version);
+      this.text("restore-status", `Version ${version.version} is current. Your next edit starts here. No charge.`);
+    } catch (error) {
+      this.text("restore-status", error instanceof Error ? error.message : "Could not restore this version. Try again.");
+    } finally { this.#restoringVersion = false; this.syncControls(); }
+  }
   private async switchVersion(version: WorkspaceVersion): Promise<void> {
-    if (this.#selectingVersion || this.#running) return;
+    if (this.#selectingVersion || this.#restoringVersion || this.#running) return;
     this.#selectingVersion = true; this.syncControls();
     try { await this.#changeVersion?.(version); } finally { this.#selectingVersion = false; this.syncControls(); }
   }
@@ -274,7 +306,7 @@ export class ProductWorkspace {
     this.syncControls();
   }
   selected(version: WorkspaceVersion): void { this.#version = version; this.el("preview-empty").hidden = true; this.el("preview-verified").hidden = false; this.previewStatusPlacement(); this.text("preview-caption", `Version ${version.version} · ready to explore`); }
-  get checkingSession(): boolean { return this.#checkingSession; }
+  get checkingSession(): boolean { return this.#checkingSession || this.#restoringVersion; }
   onSessionStatusCheck(check: () => Promise<void>): void { this.#checkSession = check; }
   private async checkSession(): Promise<void> {
     if (!this.#checkSession || this.#checkingSession || this.#running || this.#recovering) return;
@@ -295,7 +327,8 @@ export class ProductWorkspace {
     } else if (this.#running) {
       reason = "Your current request is still running. Wait for it to finish before sending another revision.";
       label = "View progress"; help = () => this.el("product-progress").scrollIntoView({ block: "center" });
-    } else if (this.#checkingSession) reason = "Checking the saved session status…";
+    } else if (this.#restoringVersion) reason = "Restoring the selected version…";
+    else if (this.#checkingSession) reason = "Checking the saved session status…";
     else if (this.#recovering) {
       reason = "Your previous request has no confirmed result. Check the original request before sending another revision.";
       label = "Check previous request"; help = () => this.el<HTMLButtonElement>("recover").click();
@@ -317,12 +350,12 @@ export class ProductWorkspace {
       else check();
     } else if (this.#selectingVersion) reason = "Opening the selected preview version…";
     else if (!this.#version) {
-      if (this.el<HTMLSelectElement>("version-picker").value) { reason = "A verified version is ready. Open it before sending a revision."; label = "Open latest version"; help = () => this.el<HTMLButtonElement>("return-latest").click(); }
+      if (this.el<HTMLSelectElement>("version-picker").value) { reason = "A verified version is ready. Open it before sending a revision."; label = "Open current version"; help = () => this.el<HTMLButtonElement>("return-latest").click(); }
       else reason = "Your first verified preview must be ready before you can send a revision.";
     }
     else if (!this.el("old-version-note").hidden) {
-      reason = "You’re viewing an earlier version. Return to the latest version to send your change.";
-      label = "Return to latest version"; help = () => this.el<HTMLButtonElement>("return-latest").click();
+      reason = "Restore the version you’re viewing, or return to current to send your change.";
+      label = "Return to current version"; help = () => this.el<HTMLButtonElement>("return-latest").click();
     } else if (!this.field("revision").value.trim()) reason = "Describe what you’d like to change to enable Send.";
     const button = this.el<HTMLButtonElement>("revise"); button.disabled = !!reason; button.title = reason || "Send revision";
     this.el("revision-availability").hidden = !reason; this.text("revision-blocked-reason", reason);
@@ -346,13 +379,15 @@ export class ProductWorkspace {
   private syncControls(): void {
     this.navigation();
     this.el("revise-estimates").hidden = !this.#version;
-    const picker = this.el<HTMLSelectElement>("version-picker"); picker.disabled = this.#running || this.#selectingVersion || this.#checkingSession || !picker.value;
-    this.el<HTMLButtonElement>("generate").disabled = !this.#connected || this.#running || this.#recovering || this.#checkingSession;
+    const picker = this.el<HTMLSelectElement>("version-picker"); picker.disabled = this.#running || this.#selectingVersion || this.#restoringVersion || this.#checkingSession || !picker.value;
+    this.el<HTMLButtonElement>("generate").disabled = !this.#connected || this.#running || this.#recovering || this.#checkingSession || this.#restoringVersion;
+    this.el<HTMLButtonElement>("restore-version").disabled = !this.#connected || !this.#restoreVersion || this.#running || this.#selectingVersion || this.#restoringVersion || this.#checkingSession || this.#recovering || this.#sessionBlocked;
+    for (const button of this.root.querySelectorAll<HTMLButtonElement>("[data-preview-revision], #return-current, #return-latest")) button.disabled = this.#running || this.#selectingVersion || this.#restoringVersion || this.#checkingSession;
     this.revisionAvailability();
-    this.el<HTMLTextAreaElement>("revision").disabled = this.#running || !this.#version || !this.el("old-version-note").hidden;
+    this.el<HTMLTextAreaElement>("revision").disabled = this.#running || this.#restoringVersion || !this.#version || !this.el("old-version-note").hidden;
     this.el<HTMLButtonElement>("recover").disabled = !this.#connected || this.#running || this.#checkingSession;
-    this.el<HTMLButtonElement>("resume").disabled = !this.#connected || this.#running || this.#recovering || this.#checkingSession;
-    this.el<HTMLButtonElement>("new-applet").disabled = this.#running || this.#recovering || this.#checkingSession;
+    this.el<HTMLButtonElement>("resume").disabled = !this.#connected || this.#running || this.#recovering || this.#checkingSession || this.#restoringVersion;
+    this.el<HTMLButtonElement>("new-applet").disabled = this.#running || this.#recovering || this.#checkingSession || this.#restoringVersion;
     this.el<HTMLButtonElement>("open-settings").disabled = false;
   }
   private addMessage(message: Message): void { this.#messages.push(message); if (this.#pendingFrom !== undefined) this.#pendingFrom = Math.max(0,this.#pendingFrom - Math.max(0,this.#messages.length - 60)); this.#messages = this.#messages.slice(-60); this.renderMessages(); this.persist(); }

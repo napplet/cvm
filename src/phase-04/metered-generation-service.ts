@@ -204,7 +204,7 @@ export class MeteredGenerationService {
         // states remain fenced, and prepareMeteredAction still locks the lineage.
         const hasVerifiedBase = session.status === "failed" && session.version > 0 &&
           (await this.options.store.listMeteredActionsForSession(accountId, command.sessionId)).some((action) =>
-            action.status === "completed" && action.artifactVersion === session.version && !!action.artifact?.artifactId);
+            action.status === "completed" && action.artifactVersion === (session.currentVerifiedArtifactVersion ?? session.version) && !!action.artifact?.artifactId);
         if (!hasVerifiedBase) return SessionActionResultSchema.parse({ status: "denied", code: "SESSION_NOT_REVISION_READY" });
       }
       return this.execute(command, accountId, fingerprint);
@@ -289,7 +289,8 @@ export class MeteredGenerationService {
     // must never invent a new prompt, profile/card, or provider request ID.
     const providerRequestId = operationId;
     const prompt = "repair" in command ? "Repair the charged focused napplet." : "revision" in command ? command.revision : command.idea;
-    const priorForIntent = (await this.options.store.listMeteredActionsForSession(accountId, sessionId)).filter((item) => item.artifact?.artifactId).sort((left, right) => (right.artifactVersion ?? 0) - (left.artifactVersion ?? 0))[0];
+    const currentSession = await this.options.store.sessionStatus(accountId, sessionId);
+    const priorForIntent = (await this.options.store.listMeteredActionsForSession(accountId, sessionId)).filter((item) => item.artifact?.artifactId && (currentSession?.currentVerifiedArtifactVersion === undefined || item.artifactVersion === currentSession.currentVerifiedArtifactVersion)).sort((left, right) => (right.artifactVersion ?? 0) - (left.artifactVersion ?? 0))[0];
     const intent = ProviderOperationIntentSchema.parse({ operationId, providerRequestId, accountId, sessionId, actionId: durableActionId, expectedVersion: command.expectedVersion, actionBudgetReference: budget.reference, profileId: profile.id, priceCardId: priceCard.id, requestFingerprint: fingerprint, prompt, ...("remixReference" in command && command.remixReference ? { remixReference: command.remixReference } : {}), ...(priorForIntent?.artifact?.artifactId ? { authorizedPriorArtifactReference: priorForIntent.artifact.artifactId } : {}), maximumUnits: profile.maximumUnits, selection: "unselected" });
     const claim = await this.options.store.transact(accountId, (transaction) => transaction.claimProviderOperation(operationId));
     if (!claim.claimed && claim.action.result) return SessionActionResultSchema.parse(claim.action.result);
@@ -352,8 +353,7 @@ export class MeteredGenerationService {
     // Workspace/checkpoint references are coordinator-owned, action-scoped
     // identities.  Revisions inherit only the prior durable verified lineage;
     // they never read a process-wide harness default shared with another user.
-    const history = await this.options.store.listMeteredActionsForSession(accountId, sessionId);
-    const prior = [...history].filter((item) => item.artifact?.artifactId).sort((left, right) => (right.artifactVersion ?? 0) - (left.artifactVersion ?? 0))[0];
+    const prior = priorForIntent;
     const workspaceLineage = prior?.artifact?.workspaceLineage ?? `workspace:${sessionId}`;
     const checkpointReference = `checkpoint:${sessionId}:${durableActionId}`;
     const snapshotReference = prior?.artifact?.snapshotReference ?? `snapshot:${sessionId}:initial`;

@@ -87,7 +87,7 @@ export class LocalPublication {
         const latest = (await this.query<Row>(`SELECT * FROM development_publications
           WHERE account_id=$1 AND session_id=$2 AND publisher=$3 AND state='published'
             AND NOT coalesce((prepared->>'preview')::boolean,false)
-          ORDER BY (prepared->>'version')::integer DESC,published_at DESC,id DESC LIMIT 1`, [account, command.sessionId, command.publisher])).rows[0];
+          ORDER BY published_at DESC NULLS LAST,id DESC LIMIT 1`, [account, command.sessionId, command.publisher])).rows[0];
         return { status: "ok", current: current ? this.projection(current) : null, latestPublished: latest ? this.projection(latest) : null };
       }
       if (command.action === "prepare" || command.action === "preview" || command.action === "metadata") {

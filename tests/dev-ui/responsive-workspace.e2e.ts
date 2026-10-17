@@ -139,6 +139,10 @@ try {
   await page.locator("#workspace-home").click();
   assert(await page.locator("#revision").inputValue()==="Keep this draft across resize and navigation","DRAFT_LOST");
   assert(await page.frameLocator("#preview").getByRole("button").innerText()==="1","PREVIEW_REMOUNTED");
+  await page.evaluate(()=>{const w=window as any; w.workspace.sessionState("verified"); const older={...w.v,version:99,artifactId:"older-preview"}; w.workspace.onRestoreVersion(async()=>{}); w.workspace.versions([older,w.v],older,async()=>{},w.v); w.workspace.selected(older); (document.getElementById("revision-history") as HTMLDetailsElement).open=true; });
+  await layout("revision-history","#restore-version");
+  assert(await page.locator("#restore-version").isEnabled(),"RESTORE_ACTION_UNREACHABLE");
+  await page.evaluate(()=>{const w=window as any;w.workspace.versions([w.v],w.v,async()=>{});w.workspace.selected(w.v);(document.getElementById("revision-history") as HTMLDetailsElement).open=false;});
   await page.evaluate(()=>document.dispatchEvent(new CustomEvent("applet:step",{detail:4})));
   for(const [id,scheme] of [["publication-servers","https"],["publication-relays","wss"]]){
     await page.locator(`#${id}`).fill(`${scheme}://${"a".repeat(60)}.${"b".repeat(60)}.example.test`); await page.locator(`#${id}`).press("Enter");

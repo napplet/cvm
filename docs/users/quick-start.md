@@ -34,7 +34,7 @@ If it stops, read the explanation beside the action or open the execution detail
 
 Use the preview as you would the applet. In the revision box, describe a specific change, such as “Ask before resetting the counter.” Send it with the arrow or **⌘/Ctrl + Enter**.
 
-A successful revision creates a new verified version. You can select an earlier version without asking the model to generate it again.
+A successful revision creates a new verified version. Use **Version history** to view earlier builds. Choose **Restore this version** to continue editing from one, without another model request or charge. [Learn about revisions](./create-and-revise#load-or-restore-an-earlier-revision).
 
 <GuideScreenshot name="revise" alt="Reading counter preview beside a request to ask for confirmation before resetting, with Version 2 selected" caption="Test the preview, then send one specific change. The version picker is above the preview." />
 

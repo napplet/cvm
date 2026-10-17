@@ -46,6 +46,7 @@ try {
   assert((await owner.callTool("service_info",{})).estimates.create===null,"ACTIVE_WORK_USED_AS_ESTIMATE");
   const active = await owner.callTool("projects",{action:"list",stage:"active"});
   assert(active.projects.length === 1,"SIGNED_USER_ACTIVE_PROJECT_MISSING"); const id=active.projects[0].id;
+  assert((await owner.callTool("projects",{action:"restore",id,artifactId:"artifact:sha256:"+"a".repeat(64),expectedVersion:0,idempotencyKey:"restore:busy"})).status==="busy","RESTORE_ALLOWED_DURING_GENERATION");
   assert((await other.callTool("projects",{action:"list"})).projects.length===0,"OTHER_USER_LIST_LEAK");
   const liveCosts = await owner.callTool("projects",{action:"costs",id});
   assert(liveCosts.costs.total.confirmed==="0" && liveCosts.costs.total.pending===1 && liveCosts.costs.requests[0].charge===null,"ACTIVE_COST_SHOWN_AS_FREE");
@@ -137,21 +138,63 @@ try {
   await page.reload(); await page.locator('.request-message').nth(1).waitFor();
   assert((await page.locator('[data-spend="conversation"] strong').innerText()).includes(costs.total.confirmed),"RELOAD_LOST_TOTAL");
 
+  // Browse freely, restore an old source, and keep later builds and costs.
+  await page.locator("#revision").fill("Keep my unsent draft while browsing revisions");
+  const v2 = (await owner.sessionStatus(id)).session.latestVerifiedArtifact;
+  await page.locator("#revision-history summary").click();
+  await page.getByRole("button",{name:"View version 1",exact:true}).click();
+  await page.locator("#revision-selection").waitFor();
+  assert((await owner.sessionStatus(id)).session.latestVerifiedArtifact.id===v2.id,"PREVIEW_MUTATED_CURRENT_VERSION");
+  assert(await page.locator("#revise").isDisabled(),"OLD_PREVIEW_CAN_SUBMIT_WITHOUT_RESTORE");
+  assert(await page.locator("#restore-version").isEnabled(),"RESTORE_UNREACHABLE");
+  const restoreInput = {action:"restore",id,artifactId:artifact,expectedVersion:2,idempotencyKey:"revision:owner-only"};
+  assert((await other.callTool("projects",restoreInput)).status==="not_found_or_denied","CROSS_OWNER_RESTORE");
+  assert((await owner.callTool("projects",{...restoreInput,artifactId:(await anonymous.sessionStatus(anonymousId)).session.latestVerifiedArtifact.id})).status==="not_found_or_denied","CROSS_PROJECT_ARTIFACT_RESTORE");
+  await page.locator("#restore-version").click();
+  await page.locator("#restore-status").filter({hasText:"is current"}).waitFor();
+  const restored = (await owner.sessionStatus(id)).session;
+  assert(restored.version===3 && restored.latestVerifiedArtifact.id===artifact && restored.verifiedArtifacts.length===2,"RESTORE_NOT_DURABLE_OR_HISTORY_LOST");
+  assert(await page.locator("#revision").inputValue()==="Keep my unsent draft while browsing revisions" && await page.locator("#revise").isEnabled(),"RESTORE_LOST_DRAFT_OR_CANNOT_EDIT");
+  assert(fixture.counts().inferences===3,"RESTORE_STARTED_MODEL");
+  const restoredCosts=(await owner.callTool("projects",{action:"costs",id})).costs;
+  assert(restoredCosts.total.confirmed===costs.total.confirmed && restoredCosts.requests.length===2,"RESTORE_ADDED_CHARGE_OR_METERED_ACTION");
+  const savedRestore=(await pool.query("SELECT idempotency_key FROM development_revision_restores WHERE session_id=$1",[id])).rows[0];
+  assert((await owner.callTool("projects",{...restoreInput,idempotencyKey:savedRestore.idempotency_key})).status==="restored","RESTORE_REPLAY_FAILED");
+  assert((await owner.sessionStatus(id)).session.version===3,"RESTORE_REPLAY_INCREMENTED_VERSION");
+  assert((await owner.callTool("projects",{...restoreInput,artifactId:v2.id})).code==="STALE_SESSION_VERSION","STALE_RESTORE_OVERWROTE_CURRENT");
+  assert((await owner.callTool("projects",{...restoreInput,artifactId:v2.id,idempotencyKey:savedRestore.idempotency_key})).code==="IDEMPOTENCY_KEY_CONFLICT","RESTORE_KEY_REUSED_FOR_OTHER_VERSION");
+  await page.reload(); await page.locator("#preview").waitFor({state:"visible"});
+  assert((await page.locator("#version-picker option:checked").innerText()).includes("Version 1 · current"),"RELOAD_IGNORED_RESTORED_CURRENT");
+  assert(await page.locator("#version-picker option").count()===2,"LATER_VERSION_NOT_LOADABLE");
+  await page.locator("#version-picker").selectOption(v2.id); await page.locator("#revision-selection").waitFor();
+  await page.locator("#return-current").click(); await page.locator("#revision-selection").waitFor({state:"hidden"});
+  assert(await page.locator("#version-picker").inputValue()===artifact,"RETURN_CURRENT_LOADED_NEWEST_INSTEAD");
+  // Make a real edit from the restored source through the GUI's concurrency version.
+  await page.locator("#revision").fill("Add a reset button to the restored version"); await page.locator("#revise").click();
+  await page.waitForFunction(()=>document.querySelector('.request-message:last-child .request-outcome')?.textContent==='Version 4 ready',undefined,{timeout:180000});
+  const restoredRequest = JSON.parse(String(fixture.calls.filter(call=>call.url.endsWith("/responses")).at(-1)!.init!.body));
+  assert(JSON.stringify(restoredRequest).includes("OAuth fixture 1") && !JSON.stringify(restoredRequest).includes("OAuth fixture 3"),"MODEL_RECEIVED_NEWEST_INSTEAD_OF_RESTORED_SOURCE");
+  assert(Number((await pool.query("SELECT lineage->>'parentArtifactVersion' AS parent FROM session_artifacts WHERE session_id=$1 AND version=4",[id])).rows[0].parent)===1,"RESTORED_EDIT_LINEAGE_POINTS_TO_WRONG_VERSION");
+  const afterRestoredEdit=(await owner.callTool("projects",{action:"costs",id})).costs;
+  assert((await owner.sessionStatus(id)).session.verifiedArtifacts.length===3,"EDIT_FROM_RESTORE_REMOVED_HISTORY");
+
   // A failed build still pays for completed model usage; interrupted output has
   // a separately confirmed zero local charge. Neither becomes a fake free run.
   await owner.fundCashu("1000");
   fixture.setInferenceMode("invalid-typescript");
   const failedAdmission=await owner.fundAdmission("395");
-  const failed=await owner.reviseSession({sessionId:id,admissionReference:failedAdmission.admissionReference,expectedVersion:2,maximum:"395",idempotencyKey:"costs:failed",revision:"Test a change that fails its checks"});
+  const failed=await owner.reviseSession({sessionId:id,admissionReference:failedAdmission.admissionReference,expectedVersion:4,maximum:"395",idempotencyKey:"costs:failed",revision:"Test a change that fails its checks"});
   assert(failed.status==="failed" && BigInt(failed.confirmedSpend)>0n,"FAILED_TEST_DID_NOT_INCUR_USAGE");
   const paidFailure=(await owner.callTool("projects",{action:"costs",id})).costs;
-  assert(paidFailure.requests[0].charge===failed.confirmedSpend && paidFailure.requests[0].lines.length>0 && BigInt(paidFailure.total.confirmed)===BigInt(costs.total.confirmed)+BigInt(failed.confirmedSpend),"FAILED_CHARGE_NOT_IN_TOTAL");
+  assert(paidFailure.requests[0].charge===failed.confirmedSpend && paidFailure.requests[0].lines.length>0 && BigInt(paidFailure.total.confirmed)===BigInt(afterRestoredEdit.total.confirmed)+BigInt(failed.confirmedSpend),"FAILED_CHARGE_NOT_IN_TOTAL");
   fixture.setInferenceMode("cut");
   const cutAdmission=await owner.fundAdmission("395");
   const cut=await owner.reviseSession({sessionId:id,admissionReference:cutAdmission.admissionReference,expectedVersion:failed.sessionVersion,maximum:"395",idempotencyKey:"costs:cut",revision:"Test interrupted output"});
   const zero=(await owner.callTool("projects",{action:"costs",id})).costs;
   assert(cut.status==="failed" && zero.requests[0].charge==="0" && zero.total.confirmed===paidFailure.total.confirmed && zero.total.pending===0,"ZERO_CHARGE_NOT_DISTINCT_FROM_UNKNOWN");
   fixture.setInferenceMode("complete");
+  const finalRestore=await owner.callTool("projects",{action:"restore",id,artifactId:artifact,expectedVersion:(await owner.sessionStatus(id)).session.version,idempotencyKey:"restore:before-restart"});
+  assert(finalRestore.status==="restored","RESTORE_AFTER_SETTLED_FAILURE_DENIED");
   await anonymous.close(); await owner.close(); await other.close(); await context.close();
   const port=Number(new URL(server.url).port); await server.close(); server=await createDevelopmentContextVmServer({config,stateRoot:root,port,chatGptFetch:modelFetch});
   const fresh=await browser.newContext(); const returning=await fresh.newPage(); await signer(returning,key); await returning.goto(`${server.url}/#/applets`); await returning.getByText("Workspace connected",{exact:true}).waitFor({state:"attached"});
@@ -161,13 +204,14 @@ try {
   assert(await returning.locator("#projects-list li").count()===1,"RETURNING_LIST_LEAK");
   await returning.getByRole("button",{name:/Reading counter/}).click(); await returning.locator("#preview").waitFor({state:"visible",timeout:30000});
   assert(await returning.locator("#publish").isEnabled(),"RETURNING_PUBLISH_UNAVAILABLE");
+  assert((await returning.locator("#version-picker option:checked").innerText()).includes("Version 1 · current"),"CVM_RESTART_LOST_RESTORED_VERSION");
   await returning.reload(); await returning.locator("#preview").waitFor({state:"visible",timeout:30000});
   assert((await returning.locator("#nostr-sign-in").innerText()).includes("NIP-07"),"RETURNING_SIGNIN_NOT_PERSISTED");
-  assert(fixture.counts().inferences===5,"LIST_OR_OPEN_STARTED_GENERATION");
+  assert(fixture.counts().inferences===6,"LIST_OR_OPEN_STARTED_GENERATION");
   await returning.locator("#nostr-sign-in").click(); await returning.locator("#nostr-sign-out").click(); await returning.locator("#nostr-close").click();
   await returning.locator("#your-applets").click(); await returning.locator("#projects-empty").waitFor({state:"visible"});
   assert(await returning.locator("#projects-list li").count()===0,"SIGN_OUT_LEFT_ACCOUNT_PROJECT_LIST");
   assert(errors.length===0,`BROWSER_ERRORS:${errors.join(";")}`);
-  console.log(JSON.stringify({status:"passed",case:"returning-projects",checks:["actual selected identity signs generation","active/pending/verified stages","cross-owner list/get/preview denial","same npub from fresh browser after CVM restart","open without inference","signout clears account list","legacy anonymous build visible after sign-in","live stages refresh without interrupting generation","dedicated static route and browser back/forward","mobile layout","primary navigation preserves builder context and running status","signed caller-only cost/time estimates","active jobs excluded from estimates","history survives reload without inference","exact per-request breakdown and cumulative totals","owner-only costs and cursor","pagination and replay do not change totals","failed paid requests included; confirmed zero distinct from pending"]}));
+  console.log(JSON.stringify({status:"passed",case:"returning-projects",checks:["actual selected identity signs generation","active/pending/verified stages","cross-owner list/get/preview denial","same npub from fresh browser after CVM restart","open without inference","signout clears account list","legacy anonymous build visible after sign-in","live stages refresh without interrupting generation","dedicated static route and browser back/forward","mobile layout","primary navigation preserves builder context and running status","signed caller-only cost/time estimates","active jobs excluded from estimates","history survives reload without inference","exact per-request breakdown and cumulative totals","owner-only costs and cursor","pagination and replay do not change totals","failed paid requests included; confirmed zero distinct from pending","preview versus durable restore","restore ownership, idempotency and stale guards","restore preserves costs, draft and later revisions","reload and subsequent model source use restored revision"]}));
 } catch(error) { console.error(error, await page.locator("body").innerText({timeout:1000}).catch(()=>"original page closed")); throw error; }
 finally { release(); releaseAnonymous(); await owner.close(); await other.close(); await browser.close(); await pool.end(); await server.close(); await stack.down(true); await rm(root,{recursive:true,force:true}); }

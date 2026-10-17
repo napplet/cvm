@@ -115,7 +115,7 @@ try {
     Object.assign(w, { workspace, live, publication, version }); workspace.connected(true);
     workspace.estimates({ unit:"test_sat", windowDays:30,
       create:{samples:4,basis:"create",cost:{low:"120",high:"300"},seconds:{low:45,high:90}},
-      revise:{samples:3,basis:"revise",cost:{low:"80",high:"180"},seconds:{low:30,high:60}},
+      revise:{samples:3,basis:"revise",cost:{low:"80",high:"180"},seconds:{low:90,high:180}},
     });
   }, { scripts, pubkey, address, timerAddress });
 
@@ -131,6 +131,7 @@ try {
     await page.evaluate(event => (window as any).live.receive({ kind: "progress", progress: { kind: "stage", requestId: "docs", ...event } }), { sequence, stage, state });
   }
   await capture("build-progress", "#product-progress");
+  await capture("preview-status", ".preview-panel");
   await page.locator("#execution-details summary").click();
   await capture("execution-details", "#execution-activity");
   await page.locator("#execution-details summary").click();
@@ -177,7 +178,7 @@ try {
   await page.locator("#publish").click();
   await page.locator("#publication-discovery").filter({ hasText: "No server list" }).waitFor();
   await page.locator("#publication-title").fill("Reading-session counter");
-  for (const [id, value] of [["publication-servers", "https://blossom.example.com"], ["publication-relays", "wss://relay.example.com"]]) {
+  for (const [id, value] of [["publication-servers", "https://blossom.example.com"], ["publication-servers", "https://backup.example.com"], ["publication-servers", "https://unavailable.example.com"], ["publication-relays", "wss://relay.example.com"]]) {
     await page.locator(`#${id}`).fill(value); await page.locator(`#${id}`).press("Enter");
   }
   await capture("publish-destinations", "#publish-step");
@@ -191,7 +192,7 @@ try {
     // file upload or relay publication is performed by this capture.
     w.samplePublication = { ...w.samplePrepared, status: "published", address, url: origin,
       publishedAt: "2026-10-16T12:00:00Z", files: [{ path: "index.html", sha256: "a".repeat(64), bytes: 2048, url: origin, type: "text/html" }],
-      fileResults: [{ server: "https://blossom.example.com", file: "index.html", state: "verified" }],
+      fileResults: [{ server: "https://blossom.example.com", file: "index.html", state: "verified" }, { server: "https://backup.example.com", file: "index.html", state: "verified" }, { server: "https://unavailable.example.com", file: "index.html", state: "failed", detail: "Server declined upload (401)" }],
       relayResults: [{ relay: "wss://relay.example.com", state: "published" }] };
   }, { address, origin });
   await page.locator("#publish").click(); await page.locator("#publication-result").waitFor();

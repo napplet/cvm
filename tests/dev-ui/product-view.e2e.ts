@@ -32,23 +32,34 @@ try {
   await page.evaluate(() => (window as any).workspace.estimates({unit:"test_sat",windowDays:30,create:null,revise:null}));
   assert((await page.locator("#create-estimate-time").innerText()).includes("Not enough history"), "EMPTY_HISTORY_INVENTED_ETA");
   await page.evaluate(() => { const w=window as any; w.estimate={samples:4,basis:"create",cost:{low:"120",high:"300"},seconds:{low:30,high:60}}; w.workspace.estimates({unit:"test_sat",windowDays:30,create:w.estimate,revise:{...w.estimate,basis:"all"}}); });
-  assert((await page.locator("#create-estimate-cost").innerText()).includes("120–300 test sats"), "COST_ESTIMATE_MISSING");
-  assert((await page.locator("#create-estimate-time").innerText()).includes("30 sec–1 min"), "TIME_ESTIMATE_MISSING");
+  assert((await page.locator("#create-estimate-cost").innerText()).includes("120–300\u00a0test sats"), "COST_ESTIMATE_MISSING");
+  assert((await page.locator("#create-estimate-time").innerText()).includes("30–60\u00a0sec"), "TIME_ESTIMATE_MISSING");
   assert((await page.locator(".estimate-limit").first().innerText()).includes("3,250"), "MAXIMUM_NOT_SEPARATE_FROM_ESTIMATE");
   await page.evaluate(() => { const w = window as any; w.workspace.begin("generate"); w.live.begin("Create", "Deterministic fixture"); w.live.receive({ kind: "sent", requestId: "a", tool: "start_session" }); });
   assert(await page.locator("#workspace-nav-label").innerText()==="Builder" && await page.locator("#workspace-nav-status").isVisible(),"RUNNING_BUILDER_CONTEXT_MISSING");
   assert((await page.locator("#progress-provider").textContent())?.includes("no model request"), "FIXTURE_HIDDEN_IN_PRODUCT");
   assert((await page.locator("#progress-estimate").innerText()).includes("remaining"), "RUNNING_ETA_MISSING");
+  assert(await page.locator("#progress-detail").isHidden() && await page.locator("#progress-time").isHidden(), "EMPTY_PREVIEW_STATUS_DUPLICATED");
+  assert(await page.locator("#preview-status-title").isVisible() && (await page.locator("#preview-status-remaining").innerText()).includes("30–60"), "PREVIEW_STATUS_OR_ETA_MISSING");
+  assert((await page.locator("#preview-status-cost").innerText()).includes("120–300"), "PREVIEW_COST_MISSING");
+  assert(await page.locator("#revise-estimates").isHidden(), "REVISION_ESTIMATE_BEFORE_VERSION");
   await page.clock.fastForward(16000);
   assert((await page.locator("#progress-estimate").innerText()).includes("paused"), "STALE_ESTIMATE_KEPT_COUNTING");
   assert((await page.locator("#progress-title").textContent())?.includes("Still waiting"), "STALE_NOT_VISIBLE_AT_TOP");
+  assert(await page.locator("#preview-empty").getAttribute("data-state") === "stale" && (await page.locator("#preview-status-remaining").innerText()).includes("Waiting"), "PREVIEW_STALE_STATE_MISSING");
+  assert(await page.locator(".preview-shape").evaluate(el => getComputedStyle(el).animationName) === "none", "STALE_LOADER_KEPT_SPINNING");
   assert(await page.locator("#build-progress").getAttribute("aria-valuenow") === "0", "CLOCK_FAKED_PROGRESS");
   await page.evaluate(() => { const w = window as any; w.live.receive({ kind: "progress", progress: { kind: "stage", requestId: "a", stage: "verify", state: "running", sequence: 1 } }); });
   assert((await page.locator("#progress-title").textContent())?.includes("Checking"), "HEARTBEAT_DID_NOT_RESTORE_STATUS");
+  assert((await page.locator("#preview-status-title").innerText()).includes("Checking"), "PREVIEW_STAGE_NOT_UPDATED");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  assert(await page.locator(".preview-shape").evaluate(el => getComputedStyle(el).animationName) === "none", "PREVIEW_REDUCED_MOTION_IGNORED");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
   await page.clock.fastForward(50000);
   await page.evaluate(() => (window as any).live.receive({kind:"progress",progress:{kind:"stage",requestId:"a",stage:"verify",state:"running",sequence:2}}));
   assert((await page.locator("#progress-estimate").innerText()).includes("Taking longer"), "OVERRUN_SHOWS_ZERO_REMAINING");
   await page.evaluate(() => { const w = window as any; w.workspace.failed("TIMEOUT", true); w.live.finish("Outcome unconfirmed", "uncertain"); w.workspace.settled(); w.workspace.recovery(true); });
+  assert((await page.locator("#preview-status-title").innerText()).includes("needs checking"), "PREVIEW_RECOVERY_STATE_MISSING");
   assert(await page.locator("#new-applet").isDisabled(), "UNCERTAIN_RELOAD_CAN_CREATE_DUPLICATE");
   assert(await page.locator("#build-progress").getAttribute("aria-valuenow") === "0", "RECOVERY_SHOWS_PREVIOUS_SUCCESS");
   assert((await page.locator("#revision-blocked-reason").innerText()).includes("previous request"), "RECOVERY_BLOCK_NOT_AT_COMPOSER");
@@ -57,6 +68,7 @@ try {
     w.workspace.recovery(false); w.workspace.completed(v); w.workspace.versions([v],v,async()=>{}); w.workspace.settled();
     w.revisionsSent=0; document.querySelector<HTMLButtonElement>("#revise")!.onclick=()=>{w.revisionsSent++;};
   });
+  assert(await page.locator("#preview-empty").isHidden() && await page.locator("#progress-detail").isVisible() && await page.locator("#revise-estimates").isVisible(), "VERIFIED_PREVIEW_STATUS_PLACEMENT");
   assert(await page.locator("#revise").isDisabled() && (await page.locator("#revision-blocked-reason").innerText()).includes("Describe"),"EMPTY_REVISION_UNEXPLAINED");
   await page.locator("#revision").fill("Keep the pong ball visible at every screen size");
   assert(await page.locator("#revise").isEnabled() && await page.locator("#revision-availability").isHidden(),"READY_REVISION_DISABLED");
@@ -79,7 +91,7 @@ try {
   assert(await page.locator("#revise").isEnabled() && await page.locator("#product-notice").isHidden(),"RESOLVED_STATUS_LEFT_REVISION_DISABLED");
   await page.evaluate(()=>{const w=window as any;w.workspace.sessionState("billing_invariant_failed");});
   assert((await page.locator("#revision-blocked-reason").innerText()).includes("accounting problem"),"ACCOUNTING_BLOCK_UNEXPLAINED");
-  for (const width of [390, 768, 1440]) {
+  for (const width of [320, 390, 768, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `PRODUCT_OVERFLOW_${width}`);
     const tiny = await page.locator("button,a,summary,input,select,textarea").evaluateAll((elements) => elements.filter((el) => {

@@ -10,12 +10,17 @@
     {
       "file": "setup.png",
       "width": 720,
-      "height": 1020
+      "height": 1030
     },
     {
       "file": "build-progress.png",
       "width": 1190,
-      "height": 147
+      "height": 87
+    },
+    {
+      "file": "preview-status.png",
+      "width": 808,
+      "height": 765
     },
     {
       "file": "execution-details.png",
@@ -30,7 +35,7 @@
     {
       "file": "revision-composer.png",
       "width": 360,
-      "height": 768
+      "height": 756
     },
     {
       "file": "sign-in.png",
@@ -50,17 +55,17 @@
     {
       "file": "publish-destinations.png",
       "width": 840,
-      "height": 1245
+      "height": 1303
     },
     {
       "file": "publish-review.png",
       "width": 840,
-      "height": 848
+      "height": 891
     },
     {
       "file": "publish-confirmed.png",
       "width": 840,
-      "height": 909
+      "height": 995
     },
     {
       "file": "remix.png",

@@ -135,6 +135,7 @@ try {
     await page.locator(`#${id}`).fill(`${scheme}://${"a".repeat(60)}.${"b".repeat(60)}.example.test`); await page.locator(`#${id}`).press("Enter");
   }
   await layout("publish","#publication-review");
+  await page.locator("#publication-servers").fill("https://backup.example.com"); await page.locator("#publication-servers").press("Enter");
   await page.locator("#publication-review").click(); await page.locator("#publication-review-panel").waitFor();
   await page.locator("#publication-review-panel details").evaluate((el:HTMLDetailsElement)=>el.open=true);
   await layout("publish-review","#publication-confirm");

@@ -1,6 +1,7 @@
 import { SimplePool } from "nostr-tools/pool";
 import { verifyEvent, type Event, type EventTemplate } from "nostr-tools/pure";
 import { createUploadAuthorization } from "../../../infra/vendor/napplet-cli/bundle/entry.js";
+import { MIN_PUBLICATION_SERVERS, verifiedPublicationServers } from "../publication-copies";
 
 export type BlobFile = { path: string; sha256: string; bytes: number; url: string; type: string };
 export type Propagation = { server: string; file: string; state: "checking" | "signing" | "mirroring" | "uploading" | "verified" | "failed"; detail?: string };
@@ -35,11 +36,12 @@ const request = (url: string, options: RequestInit = {}) => fetch(url, { ...opti
 /** Runs in the user's client. The CVM never receives user upload authorizations.
  * Verify destination bytes, not just upload acknowledgements or HEAD responses. */
 export async function propagateBlobs(files: BlobFile[], servers: string[], signer: { sign(template: EventTemplate): Promise<Event> }, progress: (event: Propagation) => void): Promise<boolean> {
-  let complete = true; const source = new Map<string, Uint8Array>();
-  for (const raw of servers) {
+  const receipts: Propagation[] = []; const source = new Map<string, Uint8Array>();
+  const destinations = [...new Set(servers.map(blossomServer))];
+  for (const raw of destinations) {
     const server = blossomServer(raw); let authorization: string | undefined;
     for (const file of files) {
-      const report = (state: Propagation["state"], detail?: string) => progress({ server, file: file.path, state, detail });
+      const report = (state: Propagation["state"], detail?: string) => { const event = { server, file: file.path, state, detail }; receipts.push(event); progress(event); };
       try {
         report("checking");
         try { await bytes(await request(`${server}/${file.sha256}`), file); report("verified"); continue; } catch { /* Missing or damaged destination: copy verified source bytes. */ }
@@ -60,8 +62,8 @@ export async function propagateBlobs(files: BlobFile[], servers: string[], signe
           await bytes(await request(`${server}/${file.sha256}`), file);
         }
         report("verified");
-      } catch (error) { complete = false; report("failed", error instanceof Error ? error.message : "Server unavailable"); }
+      } catch (error) { report("failed", error instanceof Error ? error.message : "Server unavailable"); }
     }
   }
-  return complete;
+  return verifiedPublicationServers(files, destinations, receipts).length >= MIN_PUBLICATION_SERVERS;
 }

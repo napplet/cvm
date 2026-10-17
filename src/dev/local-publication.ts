@@ -1,5 +1,6 @@
 import { publishOnUserRelays, type RelayReceipt } from "./publication-relays";
 import { relayUrl } from "../dev-ui/destinations";
+import { MIN_PUBLICATION_SERVERS, verifiedPublicationServers } from "../dev-ui/publication-copies";
 import { CvmBlossom } from "./cvm-blossom";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { resolve, extname } from "node:path";
@@ -89,9 +90,10 @@ export class LocalPublication {
             AND NOT coalesce((prepared->>'preview')::boolean,false)
           ORDER BY (state='published') DESC,created_at DESC,id DESC LIMIT 1`, [account, artifact.sessionId, artifact.artifactId, command.publisher])).rows[0];
         if (signed) return this.projection(signed);
+        if (new Set(command.servers.map(server => new URL(server).origin)).size < MIN_PUBLICATION_SERVERS) return { status: "rejected", code: "PUBLICATION_NEEDS_TWO_SERVERS" };
         const metadata = await this.metadata(artifact);
         const id = crypto.randomUUID(); const dTag = `applet-${artifact.artifactId.slice(-20)}-${command.publisher.slice(0, 8)}`;
-        const template = await createSiteManifestTemplate({ target: "named", dTag }, artifact.files.map(file => ({ path: `/${file.path}`, sha256: file.sha256 })), { servers: [...new Set(command.servers.map(server => server.replace(/\/$/, "")))], metadataTags: [...metadata.filter(tag => tag[0] !== "title"), ["title", command.title]] });
+        const template = await createSiteManifestTemplate({ target: "named", dTag }, artifact.files.map(file => ({ path: `/${file.path}`, sha256: file.sha256 })), { servers: [...new Set(command.servers.map(server => new URL(server).origin))], metadataTags: [...metadata.filter(tag => tag[0] !== "title"), ["title", command.title]] });
         if (template.tags.find(tag => tag[0] === "x" && tag[2] === "aggregate")?.[1] !== artifact.aggregateSha256) throw new Error("PUBLICATION_AGGREGATE_MISMATCH");
         const prepared: Prepared = { relays: [...new Set(command.relays)], template, expiresAt: Date.now() + 600000, files: artifact.files, version: artifact.version, title: command.title, aggregate: artifact.aggregateSha256, dTag };
         await this.query("INSERT INTO development_publications(id,account_id,session_id,artifact_id,publisher,request_key,fingerprint,prepared,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'prepared') ON CONFLICT(account_id,request_key) DO NOTHING", [id, account, artifact.sessionId, artifact.artifactId, command.publisher, command.requestKey, fingerprint, JSON.stringify(prepared)]);
@@ -121,6 +123,10 @@ export class LocalPublication {
         row.signed_event ??= event; if (command.fileResults) row.file_results = command.fileResults;
         return this.projection(row);
       }
+      // File verification happens in the client; do not turn destinations into
+      // arbitrary server-side fetches. Require its durable complete-copy receipts.
+      const servers = row.prepared.template.tags.filter(tag => tag[0] === "server").map(tag => tag[1]!);
+      if (!row.prepared.preview && verifiedPublicationServers(row.prepared.files, servers, row.file_results ?? []).length < MIN_PUBLICATION_SERVERS) return { status: "rejected", code: "PUBLICATION_NEEDS_TWO_VERIFIED_SERVERS" };
       const running = this.#active.get(row.id); if (running) return running;
       const operation = this.publish(row, event); this.#active.set(row.id, operation);
       try { return await operation; } finally { this.#active.delete(row.id); }

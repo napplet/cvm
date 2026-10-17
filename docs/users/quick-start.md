@@ -24,6 +24,10 @@ The workspace reports admission, model work, response receipt, the isolated buil
 
 <GuideScreenshot name="build-progress" alt="Build progress at Checking, following Preparing, Generating and Building, with Preview still ahead" caption="The stage strip tells you what is happening now. This example is checking the applet." />
 
+While the first version is building, the empty preview shows the current operation, elapsed time, approximate remaining time and estimated cost. The stage strip stays above it. During revisions, your last verified preview remains available and live details stay above the workspace.
+
+<GuideScreenshot name="preview-status" alt="Empty preview showing Checking everything works with a quiet geometric loader, current operation, elapsed time, estimated remaining time and test-sat cost" caption="Follow the first build in the preview pane. These timings are estimates from your CVM history, not deadlines." />
+
 If it stops, read the explanation beside the action or open the execution details. See [troubleshooting](./troubleshooting) before starting another request.
 
 ## 4. Try it and improve it

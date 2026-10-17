@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: verification_deferred_gaps
-stopped_at: CVM cost/time estimates and GUI verified and running locally; prior missing generation-estimation capability flagged
-last_updated: "2026-10-17T16:07:00Z"
+stopped_at: Preview status, compact estimates and two-server publication threshold verified and running locally
+last_updated: "2026-10-17T16:30:48Z"
 last_activity: 2026-10-17
-last_activity_desc: Added CVM historical cost/time estimates, GUI guidance and screenshot docs; flagged COST-01 as previously deferred/missing
+last_activity_desc: Polished estimates and preview status; publication succeeds with two verified servers despite extra failures; screenshot docs refreshed
 progress:
   total_phases: 7
   completed_phases: 6
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
 Plan: 56 of 58 accepted; development Plans 07-52/53/56/57/54/55 complete
 Status: Guided applet.broker workspace at http://127.0.0.1:49371; diagnostic console at /dev. Saved chatgpt-oauth mode with gpt-6.1-sol retained. Product/console browser journeys and recovery passed through real local services. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
-Last activity: 2026-10-17 — Completed quick task 261017-ccq: signed caller-scoped historical cost/time estimates, separate maximum, remaining-time guidance and actual charges. Explicitly flagged missing prior CVM estimation capability (COST-01 deferred v2); production equivalent remains deferred. Seven focused tests, real product/returning-projects journeys, 323 responsive checks, docs build/1,303 links/catalog/90 browser layouts/130 images passed. Local CVM restarted idle at http://127.0.0.1:49371 preserving chatgpt-oauth; no live model usage. Typecheck retains 424 existing diagnostics.
+Last activity: 2026-10-17 — Completed quick task 261017-ctq: compact revision estimates, live empty-preview status and publication with two complete verified servers despite additional failures. Same-event retry and warnings persist across reload/restart. Seven focused tests, product view, real publication e2e, 323 responsive checks, docs build/1,306 links/90 layouts/135 images passed. Active at http://127.0.0.1:49371 with chatgpt-oauth preserved; no live model usage. TypeScript retains 424 existing diagnostics.
 
 Follow-up: Stream assembly/counter verification remains complete. Latest helper-signature and compiler-feedback fix passed 29 targeted unit/integration cases plus activity and composed OAuth browser journeys. Real blinking-text generation also passed. See debug/resolved/generated-typescript-check.md.
 
@@ -380,6 +380,8 @@ Recent decisions affecting current work:
 
 | 261017-ccq | CVM historical cost/time estimates, live remaining time and actual charges; prior missing COST-01 capability flagged | 2026-10-17 | see task history | [261017-ccq](./quick/261017-ccq-add-cost-and-time-estimates-to-the-gener/) |
 
+| 261017-ctq | Compact revision estimates, live preview status and two-server publication threshold with durable warnings; refreshed screenshot docs | 2026-10-17 | see task history | [261017-ctq](./quick/261017-ctq-improve-estimate-footer-and-live-status-/) |
+
 ## Deferred Verification
 
 | Phase | Status | Reason | Resume command |
@@ -396,6 +398,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-17T16:07:00Z
-Stopped at: CVM cost/time estimates and GUI complete and active at http://127.0.0.1:49371. Docs preview at http://127.0.0.1:4173/docs/. Missing prior CVM estimation capability flagged; production remains deferred.
-Resume file: .planning/quick/261017-ccq-add-cost-and-time-estimates-to-the-gener/SUMMARY.md
+Last session: 2026-10-17T16:30:48Z
+Stopped at: Preview status, compact estimates and two-server publication threshold complete and active at http://127.0.0.1:49371. Docs preview at http://127.0.0.1:4173/docs/. User can refresh and retry saved publication. Production remains deferred.
+Resume file: .planning/quick/261017-ctq-improve-estimate-footer-and-live-status-/SUMMARY.md

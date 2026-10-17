@@ -14,7 +14,7 @@ Useful revisions describe the defect and the desired result:
 
 > Keep the ball inside the visible play area at every supported screen size. Add padding at the top and bottom.
 
-Avoid resending the entire original idea unless you intend a broader redesign. Revisions start from authorized, verified prior source. Review the cost and time estimates below the composer before sending; [costs and limits](./costs-and-limits) explains how they are calculated.
+Avoid resending the entire original idea unless you intend a broader redesign. Revisions start from authorized, verified prior source. Review the compact **Next revision** cost and time footer below the composer before sending. Open **How this is estimated** for the history behind the range; [costs and limits](./costs-and-limits) explains how they are calculated.
 
 <GuideScreenshot name="revision-composer" alt="Revision conversation with Version 2 ready and a filled change request beside the send arrow" caption="Write your change in the bottom field, then use the arrow or ⌘/Ctrl + Enter." />
 

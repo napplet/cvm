@@ -20,6 +20,8 @@ Local Cashu/NWC test sats are separate from provider usage in every mode. An API
 3. Select the account and an available model. Selection applies automatically. Check the workspace provider label before generating.
 4. Use the jobs view to inspect pending, active and finished actions, including individual job details.
 
+<GuideScreenshot audience="operators" name="subscription" alt="Private Generation model panel with a demo ChatGPT account, selected model, Continue with ChatGPT and Reload models controls" caption="Check the active model above the account selector. Selecting an account or model applies it automatically; the example account is fictional." />
+
 The CVM keeps OAuth state in its private local directory across restarts. Repeated sign-in is not part of the normal development loop. A genuine authentication failure can require reconnecting; a timeout, large response or worker failure does not by itself mean you are signed out.
 
 The admin opener passes a local operator credential in a URL fragment, which the page removes. Do not copy that launch URL to others. **Lock admin** ends that browser's admin session. The public static export excludes the admin page.
@@ -29,6 +31,10 @@ Model availability is confirmed by a successful request. A listed model is not a
 ## Use an API account
 
 Private admin accepts an account label/key, model, model profile, price card and captured price sources. The current adapter accepts `gpt-5-mini` or `gpt-5-mini-2025-08-07` at the fixed OpenAI Responses endpoint. It does not accept arbitrary OpenAI-compatible endpoints.
+
+Open **Add an API account** beneath Rates. Enter a label and your key, then supply the complete provider configuration. The JSON placeholder only shows the required top-level structure; its empty objects are not a valid configuration.
+
+<GuideScreenshot audience="operators" name="api-account" alt="Expanded Add an API account form with a sample label, empty API key field and Provider configuration JSON field" caption="The key is entered only in private admin. Prepare the profile, price card and evidence described below before adding the account." />
 
 You can also supply these five environment variables before launching:
 
@@ -55,3 +61,5 @@ Do not reuse fixture rates as real-provider price evidence. The validator checks
 ## Change rates or models
 
 Private admin allows synthetic development rates. Real API pricing requires a new validated price card/evidence set. Active work blocks configuration changes, and saved actions retain their original pricing/model pins. An update is not permission to change an existing operation's accounting.
+
+<GuideScreenshot audience="operators" name="rates" alt="Rates form with numerator and denominator inputs for input, output, cached and reasoning tokens, plus Save rates" caption="Each row is a numerator divided by a denominator. These are example local test rates, not ChatGPT subscription prices or API price evidence." />

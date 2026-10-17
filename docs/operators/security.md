@@ -6,6 +6,8 @@ The CVM verifies the signed request and uses its public key as the caller identi
 
 Users' signing keys remain in their extension or remote signer. NIP-46 restoration stores a local `nbunksec` credential in browser storage; treat that as a session secret. Operator model accounts live in the CVM's private vault, separate from users' Nostr authentication. The static site contains neither those accounts nor an admin signer.
 
+<GuideScreenshot audience="operators" name="access" alt="Operator-only access form with a blank private key field and Connect to CVM button" caption="Admin access uses the CVM operator credential. Signing in to the public workspace does not grant these controls." />
+
 ## Untrusted generated code
 
 Prompts, imported repositories, model output and build tools are untrusted. The coordinator checks bounded inputs and allowed application paths. The worker uses a pinned toolchain, offline dependencies, resource/time limits and an isolated filesystem. Preview is a sandboxed applet with an explicit capability policy, not arbitrary code running with the parent page's privileges.

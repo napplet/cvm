@@ -4,7 +4,29 @@
 
 Run `bun scripts/dev.ts status` for local readiness and mode. Open private admin with `bun scripts/open-dev-admin.ts`; its pending, active and finished views show jobs across identities. Open a job for action details. Users can only read their own projects and bounded diagnostics.
 
+### Pending requests
+
 A pending saved idea is not necessarily a queued provider request. Admission accepts immediate capacity or refuses; an unfunded saved draft waits for explicit funding/approval. Read the job state before deciding it is stuck.
+
+<GuideScreenshot audience="operators" name="jobs-pending" alt="Pending jobs view with a saved sample checkpoint awaiting funds" caption="A saved checkpoint can appear under Pending before a model request has started." />
+
+### Active and unconfirmed actions
+
+**Active** also includes `usage_unknown` and `billing_invariant_failed`. Presence in this view alone does not prove a model or worker is still running. Open the job and inspect its recorded state and diagnostic before deciding how to recover it.
+
+<GuideScreenshot audience="operators" name="jobs-active" alt="Active jobs view with one active action and a separate usage_unknown action" caption="Read the State column. A request with an unknown outcome stays in this category until it is reconciled." />
+
+### Finished actions
+
+Use **Finished** to inspect completed or failed actions. A `verified` generation result means the applet passed its checks; it does not by itself confirm user publication. Publication has its own [signing and confirmation flow](../users/publish-and-share).
+
+<GuideScreenshot audience="operators" name="jobs-finished" alt="Finished jobs view showing a sample generation action in verified state" caption="Select the job identifier to inspect the completed action and its evidence." />
+
+### Open a job
+
+Job details include the session and operation identifiers, pinned provider/profile/price card, reserved amount, receipt charge, remaining balances, and available worker/artifact records. Pending-request details contain a smaller set of saved-request fields.
+
+<GuideScreenshot audience="operators" name="job-details" alt="Job details showing a verified action, its session and operation IDs, five-test-sat charge, completed worker and version-two artifact" caption="Compare the reserved amount with the settled charge and released funds. Scroll the dialog when needed; all identifiers here are examples." />
 
 ## Recover a failed request
 

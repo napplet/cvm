@@ -1,0 +1,46 @@
+{
+  "source": "Current admin HTML, CSS and browser code; offline read-only sample responses, demo account and jobs.",
+  "regeneration": "bun docs/scripts/capture-operator-screenshots.ts",
+  "screenshots": [
+    {
+      "file": "access.png",
+      "width": 724,
+      "height": 190
+    },
+    {
+      "file": "subscription.png",
+      "width": 569,
+      "height": 496
+    },
+    {
+      "file": "rates.png",
+      "width": 569,
+      "height": 449
+    },
+    {
+      "file": "api-account.png",
+      "width": 523,
+      "height": 557
+    },
+    {
+      "file": "jobs-active.png",
+      "width": 1168,
+      "height": 396
+    },
+    {
+      "file": "jobs-pending.png",
+      "width": 1168,
+      "height": 332
+    },
+    {
+      "file": "jobs-finished.png",
+      "width": 1168,
+      "height": 332
+    },
+    {
+      "file": "job-details.png",
+      "width": 850,
+      "height": 964
+    }
+  ]
+}

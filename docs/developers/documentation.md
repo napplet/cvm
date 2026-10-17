@@ -29,26 +29,30 @@ Add pages to the matching sidebar in `.vitepress/config.mts`. Use relative links
 
 Keep headings stable because other pages may link to their fragments. Downloadable schema JSON lives in `public/contracts/`. Do not put credentials or private examples anywhere under `public/`.
 
-## User-guide screenshots
+## Guide screenshots
 
 Illustrate tasks with the current application controls, useful alternative text, and a caption explaining what to do. Use the shared component so images scale down, reserve their layout space and open at full size:
 
 ```md
 <GuideScreenshot name="create" alt="Creation page with a prompt and the Shape my idea button" caption="Describe one focused applet, then continue." />
+<GuideScreenshot audience="operators" name="subscription" alt="Private admin account and model selectors" caption="Choose the provider account and model." />
 ```
 
-Regenerate the committed PNG files and their dimensions under `public/images/users/` when the workspace changes:
+Regenerate the committed PNG files and their dimensions under `public/images/users/` or `public/images/operators/` when the corresponding interface changes:
 
 ```sh
 bun install --frozen-lockfile
 bun install --cwd tests/dev-ui --frozen-lockfile
 ./tests/dev-ui/node_modules/.bin/playwright install chromium
 bun docs/scripts/capture-user-screenshots.ts
+bun docs/scripts/capture-operator-screenshots.ts
 ```
 
-The capture script renders the real workspace components and stylesheet in isolated Chromium with disposable sample data. CVM responses, discovery results and execution stages are simulated; the preview contains a sample counter. These screenshots explain the interface and are not end-to-end evidence. The script blocks external HTTP/WebSocket traffic, rejects generation/signing/publication effects and needs no Docker, live CVM or model account. It does not connect to the user's running development service.
+The user capture script renders the real workspace components and stylesheet in isolated Chromium with disposable sample data. CVM responses, discovery results and execution stages are simulated; the preview contains a sample counter. The operator script serves the actual admin HTML, CSS and bundled browser code, replacing only the CVM transport with read-only sample responses. Its sample rates use the development pricing helper; job fields and billing entries follow the persisted admin projection.
 
-The sign-in crop excludes the generated connection QR. Never capture a live account, pairing URI, `nbunksec`, token or private project for public documentation. Use reserved example domains for publication destinations. Captions identify sample screens and placeholder addresses; keep those distinctions when adding images.
+These screenshots explain the interface and are not end-to-end evidence. Both scripts block external HTTP/WebSocket traffic and need no Docker, live CVM or model account. The operator harness rejects configuration mutations and external authorization, asserts that every command was read-only, and clears its disposable browser session with Lock admin. Neither script connects to the user's running development service.
+
+The user sign-in crop excludes the generated connection QR. Operator screenshots use a fictional `example.com` account and empty key fields. Never capture a live account, pairing URI, `nbunksec`, token or private project for public documentation. Use reserved example domains for publication destinations. Captions identify sample screens and placeholder addresses; keep those distinctions when adding images. Prefer copyable commands and configuration examples to terminal screenshots.
 
 Inspect every regenerated image for clipped controls or stale copy, then run the built-site browser check below. Do not retouch screenshots into a UI that the application does not actually render.
 
@@ -66,6 +70,6 @@ bun run --cwd docs check:links
 bun run --cwd docs preview
 ```
 
-Review the built `/docs/` site, including search and narrow layouts. Restart the preview server after a rebuild so it picks up the new hashed assets. With the browser test dependencies and Chromium installed, `bun docs/scripts/check-browser.ts` checks the running preview (default `http://127.0.0.1:4173/docs/`; override `DOCS_URL`). It tests 70 page/viewport combinations down to 280 pixels, screenshot loading and full-size links, search, mobile navigation, sidebars and direct reloads, and writes screenshots under `.local/docs-evidence/`. The documentation workflow builds, checks links/schema drift and uploads a prefix-ready artifact. Use [static hosting](../operators/static-hosting#build-the-documentation-at-docs) to mount it alongside the website. The workflow does not provision a public host.
+Review the built `/docs/` site, including search and narrow layouts. Restart the preview server after a rebuild so it picks up the new hashed assets. With the browser test dependencies and Chromium installed, `bun docs/scripts/check-browser.ts` checks the running preview (default `http://127.0.0.1:4173/docs/`; override `DOCS_URL`). It tests 90 page/viewport combinations down to 280 pixels, screenshot loading and full-size links for both audiences, search, mobile navigation, sidebars and direct reloads, and writes screenshots under `.local/docs-evidence/`. The documentation workflow builds, checks links/schema drift and uploads a prefix-ready artifact. Use [static hosting](../operators/static-hosting#build-the-documentation-at-docs) to mount it alongside the website. The workflow does not provision a public host.
 
 The original runbooks remain part of the site. Update stale scope statements when adding integration coverage; keep historical evidence identifiable rather than presenting it as a current production guarantee.

@@ -12,7 +12,7 @@ try {
   page.on("response", response => { if (response.url().startsWith(base) && response.status() >= 400) failures.push(`${response.status()} ${response.url()}`); });
   for (const width of [280, 320, 390, 768, 1280]) {
     await page.setViewportSize({ width, height: 900 });
-    for (const route of ["", "users/", "users/quick-start", "users/create-and-revise", "users/identity-and-projects", "users/remix-and-explore", "users/publish-and-share", "users/costs-and-limits", "users/troubleshooting", "operators/providers", "operators/static-hosting", "implementers/mcp", "implementers/schemas", "developers/schema-changes"]) {
+    for (const route of ["", "users/", "users/quick-start", "users/create-and-revise", "users/identity-and-projects", "users/remix-and-explore", "users/publish-and-share", "users/costs-and-limits", "users/troubleshooting", "operators/", "operators/quick-start", "operators/providers", "operators/operations", "operators/security", "operators/static-hosting", "implementers/mcp", "implementers/schemas", "developers/schema-changes"]) {
       await page.goto(base + route, { waitUntil: "networkidle" });
       const size = await page.evaluate(() => ({ body: document.documentElement.scrollWidth, viewport: innerWidth }));
       assert.deepEqual(failures, []);
@@ -43,17 +43,21 @@ try {
   await page.waitForURL(url => url.pathname.startsWith("/docs/") && url.pathname !== "/docs/");
   await page.reload({ waitUntil: "networkidle" });
   assert(await page.locator("h1").count());
-  await page.goto(base + "users/quick-start", { waitUntil: "networkidle" });
-  const popupPromise = page.waitForEvent("popup");
-  await page.locator(".guide-screenshot figcaption a").first().click();
-  const popup = await popupPromise;
-  await popup.waitForLoadState();
-  assert(popup.url() === new URL("images/users/create.png", base).href, "Full-size image escaped the docs base");
-  await popup.locator("img").evaluate(async (el: HTMLImageElement) => { await el.decode(); });
-  await popup.close();
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page.screenshot({ path: `${evidence}/user-guide-desktop.png`, fullPage: true });
+  for (const [route, image, label] of [["users/quick-start", "users/create", "user"], ["operators/providers", "operators/subscription", "operator"]]) {
+    await page.goto(base + route, { waitUntil: "networkidle" });
+    const popupPromise = page.waitForEvent("popup");
+    await page.locator(".guide-screenshot figcaption a").first().click();
+    const popup = await popupPromise;
+    await popup.waitForLoadState();
+    assert(popup.url() === new URL(`images/${image}.png`, base).href, "Full-size image escaped the docs base");
+    await popup.locator("img").evaluate(async (el: HTMLImageElement) => { await el.decode(); });
+    await popup.close();
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.screenshot({ path: `${evidence}/${label}-guide-desktop.png`, fullPage: true });
+  }
   await page.setViewportSize({ width: 320, height: 700 });
+  await page.goto(base + "operators/providers", { waitUntil: "networkidle" });
+  await page.screenshot({ path: `${evidence}/operator-guide-mobile.png`, fullPage: true });
   await page.goto(base + "users/quick-start", { waitUntil: "networkidle" });
   await page.screenshot({ path: `${evidence}/user-guide-mobile.png`, fullPage: true });
   await page.getByRole("button", { name: "mobile navigation" }).click();
@@ -72,6 +76,6 @@ try {
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
   await page.screenshot({ path: `${evidence}/mcp-mobile.png`, fullPage: true });
   assert.deepEqual(failures, []);
-  await Bun.write(`${evidence}/checks.json`, JSON.stringify({ layouts, images, fullSizeScreenshot: true, search: true, mobileNavigation: true, sidebar: true, deepReload: true, browserErrors: failures }, null, 2));
-  console.log(`Docs browser check passed: ${layouts} layouts, ${images} images, full-size screenshot, search, navigation, sidebar and deep reload.`);
+  await Bun.write(`${evidence}/checks.json`, JSON.stringify({ layouts, images, fullSizeScreenshots: 2, search: true, mobileNavigation: true, sidebar: true, deepReload: true, browserErrors: failures }, null, 2));
+  console.log(`Docs browser check passed: ${layouts} layouts, ${images} images, both full-size screenshot catalogs, search, navigation, sidebar and deep reload.`);
 } finally { await browser.close(); }

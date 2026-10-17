@@ -20,6 +20,20 @@ Open the URL printed by `up`; its port is chosen locally. `status` reports readi
 
 Create a small applet using the [first applet guide](../users/quick-start). **Deterministic fixture** means the model response is a sample; the relay, funding, worker, build and verification still run. For prompt-driven generation, [select an account in private admin](./providers).
 
+## Open private admin
+
+From the repository root on the CVM host, run:
+
+```sh
+bun scripts/open-dev-admin.ts
+```
+
+The opener supplies the local operator credential and the page connects automatically. Opening the admin page without that credential shows the access form below. This is separate from Nostr sign-in in the public workspace. For a named instance, prefix the opener command with the same `NAPPLET_CVM_DEV_INSTANCE` value.
+
+<GuideScreenshot audience="operators" name="access" alt="Private admin access form with an empty Operator access key field and Connect to CVM button" caption="If you see this form, use the admin opener on the CVM host. Keep its credential and launch URL private." />
+
+Once connected, configure [accounts and providers](./providers) or [inspect jobs](./operations#inspect-work). Use **Lock admin** when you finish on a shared browser.
+
 ## Stop and return later
 
 ```sh

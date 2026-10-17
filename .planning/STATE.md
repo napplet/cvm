@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: verification_deferred_gaps
-stopped_at: User documentation illustrated with 12 screenshots and verified at /docs/
-last_updated: "2026-10-17T01:50:39Z"
+stopped_at: User and operator documentation illustrated with 20 screenshots and verified at /docs/
+last_updated: "2026-10-17T02:13:48Z"
 last_activity: 2026-10-16
-last_activity_desc: Added user-guide screenshots, safe repeatable capture and 70 responsive documentation checks
+last_activity_desc: Added eight operator screenshots and job-state guidance; verified 90 responsive documentation layouts
 progress:
   total_phases: 7
   completed_phases: 6
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
 Plan: 56 of 58 accepted; development Plans 07-52/53/56/57/54/55 complete
 Status: Guided applet.broker workspace at http://127.0.0.1:49371; diagnostic console at /dev. Saved chatgpt-oauth mode with gpt-6.1-sol retained. Product/console browser journeys and recovery passed through real local services. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
-Last activity: 2026-10-16 — Completed quick task 261016-q0k: 12 screenshots across eight user guides, with safe offline capture, accessible captions and full-size views. Documentation build, 1,258 local links and 70 responsive layouts passed. Docs preview remains at http://127.0.0.1:4173/docs/. User CVM and application behavior unchanged. Publication-state tracking and publishing UI refresh remain next. Typecheck retains the previously verified 424 existing diagnostics.
+Last activity: 2026-10-16 — Completed quick task 261016-qkz: eight operator screenshots across five guides, in addition to the 12 user screenshots. Read-only offline capture, accessible captions and full-size views documented. Build, 1,296 local links, 90 responsive layouts and 125 image loads passed. Docs preview remains at http://127.0.0.1:4173/docs/. User CVM and application behavior unchanged. Publication-state tracking and publishing UI refresh remain next. Typecheck retains the previously verified 424 existing diagnostics.
 
 Follow-up: Stream assembly/counter verification remains complete. Latest helper-signature and compiler-feedback fix passed 29 targeted unit/integration cases plus activity and composed OAuth browser journeys. Real blinking-text generation also passed. See debug/resolved/generated-typescript-check.md.
 
@@ -374,6 +374,8 @@ Recent decisions affecting current work:
 
 | 261016-q0k | Twelve screenshots across eight user guides, repeatable offline capture and responsive image checks | 2026-10-16 | see task history | [261016-q0k](./quick/261016-q0k-add-current-workspace-screenshots-to-use/) |
 
+| 261016-qkz | Eight private-admin screenshots across operator guides; job-state explanations and 90 responsive docs checks | 2026-10-16 | see task history | [261016-qkz](./quick/261016-qkz-illustrate-operator-documentation-with-p/) |
+
 ## Deferred Verification
 
 | Phase | Status | Reason | Resume command |
@@ -390,6 +392,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-17T01:50:39Z
-Stopped at: User documentation screenshots complete and verified at http://127.0.0.1:4173/docs/users/. Next application task: track successful publications durably and update publishing UI. User prioritized docs and then user-guide screenshots. Existing CVM remains running unchanged.
-Resume file: .planning/quick/261016-q0k-add-current-workspace-screenshots-to-use/SUMMARY.md
+Last session: 2026-10-17T02:13:48Z
+Stopped at: User and operator screenshot guides complete and verified at http://127.0.0.1:4173/docs/. Next application task: track successful publications durably and update publishing UI. User prioritized docs, user screenshots, then continued to operator screenshots. Existing CVM was not modified or restarted.
+Resume file: .planning/quick/261016-qkz-illustrate-operator-documentation-with-p/SUMMARY.md

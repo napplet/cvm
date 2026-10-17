@@ -708,7 +708,7 @@
     },
     {
       "name": "service_info",
-      "description": "Read development mode, availability and required ceilings.",
+      "description": "Read development mode, availability, required ceilings and caller-scoped historical estimates.",
       "scope": "development",
       "inputSchema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -1884,6 +1884,167 @@
     }
   ],
   "results": {
+    "generationEstimates": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "unit": {
+          "type": "string",
+          "const": "test_sat"
+        },
+        "windowDays": {
+          "type": "number",
+          "const": 30
+        },
+        "create": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "samples": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 30
+                },
+                "basis": {
+                  "type": "string",
+                  "enum": [
+                    "create",
+                    "revise",
+                    "all"
+                  ]
+                },
+                "cost": {
+                  "type": "object",
+                  "properties": {
+                    "low": {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]{0,18})$"
+                    },
+                    "high": {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]{0,18})$"
+                    }
+                  },
+                  "required": [
+                    "low",
+                    "high"
+                  ],
+                  "additionalProperties": false
+                },
+                "seconds": {
+                  "type": "object",
+                  "properties": {
+                    "low": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "high": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "low",
+                    "high"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "samples",
+                "basis",
+                "cost",
+                "seconds"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revise": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "samples": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 30
+                },
+                "basis": {
+                  "type": "string",
+                  "enum": [
+                    "create",
+                    "revise",
+                    "all"
+                  ]
+                },
+                "cost": {
+                  "type": "object",
+                  "properties": {
+                    "low": {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]{0,18})$"
+                    },
+                    "high": {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]{0,18})$"
+                    }
+                  },
+                  "required": [
+                    "low",
+                    "high"
+                  ],
+                  "additionalProperties": false
+                },
+                "seconds": {
+                  "type": "object",
+                  "properties": {
+                    "low": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "high": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "low",
+                    "high"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "samples",
+                "basis",
+                "cost",
+                "seconds"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "unit",
+        "windowDays",
+        "create",
+        "revise"
+      ],
+      "additionalProperties": false
+    },
     "sessionAction": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "oneOf": [

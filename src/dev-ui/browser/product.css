@@ -1711,3 +1711,16 @@ button { max-width:100%; }
 @media(max-width:360px) { .app-nav-item { gap:4px; font-size:11px; } .app-nav-item svg { width:14px; } }
 .remix-options a { display:inline-flex; align-items:center; min-height:44px; padding-block:8px; }
 #remix-basis { overflow-wrap:anywhere; }
+
+/* Cost and duration guidance uses the same quiet surfaces as the workspace. */
+.generation-estimate { padding:20px 0 12px; min-width:0; }
+.generation-estimate dl { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px 24px; margin:0; }
+.generation-estimate dt { color:var(--muted); font-size:12px; margin-bottom:6px; }
+.generation-estimate dd { margin:0; font-size:18px; font-weight:600; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+.generation-estimate p { font-size:12px; line-height:1.6; color:var(--muted); margin:12px 0 0; }
+.generation-estimate .estimate-limit { margin-top:6px; }
+.estimate-compact { padding:16px; border-radius:12px; background:var(--paper); border:1px solid var(--line); margin-top:12px; }
+.estimate-compact dd { font-size:14px; }
+.progress-estimate { font-size:13px; color:var(--muted); margin:8px 0 0; font-variant-numeric:tabular-nums; }
+.progress-estimate:empty { display:none; }
+@media(max-width:360px) { .generation-estimate dl { grid-template-columns:1fr; gap:12px; } }

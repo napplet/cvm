@@ -113,6 +113,10 @@ try {
       { ...manifest, naddr: timerAddress, title: "A quiet focus timer", description: "One task. A little focus. Time for a break." },
     ] }, publication.identity, bootstrap.servicePubkey, () => live.running);
     Object.assign(w, { workspace, live, publication, version }); workspace.connected(true);
+    workspace.estimates({ unit:"test_sat", windowDays:30,
+      create:{samples:4,basis:"create",cost:{low:"120",high:"300"},seconds:{low:45,high:90}},
+      revise:{samples:3,basis:"revise",cost:{low:"80",high:"180"},seconds:{low:30,high:60}},
+    });
   }, { scripts, pubkey, address, timerAddress });
 
   await page.locator("#idea").fill("A reading-session counter with Add and Reset buttons. Show today’s total in large text and use a quiet green theme.");
@@ -133,7 +137,7 @@ try {
 
   await page.evaluate(async () => {
     const w = window as any; w.selectedVersion = w.version;
-    w.workspace.completed(w.version); w.workspace.versions([{ ...w.version, artifactId: "artifact:" + "b".repeat(64), version: 1 }, w.version], w.version, async () => {});
+    w.workspace.actionCharge("160"); w.workspace.completed(w.version); w.workspace.versions([{ ...w.version, artifactId: "artifact:" + "b".repeat(64), version: 1 }, w.version], w.version, async () => {});
     w.workspace.settled(); w.live.finish("Preview ready", "completed"); await w.publication.version();
     // A sample applet inside the real preview frame, not a generated build claim.
     const frame = document.querySelector<HTMLIFrameElement>("#preview")!; frame.hidden = false;

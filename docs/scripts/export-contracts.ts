@@ -1,3 +1,4 @@
+import { GenerationEstimatesSchema } from "../../src/dev-ui/generation-estimates-contract";
 import { z } from "zod";
 import * as core from "../../src/contextvm/adapter";
 import { ProjectsArgumentsSchema } from "../../src/dev/projects";
@@ -20,7 +21,7 @@ const entries: [string, string, z.ZodType, string][] = [
   ["session_status", "Read owner-scoped session state and billing, or a pending action.", core.SessionStatusArgumentsSchema, "core"],
   ["preview", "Read a verified artifact descriptor or its capability review.", core.PreviewArgumentsSchema, "core"],
   ["publication", "Coordinate owner-signed publication when the promoted facade is installed.", core.PublicationArgumentsSchema, "core-optional"],
-  ["service_info", "Read development mode, availability and required ceilings.", extra.ServiceInfoArgumentsSchema, "development"],
+  ["service_info", "Read development mode, availability, required ceilings and caller-scoped historical estimates.", extra.ServiceInfoArgumentsSchema, "development"],
   ["development_faucet", "Mint local test Cashu; never real money.", extra.DevelopmentFaucetArgumentsSchema, "development"],
   ["projects", "List, read or rename projects belonging to the signed request identity.", ProjectsArgumentsSchema, "development"],
   ["remix_import", "Validate a signed applet and import isolated source or staged HTML.", RemixImportArgumentsSchema, "development"],
@@ -33,7 +34,7 @@ const value = {
   format: "napplet-cvm-contract-catalog-v1", sdkVersion: "0.13.10", mcpSdkVersion: "1.30.0",
   note: "Generated structural input schemas. Runtime refinements, signatures, ownership, availability, money ceilings, URL policy and durable state remain authoritative. A listed tool is not proof its facade is installed. This catalog format is not a wire protocol negotiation version.",
   tools: entries.map(([name, description, schema, scope]) => ({ name, description, scope, inputSchema: json(schema) })),
-  results: { sessionAction: json(SessionActionResultSchema), sessionStatus: json(SessionStatusSchema), developmentProgress: json(DevelopmentProgressSchema) },
+  results: { generationEstimates: json(GenerationEstimatesSchema), sessionAction: json(SessionActionResultSchema), sessionStatus: json(SessionStatusSchema), developmentProgress: json(DevelopmentProgressSchema) },
   operatorConfiguration: { modelProfile: json(ModelProfileSchema), priceCard: json(PriceCardSchema) },
 };
 const path = new URL("../public/contracts/napplet-cvm-v1.json", import.meta.url);

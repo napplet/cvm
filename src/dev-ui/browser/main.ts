@@ -82,8 +82,43 @@ function validMaximum(value: string): boolean { try { return BigInt(value) >= Bi
 async function selectVersion(version: Version): Promise<any> { const descriptor = await client!.preview({ sessionId: version.sessionId, artifactId: version.artifactId }); if (descriptor?.status !== "ready" || typeof descriptor.previewUrl !== "string") throw new Error("PREVIEW_NOT_READY"); const frame = byId<HTMLIFrameElement>("preview"); const previewUrl = new URL(descriptor.previewUrl); if (product) previewUrl.searchParams.set("presentation", "workspace"); frame.src = previewUrl.href; frame.hidden = false; selected = version; void publishing?.version(); byId<HTMLButtonElement>("revise").disabled = activity.running; product?.selected(version); renderVersions(); return descriptor; }
 function renderVersions(): void { const list = byId<HTMLUListElement>("versions"); list.replaceChildren(...versions.map((version) => { const item = document.createElement("li"); const button = document.createElement("button"); button.disabled = activity.running; button.textContent = `Version ${version.version}: ${version.artifactId}`; button.onclick = () => { void selectVersion(version).then(() => facts({ selectedVersion: version.version, artifact: version.artifactId })).catch((error) => setError(`Preview unavailable: ${error instanceof Error ? error.message : "unknown"}`)); }; item.append(button); return item; })); product?.versions(versions, selected, async (version) => { try { await selectVersion(version); facts({ selectedVersion: version.version, artifact: version.artifactId }); } catch (error) { setError(`Preview unavailable: ${error instanceof Error ? error.message : "unknown"}`); } }); }
 function renderDurableTimeline(status: any): void { const timeline = byId<HTMLUListElement>("timeline"); const events = Array.isArray(status?.timeline) ? status.timeline : []; timeline.replaceChildren(...events.map((event: any) => { const item = document.createElement("li"); item.textContent = `${event.stage.replaceAll("_", " ")} · ${new Date(event.at).toLocaleTimeString()} · ${event.detail}`; return item; })); }
+async function refreshEstimates(): Promise<void> {
+  const current = client;
+  if (!current || !product) return;
+  try {
+    const info = await current.callTool("service_info", {});
+    const target = publishing?.identity.pubkey ?? await new PrivateKeySigner(browserSignerKey(bootstrap.servicePubkey)).getPublicKey();
+    const owner = await current.pubkey;
+    if (client === current) product.estimates(info.estimates, false, owner === target ? undefined : "revise");
+  }
+  catch { if (client === current) product.estimates(null); }
+}
+let estimateReview = 0;
+async function reviewCreationEstimate(): Promise<void> {
+  const review = ++estimateReview;
+  if (!product || activity.running) return;
+  product.estimates(null, false, "create");
+  let temporary: DevelopmentContextVmClient | undefined;
+  try {
+    await publishing?.identity.ready;
+    const identity = publishing?.identity;
+    const target = identity?.pubkey ?? await new PrivateKeySigner(browserSignerKey(bootstrap.servicePubkey)).getPublicKey();
+    let reader = client;
+    if (!reader || await reader.pubkey !== target) {
+      reader = temporary = new DevelopmentContextVmClient(bootstrap, undefined, identity?.pubkey ? identity.captureSigner() : undefined);
+      await reader.connect({ accountStatus: false });
+    }
+    const info = await reader.callTool("service_info", {});
+    if (review === estimateReview && !activity.running) product.estimates(info.estimates, false, "create");
+  } catch { /* Estimates never block creating an applet. */ }
+  finally { await temporary?.close().catch(() => undefined); }
+}
+if (product) {
+  byId("idea-next").addEventListener("click", () => { if (!byId("setup-step").hidden) void reviewCreationEstimate(); });
+  publishing?.identity.onChange(() => { ++estimateReview; product.estimates(null, false, "create"); if (!byId("setup-step").hidden) void reviewCreationEstimate(); });
+}
 async function refresh(): Promise<void> { if (client) setBalance(await client.accountStatus()); }
-async function preview(action: any): Promise<void> { if (!action?.artifactId) throw new Error("ARTIFACT_NOT_AVAILABLE"); const version = { sessionId: action.sessionId, version: action.artifactVersion, artifactId: action.artifactId }; if (versions.some((item) => item.sessionId !== version.sessionId)) versions.length = 0; if (!versions.some((item) => item.version === version.version && item.sessionId === version.sessionId)) versions.push(version); renderVersions(); const descriptor = await selectVersion(version); const generation = action.generation; facts({ provider: generation?.provider ?? "durably recorded", model: generation?.model ?? "recorded", usage: Array.isArray(generation?.usage) ? generation.usage.map((line: any) => `${line.dimension}:${line.units}`).join(", ") : "recorded", worker: generation?.worker ?? "verified", stage: "verified", version: action.artifactVersion, artifact: action.artifactId, aggregate: descriptor.aggregateSha256, charge: action.confirmedSpend, remainingMaximum: action.remainingCap, remainingBalance: action.remainingBalance }); appendTimeline("verified preview", `version ${action.artifactVersion} · charge ${action.confirmedSpend} sats`); product?.completed(version); }
+async function preview(action: any): Promise<void> { if (!action?.artifactId) throw new Error("ARTIFACT_NOT_AVAILABLE"); const version = { sessionId: action.sessionId, version: action.artifactVersion, artifactId: action.artifactId }; if (versions.some((item) => item.sessionId !== version.sessionId)) versions.length = 0; if (!versions.some((item) => item.version === version.version && item.sessionId === version.sessionId)) versions.push(version); renderVersions(); const descriptor = await selectVersion(version); const generation = action.generation; facts({ provider: generation?.provider ?? "durably recorded", model: generation?.model ?? "recorded", usage: Array.isArray(generation?.usage) ? generation.usage.map((line: any) => `${line.dimension}:${line.units}`).join(", ") : "recorded", worker: generation?.worker ?? "verified", stage: "verified", version: action.artifactVersion, artifact: action.artifactId, aggregate: descriptor.aggregateSha256, charge: action.confirmedSpend, remainingMaximum: action.remainingCap, remainingBalance: action.remainingBalance }); appendTimeline("verified preview", `version ${action.artifactVersion} · charge ${action.confirmedSpend} sats`); product?.actionCharge(action.confirmedSpend); product?.completed(version); }
 async function hydrateSession(sessionId: string): Promise<boolean> {
   const status = await client!.sessionStatus(sessionId); if (status?.status !== "ok") return false;
   versions.splice(0, versions.length, ...(status.session.verifiedArtifacts ?? []).map((item: any) => ({ sessionId, version: item.version, artifactId: item.id })).sort((a: Version, b: Version) => a.version - b.version));
@@ -91,7 +126,7 @@ async function hydrateSession(sessionId: string): Promise<boolean> {
   if (!latest) { facts({ session: sessionId, state: status.session.state, nextAction: status.session.nextAction }); setGenerationStatus(`Saved applet: ${status.session.progress.replaceAll("_", " ")}`); product?.savedStatus(status.session.state); return true; }
   await selectVersion(latest);
   facts({ session: sessionId, state: status.session.state, version: latest.version, artifact: latest.artifactId, remainingMaximum: status.session.remainingCap, remainingBalance: status.session.remainingBalance });
-  product?.completed(latest, true); product?.sessionState(status.session.state);
+  product?.completed(latest, true); product?.sessionState(status.session.state); void refreshEstimates();
   return true;
 }
 
@@ -107,7 +142,7 @@ product?.onSessionStatusCheck(async () => {
   product.sessionState(status.session.state);
 });
 
-async function complete(action: any): Promise<void> { if (action?.status !== "completed") throw new Error(action?.code ?? "GENERATION_NOT_COMPLETED"); sessionStorage.setItem(sessionStorageKey, action.sessionId); await preview(action); const status = await client!.sessionStatus(action.sessionId); if (status?.status === "ok") renderDurableTimeline(status.session); await refresh(); setGenerationStatus("Verified preview ready"); clearRequest(); }
+async function complete(action: any): Promise<void> { if (action?.status !== "completed") throw new Error(action?.code ?? "GENERATION_NOT_COMPLETED"); sessionStorage.setItem(sessionStorageKey, action.sessionId); await preview(action); const status = await client!.sessionStatus(action.sessionId); if (status?.status === "ok") renderDurableTimeline(status.session); await refresh(); setGenerationStatus("Verified preview ready"); clearRequest(); void refreshEstimates(); }
 
 byId<HTMLButtonElement>("connect").onclick = async () => {
   const button = byId<HTMLButtonElement>("connect"); button.disabled = true;
@@ -122,7 +157,7 @@ byId<HTMLButtonElement>("connect").onclick = async () => {
     const connected = await client.connect();
     const info = await client.callTool("service_info", {});
     Object.assign(bootstrap, { reserveSat: info.reserveSat, actionCeilingSat: info.actionCeilingSat, providerLabel: info.providerLabel });
-    product?.configuration();
+    product?.configuration(); product?.estimates(info.estimates);
     if (!product && byId<HTMLInputElement>("maximum").value === "3750") byId<HTMLInputElement>("maximum").value = info.actionCeilingSat;
     byId("connection-status").textContent = `Connected: ${connected.pubkey}`; setBalance(connected.account);
     connectedControls.forEach((control) => control.disabled = false); byId("provider-mode").textContent = bootstrap.providerLabel;
@@ -141,6 +176,7 @@ byId<HTMLButtonElement>("connect").onclick = async () => {
       } catch (error) { setError(`Preview unavailable: ${error instanceof Error ? error.message : "unknown"}`); }
     }
     publishing?.sync(); product?.connected(true); product?.recovery(!!restoreRequest());
+    if (product && !byId("setup-step").hidden) void reviewCreationEstimate();
   } catch { await client?.close().catch(() => undefined); client = undefined; byId("connection-status").textContent = "Connection failed; retry Connect"; button.disabled = false; connectedControls.forEach((control) => control.disabled = true); product?.connected(false); }
 };
 byId<HTMLButtonElement>("cashu").onclick = async () => { try { setFundingStatus("Cashu payment pending"); const payment = await client!.fundCashu(byId<HTMLInputElement>("cashu-amount").value); await refresh(); setFundingStatus(payment?.state === "credited" ? "Cashu credited" : "Cashu credit unconfirmed; check account status before retrying"); } catch { setFundingStatus("Cashu credit unconfirmed; check account status before retrying"); } };
@@ -222,6 +258,7 @@ for (const id of actionButtons) {
       sessionStorage.setItem(ownerStorageKey, await client!.pubkey);
       if (id !== "replay-revision" && id !== "recover") {
         const service = await client!.callTool("service_info", {});
+        product?.estimates(service.estimates, true);
         if (service.available === false) throw new Error("The CVM provider is unavailable. Its operator needs to reconnect the provider account.");
         if (product) await prepareTestFunds(id === "resume" && pending ? pending.maximum : byId<HTMLInputElement>("maximum").value);
       }

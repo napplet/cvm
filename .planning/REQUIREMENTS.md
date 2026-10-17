@@ -103,6 +103,8 @@ Deferred until the v1 creation loop and its trust boundaries are validated.
 - **COST-01**: A user receives a pre-run cost estimate derived from observed usage without weakening the hard session cap.
 - **COST-02**: An operator can configure and disclose a service-margin policy independently of raw provider usage.
 
+**COST-01 implementation flag (2026-10-17):** This had remained deferred; before quick task `261017-ccq`, the public CVM exposed action ceilings and confirmed charges but no applet-generation estimates. Existing `src/release/costs/*` estimators apply to infrastructure release authorization. Quick task [261017-ccq](./quick/261017-ccq-add-cost-and-time-estimates-to-the-gener/PLAN.md) adds caller-scoped historical cost/time ranges through the development CVM's signed `service_info` response and renders them in the GUI. This is newly implemented CVM functionality, not wiring an existing estimator. The promoted production core still has no equivalent estimation capability; production remains deferred and does not block development.
+
 ### User Data and Verification
 
 - **DATA-01**: A user can export a portable session checkpoint before expiry.

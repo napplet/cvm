@@ -13,7 +13,7 @@ This is the tool surface of the current repository. **Core** means a transport-n
 | `session_status` | Durable state and billing | `sessionId`, optional billing page; or pending-action checkpoint |
 | `preview` | Verified artifact descriptor/review | `action`, session/artifact IDs and runtime variant |
 | `publication` | Promoted publication workflow | Intent/consent, signed manifest submission, status/reconcile; unavailable in default development composition |
-| `service_info` | Development availability and ceilings | `{}`; provider label, current ceilings, availability |
+| `service_info` | Development availability, ceilings and estimates | `{}`; provider label, current ceilings, availability, caller-scoped `estimates` |
 | `development_faucet` | Local test Cashu | `amount`; runtime cap is 10,000 test sats, no real value |
 | `projects` | Private project list/read/rename | `action`; list accepts stage, limit 1–50, cursor; get/rename use ID |
 | `remix_import` | Prepare a verified remix basis | Signed `event`, `naddr`, optional `assetUploaded`; or `action: "asset_part"` for bounded staging; returns owned remix reference |
@@ -22,6 +22,14 @@ This is the tool surface of the current repository. **Core** means a transport-n
 | `cvm_admin` | Operator configuration and jobs | Operator signer only; status, accounts, rates, jobs and job details |
 
 See [complete structural input schemas](./schemas) for unions, required fields and bounds. Ordinary callers must not pass `principal` or an owner override. `publisher` in a publication preparation selects the eventual event signer; it does not grant access to someone else's artifact.
+
+## Generation estimates
+
+`service_info.estimates` contains `unit: "test_sat"`, `windowDays: 30`, and nullable `create`/`revise` estimates. Each estimate has `samples`, `basis` (`create`, `revise`, or `all`), a decimal-string `cost` range and integer `seconds` range, both with `low`/`high`. A null estimate means no eligible history; a null/missing `estimates` field means estimates are unavailable. Clients must still allow ordinary generation when estimates are unavailable.
+
+Only the verified request identity's successful actions at the current runtime profile and price card are considered. The latest 60 candidates from 30 days are examined; up to 30 matching action types are used, with all-build fallback. Reconciled actions and nonpositive or over-one-hour durations are excluded. Observed cost and duration bounds are padded by 25%; cost is capped at the action ceiling and time rounded outward to five seconds (minimum displayed range 5–10 seconds). This is a historical heuristic, not a statistical confidence interval or prompt-specific quote. No provider credentials or job records are included.
+
+Keep time guidance separate from durable stage progress. Suppress the ETA during stale/recovered requests and stop the countdown at completion or failure. Confirmed charges come from action results, never from estimates.
 
 ## Project pagination
 

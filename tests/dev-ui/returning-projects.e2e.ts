@@ -43,6 +43,7 @@ try {
   await page.locator("#idea").fill("A simple counter for reading sessions"); await page.locator("#idea-next").click(); await page.locator("#generate").click();
   await page.locator('#activity-events [data-stage="model_stream"]').waitFor({ state:"attached",timeout:30000 });
   await owner.connect({accountStatus:false}); await other.connect({accountStatus:false});
+  assert((await owner.callTool("service_info",{})).estimates.create===null,"ACTIVE_WORK_USED_AS_ESTIMATE");
   const active = await owner.callTool("projects",{action:"list",stage:"active"});
   assert(active.projects.length === 1,"SIGNED_USER_ACTIVE_PROJECT_MISSING"); const id=active.projects[0].id;
   assert((await other.callTool("projects",{action:"list"})).projects.length===0,"OTHER_USER_LIST_LEAK");
@@ -62,10 +63,16 @@ try {
   assert(await page.locator("#workspace-home").getAttribute("aria-current")==="page" && await page.locator("#workspace-nav-label").innerText()==="Builder","PRIMARY_NAV_DID_NOT_RETURN_TO_BUILDER");
   release(); await page.waitForFunction(()=>document.querySelector("#build-progress")?.getAttribute("aria-valuenow")==="5",undefined,{timeout:180000});
   const ready=await owner.callTool("projects",{action:"get",id}); assert(ready.project.stage==="verified" && ready.project.verifiedVersion===1,"VERIFIED_STAGE_MISSING");
+  const estimates = (await owner.callTool("service_info",{})).estimates;
+  assert(estimates.create?.samples===1 && estimates.create?.basis==="create" && estimates.revise?.basis==="all","COMPLETED_WORK_NOT_ESTIMATED");
+  assert((await other.callTool("service_info",{})).estimates.create===null,"OTHER_USER_ESTIMATE_LEAK");
+  assert((await page.locator("#progress-estimate").innerText()).includes("Actual charge:"),"ACTUAL_CHARGE_NOT_IN_GUI");
   await page.reload();
   await page.locator("#nostr-sign-in").filter({hasText:"NIP-07"}).waitFor();
   await page.locator("#preview").waitFor({state:"visible",timeout:30000});
   assert(await page.locator("#publish").isEnabled(),"RESTORED_EXTENSION_PUBLISH_DISABLED");
+  await page.locator("#revise-estimate-basis").filter({hasText:"1 recent build"}).waitFor();
+  assert(await page.locator("#progress-estimate").innerText()==="","RESTORE_SHOWS_FAKE_ACTUAL_DURATION_OR_CHARGE");
   assert(fixture.counts().inferences===1,"SIGNIN_RESTORE_STARTED_GENERATION");
   await owner.callTool("projects",{action:"rename",id,title:"Reading counter"});
   const row=(await pool.query("SELECT owner_pubkey FROM development_projects WHERE id=$1",[id])).rows[0]; assert(row.owner_pubkey===pubkey,"PROJECT_OWNER_NOT_REQUEST_SIGNER");
@@ -116,6 +123,6 @@ try {
   await returning.locator("#your-applets").click(); await returning.locator("#projects-empty").waitFor({state:"visible"});
   assert(await returning.locator("#projects-list li").count()===0,"SIGN_OUT_LEFT_ACCOUNT_PROJECT_LIST");
   assert(errors.length===0,`BROWSER_ERRORS:${errors.join(";")}`);
-  console.log(JSON.stringify({status:"passed",case:"returning-projects",checks:["actual selected identity signs generation","active/pending/verified stages","cross-owner list/get/preview denial","same npub from fresh browser after CVM restart","open without inference","signout clears account list","legacy anonymous build visible after sign-in","live stages refresh without interrupting generation","dedicated static route and browser back/forward","mobile layout","primary navigation preserves builder context and running status"]}));
+  console.log(JSON.stringify({status:"passed",case:"returning-projects",checks:["actual selected identity signs generation","active/pending/verified stages","cross-owner list/get/preview denial","same npub from fresh browser after CVM restart","open without inference","signout clears account list","legacy anonymous build visible after sign-in","live stages refresh without interrupting generation","dedicated static route and browser back/forward","mobile layout","primary navigation preserves builder context and running status","signed caller-only cost/time estimates","active jobs excluded from estimates","history survives reload without inference"]}));
 } catch(error) { console.error(error, await page.locator("body").innerText({timeout:1000}).catch(()=>"original page closed")); throw error; }
 finally { release(); releaseAnonymous(); await owner.close(); await other.close(); await browser.close(); await pool.end(); await server.close(); await stack.down(true); await rm(root,{recursive:true,force:true}); }

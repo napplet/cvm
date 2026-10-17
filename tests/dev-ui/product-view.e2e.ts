@@ -29,14 +29,25 @@ try {
   assert(await page.evaluate(() => (window as any).workspace.validate("generate")) === false, "INVALID_BUDGET_ACCEPTED");
   assert(await page.locator("#maximum").evaluate((el) => document.activeElement === el), "INVALID_BUDGET_NOT_FOCUSED");
   await page.locator("#maximum").fill("3250");
+  await page.evaluate(() => (window as any).workspace.estimates({unit:"test_sat",windowDays:30,create:null,revise:null}));
+  assert((await page.locator("#create-estimate-time").innerText()).includes("Not enough history"), "EMPTY_HISTORY_INVENTED_ETA");
+  await page.evaluate(() => { const w=window as any; w.estimate={samples:4,basis:"create",cost:{low:"120",high:"300"},seconds:{low:30,high:60}}; w.workspace.estimates({unit:"test_sat",windowDays:30,create:w.estimate,revise:{...w.estimate,basis:"all"}}); });
+  assert((await page.locator("#create-estimate-cost").innerText()).includes("120–300 test sats"), "COST_ESTIMATE_MISSING");
+  assert((await page.locator("#create-estimate-time").innerText()).includes("30 sec–1 min"), "TIME_ESTIMATE_MISSING");
+  assert((await page.locator(".estimate-limit").first().innerText()).includes("3,250"), "MAXIMUM_NOT_SEPARATE_FROM_ESTIMATE");
   await page.evaluate(() => { const w = window as any; w.workspace.begin("generate"); w.live.begin("Create", "Deterministic fixture"); w.live.receive({ kind: "sent", requestId: "a", tool: "start_session" }); });
   assert(await page.locator("#workspace-nav-label").innerText()==="Builder" && await page.locator("#workspace-nav-status").isVisible(),"RUNNING_BUILDER_CONTEXT_MISSING");
   assert((await page.locator("#progress-provider").textContent())?.includes("no model request"), "FIXTURE_HIDDEN_IN_PRODUCT");
+  assert((await page.locator("#progress-estimate").innerText()).includes("remaining"), "RUNNING_ETA_MISSING");
   await page.clock.fastForward(16000);
+  assert((await page.locator("#progress-estimate").innerText()).includes("paused"), "STALE_ESTIMATE_KEPT_COUNTING");
   assert((await page.locator("#progress-title").textContent())?.includes("Still waiting"), "STALE_NOT_VISIBLE_AT_TOP");
   assert(await page.locator("#build-progress").getAttribute("aria-valuenow") === "0", "CLOCK_FAKED_PROGRESS");
   await page.evaluate(() => { const w = window as any; w.live.receive({ kind: "progress", progress: { kind: "stage", requestId: "a", stage: "verify", state: "running", sequence: 1 } }); });
   assert((await page.locator("#progress-title").textContent())?.includes("Checking"), "HEARTBEAT_DID_NOT_RESTORE_STATUS");
+  await page.clock.fastForward(50000);
+  await page.evaluate(() => (window as any).live.receive({kind:"progress",progress:{kind:"stage",requestId:"a",stage:"verify",state:"running",sequence:2}}));
+  assert((await page.locator("#progress-estimate").innerText()).includes("Taking longer"), "OVERRUN_SHOWS_ZERO_REMAINING");
   await page.evaluate(() => { const w = window as any; w.workspace.failed("TIMEOUT", true); w.live.finish("Outcome unconfirmed", "uncertain"); w.workspace.settled(); w.workspace.recovery(true); });
   assert(await page.locator("#new-applet").isDisabled(), "UNCERTAIN_RELOAD_CAN_CREATE_DUPLICATE");
   assert(await page.locator("#build-progress").getAttribute("aria-valuenow") === "0", "RECOVERY_SHOWS_PREVIOUS_SUCCESS");
@@ -77,10 +88,16 @@ try {
     assert(await page.locator("#your-applets").isVisible() && await page.locator("#workspace-home").isVisible(), `PRIMARY_NAV_UNAVAILABLE_${width}`);
     assert(tiny.length === 0, `SMALL_TOUCH_TARGETS_${width}:${tiny.join(",")}`);
   }
+  await page.evaluate(() => { const w=window as any; w.workspace.begin("revise"); w.live.begin("Revise", "fixture"); w.workspace.actionCharge("180"); w.live.finish("Ready", "completed"); w.workspace.settled(); });
+  assert(await page.locator("#progress-estimate").innerText()==="Actual charge: 180 test sats", "CONFIRMED_CHARGE_NOT_DISTINCT");
+  await page.evaluate(() => { const w=window as any; w.workspace.begin("recover-revise"); w.live.begin("Check", "fixture"); });
+  assert((await page.locator("#progress-estimate").innerText()).includes("remaining time unavailable"), "RECOVERY_RESTARTED_ETA");
+  await page.evaluate(() => { const w=window as any; w.live.finish("Uncertain", "uncertain"); w.workspace.settled(); });
+  assert(await page.locator("#progress-estimate").innerText()==="", "FAILED_RUN_SHOWS_PRIOR_CHARGE");
   await page.emulateMedia({ reducedMotion: "reduce" });
   assert(await page.locator("#progress-fill").evaluate((el) => getComputedStyle(el).transitionDuration) === "0s", "REDUCED_MOTION_NOT_HONORED");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.keyboard.press("Escape");
   assert(await page.locator("#open-settings").evaluate((el) => document.activeElement === el), "MODAL_FOCUS_LOST");
-  console.log(JSON.stringify({ status: "passed", case: "product-view", checks: ["text-only rendering", "budget validation/focus", "fixture labeling", "stale clock", "real stage projection", "uncertain recovery fence", "inline revision blockers", "draft preservation", "read-only status actions", "resolved status re-enables send", "responsive touch targets", "reduced motion", "dialog focus", "primary navigation contexts", "persistent mobile navigation"] }));
+  console.log(JSON.stringify({ status: "passed", case: "product-view", checks: ["text-only rendering", "budget validation/focus", "fixture labeling", "stale clock", "real stage projection", "uncertain recovery fence", "inline revision blockers", "draft preservation", "read-only status actions", "resolved status re-enables send", "responsive touch targets", "reduced motion", "dialog focus", "primary navigation contexts", "persistent mobile navigation", "historical estimates and separate maximum", "stale and overrun timing", "actual charge and recovery ETA"] }));
 } finally { await browser.close(); server.stop(true); }

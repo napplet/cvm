@@ -10,12 +10,12 @@
     {
       "file": "setup.png",
       "width": 720,
-      "height": 879
+      "height": 1020
     },
     {
       "file": "build-progress.png",
       "width": 1190,
-      "height": 115
+      "height": 147
     },
     {
       "file": "execution-details.png",
@@ -30,7 +30,7 @@
     {
       "file": "revision-composer.png",
       "width": 360,
-      "height": 753
+      "height": 768
     },
     {
       "file": "sign-in.png",

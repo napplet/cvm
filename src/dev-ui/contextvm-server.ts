@@ -1,3 +1,4 @@
+import { readGenerationEstimates } from "../dev/generation-estimates";
 import { ServiceInfoArgumentsSchema, DevelopmentFaucetArgumentsSchema, OperationDiagnosticArgumentsSchema } from "./extension-schemas";
 import { DevelopmentRemixImports } from "../dev/remix-imports";
 import { LocalRemixSourceImporter } from "../dev/remix-source-import";
@@ -358,7 +359,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
         return { status: "failed", code, detail: details[code] ?? "The starting applet could not be verified. Check its address and try again; no generation was started." };
       }
     }),
-    service_info: async input => { ServiceInfoArgumentsSchema.parse(input); const settings = chatgpt.settings(); const account = chatgpt.status().accounts.find(item => item.id === settings.accountId); return { reserveSat, actionCeilingSat, providerLabel, available: !!operator?.selectedApi() || settings.mode !== "chatgpt" || !!(account?.signedIn && account.planEnabled), development: true }; },
+    service_info: async (input, pubkey) => { ServiceInfoArgumentsSchema.parse(input); const settings = chatgpt.settings(); const account = chatgpt.status().accounts.find(item => item.id === settings.accountId); return { reserveSat, actionCeilingSat, providerLabel, estimates: await readGenerationEstimates(app.pool, pubkey, runtime.pricing, actionCeilingSat).catch(() => null), available: !!operator?.selectedApi() || settings.mode !== "chatgpt" || !!(account?.signedIn && account.planEnabled), development: true }; },
     development_faucet: async input => { const { amount } = DevelopmentFaucetArgumentsSchema.parse(input); return { token: await mintCashuToken(app, config, Number(amount)) }; },
     development_publication: (input, pubkey) => publication.handle(input, pubkey),
     operation_diagnostic: async (input, pubkey) => {

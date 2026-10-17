@@ -81,6 +81,7 @@ try {
     const bootstrap = {servicePubkey:"a".repeat(64),relayUrl:"ws://127.0.0.1:1",providerLabel:"CVM generation service",actionCeilingSat:"3750"};
     const w=window as any;
     const workspace = new ProductWorkspace(document.getElementById("app"),bootstrap);
+    workspace.estimates({unit:"test_sat",windowDays:30,create:{samples:4,basis:"create",cost:{low:"120",high:"300"},seconds:{low:45,high:90}},revise:{samples:1,basis:"all",cost:{low:"100",high:"2000"},seconds:{low:30,high:120}}});
     const live = new ExecutionActivity(document.getElementById("execution-activity"),bootstrap.providerLabel,(value:unknown)=>workspace.progress(value));
     const v={sessionId:"session:view",artifactId:"artifact:"+"a".repeat(64),version:1};
     const publicationClient = {callTool:async(name:string,input:any)=>{

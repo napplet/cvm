@@ -4,7 +4,7 @@ The sequence is **fund → reserve → generate → inspect → revise or publis
 
 ## 1. Discover and inspect
 
-Read `service_info` in the development composition for the provider label, availability and current required ceilings. Read `account_status` for available/held funds and existing work. `tools/list` shows names but is not proof every optional facade is installed.
+Read `service_info` in the development composition for the provider label, availability, current required ceilings and optional caller-scoped estimates. Estimates do not authorize spending or replace admission. Read `account_status` for available/held funds and existing work. `tools/list` shows names but is not proof every optional facade is installed.
 
 ## 2. Top up separately
 

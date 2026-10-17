@@ -48,7 +48,7 @@ const backup = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => {co
 const backupUrl = `http://127.0.0.1:${backup.port}`; backupBlossom = new CvmBlossom(join(root, "backup-blossom"), userPubkey, () => backupUrl);
 const unavailable = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => {copyRequests++; return new Response(null, { status: request.method === "OPTIONS" ? 204 : 401, headers: { "access-control-allow-origin": "*", "access-control-allow-methods": "GET, PUT, OPTIONS", "access-control-allow-headers": "authorization, content-type, x-sha-256" } });} });
 const unavailableUrl = `http://127.0.0.1:${unavailable.port}`;
-const errors: string[] = []; const traffic: string[] = []; let signerRequests = 0; let appletSignatures = 0; let remoteSubscription: { close(): void } | undefined;
+const errors: string[] = []; const traffic: string[] = []; let signerRequests = 0; let appletSignatures = 0; let applicationSignatures = 0; let remoteSubscription: { close(): void } | undefined;
 await page.addInitScript(() => {
   const Original = window.WebSocket; (window as any).listeningSigners = [];
   window.WebSocket = class extends Original {
@@ -108,7 +108,7 @@ try {
     else if (request.method === "switch_relays") result = JSON.stringify([config.relayUrl]);
     else if (request.method === "nip44_decrypt") result = nip44.v2.decrypt(request.params[1], nip44.v2.utils.getConversationKey(userKey,request.params[0]));
     else if (request.method === "nip44_encrypt") result = nip44.v2.encrypt(request.params[1], nip44.v2.utils.getConversationKey(userKey,request.params[0]));
-    else if (request.method === "sign_event") { signerRequests++; const template = JSON.parse(request.params[0]); if (template.kind === 35129) appletSignatures++; result = JSON.stringify(finalizeEvent(template, userKey)); }
+    else if (request.method === "sign_event") { signerRequests++; const template = JSON.parse(request.params[0]); if (template.kind === 35129) appletSignatures++; if (template.kind === 32267) applicationSignatures++; result = JSON.stringify(finalizeEvent(template, userKey)); }
     else result = "ack";
     await Promise.all(relay.publish([config.relayUrl], finalizeEvent({ kind: 24133, created_at: Math.floor(Date.now() / 1000), tags: [["p", clientPubkey]], content: nip44.v2.encrypt(JSON.stringify({ id: request.id, result }), conversation) }, signerKey)));
   })().catch(error => errors.push(`Signer fixture: ${error.message}`)); } });
@@ -157,7 +157,9 @@ try {
   const failedCopy = (await pool.query<{ signed_event: { id: string }; file_results: { state: string }[]; state: string }>("SELECT signed_event,file_results,state FROM development_publications WHERE publisher=$1", [userPubkey])).rows[0]!;
   assert(failedCopy.signed_event && failedCopy.file_results.some((result: any) => result.state === "failed") && failedCopy.state === "prepared", "FAILED_COPY_NOT_DURABLE");
   assert(appletSignatures === 1, "APPLET_SIGNED_MORE_THAN_ONCE");
-  assert(failedCopy.file_results.filter(result => result.state === "verified").length === 1, "ONE_COPY_FIXTURE_INVALID");
+  assert(applicationSignatures===1, "APPLICATION_NOT_SIGNED_ONCE");
+  assert(await page.locator("#publication-screenshot").evaluate((img:HTMLImageElement)=>img.complete&&img.naturalWidth===1200&&img.naturalHeight===750), "REAL_SCREENSHOT_NOT_SHOWN");
+  assert(failedCopy.file_results.filter(result => result.state === "verified").length === 2, "ONE_COPY_FIXTURE_INVALID");
   const earlyOwner = new DevelopmentContextVmClient({ ...connection, reserveSat: "0", actionCeilingSat: "0", providerLabel: "test" }, undefined, generationKey);
   await earlyOwner.connect({ accountStatus: false });
   try {
@@ -194,6 +196,13 @@ try {
   await page.locator("#publication-copy").click(); const address = await page.evaluate(() => navigator.clipboard.readText()); assert(address.startsWith("naddr1") && address !== previewAddress, "USER_NADDR_MISSING");
   const published = await relay.querySync([config.relayUrl], { kinds: [35129], authors: [userPubkey] }, { maxWait: 3000 }); assert(published.length === 1, "USER_EVENT_COUNT_INVALID");
   for (const tag of published[0]!.tags.filter(tag => tag[0] === "path")) { const response = await fetch(`${destinationUrl}/${tag[2]}`); assert(new Bun.CryptoHasher("sha256").update(await response.arrayBuffer()).digest("hex") === tag[2], "DESTINATION_BYTES_MISMATCH"); }
+  const applications = await relay.querySync([config.relayUrl], { kinds: [32267], authors: [userPubkey] }, { maxWait: 3000 });
+  assert(applications.length===1 && applications[0].tags.some(tag=>tag[0]==="name"&&tag[1]==="My daily counter") && applications[0].content.includes(`nostr:${address}`), "APPLICATION_NOT_PUBLISHED");
+  assert((await page.locator("#publication-listing").innerText()).includes("shared with screenshot"), "APPLICATION_RESULT_MISSING");
+  for (const image of applications[0].tags.filter(tag=>tag[0]==="image"&&[destinationUrl,backupUrl].some(server=>tag[1].startsWith(server+"/")))) {
+    const response = await fetch(image[1]); const png = new Uint8Array(await response.arrayBuffer());
+    assert(response.ok && response.headers.get("content-type")?.includes("image/png") && new Bun.CryptoHasher("sha256").update(png).digest("hex")===new URL(image[1]).pathname.slice(1), "SCREENSHOT_NOT_MIRRORED");
+  }
   const intent = (await pool.query("SELECT id FROM development_publications WHERE publisher=$1", [userPubkey])).rows[0].id;
   assert(published[0]!.tags.some(tag=>tag[0]==="description"&&tag[1]==="Count daily practice, one step at a time."), "DESCRIPTION_NOT_SIGNED");
   assert((await unauthorized.callTool("development_publication", {action:"republish",id:intent})).status==="denied", "CROSS_OWNER_REPUBLICATION");
@@ -235,11 +244,12 @@ try {
     assert(spoofRejected, "CALLER_SUPPLIED_PROJECT_IDENTITY_ACCEPTED");
     assert((await owner.callTool("projects", { action: "rename", id: projectId, title: "Daily counter" })).project.title === "Daily counter", "OWNER_RENAME_FAILED");
     const saved = await owner.callTool("development_publication", { action: "status", id: intent });
-    assert(saved.signedEvent.id === published[0]!.id && saved.publishedAt && saved.fileResults.filter((result: any) => result.state === "verified").length === 2 && saved.fileResults.some((result: any) => result.state === "failed"), "PUBLISHED_RECEIPTS_MISSING");
+    assert(saved.signedEvent.id === published[0]!.id && saved.publishedAt && saved.fileResults.filter((result: any) => result.state === "verified").length === 4 && saved.fileResults.some((result: any) => result.state === "failed"), "PUBLISHED_RECEIPTS_MISSING");
     const metadata = await owner.callTool("development_publication", {action:"metadata", sessionId:projectId, artifactId:saved.artifactId});
     assert(metadata.status==="ok" && metadata.title==="Daily counter" && metadata.description, "OWNER_METADATA_MISSING");
     assert((await unauthorized.callTool("development_publication", {action:"metadata",sessionId:projectId,artifactId:saved.artifactId})).status==="denied", "CROSS_OWNER_METADATA");
     assert((await owner.callTool("development_publication", {action:"metadata",sessionId:"wrong",artifactId:saved.artifactId})).status==="denied", "WRONG_SESSION_METADATA");
+    assert(saved.application.signedEvent.id===applications[0].id && saved.application.relayResults.some((r:any)=>r.state==="published"), "APPLICATION_RECEIPTS_LOST");
     assert(saved.republication?.relayResults.some((receipt:any)=>receipt.state==="published"), "REPUBLICATION_NOT_SAVED");
     // A later resend with no responding destinations cannot revoke success.
     await pool.query("UPDATE development_publications SET prepared=jsonb_set(prepared,'{relays}',$2::jsonb) WHERE id=$1",[intent,JSON.stringify(["wss://unreachable.invalid"])]);
@@ -316,6 +326,10 @@ try {
   try {
     assert((await editor.callTool("development_publication",{action:"submit",id:prior.id,event:prior.signed_event})).code==="PUBLICATION_SUPERSEDED", "STALE_SIGNED_DRAFT_SUBMITTED");
     const replacement = await editor.callTool("development_publication",{action:"status",id:replaced.prepared.supersededBy});
+    const signedApplet = finalizeEvent(replacement.template,userKey);
+    const badListing = finalizeEvent({...replacement.application.template,content:"tampered"},userKey);
+    assert((await editor.callTool("development_publication",{action:"save",id:replacement.id,event:signedApplet,applicationEvent:badListing})).code==="PUBLICATION_APPLICATION_SIGNATURE_MISMATCH", "TAMPERED_APPLICATION_ACCEPTED");
+    assert((await editor.callTool("development_publication",{action:"submit",id:replacement.id,event:signedApplet})).code==="PUBLICATION_APPLICATION_SIGNATURE_REQUIRED", "UNSIGNED_APPLICATION_ACCEPTED");
     assert(replacement.servers.length===2 && replacement.fileResults.some((item:any)=>item.state==="verified"), "REPLACEMENT_LOST_VERIFIED_RECEIPTS");
     assert((await unauthorized.callTool("development_publication",{action:"prepare",artifactId:prior.artifact_id,sessionId:prior.session_id,publisher:userPubkey,requestKey:crypto.randomUUID(),title:"stolen",servers:replacement.servers,relays:replacement.relays,replaces:replacement.id})).status==="denied", "CROSS_OWNER_REPLACEMENT");
   } finally {await editor.close();}
@@ -323,7 +337,7 @@ try {
   assert(appletSignatures===3 && fixture.counts().inferences===2, "REPLACEMENT_SIGNATURE_OR_GENERATION_COUNT");
   assert(!(await page.locator("#publication-copy-warning").isVisible()), "REMOVED_SERVER_STILL_BLOCKS");
   assert((await fetch(`${cvmBlob}/`)).ok, "BLOSSOM_ORIGIN_CHANGED_ON_RESTART");
-  console.log(JSON.stringify({ status: "passed", case: "static-cvm-publication", checks: ["separate static origin and subdirectory", "private operator OAuth", "rate version used", "job views", "all sign-in choices during generation", "real NIP46", "CVM naddr", "CVM-only Blossom writes", "manual and discovered servers", "one complete copy blocks publication in browser and CVM", "two complete copies publish despite third server HTTP 401", "warnings and verified count survive reopen", "saved signature and failures restored without browser journal", "copy retry uses one signature", "verified mirrors and user naddr", "owner-scoped publication lookup", "signed template tamper rejected", "exact event replay and repeated preparation", "pending job details", "published builder and project after CVM restart", "reopen retains address without generation", "revision shows unpublished changes", "CVM metadata ownership and editable signed description", "continue with saved two copies skips uploads and signing", "signed draft destination editing preserves history and rejects stale submission", "one relay confirms despite extra relay failure", "legacy partial success repairs on lookup and startup without republishing", "zero confirmations remain retryable", "compact success with collapsed failure details", "explicit republish from builder and result reuses event, address and files", "republish ownership and last-attempt persistence", "failed resend retains earlier publication"] }));
+  console.log(JSON.stringify({ status: "passed", case: "static-cvm-publication", checks: ["offline CLI screenshot and kind-32267 application publication", "screenshot hash verified on two destinations", "both signatures persist and republish without model or copy work", "tampered and missing application signatures rejected", "separate static origin and subdirectory", "private operator OAuth", "rate version used", "job views", "all sign-in choices during generation", "real NIP46", "CVM naddr", "CVM-only Blossom writes", "manual and discovered servers", "one complete copy blocks publication in browser and CVM", "two complete copies publish despite third server HTTP 401", "warnings and verified count survive reopen", "saved signature and failures restored without browser journal", "copy retry uses one signature", "verified mirrors and user naddr", "owner-scoped publication lookup", "signed template tamper rejected", "exact event replay and repeated preparation", "pending job details", "published builder and project after CVM restart", "reopen retains address without generation", "revision shows unpublished changes", "CVM metadata ownership and editable signed description", "continue with saved two copies skips uploads and signing", "signed draft destination editing preserves history and rejects stale submission", "one relay confirms despite extra relay failure", "legacy partial success repairs on lookup and startup without republishing", "zero confirmations remain retryable", "compact success with collapsed failure details", "explicit republish from builder and result reuses event, address and files", "republish ownership and last-attempt persistence", "failed resend retains earlier publication"] }));
 } catch (error) { console.error("TEST_STAGE", error, await admin.locator("body").innerText({ timeout: 2000 }).catch(() => "admin page unavailable"), await page.locator("body").innerText({ timeout: 2000 }).catch(() => "workspace unavailable"), errors); throw error; } finally {
   release(); remoteSubscription?.close(); relay.close([config.relayUrl]); relay.destroy(); await unauthorized.close();
   await browser.close(); site.stop(true); destination.stop(true); backup.stop(true); unavailable.stop(true); await pool.end();

@@ -21,7 +21,7 @@ const built = await Bun.build({ entrypoints: modules.map(name => resolve(`src/de
 } }] });
 if (!built.success) throw new Error(built.logs.map(log => log.message).join(";"));
 const scripts = Object.fromEntries(await Promise.all(built.outputs.map(async output => [output.path.split("/").at(-1)!, await output.text()])));
-const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response('<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Responsive workspace</title></head><body><main id="app"></main></body></html>', { headers: { "content-type": "text/html" } }) });
+const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => new URL(request.url).pathname === "/sample-screenshot.png" ? new Response(Bun.file(resolve("tests/fixtures/publication-screenshot.png")), { headers: {"content-type":"image/png"} }) : new Response('<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Responsive workspace</title></head><body><main id="app"></main></body></html>', { headers: { "content-type": "text/html" } }) });
 const browser = await chromium.launch();
 const page = await browser.newPage();
 const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
@@ -88,7 +88,7 @@ try {
       if(name==="development_publication"&&input.action==="lookup")return {status:"ok",current:w.publishedFixture??null,latestPublished:w.publishedFixture??null};
       if(name==="development_publication"&&input.action==="metadata")return {status:"ok",artifactId:v.artifactId,version:1,title:"Suggested title",description:"Suggested description for an older draft.",basis:"project",tags:[],files:[]};
       if(name!=="development_publication"||input.action!=="prepare")throw new Error("Unexpected publication effect");
-      return w.preparedFixture = {id:"publication:view",status:"prepared",artifactId:v.artifactId,publisher:publication.identity.pubkey,title:input.title,description:input.description,template:{tags:[["R","storage"],["O","theme"]]},servers:input.servers,relays:input.relays,files:[],version:1,expiresAt:Date.now()+60000};
+      return w.preparedFixture = {id:"publication:view",status:"prepared",artifactId:v.artifactId,publisher:publication.identity.pubkey,screenshot:location.origin+"/sample-screenshot.png",application:{template:{kind:32267,tags:[],content:input.description,created_at:1}},title:input.title,description:input.description,template:{tags:[["R","storage"],["O","theme"]]},servers:input.servers,relays:input.relays,files:[],version:1,expiresAt:Date.now()+60000};
     }};
     const publication = new PublicationWorkspace(bootstrap,()=>publicationClient,()=>v);
     w.fixtureProjects = ["active","verified","published","unconfirmed","pending"].map((stage,i)=>({id:`project:${i}`,title:i===0?"A".repeat(512):`My ${stage} applet`,stage,verifiedVersion:i,createdAt:new Date().toISOString()}));

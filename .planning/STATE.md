@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: verification_deferred_gaps
-stopped_at: Explicit republication verified and available in the local workspace
-last_updated: "2026-10-17T17:33:47Z"
+stopped_at: Screenshot and Zapstore publication verified and active locally
+last_updated: "2026-10-17T17:49:56Z"
 last_activity: 2026-10-17
-last_activity_desc: Republish resends the saved signed event and preserves prior publication success
+last_activity_desc: New publications capture screenshots and publish user-signed application listings with durable delivery
 progress:
   total_phases: 7
   completed_phases: 6
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
 Plan: 56 of 58 accepted; development Plans 07-52/53/56/57/54/55 complete
 Status: Guided applet.broker workspace at http://127.0.0.1:49371; diagnostic console at /dev. Saved chatgpt-oauth mode with gpt-6.1-sol retained. Product/console browser journeys and recovery passed through real local services. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
-Last activity: 2026-10-17 — Completed quick task 261017-eji: explicit Republish in builder and publication result; same event/address/signature, no extra model or file-copy work. Failed resends retain earlier published status. Actual relay resend test, full publication e2e, 380 responsive checks and screenshot docs verified. Active at http://127.0.0.1:49371 with saved chatgpt-oauth preserved; no live user republication. TypeScript retains 424 existing diagnostics.
+Last activity: 2026-10-17 — Completed quick task 261017-eou: isolated CLI 0.10.0 screenshot and Zapstore listing publication, two user signatures, durable mirroring and relay receipts, independent partial success and republication. Full browser/service journey, 54 targeted assertions, 380 responsive checks and illustrated docs verified. Active at http://127.0.0.1:49371 with saved ChatGPT OAuth. Existing published envelopes and sealed generation toolchain retained; TypeScript baseline 424 diagnostics.
 
 Follow-up: Stream assembly/counter verification remains complete. Latest helper-signature and compiler-feedback fix passed 29 targeted unit/integration cases plus activity and composed OAuth browser journeys. Real blinking-text generation also passed. See debug/resolved/generated-typescript-check.md.
 
@@ -387,6 +387,7 @@ Recent decisions affecting current work:
 | 261017-e8h | One confirmed relay completes publication; saved outcome repair and simplified readable success UI | 2026-10-17 | see task history | [261017-e8h](./quick/261017-e8h-accept-partial-nostr-publication-and-sim/) |
 
 | 261017-eji | Explicit Republish with saved event/signature and durable resend feedback; preserves earlier success | 2026-10-17 | see task history | [261017-eji](./quick/261017-eji-allow-explicit-republication-of-publishe/) |
+| 261017-eou | CLI screenshots and user-signed Zapstore listings; isolated capture, verified mirroring and durable independent delivery | 2026-10-17 | see task history | [261017-eou](./quick/261017-eou-use-current-napplet-cli-screenshot-and-z/) |
 
 ## Deferred Verification
 
@@ -404,6 +405,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-17T16:30:48Z
-Stopped at: Preview status, compact estimates and two-server publication threshold complete and active at http://127.0.0.1:49371. Docs preview at http://127.0.0.1:4173/docs/. User can refresh and retry saved publication. Production remains deferred.
-Resume file: .planning/quick/261017-eji-allow-explicit-republication-of-publishe/SUMMARY.md
+Last session: 2026-10-17T17:50:33Z
+Stopped at: Screenshot and Zapstore publication complete and active at http://127.0.0.1:49371. Illustrated docs at http://127.0.0.1:4173/docs/. New publications include both signed events; existing published envelopes remain unchanged. Production remains deferred.
+Resume file: .planning/quick/261017-eou-use-current-napplet-cli-screenshot-and-z/SUMMARY.md

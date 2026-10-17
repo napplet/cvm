@@ -1,3 +1,5 @@
+import { publicationScreenshot } from "./publication-media";
+import { prepareZapstorePublication } from "../../infra/vendor/napplet-publication/bundle/zapstore.js";
 import { publishOnUserRelays, type RelayReceipt } from "./publication-relays";
 import { relayUrl } from "../dev-ui/destinations";
 import { MIN_PUBLICATION_SERVERS, verifiedPublicationServers } from "../dev-ui/publication-copies";
@@ -17,6 +19,7 @@ import type { LocalArtifactRepository, SealedArtifact } from "./local-artifact-r
 
 const Hex = z.string().regex(/^[a-f0-9]{64}$/u);
 const SignedEvent = z.object({ id: Hex, pubkey: Hex, sig: z.string().regex(/^[a-f0-9]{128}$/u), kind: z.literal(35129), created_at: z.number().int().positive(), tags: z.array(z.array(z.string().max(1024)).max(8)).max(512), content: z.literal("") }).strict();
+const ApplicationEvent = SignedEvent.extend({ kind: z.literal(32267), content: z.string().max(4000) });
 const ServerUrl = z.string().url().max(512).refine(value => { const url = new URL(value); return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash && url.pathname === "/"; });
 const FileResult = z.object({ server: ServerUrl, file: z.string().max(512), state: z.enum(["checking", "signing", "mirroring", "uploading", "verified", "failed"]), detail: z.string().max(1000).optional() }).strict();
 export const DevelopmentPublicationArgumentsSchema = z.discriminatedUnion("action", [
@@ -25,15 +28,16 @@ export const DevelopmentPublicationArgumentsSchema = z.discriminatedUnion("actio
   z.object({ action: z.literal("metadata"), artifactId: z.string().max(100), sessionId: z.string().max(240) }).strict(),
   z.object({ action: z.literal("prepare"), servers: z.array(ServerUrl).min(1).max(5), relays: z.array(z.string().max(512).transform(value => relayUrl(value))).min(1).max(5), artifactId: z.string().max(100), sessionId: z.string().max(240), publisher: Hex, requestKey: z.string().uuid(), title: z.string().trim().min(1).max(120), description: z.string().trim().min(1).max(500).optional(), replaces: z.string().uuid().optional() }).strict(),
   z.object({ action: z.literal("submit"), id: z.string().uuid(), event: SignedEvent }).strict(),
-  z.object({ action: z.literal("save"), id: z.string().uuid(), event: SignedEvent, fileResults: z.array(FileResult).max(2560).optional() }).strict(),
+  z.object({ action: z.literal("save"), id: z.string().uuid(), event: SignedEvent, applicationEvent: ApplicationEvent.optional(), fileResults: z.array(FileResult).max(2560).optional() }).strict(),
   z.object({ action: z.enum(["status", "reconcile", "republish"]), id: z.string().uuid() }).strict(),
 ]);
 type Republication = { attemptedAt: string; relayResults: RelayReceipt[] };
-type Prepared = { republication?: Republication; supersededBy?: string; supersedes?: string; preview?: boolean; relays?: string[]; template: EventTemplate; expiresAt: number; files: SealedArtifact["files"]; version: number; title: string; description?: string; aggregate: string; dTag: string };
+type Application = { template: EventTemplate; signedEvent?: Event; relayResults?: RelayReceipt[] };
+type Prepared = { application?: Application; screenshot?: string; republication?: Republication; supersededBy?: string; supersedes?: string; preview?: boolean; relays?: string[]; template: EventTemplate; expiresAt: number; files: SealedArtifact["files"]; version: number; title: string; description?: string; aggregate: string; dTag: string };
 type Row = { file_results: z.infer<typeof FileResult>[]; published_at: Date | null; relay_results: RelayReceipt[]; id: string; account_id: string; session_id: string; artifact_id: string; publisher: string; fingerprint: string; prepared: Prepared; signed_event: Event | null; state: "prepared" | "publishing" | "published" | "unconfirmed" };
 type Options = { pubkey: string; sign(template: EventTemplate): Promise<Event>; publicOrigin?: string; publicRelay?: string; pool: Pick<PostgresSqlClient, "query">; repository: LocalArtifactRepository; root: string; workerResultsRoot: string; relay: string; openTarget(target: string): Promise<string> };
 const hash = (value: string | Uint8Array) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
-const mime = (path: string) => ({ ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".svg": "image/svg+xml" } as Record<string,string>)[extname(path)] ?? "application/octet-stream";
+const mime = (path: string) => ({ ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png" } as Record<string,string>)[extname(path)] ?? "application/octet-stream";
 
 /** Explicit development deployment: immutable local content-addressed files and
  * the real local relay. The promoted production publication gate is unchanged. */
@@ -109,7 +113,16 @@ export class LocalPublication {
         const id = crypto.randomUUID(); const dTag = `applet-${artifact.artifactId.slice(-20)}-${command.publisher.slice(0, 8)}`;
         const template = await createSiteManifestTemplate({ target: "named", dTag }, artifact.files.map(file => ({ path: `/${file.path}`, sha256: file.sha256 })), { servers: [...new Set(command.servers.map(server => new URL(server).origin))], metadataTags: [...metadata.filter(tag => !["title", "description"].includes(tag[0]!)), ["title", command.title], ["description", description]] });
         if (template.tags.find(tag => tag[0] === "x" && tag[2] === "aggregate")?.[1] !== artifact.aggregateSha256) throw new Error("PUBLICATION_AGGREGATE_MISMATCH");
-        const prepared: Prepared = { ...(command.replaces ? { supersedes: command.replaces } : {}), relays: [...new Set(command.relays)], template, expiresAt: Date.now() + 600000, files: artifact.files, version: artifact.version, title: command.title, description, aggregate: artifact.aggregateSha256, dTag };
+        const screenshot = await publicationScreenshot(this.options.root, this.options.repository, artifact);
+        await this.uploadCvmBlob(screenshot.file.sha256, "image/png", screenshot.bytes);
+        const servers = [...new Set(command.servers.map(server => new URL(server).origin))];
+        const address = naddrEncode({ kind: 35129, pubkey: command.publisher, identifier: dTag, relays: command.relays });
+        // Use the exact CLI --zapstore implementation. Remote media URLs need
+        // no filesystem access; all local bytes were captured in isolation.
+        const listing = await prepareZapstorePublication({ version: 1, sourceDir: ".", defaultTarget: "named", relays: command.relays, blossomServers: servers,
+          zapstore: { id: `applet-${hash(artifact.sessionId).slice(0, 32)}`, name: command.title, summary: description, description: `${description}\n\nOpen in a compatible napplet shell: nostr:${address}`, images: servers.map(server => `${server}/${screenshot.file.sha256}`) } }, servers, { enabled: true, cwd: "/", createdAt: template.created_at });
+        if (!listing) throw new Error("PUBLICATION_APPLICATION_MISSING");
+        const prepared: Prepared = { ...(command.replaces ? { supersedes: command.replaces } : {}), relays: [...new Set(command.relays)], template, expiresAt: Date.now() + 600000, files: [...artifact.files, screenshot.file], screenshot: screenshot.file.sha256, application: { template: listing.template }, version: artifact.version, title: command.title, description, aggregate: artifact.aggregateSha256, dTag };
         const parameters = [id, account, artifact.sessionId, artifact.artifactId, command.publisher, command.requestKey, fingerprint, JSON.stringify(prepared)];
         if (command.replaces) {
           // Replace only an unfinished envelope. The conditional update races
@@ -133,6 +146,7 @@ export class LocalPublication {
       await this.restoreConfirmed(row);
       if (command.action === "status") return this.projection(row);
       if (command.action === "reconcile") {
+        if (row.prepared.application?.signedEvent) await this.publishApplication(row, false);
         if (row.state === "published") return this.projection(row);
         if (row.signed_event && await this.observe(row)) { await this.setState(row.id, "published"); return this.projection((await this.query<Row>("SELECT * FROM development_publications WHERE id=$1", [row.id])).rows[0]!); }
         return this.projection(row);
@@ -150,15 +164,22 @@ export class LocalPublication {
       if (row.state === "published") return this.projection(row);
       if (!row.signed_event && row.prepared.expiresAt < Date.now()) return { status: "expired", id: row.id };
       if (command.action === "save") {
+        if (command.applicationEvent) {
+          const application = row.prepared.application;
+          if (!application || command.applicationEvent.pubkey !== row.publisher || command.applicationEvent.id !== getEventHash({ ...application.template, pubkey: row.publisher }) || !verifyEvent(command.applicationEvent)) return { status: "rejected", code: "PUBLICATION_APPLICATION_SIGNATURE_MISMATCH" };
+          if (application.signedEvent && application.signedEvent.id !== command.applicationEvent.id) return { status: "rejected", code: "PUBLICATION_APPLICATION_CHANGED" };
+        }
         const servers = row.prepared.template.tags.filter(tag => tag[0] === "server").map(tag => tag[1]);
         if (command.fileResults?.some(result => !servers.includes(result.server) || !row.prepared.files.some(file => file.path === result.file))) return { status: "rejected", code: "PUBLICATION_DESTINATION_CHANGED" };
         // Save before the browser begins copying. Resuming on another tab can
         // reuse this exact signature without re-signing or generating anything.
-        const saved = await this.query("UPDATE development_publications SET signed_event=coalesce(signed_event,$2::jsonb),file_results=coalesce($3::jsonb,file_results),updated_at=now() WHERE id=$1 AND prepared->>'supersededBy' IS NULL RETURNING id", [row.id, JSON.stringify(event), command.fileResults ? JSON.stringify(command.fileResults) : null]);
+        const saved = await this.query("UPDATE development_publications SET signed_event=coalesce(signed_event,$2::jsonb),file_results=coalesce($3::jsonb,file_results),prepared=CASE WHEN $4::jsonb IS NULL THEN prepared ELSE jsonb_set(prepared,'{application,signedEvent}',$4::jsonb) END,updated_at=now() WHERE id=$1 AND prepared->>'supersededBy' IS NULL RETURNING id", [row.id, JSON.stringify(event), command.fileResults ? JSON.stringify(command.fileResults) : null, command.applicationEvent ? JSON.stringify(command.applicationEvent) : null]);
         if (!saved.rows.length) return { status: "rejected", code: "PUBLICATION_SUPERSEDED" };
+        if (command.applicationEvent) row.prepared.application!.signedEvent = command.applicationEvent;
         row.signed_event ??= event; if (command.fileResults) row.file_results = command.fileResults;
         return this.projection(row);
       }
+      if (row.prepared.application && !row.prepared.application.signedEvent) return { status: "rejected", code: "PUBLICATION_APPLICATION_SIGNATURE_REQUIRED" };
       // File verification happens in the client; do not turn destinations into
       // arbitrary server-side fetches. Require its durable complete-copy receipts.
       const servers = row.prepared.template.tags.filter(tag => tag[0] === "server").map(tag => tag[1]!);
@@ -166,7 +187,7 @@ export class LocalPublication {
       const running = this.#active.get(row.id); if (running) return running;
       const operation = this.publish(row, event); this.#active.set(row.id, operation);
       try { return await operation; } finally { this.#active.delete(row.id); }
-    } catch { return { status: "rejected", code: "PUBLICATION_UNAVAILABLE" }; }
+    } catch (error) { const code = error instanceof Error && /^PUBLICATION_SCREENSHOT_(BUSY|FAILED|TOOLCHAIN_MISSING)$/.test(error.message) ? error.message : "PUBLICATION_UNAVAILABLE"; return { status: "rejected", code }; }
   }
   async ensurePreview(artifact: SealedArtifact): Promise<unknown> {
     const key = `cvm-preview:${artifact.artifactId}:${hash(this.origin).slice(0, 16)}`;
@@ -186,7 +207,7 @@ export class LocalPublication {
     try { return await operation; } finally { this.#active.delete(row.id); }
   }
   private projection(row: Row) {
-    return { status: row.state, republication: row.prepared.republication, id: row.id, artifactId: row.artifact_id, publisher: row.publisher, version: row.prepared.version, title: row.prepared.title, description: row.prepared.description ?? row.prepared.template.tags.find(tag => tag[0] === "description")?.[1] ?? "", aggregate: row.prepared.aggregate, template: row.prepared.template, expiresAt: row.prepared.expiresAt, destination: row.prepared.preview ? "CVM preview" : "Your Blossom servers", relay: this.options.publicRelay ?? this.options.relay, relays: row.prepared.relays ?? [this.options.publicRelay ?? this.options.relay], relayResults: row.relay_results ?? [], fileResults: row.file_results ?? [], signedEvent: row.signed_event ?? undefined, publishedAt: row.published_at?.toISOString(), files: row.prepared.files.map(file => ({ ...file, url: `${this.origin}/${file.sha256}`, type: mime(file.path) })), servers: row.prepared.template.tags.filter(tag => tag[0] === "server").map(tag => tag[1]), preview: !!row.prepared.preview,
+    return { status: row.state, application: row.prepared.application, screenshot: row.prepared.screenshot ? `${this.origin}/${row.prepared.screenshot}` : undefined, republication: row.prepared.republication, id: row.id, artifactId: row.artifact_id, publisher: row.publisher, version: row.prepared.version, title: row.prepared.title, description: row.prepared.description ?? row.prepared.template.tags.find(tag => tag[0] === "description")?.[1] ?? "", aggregate: row.prepared.aggregate, template: row.prepared.template, expiresAt: row.prepared.expiresAt, destination: row.prepared.preview ? "CVM preview" : "Your Blossom servers", relay: this.options.publicRelay ?? this.options.relay, relays: row.prepared.relays ?? [this.options.publicRelay ?? this.options.relay], relayResults: row.relay_results ?? [], fileResults: row.file_results ?? [], signedEvent: row.signed_event ?? undefined, publishedAt: row.published_at?.toISOString(), files: row.prepared.files.map(file => ({ ...file, url: `${this.origin}/${file.sha256}`, type: mime(file.path) })), servers: row.prepared.template.tags.filter(tag => tag[0] === "server").map(tag => tag[1]), preview: !!row.prepared.preview,
       ...(row.state === "published" && row.signed_event ? { eventId: row.signed_event.id, url: `${this.origin}/open/${row.id}`, address: naddrEncode({ identifier: row.prepared.dTag, pubkey: row.publisher, kind: 35129, relays: row.prepared.relays ?? [this.options.publicRelay ?? this.options.relay] }) } : {}) };
   }
   private async suggestions(artifact: SealedArtifact, tags: string[][]) {
@@ -221,6 +242,7 @@ export class LocalPublication {
         if (!uploaded.ok || (await uploaded.json() as any).sha256 !== file.sha256) throw new Error("CVM_BLOB_UPLOAD_FAILED");
       }
       if (row.prepared.relays && !row.prepared.preview) {
+        await this.publishApplication(row, true);
         row.relay_results = await publishOnUserRelays(row.prepared.relays, event, this.options.relay, true);
         await this.query("UPDATE development_publications SET relay_results=$2,updated_at=now() WHERE id=$1", [row.id, JSON.stringify(row.relay_results)]);
         row.state = row.relay_results.some(result => result.state === "published") ? "published" : "unconfirmed";
@@ -234,6 +256,7 @@ export class LocalPublication {
     return this.projection(saved);
   }
   private async republish(row: Row) {
+    await this.publishApplication(row, "always");
     const relayResults = await publishOnUserRelays(row.prepared.relays!, row.signed_event!, this.options.relay, "always");
     // A resend does not undo a prior publication or its confirmation receipts.
     const known = new Map((row.relay_results ?? []).map(receipt => [receipt.relay, receipt]));
@@ -242,6 +265,22 @@ export class LocalPublication {
     const saved = await this.query<Row>("UPDATE development_publications SET prepared=jsonb_set(prepared,'{republication}',$2::jsonb),relay_results=$3::jsonb,updated_at=now() WHERE id=$1 AND state='published' AND prepared->>'supersededBy' IS NULL RETURNING *", [row.id, JSON.stringify(republication), JSON.stringify([...known.values()])]);
     if (!saved.rows[0]) return { status: "rejected", code: "PUBLICATION_NOT_PUBLISHED" };
     return this.projection(saved.rows[0]);
+  }
+  private async uploadCvmBlob(digest: string, contentType: string, bytes: Uint8Array) {
+    const authorization = await createUploadAuthorization({ sign: template => this.options.sign(template) }, [digest], undefined, new URL(this.origin).hostname);
+    const response = await fetch(`${this.#localOrigin}/upload`, { method: "PUT", headers: { authorization, "x-sha-256": digest, "content-type": contentType }, body: new Uint8Array(bytes).buffer, signal: AbortSignal.timeout(15000) });
+    if (!response.ok || (await response.json() as any).sha256 !== digest) throw new Error("CVM_BLOB_UPLOAD_FAILED");
+  }
+  private async publishApplication(row: Row, send: boolean | "always") {
+    const application = row.prepared.application;
+    if (!application?.signedEvent || !row.prepared.relays?.length) return;
+    // Listing delivery never downgrades an applet's independently confirmed
+    // publication. Preserve prior receipts when a later resend is unavailable.
+    const results = await publishOnUserRelays(row.prepared.relays, application.signedEvent, this.options.relay, send);
+    const known = new Map((application.relayResults ?? []).map(receipt => [receipt.relay, receipt]));
+    for (const receipt of results) if (known.get(receipt.relay)?.state !== "published") known.set(receipt.relay, receipt);
+    application.relayResults = [...known.values()];
+    await this.query("UPDATE development_publications SET prepared=jsonb_set(prepared,'{application,relayResults}',$2::jsonb),updated_at=now() WHERE id=$1", [row.id, JSON.stringify(application.relayResults)]);
   }
   private async restoreConfirmed(row: Row) {
     if (row.state !== "unconfirmed" || row.prepared.preview || row.prepared.supersededBy || !row.signed_event) return;

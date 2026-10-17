@@ -42,7 +42,7 @@ const built = await Bun.build({
 });
 assert(built.success, built.logs.map(log => log.message).join("\n"));
 const scripts = Object.fromEntries(await Promise.all(built.outputs.map(async file => [file.path.split("/").at(-1)!, await file.text()])));
-const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(
+const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => new URL(request.url).pathname === "/sample-screenshot.png" ? new Response(Bun.file(resolve("tests/fixtures/publication-screenshot.png")), { headers: {"content-type":"image/png"} }) : new Response(
   '<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Documentation examples</title></head><body><main id="app"></main></body></html>',
   { headers: { "content-type": "text/html" } },
 ) });
@@ -100,7 +100,7 @@ try {
       if (input.action === "metadata") return {status:"ok", ...version, title:"Reading-session counter", description:"Count your daily reading sessions with a simple, focused counter.", basis:"project", tags:[["requires","storage"]], files:[]};
       if (input.action !== "prepare") throw new Error("Publication is disabled in screenshots");
       return w.samplePrepared = { id: "publication:docs", status: "prepared", artifactId: version.artifactId, publisher: publication.identity.pubkey,
-        title:input.title, description:input.description, template: { tags: [["title",input.title],["description",input.description],["requires","storage"]] }, servers: input.servers, relays: input.relays, files: [], version: 2, expiresAt: Date.now() + 60000 };
+        screenshot: location.origin+"/sample-screenshot.png", application: {template:{kind:32267,tags:[],content:input.description,created_at:1}}, title:input.title, description:input.description, template: { tags: [["title",input.title],["description",input.description],["requires","storage"]] }, servers: input.servers, relays: input.relays, files: [], version: 2, expiresAt: Date.now() + 60000 };
     } };
     const publication = new PublicationWorkspace(bootstrap, () => client, () => w.selectedVersion);
     w.sampleProjects = [
@@ -194,7 +194,7 @@ try {
     const w = window as any;
     // Read-only presentation fixture for a completed publication; no signing,
     // file upload or relay publication is performed by this capture.
-    w.samplePublication = { ...w.samplePrepared, status: "published", address, url: origin,
+    w.samplePublication = { ...w.samplePrepared, application:{...w.samplePrepared.application,relayResults:[{relay:"wss://relay.example.com",state:"published"}]}, status: "published", address, url: origin,
       publishedAt: "2026-10-16T12:00:00Z", files: [{ path: "index.html", sha256: "a".repeat(64), bytes: 2048, url: origin, type: "text/html" }],
       fileResults: [{ server: "https://blossom.example.com", file: "index.html", state: "verified" }, { server: "https://backup.example.com", file: "index.html", state: "verified" }, { server: "https://unavailable.example.com", file: "index.html", state: "failed", detail: "Server declined upload (401)" }],
       relays:["wss://relay.example.com","wss://unavailable.example.com"], relayResults: [{ relay: "wss://relay.example.com", state: "published" },{relay:"wss://unavailable.example.com",state:"failed",detail:"No confirmation received."}] };

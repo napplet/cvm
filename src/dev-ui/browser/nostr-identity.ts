@@ -163,7 +163,7 @@ export class PublishingIdentity {
     try {
       const relay = new URL(this.el<HTMLInputElement>("nostr-relay").value);
       if (!["ws:", "wss:"].includes(relay.protocol) || relay.username || relay.password || relay.hash) throw new Error("Invalid relay");
-      const key = generateSecretKey(); const uri = createNostrConnectURI({ clientPubkey: getPublicKey(key), relays: [relay.href], secret: hex(generateSecretKey()), perms: ["get_public_key", "sign_event:35129", "sign_event:24242", "sign_event:25910", "nip44_encrypt", "nip44_decrypt"], name: "applet.broker", url: location.origin });
+      const key = generateSecretKey(); const uri = createNostrConnectURI({ clientPubkey: getPublicKey(key), relays: [relay.href], secret: hex(generateSecretKey()), perms: ["get_public_key", "sign_event:35129", "sign_event:32267", "sign_event:24242", "sign_event:25910", "nip44_encrypt", "nip44_decrypt"], name: "applet.broker", url: location.origin });
       this.drawQr(uri); this.el<HTMLAnchorElement>("nostr-open").href = uri;
       this.el("nostr-copy").onclick = () => { void navigator.clipboard.writeText(uri).then(() => { this.el("nostr-status").textContent = "Connection copied. Waiting for your signer…"; }).catch(() => { this.el("nostr-status").textContent = "Copy unavailable; scan the QR code or open your signer."; }); };
       this.el("nostr-status").textContent = "Waiting for approval in your Nostr signer…";

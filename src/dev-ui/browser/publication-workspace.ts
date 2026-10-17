@@ -8,8 +8,8 @@ import type { DevelopmentBootstrap, DevelopmentContextVmClient } from "./context
 import { PublishingIdentity } from "./nostr-identity";
 import { blossomServer, discoverBlossom, propagateBlobs, type BlobFile, type Propagation } from "./blossom-client";
 type Version = { sessionId: string; artifactId: string; version: number };
-type Publication = { republication?: { attemptedAt: string; relayResults: {relay:string;state:string}[] }; id: string; status: string; artifactId: string; publisher: string; template: EventTemplate; files: BlobFile[]; servers: string[]; relays: string[]; relayResults?: { relay: string; state: string; detail?: string }[]; fileResults?: Propagation[]; signedEvent?: Event; publishedAt?: string; title?: string; description?: string; address?: string; url?: string; version: number; expiresAt: number };
-type Journal = { prepared: Publication; event?: Event; propagated?: boolean };
+type Publication = { screenshot?: string; application?: { template: EventTemplate; signedEvent?: Event; relayResults?: { relay: string; state: string }[] }; republication?: { attemptedAt: string; relayResults: {relay:string;state:string}[] }; id: string; status: string; artifactId: string; publisher: string; template: EventTemplate; files: BlobFile[]; servers: string[]; relays: string[]; relayResults?: { relay: string; state: string; detail?: string }[]; fileResults?: Propagation[]; signedEvent?: Event; publishedAt?: string; title?: string; description?: string; address?: string; url?: string; version: number; expiresAt: number };
+type Journal = { prepared: Publication; event?: Event; applicationEvent?: Event; propagated?: boolean };
 export class PublicationWorkspace {
   readonly identity: PublishingIdentity;
   readonly #panel: HTMLElement;
@@ -39,10 +39,10 @@ export class PublicationWorkspace {
     this.#panel = document.createElement("section"); this.#panel.id = "publish-step"; this.#panel.hidden = true; this.#panel.className = "step-panel publication-step"; this.#panel.setAttribute("aria-labelledby", "publication-heading");
     this.#panel.innerHTML = `<button id="publication-close" class="text-button">← Back to your applet</button><header class="publication-heading"><span class="small-mark" aria-hidden="true">a·</span><div><div class="eyebrow">THE FINAL STEP</div><h1 id="publication-heading" tabindex="-1">Ready for the world.</h1><p id="publication-version" class="supporting"></p></div></header><p id="publication-history" class="supporting" hidden></p>
       <form id="publication-prepare"><label for="publication-title">Applet name</label><input id="publication-title" maxlength="120" required aria-describedby="publication-metadata-note"><label for="publication-description">Description</label><textarea id="publication-description" rows="3" maxlength="500" required aria-describedby="publication-metadata-note"></textarea><p id="publication-metadata-note" class="supporting" role="status"></p><p id="publication-discovery" role="status"></p><div id="publication-server-editor"></div><p class="supporting">Two verified copies are enough.</p><p id="publication-relay-discovery" role="status"></p><div id="publication-relay-editor"></div><p id="publication-relay-hint" class="supporting">One relay confirmation is enough to publish.</p><button id="publication-review" class="primary">Review publication</button></form>
-      <section id="publication-review-panel" hidden><h2 id="publication-review-title"></h2><p id="publication-review-description"></p><p id="publication-review-copy"></p><details><summary>Destinations</summary><ul id="publication-destinations"></ul></details><button id="publication-confirm" class="primary">Sign and publish</button><button id="publication-edit">Edit details and destinations</button></section>
+      <figure id="publication-media" hidden><img id="publication-screenshot" alt="Screenshot of this applet" width="1200" height="750"><figcaption>Screenshot included in your application listing</figcaption></figure><section id="publication-review-panel" hidden><h2 id="publication-review-title"></h2><p id="publication-review-description"></p><p id="publication-review-copy"></p><details><summary>Destinations</summary><ul id="publication-destinations"></ul></details><button id="publication-confirm" class="primary">Sign and publish</button><button id="publication-edit">Edit details and destinations</button></section>
       <details id="publication-advanced" class="publication-advanced" hidden><summary>Advanced applet details</summary><p class="supporting">Capabilities declared by this build. Your shell decides which permissions to grant.</p><div class="publication-capability-grid"><section><h3>Required</h3><ul id="publication-required" class="publication-capabilities"></ul></section><section><h3>Optional</h3><ul id="publication-optional" class="publication-capabilities"></ul></section></div><p id="publication-optional-note" class="supporting"></p><details><summary>Manifest and files</summary><pre id="publication-manifest" tabindex="0"></pre></details></details>
-      <ol id="publication-stages" class="publication-stages" aria-label="Publication progress"><li id="publication-signing">Sign your applet</li><li id="publication-propagating">Copy to your servers</li><li id="publication-announcing">Publish to Nostr</li></ol><p id="publication-status" role="status" aria-live="polite"></p><p id="publication-copy-warning" class="publication-copy-warning" role="status" hidden></p><details id="publication-receipts" hidden><summary id="publication-delivery-summary">Delivery details</summary><div class="publication-delivery-grid"><section><h3>Files</h3><ul id="publication-files" aria-label="File propagation progress"></ul></section><section><h3>Relays</h3><ul id="publication-relay-results" aria-label="Relay publication progress"></ul></section></div></details><button id="publication-check" hidden>Check publication</button>
-      <div id="publication-result" role="status" hidden><span class="publication-success" aria-hidden="true">✓</span><h2 id="publication-result-title">Your applet</h2><p id="publication-completion"></p><div class="publication-actions"><button id="publication-copy" class="primary">Copy naddr</button><a id="publication-open" class="quiet" target="_blank" rel="noopener noreferrer">Open applet ↗</a><button id="publication-republish">Republish</button></div><p id="publication-share-feedback" class="supporting" aria-live="polite">Paste its naddr into any compatible shell.</p><details class="publication-address-details"><summary>Applet address</summary><input id="publication-address" aria-label="Applet address" readonly></details></div>`;
+      <ol id="publication-stages" class="publication-stages" aria-label="Publication progress"><li id="publication-signing">Sign your applet</li><li id="publication-propagating">Copy to your servers</li><li id="publication-announcing">Publish to Nostr</li></ol><p id="publication-status" role="status" aria-live="polite"></p><p id="publication-copy-warning" class="publication-copy-warning" role="status" hidden></p><details id="publication-receipts" hidden><summary id="publication-delivery-summary">Delivery details</summary><div class="publication-delivery-grid"><section><h3>Files</h3><ul id="publication-files" aria-label="File propagation progress"></ul></section><section><h3>Relays</h3><ul id="publication-relay-results" aria-label="Relay publication progress"></ul></section><section id="publication-application-delivery" hidden><h3>Application listing</h3><ul id="publication-application-results" aria-label="Application listing delivery"></ul></section></div></details><button id="publication-check" hidden>Check publication</button>
+      <div id="publication-result" role="status" hidden><span class="publication-success" aria-hidden="true">✓</span><h2 id="publication-result-title">Your applet</h2><p id="publication-completion"></p><p id="publication-listing" hidden></p><div class="publication-actions"><button id="publication-copy" class="primary">Copy naddr</button><a id="publication-open" class="quiet" target="_blank" rel="noopener noreferrer">Open applet ↗</a><button id="publication-republish">Republish</button></div><p id="publication-share-feedback" class="supporting" aria-live="polite">Paste its naddr into any compatible shell.</p><details class="publication-address-details"><summary>Applet address</summary><input id="publication-address" aria-label="Applet address" readonly></details></div>`;
     this.el("publication-history").after(this.el("publication-result"));
     this.el("publication-receipts").querySelector("summary")!.after(this.el("publication-copy-warning"));
     this.#panel.append(this.el("publication-advanced"));
@@ -89,7 +89,7 @@ export class PublicationWorkspace {
   private el<T extends HTMLElement = HTMLElement>(id: string) { return this.#panel.querySelector<T>(`#${id}`)!; }
   private key(version: Version, publisher = this.identity.pubkey) { return `applet-broker/publication/v1/${this.bootstrap.servicePubkey}/${version.artifactId}/${publisher}`; }
   private save() { if (this.#journal) { try { sessionStorage.setItem(this.key({ artifactId: this.#journal.prepared.artifactId } as Version, this.#journal.prepared.publisher), JSON.stringify(this.#journal)); } catch { /* Durable CVM state is authoritative; browser storage is optional. */ } } }
-  private async call(input: unknown): Promise<any> { if (!this.client()) throw new Error("Connect to the CVM first."); const result = await this.client()!.callTool("development_publication", input); if (["denied", "rejected", "expired"].includes(result?.status)) throw new Error(({PUBLICATION_SUPERSEDED:"This draft was replaced. Go back to your applet and reopen publishing for the current draft.",PUBLICATION_EDIT_UNAVAILABLE:"Publication changed or is sending. Check its status, then reopen publishing to edit.",PUBLICATION_NEEDS_TWO_VERIFIED_SERVERS:"Two verified file copies are needed. Retry file copies or edit destinations."} as Record<string,string>)[result.code] ?? result.code ?? `Publication ${result.status}`); return result; }
+  private async call(input: unknown): Promise<any> { if (!this.client()) throw new Error("Connect to the CVM first."); const result = await this.client()!.callTool("development_publication", input); if (["denied", "rejected", "expired"].includes(result?.status)) throw new Error(({PUBLICATION_SCREENSHOT_BUSY:"Screenshots are busy. Try again in a moment.",PUBLICATION_SCREENSHOT_FAILED:"The screenshot could not be captured. Your applet is saved; try again.",PUBLICATION_SCREENSHOT_TOOLCHAIN_MISSING:"The CVM needs its publication tools. Run development setup, then retry.",PUBLICATION_SUPERSEDED:"This draft was replaced. Go back to your applet and reopen publishing for the current draft.",PUBLICATION_EDIT_UNAVAILABLE:"Publication changed or is sending. Check its status, then reopen publishing to edit.",PUBLICATION_NEEDS_TWO_VERIFIED_SERVERS:"Two verified file copies are needed. Retry file copies or edit destinations."} as Record<string,string>)[result.code] ?? result.code ?? `Publication ${result.status}`); return result; }
   sync(): void {
     if (this.#current && (this.#current.artifactId !== this.selected()?.artifactId || this.#current.publisher !== this.identity?.pubkey)) this.#current = undefined;
     const button = document.getElementById("publish") as HTMLButtonElement;
@@ -138,6 +138,7 @@ export class PublicationWorkspace {
     const opening = ++this.#opening; document.dispatchEvent(new CustomEvent("applet:step", { detail: 4 })); this.el("publication-version").textContent = `Version ${version.version} · ${this.identity.label}`;
     this.el("publication-relay-results").replaceChildren();
     this.el("publication-status").textContent = "Checking saved publication…"; this.el("publication-copy-warning").hidden = true; this.el("publication-result").hidden = true; this.el("publication-check").hidden = true; this.el("publication-receipts").hidden = true; this.el("publication-prepare").hidden = true; this.el("publication-review-panel").hidden = true;
+    this.el("publication-media").hidden = true; this.el("publication-listing").hidden = true;
     this.#journal = undefined; this.#replacement = undefined; this.el("publication-advanced").hidden = true;
     this.el("publication-check").textContent = "Check publication";
     const saved = await this.lookup();
@@ -192,12 +193,13 @@ export class PublicationWorkspace {
     if (servers.length < MIN_PUBLICATION_SERVERS || servers.length > 5) throw new Error("Add at least two Blossom servers so your applet has a backup. You can choose up to five.");
     this.#busy = true; this.sync(); this.el<HTMLButtonElement>("publication-review").disabled = true;
     try {
-      this.el("publication-status").textContent = "Preparing your applet’s signing request…";
+      this.el("publication-status").textContent = "Capturing your applet and preparing its application listing…";
+      this.el("publication-review").textContent = "Preparing screenshot…";
       const prepared = await this.call({ action: "prepare", artifactId: version.artifactId, sessionId: version.sessionId, publisher: pubkey, requestKey: crypto.randomUUID(), title: this.el<HTMLInputElement>("publication-title").value, description: this.el<HTMLTextAreaElement>("publication-description").value, ...(this.#replacement ? { replaces: this.#replacement } : {}), servers, relays });
       if (this.identity.pubkey !== pubkey || this.selected()?.artifactId !== version.artifactId) throw new Error("Identity or version changed. Review publication again.");
       this.#journal = { prepared, event: prepared.signedEvent }; this.#replacement = undefined; this.#current = prepared; this.save(); this.review();
       if (prepared.signedEvent || prepared.status === "published") this.result(); else this.el("publication-status").textContent = "Ready for your approval. Nothing has been published under your identity.";
-    } finally { this.#busy = false; this.sync(); this.el<HTMLButtonElement>("publication-review").disabled = false; }
+    } finally { this.#busy = false; this.sync(); this.el<HTMLButtonElement>("publication-review").disabled = false; this.el("publication-review").textContent = "Review publication"; }
   }
   private review() {
     const journal = this.#journal!;
@@ -206,24 +208,25 @@ export class PublicationWorkspace {
     this.el("publication-review-title").textContent = this.el<HTMLInputElement>("publication-title").value; this.el("publication-review-description").textContent = this.el<HTMLTextAreaElement>("publication-description").value || "This saved publication has no description. Edit details to add one before publishing.";
     this.el("publication-prepare").hidden = true; this.el("publication-review-panel").hidden = false;
     this.el("publication-edit").hidden = !["prepared", "unconfirmed"].includes(journal.prepared.status);
-    this.el("publication-review-copy").textContent = "Approve the applet in your signer.";
-    this.el("publication-review-copy").hidden = !!journal.event;
-    this.advanced(journal.prepared.template.tags, journal.prepared.files, journal.prepared.template);
+    this.media(journal.prepared);
+    this.el("publication-review-copy").textContent = journal.prepared.application ? "Approve your applet and application listing in your signer (two requests)." : "Approve the applet in your signer.";
+    this.el("publication-review-copy").hidden = !!journal.event && (!journal.prepared.application || !!journal.prepared.application.signedEvent);
+    this.advanced(journal.prepared.template.tags, journal.prepared.files, journal.prepared.template, journal.prepared.application?.template);
     this.el("publication-destinations").replaceChildren(...[...journal.prepared.servers, ...journal.prepared.relays].map(server => { const item = document.createElement("li"); item.textContent = server; return item; }));
     this.el<HTMLButtonElement>("publication-confirm").disabled = false; this.el("publication-confirm").textContent = this.continueLabel(journal);
   }
-  private advanced(tags: string[][], files: { path: string; sha256: string; bytes: number }[], template?: EventTemplate) {
+  private advanced(tags: string[][], files: { path: string; sha256: string; bytes: number }[], template?: EventTemplate, application?: EventTemplate) {
     const capabilities = publicationCapabilities(tags);
     for (const kind of ["required", "optional"] as const) {
       const values = capabilities[kind];
       this.el(`publication-${kind}`).replaceChildren(...(values.length ? values : [kind === "optional" && capabilities.legacy ? "Not declared by this build" : "None declared"]).map(value => { const li = document.createElement("li"); li.textContent = value; return li; }));
     }
     this.el("publication-optional-note").textContent = capabilities.legacy ? "This build uses an older manifest format that does not declare optional capabilities. Runtime integrations may still be present." : "Optional capabilities enhance the applet when your shell provides them.";
-    this.el("publication-manifest").textContent = JSON.stringify({ ...(template ? { template } : { tags }), files: files.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })) }, null, 2);
+    this.el("publication-manifest").textContent = JSON.stringify({ ...(template ? { template } : { tags }), ...(application ? { application } : {}), files: files.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })) }, null, 2);
     this.el("publication-advanced").hidden = false;
   }
   private continueLabel(journal = this.#journal) {
-    if (!journal?.event) return "Sign and publish";
+    if (!journal?.event || (journal.prepared.application && !journal.prepared.application.signedEvent)) return "Sign and publish";
     const count = verifiedPublicationServers(journal.prepared.files, journal.prepared.servers, journal.prepared.fileResults ?? []).length;
     return count >= MIN_PUBLICATION_SERVERS ? journal.prepared.status === "unconfirmed" ? "Retry publication" : "Publish to Nostr" : "Retry file copies";
   }
@@ -267,15 +270,18 @@ export class PublicationWorkspace {
     try {
       unchanged();
       this.el("publication-stages").hidden = false;
-      if (journal.event && verifiedPublicationServers(journal.prepared.files, journal.prepared.servers, journal.prepared.fileResults ?? []).length >= MIN_PUBLICATION_SERVERS) {
-        this.#propagation.clear(); for (const receipt of journal.prepared.fileResults ?? []) this.#propagation.set(`${receipt.server}:${receipt.file}`, receipt);
-        await this.announce(journal); return;
-      }
       this.el("publication-status").textContent = "Waiting for your applet signature…";
       this.stage("signing", "Approve in your signer", "active");
       if (!journal.event) { journal.event = await this.identity.sign(journal.prepared.template); this.save(); }
       unchanged();
       journal.prepared = await this.call({ action: "save", id: journal.prepared.id, event: journal.event }); this.#current = journal.prepared; this.save();
+      if (journal.prepared.application && !journal.prepared.application.signedEvent) {
+        this.el("publication-status").textContent = "Approve your application listing…";
+        this.stage("signing", "Approve listing in your signer", "active");
+        journal.applicationEvent ??= await this.identity.sign(journal.prepared.application.template); this.save();
+        unchanged();
+        journal.prepared = await this.call({ action: "save", id: journal.prepared.id, event: journal.event, applicationEvent: journal.applicationEvent }); this.#current = journal.prepared; this.save();
+      }
       this.stage("signing", "Applet signed", "complete");
       this.#propagation.clear();
       if (verifiedPublicationServers(journal.prepared.files, journal.prepared.servers, journal.prepared.fileResults ?? []).length >= MIN_PUBLICATION_SERVERS) {
@@ -304,9 +310,13 @@ export class PublicationWorkspace {
     finally { this.#busy = this.#republishing = false; this.sync(); }
   }
   private async check() { if (this.#busy || !this.#journal) return; const journal = this.#journal; this.#busy = true; this.sync(); this.el<HTMLButtonElement>("publication-check").disabled = true; try { journal.prepared = await this.call({ action: "reconcile", id: journal.prepared.id }); this.save(); if (this.#journal === journal) this.result(); } finally { this.#busy = false; this.sync(); this.el<HTMLButtonElement>("publication-check").disabled = false; } }
+  private media(result: Publication) {
+    this.el("publication-media").hidden = !result.screenshot;
+    if (result.screenshot) { this.el<HTMLImageElement>("publication-screenshot").src = result.screenshot; this.el<HTMLImageElement>("publication-screenshot").alt = `Screenshot of ${result.title || "your applet"}`; }
+  }
   private result() {
     const result = this.#journal!.prepared;
-    this.#current = result;
+    this.#current = result; this.media(result);
     if (result.status === "published" && (!this.#latest || result.version >= this.#latest.version)) this.#latest = result;
     this.#propagation.clear(); for (const entry of result.fileResults ?? []) this.progress(entry);
     const verified = this.verifiedCopies();
@@ -319,6 +329,8 @@ export class PublicationWorkspace {
     if (failed) this.el<HTMLDetailsElement>("publication-receipts").open = true;
     this.el("publication-receipts").hidden = !(result.fileResults?.length || result.relayResults?.length);
     this.el("publication-relay-results").replaceChildren(...(result.relayResults ?? []).map(receipt => this.receipt(new URL(receipt.relay).host, receipt.state, receipt.state === "published" ? "Confirmed" : "Unconfirmed")));
+    this.el("publication-application-delivery").hidden = !result.application?.relayResults?.length;
+    this.el("publication-application-results").replaceChildren(...(result.application?.relayResults ?? []).map(receipt => this.receipt(new URL(receipt.relay).host, receipt.state, receipt.state === "published" ? "Confirmed" : "Unconfirmed")));
     const relayCount = new Set((result.relayResults ?? []).filter(receipt => receipt.state === "published").map(receipt => receipt.relay)).size;
     const extras = new Set([...(result.fileResults ?? []).filter(receipt => receipt.state === "failed").map(receipt => receipt.server), ...(result.relayResults ?? []).filter(receipt => receipt.state !== "published").map(receipt => receipt.relay)]).size;
     this.el("publication-delivery-summary").textContent = `Delivery details${extras ? ` · ${extras} unavailable` : ""}`;
@@ -329,6 +341,9 @@ export class PublicationWorkspace {
       this.el("publication-version").hidden = true; this.el("publication-history").hidden = true;
       this.el("publication-status").hidden = true;
       this.el("publication-result-title").textContent = result.title || "Your applet";
+      const listed = result.application?.relayResults?.some(receipt => receipt.state === "published");
+      this.el("publication-listing").hidden = !result.application;
+      this.el("publication-listing").textContent = listed ? "✓ Application listing shared with screenshot" : "Applet published. Listing unconfirmed — Republish to retry.";
       const resent = result.republication?.relayResults.filter(receipt => receipt.state === "published").length ?? 0;
       this.el("publication-share-feedback").textContent = result.republication ? resent ? `Republished · ${resent} relay${resent === 1 ? "" : "s"} confirmed.` : "No new confirmations. Your earlier publication is still saved." : "Paste its naddr into any compatible shell.";
       this.el<HTMLDetailsElement>("publication-receipts").open = false;

@@ -66,6 +66,7 @@ async function ensurePrerequisites(value: Scope): Promise<void> {
   // The worker image is shared. Compose injects its project name into image
   // labels, so an instance-specific build project would change its identity.
   await run(["docker", "compose", "--env-file", "/dev/null", "-p", "napplet-cvm-ui-worker", "-f", "infra/dev-ui/compose.yaml", "build", "--provenance=false", "--sbom=false", "worker-image"], { timeoutMs: 600_000 });
+  await run(["docker", "compose", "--env-file", "/dev/null", "-p", "napplet-cvm-publication", "-f", "infra/dev-publication/compose.yaml", "build", "--provenance=false", "--sbom=false", "publication-image"], { timeoutMs: 600_000 });
 }
 
 async function runningMode(url: string): Promise<DevelopmentMode> {
@@ -185,7 +186,7 @@ async function test(): Promise<void> {
     "product": [["tests/dev-ui/product-view.e2e.ts"], ["tests/dev-ui/product-workspace.e2e.ts"]],
     "progress": [["test", "tests/dev-ui/development-progress.test.ts"], ["tests/dev-ui/progress-view.e2e.ts"], ["tests/dev-ui/chatgpt-oauth.e2e.ts"]],
     "chatgpt-oauth": [["tests/dev-ui/chatgpt-oauth.e2e.ts"]],
-    "publication": [["test", "tests/dev/publication-destinations.test.ts", "tests/dev/publication-relay-tls.test.ts"], ["tests/dev-ui/static-cvm-publication.e2e.ts"]],
+    "publication": [["test", "tests/dev/publication-destinations.test.ts", "tests/dev/publication-relay-tls.test.ts", "tests/dev/publication-media.test.ts"], ["tests/dev-ui/static-cvm-publication.e2e.ts"]],
     "projects": [["test", "tests/contextvm/verified-project-identity.test.ts"], ["tests/dev-ui/returning-projects.e2e.ts"]],
     "chatgpt-timeout": [["tests/dev-ui/chatgpt-timeout.e2e.ts"], ["tests/dev-ui/interrupted-generation.e2e.ts"]],
     "contextvm-funding": [["tests/dev-ui/contextvm-funding.e2e.ts", "--case=both-rails-restart-replay"]],
@@ -206,7 +207,7 @@ async function test(): Promise<void> {
       ["tests/dev-ui/interrupted-generation.e2e.ts"],
       ["tests/dev-ui/static-cvm-publication.e2e.ts"],
       ["tests/dev-ui/returning-projects.e2e.ts"],
-      ["test", "tests/dev/publication-destinations.test.ts", "tests/dev/publication-relay-tls.test.ts", "tests/contextvm/verified-project-identity.test.ts"],
+      ["test", "tests/dev/publication-destinations.test.ts", "tests/dev/publication-relay-tls.test.ts", "tests/dev/publication-media.test.ts", "tests/contextvm/verified-project-identity.test.ts"],
       ["tests/dev-ui/contextvm-funding.e2e.ts", "--case=both-rails-restart-replay"],
       ["tests/dev-ui/generation-preview.e2e.ts", "--case=deterministic-real-worker-compatible-host"],
       ["tests/dev-ui/generation-preview.e2e.ts", "--case=boundaries-platform-provider-recovery", "--allow-skip-without-provider-credentials"],

@@ -1243,6 +1243,58 @@
                 ],
                 "additionalProperties": false
               },
+              "applicationEvent": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "pubkey": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "sig": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{128}$"
+                  },
+                  "kind": {
+                    "type": "number",
+                    "const": 32267
+                  },
+                  "created_at": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "tags": {
+                    "maxItems": 512,
+                    "type": "array",
+                    "items": {
+                      "maxItems": 8,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 1024
+                      }
+                    }
+                  },
+                  "content": {
+                    "type": "string",
+                    "maxLength": 4000
+                  }
+                },
+                "required": [
+                  "id",
+                  "pubkey",
+                  "sig",
+                  "kind",
+                  "created_at",
+                  "tags",
+                  "content"
+                ],
+                "additionalProperties": false
+              },
               "fileResults": {
                 "maxItems": 2560,
                 "type": "array",

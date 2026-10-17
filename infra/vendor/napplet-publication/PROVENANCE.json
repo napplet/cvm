@@ -1,0 +1,13 @@
+{
+  "repository": "https://github.com/napplet/napplet",
+  "commit": "67d0e814100b9b54654168e525bfef74eff08c04",
+  "version": "@napplet/cli@0.10.0",
+  "license": "MIT",
+  "files": {
+    "zapstore.ts": "e3feacbe03de69ff86c35f3323e9e36375787545e5a4e551d5672c2a0c7d4090",
+    "client-tag.ts": "a48a96620c23c2a5144ed735bb8693e5cab7aec5f2c1b08a9f6126adaf26e4d9",
+    "path.ts": "0672896e4ca1004047e7e41a94e9947ec1a0fbe33daa0247eb0e3e42a0594eb9",
+    "types.ts": "ba999952df90a35649caf3fe7b989b17595116c9884adb72111a676c645a2675",
+    "LICENSE": "e265646fbf221d880f97c342bd648c50e431d42162a370d155616b6c7114f97c"
+  }
+}

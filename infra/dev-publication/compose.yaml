@@ -1,0 +1,14 @@
+services:
+  publication-image:
+    image: napplet-cvm/dev-publication:development
+    build:
+      context: .
+      dockerfile: Dockerfile
+      platforms: [linux/arm64]
+      provenance: false
+      sbom: false
+    labels:
+      com.napplet-cvm.development: "true"
+      com.napplet-cvm.component: publication-image
+    profiles: [build]
+    entrypoint: ["/bin/true"]

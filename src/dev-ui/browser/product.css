@@ -1444,6 +1444,11 @@ dialog details p {
 .publication-actions { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin-top:20px; }
 .publication-actions a { padding:10px 14px; }
 #publication-result[hidden] { display:none; }
+#publication-media { margin:24px 0; max-width:640px; }
+#publication-media img { display:block; width:100%; height:auto; aspect-ratio:8/5; object-fit:contain; border:1px solid var(--line); border-radius:16px; background:var(--surface); }
+#publication-media figcaption { margin-top:10px; color:var(--muted); font-size:16px; }
+#publication-media[hidden],#publication-listing[hidden] { display:none; }
+#publication-listing { font-size:18px; line-height:1.5; }
 @media(max-width:650px) { .brand-header { height:auto; min-height:80px; padding-block:1rem; gap:.75rem; flex-wrap:wrap; } .header-actions { flex-wrap:wrap; justify-content:flex-end; gap:.3rem; } .header-actions button { padding:.5rem .7rem; } }
 .publish-next { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:1rem; margin-top:1.5rem; padding:20px 24px; border:1px solid var(--line); border-radius:18px; background:var(--card); }
 .publish-next p { flex:1 1 240px; margin:0; font-size:14px; line-height:1.6; }

@@ -13,13 +13,21 @@ An `naddr` identifies a replaceable Nostr event. A shell still needs access to t
 
 1. Select a verified version. **Publish** appears beside the applet and stays disabled until a signing identity is selected.
 2. Open the final **Publish** step. Review the title and description suggested by the CVM, edit them if needed, and choose destinations.
-3. Approve signing in your extension or remote signer.
-4. Follow file propagation. The browser mirrors the CVM’s verified files to your Blossom servers, falling back to verified upload where necessary.
+3. Review the captured screenshot, then approve the applet and its application listing in your extension or remote signer (two signing requests).
+4. Follow file propagation. The browser mirrors the applet and screenshot to your Blossom servers, falling back to verified upload where necessary.
 5. Once any selected relay confirms, choose **Copy naddr**. Other relays can remain unavailable.
 
-The applet event is signed before file propagation. It is published once all files have verified copies on at least **two distinct Blossom servers**. An extra server failing does not block publication. **One confirmed relay is enough**; every selected relay does not need to succeed. The CVM prepares the event, but your signer owns the publication signature.
+Both events are signed before file propagation. It is published once all files have verified copies on at least **two distinct Blossom servers**. An extra server failing does not block publication. **One confirmed relay is enough**; every selected relay does not need to succeed. The CVM prepares the event, but your signer owns the publication signature.
 
-<GuideScreenshot name="publish-review" alt="Publication review for Version 2 with destinations expanded and the Sign and publish button above three publication stages" caption="Review the version and destinations before approving your signer. Preparing this review does not publish anything." />
+<GuideScreenshot name="publish-review" alt="Publication review with the captured applet screenshot, title, description, destinations, and Sign and publish button" caption="Review the version and destinations before approving your signer. Preparing this review does not publish anything." />
+
+## Screenshot and application listing
+
+Publishing automatically includes a screenshot and a Zapstore-compatible application listing with your title, description and applet address. The CVM captures the verified version in an isolated browser; it uses no model tokens and reuses the screenshot on retries. You see it before signing.
+
+The screenshot travels with the applet to your Blossom servers. **Application listing shared with screenshot** means at least one of your relays confirmed the listing. It makes the metadata available to compatible clients; inclusion in a particular store’s catalog depends on that store.
+
+Your applet can be published even when the listing has no relay confirmation. Use **Republish** to retry; both saved signatures are reused. Existing publications created before this feature keep their original events when republished. New publications, including previously generated but unpublished versions, include the listing automatically.
 
 ## Review applet details
 
@@ -57,7 +65,7 @@ The builder shows **Published · Version N** and changes **Publish** to **View p
 
 <GuideScreenshot name="publish-confirmed" alt="Published applet with Copy naddr and Republish buttons, two file copies and one confirmed relay; unavailable destinations are in collapsed delivery details" caption="Two file copies and one confirmed relay are enough. Extra failures stay in delivery details; your applet is ready to share." />
 
-**Republish** is available beside **View publication** and on the publication result. It sends the same signed applet to your saved relays again, keeping the same naddr. Files, signatures and model generation are reused. Progress changes to **Republishing…**, then reports the new confirmations. If the resend cannot confirm, your earlier publication remains saved.
+**Republish** is available beside **View publication** and on the publication result. It sends the saved application listing (when present) and the same signed applet to your saved relays again, keeping the same naddr. Files, signatures and model generation are reused. Progress changes to **Republishing…**, then reports the new confirmations. If the resend cannot confirm, your earlier publication remains saved.
 
 **Your applets** also shows the published version. After a successful revision, it shows **Unpublished changes** and identifies both the published version and the newer version ready to publish. Revising does not publish automatically. You can select an older version above the preview to return to its publication.
 

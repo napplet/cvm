@@ -4,43 +4,58 @@
   "screenshots": [
     {
       "file": "access.png",
-      "width": 724,
-      "height": 190
+      "width": 708,
+      "height": 191
     },
     {
       "file": "subscription.png",
-      "width": 569,
+      "width": 554,
       "height": 496
     },
     {
       "file": "rates.png",
-      "width": 569,
+      "width": 554,
       "height": 449
     },
     {
       "file": "api-account.png",
-      "width": 523,
-      "height": 557
+      "width": 509,
+      "height": 556
+    },
+    {
+      "file": "jobs-all.png",
+      "width": 1180,
+      "height": 873
     },
     {
       "file": "jobs-active.png",
-      "width": 1168,
-      "height": 396
+      "width": 1180,
+      "height": 542
+    },
+    {
+      "file": "jobs-review.png",
+      "width": 1180,
+      "height": 542
     },
     {
       "file": "jobs-pending.png",
-      "width": 1168,
-      "height": 332
+      "width": 1180,
+      "height": 542
     },
     {
       "file": "jobs-finished.png",
-      "width": 1168,
-      "height": 332
+      "width": 1180,
+      "height": 542
     },
     {
       "file": "job-details.png",
-      "width": 850,
-      "height": 964
+      "width": 800,
+      "height": 702
+    },
+    {
+      "file": "jobs-mobile.png",
+      "width": 345,
+      "height": 1512
     }
   ]
 }

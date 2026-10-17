@@ -3,7 +3,7 @@ import { loadRemixContext, REMIX_INSTRUCTIONS, type RemixContextLoader } from ".
 import { z } from "zod";
 import { nappletAuthoringInstructions } from "./napplet-authoring";
 import { canonicalJson } from "../promotion/schema";
-import { ModelDispatchObservationSchema, ModelLookupObservationSchema, NormalizedUsageReceiptSchema, ProviderOperationIntentSchema, SourceProposalFileSchema, type ModelDispatchObservation, type ModelGateway, type ProviderOperationIntent, type SourceProposalFile } from "../model/model-gateway";
+import { ModelDispatchObservationSchema, ModelLookupObservationSchema, NormalizedUsageReceiptSchema, ProviderOperationIntentSchema, SourceProposalFileSchema, type NormalizedUsageReceipt, type ModelDispatchObservation, type ModelGateway, type ProviderOperationIntent, type SourceProposalFile } from "../model/model-gateway";
 import { ModelProfileSchema, PriceCardSchema } from "../model/price-card";
 import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
 import type { SourceProposalStore } from "./source-proposal-store";
@@ -116,7 +116,7 @@ export async function readChatGptResponse(response: Response, signal: AbortSigna
 export class ChatGptModelGateway implements ModelGateway {
   readonly pricing: ReturnType<typeof chatGptDevelopmentPricing>;
   #lastError?: string;
-  constructor(private readonly options: { rates?: Record<string, { numerator: string; denominator: string }>; accountId: string; model: string; auth: Pick<ChatGptOAuth, "accessToken">; store: Pick<SourceProposalStore, "persist" | "recordProviderObservation" | "lookupProviderObservation">; operations: ChatGptOperations; fetch?: ChatGptFetch; onResponseBytes?: (bytes: number) => void; remixSource?: RemixContextLoader; priorSource?: (input: { accountId: string; sessionId: string; authorizedPriorArtifactReference: string }) => Promise<readonly SourceProposalFile[] | undefined> }) {
+  constructor(private readonly options: { rates?: Record<string, { numerator: string; denominator: string }>; accountId: string; model: string; auth: Pick<ChatGptOAuth, "accessToken">; store: Pick<SourceProposalStore, "persist" | "recordProviderObservation" | "lookupProviderObservation" | "recordUsageEvidence" | "lookupUsageEvidence">; operations: ChatGptOperations; fetch?: ChatGptFetch; onResponseBytes?: (bytes: number) => void; remixSource?: RemixContextLoader; priorSource?: (input: { accountId: string; sessionId: string; authorizedPriorArtifactReference: string }) => Promise<readonly SourceProposalFile[] | undefined> }) {
     this.pricing = chatGptDevelopmentPricing(options.accountId, options.model, options.rates);
   }
   diagnostic(): string | undefined { return this.#lastError; }
@@ -148,9 +148,12 @@ export class ChatGptModelGateway implements ModelGateway {
       this.#lastError = safeChatGptError(error);
       return { status: "definitive_not_accepted", operationId: intent.operationId, providerRequestId: intent.providerRequestId, reason: "pre_dispatch_rejected", provenance: { protectedEvidenceReference: `development:chatgpt:preflight:${intent.operationId}` } };
     }
+    const recoveredReceipt = await this.options.store.lookupUsageEvidence(intent);
+    if (recoveredReceipt) return { status: "failed", receipt: recoveredReceipt };
     if (!await this.options.operations.claim(intent)) return await this.options.operations.read(intent) ?? this.#unknown(intent);
     this.#lastError = undefined;
     let observation: ModelDispatchObservation;
+    let knownReceipt: NormalizedUsageReceipt | undefined;
     let diagnostic: ChatGptDiagnostic | undefined;
     let phase: ChatGptDiagnostic["phase"] = "request";
     let receivedBytes = 0; let httpStatus: number | undefined;
@@ -170,6 +173,13 @@ export class ChatGptModelGateway implements ModelGateway {
       // A catalog alias may resolve to a dated snapshot; persist the actual model in provenance.
       if (native.model !== this.options.model && !native.model.startsWith(`${this.options.model}-`)) throw chatGptError("MODEL_MISMATCH");
       const receipt = NormalizedUsageReceiptSchema.parse({ operationId: intent.operationId, providerRequestId: intent.providerRequestId, provider: "openai_chatgpt_development", model: this.options.model, profileId: intent.profileId, priceCardId: intent.priceCardId, selection: intent.selection, completedAt: new Date().toISOString(), provenance: { protectedEvidenceReference: `development:chatgpt:${native.id}`, protectedEvidenceDigest: digest({ model: native.model, usage: native.usage, responseId: native.id }) }, usage: [{ dimension: "input_tokens", units: String(native.usage.input_tokens) }, { dimension: "output_tokens", units: String(native.usage.output_tokens) }] });
+      knownReceipt = receipt;
+      try { await this.options.store.recordUsageEvidence({ intent, receipt }); }
+      catch (error) {
+        // Conflicting evidence must never become a second charge.
+        if (error instanceof Error && error.message.startsWith("USAGE_EVIDENCE_")) knownReceipt = undefined;
+        throw error;
+      }
       let proposal: z.infer<typeof Generated> | undefined;
       try {
         proposal = Generated.parse(JSON.parse(native.output.filter((item) => item.type === "message" && item.role === "assistant").flatMap((item) => item.content ?? []).filter((item) => item.type === "output_text").map((item) => item.text ?? "").join("")));
@@ -185,7 +195,7 @@ export class ChatGptModelGateway implements ModelGateway {
     } catch (error) {
       this.#lastError = classifyChatGptFailure(error, phase, requestSignal);
       diagnostic = ChatGptDiagnosticSchema.parse({ code: this.#lastError, phase, elapsedMs: Math.min(3_600_000, Math.floor(performance.now() - started)), receivedBytes, ...(httpStatus ? { httpStatus } : {}) });
-      observation = this.#unknown(intent, this.#lastError);
+      observation = knownReceipt ? { status: "failed", receipt: knownReceipt } : this.#unknown(intent, this.#lastError);
     }
     await this.options.operations.complete(intent, observation, diagnostic);
     return observation;
@@ -199,6 +209,8 @@ export class ChatGptModelGateway implements ModelGateway {
     // Recover a crash between immutable observation persistence and fence completion.
     const stored = await this.options.store.lookupProviderObservation(intent);
     if (stored) return ModelLookupObservationSchema.parse({ status: "receipt_found", receipt: stored.receipt, sourceProposalReference: stored.sourceProposalReference });
+    const receipt = await this.options.store.lookupUsageEvidence(intent);
+    if (receipt) return ModelLookupObservationSchema.parse({ status: "receipt_found", receipt });
     return ModelLookupObservationSchema.parse({ status: "unresolved", operationId: intent.operationId, providerRequestId: intent.providerRequestId, provenance: { protectedEvidenceReference: `development:chatgpt:lookup:${intent.operationId}` } });
   }
 }

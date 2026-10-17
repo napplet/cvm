@@ -7,14 +7,18 @@ import { chatGptDevelopmentPricing } from "../../src/dev/chatgpt-model-gateway";
 
 test("operator authority, secret projection, replay, busy guard and private restart", async () => {
   const directory = await mkdtemp(join(tmpdir(), "cvm-admin-unit-"));
+  let receiptChecks = 0;
   let queries = 0; let busy = false; let fail = false;
   const pricing = chatGptDevelopmentPricing("fixture-account", "fixture-model");
-  const options = { pool: { query: async () => { queries++; return { rows: [] }; } }, busy: () => busy, pricing: () => pricing,
+  const options = { checkReceipt: async () => { receiptChecks++; return { outcome: "missing" }; }, pool: { query: async () => { queries++; return { rows: [] }; } }, busy: () => busy, pricing: () => pricing,
     configure: async () => { if (fail) throw new Error("provider failed with private-api-key"); }, chatgpt: async () => ({ accounts: ["private-account"] }) };
   try {
     const operator = await CvmOperator.open(directory, options);
-    for (const action of ["status", "jobs", "job", "chatgpt", "add_api"]) expect(await operator.handle({ action }, "f".repeat(64))).toEqual({ status: "denied", code: "OPERATOR_REQUIRED" });
-    expect(queries).toBe(0);
+    for (const action of ["status", "jobs", "job", "check_receipt", "chatgpt", "add_api"]) expect(await operator.handle({ action }, "f".repeat(64))).toEqual({ status: "denied", code: "OPERATOR_REQUIRED" });
+    expect(queries).toBe(0); expect(receiptChecks).toBe(0);
+    expect(await operator.handle({ action: "check_receipt", id: "some-job" }, operator.pubkey)).toEqual({ status: "ok", recovery: { outcome: "missing" } });
+    expect(receiptChecks).toBe(1);
+    expect(await operator.handle({ action: "jobs" }, operator.pubkey)).toMatchObject({ status: "ok", jobs: [] });
     const rates = structuredClone(pricing.card.rates); rates.input_tokens.denominator = "2000";
     busy = true;
     expect(await operator.handle({ action: "save_rates", rates }, operator.pubkey)).toEqual({ status: "rejected", code: "CONFIGURATION_BUSY" });

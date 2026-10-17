@@ -1,3 +1,5 @@
+import { recoverRecordedReceipt } from "../../src/dev/receipt-recovery";
+import { listOperatorJobs, readOperatorJob } from "../../src/dev/operator-jobs";
 /** Real SQL recovery policy, with deterministic model transport; no paid inference. */
 import { developmentStack, createDevelopmentPool } from "../../scripts/dev-payments";
 import { PostgresSqlFundingStore } from "../../src/persistence/postgres-sql-funding-store";
@@ -31,9 +33,10 @@ try {
   await registerDevelopmentPricing(pool, { profile: gateway.pricing.profile, priceCard: gateway.pricing.card });
   const recovery = new InterruptedDevelopmentGeneration(pool, store);
   const intents = new Map<string, ProviderOperationIntent>();
+  let crashAfterResponse = false;
   let beforeDispatch: ((intent: ProviderOperationIntent) => Promise<void>) | undefined;
   const service = new MeteredGenerationService({ fundedAdmission, store, pricing: gateway.pricing,
-    gateway: { dispatch: async (intent, signal) => { intents.set(intent.actionId, intent); await beforeDispatch?.(intent); return gateway.dispatch(intent, signal); }, lookup: (intent, signal) => gateway.lookup(intent, signal) },
+    gateway: { dispatch: async (intent, signal) => { intents.set(intent.actionId, intent); await beforeDispatch?.(intent); const result = await gateway.dispatch(intent, signal); if (crashAfterResponse) throw new Error("crash after receipt saved"); return result; }, lookup: (intent, signal) => gateway.lookup(intent, signal) },
     worker: { run: async () => { throw new Error("PARTIAL_OUTPUT_BUILT"); } }, artifactVerifier: { verify: async () => undefined },
   });
   async function command(key: string) {
@@ -73,5 +76,30 @@ try {
   await proposals.persist({ intent, provider: gateway.pricing.card.provider, model: gateway.pricing.profile.model, proposal: { files: fixture.files(1) } });
   assert(await recovery.recover(account, cached.sessionId) === undefined, "SAVED_SOURCE_DISCARDED");
   assert((await store.sessionStatus(account, cached.sessionId))?.status === "usage_unknown", "CACHED_SOURCE_FENCE_REMOVED");
-  console.log(JSON.stringify({ status: "passed", case: "interrupted-generation", checks: ["SQL owner isolation", "concurrent exact-once release", "immutable dispatch fence", "replay without inference", "live request retained", "unfinished claim retained", "saved source retained", "zero local charge"] }));
+
+  if (crash.status !== "usage_unknown") throw new Error("Expected crash state");
+  const missingAction = await store.findMeteredActionByOperation(account, crash.operationId);
+  assert((await recoverRecordedReceipt(pool, store, missingAction!.actionId)).outcome === "missing", "MISSING_RECEIPT_FABRICATED");
+  assert((await store.findMeteredActionByOperation(account, crash.operationId))?.status === "usage_unknown", "MISSING_RESERVATION_RELEASED");
+  fixture.setInferenceMode("complete"); crashAfterResponse = true;
+  const journalCommand = await command("journal-crash");
+  const journalResult = await service.startSession(journalCommand);
+  assert(journalResult.status === "usage_unknown", "CRASH_NOT_FENCED");
+  const journalAction = await store.findMeteredAction(account, "journal-crash");
+  assert(await recovery.recover(account, journalAction!.sessionId) === undefined, "KNOWN_USAGE_WAIVED");
+  const beforeCalls = fixture.counts().inferences;
+  const found = await Promise.all([recoverRecordedReceipt(pool, store, journalAction!.actionId), recoverRecordedReceipt(pool, store, journalAction!.actionId)]);
+  assert(found.some(result => result.outcome === "settled" && result.charged === "3"), "ORIGINAL_PRICE_NOT_SETTLED");
+  assert((await recoverRecordedReceipt(pool, store, journalAction!.actionId)).outcome === "not_required", "RECOVERY_NOT_IDEMPOTENT");
+  const charge = (await pool.query("SELECT count(*)::int AS n,sum(amount_sat)::text AS amount FROM billing_line_items WHERE action_id=$1 AND kind='debit'", [journalAction!.actionId])).rows[0];
+  assert(charge.n === 1 && charge.amount === "-3" && fixture.counts().inferences === beforeCalls, "DUPLICATE_DEBIT_OR_REDISPATCH");
+  const all: any = await listOperatorJobs(pool, "all", 0, "");
+  const review: any = await listOperatorJobs(pool, "review", 0, "");
+  assert(all.total > review.total && review.jobs.every((row: any) => row.category === "review" && row.held_sat === "395"), "JOB_CATEGORIES_INCORRECT");
+  const filtered: any = await listOperatorJobs(pool, "all", 0, journalAction!.actionId);
+  assert(filtered.total === 1 && filtered.jobs[0].receipt_charge === "3", "JOB_SEARCH_OR_COST_INCORRECT");
+  assert((await listOperatorJobs(pool, "all", 0, "%' OR 1=1 --")).total === 0, "SEARCH_NOT_LITERAL");
+  const detail: any = await readOperatorJob(pool, journalAction!.actionId, "action");
+  assert(detail.usage_receipt.usage[0].units === "1200" && detail.held_sat === "0", "DETAIL_RECEIPT_MISSING");
+  console.log(JSON.stringify({ status: "passed", case: "interrupted-generation", checks: ["SQL owner isolation", "concurrent exact-once release", "immutable dispatch fence", "replay without inference", "live request retained", "unfinished claim retained", "saved source retained", "zero local charge", "receipt journal crash recovery", "exact-once three-sat debit", "missing receipt holds retained", "All/search/review SQL", "receipt detail"] }));
 } finally { await pool.end(); await stack.down(true); }

@@ -1,3 +1,4 @@
+import { ProviderOperationIntentSchema } from "../../src/model/model-gateway";
 import { expect, test } from "bun:test";
 import { createDevelopmentFunding } from "../../scripts/dev-funding";
 import type { DevPayments } from "../../scripts/dev-payments";
@@ -11,7 +12,7 @@ import { MeteredGenerationService } from "../../src/phase-04/metered-generation-
 import { exactReadyReservation, trustedAdmissionReceipt, trustedAdmissionReceiptAuthority } from "../fixtures/admission-ready";
 
 const testRunId = crypto.randomUUID();
-const intent = (overrides: Record<string, unknown> = {}) => ({
+const intent = (overrides: Record<string, unknown> = {}) => ProviderOperationIntentSchema.parse({
   operationId: `operation:proposal-e2e-v3:${testRunId}`, providerRequestId: `operation:proposal-e2e-v3:${testRunId}`, accountId: "account:proposal-e2e", sessionId: "session:proposal-e2e", actionId: `start:proposal-e2e-v3:${testRunId}`, expectedVersion: 0,
   actionBudgetReference: "budget:proposal-e2e", profileId: "code-proposal", priceCardId: "phase-04-deterministic-card-2026-08-04", requestFingerprint: "a".repeat(64), prompt: "Build a focused counter.",
   maximumUnits: [{ dimension: "input_tokens", units: "1000" }, { dimension: "output_tokens", units: "1000" }], selection: "unselected" as const, ...overrides,
@@ -120,16 +121,34 @@ test("configured provider pricing usage proposal recovery parses raw Responses H
     expect(body.max_output_tokens).toBe(100); expect(body.input[0].content).toContain("runtimeHasDomain"); expect(body.input[1].content).toContain("const prior = true;"); expect(calls[0]?.init?.headers).toMatchObject({ "idempotency-key": operationId });
     const lookup = await gateway.lookup(configuredIntent, new AbortController().signal);
     expect(lookup).toMatchObject({ status: "receipt_found", sourceProposalReference: dispatched.sourceProposalReference });
-    expect(calls[1]?.url).toBe(`https://api.openai.com/v1/responses/${encodeURIComponent(responseId)}`); expect(calls[1]?.init?.method).toBe("GET");
+    // Durable correlated usage is sufficient; receipt recovery requires no provider request.
+    expect(calls).toHaveLength(1);
     const replay = await gateway.dispatch(configuredIntent, new AbortController().signal);
     expect(replay).toEqual(dispatched);
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(1);
+    await expect(proposalStore.recordUsageEvidence({ intent: configuredIntent, receipt: { ...dispatched.receipt, usage: [{ dimension: "input_tokens", units: "999" }] } })).rejects.toThrow("USAGE_EVIDENCE_CONFLICT");
+    await expect(proposalStore.lookupUsageEvidence({ ...configuredIntent, accountId: "foreign" })).rejects.toThrow("USAGE_EVIDENCE_BINDING_INVALID");
+    const duplicateIntent = { ...configuredIntent, operationId: operationId + "-duplicate", providerRequestId: operationId + "-duplicate", actionId: configuredIntent.actionId + "-duplicate" };
+    await expect(proposalStore.recordUsageEvidence({ intent: duplicateIntent, receipt: { ...dispatched.receipt, operationId: duplicateIntent.operationId, providerRequestId: duplicateIntent.providerRequestId } })).rejects.toThrow("USAGE_EVIDENCE_CONFLICT");
+    expect(await proposalStore.lookupUsageEvidence(duplicateIntent)).toBeUndefined();
+    await expect(app.pool.query("UPDATE development_usage_evidence SET receipt_json=receipt_json WHERE operation_id=$1", [operationId])).rejects.toThrow();
+
+    const brokenIntent = { ...configuredIntent, operationId: operationId + "-broken", providerRequestId: operationId + "-broken", actionId: configuredIntent.actionId + "-broken", authorizedPriorArtifactReference: undefined };
+    let brokenCalls = 0;
+    const broken = new DevelopmentModelGateway({ store: proposalStore, configured: sourceConfig, fetch: async () => {
+      brokenCalls++;
+      return Response.json({ ...raw, id: raw.id + "-broken", metadata: { operation_id: brokenIntent.operationId, provider_request_id: brokenIntent.providerRequestId }, output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "not valid JSON" }] }] });
+    } });
+    expect(await broken.dispatch(brokenIntent, new AbortController().signal)).toMatchObject({ status: "failed", receipt: { usage: dispatched.receipt.usage } });
+    expect(await broken.lookup(brokenIntent, new AbortController().signal)).toMatchObject({ status: "receipt_found" });
+    expect(await broken.dispatch(brokenIntent, new AbortController().signal)).toMatchObject({ status: "failed" });
+    expect(brokenCalls).toBe(1);
     const inputCeiling = await gateway.dispatch(intent({ operationId: "operation:openai-input-ceiling", providerRequestId: "operation:openai-input-ceiling", actionId: "start:openai-input-ceiling", profileId: "configured", priceCardId: "configured-card", maximumUnits: [{ dimension: "input_tokens", units: "1" }, { dimension: "cached_tokens", units: "100" }, { dimension: "output_tokens", units: "100" }, { dimension: "reasoning_tokens", units: "100" }] }), new AbortController().signal);
     expect(inputCeiling).toMatchObject({ status: "definitive_not_accepted", reason: "pre_dispatch_rejected" });
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(1);
     const noPriorLoader = new DevelopmentModelGateway({ store: proposalStore, configured: sourceConfig, fetch: async (url, init) => { calls.push({ url: String(url), init }); return Response.json(raw); } });
     const unavailablePrior = await noPriorLoader.dispatch(intent({ operationId: "operation:openai-prior-unavailable", providerRequestId: "operation:openai-prior-unavailable", actionId: "start:openai-prior-unavailable", profileId: "configured", priceCardId: "configured-card", maximumUnits: [{ dimension: "input_tokens", units: "100000" }, { dimension: "cached_tokens", units: "100" }, { dimension: "output_tokens", units: "100" }, { dimension: "reasoning_tokens", units: "100" }], authorizedPriorArtifactReference: "artifact:owned-prior" }), new AbortController().signal);
     expect(unavailablePrior).toMatchObject({ status: "definitive_not_accepted", reason: "pre_dispatch_rejected" });
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(1);
   } finally { await app.close(); }
 });

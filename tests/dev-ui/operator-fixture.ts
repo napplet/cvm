@@ -12,6 +12,7 @@ export async function openFixtureAdmin(page: Page, origin: string, root: string,
   });
   const operator = JSON.parse(await readFile(join(root, "cvm-operator/operator.json"), "utf8"));
   await page.goto(`${origin}/admin#key=${operator.adminKey}`);
+  await page.locator("#provider-navigation").click();
   await page.getByRole("button", { name: "Continue with ChatGPT", exact: true }).click();
   await page.getByRole("button", { name: "Got it", exact: true }).click();
   await page.locator("#chatgpt-welcome").waitFor({ state: "hidden" });

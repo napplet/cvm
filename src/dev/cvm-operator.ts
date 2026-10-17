@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { PostgresSqlClient } from "../persistence/postgres-sql-funding-store";
 import { configuredProviderFromEnvironment } from "./development-model-gateway";
 import { PriceCardSchema, ModelProfileSchema, RationalRateSchema } from "../model/price-card";
+import { listOperatorJobs, readOperatorJob } from "./operator-jobs";
 import { safeChatGptError } from "./chatgpt-oauth";
 
 const Id = z.string().min(1).max(240);
@@ -18,10 +19,11 @@ export const CvmAdminArgumentsSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("add_api"), account: ApiAccount }).strict(),
   z.object({ action: z.literal("select_api"), id: z.string().uuid() }).strict(),
   z.object({ action: z.literal("remove_api"), id: z.string().uuid() }).strict(),
-  z.object({ action: z.literal("jobs"), status: z.enum(["pending", "active", "finished"]), offset: z.number().int().min(0).max(100000).default(0) }).strict(),
+  z.object({ action: z.literal("jobs"), status: z.enum(["all", "pending", "active", "review", "finished"]).default("all"), search: z.string().trim().max(160).default(""), offset: z.number().int().min(0).max(100000).default(0) }).strict(),
+  z.object({ action: z.literal("check_receipt"), id: Id }).strict(),
   z.object({ action: z.literal("job"), id: Id, kind: z.enum(["action", "pending"]) }).strict(),
 ]);
-type OperatorOptions = { pool: Pick<PostgresSqlClient, "query">; busy(): boolean; pricing(): { card: unknown; profile: unknown }; configure(): Promise<void>; chatgpt(operation: string, body: unknown): Promise<unknown> };
+type OperatorOptions = { checkReceipt?(id: string): Promise<unknown>; pool: Pick<PostgresSqlClient, "query">; busy(): boolean; pricing(): { card: unknown; profile: unknown }; configure(): Promise<void>; chatgpt(operation: string, body: unknown): Promise<unknown> };
 
 /** CVM-local vault. Only a signed request from the allowlisted operator can read
  * redacted configuration or jobs. Secret fields have no read operation. */
@@ -61,8 +63,9 @@ export class CvmOperator {
     const run = async () => {
       try {
         if (command.action === "status") return { status: "ok", pricing: this.options.pricing(), rates: this.rates(), selectedApi: this.#state.selectedApi, apiAccounts: this.#state.apiAccounts.map(a => ({ id: a.id, label: a.label, model: a.model, keyConfigured: true })), busy: this.options.busy() };
-        if (command.action === "jobs") return { status: "ok", jobs: await this.jobs(command.status, command.offset), offset: command.offset };
-        if (command.action === "job") return { status: "ok", job: await this.job(command.id, command.kind) };
+        if (command.action === "jobs") return { status: "ok", ...await listOperatorJobs(this.options.pool, command.status, command.offset, command.search) };
+        if (command.action === "job") return { status: "ok", job: await readOperatorJob(this.options.pool, command.id, command.kind) };
+        if (command.action === "check_receipt") return { status: "ok", recovery: await this.options.checkReceipt?.(command.id) ?? { outcome: "unavailable" } };
         if (command.action === "chatgpt") {
           const result = await this.options.chatgpt(command.operation, command.body ?? {});
           return result;
@@ -99,30 +102,5 @@ export class CvmOperator {
     // Read-only job/status views remain responsive while OAuth/provider calls run.
     if (["status", "jobs", "job"].includes(command.action)) return run();
     const result = this.#tail.then(run); this.#tail = result.catch(() => undefined); return result;
-  }
-  private async jobs(status: "pending" | "active" | "finished", offset: number) {
-    const rows = await this.options.pool.query(`SELECT * FROM (
-      SELECT 'action' AS kind, id, session_id, state, created_at, settled_at,
-        CASE WHEN state='prepared' THEN 'pending' WHEN state IN ('active','usage_unknown','billing_invariant_failed') THEN 'active' ELSE 'finished' END AS category
-      FROM metered_actions
-      UNION ALL SELECT 'pending', checkpoint_id, NULL, state, created_at, NULL,
-        CASE WHEN state='saved' AND expires_at_ms > extract(epoch from now())*1000 THEN 'pending' WHEN state='bound' AND EXISTS (SELECT 1 FROM metered_actions a WHERE a.operation_id=p.operation_id AND a.state IN ('active','usage_unknown','billing_invariant_failed')) THEN 'active' ELSE 'finished' END
-      FROM development_pending_actions p
-    ) jobs WHERE category=$1 ORDER BY created_at DESC,id DESC LIMIT 50 OFFSET $2`, [status, offset]);
-    return rows.rows;
-  }
-  private async job(id: string, kind: string) {
-    if (kind === "pending") {
-      return (await this.options.pool.query("SELECT checkpoint_id AS id,account_id,state,maximum_sat,expires_at_ms,created_at,updated_at,operation_id FROM development_pending_actions WHERE checkpoint_id=$1", [id])).rows[0] ?? null;
-    }
-    const row = (await this.options.pool.query(`SELECT a.id,a.account_id,a.session_id,a.state,a.created_at,a.settled_at,a.expected_session_version,a.profile_id,a.price_card_id,a.operation_id,a.reservation_sat,a.receipt_charge,a.remaining_cap_sat,a.remaining_balance_sat,a.artifact_id,
-      p.model,p.provider,c.diagnostic_json FROM metered_actions a LEFT JOIN model_profile_versions p ON p.id=a.profile_id LEFT JOIN development_chatgpt_operations c ON c.operation_id=a.operation_id WHERE a.id=$1`, [id])).rows[0];
-    if (!row) return null;
-    const [billing, worker, artifacts] = await Promise.all([
-      this.options.pool.query("SELECT kind,amount_sat,committed_at FROM billing_line_items WHERE action_id=$1 ORDER BY sequence", [id]),
-      this.options.pool.query("SELECT state,completed_at FROM development_worker_results WHERE action_id=$1", [id]),
-      this.options.pool.query("SELECT artifact_id,version,aggregate_sha256,created_at FROM development_artifacts WHERE action_id=$1", [id]),
-    ]);
-    return { ...row, billing: billing.rows, worker: worker.rows, artifacts: artifacts.rows };
   }
 }

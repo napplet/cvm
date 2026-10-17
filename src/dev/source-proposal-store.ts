@@ -28,6 +28,32 @@ function validFiles(proposal: SourceProposal): boolean {
 export class SourceProposalStore {
   constructor(private readonly pool: PostgresSqlPool) {}
 
+  private async query(sql: string, values: readonly unknown[]) {
+    const client = await this.pool.connect();
+    try { return await client.query(sql, values); } finally { client.release(); }
+  }
+
+  /** Receipt journal is independent of generated source validity. */
+  async recordUsageEvidence(input: { intent: ProviderOperationIntent; receipt: NormalizedUsageReceipt }): Promise<void> {
+    const intent = ProviderOperationIntentSchema.parse(input.intent);
+    const receipt = NormalizedUsageReceiptSchema.parse(input.receipt);
+    if (receipt.operationId !== intent.operationId || receipt.providerRequestId !== intent.providerRequestId || receipt.profileId !== intent.profileId || receipt.priceCardId !== intent.priceCardId) throw new Error("USAGE_EVIDENCE_BINDING_INVALID");
+    const hash = await sha256(canonicalJson(intent));
+    const result = await this.query("INSERT INTO development_usage_evidence(operation_id,intent_sha256,receipt_json) VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING operation_id", [intent.operationId, hash, receipt]);
+    if (!result.rows.length) {
+      const recorded = await this.lookupUsageEvidence(intent);
+      if (!recorded || !sameReceipt(recorded, receipt)) throw new Error("USAGE_EVIDENCE_CONFLICT");
+    }
+  }
+
+  async lookupUsageEvidence(input: ProviderOperationIntent): Promise<NormalizedUsageReceipt | undefined> {
+    const intent = ProviderOperationIntentSchema.parse(input);
+    const row = (await this.query("SELECT intent_sha256,receipt_json FROM development_usage_evidence WHERE operation_id=$1", [intent.operationId])).rows[0];
+    if (!row) return undefined;
+    if (row.intent_sha256 !== await sha256(canonicalJson(intent))) throw new Error("USAGE_EVIDENCE_BINDING_INVALID");
+    return freeze(NormalizedUsageReceiptSchema.parse(row.receipt_json));
+  }
+
   async persist(input: Readonly<{ intent: ProviderOperationIntent; provider: string; model: string; proposal: Omit<SourceProposal, "reference" | "sha256"> }>): Promise<StoredSourceProposal> {
     const intent = ProviderOperationIntentSchema.parse(input.intent);
     const raw = { files: input.proposal.files };

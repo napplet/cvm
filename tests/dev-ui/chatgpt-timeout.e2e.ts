@@ -51,7 +51,7 @@ try {
   // Exercise SQL replay across gateway replacement without a second network call.
   const operations = new SqlChatGptOperations(pool);
   const options = { accountId: "diagnostic-test", model: "fixture-codex", auth: { accessToken: async () => "fixture-access" }, operations, fetch: timeoutFetch,
-    store: { persist: async () => { throw new Error("must not persist partial output"); }, recordProviderObservation: async () => {}, lookupProviderObservation: async () => undefined } };
+    store: { recordUsageEvidence: async () => { throw new Error("partial stream cannot have usage"); }, lookupUsageEvidence: async () => undefined, persist: async () => { throw new Error("must not persist partial output"); }, recordProviderObservation: async () => {}, lookupProviderObservation: async () => undefined } };
   const gateway = new ChatGptModelGateway(options);
   const intent = { operationId: "diagnostic-replay", providerRequestId: "diagnostic-request", accountId: "diagnostic-owner", sessionId: "diagnostic-session", actionId: "diagnostic-action", expectedVersion: 0, actionBudgetReference: "diagnostic-budget", profileId: gateway.pricing.profile.id, priceCardId: gateway.pricing.card.id, requestFingerprint: "a".repeat(64), prompt: "A timer", maximumUnits: gateway.pricing.profile.maximumUnits, selection: "unselected" as const };
   assert((await gateway.dispatch(intent, new AbortController().signal)).status === "usage_unknown", "SQL_TIMEOUT_NOT_FENCED");

@@ -72,19 +72,30 @@ export class DevelopmentModelGateway implements ModelGateway {
     catch { return this.#preDispatchRejected(intent); }
     const recovered = await this.store.lookupProviderObservation(intent);
     if (recovered) return ModelDispatchObservationSchema.parse({ status: "completed", receipt: recovered.receipt, sourceProposalReference: recovered.sourceProposalReference });
+    const recoveredReceipt = await this.store.lookupUsageEvidence(intent);
+    if (recoveredReceipt) return ModelDispatchObservationSchema.parse({ status: "failed", receipt: recoveredReceipt });
     let requestBody: Record<string, unknown>;
     try { requestBody = await this.#requestBody(intent, this.#configured); }
     catch { return this.#preDispatchRejected(intent); }
+    let knownReceipt: NormalizedUsageReceipt | undefined;
     try {
       const response = await this.#request("POST", "https://api.openai.com/v1/responses", intent, signal, requestBody);
       const native = ProviderResponseSchema.parse(await response.json());
       this.#validateNativeBinding(intent, this.#configured, native);
-      const generated = GeneratedFilesSchema.parse(JSON.parse(outputText(native)));
       const receipt = this.#receipt(intent, this.#configured, native, native.completed_at ? new Date(native.completed_at * 1000).toISOString() : new Date().toISOString());
+      knownReceipt = receipt;
+      try { await this.store.recordUsageEvidence({ intent, receipt }); }
+      catch (error) {
+        // Conflicting evidence must never become a second charge.
+        if (error instanceof Error && error.message.startsWith("USAGE_EVIDENCE_")) knownReceipt = undefined;
+        throw error;
+      }
+      const generated = GeneratedFilesSchema.parse(JSON.parse(outputText(native)));
       const stored = await this.store.persist({ intent, provider: "openai_responses", model: this.#configured.model, proposal: generated });
       await this.store.recordProviderObservation({ intent, providerResponseId: native.id, receipt, sourceProposalReference: stored.proposal.reference });
       return ModelDispatchObservationSchema.parse({ status: "completed", receipt, sourceProposalReference: stored.proposal.reference });
     } catch {
+      if (knownReceipt) return ModelDispatchObservationSchema.parse({ status: "failed", receipt: knownReceipt });
       return ModelDispatchObservationSchema.parse({ status: "usage_unknown", operationId: intent.operationId, providerRequestId: intent.providerRequestId, reason: signal.aborted ? "aborted" : "uncertain_acceptance", provenance: { protectedEvidenceReference: `openai:response:unknown:${intent.operationId}` } });
     }
   }
@@ -94,6 +105,8 @@ export class DevelopmentModelGateway implements ModelGateway {
     try { this.#validateIntent(intent, this.#configured); }
     catch { return ModelLookupObservationSchema.parse({ status: "definitive_not_accepted", operationId: intent.operationId, providerRequestId: intent.providerRequestId, reason: "pre_dispatch_rejected", provenance: { protectedEvidenceReference: `openai:response:preflight:${intent.operationId}` } }); }
     const observation = await this.store.lookupProviderObservation(intent);
+    const receipt = await this.store.lookupUsageEvidence(intent);
+    if (receipt) return ModelLookupObservationSchema.parse({ status: "receipt_found", receipt, ...(observation ? { sourceProposalReference: observation.sourceProposalReference } : {}) });
     if (!observation) return ModelLookupObservationSchema.parse({ status: "unresolved", operationId: intent.operationId, providerRequestId: intent.providerRequestId, provenance: { protectedEvidenceReference: `openai:response:lookup:${intent.operationId}` } });
     try {
       const response = await this.#request("GET", `https://api.openai.com/v1/responses/${encodeURIComponent(observation.providerResponseId)}`, intent, signal);

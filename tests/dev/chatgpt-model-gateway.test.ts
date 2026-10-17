@@ -7,7 +7,7 @@ import { ProviderOperationIntentSchema, type ModelDispatchObservation } from "..
 import { chatGptFixture } from "../fixtures/chatgpt";
 
 function setup() {
-  const fixture = chatGptFixture(); const records = new Map<string, { intent: string; observation?: ModelDispatchObservation; diagnostic?: ChatGptDiagnostic }>(); const proposals: any[] = []; const observations: any[] = [];
+  const fixture = chatGptFixture(); const records = new Map<string, { intent: string; observation?: ModelDispatchObservation; diagnostic?: ChatGptDiagnostic }>(); const proposals: any[] = []; const observations: any[] = []; const receipts = new Map<string, any>();
   const operations: ChatGptOperations = {
     async claim(intent) { if (records.has(intent.operationId)) return false; records.set(intent.operationId, { intent: JSON.stringify(intent) }); return true; },
     async read(intent) { const row = records.get(intent.operationId); if (row && row.intent !== JSON.stringify(intent)) throw new Error("OPERATION_BINDING_MISMATCH"); return row?.observation; },
@@ -15,6 +15,8 @@ function setup() {
     async diagnostic(intent) { return records.get(intent.operationId)?.diagnostic; },
   };
   const store = {
+    async recordUsageEvidence(input: any) { receipts.set(input.intent.operationId, input.receipt); },
+    async lookupUsageEvidence(intent: any) { return receipts.get(intent.operationId); },
     async persist(input: any) { const proposal = { reference: `proposal:sha256:${"a".repeat(64)}`, sha256: "a".repeat(64), ...input.proposal }; proposals.push(input); return { proposal } as any; },
     async recordProviderObservation(input: any) { observations.push(input); },
     async lookupProviderObservation(intent: any) { return observations.find((item) => item.intent.operationId === intent.operationId); },
@@ -201,7 +203,7 @@ for (const failure of ["network", "malformed", "persistence"] as const) test(`${
     },
     store: { ...options.store, persist: async (input) => { if (failure === "persistence") throw new Error("private SQL with source"); return options.store.persist(input); } },
   });
-  expect((await gateway.dispatch(intent, signal())).status).toBe("usage_unknown");
+  expect((await gateway.dispatch(intent, signal())).status).toBe(failure === "persistence" ? "failed" : "usage_unknown");
   expect(gateway.diagnostic()).toBe({ network: "CHATGPT_CONNECTION_FAILED", malformed: "CHATGPT_RESPONSE_INVALID", persistence: "CHATGPT_RESULT_RECORDING_FAILED" }[failure]);
   const diagnostic = await operations.diagnostic!(intent);
   for (const secret of ["private", "Bearer", "fixture-access", "https://", "SQL"]) expect(JSON.stringify(diagnostic)).not.toContain(secret);
@@ -258,4 +260,27 @@ test("source-based remix carries the pinned snapshot as data without changing ge
   const request = JSON.parse(String(fixture.calls.find(call => call.url.endsWith("/responses"))!.init!.body));
   expect(JSON.parse(request.input[1].content).remixReferenceData).toEqual(source);
   expect(request.text.format.schema.properties.files.items.properties.path.enum).toEqual(["src/main.ts","src/styles.css","src/capabilities.json"]);
+});
+
+
+test("valid usage survives source storage failure and completion-fence failure without redispatch", async () => {
+  const { options, intent, fixture } = setup();
+  let receiptSaved = false;
+  const store = { ...options.store,
+    recordUsageEvidence: async (input: any) => { await options.store.recordUsageEvidence(input); receiptSaved = true; },
+    persist: async () => { expect(receiptSaved).toBe(true); throw new Error("source rejected"); },
+  };
+  const gateway = new ChatGptModelGateway({ ...options, store, operations: { ...options.operations, complete: async () => { throw new Error("database disconnected after journal commit"); } } });
+  await expect(gateway.dispatch(intent, signal())).rejects.toThrow("database disconnected");
+  const restarted = new ChatGptModelGateway({ ...options, store });
+  expect(await restarted.lookup(intent, signal())).toMatchObject({ status: "receipt_found", receipt: { usage: [{ dimension: "input_tokens", units: "1200" }, { dimension: "output_tokens", units: "800" }] } });
+  expect((await restarted.dispatch(intent, signal())).status).toBe("failed");
+  expect(fixture.counts().inferences).toBe(1);
+});
+
+
+test("conflicting receipt evidence stays unsettled rather than charging twice", async () => {
+  const { options, intent } = setup();
+  const gateway = new ChatGptModelGateway({ ...options, store: { ...options.store, recordUsageEvidence: async () => { throw new Error("USAGE_EVIDENCE_CONFLICT"); } } });
+  expect((await gateway.dispatch(intent, signal())).status).toBe("usage_unknown");
 });

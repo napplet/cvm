@@ -1,3 +1,4 @@
+import { jobsMarkup, mountAdminJobs } from "./admin-jobs";
 import { DevelopmentContextVmClient, type DevelopmentBootstrap } from "./contextvm-client";
 import { mountChatGptSettings } from "./chatgpt-settings";
 
@@ -7,17 +8,20 @@ const storageKey = `napplet-cvm/operator/v1/${bootstrap.servicePubkey}`;
 const keyFromLink = new URLSearchParams(location.hash.slice(1)).get("key");
 if (keyFromLink && /^[a-f0-9]{64}$/.test(keyFromLink)) sessionStorage.setItem(storageKey, keyFromLink);
 if (location.hash) history.replaceState(null, "", location.pathname + location.search);
-document.querySelector("#app")!.innerHTML = `<header class="brand-header"><h1>CVM admin</h1><button id="admin-lock" hidden>Lock admin</button></header>
-<p>Private operator controls · encrypted ContextVM</p><p id="operator-provider"></p><p id="admin-status" role="status"></p>
+document.querySelector("#app")!.innerHTML = `<header class="brand-header"><div><a class="admin-home" href="/">applet.broker</a><h1>CVM admin</h1></div><nav aria-label="Admin navigation"><a href="#jobs-heading">Jobs</a><a id="provider-navigation" href="#provider-settings">Provider & rates</a><button id="admin-lock" hidden>Lock admin</button></nav></header>
+<p class="supporting">Private operator workspace · encrypted ContextVM</p><p id="operator-provider"></p><p id="admin-status" role="status"></p>
 <form id="admin-login"><label for="operator-key">Operator access key</label><input id="operator-key" type="password" autocomplete="off" required><button class="primary">Connect to CVM</button><p>Open with <code>bun scripts/open-dev-admin.ts</code> on the CVM host, or enter its private operator access key.</p></form>
-<div id="admin-content" hidden><div class="admin-grid"><section class="workspace-controls"></section><section><h2>Rates</h2><p>Integer sats per token, expressed as numerator / denominator. Saves a new price version for new work. Existing jobs retain their original rates.</p><form id="rates-form"><div id="rate-fields"></div><button>Save rates</button></form><p id="price-version" class="supporting"></p>
+<div id="admin-content" hidden>${jobsMarkup}<details id="provider-settings"><summary>Provider & rates</summary><div class="admin-grid"><section class="workspace-controls"></section><section><h2>Rates</h2><p>Integer sats per token, expressed as numerator / denominator. Saves a new price version for new work. Existing jobs retain their original rates.</p><form id="rates-form"><div id="rate-fields"></div><button>Save rates</button></form><p id="price-version" class="supporting"></p>
 <h2>API accounts</h2><ul id="api-accounts"></ul><details><summary>Add an API account</summary><form id="api-form"><label for="api-label">Label</label><input id="api-label" maxlength="80" required><label for="api-key">API key</label><input id="api-key" type="password" autocomplete="off" required><label for="api-config">Provider configuration (JSON)</label><textarea id="api-config" rows="8" required placeholder='{"model":"gpt-5-mini","profile":{},"priceCard":{},"priceSources":{}}'></textarea><p class="supporting">Use the pinned OpenAI Responses configuration documented in docs/runbooks/development-gui.md. Price cards require source evidence. Secrets are write-only and stored privately on the CVM.</p><button>Add account</button></form></details></section></div>
-<section class="admin-jobs"><h2>Jobs</h2><p class="supporting">Pending includes saved requests awaiting funds. Unconfirmed outcomes remain active until reconciled; they are not silently retried.</p><div class="job-tabs" role="group" aria-label="Job state"><button data-state="pending">Pending</button><button data-state="active" aria-pressed="true">Active</button><button data-state="finished">Finished</button><button id="jobs-refresh">Refresh</button></div><table><thead><tr><th>Job</th><th>State</th><th>Recorded</th></tr></thead><tbody id="jobs"></tbody></table><div class="row"><button id="jobs-prev">Previous</button><button id="jobs-next">Next</button></div></section></div>
+</details></div>
 <dialog id="job-detail"><div class="dialog-header"><h2>Job details</h2><button id="job-close" aria-label="Close job details">×</button></div><div id="job-facts"></div></dialog>`;
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+const settingsPanel = el<HTMLDetailsElement>("provider-settings");
+settingsPanel.open = sessionStorage.getItem(storageKey + "/settings") === "open";
+settingsPanel.ontoggle = () => { if (settingsPanel.open) sessionStorage.setItem(storageKey + "/settings", "open"); else sessionStorage.removeItem(storageKey + "/settings"); };
 let client: DevelopmentContextVmClient | undefined;
 let status: any;
-let state = "active"; let offset = 0; let refreshTimer: ReturnType<typeof setInterval> | undefined;
+let refreshTimer: ReturnType<typeof setInterval> | undefined;
 const message = (value: string) => { el("admin-status").textContent = value; };
 async function command(args: unknown) {
   const result = await client!.callTool("cvm_admin", args);
@@ -43,45 +47,18 @@ async function refreshConfig() {
     return item;
   }));
 }
-async function job(id: string, kind: string) {
-  const result = await command({ action: "job", id, kind }); const root = el("job-facts"); root.replaceChildren();
-  if (!result.job) { root.textContent = "Job not found."; } else {
-    const facts = document.createElement("dl");
-    for (const [name, value] of Object.entries(result.job)) {
-      const label = document.createElement("dt"); label.textContent = name.replaceAll("_", " ");
-      const detail = document.createElement("dd"); detail.textContent = value == null ? "—" : typeof value === "object" ? JSON.stringify(value, null, 2) : String(value); facts.append(label, detail);
-    }
-    root.append(facts);
-  }
-  if (!el<HTMLDialogElement>("job-detail").open) el<HTMLDialogElement>("job-detail").showModal();
-}
-async function jobs() {
-  const selected = state; const page = offset;
-  el("jobs").querySelectorAll<HTMLButtonElement>("button").forEach(button => button.disabled = true);
-  const result = await command({ action: "jobs", status: selected, offset: page });
-  if (state !== selected || offset !== page) return;
-  el("jobs").replaceChildren(...result.jobs.map((row: any) => {
-    const tr = document.createElement("tr"); const id = document.createElement("td"); const button = document.createElement("button"); button.textContent = row.id; button.onclick = () => void job(row.id, row.kind).catch(report); id.append(button); tr.append(id);
-    for (const value of [row.state, new Date(row.created_at).toLocaleString()]) { const td = document.createElement("td"); td.textContent = value; tr.append(td); } return tr;
-  }));
-  if (!result.jobs.length) { const tr = document.createElement("tr"); const td = document.createElement("td"); td.colSpan = 3; td.textContent = `No ${selected} jobs.`; tr.append(td); el("jobs").append(tr); }
-  el<HTMLButtonElement>("jobs-prev").disabled = offset === 0; el<HTMLButtonElement>("jobs-next").disabled = result.jobs.length < 50;
-}
+const jobs = mountAdminJobs(command);
 async function connect(key: string) {
   if (!/^[a-f0-9]{64}$/u.test(key)) throw new Error("Enter the operator’s 64-character access key.");
   await client?.close(); client = new DevelopmentContextVmClient(bootstrap, undefined, key); await client.connect({ accountStatus: false });
   await refreshConfig(); sessionStorage.setItem(storageKey, key); el<HTMLInputElement>("operator-key").value = "";
   el("admin-login").hidden = true; el("admin-content").hidden = false; el("admin-lock").hidden = false; message("Connected as CVM operator.");
   await mountChatGptSettings(bootstrap, async (operation, body) => command({ action: "chatgpt", operation, ...(body === undefined ? {} : { body }) }), () => { if (status.selectedApi) el("chatgpt-active").textContent = "Saved ChatGPT selection · API account is currently active"; });
-  await jobs(); refreshTimer = setInterval(() => { void jobs().catch(report); }, 5000);
+  await jobs.refresh(); clearInterval(refreshTimer); refreshTimer = setInterval(() => { void jobs.refresh(); }, 5000);
 }
 el<HTMLFormElement>("admin-login").onsubmit = event => { event.preventDefault(); void connect(el<HTMLInputElement>("operator-key").value.trim()).catch(report); };
-el("admin-lock").onclick = () => { sessionStorage.removeItem(storageKey); clearInterval(refreshTimer); void client?.close(); location.reload(); };
+el("admin-lock").onclick = () => { sessionStorage.removeItem(storageKey); sessionStorage.removeItem(storageKey + "/settings"); clearInterval(refreshTimer); void client?.close(); location.reload(); };
 el<HTMLFormElement>("rates-form").onsubmit = event => { event.preventDefault(); const fields = new FormData(el<HTMLFormElement>("rates-form")); const rates = Object.fromEntries(Object.keys(status.pricing.card.rates).map(name => [name, { numerator: fields.get(`${name}.numerator`), denominator: fields.get(`${name}.denominator`) }])); void command({ action: "save_rates", rates }).then(async () => { await refreshConfig(); message("New rates saved. Existing jobs retain their price versions."); }).catch(report); };
 el<HTMLFormElement>("api-form").onsubmit = event => { event.preventDefault(); void (async () => { const configuration = JSON.parse(el<HTMLTextAreaElement>("api-config").value); await command({ action: "add_api", account: { ...configuration, id: crypto.randomUUID(), label: el<HTMLInputElement>("api-label").value, apiKey: el<HTMLInputElement>("api-key").value } }); el<HTMLInputElement>("api-key").value = ""; await refreshConfig(); message("API account saved privately on the CVM."); })().catch(report); };
-document.querySelectorAll<HTMLButtonElement>("[data-state]").forEach(button => button.onclick = () => { state = button.dataset.state!; offset = 0; document.querySelectorAll("[data-state]").forEach(item => item.setAttribute("aria-pressed", String(item === button))); void jobs().catch(report); });
-el("jobs-refresh").onclick = () => void jobs().catch(report);
-el("jobs-prev").onclick = () => { offset = Math.max(0, offset - 50); void jobs().catch(report); };
-el("jobs-next").onclick = () => { offset += 50; void jobs().catch(report); };
-el("job-close").onclick = () => el<HTMLDialogElement>("job-detail").close();
+el("provider-navigation").onclick = () => { el<HTMLDetailsElement>("provider-settings").open = true; };
 const saved = sessionStorage.getItem(storageKey); if (saved) void connect(saved).catch(report);

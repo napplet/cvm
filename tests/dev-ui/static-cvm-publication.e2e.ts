@@ -117,7 +117,8 @@ try {
   assert((await page.evaluate(() => Object.entries(sessionStorage).find(([key]) => key.includes("dev-contextvm-key"))?.[1])) === generationKey, "SIGN_IN_CHANGED_GENERATION_OWNER");
   assert(await page.locator("#publish").isDisabled(), "PUBLISH_UNVERIFIED_ARTIFACT");
   await admin.getByRole("button", { name: "Active", exact: true }).click(); await admin.locator("#jobs button").first().waitFor(); await admin.locator("#jobs button").first().click(); await admin.locator("#job-detail").waitFor();
-  assert((await admin.locator("#job-facts").textContent())?.includes("active"), "ACTIVE_JOB_DETAIL_MISSING"); await admin.locator("#job-close").click();
+  await admin.locator("#job-facts .job-badge").filter({ hasText: "Running" }).waitFor();
+  assert((await admin.locator("#job-facts").textContent())?.includes("Running"), "ACTIVE_JOB_DETAIL_MISSING"); await admin.locator("#job-close").click();
   console.log("Signers checked; releasing generation");
   release();
   await page.waitForFunction(() => document.querySelector("#build-progress")?.getAttribute("aria-valuenow") === "5", undefined, { timeout: 180000 });
@@ -281,10 +282,12 @@ try {
   const pending = await unauthorized.savePreAdmission({ maximum: "4000", idea: "A saved idea", idempotencyKey: crypto.randomUUID() });
   assert(pending.status === "saved", "PENDING_FIXTURE_MISSING");
   const ownPending = await unauthorized.callTool("projects", { action: "list" }); assert(ownPending.projects.length === 1 && ownPending.projects[0].checkpointId === pending.checkpointId && ownPending.projects[0].stage === "pending", "PENDING_PROJECT_NOT_OWNER_SCOPED");
-  await admin.locator('[data-state="pending"]').click(); await admin.getByRole("button", { name: pending.checkpointId, exact: true }).click(); await admin.locator("#job-detail").waitFor();
-  assert((await admin.locator("#job-facts").textContent())?.includes("saved"), "PENDING_JOB_DETAIL_MISSING"); await admin.locator("#job-close").click();
+  await admin.locator('[data-state="pending"]').click(); await admin.locator(`[data-job-id="${pending.checkpointId}"]`).click(); await admin.locator("#job-detail").waitFor();
+  await admin.locator("#job-facts .job-badge").filter({ hasText: "Awaiting funds" }).waitFor();
+  assert((await admin.locator("#job-facts").textContent())?.includes("Awaiting funds"), "PENDING_JOB_DETAIL_MISSING"); await admin.locator("#job-close").click();
   await admin.locator('[data-state="finished"]').click(); await admin.locator("#jobs button").first().waitFor(); await admin.locator("#jobs button").first().click(); await admin.locator("#job-detail").waitFor();
-  assert((await admin.locator("#job-facts").textContent())?.includes("verified"), "FINISHED_JOB_DETAIL_MISSING");
+  await admin.locator("#job-facts .job-badge").filter({ hasText: "Ready" }).waitFor();
+  assert((await admin.locator("#job-facts").textContent())?.includes("Ready"), "FINISHED_JOB_DETAIL_MISSING");
   const currentPricing: any = (await pool.query("SELECT normalized_card FROM price_card_versions WHERE id=(SELECT price_card_id FROM metered_actions LIMIT 1)")).rows[0].normalized_card;
   assert(currentPricing.rates.input_tokens.denominator === "2000", `ADMIN_RATES_NOT_USED:${JSON.stringify(currentPricing)}`);
   assert(!traffic.some(url => new URL(url).origin === server.url), "PUBLIC_SITE_CALLED_CVM_HTTP");

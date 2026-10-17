@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: verification_deferred_gaps
-stopped_at: Revision history and durable no-charge restoration verified and active locally
-last_updated: "2026-10-17T19:18:58.980550+00:00"
+stopped_at: Admin All/search/review job browser and receipt-first accounting verified and active locally
+last_updated: "2026-10-17T20:01:25.232405+00:00"
 last_activity: 2026-10-17
-last_activity_desc: Saved revision viewing and restoration shipped with source continuity, publication tracking and illustrated docs
+last_activity_desc: Usable admin jobs, private receipt recovery, preserved provider usage and illustrated operator guide
 progress:
   total_phases: 7
   completed_phases: 6
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
 Plan: 56 of 58 accepted; development Plans 07-52/53/56/57/54/55 complete
 Status: Guided applet.broker workspace at http://127.0.0.1:49371; diagnostic console at /dev. Saved chatgpt-oauth mode with gpt-6.1-sol retained. Product/console browser journeys and recovery passed through real local services. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
-Last activity: 2026-10-17 — Completed quick task 261017-gsu: load, view and restore saved revisions without model charges; subsequent edits use restored source. Real-service and publication journeys, 437 responsive checks and illustrated docs passed. Local preview refreshed with saved ChatGPT OAuth. Existing TypeScript baseline: 425 diagnostics, no new errors.
+Last activity: 2026-10-17 — Completed quick task 261017-hov: All/search/cost-aware admin jobs and separate Needs review; receipt journal and original-rate recovery without redispatch. Live historical unknowns retain 790 test sats. Unit, SQL and full publication browser tests passed. TypeScript baseline now 411 diagnostics with none added.
 
 Follow-up: Stream assembly/counter verification remains complete. Latest helper-signature and compiler-feedback fix passed 29 targeted unit/integration cases plus activity and composed OAuth browser journeys. Real blinking-text generation also passed. See debug/resolved/generated-typescript-check.md.
 
@@ -394,6 +394,8 @@ Recent decisions affecting current work:
 
 | 261017-gsu | Version history, durable no-charge restore, source lineage and restored-version publication tracking | 2026-10-17 | see task history | [261017-gsu](./quick/261017-gsu-browse-load-and-restore-earlier-applet-r/) |
 
+| 261017-hov | All/search admin jobs, explicit billing review, immutable usage evidence and original-rate receipt recovery | 2026-10-17 | see task history | [261017-hov](./quick/261017-hov-make-cvm-admin-jobs-usable-with-all-jobs/) |
+
 ## Deferred Verification
 
 | Phase | Status | Reason | Resume command |
@@ -410,6 +412,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-17T19:18:58.980550+00:00
-Stopped at: Revision history and durable restore implemented and verified. Local app http://127.0.0.1:49371; illustrated guide http://127.0.0.1:4173/docs/users/create-and-revise. Prior cost visibility preserved. Production remains deferred.
-Resume file: .planning/quick/261017-gsu-browse-load-and-restore-earlier-applet-r/SUMMARY.md
+Last session: 2026-10-17T20:01:25.232405+00:00
+Stopped at: Admin jobs and receipt preservation/recovery verified. Local admin http://127.0.0.1:49371/admin; illustrated guide http://127.0.0.1:4173/docs/operators/operations. Two old missing-receipt jobs remain reserved, not fabricated or waived. Production remains deferred.
+Resume file: .planning/quick/261017-hov-make-cvm-admin-jobs-usable-with-all-jobs/SUMMARY.md

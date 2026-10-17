@@ -38,6 +38,16 @@ const fixtures = {
     artifacts: [{ artifact_id: "artifact:sha256:" + "c".repeat(64), version: 2, aggregate_sha256: "c".repeat(64), created_at: "2026-10-16T09:00:29Z" }],
   },
 };
+// Enrich examples with the current job projection; these are not live customer records.
+Object.assign(fixtures.job, { title: "Reading counter", action_label: "Revision", category: "finished", price_kind: "development_test", held_sat: "0", billing_status: "settled", request_text: "Make the count easier to read.", usage_receipt: { usage: [{ dimension: "input_tokens", units: "2400" }, { dimension: "output_tokens", units: "1800" }] } });
+const examples: any = fixtures.jobs;
+examples.review = [examples.active.pop()];
+for (const [category, rows] of Object.entries(examples) as [string, any[]][]) for (const row of rows) Object.assign(row, {
+  category, title: { active: "Focus timer", pending: "Saved applet", review: "Daily notes", finished: "Reading counter" }[category],
+  action_label: row.kind === "pending" ? "Saved request" : "Revision", request_text: category === "finished" ? "Make the count easier to read." : "A small, focused applet.",
+  price_kind: "development_test", reservation_sat: "395", held_sat: ["active", "review"].includes(category) ? "395" : "0",
+  receipt_charge: category === "finished" ? "5" : null, billing_status: category === "review" ? "unresolved" : category === "finished" ? "settled" : "pending",
+});
 const built = await Bun.build({ entrypoints: [resolve(root, "src/dev-ui/browser/admin.ts")], target: "browser", format: "esm", plugins: [{
   name: "read-only-admin-documentation", setup(builder) {
     builder.onLoad({ filter: /\/contextvm-client\.ts$/ }, () => ({ loader: "js", contents: `
@@ -49,7 +59,14 @@ const built = await Bun.build({ entrypoints: [resolve(root, "src/dev-ui/browser/
           if (name !== "cvm_admin") throw new Error("Unexpected tool in documentation capture");
           const samples = window.documentationFixtures;
           if (input.action === "status") return samples.status;
-          if (input.action === "jobs") return { status: "ok", jobs: samples.jobs[input.status], offset: 0 };
+          if (input.action === "jobs") {
+            if (window.failJobRefresh) throw new Error("Fixture disconnected");
+            const all = Object.values(samples.jobs).flat().filter(row => !input.search || (row.title + row.request_text + row.id).toLowerCase().includes(input.search.toLowerCase()));
+            const matching = all.filter(row => input.status === "all" || row.category === input.status);
+            return { status: "ok", jobs: matching.slice(input.offset, input.offset + 50), offset: input.offset,
+              counts: Object.fromEntries(["pending","active","review","finished"].map(category => [category, all.filter(row => row.category === category).length])), total: matching.length,
+              totals: [{ price_kind: "development_test", charged_sat: "5", review_held_sat: "395" }] };
+          }
           if (input.action === "job" && input.id === samples.job.id) return { status: "ok", job: samples.job };
           if (input.action === "chatgpt" && input.operation === "status") return samples.chatgpt;
           if (input.action === "chatgpt" && input.operation === "models") return samples.models;
@@ -101,6 +118,9 @@ try {
   // This disposable key has no authority; the capture transport has no network implementation.
   await page.locator("#operator-key").fill("1".repeat(64));
   await page.getByRole("button", { name: "Connect to CVM", exact: true }).click();
+  await page.locator("[data-state=all][aria-pressed=true]").waitFor();
+  await page.locator("#jobs tr").first().waitFor();
+  await page.locator("#provider-navigation").click();
   await page.locator("#chatgpt-model").waitFor();
   await page.waitForFunction(() => document.querySelector<HTMLSelectElement>("#chatgpt-model")?.value === "gpt-6.1-sol");
   assert(await page.locator("#operator-key").inputValue() === "");
@@ -111,15 +131,49 @@ try {
   await page.locator("#api-label").fill("Development API account");
   await capture("api-account", "#api-form");
   await page.getByText("Add an API account", { exact: true }).click();
-  for (const state of ["active", "pending", "finished"]) {
+  for (const state of ["all", "active", "review", "pending", "finished"]) {
     await page.locator(`[data-state="${state}"]`).click();
-    await page.locator("#jobs button").first().filter({ hasText: fixtures.jobs[state as keyof typeof fixtures.jobs][0]!.id }).waitFor();
+    const first = (state === "all" ? Object.values(examples).flat() : examples[state])[0];
+    await page.locator('[data-job-id="' + first.id + '"]').waitFor();
     await capture(`jobs-${state}`, ".admin-jobs");
   }
-  await page.getByRole("button", { name: "action:demo-completed", exact: true }).click();
+  await page.locator('[data-job-id="action:demo-completed"]').click();
   await page.locator("#job-detail").waitFor();
   await capture("job-details", "#job-detail");
   await page.getByRole("button", { name: "Close job details" }).click();
+  await page.locator('[data-state="all"]').click();
+  await page.getByLabel("Search jobs", { exact: true }).fill("reading");
+  await page.waitForFunction(() => document.querySelector("#jobs-range")?.textContent === "1–1 of 1 jobs");
+  await page.getByLabel("Search jobs", { exact: true }).fill("no matching applet");
+  await page.getByText("No jobs match your search.", { exact: true }).waitFor();
+  await page.getByLabel("Search jobs", { exact: true }).fill("");
+  await page.waitForFunction(() => document.querySelectorAll("#jobs button").length === 4);
+  await page.evaluate(() => { (window as any).failJobRefresh = true; });
+  await page.locator("#jobs-refresh").click();
+  await page.getByText("Could not refresh jobs. Your last results are still shown. Try Refresh.", { exact: true }).waitFor();
+  assert(await page.locator("#jobs button:not([disabled])").count() === 4, "Refresh failure must leave old rows usable");
+  await page.evaluate(() => { (window as any).failJobRefresh = false; });
+  await page.locator("#jobs-refresh").click();
+  for (const width of [320, 375, 768, 1280]) {
+    await page.setViewportSize({ width, height: 1050 });
+    await page.locator(".admin-jobs").scrollIntoViewIfNeeded();
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Admin overflow at " + width);
+    await page.locator('[data-job-id="action:demo-completed"]').click();
+    assert(await page.locator("#job-detail").evaluate(el => el.scrollWidth <= el.clientWidth), "Job details overflow at " + width);
+    await page.getByRole("button", { name: "Close job details" }).click();
+    if (width === 375) await capture("jobs-mobile", ".admin-jobs");
+  }
+  await page.evaluate(() => {
+    const fixture = (window as any).documentationFixtures;
+    fixture.jobs.finished = Array.from({ length: 55 }, (_, i) => ({ ...fixture.jobs.finished[0], id: "page-job-" + i }));
+  });
+  await page.locator('[data-state="finished"]').click();
+  await page.waitForFunction(() => document.querySelector("#jobs-range")?.textContent === "1–50 of 55 jobs");
+  await page.locator("#jobs-next").click();
+  await page.waitForFunction(() => document.querySelector("#jobs-range")?.textContent === "51–55 of 55 jobs");
+  assert(await page.locator("#jobs-next").isDisabled());
+  await page.locator("#jobs-prev").click();
+  await page.waitForFunction(() => document.querySelector("#jobs-range")?.textContent === "1–50 of 55 jobs");
   // Every recorded command must remain read-only, including component startup calls.
   const calls = await page.evaluate(() => (window as any).documentationCalls as { action: string; operation?: string }[]);
   assert(calls.every(call => ["status", "jobs", "job"].includes(call.action) || call.action === "chatgpt" && ["status", "models"].includes(call.operation!)));

@@ -20,6 +20,7 @@ export class InterruptedDevelopmentGeneration {
         JOIN price_card_versions p ON p.id=a.price_card_id
         WHERE a.account_id=$1 AND a.session_id=$2 AND a.state='usage_unknown'
           AND c.observation_json IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM development_usage_evidence e WHERE e.operation_id=a.operation_id)
           AND NOT EXISTS (SELECT 1 FROM source_proposals s WHERE s.operation_id=a.operation_id)
           AND NOT EXISTS (SELECT 1 FROM provider_observations o WHERE o.operation_id=a.operation_id)`, [accountId, sessionId])).rows;
     } finally { client.release(); }

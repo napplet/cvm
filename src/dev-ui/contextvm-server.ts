@@ -1,3 +1,4 @@
+import { recoverRecordedReceipt } from "../dev/receipt-recovery";
 import { readGenerationEstimates } from "../dev/generation-estimates";
 import { ServiceInfoArgumentsSchema, DevelopmentFaucetArgumentsSchema, OperationDiagnosticArgumentsSchema } from "./extension-schemas";
 import { DevelopmentRemixImports } from "../dev/remix-imports";
@@ -263,6 +264,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
     } finally { configuring = false; }
   }
   operator = await CvmOperator.open(resolve(stateRoot, "cvm-operator"), {
+    checkReceipt: id => recoverRecordedReceipt(app.pool, app.database.meteredFunding, id),
     pool: app.pool, busy: () => activeWork > 0 || configuring, pricing: () => runtime.pricing,
     configure: () => configureModel(chatgpt.settings(), false),
     chatgpt: (operation, body) => chatgptRoutes.command(operation, body, webOrigin),

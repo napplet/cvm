@@ -2,39 +2,49 @@
 
 ## Inspect work
 
-Run `bun scripts/dev.ts status` for local readiness and mode. Open private admin with `bun scripts/open-dev-admin.ts`; its pending, active and finished views show jobs across identities. Open a job for action details. Users can only read their own projects and bounded diagnostics.
+Run `bun scripts/dev.ts status` for local readiness and mode. Open private admin with `bun scripts/open-dev-admin.ts`. **Jobs** is the first view, with **All** selected. Provider accounts and rates are under **Provider & rates**. Users can only read their own projects; this operator view spans identities.
 
-### Pending requests
+<GuideScreenshot audience="operators" name="jobs-all" alt="Admin All view with readable applet names, status badges, charges, held funds and filter counts" caption="Search by applet, request, model or identifier. Open an applet name for the job’s details." />
 
-A pending saved idea is not necessarily a queued provider request. Admission accepts immediate capacity or refuses; an unfunded saved draft waits for explicit funding/approval. Read the job state before deciding it is stuck.
+### Find the right jobs
 
-<GuideScreenshot audience="operators" name="jobs-pending" alt="Pending jobs view with a saved sample checkpoint awaiting funds" caption="A saved checkpoint can appear under Pending before a model request has started." />
+| View | What it contains |
+| --- | --- |
+| All | Every recorded action and saved request; admitted requests are counted once. |
+| Pending | Prepared work and saved requests awaiting funds. |
+| Active | Actions recorded as running. A stale action still needs investigation; this is not a worker heartbeat. |
+| Needs review | Missing provider receipts, billing mismatches, or incomplete admission records. |
+| Finished | Ready, stopped, completed and expired work. |
 
-### Active and unconfirmed actions
+Counts follow your search. Results refresh every five seconds without disabling job links, with 50 jobs per page. On phones, results become cards rather than a horizontally scrolling table.
 
-**Active** also includes `usage_unknown` and `billing_invariant_failed`. Presence in this view alone does not prove a model or worker is still running. Open the job and inspect its recorded state and diagnostic before deciding how to recover it.
+<GuideScreenshot audience="operators" name="jobs-pending" alt="Pending jobs view with a saved applet awaiting funds and no charge" caption="A saved request has not reserved funds or started inference yet." />
 
-<GuideScreenshot audience="operators" name="jobs-active" alt="Active jobs view with one active action and a separate usage_unknown action" caption="Read the State column. A request with an unknown outcome stays in this category until it is reconciled." />
+<GuideScreenshot audience="operators" name="jobs-active" alt="Active job showing a focus timer running with a 395-test-sat reservation" caption="Reserved is an authorization, not a confirmed charge." />
 
-### Finished actions
+<GuideScreenshot audience="operators" name="jobs-finished" alt="Finished reading-counter job with five test sats settled" caption="Ready means generation passed its checks. User publication has a separate signing and confirmation flow." />
 
-Use **Finished** to inspect completed or failed actions. A `verified` generation result means the applet passed its checks; it does not by itself confirm user publication. Publication has its own [signing and confirmation flow](../users/publish-and-share).
+### Understand the money
 
-<GuideScreenshot audience="operators" name="jobs-finished" alt="Finished jobs view showing a sample generation action in verified state" caption="Select the job identifier to inspect the completed action and its evidence." />
+**Confirmed charges** sums settled actions. **Reserved for review** shows action authorizations still held against jobs needing attention. These are separate amounts, and development test sats are labelled separately from provider-priced sats. A zero or waived local charge is never evidence of zero upstream usage.
 
-### Open a job
+Each job opens with its request, confirmed charge, still-reserved amount and approved maximum. The usage section shows recorded token counts, model, timing and worker results. **Identifiers & ledger** contains operation IDs, original price version and individual ledger entries.
 
-Job details include the session and operation identifiers, pinned provider/profile/price card, reserved amount, receipt charge, remaining balances, and available worker/artifact records. Pending-request details contain a smaller set of saved-request fields.
+<GuideScreenshot audience="operators" name="job-details" alt="Structured job details with confirmed charge, reservation, maximum, token usage and execution facts" caption="Receipt charges use the job’s original immutable price card, even after the operator changes rates." />
 
-<GuideScreenshot audience="operators" name="job-details" alt="Job details showing a verified action, its session and operation IDs, five-test-sat charge, completed worker and version-two artifact" caption="Compare the reserved amount with the settled charge and released funds. Scroll the dialog when needed; all identifiers here are examples." />
+### Recover missing usage {#recover-a-failed-request}
 
-## Recover a failed request
+A provider can accept a request and then lose its connection before delivering a final usage receipt. Local storage can also fail after a response arrives. The service cannot truthfully infer an exact token count from missing evidence. Such a request is **Receipt missing** under **Needs review**, not a free action or proof of running generation.
 
-Preserve the session, verified artifact, operation ID and idempotency key. Read status first. If a source proposal and receipt were durably saved, recovery can use them without repeating inference. A missing outcome after dispatch is handled separately from a definite rejection.
+<GuideScreenshot audience="operators" name="jobs-review" alt="Needs review filter showing an unsettled job and its protected test-sat reservation" caption="Missing receipts remain visible separately from active generation." />
 
-Development subscription attempts that have definitely ended without recoverable source/receipt can be closed with a waived local test charge and a new explicit revision. This does not erase upstream subscription usage. Uncertain real API billing remains fenced for reconciliation. Do not delete database rows or replay generation to clear a warning.
+Open the job and select **Check receipt**. It checks the CVM’s saved, correlated evidence without making a model request. A valid receipt settles exactly once at the original rates. If no receipt exists, funds remain reserved; conflicts also remain unresolved. This button cannot retrieve usage that the provider never delivered. It never guesses zero usage or charges the approved maximum as if it were actual usage.
 
-See [user troubleshooting](../users/troubleshooting) and the [detailed timeout/recovery notes](../runbooks/development-gui#model-timeouts-and-unconfirmed-outcomes).
+Valid receipts are journaled before parsing or saving generated source, so invalid output and source-storage failures retain their billable usage. Do not delete rows or repeat inference to clear a warning.
+
+Development subscription attempts that have ended without recoverable source/receipt can still be closed through the existing session-recovery policy, with the operator absorbing the local test charge. Admin labels these **Operator absorbed**; upstream subscription usage remains unconfirmed. Known journaled usage is never waived by this policy. Real API billing remains fenced until reconciliation.
+
+See [user troubleshooting](../users/troubleshooting) and [timeout/recovery notes](../runbooks/development-gui#model-timeouts-and-unconfirmed-outcomes).
 
 ## Back up a development instance
 

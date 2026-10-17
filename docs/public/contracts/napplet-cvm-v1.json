@@ -1992,12 +1992,20 @@
                 "const": "jobs"
               },
               "status": {
+                "default": "all",
                 "type": "string",
                 "enum": [
+                  "all",
                   "pending",
                   "active",
+                  "review",
                   "finished"
                 ]
+              },
+              "search": {
+                "default": "",
+                "type": "string",
+                "maxLength": 160
               },
               "offset": {
                 "default": 0,
@@ -2007,8 +2015,26 @@
               }
             },
             "required": [
+              "action"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "check_receipt"
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 240
+              }
+            },
+            "required": [
               "action",
-              "status"
+              "id"
             ],
             "additionalProperties": false
           },

@@ -129,8 +129,15 @@ async function up(): Promise<LaunchRecord> {
   const value = scope(); const existing = await readRecord(value);
   if (existing && await alive(existing)) {
     const config = JSON.parse(await readFile(value.configPath, "utf8")) as DevPayments;
-    const ready = await assertLauncherReadiness({ config, configPath: value.configPath, url: existing.url, stateRoot: value.stateRoot });
-    if (existing.workerImageDigest === ready.workerImageDigest) {
+    let ready;
+    try { ready = await assertLauncherReadiness({ config, configPath: value.configPath, url: existing.url, stateRoot: value.stateRoot }); }
+    catch (error) {
+      const code = (error as { code?: string }).code;
+      const message = error instanceof Error ? error.message : "";
+      if (!["ECONNREFUSED", "ConnectionRefused", "ECONNRESET", "ETIMEDOUT"].includes(code ?? "") && !/^DEV_(?:RELAY_NOT_READY|MINT_NOT_READY|SECONDARY_MINT_NOT_READY|HUB_NOT_READY|HUB_RELAY_NOT_READY)$/u.test(message) && !(error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name))) throw error;
+      console.error("Development dependencies are unavailable. Restoring local services…");
+    }
+    if (ready && existing.workerImageDigest === ready.workerImageDigest) {
       const complete = { ...existing, mode: await runningMode(existing.url) } as LaunchRecord;
       await writeRecord(value, complete);
       return complete;
@@ -138,6 +145,9 @@ async function up(): Promise<LaunchRecord> {
   }
   await stopServer(existing);
   await ensurePrerequisites(value);
+  // A still-running wallet hub can retain a dead relay connection. Recreate
+  // the stack together, retaining its volumes and private configuration.
+  await paymentStack(value).down(false);
   const config = await paymentStack(value).up();
   const record = await startServer(value, existing?.port ?? await freePort());
   const ready = await assertLauncherReadiness({ config, configPath: value.configPath, url: record.url, stateRoot: value.stateRoot });

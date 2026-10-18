@@ -24,7 +24,7 @@ Local Cashu/NWC test sats are separate from provider usage in every mode. An API
 
 The CVM keeps OAuth state in its private local directory across restarts. Repeated sign-in is not part of the normal development loop. A genuine authentication failure can require reconnecting; a timeout, large response or worker failure does not by itself mean you are signed out.
 
-The admin opener passes a local operator credential in a URL fragment, which the page removes. Do not copy that launch URL to others. **Lock admin** ends that browser's admin session. The public static export excludes the admin page.
+The admin opener first checks the local CVM and restores stopped development services when necessary, retaining data and credentials. It then passes a local operator credential in a URL fragment, which the page removes. Reopening it also works when the browser reuses a locked admin tab. Do not copy that launch URL to others. **Lock admin** ends that browser's admin session. The public static export excludes the admin page. An explicit `NAPPLET_CVM_DEV_INSTANCE=default` uses the normal default workspace; other names open their own instances.
 
 Model availability is confirmed by a successful request. A listed model is not a guarantee of permission or remaining subscription allowance. Manage subscription limits in the account's ChatGPT settings; API-credit balances are separate.
 

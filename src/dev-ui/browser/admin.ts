@@ -11,6 +11,9 @@ const storageKey = `napplet-cvm/operator/v1/${bootstrap.servicePubkey}`;
 const keyFromLink = new URLSearchParams(location.hash.slice(1)).get("key");
 if (keyFromLink && /^[a-f0-9]{64}$/.test(keyFromLink)) sessionStorage.setItem(storageKey, keyFromLink);
 if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+if (new URL(location.href).searchParams.has("launch")) {
+  const clean = new URL(location.href); clean.searchParams.delete("launch"); history.replaceState(null, "", clean.pathname + clean.search);
+}
 document.querySelector("#app")!.innerHTML = `<header class="brand-header"><div><a class="admin-home" href="/">applet.broker</a><h1>CVM admin</h1></div><nav aria-label="Admin navigation"><a href="#jobs-heading">Jobs</a><a id="provider-navigation" href="#provider-settings">Provider & rates</a><button id="admin-lock" hidden>Lock admin</button></nav></header>
 <p class="supporting">Private operator workspace · encrypted ContextVM</p><p id="operator-provider"></p><p id="admin-status" role="status"></p>
 <form id="admin-login"><label for="operator-key">Operator access key</label><input id="operator-key" type="password" autocomplete="off" required><button class="primary">Connect to CVM</button><p>Open with <code>bun scripts/open-dev-admin.ts</code> on the CVM host, or enter its private operator access key.</p></form>
@@ -76,3 +79,11 @@ el("admin-lock").onclick = () => { sessionStorage.removeItem(storageKey); sessio
 el<HTMLFormElement>("api-form").onsubmit = event => { event.preventDefault(); void (async () => { const configuration = JSON.parse(el<HTMLTextAreaElement>("api-config").value); await command({ action: "add_api", account: { ...configuration, id: crypto.randomUUID(), label: el<HTMLInputElement>("api-label").value, apiKey: el<HTMLInputElement>("api-key").value } }); el<HTMLInputElement>("api-key").value = ""; await refreshConfig(); message("API account saved privately on the CVM."); })().catch(report); };
 el("provider-navigation").onclick = () => { el<HTMLDetailsElement>("provider-settings").open = true; };
 const saved = sessionStorage.getItem(storageKey); if (saved) void connect(saved).catch(report);
+// Opening a fragment link into an existing document does not re-run the module.
+window.addEventListener("hashchange", () => {
+  const key = new URLSearchParams(location.hash.slice(1)).get("key");
+  if (!key || !/^[a-f0-9]{64}$/u.test(key)) return;
+  sessionStorage.setItem(storageKey, key);
+  history.replaceState(null, "", location.pathname + location.search);
+  location.reload();
+});

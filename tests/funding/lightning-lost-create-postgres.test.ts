@@ -25,7 +25,7 @@ integration("restricted PostgreSQL preserves lost NWC intent across fresh reposi
     if (!port) throw new Error("POSTGRES_PORT_MISSING");
     admin = new Pool({ connectionString: `postgresql://postgres@127.0.0.1:${port}/postgres`, connectionTimeoutMillis: 2000 });
     for (let attempt = 0; attempt < 60; attempt++) { try { await admin.query("SELECT 1"); break; } catch (error) { if (attempt === 59) throw error; await Bun.sleep(250); } }
-    for (const path of ["phase-03/001_funding.sql", "phase-04/001_metered_generation.sql", "phase-04/002_action_budget_lifecycle.sql", "phase-05/001_continuation.sql", "phase-06/001_publication.sql", "phase-03/002_production_accounting.sql", "phase-03/003_cashu_custody_and_identities.sql"]) await admin.query(await Bun.file(`migrations/${path}`).text());
+    for (const path of ["phase-03/001_funding.sql", "phase-04/001_metered_generation.sql", "phase-04/002_action_budget_lifecycle.sql", "phase-05/001_continuation.sql", "phase-06/001_publication.sql", "phase-03/002_production_accounting.sql", "phase-03/003_cashu_custody_and_identities.sql", "phase-03/004_production_rail_material_scope.sql"]) await admin.query(await Bun.file(`migrations/${path}`).text());
     await admin.query("CREATE ROLE nwc_recovery_test LOGIN");
     await admin.query("GRANT napplet_production_real TO nwc_recovery_test");
     application = new Pool({ connectionString: `postgresql://nwc_recovery_test@127.0.0.1:${port}/postgres`, connectionTimeoutMillis: 2000 });
@@ -51,8 +51,10 @@ integration("restricted PostgreSQL preserves lost NWC intent across fresh reposi
         vault: new ProtectedRailMaterialVault({ key: new Uint8Array(32).fill(8), repository: db.protectedMaterials }),
         receiver: new NwcLightningReceiptPort(transport, () => now), now: () => new Date(now).toISOString(), providerTimeoutMs: 10000 }) };
     };
-    const first = await create().coordinator.begin({ principal, idempotencyKey: "pg-lost", amount: "250", unit: "sat", policyVersion: "v1", protocolVersion: "v1" });
-    expect(first.state).toBe("reconciliation_pending");
+    const initial = await Promise.all(Array.from({ length: 2 }, () => create().coordinator.begin({ principal, idempotencyKey: "pg-lost", amount: "250", unit: "sat", policyVersion: "v1", protocolVersion: "v1" })));
+    const first = initial[0]!;
+    expect(new Set(initial.map(result => result.topUpId)).size).toBe(1);
+    expect(creates).toBe(1);
     const results = await Promise.all(Array.from({ length: 2 }, () => create().coordinator.reconcile({ principal, topUpId: first.topUpId })));
     // Bounded serialization contention may require another query, never create.
     if (results.some(result => result.state !== "credited")) await create().coordinator.reconcile({ principal, topUpId: first.topUpId });

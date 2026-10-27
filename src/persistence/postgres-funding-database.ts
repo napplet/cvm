@@ -137,22 +137,17 @@ class PostgresLightningLifecycleRepository implements LightningTopUpRepository {
   constructor(private readonly pool: PostgresSqlPool) {}
 
   async transact<T>(operation: (state: LightningTopUpState) => Promise<T> | T): Promise<T> {
-    const client = await this.pool.connect();
-    try {
-      await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
+    return serializableProductionTransaction(this.pool, async (client) => {
+      // Establish the row before locking it, including simultaneous first-ever
+      // claims. ON CONFLICT plus serializable retry fences both creators.
+      await client.query("INSERT INTO lightning_top_up_state(state_key,state_json) VALUES ('global','{}'::jsonb) ON CONFLICT (state_key) DO NOTHING");
       const found = await client.query<{ state_json: LightningJson }>("SELECT state_json FROM lightning_top_up_state WHERE state_key='global' FOR UPDATE");
       const raw = found.rows[0]?.state_json ?? {};
       const state: LightningTopUpState = { topUps: new Map(raw.topUps ?? []), commands: new Map(raw.commands ?? []) };
       const result = await operation(state);
       await client.query("INSERT INTO lightning_top_up_state(state_key,state_json) VALUES ('global',$1) ON CONFLICT (state_key) DO UPDATE SET state_json=EXCLUDED.state_json,updated_at=now()", [JSON.stringify({ topUps: [...state.topUps], commands: [...state.commands] })]);
-      await client.query("COMMIT");
       return frozen(result);
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined);
-      throw error;
-    } finally {
-      client.release();
-    }
+    });
   }
 }
 
@@ -267,13 +262,20 @@ function monotonicCashuResult(current: CashuTopUpResult, proposed: CashuTopUpRes
 }
 
 class PostgresProtectedRailMaterialRepository implements ProtectedRailMaterialRepository {
-  constructor(private readonly pool: PostgresSqlPool) {}
+  constructor(private readonly pool: PostgresSqlPool, private readonly realm: AccountingRealm) {}
 
   async put(record: ProtectedRailMaterialRecord): Promise<void> {
-    const client = await this.pool.connect();
-    try {
+    await serializableProductionTransaction(this.pool, async (client) => {
+      if (this.realm.name === "production-real") {
+        // This creates a zero-money identity only. Settlement and all balance
+        // mutations remain exclusively in the verified funding transaction.
+        await client.query("INSERT INTO funding_accounts(account_id,unit) VALUES($1,'sat') ON CONFLICT (account_id) DO NOTHING", [record.accountId]);
+        await client.query("INSERT INTO rail_material_scopes(top_up_id,account_id,rail) VALUES($1,$2,$3) ON CONFLICT (top_up_id) DO NOTHING", [record.topUpId, record.accountId, record.rail]);
+        const scope = (await client.query<{ account_id: string; rail: string }>("SELECT account_id,rail FROM rail_material_scopes WHERE top_up_id=$1", [record.topUpId])).rows[0];
+        if (!scope || scope.account_id !== record.accountId || scope.rail !== record.rail) throw new Error("PRODUCTION_RAIL_MATERIAL_SCOPE_CONFLICT");
+      }
       await client.query("INSERT INTO protected_rail_material(material_id,account_id,top_up_id,rail,payload_digest,nonce,ciphertext,expires_at,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)", [record.id, record.accountId, record.topUpId, record.rail, record.payloadDigest, record.nonce, record.ciphertext, record.expiresAt ?? null, record.createdAt]);
-    } finally { client.release(); }
+    });
   }
 
   async get(id: string): Promise<ProtectedRailMaterialRecord | undefined> {
@@ -341,7 +343,7 @@ export class PostgresFundingDatabase {
     this.continuationFunding = this.funding;
     this.lightning = new PostgresLightningLifecycleRepository(realmPool);
     this.cashu = new PostgresCashuLifecycleRepository(realmPool);
-    this.protectedMaterials = new PostgresProtectedRailMaterialRepository(realmPool);
+    this.protectedMaterials = new PostgresProtectedRailMaterialRepository(realmPool, this.realm);
     this.railStatuses = new PostgresRailStatusProjection(realmPool);
     this.custody = new PostgresProductionCustodyRepository(realmPool, this.realm);
     this.uncertainRailOperations = new PostgresUncertainRailOperationRepository(realmPool, this.realm);

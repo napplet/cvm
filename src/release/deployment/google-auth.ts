@@ -75,13 +75,16 @@ export function createGoogleAdcTokenSource(input: Readonly<{
   auth?: GoogleAuthPort;
   now?: () => number;
   expiryMarginMs?: number;
+  timeoutMs?: number;
 }>): GoogleTokenSource {
   const projectId = ProjectIdSchema.parse(input.projectId);
   const quotaProjectId = ProjectIdSchema.parse(input.quotaProjectId);
   const principal = z.string().regex(/^[A-Za-z0-9@._:/-]{3,255}$/u).parse(input.principal);
   const now = input.now ?? Date.now;
   const margin = input.expiryMarginMs ?? 60_000;
+  const timeoutMs = input.timeoutMs ?? 5_000;
   if (!Number.isSafeInteger(margin) || margin < 10_000 || margin > 10 * 60_000) throw new Error("GOOGLE_ADC_EXPIRY_MARGIN_INVALID");
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) throw new Error("GOOGLE_ADC_TIMEOUT_INVALID");
   const fetcher = input.fetch ?? fetch;
   const libraryAuth: GoogleAuthPort | undefined = input.auth ?? (!input.fetch ? new GoogleAuth({ projectId, scopes: GOOGLE_CONTROL_PLANE_SCOPES, clientOptions: { quotaProjectId } }) : undefined);
   let cached: GoogleAccessToken | undefined;
@@ -93,12 +96,12 @@ export function createGoogleAdcTokenSource(input: Readonly<{
       let token = ""; let expiresAtMs = 0; let actualScopes: readonly string[] = [];
       if (libraryAuth) {
         try {
-          const [resolvedProject, credentials, client] = await within(Promise.all([libraryAuth.getProjectId(), libraryAuth.getCredentials(), libraryAuth.getClient()]));
+          const [resolvedProject, credentials, client] = await within(Promise.all([libraryAuth.getProjectId(), libraryAuth.getCredentials(), libraryAuth.getClient()]), timeoutMs);
           const credential = credentials as Readonly<{ client_email?: unknown; quota_project_id?: unknown }>;
           if (resolvedProject !== projectId || (credential.quota_project_id !== undefined && credential.quota_project_id !== quotaProjectId)) throw new Error("GOOGLE_ADC_IDENTITY_INVALID");
-          const access = await within(client.getAccessToken());
+          const access = await within(client.getAccessToken(), timeoutMs);
           const expiry = client.credentials.expiry_date;
-          const tokenInfo = typeof access.token === "string" && typeof client.getTokenInfo === "function" ? await within(client.getTokenInfo(access.token)) : undefined;
+          const tokenInfo = typeof access.token === "string" && typeof client.getTokenInfo === "function" ? await within(client.getTokenInfo(access.token), timeoutMs) : undefined;
           const discoveredPrincipal = credential.client_email ?? tokenInfo?.email;
           if (discoveredPrincipal !== principal) throw new Error("GOOGLE_ADC_IDENTITY_INVALID");
           const scopeMatches = tokenInfo !== undefined && await googleAccountScopeSha256({ projectId, quotaProjectId, principal, scopes: tokenInfo.scopes }).then(() => true).catch(() => false);
@@ -111,7 +114,7 @@ export function createGoogleAdcTokenSource(input: Readonly<{
       if (!token) try {
         const headers = { "Metadata-Flavor": "Google" };
         const controller = new AbortController();
-        const metadataGet = (path: string) => within(fetcher(`http://metadata.google.internal/computeMetadata/v1/${path}`, { method: "GET", headers, redirect: "error", signal: controller.signal })).catch((error) => { controller.abort(); throw error; });
+        const metadataGet = (path: string) => within(fetcher(`http://metadata.google.internal/computeMetadata/v1/${path}`, { method: "GET", headers, redirect: "error", signal: controller.signal }), timeoutMs).catch((error) => { controller.abort(); throw error; });
         const [metadataProject, metadataPrincipal, metadataScopes] = await Promise.all([
           metadataGet("project/project-id"), metadataGet("instance/service-accounts/default/email"), metadataGet("instance/service-accounts/default/scopes"),
         ]);

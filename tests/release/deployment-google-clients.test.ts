@@ -62,6 +62,11 @@ test("metadata ADC verifies documented bearer type, scope, identity, and expiry"
   expect(calls).toContain("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token");
 });
 
+test("ADC metadata hangs are bounded and never release a token", async () => {
+  const source = createGoogleAdcTokenSource({ projectId, quotaProjectId: projectId, principal, timeoutMs: 1, fetch: async () => new Promise<Response>(() => {}) });
+  await expect(source.getAccessToken()).rejects.toThrow("ADC_APPLICATION_DEFAULT_LOGIN_REQUIRED");
+});
+
 test("wrong ADC project, quota, principal, expiry, or scope fails before any Google request", async () => {
   const variants = [
     { projectId: "wrong-project-1" }, { quotaProjectId: "wrong-project-1" }, { principal: "wrong@napplet-cvm-run-1.iam.gserviceaccount.com" },

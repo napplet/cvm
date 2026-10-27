@@ -21,7 +21,7 @@ const logPath = reportPath.replace(/\.json$/u, "") + ".log";
 // Docker's default AppArmor profile denies mounts even with CAP_SYS_ADMIN.
 // This is deliberately not a production provider isolation certificate.
 const resourceArgs = ["--cpus", "1", "--memory", "1024m", "--memory-swap", "1024m", "--security-opt", "apparmor=unconfined"];
-const containers = [`napplet-cvm-production-worker-build-${run}`, `napplet-cvm-production-worker-idle-${run}`, `napplet-cvm-production-worker-ready-${run}`, `napplet-cvm-production-worker-jobs-${run}`];
+const containers = [`napplet-cvm-production-worker-build-${run}`, `napplet-cvm-production-worker-idle-${run}`, `napplet-cvm-production-worker-ready-${run}`, `napplet-cvm-production-worker-jobs-${run}`, `napplet-cvm-production-worker-restore-${run}`];
 const lease = "a".repeat(64);
 const imageHash = "b".repeat(64);
 const toolchain = "c".repeat(64);
@@ -145,6 +145,7 @@ try {
   await requireDocker(["run", "-d", "--name", jobName, ...resourceArgs, "--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "-e", `NAPPLET_CVM_POLICY_VERSION=${POLICY}`, image, "/usr/local/bin/napplet-cvm-worker", "idle", "--provider-deadline-epoch-ms", String(Date.now() + 1_200_000)]);
   const jobCommand = async (...args: string[]) => lastJson((await requireDocker(["exec", jobName, "/usr/local/bin/napplet-cvm-bootstrap", "/usr/local/bin/napplet-cvm-job", ...args])).stdout);
   const jobs: unknown[] = [];
+  let checkpointWorkspace: Buffer | undefined, lastJobId = "";
   for (let revision = 1; revision <= 2; revision++) {
     const body = canonicalJson({ version: 1, sessionId: "local-job-proof", actionId: `revision-${revision}`, expectedVersion: revision - 1, proposalSha256: lease, toolchainSha256: toolchain, deadlineEpochMs: Date.now() + 600_000, files: JSON.parse(sourceJson).files });
     const bytes = Buffer.from(body), id = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
@@ -165,8 +166,37 @@ try {
     const observedAgain = await jobCommand("status", id);
     if (replayed.jobId !== id || canonicalJson(observedAgain) !== canonicalJson(result)) throw new Error("WORKER_JOB_REDISPATCHED");
     jobs.push({ ...result, revision, resultAccess: "denied-to-generated-uid" });
+    if (revision === 2) {
+      const parts: Buffer[] = [];
+      for (let offset = 0; offset < Number(result.artifactBytes); offset += 24_576) {
+        const part = await jobCommand("artifact", id, String(offset)); parts.push(Buffer.from(String(part.bytesBase64), "base64"));
+      }
+      const artifactBytes = Buffer.concat(parts);
+      if (new Bun.CryptoHasher("sha256").update(artifactBytes).digest("hex") !== result.artifactSha256) throw new Error("WORKER_ARTIFACT_EXPORT_INVALID");
+      checkpointWorkspace = Buffer.from(canonicalJson({ version: 1, source: JSON.parse(body), artifact: JSON.parse(artifactBytes.toString("utf8")), toolchainSha256: toolchain })); lastJobId = id;
+    }
   }
   report.durableJobs = jobs;
+  const fence = await jobCommand("fence", lastJobId, lease);
+  const fenceAgain = await jobCommand("fence-status", lastJobId, lease);
+  if (fence.state !== "fenced" || canonicalJson(fence) !== canonicalJson(fenceAgain)) throw new Error("WORKER_FENCE_FAILED");
+  const blockedBody = canonicalJson({ ...JSON.parse(checkpointWorkspace!.toString("utf8")).source, actionId: "forbidden-after-fence" });
+  const blockedId = new Bun.CryptoHasher("sha256").update(blockedBody).digest("hex");
+  await jobCommand("put", blockedId, "0", Buffer.from(blockedBody).toString("base64"));
+  const blocked = await docker(["exec", jobName, "/usr/local/bin/napplet-cvm-bootstrap", "/usr/local/bin/napplet-cvm-job", "start", blockedId, "1"]);
+  if (blocked.status === 0 || !blocked.stderr.includes("JOB_LEASE_FENCED")) throw new Error("WORKER_FENCE_NOT_ENFORCED");
+  const freshName = containers[4]!;
+  await requireDocker(["run", "-d", "--name", freshName, ...resourceArgs, "--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "-e", `NAPPLET_CVM_POLICY_VERSION=${POLICY}`, image, "/usr/local/bin/napplet-cvm-worker", "idle", "--provider-deadline-epoch-ms", String(Date.now() + 1_200_000)]);
+  const restoreCommand = async (...args: string[]) => lastJson((await requireDocker(["exec", freshName, "/usr/local/bin/napplet-cvm-bootstrap", "/usr/local/bin/napplet-cvm-job", ...args])).stdout);
+  const archive = checkpointWorkspace!, archiveSha256 = new Bun.CryptoHasher("sha256").update(archive).digest("hex");
+  for (let offset = 0, index = 0; offset < archive.length; offset += 24_576, index++) await restoreCommand("restore-put", archiveSha256, String(index), archive.subarray(offset, offset + 24_576).toString("base64"));
+  const restored = await restoreCommand("restore", archiveSha256, String(Math.ceil(archive.length / 24_576)));
+  const restoredAgain = await restoreCommand("restore-status", archiveSha256);
+  if (restored.state !== "restored" || restored.archiveSha256 !== archiveSha256 || restored.toolchainSha256 !== toolchain || canonicalJson(restored) !== canonicalJson(restoredAgain)) throw new Error("WORKER_FRESH_RESTORE_FAILED");
+  await requireDocker(["exec", freshName, "/usr/local/bin/napplet-cvm-bootstrap", "/bin/sh", "-ec", "test -r /workspace/restored/src/main.ts; test -r /workspace/restored/dist/index.html; test ! -w /workspace/restored/src/main.ts; test ! -r /run/napplet-cvm-jobs/restoring"]);
+  const originalAbsent = await restoreCommand("status", lastJobId);
+  if (originalAbsent.state !== "missing") throw new Error("WORKER_RESTORE_DISPATCHED_BUILD");
+  report.checkpoint = { fence, deniedNewStart: true, restored, repeatedObservationStable: true, originalJobAbsent: true, freshContainer: freshName };
 
   const idleName = containers[1]!; const idleDeadline = Date.now() + 12_000;
   const idleArgv = ["/usr/local/bin/napplet-cvm-worker", "idle", "--provider-deadline-epoch-ms", String(idleDeadline)];

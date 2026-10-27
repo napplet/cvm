@@ -12,13 +12,13 @@ provides:
   - root-owned offline production worker image with enforced workload restrictions
   - repeatable native image validation workflow
 requirements-completed: []
-status: implementation_review
+status: implementation_complete
 completed: 2026-10-27
 ---
 
 # Plan 07-64 — Production worker transports
 
-Implementation and local ARM64 validation pass. Native AMD64 CI review is pending. No provider has been selected or certified, and no protected provider effects occurred.
+Implementation, local ARM64 validation, and native AMD64 CI review pass. PR #8 merged as `df0ec9e96a4b2a68fbf754a7e6dc5cd30d7b7b1b` at 2026-10-27T17:55:26Z. No provider has been selected or certified, and no protected provider effects occurred.
 
 ## Implemented
 
@@ -31,7 +31,7 @@ Implementation and local ARM64 validation pass. Native AMD64 CI review is pendin
 
 ## Verification
 
-- Denied-effects release and Modal probe suite: **206 passed, 0 failed, 1,042 assertions** (`/tmp/cvm-plan64-release-tests.log`).
+- Denied-effects release and Modal probe suite: **208 passed, 0 failed, 1,058 assertions** (`/tmp/cvm-worker-review-release-tests.log`).
 - Full local ARM64 production image run finished **2026-10-27T17:39:39.579Z**, report `/tmp/cvm-plan64-worker-final.json`, paired `.log`.
 - Image ID: `sha256:bb733a42220ad2123f824c0d87d3dcfef2e08c74a45c7d6e748a31bca8a01d35`.
 - Enforced local resources: **1 CPU, 1 GiB memory, no additional swap**. The outer Docker network was ordinary bridge networking; the inner bootstrap enforced network denial.
@@ -50,3 +50,11 @@ The historical CLI asset changed upstream. Historical candidate JSON remains imm
 Implementation history includes `870a5be`, `d6f70dc`, `a86b022`, `f2a7357`, `ab841c3`, `68a1c13`, `1b34f77`, `b6f270c`, `9839c58`, `0c155bc`, `9bc0d25`, `71a5d8a`, `84904be`, `e92df9a`, `de93462`, `0e14de0`, and `877c571`. PR: https://github.com/napplet/cvm/pull/8.
 
 Plan 69 must install the shared cross-region SQL journal. Plan 70 must use these production execution paths and preserve durable job/artifact identity across bounded provider exec calls. Plans 67/68/73 and protected execution must supply provenance, real provider capability probes, candidate-bound admission, conformance and publication evidence. SESS-02 and OPS-01–OPS-04 remain unverified. No live deployment or real-money effects occurred.
+
+## Final CI review
+
+Native AMD64 [worker run 40554580553](https://github.com/napplet/cvm/actions/runs/40554580553) and [documentation run 40554580520](https://github.com/napplet/cvm/actions/runs/40554580520) passed at reviewed head `b01c5d3bdbb148e7cda9fa6a656b524d3b1db32b`. AMD64 image ID was `sha256:dd437c19f2a2b35e942e09db6d93f5c5bf083d28c6bfd3cdd92e8c8511de7a9c`. All eight tooling commands, supervisor EPERM/deadline and all three cleanup observations passed; Chromium remained 5/0/5. Downloaded report: `/tmp/cvm-worker-ci-40554580553/production-worker-report.json`.
+
+Initial native CI exposed Docker host mount denial. The mechanism harness now explicitly uses `apparmor=unconfined` so its trusted bootstrap can mount quotas; workload restrictions remain verified. This test configuration is not a certified provider boundary. Local ARM64 revalidation with the same option passed at `/tmp/cvm-plan64-worker-apparmor.json`.
+
+Final review removed an unconditional Fly pending result after a valid lease-bound probe and added server-held request-digest checks to ambiguous-create recovery. Missing or mismatched observations remain unknown, and no retry creates another resource.

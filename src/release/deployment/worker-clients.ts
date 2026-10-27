@@ -101,7 +101,7 @@ function isolatedExec(command: readonly string[]): readonly string[] {
 }
 function productionCommand(value: readonly string[]): string[] {
   const command = z.array(z.string().min(1).max(32_768)).min(1).max(12).parse(value);
-  if (command.some((argument, index) => argument.length > 256 && !(command[0] === "/usr/local/bin/napplet-cvm-job" && command[1] === "put" && index === 4 && /^[A-Za-z0-9+/]+={0,2}$/u.test(argument)))) throw new Error("WORKER_COMMAND_ARGUMENT_INVALID");
+  if (command.some((argument, index) => argument.length > 256 && !(command[0] === "/usr/local/bin/napplet-cvm-job" && ["put", "restore-put"].includes(command[1]!) && index === 4 && /^[A-Za-z0-9+/]+={0,2}$/u.test(argument)))) throw new Error("WORKER_COMMAND_ARGUMENT_INVALID");
   return command;
 }
 
@@ -134,9 +134,10 @@ async function boundedJson(response: Response, signal?: AbortSignal): Promise<un
 }
 
 export type FlyCreateResult = Readonly<{ status: "created" | "reconciled"; operationId: string; resourceId: string }> | Readonly<{ status: "unknown"; operationId: string }>;
+export type WorkerReadinessObservation = Readonly<{ readyMonotonicMs: number; readinessProbeDigest: string }>;
 export type FlyMachinesHttpTransport = Readonly<{
   create(input: Readonly<{ operationId: string; region: string; image: string; policy: ProductionWorkerPolicy; sessionLeaseSha256: string; toolchainSha256: string; providerDeadlineEpochMs: number }>): Promise<FlyCreateResult>;
-  observe(input: Readonly<{ operationId: string }>): Promise<Readonly<{ status: "missing" | "pending" | "completed" | "unknown"; resourceId?: string }>>;
+  observe(input: Readonly<{ operationId: string }>): Promise<Readonly<{ status: "missing" | "pending" | "completed" | "unknown"; resourceId?: string; readiness?: WorkerReadinessObservation }>>;
   terminate(input: Readonly<{ operationId: string }>): Promise<Readonly<{ status: "terminated" | "pending" | "unknown" | "blocked" }>>;
   /** Controller-only bounded Machines exec. It is used for the immutable
    * image's readiness probe, never to re-run generated or paid work. */
@@ -145,7 +146,7 @@ export type FlyMachinesHttpTransport = Readonly<{
 
 export type ModalProductionTransport = Readonly<{
   create(input: Readonly<{ operationId: string; sessionLeaseSha256: string; toolchainSha256: string; providerDeadlineEpochMs: number }>): Promise<Readonly<{ status: "created" | "reconciled" | "unknown"; operationId: string; resourceId?: string }>>;
-  observe(input: Readonly<{ operationId: string }>): Promise<Readonly<{ status: "completed" | "pending" | "unknown"; resourceId?: string }>>;
+  observe(input: Readonly<{ operationId: string }>): Promise<Readonly<{ status: "completed" | "pending" | "unknown"; resourceId?: string; readiness?: WorkerReadinessObservation }>>;
   terminate(input: Readonly<{ operationId: string }>): Promise<Readonly<{ status: "terminated" | "pending" | "unknown" | "blocked" }>>;
   /** Production-only, bounded and bootstrap-wrapped command surface. */
   exec(input: Readonly<{ operationId: string; command: readonly string[]; timeoutMs?: number }>): Promise<Readonly<{ status: "completed" | "unknown"; stdout?: string; stderr?: string; exitCode?: number }>>;
@@ -238,7 +239,10 @@ export function createModalProductionTransport(input: Readonly<{ appName: string
         if (output.status !== "completed" || output.exitCode !== 0 || output.stdout === undefined) return Object.freeze({ status: "pending" as const, resourceId: record.resourceId });
         const report = z.object({ checks: z.object({ toolchain_readonly: z.literal(true), workspace_bounded: z.literal(true), non_root: z.literal(true), no_ambient_credentials: z.literal(true), network_denied: z.literal(true), no_inbound_ports: z.literal(true), minimal_capabilities: z.literal(true) }).strict(), exactReady: z.object({ image: ImageSchema, sessionLeaseSha256: ImageDigestSchema, toolchainSha256: ImageDigestSchema, remainingLifetimeMs: z.number().int().positive().max(PRODUCTION_WORKER_POLICY.totalLifetimeMs) }).strict() }).strict().safeParse(JSON.parse(output.stdout));
         if (!report.success || report.data.exactReady.image !== image || report.data.exactReady.sessionLeaseSha256 !== record.sessionLeaseSha256 || report.data.exactReady.toolchainSha256 !== record.toolchainSha256) return Object.freeze({ status: "unknown" as const, resourceId: record.resourceId });
-        return Object.freeze({ status: "completed" as const, resourceId: record.resourceId });
+        // Use the coordinator's monotonic clock, shared with ContextVM receipt
+        // telemetry, rather than comparing clocks from separate worker hosts.
+        const readyMonotonicMs = Math.floor(performance.now());
+        return Object.freeze({ status: "completed" as const, resourceId: record.resourceId, readiness: Object.freeze({ readyMonotonicMs, readinessProbeDigest: `sha256:${await sha256(output.stdout)}` }) });
       } catch { return Object.freeze({ status: "pending" as const, resourceId: record.resourceId }); }
     },
     exec,
@@ -444,7 +448,8 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: WorkerOper
       // quota mounts and privilege drop before this probe. Provider identity
       // plus the complete probe establishes operational readiness; selecting
       // Fly still requires the separate protected capability/admission gates.
-      return Object.freeze({ status: "completed" as const, resourceId: record.resourceId });
+      const readyMonotonicMs = Math.floor(performance.now());
+      return Object.freeze({ status: "completed" as const, resourceId: record.resourceId, readiness: Object.freeze({ readyMonotonicMs, readinessProbeDigest: `sha256:${await sha256(probe.stdout)}` }) });
     },
     async terminate(value) {
       const operationId = OperationIdSchema.parse(value.operationId); const record = await input.journal.read(operationId);

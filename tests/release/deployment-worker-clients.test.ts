@@ -57,7 +57,11 @@ test("Modal accepts only a trusted probe bound to its returned immutable sandbox
   });
   const intent = { operationId: "op-modal-probe", sessionLeaseSha256: lease, toolchainSha256: toolchain, providerDeadlineEpochMs: Date.now() + 60_000 };
   await expect(clients.modal.create(intent)).resolves.toEqual({ status: "created", operationId: intent.operationId, resourceId: "modal-bound" });
-  await expect(clients.modal.observe({ operationId: intent.operationId })).resolves.toEqual({ status: "completed", resourceId: "modal-bound" });
+  const observed = await clients.modal.observe({ operationId: intent.operationId });
+  expect(observed).toMatchObject({ status: "completed", resourceId: "modal-bound" });
+  expect(observed.readiness?.readyMonotonicMs).toBeGreaterThanOrEqual(0);
+  expect(observed.readiness?.readyMonotonicMs).toBeLessThanOrEqual(Math.floor(performance.now()));
+  expect(observed.readiness?.readinessProbeDigest).toMatch(/^sha256:[a-f0-9]{64}$/u);
   await expect(clients.modal.exec({ operationId: intent.operationId, command: ["/usr/local/bin/napplet-cvm-worker", "build-source"] })).resolves.toMatchObject({ status: "completed", exitCode: 0 });
   expect(execs).toHaveLength(2);
   expect(execs[0]!.slice(0, 3)).toEqual(["/usr/local/bin/napplet-cvm-bootstrap", "/usr/local/bin/napplet-cvm-probe", "observe-isolation"]);

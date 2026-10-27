@@ -9,7 +9,7 @@ import { registerDeploymentClientFamilies } from "../../src/release/deployment/f
 
 const digest = (letter: string) => letter.repeat(64);
 const vertexPrice = { sourceUrl: "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing", sourceDocumentSha256: digest("1"), quoteSha256: digest("2"), observedAtMs: 1_000, freshUntilMs: 2_000, effectiveFromMs: 900, effectiveUntilMs: 3_000, currency: "USD" as const, inputMicrosPerMillion: 750_000, cachedInputMicrosPerMillion: 75_000, outputAndThoughtMicrosPerMillion: 3_750_000 };
-function vertexJournal() { const values = new Map<string, unknown>(); return { async read(operationId: string) { return values.get(operationId); }, async write(entry: { operationId: string }) { values.set(entry.operationId, entry); } }; }
+function vertexJournal() { const values = new Map<string, unknown>(); return { async claim(entry: { operationId: string }) { const prior = values.get(entry.operationId); if (prior) return { claimed: false, entry: prior }; values.set(entry.operationId, entry); return { claimed: true, entry }; }, async read(operationId: string) { return values.get(operationId); }, async write(entry: { operationId: string }) { values.set(entry.operationId, entry); } }; }
 
 test("host: binds a sealed artifact to the promoted reference-host Chromium fixture", async () => {
   const calls: unknown[] = [];

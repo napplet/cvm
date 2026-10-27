@@ -10,14 +10,16 @@ const PriceSchema = z.object({
   sourceDocumentSha256: DigestSchema, quoteSha256: DigestSchema, observedAtMs: z.number().int().positive(), freshUntilMs: z.number().int().positive(), effectiveFromMs: z.number().int().positive(), effectiveUntilMs: z.number().int().positive(), currency: z.literal("USD"),
   inputMicrosPerMillion: z.number().int().positive(), cachedInputMicrosPerMillion: z.number().int().positive(), outputAndThoughtMicrosPerMillion: z.number().int().positive(),
 }).strict().superRefine((value, context) => { if (value.freshUntilMs <= value.observedAtMs || value.effectiveUntilMs <= value.effectiveFromMs) context.addIssue({ code: "custom", message: "VERTEX_PRICE_SNAPSHOT_INVALID" }); });
-const UsageSchema = z.object({ totalInputTokens: z.number().int().nonnegative(), cachedInputTokens: z.number().int().nonnegative(), totalOutputTokens: z.number().int().nonnegative(), thoughtTokens: z.number().int().nonnegative(), toolUseTokens: z.number().int().nonnegative() }).strict();
+const UsageSchema = z.object({ totalInputTokens: z.number().int().nonnegative(), totalCachedTokens: z.number().int().nonnegative(), totalOutputTokens: z.number().int().nonnegative(), totalThoughtTokens: z.number().int().nonnegative(), totalToolUseTokens: z.number().int().nonnegative() }).strict();
 const InteractionSchema = z.object({ name: InteractionNameSchema, model: z.literal("gemini-3.8-flash"), input: z.string().min(1).max(512), status: z.enum(["IN_PROGRESS", "COMPLETED", "FAILED"]), createTime: z.iso.datetime(), usage: UsageSchema.optional() }).strict();
-const JournalSchema = z.object({ operationId: OperationSchema, requestSha256: DigestSchema, nonce: z.string().min(1).max(512), candidateSha256: DigestSchema, model: z.literal("gemini-3.8-flash"), location: z.literal("global"), price: PriceSchema, interactionName: InteractionNameSchema.optional(), completedReceipt: z.unknown().optional() }).strict();
+const JournalSchema = z.object({ operationId: OperationSchema, requestSha256: DigestSchema, nonce: z.string().min(1).max(512), candidateSha256: DigestSchema, projectId: ProjectSchema, model: z.literal("gemini-3.8-flash"), location: z.literal("global"), price: PriceSchema, interactionName: InteractionNameSchema.optional(), completedReceipt: z.unknown().optional() }).strict();
 
 type PriceSnapshot = z.infer<typeof PriceSchema>;
 type JournalEntry = z.infer<typeof JournalSchema>;
 type Interaction = z.infer<typeof InteractionSchema>;
-export type VertexOperationJournal = Readonly<{ read(operationId: string): Promise<unknown>; write(entry: JournalEntry): Promise<void> }>;
+/** Claim must be a durable transactional CAS: only the successful claimer may
+ * issue POST. File/memory journals are test seams, never Cloud Run authority. */
+export type VertexOperationJournal = Readonly<{ claim(entry: JournalEntry): Promise<Readonly<{ claimed: boolean; entry: unknown }>>; read(operationId: string): Promise<unknown>; write(entry: JournalEntry): Promise<void> }>;
 export type VertexInteractionsPort = Readonly<{
   create(input: Readonly<{ projectId: string; location: "global"; model: "gemini-3.8-flash"; store: true; input: string }>): Promise<unknown>;
   get(input: Readonly<{ projectId: string; location: "global"; name: string }>): Promise<unknown>;
@@ -25,16 +27,17 @@ export type VertexInteractionsPort = Readonly<{
 }>;
 
 function frozen<T>(value: T): T { return Object.freeze(value); }
-function ceilMillion(tokens: number, microsPerMillion: number): number { const charge = (BigInt(tokens) * BigInt(microsPerMillion) + 999_999n) / 1_000_000n; if (charge > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("VERTEX_RECEIPT_COST_OVERFLOW"); return Number(charge); }
+function ceilMillion(numerator: bigint): number { const charge = (numerator + 999_999n) / 1_000_000n; if (charge > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("VERTEX_RECEIPT_COST_OVERFLOW"); return Number(charge); }
 function nonceFor(operationId: string, requestSha256: string): string { return `napplet-cvm:${operationId}:${requestSha256}`; }
 function interactionFrom(value: unknown): Interaction | undefined { const parsed = InteractionSchema.safeParse(value); return parsed.success ? parsed.data : undefined; }
 function completion(entry: JournalEntry, interaction: Interaction) {
   if (interaction.status !== "COMPLETED") return undefined;
   const usage = interaction.usage;
-  if (!usage || usage.toolUseTokens !== 0 || usage.cachedInputTokens > usage.totalInputTokens) return undefined;
-  const inputTokens = usage.totalInputTokens - usage.cachedInputTokens;
-  const costUsdMicros = ceilMillion(inputTokens, entry.price.inputMicrosPerMillion) + ceilMillion(usage.cachedInputTokens, entry.price.cachedInputMicrosPerMillion) + ceilMillion(usage.totalOutputTokens + usage.thoughtTokens, entry.price.outputAndThoughtMicrosPerMillion);
-  return frozen({ status: "completed" as const, operationId: entry.operationId, interactionName: interaction.name, model: entry.model, requestSha256: entry.requestSha256, price: entry.price, usage: frozen({ inputTokens, cachedInputTokens: usage.cachedInputTokens, outputTokens: usage.totalOutputTokens, thoughtTokens: usage.thoughtTokens }), cost: frozen({ currency: "USD" as const, micros: costUsdMicros }), completedAt: interaction.createTime });
+  if (!usage || usage.totalToolUseTokens !== 0 || usage.totalCachedTokens > usage.totalInputTokens) return undefined;
+  const inputTokens = usage.totalInputTokens - usage.totalCachedTokens;
+  const numerator = BigInt(inputTokens) * BigInt(entry.price.inputMicrosPerMillion) + BigInt(usage.totalCachedTokens) * BigInt(entry.price.cachedInputMicrosPerMillion) + BigInt(usage.totalOutputTokens + usage.totalThoughtTokens) * BigInt(entry.price.outputAndThoughtMicrosPerMillion);
+  const costUsdMicros = ceilMillion(numerator);
+  return frozen({ status: "completed" as const, operationId: entry.operationId, interactionName: interaction.name, model: entry.model, requestSha256: entry.requestSha256, price: entry.price, usage: frozen({ inputTokens, cachedInputTokens: usage.totalCachedTokens, outputTokens: usage.totalOutputTokens, thoughtTokens: usage.totalThoughtTokens }), cost: frozen({ currency: "USD" as const, micros: costUsdMicros }), completedAt: interaction.createTime });
 }
 function unknown(operationId: string, reason: "lost_response" | "unmatched_original" | "receipt_invalid") { return frozen({ status: "unknown" as const, operationId, reason, originalOperationOnly: true as const }); }
 function pending(operationId: string) { return frozen({ status: "pending" as const, operationId, originalOperationOnly: true as const }); }
@@ -50,7 +53,7 @@ export function createVertexDeploymentClient(input: Readonly<{
   if (input.location !== "global" || input.model !== "gemini-3.8-flash") throw new Error("VERTEX_PRODUCTION_MODEL_REQUIRED");
   const credentialReference = CredentialReferenceSchema.parse(input.credentialReference); const price = PriceSchema.parse(input.price); const now = input.now ?? Date.now;
   const assertFresh = (snapshot: PriceSnapshot) => { const at = now(); if (!Number.isSafeInteger(at) || at <= 0 || at < snapshot.observedAtMs || at >= snapshot.freshUntilMs || at < snapshot.effectiveFromMs || at >= snapshot.effectiveUntilMs) throw new Error("VERTEX_PRICE_SNAPSHOT_STALE"); };
-  const same = (entry: JournalEntry, operationId: string, requestSha256: string) => entry.operationId === operationId && entry.requestSha256 === requestSha256 && entry.candidateSha256 === candidateSha256 && entry.model === "gemini-3.8-flash" && entry.location === "global";
+  const same = (entry: JournalEntry, operationId: string, requestSha256: string) => entry.operationId === operationId && entry.requestSha256 === requestSha256 && entry.candidateSha256 === candidateSha256 && entry.projectId === projectId && entry.model === "gemini-3.8-flash" && entry.location === "global";
   async function recover(entry: JournalEntry) {
     if (entry.completedReceipt !== undefined) return entry.completedReceipt;
     let found: Interaction | undefined;
@@ -78,7 +81,7 @@ export function createVertexDeploymentClient(input: Readonly<{
     async dispatch(value: Readonly<{ operationId: unknown; requestSha256: unknown }>) {
       const operationId = OperationSchema.parse(value.operationId); const requestSha256 = DigestSchema.parse(value.requestSha256); const existing = await input.journal.read(operationId);
       if (existing !== undefined && existing !== null) { const entry = JournalSchema.parse(existing); if (!same(entry, operationId, requestSha256)) throw new Error("VERTEX_OPERATION_IDENTITY_CONFLICT"); return recover(entry); }
-      assertFresh(price); const entry = JournalSchema.parse({ operationId, requestSha256, nonce: nonceFor(operationId, requestSha256), candidateSha256, model: "gemini-3.8-flash", location: "global", price }); await input.journal.write(entry);
+      assertFresh(price); const entry = JournalSchema.parse({ operationId, requestSha256, nonce: nonceFor(operationId, requestSha256), candidateSha256, projectId, model: "gemini-3.8-flash", location: "global", price }); const claim = await input.journal.claim(entry); if (!claim.claimed) { const prior = JournalSchema.parse(claim.entry); if (!same(prior, operationId, requestSha256)) throw new Error("VERTEX_OPERATION_IDENTITY_CONFLICT"); return recover(prior); }
       try {
         const created = interactionFrom(await input.interactions.create({ projectId, location: "global", model: "gemini-3.8-flash", store: true, input: entry.nonce }));
         if (!created || created.model !== entry.model || created.input !== entry.nonce) return unknown(operationId, "receipt_invalid");

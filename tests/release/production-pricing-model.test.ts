@@ -5,11 +5,11 @@ import { convertUsdMicrosToSats } from "../../src/model/price-card";
 
 const digest = (letter: string) => letter.repeat(64);
 const price = Object.freeze({ sourceUrl: "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing", sourceDocumentSha256: digest("a"), quoteSha256: digest("b"), observedAtMs: 1_000, freshUntilMs: 2_000, effectiveFromMs: 900, effectiveUntilMs: 3_000, currency: "USD" as const, inputMicrosPerMillion: 750_000, cachedInputMicrosPerMillion: 75_000, outputAndThoughtMicrosPerMillion: 3_750_000 });
-const interaction = (input: string, overrides: Record<string, unknown> = {}) => ({ name: "interactions/original", model: "gemini-3.8-flash", input, status: "COMPLETED", createTime: "2026-10-27T00:00:00.000Z", usage: { totalInputTokens: 1_000_000, cachedInputTokens: 200_000, totalOutputTokens: 1_000_000, thoughtTokens: 100_000, toolUseTokens: 0 }, ...overrides });
+const interaction = (input: string, overrides: Record<string, unknown> = {}) => ({ name: "interactions/original", model: "gemini-3.8-flash", input, status: "COMPLETED", createTime: "2026-10-27T00:00:00.000Z", usage: { totalInputTokens: 1_000_000, totalCachedTokens: 200_000, totalOutputTokens: 1_000_000, totalThoughtTokens: 100_000, totalToolUseTokens: 0 }, ...overrides });
 
 function journal(): [VertexOperationJournal, Map<string, unknown>] {
   const values = new Map<string, unknown>();
-  return [Object.freeze({ async read(operationId) { return values.get(operationId); }, async write(entry) { values.set(entry.operationId, structuredClone(entry)); } }), values];
+  return [Object.freeze({ async claim(entry) { const prior = values.get(entry.operationId); if (prior) return { claimed: false, entry: prior }; values.set(entry.operationId, structuredClone(entry)); return { claimed: true, entry }; }, async read(operationId) { return values.get(operationId); }, async write(entry) { values.set(entry.operationId, structuredClone(entry)); } }), values];
 }
 function client(input: Readonly<{ port: VertexInteractionsPort; journal?: VertexOperationJournal; now?: () => number }> ) {
   const [defaultJournal] = journal();
@@ -65,7 +65,7 @@ test("missing, duplicate, tool, or identity-mismatched interaction evidence rema
   await expect(subject.dispatch({ operationId: "vertex-original-op", requestSha256: digest("e") })).rejects.toThrow("VERTEX_OPERATION_IDENTITY_CONFLICT");
   expect(creates).toBe(1);
   const [toolStore] = journal();
-  const toolClient = client({ journal: toolStore, port: { async create(value) { return interaction(value.input, { usage: { totalInputTokens: 1, cachedInputTokens: 0, totalOutputTokens: 1, thoughtTokens: 0, toolUseTokens: 1 } }); }, async list() { return { interactions: [] }; }, async get() { return undefined; } } });
+  const toolClient = client({ journal: toolStore, port: { async create(value) { return interaction(value.input, { usage: { totalInputTokens: 1, totalCachedTokens: 0, totalOutputTokens: 1, totalThoughtTokens: 0, totalToolUseTokens: 1 } }); }, async list() { return { interactions: [] }; }, async get() { return undefined; } } });
   await expect(toolClient.dispatch({ operationId: "vertex-tool-op", requestSha256: digest("d") })).resolves.toMatchObject({ status: "unknown", reason: "receipt_invalid" });
   await expect(toolClient.reconcileOriginal({ operationId: "vertex-absent-op" })).resolves.toMatchObject({ status: "unknown", reason: "unmatched_original" });
 });

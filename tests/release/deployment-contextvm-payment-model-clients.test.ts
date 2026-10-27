@@ -7,7 +7,7 @@ import { registerDeploymentClientFamilies } from "../../src/release/deployment/f
 
 const digest = (letter: string) => letter.repeat(64);
 const vertexPrice = { sourceUrl: "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing", sourceDocumentSha256: digest("1"), quoteSha256: digest("2"), observedAtMs: 1_000, freshUntilMs: 2_000, effectiveFromMs: 900, effectiveUntilMs: 3_000, currency: "USD" as const, inputMicrosPerMillion: 750_000, cachedInputMicrosPerMillion: 75_000, outputAndThoughtMicrosPerMillion: 3_750_000 };
-function vertexJournal() { const values = new Map<string, unknown>(); return { async read(operationId: string) { return values.get(operationId); }, async write(entry: { operationId: string }) { values.set(entry.operationId, entry); } }; }
+function vertexJournal() { const values = new Map<string, unknown>(); return { async claim(entry: { operationId: string }) { const prior = values.get(entry.operationId); if (prior) return { claimed: false, entry: prior }; values.set(entry.operationId, entry); return { claimed: true, entry }; }, async read(operationId: string) { return values.get(operationId); }, async write(entry: { operationId: string }) { values.set(entry.operationId, entry); } }; }
 
 test("contextvm: records only the official SDK correlation and a service-owned key reference", () => {
   const client = createContextVmDeploymentClient({
@@ -42,7 +42,7 @@ test("vertex: binds a Gemini request to the shared loopback Google client and ne
     candidateSha256: digest("c"), projectId: "napplet-cvm-run-1", location: "global", model: "gemini-3.8-flash",
     credentialReference: "gcp:adc:release", price: vertexPrice, journal: vertexJournal(),
     interactions: {
-      create: async (input) => { requests.push(input); return { name: "interactions/original", model: "gemini-3.8-flash", input: input.input, status: "COMPLETED" as const, createTime: "2026-10-27T00:00:00.000Z", usage: { totalInputTokens: 1, cachedInputTokens: 0, totalOutputTokens: 1, thoughtTokens: 0, toolUseTokens: 0 } }; },
+      create: async (input) => { requests.push(input); return { name: "interactions/original", model: "gemini-3.8-flash", input: input.input, status: "COMPLETED" as const, createTime: "2026-10-27T00:00:00.000Z", usage: { totalInputTokens: 1, totalCachedTokens: 0, totalOutputTokens: 1, totalThoughtTokens: 0, totalToolUseTokens: 0 } }; },
       get: async () => undefined,
       list: async () => ({ interactions: [] }),
     },

@@ -45,7 +45,7 @@ export class CvmMcpCompatibility implements Transport {
         const remote = message.result as { tools?: { name: string }[] };
         const names = new Set(remote.tools?.map(tool => tool.name));
         message = { ...message, result: { tools: catalog.tools.filter(tool => names.has(tool.name) && this.allowed.has(tool.name)).map(({ name, description, inputSchema }) => ({
-          name, description, inputSchema: { type: "object", ...inputSchema, ...(name === "projects" ? { oneOf: (inputSchema as { oneOf: unknown[] }).oneOf.slice(0, 2) } : {}) },
+          name, description, inputSchema: { type: "object", ...inputSchema, ...(name === "projects" ? { oneOf: (inputSchema as { oneOf: { properties: { action: { const: string } } }[] }).oneOf.filter(schema => ["list", "get"].includes(schema.properties.action.const)) } : {}) },
           annotations: { readOnlyHint: readTools.has(name), openWorldHint: true },
         })) } } as JSONRPCMessage;
       } else if ("result" in message && method === "tools/call") {

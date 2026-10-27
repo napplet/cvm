@@ -15,7 +15,7 @@
   "docker_compose_domains": [
     {
       "name": "engine",
-      "domain": "https://cvm.lab.sandwich.farm:8080"
+      "domain": "https://cvm.lab.sandwich.farm"
     }
   ],
   "autogenerate_domain": false

@@ -1,4 +1,4 @@
-/** One explicitly requested real homelab generation; no automatic retry. */
+/** Bounded private generation or read-only restoration of the same smoke artifact. */
 import { chromium } from "playwright";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";

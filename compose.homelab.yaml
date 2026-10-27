@@ -5,6 +5,7 @@ services:
     dns: [192.168.151.196]
     command: ["dockerd", "--host=unix:///run/cvm-docker/docker.sock", "--storage-driver=overlay2", "--log-opt=max-size=10m", "--log-opt=max-file=3"]
     restart: unless-stopped
+    expose: ["8080"]
     ports:
       - "18870:8080"
     volumes:

@@ -309,7 +309,7 @@ class PostgresRailStatusProjection implements AccountTopUpStatusPort {
         ...(record.settlementReference ? { settlementReference: record.settlementReference } : {}),
       }));
       const cashuRows = cashu.rows.map(({ state_json: record }): AccountTopUpStatus => ({
-        topUpId: record.result.topUpId, rail: "cashu", state: record.result.state, amount: record.amount, unit: "sat", createdAt: record.createdAt,
+        topUpId: record.result.topUpId, rail: "cashu", state: record.result.state, amount: record.result.amount ?? record.amount, unit: "sat", createdAt: record.createdAt,
         ...(record.result.settlementReference ? { settlementReference: record.result.settlementReference } : {}),
       }));
       return frozen([...lightningRows, ...cashuRows]);

@@ -78,8 +78,10 @@ export async function createDevelopmentFunding(config: DevPayments) {
   const mints = await Promise.all(mintUrls.map(async (url, index) => {
     const response = await fetch(`${url}/v1/keysets`, { redirect: "error", signal: AbortSignal.timeout(5000) });
     if (!response.ok) throw new Error("DEV_MINT_KEYSETS_UNAVAILABLE");
-    const data = z.object({ keysets: z.array(z.object({ id: z.string(), unit: z.string(), active: z.boolean() })) }).parse(await response.json());
-    return { url: aliases[index]!, unit: "sat" as const, keysetIds: data.keysets.filter((keyset) => keyset.active && keyset.unit === "sat").map((keyset) => keyset.id), requireDleq: true, proofConditions: ["none"] };
+    const data = z.object({ keysets: z.array(z.object({ id: z.string(), unit: z.string(), active: z.boolean(), input_fee_ppk: z.number().int().nonnegative().optional() })) }).parse(await response.json());
+    const active = data.keysets.filter((keyset) => keyset.active && keyset.unit === "sat");
+    if (active.length === 0) throw new Error("DEV_MINT_ACTIVE_SAT_KEYSET_REQUIRED");
+    return { url: aliases[index]!, unit: "sat" as const, keysetIds: active.map((keyset) => keyset.id), maxInputFeePpk: Math.max(...active.map((keyset) => keyset.input_fee_ppk ?? 0)), requireDleq: true, proofConditions: ["none"] };
   }));
   const policies = new CashuMintPolicyRegistry({ version: "development-local-v1", activeFrom: "2026-01-01T00:00:00.000Z", activeUntil: null, mints });
   // Keep the application's HTTPS policy intact. Only this request seam routes

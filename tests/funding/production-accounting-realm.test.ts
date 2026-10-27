@@ -100,7 +100,7 @@ postgresIsolation("real PostgreSQL keeps development history read-only and produ
     const cashuRecord = (topUpId: string, commitment: string): CashuTopUpRecord => ({
       result: { topUpId, state: "verifying", policyVersion: "cashu-policy", commitment }, accountId: productionAccountId,
       policy: { version: "cashu-policy", mints: [] } as never, protectedId: `protected:${topUpId}`,
-      semanticProofIdentities: ["9".repeat(64)], idempotencyKey: `cashu:${topUpId}`, principal, amount: "21", createdAt: "2026-10-27T00:00:00.000Z",
+      semanticProofIdentities: ["9".repeat(64)], idempotencyKey: `cashu:${topUpId}`, principal, amount: "21", maxFee: "0", createdAt: "2026-10-27T00:00:00.000Z",
     });
     const [cashuOne, cashuTwo] = await Promise.all([
       database.cashu.claim(cashuRecord("cashu:one", "1".repeat(64))),
@@ -108,7 +108,7 @@ postgresIsolation("real PostgreSQL keeps development history read-only and produ
     ]);
     expect([cashuOne, cashuTwo].filter((claim) => claim.claimed)).toHaveLength(1);
     const cashuWinner = cashuOne.claimed ? cashuOne.record : cashuTwo.record;
-    await database.cashu.prepareCustody(cashuWinner.result.topUpId, { operationId: `cashu-swap:${cashuWinner.result.topUpId}`, mintUrl: "https://mint.example", keysetId: "keyset", unit: "sat", amount: "21", expectedOutputAmount: "21", inputProtectedId: cashuWinner.protectedId, outputDataProtectedId: "protected:output-data" });
+    await database.cashu.prepareCustody(cashuWinner.result.topUpId, { operationId: `cashu-swap:${cashuWinner.result.topUpId}`, mintUrl: "https://mint.example", keysetId: "keyset", unit: "sat", amount: "21", maxFee: "0", inputFeePpk: 0, feeAmount: "0", expectedOutputAmount: "21", inputProtectedId: cashuWinner.protectedId, outputDataProtectedId: "protected:output-data" });
     const dispatches = await Promise.all([database.cashu.claimCustodyDispatch(cashuWinner.result.topUpId), database.cashu.claimCustodyDispatch(cashuWinner.result.topUpId)]);
     expect(dispatches.filter(Boolean)).toHaveLength(1);
     await database.cashu.recordOwnedCustodyOutputs(cashuWinner.result.topUpId, "protected:owned-output", "a".repeat(64));

@@ -21,6 +21,7 @@ const keyAmounts = [1, 2, 4, 8, 16, 32] as const;
 const privateKeys = new Map(keyAmounts.map((amount) => [String(amount), new Uint8Array(32).fill(amount)]));
 const generators = Object.fromEntries([...privateKeys].map(([amount, privateKey]) => [amount, hex(getPubKeyFromPrivKey(privateKey))]));
 const fixtureKeysetId = deriveKeysetId(generators);
+const feeFixtureKeysetId = deriveKeysetId(generators, { input_fee_ppk: 1000 });
 const signedOutput = (output: { B_: string; amount: string; id: string }) => {
   const B_ = pointFromHex(output.B_);
   const privateKey = privateKeys.get(output.amount); if (!privateKey) throw new Error(`unsupported amount:${output.amount}`);
@@ -94,29 +95,52 @@ describe("Cashu treasury custody", () => {
     expect(both.has(firstOnly[0]!)).toBeTrue(); expect(both.has(secondOnly[0]!)).toBeTrue();
   });
 
-  test("recovers a lost default cashu-ts swap through exact persisted NUT-09 messages without a second swap", async () => {
+  test("recovers a fee-bounded lost default cashu-ts swap through exact persisted NUT-09 messages without a second swap", async () => {
     let swaps = 0; let restores = 0; let original: { B_: string; amount: string; id: string }[] = [];
     const request: RequestFn = async (input) => {
       if (input.endpoint.endsWith("/v1/info")) return { name: "fixture", version: "1", nuts: { 12: { supported: true } } } as never;
-      if (input.endpoint.includes("/v1/keysets")) return { keysets: [{ id: fixtureKeysetId, unit: "sat", active: true, input_fee_ppk: 0 }] } as never;
-      if (input.endpoint.includes("/v1/keys")) return { keysets: [{ id: fixtureKeysetId, unit: "sat", keys: generators }] } as never;
+      if (input.endpoint.includes("/v1/keysets")) return { keysets: [{ id: feeFixtureKeysetId, unit: "sat", active: true, input_fee_ppk: 1000 }] } as never;
+      if (input.endpoint.includes("/v1/keys")) return { keysets: [{ id: feeFixtureKeysetId, unit: "sat", keys: generators }] } as never;
       if (input.endpoint.endsWith("/v1/swap")) { swaps += 1; original = (input.requestBody as { outputs: typeof original }).outputs; throw new Error("LOST_RESPONSE_AFTER_MINT_SWAP"); }
       if (input.endpoint.endsWith("/v1/restore")) { restores += 1; const outputs = (input.requestBody as { outputs: typeof original }).outputs; expect(outputs.map((output) => output.B_).sort()).toEqual(original.map((output) => output.B_).sort()); return { outputs, signatures: outputs.map((output) => signedOutput({ ...output, amount: output.amount.toString() })) } as never; }
       if (input.endpoint.endsWith("/v1/checkstate")) return { states: (input.requestBody as { Ys: string[] }).Ys.map((Y) => ({ Y, state: "SPENT", witness: null })) } as never;
       throw new Error(`unexpected:${input.endpoint}`);
     };
     const vault = new RecoveryVault(); const repository = new InMemoryCashuTopUpRepository(); const store = new TransactionalMemoryFundingStore();
-    const policy = { ...fixture.policies[0]!, mints: fixture.policies[0]!.mints.map((mint) => mint.url === mintUrl ? { ...mint, keysetIds: [fixtureKeysetId] } : mint) };
-    const principal = { pubkey: "c".repeat(64) }; const bearer = new TextEncoder().encode(getEncodedToken({ mint: mintUrl, unit: "sat", proofs: [validProof("durable-input-16", "16", fixtureKeysetId), validProof("durable-input-4", "4", fixtureKeysetId), validProof("durable-input-1", "1", fixtureKeysetId)] }));
-    const command = { principal, idempotencyKey: "recover-default", topUpId: "recover-default", amount: "21", unit: "sat" as const, pmi: fixture.pmi, token: bearer };
+    const policy = { ...fixture.policies[0]!, mints: fixture.policies[0]!.mints.map((mint) => mint.url === mintUrl ? { ...mint, keysetIds: [feeFixtureKeysetId] } : mint) };
+    const principal = { pubkey: "c".repeat(64) }; const bearer = new TextEncoder().encode(getEncodedToken({ mint: mintUrl, unit: "sat", proofs: [validProof("durable-input-16", "16", feeFixtureKeysetId), validProof("durable-input-4", "4", feeFixtureKeysetId), validProof("durable-input-1", "1", feeFixtureKeysetId)] }));
+    const command = { principal, idempotencyKey: "recover-default", topUpId: "recover-default", amount: "21", maxFee: "3", unit: "sat" as const, pmi: fixture.pmi, token: bearer };
     const first = new CashuTopUpCoordinator({ policies: new CashuMintPolicyRegistry(policy), provider: new CashuTsSettlementAdapter({ request }), vault, funding: new FundingService(store), repository });
     expect((await first.submit(command)).state).toBe("reconciliation_pending");
     expect(await repository.custody(command.topUpId)).toMatchObject({ state: "dispatching" });
     const restarted = new CashuTopUpCoordinator({ policies: new CashuMintPolicyRegistry(policy), provider: new CashuTsSettlementAdapter({ request }), vault, funding: new FundingService(store), repository });
     const reconciled = await restarted.reconcile(command.topUpId);
     expect({ swaps, restores }).toEqual({ swaps: 1, restores: 1 });
-    expect(reconciled.state).toBe("credited");
+    expect(reconciled).toMatchObject({ state: "credited", amount: "18", grossAmount: "21", feeAmount: "3" });
+    expect(await repository.custody(command.topUpId)).toMatchObject({ amount: "21", maxFee: "3", inputFeePpk: 1000, feeAmount: "3", expectedOutputAmount: "18" });
     expect(store.postings).toHaveLength(1);
+    expect(store.postings[0]).toMatchObject({ amount: "18" });
+  });
+
+  test("rejects a mint or user fee ceiling before dispatching a default cashu-ts swap", async () => {
+    for (const limits of [{ maxFee: "2", policyFeePpk: 1000 }, { maxFee: "3", policyFeePpk: 999 }] as const) {
+      let swaps = 0;
+      const request: RequestFn = async (input) => {
+        if (input.endpoint.endsWith("/v1/info")) return { name: "fixture", version: "1", nuts: { 12: { supported: true } } } as never;
+        if (input.endpoint.includes("/v1/keysets")) return { keysets: [{ id: feeFixtureKeysetId, unit: "sat", active: true, input_fee_ppk: 1000 }] } as never;
+        if (input.endpoint.includes("/v1/keys")) return { keysets: [{ id: feeFixtureKeysetId, unit: "sat", keys: generators }] } as never;
+        if (input.endpoint.endsWith("/v1/swap")) { swaps += 1; throw new Error("SWAP_MUST_NOT_RUN"); }
+        throw new Error(`unexpected:${input.endpoint}`);
+      };
+      const policy = { ...fixture.policies[0]!, mints: fixture.policies[0]!.mints.map((mint) => mint.url === mintUrl ? { ...mint, keysetIds: [feeFixtureKeysetId], maxInputFeePpk: limits.policyFeePpk } : mint) };
+      const command = {
+        principal: { pubkey: "f".repeat(64) }, idempotencyKey: `fee-limit-${limits.maxFee}-${limits.policyFeePpk}`, topUpId: `fee-limit-${limits.maxFee}-${limits.policyFeePpk}`,
+        amount: "21", maxFee: limits.maxFee, unit: "sat" as const, pmi: fixture.pmi,
+        token: new TextEncoder().encode(getEncodedToken({ mint: mintUrl, unit: "sat", proofs: [validProof(`fee-limit-${limits.maxFee}-${limits.policyFeePpk}-16`, "16", feeFixtureKeysetId), validProof(`fee-limit-${limits.maxFee}-${limits.policyFeePpk}-4`, "4", feeFixtureKeysetId), validProof(`fee-limit-${limits.maxFee}-${limits.policyFeePpk}-1`, "1", feeFixtureKeysetId)] })),
+      };
+      await expect(new CashuTopUpCoordinator({ policies: new CashuMintPolicyRegistry(policy), provider: new CashuTsSettlementAdapter({ request }), vault: new RecoveryVault(), funding: new FundingService(new TransactionalMemoryFundingStore()), repository: new InMemoryCashuTopUpRepository() }).submit(command)).rejects.toThrow("CASHU_SWAP_FAILED");
+      expect(swaps).toBe(0);
+    }
   });
 
   test("refuses malformed NUT-09 recovery responses without a replacement swap", async () => {
@@ -153,7 +177,7 @@ describe("Cashu treasury custody", () => {
       const vault = new RecoveryVault(); const repository = new InMemoryCashuTopUpRepository(); const store = new TransactionalMemoryFundingStore();
       const policy = { ...fixture.policies[0]!, mints: fixture.policies[0]!.mints.map((mint) => mint.url === mintUrl ? { ...mint, keysetIds: [fixtureKeysetId] } : mint) };
       const principal = { pubkey: "d".repeat(64) }; const bearer = new TextEncoder().encode(getEncodedToken({ mint: mintUrl, unit: "sat", proofs: [validProof(`${mode}-input-16`, "16", fixtureKeysetId), validProof(`${mode}-input-4`, "4", fixtureKeysetId), validProof(`${mode}-input-1`, "1", fixtureKeysetId)] }));
-      const command = { principal, idempotencyKey: `recover-${mode}`, topUpId: `recover-${mode}`, amount: "21", unit: "sat" as const, pmi: fixture.pmi, token: bearer };
+      const command = { principal, idempotencyKey: `recover-${mode}`, topUpId: `recover-${mode}`, amount: "21", maxFee: "0", unit: "sat" as const, pmi: fixture.pmi, token: bearer };
       const first = new CashuTopUpCoordinator({ policies: new CashuMintPolicyRegistry(policy), provider: new CashuTsSettlementAdapter({ request }), vault, funding: new FundingService(store), repository });
       expect((await first.submit(command)).state).toBe("reconciliation_pending");
       const restarted = new CashuTopUpCoordinator({ policies: new CashuMintPolicyRegistry(policy), provider: new CashuTsSettlementAdapter({ request }), vault, funding: new FundingService(store), repository });
@@ -186,16 +210,16 @@ postgresIntegration("restricted PostgreSQL restores a lost default Cashu swap fr
     let swaps = 0; let restores = 0; let original: { B_: string; amount: string; id: string }[] = [];
     const request: RequestFn = async (input) => {
       if (input.endpoint.endsWith("/v1/info")) return { name: "fixture", version: "1", nuts: { 12: { supported: true } } } as never;
-      if (input.endpoint.includes("/v1/keysets")) return { keysets: [{ id: fixtureKeysetId, unit: "sat", active: true, input_fee_ppk: 0 }] } as never;
-      if (input.endpoint.includes("/v1/keys")) return { keysets: [{ id: fixtureKeysetId, unit: "sat", keys: generators }] } as never;
+      if (input.endpoint.includes("/v1/keysets")) return { keysets: [{ id: feeFixtureKeysetId, unit: "sat", active: true, input_fee_ppk: 1000 }] } as never;
+      if (input.endpoint.includes("/v1/keys")) return { keysets: [{ id: feeFixtureKeysetId, unit: "sat", keys: generators }] } as never;
       if (input.endpoint.endsWith("/v1/swap")) { swaps += 1; original = (input.requestBody as { outputs: typeof original }).outputs; throw new Error("LOST_RESPONSE_AFTER_MINT_SWAP"); }
       if (input.endpoint.endsWith("/v1/restore")) { restores += 1; const outputs = (input.requestBody as { outputs: typeof original }).outputs; expect(outputs.map((output) => output.B_).sort()).toEqual(original.map((output) => output.B_).sort()); return { outputs, signatures: outputs.map((output) => signedOutput({ ...output, amount: output.amount.toString() })) } as never; }
       if (input.endpoint.endsWith("/v1/checkstate")) return { states: (input.requestBody as { Ys: string[] }).Ys.map((Y) => ({ Y, state: "SPENT", witness: null })) } as never;
       throw new Error(`unexpected:${input.endpoint}`);
     };
-    const policy = { ...fixture.policies[0]!, mints: fixture.policies[0]!.mints.map((mint) => mint.url === mintUrl ? { ...mint, keysetIds: [fixtureKeysetId] } : mint) };
-    const principal = { pubkey: "e".repeat(64) }; const bearer = new TextEncoder().encode(getEncodedToken({ mint: mintUrl, unit: "sat", proofs: [validProof("pg-input-16", "16", fixtureKeysetId), validProof("pg-input-4", "4", fixtureKeysetId), validProof("pg-input-1", "1", fixtureKeysetId)] }));
-    const command = { principal, idempotencyKey: "pg-recover-default", topUpId: "pg-recover-default", amount: "21", unit: "sat" as const, pmi: fixture.pmi, token: bearer };
+    const policy = { ...fixture.policies[0]!, mints: fixture.policies[0]!.mints.map((mint) => mint.url === mintUrl ? { ...mint, keysetIds: [feeFixtureKeysetId] } : mint) };
+    const principal = { pubkey: "e".repeat(64) }; const bearer = new TextEncoder().encode(getEncodedToken({ mint: mintUrl, unit: "sat", proofs: [validProof("pg-input-16", "16", feeFixtureKeysetId), validProof("pg-input-4", "4", feeFixtureKeysetId), validProof("pg-input-1", "1", feeFixtureKeysetId)] }));
+    const command = { principal, idempotencyKey: "pg-recover-default", topUpId: "pg-recover-default", amount: "21", maxFee: "3", unit: "sat" as const, pmi: fixture.pmi, token: bearer };
     const coordinator = () => {
       const database = new PostgresFundingDatabase(application, { realm: "production-real", deadlineMs: 5_000 });
       return { database, cashu: new CashuTopUpCoordinator({ policies: new CashuMintPolicyRegistry(policy), provider: new CashuTsSettlementAdapter({ request }), vault: new ProtectedRailMaterialVault({ key: new Uint8Array(32).fill(9), repository: database.protectedMaterials }), funding: new FundingService(database.funding), repository: database.cashu }) };
@@ -203,7 +227,7 @@ postgresIntegration("restricted PostgreSQL restores a lost default Cashu swap fr
     expect((await coordinator().cashu.submit(command)).state).toBe("reconciliation_pending");
     expect((await coordinator().cashu.reconcile(command.topUpId)).state).toBe("credited");
     expect({ swaps, restores }).toEqual({ swaps: 1, restores: 1 });
-    expect((await new FundingService(coordinator().database.funding).status(principal)).available).toBe("21");
+    expect((await new FundingService(coordinator().database.funding).status(principal)).available).toBe("18");
     expect((await admin.query("SELECT count(*)::int AS n FROM production_real.rail_material_scopes WHERE top_up_id='pg-recover-default'")).rows[0].n).toBe(1);
     expect((await admin.query("SELECT count(*)::int AS n FROM production_real.top_ups WHERE top_up_id='pg-recover-default'")).rows[0].n).toBe(1);
   } finally { await application?.end(); await admin?.end(); await docker("rm", "--force", name).catch(() => undefined); }

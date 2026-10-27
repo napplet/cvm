@@ -91,7 +91,8 @@ export class DevelopmentContextVmClient {
   async fundCashu(amount: string): Promise<any> {
     const { token } = await this.callTool("development_faucet", { amount });
     if (typeof token !== "string") throw new Error("LOCAL_CASHU_FAUCET_UNAVAILABLE");
-    const args = { idempotencyKey: `browser:cashu:${crypto.randomUUID()}`, topUpId: `browser:cashu:${crypto.randomUUID()}`, pmi: "bitcoin-cashu-v4-direct", mode: "transparent", amount };
+    const maxFee = (BigInt(amount) > 64n ? 64n : BigInt(amount) - 1n).toString();
+    const args = { idempotencyKey: `browser:cashu:${crypto.randomUUID()}`, topUpId: `browser:cashu:${crypto.randomUUID()}`, pmi: "bitcoin-cashu-v4-direct", mode: "transparent", amount, maxFee };
     this.#lastCashu = Object.freeze({ arguments: Object.freeze(args), token });
     return this.callTool("top_up", args, [["pmi", args.pmi], ["payment_interaction", args.mode], ["direct_payment", args.pmi, token]]);
   }

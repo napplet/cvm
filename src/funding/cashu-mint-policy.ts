@@ -11,6 +11,9 @@ export const CashuMintPolicySchema = z.object({
     url: HttpsUrlSchema,
     unit: z.literal("sat").default("sat"),
     keysetIds: z.array(KeysetIdSchema).min(1),
+    // A policy authorizes a bounded NUT-02 input fee for every currently
+    // allowed keyset. The live mint value is checked again before dispatch.
+    maxInputFeePpk: z.number().int().min(0).max(1_000_000),
     requireDleq: z.boolean(),
     proofConditions: z.array(z.literal("none")).min(1).default(["none"]),
   }).strict()).min(2),

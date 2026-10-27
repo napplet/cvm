@@ -8,6 +8,7 @@ const IsoTimeSchema = z.iso.datetime();
 
 const VerifiedCashuObservationSchema = z.object({
   status: z.literal("verified"), externalReference: z.string().min(1), settlementReference: z.string().min(1), verifiedAt: IsoTimeSchema,
+  amounts: z.object({ grossAmount: DecimalSatSchema, feeAmount: z.string().regex(/^[0-9]+$/u), netAmount: DecimalSatSchema }).strict().optional(),
 }).strict();
 const FailedCashuObservationSchema = z.object({
   status: z.literal("failed"), code: z.enum(["untrusted_mint", "wrong_unit", "wrong_amount", "inactive_keyset", "invalid_dleq", "unsupported_condition", "duplicate_proof", "malformed", "swap_failed"]),
@@ -15,20 +16,21 @@ const FailedCashuObservationSchema = z.object({
 const UnknownCashuObservationSchema = z.object({ status: z.literal("unknown"), operationReference: z.string().min(1) }).strict();
 export const CashuSettlementObservationSchema = z.discriminatedUnion("status", [VerifiedCashuObservationSchema, FailedCashuObservationSchema, UnknownCashuObservationSchema]);
 export type CashuSettlementObservation = z.infer<typeof CashuSettlementObservationSchema>;
-export type CashuCustodyJournal = Readonly<{ operationId: string; mintUrl: string; keysetId: string; unit: "sat"; amount: string; expectedOutputAmount: string; inputProtectedId: string; outputDataProtectedId: string; state: "prepared" | "dispatching" | "owned_outputs"; ownedOutputsProtectedId?: string }>;
+export type CashuSwapAmounts = Readonly<{ grossAmount: string; feeAmount: string; netAmount: string }>;
+export type CashuCustodyJournal = Readonly<{ operationId: string; mintUrl: string; keysetId: string; unit: "sat"; amount: string; maxFee: string; inputFeePpk: number; feeAmount: string; expectedOutputAmount: string; inputProtectedId: string; outputDataProtectedId: string; state: "prepared" | "dispatching" | "owned_outputs"; ownedOutputsProtectedId?: string }>;
 /**
  * Coordinator-provided narrow persistence port.  It intentionally accepts only
  * opaque JSON-safe output data and is the sole bridge from cashu-ts secrets to
  * encrypted durable custody.  The adapter has no SQL/funding authority.
  */
 export interface CashuTreasuryCustody {
-  prepare(input: Readonly<{ operationId: string; mintUrl: string; keysetId: string; expectedOutputAmount: string; outputData: readonly unknown[] }>): Promise<CashuCustodyJournal>;
+  prepare(input: Readonly<{ operationId: string; mintUrl: string; keysetId: string; grossAmount: string; maxFee: string; inputFeePpk: number; feeAmount: string; expectedOutputAmount: string; outputData: readonly unknown[] }>): Promise<CashuCustodyJournal>;
   claimDispatch(): Promise<boolean>;
   recordOwnedOutputs(outputs: readonly unknown[]): Promise<void>;
   load(): Promise<Readonly<{ journal: CashuCustodyJournal; outputData?: Uint8Array; outputs?: Uint8Array }> | undefined>;
 }
-export type CashuSettlementRequest = Readonly<{ topUpId: string; accountId?: string; policy: CashuMintPolicy; amount: string; commitment: string; token: Uint8Array; custody?: CashuTreasuryCustody; signal: AbortSignal }>;
-export type CashuObserveRequest = Readonly<{ topUpId: string; accountId?: string; policy: CashuMintPolicy; commitment: string; amount: string; token?: Uint8Array; custody?: CashuTreasuryCustody; signal: AbortSignal }>;
+export type CashuSettlementRequest = Readonly<{ topUpId: string; accountId?: string; policy: CashuMintPolicy; amount: string; maxFee: string; commitment: string; token: Uint8Array; custody?: CashuTreasuryCustody; signal: AbortSignal }>;
+export type CashuObserveRequest = Readonly<{ topUpId: string; accountId?: string; policy: CashuMintPolicy; commitment: string; amount: string; maxFee: string; token?: Uint8Array; custody?: CashuTreasuryCustody; signal: AbortSignal }>;
 export type CashuProofIdentity = Readonly<{ status: "accepted"; semanticProofIdentities: readonly string[] }> | Extract<CashuSettlementObservation, { status: "failed" }>;
 export type CashuTreasuryState = "held_at_trusted_mint" | "melted_settled" | "failed" | "unknown";
 
@@ -57,12 +59,13 @@ async function sha256(bytes: Uint8Array): Promise<string> {
 
 type DecodedToken = ReturnType<typeof getDecodedToken>;
 type AllowedMint = CashuMintPolicy["mints"][number];
-type CashuWalletOperationInput = Readonly<{ topUpId: string; decoded: DecodedToken; mint: AllowedMint; keysetId: string; amount: string; custody?: CashuTreasuryCustody; signal: AbortSignal }>;
+type CashuWalletOperationInput = Readonly<{ topUpId: string; decoded: DecodedToken; mint: AllowedMint; keysetId: string; amount: string; maxFee: string; custody?: CashuTreasuryCustody; signal: AbortSignal }>;
 export interface CashuWalletOperations {
-  settle(input: CashuWalletOperationInput): Promise<void>;
+  /** Void is legacy fake compatibility; production default always returns facts. */
+  settle(input: CashuWalletOperationInput): Promise<CashuSwapAmounts | void>;
   observe(input: CashuWalletOperationInput): Promise<"spent" | "pending" | "unspent" | "mixed">;
   /** Optional because deterministic legacy fakes intentionally cannot claim recovery ownership. */
-  recover?(input: CashuWalletOperationInput): Promise<boolean>;
+  recover?(input: CashuWalletOperationInput): Promise<CashuSwapAmounts | false>;
 }
 
 class OpaqueCashuSwapError extends Error { constructor(readonly cause: unknown) { super("CASHU_SWAP_OUTCOME_UNKNOWN"); } }
@@ -93,7 +96,7 @@ const fetchMintJson: RequestFn = async <T>(options: RequestOptions): Promise<T> 
 /** cashu-ts bridge whose every HTTP request is bound to the coordinator signal. */
 class CashuTsWalletOperations implements CashuWalletOperations {
   constructor(private readonly request: RequestFn = fetchMintJson) {}
-  async settle(input: CashuWalletOperationInput): Promise<void> {
+  async settle(input: CashuWalletOperationInput): Promise<CashuSwapAmounts> {
     const wallet = this.wallet(input);
     input.signal.throwIfAborted();
     await wallet.loadMint();
@@ -102,21 +105,24 @@ class CashuTsWalletOperations implements CashuWalletOperations {
     input.signal.throwIfAborted();
     const outputData = [...(preview.keepOutputs ?? []), ...(preview.sendOutputs ?? [])];
     const expectedOutputAmount = OutputData.sumOutputAmounts(outputData).toString();
-    // Input fees can reduce the owned outputs. Do not silently credit the
-    // submitted face value when a pinned mint quotes a different output value.
-    if (expectedOutputAmount !== input.amount) throw new Error("CASHU_OUTPUT_AMOUNT_MISMATCH");
+    const feeAmount = preview.fees.toString();
+    const inputFeePpk = Number(wallet.getKeyset(input.keysetId).fee);
+    if (!Number.isSafeInteger(inputFeePpk) || inputFeePpk < 0 || inputFeePpk > input.mint.maxInputFeePpk) throw new Error("CASHU_INPUT_FEE_POLICY_DENIED");
+    if (BigInt(feeAmount) > BigInt(input.maxFee) || BigInt(expectedOutputAmount) + BigInt(feeAmount) !== BigInt(input.amount)) throw new Error("CASHU_OUTPUT_AMOUNT_MISMATCH");
+    const amounts = Object.freeze({ grossAmount: input.amount, feeAmount, netAmount: expectedOutputAmount });
     if (input.custody) {
-      await input.custody.prepare({ operationId: `cashu-swap:${input.topUpId}`, mintUrl: input.mint.url, keysetId: input.keysetId, expectedOutputAmount, outputData: outputData.map((output) => OutputData.serialize(output)) });
+      await input.custody.prepare({ operationId: `cashu-swap:${input.topUpId}`, mintUrl: input.mint.url, keysetId: input.keysetId, grossAmount: input.amount, maxFee: input.maxFee, inputFeePpk, feeAmount, expectedOutputAmount, outputData: outputData.map((output) => OutputData.serialize(output)) });
       if (!await input.custody.claimDispatch()) throw new OpaqueCashuSwapError(new Error("CASHU_DISPATCH_ALREADY_CLAIMED"));
     }
     try {
       const completed = await wallet.completeSwap(preview);
       const outputs = [...completed.keep, ...completed.send];
-      this.assertOwnedOutputs(outputs, input);
+      this.assertOwnedOutputs(outputs, input, amounts.netAmount);
       if (input.custody) await input.custody.recordOwnedOutputs(outputs);
     }
     catch (error) { throw new OpaqueCashuSwapError(error); }
     input.signal.throwIfAborted();
+    return amounts;
   }
   async observe(input: CashuWalletOperationInput): Promise<"spent" | "pending" | "unspent" | "mixed"> {
     const states = await this.wallet(input).checkProofsStates(input.decoded.proofs);
@@ -126,7 +132,7 @@ class CashuTsWalletOperations implements CashuWalletOperations {
     if (states.some(({ state }) => state === CheckStateEnum.PENDING)) return "pending";
     return "mixed";
   }
-  async recover(input: CashuWalletOperationInput): Promise<boolean> {
+  async recover(input: CashuWalletOperationInput): Promise<CashuSwapAmounts | false> {
     if (!input.custody) return false;
     const loaded = await input.custody.load();
     if (!loaded || loaded.journal.mintUrl !== input.mint.url || loaded.journal.keysetId !== input.keysetId || loaded.journal.amount !== input.amount) return false;
@@ -135,7 +141,7 @@ class CashuTsWalletOperations implements CashuWalletOperations {
       try {
         const outputs = JSON.parse(new TextDecoder().decode(loaded.outputs));
         this.assertOwnedOutputs(outputs, input, loaded.journal.expectedOutputAmount);
-        return true;
+        return this.amountsFromJournal(loaded.journal, input);
       } finally { loaded.outputs.fill(0); }
       }
       if (!loaded.outputData || loaded.journal.state !== "dispatching") return false;
@@ -158,7 +164,7 @@ class CashuTsWalletOperations implements CashuWalletOperations {
       });
       this.assertOwnedOutputs(outputs, input, loaded.journal.expectedOutputAmount);
       await input.custody.recordOwnedOutputs(outputs);
-      return true;
+      return this.amountsFromJournal(loaded.journal, input);
     } catch { return false; }
     finally { loaded.outputData?.fill(0); loaded.outputs?.fill(0); }
   }
@@ -174,6 +180,10 @@ class CashuTsWalletOperations implements CashuWalletOperations {
       const identity = `${output.id}:${output.secret}`; if (seen.has(identity)) throw new Error("CASHU_OUTPUT_DUPLICATE"); seen.add(identity); amount += individual;
     }
     if (amount !== BigInt(expectedAmount)) throw new Error("CASHU_OUTPUT_AMOUNT_MISMATCH");
+  }
+  private amountsFromJournal(journal: CashuCustodyJournal, input: CashuWalletOperationInput): CashuSwapAmounts {
+    if (journal.amount !== input.amount || journal.maxFee !== input.maxFee || BigInt(journal.feeAmount) > BigInt(input.maxFee) || BigInt(journal.expectedOutputAmount) + BigInt(journal.feeAmount) !== BigInt(input.amount)) throw new Error("CASHU_RECOVERY_FEE_BINDING_INVALID");
+    return Object.freeze({ grossAmount: journal.amount, feeAmount: journal.feeAmount, netAmount: journal.expectedOutputAmount });
   }
   private wallet(input: CashuWalletOperationInput): Wallet {
     const request: RequestFn = (options) => this.request({ ...options, signal: input.signal });
@@ -224,8 +234,8 @@ export class CashuTsSettlementAdapter implements CashuSettlementPort {
       if (!mint) return failed("untrusted_mint");
       const keysetIds = new Set(decoded.proofs.map((proof) => proof.id));
       if (keysetIds.size !== 1) return failed("wrong_amount");
-      await this.#operations.settle({ topUpId: request.topUpId, decoded, mint, keysetId: [...keysetIds][0]!, amount: request.amount, custody: request.custody, signal: request.signal });
-      return { status: "verified", externalReference: `cashu:${request.commitment}`, settlementReference: `cashu-swap:${request.topUpId}:${request.commitment}`, verifiedAt: this.#now() };
+      const amounts = await this.#operations.settle({ topUpId: request.topUpId, decoded, mint, keysetId: [...keysetIds][0]!, amount: request.amount, maxFee: request.maxFee, custody: request.custody, signal: request.signal });
+      return { status: "verified", externalReference: `cashu:${request.commitment}`, settlementReference: `cashu-swap:${request.topUpId}:${request.commitment}`, verifiedAt: this.#now(), ...(amounts ? { amounts } : {}) };
     } catch (error) {
       if (request.signal.aborted || error instanceof OpaqueCashuSwapError) return { status: "unknown", operationReference: `cashu:${request.commitment}` };
       return failed(codeOf(error));
@@ -243,9 +253,10 @@ export class CashuTsSettlementAdapter implements CashuSettlementPort {
       if (amount !== BigInt(request.amount)) return { status: "unknown", operationReference: `cashu:${request.commitment}` };
       const keysets = new Set(decoded.proofs.map((proof) => proof.id));
       if (keysets.size !== 1 || !mint.keysetIds.includes([...keysets][0]!)) return { status: "unknown", operationReference: `cashu:${request.commitment}` };
-      const operation = { topUpId: request.topUpId, decoded, mint, keysetId: [...keysets][0]!, amount: request.amount, custody: request.custody, signal: request.signal };
-      if (await this.#operations.recover?.(operation)) {
-        return { status: "verified", externalReference: `cashu:${request.commitment}`, settlementReference: `cashu-swap:${request.topUpId}:${request.commitment}`, verifiedAt: this.#now() };
+      const operation = { topUpId: request.topUpId, decoded, mint, keysetId: [...keysets][0]!, amount: request.amount, maxFee: request.maxFee, custody: request.custody, signal: request.signal };
+      const recovered = await this.#operations.recover?.(operation);
+      if (recovered) {
+        return { status: "verified", externalReference: `cashu:${request.commitment}`, settlementReference: `cashu-swap:${request.topUpId}:${request.commitment}`, verifiedAt: this.#now(), amounts: recovered };
       }
       const state = await this.#operations.observe(operation);
       // Input SPENT proves only that the bearer is no longer available. It

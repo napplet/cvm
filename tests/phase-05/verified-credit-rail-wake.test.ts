@@ -83,7 +83,7 @@ describe("verified rail credit to same-worker continuation", () => {
     const activeProvider = new FakeCashuSettlementPort();
     activeProvider.nextSettlement({ status: "verified", externalReference: "cashu:rail-wake:external", settlementReference: "cashu:rail-wake:settlement", verifiedAt: "2026-08-05T00:01:00.000Z" });
     const activeCoordinator = new CashuTopUpCoordinator({ policies: new CashuMintPolicyRegistry(cashuFixture.policies[0]!), provider: activeProvider, vault: new CashuVault(), funding: active.funding, repository: new InMemoryCashuTopUpRepository(), verifiedCreditWake: active.generation });
-    const submit = { principal, idempotencyKey: "cashu:rail-wake", topUpId: "cashu:rail-wake", amount: "3250", unit: "sat" as const, pmi: cashuFixture.pmi, token: new TextEncoder().encode("cashuB-rail-wake") };
+    const submit = { principal, idempotencyKey: "cashu:rail-wake", topUpId: "cashu:rail-wake", amount: "3250", maxFee: "0", unit: "sat" as const, pmi: cashuFixture.pmi, token: new TextEncoder().encode("cashuB-rail-wake") };
 
     await expect(activeCoordinator.submit(submit)).resolves.toMatchObject({ state: "credited" });
     await expect(activeCoordinator.submit(submit)).resolves.toMatchObject({ state: "credited" });

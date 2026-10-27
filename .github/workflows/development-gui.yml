@@ -40,6 +40,10 @@ jobs:
         with:
           platforms: amd64
           image: tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+      - name: Install the Compose version required by the worker image contract
+        uses: docker/setup-compose-action@2fe291b7677a45ee1269ec56a42604c143505e7e # v1
+        with:
+          version: v2.39.4
       - run: bun install --frozen-lockfile
       - run: bun install --cwd tests/dev-ui --frozen-lockfile
       - name: Install host Chromium and its Linux libraries

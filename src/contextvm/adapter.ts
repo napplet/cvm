@@ -141,6 +141,8 @@ export interface ContextVmFundingAdapterOptions {
   /** Explicit post-grace continuation only; rails and status cannot call this facade. */
   continuation?: Readonly<{ resumeSession(input: unknown): Promise<unknown> }>;
   sessionStatus?: Readonly<{ read(input: unknown): Promise<unknown> }>;
+  /** Optional composition-owned HTTPS origin for remote opaque-grant previews. */
+  publicPreviewOrigin?: string;
   /** Preview remains a read-only, owner-scoped facade and never gains publication authority. */
   preview?: Readonly<{
     previewVerifiedArtifact(input: unknown): Promise<unknown>;
@@ -181,11 +183,17 @@ function freeze<T>(value: T): T {
  * DTO, event, bearer material, signer, or SDK replay state in the funding core.
  */
 export class ContextVmFundingAdapter {
+  private readonly publicPreviewOrigin?: string;
   private readonly policyVersion: string;
   private readonly protocolVersion: string;
   private readonly publicationSourceContract?: AvailablePromotedCliSourceContract;
 
   constructor(private readonly options: ContextVmFundingAdapterOptions) {
+    if (options.publicPreviewOrigin) {
+      const origin = new URL(options.publicPreviewOrigin);
+      if (origin.protocol !== "https:" || origin.origin !== options.publicPreviewOrigin) throw new Error("PUBLIC_PREVIEW_ORIGIN_INVALID");
+      this.publicPreviewOrigin = origin.origin;
+    }
     this.policyVersion = options.policyVersion ?? "funding-policy-v1";
     this.protocolVersion = options.protocolVersion ?? "funding-contract-v1";
     // Do not preserve a caller-supplied availability shape as a capability.
@@ -397,7 +405,7 @@ export class ContextVmFundingAdapter {
   private async previewResponse(verifiedPubkey: string, requestEventId: string, id: string | number | null, action: "descriptor" | "review_capabilities", input: unknown): Promise<ContextVmWireResponse> {
     const descriptor = PreviewDescriptorSchema.safeParse(input);
     const review = CapabilityReviewSchema.safeParse(input);
-    const projected = z.object({ state: z.enum(["ready", "incompatible", "expired", "denied"]), artifactId: z.string().min(1).optional(), aggregateSha256: z.string().regex(/^[a-f0-9]{64}$/iu).optional(), previewGrantId: z.string().min(1).optional(), expiresAtMs: z.number().int().positive().optional(), previewUrl: z.string().url().refine((value) => { const url = new URL(value); return url.protocol === "http:" && (url.hostname === "127.0.0.1" || url.hostname === "localhost"); }, "LOOPBACK_PREVIEW_URL_REQUIRED").optional(), capabilityDigest: z.string().regex(/^[a-f0-9]{64}$/iu).optional(), runtimeVariant: z.string().min(1).optional(), required: z.array(z.object({ capability: z.string().min(1), requirement: z.enum(["required", "optional"]), purpose: z.string().min(1).max(512), consent: z.enum(["required", "optional"]), available: z.boolean() }).strict()).optional(), optional: z.array(z.object({ capability: z.string().min(1), requirement: z.enum(["required", "optional"]), purpose: z.string().min(1).max(512), consent: z.enum(["required", "optional"]), available: z.boolean() }).strict()).optional(), nextAction: z.enum(["preview", "review_capabilities", "sign_manifest"]), safeReasonCode: z.enum(["preview_not_available", "runtime_incompatible", "preview_expired", "runtime_denied"]).optional() }).passthrough().safeParse(input);
+    const projected = z.object({ state: z.enum(["ready", "incompatible", "expired", "denied"]), artifactId: z.string().min(1).optional(), aggregateSha256: z.string().regex(/^[a-f0-9]{64}$/iu).optional(), previewGrantId: z.string().min(1).optional(), expiresAtMs: z.number().int().positive().optional(), previewUrl: z.string().url().refine((value) => { const url = new URL(value); return !url.username && !url.password && ((url.protocol === "http:" && (url.hostname === "127.0.0.1" || url.hostname === "localhost")) || (url.origin === this.publicPreviewOrigin && /^\/cvm-preview\/[a-f0-9-]{36}\/$/u.test(url.pathname) && !url.search && !url.hash)); }, "TRUSTED_PREVIEW_URL_REQUIRED").optional(), capabilityDigest: z.string().regex(/^[a-f0-9]{64}$/iu).optional(), runtimeVariant: z.string().min(1).optional(), required: z.array(z.object({ capability: z.string().min(1), requirement: z.enum(["required", "optional"]), purpose: z.string().min(1).max(512), consent: z.enum(["required", "optional"]), available: z.boolean() }).strict()).optional(), optional: z.array(z.object({ capability: z.string().min(1), requirement: z.enum(["required", "optional"]), purpose: z.string().min(1).max(512), consent: z.enum(["required", "optional"]), available: z.boolean() }).strict()).optional(), nextAction: z.enum(["preview", "review_capabilities", "sign_manifest"]), safeReasonCode: z.enum(["preview_not_available", "runtime_incompatible", "preview_expired", "runtime_denied"]).optional() }).passthrough().safeParse(input);
     const value = projected.success
       ? freeze({ status: projected.data.state, ...(projected.data.artifactId ? { artifactId: projected.data.artifactId } : {}), ...(projected.data.aggregateSha256 ? { aggregateSha256: projected.data.aggregateSha256 } : {}), ...(projected.data.previewGrantId ? { previewGrantId: projected.data.previewGrantId } : {}), ...(projected.data.expiresAtMs ? { expiresAtMs: projected.data.expiresAtMs } : {}), ...(projected.data.previewUrl ? { previewUrl: projected.data.previewUrl } : {}), ...(projected.data.capabilityDigest ? { capabilityDigest: projected.data.capabilityDigest } : {}), ...(projected.data.runtimeVariant ? { runtimeVariant: projected.data.runtimeVariant } : {}), ...(projected.data.required ? { required: projected.data.required } : {}), ...(projected.data.optional ? { optional: projected.data.optional } : {}), ...(projected.data.safeReasonCode ? { safeReasonCode: projected.data.safeReasonCode } : {}), nextAction: projected.data.nextAction })
       : descriptor.success

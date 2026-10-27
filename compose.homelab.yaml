@@ -1,0 +1,52 @@
+services:
+  engine:
+    image: docker:29.9.2-dind@sha256:9e79b879b177fbd72c34376a3dd3d91747da5db49e1f560f76aea59561471977
+    privileged: true
+    dns: [192.168.151.196]
+    command: ["dockerd", "--host=unix:///run/cvm-docker/docker.sock", "--storage-driver=overlay2", "--log-opt=max-size=10m", "--log-opt=max-file=3"]
+    restart: unless-stopped
+    expose: ["8080"]
+    ports:
+      - "18870:8080"
+    volumes:
+      - engine-data:/var/lib/docker
+      - engine-socket:/run/cvm-docker
+      - scratch:/scratch
+    healthcheck:
+      test: ["CMD", "docker", "--host=unix:///run/cvm-docker/docker.sock", "info"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+  cvm:
+    build:
+      context: .
+      dockerfile: infra/homelab/Dockerfile
+    network_mode: service:engine
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    shm_size: 1gb
+    labels:
+      com.napplet-cvm.component: control
+    depends_on:
+      engine:
+        condition: service_healthy
+    environment:
+      NAPPLET_CVM_PUBLIC_ORIGIN: https://cvm.lab.sandwich.farm
+      NAPPLET_CVM_PREVIEW_PUBLIC_ORIGIN: https://cvm-preview.lab.sandwich.farm
+      NAPPLET_CVM_PUBLIC_RELAY_URL: wss://cvm.lab.sandwich.farm/relay
+      NAPPLET_CVM_BLOSSOM_PUBLIC_URL: https://cvm-blobs.lab.sandwich.farm
+    volumes:
+      - /srv/homelab/cvm/state:/app/.local
+      - engine-socket:/run/cvm-docker
+      - scratch:/scratch
+    healthcheck:
+      test: ["CMD", "bun", "-e", "if (!(await fetch('http://127.0.0.1:8080/health')).ok) process.exit(1)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30m
+      retries: 5
+volumes:
+  engine-data:
+  engine-socket:
+  scratch:

@@ -18,7 +18,7 @@ test("wrong worker platform fails before container execution", async () => {
   const root = await mkdtemp(join(tmpdir(), "napplet-readiness-platform-"));
   try {
     const dockerBin = join(root, "docker-fixture");
-    await writeFile(dockerBin, `#!/usr/bin/env bun\nif(process.argv[2]!=='image')throw Error('unexpected container execution');console.log('sha256:${"a".repeat(64)}|linux|amd64');`, { mode: 0o700 });
+    await writeFile(dockerBin, `#!/usr/bin/env bun\nif(process.argv[2]!=='image')throw Error('unexpected container execution');console.log('sha256:${"a".repeat(64)}|linux|${process.arch === "x64" ? "arm64" : "amd64"}');`, { mode: 0o700 });
     await expect(new LocalDevelopmentRuntimeReadiness({ dockerBin }).assertReady()).rejects.toThrow("DEV_WORKER_IMAGE_NOT_READY");
   } finally { await rm(root, { recursive: true, force: true }); }
 });

@@ -83,7 +83,7 @@ export class LocalNappletWorker {
     const docker = this.input.dockerBin ?? "docker";
     const inspected = await runBoundedDevelopmentCommand([docker, "image", "inspect", this.input.image ?? image, "--format", "{{.Id}}|{{.Os}}|{{.Architecture}}"], { deadlineMs: 15_000, maxBytes: 16_000, signal });
     const [imageId, os, arch] = inspected.stdout.trim().split("|");
-    if (inspected.exitCode !== 0 || !/^sha256:[a-f0-9]{64}$/u.test(imageId ?? "") || os !== "linux" || arch !== "arm64") throw new Error("WORKER_IMAGE_PRECONDITION_FAILED");
+    if (inspected.exitCode !== 0 || !/^sha256:[a-f0-9]{64}$/u.test(imageId ?? "") || os !== "linux" || arch !== (process.arch === "x64" ? "amd64" : "arm64")) throw new Error("WORKER_IMAGE_PRECONDITION_FAILED");
     const workspace = await mkdtemp(join(tmpdir(), "napplet-cvm-worker-")); const input = resolve(workspace, "input"); const output = resolve(workspace, "output");
     const containerName = `napplet-cvm-dev-worker-${crypto.randomUUID()}`; let retained = false;
     try {

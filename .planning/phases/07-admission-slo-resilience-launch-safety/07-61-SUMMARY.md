@@ -20,11 +20,10 @@ key-files:
 key-decisions:
   - "A spent input is insufficient for credit; only encrypted verified owned outputs or NUT-09 recovery of the original output data can verify a settlement."
   - "Production composition admits only the default custody-capable Cashu adapter; explicit fake/custom operations remain test-only."
-requirements-completed: [OPS-02, OPS-03, OPS-04]
+requirements-completed: []
 coverage:
   - id: D1
     description: Durable encrypted Cashu input/output custody and restart-safe dispatch fencing
-    requirement: OPS-02
     verification:
       - kind: integration
         ref: NAPPLET_RUN_POSTGRES_ISOLATION=1 bun test tests/funding/production-accounting-realm.test.ts --timeout 120000
@@ -35,7 +34,6 @@ coverage:
     human_judgment: false
   - id: D2
     description: Semantic proof replay rejection and unknown handling for ambiguous spent inputs
-    requirement: OPS-03
     verification:
       - kind: unit
         ref: bun test tests/funding/cashu-treasury-recovery.test.ts tests/funding/cashu-top-up.test.ts tests/dev/funding.test.ts --timeout 10000
@@ -43,7 +41,6 @@ coverage:
     human_judgment: false
   - id: D3
     description: Original-message-only NUT-09 recovery and DLEQ/keyset/output binding
-    requirement: OPS-04
     verification:
       - kind: unit
         ref: tests/funding/cashu-treasury-recovery.test.ts
@@ -51,7 +48,7 @@ coverage:
     human_judgment: false
 duration: 34min
 completed: 2026-10-27
-status: complete
+status: implementation_complete
 ---
 
 # Phase 07 Plan 61: Cashu Custody and Replay Safety Summary
@@ -107,6 +104,8 @@ status: complete
 None. Deterministic fake/custom Cashu operations remain explicitly rejected by production composition; they are retained only for development tests.
 
 ## Next Phase Readiness
+
+OPS-02, OPS-03, and OPS-04 remain protected-unverified. This local implementation is not live Cashu/mint, real-money, or protected production certification evidence.
 
 Cashu custody is ready for production-integrated verification. Protected live mint evidence, real-money funding, and production certification remain unperformed and unclaimed.
 

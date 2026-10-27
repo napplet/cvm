@@ -31,6 +31,7 @@
     "protectedEvidence": null,
     "blockers": [
       "The recreated release asset has no upstream source-to-binary attestation.",
+      "Deno compile embeds build-path/cache-dependent bytes in repeated local builds; this receipt is an observed source-build digest, not a claim of bit-for-bit reproducibility.",
       "This local source build must complete compatibility and promotion review before it can replace any historical candidate."
     ]
   }

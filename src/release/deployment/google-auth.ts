@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { GoogleAuth } from "google-auth-library";
 
 const ProjectIdSchema = z.string().regex(/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/u);
 const TokenSchema = z.string().regex(/^[A-Za-z0-9._~-]{20,8192}$/u);
@@ -81,6 +82,9 @@ export function createGoogleAdcTokenSource(input: Readonly<{
   if (!Number.isSafeInteger(margin) || margin < 10_000 || margin > 10 * 60_000) throw new Error("GOOGLE_ADC_EXPIRY_MARGIN_INVALID");
   const fetcher = input.fetch ?? fetch;
   const command = input.command ?? runGcloud;
+  const libraryAuth = !input.fetch && !input.command && !input.identity
+    ? new GoogleAuth({ projectId, scopes: GOOGLE_CONTROL_PLANE_SCOPES, clientOptions: { quotaProjectId } })
+    : undefined;
   let cached: GoogleAccessToken | undefined;
 
   return Object.freeze({
@@ -91,9 +95,19 @@ export function createGoogleAdcTokenSource(input: Readonly<{
       if (cached && cached.expiresAtMs - margin > now()) return cached;
 
       let token = ""; let expiresAtMs = 0;
+      if (libraryAuth) {
+        try {
+          const [resolvedProject, credentials, client] = await Promise.all([libraryAuth.getProjectId(), libraryAuth.getCredentials(), libraryAuth.getClient()]);
+          const credential = credentials as Readonly<{ client_email?: unknown; quota_project_id?: unknown }>;
+          if (resolvedProject !== projectId || credential.client_email !== principal || (credential.quota_project_id !== undefined && credential.quota_project_id !== quotaProjectId)) throw new Error("GOOGLE_ADC_IDENTITY_INVALID");
+          const access = await client.getAccessToken();
+          const expiry = client.credentials.expiry_date;
+          if (typeof access.token === "string" && TokenSchema.safeParse(access.token).success && Number.isSafeInteger(expiry) && expiry > now() + margin) { token = access.token; expiresAtMs = expiry; }
+        } catch (error) { if (error instanceof Error && error.message === "GOOGLE_ADC_IDENTITY_INVALID") throw error; }
+      }
       /* Metadata is accepted only after the attached Cloud Run project and
        * service-account email exactly match the receipt-bound identity. */
-      try {
+      if (!token) try {
         const headers = { "Metadata-Flavor": "Google" };
         const [metadataProject, metadataPrincipal] = await Promise.all([
           fetcher("http://metadata.google.internal/computeMetadata/v1/project/project-id", { method: "GET", headers, redirect: "error" }),

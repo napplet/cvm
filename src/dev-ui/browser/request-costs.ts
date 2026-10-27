@@ -21,7 +21,7 @@ const labels = { input_tokens: "Input", output_tokens: "Output", cached_tokens: 
 
 /** A request and its result share one receipt. Showing that receipt once avoids
  * implying that the status reply is a second paid model request. */
-export function requestCostElement(request: RequestCost): HTMLLIElement {
+export function requestCostElement(request: RequestCost, failureExplanation?: string): HTMLLIElement {
   const item = document.createElement("li"); item.className = "request-message"; item.dataset.requestId = request.id; item.dataset.state = request.state;
   const heading = document.createElement("div"); heading.className = "request-message-heading";
   heading.append(text("span",`Request ${request.number} · ${request.kind === "create" ? "Create" : "Revision"}`),text("time",new Date(request.createdAt).toLocaleDateString()));
@@ -30,6 +30,7 @@ export function requestCostElement(request: RequestCost): HTMLLIElement {
   if (!request.prompt) item.append(text("p","Original prompt unavailable.","request-note"));
   const outcome = request.state === "verified" ? `Version ${request.version} ready` : request.state === "failed" ? "Attempt stopped" : ["active","prepared"].includes(request.state) ? "In progress" : "Outcome needs checking";
   item.append(text("p",outcome,"request-outcome"));
+  if (failureExplanation && !["verified", "active", "prepared"].includes(request.state)) item.append(text("p",failureExplanation,"request-note"));
   const footer = document.createElement("div"); footer.className = "request-charge";
   footer.append(text("span",request.charge === null ? "Request cost" : "Actual cost"),text("strong",request.charge === null ? "Awaiting confirmation" : formatCost(request.charge)));
   item.append(footer);

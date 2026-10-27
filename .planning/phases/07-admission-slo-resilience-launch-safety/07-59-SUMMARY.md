@@ -74,7 +74,7 @@ status: verification_pending
 - Passed: `bun test tests/dev/payment-config.test.ts --timeout 10000` (6 tests), including Cashu v4 `cashuB` format and failure cleanup.
 - Passed: `bun scripts/probe-development-relay.ts` — exact pinned relay reported `amd64` and `websocket: ready`.
 - Pending: `bun scripts/dev-payments.ts test` installed/built the browser and native worker prerequisites, then failed before the isolated stack started because the local Docker daemon reported `all predefined address pools have been fully subnetted` while creating `napplet-cvm-payments-test-4509bf873cbe7cfe_default`.
-- Pending: clean remote payment and GUI workflow runs. No remote CI has been claimed as green.
+- Pending: clean remote payment and GUI workflow runs. GUI run `40507779530` passed the pinned relay probe but failed building the ARM64-default worker on the AMD64 runner. Both jobs now set `NAPPLET_CVM_WORKER_PLATFORM=linux/amd64`; Compose configuration checks confirm both worker images select that platform. No remote CI has been claimed as green.
 
 ## Deviations from Plan
 
@@ -95,9 +95,17 @@ status: verification_pending
 
 The local Docker daemon had exhausted its predefined address pools. The executor did not prune networks or alter shared/operator Docker state. The isolated test command's `finally` cleanup targeted only its generated project; subsequent `docker ps` and network checks found no `napplet-cvm-payments-test-*` or relay-probe resource.
 
+Remote payment run `40508257133` completed all 138 selected tests: 135 passed and three failed. The real worker result test exposed native-Linux bind-mount ownership (`EACCES` removing a worker-owned directory); the development worker now matches a non-root launcher's numeric identity and retains UID/GID 65532 for root launchers, with network/capability/read-only controls intact. The authoring assertion was stale after the supported data-only `src/capabilities.json` surface was added; it now asserts that exact surface and the protected manifest/dependency/toolchain prohibition. Six focused lifecycle/authoring tests pass. The pre-admission real-worker failure requires the next full run to establish whether the ownership correction also resolves it; it has not been waived.
+
+Payment run `40509872748` passed all 138 tests / 923 assertions at source `1442809`, including both previously failing worker flows. GUI run `40509872944` then timed out in the remix journey: its selector still expected the old `Version N · latest` label, while version restoration now renders `Version N · current`. Updated the exact selectors in both affected browser journeys and added bounded failure-state diagnostics to the remix wait. Full GUI verification remains pending; no journey was skipped.
+
+At `7db29af`, payment run `40512008210` passed again. GUI run `40512008420` passed remix, product-view and responsive flows, then exposed another stale older-version assertion. The product journey now requires the current restore-or-return explanation, an enabled restore control, and the current-version return button; direct edits to an older preview must remain disabled. Full GUI verification is still pending.
+
+At `f041e7b`, payment run `40513639887` passed. GUI run `40513639935` passed the full product journey and OAuth flow, then exposed a real timeout presentation defect: cost receipts replaced the detailed failure message with a generic outcome. Failure messages now retain their request key and enrich only the matching unresolved receipt. A browser regression failed before the fix and passes after it, including repeated refresh, saved workspace reconstruction, text-only rendering, and suppression after successful reconciliation. Full remote GUI verification remains required.
+
 ## Next Phase Readiness
 
-Source changes are ready for a push and clean remote CI. Do not mark OPS-04 complete until the retained payment and GUI workflows pass remotely.
+PR #5 is open. Do not mark OPS-04 complete until the retained payment and GUI workflows pass remotely.
 
 ## Self-Check: PASSED
 

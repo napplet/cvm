@@ -27,6 +27,8 @@ permissions:
 jobs:
   payments:
     runs-on: ubuntu-24.04
+    env:
+      NAPPLET_CVM_WORKER_PLATFORM: linux/amd64
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4

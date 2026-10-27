@@ -15,6 +15,7 @@ import type { FundingStore, MeteredFundingStore } from "../persistence/funding-s
 import { PostgresFundingStore, type PostgresFundingExecutor } from "../persistence/postgres-funding-store";
 import { PostgresSqlFundingStore, type PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
 import { PostgresFundingDatabase } from "../persistence/postgres-funding-database";
+import { assertProductionAccountingConfiguration, assertProductionRealm, type AccountingRealmName } from "../funding/accounting-realm";
 import type { MeteredGenerationService } from "../phase-04/metered-generation-service";
 import { readSessionStatus } from "../phase-04/session-status";
 import type { ContinuationService } from "../continuity/continuation-service";
@@ -40,6 +41,10 @@ export type FundedCoreOptions = Readonly<{
   postgresExecutor?: PostgresFundingExecutor;
   postgresPool?: PostgresSqlPool;
   database?: PostgresFundingDatabase;
+  /** Real-money composition selects a fresh zero-funded realm, never public history. */
+  accountingRealm?: AccountingRealmName;
+  /** Non-secret adapter/catalog identity descriptor validated before real-money composition. */
+  productionAccountingConfiguration?: unknown;
   capacity?: ReadyCapacityPort;
   sessions?: AccountSessionStatusPort;
   transport?: ContextVmTransportPort;
@@ -90,7 +95,10 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
   if (options.store && (options.postgresExecutor || options.postgresPool || options.database)) throw new Error("CONFLICTING_FUNDING_STORE_CONFIGURATION");
   if ([options.postgresExecutor, options.postgresPool, options.database].filter(Boolean).length > 1) throw new Error("CONFLICTING_POSTGRES_CONFIGURATION");
   if (!options.testOnly && (options.lightning || options.cashu)) throw new Error("PRODUCTION_RAIL_COMPOSITION_REQUIRED");
-  const database = options.database ?? (options.postgresPool ? new PostgresFundingDatabase(options.postgresPool) : undefined);
+  const requestedRealm = options.accountingRealm ?? (options.testOnly ? "development-test" : "production-real");
+  if (!options.testOnly) assertProductionAccountingConfiguration({ accountingRealm: requestedRealm, configuration: options.productionAccountingConfiguration ?? {} });
+  const database = options.database ?? (options.postgresPool ? new PostgresFundingDatabase(options.postgresPool, { realm: requestedRealm }) : undefined);
+  if (!options.testOnly && database) assertProductionRealm(database.realm);
   const store = options.store ?? database?.funding ?? (options.postgresExecutor ? new PostgresFundingStore(options.postgresExecutor) : undefined);
   // The deterministic test-only path has an explicit in-memory authority. It is
   // still offline design evidence, never a selected database/provider claim.

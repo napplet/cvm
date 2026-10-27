@@ -1,4 +1,5 @@
 import type { AccountTopUpStatusPort } from "../funding/account-status";
+import { bindAccountingRealmPool, createAccountingRealm, type AccountingRealm, type AccountingRealmName } from "../funding/accounting-realm";
 import type { CashuTopUpRecord, CashuTopUpRepository, CashuTopUpResult } from "../funding/cashu-top-up";
 import type { LightningPrivateTopUp, LightningTopUpRepository, LightningTopUpState } from "../funding/lightning-top-up";
 import type { ProtectedRailMaterialRecord, ProtectedRailMaterialRepository } from "../funding/protected-rail-material";
@@ -144,6 +145,7 @@ class PostgresRailStatusProjection implements AccountTopUpStatusPort {
  * neither issue arbitrary queries nor pass database credentials into rail code.
  */
 export class PostgresFundingDatabase {
+  readonly realm: AccountingRealm;
   readonly funding: PostgresSqlFundingStore;
   /** Alias of `funding`, not a second billing/session capability or connection. */
   readonly meteredFunding: MeteredFundingStore;
@@ -154,14 +156,16 @@ export class PostgresFundingDatabase {
   readonly protectedMaterials: ProtectedRailMaterialRepository;
   readonly railStatuses: AccountTopUpStatusPort;
 
-  constructor(pool: PostgresSqlPool, options: PostgresSqlStoreOptions = {}) {
-    this.funding = new PostgresSqlFundingStore(pool, options);
+  constructor(pool: PostgresSqlPool, options: PostgresSqlStoreOptions & Readonly<{ realm?: AccountingRealmName }> = {}) {
+    this.realm = createAccountingRealm(options.realm ?? "development-test");
+    const realmPool = bindAccountingRealmPool(pool, this.realm);
+    this.funding = new PostgresSqlFundingStore(realmPool, options);
     this.meteredFunding = this.funding;
     this.continuationFunding = this.funding;
-    this.lightning = new PostgresLightningLifecycleRepository(pool);
-    this.cashu = new PostgresCashuLifecycleRepository(pool);
-    this.protectedMaterials = new PostgresProtectedRailMaterialRepository(pool);
-    this.railStatuses = new PostgresRailStatusProjection(pool);
+    this.lightning = new PostgresLightningLifecycleRepository(realmPool);
+    this.cashu = new PostgresCashuLifecycleRepository(realmPool);
+    this.protectedMaterials = new PostgresProtectedRailMaterialRepository(realmPool);
+    this.railStatuses = new PostgresRailStatusProjection(realmPool);
     Object.freeze(this);
   }
 }

@@ -227,7 +227,7 @@ function failedEvidence(config: ModalWorkerConfig, checks: ModalProbeChecks | un
 }
 
 async function observeLiveModalIsolation(config: ModalWorkerConfig): Promise<ModalProbeObservation> {
-  const sdk = await productionModalSdk();
+  const sdk = await createOfficialModalSdk();
   const app = await sdk.apps.fromName(config.appName, { createIfMissing: false });
   const image = sdk.images.fromRegistry(config.image);
   const first = await sdk.sandboxes.create(app, image, strictCreateOptions(config));
@@ -301,7 +301,9 @@ export async function runModalIsolationProbe(input: Readonly<{
   }
 }
 
-async function productionModalSdk(): Promise<ModalSdkPort> {
+/** Controller-only official SDK construction; generated code never receives
+ * this client or Modal credentials. */
+export async function createOfficialModalSdk(): Promise<ModalSdkPort> {
   const { ModalClient } = await import("modal");
   const client = new ModalClient();
   return {
@@ -425,5 +427,5 @@ export class ModalWorkerAdapter implements ContinuationWorkerPort {
 
 export async function createModalWorkerAdapter(config: unknown): Promise<ModalWorkerAdapter> {
   const parsed = ModalWorkerConfigSchema.parse(config);
-  return new ModalWorkerAdapter(parsed, await productionModalSdk());
+  return new ModalWorkerAdapter(parsed, await createOfficialModalSdk());
 }

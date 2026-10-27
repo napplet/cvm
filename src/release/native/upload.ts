@@ -50,6 +50,7 @@ export type ExactSealedUploadPort = Readonly<{
     targetReference: string;
     retentionDays: number;
     files: readonly PreSignedNamedDeployFile[];
+    authorization?: unknown;
   }>): Promise<void>;
 }>;
 
@@ -151,11 +152,11 @@ export function createExactSealedUploadAdapter(input: Readonly<{
       const prior = completed(existing, operationId, checksums, config);
       if (prior) return prior;
       if (existing.status !== "missing") return Object.freeze({ operationId, state: existing.status === "blocked" ? "failed" : "unknown" });
-      await raw.authorizeExactHashes(Object.freeze([...checksums]));
+      const authorization = await raw.authorizeExactHashes(Object.freeze([...checksums]));
       // Revalidate after the authorization callback and immediately before the external upload.
       await authorize({ request: input.request, receipt: input.receipt, nowMs: now() }, config);
       try {
-        await input.port.uploadExact({ operationId, targetReference: config.targetReference, retentionDays: config.retentionDays, files: raw.files.map((file) => Object.freeze({ ...file, bytes: new Uint8Array(file.bytes) })) });
+        await input.port.uploadExact({ operationId, targetReference: config.targetReference, retentionDays: config.retentionDays, authorization, files: raw.files.map((file) => Object.freeze({ ...file, bytes: new Uint8Array(file.bytes) })) });
       } catch {
         return reconcileOriginalUpload({ operationId, files: raw.files });
       }

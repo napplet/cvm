@@ -15,6 +15,19 @@ const SOURCE_FILE_HASHES = {
   "manifest.ts": "74b9f5f13079cf451412c30c7ad944e445d31e07a46826792ec0d6b78a30f0a8",
 } as const;
 
+/** Separately reviewed source-build identity. Historical promoted pins remain unchanged. */
+export const SOURCE_BUILT_CLI_IDENTITY = Object.freeze({ version: "0.5.2", sourceCommit: "976ad0549c38f93d4ed418d3ea59a615a7e5fd7f", linuxSha256: "54a3c5ac963b1eebe3a178a90f112f86bc3ed2914cde1632a60e89b4f2b5c524" } as const);
+export const SOURCE_BUILT_CLI_SOURCE_FILE_HASHES = {
+  "deploy-network.ts": "b28dd1966718512617c139aaede77b3ed9a4b46cfbd7a2bb642eb046c46c4440",
+  "blossom-upload.ts": "078970ea91ff2d7f35c7d45798ad05232a082ea6a124424069aae70dbf74e71e",
+  "types.ts": "18c313d152bd4e2eb4f382d16f60bd361212566e42091f8bf27b9dd6df800f10",
+  "cli.ts": "f60640dab13b0f2e32668e988e8dbe481c1aa9003fc1a762589718966759424c",
+  "deploy-plan.ts": "d53317627c99ab38aa702d9218c243d387250a7252ccc31866d2cb989d7e4ac8",
+  "signing.ts": "be5bbc8205227ae09447e87fb0e7d6f0da5f12da6b94601e8609f98b991ef858",
+  "discover.ts": "eeb7667d815367377811ac8d909ebee6ebe2fde33002d869335f446fb64a67e9",
+  "manifest.ts": "74b9f5f13079cf451412c30c7ad944e445d31e07a46826792ec0d6b78a30f0a8"
+} as const;
+
 const REQUIRED_EXPORTS = [
   "DeployFilePayload", "ServerUploadResult", "RelayPublishResult", "NetworkDeployProgress", "NetworkDeployResult",
   "uploadFilesToServers", "publishEventWithSimplePool", "networkDeploySucceeded",
@@ -25,12 +38,21 @@ const REJECTED_ROUTES = [
   "main", "root_manifest", "snapshot_manifest", "multi_target", "dependency_build_prebuilt_rebuild", "dry_run_json_stdout",
 ] as const;
 
-const PromotedCliSourceIdentitySchema = z.object({
+const HistoricalCliSourceIdentitySchema = z.object({
   version: z.literal("0.5.2"),
   sourceCommit: z.literal(NAPPLET_CLI_SOURCE_COMMIT),
   linuxSha256: z.literal(NAPPLET_CLI_LINUX_SHA256),
 }).strict();
-const PromotedCliSourceFilesSchema = z.object(Object.fromEntries(Object.entries(SOURCE_FILE_HASHES).map(([file, hash]) => [file, z.literal(hash)])) as Record<keyof typeof SOURCE_FILE_HASHES, z.ZodLiteral<string>>).strict();
+const HistoricalCliSourceFilesSchema = z.object(Object.fromEntries(Object.entries(SOURCE_FILE_HASHES).map(([file, hash]) => [file, z.literal(hash)])) as Record<keyof typeof SOURCE_FILE_HASHES, z.ZodLiteral<string>>).strict();
+const SourceBuiltCliIdentitySchema = z.object({ version: z.literal(SOURCE_BUILT_CLI_IDENTITY.version), sourceCommit: z.literal(SOURCE_BUILT_CLI_IDENTITY.sourceCommit), linuxSha256: z.literal(SOURCE_BUILT_CLI_IDENTITY.linuxSha256) }).strict();
+export const ReviewedCliIdentitySchema = z.union([HistoricalCliSourceIdentitySchema, SourceBuiltCliIdentitySchema]);
+const PromotedCliSourceIdentitySchema = ReviewedCliIdentitySchema;
+const SourceBuiltFilesSchema = z.object(Object.fromEntries(Object.entries(SOURCE_BUILT_CLI_SOURCE_FILE_HASHES).map(([file, hash]) => [file, z.literal(hash)])) as Record<keyof typeof SOURCE_FILE_HASHES, z.ZodLiteral<string>>).strict();
+const PromotedCliSourceFilesSchema = z.union([HistoricalCliSourceFilesSchema, SourceBuiltFilesSchema]);
+function exactIdentityFiles(value: { identity: { sourceCommit: string }; sourceFiles: Record<string, string> }): boolean {
+  const expected = value.identity.sourceCommit === SOURCE_BUILT_CLI_IDENTITY.sourceCommit ? SOURCE_BUILT_CLI_SOURCE_FILE_HASHES : SOURCE_FILE_HASHES;
+  return Object.entries(expected).every(([file, hash]) => value.sourceFiles[file] === hash);
+}
 const PromotedCliSourceSurfaceSchema = z.object({
   requiredExports: z.array(z.string()).max(REQUIRED_EXPORTS.length),
   rejectedRoutes: z.array(z.string()).max(REJECTED_ROUTES.length),
@@ -42,7 +64,7 @@ export const PromotedCliSourceSnapshotSchema = z.object({
   requiredExports: PromotedCliSourceSurfaceSchema.shape.requiredExports,
   rejectedRoutes: PromotedCliSourceSurfaceSchema.shape.rejectedRoutes,
   liveExecution: z.literal("not_observed"),
-}).strict();
+}).strict().refine(exactIdentityFiles, "SOURCE_FILE_IDENTITY_MISMATCH");
 export type PromotedCliSourceSnapshot = Readonly<z.infer<typeof PromotedCliSourceSnapshotSchema>>;
 
 const UnavailableReasonSchema = z.enum([
@@ -57,7 +79,7 @@ export const PromotedCliSourceContractResultSchema = z.discriminatedUnion("statu
     identity: PromotedCliSourceIdentitySchema,
     sourceFiles: PromotedCliSourceFilesSchema,
     surface: PromotedCliSourceSurfaceSchema,
-  }).strict(),
+  }).strict().refine(exactIdentityFiles, "SOURCE_FILE_IDENTITY_MISMATCH"),
   z.object({ status: z.literal("publication_unavailable"), liveExecution: z.literal("not_observed"), reasonCode: UnavailableReasonSchema }).strict(),
 ]);
 export type PromotedCliSourceContractResult = Readonly<z.infer<typeof PromotedCliSourceContractResultSchema>>;
@@ -102,8 +124,8 @@ export function probePromotedCliPreSignedRoute(snapshot: unknown): PromotedCliSo
   return PromotedCliSourceContractResultSchema.parse({
     status: "available",
     liveExecution: "not_observed",
-    identity: { version: "0.5.2", sourceCommit: NAPPLET_CLI_SOURCE_COMMIT, linuxSha256: NAPPLET_CLI_LINUX_SHA256 },
-    sourceFiles: { ...SOURCE_FILE_HASHES },
+    identity: parsed.data.identity,
+    sourceFiles: parsed.data.sourceFiles,
     surface: { requiredExports: [...REQUIRED_EXPORTS], rejectedRoutes: [...REJECTED_ROUTES] },
   });
 }
@@ -112,3 +134,6 @@ export const PROMOTED_CLI_SOURCE_FILE_HASHES = SOURCE_FILE_HASHES;
 export const PROMOTED_CLI_REQUIRED_EXPORTS = REQUIRED_EXPORTS;
 export const PROMOTED_CLI_REJECTED_ROUTES = REJECTED_ROUTES;
 export const PromotedCliSourceFileHashSchema = SHA256;
+
+/** Review input only: this neither promotes the candidate nor authorizes effects. */
+export const SOURCE_BUILT_CLI_SNAPSHOT = PromotedCliSourceSnapshotSchema.parse({ identity: SOURCE_BUILT_CLI_IDENTITY, sourceFiles: SOURCE_BUILT_CLI_SOURCE_FILE_HASHES, requiredExports: [...REQUIRED_EXPORTS], rejectedRoutes: [...REJECTED_ROUTES], liveExecution: "not_observed" });

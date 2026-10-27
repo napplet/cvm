@@ -70,6 +70,7 @@ status: complete
    - Follow-up reconciliation/ADC broker: `d446235` (`fix`)
    - Follow-up durable state and policy correction: `708bc52` (`fix`)
    - Follow-up Cloud Run terminal LRO reconciliation: `4a1a510` (`fix`)
+   - Review hardening for bounded streams and immutable provider identity: `ced02f7` (`fix`)
 2. **Task 2: Correct the selected topology and storage policy** — `3667aa4` (`feat`)
 
 ## Files Created/Modified
@@ -118,7 +119,15 @@ status: complete
 - **Files modified:** `src/release/deployment/google-clients.ts`, `tests/release/deployment-google-clients.test.ts`
 - **Commit:** `708bc52`
 
-**Total deviations:** 3 auto-fixed (Rules 1–2).
+**4. [Rules 1–2 - Review hardening] Bound response streams and cleanup reconciliation to provider evidence**
+- **Found during:** Post-Task 1 review.
+- **Issue:** A timed-out response reader could release without cancellation; completed local cleanup records could be treated as deletion despite a still-present resource; GCS bucket and Cloud SQL recovery lacked immutable creation-identity binding on all paths.
+- **Fix:** Enforced total stream deadlines with reader cancellation and request aborts, persisted/checked immutable provider creation times, refused replacement resources, and made all cleanup completion paths re-observe absence before reporting success.
+- **Files modified:** `src/release/deployment/google-auth.ts`, `src/release/deployment/google-clients.ts`, `tests/release/deployment-google-clients.test.ts`.
+- **Verification:** 27 focused Google deployment tests and the full denied-effects release suite pass.
+- **Commit:** `ced02f7`
+
+**Total deviations:** 4 auto-fixed (Rules 1–2).
 
 ## Known Stubs
 
@@ -130,6 +139,6 @@ The code is local-contract verified only. Before a protected execution, producti
 
 ## Self-Check: PASSED
 
-- Confirmed task commits `f0ccbf9`, `3667aa4`, `d446235`, `708bc52`, and `4a1a510` exist and all plan artifacts exist.
-- `NAPPLET_CVM_TEST_EXTERNAL_EFFECTS=deny bun test tests/release --timeout 10000 --reporter=dot` passed: 165 tests, 838 assertions.
-- Final dependency manifest hashes (for the parent-owned root manifest update): `package.json` `7b9ec92ae183fb9759f6e5eb4e511ec82dfa156df9bbb8c88e4d1e5b88492e3f`; `bun.lock` `72716c6669316db9b6f461d3e520883e9db6254d87a00c4fcc4730238dc11912`.
+- Confirmed task commits `f0ccbf9`, `3667aa4`, `d446235`, `708bc52`, `4a1a510`, and `ced02f7` exist and all plan artifacts exist.
+- `NAPPLET_CVM_TEST_EXTERNAL_EFFECTS=deny bun test tests/release --timeout 10000 --reporter=dot` passed: 181 tests, 885 assertions.
+- Root dependency manifest hashes are intentionally omitted: approved manifest pins are parent-owned and changed after the earlier recorded values.

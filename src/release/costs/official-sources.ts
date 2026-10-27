@@ -23,10 +23,15 @@ export type GoogleCatalogSelector = Readonly<{
   componentId: string;
   provider: GoogleProvider;
   serviceDisplayName: string;
-  skuId: string;
+  /** A prior source capture may pin an exact SKU. Before the first capture,
+   * all declared catalog attributes must resolve to exactly one official SKU. */
+  skuId?: string;
   region: string;
   usageUnit: string;
   unit: string;
+  descriptionIncludes?: string;
+  resourceFamily?: string;
+  resourceGroup?: string;
 }>;
 export type OfficialPricingSourcesOptions = Readonly<{
   fetch: OfficialFetch;
@@ -45,8 +50,8 @@ export type OfficialPricingSourcesOptions = Readonly<{
 type SourceQuote = Readonly<{ provider: string; componentId: string; skuId: string; region: string; currency: "USD"; unit: string; priceMicros: number; priceNanos: string }>;
 type SourceSnapshot = Readonly<{ sourceId: string; bytes: Uint8Array; observedAtMs: number; freshUntilMs: number; quotes: readonly SourceQuote[] }>;
 export type VertexGeminiPriceObservation = Readonly<{
-  sourceUrl: typeof VERTEX_GEMINI_PRICING_URL; bytes: Uint8Array; observedAtMs: number; freshUntilMs: number; currency: "USD"; location: "global"; model: "gemini-3.8-flash";
-  effectiveFrom: "2026-08-13"; effectiveUntil: "2026-12-31"; inputMicrosPerMillion: 1_500_000; cachedInputMicrosPerMillion: 150_000; outputAndThoughtMicrosPerMillion: 7_500_000;
+  sourceUrl: typeof VERTEX_GEMINI_PRICING_URL; bytes: Uint8Array; observedAtMs: number; freshUntilMs: number; currency: "USD"; location: "global"; model: "gemini-4-argon";
+  effectiveFrom: "2026-10-13"; effectiveUntil: "2026-11-30"; inputMicrosPerMillion: 4_000_000; cachedInputMicrosPerMillion: 200_000; outputAndThoughtMicrosPerMillion: 20_000_000;
 }>;
 
 /** Reads ADC only from gcloud stdout into this process's memory. No project is
@@ -92,7 +97,7 @@ function decimalToNanos(value: string): bigint { if (!DecimalSchema.test(value))
 function nanosToMicros(nanos: bigint): number { if (nanos <= 0n) throw new Error("OFFICIAL_SOURCE_PRICE_REJECTED"); const micros = (nanos + 999n) / 1_000n; if (micros > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("OFFICIAL_SOURCE_PRICE_REJECTED"); return Number(micros); }
 function pageUrl(serviceName: string, pageToken?: string): string { if (!/^services\/[A-Za-z0-9-]+$/u.test(serviceName) || (pageToken !== undefined && !/^[A-Za-z0-9._~-]{1,1024}$/u.test(pageToken))) throw new Error("OFFICIAL_SOURCE_PARSER_DRIFT"); return `${GOOGLE_ORIGIN}/v1/${serviceName}/skus?currencyCode=USD&pageSize=5000${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""}`; }
 function googlePriceNanos(rawSku: Record<string, unknown>, selector: GoogleCatalogSelector): bigint {
-  if (text(rawSku.skuId) !== selector.skuId) throw new Error("OFFICIAL_SOURCE_PARSER_DRIFT");
+  if (!text(rawSku.skuId)) throw new Error("OFFICIAL_SOURCE_PARSER_DRIFT");
   const offeredRegions = rawSku.serviceRegions;
   if (!Array.isArray(offeredRegions) || !offeredRegions.includes(selector.region)) throw new Error("OFFICIAL_SOURCE_REGION_REJECTED");
   const pricing = rawSku.pricingInfo;
@@ -109,6 +114,15 @@ function googlePriceNanos(rawSku: Record<string, unknown>, selector: GoogleCatal
   if (result <= 0n) throw new Error("OFFICIAL_SOURCE_PRICE_REJECTED");
   return result;
 }
+function matchesSelector(sku: Record<string, unknown>, selector: GoogleCatalogSelector): boolean {
+  if (selector.skuId !== undefined && text(sku.skuId) !== selector.skuId) return false;
+  if (selector.descriptionIncludes !== undefined && !text(sku.description)?.toLowerCase().includes(selector.descriptionIncludes.toLowerCase())) return false;
+  const category = sku.category;
+  if ((selector.resourceFamily !== undefined || selector.resourceGroup !== undefined) && (!category || typeof category !== "object" || Array.isArray(category))) return false;
+  if (selector.resourceFamily !== undefined && text((category as Record<string, unknown>).resourceFamily) !== selector.resourceFamily) return false;
+  if (selector.resourceGroup !== undefined && text((category as Record<string, unknown>).resourceGroup) !== selector.resourceGroup) return false;
+  return true;
+}
 function priceAfter(textSource: string, matcher: RegExp): bigint { const match = matcher.exec(textSource); if (!match?.[1]) throw new Error("OFFICIAL_SOURCE_PARSER_DRIFT"); return decimalToNanos(match[1]); }
 
 /** The only production pricing readers: bounded official GETs, Cloud Billing
@@ -118,7 +132,7 @@ export function createOfficialPricingSources(options: OfficialPricingSourcesOpti
   const freshForMs = options.freshnessMs ?? 60 * 60 * 1000;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const selectors = options.google.selectors;
-  if (!Number.isSafeInteger(freshForMs) || freshForMs <= 0 || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000 || selectors.length === 0 || selectors.some((selector) => !validIdentifier(selector.componentId) || !validSkuId(selector.skuId) || !/^[a-z][a-z0-9-]{2,63}$/u.test(selector.region)) || new Set(selectors.map((selector) => selector.componentId)).size !== selectors.length || new Set(selectors.map((selector) => selector.skuId)).size !== selectors.length) throw new Error("OFFICIAL_SOURCE_CONFIGURATION_REJECTED");
+  if (!Number.isSafeInteger(freshForMs) || freshForMs <= 0 || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000 || selectors.length === 0 || selectors.some((selector) => !validIdentifier(selector.componentId) || (selector.skuId !== undefined && !validSkuId(selector.skuId)) || (selector.skuId === undefined && selector.descriptionIncludes === undefined && selector.resourceFamily === undefined && selector.resourceGroup === undefined) || !/^[a-z][a-z0-9-]{2,63}$/u.test(selector.region)) || new Set(selectors.map((selector) => selector.componentId)).size !== selectors.length || new Set(selectors.flatMap((selector) => selector.skuId === undefined ? [] : [selector.skuId])).size !== selectors.filter((selector) => selector.skuId !== undefined).length) throw new Error("OFFICIAL_SOURCE_CONFIGURATION_REJECTED");
   const snapshot = (sourceId: string, bytes: Uint8Array, quotes: readonly SourceQuote[]): SourceSnapshot => { const observedAtMs = now(); if (!Number.isSafeInteger(observedAtMs) || observedAtMs <= 0) throw new Error("OFFICIAL_SOURCE_TIME_REJECTED"); return Object.freeze({ sourceId, bytes, observedAtMs, freshUntilMs: observedAtMs + freshForMs, quotes: Object.freeze([...quotes]) }); };
   return Object.freeze({
     google: Object.freeze({
@@ -137,7 +151,7 @@ export function createOfficialPricingSources(options: OfficialPricingSourcesOpti
         if (names.size !== new Set(selected.map((selector) => selector.serviceDisplayName)).size) throw new Error("OFFICIAL_SOURCE_SERVICE_REJECTED");
         const catalogs = new Map<string, unknown[]>();
         for (const displayName of [...names.keys()].sort()) { const skus: unknown[] = []; let pageToken: string | undefined; const skuTokens = new Set<string>(); for (let page = 0; page < MAX_CATALOG_PAGES; page += 1) { const bytes = await readOfficial(options.fetch, pageUrl(names.get(displayName)!, pageToken), token, timeoutMs); capture(bytes); const catalog = json(bytes); if (!Array.isArray(catalog.skus)) throw new Error("OFFICIAL_SOURCE_PARSER_DRIFT"); skus.push(...catalog.skus); const next = text(catalog.nextPageToken); if (!next) break; if (!/^[A-Za-z0-9._~-]{1,1024}$/u.test(next) || page === MAX_CATALOG_PAGES - 1 || skuTokens.has(next)) throw new Error("OFFICIAL_SOURCE_PAGINATION_REJECTED"); skuTokens.add(next); pageToken = next; } catalogs.set(displayName, skus); }
-        const quotes = selected.map((selector) => { const skus = catalogs.get(selector.serviceDisplayName)!; const matches = skus.filter((sku): sku is Record<string, unknown> => !!sku && typeof sku === "object" && !Array.isArray(sku) && text((sku as Record<string, unknown>).skuId) === selector.skuId); if (matches.length !== 1) throw new Error("OFFICIAL_SOURCE_SKU_REJECTED"); const priceNanos = googlePriceNanos(matches[0]!, selector); return Object.freeze({ provider: selector.provider, componentId: selector.componentId, skuId: selector.skuId, region: selector.region, currency: "USD" as const, unit: selector.unit, priceMicros: nanosToMicros(priceNanos), priceNanos: priceNanos.toString() }); });
+        const quotes = selected.map((selector) => { const skus = catalogs.get(selector.serviceDisplayName)!; const matches = skus.filter((sku): sku is Record<string, unknown> => !!sku && typeof sku === "object" && !Array.isArray(sku) && matchesSelector(sku as Record<string, unknown>, selector)); if (matches.length !== 1) throw new Error("OFFICIAL_SOURCE_SKU_REJECTED"); const skuId = text(matches[0]!.skuId); if (!skuId) throw new Error("OFFICIAL_SOURCE_SKU_REJECTED"); const priceNanos = googlePriceNanos(matches[0]!, selector); return Object.freeze({ provider: selector.provider, componentId: selector.componentId, skuId, region: selector.region, currency: "USD" as const, unit: selector.unit, priceMicros: nanosToMicros(priceNanos), priceNanos: priceNanos.toString() }); });
         return snapshot("gcp-cloud-billing-catalog-v1", joinRawDocuments(rawDocuments), quotes);
       },
     }),
@@ -151,8 +165,8 @@ export function createOfficialPricingSources(options: OfficialPricingSourcesOpti
         /* The asterisked 2026 rows are explicitly a 50% billing credit. They
          * cannot fund an authorization; retain the full pre-credit charge
          * proven by the matching standard rows instead. */
-        const credited = /Gemini 3\.8 Flash\*?\s*through December\s+31,?\s+2026\s+Input \(text, image, video, audio\)\s+Global\s+\$0\.75\s+\$0\.75\s+\$0\.075\s+\$0\.075\s+Non-global[\s\S]{0,200}?Text output \(response and reasoning\)\s+Global\s+\$3\.75\s+\$3\.75/iu;
-        const gross = /Gemini 3\.8 Flash\s+Starting January\s+1,?\s+2027\s+Input \(text, image, video, audio\)\s+Global\s+\$1\.50\s+\$1\.50\s+\$0\.15\s+\$0\.15[\s\S]{0,200}?Text output \(response and reasoning\)\s+Global\s+\$7\.50\s+\$7\.50/iu;
+        const credited = /Gemini 4 Argon\*?\s*through November\s+30,?\s+2026\s+Input \(text, image, video, audio\)\s+Global\s+\$2\.00\s+\$0\.10\s+Non-global\s+\$2\.20\s+\$0\.11\s+Text output \(response and reasoning\)\s+Global\s+\$10\.00\s+\$10\.00\s+Non-global\s+\$11\.00\s+\$11\.00/iu;
+        const gross = /Gemini 4 Argon\s*\(Starting December\s+1,?\s+2026\)\s*,?\s*Gemini 4 Argon Cyber Permissive\s+Input \(text, image, video, audio\)\s+Global\s+\$4\.00\s+\$0\.20\s+Non-global\s+\$4\.40\s+\$0\.22\s+Text output \(response and reasoning\)\s+Global\s+\$20\.00\s+\$20\.00\s+Non-global\s+\$22\.00\s+\$22\.00/iu;
         if (!credited.test(source) || !gross.test(source) || !/Promotional pricing provided through 50% credits back on net spend/iu.test(source)) throw new Error("VERTEX_PRICE_SOURCE_GROSS_UNPROVEN");
         const observedAtMs = now(); if (!Number.isSafeInteger(observedAtMs) || observedAtMs <= 0) throw new Error("OFFICIAL_SOURCE_TIME_REJECTED");
         return frozenVertexPrice({ bytes, observedAtMs, freshUntilMs: observedAtMs + freshForMs });
@@ -168,5 +182,5 @@ export function createOfficialPricingSources(options: OfficialPricingSourcesOpti
 }
 
 function frozenVertexPrice(input: Readonly<{ bytes: Uint8Array; observedAtMs: number; freshUntilMs: number }>): VertexGeminiPriceObservation {
-  return Object.freeze({ sourceUrl: VERTEX_GEMINI_PRICING_URL, bytes: input.bytes, observedAtMs: input.observedAtMs, freshUntilMs: input.freshUntilMs, currency: "USD", location: "global", model: "gemini-3.8-flash", effectiveFrom: "2026-08-13", effectiveUntil: "2026-12-31", inputMicrosPerMillion: 1_500_000, cachedInputMicrosPerMillion: 150_000, outputAndThoughtMicrosPerMillion: 7_500_000 });
+  return Object.freeze({ sourceUrl: VERTEX_GEMINI_PRICING_URL, bytes: input.bytes, observedAtMs: input.observedAtMs, freshUntilMs: input.freshUntilMs, currency: "USD", location: "global", model: "gemini-4-argon", effectiveFrom: "2026-10-13", effectiveUntil: "2026-11-30", inputMicrosPerMillion: 4_000_000, cachedInputMicrosPerMillion: 200_000, outputAndThoughtMicrosPerMillion: 20_000_000 });
 }

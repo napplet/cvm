@@ -44,7 +44,7 @@ test("host: factory preserves distinct compatible-host and NIP-46 family identit
   const families = registerDeploymentClientFamilies({
     contextvm: createContextVmDeploymentClient({ serviceKeyReference: "nostr:contextvm-service-key", relaySetReference: "relay-set:primary", relaySetSha256: digest("1") }),
     payments: createPaymentDeploymentClients({ nwcConnectionReference: "nwc:consent:wallet-one", cashuWalletReference: "cashu:funded-wallet:one" }),
-    vertex: createVertexDeploymentClient({ candidateSha256: digest("2"), projectId: "napplet-cvm-run-1", location: "global", model: "gemini-3.8-flash", credentialReference: "gcp:adc:release", price: vertexPrice, journal: vertexJournal(), interactions: { create: async () => undefined, get: async () => undefined, list: async () => ({ interactions: [] }) } }),
+    vertex: createVertexDeploymentClient({ candidateSha256: digest("2"), projectId: "napplet-cvm-run-1", location: "global", model: "gemini-4-argon", credentialReference: "gcp:adc:release", price: vertexPrice, journal: vertexJournal(), interactions: { create: async () => undefined, get: async () => undefined, list: async () => ({ interactions: [] }) } }),
     host, signer,
   });
   expect(families.compatible_host).toBe(host);

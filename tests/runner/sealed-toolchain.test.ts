@@ -18,25 +18,18 @@ const lockfilePath = join(root, "toolchains/locks/initial/pnpm-lock.yaml");
 const approvedCandidateId = "a19fc7d283a4482c53728f4a931743576564fb3826d7f8fa1383d02578b69024";
 
 describe("sealed toolchain image and policy", () => {
-  test("image inputs bind the reviewed candidate to a frozen offline lock", async () => {
-    const result = await verifyToolchainImageInputs({ candidatePath, policyPath, dockerfilePath, lockfilePath });
-
-    expect(result.candidateId).toBe("a19fc7d283a4482c53728f4a931743576564fb3826d7f8fa1383d02578b69024");
-    expect(result.lockfileSha256).toMatch(/^[a-f0-9]{64}$/);
-    expect(result.packages).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: "@napplet/skills", version: "0.3.2" }),
-      expect.objectContaining({ name: "@napplet/boilerplate", version: "0.3.2" }),
-      expect.objectContaining({ name: "@napplet/conformance-cli", version: "0.2.18" }),
-    ]));
-    expect(result.dockerfile).toContain("pnpm fetch --frozen-lockfile --ignore-scripts");
-    expect(result.dockerfile).toContain("COPY --from=intake /toolchain/node_modules /toolchain/node_modules");
-    expect(result.dockerfile).toContain("/toolchain/bin/napplet-conformance");
-    expect(result.dockerfile).toContain("AS cli-source");
-    expect(result.dockerfile).toContain("--cached-only");
-    expect(result.dockerfile).toContain("54a3c5ac963b1eebe3a178a90f112f86bc3ed2914cde1632a60e89b4f2b5c524");
-    expect(result.dockerfile).toContain("3573e8cda272806df011ab856357f5165a6719bb1daed8080227ee1083a112d3");
-    expect(result.dockerfile).not.toContain("releases/download/%40napplet/cli%400.5.2/napplet-linux-");
-    expect(result.dockerfile).not.toMatch(/\bnpx\b/);
+  test("refuses to bind a source-built CLI to the historical release candidate", async () => {
+    await expect(verifyToolchainImageInputs({ candidatePath, policyPath, dockerfilePath, lockfilePath })).rejects.toThrow("SOURCEBUILD_CANDIDATE_REQUIRED");
+    const dockerfile = await Bun.file(dockerfilePath).text();
+    expect(dockerfile).toContain("pnpm fetch --frozen-lockfile --ignore-scripts");
+    expect(dockerfile).toContain("COPY --from=intake /toolchain/node_modules /toolchain/node_modules");
+    expect(dockerfile).toContain("/toolchain/bin/napplet-conformance");
+    expect(dockerfile).toContain("AS cli-source");
+    expect(dockerfile).toContain("--cached-only");
+    expect(dockerfile).toContain("54a3c5ac963b1eebe3a178a90f112f86bc3ed2914cde1632a60e89b4f2b5c524");
+    expect(dockerfile).toContain("3573e8cda272806df011ab856357f5165a6719bb1daed8080227ee1083a112d3");
+    expect(dockerfile).not.toContain("releases/download/%40napplet/cli%400.5.2/napplet-linux-");
+    expect(dockerfile).not.toMatch(/\bnpx\b/);
   });
 
   test("policy rejects missing, relaxed, or unknown image isolation controls", async () => {

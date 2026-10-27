@@ -64,7 +64,7 @@ RUN case "$TARGETARCH" in \
     && /tmp/busybox unzip -q /tmp/deno.zip -d /runtime \
     && /runtime/deno --version | grep -F 'deno 2.9.6 ' \
     && cd /src/packages/cli \
-    && ulimit -v 4194304 -t 900 \
+    && ulimit -t 900 \
     && DENO_DIR=/cache TZ=UTC LC_ALL=C LANG=C HOME=/home/deno SOURCE_DATE_EPOCH=1789254081 /tmp/busybox timeout 900 /runtime/deno cache --frozen --node-modules-dir=none src/standalone.ts \
     && DENO_DIR=/cache TZ=UTC LC_ALL=C LANG=C HOME=/home/deno SOURCE_DATE_EPOCH=1789254081 /tmp/busybox timeout 900 /runtime/deno compile --frozen --no-check --node-modules-dir=none --allow-read --allow-write --allow-run --allow-env --allow-net --target "$target" --output /out/seed src/standalone.ts \
     && find /src /cache -exec touch -h -d @1789254081 {} + \

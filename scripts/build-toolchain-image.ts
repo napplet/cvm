@@ -45,6 +45,14 @@ export async function verifyToolchainImageInputs(inputs: ToolchainImageInputs): 
   if (reviewed.status !== "review_ready") throw new Error("candidate is not approved for sealed intake");
   const parsedPolicy = parseToolchainImagePolicy(policy);
   if (parsedPolicy.candidateId !== reviewed.candidateId) throw new Error("policy candidate ID does not match the reviewed candidate");
+  const cli = reviewed.record.cli as { readonly distributionType?: unknown; readonly sourceCommit?: unknown; readonly executableSha256?: unknown };
+  // Release-asset provenance must never be reused to certify a distinct
+  // locally built executable. Plan 67 will add the separately reviewed source
+  // candidate schema and bind these fields before this build entrypoint admits
+  // it. Direct local image construction remains non-promoting evidence only.
+  if (cli.distributionType !== "source-build" || cli.sourceCommit !== "976ad0549c38f93d4ed418d3ea59a615a7e5fd7f" || typeof cli.executableSha256 !== "object") {
+    throw new Error("SOURCEBUILD_CANDIDATE_REQUIRED");
+  }
   const packages = reviewed.record.packages.map((pkg) => ({ name: String(pkg.name), version: String(pkg.version), integrity: String(pkg.integrity) }));
   for (const pkg of packages) {
     if (!lockfile.includes(`specifier: ${pkg.version}`) || packageIntegrity(lockfile, pkg.name) !== pkg.integrity) {
@@ -66,7 +74,7 @@ export async function verifyToolchainImageInputs(inputs: ToolchainImageInputs): 
     "deno-",
     "--cached-only",
     "touch -h -d @1789254081",
-    "ulimit -v 4194304 -t 900",
+    "ulimit -t 900",
     "54a3c5ac963b1eebe3a178a90f112f86bc3ed2914cde1632a60e89b4f2b5c524",
     "3573e8cda272806df011ab856357f5165a6719bb1daed8080227ee1083a112d3",
   ]) if (!dockerfile.includes(required)) throw new Error(`Dockerfile is missing required sealed input: ${required}`);

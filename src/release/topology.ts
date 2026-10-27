@@ -49,8 +49,11 @@ export const RELEASE_TOPOLOGY_QUANTITY_CONTRACT: readonly ReleaseTopologyQuantit
   // The source-priced model envelope is token based, not a made-up flat
   // per-operation rate. Input and combined output/thought remain separate so
   // the gross Vertex quote can be recomputed and actual receipts reconciled.
-  component("model", "model.global.input", "global", "token", BigInt(PRODUCTION_CERTIFICATION_OPERATION_INVENTORY.modelOperations * PRODUCTION_CERTIFICATION_OPERATION_INVENTORY.modelInputTokensPerOperation) * 1_000_000_000n, 1_000),
-  component("model", "model.global.output-thought", "global", "token", BigInt(PRODUCTION_CERTIFICATION_OPERATION_INVENTORY.modelOperations * PRODUCTION_CERTIFICATION_OPERATION_INVENTORY.modelOutputAndThoughtTokensPerOperation) * 1_000_000_000n, 1_000),
+  /* Quantities are in ten-million-token units so their serialized nanos stay
+   * below the authorization schema's safe-integer boundary while preserving
+   * exact integer USD arithmetic. */
+  component("model", "model.global.input", "global", "ten-million-tokens", BigInt(PRODUCTION_CERTIFICATION_OPERATION_INVENTORY.modelOperations * PRODUCTION_CERTIFICATION_OPERATION_INVENTORY.modelInputTokensPerOperation) * 100n, 1_000),
+  component("model", "model.global.output-thought", "global", "ten-million-tokens", BigInt(PRODUCTION_CERTIFICATION_OPERATION_INVENTORY.modelOperations * PRODUCTION_CERTIFICATION_OPERATION_INVENTORY.modelOutputAndThoughtTokensPerOperation) * 100n, 1_000),
   component("compatible_host", "compatible_host.global", "global", "operation", 2_000_000_000n, 0),
   component("signer", "signer.global", "global", "operation", 1_000_000_000n, 0),
   component("promoted_cli", "promoted_cli.global", "global", "operation", 2_000_000_000n, 0),

@@ -42,7 +42,7 @@ test("vertex: binds a Gemini request to the shared loopback Google client and ne
     candidateSha256: digest("c"), projectId: "napplet-cvm-run-1", location: "global", model: "gemini-4-argon",
     credentialReference: "gcp:adc:release", price: vertexPrice, journal: vertexJournal(),
     interactions: {
-      create: async (input) => { requests.push(input); return { id: "original", model: "gemini-4-argon", input: input.input, status: "completed" as const, created: "2026-10-27T00:00:00.000Z", output_text: "{}", usage: { totalInputTokens: 1, totalCachedTokens: 0, totalOutputTokens: 1, totalThoughtTokens: 0, totalToolUseTokens: 0 } }; },
+      create: async (input) => { requests.push(input); return { id: "original", model: "gemini-4-argon", input: input.input, status: "completed" as const, created: "2026-10-27T00:00:00.000Z", steps: [{ model_output: { content: [{ type: "text", text: "{}" }] } }], usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, thought_tokens: 0, tool_use_tokens: 0 } }; },
       get: async () => undefined,
       list: async () => ({ interactions: [] }),
     },

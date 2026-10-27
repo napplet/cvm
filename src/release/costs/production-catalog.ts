@@ -51,13 +51,13 @@ function familyComponents(provider: typeof PAID_PROVIDERS[number], snapshot: Sna
 }
 
 function vertexSnapshot(observation: VertexGeminiPriceObservation): Snapshot {
-  const priceNanos = (microsPerMillion: number): string => (BigInt(microsPerMillion) * 1_000n / 1_000_000n).toString();
+  const priceNanos = (microsPerMillion: number): string => (BigInt(microsPerMillion) * 10n * 1_000n).toString();
   /* The topology has separate non-cached-input and combined-output/thought
    * components. Cached input remains captured in the model snapshot and is
    * used only for exact receipt reconciliation; it cannot lower a maximum. */
   const quotes: readonly Quote[] = [
-    { provider: "model", componentId: "model.global.input", skuId: "gemini-4-argon-global-input", region: observation.location, currency: "USD", unit: "token", priceMicros: observation.inputMicrosPerMillion, priceNanos: priceNanos(observation.inputMicrosPerMillion) },
-    { provider: "model", componentId: "model.global.output-thought", skuId: "gemini-4-argon-global-output-thought", region: observation.location, currency: "USD", unit: "token", priceMicros: observation.outputAndThoughtMicrosPerMillion, priceNanos: priceNanos(observation.outputAndThoughtMicrosPerMillion) },
+    { provider: "model", componentId: "model.global.input", skuId: "gemini-4-argon-global-input", region: observation.location, currency: "USD", unit: "ten-million-tokens", priceMicros: observation.inputMicrosPerMillion * 10, priceNanos: priceNanos(observation.inputMicrosPerMillion) },
+    { provider: "model", componentId: "model.global.output-thought", skuId: "gemini-4-argon-global-output-thought", region: observation.location, currency: "USD", unit: "ten-million-tokens", priceMicros: observation.outputAndThoughtMicrosPerMillion * 10, priceNanos: priceNanos(observation.outputAndThoughtMicrosPerMillion) },
   ];
   return { sourceId: "vertex-gemini-4-argon-official-pricing", bytes: observation.bytes, observedAtMs: observation.observedAtMs, freshUntilMs: observation.freshUntilMs, quotes };
 }
@@ -100,7 +100,9 @@ const CERTIFICATION_CEILING_MICROS: Readonly<Record<typeof PAID_PROVIDERS[number
   cloud_sql_postgres: 1_000,
   modal: 10_000,
   fly: 10_000,
-  model: 25,
+  // Product policy ceiling per ten-million-token unit; it is intentionally
+  // separate from (and never presented as) the source-priced Vertex quote.
+  model: 250_000_000,
 });
 
 /**

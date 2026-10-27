@@ -10,6 +10,7 @@ const SOURCE_DATE_EPOCH = "1789254081";
 const BUILD_IMAGE = "debian@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587";
 const PROBE_IMAGE = "oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4";
 const TARGETS = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"] as const;
+const COMMAND_TIMEOUT_MS = 15 * 60_000;
 
 type Target = (typeof TARGETS)[number];
 type CommandResult = Readonly<{ argv: readonly string[]; exitCode: number; stdout: string; stderr: string }>;
@@ -30,8 +31,17 @@ async function run(argv: readonly string[], options: Readonly<{ cwd?: string; en
     stdout: "pipe",
     stderr: "pipe",
   });
-  const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-  return Object.freeze({ argv, exitCode, stdout, stderr });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result = await Promise.race([
+      Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => { child.kill(); reject(new Error(`command timed out after ${COMMAND_TIMEOUT_MS}ms: ${argv[0]}`)); }, COMMAND_TIMEOUT_MS); }),
+    ]);
+    return Object.freeze({ argv, exitCode: result[0], stdout: result[1], stderr: result[2] });
+  } finally {
+    clearTimeout(timer);
+    child.kill();
+  }
 }
 
 async function requireSuccess(argv: readonly string[], options: Readonly<{ cwd?: string; env?: Record<string, string | undefined> }> = {}): Promise<CommandResult> {
@@ -131,7 +141,7 @@ async function main(): Promise<void> {
   const runtime = join(output, "runtime");
   await requireSuccess(["mkdir", "-p", runtime]);
   const archive = join(output, basename(new URL(DENO_ASSET_URL).pathname));
-  const response = await fetch(DENO_ASSET_URL);
+  const response = await fetch(DENO_ASSET_URL, { signal: AbortSignal.timeout(120_000) });
   if (!response.ok) throw new Error(`Deno runtime download failed: HTTP ${response.status}`);
   const bytes = new Uint8Array(await response.arrayBuffer());
   if (sha256(bytes) !== DENO_ASSET_SHA256) throw new Error("Deno runtime digest mismatch");

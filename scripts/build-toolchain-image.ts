@@ -45,8 +45,6 @@ export async function verifyToolchainImageInputs(inputs: ToolchainImageInputs): 
   if (reviewed.status !== "review_ready") throw new Error("candidate is not approved for sealed intake");
   const parsedPolicy = parseToolchainImagePolicy(policy);
   if (parsedPolicy.candidateId !== reviewed.candidateId) throw new Error("policy candidate ID does not match the reviewed candidate");
-  const cli = reviewed.record.cli as { readonly distribution?: unknown; readonly releaseAssetSha256?: unknown };
-  if (typeof cli.distribution !== "string" || typeof cli.releaseAssetSha256 !== "string") throw new Error("reviewed candidate CLI release data is incomplete");
   const packages = reviewed.record.packages.map((pkg) => ({ name: String(pkg.name), version: String(pkg.version), integrity: String(pkg.integrity) }));
   for (const pkg of packages) {
     if (!lockfile.includes(`specifier: ${pkg.version}`) || packageIntegrity(lockfile, pkg.name) !== pkg.integrity) {
@@ -59,13 +57,21 @@ export async function verifyToolchainImageInputs(inputs: ToolchainImageInputs): 
     "sha512-Af+K5xtEGZA7ZcYPstydNM+LtuBtA73hEu8496NNaQTEJLpmvqXNzxKJAjC/OflYBHMUDtnJRv7zKLblI4o0Wg==",
     "pnpm fetch --frozen-lockfile --ignore-scripts",
     "pnpm install --frozen-lockfile --ignore-scripts",
-    "COPY --from=intake --chown=65532:65532 /toolchain/node_modules /toolchain/node_modules",
+    "COPY --from=intake /toolchain/node_modules /toolchain/node_modules",
     "/toolchain/bin/napplet-conformance",
     "infra/toolchain/denial-probe.ts /toolchain/bin/denial-probe",
-    cli.distribution,
-    cli.releaseAssetSha256,
+    "FROM oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4 AS cli-source",
+    "https://codeload.github.com/napplet/web/tar.gz/976ad0549c38f93d4ed418d3ea59a615a7e5fd7f",
+    "914eb84228c77b83b040a23854cdf7b320f9fe4ba20a40dfff3c6ef3ff6bd9b8",
+    "deno-",
+    "--cached-only",
+    "touch -h -d @1789254081",
+    "ulimit -v 4194304 -t 900",
+    "54a3c5ac963b1eebe3a178a90f112f86bc3ed2914cde1632a60e89b4f2b5c524",
+    "3573e8cda272806df011ab856357f5165a6719bb1daed8080227ee1083a112d3",
   ]) if (!dockerfile.includes(required)) throw new Error(`Dockerfile is missing required sealed input: ${required}`);
   if (/\bnpx\b/.test(dockerfile)) throw new Error("Dockerfile must not expose an npx resolver fallback");
+  if (dockerfile.includes("releases/download/%40napplet/cli%400.5.2/napplet-linux-")) throw new Error("Dockerfile must not consume the recreated standalone CLI release asset");
   return { candidateId: reviewed.candidateId, lockfileSha256: await sha256File(inputs.lockfilePath), packages, dockerfile };
 }
 

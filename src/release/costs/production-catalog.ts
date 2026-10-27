@@ -2,22 +2,27 @@ import { z } from "zod";
 import { canonicalJson } from "../../promotion/schema";
 import { RELEASE_COST_FAMILIES, type LiveCostCatalogPort } from "./live-estimator";
 import type { ReleaseTopologyQuantity } from "../topology";
+import type { VertexGeminiPriceObservation } from "./official-sources";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 const ProviderSchema = z.enum(RELEASE_COST_FAMILIES);
-const PaidProviderSchema = z.enum(["cloud_run", "gcs", "collector", "cloud_sql_postgres", "modal", "fly", "cep8_lightning", "cashu", "model"]);
+const PaidProviderSchema = z.enum(["cloud_run", "gcs", "collector", "cloud_sql_postgres", "modal", "fly", "model"]);
 const SourceQuoteSchema = z.object({ provider: PaidProviderSchema, componentId: z.string().regex(/^[a-z][a-z0-9._-]{2,127}$/u).optional(), skuId: z.string().regex(/^[A-Za-z0-9._-]{2,127}$/u).optional(), region: z.string().regex(/^[a-z][a-z0-9-]{2,63}$/u).optional(), currency: z.literal("USD"), unit: z.string().regex(/^[a-z][a-z0-9._/-]{1,63}$/u), priceMicros: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), priceNanos: z.string().regex(/^\d+$/u).optional() }).strict().superRefine((value, context) => { if (value.priceNanos !== undefined && BigInt(value.priceNanos) <= 0n) context.addIssue({ code: "custom", message: "PRODUCTION_CATALOG_PRICE_INVALID" }); });
 const SourceSnapshotSchema = z.object({ sourceId: z.string().regex(/^[a-z][a-z0-9._-]{2,127}$/u), bytes: z.instanceof(Uint8Array).refine((value) => value.byteLength > 0 && value.byteLength <= 8 * 1024 * 1024, "PRODUCTION_CATALOG_SOURCE_BYTES_INVALID"), observedAtMs: z.number().int().positive(), freshUntilMs: z.number().int().positive(), quotes: z.array(SourceQuoteSchema).min(1).max(64) }).strict();
-const GOOGLE_PROVIDERS = ["cloud_run", "gcs", "collector", "cloud_sql_postgres", "cep8_lightning", "cashu", "model"] as const;
-const NON_BILLABLE_PROVIDERS = ["contextvm", "compatible_host", "signer", "promoted_cli", "upload", "owner_relay", "attestation_relay"] as const;
-const PAID_PROVIDERS = ["cloud_run", "gcs", "collector", "cloud_sql_postgres", "modal", "fly", "cep8_lightning", "cashu", "model"] as const;
+/** Funding rails are capital custody and provider-fee arrangements, not Google
+ * Cloud SKUs. They stay in the effect inventory but may not be smuggled into
+ * a cloud price request or represented by a made-up zero vendor quote. */
+const GOOGLE_PROVIDERS = ["cloud_run", "gcs", "collector", "cloud_sql_postgres"] as const;
+const NON_BILLABLE_PROVIDERS = ["contextvm", "cep8_lightning", "cashu", "compatible_host", "signer", "promoted_cli", "upload", "owner_relay", "attestation_relay"] as const;
+const PAID_PROVIDERS = ["cloud_run", "gcs", "collector", "cloud_sql_postgres", "modal", "fly", "model"] as const;
 type Quote = z.infer<typeof SourceQuoteSchema>;
 type Snapshot = z.infer<typeof SourceSnapshotSchema>;
 
 /** Catalog access has no project parameter and therefore no account selection path. */
 export type GooglePublicCatalogPort = Readonly<{ readCatalog(input: Readonly<{ projectId: undefined; providers: readonly typeof GOOGLE_PROVIDERS[number][] }>): Promise<unknown> }>;
 export type OfficialPricingSourcePort = Readonly<{ readOfficialPricing(input: Readonly<{ provider: "modal" | "fly" }>): Promise<unknown> }>;
-export type ProductionLiveCostCatalogOptions = Readonly<{ google: GooglePublicCatalogPort; sources: OfficialPricingSourcePort; quantityContract?: readonly ReleaseTopologyQuantity[]; now?: () => number }>;
+export type VertexModelPricePort = Readonly<{ readVertexGeminiPrice(): Promise<VertexGeminiPriceObservation> }>;
+export type ProductionLiveCostCatalogOptions = Readonly<{ google: GooglePublicCatalogPort; sources: OfficialPricingSourcePort; vertex: VertexModelPricePort; quantityContract?: readonly ReleaseTopologyQuantity[]; now?: () => number }>;
 
 async function sha256Bytes(bytes: Uint8Array): Promise<string> { const hash = await crypto.subtle.digest("SHA-256", bytes); return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join(""); }
 async function sha256(value: unknown): Promise<string> { return sha256Bytes(new TextEncoder().encode(canonicalJson(value))); }
@@ -45,6 +50,18 @@ function familyComponents(provider: typeof PAID_PROVIDERS[number], snapshot: Sna
   return Object.freeze(contract.map((component) => actual.find((quote) => quote.componentId === component.componentId)!));
 }
 
+function vertexSnapshot(observation: VertexGeminiPriceObservation): Snapshot {
+  const priceNanos = (microsPerMillion: number): string => (BigInt(microsPerMillion) * 1_000n / 1_000_000n).toString();
+  /* The topology has separate non-cached-input and combined-output/thought
+   * components. Cached input remains captured in the model snapshot and is
+   * used only for exact receipt reconciliation; it cannot lower a maximum. */
+  const quotes: readonly Quote[] = [
+    { provider: "model", componentId: "model.global.input", skuId: "gemini-4-argon-global-input", region: observation.location, currency: "USD", unit: "token", priceMicros: observation.inputMicrosPerMillion, priceNanos: priceNanos(observation.inputMicrosPerMillion) },
+    { provider: "model", componentId: "model.global.output-thought", skuId: "gemini-4-argon-global-output-thought", region: observation.location, currency: "USD", unit: "token", priceMicros: observation.outputAndThoughtMicrosPerMillion, priceNanos: priceNanos(observation.outputAndThoughtMicrosPerMillion) },
+  ];
+  return { sourceId: "vertex-gemini-4-argon-official-pricing", bytes: observation.bytes, observedAtMs: observation.observedAtMs, freshUntilMs: observation.freshUntilMs, quotes };
+}
+
 /** Builds sixteen stable family facts. When a topology contract is supplied,
  * every fact retains ordered one-to-one component provenance for recomputation. */
 export function createProductionLiveCostCatalog(options: ProductionLiveCostCatalogOptions): LiveCostCatalogPort {
@@ -53,10 +70,14 @@ export function createProductionLiveCostCatalog(options: ProductionLiveCostCatal
     async listPriceFacts(input: Readonly<{ providers: readonly string[] }>) {
       if (input.providers.length !== RELEASE_COST_FAMILIES.length || input.providers.some((provider, index) => provider !== RELEASE_COST_FAMILIES[index])) throw new Error("PRODUCTION_CATALOG_COVERAGE_REQUIRED");
       const nowMs = now(); if (!Number.isSafeInteger(nowMs) || nowMs <= 0) throw new Error("PRODUCTION_CATALOG_TIME_INVALID");
-      const [rawGoogle, rawModal, rawFly] = await Promise.all([options.google.readCatalog({ projectId: undefined, providers: GOOGLE_PROVIDERS }), options.sources.readOfficialPricing({ provider: "modal" }), options.sources.readOfficialPricing({ provider: "fly" })]);
-      const google = SourceSnapshotSchema.parse(rawGoogle); const modal = SourceSnapshotSchema.parse(rawModal); const fly = SourceSnapshotSchema.parse(rawFly); assertFresh(google, nowMs); assertFresh(modal, nowMs); assertFresh(fly, nowMs);
-      const snapshots = new Map<typeof PAID_PROVIDERS[number], Snapshot>([...GOOGLE_PROVIDERS.map((provider) => [provider, google] as const), ["modal", modal], ["fly", fly]]);
-      const legacyQuotes = quantities === undefined ? new Map<typeof PAID_PROVIDERS[number], Quote>([...exactLegacyQuotes(google, GOOGLE_PROVIDERS), ...exactLegacyQuotes(modal, ["modal"]), ...exactLegacyQuotes(fly, ["fly"])]) : undefined;
+      const [rawGoogle, rawModal, rawFly, rawVertex] = await Promise.all([options.google.readCatalog({ projectId: undefined, providers: GOOGLE_PROVIDERS }), options.sources.readOfficialPricing({ provider: "modal" }), options.sources.readOfficialPricing({ provider: "fly" }), options.vertex.readVertexGeminiPrice()]);
+      const google = SourceSnapshotSchema.parse(rawGoogle); const modal = SourceSnapshotSchema.parse(rawModal); const fly = SourceSnapshotSchema.parse(rawFly); const vertex = vertexSnapshot(rawVertex); assertFresh(google, nowMs); assertFresh(modal, nowMs); assertFresh(fly, nowMs); assertFresh(vertex, nowMs);
+      const snapshots = new Map<typeof PAID_PROVIDERS[number], Snapshot>([...GOOGLE_PROVIDERS.map((provider) => [provider, google] as const), ["modal", modal], ["fly", fly], ["model", vertex]]);
+      /* Legacy consumers without a component contract still receive a single
+       * model fact. Derive it from quoted model units rather than pretending a
+       * product certification ceiling is a vendor price. */
+      const legacyModel = vertex.quotes.reduce((total, quote) => total + quote.priceMicros, 0);
+      const legacyQuotes = quantities === undefined ? new Map<typeof PAID_PROVIDERS[number], Quote>([...exactLegacyQuotes(google, GOOGLE_PROVIDERS), ...exactLegacyQuotes(modal, ["modal"]), ...exactLegacyQuotes(fly, ["fly"]), ["model", { provider: "model", currency: "USD", unit: "token-aggregate", priceMicros: legacyModel }]]) : undefined;
       const facts = await Promise.all(RELEASE_COST_FAMILIES.map(async (provider) => {
         const components = quantities?.get(provider);
         if ((NON_BILLABLE_PROVIDERS as readonly string[]).includes(provider)) return nonBillableFact(provider as typeof NON_BILLABLE_PROVIDERS[number], nowMs, components);
@@ -79,9 +100,7 @@ const CERTIFICATION_CEILING_MICROS: Readonly<Record<typeof PAID_PROVIDERS[number
   cloud_sql_postgres: 1_000,
   modal: 10_000,
   fly: 10_000,
-  cep8_lightning: 1_000_000,
-  cashu: 1_000_000,
-  model: 10_000_000,
+  model: 25,
 });
 
 /**

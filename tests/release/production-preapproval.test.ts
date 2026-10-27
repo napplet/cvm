@@ -66,7 +66,7 @@ test("binds each regional Google component to one authenticated catalog SKU with
   const topology = await deriveReleaseTopology(digest("a"));
   // One Cloud SQL REGIONAL HA authority serves both ingress regions; billing
   // must not fabricate a second database from the second Cloud Run region.
-  expect(topology.quantityContract.map((line) => line.provider)).toHaveLength(19);
+  expect(topology.quantityContract.map((line) => line.provider)).toHaveLength(20);
   expect(new Set(topology.quantityContract.map((line) => line.quantityNanos)).size).toBeGreaterThan(1);
   expect(topology.quantityContract.find((line) => line.componentId === "cloud_run.europe-west1.cpu")?.quantityNanos).toBe("2700000000000");
   expect(topology.topologySha256).toMatch(/^[a-f0-9]{64}$/);
@@ -87,7 +87,7 @@ test("rejects redirects, unrecognized official rates, wrong units, and uniform q
 test("aggregates component receipts into one family line with complete provenance", async () => {
   const topology = await deriveReleaseTopology(digest("b"));
   const now = () => 1_000_000;
-  const googleComponents = topology.quantityContract.filter((component) => ["cloud_run", "gcs", "collector", "cloud_sql_postgres", "cep8_lightning", "cashu", "model"].includes(component.provider));
+  const googleComponents = topology.quantityContract.filter((component) => ["cloud_run", "gcs", "collector", "cloud_sql_postgres"].includes(component.provider));
   const catalog = createProductionLiveCostCatalog({
     now,
     quantityContract: topology.quantityContract.map((component) => ({ ...component, quantityNanos: BigInt(component.quantityNanos) })),
@@ -97,6 +97,7 @@ test("aggregates component receipts into one family line with complete provenanc
     } },
     sources: { async readOfficialPricing({ provider }) { return { sourceId: `${provider}-official-pricing`, bytes: new TextEncoder().encode(provider), observedAtMs: 999_999, freshUntilMs: 1_060_000,
       quotes: [{ provider, componentId: `${provider}.global`, skuId: `${provider}-official`, region: "global", currency: "USD", unit: "worker-100-seconds", priceMicros: 3 }] }; } },
+    vertex: { async readVertexGeminiPrice() { return { sourceUrl: "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing" as const, bytes: new TextEncoder().encode("vertex"), observedAtMs: 999_999, freshUntilMs: 1_060_000, currency: "USD" as const, location: "global" as const, model: "gemini-4-argon" as const, effectiveFrom: "2026-10-13" as const, effectiveUntil: "2026-11-30" as const, inputMicrosPerMillion: 4_000_000 as const, cachedInputMicrosPerMillion: 200_000 as const, outputAndThoughtMicrosPerMillion: 20_000_000 as const }; } },
   });
   const facts = await catalog.listPriceFacts({ providers: RELEASE_COST_FAMILIES });
   const cloudRun = facts.find((fact) => fact.provider === "cloud_run");

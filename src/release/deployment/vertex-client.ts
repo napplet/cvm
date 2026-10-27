@@ -6,24 +6,34 @@ const OperationSchema = z.string().regex(/^[a-z][a-z0-9_-]{2,127}$/u);
 const ProjectSchema = z.string().regex(/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/u);
 const InteractionIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,256}$/u);
 const CredentialReferenceSchema = z.string().regex(/^gcp:adc:[a-z][a-z0-9:_-]{2,127}$/u);
+const MAX_RECOVERY_GETS = 32;
+const RECOVERY_DEADLINE_MS = 25_000;
 const PriceSchema = z.object({
   sourceUrl: z.string().url().refine((value) => new URL(value).hostname === "cloud.google.com"),
   sourceDocumentSha256: DigestSchema, quoteSha256: DigestSchema, observedAtMs: z.number().int().positive(), freshUntilMs: z.number().int().positive(), effectiveFromMs: z.number().int().positive(), effectiveUntilMs: z.number().int().positive(), currency: z.literal("USD"),
   inputMicrosPerMillion: z.number().int().positive(), cachedInputMicrosPerMillion: z.number().int().positive(), outputAndThoughtMicrosPerMillion: z.number().int().positive(),
 }).strict().superRefine((value, context) => { if (value.freshUntilMs <= value.observedAtMs || value.effectiveUntilMs <= value.effectiveFromMs) context.addIssue({ code: "custom", message: "VERTEX_PRICE_SNAPSHOT_INVALID" }); });
-const UsageSchema = z.object({ totalInputTokens: z.number().int().nonnegative(), totalCachedTokens: z.number().int().nonnegative(), totalOutputTokens: z.number().int().nonnegative(), totalThoughtTokens: z.number().int().nonnegative(), totalToolUseTokens: z.number().int().nonnegative() }).strict();
+/* The Interactions custom HTTP API is not the Vertex protobuf discovery API.
+ * Its request and usage fields are snake_case. Keep this boundary literal: a
+ * camelCase payload can be accepted by a mock yet be silently ignored by the
+ * Preview service. */
+const UsageSchema = z.object({ input_tokens: z.number().int().nonnegative(), cached_input_tokens: z.number().int().nonnegative(), output_tokens: z.number().int().nonnegative(), thought_tokens: z.number().int().nonnegative(), tool_use_tokens: z.number().int().nonnegative() }).strict();
 const RequestSchema = z.object({ idea: z.string().min(1).max(4_000), systemInstruction: z.string().min(1).max(8_000), maximumOutputTokens: z.number().int().min(1).max(8_192) }).strict();
 /* The raw REST Interaction has optional server additions. Normalize only the
  * documented fields this financial adapter needs; `.passthrough()` avoids
  * falsely rejecting valid receipts merely because the preview API grew an
  * output-only field. */
-const InteractionSchema = z.object({ id: InteractionIdSchema, model: z.literal("gemini-4-argon"), input: z.array(z.object({ role: z.literal("user"), content: z.array(z.object({ type: z.literal("text"), text: z.string().min(1).max(32_000) }).strict()).length(1) }).strict()).length(1), status: z.enum(["in_progress", "completed", "incomplete", "failed", "cancelled", "queued", "requires_action"]), created: z.string().datetime(), usage: UsageSchema.passthrough().optional(), output_text: z.string().max(1_000_000).optional(), steps: z.array(z.unknown()).max(128).optional() }).passthrough();
+const InteractionSchema = z.object({ id: InteractionIdSchema, model: z.literal("gemini-4-argon"), input: z.array(z.object({ role: z.literal("user"), content: z.array(z.object({ type: z.literal("text"), text: z.string().min(1).max(32_000) }).strict()).length(1) }).strict()).length(1), status: z.enum(["in_progress", "completed", "incomplete", "failed", "cancelled", "queued", "requires_action"]), created: z.string().datetime(), usage: UsageSchema.passthrough().optional(), steps: z.array(z.object({ model_output: z.object({ content: z.array(z.object({ type: z.literal("text"), text: z.string().min(1).max(1_000_000) }).strict()).min(1).max(64) }).strict().optional() }).passthrough()).max(128).optional() }).passthrough();
 const JournalSchema = z.object({ operationId: OperationSchema, requestSha256: DigestSchema, nonce: z.string().min(1).max(512), request: RequestSchema, candidateSha256: DigestSchema, projectId: ProjectSchema, model: z.literal("gemini-4-argon"), location: z.literal("global"), price: PriceSchema, interactionId: InteractionIdSchema.optional(), completedReceipt: z.unknown().optional() }).strict();
-const ReceiptSchema = z.object({ status: z.literal("completed"), operationId: OperationSchema, interactionId: InteractionIdSchema, model: z.literal("gemini-4-argon"), requestSha256: DigestSchema, price: PriceSchema, generatedResult: z.string().min(1).max(1_000_000), usage: z.object({ inputTokens: z.number().int().nonnegative(), cachedInputTokens: z.number().int().nonnegative(), outputTokens: z.number().int().nonnegative(), thoughtTokens: z.number().int().nonnegative() }).strict(), cost: z.object({ currency: z.literal("USD"), micros: z.number().int().nonnegative() }).strict(), completedAt: z.string().datetime() }).strict();
+const ReceiptSchema = z.object({ status: z.enum(["completed", "incomplete"]), operationId: OperationSchema, interactionId: InteractionIdSchema, model: z.literal("gemini-4-argon"), requestSha256: DigestSchema, price: PriceSchema, generatedResult: z.string().min(1).max(1_000_000).optional(), usage: z.object({ inputTokens: z.number().int().nonnegative(), cachedInputTokens: z.number().int().nonnegative(), outputTokens: z.number().int().nonnegative(), thoughtTokens: z.number().int().nonnegative() }).strict(), cost: z.object({ currency: z.literal("USD"), micros: z.number().int().nonnegative() }).strict(), completedAt: z.string().datetime() }).strict().superRefine((value, context) => { if (value.status === "completed" && value.generatedResult === undefined) context.addIssue({ code: "custom", message: "VERTEX_RECEIPT_RESULT_REQUIRED" }); if (value.status === "incomplete" && value.generatedResult !== undefined) context.addIssue({ code: "custom", message: "VERTEX_RECEIPT_INCOMPLETE_RESULT_REJECTED" }); });
 
 type PriceSnapshot = z.infer<typeof PriceSchema>;
 type JournalEntry = z.infer<typeof JournalSchema>;
 type Interaction = z.infer<typeof InteractionSchema>;
+/** Immutable, source-priced USD evidence for the funding finalizer. Only a
+ * completed/incomplete receipt is debit-eligible; pending/unknown outcomes
+ * must remain unresolved and may never be converted to sats. */
+export type VertexProviderReceipt = z.infer<typeof ReceiptSchema>;
 /** Claim must be a durable transactional CAS: only the successful claimer may
  * issue POST. File/memory journals are test seams, never Cloud Run authority. */
 export type VertexOperationJournal = Readonly<{ claim(entry: JournalEntry): Promise<Readonly<{ claimed: boolean; entry: unknown }>>; read(operationId: string): Promise<unknown>; write(entry: JournalEntry): Promise<void> }>;
@@ -55,7 +65,7 @@ export function createVertexInteractionsHttpPort(input: Readonly<{ accessToken?:
     } finally { clearTimeout(timer); }
   }
   return frozen({
-    create: async (value) => request(parent(value.projectId), { method: "POST", body: JSON.stringify({ model: value.model, input: value.input, system_instruction: value.systemInstruction, response_mime_type: value.responseMimeType, response_format: value.responseFormat, generation_config: value.generationConfig, store: value.store, stream: false, background: false, tools: [] }) }),
+    create: async (value) => request(parent(value.projectId), { method: "POST", body: JSON.stringify({ model: value.model, input: value.input, system_instruction: value.systemInstruction, response_mime_type: value.responseMimeType, response_format: value.responseFormat, generation_config: { max_output_tokens: value.generationConfig.maxOutputTokens, thinking_level: value.generationConfig.thinkingLevel }, store: value.store, stream: false, background: false, tools: [] }) }),
     get: async (value) => request(`${parent(value.projectId)}/${encodeURIComponent(value.id)}`, { method: "GET" }),
     list: async (value) => request(`${parent(value.projectId)}?page_size=500${value.pageToken ? `&page_token=${encodeURIComponent(value.pageToken)}` : ""}`, { method: "GET" }),
   });
@@ -69,24 +79,27 @@ async function requestDigest(input: Readonly<{ candidateSha256: string; projectI
 function ceilMillion(numerator: bigint): number { const charge = (numerator + 999_999n) / 1_000_000n; if (charge > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("VERTEX_RECEIPT_COST_OVERFLOW"); return Number(charge); }
 function nonceFor(operationId: string, requestSha256: string): string { return `napplet-cvm:${operationId}:${requestSha256}`; }
 function interactionFrom(value: unknown): Interaction | undefined { const parsed = InteractionSchema.safeParse(value); return parsed.success ? parsed.data : undefined; }
-function requestContent(entry: JournalEntry) { return frozen([{ role: "user" as const, content: frozen([{ type: "text" as const, text: JSON.stringify({ nonce: entry.nonce, idea: entry.request.idea }) }]) }]); }
+function requestContent(entry: JournalEntry) { return frozen([{ role: "user" as const, content: frozen([{ type: "text" as const, text: JSON.stringify({ nonce: entry.nonce, request_sha256: entry.requestSha256, idea: entry.request.idea, system_instruction: entry.request.systemInstruction, max_output_tokens: entry.request.maximumOutputTokens }) }]) }]); }
 function sameInput(entry: JournalEntry, interaction: Interaction): boolean { return JSON.stringify(interaction.input) === JSON.stringify(requestContent(entry)); }
+function generatedResult(interaction: Interaction): string | undefined {
+  const output = interaction.steps?.flatMap((step) => step.model_output?.content.map((part) => part.text) ?? []);
+  if (!output || output.length !== 1) return undefined;
+  return output[0];
+}
 function completion(entry: JournalEntry, interaction: Interaction) {
-  if (interaction.status !== "completed") return undefined;
+  if (interaction.status !== "completed" && interaction.status !== "incomplete") return undefined;
   const usage = interaction.usage;
   /* Gemini 4 Argon's max_output_tokens is a unified server-side ceiling for
    * response, reasoning and function-call tokens.  We send no tools, then
    * reject a receipt which cannot possibly have honoured the persisted cap. */
-  if (!usage || usage.totalToolUseTokens !== 0 || usage.totalCachedTokens > usage.totalInputTokens || usage.totalOutputTokens + usage.totalThoughtTokens > entry.request.maximumOutputTokens) return undefined;
-  const inputTokens = usage.totalInputTokens - usage.totalCachedTokens;
-  const numerator = BigInt(inputTokens) * BigInt(entry.price.inputMicrosPerMillion) + BigInt(usage.totalCachedTokens) * BigInt(entry.price.cachedInputMicrosPerMillion) + BigInt(usage.totalOutputTokens + usage.totalThoughtTokens) * BigInt(entry.price.outputAndThoughtMicrosPerMillion);
+  if (!usage || usage.tool_use_tokens !== 0 || usage.cached_input_tokens > usage.input_tokens || usage.output_tokens + usage.thought_tokens > entry.request.maximumOutputTokens) return undefined;
+  const inputTokens = usage.input_tokens - usage.cached_input_tokens;
+  const numerator = BigInt(inputTokens) * BigInt(entry.price.inputMicrosPerMillion) + BigInt(usage.cached_input_tokens) * BigInt(entry.price.cachedInputMicrosPerMillion) + BigInt(usage.output_tokens + usage.thought_tokens) * BigInt(entry.price.outputAndThoughtMicrosPerMillion);
   const costUsdMicros = ceilMillion(numerator);
-  const generatedResult = interaction.output_text; if (!generatedResult) return undefined;
-  try {
-    const structured: unknown = JSON.parse(generatedResult);
-    if (!structured || typeof structured !== "object" || Array.isArray(structured)) return undefined;
-  } catch { return undefined; }
-  return frozen({ status: "completed" as const, operationId: entry.operationId, interactionId: interaction.id, model: entry.model, requestSha256: entry.requestSha256, price: entry.price, generatedResult, usage: frozen({ inputTokens, cachedInputTokens: usage.totalCachedTokens, outputTokens: usage.totalOutputTokens, thoughtTokens: usage.totalThoughtTokens }), cost: frozen({ currency: "USD" as const, micros: costUsdMicros }), completedAt: interaction.created });
+  if (interaction.status === "incomplete") return frozen({ status: "incomplete" as const, operationId: entry.operationId, interactionId: interaction.id, model: entry.model, requestSha256: entry.requestSha256, price: entry.price, usage: frozen({ inputTokens, cachedInputTokens: usage.cached_input_tokens, outputTokens: usage.output_tokens, thoughtTokens: usage.thought_tokens }), cost: frozen({ currency: "USD" as const, micros: costUsdMicros }), completedAt: interaction.created });
+  const result = generatedResult(interaction); if (!result) return undefined;
+  try { const structured: unknown = JSON.parse(result); if (!structured || typeof structured !== "object" || Array.isArray(structured)) return undefined; } catch { return undefined; }
+  return frozen({ status: "completed" as const, operationId: entry.operationId, interactionId: interaction.id, model: entry.model, requestSha256: entry.requestSha256, price: entry.price, generatedResult: result, usage: frozen({ inputTokens, cachedInputTokens: usage.cached_input_tokens, outputTokens: usage.output_tokens, thoughtTokens: usage.thought_tokens }), cost: frozen({ currency: "USD" as const, micros: costUsdMicros }), completedAt: interaction.created });
 }
 function persistedReceipt(entry: JournalEntry, raw: unknown) {
   const receipt = ReceiptSchema.safeParse(raw);
@@ -110,14 +123,18 @@ export function createVertexDeploymentClient(input: Readonly<{
   const same = (entry: JournalEntry, operationId: string, requestSha256: string) => entry.operationId === operationId && entry.requestSha256 === requestSha256 && entry.candidateSha256 === candidateSha256 && entry.projectId === projectId && entry.model === "gemini-4-argon" && entry.location === "global";
   async function recover(entry: JournalEntry) {
     if (entry.completedReceipt !== undefined) return persistedReceipt(entry, entry.completedReceipt) ?? unknown(entry.operationId, "receipt_invalid");
-    let found: Interaction | undefined; let pageToken: string | undefined; const visitedTokens = new Set<string>();
+    let found: Interaction | undefined; let pageToken: string | undefined; const visitedTokens = new Set<string>(); const deadline = Date.now() + RECOVERY_DEADLINE_MS; let reads = 0;
     for (let page = 0; page < 3; page += 1) {
+      if (Date.now() >= deadline) return unknown(entry.operationId, "unmatched_original");
       const raw = await input.interactions.list({ projectId, location: "global", pageSize: 500, ...(pageToken ? { pageToken } : {}) });
       const value = z.object({ interaction_metadatas: z.array(z.object({ id: InteractionIdSchema }).passthrough()).max(500), next_page_token: z.string().min(1).max(2048).optional() }).passthrough().safeParse(raw);
       if (!value.success) return unknown(entry.operationId, "receipt_invalid");
-      /* Bounded serial GETs cap both in-flight response bytes and wall-clock
-       * pressure. A page can never trigger more than 500 two-MiB bodies. */
+      /* Serial (one-at-a-time) GETs cap in-flight response bytes; both total
+       * reads and the full recovery window are bounded. Omitting a later ID is
+       * intentionally unknown, never evidence that the paid POST did not run. */
       for (const metadata of value.data.interaction_metadatas) {
+        if (reads >= MAX_RECOVERY_GETS || Date.now() >= deadline) return unknown(entry.operationId, "unmatched_original");
+        reads += 1;
         const item = interactionFrom(await input.interactions.get({ projectId, location: "global", id: metadata.id }));
         if (!item || item.model !== entry.model || !sameInput(entry, item)) continue;
         if (found) return unknown(entry.operationId, "receipt_invalid"); found = item;

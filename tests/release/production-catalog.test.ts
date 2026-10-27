@@ -14,6 +14,15 @@ function source(provider: "modal" | "fly", priceMicros: number) {
     quotes: [{ provider, currency: "USD", unit: "worker-second", priceMicros }],
   };
 }
+function vertex() {
+  return {
+    sourceUrl: "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing" as const,
+    bytes: new TextEncoder().encode("vertex-gemini-4-argon-official-pricing"), observedAtMs: nowMs - 1, freshUntilMs: nowMs + 60_000,
+    currency: "USD" as const, location: "global" as const, model: "gemini-4-argon" as const,
+    effectiveFrom: "2026-10-13" as const, effectiveUntil: "2026-11-30" as const,
+    inputMicrosPerMillion: 4_000_000 as const, cachedInputMicrosPerMillion: 200_000 as const, outputAndThoughtMicrosPerMillion: 20_000_000 as const,
+  };
+}
 
 function catalog(overrides: Partial<Record<string, unknown>> = {}) {
   let calls = 0;
@@ -24,7 +33,7 @@ function catalog(overrides: Partial<Record<string, unknown>> = {}) {
       google: {
         async readCatalog(input) {
           calls += 1;
-          expect(input).toEqual({ projectId: undefined, providers: ["cloud_run", "gcs", "collector", "cloud_sql_postgres", "cep8_lightning", "cashu", "model"] });
+          expect(input).toEqual({ projectId: undefined, providers: ["cloud_run", "gcs", "collector", "cloud_sql_postgres"] });
           return {
             sourceId: "gcp-cloud-billing-catalog-v1",
             bytes: new TextEncoder().encode("official-google-catalog-v1"),
@@ -32,7 +41,6 @@ function catalog(overrides: Partial<Record<string, unknown>> = {}) {
             freshUntilMs: nowMs + 60_000,
             quotes: [
               ["cloud_run", 11], ["gcs", 12], ["collector", 13], ["cloud_sql_postgres", 14],
-              ["cep8_lightning", 15], ["cashu", 16], ["model", 17],
             ].map(([provider, priceMicros]) => ({ provider, currency: "USD", unit: "operation", priceMicros })),
           };
         },
@@ -44,6 +52,7 @@ function catalog(overrides: Partial<Record<string, unknown>> = {}) {
           throw new Error("unexpected source");
         },
       },
+      vertex: { async readVertexGeminiPrice() { return vertex(); } },
       ...overrides,
     }),
   };
@@ -64,7 +73,7 @@ test("derives one complete current sixteen-family catalog from public sources wi
 
 test("fails closed on stale, incomplete, changed, unpriced, or non-USD source facts", async () => {
   for (const scenario of [
-    { sources: { async readOfficialPricing(input: { provider: "modal" | "fly" }) { return source(input.provider, input.provider === "modal" ? 18 : 19); } }, google: { async readCatalog() { return { sourceId: "gcp-cloud-billing-catalog-v1", bytes: new TextEncoder().encode("a"), observedAtMs: nowMs - 1, freshUntilMs: nowMs, quotes: [] }; } } },
+    { sources: { async readOfficialPricing(input: { provider: "modal" | "fly" }) { return source(input.provider, input.provider === "modal" ? 18 : 19); } }, google: { async readCatalog() { return { sourceId: "gcp-cloud-billing-catalog-v1", bytes: new TextEncoder().encode("a"), observedAtMs: nowMs - 1, freshUntilMs: nowMs, quotes: [] }; } }, vertex: { async readVertexGeminiPrice() { return vertex(); } } },
   ]) {
     const candidate = createProductionLiveCostCatalog({ now: () => nowMs, ...scenario });
     await expect(candidate.listPriceFacts({ providers: RELEASE_COST_FAMILIES })).rejects.toThrow();

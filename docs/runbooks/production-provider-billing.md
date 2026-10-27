@@ -1,6 +1,6 @@
 # Production provider billing
 
-Production generation is Vertex AI **Gemini 3.8 Flash** at the `global`
+Production generation is Vertex AI **Gemini 4 Argon** at the `global`
 location. The development ChatGPT OAuth integration remains a
 `development-test` path and is not a construction input for the production
 adapter, production price card, or settlement.
@@ -10,18 +10,21 @@ adapter, production price card, or settlement.
 The production reader captures bytes, SHA-256, observed time, freshness, model,
 location, currency, unit, and effective period from the current official
 [Gemini Enterprise pricing page](https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing).
-Its October 27, 2026 contract accepts only the global Gemini 3.8 Flash table
-effective through December 31, 2026: gross USD $0.75 / million input tokens,
-$0.075 / million cached input tokens, and $3.75 / million output plus thought
-tokens. Promotional credits are recorded separately by a future provider
-receipt; they are never subtracted from the authorization price or interpreted
-as a customer-funded balance.
+Its October 27, 2026 contract accepts only the global Gemini 4 Argon source
+table: gross USD $4 / million input tokens, $0.20 / million cached-input
+tokens, and $20 / million combined output-plus-thought tokens. The advertised
+50% promotion is a credit back on net spend, not a lower gross provider charge
+or customer-funded balance. The reader binds both the promotion/effective
+period and standard gross table; a request outside the gross table's effective
+period is refused rather than priced from a project ceiling.
 
 The reader rejects redirects, a changed model/location/effective-period table,
 missing cached/output/thought columns, stale observations, and bodies outside
-its bounded request/body deadline. Infrastructure quotes use the paginated
-official Cloud Billing catalog with exact SKU, region, currency, and unit
-matches. Worker authorization uses twenty billable minutes (ten active plus ten
+its bounded request/body deadline. Infrastructure quotes use the authenticated,
+paginated official Cloud Billing catalog with exact SKU, region, currency, and
+unit matches. CEP-8 Lightning and Cashu are funding capital plus separately
+contracted provider fees, not Cloud Billing SKUs, and are never sent to that
+catalog. Worker authorization uses twenty billable minutes (ten active plus ten
 continuity-grace minutes): Modal must be quoted at its hard 2 CPU / 2 GiB
 ceiling, while Fly is 1 CPU / 1 GiB. Project-owned certification ceilings are
 maximum-spend policy only and must never appear as a vendor source or price line.
@@ -42,11 +45,12 @@ is Preview and documents no create idempotency key. Protected fault evidence is
 required before production use; this implementation does not claim that an
 absent list result proves zero usage.
 
-Completed receipts preserve gross input (total less cached), cached input,
-visible output, and thought tokens. Tool-use tokens are refused because this
-price contract has no tool-use quote. The calculation uses integer USD micros
-and upward rounding per priced category; a receipt cannot overwrite the
-request-bound price snapshot.
+Completed and incomplete receipts preserve gross input (total less cached),
+cached input, visible output, and thought tokens. An incomplete response at a
+combined output/thought cap has no artifact but still has immutable billed USD
+evidence. Tool-use tokens are refused because this price contract has no
+tool-use quote. The calculation uses integer USD micros and upward rounding per
+priced category; a receipt cannot overwrite the request-bound price snapshot.
 
 ## USD to sat settlement
 

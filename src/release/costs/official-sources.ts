@@ -10,7 +10,10 @@ const GOOGLE_ORIGIN = "https://cloudbilling.googleapis.com";
 const MODAL_PRICING_URL = "https://modal.com/pricing";
 const FLY_PRICING_URL = "https://docs.fly.io/about/pricing";
 export const VERTEX_GEMINI_PRICING_URL = "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing";
-const ProviderSchema = z.enum(["cloud_run", "gcs", "collector", "cloud_sql_postgres", "cep8_lightning", "cashu", "model"]);
+/** Only infrastructure is discoverable through Cloud Billing. Payment rails
+ * are funding capital (and separately contracted fees); model prices come
+ * from the Vertex model source, never an invented Cloud SKU selector. */
+const ProviderSchema = z.enum(["cloud_run", "gcs", "collector", "cloud_sql_postgres"]);
 const WorkerProviderSchema = z.enum(["modal", "fly"]);
 const DecimalSchema = /^\d+(?:\.\d+)?$/u;
 const TokenSchema = /^[A-Za-z0-9._~-]{20,8192}$/u;
@@ -33,6 +36,18 @@ export type GoogleCatalogSelector = Readonly<{
   resourceFamily?: string;
   resourceGroup?: string;
 }>;
+/** Controller-owned topology selectors. They are deliberately semantic rather
+ * than a user-supplied SKU list: Cloud Billing returns and pins the selected
+ * IDs in each fresh capture. A changed/ambiguous catalog is a refusal. */
+export const PRODUCTION_CATALOG_SELECTORS: readonly GoogleCatalogSelector[] = Object.freeze([
+  { componentId: "cloud_run.europe-west1.cpu", provider: "cloud_run", serviceDisplayName: "Cloud Run", skuId: "4C19-DF1E-81AB", region: "europe-west1", usageUnit: "seconds", unit: "worker-second" },
+  { componentId: "cloud_run.us-central1.cpu", provider: "cloud_run", serviceDisplayName: "Cloud Run", skuId: "011E-3072-CBDB", region: "us-central1", usageUnit: "seconds", unit: "worker-second" },
+  { componentId: "collector.europe-west1.cpu", provider: "collector", serviceDisplayName: "Cloud Run", skuId: "4C19-DF1E-81AB", region: "europe-west1", usageUnit: "seconds", unit: "worker-second" },
+  { componentId: "collector.us-central1.cpu", provider: "collector", serviceDisplayName: "Cloud Run", skuId: "011E-3072-CBDB", region: "us-central1", usageUnit: "seconds", unit: "worker-second" },
+  { componentId: "gcs.nam4.storage", provider: "gcs", serviceDisplayName: "Cloud Storage", descriptionIncludes: "dual-region standard storage", region: "nam4", usageUnit: "gibibyte day", unit: "gibibyte-day" },
+  { componentId: "gcs.nam4.operations", provider: "gcs", serviceDisplayName: "Cloud Storage", descriptionIncludes: "dual-region class a operations", region: "nam4", usageUnit: "operations", unit: "operation" },
+  { componentId: "cloud_sql_postgres.europe-west1.regional-ha", provider: "cloud_sql_postgres", serviceDisplayName: "Cloud SQL", descriptionIncludes: "postgresql regional", region: "europe-west1", usageUnit: "seconds", unit: "database-second" },
+]);
 export type OfficialPricingSourcesOptions = Readonly<{
   fetch: OfficialFetch;
   now?: () => number;
@@ -59,7 +74,9 @@ export type VertexGeminiPriceObservation = Readonly<{
 export function createApplicationDefaultTokenPort(): ApplicationDefaultTokenPort {
   return Object.freeze({
     async readAccessToken() {
-      const process = Bun.spawn(["gcloud", "auth", "application-default", "print-access-token"], { stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+      let process: ReturnType<typeof Bun.spawn>;
+      try { process = Bun.spawn(["gcloud", "auth", "application-default", "print-access-token"], { stdin: "ignore", stdout: "pipe", stderr: "ignore" }); }
+      catch { throw new Error("ADC_APPLICATION_DEFAULT_LOGIN_REQUIRED"); }
       const value = (await new Response(process.stdout).text()).trim();
       if (await process.exited !== 0 || !TokenSchema.test(value)) throw new Error("ADC_APPLICATION_DEFAULT_LOGIN_REQUIRED");
       return value;
@@ -124,6 +141,27 @@ function matchesSelector(sku: Record<string, unknown>, selector: GoogleCatalogSe
   return true;
 }
 function priceAfter(textSource: string, matcher: RegExp): bigint { const match = matcher.exec(textSource); if (!match?.[1]) throw new Error("OFFICIAL_SOURCE_PARSER_DRIFT"); return decimalToNanos(match[1]); }
+function officialText(document: string): string {
+  /* Modal's animated price digits carry one authoritative screen-reader value.
+   * Preserve that value before stripping markup; otherwise the visual animation
+   * turns $0.00003942 into a sequence of unrelated digits. */
+  const srOnly = [...document.matchAll(/<span[^>]*class=["'][^"']*\bsr-only\b[^"']*["'][^>]*>\s*([0-9]+(?:\.[0-9]+)?)\s*<\/span>/giu)].map((match) => match[1]);
+  return `${srOnly.join(" ")} ${document.replace(/<[^>]*>/gu, " ")}`.replace(/&(nbsp|amp|lt|gt|quot);/giu, " ").replace(/\s+/gu, " ");
+}
+function flyMonthlyMachinePrice(document: string, preset: string, memory: string): bigint {
+  const escapedPreset = preset.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"); const escapedMemory = memory.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const table = new RegExp(`Started Machine,?\\s*${escapedPreset}\\s*(?:with)?\\s*${escapedMemory}[^$]{0,128}\\$\\s*([0-9]+(?:\\.[0-9]+)?)\\s*/\\s*month`, "iu").exec(document);
+  if (!table?.[1]) {
+    /* Retain the direct per-second representation for a source revision that
+     * exposes its calculator rate rather than the documented monthly table. */
+    const perSecond = new RegExp(`${escapedPreset}[\\s\\S]{0,256}?${escapedMemory}[\\s\\S]{0,256}?\\$\\s*([0-9]+(?:\\.[0-9]+)?)\\s*/\\s*(?:second|sec)`, "iu").exec(document);
+    if (!perSecond?.[1]) throw new Error("OFFICIAL_SOURCE_UNIT_REJECTED");
+    return decimalToNanos(perSecond[1]);
+  }
+  /* Fly documents its monthly examples as a 30-day continuous run and bills
+   * started Machines by the second. Convert that documented unit exactly. */
+  return decimalToNanos(table[1]) / (30n * 24n * 60n * 60n);
+}
 
 /** The only production pricing readers: bounded official GETs, Cloud Billing
  * service/SKU endpoints only, and opaque ADC that never leaves request memory. */
@@ -132,7 +170,7 @@ export function createOfficialPricingSources(options: OfficialPricingSourcesOpti
   const freshForMs = options.freshnessMs ?? 60 * 60 * 1000;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const selectors = options.google.selectors;
-  if (!Number.isSafeInteger(freshForMs) || freshForMs <= 0 || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000 || selectors.length === 0 || selectors.some((selector) => !validIdentifier(selector.componentId) || (selector.skuId !== undefined && !validSkuId(selector.skuId)) || (selector.skuId === undefined && selector.descriptionIncludes === undefined && selector.resourceFamily === undefined && selector.resourceGroup === undefined) || !/^[a-z][a-z0-9-]{2,63}$/u.test(selector.region)) || new Set(selectors.map((selector) => selector.componentId)).size !== selectors.length || new Set(selectors.flatMap((selector) => selector.skuId === undefined ? [] : [selector.skuId])).size !== selectors.filter((selector) => selector.skuId !== undefined).length) throw new Error("OFFICIAL_SOURCE_CONFIGURATION_REJECTED");
+  if (!Number.isSafeInteger(freshForMs) || freshForMs <= 0 || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000 || selectors.length === 0 || selectors.some((selector) => !validIdentifier(selector.componentId) || (selector.skuId !== undefined && !validSkuId(selector.skuId)) || (selector.skuId === undefined && selector.descriptionIncludes === undefined && selector.resourceFamily === undefined && selector.resourceGroup === undefined) || !/^[a-z][a-z0-9-]{2,63}$/u.test(selector.region)) || new Set(selectors.map((selector) => selector.componentId)).size !== selectors.length) throw new Error("OFFICIAL_SOURCE_CONFIGURATION_REJECTED");
   const snapshot = (sourceId: string, bytes: Uint8Array, quotes: readonly SourceQuote[]): SourceSnapshot => { const observedAtMs = now(); if (!Number.isSafeInteger(observedAtMs) || observedAtMs <= 0) throw new Error("OFFICIAL_SOURCE_TIME_REJECTED"); return Object.freeze({ sourceId, bytes, observedAtMs, freshUntilMs: observedAtMs + freshForMs, quotes: Object.freeze([...quotes]) }); };
   return Object.freeze({
     google: Object.freeze({
@@ -172,8 +210,8 @@ export function createOfficialPricingSources(options: OfficialPricingSourcesOpti
         return frozenVertexPrice({ bytes, observedAtMs, freshUntilMs: observedAtMs + freshForMs });
       },
       async readOfficialPricing(input) {
-        const provider = WorkerProviderSchema.parse(input.provider); const url = provider === "modal" ? MODAL_PRICING_URL : FLY_PRICING_URL; const bytes = await readOfficial(options.fetch, url, undefined, timeoutMs); const document = new TextDecoder().decode(bytes); const normalized = document.replace(/<[^>]*>/gu, " ").replace(/\$\s+/gu, "$ ").replace(/\s*\.\s*/gu, ".");
-        const priceNanos = provider === "modal" ? (() => { const cpu = priceAfter(normalized, /\$\s*([0-9]+(?:\.[0-9]+)?)(?:\s+[0-9.]){0,32}\s*\/\s*core\s*\/\s*sec/iu); const memory = priceAfter(normalized, /\$\s*([0-9]+(?:\.[0-9]+)?)(?:\s+[0-9.]){0,32}\s*\/\s*GiB\s*\/\s*sec/iu); return (cpu * BigInt(options.workers.modal.cpuCores) + memory * BigInt(options.workers.modal.memoryGiB)) * (options.workers.modal.unit === "worker-100-seconds" ? 100n : 1n); })() : (() => { const preset = options.workers.fly.preset.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"); const memory = options.workers.fly.memory.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"); const match = new RegExp(`${preset}[\\s\\S]{0,256}?${memory}[\\s\\S]{0,256}?\\$([0-9]+(?:\\.[0-9]+)?)\\s*\\/\\s*(second|sec)`, "iu").exec(normalized); if (!match?.[1]) throw new Error("OFFICIAL_SOURCE_UNIT_REJECTED"); return decimalToNanos(match[1]) * (options.workers.fly.unit === "worker-100-seconds" ? 100n : 1n); })();
+        const provider = WorkerProviderSchema.parse(input.provider); const url = provider === "modal" ? MODAL_PRICING_URL : FLY_PRICING_URL; const bytes = await readOfficial(options.fetch, url, undefined, timeoutMs); const document = new TextDecoder().decode(bytes); const normalized = officialText(document);
+        const priceNanos = provider === "modal" ? (() => { const cpu = priceAfter(normalized, /\$?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:[0-9.\s]{0,128})\/\s*core\s*\/\s*sec/iu); const memory = priceAfter(normalized, /\$?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:[0-9.\s]{0,128})\/\s*GiB\s*\/\s*sec/iu); return (cpu * BigInt(options.workers.modal.cpuCores) + memory * BigInt(options.workers.modal.memoryGiB)) * (options.workers.modal.unit === "worker-100-seconds" ? 100n : 1n); })() : (() => flyMonthlyMachinePrice(normalized, options.workers.fly.preset, options.workers.fly.memory) * (options.workers.fly.unit === "worker-100-seconds" ? 100n : 1n))();
         const unit = provider === "modal" ? options.workers.modal.unit : options.workers.fly.unit;
         return snapshot(`${provider}-official-pricing`, bytes, [{ provider, componentId: `${provider}.global`, skuId: `${provider}-official`, region: "global", currency: "USD", unit, priceMicros: nanosToMicros(priceNanos), priceNanos: priceNanos.toString() }]);
       },

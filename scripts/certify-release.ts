@@ -14,7 +14,8 @@ import {
 } from "../src/release/deployment/local-setup";
 import { readFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { createCertificationBudgetCatalog } from "../src/release/costs/production-catalog";
+import { createCertificationBudgetCatalog, createProductionLiveCostCatalog } from "../src/release/costs/production-catalog";
+import { createApplicationDefaultTokenPort, createOfficialPricingSources, PRODUCTION_CATALOG_SELECTORS } from "../src/release/costs/official-sources";
 import { RELEASE_TOPOLOGY_QUANTITY_CONTRACT } from "../src/release/topology";
 
 const repositoryRoot = resolve(import.meta.dir, "..");
@@ -116,6 +117,22 @@ function zeroEffectCounters() {
   });
 }
 
+/** Build the controller-owned, read-only price discovery path. It neither
+ * selects a project nor creates a billing account; ADC is used only as an
+ * opaque request header for the public Cloud Billing catalog. */
+function currentOfficialCostCatalog() {
+  const official = createOfficialPricingSources({
+    fetch,
+    adc: createApplicationDefaultTokenPort(),
+    google: { selectors: PRODUCTION_CATALOG_SELECTORS },
+    workers: {
+      modal: { cpuCores: 2, memoryGiB: 2, unit: "worker-100-seconds" },
+      fly: { preset: "shared-cpu-1x", memory: "1GB", unit: "worker-100-seconds" },
+    },
+  });
+  return createProductionLiveCostCatalog({ google: official.google, sources: official.sources, vertex: official.sources, quantityContract: RELEASE_TOPOLOGY_QUANTITY_CONTRACT });
+}
+
 /** Prefer the precise pinned execution session for read-only preapproval
  * discovery. A missing protected config remains a bounded blocker and falls
  * back to the existing no-credential registry; neither branch can plan,
@@ -209,18 +226,18 @@ async function main(): Promise<number> {
           // A project maximum-spend policy is useful only for local dry-run
           // bounds. It is not vendor provenance and must never authorize a
           // `--request`; that path requires injected fresh official facts.
-          ...(request ? {} : { costCatalog: createCertificationBudgetCatalog({ quantityContract: RELEASE_TOPOLOGY_QUANTITY_CONTRACT }) }),
+          ...(request ? { costCatalog: currentOfficialCostCatalog() } : { costCatalog: createCertificationBudgetCatalog({ quantityContract: RELEASE_TOPOLOGY_QUANTITY_CONTRACT }) }),
           requireCurrentPriceCatalog: true,
           operatorFundingReadiness: certificationFunding,
         });
     } catch (error) {
-      if (!status && error instanceof Error && error.message === "RELEASE_CONTROLLER_LIVE_PRICE_CATALOG_REQUIRED") {
+      if (!status && error instanceof Error && ["RELEASE_CONTROLLER_LIVE_PRICE_CATALOG_REQUIRED", "ADC_APPLICATION_DEFAULT_LOGIN_REQUIRED"].includes(error.message)) {
         console.log(JSON.stringify({
           progress: "preapproval_blocked",
           candidateSha256,
           readiness: {
             capabilityDiscovery: { status: "completed", mode: "read_only" },
-            pricing: { status: "blocked", reasonCode: request ? "RELEASE_PRODUCTION_PRICE_SOURCE_CONFIG_REQUIRED" : "RELEASE_CONTROLLER_LIVE_PRICE_CATALOG_REQUIRED" },
+            pricing: { status: "blocked", reasonCode: error.message },
             execution: await executionReadinessProjection({ candidateSha256: candidateSha256!, workspace }),
           },
           prerequisites: preparePreApprovalPrerequisites(fundingPrerequisites ? { funding: fundingPrerequisites } : undefined),

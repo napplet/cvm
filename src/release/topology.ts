@@ -24,7 +24,7 @@ const component = (provider: ReleaseTopologyQuantity["provider"], componentId: s
 
 /** Closed pre-authorization inventory: locked 1,000 admissions plus all
  * eight mandatory suites; never an observed average. */
-export const PRODUCTION_CERTIFICATION_OPERATION_INVENTORY = Object.freeze({ acceptedAdmissionSamples: 1_000, protectedSuites: 8, workerLifetimeSeconds: 20 * 60, modelOperations: 1_008 });
+export const PRODUCTION_CERTIFICATION_OPERATION_INVENTORY = Object.freeze({ acceptedAdmissionSamples: 1_000, protectedSuites: 8, workerLifetimeSeconds: 20 * 60, modelOperations: 1_008, modelInputTokensPerOperation: 12_000, modelOutputAndThoughtTokensPerOperation: 8_192 });
 const WORKER_100_SECOND_UNITS = BigInt((PRODUCTION_CERTIFICATION_OPERATION_INVENTORY.acceptedAdmissionSamples + PRODUCTION_CERTIFICATION_OPERATION_INVENTORY.protectedSuites) * (PRODUCTION_CERTIFICATION_OPERATION_INVENTORY.workerLifetimeSeconds / 100));
 
 /** Every paid allocation is explicit. The 16 public authorization families are
@@ -46,7 +46,11 @@ export const RELEASE_TOPOLOGY_QUANTITY_CONTRACT: readonly ReleaseTopologyQuantit
   component("contextvm", "contextvm.global", "global", "operation", 1_000_000_000n, 0),
   component("cep8_lightning", "cep8_lightning.global", "global", "operation", 2_000_000_000n, 1_000),
   component("cashu", "cashu.global", "global", "operation", 2_000_000_000n, 1_000),
-  component("model", "model.global", "global", "operation", BigInt(PRODUCTION_CERTIFICATION_OPERATION_INVENTORY.modelOperations) * 1_000_000_000n, 1_000),
+  // The source-priced model envelope is token based, not a made-up flat
+  // per-operation rate. Input and combined output/thought remain separate so
+  // the gross Vertex quote can be recomputed and actual receipts reconciled.
+  component("model", "model.global.input", "global", "token", BigInt(PRODUCTION_CERTIFICATION_OPERATION_INVENTORY.modelOperations * PRODUCTION_CERTIFICATION_OPERATION_INVENTORY.modelInputTokensPerOperation) * 1_000_000_000n, 1_000),
+  component("model", "model.global.output-thought", "global", "token", BigInt(PRODUCTION_CERTIFICATION_OPERATION_INVENTORY.modelOperations * PRODUCTION_CERTIFICATION_OPERATION_INVENTORY.modelOutputAndThoughtTokensPerOperation) * 1_000_000_000n, 1_000),
   component("compatible_host", "compatible_host.global", "global", "operation", 2_000_000_000n, 0),
   component("signer", "signer.global", "global", "operation", 1_000_000_000n, 0),
   component("promoted_cli", "promoted_cli.global", "global", "operation", 2_000_000_000n, 0),

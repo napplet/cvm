@@ -190,7 +190,10 @@ const EFFECT_DEFINITIONS = [
   ["cli-asset", "promoted_cli", "verify_integration"], ["publication", "upload", "verify_integration"],
   ["owner-relay", "owner_relay", "verify_integration"], ["attestation-relay", "attestation_relay", "verify_integration"],
 ] as const;
-const RELEASE_MAX_AUTHORIZED_COST_MICROS = 100_000_000;
+/* The bound must cover the topology's source-priced Argon token envelope
+ * (1,008 operations × 12k input + 8,192 output/thought plus headroom). It is
+ * a project maximum authorization policy, never vendor provenance. */
+const RELEASE_MAX_AUTHORIZED_COST_MICROS = 1_000_000_000;
 
 /** The local no-credential path has no external price authority. It produces
  * finite candidate-bound fixture facts only; authenticated readiness must

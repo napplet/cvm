@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ModalSandboxCreateOptions, ModalSdkPort } from "../../worker-adapters/modal-worker";
+import { readBoundedModalProcessOutput, type ModalSandboxCreateOptions, type ModalSdkPort } from "../../worker-adapters/modal-worker";
 import { PRODUCTION_WORKER_POLICY, type ProductionWorkerPolicy } from "../../worker-adapters/production-worker-policy";
 import { createWorkerBenchmarkSchedule, WorkerBenchmarkProfileSchema } from "../../admission/benchmark";
 
@@ -129,7 +129,7 @@ export type FlyMachinesHttpTransport = Readonly<{
 
 export type ModalProductionTransport = Readonly<{
   create(input: Readonly<{ operationId: string; sessionLeaseSha256: string; toolchainSha256: string; providerDeadlineEpochMs: number }>): Promise<Readonly<{ status: "created" | "reconciled" | "unknown"; operationId: string; resourceId?: string }>>;
-  observe(input: Readonly<{ operationId: string }>): Promise<Readonly<{ status: "pending" | "unknown"; resourceId?: string }>>;
+  observe(input: Readonly<{ operationId: string }>): Promise<Readonly<{ status: "completed" | "pending" | "unknown"; resourceId?: string }>>;
   terminate(input: Readonly<{ operationId: string }>): Promise<Readonly<{ status: "terminated" | "pending" | "unknown" | "blocked" }>>;
 }>;
 
@@ -182,13 +182,17 @@ export function createModalProductionTransport(input: Readonly<{ appName: string
     },
     async observe(value) {
       const record = await input.journal.read(OperationIdSchema.parse(value.operationId));
-      if (!record?.resourceId || record.image !== image || record.policyVersion !== PRODUCTION_WORKER_POLICY.version) return Object.freeze({ status: "unknown" as const });
+      if (!record?.resourceId || record.image !== image || record.policyVersion !== PRODUCTION_WORKER_POLICY.version || !record.sessionLeaseSha256 || !record.toolchainSha256 || !record.providerDeadlineEpochMs) return Object.freeze({ status: "unknown" as const });
       const observed = await find(appName, record.resourceName);
       if (observed.kind !== "found" || observed.sandbox.id !== record.resourceId) return Object.freeze({ status: "unknown" as const, resourceId: record.resourceId });
-      // The SDK does not expose immutable image/create-time metadata on this
-      // surface.  Do not infer it from a sandbox ID: protected eligibility is
-      // therefore pending until an authoritative provider observation exists.
-      return Object.freeze({ status: "pending" as const, resourceId: record.resourceId });
+      try {
+        const process = await observed.sandbox.exec([...PRODUCTION_WORKER_POLICY.probeCommand, "--session-lease-sha256", record.sessionLeaseSha256, "--provider-image", record.image, "--toolchain-sha256", record.toolchainSha256, "--provider-deadline-epoch-ms", String(record.providerDeadlineEpochMs)], { timeoutMs: 60_000 });
+        const output = await readBoundedModalProcessOutput(process);
+        if (output.exitCode !== 0) return Object.freeze({ status: "pending" as const, resourceId: record.resourceId });
+        const report = z.object({ checks: z.object({ toolchain_readonly: z.literal(true), workspace_bounded: z.literal(true), non_root: z.literal(true), no_ambient_credentials: z.literal(true), network_denied: z.literal(true), no_inbound_ports: z.literal(true), minimal_capabilities: z.literal(true) }).strict(), exactReady: z.object({ image: ImageSchema, sessionLeaseSha256: ImageDigestSchema, toolchainSha256: ImageDigestSchema, remainingLifetimeMs: z.number().int().positive().max(PRODUCTION_WORKER_POLICY.totalLifetimeMs) }).strict() }).strict().safeParse(JSON.parse(output.stdout));
+        if (!report.success || report.data.exactReady.image !== image || report.data.exactReady.sessionLeaseSha256 !== record.sessionLeaseSha256 || report.data.exactReady.toolchainSha256 !== record.toolchainSha256) return Object.freeze({ status: "unknown" as const, resourceId: record.resourceId });
+        return Object.freeze({ status: "completed" as const, resourceId: record.resourceId });
+      } catch { return Object.freeze({ status: "pending" as const, resourceId: record.resourceId }); }
     },
     async terminate(value) {
       const record = await input.journal.read(OperationIdSchema.parse(value.operationId));
@@ -259,9 +263,9 @@ export function createFlyMachinesHttpTransport(input: Readonly<{
     } catch (error) { clearTimeout(timer); throw error; }
   };
 
-function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<WorkerOperationRecord, "operationId" | "resourceName" | "image" | "policyVersion" | "providerCreatedAtMs">, image: string): boolean {
+function intendedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<WorkerOperationRecord, "operationId" | "resourceName" | "image" | "policyVersion">, image: string): boolean {
   const metadata = machine.config.metadata;
-  return Boolean(record.image) && (!Number.isSafeInteger(record.providerCreatedAtMs) || createdAtMs(machine) === record.providerCreatedAtMs) && machine.name === record.resourceName && machine.config.image === image && image === record.image
+  return Boolean(record.image) && machine.name === record.resourceName && machine.config.image === image && image === record.image
     && metadata?.["napplet-cvm-operation"] === record.operationId
     && metadata?.["napplet-cvm-policy"] === record.policyVersion
     && metadata?.["napplet-cvm-role"] === "isolated-worker"
@@ -270,6 +274,9 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<Worke
     && machine.config.guest?.memory_mb === PRODUCTION_WORKER_POLICY.memoryMiB
     && machine.config.services?.length === 0
     && machine.config.env?.NAPPLET_CVM_POLICY_VERSION === PRODUCTION_WORKER_POLICY.version;
+}
+function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<WorkerOperationRecord, "operationId" | "resourceName" | "image" | "policyVersion" | "providerCreatedAtMs">, image: string): boolean {
+  return Number.isSafeInteger(record.providerCreatedAtMs) && createdAtMs(machine) === record.providerCreatedAtMs && intendedMachine(machine, record, image);
 }
   const findOriginal = async (operationId: string, name: string, expectedImage: string): Promise<Readonly<{ kind: "found"; id: string; providerCreatedAtMs: number }> | Readonly<{ kind: "missing" | "unknown" }>> => {
     let response: Response;
@@ -332,7 +339,7 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<Worke
         const response = await request(`/v1/apps/${encodeURIComponent(appName)}/machines`, { method: "POST", body: JSON.stringify(body) });
         if (!response.ok) { await input.journal.update({ operationId, requestSha256, state: "unknown" }); return Object.freeze({ status: "unknown" as const, operationId }); }
         const machine = MachineSchema.safeParse(await boundedJson(response).catch(() => undefined));
-        if (!machine.success || !ownedMachine(machine.data, claimed.record, image)) {
+        if (!machine.success || !intendedMachine(machine.data, claimed.record, image)) {
           await input.journal.update({ operationId, requestSha256, state: "unknown" }); return Object.freeze({ status: "unknown" as const, operationId });
         }
         const providerCreatedAtMs = createdAtMs(machine.data);

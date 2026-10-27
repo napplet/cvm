@@ -148,6 +148,17 @@ test("cleanup after controller interruption deletes only the original owned mach
   expect(calls.map((call) => call.method)).toEqual(["GET", "DELETE", "GET"]);
 });
 
+test("Fly never executes or cleans a legacy record without persisted provider creation identity", async () => {
+  const operationId = "op-legacy";
+  const journal = createMemoryWorkerOperationJournal([{ operationId, requestSha256: digest("d"), state: "dispatched", resourceName: `napplet-cvm-${operationId}`, resourceId: "machine-legacy", image, region: "ams", policyVersion: PRODUCTION_WORKER_POLICY.version, createdAtMs: 1, sessionLeaseSha256: digest("b"), toolchainSha256: digest("c"), providerDeadlineEpochMs: Date.now() + 60_000 }]);
+  let deletes = 0;
+  const machine = { id: "machine-legacy", name: `napplet-cvm-${operationId}`, created_at: "2026-10-27T00:00:00.000Z", state: "started", config: { image, guest: { cpus: 1, memory_mb: 1024 }, services: [], env: { NAPPLET_CVM_POLICY_VERSION: PRODUCTION_WORKER_POLICY.version }, metadata: { "napplet-cvm-operation": operationId, "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-role": "isolated-worker" } } };
+  const transport = createFlyMachinesHttpTransport({ appName: "napplet-cvm-workers", getAccessToken: async () => "valid-access-token", journal, fetch: async (_url, init) => { if (init.method === "DELETE") deletes += 1; return new Response(JSON.stringify(machine), { status: 200 }); } });
+  await expect(transport.terminate({ operationId })).resolves.toEqual({ status: "unknown" });
+  await expect(transport.exec({ operationId, command: ["/usr/local/bin/napplet-cvm-probe"] })).resolves.toEqual({ status: "unknown" });
+  expect(deletes).toBe(0);
+});
+
 test("Fly readiness exec is bounded, authenticated, and cannot run against a substituted image", async () => {
   const operationId = "op-probe";
   const journal = createMemoryWorkerOperationJournal([{ operationId, requestSha256: digest("d"), state: "dispatched", resourceName: `napplet-cvm-${operationId}`, resourceId: "machine-probe", image, region: "ams", policyVersion: PRODUCTION_WORKER_POLICY.version, createdAtMs: 1, providerCreatedAtMs: Date.parse("2026-10-27T00:00:00.000Z"), sessionLeaseSha256: digest("b"), toolchainSha256: digest("c"), providerDeadlineEpochMs: Date.now() + 60_000 }]);

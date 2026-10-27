@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1.7
 # The base image is an immutable multi-platform index for Bun 1.3.14.
 FROM oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4 AS intake
+ARG TARGETARCH
 
 WORKDIR /toolchain
 COPY toolchains/locks/initial/package.json package.json
@@ -17,9 +18,21 @@ RUN bun -e 'const response = await fetch("https://registry.npmjs.org/pnpm/-/pnpm
     && pnpm install --frozen-lockfile --ignore-scripts
 
 # The reviewed standalone CLI is independently verified rather than resolved by npm.
-RUN bun -e 'const response = await fetch("https://github.com/napplet/web/releases/download/%40napplet/cli%400.5.2/napplet-linux-x86_64"); if (!response.ok) process.exit(1); await Bun.write("/toolchain/napplet", await response.arrayBuffer())' \
-    && echo 'a17fd2f61beb3b1553518b517045c4e1a474ddee5db87be80e18cf1bd24d8e28  /toolchain/napplet' | sha256sum --check \
+RUN case "$TARGETARCH" in \
+      arm64) asset=aarch64; digest=35ffb0d21e75877e749d63569b4369e5b467967e48034c2ee7d0ae958ed5ee54 ;; \
+      amd64) asset=x86_64; digest=a17fd2f61beb3b1553518b517045c4e1a474ddee5db87be80e18cf1bd24d8e28 ;; \
+      *) exit 1 ;; \
+    esac \
+    && NAPPLET_CLI_ASSET="$asset" bun -e 'const response = await fetch(`https://github.com/napplet/web/releases/download/%40napplet/cli%400.5.2/napplet-linux-${process.env.NAPPLET_CLI_ASSET}`); if (!response.ok) process.exit(1); await Bun.write("/toolchain/napplet", await response.arrayBuffer())' \
+    && echo "$digest  /toolchain/napplet" | sha256sum --check \
     && chmod 0555 /toolchain/napplet
+
+# The registry boilerplate package intentionally omits its lockfile.  The
+# worker must use the same integrity-pinned source substrate as the verified
+# development flow so frozen offline installation remains meaningful.
+ADD --checksum=sha256:7d66183c30454ec40ca2458d38dedde827fa1f8b58a2fbcd25a3b7d1c3bf538b https://codeload.github.com/napplet/boilerplate/tar.gz/cbbebe9bd56271277b054535c0a8d720a588f61d /tmp/boilerplate.tgz
+RUN mkdir -p /toolchain/boilerplate-template \
+    && tar -xzf /tmp/boilerplate.tgz -C /toolchain/boilerplate-template --strip-components=1
 
 FROM oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4 AS sealed
 
@@ -35,6 +48,7 @@ COPY --from=intake /root/.local/share/pnpm/store /root/.local/share/pnpm/store
 COPY --from=intake /toolchain/package.json /toolchain/pnpm-lock.yaml /toolchain/
 COPY --from=intake /toolchain/node_modules /toolchain/node_modules
 COPY --from=intake /toolchain/napplet /toolchain/bin/napplet
+COPY --from=intake /toolchain/boilerplate-template /toolchain/boilerplate-template
 COPY infra/toolchain/denial-probe.ts /toolchain/bin/denial-probe
 COPY infra/toolchain/fixture-runner.ts /toolchain/bin/fixture-runner
 COPY infra/toolchain/production-worker.ts /usr/local/bin/napplet-cvm-worker
@@ -44,8 +58,6 @@ RUN ln -s /usr/local/bin/bun /usr/local/bin/node \
     && ln -s /usr/local/bin/bun /toolchain/bin/bun \
     && ln -s /toolchain/node_modules/.bin/napplet-conformance /toolchain/bin/napplet-conformance \
     && PLAYWRIGHT_BROWSERS_PATH=/toolchain/ms-playwright node -e 'const {realpathSync}=require("node:fs");const {execFileSync}=require("node:child_process");const {dirname,join}=require("node:path");const pkg=require.resolve("playwright/package.json",{paths:[realpathSync("node_modules/@napplet/conformance-cli")]});execFileSync(process.execPath,[join(dirname(pkg),"cli.js"),"install","chromium"],{stdio:"inherit"})' \
-    && mkdir -p /toolchain/boilerplate-template \
-    && cp -a /toolchain/node_modules/@napplet/boilerplate/. /toolchain/boilerplate-template/ \
     && chmod 0555 /toolchain/bin/denial-probe /toolchain/bin/fixture-runner /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe /usr/local/bin/napplet-cvm-bootstrap \
     && mkdir -p /home/napplet /work /tmp \
     && chown 65532:65532 /home/napplet /work /tmp \

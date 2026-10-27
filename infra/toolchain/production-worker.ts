@@ -27,8 +27,8 @@ async function bounded(argv: string[], cwd?: string) {
     const remaining = activeDeadlineEpochMs ? activeDeadlineEpochMs - Date.now() : MAX_MS;
     if (remaining <= 0) throw new Error("WORKER_ACTIVE_DEADLINE_EXPIRED");
     const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { child.kill(); reject(new Error("WORKER_CHILD_TIMEOUT")); }, Math.min(MAX_MS, remaining)); });
-    const [status] = await Promise.race([Promise.all([child.exited, read(child.stdout), read(child.stderr)]), timeout]);
-    if (status !== 0) throw new Error("WORKER_CHILD_FAILED");
+    const [status, stdout, stderr] = await Promise.race([Promise.all([child.exited, read(child.stdout), read(child.stderr)]), timeout]);
+    if (status !== 0) throw new Error(`WORKER_CHILD_FAILED:${`${stdout}\n${stderr}`.slice(0, 2_000).replace(/[\r\n]+/gu, " ")}`);
   } finally { clearTimeout(timer); child.kill(); }
 }
 async function regularContained(path: string) {
@@ -91,7 +91,9 @@ async function build() {
   if (sourceBytes.byteLength > MAX_BYTES) throw new Error("WORKER_SOURCE_TOO_LARGE"); const sourceText = new TextDecoder().decode(sourceBytes);
   const source = JSON.parse(sourceText) as { files?: Array<{ path?: unknown; content?: unknown }> };
   if (!Array.isArray(source.files) || source.files.length < 1 || source.files.length > 3) throw new Error("WORKER_SOURCE_INVALID");
-  const allowed = new Set(["src/main.ts", "src/styles.css", "src/capabilities.json"]);
+  // The official scaffold owns the entrypoint. Generated input changes only
+  // the same application surfaces used by the verified fixture runner.
+  const allowed = new Set(["src/App.tsx", "src/styles.css", "src/capabilities.json"]);
   const files = source.files.map((file) => {
     if (!file || typeof file.path !== "string" || !allowed.has(file.path) || typeof file.content !== "string" || new TextEncoder().encode(file.content).byteLength > 30_000) throw new Error("WORKER_SOURCE_INVALID");
     return { path: file.path, content: file.content };
@@ -102,7 +104,7 @@ async function build() {
   // the project filesystem.  The commands below match the proven fixture flow.
   await bounded(["/toolchain/bin/napplet", "create", project, "--template", "/toolchain/boilerplate-template"], WORKSPACE);
   await bounded(["/toolchain/bin/napplet", "init", "--force", "--root", "--source-dir", "src", "--title", "Generated napplet"], project);
-  await bounded(["/toolchain/bin/napplet", "skills", "install", "--to", "codex"], project);
+  await bounded(["/toolchain/bin/bun", "/toolchain/node_modules/@napplet/skills/dist/cli.js", "install", "--to", "codex", "--dir", ".codex/skills"], project);
   for (const file of files) {
     const target = resolve(project, file.path); if (!target.startsWith(`${project}/src/`)) throw new Error("WORKER_SOURCE_INVALID");
     await mkdir(dirname(target), { recursive: true }); await writeFile(target, file.content, { mode: 0o600 });

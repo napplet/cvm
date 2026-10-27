@@ -105,6 +105,8 @@ At `f041e7b`, payment run `40513639887` passed. GUI run `40513639935` passed the
 
 At `5499e7d`, payment run `40516163304` passed. GUI run `40516163434` passed the timeout, interrupted-generation, static publication, returning-project, and both-rail funding flows; the latter then failed its evidence check because it retained old root dependency hashes. Both that check and the later full-flow check now use the launcher’s existing approved pin set from one shared verifier. Three local checks prove the current manifests pass and changing either file is refused. No pin was loosened or dropped.
 
+At `58cb406`, the payment workflow passes 141 tests / 926 assertions. The GUI run `40518538358` stalled for its existing ten-minute process limit in static publication, a journey that passed at `5499e7d`; its bounded stderr only showed relay liveness recovery. Added fixed stage labels and periodic stage-only diagnostics to identify whether a subsequent stall is in browser work, restart, or cleanup. No timeout or acceptance check changed. Full GUI verification remains pending.
+
 ## Next Phase Readiness
 
 PR #5 is open. Do not mark OPS-04 complete until the retained payment and GUI workflows pass remotely.

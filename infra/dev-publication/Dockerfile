@@ -3,7 +3,7 @@ FROM mcr.microsoft.com/playwright:v1.62.1-noble@sha256:dcc5531e97840b9b5e794f281
 COPY --from=oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4 /usr/local/bin/bun /usr/local/bin/bun
 ARG TARGETARCH
 RUN case "$TARGETARCH" in \
-      arm64) asset=aarch64; digest=9646ec07a3494299709b87b9d342e16218a77f11eac6c119502135430b0c0777 ;; \
+      arm64) asset=aarch64; digest=2459bab845ca735eea19dd5387133696b8f03143cbd08161a7fcddc2c32d3d8b ;; \
       amd64) asset=x86_64; digest=64678b48a227d9e1e0054db8d5a13d7aac114b8716fa097c5302ff6bc42f2ff7 ;; \
       *) exit 1 ;; \
     esac && curl -fsSL "https://github.com/napplet/web/releases/download/%40napplet/cli%400.10.0/napplet-linux-$asset" -o /usr/local/bin/napplet && echo "$digest  /usr/local/bin/napplet" | sha256sum -c -

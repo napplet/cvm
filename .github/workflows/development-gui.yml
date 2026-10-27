@@ -15,6 +15,7 @@ on:
       - "infra/dev-payments/**"
       - "migrations/**"
       - "scripts/dev*.ts"
+      - "scripts/probe-development-relay.ts"
       - "tests/fixtures/chatgpt.ts"
       - "tests/dev/**"
       - "tests/dev-ui/**"

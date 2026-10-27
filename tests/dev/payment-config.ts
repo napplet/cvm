@@ -1,5 +1,5 @@
-import { lstat, readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { lstat, readFile, realpath } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import type { DevPayments } from "../../scripts/dev-payments";
 
 const root = resolve(import.meta.dir, "../..");
@@ -31,7 +31,7 @@ function parse(value: unknown): DevPayments {
   const nwcRelay = nwc.searchParams.get("relay");
   if (nwc.protocol !== "nostr+walletconnect:" || !/^[a-f0-9]{64}$/u.test(nwc.hostname) || !/^[a-f0-9]{64}$/u.test(nwc.searchParams.get("secret") ?? "") || !nwcRelay) fail("DEV_TEST_PAYMENT_CONFIG_ENDPOINT_INVALID");
   loopbackUrl(nwcRelay, "ws:");
-  if (!/^cashuA[a-zA-Z0-9_-]+$/u.test(config.cashuToken) || !/^[a-f0-9]{64}$/u.test(config.fundingKey)) fail("DEV_TEST_PAYMENT_CONFIG_INVALID");
+  if (!/^cashu[AB][a-zA-Z0-9_-]+$/u.test(config.cashuToken) || !/^[a-f0-9]{64}$/u.test(config.fundingKey)) fail("DEV_TEST_PAYMENT_CONFIG_INVALID");
   return Object.freeze({ version: 1, developmentOnly: true, mintUrl, secondaryMintUrl, relayUrl, hubUrl, nwcUri: config.nwcUri, cashuToken: config.cashuToken, databaseUrl: config.databaseUrl, fundingKey: config.fundingKey });
 }
 
@@ -46,6 +46,11 @@ export async function readDevelopmentPaymentConfig(environment: Environment = pr
   let metadata;
   try { metadata = await lstat(configured); } catch { fail("DEV_TEST_PAYMENT_CONFIG_INVALID"); }
   if (metadata.isSymbolicLink()) fail("DEV_TEST_PAYMENT_CONFIG_SYMLINK");
+  try {
+    const canonicalRoot = await realpath(root);
+    const canonicalDirectory = await realpath(dirname(expected));
+    if (canonicalDirectory !== resolve(canonicalRoot, ".local", "napplet-cvm-dev", runId, "payments")) fail("DEV_TEST_PAYMENT_CONFIG_OWNERSHIP_INVALID");
+  } catch (error) { if (error instanceof Error && error.message === "DEV_TEST_PAYMENT_CONFIG_OWNERSHIP_INVALID") throw error; fail("DEV_TEST_PAYMENT_CONFIG_INVALID"); }
   if (!metadata.isFile() || (metadata.mode & 0o777) !== 0o600) fail("DEV_TEST_PAYMENT_CONFIG_INVALID");
   try { return parse(JSON.parse(await readFile(configured, "utf8"))); }
   catch (error) { if (error instanceof Error && error.message.startsWith("DEV_TEST_PAYMENT_CONFIG_")) throw error; fail("DEV_TEST_PAYMENT_CONFIG_INVALID"); }

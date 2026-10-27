@@ -243,6 +243,11 @@ async function ensureTestPrerequisites(): Promise<void> {
   await command(["docker", "compose", "--env-file", "/dev/null", "-p", "napplet-cvm-publication", "-f", "infra/dev-publication/compose.yaml", "build", "--provenance=false", "--sbom=false", "publication-image"], { timeoutMs: 600_000 });
 }
 
+export async function withRunOwnedStack<T>(stack: Readonly<{ down(reset?: boolean): Promise<void> }>, work: () => Promise<T>): Promise<T> {
+  try { return await work(); }
+  finally { await stack.down(true); }
+}
+
 async function runIsolatedTests(): Promise<void> {
   const instance = `test-${randomBytes(8).toString("hex")}`;
   const stack = developmentStack(true, { instance });
@@ -254,7 +259,7 @@ async function runIsolatedTests(): Promise<void> {
   };
   const interrupt = () => { void cleanup().finally(() => process.exit(130)); };
   process.once("SIGINT", interrupt); process.once("SIGTERM", interrupt);
-  try {
+  try { await withRunOwnedStack({ down: cleanup }, async () => {
     await ensureTestPrerequisites();
     await stack.up();
     const selected = (await Promise.all([testFiles(resolve(root, "tests", "dev")), testFiles(resolve(root, "tests", "dev-ui"))])).flat().sort();
@@ -265,9 +270,9 @@ async function runIsolatedTests(): Promise<void> {
       stdout: "inherit", stderr: "inherit", stdin: "ignore",
     });
     if (await child.exited !== 0) throw new Error("DEV_PAYMENT_TESTS_FAILED");
+  });
   } finally {
     process.off("SIGINT", interrupt); process.off("SIGTERM", interrupt);
-    await cleanup();
   }
 }
 

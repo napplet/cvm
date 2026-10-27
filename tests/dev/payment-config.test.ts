@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { chmod, lstat, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { readDevelopmentPaymentConfig } from "./payment-config";
+import { withRunOwnedStack } from "../../scripts/dev-payments";
 
 const root = resolve(import.meta.dir, "../..");
 const runs = new Set<string>();
@@ -14,7 +15,8 @@ const paymentConfig = () => ({
   relayUrl: "ws://127.0.0.1:7777",
   hubUrl: "http://127.0.0.1:8081",
   nwcUri: "nostr+walletconnect://" + "a".repeat(64) + "?relay=ws%3A%2F%2F127.0.0.1%3A7777&secret=" + "b".repeat(64),
-  cashuToken: "cashuA-test-only",
+  // @cashu/cashu-ts v4 emits cashuB tokens for the v4 token format.
+  cashuToken: "cashuBo2FtdWh0dHA6Ly8xMjcuMC4wLjE6MzMzOGF1Y3NhdGF0gA",
   databaseUrl: "postgresql://napplet_dev:development-only-no-real-funds@127.0.0.1:55432/napplet_dev",
   fundingKey: "c".repeat(64),
 });
@@ -67,10 +69,27 @@ test("rejects symlinks, escaped paths, and another run's config", async () => {
   await expect(readDevelopmentPaymentConfig(environment(runId, file))).rejects.toThrow("DEV_TEST_PAYMENT_CONFIG_SYMLINK");
 });
 
+test("rejects a config directory redirected through an ancestor symlink", async () => {
+  const runId = "config-ancestor";
+  const file = await writeRun(runId);
+  const target = await writeRun("config-ancestor-target");
+  const directory = resolve(root, ".local", "napplet-cvm-dev", runId, "payments");
+  await rm(directory, { recursive: true, force: true });
+  await symlink(resolve(target, ".."), directory);
+  await expect(readDevelopmentPaymentConfig(environment(runId, file))).rejects.toThrow("DEV_TEST_PAYMENT_CONFIG_OWNERSHIP_INVALID");
+});
+
 test("keeps concurrent run identities isolated", async () => {
   const one = await writeRun("config-concurrent-one");
   const two = await writeRun("config-concurrent-two");
   await expect(readDevelopmentPaymentConfig(environment("config-concurrent-one", one))).resolves.toMatchObject({ developmentOnly: true });
   await expect(readDevelopmentPaymentConfig(environment("config-concurrent-two", two))).resolves.toMatchObject({ developmentOnly: true });
   await expect(readDevelopmentPaymentConfig(environment("config-concurrent-one", two))).rejects.toThrow("DEV_TEST_PAYMENT_CONFIG_OWNERSHIP_INVALID");
+});
+
+test("cleans only the run-owned stack when setup or the child test process fails", async () => {
+  const resetCalls: boolean[] = [];
+  const stack = { down: async (reset = false) => { resetCalls.push(reset); } };
+  await expect(withRunOwnedStack(stack, async () => { throw new Error("SIMULATED_CHILD_FAILURE"); })).rejects.toThrow("SIMULATED_CHILD_FAILURE");
+  expect(resetCalls).toEqual([true]);
 });

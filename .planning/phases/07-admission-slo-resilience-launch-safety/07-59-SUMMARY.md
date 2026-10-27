@@ -58,7 +58,7 @@ status: verification_pending
 
 ## Accomplishments
 
-- Replaced ambient primary-workspace payment reads with a strict, mode-checked, loopback-only run config resolver.
+- Replaced ambient primary-workspace payment reads with a strict, mode-checked, loopback-only resolver that also rejects symlinked ancestor directories.
 - Made payment test selection explicit across `tests/dev` and `tests/dev-ui`, while provisioning browser, Chromium, and native worker prerequisites.
 - Replaced the stale migration count with exact ordered migration names and source SHA-256 values.
 - Added a uniquely named digest-pinned relay probe and moved the required GUI job to native AMD64.
@@ -71,7 +71,7 @@ status: verification_pending
 
 ## Verification
 
-- Passed: `bun test tests/dev/payment-config.test.ts --timeout 10000` (4 tests).
+- Passed: `bun test tests/dev/payment-config.test.ts --timeout 10000` (6 tests), including Cashu v4 `cashuB` format and failure cleanup.
 - Passed: `bun scripts/probe-development-relay.ts` — exact pinned relay reported `amd64` and `websocket: ready`.
 - Pending: `bun scripts/dev-payments.ts test` installed/built the browser and native worker prerequisites, then failed before the isolated stack started because the local Docker daemon reported `all predefined address pools have been fully subnetted` while creating `napplet-cvm-payments-test-4509bf873cbe7cfe_default`.
 - Pending: clean remote payment and GUI workflow runs. No remote CI has been claimed as green.
@@ -88,7 +88,8 @@ status: verification_pending
 
 **2. [Rule 3 - Verification reference] The planned `tests/dev-ui/launcher.test.ts` does not exist in this checkout.**
 - **Found during:** Task 2 verification.
-- **Impact:** No substitute or narrower test was run; the existing isolated launcher flow is `tests/dev-ui/launcher.e2e.ts`, and clean remote GUI CI remains required.
+- **Fix:** Updated the plan to its existing isolated launcher flow: `bun run tests/dev-ui/launcher.e2e.ts --case=clean-up-idempotent-down-persist-reset`.
+- **Impact:** Clean remote GUI CI remains required.
 
 ## Issues Encountered
 

@@ -5,6 +5,8 @@ on:
   pull_request:
     paths:
       - "infra/dev-payments/**"
+      - "infra/dev-ui/**"
+      - "infra/dev-publication/**"
       - "scripts/dev-*.ts"
       - "src/funding/**"
       - "src/persistence/**"
@@ -12,9 +14,11 @@ on:
       - "src/phase-03/**"
       - "migrations/**"
       - "tests/dev/**"
+      - "tests/dev-ui/**"
       - "tests/funding/**"
       - "package.json"
       - "bun.lock"
+      - "scripts/probe-development-relay.ts"
       - ".github/workflows/development-payments.yml"
 
 permissions:
@@ -23,7 +27,7 @@ permissions:
 jobs:
   payments:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:

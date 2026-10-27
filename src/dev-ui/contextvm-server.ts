@@ -288,7 +288,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
     return parsed.length === files.length ? parsed : undefined;
   };
   const paja = await import("../../tests/dev-ui/node_modules/@kehto/paja");
-  const previewServer = await createPreviewServer({ repository, grants, paja: { startPajaServer: paja.startPajaServer, domains: paja.PAJA_SIMULATION_DOMAINS } });
+  const previewServer = await createPreviewServer({ publicOrigin: process.env.NAPPLET_CVM_PREVIEW_PUBLIC_ORIGIN, repository, grants, paja: { startPajaServer: paja.startPajaServer, domains: paja.PAJA_SIMULATION_DOMAINS } });
   const publication = await LocalPublication.open({ pubkey: await signer.getPublicKey(), sign: async template => finalizeEvent(template, Uint8Array.from(Buffer.from(identity.signerPrivateKey, "hex"))), publicOrigin: process.env.NAPPLET_CVM_BLOSSOM_PUBLIC_URL, publicRelay: process.env.NAPPLET_CVM_PUBLIC_RELAY_URL, pool: app.pool, repository, root: resolve(stateRoot, "development-published"), workerResultsRoot: resolve(stateRoot, "development-worker-results"), relay: config.relayUrl, openTarget: target => previewServer.openTarget(target) });
   const preview = {
     async previewVerifiedArtifact(input: Readonly<{ accountId: string; sessionId: string; artifactId: string }>) {
@@ -403,6 +403,8 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
     async fetch(request) {
       const url = new URL(request.url);
       if (url.hostname !== "127.0.0.1" && url.hostname !== "localhost") return new Response("loopback only", { status: 403 });
+      const publicPreview = await previewServer.handlePublic(request);
+      if (publicPreview) return publicPreview;
       const chatgptResponse = await chatgptRoutes.handle(request, `http://127.0.0.1:${web.port}`);
       if (chatgptResponse) return chatgptResponse;
       if (request.method === "GET" || request.method === "HEAD") {

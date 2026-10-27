@@ -1,0 +1,16 @@
+{
+  "name": "napplet-cvm",
+  "description": "Private CVM with ChatGPT subscription, isolated Docker build engine and test-credit ledger",
+  "git_repository": "git@gogs:owner/napplet-cvm.git",
+  "git_branch": "main",
+  "build_pack": "dockercompose",
+  "docker_compose_location": "/infra/homelab/compose.yaml",
+  "ports_exposes": "8080",
+  "server_name": "beta-ssh",
+  "project_name": "Homelab Apps",
+  "environment_name": "production",
+  "private_key_name": "gogs-repo-key",
+  "instant_deploy": true,
+  "health_check_enabled": false,
+  "docker_compose_domains": []
+}

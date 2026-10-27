@@ -8,9 +8,10 @@ const collapsedConsole = `<script>try { localStorage.setItem('kehto:paja:console
 // A presentation switch for the product workspace. It changes no sandbox,
 // simulation, grant, capability or message policy; /dev keeps Paja controls.
 const workspaceChrome = `<style>html[data-preview-presentation="workspace"] body { grid-template-rows: minmax(0, 1fr); } html[data-preview-presentation="workspace"] .bar, html[data-preview-presentation="workspace"] .console { display: none !important; } html[data-preview-presentation="workspace"] main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }</style>`;
-export type PreviewServer = Readonly<{ url: string; openPaja(token: string): Promise<string>; openTarget(targetUrl: string): Promise<string>; close(): Promise<void> }>;
+export type PreviewServer = Readonly<{ url: string; openPaja(token: string): Promise<string>; openTarget(targetUrl: string): Promise<string>; handlePublic(request: Request): Promise<Response | undefined>; close(): Promise<void> }>;
 /** Static/opaque-grant boundary only. There are deliberately no application commands here. */
-export async function createPreviewServer(input: Readonly<{ repository: LocalArtifactRepository; grants: LocalPreviewGrantStore; paja: Readonly<{ startPajaServer(options: unknown): Promise<{ url: string; close(): Promise<void> }>; domains: readonly string[] }> }>): Promise<PreviewServer> {
+export async function createPreviewServer(input: Readonly<{ publicOrigin?: string; repository: LocalArtifactRepository; grants: LocalPreviewGrantStore; paja: Readonly<{ startPajaServer(options: unknown): Promise<{ url: string; close(): Promise<void> }>; domains: readonly string[] }> }>): Promise<PreviewServer> {
+  const publicHosts = new Map<string, { url: string; targetUrl: string }>();
   const hosts: Array<{ close(): Promise<void> }> = [];
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const url = new URL(request.url); if (url.pathname === "/health") return Response.json({ status: "ok" });
@@ -42,7 +43,31 @@ export async function createPreviewServer(input: Readonly<{ repository: LocalArt
       } catch { return new Response("preview unavailable", { status: 502 }); }
     } });
     hosts.push({ async close() { minimized.stop(true); await host.close(); } });
-    return `http://127.0.0.1:${minimized.port}`;
+    const localUrl = `http://127.0.0.1:${minimized.port}`;
+    if (!input.publicOrigin) return localUrl;
+    const id = crypto.randomUUID();
+    publicHosts.set(id, { url: localUrl, targetUrl });
+    return `${input.publicOrigin}/cvm-preview/${id}/`;
   }
-  return Object.freeze({ url, openTarget, openPaja: (token: string) => openTarget(`${url}/preview/${encodeURIComponent(token)}/index.html`), async close(): Promise<void> { await Promise.all(hosts.map((host) => host.close())); server.stop(true); } });
+  async function handlePublic(request: Request): Promise<Response | undefined> {
+    if (!input.publicOrigin) return;
+    const requestUrl = new URL(request.url);
+    if (requestUrl.pathname.startsWith('/cvm-artifacts/')) {
+      if (request.method !== 'GET') return new Response('not found', { status: 404 });
+      const response = await fetch(`${url}/preview/${requestUrl.pathname.slice('/cvm-artifacts/'.length)}`, { redirect: 'error' });
+      const headers = new Headers(response.headers); headers.set('content-security-policy', "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:");
+      return new Response(response.body, { status: response.status, headers });
+    }
+    if (!requestUrl.pathname.startsWith('/cvm-preview/')) return;
+    const match = /^\/cvm-preview\/([a-f0-9-]{36})(\/.*)$/.exec(requestUrl.pathname);
+    const host = match && publicHosts.get(match[1]!);
+    if (!match || !host || request.method !== 'GET' || !pajaRoutes.has(match[2]!)) return new Response('not found', { status: 404 });
+    const target = new URL(match[2]!, host.url); target.search = requestUrl.search;
+    const response = await fetch(target, { redirect: 'error' });
+    if (match[2] === '/__kehto/target.html') { const headers = new Headers(response.headers); headers.set('content-security-policy', 'sandbox allow-scripts'); return new Response(response.body, { status: response.status, headers }); }
+    if (match[2] !== '/__kehto/config.json' || !host.targetUrl.startsWith(`${url}/preview/`)) return response;
+    const externalTarget = `${input.publicOrigin}/cvm-artifacts/${host.targetUrl.slice(`${url}/preview/`.length)}`;
+    return new Response((await response.text()).replaceAll(host.targetUrl, externalTarget), { status: response.status, headers: response.headers });
+  }
+  return Object.freeze({ url, openTarget, handlePublic, openPaja: (token: string) => openTarget(`${url}/preview/${encodeURIComponent(token)}/index.html`), async close(): Promise<void> { await Promise.all(hosts.map((host) => host.close())); server.stop(true); } });
 }

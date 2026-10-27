@@ -55,7 +55,7 @@ export class LocalDevelopmentRuntimeReadiness {
     const image = this.options.image ?? process.env.NAPPLET_CVM_DEV_WORKER_IMAGE ?? "napplet-cvm/dev-worker:development";
     const inspected = await runBoundedDevelopmentCommand([docker, "image", "inspect", image, "--format", "{{.Id}}|{{.Os}}|{{.Architecture}}"], { deadlineMs: 15_000, maxBytes: 16_000 });
     const [imageDigest, os, arch] = inspected.stdout.trim().split("|");
-    if (inspected.exitCode !== 0 || !/^sha256:[a-f0-9]{64}$/u.test(imageDigest ?? "") || os !== "linux" || arch !== "arm64") throw new Error("DEV_WORKER_IMAGE_NOT_READY:build the linux/arm64 development worker image");
+    if (inspected.exitCode !== 0 || !/^sha256:[a-f0-9]{64}$/u.test(imageDigest ?? "") || os !== "linux" || arch !== (process.arch === "x64" ? "amd64" : "arm64")) throw new Error("DEV_WORKER_IMAGE_NOT_READY:build the native Linux development worker image");
     const name = `napplet-cvm-dev-readiness-${crypto.randomUUID()}`;
     const script = `
       const {createRequire}=require('node:module'); const {realpathSync}=require('node:fs');
@@ -76,7 +76,7 @@ export class LocalDevelopmentRuntimeReadiness {
       const result = await runBoundedDevelopmentCommand([docker, "run", "--name", name, "--rm", "--network", "none", "--read-only", "--user", "65532:65532", "--cpus", "2", "--memory", "1g", "--pids-limit", "256", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=256m", "--tmpfs", "/home/napplet:rw,nosuid,nodev,size=64m", "--entrypoint", "bun", imageDigest!, "-e", script], { deadlineMs: 45_000, maxBytes: 32_000 });
       if (result.exitCode !== 0) throw new Error("DEV_WORKER_BROWSER_NOT_READY:rebuild the development worker image");
       probe = JSON.parse(result.stdout.trim());
-      if (probe.capabilityParserHash !== hash(await readFile(join(projectRoot, "infra/dev-ui/source-capabilities.ts"))) || probe.skillsSha256 !== skills.sha256 || probe.skillsLoaderHash !== hash(await readFile(join(projectRoot, "infra/dev-ui/authoring-skills.ts"))) || probe.cliHash !== "35ffb0d21e75877e749d63569b4369e5b467967e48034c2ee7d0ae958ed5ee54" || probe.runnerHash !== hash(await readFile(join(projectRoot, "infra/dev-ui/run-proposal.ts"))) || probe.playwright !== "1.61.0" || probe.typescript !== "5.9.3" || probe.conformance !== "0.2.15" || !/^\d+\.\d+\.\d+\.\d+$/u.test(probe.browserVersion)) throw new Error("DEV_WORKER_TOOLCHAIN_MISMATCH:rebuild the development worker image");
+      if (probe.capabilityParserHash !== hash(await readFile(join(projectRoot, "infra/dev-ui/source-capabilities.ts"))) || probe.skillsSha256 !== skills.sha256 || probe.skillsLoaderHash !== hash(await readFile(join(projectRoot, "infra/dev-ui/authoring-skills.ts"))) || probe.cliHash !== (arch === "amd64" ? "a17fd2f61beb3b1553518b517045c4e1a474ddee5db87be80e18cf1bd24d8e28" : "35ffb0d21e75877e749d63569b4369e5b467967e48034c2ee7d0ae958ed5ee54") || probe.runnerHash !== hash(await readFile(join(projectRoot, "infra/dev-ui/run-proposal.ts"))) || probe.playwright !== "1.61.0" || probe.typescript !== "5.9.3" || probe.conformance !== "0.2.15" || !/^\d+\.\d+\.\d+\.\d+$/u.test(probe.browserVersion)) throw new Error("DEV_WORKER_TOOLCHAIN_MISMATCH:rebuild the development worker image");
     } finally {
       await runBoundedDevelopmentCommand([docker, "rm", "--force", name], { deadlineMs: 5_000, maxBytes: 8_000 }).catch(() => undefined);
     }

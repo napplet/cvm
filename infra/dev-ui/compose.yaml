@@ -4,7 +4,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      platforms: [linux/arm64]
+      platforms: ["${NAPPLET_CVM_WORKER_PLATFORM:-linux/arm64}"]
       # Local checkpoint pins must survive a cached rebuild. Timestamped build
       # attestations change the index digest even when executable bytes match.
       provenance: false

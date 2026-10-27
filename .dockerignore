@@ -1,0 +1,11 @@
+.git
+.local
+.runtime
+.env*
+node_modules
+**/node_modules
+.planning
+.playwright-mcp
+evidence
+docs/.vitepress
+dist

@@ -23,6 +23,10 @@ service:
       # Certification-only debug sink; traces and metrics have already passed the
       # coordinator allowlist and no logs pipeline exists.
       level: debug
+      # Preserve each detailed export as one structured Cloud Logging entry.
+      encoding: json
+      sampling:
+        enabled: false
   pipelines:
     traces:
       receivers: [otlp]

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { createRequire } from "node:module";
 import { PostgresOperationJournal, assertPostgresOperationJournal } from "../../src/release/deployment/postgres-operation-journal";
+import { createPostgresGoogleOperationJournal, createPostgresWorkerOperationJournal, createPostgresVertexOperationJournal } from "../../src/release/deployment/postgres-provider-journals";
 
 const scopeSha256 = "a".repeat(64), identity = "b".repeat(64);
 test("journal construction has no effects and rejects structural/prototype impersonation", async () => {
@@ -63,5 +64,31 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
     expect(audit).toEqual([{ revision: "1", value_json: { state: "claimed", eventId: "encrypted-event" } }, { revision: "2", value_json: winner.value }]);
     await expect(new PostgresOperationJournal(admin, { namespace: "forbidden", scopeSha256 }).read("original")).rejects.toThrow("ACCOUNTING_REALM_SUPERUSER_DENIED");
     expect((await admin.query("SELECT to_regclass('public.release_operation_journal') AS value")).rows[0].value).toBeNull();
+    const google = () => createPostgresGoogleOperationJournal(create("google:run-1"));
+    const googleInput = { operationId: "google-original", requestSha256: identity, contentSha256: scopeSha256, resource: "projects/original", owned: false };
+    expect((await google().claim(googleInput)).claimed).toBe(true);
+    await google().markCompleted({ operationId: googleInput.operationId, requestSha256: identity, generation: "1", owned: true });
+    await google().markDispatched({ operationId: googleInput.operationId, requestSha256: identity, operationName: "original-lro" });
+    expect(await google().read(googleInput.operationId)).toMatchObject({ state: "completed", owned: true, generation: "1", operationName: "original-lro" });
+    await expect(google().markCompleted({ operationId: googleInput.operationId, requestSha256: identity, generation: "2" })).rejects.toThrow("PROVIDER_OPERATION_IDENTITY_CONFLICT");
+    await expect(google().claim({ ...googleInput, resource: "projects/replaced" })).rejects.toThrow("OPERATION_IDENTITY_CONFLICT");
+    const worker = () => createPostgresWorkerOperationJournal(create("worker:run-1"));
+    const workerInput = { operationId: "worker-original", requestSha256: identity, resourceName: "original-worker", provider: "modal" as const, image: "registry/image@sha256:" + scopeSha256 };
+    expect((await worker().claim(workerInput)).claimed).toBe(true);
+    await worker().update({ operationId: workerInput.operationId, requestSha256: identity, state: "reconciled", resourceId: "actual-worker" });
+    await worker().update({ operationId: workerInput.operationId, requestSha256: identity, state: "unknown" });
+    expect(await worker().read(workerInput.operationId)).toMatchObject({ state: "reconciled", resourceId: "actual-worker" });
+    await worker().update({ operationId: workerInput.operationId, requestSha256: identity, state: "terminated" });
+    await worker().update({ operationId: workerInput.operationId, requestSha256: identity, state: "dispatched" });
+    expect(await worker().read(workerInput.operationId)).toMatchObject({ state: "terminated" });
+    await expect(worker().update({ operationId: workerInput.operationId, requestSha256: identity, state: "reconciled", resourceId: "different-worker" })).rejects.toThrow("PROVIDER_OPERATION_IDENTITY_CONFLICT");
+    const vertex = () => createPostgresVertexOperationJournal(create("vertex:run-1"));
+    const entry = { operationId: "vertex-original", requestSha256: identity, nonce: "original", request: { idea: "small app", systemInstruction: "bounded", maximumOutputTokens: 128 }, candidateSha256: scopeSha256, projectId: "original-project", model: "gemini-4-argon" as const, location: "global" as const, price: { sourceUrl: "https://cloud.google.com/pricing", sourceDocumentSha256: identity, quoteSha256: identity, observedAtMs: 1, freshUntilMs: 2, effectiveFromMs: 1, effectiveUntilMs: 2, currency: "USD" as const, inputMicrosPerMillion: 1, cachedInputMicrosPerMillion: 1, outputAndThoughtMicrosPerMillion: 1 } };
+    expect((await vertex().claim(entry)).claimed).toBe(true);
+    await vertex().write({ ...entry, interactionId: "original-result", completedReceipt: { immutable: "receipt" } });
+    await vertex().write(entry);
+    expect(await vertex().read(entry.operationId)).toMatchObject({ interactionId: "original-result", completedReceipt: { immutable: "receipt" } });
+    await expect(vertex().write({ ...entry, interactionId: "other-result" })).rejects.toThrow("PROVIDER_OPERATION_IDENTITY_CONFLICT");
+    await expect(vertex().write({ ...entry, completedReceipt: { immutable: "different" } })).rejects.toThrow("PROVIDER_OPERATION_IDENTITY_CONFLICT");
   } finally { await application?.end(); await admin?.end(); await docker("rm", "--force", name).catch(() => undefined); }
 }, 120000);

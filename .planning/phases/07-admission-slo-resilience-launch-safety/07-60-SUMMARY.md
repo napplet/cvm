@@ -20,12 +20,18 @@ metrics:
   tasks_completed: 2
   files_changed: 5
   completed_at: 2026-10-27
-status: complete
+status: pending
 ---
 
 # Phase 07 Plan 60: Production Accounting Realm Summary
 
 Preserved development-test ledger history is separated from a zero-funded production-real PostgreSQL realm with role enforcement, encrypted custody metadata, and immutable rail-operation recovery identities.
+
+## Reopened Review Work
+
+The initial close-out was reopened after review. The production schema now clones compatible Phase 04–06 tables when upgrading an existing authority, requires a non-superuser member of the selected realm role, rejects an absent/non-live accounting descriptor, and uses separate login-role connections in the PostgreSQL proof. Custody now supports multiple immutable records per original operation, globally fences semantic Cashu proof identity, and requires the matching original operation/account/rail tuple.
+
+Remaining required evidence before this plan can be marked complete: a restricted-role end-to-end SQL funding credit/reservation/settlement transaction against the production schema (including bounded concurrency) and a reviewable multiline rewrite of the custody/operation repository transaction methods.
 
 ## Tasks Completed
 
@@ -70,7 +76,7 @@ Preserved development-test ledger history is separated from a zero-funded produc
 - This is a no-effect schema and repository change. It does not provision Cloud SQL, assign production login credentials, migrate later Phase 4–6 tables into the production schema, or perform Lightning/Cashu/NWC I/O.
 - The PG17 check is intentionally environment-gated so ordinary unit runs do not start Docker; production accounting changes require the explicit command above in CI/release validation.
 
-## Self-Check: PASSED
+## Self-Check: PENDING
 
 - Required migration, realm contract, and focused test files exist.
 - Task commits `2b92e37` and `411fd4c` exist on the current branch.

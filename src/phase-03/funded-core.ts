@@ -96,7 +96,8 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
   if ([options.postgresExecutor, options.postgresPool, options.database].filter(Boolean).length > 1) throw new Error("CONFLICTING_POSTGRES_CONFIGURATION");
   if (!options.testOnly && (options.lightning || options.cashu)) throw new Error("PRODUCTION_RAIL_COMPOSITION_REQUIRED");
   const requestedRealm = options.accountingRealm ?? (options.testOnly ? "development-test" : "production-real");
-  if (!options.testOnly) assertProductionAccountingConfiguration({ accountingRealm: requestedRealm, configuration: options.productionAccountingConfiguration ?? {} });
+  const railConfigurationStarted = Boolean(options.lightningReceiver || options.cashuProvider || options.cashuPolicies || options.protectedMaterialKey);
+  if (!options.testOnly && railConfigurationStarted) assertProductionAccountingConfiguration(options.productionAccountingConfiguration);
   const database = options.database ?? (options.postgresPool ? new PostgresFundingDatabase(options.postgresPool, { realm: requestedRealm }) : undefined);
   if (!options.testOnly && database) assertProductionRealm(database.realm);
   const store = options.store ?? database?.funding ?? (options.postgresExecutor ? new PostgresFundingStore(options.postgresExecutor) : undefined);
@@ -104,7 +105,6 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
   // still offline design evidence, never a selected database/provider claim.
   const authority = store ?? (() => { throw new Error("POSTGRES_FUNDING_STORE_REQUIRED"); })();
   const funding = new FundingService(authority, options.lifecycle);
-  const railConfigurationStarted = Boolean(options.lightningReceiver || options.cashuProvider || options.cashuPolicies || options.protectedMaterialKey);
   if (railConfigurationStarted && (!database || !options.lightningReceiver || !options.cashuProvider || !options.cashuPolicies || !options.protectedMaterialKey)) throw new Error("PRODUCTION_RAIL_COMPOSITION_REQUIRED");
   const vault = database && options.protectedMaterialKey ? new ProtectedRailMaterialVault({ key: options.protectedMaterialKey, repository: database.protectedMaterials }) : undefined;
   const verifiedCreditWake = options.meteredService?.dispatchVerifiedCredit

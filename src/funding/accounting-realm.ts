@@ -27,6 +27,9 @@ export function createAccountingRealm(name: AccountingRealmName): AccountingReal
  * names only: credentials and protected material must never enter this check.
  */
 export function assertProductionAccountingConfiguration(configuration: unknown): void {
+  if (!configuration || typeof configuration !== "object") throw new Error("PRODUCTION_ACCOUNTING_DESCRIPTOR_REQUIRED");
+  const root = configuration as Record<string, unknown>;
+  if (root.mode !== "production-real" || !Array.isArray(root.adapters) || root.adapters.length === 0 || !root.adapters.every((adapter) => typeof adapter === "string" && ["lightning", "cashu", "nwc"].includes(adapter)) || !root.catalog || typeof root.catalog !== "object" || (root.catalog as Record<string, unknown>).kind !== "live" || root.keyMode !== "secret-broker") throw new Error("PRODUCTION_ACCOUNTING_DESCRIPTOR_REQUIRED");
   const seen = new Set<unknown>();
   const visit = (value: unknown): void => {
     if (typeof value === "string") {
@@ -36,6 +39,7 @@ export function assertProductionAccountingConfiguration(configuration: unknown):
     if (!value || typeof value !== "object" || seen.has(value)) return;
     seen.add(value);
     for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      if ((/^(developmentOnly|testOnly|faucetEnabled)$/iu.test(key) && child === true) || (/^(mode|environment)$/iu.test(key) && typeof child === "string" && /^(development|test)$/iu.test(child))) throw new Error("PRODUCTION_ACCOUNTING_DEVELOPMENT_MARKER");
       if (/^(secret|key|token|proof|ciphertext|password)$/iu.test(key)) continue;
       visit(child);
     }
@@ -53,6 +57,11 @@ export function bindAccountingRealmPool(pool: PostgresSqlPool, realm: Accounting
     async connect(): Promise<PostgresSqlClient> {
       const client = await pool.connect();
       try {
+        const identity = (await client.query<{ current_user: string; is_superuser: boolean }>("SELECT current_user::text AS current_user, (SELECT rolsuper FROM pg_roles WHERE rolname=current_user) AS is_superuser")).rows[0];
+        if (!identity || identity.is_superuser || identity.current_user === "postgres") throw new Error("ACCOUNTING_REALM_SUPERUSER_DENIED");
+        await client.query(`SET ROLE ${realm.role}`);
+        const selected = (await client.query<{ current_user: string }>("SELECT current_user::text AS current_user")).rows[0];
+        if (!selected || selected.current_user !== realm.role) throw new Error("ACCOUNTING_REALM_ROLE_DENIED");
         await client.query(`SET search_path TO ${realm.schema}, pg_catalog`);
         return client;
       } catch (error) {

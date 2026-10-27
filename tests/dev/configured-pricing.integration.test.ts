@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
-import { createDevelopmentPool, type DevPayments } from "../../scripts/dev-payments";
+import { createDevelopmentPool } from "../../scripts/dev-payments";
+import { readDevelopmentPaymentConfig } from "./payment-config";
 import { registerDevelopmentPricing } from "../../src/dev/register-development-pricing";
 import { PHASE_04_DETERMINISTIC_PRICE_CARD, PHASE_04_MODEL_PROFILES } from "../../src/model/price-card";
 
 test("configured profile/card SQL registration survives restart and rejects ID drift", async () => {
-  const config = await Bun.file(`${import.meta.dir}/../../.local/napplet-cvm-dev-payments/payments.json`).json() as DevPayments;
+  const config = await readDevelopmentPaymentConfig();
   let pool = createDevelopmentPool(config.databaseUrl); const nonce = crypto.randomUUID();
   // Configuration-persistence fixture only: no live model request or price claim.
   const profile = { ...structuredClone(PHASE_04_MODEL_PROFILES["code-proposal"]), id: `profile:${nonce}`, priceCardId: `card:${nonce}` };

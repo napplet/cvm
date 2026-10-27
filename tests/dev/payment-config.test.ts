@@ -61,7 +61,7 @@ test("rejects symlinks, escaped paths, and another run's config", async () => {
   const file = await writeRun(runId);
   const other = await writeRun("config-other");
   await expect(readDevelopmentPaymentConfig(environment(runId, other))).rejects.toThrow("DEV_TEST_PAYMENT_CONFIG_OWNERSHIP_INVALID");
-  await expect(readDevelopmentPaymentConfig(environment(runId, resolve(root, ".local", "napplet-cvm-dev", runId, "payments", "..", "payments.json")))).rejects.toThrow("DEV_TEST_PAYMENT_CONFIG_OWNERSHIP_INVALID");
+  await expect(readDevelopmentPaymentConfig(environment(runId, `${resolve(root, ".local", "napplet-cvm-dev", runId, "payments")}/../payments.json`))).rejects.toThrow("DEV_TEST_PAYMENT_CONFIG_OWNERSHIP_INVALID");
   await rm(file);
   await symlink(other, file);
   await expect(readDevelopmentPaymentConfig(environment(runId, file))).rejects.toThrow("DEV_TEST_PAYMENT_CONFIG_SYMLINK");

@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
 import { createRequire } from "node:module";
-import { createDevelopmentPool, type DevPayments } from "../../scripts/dev-payments";
+import { createDevelopmentPool } from "../../scripts/dev-payments";
+import { readDevelopmentPaymentConfig } from "./payment-config";
 import { PostgresSqlFundingStore } from "../../src/persistence/postgres-sql-funding-store";
 
 test("SQL fences concurrent revision versions and rolls back losing budgets", async () => {
-  const config = await Bun.file(`${import.meta.dir}/../../.local/napplet-cvm-dev-payments/payments.json`).json() as DevPayments;
+  const config = await readDevelopmentPaymentConfig();
   const admin = createDevelopmentPool(config.databaseUrl);
   const schema = `revision_fence_${crypto.randomUUID().replaceAll("-", "")}`;
   await admin.query(`CREATE SCHEMA ${schema}`);

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Wallet, getDecodedToken, getEncodedToken } from "@cashu/cashu-ts";
 import { createDevelopmentFunding } from "../../scripts/dev-funding";
-import { developmentStack, waitUntil } from "../../scripts/dev-payments";
+import { developmentStack, expectedDevelopmentMigrations, waitUntil } from "../../scripts/dev-payments";
 
 const e2e = process.env.NAPPLET_CVM_DEV_PAYMENTS_E2E === "1" ? test : test.skip;
 const principal = { pubkey: "ab".repeat(32) };
@@ -15,7 +15,7 @@ e2e("real local payments credit the PostgreSQL application ledger once across re
     const config = await stack.up();
     app = await createDevelopmentFunding(config);
     expect((await app.funding.status(principal)).available).toBe("0");
-    expect((await app.pool.query("SELECT count(*)::int AS count FROM development_migrations")).rows[0].count).toBe(4);
+    expect((await app.pool.query("SELECT name, sha256 FROM development_migrations ORDER BY name")).rows).toEqual((await expectedDevelopmentMigrations()).map(({ name, sha256 }) => ({ name, sha256 })).sort((left, right) => left.name.localeCompare(right.name)));
     expect(app.policies.pinActive().mints[0]!.keysetIds).not.toEqual(app.policies.pinActive().mints[1]!.keysetIds);
 
     const primary = new Wallet(config.mintUrl);

@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
@@ -11,6 +11,7 @@ const composeFile = resolve(root, "infra/dev-payments/compose.yaml");
 export type DevPayments = { version: 1; developmentOnly: true; mintUrl: string; secondaryMintUrl: string; relayUrl: string; hubUrl: string; nwcUri: string; cashuToken: string; databaseUrl: string; fundingKey: string };
 
 type DevelopmentPool = PostgresSqlPool & Pick<PostgresSqlClient, "query"> & { end(): Promise<void> };
+export const DEVELOPMENT_MIGRATIONS = Object.freeze(["phase-03/001_funding.sql", "phase-04/001_metered_generation.sql", "phase-04/002_action_budget_lifecycle.sql", "phase-05/001_continuation.sql", "phase-06/001_publication.sql", "development/001_generation.sql", "development/002_provider_observations.sql", "development/003_artifact_preview.sql", "development/004_source_proposal_bindings.sql", "development/005_pending_actions.sql", "development/006_worker_results.sql", "development/007_chatgpt_operations.sql", "development/008_chatgpt_diagnostics.sql", "development/009_operator_publication.sql", "development/010_projects.sql", "development/011_publication_relays.sql", "development/012_remix_imports.sql", "development/013_publication_tracking.sql", "development/014_request_cost_history.sql", "development/015_revision_restore.sql", "development/016_usage_evidence.sql"] as const);
 // pg has no bundled declarations; expose only the application's existing SQL
 // port plus pool lifecycle, without changing the approved package manifest.
 const { Pool } = createRequire(import.meta.url)("pg") as { Pool: new (options: Record<string, unknown>) => DevelopmentPool };
@@ -73,6 +74,13 @@ async function localSecret(path: string): Promise<string> {
   }
 }
 
+export async function expectedDevelopmentMigrations(): Promise<Array<Readonly<{ name: string; sha256: string; sql: string }>>> {
+  return Promise.all(DEVELOPMENT_MIGRATIONS.map(async (name) => {
+    const sql = await readFile(resolve(root, "migrations", name), "utf8");
+    return Object.freeze({ name, sha256: new Bun.CryptoHasher("sha256").update(sql).digest("hex"), sql });
+  }));
+}
+
 /** Development-only migration runner. Checksums prevent silent schema drift on reuse. */
 async function migrate(databaseUrl: string) {
   const pool = createDevelopmentPool(databaseUrl);
@@ -82,18 +90,16 @@ async function migrate(databaseUrl: string) {
     try {
       await client.query("SELECT pg_advisory_lock(7351051)");
       await client.query("CREATE TABLE IF NOT EXISTS development_migrations (name text PRIMARY KEY, sha256 text NOT NULL)");
-      for (const file of ["phase-03/001_funding.sql", "phase-04/001_metered_generation.sql", "phase-04/002_action_budget_lifecycle.sql", "phase-05/001_continuation.sql", "phase-06/001_publication.sql", "development/001_generation.sql", "development/002_provider_observations.sql", "development/003_artifact_preview.sql", "development/004_source_proposal_bindings.sql", "development/005_pending_actions.sql", "development/006_worker_results.sql", "development/007_chatgpt_operations.sql", "development/008_chatgpt_diagnostics.sql", "development/009_operator_publication.sql", "development/010_projects.sql", "development/011_publication_relays.sql", "development/012_remix_imports.sql", "development/013_publication_tracking.sql", "development/014_request_cost_history.sql", "development/015_revision_restore.sql", "development/016_usage_evidence.sql"]) {
-        const sql = await readFile(resolve(root, "migrations", file), "utf8");
-        const digest = new Bun.CryptoHasher("sha256").update(sql).digest("hex");
-        const prior = await client.query("SELECT sha256 FROM development_migrations WHERE name=$1", [file]);
+      for (const migration of await expectedDevelopmentMigrations()) {
+        const prior = await client.query("SELECT sha256 FROM development_migrations WHERE name=$1", [migration.name]);
         if (prior.rows.length) {
-          if (prior.rows[0].sha256 !== digest) throw new Error(`DEV_MIGRATION_CHANGED:${file}`);
+          if (prior.rows[0].sha256 !== migration.sha256) throw new Error(`DEV_MIGRATION_CHANGED:${migration.name}`);
           continue;
         }
         await client.query("BEGIN");
         try {
-          await client.query(sql.replace(/^(?:BEGIN|COMMIT);\s*$/gm, ""));
-          await client.query("INSERT INTO development_migrations(name,sha256) VALUES ($1,$2)", [file, digest]);
+          await client.query(migration.sql.replace(/^(?:BEGIN|COMMIT);\s*$/gm, ""));
+          await client.query("INSERT INTO development_migrations(name,sha256) VALUES ($1,$2)", [migration.name, migration.sha256]);
           await client.query("COMMIT");
         } catch (error) { await client.query("ROLLBACK"); throw error; }
       }
@@ -210,6 +216,61 @@ export function developmentStack(test = false, options: Readonly<{ instance?: st
   };
 }
 
+async function command(argv: string[], input: Readonly<{ cwd?: string; timeoutMs?: number }> = {}): Promise<void> {
+  const child = Bun.spawn(argv, { cwd: input.cwd ?? root, stdin: "ignore", stdout: "inherit", stderr: "inherit" });
+  const timeout = setTimeout(() => child.kill(), input.timeoutMs ?? 600_000);
+  const code = await child.exited;
+  clearTimeout(timeout);
+  if (code !== 0) throw new Error(`DEV_TEST_PREREQUISITE_FAILED:${argv[0]}`);
+}
+
+async function testFiles(directory: string): Promise<string[]> {
+  const files: string[] = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = resolve(directory, entry.name);
+    if (entry.isDirectory()) files.push(...await testFiles(path));
+    else if (entry.isFile() && entry.name.endsWith(".test.ts")) files.push(path);
+  }
+  return files;
+}
+
+async function ensureTestPrerequisites(): Promise<void> {
+  await command(["docker", "info", "--format", "{{.ServerVersion}}"], { timeoutMs: 20_000 });
+  const uiRoot = resolve(root, "tests", "dev-ui");
+  if (!await Bun.file(resolve(uiRoot, "node_modules", "playwright", "package.json")).exists()) await command([process.execPath, "install", "--frozen-lockfile"], { cwd: uiRoot, timeoutMs: 180_000 });
+  await command([process.execPath, "./node_modules/playwright/cli.js", "install", "chromium"], { cwd: uiRoot, timeoutMs: 180_000 });
+  await command(["docker", "compose", "--env-file", "/dev/null", "-p", "napplet-cvm-ui-worker", "-f", "infra/dev-ui/compose.yaml", "build", "--provenance=false", "--sbom=false", "worker-image"], { timeoutMs: 600_000 });
+  await command(["docker", "compose", "--env-file", "/dev/null", "-p", "napplet-cvm-publication", "-f", "infra/dev-publication/compose.yaml", "build", "--provenance=false", "--sbom=false", "publication-image"], { timeoutMs: 600_000 });
+}
+
+async function runIsolatedTests(): Promise<void> {
+  const instance = `test-${randomBytes(8).toString("hex")}`;
+  const stack = developmentStack(true, { instance });
+  let cleaned = false;
+  const cleanup = async () => {
+    if (cleaned) return;
+    cleaned = true;
+    await stack.down(true);
+  };
+  const interrupt = () => { void cleanup().finally(() => process.exit(130)); };
+  process.once("SIGINT", interrupt); process.once("SIGTERM", interrupt);
+  try {
+    await ensureTestPrerequisites();
+    await stack.up();
+    const selected = (await Promise.all([testFiles(resolve(root, "tests", "dev")), testFiles(resolve(root, "tests", "dev-ui"))])).flat().sort();
+    if (!selected.length) throw new Error("DEV_TEST_SELECTION_EMPTY");
+    const child = Bun.spawn([process.execPath, "test", ...selected], {
+      cwd: root,
+      env: { ...process.env, NAPPLET_CVM_DEV_PAYMENTS_E2E: "1", NAPPLET_CVM_DEV_TEST_RUN_ID: instance, NAPPLET_CVM_DEV_TEST_PAYMENTS_FILE: resolve(stack.directory, "payments.json") },
+      stdout: "inherit", stderr: "inherit", stdin: "ignore",
+    });
+    if (await child.exited !== 0) throw new Error("DEV_PAYMENT_TESTS_FAILED");
+  } finally {
+    process.off("SIGINT", interrupt); process.off("SIGTERM", interrupt);
+    await cleanup();
+  }
+}
+
 if (import.meta.main) {
   const command = process.argv[2] ?? "up";
   const stack = developmentStack();
@@ -220,9 +281,7 @@ if (import.meta.main) {
     } else if (command === "down" || command === "reset") {
       await stack.down(command === "reset");
       console.log(command === "reset" ? "Development payment data removed." : "Development payments stopped; data retained.");
-    } else if (command === "test") {
-      const child = Bun.spawn([process.execPath, "test", "tests/dev"], { cwd: root, env: { ...process.env, NAPPLET_CVM_DEV_PAYMENTS_E2E: "1" }, stdout: "inherit", stderr: "inherit" });
-      process.exitCode = await child.exited;
-    } else throw new Error("Usage: bun scripts/dev-payments.ts up|down|reset|test");
+    } else if (command === "test") await runIsolatedTests();
+    else throw new Error("Usage: bun scripts/dev-payments.ts up|down|reset|test");
   } catch (error) { console.error(error instanceof Error ? error.message : "Development setup failed"); process.exitCode = 1; }
 }

@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDevelopmentPool, type DevPayments } from "../../scripts/dev-payments";
+import { createDevelopmentPool } from "../../scripts/dev-payments";
+import { readDevelopmentPaymentConfig } from "./payment-config";
 import { SourceProposalStore } from "../../src/dev/source-proposal-store";
 import { DevelopmentModelGateway } from "../../src/dev/development-model-gateway";
 import { DurableWorkerResultStore } from "../../src/dev/durable-worker-result-store";
@@ -12,7 +13,7 @@ import { LocalArtifactVerifier } from "../../src/dev/local-artifact-verifier";
 import { accountIdForPrincipal } from "../../src/domain/account-command";
 
 test("SQL worker claim reuses a real Docker result across duplicates, process recreation and completion-write loss", async () => {
-  const config = await Bun.file(`${import.meta.dir}/../../.local/napplet-cvm-dev-payments/payments.json`).json() as DevPayments;
+  const config = await readDevelopmentPaymentConfig();
   let pool = createDevelopmentPool(config.databaseUrl);
   const root = await mkdtemp(join(tmpdir(), "napplet-worker-result-"));
   const ownerId = "73".repeat(32); const accountId = await accountIdForPrincipal({ pubkey: ownerId }); const nonce = crypto.randomUUID();

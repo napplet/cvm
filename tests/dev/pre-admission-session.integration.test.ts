@@ -3,7 +3,8 @@ import { createRequire } from "node:module";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createDevelopmentPool, developmentStack, type DevPayments } from "../../scripts/dev-payments";
+import { createDevelopmentPool, developmentStack } from "../../scripts/dev-payments";
+import { readDevelopmentPaymentConfig } from "./payment-config";
 import { accountIdForPrincipal } from "../../src/domain/account-command";
 import { PendingActionEnvelopeService } from "../../src/continuity/checkpoint-envelope";
 import { PreAdmissionSessionService } from "../../src/continuity/pre-admission-session-service";
@@ -23,7 +24,7 @@ const ownerId = "a".repeat(64);
 const pins = Object.freeze({ policyVersion: "development-local-v1", profileId: "code-proposal", priceCardId: "phase-04-deterministic-card-2026-08-04", toolchainId: "development-test-toolchain", rootManifestSha256: "b".repeat(64) });
 
 test("save restart fund resume original operation", async () => {
-  const config = await Bun.file(`${import.meta.dir}/../../.local/napplet-cvm-dev-payments/payments.json`).json() as DevPayments;
+  const config = await readDevelopmentPaymentConfig();
   const admin = createDevelopmentPool(config.databaseUrl); const schema = `pending_${crypto.randomUUID().replaceAll("-", "")}`;
   const { Pool } = createRequire(import.meta.url)("pg") as { Pool: new (options: Record<string, unknown>) => ReturnType<typeof createDevelopmentPool> };
   const pool = new Pool({ connectionString: config.databaseUrl, options: `-csearch_path=${schema}`, max: 4 });

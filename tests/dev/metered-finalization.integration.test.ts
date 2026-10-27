@@ -1,12 +1,13 @@
 import { expect, test } from "bun:test";
 import { createRequire } from "node:module";
-import { createDevelopmentPool, type DevPayments } from "../../scripts/dev-payments";
+import { createDevelopmentPool } from "../../scripts/dev-payments";
+import { readDevelopmentPaymentConfig } from "./payment-config";
 import { PostgresSqlFundingStore } from "../../src/persistence/postgres-sql-funding-store";
 import type { MeteredFinalizeInput } from "../../src/persistence/funding-store";
 
 for (const charge of ["0", "10"]) {
   test(`actual SQL finalizes charge ${charge}, preserves action identity and replays once`, async () => {
-    const config = await Bun.file(`${import.meta.dir}/../../.local/napplet-cvm-dev-payments/payments.json`).json() as DevPayments;
+    const config = await readDevelopmentPaymentConfig();
     const admin = createDevelopmentPool(config.databaseUrl);
     const schema = `metered_test_${crypto.randomUUID().replaceAll("-", "")}`;
     await admin.query(`CREATE SCHEMA ${schema}`);

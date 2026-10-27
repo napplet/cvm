@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 
 // Private homelab runtime, retaining the existing test-credit composition.
@@ -48,6 +48,9 @@ const gateway = Bun.serve<Peer>({
     maxPayloadLength: 2_000_000,
   },
 });
+// The entrypoint holds an OS lock on the shared volume for this entire process.
+// PIDs from the previous container namespace cannot establish lock ownership.
+await rm(resolve(root, '.local/development-chatgpt/owner.lock'), { force: true });
 const child = Bun.spawn([process.execPath, "scripts/dev.ts", "up"], { cwd: root, stdout: "pipe", stderr: "inherit" });
 const output = await new Response(child.stdout).text();
 if (await child.exited !== 0) process.exit(1);

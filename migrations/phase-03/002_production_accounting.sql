@@ -86,6 +86,12 @@ DO $$ DECLARE t text; c record; BEGIN
     END IF;
   END LOOP;
 END $$;
+DO $$ BEGIN
+  IF to_regclass('production_real.billing_line_items') IS NOT NULL THEN
+    ALTER TABLE production_real.billing_line_items DROP CONSTRAINT IF EXISTS billing_line_items_account_id_fkey;
+    ALTER TABLE production_real.billing_line_items ADD CONSTRAINT billing_line_items_account_id_fkey FOREIGN KEY(account_id) REFERENCES production_real.funding_accounts(account_id);
+  END IF;
+END $$;
 
 -- The durable recovery authority stores ciphertext and broker references only.
 -- It never stores a raw Cashu proof, NWC URI, invoice, or preimage.

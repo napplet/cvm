@@ -1,0 +1,38 @@
+name: Production publication mechanisms
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/production/cli-upload.ts"
+      - "src/production/pinned-cli-network.ts"
+      - "src/publication/napplet-cli-*.ts"
+      - "src/release/native/upload.ts"
+      - "vendor/napplet-cli-976ad054/**"
+      - "scripts/rebuild-napplet-upload-helper.ts"
+      - "tests/release/production-cli-upload.integration.test.ts"
+      - "tests/phase-06/**"
+      - ".github/workflows/production-publication.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  publication:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      NAPPLET_RUN_POSTGRES_ISOLATION: "1"
+      NAPPLET_CVM_TEST_EXTERNAL_EFFECTS: deny
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      - run: bun install --frozen-lockfile
+      - name: Actual CLI function with local HTTP and restricted PostgreSQL
+        run: bun test tests/release/production-cli-upload.integration.test.ts --timeout 130000
+      - name: Publication contracts and reconciliation regressions
+        run: bun test tests/phase-06 --timeout 10000

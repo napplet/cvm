@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 
 import { SignedOwnerManifestEventSchema, type PublicationObservation, type SealedArtifactIdentity, type SignedOwnerManifestEvent } from "./contracts.js";
-import { NAPPLET_CLI_LINUX_SHA256, NAPPLET_CLI_SOURCE_COMMIT, validatedAvailablePromotedCliSourceContract, type AvailablePromotedCliSourceContract, type PromotedCliSourceContractResult } from "./napplet-cli-source-contract.js";
+import { NAPPLET_CLI_LINUX_SHA256, NAPPLET_CLI_SOURCE_COMMIT, ReviewedCliIdentitySchema, validatedAvailablePromotedCliSourceContract, type AvailablePromotedCliSourceContract, type PromotedCliSourceContractResult } from "./napplet-cli-source-contract.js";
 import { normalizePublicationDTag } from "./publication-intent.js";
 
 export const NAPPLET_CLI_PROMOTED_IDENTITY = Object.freeze({ version: "0.5.2", sourceCommit: NAPPLET_CLI_SOURCE_COMMIT, linuxSha256: NAPPLET_CLI_LINUX_SHA256 });
-export type PromotedNappletCliIdentity = Readonly<typeof NAPPLET_CLI_PROMOTED_IDENTITY>;
+export type PromotedNappletCliIdentity = AvailablePromotedCliSourceContract["identity"];
 export type PreSignedNamedDeployFile = Readonly<{ path: string; mimeType: string; bytes: Uint8Array; sha256: string; size: number }>;
 export type PreSignedNamedDeployInput = Readonly<{
   operationId: string;
@@ -51,8 +51,9 @@ function checkedSourceEffect(stage: "upload" | "relay", expectedOperationId: str
 }
 
 export function assertPromotedCliIdentity(identity: PromotedNappletCliIdentity): PromotedNappletCliIdentity {
-  if (identity.version !== NAPPLET_CLI_PROMOTED_IDENTITY.version || identity.sourceCommit !== NAPPLET_CLI_PROMOTED_IDENTITY.sourceCommit || identity.linuxSha256 !== NAPPLET_CLI_PROMOTED_IDENTITY.linuxSha256) throw new Error("PROMOTED_CLI_IDENTITY_MISMATCH");
-  return NAPPLET_CLI_PROMOTED_IDENTITY;
+  const parsed = ReviewedCliIdentitySchema.safeParse(identity);
+  if (!parsed.success) throw new Error("PROMOTED_CLI_IDENTITY_MISMATCH");
+  return Object.freeze(parsed.data);
 }
 
 export function assertAvailablePromotedCliSourceContract(contract: unknown): AvailablePromotedCliSourceContract {
@@ -90,7 +91,9 @@ export class PromotedNappletCliAdapter {
   private readonly validatedContract?: AvailablePromotedCliSourceContract;
 
   constructor(private readonly dependencies: Readonly<{ contract: PromotedCliSourceContractResult; source: PromotedNappletCliSourcePort; identity?: PromotedNappletCliIdentity }>) {
-    this.identity = assertPromotedCliIdentity(dependencies.identity ?? NAPPLET_CLI_PROMOTED_IDENTITY);
+    const contract = validatedAvailablePromotedCliSourceContract(dependencies.contract);
+    this.identity = assertPromotedCliIdentity(dependencies.identity ?? contract?.identity ?? NAPPLET_CLI_PROMOTED_IDENTITY);
+    if (contract && (this.identity.sourceCommit !== contract.identity.sourceCommit || this.identity.linuxSha256 !== contract.identity.linuxSha256)) throw new Error("PROMOTED_CLI_IDENTITY_MISMATCH");
     // Construction never upgrades an arbitrary status flag to authority. Keep
     // the validated result only as a construction-time fence; dispatch checks
     // the supplied object again to detect post-construction mutation.
@@ -100,7 +103,8 @@ export class PromotedNappletCliAdapter {
   async deployPreSignedNamed(input: PreSignedNamedDeployInput): Promise<PromotedDeployResult> {
     // Revalidate immediately before the first effect. A mutated object cannot
     // retain eligibility merely because it was accepted at construction time.
-    if (!this.validatedContract || !validatedAvailablePromotedCliSourceContract(this.dependencies.contract)) return { state: "publication_unavailable", operationId: input.operationId, safeReasonCode: "PUBLICATION_UNAVAILABLE" };
+    const current = validatedAvailablePromotedCliSourceContract(this.dependencies.contract);
+    if (!this.validatedContract || !current || current.identity.sourceCommit !== this.identity.sourceCommit || current.identity.linuxSha256 !== this.identity.linuxSha256) return { state: "publication_unavailable", operationId: input.operationId, safeReasonCode: "PUBLICATION_UNAVAILABLE" };
     assertSealedNamedDeployPlan(input);
     const hashes = input.sealedFiles.map((file) => file.sha256);
     const authorizeExactHashes = async (requested: readonly string[]) => {

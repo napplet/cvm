@@ -89,7 +89,8 @@ test("PostgreSQL publication authority keeps serializable, original-operation pr
     Bun.file("src/persistence/postgres-sql-funding-store.ts").text(),
     Bun.file("migrations/phase-06/001_publication.sql").text(),
   ]);
-  expect(store).toContain("implements MeteredFundingStore, ContinuationFundingStore, PublicationFundingStore");
+  const implemented = store.match(/class PostgresSqlFundingStore implements ([^{]+)\{/u)?.[1]?.split(",").map(name => name.trim());
+  expect(implemented).toEqual(expect.arrayContaining(["MeteredFundingStore", "ContinuationFundingStore", "PublicationFundingStore"]));
   expect(store).toContain("class PostgresSqlPublicationStore implements DurablePublicationStore");
   expect(store).toContain("publication_signed_events");
   expect(store).toContain("BEGIN ISOLATION LEVEL SERIALIZABLE");

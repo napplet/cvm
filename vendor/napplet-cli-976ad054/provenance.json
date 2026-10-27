@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "status": "reviewed-source-helper-not-promoted",
+  "sourceCommit": "976ad0549c38f93d4ed418d3ea59a615a7e5fd7f",
+  "sourceLockSha256": "914eb84228c77b83b040a23854cdf7b320f9fe4ba20a40dfff3c6ef3ff6bd9b8",
+  "sourceFiles": {
+    "blossom-upload.ts": "078970ea91ff2d7f35c7d45798ad05232a082ea6a124424069aae70dbf74e71e",
+    "path.ts": "0672896e4ca1004047e7e41a94e9947ec1a0fbe33daa0247eb0e3e42a0594eb9",
+    "types.ts": "18c313d152bd4e2eb4f382d16f60bd361212566e42091f8bf27b9dd6df800f10",
+    "signing.ts": "be5bbc8205227ae09447e87fb0e7d6f0da5f12da6b94601e8609f98b991ef858",
+    "deploy-network.ts": "b28dd1966718512617c139aaede77b3ed9a4b46cfbd7a2bb642eb046c46c4440"
+  },
+  "runtimeVersion": "2.9.6",
+  "runtimeArchiveSha256": "394f07f4da2bebe6ce6f1e7ce0fa16429b29b08c35e3fac3fe25972676dff4b2",
+  "bundleSha256": "cb7ce3b6ce6a4dccd09d7234c7c4dcd073533752e2093b01405aefe981326c2e",
+  "exports": [
+    "publishEventWithSimplePool",
+    "uploadFilesToServers"
+  ],
+  "build": "scripts/rebuild-napplet-upload-helper.ts",
+  "evidence": "Two checkouts of the same exact commit produced byte-identical ESM bundles; second build had no network. This is a source helper, not the CLI binary or protected production evidence.",
+  "runtimeBinarySha256": "bceb5b6a6239b0b010418406d8c77a508f67cf4337d94288f1c19fe71304aab0"
+}

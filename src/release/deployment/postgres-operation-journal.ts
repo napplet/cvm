@@ -1,0 +1,96 @@
+import { bindAccountingRealmPool, createAccountingRealm } from "../../funding/accounting-realm";
+import type { PostgresSqlClient, PostgresSqlPool } from "../../persistence/postgres-sql-funding-store";
+
+export type OperationRecord<T = unknown> = Readonly<{ operationId: string; identitySha256: string; revision: number; value: T }>;
+const instances = new WeakSet<object>();
+const digest = (value: string) => { if (!/^[a-f0-9]{64}$/u.test(value)) throw new Error("OPERATION_DIGEST_INVALID"); return value; };
+const identifier = (value: string) => { if (!/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$/u.test(value)) throw new Error("OPERATION_IDENTIFIER_INVALID"); return value; };
+function encode(value: unknown): string {
+  const seen = new Set<object>();
+  function visit(item: unknown, depth: number): void {
+    if (depth > 64) throw new Error("OPERATION_VALUE_INVALID");
+    if (item === null || typeof item === "string" || typeof item === "boolean") return;
+    if (typeof item === "number" && Number.isFinite(item)) return;
+    if (!item || typeof item !== "object" || seen.has(item) || (!Array.isArray(item) && Object.getPrototypeOf(item) !== Object.prototype && Object.getPrototypeOf(item) !== null)) throw new Error("OPERATION_VALUE_INVALID");
+    seen.add(item);
+    for (const child of Object.values(item)) visit(child, depth + 1);
+    seen.delete(item);
+  }
+  visit(value, 0);
+  const encoded = JSON.stringify(value);
+  if (Buffer.byteLength(encoded) > 1_048_576) throw new Error("OPERATION_VALUE_TOO_LARGE");
+  return encoded;
+}
+function freeze<T>(value: T): T {
+  if (value && typeof value === "object") { for (const child of Object.values(value)) freeze(child); Object.freeze(value); }
+  return value;
+}
+function record<T>(row: Record<string, unknown>): OperationRecord<T> {
+  const revision = Number(row.revision);
+  if (!Number.isSafeInteger(revision) || revision < 1) throw new Error("OPERATION_REVISION_INVALID");
+  return freeze({ operationId: identifier(String(row.operation_id)), identitySha256: digest(String(row.identity_sha256)), revision, value: JSON.parse(encode(row.value_json)) as T });
+}
+
+/** Production authority. Construction performs no I/O; every access selects the restricted realm.
+ * Values are bounded JSON observations or encrypted envelopes, never credentials.
+ * A false claim means query-only recovery; it never licenses another external dispatch.
+ */
+export class PostgresOperationJournal {
+  readonly #pool: PostgresSqlPool;
+  readonly #namespace: string;
+  readonly #scope: string;
+  constructor(pool: PostgresSqlPool, options: Readonly<{ namespace: string; scopeSha256: string }>) {
+    this.#namespace = identifier(options.namespace);
+    this.#scope = digest(options.scopeSha256);
+    this.#pool = bindAccountingRealmPool(pool, createAccountingRealm("production-real"));
+    instances.add(this);
+    Object.freeze(this);
+  }
+  async #transaction<T>(action: (client: PostgresSqlClient) => Promise<T>): Promise<T> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const client = await this.#pool.connect();
+      try {
+        await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
+        await client.query("SET LOCAL lock_timeout = '1s'");
+        await client.query("SET LOCAL statement_timeout = '5s'");
+        const result = await action(client);
+        await client.query("COMMIT");
+        return result;
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        if (attempt === 2 || !["40001", "40P01", "23505"].includes(String((error as { code?: string }).code))) throw error;
+      } finally { client.release(); }
+    }
+    throw new Error("OPERATION_JOURNAL_RETRY_EXHAUSTED");
+  }
+  async claim<T>(operationId: string, identitySha256: string, value: T): Promise<Readonly<{ claimed: boolean; record: OperationRecord<T> }>> {
+    identifier(operationId); digest(identitySha256); const encoded = encode(value);
+    return this.#transaction(async client => {
+      const inserted = await client.query("INSERT INTO production_real.release_operation_journal(namespace,scope_sha256,operation_id,identity_sha256,value_json) VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT(namespace,scope_sha256,operation_id) DO NOTHING RETURNING *", [this.#namespace, this.#scope, operationId, identitySha256, encoded]);
+      const row = inserted.rows[0] ?? (await client.query("SELECT * FROM production_real.release_operation_journal WHERE namespace=$1 AND scope_sha256=$2 AND operation_id=$3", [this.#namespace, this.#scope, operationId])).rows[0];
+      if (!row) throw new Error("OPERATION_JOURNAL_RECORD_MISSING");
+      if (row.identity_sha256 !== identitySha256) throw new Error("OPERATION_IDENTITY_CONFLICT");
+      return Object.freeze({ claimed: inserted.rows.length === 1, record: record<T>(row) });
+    });
+  }
+  async read<T = unknown>(operationId: string): Promise<OperationRecord<T> | undefined> {
+    identifier(operationId);
+    return this.#transaction(async client => {
+      const row = (await client.query("SELECT * FROM production_real.release_operation_journal WHERE namespace=$1 AND scope_sha256=$2 AND operation_id=$3", [this.#namespace, this.#scope, operationId])).rows[0];
+      return row ? record<T>(row) : undefined;
+    });
+  }
+  async compareAndSet<T>(operationId: string, identitySha256: string, expectedRevision: number, value: T): Promise<OperationRecord<T> | undefined> {
+    identifier(operationId); digest(identitySha256);
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) throw new Error("OPERATION_REVISION_INVALID");
+    const encoded = encode(value);
+    return this.#transaction(async client => {
+      const row = (await client.query("UPDATE production_real.release_operation_journal SET value_json=$6::jsonb,revision=revision+1,updated_at=clock_timestamp() WHERE namespace=$1 AND scope_sha256=$2 AND operation_id=$3 AND identity_sha256=$4 AND revision=$5 RETURNING *", [this.#namespace, this.#scope, operationId, identitySha256, expectedRevision, encoded])).rows[0];
+      return row ? record<T>(row) : undefined;
+    });
+  }
+}
+
+export function assertPostgresOperationJournal(value: unknown): asserts value is PostgresOperationJournal {
+  if (!value || typeof value !== "object" || !instances.has(value)) throw new Error("PRODUCTION_POSTGRES_OPERATION_JOURNAL_REQUIRED");
+}

@@ -184,8 +184,11 @@ export async function materializeProtectedCertifier(input: MaterializeProtectedC
   const adapterBytes = new Uint8Array(await output.arrayBuffer());
   await writeExclusiveCanonical(adapterPath, new TextDecoder().decode(adapterBytes));
   const adapter: PinnedModule = { root: adapterRoot, modulePath: adapterPath, sha256: await sha256(adapterBytes) };
-  const factoryPath = resolve(input.repositoryRoot, "src/release/deployment/production-session.ts");
-  if (!under(resolve(input.repositoryRoot), factoryPath)) throw new Error("MATERIALIZER_FACTORY_SOURCE_REJECTED");
+  const factoryPath = join(executionRoot, "factory-source.ts");
+  const sessionPath = resolve(input.repositoryRoot, "src/release/deployment/factory.ts");
+  const readinessPath = resolve(input.repositoryRoot, "src/release/deployment/production-factory.ts");
+  if (!under(resolve(input.repositoryRoot), sessionPath) || !under(resolve(input.repositoryRoot), readinessPath)) throw new Error("MATERIALIZER_FACTORY_SOURCE_REJECTED");
+  await writeExclusiveCanonical(factoryPath, `export { createReleaseExecutionSession } from ${JSON.stringify(sessionPath)};\nexport { releaseReadiness, assessProductionFactoryReadiness } from ${JSON.stringify(readinessPath)};\n`);
   /** Seal the entire transitive factory closure. A hash over an entry module
    * alone is insufficient because it can import changed sibling code after the
    * review; Bun's output is a single content-addressed ESM bundle. */

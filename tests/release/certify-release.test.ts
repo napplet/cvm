@@ -17,7 +17,7 @@ async function isolatedReleaseWorkspace(prefix: string): Promise<string> {
   return await mkdtemp(join(workspaceRoot, prefix));
 }
 
-test("expired saved Cashu readiness returns local setup before discovery or authorization", async () => {
+test("incomplete execution is reported before expired funding readiness and preserves saved custody", async () => {
   const workspace = await isolatedReleaseWorkspace("certify-expired-funding-");
   try {
     const funding = createOperatorFundingPrerequisiteController({ now: () => 1_000 });
@@ -32,7 +32,9 @@ test("expired saved Cashu readiness returns local setup before discovery or auth
     expect(code).toBe(1);
     expect(stderr).not.toContain("RELEASE_AUTHORIZATION_OPERATOR_FUNDING_INVALID");
     const result = JSON.parse(stdout);
-    expect(result.progress).toBe("local_setup_required");
+    expect(result.progress).toBe("preapproval_blocked");
+    expect(result.readiness.execution.status).toBe("blocked");
+    expect(result).not.toHaveProperty("setup");
     expect(Object.values(result.zeroEffectCounters).every((value) => value === 0)).toBeTrue();
     expect(result).not.toHaveProperty("review");
     expect(await readFile(path, "utf8")).toBe(stored);
@@ -164,7 +166,7 @@ test("a supplied receipt cannot bypass exact request matching", async () => {
   }
 });
 
-test("request surfaces local funding setup before remote readiness without launchable consent", async () => {
+test("request reports missing implementation before funding setup or remote price discovery", async () => {
   const workspace = await isolatedReleaseWorkspace("certify-setup-required-");
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "NAPPLET_CVM_RELEASE_WORKSPACE")), NAPPLET_CVM_RELEASE_WORKSPACE: workspace, PATH: "/nonexistent", NAPPLET_CVM_TEST_EXTERNAL_EFFECTS: "deny" } as Record<string, string>;
   try {
@@ -174,14 +176,15 @@ test("request surfaces local funding setup before remote readiness without launc
     expect(stderr).not.toContain("token");
     const result = JSON.parse(stdout);
     expect(result).toMatchObject({
-      progress: "local_setup_required",
-      setup: { kind: "local_operator_funding_setup", status: "action_required", plan: "07-20", rails: ["nwc_lightning", "cashu"] },
+      progress: "preapproval_blocked",
+      readiness: { execution: { status: "blocked", reasonCode: "RELEASE_PRODUCTION_EXECUTION_CONFIG_REQUIRED" } },
     });
     expect(Object.values(result.zeroEffectCounters)).toEqual(expect.arrayContaining([0]));
     expect(Object.values(result.zeroEffectCounters).every((value) => value === 0)).toBe(true);
     expect(result).not.toHaveProperty("review");
     expect(result).not.toHaveProperty("consentLaunches");
-    expect(result).not.toHaveProperty("readiness");
+    expect(result).not.toHaveProperty("setup");
+    expect(result.readiness).not.toHaveProperty("pricing");
     expect(result).not.toHaveProperty("prerequisites");
     expect(JSON.stringify(result)).not.toContain("secret");
     expect(JSON.stringify(result)).not.toContain("NWC");
@@ -190,7 +193,7 @@ test("request surfaces local funding setup before remote readiness without launc
   }
 });
 
-test("product request fails closed at local funding setup before current price authority", async () => {
+test("product request blocks missing execution without asking for credentials or funds", async () => {
   const workspaceRoot = join(process.cwd(), ".runtime", "release-certification", "native-discovery-v1");
   await mkdir(workspaceRoot, { recursive: true });
   const workspace = await mkdtemp(join(workspaceRoot, "certify-preapproval-blocked-"));
@@ -207,8 +210,8 @@ test("product request fails closed at local funding setup before current price a
     expect(stderr).not.toContain("token");
     const result = JSON.parse(stdout);
     expect(result).toMatchObject({
-      progress: "local_setup_required",
-      setup: { kind: "local_operator_funding_setup", status: "action_required", plan: "07-20", rails: ["nwc_lightning", "cashu"] },
+      progress: "preapproval_blocked",
+      readiness: { execution: { status: "blocked", reasonCode: "RELEASE_PRODUCTION_EXECUTION_CONFIG_REQUIRED" } },
     });
     expect(Object.values(result.zeroEffectCounters).every((value) => value === 0)).toBe(true);
     expect(result).not.toHaveProperty("review");
@@ -218,4 +221,14 @@ test("product request fails closed at local funding setup before current price a
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
+});
+
+test("immutable bundle verification rejects an absolute caller-selected path before trust loading", async () => {
+  const child = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--verify-bundle", "/tmp/forged-release.json"], {
+    cwd: process.cwd(), env: { ...process.env, PATH: "/nonexistent" }, stdout: "pipe", stderr: "pipe",
+  });
+  const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect(code).toBe(1);
+  expect(stdout).toBe("");
+  expect(stderr).toContain("RELEASE_CERTIFICATION_USAGE");
 });

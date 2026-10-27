@@ -126,3 +126,14 @@ test("cleanup after controller interruption deletes only the original owned mach
   await expect(transport.terminate({ operationId: "op-foreign" })).resolves.toEqual({ status: "blocked" });
   expect(calls.map((call) => call.method)).toEqual(["GET", "DELETE"]);
 });
+
+test("trusted harness refuses the default unbounded workspace and never turns run-proposal into a success placeholder", async () => {
+  const run = (args: string[], env: Record<string, string> = {}) => Bun.spawn(["bun", "infra/toolchain/production-worker.ts", ...args], { stdout: "pipe", stderr: "pipe", env: { PATH: process.env.PATH ?? "", ...env } });
+  const readiness = run(["ready", "--session-lease-sha256", digest("a"), "--provider-image-sha256", digest("b"), "--toolchain-sha256", digest("c"), "--provider-deadline-epoch-ms", String(Date.now() + 60_000)], { NAPPLET_CVM_POLICY_VERSION: PRODUCTION_WORKER_POLICY.version });
+  expect(await readiness.exited).not.toBe(0);
+  const proposal = run(["run-proposal"]);
+  expect(await proposal.exited).toBe(0);
+  expect(await new Response(proposal.stdout).text()).toContain('"status":"unavailable"');
+  const traversal = run(["build-source", "--source", "/tmp/not-a-worker-source.json"]);
+  expect(await traversal.exited).not.toBe(0);
+});

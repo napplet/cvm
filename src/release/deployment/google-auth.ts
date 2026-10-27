@@ -22,6 +22,7 @@ export type GoogleAccessToken = Readonly<{
 export type GoogleTokenSource = Readonly<{ getAccessToken(): Promise<GoogleAccessToken> }>;
 export type GoogleAuthFetch = (url: string, init: RequestInit) => Promise<Response>;
 export type GoogleAdcCommand = (argv: readonly string[]) => Promise<Readonly<{ exitCode: number; stdout: string }>>;
+export type GoogleAdcIdentity = () => Promise<Readonly<{ projectId: string; principal: string }>>;
 
 async function sha256(value: string): Promise<string> {
   const bytes = new TextEncoder().encode(value);
@@ -66,6 +67,9 @@ export function createGoogleAdcTokenSource(input: Readonly<{
   accountScopeSha256?: string;
   fetch?: GoogleAuthFetch;
   command?: GoogleAdcCommand;
+  /** Local ADC must prove its selected identity through an operator-owned port;
+   * Cloud Run derives it directly from protected metadata instead. */
+  identity?: GoogleAdcIdentity;
   now?: () => number;
   expiryMarginMs?: number;
 }>): GoogleTokenSource {
@@ -86,25 +90,30 @@ export function createGoogleAdcTokenSource(input: Readonly<{
       if (configuredScope !== expectedScope) throw new Error("GOOGLE_ADC_ACCOUNT_SCOPE_INVALID");
       if (cached && cached.expiresAtMs - margin > now()) return cached;
 
-      let token = "";
-      let expiresAtMs = 0;
-      const local = await command(["gcloud", "auth", "application-default", "print-access-token"]);
-      if (local.exitCode === 0 && TokenSchema.safeParse(local.stdout.trim()).success) {
-        token = local.stdout.trim();
-        // The command does not expose expiry. Re-read on every request rather
-        // than speculating about a credential's expiry.
-        expiresAtMs = now() + margin + 1;
-      } else {
-        try {
-          const response = await fetcher("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token", {
-            method: "GET", headers: { "Metadata-Flavor": "Google" }, redirect: "error",
-          });
+      let token = ""; let expiresAtMs = 0;
+      /* Metadata is accepted only after the attached Cloud Run project and
+       * service-account email exactly match the receipt-bound identity. */
+      try {
+        const headers = { "Metadata-Flavor": "Google" };
+        const [metadataProject, metadataPrincipal] = await Promise.all([
+          fetcher("http://metadata.google.internal/computeMetadata/v1/project/project-id", { method: "GET", headers, redirect: "error" }),
+          fetcher("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email", { method: "GET", headers, redirect: "error" }),
+        ]);
+        if (metadataProject.ok && metadataPrincipal.ok && (await metadataProject.text()).trim() === projectId && (await metadataPrincipal.text()).trim() === principal) {
+          const response = await fetcher("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token", { method: "GET", headers, redirect: "error" });
           const value = response.ok ? z.object({ access_token: z.string(), expires_in: z.number().int().positive().max(3600) }).strict().safeParse(await response.json()) : undefined;
-          if (value?.success && TokenSchema.safeParse(value.data.access_token).success) {
-            token = value.data.access_token;
-            expiresAtMs = now() + value.data.expires_in * 1000;
-          }
-        } catch { /* fail closed below */ }
+          if (value?.success && TokenSchema.safeParse(value.data.access_token).success) { token = value.data.access_token; expiresAtMs = now() + value.data.expires_in * 1000; }
+        }
+      } catch { /* metadata is optional; fail closed unless local proof succeeds */ }
+      if (!token) {
+        const identity = input.identity ? await input.identity() : undefined;
+        if (!identity || ProjectIdSchema.safeParse(identity.projectId).data !== projectId || identity.principal !== principal) throw new Error("GOOGLE_ADC_IDENTITY_INVALID");
+        const local = await command(["gcloud", "auth", "application-default", "print-access-token"]);
+        if (local.exitCode === 0 && TokenSchema.safeParse(local.stdout.trim()).success) {
+          token = local.stdout.trim();
+          // gcloud does not expose expiry; read every time rather than guess.
+          expiresAtMs = now() + margin + 1;
+        }
       }
       if (!TokenSchema.safeParse(token).success || expiresAtMs - margin <= now()) throw new Error("ADC_APPLICATION_DEFAULT_LOGIN_REQUIRED");
       cached = Object.freeze({ token, projectId, quotaProjectId, principal, scopes: GOOGLE_CONTROL_PLANE_SCOPES, accountScopeSha256: expectedScope, expiresAtMs });

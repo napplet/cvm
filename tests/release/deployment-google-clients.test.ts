@@ -22,10 +22,21 @@ async function fixture(handler: (url: string, init: RequestInit) => Response | P
 
 test("ADC binds project, quota project, scope digest and expiry without exposing a token", async () => {
   const expected = await googleAccountScopeSha256({ projectId, quotaProjectId: projectId, principal });
-  const source = createGoogleAdcTokenSource({ projectId, quotaProjectId: projectId, principal, accountScopeSha256: expected, now: () => 1_000, command: async () => ({ exitCode: 0, stdout: `${token}\n` }) });
+  const source = createGoogleAdcTokenSource({ projectId, quotaProjectId: projectId, principal, accountScopeSha256: expected, now: () => 1_000, identity: async () => ({ projectId, principal }), command: async () => ({ exitCode: 0, stdout: `${token}\n` }) });
   const result = await source.getAccessToken();
   expect(result).toMatchObject({ projectId, quotaProjectId: projectId, principal, accountScopeSha256: expected, scopes: ["https://www.googleapis.com/auth/cloud-platform"] });
   expect(JSON.stringify({ projectId: result.projectId, accountScopeSha256: result.accountScopeSha256 })).not.toContain(token);
+});
+
+test("metadata fallback requires the attached Cloud Run project and principal before it reads a token", async () => {
+  const expected = await googleAccountScopeSha256({ projectId, quotaProjectId: projectId, principal });
+  const metadataCalls: string[] = [];
+  const source = createGoogleAdcTokenSource({ projectId, quotaProjectId: projectId, principal, accountScopeSha256: expected, now: () => 1_000,
+    command: async () => ({ exitCode: 127, stdout: "" }),
+    fetch: async (url) => { metadataCalls.push(url); return url.includes("project-id") ? new Response("wrong-project-1") : url.includes("/email") ? new Response(principal) : json({ access_token: token, expires_in: 300 }); },
+  });
+  await expect(source.getAccessToken()).rejects.toThrow("GOOGLE_ADC_IDENTITY_INVALID");
+  expect(metadataCalls).not.toContain("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token");
 });
 
 test("wrong ADC project, quota, principal, expiry, or scope fails before any Google request", async () => {

@@ -352,7 +352,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
       }
     },
   };
-  new ContextVmFundingAdapter({ service: app.funding, transport: progress, admissions, admissionReceipts: receipts, accountStatus, topUps: { lightning: app.lightning, cashu: app.cashu }, generation: generationFacade, preAdmission: preAdmissionFacade, sessionStatus: { read: async (query: any) => {
+  new ContextVmFundingAdapter({ publicPreviewOrigin: process.env.NAPPLET_CVM_PREVIEW_PUBLIC_ORIGIN, service: app.funding, transport: progress, admissions, admissionReceipts: receipts, accountStatus, topUps: { lightning: app.lightning, cashu: app.cashu }, generation: generationFacade, preAdmission: preAdmissionFacade, sessionStatus: { read: async (query: any) => {
     await interrupted.recover(await accountIdForPrincipal(query.principal), query.sessionId);
     const result = await readSessionStatus({ store: app.database.meteredFunding, query, cursorSecret: identity.cursorSecret });
     if (result.status !== "ok") return result;

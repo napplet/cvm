@@ -275,3 +275,24 @@ describe("verified ContextVM funding adapter", () => {
     }
   });
 });
+
+
+test("remote preview descriptors accept only the configured HTTPS grant origin", async () => {
+  const origin = "https://preview.lab.example";
+  const remote = `${origin}/cvm-preview/00000000-0000-0000-0000-000000000000/`;
+  for (const configured of [undefined, origin]) {
+    const transport = new FakeContextVmTransport();
+    let previewUrl = remote;
+    const adapter = new ContextVmFundingAdapter({ service: new FundingService(new TransactionalMemoryFundingStore()), transport, publicPreviewOrigin: configured,
+      preview: { previewVerifiedArtifact: async () => ({ state: "ready", previewUrl, nextAction: "review_capabilities" }), reviewCapabilities: async () => ({ state: "denied", nextAction: "preview" }) } });
+    for (const [value, ready] of [[remote, !!configured], ["http://127.0.0.1:23456", true], [remote.replace("https:", "http:"), false], [remote.replace("preview.lab.example", "preview.lab.example.evil.example"), false], [remote.replace("https://", "https://user:pass@"), false], [`${origin}/admin`, false], [remote + "?redirect=evil", false]] as const) {
+      previewUrl = value;
+      await adapter.handle(envelope({ request: { id: "preview-1", method: "tools/call", params: { name: "preview", arguments: { action: "descriptor", sessionId: "session:one", artifactId: "artifact:one", runtimeVariant: "test" } } } }));
+      expect(transport.responses.at(-1)?.response).toMatchObject({ result: { status: ready ? "ready" : "denied" } });
+      if (ready) expect(transport.responses.at(-1)?.response).toMatchObject({ result: { previewUrl: value } });
+    }
+  }
+  for (const publicPreviewOrigin of ["http://preview.lab.example", "https://preview.lab.example/path", "https://user:pass@preview.lab.example"]) {
+    expect(() => new ContextVmFundingAdapter({ service: new FundingService(new TransactionalMemoryFundingStore()), transport: new FakeContextVmTransport(), publicPreviewOrigin })).toThrow("PUBLIC_PREVIEW_ORIGIN_INVALID");
+  }
+});

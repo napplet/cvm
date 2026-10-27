@@ -6,7 +6,7 @@ current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: verification_deferred_gaps
 stopped_at: Admin opener authentication and stopped-dependency recovery fixed and verified
-last_updated: "2026-10-18T03:02:48+00:00"
+last_updated: "2026-10-27T12:01:37.667746+00:00"
 last_activity: 2026-10-17
 last_activity_desc: Opener ensures ready CVM, restores dependencies and supports reused-tab authentication; default admin reopened
 progress:
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
 Plan: 56 of 58 accepted; development Plans 07-52/53/56/57/54/55 complete
 Status: Guided applet.broker workspace at http://127.0.0.1:49371; diagnostic console at /dev. Saved chatgpt-oauth mode with gpt-6.1-sol retained. Product/console browser journeys and recovery passed through real local services. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
-Last activity: 2026-10-17 — Resolved admin-opener-auth: stopped relay/Postgres behind healthy HTTP, stale wallet-hub connection and initial-only fragment handling prevented reliable admin sign-in. Actual CLI/browser/recovery test passed; opener restores services, retains keys/data and authenticates reused tabs. Explicit default instance corrected. Default live admin reopened and readiness verified; no live pricing changes. See debug/resolved/admin-opener-auth.md.
+Last activity: 2026-10-27 — Completed quick task 261027-gsr: private homelab CVM on Beta, existing ChatGPT/test credits, signed WSS, real isolated generation/HTTPS preview and no-charge restart recovery verified. Production remains deferred.
 
 Follow-up: Stream assembly/counter verification remains complete. Latest helper-signature and compiler-feedback fix passed 29 targeted unit/integration cases plus activity and composed OAuth browser journeys. Real blinking-text generation also passed. See debug/resolved/generated-typescript-check.md.
 
@@ -406,6 +406,8 @@ Recent decisions affecting current work:
 
 | 261017-ma7 | Global percentage or sats/USD profit per thousand billed tokens, immutable fees, admin examples and exact settlement | 2026-10-17 | see task history | [261017-ma7](./quick/261017-ma7-add-admin-profit-margin-in-percentage-sa/) |
 
+| 261027-gsr | Private homelab CVM with existing ChatGPT/test credits; signed WSS, isolated generation, remote preview and durable restart | 2026-10-27 | 1e93010 | [261027-gsr](./quick/261027-gsr-deploy-cvm-to-homelab-through-coolify-wi/) |
+
 ## Deferred Verification
 
 | Phase | Status | Reason | Resume command |
@@ -422,6 +424,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-18T03:02:48+00:00
-Stopped at: Admin opener repaired and default environment recovered. http://127.0.0.1:49371/admin is ready; `bun scripts/open-dev-admin.ts` checks/restores dependencies before opening. Original ChatGPT selection, OAuth, rates and zero profit retained. Production deferred.
+Last session: 2026-10-27T12:01:37.667746+00:00
+Stopped at: Private CVM deployed on Beta through Coolify. Use ~/Develop/homelab/homelab cvm open or admin. Real generation and same-artifact restart recovery pass; production remains deferred.
 Resume file: .planning/debug/resolved/admin-opener-auth.md

@@ -15,7 +15,7 @@ type Submit = z.infer<typeof SubmitSchema>;
 export type CashuTopUpState = "verifying" | "credited" | "failed" | "reconciliation_pending";
 export type CashuTopUpResult = Readonly<{ topUpId: string; state: CashuTopUpState; policyVersion: string; commitment: string; settlementReference?: string; treasuryState?: CashuTreasuryState }>;
 type Vault = Readonly<{ seal(metadata: { accountId: string; topUpId: string; rail: "cashu" }, plaintext: Uint8Array): Promise<{ id: string; payloadDigest: string }>; expire(id: string): Promise<void>; open?(request: { id: string; accountId: string; topUpId: string; rail: "cashu" }): Promise<Uint8Array> }>;
-export type CashuTopUpRecord = Readonly<{ result: CashuTopUpResult; accountId: string; policy: CashuMintPolicy; protectedId: string; idempotencyKey: string; principal: Principal; amount: string; createdAt: string }>;
+export type CashuTopUpRecord = Readonly<{ result: CashuTopUpResult; accountId: string; policy: CashuMintPolicy; protectedId: string; semanticProofIdentities: readonly string[]; idempotencyKey: string; principal: Principal; amount: string; createdAt: string }>;
 export interface CashuTopUpRepository {
   /** Durable uniqueness claim before any bearer is sealed or provider effect starts. */
   claim(input: CashuTopUpRecord): Promise<Readonly<{ claimed: boolean; record: CashuTopUpRecord }>>;
@@ -26,13 +26,13 @@ export interface CashuTopUpRepository {
 }
 /** Test-only repository. Production composition must provide a PostgreSQL-backed implementation. */
 export class InMemoryCashuTopUpRepository implements CashuTopUpRepository {
-  #records = new Map<string, CashuTopUpRecord>(); #commitments = new Map<string, string>(); #treasury = new Map<string, CashuTopUpResult>(); #tail = Promise.resolve();
+  #records = new Map<string, CashuTopUpRecord>(); #proofIdentities = new Map<string, string>(); #treasury = new Map<string, CashuTopUpResult>(); #tail = Promise.resolve();
   async claim(input: CashuTopUpRecord): Promise<Readonly<{ claimed: boolean; record: CashuTopUpRecord }>> {
     let release!: () => void; const prior = this.#tail; this.#tail = new Promise<void>((resolve) => { release = resolve; }); await prior;
     try {
       const existing = this.#records.get(input.result.topUpId); if (existing) return frozen({ claimed: false, record: existing });
-      const committed = this.#commitments.get(input.result.commitment); if (committed) return frozen({ claimed: false, record: this.#records.get(committed)! });
-      const value = frozen(input); this.#records.set(value.result.topUpId, value); this.#commitments.set(value.result.commitment, value.result.topUpId); return frozen({ claimed: true, record: value });
+      const committed = input.semanticProofIdentities.map((identity) => this.#proofIdentities.get(identity)).find(Boolean); if (committed) return frozen({ claimed: false, record: this.#records.get(committed)! });
+      const value = frozen(input); this.#records.set(value.result.topUpId, value); for (const identity of value.semanticProofIdentities) this.#proofIdentities.set(identity, value.result.topUpId); return frozen({ claimed: true, record: value });
     } finally { release(); }
   }
   async find(topUpId: string): Promise<CashuTopUpRecord | undefined> { const value = this.#records.get(topUpId); return value && frozen(value); }
@@ -67,6 +67,8 @@ export class CashuTopUpCoordinator {
     const policy = this.options.policies.pinActive();
     const accountId = await accountIdForPrincipal(submitted.principal as Principal);
     const commitment = await sha256(submitted.token);
+    const identity = await this.options.provider.identify({ policy, amount: submitted.amount, token: submitted.token });
+    if (identity.status === "failed") throw asError(`CASHU_${identity.code.toUpperCase()}`);
     const existing = await this.options.repository.find(submitted.topUpId);
     if (existing) {
       if (existing.accountId !== accountId) throw asError("CASHU_TOP_UP_NOT_OWNER");
@@ -76,12 +78,12 @@ export class CashuTopUpCoordinator {
     }
     const protectedReference = await this.options.vault.seal({ accountId, topUpId: submitted.topUpId, rail: "cashu" }, submitted.token);
     const result = frozen({ topUpId: submitted.topUpId, state: "verifying" as const, policyVersion: policy.version, commitment });
-    const claimed = await this.options.repository.claim({ result, accountId, policy, protectedId: protectedReference.id, idempotencyKey: submitted.idempotencyKey, principal: submitted.principal as Principal, amount: submitted.amount, createdAt: this.#now() });
+    const claimed = await this.options.repository.claim({ result, accountId, policy, protectedId: protectedReference.id, semanticProofIdentities: identity.semanticProofIdentities, idempotencyKey: submitted.idempotencyKey, principal: submitted.principal as Principal, amount: submitted.amount, createdAt: this.#now() });
     if (!claimed.claimed) {
       await this.options.vault.expire(protectedReference.id);
       if (claimed.record.accountId !== accountId) throw asError("CASHU_TOP_UP_NOT_OWNER");
       if (claimed.record.result.topUpId !== submitted.topUpId) throw asError("CASHU_PROOF_ALREADY_CLAIMED");
-      if (claimed.record.idempotencyKey !== submitted.idempotencyKey || claimed.record.amount !== submitted.amount || claimed.record.result.commitment !== commitment) throw asError("CASHU_TOP_UP_CONFLICT");
+      if (claimed.record.idempotencyKey !== submitted.idempotencyKey || claimed.record.amount !== submitted.amount || claimed.record.result.commitment !== commitment || JSON.stringify(claimed.record.semanticProofIdentities) !== JSON.stringify(identity.semanticProofIdentities)) throw asError("CASHU_TOP_UP_CONFLICT");
       if (claimed.record.result.state === "credited") await this.options.verifiedCreditWake?.dispatchVerifiedCredit(claimed.record.accountId);
       return claimed.record.result;
     }

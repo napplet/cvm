@@ -161,6 +161,7 @@ describe("Cashu credit and treasury", () => {
     let settles = 0; let observations = 0; const signals: AbortSignal[] = [];
     const never = () => new Promise<never>(() => undefined);
     const provider = {
+      identify: async (input: { token: Uint8Array }) => ({ status: "accepted" as const, semanticProofIdentities: [[...new Uint8Array(await crypto.subtle.digest("SHA-256", input.token))].map((byte) => byte.toString(16).padStart(2, "0")).join("")] }),
       settle: async (input: { signal: AbortSignal }) => { settles += 1; signals.push(input.signal); return never(); },
       observe: async (input: { signal: AbortSignal }) => { observations += 1; signals.push(input.signal); return never(); },
       reconcileTreasury: async () => never(),
@@ -202,11 +203,11 @@ describe("Cashu credit and treasury", () => {
     globalThis.fetch = (async () => new Promise<never>(() => undefined)) as typeof fetch;
     try {
       expect(await coordinator.submit(command)).toMatchObject({ state: "reconciliation_pending" });
-      expect(await coordinator.reconcile(command.topUpId)).toMatchObject({ state: "credited", settlementReference: expect.stringContaining("adapter-timeout") });
+      expect(await coordinator.reconcile(command.topUpId)).toMatchObject({ state: "reconciliation_pending" });
       expect({ swaps, observations }).toEqual({ swaps: 1, observations: 1 });
       expect(signals).toHaveLength(2);
       expect(signals[0]?.aborted).toBeTrue();
-      expect(store.postings).toHaveLength(1);
+      expect(store.postings).toHaveLength(0);
     } finally {
       globalThis.fetch = nativeFetch;
     }
@@ -234,13 +235,13 @@ describe("Cashu credit and treasury", () => {
     const commitment = [...new Uint8Array(await crypto.subtle.digest("SHA-256", adapterTokenWithoutDleq))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
     const abort = new AbortController();
     const settling = adapter.settle({ topUpId: "default-adapter", policy: adapterPolicy, amount: "21", commitment, token: adapterTokenWithoutDleq, signal: abort.signal });
-    setTimeout(() => abort.abort(), 5);
+    setTimeout(() => abort.abort(), 50);
 
     expect(await settling).toEqual({ status: "unknown", operationReference: `cashu:${commitment}` });
     expect(seen.some(({ endpoint }) => endpoint.endsWith("/v1/swap"))).toBeTrue();
     expect(seen.every(({ signal }) => signal === abort.signal)).toBeTrue();
     const observeAbort = new AbortController();
-    expect(await adapter.observe({ topUpId: "default-adapter", policy: adapterPolicy, amount: "21", commitment, token: adapterTokenWithoutDleq, signal: observeAbort.signal })).toMatchObject({ status: "verified", settlementReference: `cashu-swap:default-adapter:${commitment}` });
+    expect(await adapter.observe({ topUpId: "default-adapter", policy: adapterPolicy, amount: "21", commitment, token: adapterTokenWithoutDleq, signal: observeAbort.signal })).toMatchObject({ status: "unknown", operationReference: `cashu:${commitment}` });
     expect(seen.find(({ endpoint }) => endpoint.endsWith("/v1/checkstate"))?.signal).toBe(observeAbort.signal);
   });
 

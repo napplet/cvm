@@ -1,6 +1,7 @@
 import { CheckStateEnum, getDecodedToken, HttpResponseError, JSONInt, Mint, MintOperationError, NetworkError, Wallet, type RequestFn, type RequestOptions } from "@cashu/cashu-ts";
 import { z } from "zod";
 import { canonicalCashuMintUrl, type CashuMintPolicy } from "./cashu-mint-policy";
+import { canonicalCashuProofIdentities } from "./treasury-custody";
 
 const DecimalSatSchema = z.string().regex(/^[1-9][0-9]*$/u);
 const IsoTimeSchema = z.iso.datetime();
@@ -16,10 +17,13 @@ export const CashuSettlementObservationSchema = z.discriminatedUnion("status", [
 export type CashuSettlementObservation = z.infer<typeof CashuSettlementObservationSchema>;
 export type CashuSettlementRequest = Readonly<{ topUpId: string; policy: CashuMintPolicy; amount: string; commitment: string; token: Uint8Array; signal: AbortSignal }>;
 export type CashuObserveRequest = Readonly<{ topUpId: string; policy: CashuMintPolicy; commitment: string; amount: string; token?: Uint8Array; signal: AbortSignal }>;
+export type CashuProofIdentity = Readonly<{ status: "accepted"; semanticProofIdentities: readonly string[] }> | Extract<CashuSettlementObservation, { status: "failed" }>;
 export type CashuTreasuryState = "held_at_trusted_mint" | "melted_settled" | "failed" | "unknown";
 
 /** Adapter-only port. Its normalized observations have no access to funding or ledger authority. */
 export interface CashuSettlementPort {
+  /** Validates parsed bearer facts before any durable claim or mint effect. */
+  identify(request: Omit<CashuSettlementRequest, "topUpId" | "commitment" | "signal">): Promise<CashuProofIdentity>;
   settle(request: CashuSettlementRequest): Promise<CashuSettlementObservation>;
   observe(request: CashuObserveRequest): Promise<CashuSettlementObservation>;
   reconcileTreasury(input: Readonly<{ topUpId: string; commitment: string; signal: AbortSignal }>): Promise<Readonly<{ state: CashuTreasuryState }>>;
@@ -108,16 +112,14 @@ export class CashuTsSettlementAdapter implements CashuSettlementPort {
     this.#operations = options.operations ?? new CashuTsWalletOperations(options.request);
     this.#now = options.now ?? (() => new Date().toISOString());
   }
-  async settle(request: CashuSettlementRequest): Promise<CashuSettlementObservation> {
+  async identify(request: Omit<CashuSettlementRequest, "topUpId" | "commitment" | "signal">): Promise<CashuProofIdentity> {
     try {
-      request.signal.throwIfAborted();
       if (request.token.byteLength === 0 || request.token.byteLength > 8_192) return failed("malformed");
       const decoded = getDecodedToken(new TextDecoder().decode(request.token), request.policy.mints.flatMap(({ keysetIds }) => keysetIds));
       const mint = mintPolicy(request.policy, decoded.mint);
       if (!mint) return failed("untrusted_mint");
       if (decoded.unit !== "sat") return failed("wrong_unit");
-      const proofIds = new Set<string>(); const proofSecrets = new Set<string>();
-      let total = 0n;
+      const proofIds = new Set<string>(); const proofSecrets = new Set<string>(); let total = 0n;
       for (const proof of decoded.proofs) {
         if (!mint.keysetIds.includes(proof.id)) return failed("inactive_keyset");
         if (proof.witness !== undefined || !mint.proofConditions.includes("none")) return failed("unsupported_condition");
@@ -125,7 +127,20 @@ export class CashuTsSettlementAdapter implements CashuSettlementPort {
         proofSecrets.add(proof.secret); proofIds.add(proof.id); total += BigInt(proof.amount.toString());
       }
       if (proofIds.size !== 1 || total !== BigInt(request.amount)) return failed("wrong_amount");
-      await this.#operations.settle({ decoded, mint, keysetId: [...proofIds][0]!, signal: request.signal });
+      return { status: "accepted", semanticProofIdentities: await canonicalCashuProofIdentities(request.token, mint.keysetIds) };
+    } catch (error) { return failed(codeOf(error)); }
+  }
+  async settle(request: CashuSettlementRequest): Promise<CashuSettlementObservation> {
+    try {
+      request.signal.throwIfAborted();
+      const identified = await this.identify(request);
+      if (identified.status === "failed") return identified;
+      const decoded = getDecodedToken(new TextDecoder().decode(request.token), request.policy.mints.flatMap(({ keysetIds }) => keysetIds));
+      const mint = mintPolicy(request.policy, decoded.mint);
+      if (!mint) return failed("untrusted_mint");
+      const keysetIds = new Set(decoded.proofs.map((proof) => proof.id));
+      if (keysetIds.size !== 1) return failed("wrong_amount");
+      await this.#operations.settle({ decoded, mint, keysetId: [...keysetIds][0]!, signal: request.signal });
       return { status: "verified", externalReference: `cashu:${request.commitment}`, settlementReference: `cashu-swap:${request.topUpId}:${request.commitment}`, verifiedAt: this.#now() };
     } catch (error) {
       if (request.signal.aborted || error instanceof OpaqueCashuSwapError) return { status: "unknown", operationReference: `cashu:${request.commitment}` };
@@ -145,7 +160,9 @@ export class CashuTsSettlementAdapter implements CashuSettlementPort {
       const keysets = new Set(decoded.proofs.map((proof) => proof.id));
       if (keysets.size !== 1 || !mint.keysetIds.includes([...keysets][0]!)) return { status: "unknown", operationReference: `cashu:${request.commitment}` };
       const state = await this.#operations.observe({ decoded, mint, keysetId: [...keysets][0]!, signal: request.signal });
-      if (state === "spent") return { status: "verified", externalReference: `cashu:${request.commitment}`, settlementReference: `cashu-swap:${request.topUpId}:${request.commitment}`, verifiedAt: this.#now() };
+      // Input SPENT proves only that the bearer is no longer available. It
+      // does not prove that this service owns the swap outputs, so it can
+      // never manufacture a credit during interrupted-swap reconciliation.
       if (state === "unspent") return failed("swap_failed");
       return { status: "unknown", operationReference: `cashu:${request.commitment}` };
     } catch {
@@ -168,6 +185,7 @@ export class FakeCashuSettlementPort implements CashuSettlementPort {
   nextObservation(value: CashuSettlementObservation): void { this.#observations.push(CashuSettlementObservationSchema.parse(value)); }
   nextTreasury(value: Readonly<{ state: CashuTreasuryState }>): void { this.#treasury.push(value); }
   effectThenThrowOnce(value: CashuSettlementObservation): void { this.#effectThenThrow = CashuSettlementObservationSchema.parse(value); }
+  async identify(request: Omit<CashuSettlementRequest, "topUpId" | "commitment" | "signal">): Promise<CashuProofIdentity> { return { status: "accepted", semanticProofIdentities: [await sha256(request.token)] }; }
   async settle(request: CashuSettlementRequest): Promise<CashuSettlementObservation> {
     request.signal.throwIfAborted();
     const { signal: _, ...recorded } = request;

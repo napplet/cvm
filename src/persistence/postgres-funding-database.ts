@@ -160,23 +160,22 @@ class PostgresCashuLifecycleRepository implements CashuTopUpRepository {
   constructor(private readonly pool: PostgresSqlPool) {}
 
   async claim(input: CashuTopUpRecord): Promise<Readonly<{ claimed: boolean; record: CashuTopUpRecord }>> {
-    const client = await this.pool.connect();
-    try {
-      await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
-      const existing = await client.query<{ state_json: CashuTopUpRecord }>("SELECT state_json FROM cashu_top_up_state WHERE top_up_id=$1 OR proof_commitment=$2 FOR UPDATE", [input.result.topUpId, input.result.commitment]);
+    if (!input.semanticProofIdentities.length || new Set(input.semanticProofIdentities).size !== input.semanticProofIdentities.length || input.semanticProofIdentities.some((identity) => !/^[a-f0-9]{64}$/iu.test(identity))) throw new Error("CASHU_PROOF_IDENTITY_INVALID");
+    return serializableProductionTransaction(this.pool, async (client) => {
+      const existing = await client.query<{ state_json: CashuTopUpRecord }>("SELECT state_json FROM cashu_top_up_state WHERE top_up_id=$1 FOR UPDATE", [input.result.topUpId]);
       if (existing.rows[0]) {
-        await client.query("COMMIT");
         return frozen({ claimed: false, record: existing.rows[0].state_json });
       }
+      const collision = await client.query<{ top_up_id: string }>("SELECT top_up_id FROM cashu_top_up_proof_identities WHERE proof_identity = ANY($1::text[]) FOR UPDATE", [input.semanticProofIdentities]);
+      if (collision.rows[0]) {
+        const winner = await client.query<{ state_json: CashuTopUpRecord }>("SELECT state_json FROM cashu_top_up_state WHERE top_up_id=$1 FOR UPDATE", [collision.rows[0].top_up_id]);
+        if (!winner.rows[0]) throw new Error("CASHU_PROOF_CLAIM_INTEGRITY_INVALID");
+        return frozen({ claimed: false, record: winner.rows[0].state_json });
+      }
       await client.query("INSERT INTO cashu_top_up_state(top_up_id,account_id,proof_commitment,state_json) VALUES ($1,$2,$3,$4)", [input.result.topUpId, input.accountId, input.result.commitment, JSON.stringify(input)]);
-      await client.query("COMMIT");
+      for (const proofIdentity of input.semanticProofIdentities) await client.query("INSERT INTO cashu_top_up_proof_identities(proof_identity,top_up_id,account_id) VALUES($1,$2,$3)", [proofIdentity, input.result.topUpId, input.accountId]);
       return frozen({ claimed: true, record: input });
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined);
-      throw error;
-    } finally {
-      client.release();
-    }
+    });
   }
 
   async find(topUpId: string): Promise<CashuTopUpRecord | undefined> {

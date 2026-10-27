@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { createModalLiveWorkerProvider } from "../../src/release/native/modal";
 import { executeIdenticalWorkerCohorts } from "../../src/certification/live/worker-ports";
+import { createMemoryWorkerOperationJournal } from "../../src/release/deployment/worker-clients";
 
 const digest = (letter: string) => letter.repeat(64);
 const image = `registry.example/worker@sha256:${digest("a")}`;
@@ -19,7 +20,7 @@ function modalSdk(calls: string[]) {
     sandboxes: { create: async (_app: unknown, _image: unknown, options: { blockNetwork: true; command: readonly string[]; timeoutMs: number; idleTimeoutMs: number }) => {
       calls.push(`create:${options.blockNetwork}:${options.command.join(" ")}:${options.timeoutMs}:${options.idleTimeoutMs}`);
       return sandbox;
-    } },
+    }, findByName: async () => ({ kind: "missing" as const }), fromId: async () => sandbox },
   };
 }
 
@@ -29,6 +30,7 @@ test("Modal provider has zero effects before receipt-gated apply, preserves orig
     config: { appName: "napplet-cvm", image, workspaceRoot: "/workspace", policyVersion: "phase-02-policy-2026-08-04", tags: { run: "run-1" } },
     sdk: modalSdk(calls),
     command: { observeReady: async ({ operationId }) => ({ operationId, status: "ready", isolation: "passed", durableBacklogCount: 0, readyLeaseCount: 1 }) },
+    journal: createMemoryWorkerOperationJournal(),
     now: (() => { let value = 100; return () => value += 25; })(),
   });
 
@@ -51,6 +53,7 @@ test("Modal readiness samples timestamp trusted receipt through exact isolated-r
     config: { appName: "napplet-cvm", image, workspaceRoot: "/workspace", policyVersion: "phase-02-policy-2026-08-04", tags: { run: "run-2" } },
     sdk: modalSdk(calls),
     command: { observeReady: async ({ operationId, cohort }) => ({ operationId, cohort, status: "ready", isolation: "passed", durableBacklogCount: 0, readyLeaseCount: 1 }) },
+    journal: createMemoryWorkerOperationJournal(),
     now: (() => { let value = 0; return () => value += 10; })(),
   });
 

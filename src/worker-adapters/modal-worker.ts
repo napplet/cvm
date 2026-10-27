@@ -104,6 +104,7 @@ export type ModalSandboxCreateOptions = Readonly<{
   env: Readonly<Record<string, string>>;
   blockNetwork: true;
   tags: Readonly<Record<string, string>>;
+  name?: string;
   regions?: readonly string[];
 }>;
 export type ModalProcessPort = Readonly<{
@@ -127,7 +128,13 @@ export interface ModalSandboxPort {
 export interface ModalSdkPort {
   readonly apps: { fromName(name: string, options: Readonly<{ createIfMissing: false }>): Promise<unknown> };
   readonly images: { fromRegistry(image: string): unknown };
-  readonly sandboxes: { create(app: unknown, image: unknown, options: ModalSandboxCreateOptions): Promise<ModalSandboxPort> };
+  readonly sandboxes: {
+    create(app: unknown, image: unknown, options: ModalSandboxCreateOptions): Promise<ModalSandboxPort>;
+    /** Lookup separates authoritative absence from an unavailable provider.
+     * Callers must not create after `unknown`. */
+    findByName?(appName: string, name: string): Promise<Readonly<{ kind: "found"; sandbox: ModalSandboxPort }> | Readonly<{ kind: "missing" | "unknown" }>>;
+    fromId?(sandboxId: string): Promise<ModalSandboxPort>;
+  };
 }
 
 const FIXED_ENTRYPOINT = Object.freeze(["/bin/sh", "-c", "while true; do sleep 60; done"]);
@@ -313,6 +320,16 @@ export async function createOfficialModalSdk(): Promise<ModalSdkPort> {
       async create(app, image, options) {
         const sandbox = await client.sandboxes.create(app as never, image as never, options as never);
         return sandboxPort(sandbox);
+      },
+      async fromId(sandboxId) { return sandboxPort(await client.sandboxes.fromId(sandboxId)); },
+      async findByName(appName, name) {
+        try { return Object.freeze({ kind: "found" as const, sandbox: sandboxPort(await client.sandboxes.fromName(appName, name)) }); }
+        catch (error) {
+          // The SDK exposes NotFoundError; use its class rather than matching
+          // provider text so an auth/network failure is never treated as absent.
+          const { NotFoundError } = await import("modal");
+          return error instanceof NotFoundError ? Object.freeze({ kind: "missing" as const }) : Object.freeze({ kind: "unknown" as const });
+        }
       },
     },
   };

@@ -11,16 +11,20 @@ const token = "a".repeat(32);
 const digest = (letter: string) => letter.repeat(64);
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
 
-async function fixture(handler: (url: string, init: RequestInit) => Response | Promise<Response>, credential: Partial<Readonly<{ projectId: string; quotaProjectId: string; principal: string; scopes: readonly string[]; accountScopeSha256: string; expiresAtMs: number }>> = {}, savedJournal?: GoogleOperationJournal) {
+async function fixture(handler: (url: string, init: RequestInit) => Response | Promise<Response>, credential: Partial<Readonly<{ projectId: string; quotaProjectId: string; principal: string; scopes: readonly string[]; accountScopeSha256: string; expiresAtMs: number }>> = {}, savedJournal?: GoogleOperationJournal, timeoutMs?: number) {
   const calls: Array<Readonly<{ url: string; method: string; body: string; headers: Headers }>> = [];
   const scope = await googleAccountScopeSha256({ projectId, quotaProjectId: projectId, principal });
   const journal = savedJournal ?? createMemoryGoogleOperationJournal();
-  const client = createGoogleDeploymentClients({ projectId, quotaProjectId: projectId, principal, journal, now: () => 1_000,
+  const client = createGoogleDeploymentClients({ projectId, quotaProjectId: projectId, principal, journal, now: () => 1_000, ...(timeoutMs === undefined ? {} : { timeoutMs }),
     tokenSource: { getAccessToken: async () => ({ token, projectId, quotaProjectId: projectId, principal, scopes: ["https://www.googleapis.com/auth/cloud-platform"], accountScopeSha256: scope, expiresAtMs: 120_000, ...credential }) },
     fetch: async (url, init) => { calls.push({ url: String(url), method: init.method ?? "GET", body: init.body ? await new Response(init.body).text() : "", headers: new Headers(init.headers) }); return handler(String(url), init); },
   });
   return { client, calls, journal };
 }
+
+const cloudRunRequest = (operationId: string) => ({ operationId, projectId, region: "europe-west1", serviceName: "napplet-cvm-api", imageReference: `us-docker.pkg.dev/${projectId}/control/control@sha256:${digest("a")}`, serviceAccountReference: "svc@napplet-cvm-run-1.iam.gserviceaccount.com", environmentReferenceSha256: digest("b"), secretReferences: [{ name: "DATABASE_URL", secret: "control-database-url", version: "1" }], minimumInstances: 3 as const, ingress: "internal-and-cloud-load-balancing" as const, concurrency: 80, admissionRefusal: "capacity_unavailable" as const });
+const cloudRunService = (operationId: string, overrides: Record<string, unknown> = {}) => ({ name: `projects/${projectId}/locations/europe-west1/services/napplet-cvm-api`, uid: "service-uid-1", createTime: "2026-01-01T00:00:00Z", generation: "3", observedGeneration: "3", reconciling: false, terminalCondition: { state: "CONDITION_SUCCEEDED" }, conditions: [{ type: "ConfigurationsReady", state: "CONDITION_SUCCEEDED" }, { type: "RoutesReady", state: "CONDITION_SUCCEEDED" }], labels: { "napplet-cvm-operation": operationId }, ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER", template: { scaling: { minInstanceCount: 3 }, maxInstanceRequestConcurrency: 80, serviceAccount: "svc@napplet-cvm-run-1.iam.gserviceaccount.com", containers: [{ image: `us-docker.pkg.dev/${projectId}/control/control@sha256:${digest("a")}`, env: [{ name: "GOOGLE_CLOUD_PROJECT", value: projectId }, { name: "NAPPLET_CVM_ENVIRONMENT_SHA256", value: digest("b") }, { name: "DATABASE_URL", valueSource: { secretKeyRef: { secret: "control-database-url", version: "1" } } }] }] }, ...overrides });
+const sqlRequest = (operationId: string) => ({ operationId, instanceId: "napplet-cvm-sql-1", region: "europe-west1", databaseVersion: "POSTGRES_17" as const, availabilityType: "REGIONAL" as const, tier: "db-custom-2-7680", privateNetwork: `projects/${projectId}/global/networks/production`, requireSsl: true as const, serializablePolicy: true as const });
 
 test("ADC binds project, quota project, scope digest and expiry without exposing a token", async () => {
   const expected = await googleAccountScopeSha256({ projectId, quotaProjectId: projectId, principal });
@@ -41,7 +45,6 @@ test("metadata fallback requires the attached Cloud Run project and principal be
   const expected = await googleAccountScopeSha256({ projectId, quotaProjectId: projectId, principal });
   const metadataCalls: string[] = [];
   const source = createGoogleAdcTokenSource({ projectId, quotaProjectId: projectId, principal, accountScopeSha256: expected, now: () => 1_000,
-    command: async () => ({ exitCode: 127, stdout: "" }),
     fetch: async (url) => { metadataCalls.push(url); return url.includes("project-id") ? new Response("wrong-project-1") : url.includes("/email") ? new Response(principal) : json({ access_token: token, expires_in: 300, token_type: "Bearer" }); },
   });
   await expect(source.getAccessToken()).rejects.toThrow("ADC_APPLICATION_DEFAULT_LOGIN_REQUIRED");
@@ -51,7 +54,7 @@ test("metadata fallback requires the attached Cloud Run project and principal be
 test("metadata ADC verifies documented bearer type, scope, identity, and expiry", async () => {
   const expected = await googleAccountScopeSha256({ projectId, quotaProjectId: projectId, principal });
   const calls: string[] = [];
-  const source = createGoogleAdcTokenSource({ projectId, quotaProjectId: projectId, principal, accountScopeSha256: expected, now: () => 1_000, command: async () => ({ exitCode: 127, stdout: "" }), fetch: async (url) => {
+  const source = createGoogleAdcTokenSource({ projectId, quotaProjectId: projectId, principal, accountScopeSha256: expected, now: () => 1_000, fetch: async (url) => {
     calls.push(url);
     if (url.includes("project-id")) return new Response(projectId);
     if (url.endsWith("/email")) return new Response(principal);
@@ -190,4 +193,145 @@ test("Cloud SQL observes its sole instance before official instances.insert", as
   expect(await journal.read("sql-op-1")).toMatchObject({ state: "dispatched", operationName: "operation-1" });
   expect(calls.map((call) => call.url)).toEqual([`https://sqladmin.googleapis.com/v1/projects/${projectId}/instances/napplet-cvm-sql-1`, `https://sqladmin.googleapis.com/v1/projects/${projectId}/instances`]);
   expect(JSON.parse(calls[1]!.body)).toMatchObject({ databaseVersion: "POSTGRES_17", settings: { availabilityType: "REGIONAL", tier: "db-custom-2-7680", ipConfiguration: { privateNetwork: "projects/napplet-cvm-run-1/global/networks/production", ipv4Enabled: false, requireSsl: true } } });
+});
+
+test("ADC total deadline cancels a dribbling metadata body and aborts its requests", async () => {
+  const expected = await googleAccountScopeSha256({ projectId, quotaProjectId: projectId, principal });
+  let cancelled = false; const signals: AbortSignal[] = [];
+  const source = createGoogleAdcTokenSource({ projectId, quotaProjectId: projectId, principal, accountScopeSha256: expected, timeoutMs: 20, fetch: async (url, init) => {
+    signals.push(init.signal!);
+    if (url.includes("project-id")) return new Response(projectId);
+    if (url.endsWith("/email")) return new Response(principal);
+    if (url.endsWith("/scopes")) { let timer: ReturnType<typeof setInterval> | undefined; return new Response(new ReadableStream<Uint8Array>({ start(controller) { timer = setInterval(() => controller.enqueue(new TextEncoder().encode("scope ")), 1); }, cancel() { if (timer !== undefined) clearInterval(timer); cancelled = true; } })); }
+    return json({ access_token: token, expires_in: 300, token_type: "Bearer" });
+  } });
+  await expect(source.getAccessToken()).rejects.toThrow("ADC_APPLICATION_DEFAULT_LOGIN_REQUIRED");
+  expect(cancelled).toBe(true);
+  expect(signals.every((signal) => signal.aborted)).toBe(true);
+});
+
+test("provider response total deadline aborts fetch and cancels a never-ending JSON body", async () => {
+  let cancelled = false; let signal: AbortSignal | undefined;
+  const { client } = await fixture((_url, init) => {
+    signal = init.signal!;
+    let timer: ReturnType<typeof setInterval> | undefined;
+    return new Response(new ReadableStream<Uint8Array>({ start(controller) { timer = setInterval(() => controller.enqueue(new TextEncoder().encode('{"partial":')), 1); }, cancel() { if (timer !== undefined) clearInterval(timer); cancelled = true; } }), { headers: { "content-type": "application/json" } });
+  }, {}, undefined, 20);
+  await expect(client.cloudRun.deploy(cloudRunRequest("body-timeout"))).resolves.toEqual({ status: "unknown" });
+  expect(cancelled).toBe(true);
+  expect(signal?.aborted).toBe(true);
+});
+
+test("provider fetch deadline aborts a never-resolving request without leaving a mutation in flight", async () => {
+  let signal: AbortSignal | undefined;
+  const { client } = await fixture((_url, init) => { signal = init.signal!; return new Promise<Response>(() => {}); }, {}, undefined, 5);
+  await expect(client.cloudRun.deploy(cloudRunRequest("fetch-timeout"))).resolves.toEqual({ status: "unknown" });
+  expect(signal?.aborted).toBe(true);
+});
+
+test("Cloud Run refuses replacement and only queries an already-dispatched cleanup LRO", async () => {
+  const operationId = "run-cleanup"; const resource = `projects/${projectId}/locations/europe-west1/services/napplet-cvm-api`;
+  const journal = createMemoryGoogleOperationJournal([
+    { operationId, resource, requestSha256: digest("a"), contentSha256: digest("b"), state: "completed", owned: true, resourceUid: "service-uid-1", createTime: "2026-01-01T00:00:00Z" },
+    { operationId: `${operationId}-cleanup`, resource, requestSha256: digest("c"), contentSha256: digest("d"), state: "dispatched", owned: false, operationName: `projects/${projectId}/locations/europe-west1/operations/delete-1` },
+  ]);
+  const { client, calls } = await fixture((url, init) => url.includes("/operations/delete-1") ? json({ done: false }) : json({ name: resource, etag: "changed-etag", uid: "service-uid-1", createTime: "2026-01-01T00:00:00Z", labels: { "napplet-cvm-operation": operationId } }), {}, journal);
+  await expect(client.cloudRun.cleanup({ operationId, projectId, region: "europe-west1", serviceName: "napplet-cvm-api" })).resolves.toEqual({ status: "pending" });
+  expect(calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
+  const replacement = await fixture((_url, _init) => json({ name: resource, etag: "etag", uid: "replacement-uid", createTime: "2026-02-01T00:00:00Z", labels: { "napplet-cvm-operation": operationId } }), {}, createMemoryGoogleOperationJournal([{ operationId, resource, requestSha256: digest("a"), contentSha256: digest("b"), state: "completed", owned: true, resourceUid: "service-uid-1", createTime: "2026-01-01T00:00:00Z" }]));
+  await expect(replacement.client.cloudRun.cleanup({ operationId, projectId, region: "europe-west1", serviceName: "napplet-cvm-api" })).resolves.toEqual({ status: "unknown" });
+  expect(replacement.calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
+});
+
+test("Cloud Run never treats a completed cleanup journal as deletion while the service exists", async () => {
+  const operationId = "run-done"; const resource = `projects/${projectId}/locations/europe-west1/services/napplet-cvm-api`;
+  const journal = createMemoryGoogleOperationJournal([{ operationId, resource, requestSha256: digest("a"), contentSha256: digest("b"), state: "completed", owned: true, resourceUid: "service-uid-1", createTime: "2026-01-01T00:00:00Z" }, { operationId: `${operationId}-cleanup`, resource, requestSha256: digest("c"), contentSha256: digest("d"), state: "completed", owned: false }]);
+  const { client, calls } = await fixture(() => json({ name: resource, etag: "etag", uid: "service-uid-1", createTime: "2026-01-01T00:00:00Z", labels: { "napplet-cvm-operation": operationId } }), {}, journal);
+  await expect(client.cloudRun.cleanup({ operationId, projectId, region: "europe-west1", serviceName: "napplet-cvm-api" })).resolves.toEqual({ status: "pending" });
+  expect(calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
+});
+
+test("Cloud Run accepts actual v2 terminal success but rejects unsafe reconciliation variants", async () => {
+  const valid = await fixture(() => json(cloudRunService("run-v2")));
+  await expect(valid.client.cloudRun.deploy(cloudRunRequest("run-v2"))).resolves.toEqual({ status: "completed" });
+  for (const [operationId, overrides] of [["run-failed", { terminalCondition: { state: "CONDITION_FAILED" } }], ["run-reconciling", { reconciling: true }], ["run-generation", { observedGeneration: "2" }], ["run-env", { template: { ...cloudRunService("run-env").template, containers: [{ ...cloudRunService("run-env").template.containers[0], env: [...cloudRunService("run-env").template.containers[0].env, { name: "EXTRA", value: "no" }] }] } }], ["run-duplicate", { template: { ...cloudRunService("run-duplicate").template, containers: [{ ...cloudRunService("run-duplicate").template.containers[0], env: [...cloudRunService("run-duplicate").template.containers[0].env, { name: "DATABASE_URL", value: "duplicate" }] }] } }], ["run-container", { template: { ...cloudRunService("run-container").template, containers: [...cloudRunService("run-container").template.containers, cloudRunService("run-container").template.containers[0]] } }]] as const) {
+    const { client } = await fixture(() => json(cloudRunService(operationId, overrides)));
+    await expect(client.cloudRun.deploy(cloudRunRequest(operationId))).resolves.not.toEqual({ status: "completed" });
+  }
+});
+
+test("Cloud SQL binds stored intent before its existing-instance fast path and requires backups", async () => {
+  const request = sqlRequest("sql-intent"); const resource = `projects/${projectId}/instances/${request.instanceId}`;
+  const conflicting = await fixture(() => { throw new Error("must not observe after journal identity conflict"); }, {}, createMemoryGoogleOperationJournal([{ operationId: request.operationId, resource, requestSha256: digest("f"), contentSha256: digest("e"), state: "dispatched", owned: false }]));
+  await expect(conflicting.client.cloudSqlPostgres.provision(request)).rejects.toThrow("GOOGLE_JOURNAL_IDENTITY_CONFLICT");
+  let phase = 0;
+  const { client } = await fixture((url, init) => {
+    if (init.method === "POST") return json({ name: "operation-1", status: "RUNNING" });
+    if (url.includes("/operations/operation-1")) return json({ status: "DONE" });
+    phase += 1;
+    if (phase === 1) return json({ error: { code: 404 } }, 404);
+    return json({ name: request.instanceId, createTime: "2026-01-01T00:00:00Z", region: request.region, databaseVersion: "POSTGRES_17", state: "RUNNABLE", settings: { availabilityType: "REGIONAL", tier: request.tier, userLabels: { "napplet-cvm-operation": request.operationId }, backupConfiguration: { enabled: false }, ipConfiguration: { privateNetwork: request.privateNetwork, ipv4Enabled: false, requireSsl: true }, databaseFlags: [{ name: "default_transaction_isolation", value: "serializable" }] } });
+  });
+  await expect(client.cloudSqlPostgres.provision(request)).resolves.toEqual({ status: "pending" });
+  await expect(client.cloudSqlPostgres.observe({ operationId: request.operationId, instanceId: request.instanceId, region: request.region, tier: request.tier, privateNetwork: request.privateNetwork })).resolves.toEqual({ status: "unknown" });
+});
+
+test("Cloud SQL cleanup rejects a same-label replacement with a different immutable createTime", async () => {
+  const request = sqlRequest("sql-cleanup"); const resource = `projects/${projectId}/instances/${request.instanceId}`;
+  const { client, calls } = await fixture(() => json({ name: request.instanceId, createTime: "2026-02-01T00:00:00Z", settings: { userLabels: { "napplet-cvm-operation": request.operationId } } }), {}, createMemoryGoogleOperationJournal([{ operationId: request.operationId, resource, requestSha256: digest("a"), contentSha256: digest("b"), state: "completed", owned: true, createTime: "2026-01-01T00:00:00Z" }]));
+  await expect(client.cloudSqlPostgres.cleanup({ operationId: request.operationId, instanceId: request.instanceId })).resolves.toEqual({ status: "unknown" });
+  expect(calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
+});
+
+test("GCS recovered bucket creation binds provider identity without a second POST", async () => {
+  const operationId = "bucket-lost"; let gets = 0; let posts = 0;
+  const bucket = { timeCreated: "2026-01-01T00:00:00Z", labels: { "napplet-cvm-operation": operationId }, location: "NAM4", versioning: { enabled: true }, encryption: { defaultKmsKeyName: "projects/p/locations/us/keyRings/r/cryptoKeys/k" }, retentionPolicy: { retentionPeriod: "2592000" }, softDeletePolicy: { retentionDurationSeconds: "0" }, lifecycle: { rule: [{ action: { type: "Delete" }, condition: { age: 30 } }, { action: { type: "Delete" }, condition: { numNewerVersions: 1 } }] } };
+  const { client, journal } = await fixture((_url, init) => {
+    if (init.method === "POST") { posts += 1; throw new Error("lost create response"); }
+    gets += 1; return gets === 1 ? json({ error: { code: 404 } }, 404) : json(bucket);
+  });
+  const request = { operationId, bucket: "napplet-cvm-artifacts", encryptionKeyReference: "projects/p/locations/us/keyRings/r/cryptoKeys/k" };
+  await expect(client.gcs.provisionBucket(request)).resolves.toEqual({ status: "unknown" });
+  await expect(client.gcs.provisionBucket(request)).resolves.toEqual({ status: "completed" });
+  expect(posts).toBe(1);
+  expect(await journal.read(operationId)).toMatchObject({ owned: true, createTime: "2026-01-01T00:00:00Z" });
+});
+
+test("GCS refuses missing completed buckets, changed labels or keys, and replacement cleanup", async () => {
+  const completed = createMemoryGoogleOperationJournal(); const bucketPolicy = { timeCreated: "2026-01-01T00:00:00Z", labels: { "napplet-cvm-operation": "bucket-done" }, location: "NAM4", versioning: { enabled: true }, encryption: { defaultKmsKeyName: "projects/p/locations/us/keyRings/r/cryptoKeys/k" }, retentionPolicy: { retentionPeriod: "2592000" }, softDeletePolicy: { retentionDurationSeconds: "0" }, lifecycle: { rule: [{ action: { type: "Delete" }, condition: { age: 30 } }, { action: { type: "Delete" }, condition: { numNewerVersions: 1 } }] } };
+  let setupGets = 0;
+  const setup = await fixture((_url, init) => { if (init.method === "POST") return json(bucketPolicy); setupGets += 1; return setupGets === 1 ? json({ error: { code: 404 } }, 404) : json(bucketPolicy); }, {}, completed);
+  await expect(setup.client.gcs.provisionBucket({ operationId: "bucket-done", bucket: "napplet-cvm-artifacts", encryptionKeyReference: "projects/p/locations/us/keyRings/r/cryptoKeys/k" })).resolves.toEqual({ status: "completed" });
+  const absent = await fixture((_url, init) => init.method === "POST" ? json({}) : json({ error: { code: 404 } }, 404), {}, completed);
+  await expect(absent.client.gcs.provisionBucket({ operationId: "bucket-done", bucket: "napplet-cvm-artifacts", encryptionKeyReference: "projects/p/locations/us/keyRings/r/cryptoKeys/k" })).resolves.toEqual({ status: "unknown" });
+  expect(absent.calls.filter((call) => call.method === "POST")).toHaveLength(0);
+  const changed = await fixture(() => json({ timeCreated: "2026-01-01T00:00:00Z", labels: { "napplet-cvm-operation": "someone-else" }, location: "NAM4", versioning: { enabled: true }, encryption: { defaultKmsKeyName: "projects/p/locations/us/keyRings/r/cryptoKeys/other" }, retentionPolicy: { retentionPeriod: "2592000" }, softDeletePolicy: { retentionDurationSeconds: "0" }, lifecycle: { rule: [{ action: { type: "Delete" }, condition: { age: 30 } }, { action: { type: "Delete" }, condition: { numNewerVersions: 1 } }] } }));
+  await expect(changed.client.gcs.provisionBucket({ operationId: "bucket-changed", bucket: "napplet-cvm-artifacts", encryptionKeyReference: "projects/p/locations/us/keyRings/r/cryptoKeys/k" })).resolves.toEqual({ status: "blocked" });
+  const cleanup = await fixture(() => json({ timeCreated: "2026-02-01T00:00:00Z", metageneration: "1", labels: { "napplet-cvm-operation": "bucket-done" } }), {}, completed);
+  await expect(cleanup.client.gcs.cleanupBucket({ operationId: "bucket-done", bucket: "napplet-cvm-artifacts" })).resolves.toEqual({ status: "unknown" });
+  expect(cleanup.calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
+});
+
+test("GCS never reports completed cleanup from its journal while the bucket still exists", async () => {
+  const operationId = "bucket-cleanup"; const resource = "b/napplet-cvm-artifacts";
+  const journal = createMemoryGoogleOperationJournal([{ operationId, resource, requestSha256: digest("a"), contentSha256: digest("b"), state: "completed", owned: true, createTime: "2026-01-01T00:00:00Z" }]);
+  const bucket = { timeCreated: "2026-01-01T00:00:00Z", metageneration: "1", labels: { "napplet-cvm-operation": operationId } };
+  let initialGets = 0;
+  const first = await fixture((_url, init) => { if (init.method === "DELETE") return json({ error: { code: 404 } }, 404); initialGets += 1; return initialGets === 1 ? json(bucket) : json({ error: { code: 404 } }, 404); }, {}, journal);
+  await expect(first.client.gcs.cleanupBucket({ operationId, bucket: "napplet-cvm-artifacts" })).resolves.toEqual({ status: "completed" });
+  const retry = await fixture(() => json(bucket), {}, journal);
+  await expect(retry.client.gcs.cleanupBucket({ operationId, bucket: "napplet-cvm-artifacts" })).resolves.toEqual({ status: "pending" });
+  expect(retry.calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
+});
+
+test("a 55-character operation ID can persist its 63-character cleanup ID in the file journal", async () => {
+  const operationId = `a${"b".repeat(54)}`; const resource = `projects/${projectId}/locations/europe-west1/services/napplet-cvm-api`; const root = await mkdtemp(join(tmpdir(), "napplet-google-cleanup-id-"));
+  try {
+    const journal = createFileGoogleOperationJournal(root); const initial = await journal.claim({ operationId, resource, requestSha256: digest("a"), contentSha256: digest("b"), owned: true });
+    await journal.markCompleted({ operationId, requestSha256: initial.record.requestSha256, resourceUid: "uid", createTime: "2026-01-01T00:00:00Z", owned: true });
+    let gets = 0;
+    const { client } = await fixture((_url, init) => { if (init.method === "DELETE") return json({ name: `projects/${projectId}/locations/europe-west1/operations/delete-1` }); gets += 1; return gets === 1 ? json({ name: resource, etag: "etag", uid: "uid", createTime: "2026-01-01T00:00:00Z", labels: { "napplet-cvm-operation": operationId } }) : json({ error: { code: 404 } }, 404); }, {}, journal);
+    await expect(client.cloudRun.cleanup({ operationId, projectId, region: "europe-west1", serviceName: "napplet-cvm-api" })).resolves.toEqual({ status: "completed" });
+    expect((await journal.read(`${operationId}-cleanup`))?.state).toBe("completed");
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

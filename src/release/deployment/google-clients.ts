@@ -9,7 +9,10 @@ export type GoogleFetch = (url: string, init: RequestInit) => Promise<Response>;
 const ProjectIdSchema = z.string().regex(/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/u);
 /** Provider labels carry the operation ownership marker, so deployment IDs are
  * deliberately bounded to Google label-value limits. */
-const OperationIdSchema = z.string().regex(/^[a-z][a-z0-9_-]{2,54}$/u);
+/* A Google label value permits 63 characters. Cleanup IDs append "-cleanup"
+ * (8 chars), so caller-supplied operation IDs are limited separately to 55. */
+const OperationIdSchema = z.string().regex(/^[a-z][a-z0-9_-]{2,62}$/u);
+const DeploymentOperationIdSchema = z.string().regex(/^[a-z][a-z0-9_-]{2,54}$/u);
 const RegionSchema = z.string().regex(/^[a-z]+-[a-z]+[0-9]$/u);
 const ServiceNameSchema = z.string().regex(/^[a-z][a-z0-9-]{2,48}[a-z0-9]$/u);
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
@@ -125,8 +128,9 @@ async function body(response: Response, timeoutMs = 5_000): Promise<unknown> {
   if (!response.body) throw new Error("GOOGLE_CLIENT_RESPONSE_INVALID");
   const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let length = 0; const deadline = Date.now() + timeoutMs;
   const nextWithin = async (milliseconds: number) => { let timer: ReturnType<typeof setTimeout> | undefined; try { return await Promise.race([reader.read(), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error("GOOGLE_CLIENT_TIMEOUT")), milliseconds); })]); } finally { if (timer !== undefined) clearTimeout(timer); } };
-  try { for (;;) { const remaining = deadline - Date.now(); if (remaining <= 0) { void reader.cancel(); throw new Error("GOOGLE_CLIENT_TIMEOUT"); } const next = await nextWithin(remaining); if (next.done) break; length += next.value.byteLength; if (length > 1_000_000) { void reader.cancel(); throw new Error("GOOGLE_CLIENT_RESPONSE_INVALID"); } chunks.push(next.value); } }
-  finally { reader.releaseLock(); }
+  let complete = false;
+  try { for (;;) { const remaining = deadline - Date.now(); if (remaining <= 0) throw new Error("GOOGLE_CLIENT_TIMEOUT"); const next = await nextWithin(remaining); if (next.done) { complete = true; break; } length += next.value.byteLength; if (length > 1_000_000) throw new Error("GOOGLE_CLIENT_RESPONSE_INVALID"); chunks.push(next.value); } }
+  finally { if (!complete) void reader.cancel(); reader.releaseLock(); }
   if (length === 0) throw new Error("GOOGLE_CLIENT_RESPONSE_INVALID");
   const bytes = new Uint8Array(length); let offset = 0; for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
   try { return JSON.parse(new TextDecoder().decode(bytes)); } catch { throw new Error("GOOGLE_CLIENT_RESPONSE_INVALID"); }
@@ -148,7 +152,9 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
     try { response = await Promise.race([fetcher(`${origins[api]}${path}`, { method, redirect: "error", signal: controller.signal, headers: { authorization: `Bearer ${token.token}`, "x-goog-user-project": quotaProjectId, accept: "application/json", ...(payload === undefined && rawBody === undefined ? {} : { "content-type": "application/json" }), ...headers }, ...(rawBody !== undefined ? { body: rawBody } : payload === undefined ? {} : { body: JSON.stringify(payload) }) }), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error("GOOGLE_CLIENT_TIMEOUT")); }, timeoutMs); })]); }
     catch { return Object.freeze({ response: new Response(null, { status: 503 }) }); }
     finally { if (timer !== undefined) clearTimeout(timer); }
-    return response.ok ? Object.freeze({ response, ...((response.status === 204 || response.headers.get("content-length") === "0") ? {} : { payload: await body(response, timeoutMs) }) }) : Object.freeze({ response });
+    if (!response.ok || response.status === 204 || response.headers.get("content-length") === "0") return Object.freeze({ response });
+    try { return Object.freeze({ response, payload: await body(response, timeoutMs) }); }
+    catch { controller.abort(); return Object.freeze({ response: new Response(null, { status: 503 }) }); }
   }
   async function claim(operationId: string, resource: string, payload: unknown, content: unknown = payload) {
     const requestSha256 = await sha256(payload); const contentSha256 = await sha256(content);
@@ -159,7 +165,7 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
 
   const cloudRun = Object.freeze({ projectId,
     async deploy(input: Readonly<{ operationId: string; projectId: string; region: string; serviceName: string; imageReference: string; serviceAccountReference: string; environmentReferenceSha256: string; secretReferences: readonly Readonly<{ name: string; secret: string; version: string }>[]; minimumInstances: 3; ingress: "internal-and-cloud-load-balancing"; concurrency: number; admissionRefusal: "capacity_unavailable" }>): Promise<SafeStatus> {
-      const operationId = OperationIdSchema.parse(input.operationId); if (ProjectIdSchema.parse(input.projectId) !== projectId) throw new Error("GOOGLE_CLIENT_PROJECT_SCOPE_INVALID");
+      const operationId = DeploymentOperationIdSchema.parse(input.operationId); if (ProjectIdSchema.parse(input.projectId) !== projectId) throw new Error("GOOGLE_CLIENT_PROJECT_SCOPE_INVALID");
       const region = RegionSchema.parse(input.region); const serviceName = ServiceNameSchema.parse(input.serviceName); const resource = `projects/${projectId}/locations/${region}/services/${serviceName}`;
       const secrets = z.array(z.object({ name: z.string().regex(/^[A-Z][A-Z0-9_]{1,62}$/u), secret: z.string().min(3).max(255), version: z.string().regex(/^[1-9][0-9]*$/u) })).min(1).parse(input.secretReferences);
       if (new Set(secrets.map((secret) => secret.name)).size !== secrets.length) throw new Error("GOOGLE_CLOUD_RUN_SECRET_CONFIG_INVALID");
@@ -190,7 +196,7 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
       return Object.freeze({ status: "pending" });
     },
     async observe(input: Readonly<{ operationId: string; projectId: string; region: string; serviceName: string; imageReference: string; serviceAccountReference: string; environmentReferenceSha256: string; secretReferences: readonly Readonly<{ name: string; secret: string; version: string }>[]; concurrency: number }>): Promise<SafeStatus> {
-      const operationId = OperationIdSchema.parse(input.operationId); if (ProjectIdSchema.safeParse(input.projectId).data !== projectId) return Object.freeze({ status: "blocked" });
+      const operationId = DeploymentOperationIdSchema.parse(input.operationId); if (ProjectIdSchema.safeParse(input.projectId).data !== projectId) return Object.freeze({ status: "blocked" });
       const region = RegionSchema.safeParse(input.region); const serviceName = ServiceNameSchema.safeParse(input.serviceName); if (!region.success || !serviceName.success) return Object.freeze({ status: "blocked" });
       const resource = `projects/${projectId}/locations/${region.data}/services/${serviceName.data}`;
       const original = await options.journal.read(operationId); if (!original || original.resource !== resource) return Object.freeze({ status: "blocked" });
@@ -209,20 +215,22 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
       return reconciled;
     },
     async cleanup(input: Readonly<{ operationId: string; projectId: string; region: string; serviceName: string }>): Promise<SafeStatus> {
-      const operationId = OperationIdSchema.parse(input.operationId); const region = RegionSchema.parse(input.region); const serviceName = ServiceNameSchema.parse(input.serviceName); if (ProjectIdSchema.parse(input.projectId) !== projectId) throw new Error("GOOGLE_CLIENT_PROJECT_SCOPE_INVALID");
+      const operationId = DeploymentOperationIdSchema.parse(input.operationId); const region = RegionSchema.parse(input.region); const serviceName = ServiceNameSchema.parse(input.serviceName); if (ProjectIdSchema.parse(input.projectId) !== projectId) throw new Error("GOOGLE_CLIENT_PROJECT_SCOPE_INVALID");
       const resource = `projects/${projectId}/locations/${region}/services/${serviceName}`; const original = await options.journal.read(operationId); if (!original?.owned || original.resource !== resource) throw new Error("GOOGLE_CLEANUP_RUN_OWNERSHIP_REQUIRED");
       const before = await request("cloudRun", `/v2/${resource}`, "GET"); if (before.response.status === 404) return Object.freeze({ status: "completed" }); if (!before.response.ok) return statusFor(before.response.status);
       const ownedService = z.object({ name: z.literal(resource), etag: z.string().min(1), uid: z.literal(original.resourceUid), createTime: z.literal(original.createTime), labels: z.object({ "napplet-cvm-operation": z.literal(operationId) }).passthrough() }).passthrough().safeParse(before.payload); if (!ownedService.success) return Object.freeze({ status: "unknown" });
       const cleanupId = `${operationId}-cleanup`; const priorCleanup = await options.journal.read(cleanupId);
       if (priorCleanup) {
-        if (!priorCleanup.operationName) return priorCleanup.state === "completed" ? Object.freeze({ status: "completed" }) : Object.freeze({ status: "unknown" });
+        /* A completed local record is not proof that a same-name service is
+         * absent: provider observation is the only completion authority. */
+        if (!priorCleanup.operationName) return priorCleanup.state === "completed" ? Object.freeze({ status: "pending" }) : Object.freeze({ status: "unknown" });
         const deletion = await request("cloudRun", `/v2/${priorCleanup.operationName}`, "GET"); if (!deletion.response.ok) return statusFor(deletion.response.status);
         const terminal = z.object({ done: z.boolean().optional(), error: z.unknown().optional() }).passthrough().safeParse(deletion.payload); if (!terminal.success || terminal.data.error !== undefined) return Object.freeze({ status: "unknown" }); if (terminal.data.done !== true) return Object.freeze({ status: "pending" });
         const absent = await request("cloudRun", `/v2/${resource}`, "GET"); if (absent.response.status !== 404) return absent.response.ok ? Object.freeze({ status: "pending" }) : statusFor(absent.response.status); await options.journal.markCompleted({ operationId: cleanupId, requestSha256: priorCleanup.requestSha256 }); return Object.freeze({ status: "completed" });
       }
       const cleanup = await claim(cleanupId, resource, { method: "delete", etag: ownedService.data.etag });
       if (!cleanup.claimed) {
-        if (cleanup.record.state === "completed") return Object.freeze({ status: "completed" });
+        if (cleanup.record.state === "completed") return Object.freeze({ status: "pending" });
         if (!cleanup.record.operationName) return Object.freeze({ status: "unknown" });
         const deletion = await request("cloudRun", `/v2/${cleanup.record.operationName}`, "GET"); if (!deletion.response.ok) return statusFor(deletion.response.status);
         const terminal = z.object({ done: z.boolean().optional(), error: z.unknown().optional() }).passthrough().safeParse(deletion.payload); if (!terminal.success || terminal.data.error !== undefined) return Object.freeze({ status: "unknown" }); if (terminal.data.done !== true) return Object.freeze({ status: "pending" });
@@ -249,15 +257,19 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
       return exactExpiry && exactOldVersionExpiry ? Object.freeze({ status: "completed" }) : Object.freeze({ status: "blocked" });
     },
     async provisionBucket(input: Readonly<{ operationId: string; bucket: string; encryptionKeyReference: string }>): Promise<SafeStatus> {
-      const operationId = OperationIdSchema.parse(input.operationId); const bucket = BucketSchema.parse(input.bucket);
+      const operationId = DeploymentOperationIdSchema.parse(input.operationId); const bucket = BucketSchema.parse(input.bucket);
       const resource = `b/${bucket}`;
       const policy = { name: bucket, labels: { "napplet-cvm-operation": operationId }, location: "NAM4", versioning: { enabled: true }, encryption: { defaultKmsKeyName: input.encryptionKeyReference }, retentionPolicy: { retentionPeriod: "2592000" }, softDeletePolicy: { retentionDurationSeconds: "0" }, lifecycle: { rule: [{ action: { type: "Delete" }, condition: { age: 30 } }, { action: { type: "Delete" }, condition: { numNewerVersions: 1 } }] } };
       const claimed = await claim(operationId, resource, policy);
       const existing = await request("storage", `/storage/v1/b/${encodeURIComponent(bucket)}`, "GET");
       if (existing.response.ok) {
-        const owned = z.object({ labels: z.object({ "napplet-cvm-operation": z.literal(operationId) }).passthrough() }).passthrough().safeParse(existing.payload);
+        const owned = z.object({ timeCreated: z.string().min(1), labels: z.object({ "napplet-cvm-operation": z.literal(operationId) }).passthrough() }).passthrough().safeParse(existing.payload);
         const policyStatus = await gcs.observeBucketPolicy({ bucket, encryptionKeyReference: input.encryptionKeyReference });
-        if (owned.success && policyStatus.status === "completed") { if (!claimed.record.owned) await options.journal.markCompleted({ operationId, requestSha256: claimed.requestSha256, owned: true }); return Object.freeze({ status: "completed" }); }
+        /* A fresh local claim does not prove a pre-existing same-label bucket
+         * is ours. Only a prior dispatched run or an already owned record may
+         * bind provider identity and become cleanup-authorized. */
+        const priorMutation = claimed.record.owned || claimed.record.state === "dispatching" || claimed.record.state === "dispatched" || claimed.record.state === "completed";
+        if (owned.success && policyStatus.status === "completed" && priorMutation) { if (!claimed.record.owned || claimed.record.createTime !== owned.data.timeCreated) await options.journal.markCompleted({ operationId, requestSha256: claimed.requestSha256, createTime: owned.data.timeCreated, owned: true }); return Object.freeze({ status: "completed" }); }
         return Object.freeze({ status: "blocked" });
       }
       if (existing.response.status !== 404) return statusFor(existing.response.status);
@@ -266,19 +278,23 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
       const created = await request("storage", `/storage/v1/b?project=${encodeURIComponent(projectId)}`, "POST", policy);
       if (!created.response.ok) return statusFor(created.response.status);
       const verified = await gcs.observeBucketPolicy({ bucket, encryptionKeyReference: input.encryptionKeyReference });
-      if (verified.status === "completed") await options.journal.markCompleted({ operationId, requestSha256: claimed.requestSha256, owned: true });
-      return verified;
+      if (verified.status !== "completed") return verified;
+      const current = await request("storage", `/storage/v1/b/${encodeURIComponent(bucket)}`, "GET");
+      const identity = z.object({ timeCreated: z.string().min(1), labels: z.object({ "napplet-cvm-operation": z.literal(operationId) }).passthrough() }).passthrough().safeParse(current.payload);
+      if (!current.response.ok || !identity.success) return current.response.ok ? Object.freeze({ status: "unknown" }) : statusFor(current.response.status);
+      await options.journal.markCompleted({ operationId, requestSha256: claimed.requestSha256, createTime: identity.data.timeCreated, owned: true });
+      return Object.freeze({ status: "completed" });
     },
     async cleanupBucket(input: Readonly<{ operationId: string; bucket: string }>): Promise<SafeStatus> {
-      const operationId = OperationIdSchema.parse(input.operationId); const bucket = BucketSchema.parse(input.bucket); const resource = `b/${bucket}`; const original = await options.journal.read(operationId); if (!original?.owned || original.resource !== resource) throw new Error("GOOGLE_CLEANUP_RUN_OWNERSHIP_REQUIRED");
+      const operationId = DeploymentOperationIdSchema.parse(input.operationId); const bucket = BucketSchema.parse(input.bucket); const resource = `b/${bucket}`; const original = await options.journal.read(operationId); if (!original?.owned || !original.createTime || original.resource !== resource) throw new Error("GOOGLE_CLEANUP_RUN_OWNERSHIP_REQUIRED");
       const before = await request("storage", `/storage/v1/b/${encodeURIComponent(bucket)}`, "GET"); if (before.response.status === 404) return Object.freeze({ status: "completed" }); if (!before.response.ok) return statusFor(before.response.status);
-      const owned = z.object({ metageneration: z.string().regex(/^\d+$/u), labels: z.object({ "napplet-cvm-operation": z.literal(operationId) }).passthrough() }).passthrough().safeParse(before.payload); if (!owned.success) return Object.freeze({ status: "unknown" });
-      const cleanupId = `${operationId}-cleanup`; const cleanup = await claim(cleanupId, resource, { method: "delete", metageneration: owned.data.metageneration }); if (!cleanup.claimed) return cleanup.record.state === "completed" ? Object.freeze({ status: "completed" }) : Object.freeze({ status: "unknown" });
+      const owned = z.object({ timeCreated: z.literal(original.createTime), metageneration: z.string().regex(/^\d+$/u), labels: z.object({ "napplet-cvm-operation": z.literal(operationId) }).passthrough() }).passthrough().safeParse(before.payload); if (!owned.success) return Object.freeze({ status: "unknown" });
+      const cleanupId = `${operationId}-cleanup`; const cleanup = await claim(cleanupId, resource, { method: "delete", timeCreated: owned.data.timeCreated, metageneration: owned.data.metageneration }); if (!cleanup.claimed) return cleanup.record.state === "completed" ? Object.freeze({ status: "pending" }) : Object.freeze({ status: "unknown" });
       await options.journal.markDispatching({ operationId: cleanupId, requestSha256: cleanup.requestSha256 }); const deleted = await request("storage", `/storage/v1/b/${encodeURIComponent(bucket)}?ifMetagenerationMatch=${encodeURIComponent(owned.data.metageneration)}`, "DELETE"); if (!deleted.response.ok && deleted.response.status !== 404) return statusFor(deleted.response.status);
       const absent = await request("storage", `/storage/v1/b/${encodeURIComponent(bucket)}`, "GET"); if (absent.response.status !== 404) return absent.response.ok ? Object.freeze({ status: "pending" }) : statusFor(absent.response.status); await options.journal.markCompleted({ operationId: cleanupId, requestSha256: cleanup.requestSha256 }); return Object.freeze({ status: "completed" });
     },
     async writeArtifact(input: Readonly<{ operationId: string; bucket: string; object: string; bytesBase64: string; checksum: string; encryptionKeyReference: string; location: "nam4"; versioning: true; retentionDays: 30 }>) {
-      const operationId = OperationIdSchema.parse(input.operationId); const bucket = BucketSchema.parse(input.bucket); const object = ObjectSchema.parse(input.object);
+      const operationId = DeploymentOperationIdSchema.parse(input.operationId); const bucket = BucketSchema.parse(input.bucket); const object = ObjectSchema.parse(input.object);
       if (input.location !== "nam4" || input.versioning !== true || input.retentionDays !== 30 || !/^[A-Za-z0-9+/]{6,}={0,2}$/u.test(input.checksum)) throw new Error("GOOGLE_GCS_POLICY_INVALID");
       if ((await gcs.observeBucketPolicy({ bucket, encryptionKeyReference: input.encryptionKeyReference })).status !== "completed") throw new Error("GOOGLE_GCS_BUCKET_POLICY_INVALID");
       let bytes: Uint8Array;
@@ -307,10 +323,10 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
       return Object.freeze({ status: "completed" as const, generation: observed.data.generation, checksum: observed.data.crc32c });
     },
     async cleanupArtifact(input: Readonly<{ operationId: string; bucket: string; object: string; generation: string }>): Promise<SafeStatus> {
-      const operationId = OperationIdSchema.parse(input.operationId); const bucket = BucketSchema.parse(input.bucket); const object = ObjectSchema.parse(input.object); const generation = z.string().regex(/^\d+$/u).parse(input.generation); const resource = `b/${bucket}/o/${object}`;
+      const operationId = DeploymentOperationIdSchema.parse(input.operationId); const bucket = BucketSchema.parse(input.bucket); const object = ObjectSchema.parse(input.object); const generation = z.string().regex(/^\d+$/u).parse(input.generation); const resource = `b/${bucket}/o/${object}`;
       const original = await options.journal.read(operationId); if (!original?.owned || original.resource !== resource || original.generation !== generation) throw new Error("GOOGLE_CLEANUP_RUN_OWNERSHIP_REQUIRED");
       const current = await request("storage", `/storage/v1/b/${encodeURIComponent(bucket)}/o/${encodeURIComponent(object)}?generation=${encodeURIComponent(generation)}`, "GET"); if (current.response.status === 404) return Object.freeze({ status: "completed" }); if (!current.response.ok) return statusFor(current.response.status);
-      const cleanupId = `${operationId}-cleanup`; const cleanup = await claim(cleanupId, resource, { method: "delete", generation }); if (!cleanup.claimed) return cleanup.record.state === "completed" ? Object.freeze({ status: "completed" }) : Object.freeze({ status: "unknown" });
+      const cleanupId = `${operationId}-cleanup`; const cleanup = await claim(cleanupId, resource, { method: "delete", generation }); if (!cleanup.claimed) return cleanup.record.state === "completed" ? Object.freeze({ status: "pending" }) : Object.freeze({ status: "unknown" });
       await options.journal.markDispatching({ operationId: cleanupId, requestSha256: cleanup.requestSha256 }); const deleted = await request("storage", `/storage/v1/b/${encodeURIComponent(bucket)}/o/${encodeURIComponent(object)}?generation=${encodeURIComponent(generation)}&ifGenerationMatch=${encodeURIComponent(generation)}`, "DELETE");
       if (!deleted.response.ok && deleted.response.status !== 404) return statusFor(deleted.response.status);
       const observed = await request("storage", `/storage/v1/b/${encodeURIComponent(bucket)}/o/${encodeURIComponent(object)}?generation=${encodeURIComponent(generation)}`, "GET"); if (observed.response.status !== 404) return observed.response.ok ? Object.freeze({ status: "pending" }) : statusFor(observed.response.status);
@@ -320,18 +336,27 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
 
   const cloudSqlPostgres = Object.freeze({ projectId,
     async provision(input: Readonly<{ operationId: string; instanceId: string; region: string; databaseVersion: "POSTGRES_17"; availabilityType: "REGIONAL"; tier: string; privateNetwork: string; requireSsl: true; serializablePolicy: true }>): Promise<SafeStatus> {
-      const operationId = OperationIdSchema.parse(input.operationId); const instanceId = InstanceSchema.parse(input.instanceId); const region = RegionSchema.parse(input.region); if (input.databaseVersion !== "POSTGRES_17" || input.availabilityType !== "REGIONAL" || input.serializablePolicy !== true || !/^db-custom-[1-9][0-9]*-[1-9][0-9]*$/u.test(input.tier) || !/^projects\/[a-z][a-z0-9-]{4,28}[a-z0-9]\/global\/networks\/[a-z][a-z0-9-]{0,62}$/u.test(input.privateNetwork) || input.requireSsl !== true) throw new Error("GOOGLE_CLOUD_SQL_AUTHORITY_INVALID");
-      const resource = `projects/${projectId}/instances/${instanceId}`; const existing = await request("cloudSql", `/v1/projects/${projectId}/instances/${instanceId}`, "GET");
+      const operationId = DeploymentOperationIdSchema.parse(input.operationId); const instanceId = InstanceSchema.parse(input.instanceId); const region = RegionSchema.parse(input.region); if (input.databaseVersion !== "POSTGRES_17" || input.availabilityType !== "REGIONAL" || input.serializablePolicy !== true || !/^db-custom-[1-9][0-9]*-[1-9][0-9]*$/u.test(input.tier) || !/^projects\/[a-z][a-z0-9-]{4,28}[a-z0-9]\/global\/networks\/[a-z][a-z0-9-]{0,62}$/u.test(input.privateNetwork) || input.requireSsl !== true) throw new Error("GOOGLE_CLOUD_SQL_AUTHORITY_INVALID");
+      const resource = `projects/${projectId}/instances/${instanceId}`;
+      const instance = { name: instanceId, region, databaseVersion: "POSTGRES_17", settings: { tier: input.tier, availabilityType: "REGIONAL", userLabels: { "napplet-cvm-operation": operationId }, backupConfiguration: { enabled: true }, ipConfiguration: { privateNetwork: input.privateNetwork, ipv4Enabled: false, requireSsl: true }, databaseFlags: [{ name: "default_transaction_isolation", value: "serializable" }] } };
+      /* Claim and compare intent before considering an existing resource
+       * complete. This prevents a same-name, same-label instance from
+       * satisfying a later request with altered authority settings. */
+      const claimed = await claim(operationId, resource, instance);
+      const existing = await request("cloudSql", `/v1/projects/${projectId}/instances/${instanceId}`, "GET");
       if (existing.response.ok) {
-        const matching = z.object({ name: z.literal(instanceId), region: z.literal(region), databaseVersion: z.literal("POSTGRES_17"), state: z.literal("RUNNABLE"), settings: z.object({ availabilityType: z.literal("REGIONAL"), tier: z.literal(input.tier), userLabels: z.object({ "napplet-cvm-operation": z.literal(operationId) }).passthrough(), backupConfiguration: z.object({ enabled: z.literal(true) }).passthrough(), ipConfiguration: z.object({ privateNetwork: z.literal(input.privateNetwork), ipv4Enabled: z.literal(false), requireSsl: z.literal(true) }).passthrough(), databaseFlags: z.array(z.object({ name: z.literal("default_transaction_isolation"), value: z.literal("serializable") })).min(1) }).passthrough() }).passthrough().safeParse(existing.payload);
-        return matching.success ? Object.freeze({ status: "completed" }) : Object.freeze({ status: "unknown" });
+        const matching = z.object({ name: z.literal(instanceId), createTime: z.string().min(1), region: z.literal(region), databaseVersion: z.literal("POSTGRES_17"), state: z.literal("RUNNABLE"), settings: z.object({ availabilityType: z.literal("REGIONAL"), tier: z.literal(input.tier), userLabels: z.object({ "napplet-cvm-operation": z.literal(operationId) }).passthrough(), backupConfiguration: z.object({ enabled: z.literal(true) }).passthrough(), ipConfiguration: z.object({ privateNetwork: z.literal(input.privateNetwork), ipv4Enabled: z.literal(false), requireSsl: z.literal(true) }).passthrough(), databaseFlags: z.array(z.object({ name: z.literal("default_transaction_isolation"), value: z.literal("serializable") })).min(1) }).passthrough() }).passthrough().safeParse(existing.payload);
+        const priorMutation = claimed.record.owned || claimed.record.state === "dispatching" || claimed.record.state === "dispatched" || claimed.record.state === "completed";
+        if (!matching.success || !priorMutation) return Object.freeze({ status: "unknown" });
+        if (!claimed.record.owned || claimed.record.createTime !== matching.data.createTime) await options.journal.markCompleted({ operationId, requestSha256: claimed.requestSha256, createTime: matching.data.createTime, owned: true });
+        return Object.freeze({ status: "completed" });
       }
       if (existing.response.status !== 404) return statusFor(existing.response.status);
-      const instance = { name: instanceId, region, databaseVersion: "POSTGRES_17", settings: { tier: input.tier, availabilityType: "REGIONAL", userLabels: { "napplet-cvm-operation": operationId }, backupConfiguration: { enabled: true }, ipConfiguration: { privateNetwork: input.privateNetwork, ipv4Enabled: false, requireSsl: true }, databaseFlags: [{ name: "default_transaction_isolation", value: "serializable" }] } }; const claimed = await claim(operationId, resource, instance); if (!claimed.claimed) return Object.freeze({ status: "unknown" }); await options.journal.markDispatching({ operationId, requestSha256: claimed.requestSha256 });
+      if (!claimed.claimed) return Object.freeze({ status: "unknown" }); await options.journal.markDispatching({ operationId, requestSha256: claimed.requestSha256 });
       const created = await request("cloudSql", `/v1/projects/${projectId}/instances`, "POST", instance); if (!created.response.ok) return statusFor(created.response.status); const operation = z.object({ name: z.string().min(1) }).passthrough().safeParse(created.payload); if (!operation.success) return Object.freeze({ status: "unknown" }); await options.journal.markDispatched({ operationId, requestSha256: claimed.requestSha256, operationName: operation.data.name }); return Object.freeze({ status: "pending" });
     },
     async observe(input: Readonly<{ operationId: string; instanceId: string; region: string; tier: string; privateNetwork: string }>): Promise<SafeStatus> {
-      const operationId = OperationIdSchema.parse(input.operationId); const instanceId = InstanceSchema.parse(input.instanceId); const region = RegionSchema.parse(input.region); const tier = z.string().regex(/^db-custom-[1-9][0-9]*-[1-9][0-9]*$/u).parse(input.tier); const privateNetwork = z.string().regex(/^projects\/[a-z][a-z0-9-]{4,28}[a-z0-9]\/global\/networks\/[a-z][a-z0-9-]{0,62}$/u).parse(input.privateNetwork); const resource = `projects/${projectId}/instances/${instanceId}`;
+      const operationId = DeploymentOperationIdSchema.parse(input.operationId); const instanceId = InstanceSchema.parse(input.instanceId); const region = RegionSchema.parse(input.region); const tier = z.string().regex(/^db-custom-[1-9][0-9]*-[1-9][0-9]*$/u).parse(input.tier); const privateNetwork = z.string().regex(/^projects\/[a-z][a-z0-9-]{4,28}[a-z0-9]\/global\/networks\/[a-z][a-z0-9-]{0,62}$/u).parse(input.privateNetwork); const resource = `projects/${projectId}/instances/${instanceId}`;
       const original = await options.journal.read(operationId); if (!original || original.resource !== resource) return Object.freeze({ status: "blocked" });
       const intent = { name: instanceId, region, databaseVersion: "POSTGRES_17", settings: { tier, availabilityType: "REGIONAL", userLabels: { "napplet-cvm-operation": operationId }, backupConfiguration: { enabled: true }, ipConfiguration: { privateNetwork, ipv4Enabled: false, requireSsl: true }, databaseFlags: [{ name: "default_transaction_isolation", value: "serializable" }] } };
       if (await sha256(intent) !== original.requestSha256) return Object.freeze({ status: "blocked" });
@@ -341,17 +366,17 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
         if (!terminal.success || terminal.data.error !== undefined) return Object.freeze({ status: "unknown" }); if (terminal.data.status !== "DONE") return Object.freeze({ status: "pending" });
       }
       const instance = await request("cloudSql", `/v1/projects/${projectId}/instances/${instanceId}`, "GET"); if (!instance.response.ok) return statusFor(instance.response.status);
-      const ready = z.object({ name: z.literal(instanceId), region: z.literal(region), databaseVersion: z.literal("POSTGRES_17"), state: z.literal("RUNNABLE"), settings: z.object({ tier: z.literal(tier), availabilityType: z.literal("REGIONAL"), userLabels: z.object({ "napplet-cvm-operation": z.literal(operationId) }).passthrough(), backupConfiguration: z.object({ enabled: z.literal(true) }).passthrough(), ipConfiguration: z.object({ privateNetwork: z.literal(privateNetwork), ipv4Enabled: z.literal(false), requireSsl: z.literal(true) }).passthrough(), databaseFlags: z.array(z.object({ name: z.literal("default_transaction_isolation"), value: z.literal("serializable") })).min(1) }).passthrough() }).passthrough().safeParse(instance.payload); if (!ready.success) return Object.freeze({ status: "unknown" });
-      if (original.state !== "completed") await options.journal.markCompleted({ operationId, requestSha256: original.requestSha256, owned: true }); return Object.freeze({ status: "completed" });
+      const ready = z.object({ name: z.literal(instanceId), createTime: z.string().min(1), region: z.literal(region), databaseVersion: z.literal("POSTGRES_17"), state: z.literal("RUNNABLE"), settings: z.object({ tier: z.literal(tier), availabilityType: z.literal("REGIONAL"), userLabels: z.object({ "napplet-cvm-operation": z.literal(operationId) }).passthrough(), backupConfiguration: z.object({ enabled: z.literal(true) }).passthrough(), ipConfiguration: z.object({ privateNetwork: z.literal(privateNetwork), ipv4Enabled: z.literal(false), requireSsl: z.literal(true) }).passthrough(), databaseFlags: z.array(z.object({ name: z.literal("default_transaction_isolation"), value: z.literal("serializable") })).min(1) }).passthrough() }).passthrough().safeParse(instance.payload); if (!ready.success) return Object.freeze({ status: "unknown" });
+      if (original.state !== "completed" || original.createTime !== ready.data.createTime) await options.journal.markCompleted({ operationId, requestSha256: original.requestSha256, createTime: ready.data.createTime, owned: true }); return Object.freeze({ status: "completed" });
     },
     async cleanup(input: Readonly<{ operationId: string; instanceId: string }>): Promise<SafeStatus> {
-      const operationId = OperationIdSchema.parse(input.operationId); const instanceId = InstanceSchema.parse(input.instanceId); const resource = `projects/${projectId}/instances/${instanceId}`;
-      const original = await options.journal.read(operationId); if (!original?.owned || original.resource !== resource) throw new Error("GOOGLE_CLEANUP_RUN_OWNERSHIP_REQUIRED");
+      const operationId = DeploymentOperationIdSchema.parse(input.operationId); const instanceId = InstanceSchema.parse(input.instanceId); const resource = `projects/${projectId}/instances/${instanceId}`;
+      const original = await options.journal.read(operationId); if (!original?.owned || !original.createTime || original.resource !== resource) throw new Error("GOOGLE_CLEANUP_RUN_OWNERSHIP_REQUIRED");
       const before = await request("cloudSql", `/v1/projects/${projectId}/instances/${instanceId}`, "GET"); if (before.response.status === 404) return Object.freeze({ status: "completed" }); if (!before.response.ok) return statusFor(before.response.status);
-      const owned = z.object({ name: z.literal(instanceId), settings: z.object({ userLabels: z.object({ "napplet-cvm-operation": z.literal(operationId) }).passthrough() }).passthrough() }).passthrough().safeParse(before.payload); if (!owned.success) return Object.freeze({ status: "unknown" });
-      const cleanupId = `${operationId}-cleanup`; const cleanup = await claim(cleanupId, resource, { method: "delete" });
+      const owned = z.object({ name: z.literal(instanceId), createTime: z.literal(original.createTime), settings: z.object({ userLabels: z.object({ "napplet-cvm-operation": z.literal(operationId) }).passthrough() }).passthrough() }).passthrough().safeParse(before.payload); if (!owned.success) return Object.freeze({ status: "unknown" });
+      const cleanupId = `${operationId}-cleanup`; const cleanup = await claim(cleanupId, resource, { method: "delete", createTime: owned.data.createTime });
       if (!cleanup.claimed) {
-        if (cleanup.record.state === "completed") return Object.freeze({ status: "completed" }); if (!cleanup.record.operationName) return Object.freeze({ status: "unknown" });
+        if (cleanup.record.state === "completed") return Object.freeze({ status: "pending" }); if (!cleanup.record.operationName) return Object.freeze({ status: "unknown" });
         const operation = await request("cloudSql", `/v1/projects/${projectId}/operations/${encodeURIComponent(cleanup.record.operationName)}`, "GET"); if (!operation.response.ok) return statusFor(operation.response.status);
         const terminal = z.object({ status: z.enum(["PENDING", "RUNNING", "DONE"]), error: z.unknown().optional() }).passthrough().safeParse(operation.payload); if (!terminal.success || terminal.data.error !== undefined) return Object.freeze({ status: "unknown" }); if (terminal.data.status !== "DONE") return Object.freeze({ status: "pending" });
         const absent = await request("cloudSql", `/v1/projects/${projectId}/instances/${instanceId}`, "GET"); if (absent.response.status !== 404) return absent.response.ok ? Object.freeze({ status: "pending" }) : statusFor(absent.response.status);

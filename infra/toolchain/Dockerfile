@@ -49,4 +49,19 @@ RUN ln -s /usr/local/bin/bun /usr/local/bin/node \
     && mkdir -p /home/napplet /work /tmp \
     && chown 65532:65532 /home/napplet /work /tmp \
     && chmod -R go-w /toolchain /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe /usr/local/bin/napplet-cvm-bootstrap
+USER 65532:65532
+ENTRYPOINT ["/toolchain/bin/bun"]
+
+# This target is selected only by an approved production-worker image build.
+# The normal sealed-toolchain target above remains non-root.  The bootstrap
+# immediately rejects anything except the provider-provisioned bounded tmpfs
+# and then drops to UID 65532 before any worker command is executed.
+FROM sealed AS production-worker
+USER root
+ENTRYPOINT ["/usr/local/bin/napplet-cvm-bootstrap"]
+
+# Keep an unprivileged target last so an unqualified Docker build preserves the
+# historical sealed-toolchain behaviour rather than selecting the root stage.
+FROM sealed AS default
+USER 65532:65532
 ENTRYPOINT ["/toolchain/bin/bun"]

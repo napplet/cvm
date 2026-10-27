@@ -87,6 +87,8 @@ test("sealed image installs root-owned trusted worker commands and runs the pinn
   expect(dockerfile).toContain("infra/toolchain/production-worker.ts /usr/local/bin/napplet-cvm-worker");
   expect(dockerfile).toContain("infra/toolchain/production-probe.ts /usr/local/bin/napplet-cvm-probe");
   expect(dockerfile).toContain("infra/toolchain/production-bootstrap.sh /usr/local/bin/napplet-cvm-bootstrap");
+  expect(dockerfile).toContain("FROM sealed AS production-worker");
+  expect(dockerfile).toContain("FROM sealed AS default\nUSER 65532:65532");
   expect(dockerfile).toContain("chmod -R go-w /toolchain /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe");
   expect(dockerfile).not.toContain("--chown=65532:65532 /toolchain/node_modules");
   for (const command of ["napplet", "--offline", "--frozen-lockfile", "test:conformance", "networkDenied", "environmentClean", "CapBnd", "NoNewPrivs"]) expect(worker).toContain(command);

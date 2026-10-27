@@ -11,4 +11,4 @@ RUN cd tests/dev-ui && bun install --frozen-lockfile && bun node_modules/playwri
 COPY . .
 ENV DOCKER_HOST=unix:///run/cvm-docker/docker.sock NAPPLET_CVM_WORKER_PLATFORM=linux/amd64 TMPDIR=/scratch
 EXPOSE 8080
-ENTRYPOINT ["flock", "-n", "/app/.local/homelab.lock", "bun", "scripts/homelab.ts"]
+ENTRYPOINT ["flock", "--no-fork", "-n", "/app/.local/homelab.lock", "bun", "scripts/homelab.ts"]

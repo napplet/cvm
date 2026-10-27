@@ -14,7 +14,7 @@ for (const mode of ["timeout", "overflow"] as const) {
     const root = await mkdtemp(join(tmpdir(), "napplet-worker-lifecycle-")); const log = join(root, "commands.jsonl"); const dockerBin = join(root, "docker-fixture");
     try {
       // Lifecycle fault fixture only; real Docker/build/browser coverage is in generation-preview.e2e.ts.
-      await writeFile(dockerBin, `#!/usr/bin/env bun\nimport {appendFile} from 'node:fs/promises';\nconst args=process.argv.slice(2); await appendFile(${JSON.stringify(log)},JSON.stringify(args)+'\\n');\nif(args[0]==='image') { console.log('sha256:${"b".repeat(64)}|linux|arm64'); }\nelse if(args[0]==='run') { ${mode === "overflow" ? "process.stdout.write('x'.repeat(20000));" : ""} await new Promise(resolve=>setTimeout(resolve,60000)); }\n`, { mode: 0o700 });
+      await writeFile(dockerBin, `#!/usr/bin/env bun\nimport {appendFile} from 'node:fs/promises';\nconst args=process.argv.slice(2); await appendFile(${JSON.stringify(log)},JSON.stringify(args)+'\\n');\nif(args[0]==='image') { console.log('sha256:${"b".repeat(64)}|linux|${process.arch === "x64" ? "amd64" : "arm64"}'); }\nelse if(args[0]==='run') { ${mode === "overflow" ? "process.stdout.write('x'.repeat(20000));" : ""} await new Promise(resolve=>setTimeout(resolve,60000)); }\n`, { mode: 0o700 });
       const worker = new LocalNappletWorker({ dockerBin, deadlineMs: mode === "overflow" ? 3_000 : 250, maxOutputBytes: 1024 });
       await expect(worker.materialize(proposal)).rejects.toThrow(mode === "timeout" ? "WORKER_DEADLINE_EXCEEDED" : "WORKER_OUTPUT_LIMIT_EXCEEDED");
       const commands: string[][] = (await readFile(log, "utf8")).trim().split("\n").map((line) => JSON.parse(line));

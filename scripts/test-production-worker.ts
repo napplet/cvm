@@ -8,6 +8,7 @@
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { canonicalJson } from "../src/promotion/schema";
 
 const POLICY = "production-worker-policy-2026-10-27";
 const MAX_OUTPUT = 512 * 1024;
@@ -20,7 +21,7 @@ const logPath = reportPath.replace(/\.json$/u, "") + ".log";
 // Docker's default AppArmor profile denies mounts even with CAP_SYS_ADMIN.
 // This is deliberately not a production provider isolation certificate.
 const resourceArgs = ["--cpus", "1", "--memory", "1024m", "--memory-swap", "1024m", "--security-opt", "apparmor=unconfined"];
-const containers = [`napplet-cvm-production-worker-build-${run}`, `napplet-cvm-production-worker-idle-${run}`, `napplet-cvm-production-worker-ready-${run}`];
+const containers = [`napplet-cvm-production-worker-build-${run}`, `napplet-cvm-production-worker-idle-${run}`, `napplet-cvm-production-worker-ready-${run}`, `napplet-cvm-production-worker-jobs-${run}`];
 const lease = "a".repeat(64);
 const imageHash = "b".repeat(64);
 const toolchain = "c".repeat(64);
@@ -139,6 +140,33 @@ try {
   if (buildLogs.status !== 0) throw new Error(`WORKER_BUILD_LOGS_FAILED:${buildLogs.stderr}`);
   const commands = parseCommands(buildLogs.stdout); requireCommands(commands);
   report.build = { exitCode: 0, logsPath: logPath, commands, conformance: commands.find((record) => record.argv.includes("test:conformance")) };
+
+  const jobName = containers[3]!;
+  await requireDocker(["run", "-d", "--name", jobName, ...resourceArgs, "--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "-e", `NAPPLET_CVM_POLICY_VERSION=${POLICY}`, image, "/usr/local/bin/napplet-cvm-worker", "idle", "--provider-deadline-epoch-ms", String(Date.now() + 1_200_000)]);
+  const jobCommand = async (...args: string[]) => lastJson((await requireDocker(["exec", jobName, "/usr/local/bin/napplet-cvm-bootstrap", "/usr/local/bin/napplet-cvm-job", ...args])).stdout);
+  const jobs: unknown[] = [];
+  for (let revision = 1; revision <= 2; revision++) {
+    const body = canonicalJson({ version: 1, sessionId: "local-job-proof", actionId: `revision-${revision}`, expectedVersion: revision - 1, proposalSha256: lease, toolchainSha256: toolchain, deadlineEpochMs: Date.now() + 600_000, files: JSON.parse(sourceJson).files });
+    const bytes = Buffer.from(body), id = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+    for (let offset = 0, index = 0; offset < bytes.length; offset += 24_576, index++) {
+      const stored = await jobCommand("put", id, String(index), bytes.subarray(offset, offset + 24_576).toString("base64"));
+      if (stored.state !== "stored" || stored.jobId !== id) throw new Error("WORKER_JOB_UPLOAD_FAILED");
+    }
+    await jobCommand("start", id, String(Math.ceil(bytes.length / 24_576)));
+    // Replay after a lost response must never add another eight commands.
+    await jobCommand("start", id, String(Math.ceil(bytes.length / 24_576)));
+    let result: Record<string, unknown> | undefined;
+    const deadline = Date.now() + 600_000;
+    do { result = await jobCommand("status", id); if (result.state !== "pending") break; await Bun.sleep(1_000); } while (Date.now() < deadline);
+    if (result?.state !== "completed" || result.requestSha256 !== id || !Array.isArray(result.commands) || result.commands.length !== 8 || result.commands.some(command => command.exitCode !== 0)) throw new Error(`WORKER_DURABLE_JOB_FAILED:${JSON.stringify(result)}`);
+    const denied = await requireDocker(["exec", jobName, "/usr/local/bin/napplet-cvm-bootstrap", "/bin/sh", "-ec", `test ! -r /run/napplet-cvm-jobs/${id}/result.json; test ! -w /run/napplet-cvm-jobs/${id}/result.json`]);
+    if (denied.status !== 0) throw new Error("WORKER_JOB_RESULT_FORGEABLE");
+    const replayed = await jobCommand("start", id, String(Math.ceil(bytes.length / 24_576)));
+    const observedAgain = await jobCommand("status", id);
+    if (replayed.jobId !== id || canonicalJson(observedAgain) !== canonicalJson(result)) throw new Error("WORKER_JOB_REDISPATCHED");
+    jobs.push({ ...result, revision, resultAccess: "denied-to-generated-uid" });
+  }
+  report.durableJobs = jobs;
 
   const idleName = containers[1]!; const idleDeadline = Date.now() + 12_000;
   const idleArgv = ["/usr/local/bin/napplet-cvm-worker", "idle", "--provider-deadline-epoch-ms", String(idleDeadline)];

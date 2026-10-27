@@ -95,8 +95,8 @@ async function startServer(value: Scope, port: number): Promise<LaunchRecord> {
       const config = JSON.parse(await Bun.file(process.env.NAPPLET_CVM_DEV_CONFIG_PATH).text());
       server = await createDevelopmentContextVmServer({ config, stateRoot: process.env.NAPPLET_CVM_DEV_STATE_ROOT, port: Number(process.env.NAPPLET_CVM_DEV_PORT) });
       await trace(server.url === expectedUrl ? 'ready-port-match' : 'ready-port-mismatch');
-    } catch {
-      await trace('start-error');
+    } catch (error) {
+      await trace('start-error', safeDetail(error instanceof Error ? error.message.split(':')[0] : undefined));
       process.exit(1);
     }
     let heartbeatCount = 0;
@@ -119,6 +119,7 @@ async function startServer(value: Scope, port: number): Promise<LaunchRecord> {
   const startupDeadline = Date.now() + 120_000;
   while (Date.now() < startupDeadline) {
     if (await alive(record)) return record;
+    if (child.exitCode !== null) throw new Error("DEV_CONTEXTVM_START_FAILED:startup process exited; inspect the ContextVM log");
     await Bun.sleep(250);
   }
   if (record.pid && await ownedProcessAlive(record.pid)) process.kill(record.pid, "SIGTERM");

@@ -6,6 +6,8 @@ import { createVertexDeploymentClient } from "../../src/release/deployment/verte
 import { registerDeploymentClientFamilies } from "../../src/release/deployment/factory";
 
 const digest = (letter: string) => letter.repeat(64);
+const vertexPrice = { sourceUrl: "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing", sourceDocumentSha256: digest("1"), quoteSha256: digest("2"), observedAtMs: 1_000, freshUntilMs: 2_000, effectiveFromMs: 900, effectiveUntilMs: 3_000, currency: "USD" as const, inputMicrosPerMillion: 4_000_000, cachedInputMicrosPerMillion: 200_000, outputAndThoughtMicrosPerMillion: 20_000_000 };
+function vertexJournal() { const values = new Map<string, unknown>(); return { async claim(entry: { operationId: string }) { const prior = values.get(entry.operationId); if (prior) return { claimed: false, entry: prior }; values.set(entry.operationId, entry); return { claimed: true, entry }; }, async read(operationId: string) { return values.get(operationId); }, async write(entry: { operationId: string }) { values.set(entry.operationId, entry); } }; }
 
 test("contextvm: records only the official SDK correlation and a service-owned key reference", () => {
   const client = createContextVmDeploymentClient({
@@ -37,21 +39,24 @@ test("payments: keep NWC and Cashu consent references distinct and reconcile onl
 test("vertex: binds a Gemini request to the shared loopback Google client and never reads ambient ADC", async () => {
   const requests: unknown[] = [];
   const client = createVertexDeploymentClient({
-    candidateSha256: digest("c"), projectId: "napplet-cvm-run-1", location: "europe-west1", model: "gemini-2.5-pro",
-    credentialReference: "gcp:adc:release",
-    vertex: {
-      predict: async (input) => { requests.push(input); return { status: "completed" as const }; },
+    candidateSha256: digest("c"), projectId: "napplet-cvm-run-1", location: "global", model: "gemini-4-argon",
+    credentialReference: "gcp:adc:release", price: vertexPrice, journal: vertexJournal(),
+    interactions: {
+      create: async (input) => { requests.push(input); return { id: "original", model: "gemini-4-argon", input: input.input, status: "completed" as const, created: "2026-10-27T00:00:00.000Z", steps: [{ model_output: { content: [{ type: "text", text: "{}" }] } }], usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, thought_tokens: 0, tool_use_tokens: 0 } }; },
+      get: async () => undefined,
+      list: async () => ({ interactions: [] }),
     },
+    now: () => 1_500,
   });
-  await expect(client.dispatch({ operationId: "vertex-original-op", requestSha256: digest("d") })).resolves.toEqual({ status: "completed", operationId: "vertex-original-op" });
-  expect(requests).toEqual([expect.objectContaining({ operationId: "vertex-original-op", region: "europe-west1", modelReference: "gemini-2.5-pro", requestDigest: digest("d") })]);
-  expect(await client.reconcileOriginal({ operationId: "vertex-original-op" })).toEqual({ status: "completed", operationId: "vertex-original-op", originalOperationOnly: true });
-  expect(() => createVertexDeploymentClient({ candidateSha256: digest("c"), projectId: "napplet-cvm-run-1", location: "europe-west1", model: "gemini-2.5-pro", credentialReference: "ya29.raw-adc", vertex: { predict: async () => ({ status: "completed" as const }) } })).toThrow("DEPLOYMENT_SECRET_REFERENCE_INVALID");
+  await expect(client.dispatch({ operationId: "vertex-original-op", idea: "a napplet", systemInstruction: "JSON only", maximumOutputTokens: 32 })).resolves.toMatchObject({ status: "completed", operationId: "vertex-original-op" });
+  expect(requests).toEqual([expect.objectContaining({ location: "global", model: "gemini-4-argon", store: true })]);
+  expect(await client.reconcileOriginal({ operationId: "vertex-original-op" })).toMatchObject({ status: "completed", operationId: "vertex-original-op" });
+  expect(() => createVertexDeploymentClient({ candidateSha256: digest("c"), projectId: "napplet-cvm-run-1", location: "global", model: "gemini-3.8-flash", credentialReference: "ya29.raw-adc", price: vertexPrice, journal: vertexJournal(), interactions: { create: async () => undefined, get: async () => undefined, list: async () => ({ interactions: [] }) } })).toThrow();
 });
 
 test("contextvm: factory registers the four distinct non-infrastructure families", () => {
   const contextvm = createContextVmDeploymentClient({ serviceKeyReference: "nostr:contextvm-service-key", relaySetReference: "relay-set:primary", relaySetSha256: digest("e") });
   const payments = createPaymentDeploymentClients({ nwcConnectionReference: "nwc:consent:wallet-one", cashuWalletReference: "cashu:funded-wallet:one" });
-  const vertex = createVertexDeploymentClient({ candidateSha256: digest("f"), projectId: "napplet-cvm-run-1", location: "europe-west1", model: "gemini-2.5-pro", credentialReference: "gcp:adc:release", vertex: { predict: async () => ({ status: "blocked" as const }) } });
+  const vertex = createVertexDeploymentClient({ candidateSha256: digest("f"), projectId: "napplet-cvm-run-1", location: "global", model: "gemini-4-argon", credentialReference: "gcp:adc:release", price: vertexPrice, journal: vertexJournal(), interactions: { create: async () => undefined, get: async () => undefined, list: async () => ({ interaction_metadatas: [] }) } });
   expect(Object.keys(registerDeploymentClientFamilies({ contextvm, payments, vertex }))).toEqual(["contextvm", "cep8_lightning", "cashu", "model"]);
 });

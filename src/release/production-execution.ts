@@ -9,6 +9,7 @@ import type { AuthorizedLiveExecutionInput, ReleaseExecutionSession } from "./co
 import { validateAuthorizationReceipt, validateAuthorizationRequest } from "./authorization";
 import { createDeploymentExecutionConfig, type DeploymentExecutionConfig } from "./deployment/config";
 import { RELEASE_PRODUCTION_PROVIDER_IDS } from "./native-registry";
+import type { SealedFundingFeePolicyProjection } from "./costs/funding-fees";
 
 export type ReleaseExecutionFactoryInput = Readonly<{
   candidateSha256: string;
@@ -22,7 +23,21 @@ type ReleaseExecutionFactoryModule = Readonly<{
    * every post-receipt input without constructing a provider client. */
   releaseReadiness?: unknown;
   assessProductionFactoryReadiness?: (input: ReleaseExecutionFactoryInput) => unknown;
+  /** Sealed, read-only fee policy captured by the same pinned production
+   * factory. It contains approved mint/keyset IDs and bounds, never wallet
+   * material or a user-selected mint. */
+  fundingFeePolicyProjection?: unknown;
 }>;
+
+function parseFundingFeePolicyProjection(value: unknown): SealedFundingFeePolicyProjection {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("FUNDING_FEE_POLICY_CONSENT_REQUIRED");
+  const policy = value as Partial<SealedFundingFeePolicyProjection>;
+  if (!Number.isSafeInteger(policy.observedAtMs) || !Number.isSafeInteger(policy.freshUntilMs) || policy.observedAtMs! <= 0 || policy.freshUntilMs! <= policy.observedAtMs!
+    || !policy.nwc || !/^(?:0|[1-9][0-9]*)$/u.test(policy.nwc.maximumReceiverFeeSats) || !/^[a-f0-9]{64}$/u.test(policy.nwc.policySha256)
+    || !policy.cashu || !Number.isSafeInteger(policy.cashu.maximumProofs) || policy.cashu.maximumProofs < 1 || policy.cashu.maximumProofs > 10_000 || !Array.isArray(policy.cashu.mints) || policy.cashu.mints.length === 0
+    || policy.cashu.mints.some(mint => !mint || typeof mint.url !== "string" || !Array.isArray(mint.keysetIds) || mint.keysetIds.length === 0 || mint.keysetIds.some(id => typeof id !== "string" || !id))) throw new Error("FUNDING_FEE_POLICY_CONSENT_REQUIRED");
+  return Object.freeze({ observedAtMs: policy.observedAtMs!, freshUntilMs: policy.freshUntilMs!, nwc: Object.freeze({ maximumReceiverFeeSats: policy.nwc.maximumReceiverFeeSats, policySha256: policy.nwc.policySha256 }), cashu: Object.freeze({ maximumProofs: policy.cashu.maximumProofs, mints: Object.freeze(policy.cashu.mints.map(mint => Object.freeze({ url: mint.url, keysetIds: Object.freeze([...mint.keysetIds]) }))) }) });
+}
 
 export type ReleaseExecutionReadiness = Readonly<{
   providerFamilies: readonly string[];
@@ -183,6 +198,16 @@ export async function loadReleaseExecutionReadiness(input: Readonly<{
   catch { throw new Error("RELEASE_PRODUCTION_EXECUTION_READINESS_INVALID"); }
   if (!isReleaseExecutionSession(session)) throw new Error("RELEASE_PRODUCTION_EXECUTION_READINESS_INVALID");
   return readiness;
+}
+
+/** Reads the fee policy from the exact pinned production module, without
+ * invoking its session constructor or opening a wallet/secret surface. */
+export async function loadReleaseFundingFeePolicyProjection(input: Readonly<{ config: CertifierConfig; candidateSha256: string; workspace: string }>): Promise<SealedFundingFeePolicyProjection> {
+  const modulePin = executionModule(input.config);
+  if (input.config.controller!.candidateId !== input.candidateSha256.toLowerCase()) throw new Error("RELEASE_PRODUCTION_EXECUTION_CONFIG_INVALID");
+  const deploymentConfig = await loadDeploymentConfig(modulePin, { candidateSha256: input.candidateSha256, workspace: input.workspace, sourceRevision: input.config.controller!.sourceRevision });
+  const module = await importPinnedModule(modulePin, deploymentConfig);
+  return parseFundingFeePolicyProjection(module.fundingFeePolicyProjection);
 }
 
 function isCompletePreparedExecution(value: unknown): value is Omit<AuthorizedLiveExecutionInput, "registry"> {

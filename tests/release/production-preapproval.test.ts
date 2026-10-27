@@ -8,8 +8,25 @@ import { createCertificationBudgetCatalog, createProductionLiveCostCatalog } fro
 import { createLiveCostEstimator, RELEASE_COST_FAMILIES } from "../../src/release/costs/live-estimator";
 import { materializePreapproval, verifyPreapprovalMaterialization } from "../../src/release/preapproval-materializer";
 import { deriveReleaseTopology } from "../../src/release/topology";
+import { RELEASE_TOPOLOGY_QUANTITY_CONTRACT } from "../../src/release/topology";
 
 const digest = (letter: string) => letter.repeat(64);
+
+test("certification ceiling prices Argon input and output/thought at their distinct official units", async () => {
+  const estimator = createLiveCostEstimator({
+    catalog: createCertificationBudgetCatalog({ quantityContract: RELEASE_TOPOLOGY_QUANTITY_CONTRACT, now: () => 1_000_000 }),
+    now: () => 1_000_000,
+  });
+  const estimate = await estimator.estimate({
+    topologySha256: digest("9"),
+    quantities: RELEASE_COST_FAMILIES.map((provider) => ({ provider, quantityNanos: 1_000_000_000n, headroomBasisPoints: 1_000 })),
+    components: RELEASE_TOPOLOGY_QUANTITY_CONTRACT,
+  });
+  const model = estimate.lines.find((line) => line.provider === "model")!;
+  expect(model.components?.map((component) => component.priceMicros)).toEqual([40_000_000, 200_000_000]);
+  expect(estimate.maximumMicros).toBeGreaterThan(1_000_000_000);
+  expect(estimate.maximumMicros).toBeLessThan(2_000_000_000);
+});
 
 test("binds each regional Google component to one authenticated catalog SKU without exposing ADC", async () => {
   const calls: string[] = [];
@@ -19,7 +36,7 @@ test("binds each regional Google component to one authenticated catalog SKU with
       const url = String(request);
       calls.push(url);
       expect(init?.redirect).toBe("error");
-      if (url === "https://cloudbilling.googleapis.com/v1/services") {
+      if (url === "https://cloudbilling.googleapis.com/v1/services?pageSize=5000") {
         expect(init?.headers).toEqual(expect.objectContaining({ authorization: "Bearer opaque-adc-token-canary-value" }));
         return new Response(JSON.stringify({ services: [{ name: "services/RUN", serviceId: "RUN", displayName: "Cloud Run" }] }));
       }
@@ -31,7 +48,7 @@ test("binds each regional Google component to one authenticated catalog SKU with
         ] }));
       }
       if (url === "https://modal.com/pricing") return new Response("Modal Sandbox $0.00003942 / core / sec $0.00000667 / GiB / sec");
-      if (url === "https://fly.io/docs/about/pricing/") return new Response("shared-cpu-1x 256MB $0.00000078");
+      if (url === "https://docs.fly.io/about/pricing") return new Response("shared-cpu-1x 256MB $0.00000078 / second");
       return new Response("not found", { status: 404 });
     },
     google: {
@@ -57,16 +74,16 @@ test("binds each regional Google component to one authenticated catalog SKU with
   expect(modal).toMatchObject({ quotes: [{ provider: "modal", unit: "worker-100-seconds" }] });
   expect(fly).toMatchObject({ quotes: [{ provider: "fly", unit: "worker-100-seconds" }] });
   expect(calls).toEqual([
-    "https://cloudbilling.googleapis.com/v1/services",
+    "https://cloudbilling.googleapis.com/v1/services?pageSize=5000",
     "https://cloudbilling.googleapis.com/v1/services/RUN/skus?currencyCode=USD&pageSize=5000",
     "https://modal.com/pricing",
-    "https://fly.io/docs/about/pricing/",
+    "https://docs.fly.io/about/pricing",
   ]);
 
   const topology = await deriveReleaseTopology(digest("a"));
   // One Cloud SQL REGIONAL HA authority serves both ingress regions; billing
   // must not fabricate a second database from the second Cloud Run region.
-  expect(topology.quantityContract.map((line) => line.provider)).toHaveLength(19);
+  expect(topology.quantityContract.map((line) => line.provider)).toHaveLength(20);
   expect(new Set(topology.quantityContract.map((line) => line.quantityNanos)).size).toBeGreaterThan(1);
   expect(topology.quantityContract.find((line) => line.componentId === "cloud_run.europe-west1.cpu")?.quantityNanos).toBe("2700000000000");
   expect(topology.topologySha256).toMatch(/^[a-f0-9]{64}$/);
@@ -87,7 +104,7 @@ test("rejects redirects, unrecognized official rates, wrong units, and uniform q
 test("aggregates component receipts into one family line with complete provenance", async () => {
   const topology = await deriveReleaseTopology(digest("b"));
   const now = () => 1_000_000;
-  const googleComponents = topology.quantityContract.filter((component) => ["cloud_run", "gcs", "collector", "cloud_sql_postgres", "cep8_lightning", "cashu", "model"].includes(component.provider));
+  const googleComponents = topology.quantityContract.filter((component) => ["cloud_run", "gcs", "collector", "cloud_sql_postgres"].includes(component.provider));
   const catalog = createProductionLiveCostCatalog({
     now,
     quantityContract: topology.quantityContract.map((component) => ({ ...component, quantityNanos: BigInt(component.quantityNanos) })),
@@ -97,6 +114,11 @@ test("aggregates component receipts into one family line with complete provenanc
     } },
     sources: { async readOfficialPricing({ provider }) { return { sourceId: `${provider}-official-pricing`, bytes: new TextEncoder().encode(provider), observedAtMs: 999_999, freshUntilMs: 1_060_000,
       quotes: [{ provider, componentId: `${provider}.global`, skuId: `${provider}-official`, region: "global", currency: "USD", unit: "worker-100-seconds", priceMicros: 3 }] }; } },
+    vertex: { async readVertexGeminiPrice() { return { sourceUrl: "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing" as const, bytes: new TextEncoder().encode("vertex"), observedAtMs: 999_999, freshUntilMs: 1_060_000, currency: "USD" as const, location: "global" as const, model: "gemini-4-argon" as const, effectiveFrom: "2026-10-13" as const, effectiveUntil: "2026-11-30" as const, inputMicrosPerMillion: 4_000_000 as const, cachedInputMicrosPerMillion: 200_000 as const, outputAndThoughtMicrosPerMillion: 20_000_000 as const }; } },
+    fundingRailFees: { async readFeeFacts() { return [
+      { provider: "cep8_lightning", sourceId: "operator-nwc-fee-contract", sourceDocumentSha256: digest("d"), quoteSha256: digest("e"), currency: "USD", unit: "operation", priceMicros: 1, observedAtMs: 999_999, freshUntilMs: 1_060_000 },
+      { provider: "cashu", sourceId: "operator-cashu-fee-contract", sourceDocumentSha256: digest("f"), quoteSha256: digest("0"), currency: "USD", unit: "operation", priceMicros: 1, observedAtMs: 999_999, freshUntilMs: 1_060_000 },
+    ]; } },
   });
   const facts = await catalog.listPriceFacts({ providers: RELEASE_COST_FAMILIES });
   const cloudRun = facts.find((fact) => fact.provider === "cloud_run");
@@ -133,7 +155,9 @@ test("conservative certification ceilings remain distinct from exact user billin
   });
   expect(estimate.lines).toHaveLength(16);
   expect(estimate.maximumMicros).toBeGreaterThan(0);
-  expect(estimate.maximumMicros).toBeLessThanOrEqual(100_000_000);
+  // The fixed policy now budgets all 1,000 admission samples and eight suites,
+  // rather than a single 20-minute worker per provider.
+  expect(estimate.maximumMicros).toBeLessThanOrEqual(12_000_000_000);
   expect(estimate.lines.find((line) => line.provider === "model")?.maximumMicros).toBeGreaterThan(estimate.lines.find((line) => line.provider === "cloud_run")!.maximumMicros);
 });
 

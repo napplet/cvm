@@ -2,7 +2,7 @@ import { ReleaseCertificationController, RELEASE_WORKSPACE_ENV, releaseCandidate
 import { createNativeReleaseDiscoveryRegistry } from "../src/release/native-discovery";
 import { createReleaseControllerProviderRegistry } from "../src/release/native-registry";
 import { loadCertifierConfig } from "../src/certification/config";
-import { loadReleaseExecutionReadiness, loadReleaseExecutionSession } from "../src/release/production-execution";
+import { loadReleaseExecutionReadiness, loadReleaseExecutionSession, loadReleaseFundingFeePolicyProjection } from "../src/release/production-execution";
 import { preparePreApprovalPrerequisites } from "../src/release/deployment/consent";
 import { pendingOperatorFundingReadiness, releaseCertificationFundingReadiness, validateOperatorFundingReadiness } from "../src/release/deployment/operator-funding";
 import {
@@ -14,8 +14,11 @@ import {
 } from "../src/release/deployment/local-setup";
 import { readFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { createCertificationBudgetCatalog } from "../src/release/costs/production-catalog";
+import { createCertificationBudgetCatalog, createProductionLiveCostCatalog } from "../src/release/costs/production-catalog";
+import { createApplicationDefaultTokenPort, createOfficialPricingSources, PRODUCTION_CATALOG_SELECTORS } from "../src/release/costs/official-sources";
+import { createOfficialFundingRailFeePort, type SealedFundingFeePolicyProjection } from "../src/release/costs/funding-fees";
 import { RELEASE_TOPOLOGY_QUANTITY_CONTRACT } from "../src/release/topology";
+import { RELEASE_COST_FAMILIES, type LiveCostCatalogPort } from "../src/release/costs/live-estimator";
 
 const repositoryRoot = resolve(import.meta.dir, "..");
 const defaultWorkspace = join(repositoryRoot, ".runtime", "release-certification", "native-discovery-v1");
@@ -116,6 +119,22 @@ function zeroEffectCounters() {
   });
 }
 
+/** Build the controller-owned, read-only price discovery path. It neither
+ * selects a project nor creates a billing account; ADC is used only as an
+ * opaque request header for the public Cloud Billing catalog. */
+function currentOfficialCostCatalog(policy: SealedFundingFeePolicyProjection) {
+  const official = createOfficialPricingSources({
+    fetch,
+    adc: createApplicationDefaultTokenPort(),
+    google: { selectors: PRODUCTION_CATALOG_SELECTORS },
+    workers: {
+      modal: { cpuCores: 2, memoryGiB: 2, unit: "worker-100-seconds" },
+      fly: { preset: "shared-cpu-1x", memory: "1GB", unit: "worker-100-seconds" },
+    },
+  });
+  return createProductionLiveCostCatalog({ google: official.google, sources: official.sources, vertex: official.sources, fundingRailFees: createOfficialFundingRailFeePort({ policy, readUsdSatConversion: () => official.sources.readUsdSatConversion() }), quantityContract: RELEASE_TOPOLOGY_QUANTITY_CONTRACT });
+}
+
 /** Prefer the precise pinned execution session for read-only preapproval
  * discovery. A missing protected config remains a bounded blocker and falls
  * back to the existing no-credential registry; neither branch can plan,
@@ -154,6 +173,21 @@ async function main(): Promise<number> {
     const workspace = controllerWorkspace();
     if (setupRequested) {
       const candidateSha256 = await releaseCandidateSha256(candidatePath!);
+      const execution = await executionReadinessProjection({ candidateSha256, workspace });
+      if (execution.status !== "ready") {
+        console.log(JSON.stringify({ progress: "preapproval_blocked", candidateSha256, readiness: { execution }, zeroEffectCounters: zeroEffectCounters() }));
+        return 1;
+      }
+      try {
+        const config = await loadCertifierConfig();
+        const policy = await loadReleaseFundingFeePolicyProjection({ config, candidateSha256, workspace });
+        await currentOfficialCostCatalog(policy).listPriceFacts({ providers: RELEASE_COST_FAMILIES });
+      }
+      catch (error) {
+        const reasonCode = error instanceof Error && /^[A-Z][A-Z0-9_]{2,95}$/u.test(error.message) ? error.message : "OFFICIAL_PRICE_DISCOVERY_FAILED";
+        console.log(JSON.stringify({ progress: "preapproval_blocked", candidateSha256, readiness: { execution, pricing: { status: "blocked", reasonCode } }, zeroEffectCounters: zeroEffectCounters() }));
+        return 1;
+      }
       const setup = await createLocalOperatorFundingSetup({
         candidateSha256,
         loopback: createBunLocalFundingLoopbackPort(),
@@ -183,6 +217,26 @@ async function main(): Promise<number> {
       return result.state.status === "completed" ? 0 : 1;
     }
     const candidateSha256 = !status ? await releaseCandidateSha256(candidatePath!) : undefined;
+    // Implementation comes first. An incomplete factory must not ask the
+    // operator to fund, log in, or approve a candidate it cannot execute.
+    let preparedCatalog: LiveCostCatalogPort | undefined;
+    if (request) {
+      const execution = await executionReadinessProjection({ candidateSha256: candidateSha256!, workspace });
+      if (execution.status !== "ready") {
+        console.log(JSON.stringify({ progress: "preapproval_blocked", candidateSha256, readiness: { execution }, zeroEffectCounters: zeroEffectCounters() }));
+        return 1;
+      }
+      try {
+        const config = await loadCertifierConfig();
+        const policy = await loadReleaseFundingFeePolicyProjection({ config, candidateSha256: candidateSha256!, workspace });
+        const facts = await currentOfficialCostCatalog(policy).listPriceFacts({ providers: RELEASE_COST_FAMILIES });
+        preparedCatalog = Object.freeze({ async listPriceFacts() { return facts; } });
+      } catch (error) {
+        const reasonCode = error instanceof Error && /^[A-Z][A-Z0-9_]{2,95}$/u.test(error.message) ? error.message : "OFFICIAL_PRICE_DISCOVERY_FAILED";
+        console.log(JSON.stringify({ progress: "preapproval_blocked", candidateSha256, readiness: { execution, pricing: { status: "blocked", reasonCode } }, zeroEffectCounters: zeroEffectCounters() }));
+        return 1;
+      }
+    }
     const funding = !status ? await operatorFundingReadinessProjection(workspace) : undefined;
     const certificationFunding = funding ? await releaseCertificationFundingReadiness(funding) : undefined;
     const fundingPrerequisites = certificationFunding?.status === "pending" ? undefined : certificationFunding;
@@ -206,18 +260,21 @@ async function main(): Promise<number> {
           workspace,
           dryRun: true,
           providers: await preapprovalDiscoveryRegistry({ candidateSha256: candidateSha256!, workspace }),
-          costCatalog: createCertificationBudgetCatalog({ quantityContract: RELEASE_TOPOLOGY_QUANTITY_CONTRACT }),
+          // A project maximum-spend policy is useful only for local dry-run
+          // bounds. It is not vendor provenance and must never authorize a
+          // `--request`; that path requires injected fresh official facts.
+          ...(request ? { costCatalog: preparedCatalog! } : { costCatalog: createCertificationBudgetCatalog({ quantityContract: RELEASE_TOPOLOGY_QUANTITY_CONTRACT }) }),
           requireCurrentPriceCatalog: true,
           operatorFundingReadiness: certificationFunding,
         });
     } catch (error) {
-      if (!status && error instanceof Error && error.message === "RELEASE_CONTROLLER_LIVE_PRICE_CATALOG_REQUIRED") {
+      if (!status && error instanceof Error && ["RELEASE_CONTROLLER_LIVE_PRICE_CATALOG_REQUIRED", "ADC_APPLICATION_DEFAULT_LOGIN_REQUIRED"].includes(error.message)) {
         console.log(JSON.stringify({
           progress: "preapproval_blocked",
           candidateSha256,
           readiness: {
             capabilityDiscovery: { status: "completed", mode: "read_only" },
-            pricing: { status: "blocked", reasonCode: "RELEASE_CONTROLLER_LIVE_PRICE_CATALOG_REQUIRED" },
+            pricing: { status: "blocked", reasonCode: error.message },
             execution: await executionReadinessProjection({ candidateSha256: candidateSha256!, workspace }),
           },
           prerequisites: preparePreApprovalPrerequisites(fundingPrerequisites ? { funding: fundingPrerequisites } : undefined),

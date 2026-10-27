@@ -190,7 +190,11 @@ const EFFECT_DEFINITIONS = [
   ["cli-asset", "promoted_cli", "verify_integration"], ["publication", "upload", "verify_integration"],
   ["owner-relay", "owner_relay", "verify_integration"], ["attestation-relay", "attestation_relay", "verify_integration"],
 ] as const;
-const RELEASE_MAX_AUTHORIZED_COST_MICROS = 100_000_000;
+/* Upper policy fence for 2,016 operations × 100k input + 8,192 combined
+ * output/thought tokens, both worker cohorts and infrastructure, with
+ * headroom. This is not approval or a quote: the fresh source-priced exact
+ * envelope must still be reviewed and authorized before any protected effect. */
+const RELEASE_MAX_AUTHORIZED_COST_MICROS = 2_000_000_000;
 
 /** The local no-credential path has no external price authority. It produces
  * finite candidate-bound fixture facts only; authenticated readiness must

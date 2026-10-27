@@ -8,6 +8,8 @@ import { createVertexDeploymentClient } from "../../src/release/deployment/verte
 import { registerDeploymentClientFamilies } from "../../src/release/deployment/factory";
 
 const digest = (letter: string) => letter.repeat(64);
+const vertexPrice = { sourceUrl: "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing", sourceDocumentSha256: digest("1"), quoteSha256: digest("2"), observedAtMs: 1_000, freshUntilMs: 2_000, effectiveFromMs: 900, effectiveUntilMs: 3_000, currency: "USD" as const, inputMicrosPerMillion: 750_000, cachedInputMicrosPerMillion: 75_000, outputAndThoughtMicrosPerMillion: 3_750_000 };
+function vertexJournal() { const values = new Map<string, unknown>(); return { async claim(entry: { operationId: string }) { const prior = values.get(entry.operationId); if (prior) return { claimed: false, entry: prior }; values.set(entry.operationId, entry); return { claimed: true, entry }; }, async read(operationId: string) { return values.get(operationId); }, async write(entry: { operationId: string }) { values.set(entry.operationId, entry); } }; }
 
 test("host: binds a sealed artifact to the promoted reference-host Chromium fixture", async () => {
   const calls: unknown[] = [];
@@ -42,7 +44,7 @@ test("host: factory preserves distinct compatible-host and NIP-46 family identit
   const families = registerDeploymentClientFamilies({
     contextvm: createContextVmDeploymentClient({ serviceKeyReference: "nostr:contextvm-service-key", relaySetReference: "relay-set:primary", relaySetSha256: digest("1") }),
     payments: createPaymentDeploymentClients({ nwcConnectionReference: "nwc:consent:wallet-one", cashuWalletReference: "cashu:funded-wallet:one" }),
-    vertex: createVertexDeploymentClient({ candidateSha256: digest("2"), projectId: "napplet-cvm-run-1", location: "europe-west1", model: "gemini-2.5-pro", credentialReference: "gcp:adc:release", vertex: { predict: async () => ({ status: "blocked" as const }) } }),
+    vertex: createVertexDeploymentClient({ candidateSha256: digest("2"), projectId: "napplet-cvm-run-1", location: "global", model: "gemini-4-argon", credentialReference: "gcp:adc:release", price: vertexPrice, journal: vertexJournal(), interactions: { create: async () => undefined, get: async () => undefined, list: async () => ({ interactions: [] }) } }),
     host, signer,
   });
   expect(families.compatible_host).toBe(host);

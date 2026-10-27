@@ -4,7 +4,7 @@
   "git_repository": "git@gogs:owner/napplet-cvm.git",
   "git_branch": "main",
   "build_pack": "dockercompose",
-  "docker_compose_location": "/infra/homelab/compose.yaml",
+  "docker_compose_location": "/compose.homelab.yaml",
   "ports_exposes": "8080",
   "server_name": "beta-ssh",
   "project_name": "Homelab Apps",

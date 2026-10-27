@@ -17,7 +17,7 @@ services:
       retries: 10
   cvm:
     build:
-      context: ../..
+      context: .
       dockerfile: infra/homelab/Dockerfile
     network_mode: service:engine
     restart: unless-stopped

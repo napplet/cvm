@@ -64,6 +64,7 @@ postgresIsolation("real PostgreSQL keeps development history read-only and produ
     expect((await developmentFunding.status(principal)).available).toBe("41009");
     await pool.query(await Bun.file("migrations/phase-03/002_production_accounting.sql").text());
     await pool.query(await Bun.file("migrations/phase-03/003_cashu_custody_and_identities.sql").text());
+    await pool.query(await Bun.file("migrations/phase-03/004_production_rail_material_scope.sql").text());
     const superuserProductionDatabase = new PostgresFundingDatabase(pool as never, { realm: "production-real", deadlineMs: 1_000 });
     await expect(new FundingService(superuserProductionDatabase.funding).status(principal)).rejects.toThrow("ACCOUNTING_REALM_SUPERUSER_DENIED");
     expect((await pool.query(`SELECT source_table.relname AS source_table, target_schema.nspname AS target_schema

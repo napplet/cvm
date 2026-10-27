@@ -209,7 +209,7 @@ class PostgresCashuLifecycleRepository implements CashuTopUpRepository {
   }
 
   async recordOwnedCustodyOutputs(topUpId: string, protectedId: string, payloadDigest: string): Promise<Readonly<{ accepted: boolean; protectedId: string }>> {
-    return this.mutate(topUpId, (record) => {
+    return this.mutate<Readonly<{ accepted: boolean; protectedId: string }>>(topUpId, (record) => {
       if (!record.custody || record.custody.state === "prepared") throw new Error("CASHU_CUSTODY_DISPATCH_REQUIRED");
       if (record.custody.ownedOutputsProtectedId) {
         if (record.custody.ownedOutputsDigest !== payloadDigest) throw new Error("CASHU_CUSTODY_OUTPUT_CONFLICT");

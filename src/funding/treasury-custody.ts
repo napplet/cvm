@@ -13,8 +13,9 @@ export type CashuCustodyRecord = Readonly<{
 }>;
 
 function hex(bytes: Uint8Array): string { return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(""); }
-async function sha256(bytes: Uint8Array): Promise<string> { return hex(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))); }
 function utf8(value: string): Uint8Array { return new TextEncoder().encode(value); }
+function arrayBuffer(bytes: Uint8Array): ArrayBuffer { return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer; }
+async function sha256(bytes: Uint8Array): Promise<string> { return hex(new Uint8Array(await crypto.subtle.digest("SHA-256", arrayBuffer(bytes)))); }
 function freeze<T>(value: T): T { return Object.freeze(structuredClone(value)); }
 function canonical(value: unknown): string { return JSON.stringify(value); }
 
@@ -35,10 +36,12 @@ export async function canonicalCashuProofIdentities(token: Uint8Array, allowedKe
   const decoded = getDecodedToken(new TextDecoder().decode(token), [...allowedKeysetIds]);
   const mintUrl = canonicalCashuMintUrl(decoded.mint);
   const proofs = await Promise.all(decoded.proofs.map(async (proof) => {
-    const identity = {
-      mintUrl, unit: decoded.unit, keysetId: proof.id, amount: proof.amount.toString(), C: proof.C,
-      secretSha256: await sha256(utf8(proof.secret)),
-    };
+    // The Cashu nullifier is the exact UTF-8 secret, scoped to a canonical
+    // mint/unit. Signature points, DLEQ, denomination, and keyset encodings
+    // are validation inputs, not replay identity material: including them
+    // would let alternate encodings of an already-spent bearer evade the
+    // durable claim fence.
+    const identity = { mintUrl, unit: decoded.unit, secretSha256: await sha256(utf8(proof.secret)) };
     return sha256(utf8(canonical(identity)));
   }));
   if (new Set(proofs).size !== proofs.length) throw new Error("CASHU_PROOF_IDENTITY_DUPLICATE");
@@ -101,17 +104,17 @@ export class InMemoryCashuTreasuryCustody {
   async #encrypt(operationId: string, kind: string, plaintext: Uint8Array): Promise<Uint8Array> {
     const copy = new Uint8Array(plaintext);
     try {
-      const key = await crypto.subtle.importKey("raw", this.#key, { name: "AES-GCM" }, false, ["encrypt"]);
+      const key = await crypto.subtle.importKey("raw", arrayBuffer(this.#key), { name: "AES-GCM" }, false, ["encrypt"]);
       const nonce = crypto.getRandomValues(new Uint8Array(12));
-      const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce, additionalData: utf8(`${operationId}:${kind}`) }, key, copy));
+      const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: arrayBuffer(nonce), additionalData: arrayBuffer(utf8(`${operationId}:${kind}`)) }, key, arrayBuffer(copy)));
       const result = new Uint8Array(nonce.byteLength + ciphertext.byteLength); result.set(nonce); result.set(ciphertext, nonce.byteLength); return result;
     } finally { copy.fill(0); }
   }
 
   async #decrypt(operationId: string, kind: string, encrypted: Uint8Array): Promise<Uint8Array> {
     if (encrypted.byteLength <= 12) throw new Error("CASHU_CUSTODY_CIPHERTEXT_INVALID");
-    const key = await crypto.subtle.importKey("raw", this.#key, { name: "AES-GCM" }, false, ["decrypt"]);
-    try { return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: encrypted.slice(0, 12), additionalData: utf8(`${operationId}:${kind}`) }, key, encrypted.slice(12))); }
+    const key = await crypto.subtle.importKey("raw", arrayBuffer(this.#key), { name: "AES-GCM" }, false, ["decrypt"]);
+    try { return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: arrayBuffer(encrypted.slice(0, 12)), additionalData: arrayBuffer(utf8(`${operationId}:${kind}`)) }, key, arrayBuffer(encrypted.slice(12)))); }
     catch { throw new Error("CASHU_CUSTODY_CIPHERTEXT_INVALID"); }
   }
 }

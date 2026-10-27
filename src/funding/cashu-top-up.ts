@@ -74,7 +74,7 @@ export class InMemoryCashuTopUpRepository implements CashuTopUpRepository {
     });
   }
   async recordOwnedCustodyOutputs(topUpId: string, protectedId: string, payloadDigest: string): Promise<Readonly<{ accepted: boolean; protectedId: string }>> {
-    return this.#mutate(topUpId, (record) => {
+    return this.#mutate<Readonly<{ accepted: boolean; protectedId: string }>>(topUpId, (record) => {
       if (!record.custody || record.custody.state === "prepared") throw asError("CASHU_CUSTODY_DISPATCH_REQUIRED");
       if (record.custody.ownedOutputsProtectedId) {
         if (record.custody.ownedOutputsDigest !== payloadDigest) throw asError("CASHU_CUSTODY_OUTPUT_CONFLICT");
@@ -188,7 +188,6 @@ export class CashuTopUpCoordinator {
   }
 
   async #recordObservation(record: CashuTopUpRecord, submitted: Submit, observed: CashuSettlementObservation): Promise<CashuTopUpResult> {
-    if (process.env.CASHU_FIXTURE_DEBUG === "1") console.error("cashu observed", observed);
     if (observed.status === "unknown") {
       const result = frozen({ ...record.result, state: "reconciliation_pending" as const }); return this.#updateResult(record, result);
     }

@@ -77,6 +77,8 @@ describe("Cashu treasury custody", () => {
     expect(await canonicalCashuTokenIdentity(token([first]), [keysetId])).not.toBe(await canonicalCashuTokenIdentity(ordered, [keysetId]));
     const alternateSignatureEncoding = token([{ ...first, C: first.C.toUpperCase() }, second]);
     expect(await canonicalCashuProofIdentities(alternateSignatureEncoding, [keysetId])).toEqual(await canonicalCashuProofIdentities(ordered, [keysetId]));
+    const alternateDenomination = token([{ ...first, amount: 9n }, second]);
+    expect(await canonicalCashuProofIdentities(alternateDenomination, [keysetId])).toEqual(await canonicalCashuProofIdentities(ordered, [keysetId]));
   });
 
   test("exposes every individual proof commitment so overlap, subset, and superset claims collide", async () => {
@@ -110,5 +112,50 @@ describe("Cashu treasury custody", () => {
     expect({ swaps, restores }).toEqual({ swaps: 1, restores: 1 });
     expect(reconciled.state).toBe("credited");
     expect(store.postings).toHaveLength(1);
+  });
+
+  test("refuses malformed NUT-09 recovery responses without a replacement swap", async () => {
+    for (const mode of ["partial", "foreign", "duplicate", "missing", "corrupt", "missing-dleq"] as const) {
+      let swaps = 0; let restores = 0; let original: { B_: string; amount: string; id: string }[] = [];
+      const request: RequestFn = async (input) => {
+        if (input.endpoint.endsWith("/v1/info")) return { name: "fixture", version: "1", nuts: { 12: { supported: true } } } as never;
+        if (input.endpoint.includes("/v1/keysets")) return { keysets: [{ id: fixtureKeysetId, unit: "sat", active: true, input_fee_ppk: 0 }] } as never;
+        if (input.endpoint.includes("/v1/keys")) return { keysets: [{ id: fixtureKeysetId, unit: "sat", keys: generators }] } as never;
+        if (input.endpoint.endsWith("/v1/swap")) { swaps += 1; original = (input.requestBody as { outputs: typeof original }).outputs; throw new Error("LOST_RESPONSE_AFTER_MINT_SWAP"); }
+        if (input.endpoint.endsWith("/v1/restore")) {
+          restores += 1;
+          const outputs = (input.requestBody as { outputs: typeof original }).outputs;
+          const signatures = outputs.map((output) => signedOutput({ ...output, amount: output.amount.toString() }));
+          if (mode === "partial") return { outputs: outputs.slice(0, -1), signatures: signatures.slice(0, -1) } as never;
+          if (mode === "foreign") {
+            const foreign = blindMessage(new TextEncoder().encode("foreign-output"), 7n).B_.toHex(true);
+            return { outputs: [{ ...outputs[0]!, B_: foreign }, ...outputs.slice(1)], signatures: [signedOutput({ ...outputs[0]!, B_: foreign, amount: outputs[0]!.amount.toString() }), ...signatures.slice(1)] } as never;
+          }
+          if (mode === "duplicate") return { outputs: [outputs[0]!, outputs[0]!, ...outputs.slice(2)], signatures: [signatures[0]!, signatures[0]!, ...signatures.slice(2)] } as never;
+          if (mode === "missing") return { outputs, signatures: [] } as never;
+          if (mode === "corrupt") {
+            const wrongKey = privateKeys.get("32")!;
+            return { outputs, signatures: outputs.map((output) => {
+              const proof = createDLEQProof(pointFromHex(output.B_), wrongKey);
+              return { id: output.id, amount: output.amount, C_: createBlindSignature(pointFromHex(output.B_), wrongKey, output.id).C_.toHex(true), dleq: { e: hex(proof.e), s: hex(proof.s) } };
+            }) } as never;
+          }
+          return { outputs, signatures: signatures.map(({ dleq: _dleq, ...signature }) => signature) } as never;
+        }
+        if (input.endpoint.endsWith("/v1/checkstate")) return { states: (input.requestBody as { Ys: string[] }).Ys.map((Y) => ({ Y, state: "SPENT", witness: null })) } as never;
+        throw new Error(`unexpected:${input.endpoint}`);
+      };
+      const vault = new RecoveryVault(); const repository = new InMemoryCashuTopUpRepository(); const store = new TransactionalMemoryFundingStore();
+      const policy = { ...fixture.policies[0]!, mints: fixture.policies[0]!.mints.map((mint) => mint.url === mintUrl ? { ...mint, keysetIds: [fixtureKeysetId] } : mint) };
+      const principal = { pubkey: "d".repeat(64) }; const bearer = new TextEncoder().encode(getEncodedToken({ mint: mintUrl, unit: "sat", proofs: [validProof(`${mode}-input-16`, "16", fixtureKeysetId), validProof(`${mode}-input-4`, "4", fixtureKeysetId), validProof(`${mode}-input-1`, "1", fixtureKeysetId)] }));
+      const command = { principal, idempotencyKey: `recover-${mode}`, topUpId: `recover-${mode}`, amount: "21", unit: "sat" as const, pmi: fixture.pmi, token: bearer };
+      const first = new CashuTopUpCoordinator({ policies: new CashuMintPolicyRegistry(policy), provider: new CashuTsSettlementAdapter({ request }), vault, funding: new FundingService(store), repository });
+      expect((await first.submit(command)).state).toBe("reconciliation_pending");
+      const restarted = new CashuTopUpCoordinator({ policies: new CashuMintPolicyRegistry(policy), provider: new CashuTsSettlementAdapter({ request }), vault, funding: new FundingService(store), repository });
+      expect((await restarted.reconcile(command.topUpId)).state).toBe("reconciliation_pending");
+      expect({ swaps, restores }).toEqual({ swaps: 1, restores: 1 });
+      expect(store.postings).toHaveLength(0);
+      expect(original).toHaveLength(3);
+    }
   });
 });

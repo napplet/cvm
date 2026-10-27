@@ -13,7 +13,8 @@ const SourceSnapshotSchema = z.object({ sourceId: z.string().regex(/^[a-z][a-z0-
  * Cloud SKUs. They stay in the effect inventory but may not be smuggled into
  * a cloud price request or represented by a made-up zero vendor quote. */
 const GOOGLE_PROVIDERS = ["cloud_run", "gcs", "collector", "cloud_sql_postgres"] as const;
-const NON_BILLABLE_PROVIDERS = ["contextvm", "cep8_lightning", "cashu", "compatible_host", "signer", "promoted_cli", "upload", "owner_relay", "attestation_relay"] as const;
+const NON_BILLABLE_PROVIDERS = ["contextvm", "compatible_host", "signer", "promoted_cli", "upload", "owner_relay", "attestation_relay"] as const;
+const FUNDING_FEE_PROVIDERS = ["cep8_lightning", "cashu"] as const;
 const PAID_PROVIDERS = ["cloud_run", "gcs", "collector", "cloud_sql_postgres", "modal", "fly", "model"] as const;
 type Quote = z.infer<typeof SourceQuoteSchema>;
 type Snapshot = z.infer<typeof SourceSnapshotSchema>;
@@ -22,7 +23,12 @@ type Snapshot = z.infer<typeof SourceSnapshotSchema>;
 export type GooglePublicCatalogPort = Readonly<{ readCatalog(input: Readonly<{ projectId: undefined; providers: readonly typeof GOOGLE_PROVIDERS[number][] }>): Promise<unknown> }>;
 export type OfficialPricingSourcePort = Readonly<{ readOfficialPricing(input: Readonly<{ provider: "modal" | "fly" }>): Promise<unknown> }>;
 export type VertexModelPricePort = Readonly<{ readVertexGeminiPrice(): Promise<VertexGeminiPriceObservation> }>;
-export type ProductionLiveCostCatalogOptions = Readonly<{ google: GooglePublicCatalogPort; sources: OfficialPricingSourcePort; vertex: VertexModelPricePort; quantityContract?: readonly ReleaseTopologyQuantity[]; now?: () => number }>;
+const FundingFeeFactSchema = z.object({ provider: z.enum(FUNDING_FEE_PROVIDERS), sourceId: z.string().regex(/^[a-z][a-z0-9._-]{2,127}$/u), sourceDocumentSha256: DigestSchema, quoteSha256: DigestSchema, currency: z.literal("USD"), unit: z.string().regex(/^[a-z][a-z0-9._/-]{1,63}$/u), priceMicros: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), priceNanos: z.string().regex(/^\d+$/u).optional(), observedAtMs: z.number().int().positive(), freshUntilMs: z.number().int().positive() }).strict();
+/** Rail fees are account/mint/route-specific and do not have a Cloud SKU.
+ * The funding composition must provide a source-attributed current fee quote;
+ * absence is an approval blocker, never a fabricated zero-cost assumption. */
+export type FundingRailFeePort = Readonly<{ readFeeFacts(): Promise<readonly unknown[]> }>;
+export type ProductionLiveCostCatalogOptions = Readonly<{ google: GooglePublicCatalogPort; sources: OfficialPricingSourcePort; vertex: VertexModelPricePort; fundingRailFees?: FundingRailFeePort; quantityContract?: readonly ReleaseTopologyQuantity[]; now?: () => number }>;
 
 async function sha256Bytes(bytes: Uint8Array): Promise<string> { const hash = await crypto.subtle.digest("SHA-256", bytes); return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join(""); }
 async function sha256(value: unknown): Promise<string> { return sha256Bytes(new TextEncoder().encode(canonicalJson(value))); }
@@ -49,6 +55,18 @@ function familyComponents(provider: typeof PAID_PROVIDERS[number], snapshot: Sna
   if (actual.length !== expected.size || actual.some((quote) => !quote.componentId || !quote.skuId || !quote.region || !expected.has(quote.componentId) || expected.get(quote.componentId)!.region !== quote.region || expected.get(quote.componentId)!.unit !== quote.unit) || new Set(actual.map((quote) => quote.componentId)).size !== actual.length) throw new Error("PRODUCTION_CATALOG_COMPONENT_COVERAGE_REQUIRED");
   return Object.freeze(contract.map((component) => actual.find((quote) => quote.componentId === component.componentId)!));
 }
+function fundingFeeFacts(raw: readonly unknown[], nowMs: number, components: Map<string, readonly ReleaseTopologyQuantity[]> | undefined) {
+  const parsed = raw.map((value) => FundingFeeFactSchema.parse(value));
+  if (parsed.length !== FUNDING_FEE_PROVIDERS.length || parsed.some((value, index) => value.provider !== FUNDING_FEE_PROVIDERS[index])) throw new Error("FUNDING_RAIL_FEE_CONTRACT_REQUIRED");
+  return parsed.map((fact) => {
+    if (fact.observedAtMs > nowMs || fact.freshUntilMs <= nowMs || fact.freshUntilMs <= fact.observedAtMs) throw new Error("FUNDING_RAIL_FEE_CONTRACT_STALE");
+    const topology = components?.get(fact.provider);
+    if (!topology) return Object.freeze({ ...fact, status: "available" as const });
+    if (topology.length !== 1) throw new Error("FUNDING_RAIL_FEE_CONTRACT_REQUIRED");
+    const component = topology[0]!;
+    return Object.freeze({ ...fact, status: "available" as const, components: Object.freeze([{ componentId: component.componentId, skuId: `fee-contract-${fact.provider}`, region: component.region, unit: component.unit, priceMicros: fact.priceMicros, ...(fact.priceNanos === undefined ? {} : { priceNanos: fact.priceNanos }), quantityNanos: component.quantityNanos.toString(), headroomBasisPoints: component.headroomBasisPoints, sourceDocumentSha256: fact.sourceDocumentSha256 }]) });
+  });
+}
 
 function vertexSnapshot(observation: VertexGeminiPriceObservation): Snapshot {
   const priceNanos = (microsPerMillion: number): string => (BigInt(microsPerMillion) * 10n * 1_000n).toString();
@@ -69,10 +87,15 @@ export function createProductionLiveCostCatalog(options: ProductionLiveCostCatal
   return Object.freeze({
     async listPriceFacts(input: Readonly<{ providers: readonly string[] }>) {
       if (input.providers.length !== RELEASE_COST_FAMILIES.length || input.providers.some((provider, index) => provider !== RELEASE_COST_FAMILIES[index])) throw new Error("PRODUCTION_CATALOG_COVERAGE_REQUIRED");
+      if (!options.fundingRailFees) throw new Error("FUNDING_RAIL_FEE_CONTRACT_REQUIRED");
+      const [rawGoogle, rawModal, rawFly, rawVertex, rawFundingFees] = await Promise.all([options.google.readCatalog({ projectId: undefined, providers: GOOGLE_PROVIDERS }), options.sources.readOfficialPricing({ provider: "modal" }), options.sources.readOfficialPricing({ provider: "fly" }), options.vertex.readVertexGeminiPrice(), options.fundingRailFees.readFeeFacts()]);
+      /* Capture the evaluation instant after asynchronous source reads. A
+       * source observes itself at the end of its bounded fetch; sampling here
+       * before that work made every real-time snapshot look future-dated. */
       const nowMs = now(); if (!Number.isSafeInteger(nowMs) || nowMs <= 0) throw new Error("PRODUCTION_CATALOG_TIME_INVALID");
-      const [rawGoogle, rawModal, rawFly, rawVertex] = await Promise.all([options.google.readCatalog({ projectId: undefined, providers: GOOGLE_PROVIDERS }), options.sources.readOfficialPricing({ provider: "modal" }), options.sources.readOfficialPricing({ provider: "fly" }), options.vertex.readVertexGeminiPrice()]);
       const google = SourceSnapshotSchema.parse(rawGoogle); const modal = SourceSnapshotSchema.parse(rawModal); const fly = SourceSnapshotSchema.parse(rawFly); const vertex = vertexSnapshot(rawVertex); assertFresh(google, nowMs); assertFresh(modal, nowMs); assertFresh(fly, nowMs); assertFresh(vertex, nowMs);
       const snapshots = new Map<typeof PAID_PROVIDERS[number], Snapshot>([...GOOGLE_PROVIDERS.map((provider) => [provider, google] as const), ["modal", modal], ["fly", fly], ["model", vertex]]);
+      const railFees = new Map(fundingFeeFacts(rawFundingFees, nowMs, quantities).map((fact) => [fact.provider, fact] as const));
       /* Legacy consumers without a component contract still receive a single
        * model fact. Derive it from quoted model units rather than pretending a
        * product certification ceiling is a vendor price. */
@@ -80,6 +103,7 @@ export function createProductionLiveCostCatalog(options: ProductionLiveCostCatal
       const legacyQuotes = quantities === undefined ? new Map<typeof PAID_PROVIDERS[number], Quote>([...exactLegacyQuotes(google, GOOGLE_PROVIDERS), ...exactLegacyQuotes(modal, ["modal"]), ...exactLegacyQuotes(fly, ["fly"]), ["model", { provider: "model", currency: "USD", unit: "token-aggregate", priceMicros: legacyModel }]]) : undefined;
       const facts = await Promise.all(RELEASE_COST_FAMILIES.map(async (provider) => {
         const components = quantities?.get(provider);
+        if ((FUNDING_FEE_PROVIDERS as readonly string[]).includes(provider)) return railFees.get(provider as typeof FUNDING_FEE_PROVIDERS[number])!;
         if ((NON_BILLABLE_PROVIDERS as readonly string[]).includes(provider)) return nonBillableFact(provider as typeof NON_BILLABLE_PROVIDERS[number], nowMs, components);
         const paidProvider = ProviderSchema.parse(provider) as typeof PAID_PROVIDERS[number]; const snapshot = snapshots.get(paidProvider); if (!snapshot) throw new Error("PRODUCTION_CATALOG_COVERAGE_REQUIRED"); const sourceDocumentSha256 = await sha256Bytes(snapshot.bytes);
         if (!components) { const quote = legacyQuotes!.get(paidProvider); if (!quote) throw new Error("PRODUCTION_CATALOG_COVERAGE_REQUIRED"); return Object.freeze({ provider: paidProvider, sourceId: snapshot.sourceId, sourceDocumentSha256, quoteSha256: await sha256({ sourceDocumentSha256, quote }), currency: quote.currency, unit: quote.unit, priceMicros: quote.priceMicros, observedAtMs: snapshot.observedAtMs, freshUntilMs: snapshot.freshUntilMs, status: "available" as const }); }

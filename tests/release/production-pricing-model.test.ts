@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { createVertexDeploymentClient, createVertexInteractionsHttpPort, type VertexInteractionsPort, type VertexOperationJournal } from "../../src/release/deployment/vertex-client";
-import { createOfficialPricingSources, VERTEX_GEMINI_PRICING_URL } from "../../src/release/costs/official-sources";
-import { convertUsdMicrosToSats } from "../../src/model/price-card";
+import { BTC_USD_TICKER_URL, createOfficialPricingSources, VERTEX_GEMINI_PRICING_URL } from "../../src/release/costs/official-sources";
+import { convertUsdMicrosToSats, createVertexGeminiProductionPricing, priceReceipt } from "../../src/model/price-card";
 
 const digest = (letter: string) => letter.repeat(64);
 const price = Object.freeze({ sourceUrl: "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing", sourceDocumentSha256: digest("a"), quoteSha256: digest("b"), observedAtMs: 1_000, freshUntilMs: 2_000, effectiveFromMs: 900, effectiveUntilMs: 3_000, currency: "USD" as const, inputMicrosPerMillion: 4_000_000, cachedInputMicrosPerMillion: 200_000, outputAndThoughtMicrosPerMillion: 20_000_000 });
@@ -52,10 +52,23 @@ test("captures only the current global gross Gemini price table and rejects pric
   await expect(drift.sources.readVertexGeminiPrice()).rejects.toThrow("VERTEX_PRICE_SOURCE_GROSS_UNPROVEN");
 });
 
-test("USD receipt settlement requires fresh source-attributed conversion and always rounds against the service", () => {
-  const conversion = { source: { url: "https://example.com/fixed-usd-sat", capturedBytesSha256: digest("e"), observedAt: "2026-10-27T00:00:00.000Z", effectiveAt: "2026-10-27T00:00:00.000Z", freshUntil: "2026-10-27T01:00:00.000Z" }, satsPerUsd: { numerator: "100", denominator: "1" } };
-  expect(convertUsdMicrosToSats({ usdMicros: 4_740_001, conversion, at: "2026-10-27T00:30:00.000Z" })).toMatchObject({ currency: "sat", amount: "475" });
+test("USD receipt settlement captures a fresh executable USD/SAT source quote and always rounds against the service", async () => {
+  const sources = createOfficialPricingSources({ now: () => Date.parse("2026-10-27T00:00:00.000Z"), fetch: async (url) => {
+    if (String(url) !== BTC_USD_TICKER_URL) return new Response("no", { status: 404 });
+    return new Response(JSON.stringify({ price: "100000.00", product_id: "BTC-USD" }));
+  }, google: { selectors: [{ componentId: "cloud_run.europe-west1.cpu", provider: "cloud_run", serviceDisplayName: "Cloud Run", skuId: "RUN-CPU", region: "europe-west1", usageUnit: "seconds", unit: "worker-second" }] }, workers: { modal: { cpuCores: 1, memoryGiB: 1, unit: "worker-second" }, fly: { preset: "shared-cpu-1x", memory: "256MB", unit: "worker-second" } } });
+  const conversion = await sources.sources.readUsdSatConversion();
+  expect(conversion).toMatchObject({ source: { url: BTC_USD_TICKER_URL, observedAt: "2026-10-27T00:00:00.000Z" }, satsPerUsd: { numerator: "1000", denominator: "1" } });
+  expect(convertUsdMicrosToSats({ usdMicros: 4_740_001, conversion, at: "2026-10-27T00:30:00.000Z" })).toMatchObject({ currency: "sat", amount: "4741" });
   expect(() => convertUsdMicrosToSats({ usdMicros: 1, conversion, at: "2026-10-27T01:00:00.001Z" })).toThrow("USD_SAT_CONVERSION_STALE");
+});
+
+test("the Gemini model profile and USD price card can only be built from captured provider and FX sources", async () => {
+  const conversion = { source: { url: BTC_USD_TICKER_URL, capturedBytesSha256: digest("e"), observedAt: "2026-10-27T00:00:00.000Z", effectiveAt: "2026-10-27T00:00:00.000Z", freshUntil: "2026-10-27T01:00:00.000Z" }, satsPerUsd: { numerator: "1000", denominator: "1" } };
+  const pricing = await createVertexGeminiProductionPricing({ observation: { sourceUrl: VERTEX_GEMINI_PRICING_URL, bytes: new TextEncoder().encode("Vertex official source"), observedAtMs: Date.parse("2026-10-27T00:00:00.000Z"), freshUntilMs: Date.parse("2026-10-27T01:00:00.000Z"), currency: "USD", location: "global", model: "gemini-4-argon", inputMicrosPerMillion: 4_000_000, cachedInputMicrosPerMillion: 200_000, outputAndThoughtMicrosPerMillion: 20_000_000 }, conversion, profileId: "production-gemini-argon", maximumInputTokens: "1000", maximumOutputTokens: "100", deadlineMs: 30_000 });
+  expect(pricing.card).toMatchObject({ kind: "source_attributed_provider", provider: "vertex_ai_gemini", currency: "usd_micros", sources: { provider: { url: VERTEX_GEMINI_PRICING_URL }, conversion: { url: BTC_USD_TICKER_URL } } });
+  expect(priceReceipt({ receipt: { operationId: "op-price-source", providerRequestId: "vertex-source-1", profileId: pricing.profile.id, priceCardId: pricing.card.id, provider: "vertex_ai_gemini", model: "gemini-4-argon", selection: "unselected", completedAt: "2026-10-27T00:10:00.000Z", provenance: { protectedEvidenceReference: "evidence:vertex-source-1" }, usage: [{ dimension: "input_tokens", units: "1" }] }, card: pricing.card, profile: pricing.profile })).toMatchObject({ status: "priced", total: "4" });
+  await expect(createVertexGeminiProductionPricing({ observation: { sourceUrl: "https://example.com/not-vertex", bytes: new Uint8Array([1]), observedAtMs: 1, freshUntilMs: 2, currency: "USD", location: "global", model: "gemini-4-argon", inputMicrosPerMillion: 1, cachedInputMicrosPerMillion: 1, outputAndThoughtMicrosPerMillion: 1 }, conversion, profileId: "bad", maximumInputTokens: "1", maximumOutputTokens: "1", deadlineMs: 1 })).rejects.toThrow("VERTEX_PRODUCTION_PRICE_SOURCE_INVALID");
 });
 
 test("Gemini production receipt prices gross input, cached input, output, and thought tokens from one immutable source snapshot", async () => {
@@ -71,6 +84,21 @@ test("Gemini production receipt prices gross input, cached input, output, and th
 test("an incomplete cap-truncated interaction still records billed usage but never returns an artifact", async () => {
   const subject = client({ port: { async create(value) { return interaction(value.input, { status: "incomplete", steps: undefined, usage: { input_tokens: 1_000, cached_input_tokens: 0, output_tokens: 2_000, thought_tokens: 48, tool_use_tokens: 0 } }); }, async get() { throw new Error("not used"); }, async list() { throw new Error("not used"); } } });
   await expect(dispatch(subject, "vertex-incomplete-op")).resolves.toMatchObject({ status: "incomplete", operationId: "vertex-incomplete-op", cost: { currency: "USD", micros: 44_960 }, usage: { inputTokens: 1_000, outputTokens: 2_000, thoughtTokens: 48 } });
+});
+
+test("a persisted provider interaction ID is recovered by direct GET and a tampered receipt never settles", async () => {
+  const [store, records] = journal(); let gets = 0;
+  const subject = client({ journal: store, port: {
+    async create(value) { return interaction(value.input, { status: "in_progress", usage: undefined }); },
+    async get() { gets += 1; return interaction([{ role: "user", content: [{ type: "text", text: JSON.stringify({ nonce: "napplet-cvm:vertex-direct-op:ignored", request_sha256: digest("e"), idea: "wrong", system_instruction: "wrong", max_output_tokens: 1 }) }] }]); },
+    async list() { throw new Error("known IDs must not list"); },
+  } });
+  await expect(dispatch(subject, "vertex-direct-op")).resolves.toMatchObject({ status: "pending" });
+  await expect(dispatch(subject, "vertex-direct-op")).resolves.toMatchObject({ status: "unknown", reason: "receipt_invalid" });
+  expect(gets).toBe(1);
+  const stored = records.get("vertex-direct-op") as Record<string, unknown>;
+  records.set("vertex-direct-op", { ...stored, completedReceipt: { status: "incomplete", operationId: "vertex-direct-op", interactionId: stored.interactionId, model: "gemini-4-argon", requestSha256: stored.requestSha256, price, usage: { inputTokens: 1, cachedInputTokens: 0, outputTokens: 1, thoughtTokens: 0 }, cost: { currency: "USD", micros: 999_999 }, completedAt: "2026-10-27T00:00:00.000Z" } });
+  await expect(subject.reconcileOriginal({ operationId: "vertex-direct-op" })).resolves.toMatchObject({ status: "unknown", reason: "receipt_invalid" });
 });
 
 test("lost interaction creation is query-only on retry and a bounded nonce match can recover the original", async () => {

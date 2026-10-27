@@ -59,9 +59,72 @@ export type ModelProfile = z.infer<typeof ModelProfileSchema>;
 export type UsdSatConversion = z.infer<typeof UsdSatConversionSchema>;
 export type PricedUsageLine = Readonly<{ dimension: z.infer<typeof UsageDimensionSchema> | "service_fee"; units: string; numerator: string; denominator: string; quotient: string; remainder: string; charge: string }>;
 export type ReceiptPricing = Readonly<{ status: "priced"; profileId: string; priceCardId: string; lines: readonly PricedUsageLine[]; total: string }> | Readonly<{ status: "billing_invariant_failed"; code: string }>;
+export type VertexGeminiProductionPriceObservation = Readonly<{
+  sourceUrl: string;
+  bytes: Uint8Array;
+  observedAtMs: number;
+  freshUntilMs: number;
+  currency: "USD";
+  location: "global";
+  model: "gemini-4-argon";
+  inputMicrosPerMillion: number;
+  cachedInputMicrosPerMillion: number;
+  outputAndThoughtMicrosPerMillion: number;
+}>;
 
 function freeze<T>(value: T): T { return Object.freeze(value); }
 function ceilDivide(value: bigint, divisor: bigint): readonly [bigint, bigint, bigint] { const quotient = value / divisor; const remainder = value % divisor; return [quotient, remainder, remainder === 0n ? quotient : quotient + 1n]; }
+async function sha256Bytes(bytes: Uint8Array): Promise<string> { const digest = await crypto.subtle.digest("SHA-256", bytes); return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(""); }
+
+/** Constructs production pricing only from the exact captured Vertex source
+ * and a fresh settlement FX quote.  It deliberately has no rate arguments:
+ * callers cannot turn a project ceiling or a synthetic fixture into a billable
+ * Gemini price card. */
+export async function createVertexGeminiProductionPricing(input: Readonly<{
+  observation: VertexGeminiProductionPriceObservation;
+  conversion: UsdSatConversion;
+  profileId: string;
+  maximumInputTokens: string;
+  maximumOutputTokens: string;
+  deadlineMs: number;
+}>): Promise<Readonly<{ card: PriceCard; profile: ModelProfile; conversion: UsdSatConversion }>> {
+  const observation = input.observation;
+  if (!(observation.bytes instanceof Uint8Array) || observation.bytes.byteLength === 0 || observation.bytes.byteLength > 8 * 1024 * 1024
+    || observation.currency !== "USD" || observation.location !== "global" || observation.model !== "gemini-4-argon"
+    || !Number.isSafeInteger(observation.observedAtMs) || observation.observedAtMs <= 0
+    || !Number.isSafeInteger(observation.freshUntilMs) || observation.freshUntilMs <= observation.observedAtMs
+    || !Number.isSafeInteger(observation.inputMicrosPerMillion) || observation.inputMicrosPerMillion <= 0
+    || !Number.isSafeInteger(observation.cachedInputMicrosPerMillion) || observation.cachedInputMicrosPerMillion <= 0
+    || !Number.isSafeInteger(observation.outputAndThoughtMicrosPerMillion) || observation.outputAndThoughtMicrosPerMillion <= 0
+    || new URL(observation.sourceUrl).hostname !== "cloud.google.com") throw new Error("VERTEX_PRODUCTION_PRICE_SOURCE_INVALID");
+  const conversion = UsdSatConversionSchema.parse(input.conversion);
+  const observedAt = new Date(observation.observedAtMs).toISOString();
+  const freshUntil = new Date(observation.freshUntilMs).toISOString();
+  const source = freeze({ url: observation.sourceUrl, capturedBytesSha256: await sha256Bytes(observation.bytes), observedAt, effectiveAt: observedAt, freshUntil });
+  const cardId = `vertex-gemini-4-argon-${source.capturedBytesSha256.slice(0, 16)}`;
+  const card = freeze(PriceCardSchema.parse({
+    id: cardId, version: cardId, kind: "source_attributed_provider", provider: "vertex_ai_gemini", currency: "usd_micros", rounding: "ceil",
+    supportedDimensions: ["input_tokens", "cached_tokens", "output_tokens", "reasoning_tokens"],
+    rates: {
+      input_tokens: { numerator: String(observation.inputMicrosPerMillion), denominator: "1000000" },
+      cached_tokens: { numerator: String(observation.cachedInputMicrosPerMillion), denominator: "1000000" },
+      output_tokens: { numerator: String(observation.outputAndThoughtMicrosPerMillion), denominator: "1000000" },
+      reasoning_tokens: { numerator: String(observation.outputAndThoughtMicrosPerMillion), denominator: "1000000" },
+    },
+    ceilings: { inputTokens: input.maximumInputTokens, outputTokens: input.maximumOutputTokens },
+    validity: { notBefore: observedAt, notAfter: freshUntil }, sources: { provider: source, conversion: conversion.source },
+  }));
+  const profile = freeze(ModelProfileSchema.parse({
+    id: input.profileId, provider: "vertex_ai_gemini", model: "gemini-4-argon", priceCardId: card.id, selection: "unselected",
+    maximumUnits: [
+      { dimension: "input_tokens", units: input.maximumInputTokens },
+      { dimension: "cached_tokens", units: input.maximumInputTokens },
+      { dimension: "output_tokens", units: input.maximumOutputTokens },
+      { dimension: "reasoning_tokens", units: input.maximumOutputTokens },
+    ], deadlineMs: input.deadlineMs,
+  }));
+  return freeze({ card, profile, conversion });
+}
 
 /** Converts an immutable gross USD-micro receipt to the sat ledger amount.
  * Callers must bind this exact conversion evidence to the same operation;

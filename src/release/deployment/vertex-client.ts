@@ -86,6 +86,9 @@ function generatedResult(interaction: Interaction): string | undefined {
   if (!output || output.length !== 1) return undefined;
   return output[0];
 }
+function validStructuredResult(result: string): boolean {
+  try { const structured: unknown = JSON.parse(result); return !!structured && typeof structured === "object" && !Array.isArray(structured); } catch { return false; }
+}
 function completion(entry: JournalEntry, interaction: Interaction) {
   if (interaction.status !== "completed" && interaction.status !== "incomplete") return undefined;
   const usage = interaction.usage;
@@ -98,12 +101,16 @@ function completion(entry: JournalEntry, interaction: Interaction) {
   const costUsdMicros = ceilMillion(numerator);
   if (interaction.status === "incomplete") return frozen({ status: "incomplete" as const, operationId: entry.operationId, interactionId: interaction.id, model: entry.model, requestSha256: entry.requestSha256, price: entry.price, usage: frozen({ inputTokens, cachedInputTokens: usage.cached_input_tokens, outputTokens: usage.output_tokens, thoughtTokens: usage.thought_tokens }), cost: frozen({ currency: "USD" as const, micros: costUsdMicros }), completedAt: interaction.created });
   const result = generatedResult(interaction); if (!result) return undefined;
-  try { const structured: unknown = JSON.parse(result); if (!structured || typeof structured !== "object" || Array.isArray(structured)) return undefined; } catch { return undefined; }
+  if (!validStructuredResult(result)) return undefined;
   return frozen({ status: "completed" as const, operationId: entry.operationId, interactionId: interaction.id, model: entry.model, requestSha256: entry.requestSha256, price: entry.price, generatedResult: result, usage: frozen({ inputTokens, cachedInputTokens: usage.cached_input_tokens, outputTokens: usage.output_tokens, thoughtTokens: usage.thought_tokens }), cost: frozen({ currency: "USD" as const, micros: costUsdMicros }), completedAt: interaction.created });
 }
 function persistedReceipt(entry: JournalEntry, raw: unknown) {
   const receipt = ReceiptSchema.safeParse(raw);
-  if (!receipt.success || receipt.data.operationId !== entry.operationId || receipt.data.requestSha256 !== entry.requestSha256 || receipt.data.model !== entry.model || JSON.stringify(receipt.data.price) !== JSON.stringify(entry.price)) return undefined;
+  if (!receipt.success || receipt.data.operationId !== entry.operationId || receipt.data.requestSha256 !== entry.requestSha256 || receipt.data.model !== entry.model || entry.interactionId === undefined || receipt.data.interactionId !== entry.interactionId || JSON.stringify(receipt.data.price) !== JSON.stringify(entry.price)) return undefined;
+  const usage = receipt.data.usage;
+  if (usage.cachedInputTokens > usage.inputTokens || usage.outputTokens + usage.thoughtTokens > entry.request.maximumOutputTokens || (receipt.data.status === "completed" && (!receipt.data.generatedResult || !validStructuredResult(receipt.data.generatedResult))) || (receipt.data.status === "incomplete" && receipt.data.generatedResult !== undefined)) return undefined;
+  const recomputed = ceilMillion(BigInt(usage.inputTokens - usage.cachedInputTokens) * BigInt(entry.price.inputMicrosPerMillion) + BigInt(usage.cachedInputTokens) * BigInt(entry.price.cachedInputMicrosPerMillion) + BigInt(usage.outputTokens + usage.thoughtTokens) * BigInt(entry.price.outputAndThoughtMicrosPerMillion));
+  if (receipt.data.cost.currency !== "USD" || receipt.data.cost.micros !== recomputed) return undefined;
   return receipt.data;
 }
 function unknown(operationId: string, reason: "lost_response" | "unmatched_original" | "receipt_invalid") { return frozen({ status: "unknown" as const, operationId, reason, originalOperationOnly: true as const }); }
@@ -123,6 +130,17 @@ export function createVertexDeploymentClient(input: Readonly<{
   const same = (entry: JournalEntry, operationId: string, requestSha256: string) => entry.operationId === operationId && entry.requestSha256 === requestSha256 && entry.candidateSha256 === candidateSha256 && entry.projectId === projectId && entry.model === "gemini-4-argon" && entry.location === "global";
   async function recover(entry: JournalEntry) {
     if (entry.completedReceipt !== undefined) return persistedReceipt(entry, entry.completedReceipt) ?? unknown(entry.operationId, "receipt_invalid");
+    /* A successful create persisted the provider ID. Recovery must query that
+     * exact resource first; scanning unrelated pages can otherwise exhaust the
+     * bounded read budget before reaching a known paid interaction. */
+    if (entry.interactionId !== undefined) {
+      let direct: Interaction | undefined;
+      try { direct = interactionFrom(await input.interactions.get({ projectId, location: "global", id: entry.interactionId })); } catch { return unknown(entry.operationId, "unmatched_original"); }
+      if (!direct || direct.id !== entry.interactionId || direct.model !== entry.model || !sameInput(entry, direct)) return unknown(entry.operationId, "receipt_invalid");
+      if (direct.status === "in_progress" || direct.status === "queued") return pending(entry.operationId);
+      const receipt = completion(entry, direct); if (!receipt) return unknown(entry.operationId, "receipt_invalid");
+      await input.journal.write(frozen({ ...entry, completedReceipt: receipt })); return receipt;
+    }
     let found: Interaction | undefined; let pageToken: string | undefined; const visitedTokens = new Set<string>(); const deadline = Date.now() + RECOVERY_DEADLINE_MS; let reads = 0;
     for (let page = 0; page < 3; page += 1) {
       if (Date.now() >= deadline) return unknown(entry.operationId, "unmatched_original");
@@ -168,7 +186,7 @@ export function createVertexDeploymentClient(input: Readonly<{
       const operationId = OperationSchema.parse(value.operationId); const raw = await input.journal.read(operationId);
       if (raw === undefined || raw === null) return unknown(operationId, "unmatched_original");
       const entry = JournalSchema.parse(raw);
-      if (value.requestSha256 !== undefined && entry.requestSha256 !== DigestSchema.parse(value.requestSha256)) throw new Error("VERTEX_OPERATION_IDENTITY_CONFLICT"); return recover(entry);
+      if (!same(entry, operationId, entry.requestSha256) || (value.requestSha256 !== undefined && entry.requestSha256 !== DigestSchema.parse(value.requestSha256))) throw new Error("VERTEX_OPERATION_IDENTITY_CONFLICT"); return recover(entry);
     },
   });
 }

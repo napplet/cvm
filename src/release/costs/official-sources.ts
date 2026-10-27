@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { GooglePublicCatalogPort, OfficialPricingSourcePort } from "./production-catalog";
+import type { UsdSatConversion } from "../../model/price-card";
 
 /** Google public price pages are multi-MiB. This remains an aggregate cap, so
  * pagination cannot turn into an unbounded memory read. */
@@ -9,6 +10,10 @@ const DEFAULT_TIMEOUT_MS = 5_000;
 const GOOGLE_ORIGIN = "https://cloudbilling.googleapis.com";
 const MODAL_PRICING_URL = "https://modal.com/pricing";
 const FLY_PRICING_URL = "https://docs.fly.io/about/pricing";
+/** Coinbase Exchange's public ticker is an actual executable USD market quote,
+ * not the display-only BTC/USD cache.  A settlement binds its exact response
+ * digest and may never substitute a stale/cached value. */
+export const BTC_USD_TICKER_URL = "https://api.exchange.coinbase.com/products/BTC-USD/ticker";
 export const VERTEX_GEMINI_PRICING_URL = "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing";
 /** Only infrastructure is discoverable through Cloud Billing. Payment rails
  * are funding capital (and separately contracted fees); model prices come
@@ -68,7 +73,6 @@ export type VertexGeminiPriceObservation = Readonly<{
   sourceUrl: typeof VERTEX_GEMINI_PRICING_URL; bytes: Uint8Array; observedAtMs: number; freshUntilMs: number; currency: "USD"; location: "global"; model: "gemini-4-argon";
   effectiveFrom: "2026-10-13"; effectiveUntil: "2026-11-30"; inputMicrosPerMillion: 4_000_000; cachedInputMicrosPerMillion: 200_000; outputAndThoughtMicrosPerMillion: 20_000_000;
 }>;
-
 /** Reads ADC only from gcloud stdout into this process's memory. No project is
  * selected, and no token crosses argv, environment, a digest, or an output. */
 export function createApplicationDefaultTokenPort(): ApplicationDefaultTokenPort {
@@ -92,7 +96,7 @@ function validSkuId(value: string): boolean { return /^[A-Za-z0-9._-]{2,127}$/u.
 
 async function readOfficial(fetcher: OfficialFetch, url: string, token?: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<Uint8Array> {
   const parsed = new URL(url);
-  if (parsed.protocol !== "https:" || !["cloudbilling.googleapis.com", "modal.com", "docs.fly.io", "cloud.google.com"].includes(parsed.hostname)) throw new Error("OFFICIAL_SOURCE_ORIGIN_REJECTED");
+  if (parsed.protocol !== "https:" || !["cloudbilling.googleapis.com", "modal.com", "docs.fly.io", "cloud.google.com", "api.exchange.coinbase.com"].includes(parsed.hostname)) throw new Error("OFFICIAL_SOURCE_ORIGIN_REJECTED");
   const headers: Record<string, string> = { accept: "application/json, text/html;q=0.9, text/plain;q=0.8" };
   if (token !== undefined) headers.authorization = `Bearer ${token}`;
   const controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined;
@@ -109,6 +113,16 @@ async function readOfficial(fetcher: OfficialFetch, url: string, token?: string,
 function json(bytes: Uint8Array): Record<string, unknown> { try { const value: unknown = JSON.parse(new TextDecoder().decode(bytes)); assertBounded(value, "OFFICIAL_SOURCE_PARSER_DRIFT"); return value; } catch (error) { if (error instanceof Error && error.message === "OFFICIAL_SOURCE_PARSER_DRIFT") throw error; throw new Error("OFFICIAL_SOURCE_PARSER_DRIFT"); } }
 function joinRawDocuments(documents: readonly Uint8Array[]): Uint8Array { const total = documents.reduce((sum, document) => sum + document.byteLength, 0); if (total === 0 || total > MAX_SOURCE_BYTES) throw new Error("OFFICIAL_SOURCE_BYTES_REJECTED"); const joined = new Uint8Array(total); let cursor = 0; for (const document of documents) { joined.set(document, cursor); cursor += document.byteLength; } return joined; }
 function decimalToNanos(value: string): bigint { if (!DecimalSchema.test(value)) throw new Error("OFFICIAL_SOURCE_PARSER_DRIFT"); const [whole, fraction = ""] = value.split("."); if (fraction.length > 9) throw new Error("OFFICIAL_SOURCE_PRECISION_REJECTED"); return BigInt(whole!) * 1_000_000_000n + BigInt((fraction + "000000000").slice(0, 9)); }
+function decimalToInteger(value: string): readonly [bigint, bigint] {
+  if (!DecimalSchema.test(value)) throw new Error("USD_SAT_SOURCE_PARSER_DRIFT");
+  const [whole, fraction = ""] = value.split(".");
+  if (fraction.length > 12) throw new Error("USD_SAT_SOURCE_PRECISION_REJECTED");
+  const scale = 10n ** BigInt(fraction.length);
+  const amount = BigInt(whole!) * scale + BigInt(fraction || "0");
+  if (amount <= 0n) throw new Error("USD_SAT_SOURCE_PRICE_REJECTED");
+  return [amount, scale];
+}
+function gcd(left: bigint, right: bigint): bigint { let a = left; let b = right; while (b !== 0n) [a, b] = [b, a % b]; return a; }
 /** Keep nano-dollar precision for the estimator. The exposed micro value is a
  * conservative ceiling and is never used for the exact calculation. */
 function nanosToMicros(nanos: bigint): number { if (nanos <= 0n) throw new Error("OFFICIAL_SOURCE_PRICE_REJECTED"); const micros = (nanos + 999n) / 1_000n; if (micros > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("OFFICIAL_SOURCE_PRICE_REJECTED"); return Number(micros); }
@@ -165,7 +179,7 @@ function flyMonthlyMachinePrice(document: string, preset: string, memory: string
 
 /** The only production pricing readers: bounded official GETs, Cloud Billing
  * service/SKU endpoints only, and opaque ADC that never leaves request memory. */
-export function createOfficialPricingSources(options: OfficialPricingSourcesOptions): Readonly<{ google: GooglePublicCatalogPort; sources: OfficialPricingSourcePort & Readonly<{ readVertexGeminiPrice(): Promise<VertexGeminiPriceObservation> }> }> {
+export function createOfficialPricingSources(options: OfficialPricingSourcesOptions): Readonly<{ google: GooglePublicCatalogPort; sources: OfficialPricingSourcePort & Readonly<{ readVertexGeminiPrice(): Promise<VertexGeminiPriceObservation>; readUsdSatConversion(): Promise<UsdSatConversion> }> }> {
   const now = options.now ?? Date.now;
   const freshForMs = options.freshnessMs ?? 60 * 60 * 1000;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -208,6 +222,25 @@ export function createOfficialPricingSources(options: OfficialPricingSourcesOpti
         if (!credited.test(source) || !gross.test(source) || !/Promotional pricing provided through 50% credits back on net spend/iu.test(source)) throw new Error("VERTEX_PRICE_SOURCE_GROSS_UNPROVEN");
         const observedAtMs = now(); if (!Number.isSafeInteger(observedAtMs) || observedAtMs <= 0) throw new Error("OFFICIAL_SOURCE_TIME_REJECTED");
         return frozenVertexPrice({ bytes, observedAtMs, freshUntilMs: observedAtMs + freshForMs });
+      },
+      async readUsdSatConversion() {
+        const bytes = await readOfficial(options.fetch, BTC_USD_TICKER_URL, undefined, timeoutMs);
+        const ticker = json(bytes);
+        const quotedUsdPerBtc = text(ticker.price);
+        if (!quotedUsdPerBtc) throw new Error("USD_SAT_SOURCE_PARSER_DRIFT");
+        const [usdPerBtc, scale] = decimalToInteger(quotedUsdPerBtc);
+        const numerator = 100_000_000n * scale;
+        const divisor = gcd(numerator, usdPerBtc);
+        const observedAtMs = now();
+        if (!Number.isSafeInteger(observedAtMs) || observedAtMs <= 0) throw new Error("OFFICIAL_SOURCE_TIME_REJECTED");
+        const observedAt = new Date(observedAtMs).toISOString();
+        const freshUntil = new Date(observedAtMs + freshForMs).toISOString();
+        const hash = await crypto.subtle.digest("SHA-256", bytes);
+        const capturedBytesSha256 = Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
+        return Object.freeze({
+          source: Object.freeze({ url: BTC_USD_TICKER_URL, capturedBytesSha256, observedAt, effectiveAt: observedAt, freshUntil }),
+          satsPerUsd: Object.freeze({ numerator: (numerator / divisor).toString(), denominator: (usdPerBtc / divisor).toString() }),
+        });
       },
       async readOfficialPricing(input) {
         const provider = WorkerProviderSchema.parse(input.provider); const url = provider === "modal" ? MODAL_PRICING_URL : FLY_PRICING_URL; const bytes = await readOfficial(options.fetch, url, undefined, timeoutMs); const document = new TextDecoder().decode(bytes); const normalized = officialText(document);

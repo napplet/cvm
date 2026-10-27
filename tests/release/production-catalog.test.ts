@@ -53,6 +53,10 @@ function catalog(overrides: Partial<Record<string, unknown>> = {}) {
         },
       },
       vertex: { async readVertexGeminiPrice() { return vertex(); } },
+      fundingRailFees: { async readFeeFacts() { return [
+        { provider: "cep8_lightning", sourceId: "operator-nwc-fee-contract", sourceDocumentSha256: digest("c"), quoteSha256: digest("d"), currency: "USD", unit: "operation", priceMicros: 3, observedAtMs: nowMs - 1, freshUntilMs: nowMs + 60_000 },
+        { provider: "cashu", sourceId: "operator-cashu-fee-contract", sourceDocumentSha256: digest("e"), quoteSha256: digest("f"), currency: "USD", unit: "operation", priceMicros: 4, observedAtMs: nowMs - 1, freshUntilMs: nowMs + 60_000 },
+      ]; } },
       ...overrides,
     }),
   };
@@ -67,6 +71,8 @@ test("derives one complete current sixteen-family catalog from public sources wi
   expect(facts.find((fact) => fact.provider === "contextvm")).toMatchObject({ priceMicros: 0, sourceId: "napplet-cvm-nonbillable-policy-v1", unit: "operation" });
   expect(facts.find((fact) => fact.provider === "modal")).toMatchObject({ priceMicros: 18, sourceId: "modal-official-pricing" });
   expect(facts.find((fact) => fact.provider === "fly")).toMatchObject({ priceMicros: 19, sourceId: "fly-official-pricing" });
+  expect(facts.find((fact) => fact.provider === "cep8_lightning")).toMatchObject({ priceMicros: 3, sourceId: "operator-nwc-fee-contract" });
+  expect(facts.find((fact) => fact.provider === "cashu")).toMatchObject({ priceMicros: 4, sourceId: "operator-cashu-fee-contract" });
   expect(facts.some((fact) => fact.priceMicros === 158 || fact.sourceId.includes("fixture"))).toBeFalse();
   expect(facts.every((fact) => /^[a-f0-9]{64}$/u.test(fact.sourceDocumentSha256) && /^[a-f0-9]{64}$/u.test(fact.quoteSha256))).toBeTrue();
 });
@@ -80,5 +86,7 @@ test("fails closed on stale, incomplete, changed, unpriced, or non-USD source fa
   }
   const fixture = catalog();
   await expect(fixture.catalog.listPriceFacts({ providers: [...RELEASE_COST_FAMILIES].reverse() })).rejects.toThrow("PRODUCTION_CATALOG_COVERAGE_REQUIRED");
+  const noFeeContract = catalog({ fundingRailFees: undefined });
+  await expect(noFeeContract.catalog.listPriceFacts({ providers: RELEASE_COST_FAMILIES })).rejects.toThrow("FUNDING_RAIL_FEE_CONTRACT_REQUIRED");
   expect(digest("a")).toHaveLength(64);
 });

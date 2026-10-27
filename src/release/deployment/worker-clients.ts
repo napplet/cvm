@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ModalSdkPort } from "../../worker-adapters/modal-worker";
 import { PRODUCTION_WORKER_POLICY, type ProductionWorkerPolicy } from "../../worker-adapters/production-worker-policy";
+import { createWorkerBenchmarkSchedule, WorkerBenchmarkProfileSchema } from "../../admission/benchmark";
 
 const ImageSchema = z.string().regex(/^.+@sha256:[a-f0-9]{64}$/iu);
 const AppNameSchema = z.string().regex(/^[a-z][a-z0-9-]{2,62}$/u);
@@ -13,16 +14,9 @@ export { PRODUCTION_WORKER_POLICY };
 export type FlyFetch = (url: string, init: RequestInit) => Promise<Response>;
 export type WorkerSchedule = Readonly<{ id: string; cohort: typeof COHORTS[number] }>;
 
-/** Mirrors the verifier's schedule exactly: 1,000 total accepted samples,
- * then a 200 pool-hit forced cohort and a 200 pool-miss/cold/contention cohort. */
-export const LOCKED_WORKER_SCHEDULE: readonly WorkerSchedule[] = Object.freeze(Array.from({ length: 1_000 }, (_, index) => Object.freeze({
-  id: `benchmark-${index + 1}`,
-  cohort: index < 200
-    ? "pool_hit"
-    : index < 400
-      ? (["pool_miss", "cold", "contention"] as const)[index % 3]!
-      : COHORTS[index % COHORTS.length]!,
-})));
+/** Exact verifier schedule: 1,000 total attempts including both forced
+ * 200-attempt cohorts, rather than a transport-local approximation. */
+export const LOCKED_WORKER_SCHEDULE: readonly WorkerSchedule[] = Object.freeze(createWorkerBenchmarkSchedule(WorkerBenchmarkProfileSchema.parse({})).map(({ id, cohort }) => Object.freeze({ id, cohort })));
 
 /** The immutable cross-provider envelope. It is construction evidence only;
  * selection remains impossible without fresh protected cohort evidence. */

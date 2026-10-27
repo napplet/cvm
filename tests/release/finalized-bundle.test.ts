@@ -49,9 +49,10 @@ test("actual finalizer output verifies through pinned authority and blocks mutat
   try {
     const fixture = await finalizationFixture(root);
     let promotions = 0, cleanupCalls = 0;
+    let persistedAuthority: unknown;
     class Promotion {
       #persisted = false;
-      async persist() { this.#persisted = true; }
+      async persist(value: { verificationAuthority?: unknown }) { this.#persisted = true; persistedAuthority = value.verificationAuthority; }
       async promote() { if (!this.#persisted) throw new Error("PERSIST_REQUIRED"); promotions++; return "promoted" as const; }
     }
     const input = { workspace: root, candidateId: fixture.candidateId, topologySha256: fixture.topologySha256, authorizationReceiptSha256: fixture.authorizationReceiptSha256,
@@ -65,7 +66,7 @@ test("actual finalizer output verifies through pinned authority and blocks mutat
     const releaseRoot = join(root, "release-finalizations", fixture.candidateId);
     expect(await readdir(releaseRoot)).not.toContain("current.json");
     const result = await finalizeReleaseCertification({ ...input, cleanup: { async cleanup() { cleanupCalls++; return "cleaned"; } } });
-    expect(result.status).toBe("promoted"); expect(promotions).toBe(1); expect(cleanupCalls).toBe(1);
+    expect(result.status).toBe("promoted"); expect(persistedAuthority).toEqual(result.verificationConfig); expect(promotions).toBe(1); expect(cleanupCalls).toBe(1);
     const config = await loadCertifierConfig({ env: { NAPPLET_CVM_CERTIFIER_CONFIG: result.verificationConfig!.path, NAPPLET_CVM_CERTIFIER_CONFIG_SHA256: result.verificationConfig!.sha256 } });
     if (config.mode !== "protected") throw new Error("fixture authority missing");
     const verification = { workspace: root, bundleSha256: result.bundleSha256!, config, configSha256: result.verificationConfig!.sha256, nowMs: 2_000 };

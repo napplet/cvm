@@ -3,6 +3,7 @@ import { bindAccountingRealmPool, createAccountingRealm } from "../funding/accou
 import type { PostgresSqlClient, PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
 import { canonicalJson } from "../promotion/schema";
 import { validateAuthorizationReceipt } from "../release/authorization";
+import { FinalVerificationAuthoritySchema, type FinalVerificationAuthority } from "./release-verification-authority";
 import type { ReleaseFinalizationPromotionPort } from "../release/finalize";
 
 const digest = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex");
@@ -37,9 +38,9 @@ export class PostgresReleasePromotion implements ReleaseFinalizationPromotionPor
     const receipt = await validateAuthorizationReceipt({ ...this.#authorization, nowMs: this.now() });
     if (receipt.candidateSha256 !== this.#binding.candidateId || receipt.topologySha256 !== this.#binding.topologySha256 || receipt.authorizationReceiptSha256 !== this.#binding.authorizationReceiptSha256) throw new Error("PRODUCTION_RELEASE_PROMOTION_AUTHORITY_REJECTED");
   }
-  #identity(input: Readonly<{ operationId: string; bundleSha256: string }>) {
+  #identity(input: Readonly<{ operationId: string; bundleSha256: string }>, verificationAuthority?: unknown) {
     if (!valid(input.bundleSha256) || input.operationId !== `promotion-${digest({ candidateId: this.#binding.candidateId, bundleSha256: input.bundleSha256, authorizationReceiptSha256: this.#binding.authorizationReceiptSha256 })}`) throw new Error("PRODUCTION_RELEASE_PROMOTION_OPERATION_REJECTED");
-    return { version: 1, ...this.#binding, ...input, expectedPreviousBundleSha256: this.#previous };
+    return { version: 1, ...this.#binding, ...input, expectedPreviousBundleSha256: this.#previous, ...(verificationAuthority === undefined ? {} : { verificationAuthority: FinalVerificationAuthoritySchema.parse(verificationAuthority) }) };
   }
   async #transaction<T>(action: (client: PostgresSqlClient) => Promise<T>): Promise<T> {
     for (let attempt = 0; attempt < 5; attempt++) {
@@ -56,10 +57,10 @@ export class PostgresReleasePromotion implements ReleaseFinalizationPromotionPor
     }
     throw new Error("PRODUCTION_RELEASE_PROMOTION_RETRY_EXHAUSTED");
   }
-  async persist(input: Readonly<{ operationId: string; bundleSha256: string; authorizationReceiptSha256: string }>) {
+  async persist(input: Readonly<{ operationId: string; bundleSha256: string; authorizationReceiptSha256: string; verificationAuthority?: FinalVerificationAuthority }>) {
     await this.#authorize();
     if (input.authorizationReceiptSha256 !== this.#binding.authorizationReceiptSha256) throw new Error("PRODUCTION_RELEASE_PROMOTION_AUTHORITY_REJECTED");
-    const identity = this.#identity({ operationId: input.operationId, bundleSha256: input.bundleSha256 });
+    const identity = this.#identity({ operationId: input.operationId, bundleSha256: input.bundleSha256 }, input.verificationAuthority);
     await this.#transaction(async client => {
       await client.query("INSERT INTO production_real.release_operation_journal(namespace,scope_sha256,operation_id,identity_sha256,value_json) VALUES('release-promotion',$1,'current',$2,$3::jsonb) ON CONFLICT DO NOTHING", [this.#scope, digest({ scope: this.#scope, pointer: "current" }), JSON.stringify({ version: 1, status: "empty", bundleSha256: null })]);
       await client.query("INSERT INTO production_real.release_operation_journal(namespace,scope_sha256,operation_id,identity_sha256,value_json) VALUES('release-promotion',$1,$2,$3,$4::jsonb) ON CONFLICT DO NOTHING", [this.#scope, input.operationId, digest(identity), JSON.stringify({ ...identity, status: "pending" })]);
@@ -69,11 +70,12 @@ export class PostgresReleasePromotion implements ReleaseFinalizationPromotionPor
   }
   async promote(input: Readonly<{ operationId: string; bundleSha256: string }>): Promise<"promoted" | "unknown"> {
     await this.#authorize();
-    const identity = this.#identity(input);
+    this.#identity(input);
     return this.#transaction(async client => {
       const pointer = (await client.query("SELECT * FROM production_real.release_operation_journal WHERE namespace='release-promotion' AND scope_sha256=$1 AND operation_id='current' FOR UPDATE", [this.#scope])).rows[0];
       const operation = (await client.query("SELECT * FROM production_real.release_operation_journal WHERE namespace='release-promotion' AND scope_sha256=$1 AND operation_id=$2 FOR UPDATE", [this.#scope, input.operationId])).rows[0];
       if (!operation || !pointer) return "unknown";
+      const identity = this.#identity(input, (operation.value_json as Record<string, unknown>).verificationAuthority);
       if (operation.identity_sha256 !== digest(identity)) throw new Error("PRODUCTION_RELEASE_PROMOTION_OPERATION_CONFLICT");
       const value = operation.value_json as Record<string, unknown>;
       if (canonicalJson(value) === canonicalJson({ ...identity, status: "promoted" })) return "promoted";
@@ -89,10 +91,11 @@ export class PostgresReleasePromotion implements ReleaseFinalizationPromotionPor
   /** Reads the original operation even if a later release replaced current.
    * Expired authorization can query history but cannot advance the pointer. */
   async observe(input: Readonly<{ operationId: string; bundleSha256: string }>): Promise<"promoted" | "unknown"> {
-    const identity = this.#identity(input);
+    this.#identity(input);
     return this.#transaction(async client => {
       const row = (await client.query("SELECT identity_sha256,value_json FROM production_real.release_operation_journal WHERE namespace='release-promotion' AND scope_sha256=$1 AND operation_id=$2", [this.#scope, input.operationId])).rows[0];
       if (!row) return "unknown";
+      const identity = this.#identity(input, (row.value_json as Record<string, unknown>).verificationAuthority);
       if (row.identity_sha256 !== digest(identity)) throw new Error("PRODUCTION_RELEASE_PROMOTION_OPERATION_CONFLICT");
       return canonicalJson(row.value_json) === canonicalJson({ ...identity, status: "promoted" }) ? "promoted" : "unknown";
     });

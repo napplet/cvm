@@ -15,7 +15,7 @@ const safeDigest = (value: unknown): value is string => typeof value === "string
 
 export type ReleaseFinalizationPromotionPort = Readonly<{
   /** Durable original-operation journal write. It must happen before promote. */
-  persist(input: Readonly<{ operationId: string; bundleSha256: string; authorizationReceiptSha256: string }>): Promise<void>;
+  persist(input: Readonly<{ operationId: string; bundleSha256: string; authorizationReceiptSha256: string; verificationAuthority?: Readonly<{ path: string; sha256: string }> }>): Promise<void>;
   /** The only pointer-changing effect. Replays use the same operation identity. */
   promote(input: Readonly<{ operationId: string; bundleSha256: string }>): Promise<"promoted" | "unknown">;
   observe?(input: Readonly<{ operationId: string; bundleSha256: string }>): Promise<"promoted" | "unknown">;
@@ -62,12 +62,13 @@ export async function resumeFinalizationPromotion(input: Readonly<{
   bundleSha256: string;
   authorizationReceiptSha256: string;
   status: "pending" | "unknown" | "promoted";
-  persist(input: Readonly<{ operationId: string; bundleSha256: string; authorizationReceiptSha256: string }>): Promise<void>;
+  verificationAuthority?: Readonly<{ path: string; sha256: string }>;
+  persist(input: Readonly<{ operationId: string; bundleSha256: string; authorizationReceiptSha256: string; verificationAuthority?: Readonly<{ path: string; sha256: string }> }>): Promise<void>;
   promote(input: Readonly<{ operationId: string; bundleSha256: string }>): Promise<"promoted" | "unknown">;
 }>): Promise<Readonly<{ status: "promoted" | "blocked"; operationId: string }>> {
   if (input.status === "promoted") return Object.freeze({ status: "promoted", operationId: input.operationId });
   if (input.status === "unknown") return Object.freeze({ status: "blocked", operationId: input.operationId });
-  await input.persist({ operationId: input.operationId, bundleSha256: input.bundleSha256, authorizationReceiptSha256: input.authorizationReceiptSha256 });
+  await input.persist({ operationId: input.operationId, bundleSha256: input.bundleSha256, authorizationReceiptSha256: input.authorizationReceiptSha256, ...(input.verificationAuthority ? { verificationAuthority: input.verificationAuthority } : {}) });
   const result = await input.promote({ operationId: input.operationId, bundleSha256: input.bundleSha256 });
   return Object.freeze({ status: result === "promoted" ? "promoted" : "blocked", operationId: input.operationId });
 }
@@ -183,7 +184,7 @@ export async function finalizeReleaseCertification(input: ReleaseFinalizationInp
   } else {
     try {
       promotion = await resumeFinalizationPromotion({ operationId, bundleSha256, authorizationReceiptSha256: payload.authorizationReceiptSha256,
-        status: "pending", persist: value => input.promotion.persist(value), promote: value => input.promotion.promote(value) });
+        status: "pending", verificationAuthority: { path: trust.configPath, sha256: trust.configSha256 }, persist: value => input.promotion.persist(value), promote: value => input.promotion.promote(value) });
     } catch { promotion = { status: "blocked" }; }
   }
   if (promotion.status !== "promoted") {

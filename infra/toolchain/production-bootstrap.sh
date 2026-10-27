@@ -48,7 +48,7 @@ mount_bounded /home/napplet 67108864 noexec
 mount_bounded /tmp 67108864 noexec
 mount_bounded /var/tmp 67108864 noexec
 mount_bounded /work 67108864 noexec
-mount_bounded /run 16777216 noexec
+mount_bounded /run/lock 16777216 noexec
 # Chromium may use POSIX shared memory; keep that writable surface separately
 # quota-bound instead of inheriting Docker's provider-sized /dev/shm default.
 mount_bounded /dev/shm 67108864 exec
@@ -56,4 +56,10 @@ mount_bounded /dev/shm 67108864 exec
 # worker's ready check consumes this exact small environment as evidence.
 policy=${NAPPLET_CVM_POLICY_VERSION-}
 [ -n "$policy" ] || exit 126
+# Keep only the immutable, timer-only lease supervisor root-owned. A workload
+# sharing its UID could otherwise SIGSTOP it and evade Fly's lifetime bound.
+# It receives no source, stdin instructions, provider credentials, or shell.
+if [ "$#" = 4 ] && [ "$1" = /usr/local/bin/napplet-cvm-worker ] && [ "$2" = idle ] && [ "$3" = --provider-deadline-epoch-ms ]; then
+  exec env -i PATH=/usr/local/bin:/usr/bin:/bin NAPPLET_CVM_POLICY_VERSION="$policy" /usr/local/bin/bun /usr/local/bin/napplet-cvm-worker idle --provider-deadline-epoch-ms "$4"
+fi
 exec env -i HOME=/home/napplet CI=1 PATH=/toolchain/bin:/toolchain/pnpm:/toolchain/node_modules/.bin:/usr/local/bin:/usr/bin:/bin PLAYWRIGHT_BROWSERS_PATH=/toolchain/ms-playwright NAPPLET_CVM_POLICY_VERSION="$policy" setpriv --reuid 65532 --regid 65532 --clear-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs -- "$@"

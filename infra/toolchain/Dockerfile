@@ -69,20 +69,15 @@ COPY --from=intake /toolchain/pnpm-10.8 /toolchain/pnpm-10.8
 COPY --from=intake /toolchain/pnpm-store /toolchain/pnpm-store
 COPY --from=node-runtime /usr/bin/node /usr/local/bin/node
 COPY --from=net-tools /bin/busybox /toolchain/bin/busybox
-COPY infra/toolchain/denial-probe.ts /toolchain/bin/denial-probe
-COPY infra/toolchain/fixture-runner.ts /toolchain/bin/fixture-runner
-COPY infra/toolchain/production-worker.ts /usr/local/bin/napplet-cvm-worker
-COPY infra/toolchain/production-probe.ts /usr/local/bin/napplet-cvm-probe
-COPY infra/toolchain/production-bootstrap.sh /usr/local/bin/napplet-cvm-bootstrap
 RUN ln -s /usr/local/bin/bun /toolchain/bin/bun \
     && ln -s /toolchain/pnpm-10.8/bin/pnpm.cjs /toolchain/bin/pnpm \
     && ln -s /toolchain/node_modules/.bin/napplet-conformance /toolchain/bin/napplet-conformance \
     && PLAYWRIGHT_BROWSERS_PATH=/toolchain/ms-playwright node -e 'const {realpathSync}=require("node:fs");const {execFileSync}=require("node:child_process");const {dirname,join}=require("node:path");const pkg=require.resolve("playwright/package.json",{paths:[realpathSync("node_modules/@napplet/conformance-cli")]});execFileSync(process.execPath,[join(dirname(pkg),"cli.js"),"install","chromium"],{stdio:"inherit"})' \
     && cd /toolchain/boilerplate-template && PLAYWRIGHT_BROWSERS_PATH=/toolchain/ms-playwright node -e 'const {realpathSync}=require("node:fs");const {execFileSync}=require("node:child_process");const {dirname,join}=require("node:path");const pkg=require.resolve("playwright/package.json",{paths:[realpathSync("node_modules/@napplet/conformance-cli")]});execFileSync(process.execPath,[join(dirname(pkg),"cli.js"),"install","chromium"],{stdio:"inherit"})' \
-    && chmod 0555 /toolchain/bin/busybox /toolchain/bin/denial-probe /toolchain/bin/fixture-runner /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe /usr/local/bin/napplet-cvm-bootstrap \
+    && chmod 0555 /toolchain/bin/busybox \
     && mkdir -p /home/napplet /work /tmp \
     && chown 65532:65532 /home/napplet /work /tmp \
-    && chmod -R go-w /toolchain /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe /usr/local/bin/napplet-cvm-bootstrap \
+    && chmod -R go-w /toolchain \
     && command -v mount \
     && node --version \
     && /toolchain/bin/busybox ip link show lo \
@@ -92,6 +87,16 @@ RUN ln -s /usr/local/bin/bun /toolchain/bin/bun \
     && test -x /toolchain/bin/napplet \
     && test -d /toolchain/boilerplate-template \
     && test -d /toolchain/ms-playwright
+# Browser archives alone do not contain the Linux shared libraries. Install
+# the dependency set selected by the pinned Playwright CLI at image intake.
+RUN node -e 'const {realpathSync}=require("node:fs");const {execFileSync}=require("node:child_process");const {dirname,join}=require("node:path");const pkg=require.resolve("playwright/package.json",{paths:[realpathSync("node_modules/@napplet/conformance-cli")]});execFileSync(process.execPath,[join(dirname(pkg),"cli.js"),"install-deps","chromium"],{stdio:"inherit"})'
+# Keep trusted harness changes after the pinned dependency/browser layers.
+COPY infra/toolchain/denial-probe.ts /toolchain/bin/denial-probe
+COPY infra/toolchain/fixture-runner.ts /toolchain/bin/fixture-runner
+COPY infra/toolchain/production-worker.ts /usr/local/bin/napplet-cvm-worker
+COPY infra/toolchain/production-probe.ts /usr/local/bin/napplet-cvm-probe
+COPY infra/toolchain/production-bootstrap.sh /usr/local/bin/napplet-cvm-bootstrap
+RUN chmod 0555 /toolchain/bin/denial-probe /toolchain/bin/fixture-runner /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe /usr/local/bin/napplet-cvm-bootstrap
 USER 65532:65532
 ENTRYPOINT ["/toolchain/bin/bun"]
 

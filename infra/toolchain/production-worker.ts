@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { lookup } from "node:dns/promises";
-import { access, constants, lstat, mkdir, readFile, realpath, rm, statfs, writeFile } from "node:fs/promises";
+import { access, appendFile, constants, lstat, mkdir, readFile, realpath, rm, statfs, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, relative } from "node:path";
 
 const WORKSPACE = "/workspace";
@@ -14,6 +14,7 @@ let activeDeadlineEpochMs = 0;
 function arg(name: string): string | undefined { const i = process.argv.indexOf(name); return i < 0 ? undefined : process.argv[i + 1]; }
 function digest(value: string | undefined, code: string) { if (!value || !DIGEST.test(value)) throw new Error(code); return value.toLowerCase(); }
 async function bounded(argv: string[], cwd?: string) {
+  const started = performance.now();
   const child = Bun.spawn(argv, { cwd, stdout: "pipe", stderr: "pipe", env: { HOME: "/home/napplet", CI: "1", PLAYWRIGHT_BROWSERS_PATH: "/toolchain/ms-playwright", PATH: "/toolchain/bin:/toolchain/pnpm:/toolchain/node_modules/.bin:/usr/local/bin:/usr/bin:/bin" } });
   let timer: ReturnType<typeof setTimeout> | undefined;
   const read = async (stream: ReadableStream<Uint8Array>) => {
@@ -28,6 +29,7 @@ async function bounded(argv: string[], cwd?: string) {
     if (remaining <= 0) throw new Error("WORKER_ACTIVE_DEADLINE_EXPIRED");
     const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { child.kill(); reject(new Error("WORKER_CHILD_TIMEOUT")); }, Math.min(MAX_MS, remaining)); });
     const [status, stdout, stderr] = await Promise.race([Promise.all([child.exited, read(child.stdout), read(child.stderr)]), timeout]);
+    await appendFile(`${WORKSPACE}/.napplet-cvm/commands.ndjson`, `${JSON.stringify({ argv, cwd, status, stdout, stderr, elapsedMs: Math.ceil(performance.now() - started) })}\n`, { mode: 0o600 });
     if (status !== 0) throw new Error(`WORKER_CHILD_FAILED:${`${stdout}\n${stderr}`.slice(0, 2_000).replace(/[\r\n]+/gu, " ")}`);
   } finally { clearTimeout(timer); child.kill(); }
 }
@@ -59,7 +61,7 @@ async function workspaceBounded() {
 }
 async function writableSurfaceConfined() {
   const bounded = await Promise.all([
-    [WORKSPACE, 512 * 1024 * 1024], ["/home/napplet", 64 * 1024 * 1024], ["/tmp", 64 * 1024 * 1024], ["/var/tmp", 64 * 1024 * 1024], ["/work", 64 * 1024 * 1024], ["/run", 16 * 1024 * 1024], ["/dev/shm", 64 * 1024 * 1024],
+    [WORKSPACE, 512 * 1024 * 1024], ["/home/napplet", 64 * 1024 * 1024], ["/tmp", 64 * 1024 * 1024], ["/var/tmp", 64 * 1024 * 1024], ["/work", 64 * 1024 * 1024], ["/run/lock", 16 * 1024 * 1024], ["/dev/shm", 64 * 1024 * 1024],
   ].map(async ([path, maximum]) => {
     const fs = await statfs(path as string);
     return Number(fs.type) === 0x01021994 && Number(fs.bsize) * Number(fs.blocks) > 0 && Number(fs.bsize) * Number(fs.blocks) <= Number(maximum);
@@ -72,9 +74,9 @@ async function writableSurfaceConfined() {
     // The positive result is authoritative: every writable root filesystem
     // directory visible to UID 65532 must be one of the bounded mounts.
     const writable = stdout.trim() ? stdout.trim().split("\n") : [];
-    const allowed = new Set([WORKSPACE, "/home/napplet", "/tmp", "/var/tmp", "/work", "/run"]);
+    const allowed = new Set([WORKSPACE, "/home/napplet", "/tmp", "/var/tmp", "/work", "/run/lock"]);
     const inaccessibleOnly = stderr.split("\n").filter(Boolean).every((line) => /Permission denied$/u.test(line));
-    return bounded.every(Boolean) && (exit === 0 || inaccessibleOnly) && stderr.length <= 8 * 1024 && writable.every((path) => allowed.has(path));
+    return bounded.every(Boolean) && (exit === 0 || (exit === 1 && inaccessibleOnly)) && stderr.length <= 8 * 1024 && writable.every((path) => allowed.has(path));
   } finally { clearTimeout(timer); child.kill(); }
 }
 async function deniedProbe(probe: string) {
@@ -92,7 +94,7 @@ async function namespaceConfined() {
   };
   const [links, ipv4Default, ipv6Default] = await Promise.all([run(["-o", "link", "show"]), run(["route", "show", "default"]), run(["-6", "route", "show", "default"])]);
   const activeNonLoopback = links?.trim().split("\n").some((line) => !/^1:\s+lo:/u.test(line) && /<[^>]*\bUP\b/u.test(line));
-  return links !== undefined && /^1:\s+lo:/mu.test(links) && !activeNonLoopback && !ipv4Default?.trim() && !ipv6Default?.trim();
+  return links !== undefined && ipv4Default !== undefined && ipv6Default !== undefined && /^1:\s+lo:/mu.test(links) && !activeNonLoopback && !ipv4Default.trim() && !ipv6Default.trim();
 }
 async function dnsDenied() {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -161,8 +163,15 @@ async function build() {
   for (const command of [[pnpm, "build"], [pnpm, "verify"], [pnpm, "test:conformance"], ["/toolchain/bin/napplet", "deploy", "--dry-run", "--json", "--root"]]) await bounded(command, project);
   console.log(JSON.stringify({ status: "built", root: `${project}/dist` }));
 }
+async function idle() {
+  const remaining = Number(arg("--provider-deadline-epoch-ms")) - Date.now();
+  if (process.argv.length !== 5 || process.getuid?.() !== 0 || process.env.NAPPLET_CVM_POLICY_VERSION !== POLICY || !Number.isSafeInteger(remaining) || remaining <= 0 || remaining > 1_200_000) throw new Error("WORKER_SUPERVISOR_DEADLINE_INVALID");
+  // Bun's timer is monotonic: wall-clock adjustment cannot extend this lease.
+  await Bun.sleep(remaining);
+}
 try {
-  if (process.argv[2] === "ready") await ready();
+  if (process.argv[2] === "idle") await idle();
+  else if (process.argv[2] === "ready") await ready();
   else if (process.argv[2] === "build-source") await build();
   else if (process.argv[2] === "run-proposal") console.log(JSON.stringify({ status: "unavailable", code: "WORKER_UNAVAILABLE" }));
   else throw new Error("WORKER_COMMAND_INVALID");

@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { createRequire } from "node:module";
 import { createAccountingRealm, assertProductionAccountingConfiguration } from "../../src/funding/accounting-realm";
 import { createFundedCore } from "../../src/phase-03/funded-core";
+import { PostgresFundingDatabase } from "../../src/persistence/postgres-funding-database";
 
 test("production realm rejects development-only funding adapters before construction", () => {
   expect(createAccountingRealm("production-real").schema).toBe("production_real");
@@ -9,6 +10,12 @@ test("production realm rejects development-only funding adapters before construc
   expect(() => assertProductionAccountingConfiguration({ priceCard: "synthetic-fixture" })).toThrow("PRODUCTION_ACCOUNTING_DEVELOPMENT_MARKER");
   expect(() => assertProductionAccountingConfiguration({ adapters: ["nwc", "cashu"] })).not.toThrow();
   expect(() => createFundedCore({ postgresPool: { connect: async () => { throw new Error("unused"); } }, productionAccountingConfiguration: { wallet: "FakeWallet" } })).toThrow("PRODUCTION_ACCOUNTING_DEVELOPMENT_MARKER");
+});
+
+test("production database exposes narrow encrypted-custody and original-operation repositories", () => {
+  const database = new PostgresFundingDatabase({ connect: async () => { throw new Error("unused"); } }, { realm: "production-real" });
+  expect(typeof (database as unknown as { custody?: { put?: unknown } }).custody?.put).toBe("function");
+  expect(typeof (database as unknown as { uncertainRailOperations?: { createOrReplay?: unknown } }).uncertainRailOperations?.createOrReplay).toBe("function");
 });
 
 const postgresIsolation = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
@@ -42,6 +49,15 @@ postgresIsolation("real PostgreSQL keeps development history read-only and produ
     await pool.query("INSERT INTO production_real.account_balance_projection(account_id,unit) VALUES('same-principal','sat')");
     await pool.query("INSERT INTO public.funding_commands(account_id,command_kind,idempotency_key,fingerprint_sha256,result_json) VALUES('same-principal','credit','same-key',$1,'{}')", ["a".repeat(64)]);
     await pool.query("INSERT INTO production_real.funding_commands(account_id,command_kind,idempotency_key,fingerprint_sha256,result_json) VALUES('same-principal','credit','same-key',$1,'{}')", ["b".repeat(64)]);
+    const database = new PostgresFundingDatabase(pool as never, { realm: "production-real" });
+    expect(await database.uncertainRailOperations.createOrReplay({ operationId: "op:one", accountId: "same-principal", rail: "lightning", providerLocator: "locator:one", stableLabel: "label:one", state: "created" })).toMatchObject({ created: true });
+    expect(await database.uncertainRailOperations.createOrReplay({ operationId: "op:one", accountId: "same-principal", rail: "lightning", providerLocator: "locator:one", stableLabel: "label:one", state: "created" })).toMatchObject({ created: false });
+    await expect(database.uncertainRailOperations.createOrReplay({ operationId: "op:one", accountId: "same-principal", rail: "lightning", providerLocator: "locator:other", stableLabel: "label:one", state: "created" })).rejects.toThrow("PRODUCTION_OPERATION_IDENTITY_CONFLICT");
+    expect(await database.uncertainRailOperations.transition("op:one", "unknown")).toMatchObject({ state: "unknown" });
+    await expect(pool.query("UPDATE production_real.uncertain_rail_operations SET state='created' WHERE operation_id='op:one'")).rejects.toThrow("PRODUCTION_OPERATION_STATE_TRANSITION_INVALID");
+    await database.custody.put({ custodyId: "custody:one", operationId: "op:two", accountId: "same-principal", rail: "cashu", materialKind: "cashu_input", keyReference: "secret://broker/key", payloadDigest: "c".repeat(64), canonicalProofIdentity: "d".repeat(64), nonce: new Uint8Array(12).fill(1), ciphertext: new Uint8Array([4, 5, 6]) });
+    expect(await database.custody.get("custody:one")).toMatchObject({ operationId: "op:two", keyReference: "secret://broker/key", payloadDigest: "c".repeat(64) });
+    await expect(pool.query("UPDATE production_real.rail_custody_material SET key_reference='secret://replacement' WHERE custody_id='custody:one'")).rejects.toThrow("PRODUCTION_CUSTODY_IMMUTABLE");
 
     await pool.query("SET ROLE napplet_production_real");
     expect((await pool.query("SELECT count(*)::int AS count FROM production_real.funding_accounts")).rows[0]).toEqual({ count: 1 });

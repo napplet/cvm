@@ -63,6 +63,40 @@ CREATE TABLE IF NOT EXISTS production_real.action_budget_reservations (
   accounting_realm text NOT NULL DEFAULT 'production-real' CHECK(accounting_realm='production-real'), created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(account_id,idempotency_key)
 );
 
+-- The durable recovery authority stores ciphertext and broker references only.
+-- It never stores a raw Cashu proof, NWC URI, invoice, or preimage.
+CREATE TABLE IF NOT EXISTS production_real.rail_custody_material (
+  custody_id text PRIMARY KEY, operation_id text NOT NULL UNIQUE, account_id text NOT NULL REFERENCES production_real.funding_accounts(account_id), rail text NOT NULL CHECK(rail IN ('cashu','lightning')),
+  material_kind text NOT NULL CHECK(material_kind IN ('cashu_input','cashu_blinded_message','cashu_output','lightning_intent')), key_reference text NOT NULL CHECK(length(key_reference)>0), payload_digest char(64) NOT NULL,
+  canonical_proof_identity char(64), mint_url text, keyset_id text, nonce bytea NOT NULL CHECK(octet_length(nonce)=12), ciphertext bytea NOT NULL CHECK(octet_length(ciphertext)>0),
+  accounting_realm text NOT NULL DEFAULT 'production-real' CHECK(accounting_realm='production-real'), created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(account_id,canonical_proof_identity)
+);
+CREATE TABLE IF NOT EXISTS production_real.uncertain_rail_operations (
+  operation_id text PRIMARY KEY, account_id text NOT NULL REFERENCES production_real.funding_accounts(account_id), rail text NOT NULL CHECK(rail IN ('cashu','lightning')),
+  provider_locator text NOT NULL, stable_label text, state text NOT NULL CHECK(state IN ('created','dispatching','unknown','observed_pending','observed_succeeded','observed_failed')),
+  accounting_realm text NOT NULL DEFAULT 'production-real' CHECK(accounting_realm='production-real'), created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(rail,provider_locator), UNIQUE(account_id,rail,stable_label)
+);
+CREATE TABLE IF NOT EXISTS production_real.uncertain_rail_operation_audit (
+  audit_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, operation_id text NOT NULL REFERENCES production_real.uncertain_rail_operations(operation_id), prior_state text, next_state text NOT NULL, observed_at timestamptz NOT NULL DEFAULT now(), UNIQUE(operation_id,prior_state,next_state,observed_at)
+);
+CREATE OR REPLACE FUNCTION production_real.enforce_uncertain_rail_operation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP='UPDATE' THEN
+    IF OLD.operation_id<>NEW.operation_id OR OLD.account_id<>NEW.account_id OR OLD.rail<>NEW.rail OR OLD.provider_locator<>NEW.provider_locator OR OLD.accounting_realm<>NEW.accounting_realm THEN RAISE EXCEPTION 'PRODUCTION_OPERATION_IDENTITY_IMMUTABLE'; END IF;
+    IF OLD.state<>NEW.state AND NOT ((OLD.state='created' AND NEW.state IN ('dispatching','unknown','observed_pending','observed_failed')) OR (OLD.state='dispatching' AND NEW.state IN ('unknown','observed_pending','observed_succeeded','observed_failed')) OR (OLD.state IN ('unknown','observed_pending') AND NEW.state IN ('unknown','observed_pending','observed_succeeded','observed_failed'))) THEN RAISE EXCEPTION 'PRODUCTION_OPERATION_STATE_TRANSITION_INVALID'; END IF;
+    IF OLD.state<>NEW.state THEN INSERT INTO production_real.uncertain_rail_operation_audit(operation_id,prior_state,next_state) VALUES(NEW.operation_id,OLD.state,NEW.state); END IF;
+  ELSIF TG_OP='INSERT' THEN
+    INSERT INTO production_real.uncertain_rail_operation_audit(operation_id,prior_state,next_state) VALUES(NEW.operation_id,NULL,NEW.state);
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS uncertain_rail_operation_immutable ON production_real.uncertain_rail_operations;
+CREATE TRIGGER uncertain_rail_operation_immutable AFTER INSERT OR UPDATE ON production_real.uncertain_rail_operations FOR EACH ROW EXECUTE FUNCTION production_real.enforce_uncertain_rail_operation();
+CREATE OR REPLACE FUNCTION production_real.reject_custody_mutation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'PRODUCTION_CUSTODY_IMMUTABLE'; END $$;
+DROP TRIGGER IF EXISTS rail_custody_immutable ON production_real.rail_custody_material;
+CREATE TRIGGER rail_custody_immutable BEFORE UPDATE OR DELETE ON production_real.rail_custody_material FOR EACH ROW EXECUTE FUNCTION production_real.reject_custody_mutation();
+
 GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA production_real TO napplet_production_real;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA production_real TO napplet_production_real;
 ALTER DEFAULT PRIVILEGES IN SCHEMA production_real GRANT SELECT, INSERT, UPDATE ON TABLES TO napplet_production_real;

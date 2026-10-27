@@ -57,7 +57,7 @@ jobs:
           for profile in default unconfined; do
             args=()
             if [ "$profile" = unconfined ]; then args+=(--security-opt apparmor=unconfined); fi
-            docker run --rm --cap-add SYS_ADMIN "${args[@]}" --entrypoint /bin/sh napplet-cvm-production-worker:ci -c 'cat /proc/self/attr/current; mount -t tmpfs -o size=16777216,nosuid,nodev tmpfs /workspace; findmnt /workspace' || true
+            docker run --rm --cap-add SYS_ADMIN "${args[@]}" --entrypoint /bin/sh napplet-cvm-production-worker:ci -c 'cat /proc/self/attr/current; mkdir -p /workspace; mount -t tmpfs -o size=16777216,nosuid,nodev tmpfs /workspace; findmnt /workspace' || true
           done
       - name: Focused worker transport contracts
         shell: bash

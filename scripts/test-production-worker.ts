@@ -16,7 +16,10 @@ const image = process.argv[2] ?? "napplet-cvm-production-worker:local";
 const run = `${process.pid}-${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
 const reportPath = process.env.NAPPLET_CVM_WORKER_REPORT ?? `/tmp/napplet-cvm-production-worker-${run}.json`;
 const logPath = reportPath.replace(/\.json$/u, "") + ".log";
-const resourceArgs = ["--cpus", "1", "--memory", "1024m", "--memory-swap", "1024m"];
+// Local compatibility test needs mount permission for trusted bootstrap.
+// Docker's default AppArmor profile denies mounts even with CAP_SYS_ADMIN.
+// This is deliberately not a production provider isolation certificate.
+const resourceArgs = ["--cpus", "1", "--memory", "1024m", "--memory-swap", "1024m", "--security-opt", "apparmor=unconfined"];
 const containers = [`napplet-cvm-production-worker-build-${run}`, `napplet-cvm-production-worker-idle-${run}`, `napplet-cvm-production-worker-ready-${run}`];
 const lease = "a".repeat(64);
 const imageHash = "b".repeat(64);
@@ -108,6 +111,7 @@ async function containerLogs(name: string) {
 const report: Record<string, unknown> = {
   localMechanism: true, realProviderEvidence: false, requestedImage: image,
   startedAt: new Date().toISOString(), logPath, hostDockerNetwork: "ordinary-default (no --network override)", privilegedBootstrap: ["SYS_ADMIN", "NET_ADMIN"],
+  hostAppArmor: "unconfined (trusted bootstrap mount test only)",
   resources: { cpus: 1, memoryBytes: 1_073_741_824, memoryAndSwapBytes: 1_073_741_824 },
 };
 

@@ -1,4 +1,5 @@
 import { recoverRecordedReceipt } from "../dev/receipt-recovery";
+import { assertDevelopmentRootManifests } from "../dev/root-manifests";
 import { readGenerationEstimates } from "../dev/generation-estimates";
 import { ServiceInfoArgumentsSchema, DevelopmentFaucetArgumentsSchema, OperationDiagnosticArgumentsSchema } from "./extension-schemas";
 import { DevelopmentRemixImports } from "../dev/remix-imports";
@@ -446,8 +447,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
       if (status.available !== expected) throw new Error(`DEV_UI_BALANCE_MISMATCH:${status.available}`);
       const credits = await app.pool.query<{ count: number }>("SELECT count(*)::int AS count FROM ledger_entries WHERE account_id=$1 AND direction='credit'", [status.accountId]);
       if (credits.rows[0]?.count !== (caseName === "cashu-wire" ? 1 : 2)) throw new Error("DEV_UI_LEDGER_REPLAY_MISMATCH");
-      const [packageHash, lockHash] = await Promise.all([sha256File(resolve(root, "package.json")), sha256File(resolve(root, "bun.lock"))]);
-      if (packageHash !== "cbcc433278d32391b075576ebd847ae30039f1d86ad229a149f5566856989f23" || lockHash !== "8916ee4ec92924ae9e09bc4f315fd6656033812696e35a1b7785161d872c5ac3") throw new Error("DEV_UI_ROOT_MANIFEST_DRIFT");
+      await assertDevelopmentRootManifests(root);
     },
     async assertGenerationSettlement() {
       const result = latestGenerationResult;

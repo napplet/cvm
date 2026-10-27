@@ -12,6 +12,13 @@ on:
       - "scripts/test-production-worker.sh"
       - "scripts/test-production-worker.ts"
       - "toolchains/locks/**"
+      - "toolchains/candidates/cli-0.5.2-source-build.json"
+      - "toolchains/recipes/**"
+      - "toolchains/evidence/**"
+      - "scripts/build-toolchain-image.ts"
+      - "scripts/verify-napplet-cli-source-build.ts"
+      - "src/promotion/candidate.ts"
+      - "tests/runner/source-build-candidate.test.ts"
       - "package.json"
       - "bun.lock"
       - "patches/**"
@@ -43,6 +50,10 @@ jobs:
         run: |
           set -euo pipefail
           timeout 30m docker build --progress=plain --platform linux/amd64 --target production-worker --tag napplet-cvm-production-worker:ci --file infra/toolchain/Dockerfile . 2>&1 | tee "$RUNNER_TEMP/production-worker-build.log"
+      - name: Verify distinct source candidate and sealed input binding
+        run: |
+          bun scripts/build-toolchain-image.ts --verify-only
+          bun test tests/runner/source-build-candidate.test.ts tests/runner/sealed-toolchain.test.ts --timeout 10000
       - name: Validate local production-worker mechanism
         shell: bash
         env:

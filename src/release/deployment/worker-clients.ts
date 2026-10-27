@@ -334,19 +334,20 @@ export function createFlyMachinesHttpTransport(input: Readonly<{
     }
   };
 
-function intendedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<WorkerOperationRecord, "operationId" | "resourceName" | "image" | "policyVersion" | "provider" | "appName">, image: string): boolean {
+function intendedMachine(machine: z.infer<typeof MachineSchema>, record: WorkerOperationRecord, image: string): boolean {
   const metadata = machine.config.metadata;
   return record.provider === "fly" && record.appName === appName && Boolean(record.image) && machine.name === record.resourceName && machine.config.image === image && image === record.image
     && metadata?.["napplet-cvm-operation"] === record.operationId
+    && metadata?.["napplet-cvm-request"] === record.requestSha256
     && metadata?.["napplet-cvm-policy"] === record.policyVersion
     && metadata?.["napplet-cvm-role"] === "isolated-worker"
-    && Object.keys(metadata).sort().join(",") === "napplet-cvm-operation,napplet-cvm-policy,napplet-cvm-role"
+    && Object.keys(metadata).sort().join(",") === "napplet-cvm-operation,napplet-cvm-policy,napplet-cvm-request,napplet-cvm-role"
     && machine.config.guest?.cpus === PRODUCTION_WORKER_POLICY.cpu
     && machine.config.guest?.memory_mb === PRODUCTION_WORKER_POLICY.memoryMiB
     && machine.config.services?.length === 0
     && machine.config.env?.NAPPLET_CVM_POLICY_VERSION === PRODUCTION_WORKER_POLICY.version;
 }
-function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<WorkerOperationRecord, "operationId" | "resourceName" | "image" | "policyVersion" | "providerCreatedAtMs" | "provider" | "appName">, image: string): boolean {
+function ownedMachine(machine: z.infer<typeof MachineSchema>, record: WorkerOperationRecord, image: string): boolean {
   return Number.isSafeInteger(record.providerCreatedAtMs) && createdAtMs(machine) === record.providerCreatedAtMs && intendedMachine(machine, record, image);
 }
   const findOriginal = async (operationId: string, name: string, expectedImage: string): Promise<Readonly<{ kind: "found"; id: string; providerCreatedAtMs: number }> | Readonly<{ kind: "missing" | "unknown" }>> => {
@@ -356,14 +357,11 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<Worke
     if (!response.ok) { await dispose(response); return Object.freeze({ kind: "unknown" as const }); }
     const machines = z.array(MachineSchema).safeParse(await responseJson(response).catch(() => undefined));
     if (!machines.success) return Object.freeze({ kind: "unknown" as const });
-    const matched = machines.data.filter((machine) => {
-      const metadata = machine.config.metadata;
-      return machine.name === name && machine.config.image === expectedImage
-        && metadata?.["napplet-cvm-operation"] === operationId
-        && metadata?.["napplet-cvm-policy"] === PRODUCTION_WORKER_POLICY.version
-        && metadata?.["napplet-cvm-role"] === "isolated-worker"
-        && Object.keys(metadata).sort().join(",") === "napplet-cvm-operation,napplet-cvm-policy,napplet-cvm-role";
-    });
+    const record = await input.journal.read(operationId);
+    if (!record) return Object.freeze({ kind: "unknown" as const });
+    const candidates = machines.data.filter((machine) => machine.name === name || machine.config.metadata?.["napplet-cvm-operation"] === operationId);
+    const matched = candidates.filter((machine) => intendedMachine(machine, record, expectedImage));
+    if (candidates.length !== matched.length) return Object.freeze({ kind: "unknown" as const });
     const providerCreatedAtMs = matched.length === 1 ? createdAtMs(matched[0]!) : undefined;
     return matched.length === 1 && providerCreatedAtMs ? Object.freeze({ kind: "found" as const, id: matched[0]!.id, providerCreatedAtMs }) : matched.length === 0 ? Object.freeze({ kind: "missing" as const }) : Object.freeze({ kind: "unknown" as const });
   };
@@ -403,7 +401,7 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<Worke
           guest: { cpu_kind: "shared", cpus: value.policy.cpu, memory_mb: value.policy.memoryMiB },
           init: { exec: [BOOTSTRAP, "/usr/local/bin/napplet-cvm-worker", "idle", "--provider-deadline-epoch-ms", String(providerDeadlineEpochMs)] },
           env: { NAPPLET_CVM_POLICY_VERSION: value.policy.version },
-          metadata: { "napplet-cvm-operation": operationId, "napplet-cvm-policy": value.policy.version, "napplet-cvm-role": "isolated-worker" },
+          metadata: { "napplet-cvm-operation": operationId, "napplet-cvm-policy": value.policy.version, "napplet-cvm-request": requestSha256, "napplet-cvm-role": "isolated-worker" },
         },
       };
       try {

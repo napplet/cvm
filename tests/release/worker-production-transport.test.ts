@@ -44,6 +44,7 @@ test("Fly persists its original operation before create, queries deterministic m
   const requests: Array<Readonly<{ url: string; init: RequestInit }>> = [];
   const journal = createMemoryWorkerOperationJournal();
   let listCount = 0;
+  let originalBody: Record<string, unknown> = {};
   const transport = createFlyMachinesHttpTransport({
     appName: "napplet-cvm-workers",
     getAccessToken: async () => "fly-secret-must-not-cross-worker-boundary",
@@ -52,8 +53,9 @@ test("Fly persists its original operation before create, queries deterministic m
       requests.push({ url, init });
       if (init.method === "GET") {
         listCount += 1;
-        return new Response(JSON.stringify(listCount === 1 ? [] : [{ id: "machine-original", name: "napplet-cvm-op-lost", created_at: "2026-10-27T00:00:00.000Z", config: { image, metadata: { "napplet-cvm-operation": "op-lost", "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-role": "isolated-worker" } } }]), { status: 200 });
+        return Response.json(listCount === 1 ? [] : [{ ...originalBody, id: "machine-original", created_at: "2026-10-27T00:00:00.000Z" }]);
       }
+      originalBody = JSON.parse(String(init.body));
       throw new Error("connection dropped after Fly accepted the create");
     },
   });
@@ -77,8 +79,8 @@ test("Fly persists its original operation before create, queries deterministic m
 test("Fly records the provider creation identity after a successful original create", async () => {
   const operationId = "op-created";
   const journal = createMemoryWorkerOperationJournal();
-  const created = { id: "machine-created", name: `napplet-cvm-${operationId}`, created_at: "2026-10-27T00:00:00.000Z", config: { image, guest: { cpus: 1, memory_mb: 1024 }, services: [], env: { NAPPLET_CVM_POLICY_VERSION: PRODUCTION_WORKER_POLICY.version }, metadata: { "napplet-cvm-operation": operationId, "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-role": "isolated-worker" } } };
-  const transport = createFlyMachinesHttpTransport({ appName: "napplet-cvm-workers", getAccessToken: async () => "valid-access-token", journal, fetch: async (_url, init) => init.method === "GET" ? new Response(JSON.stringify([]), { status: 200 }) : new Response(JSON.stringify(created), { status: 200 }) });
+  const created = { id: "machine-created", name: `napplet-cvm-${operationId}`, created_at: "2026-10-27T00:00:00.000Z", config: { image, guest: { cpus: 1, memory_mb: 1024 }, services: [], env: { NAPPLET_CVM_POLICY_VERSION: PRODUCTION_WORKER_POLICY.version }, metadata: { "napplet-cvm-operation": operationId, "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-request": digest("d"), "napplet-cvm-role": "isolated-worker" } } };
+  const transport = createFlyMachinesHttpTransport({ appName: "napplet-cvm-workers", getAccessToken: async () => "valid-access-token", journal, fetch: async (_url, init) => init.method === "GET" ? new Response(JSON.stringify([]), { status: 200 }) : Response.json({ ...created, config: JSON.parse(String(init.body)).config }) });
   await expect(transport.create({ operationId, region: "ams", image, policy: PRODUCTION_WORKER_POLICY, sessionLeaseSha256: digest("b"), toolchainSha256: digest("c"), providerDeadlineEpochMs: Date.now() + 60_000 })).resolves.toEqual({ status: "created", operationId, resourceId: "machine-created" });
   await expect(journal.read(operationId)).resolves.toMatchObject({ resourceId: "machine-created", providerCreatedAtMs: Date.parse(created.created_at), state: "dispatched" });
 });
@@ -178,7 +180,7 @@ test("cleanup after controller interruption deletes only the original owned mach
     fetch: async (_url, init) => {
       calls.push(init);
       if (init.method === "GET" && ++getCount > 1) return new Response(null, { status: 404 });
-      if (init.method === "GET") return new Response(JSON.stringify({ id: "machine-cleanup", name: `napplet-cvm-${operationId}`, created_at: "2026-10-27T00:00:00.000Z", config: { image, guest: { cpus: 1, memory_mb: 1024 }, services: [], env: { NAPPLET_CVM_POLICY_VERSION: PRODUCTION_WORKER_POLICY.version }, metadata: { "napplet-cvm-operation": operationId, "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-role": "isolated-worker" } } }), { status: 200 });
+      if (init.method === "GET") return new Response(JSON.stringify({ id: "machine-cleanup", name: `napplet-cvm-${operationId}`, created_at: "2026-10-27T00:00:00.000Z", config: { image, guest: { cpus: 1, memory_mb: 1024 }, services: [], env: { NAPPLET_CVM_POLICY_VERSION: PRODUCTION_WORKER_POLICY.version }, metadata: { "napplet-cvm-operation": operationId, "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-request": digest("d"), "napplet-cvm-role": "isolated-worker" } } }), { status: 200 });
       return new Response(null, { status: 204 });
     },
   });
@@ -191,7 +193,7 @@ test("Fly never executes or cleans a legacy record without persisted provider cr
   const operationId = "op-legacy";
   const journal = createMemoryWorkerOperationJournal([{ operationId, provider: "fly", appName: "napplet-cvm-workers", requestSha256: digest("d"), state: "dispatched", resourceName: `napplet-cvm-${operationId}`, resourceId: "machine-legacy", image, region: "ams", policyVersion: PRODUCTION_WORKER_POLICY.version, createdAtMs: 1, sessionLeaseSha256: digest("b"), toolchainSha256: digest("c"), providerDeadlineEpochMs: Date.now() + 60_000 }]);
   let deletes = 0;
-  const machine = { id: "machine-legacy", name: `napplet-cvm-${operationId}`, created_at: "2026-10-27T00:00:00.000Z", state: "started", config: { image, guest: { cpus: 1, memory_mb: 1024 }, services: [], env: { NAPPLET_CVM_POLICY_VERSION: PRODUCTION_WORKER_POLICY.version }, metadata: { "napplet-cvm-operation": operationId, "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-role": "isolated-worker" } } };
+  const machine = { id: "machine-legacy", name: `napplet-cvm-${operationId}`, created_at: "2026-10-27T00:00:00.000Z", state: "started", config: { image, guest: { cpus: 1, memory_mb: 1024 }, services: [], env: { NAPPLET_CVM_POLICY_VERSION: PRODUCTION_WORKER_POLICY.version }, metadata: { "napplet-cvm-operation": operationId, "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-request": digest("d"), "napplet-cvm-role": "isolated-worker" } } };
   const transport = createFlyMachinesHttpTransport({ appName: "napplet-cvm-workers", getAccessToken: async () => "valid-access-token", journal, fetch: async (_url, init) => { if (init.method === "DELETE") deletes += 1; return new Response(JSON.stringify(machine), { status: 200 }); } });
   await expect(transport.terminate({ operationId })).resolves.toEqual({ status: "unknown" });
   await expect(transport.exec({ operationId, command: ["/usr/local/bin/napplet-cvm-probe"] })).resolves.toEqual({ status: "unknown" });
@@ -202,7 +204,7 @@ test("Fly readiness exec is bounded, authenticated, and cannot run against a sub
   const operationId = "op-probe";
   const journal = createMemoryWorkerOperationJournal([{ operationId, provider: "fly", appName: "napplet-cvm-workers", requestSha256: digest("d"), state: "dispatched", resourceName: `napplet-cvm-${operationId}`, resourceId: "machine-probe", image, region: "ams", policyVersion: PRODUCTION_WORKER_POLICY.version, createdAtMs: 1, providerCreatedAtMs: Date.parse("2026-10-27T00:00:00.000Z"), sessionLeaseSha256: digest("b"), toolchainSha256: digest("c"), providerDeadlineEpochMs: Date.now() + 60_000 }]);
   const requests: Array<Readonly<{ url: string; init: RequestInit }>> = [];
-  const machine = { id: "machine-probe", name: `napplet-cvm-${operationId}`, created_at: "2026-10-27T00:00:00.000Z", state: "started", config: { image, guest: { cpus: 1, memory_mb: 1024 }, services: [], env: { NAPPLET_CVM_POLICY_VERSION: PRODUCTION_WORKER_POLICY.version }, metadata: { "napplet-cvm-operation": operationId, "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-role": "isolated-worker" } } };
+  const machine = { id: "machine-probe", name: `napplet-cvm-${operationId}`, created_at: "2026-10-27T00:00:00.000Z", state: "started", config: { image, guest: { cpus: 1, memory_mb: 1024 }, services: [], env: { NAPPLET_CVM_POLICY_VERSION: PRODUCTION_WORKER_POLICY.version }, metadata: { "napplet-cvm-operation": operationId, "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-request": digest("d"), "napplet-cvm-role": "isolated-worker" } } };
   const transport = createFlyMachinesHttpTransport({ appName: "napplet-cvm-workers", getAccessToken: async () => "valid-access-token", journal, fetch: async (url, init) => {
     requests.push({ url, init });
     return init.method === "POST" ? new Response(JSON.stringify({ stdout: "{}", stderr: "", exit_code: 0 }), { status: 200 }) : new Response(JSON.stringify(machine), { status: 200 });
@@ -256,4 +258,27 @@ test("Fly readiness requires every trusted isolation check and exact original le
   }
   report = { checks, exactReady: { ...exactReady, sessionLeaseSha256: digest("d") } };
   expect((await transport.observe({ operationId })).status).toBe("unknown");
+});
+
+test("Fly lost-create reconciliation rejects a same-name resource with different original request", async () => {
+  let original: any;
+  let posts = 0;
+  const journal = createMemoryWorkerOperationJournal();
+  const transport = createFlyMachinesHttpTransport({ appName: "napplet-cvm-workers", getAccessToken: async () => "valid-access-token", journal, fetch: async (_url, init) => {
+    if (init.method === "POST") {
+      posts++;
+      original = { ...JSON.parse(String(init.body)), id: "machine-original", created_at: new Date().toISOString() };
+      throw new Error("lost create response");
+    }
+    return Response.json(original ? [original] : []);
+  } });
+  const intent = { operationId: "op-wrong-intent", region: "ams", image, policy: PRODUCTION_WORKER_POLICY, sessionLeaseSha256: digest("b"), toolchainSha256: digest("c"), providerDeadlineEpochMs: Date.now() + 60_000 };
+  expect((await transport.create(intent)).status).toBe("unknown");
+  const expected = original.config.metadata["napplet-cvm-request"];
+  original.config.metadata["napplet-cvm-request"] = digest("f");
+  expect((await transport.create(intent)).status).toBe("unknown");
+  expect((await journal.read(intent.operationId))?.resourceId).toBeUndefined();
+  original.config.metadata["napplet-cvm-request"] = expected;
+  expect((await transport.create(intent)).status).toBe("reconciled");
+  expect(posts).toBe(1);
 });

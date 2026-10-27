@@ -55,6 +55,8 @@ status: complete
 - `bun test tests/funding tests/persistence tests/phase-03 tests/phase-04 --timeout 30000` — **94 passed, 1 intentional opt-in PostgreSQL skip, 0 failed**.
 - `bun test tests/funding/production-accounting-realm.test.ts tests/persistence/postgres-sql-funding-store.test.ts tests/funding/funded-admission.test.ts --timeout 30000` — **25 passed, 1 intentional opt-in PostgreSQL skip, 0 failed**.
 
+Remote integration at `6e3a8f6` passed payment run `40527500303` (including the explicit PG17 proof) and full GUI run `40527500624`. PR #6 merged as `d6029130ef9684673d3ec4c1ce441373ed79eb57`. An earlier final-flow NWC timeout at `33f090b` did not reproduce in the local full continuation journey or this final clean-runner gate; no check was removed or weakened.
+
 ## Decisions Made
 
 - Production deployment must connect through a least-privilege member of `napplet_production_real`; application code selects the fixed realm role and cannot impersonate a superuser.

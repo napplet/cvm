@@ -195,7 +195,7 @@ export const FaultScheduleSchema = z.object({
   outcomes: z.array(z.object({ boundary: FaultBoundarySchema, outcome: FaultOutcomeSchema }).strict()).min(1).max(32).readonly(),
 }).strict();
 
-const FaultExecutionSchema = z.object({
+export const FaultExecutionSchema = z.object({
   operationId: z.string().min(1).max(256),
   sessionId: z.string().min(1).max(256),
   observed: FaultOutcomeSchema,

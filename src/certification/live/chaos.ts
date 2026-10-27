@@ -1,9 +1,14 @@
 import { z } from "zod";
 import { WorkerCandidateSchema, ProtectedSuiteResultSchema, type ProtectedSuiteResult } from "../contracts";
-import { D122_FAULT_MATRIX, EffectOracleSchema, runFaultScenario, validateTopologyClaim, type FaultSchedule } from "../../resilience/fault-harness";
+import { D122_FAULT_MATRIX, EffectOracleSchema, FaultExecutionSchema, runFaultScenario, validateTopologyClaim, type FaultSchedule } from "../../resilience/fault-harness";
 
-const FaultDispatchSchema = z.object({ operationId: z.string().min(1).max(256), sessionId: z.string().min(1).max(256) }).strict();
-const FaultObservationSchema = FaultDispatchSchema.extend({ activeWriters: z.number().int().nonnegative(), effects: EffectOracleSchema }).strict();
+const FaultDispatchSchema = z.object({
+  operationId: z.string().min(1).max(256), sessionId: z.string().min(1).max(256),
+  // Prepared and persisted before injection, independently of the post-fault
+  // effect query. The query cannot serve as its own expected oracle.
+  oracle: z.object({ activeWriters: z.literal(1), effects: EffectOracleSchema.refine(value => Object.values(value).every(count => count <= 1), "original effects must be at most once") }).strict(),
+}).strict();
+const FaultObservationSchema = FaultExecutionSchema;
 
 /** Provider controls are injected by the authorization-gated runner. This
  * adapter never creates credentials, a topology, or an evidence writer. */
@@ -26,7 +31,7 @@ function nonPass(status: "blocked" | "failed", reasonCode: ProtectedSuiteResult[
 
 /**
  * Runs every D-122 schedule only through a protected provider-control port and
- * derives the oracle from a second, original-identity observation. A local
+ * compares an independently prepared oracle with an original-identity observation. A local
  * fixture is refused before any fault dispatch, so it cannot claim chaos
  * success, replace an operation, or write protected evidence.
  */
@@ -43,11 +48,13 @@ export async function runLiveChaosCertification(input: LiveChaosCertificationInp
       if (dispatched.operationId !== schedule.input.operationId || dispatched.sessionId !== schedule.initialState.sessionId) {
         return nonPass("failed", "EVIDENCE_INVALID", "original-operation-mismatch");
       }
-      const observed = FaultObservationSchema.parse(await port.observeOriginal(dispatched));
+      const observed = FaultObservationSchema.parse(await port.observeOriginal({ operationId: dispatched.operationId, sessionId: dispatched.sessionId }));
       if (observed.operationId !== dispatched.operationId || observed.sessionId !== dispatched.sessionId) {
         return nonPass("failed", "EVIDENCE_INVALID", "authoritative-observation-mismatch");
       }
-      await runFaultScenario(schedule, async () => observed, { activeWriters: observed.activeWriters, effects: observed.effects });
+      if (!schedule.outcomes.some(value => value.boundary === schedule.boundary && value.outcome === observed.observed)) return nonPass("failed", "EVIDENCE_INVALID", "injected-fault-not-observed");
+      try { await runFaultScenario(schedule, async () => observed, dispatched.oracle); }
+      catch { return nonPass("failed", "EVIDENCE_INVALID", "fault-oracle-mismatch"); }
     }
     const topology = validateTopologyClaim({ claimed: input.topology as never, observation: await port.observeTopology() as never });
     if (topology.status !== "observed") return nonPass("blocked", "TOPOLOGY_UNAVAILABLE", "topology-observation-required");

@@ -44,9 +44,41 @@ test("Collector telemetry rejects deterministic ports and unavailable canary ins
 test("chaos and restore reject deterministic controls before provider effects or protected evidence", async () => {
   let faultCalls = 0;
   let restoreCalls = 0;
-  const chaos = await runLiveChaosCertification({ candidate: candidate("modal"), faultPort: { evidenceClass: "deterministic", executeFault: async () => { faultCalls += 1; return {}; }, observeOriginal: async () => ({}) }, topology: {} });
-  const restore = await runLiveRestoreCertification({ candidate: candidate("modal"), restorePort: { evidenceClass: "deterministic", inventory: async () => { restoreCalls += 1; return []; }, loseLocalState: async () => ({ status: "lost" }), createFreshInstance: async () => ({}) }, topology: {} });
+  const chaos = await runLiveChaosCertification({ candidate: candidate("modal"), faultPort: { evidenceClass: "deterministic", executeFault: async () => { faultCalls += 1; return {}; }, observeOriginal: async () => ({}), observeTopology: async () => { throw new Error("unexpected topology read"); } }, topology: {} });
+  const restore = await runLiveRestoreCertification({ candidate: candidate("modal"), restorePort: { evidenceClass: "deterministic", inventory: async () => { restoreCalls += 1; return []; }, loseLocalState: async () => ({ status: "lost" }), createFreshInstance: async () => { throw new Error("unexpected restore"); } }, topology: {} });
   expect(chaos).toEqual(expect.objectContaining({ status: "blocked", claims: [], reasonCode: "INPUT_UNAVAILABLE" }));
   expect(restore).toEqual(expect.objectContaining({ status: "blocked", claims: [], reasonCode: "INPUT_UNAVAILABLE" }));
   expect({ faultCalls, restoreCalls }).toEqual({ faultCalls: 0, restoreCalls: 0 });
+});
+
+// Contract fixtures only: these test the oracle boundary, never produce live evidence.
+test("chaos compares complete fault observations with an independent bounded oracle", async () => {
+  const { D122_FAULT_MATRIX, NO_EFFECTS_ORACLE } = await import("../../src/resilience/fault-harness");
+  const topology = { ingressRegions: ["europe-west1"], databaseRegions: ["europe-west1"], objectRegions: ["nam4"], workerRegions: ["ams"], relayRegions: ["eu"], activeStandby: "single-active", failureDomain: "instance", rtoMs: 1000, rpoMs: 0, limitations: ["contract-fixture"] };
+  const expected = { ...NO_EFFECTS_ORACLE, worker: 1, session: 1 };
+  let mode: "matching" | "duplicate" | "missing-effect" | "wrong-outcome" | "self-oracle" = "matching";
+  let dispatched = 0;
+  const port = {
+    evidenceClass: "protected_live" as const,
+    async executeFault(schedule: typeof D122_FAULT_MATRIX[number]) {
+      dispatched++;
+      return { operationId: schedule.input.operationId, sessionId: schedule.initialState.sessionId,
+        oracle: { activeWriters: 1, effects: mode === "self-oracle" ? { ...expected, worker: 2 } : expected } };
+    },
+    async observeOriginal(identity: { operationId: string; sessionId: string }) {
+      const schedule = D122_FAULT_MATRIX.find(value => value.input.operationId === identity.operationId)!;
+      return { ...identity, observed: mode === "wrong-outcome" ? "accepted" : schedule.outcomes[0]!.outcome,
+        activeWriters: 1, effects: mode === "duplicate" || mode === "self-oracle" ? { ...expected, worker: 2 } : mode === "missing-effect" ? NO_EFFECTS_ORACLE : expected };
+    },
+    async observeTopology() { return { status: "observed", topology }; },
+  };
+  const run = () => runLiveChaosCertification({ candidate: candidate("modal"), topology, faultPort: port });
+  expect((await run()).status).toBe("passed");
+  expect(dispatched).toBe(D122_FAULT_MATRIX.length);
+  for (mode of ["duplicate", "missing-effect", "wrong-outcome"] as const) {
+    const result = await run();
+    expect(result.status).toBe("failed"); expect(result.claims).toEqual([]); expect(result.reasonCode).toBe("EVIDENCE_INVALID");
+  }
+  mode = "self-oracle";
+  expect((await run()).status).toBe("blocked");
 });

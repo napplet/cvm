@@ -26,16 +26,6 @@ RUN bun -e 'const response = await fetch("https://registry.npmjs.org/pnpm/-/pnpm
     && pnpm fetch --frozen-lockfile --ignore-scripts \
     && pnpm install --frozen-lockfile --ignore-scripts
 
-# The reviewed standalone CLI is independently verified rather than resolved by npm.
-RUN case "$TARGETARCH" in \
-      arm64) asset=aarch64; digest=35ffb0d21e75877e749d63569b4369e5b467967e48034c2ee7d0ae958ed5ee54 ;; \
-      amd64) asset=x86_64; digest=a17fd2f61beb3b1553518b517045c4e1a474ddee5db87be80e18cf1bd24d8e28 ;; \
-      *) exit 1 ;; \
-    esac \
-    && NAPPLET_CLI_ASSET="$asset" bun -e 'const response = await fetch(`https://github.com/napplet/web/releases/download/%40napplet/cli%400.5.2/napplet-linux-${process.env.NAPPLET_CLI_ASSET}`); if (!response.ok) process.exit(1); await Bun.write("/toolchain/napplet", await response.arrayBuffer())' \
-    && echo "$digest  /toolchain/napplet" | sha256sum --check \
-    && chmod 0555 /toolchain/napplet
-
 # The registry boilerplate package intentionally omits its lockfile.  The
 # worker must use the same integrity-pinned source substrate as the verified
 # development flow so frozen offline installation remains meaningful.
@@ -50,6 +40,38 @@ RUN bun -e 'const response = await fetch("https://registry.npmjs.org/pnpm/-/pnpm
     && bun /toolchain/pnpm-10.8/bin/pnpm.cjs fetch --frozen-lockfile --store-dir /toolchain/pnpm-store \
     && bun /toolchain/pnpm-10.8/bin/pnpm.cjs install --offline --frozen-lockfile --ignore-scripts --store-dir /toolchain/pnpm-store
 
+# The recreated upstream CLI asset cannot be bound to its historical tag.
+# Build a distinct, source-bound executable instead: extract the immutable
+# upstream workflow revision, verify the root lock, seed all Deno runtime and
+# dependency cache entries, normalize Deno's serialized VFS mtimes, then make
+# the final compile offline.  The final target hash is checked before it ever
+# crosses into the sealed stage.
+FROM oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4 AS cli-source
+ARG TARGETARCH
+COPY --from=net-tools /bin/busybox /tmp/busybox
+ADD --checksum=sha256:06d883bfecba2d62099063faa0a3df5197e79f79bdb0e3c90e2562011785ccba https://codeload.github.com/napplet/web/tar.gz/976ad0549c38f93d4ed418d3ea59a615a7e5fd7f /tmp/napplet-web.tgz
+RUN case "$TARGETARCH" in \
+      amd64) deno_asset=x86_64; target=x86_64-unknown-linux-gnu; deno_digest=394f07f4da2bebe6ce6f1e7ce0fa16429b29b08c35e3fac3fe25972676dff4b2; cli_digest=54a3c5ac963b1eebe3a178a90f112f86bc3ed2914cde1632a60e89b4f2b5c524 ;; \
+      arm64) deno_asset=aarch64; target=aarch64-unknown-linux-gnu; deno_digest=9a46afc6c392c7cd2ff71a31558935545b46408d0e87f7a86908c712721c046e; cli_digest=3573e8cda272806df011ab856357f5165a6719bb1daed8080227ee1083a112d3 ;; \
+      *) exit 1 ;; \
+    esac \
+    && mkdir -p /src /cache /runtime /out \
+    && tar -xzf /tmp/napplet-web.tgz -C /src --strip-components=1 \
+    && echo '914eb84228c77b83b040a23854cdf7b320f9fe4ba20a40dfff3c6ef3ff6bd9b8  /src/deno.lock' | sha256sum --check \
+    && test "$(bun -e 'console.log(JSON.parse(await Bun.file("/src/packages/cli/deno.json").text()).version)')" = '0.5.2' \
+    && NAPPLET_DENO_ASSET="$deno_asset" bun -e 'const response = await fetch(`https://github.com/denoland/deno/releases/download/v2.9.6/deno-${process.env.NAPPLET_DENO_ASSET}-unknown-linux-gnu.zip`, { signal: AbortSignal.timeout(120_000) }); if (!response.ok) process.exit(1); await Bun.write("/tmp/deno.zip", await response.arrayBuffer())' \
+    && echo "$deno_digest  /tmp/deno.zip" | sha256sum --check \
+    && /tmp/busybox unzip -q /tmp/deno.zip -d /runtime \
+    && /runtime/deno --version | grep -F 'deno 2.9.6 ' \
+    && cd /src/packages/cli \
+    && ulimit -t 900 \
+    && DENO_DIR=/cache TZ=UTC LC_ALL=C LANG=C HOME=/home/deno SOURCE_DATE_EPOCH=1789254081 /tmp/busybox timeout 900 /runtime/deno cache --frozen --node-modules-dir=none src/standalone.ts \
+    && DENO_DIR=/cache TZ=UTC LC_ALL=C LANG=C HOME=/home/deno SOURCE_DATE_EPOCH=1789254081 /tmp/busybox timeout 900 /runtime/deno compile --frozen --no-check --node-modules-dir=none --allow-read --allow-write --allow-run --allow-env --allow-net --target "$target" --output /out/seed src/standalone.ts \
+    && find /src /cache -exec touch -h -d @1789254081 {} + \
+    && DENO_DIR=/cache TZ=UTC LC_ALL=C LANG=C HOME=/home/deno SOURCE_DATE_EPOCH=1789254081 /tmp/busybox timeout 900 /runtime/deno compile --frozen --cached-only --no-check --node-modules-dir=none --allow-read --allow-write --allow-run --allow-env --allow-net --target "$target" --output /out/napplet src/standalone.ts \
+    && echo "$cli_digest  /out/napplet" | sha256sum --check \
+    && chmod 0555 /out/napplet
+
 FROM oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4 AS sealed
 
 ENV HOME=/home/napplet \
@@ -63,7 +85,7 @@ COPY --from=intake /root/.bun/install/global/node_modules/pnpm /toolchain/pnpm
 COPY --from=intake /root/.local/share/pnpm/store /root/.local/share/pnpm/store
 COPY --from=intake /toolchain/package.json /toolchain/pnpm-lock.yaml /toolchain/
 COPY --from=intake /toolchain/node_modules /toolchain/node_modules
-COPY --from=intake /toolchain/napplet /toolchain/bin/napplet
+COPY --from=cli-source /out/napplet /toolchain/bin/napplet
 COPY --from=intake /toolchain/boilerplate-template /toolchain/boilerplate-template
 COPY --from=intake /toolchain/pnpm-10.8 /toolchain/pnpm-10.8
 COPY --from=intake /toolchain/pnpm-store /toolchain/pnpm-store

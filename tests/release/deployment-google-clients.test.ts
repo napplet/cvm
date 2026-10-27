@@ -321,6 +321,7 @@ test("Cloud Run observe never adopts a same-label replacement before cleanup", a
   await expect(client.cloudRun.deploy(request)).resolves.toEqual({ status: "pending" });
   await expect(client.cloudRun.observe({ operationId: request.operationId, projectId, region: request.region, serviceName: request.serviceName, imageReference: request.imageReference, serviceAccountReference: request.serviceAccountReference, environmentReferenceSha256: request.environmentReferenceSha256, secretReferences: request.secretReferences, concurrency: request.concurrency })).resolves.toEqual({ status: "completed" });
   current = cloudRunService(request.operationId, { uid: "replacement-uid", createTime: "2026-02-01T00:00:00Z" });
+  await expect(client.cloudRun.deploy(request)).resolves.toEqual({ status: "unknown" });
   await expect(client.cloudRun.observe({ operationId: request.operationId, projectId, region: request.region, serviceName: request.serviceName, imageReference: request.imageReference, serviceAccountReference: request.serviceAccountReference, environmentReferenceSha256: request.environmentReferenceSha256, secretReferences: request.secretReferences, concurrency: request.concurrency })).resolves.toEqual({ status: "unknown" });
   await expect(client.cloudRun.cleanup({ operationId: request.operationId, projectId, region: request.region, serviceName: request.serviceName })).resolves.toEqual({ status: "unknown" });
   expect(await journal.read(request.operationId)).toMatchObject({ owned: true, resourceUid: "service-uid-1", createTime: "2026-01-01T00:00:00Z" });

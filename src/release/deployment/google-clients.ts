@@ -180,7 +180,8 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
           const observedEnv = (matching.data.template.containers[0]?.env ?? []) as readonly Readonly<{ name?: string; value?: string; valueSource?: { secretKeyRef?: { secret?: string; version?: string } } }> [];
           const required = new Map(env.map((entry) => [entry.name, entry]));
           const configMatches = observedEnv.length === required.size && new Set(observedEnv.map((entry) => entry.name)).size === observedEnv.length && [...required.entries()].every(([name, expected]) => observedEnv.some((actual) => actual.name === name && ("value" in expected ? actual.value === expected.value : actual.valueSource?.secretKeyRef?.secret === expected.valueSource.secretKeyRef.secret && actual.valueSource?.secretKeyRef?.version === expected.valueSource.secretKeyRef.version)));
-          return configMatches && matching.data.generation === matching.data.observedGeneration ? Object.freeze({ status: "completed" }) : Object.freeze({ status: "unknown" });
+          const priorIdentityMatches = !prior?.owned || (prior.resourceUid === matching.data.uid && prior.createTime === matching.data.createTime);
+          return configMatches && priorIdentityMatches && matching.data.generation === matching.data.observedGeneration ? Object.freeze({ status: "completed" }) : Object.freeze({ status: "unknown" });
         }
         return Object.freeze({ status: "unknown" });
       }

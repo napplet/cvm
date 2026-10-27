@@ -1,0 +1,33 @@
+# Production review follow-ups
+
+Observed 2026-10-27. These are implementation findings, not protected release evidence. No cloud resources, paid model calls, real funding, or live migration were performed.
+
+## Plan 65 — model lifecycle, prices, and recovery
+
+- Google Cloud's [model lifecycle](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions) and [2.5 Flash page](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/2-5-flash) report retirement of the 2.5 general models on October 20, 2026. Do not carry an August model selection into the new candidate. Gemini Developer API lifecycle is a different provider contract.
+- [Gemini 3.8 Flash](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-8-flash) is a possible current candidate: GA, structured output, supported locations `global`, `us`, and `eu`; no `us-central1` endpoint is listed. Its supported thinking levels exclude `MINIMAL`. Selection still needs the exact production contract and protected generation evidence.
+- [Cloud pricing](https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing) distinguishes standard, priority, flex, global/non-global, cached input, and effective dates. The advertised 3.8 Flash introductory rates are delivered through credits back on net spend. Do not treat future promotional credits as an immediate discount or funded balance. Capture actual source bytes and bind gross charges, applicable credits, units, location, freshness, and effective period separately.
+- Synchronous `generateContent` has no documented original-result GET. Logging full requests/responses to BigQuery can support observation, but introduces explicit resources, query/storage costs, scopes, and retention; missing rows remain unknown.
+- The Cloud [Interactions API reference](https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/models/interactions-api) now documents paginated LIST (at most 500 IDs/page) and GET of stored interactions, including input, system instruction, model, and usage. It has no documented idempotency/request ID. A controller-generated nonce and request digest in stored input may allow bounded LIST+GET recovery after a lost create response; this is an implementation inference that requires contract and protected fault tests. Never redispatch an ambiguous POST or interpret an absent match as no charge. Its [Cloud overview](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/capabilities/interactions) remains Preview; do not substitute Gemini Developer API credentials or assumptions.
+
+## Plan 64 / supply chain — replaced CLI release assets
+
+- The old sealed Dockerfile pins CLI 0.5.2 Linux x86_64 digest `46685f2e4df516b5b2e7e2e133480c90e5c85dbd36d05c6e95f4eee6af33ec5e`; its intake now fails the integrity check.
+- Official GitHub release `364429008`, asset `560100559`, now reports size 291395616 and digest `a17fd2f61beb3b1553518b517045c4e1a474ddee5db87be80e18cf1bd24d8e28`. The asset was recreated September 12, 2026. The official `SHA256SUMS` agrees and has digest `eb9b909eb3e1e5a5d0243e0f1785af54eabce226e0b2b9dfed8896ee398a3f19`. A local download matched and was an ELF x86_64 binary.
+- The release tag still resolves to `1a38b9150f3a3da148091c11bce4d0365f7298e5`. Nearby upstream [Publish run 34724295523](https://github.com/napplet/web/actions/runs/34724295523) compiled CLI 0.5.2 at source `976ad0549c38f93d4ed418d3ea59a615a7e5fd7f` with Deno 2.9.6 immediately before asset recreation, but no explicit upload binding was found. Timing alone does not prove source-to-binary provenance; do not map replacement bytes to the old tag automatically.
+- `infra/dev-ui/Dockerfile` already pins the replacement binary and a working boilerplate/Chromium intake. Three fresh development GUI runs passed with that substrate. This is compatibility evidence only, not a production isolation or promotion claim.
+- Preserve historical candidate/evidence files. Prepare a separate intake with truthful provenance; if necessary, build the official CLI from exact source with pinned runtime/locks and record the source, build recipe, and output digest. No user-authored checksum or protected promotion is needed for this local preparation.
+
+## Plan 70 — admission confidence calculation
+
+- `src/admission/benchmark.ts` currently resamples index `((index * 1103515245 + seed * 12345) >>> 0) % n`. This affine schedule does not draw independent observations with replacement.
+- Reproduction: 1000 latencies comprising 960 at 4000 ms followed by 40 at 6000 ms; 1000 resamples. The current scheme's 95th percentile slow-count is 43, yielding an upper p95 of 4000 ms. Independent with-replacement sampling using Python `random.Random(6464)` yields slow-count 51, hence upper p95 6000 ms. The existing scheme can falsely pass by understating uncertainty.
+- [SciPy's bootstrap reference](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.bootstrap.html) documents random same-size resampling with replacement and seeded reproducibility. A one-sided 95% upper interval corresponds to the upper bound of a two-sided 90% interval. Implement a defensible reproducible sampler and consider cohort/dependence assumptions; add a meaningful boundary regression. Preserve the locked counts, five-second threshold, and zero backlog requirement.
+- Canonical schedule uses 1000 accepted samples with forced 200-hit and 200-miss/cold/contention cohorts inside that set. Do not silently change it to 1400 samples or relax a forced cohort.
+
+## Integration reminders
+
+- Plan 69: inject a transactional PostgreSQL CAS operation journal. Local file locks and memory journals are not cross-region Cloud Run authority.
+- Plans 61/62: claim original rail operations atomically before dispatch; setting a dispatching status alone is not a CAS. Persist semantic Cashu identities and original NWC request identities before effects.
+- Plan 72: include the pinned `patches/` directory in homelab deployment's clean-source inventory. The Dockerfile now copies the reviewed ContextVM SDK shutdown patch.
+- Plan 73: run fresh complete no-effect CI after integration. Plans 07-20/26 remain the authorization/protected-execution path; all five production requirements remain unverified until matching live evidence passes.

@@ -10,6 +10,8 @@ import { createNip46DeploymentClient } from "../../src/release/deployment/nip46-
 import { registerCompleteDeploymentClientFamilies } from "../../src/release/deployment/factory";
 
 const digest = (letter: string) => letter.repeat(64);
+const vertexPrice = { sourceUrl: "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing", sourceDocumentSha256: digest("1"), quoteSha256: digest("2"), observedAtMs: 1_000, freshUntilMs: 2_000, effectiveFromMs: 900, effectiveUntilMs: 3_000, currency: "USD" as const, inputMicrosPerMillion: 750_000, cachedInputMicrosPerMillion: 75_000, outputAndThoughtMicrosPerMillion: 3_750_000 };
+function vertexJournal() { const values = new Map<string, unknown>(); return { async read(operationId: string) { return values.get(operationId); }, async write(entry: { operationId: string }) { values.set(entry.operationId, entry); } }; }
 
 test("cli-upload: pins promoted CLI source and reconciles only the exact original upload", async () => {
   const clients = createCliUploadDeploymentClients({
@@ -43,7 +45,7 @@ test("cli-upload: factory registers all ten non-infrastructure provider families
   const families = registerCompleteDeploymentClientFamilies({
     contextvm: createContextVmDeploymentClient({ serviceKeyReference: "nostr:contextvm-service-key", relaySetReference: "relay-set:primary", relaySetSha256: digest("2") }),
     payments: createPaymentDeploymentClients({ nwcConnectionReference: "nwc:consent:wallet-one", cashuWalletReference: "cashu:funded-wallet:one" }),
-    vertex: createVertexDeploymentClient({ candidateSha256: digest("3"), projectId: "napplet-cvm-run-1", location: "europe-west1", model: "gemini-2.5-pro", credentialReference: "gcp:adc:release", vertex: { predict: async () => ({ status: "blocked" as const }) } }),
+    vertex: createVertexDeploymentClient({ candidateSha256: digest("3"), projectId: "napplet-cvm-run-1", location: "global", model: "gemini-3.8-flash", credentialReference: "gcp:adc:release", price: vertexPrice, journal: vertexJournal(), interactions: { create: async () => undefined, get: async () => undefined, list: async () => ({ interactions: [] }) } }),
     host: createCompatibleHostDeploymentClient({ referenceHostReference: "napplet:reference-host:0.3.1", chromiumReference: "chromium:fixture:123", packageHost: {} as never, browser: {} as never }),
     signer: createNip46DeploymentClient({ disposableClientKeyReference: "nostr:nip46-disposable-client-key", signer: {} as never, ownerEventVerifier: {} as never }),
     publication, relays,

@@ -206,7 +206,10 @@ async function main(): Promise<number> {
           workspace,
           dryRun: true,
           providers: await preapprovalDiscoveryRegistry({ candidateSha256: candidateSha256!, workspace }),
-          costCatalog: createCertificationBudgetCatalog({ quantityContract: RELEASE_TOPOLOGY_QUANTITY_CONTRACT }),
+          // A project maximum-spend policy is useful only for local dry-run
+          // bounds. It is not vendor provenance and must never authorize a
+          // `--request`; that path requires injected fresh official facts.
+          ...(request ? {} : { costCatalog: createCertificationBudgetCatalog({ quantityContract: RELEASE_TOPOLOGY_QUANTITY_CONTRACT }) }),
           requireCurrentPriceCatalog: true,
           operatorFundingReadiness: certificationFunding,
         });
@@ -217,7 +220,7 @@ async function main(): Promise<number> {
           candidateSha256,
           readiness: {
             capabilityDiscovery: { status: "completed", mode: "read_only" },
-            pricing: { status: "blocked", reasonCode: "RELEASE_CONTROLLER_LIVE_PRICE_CATALOG_REQUIRED" },
+            pricing: { status: "blocked", reasonCode: request ? "RELEASE_PRODUCTION_PRICE_SOURCE_CONFIG_REQUIRED" : "RELEASE_CONTROLLER_LIVE_PRICE_CATALOG_REQUIRED" },
             execution: await executionReadinessProjection({ candidateSha256: candidateSha256!, workspace }),
           },
           prerequisites: preparePreApprovalPrerequisites(fundingPrerequisites ? { funding: fundingPrerequisites } : undefined),

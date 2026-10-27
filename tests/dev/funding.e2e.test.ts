@@ -8,6 +8,32 @@ const principal = { pubkey: "ab".repeat(32) };
 const stranger = { pubkey: "cd".repeat(32) };
 const lightningCommand = (key: string, amount: string) => ({ principal, idempotencyKey: key, amount, unit: "sat", policyVersion: "development-local-v1", protocolVersion: "funding-contract-v1" });
 
+async function cashuFailureDiagnostic(
+  app: Awaited<ReturnType<typeof createDevelopmentFunding>>,
+  primary: Wallet,
+  proofs: ReturnType<typeof getDecodedToken>["proofs"],
+  topUpId: string,
+): Promise<void> {
+  // Keep failure evidence bounded and secret-free.  This repeats only the
+  // local, pre-dispatch preview: no swap request or bearer value is emitted.
+  const [record, preview] = await Promise.all([
+    app.database.cashu.find(topUpId).then((value) => value ? {
+      resultState: value.result.state,
+      custodyState: value.custody?.state ?? null,
+      expectedOutputAmount: value.custody?.expectedOutputAmount ?? null,
+    } : null).catch(() => null),
+    (async () => {
+      try {
+        const prepared = await primary.ops.receive(proofs).keyset(proofs[0]?.id ?? "").requireDleq(true).prepare();
+        return { status: "prepared", amount: prepared.amount.toString(), fees: prepared.fees.toString(), outputs: (prepared.keepOutputs?.length ?? 0) + (prepared.sendOutputs?.length ?? 0) };
+      } catch (error) {
+        return { status: "rejected", error: error instanceof Error ? error.message.slice(0, 240) : "unknown" };
+      }
+    })(),
+  ]);
+  console.error(`[dev-payments cashu diagnostic] ${JSON.stringify({ topUpId, record, inputProofs: proofs.length, inputProofsWithDleq: proofs.filter((proof) => proof.dleq && typeof proof.dleq === "object").length, preview })}`);
+}
+
 e2e("real local payments credit the PostgreSQL application ledger once across restart", async () => {
   const stack = developmentStack(true);
   let app: Awaited<ReturnType<typeof createDevelopmentFunding>> | undefined;
@@ -23,7 +49,10 @@ e2e("real local payments credit the PostgreSQL application ledger once across re
     const keysets = (await primary.mint.getKeySets()).keysets.map((keyset) => keyset.id);
     const originalProofs = getDecodedToken(config.cashuToken, keysets).proofs;
     const cashu = { principal, idempotencyKey: "local:cashu:1", topUpId: "local:cashu:1", amount: "1024", unit: "sat", pmi: "bitcoin-cashu-v4-direct", token: app.applicationToken(config.cashuToken) };
-    const credited = await app.cashu.submit(cashu);
+    const credited = await app.cashu.submit(cashu).catch(async (error) => {
+      await cashuFailureDiagnostic(app!, primary, originalProofs, cashu.topUpId);
+      throw error;
+    });
     expect(credited.state).toBe("credited");
     expect((await app.funding.status(principal)).available).toBe("1024");
     expect((await primary.checkProofsStates(originalProofs)).every((proof) => proof.state === "SPENT")).toBe(true);

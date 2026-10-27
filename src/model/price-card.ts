@@ -74,7 +74,7 @@ export type VertexGeminiProductionPriceObservation = Readonly<{
 
 function freeze<T>(value: T): T { return Object.freeze(value); }
 function ceilDivide(value: bigint, divisor: bigint): readonly [bigint, bigint, bigint] { const quotient = value / divisor; const remainder = value % divisor; return [quotient, remainder, remainder === 0n ? quotient : quotient + 1n]; }
-async function sha256Bytes(bytes: Uint8Array): Promise<string> { const digest = await crypto.subtle.digest("SHA-256", bytes); return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(""); }
+async function sha256Bytes(bytes: Uint8Array): Promise<string> { const digest = await crypto.subtle.digest("SHA-256", new Uint8Array(bytes).buffer); return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(""); }
 
 /** Constructs production pricing only from the exact captured Vertex source
  * and a fresh settlement FX quote.  It deliberately has no rate arguments:

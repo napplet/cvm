@@ -10,7 +10,7 @@ export type SealedFundingFeePolicyProjection = Readonly<{
 
 async function hash(value: Uint8Array | unknown): Promise<string> {
   const bytes = value instanceof Uint8Array ? value : new TextEncoder().encode(canonicalJson(value));
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const digest = await crypto.subtle.digest("SHA-256", new Uint8Array(bytes).buffer);
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
 }
 function ceil(left: bigint, right: bigint): bigint { return (left + right - 1n) / right; }

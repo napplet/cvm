@@ -30,7 +30,7 @@ const FundingFeeFactSchema = z.object({ provider: z.enum(FUNDING_FEE_PROVIDERS),
 export type FundingRailFeePort = Readonly<{ readFeeFacts(): Promise<readonly unknown[]> }>;
 export type ProductionLiveCostCatalogOptions = Readonly<{ google: GooglePublicCatalogPort; sources: OfficialPricingSourcePort; vertex: VertexModelPricePort; fundingRailFees?: FundingRailFeePort; quantityContract?: readonly ReleaseTopologyQuantity[]; now?: () => number }>;
 
-async function sha256Bytes(bytes: Uint8Array): Promise<string> { const hash = await crypto.subtle.digest("SHA-256", bytes); return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join(""); }
+async function sha256Bytes(bytes: Uint8Array): Promise<string> { const hash = await crypto.subtle.digest("SHA-256", new Uint8Array(bytes).buffer); return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join(""); }
 async function sha256(value: unknown): Promise<string> { return sha256Bytes(new TextEncoder().encode(canonicalJson(value))); }
 function assertFresh(snapshot: Snapshot, nowMs: number): void { if (!Number.isSafeInteger(nowMs) || nowMs <= 0 || snapshot.observedAtMs > nowMs || snapshot.freshUntilMs <= nowMs || snapshot.freshUntilMs <= snapshot.observedAtMs) throw new Error("PRODUCTION_CATALOG_STALE"); }
 function exactLegacyQuotes(snapshot: Snapshot, providers: readonly typeof PAID_PROVIDERS[number][]): Map<typeof PAID_PROVIDERS[number], Quote> { const quotes = new Map(snapshot.quotes.map((quote) => [quote.provider, quote] as const)); if (quotes.size !== snapshot.quotes.length || providers.some((provider) => !quotes.has(provider)) || [...quotes.keys()].some((provider) => !providers.includes(provider))) throw new Error("PRODUCTION_CATALOG_COVERAGE_REQUIRED"); return quotes; }
@@ -77,7 +77,7 @@ function vertexSnapshot(observation: VertexGeminiPriceObservation): Snapshot {
     { provider: "model", componentId: "model.global.input", skuId: "gemini-4-argon-global-input", region: observation.location, currency: "USD", unit: "ten-million-tokens", priceMicros: observation.inputMicrosPerMillion * 10, priceNanos: priceNanos(observation.inputMicrosPerMillion) },
     { provider: "model", componentId: "model.global.output-thought", skuId: "gemini-4-argon-global-output-thought", region: observation.location, currency: "USD", unit: "ten-million-tokens", priceMicros: observation.outputAndThoughtMicrosPerMillion * 10, priceNanos: priceNanos(observation.outputAndThoughtMicrosPerMillion) },
   ];
-  return { sourceId: "vertex-gemini-4-argon-official-pricing", bytes: observation.bytes, observedAtMs: observation.observedAtMs, freshUntilMs: observation.freshUntilMs, quotes };
+  return { sourceId: "vertex-gemini-4-argon-official-pricing", bytes: new Uint8Array(observation.bytes), observedAtMs: observation.observedAtMs, freshUntilMs: observation.freshUntilMs, quotes: [...quotes] };
 }
 
 /** Builds sixteen stable family facts. When a topology contract is supplied,

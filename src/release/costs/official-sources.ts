@@ -78,12 +78,27 @@ export type VertexGeminiPriceObservation = Readonly<{
 export function createApplicationDefaultTokenPort(): ApplicationDefaultTokenPort {
   return Object.freeze({
     async readAccessToken() {
-      let process: ReturnType<typeof Bun.spawn>;
-      try { process = Bun.spawn(["gcloud", "auth", "application-default", "print-access-token"], { stdin: "ignore", stdout: "pipe", stderr: "ignore" }); }
-      catch { throw new Error("ADC_APPLICATION_DEFAULT_LOGIN_REQUIRED"); }
-      const value = (await new Response(process.stdout).text()).trim();
-      if (await process.exited !== 0 || !TokenSchema.test(value)) throw new Error("ADC_APPLICATION_DEFAULT_LOGIN_REQUIRED");
-      return value;
+      const child = (() => {
+        try { return Bun.spawn(["gcloud", "auth", "application-default", "print-access-token"], { stdin: "ignore", stdout: "pipe", stderr: "ignore" }); }
+        catch { throw new Error("ADC_APPLICATION_DEFAULT_LOGIN_REQUIRED"); }
+      })();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const reader = child.stdout.getReader();
+      const output = async () => {
+        const parts: Uint8Array[] = []; let size = 0;
+        for (;;) { const part = await reader.read(); if (part.done) break; size += part.value.byteLength; if (size > 8192) throw new Error("ADC_TOKEN_RESPONSE_REJECTED"); parts.push(part.value); }
+        const bytes = new Uint8Array(size); let offset = 0; for (const part of parts) { bytes.set(part, offset); offset += part.byteLength; }
+        return new TextDecoder().decode(bytes).trim();
+      };
+      try {
+        const [code, value] = await Promise.race([
+          Promise.all([child.exited, output()]),
+          new Promise<never>((_, reject) => { timer = setTimeout(() => { child.kill(); reject(new Error("ADC_TOKEN_TIMEOUT")); }, 5000); }),
+        ]);
+        if (code !== 0 || !TokenSchema.test(value)) throw new Error("ADC_APPLICATION_DEFAULT_LOGIN_REQUIRED");
+        return value;
+      } finally { clearTimeout(timer); child.kill(); void reader.cancel().catch(() => undefined); }
+
     },
   });
 }
@@ -188,7 +203,7 @@ export function createOfficialPricingSources(options: OfficialPricingSourcesOpti
   const snapshot = (sourceId: string, bytes: Uint8Array, quotes: readonly SourceQuote[]): SourceSnapshot => { const observedAtMs = now(); if (!Number.isSafeInteger(observedAtMs) || observedAtMs <= 0) throw new Error("OFFICIAL_SOURCE_TIME_REJECTED"); return Object.freeze({ sourceId, bytes, observedAtMs, freshUntilMs: observedAtMs + freshForMs, quotes: Object.freeze([...quotes]) }); };
   return Object.freeze({
     google: Object.freeze({
-      async readCatalog(input) {
+      async readCatalog(input: Parameters<GooglePublicCatalogPort["readCatalog"]>[0]) {
         if (input.projectId !== undefined || !Array.isArray(input.providers) || input.providers.length === 0 || input.providers.some((provider) => !ProviderSchema.safeParse(provider).success) || new Set(input.providers).size !== input.providers.length) throw new Error("OFFICIAL_SOURCE_GOOGLE_REQUEST_REJECTED");
         const selected = selectors.filter((selector) => input.providers.includes(selector.provider));
         if (selected.length === 0 || input.providers.some((provider) => !selected.some((selector) => selector.provider === provider))) throw new Error("OFFICIAL_SOURCE_GOOGLE_COVERAGE_REJECTED");
@@ -235,14 +250,14 @@ export function createOfficialPricingSources(options: OfficialPricingSourcesOpti
         if (!Number.isSafeInteger(observedAtMs) || observedAtMs <= 0) throw new Error("OFFICIAL_SOURCE_TIME_REJECTED");
         const observedAt = new Date(observedAtMs).toISOString();
         const freshUntil = new Date(observedAtMs + freshForMs).toISOString();
-        const hash = await crypto.subtle.digest("SHA-256", bytes);
+        const hash = await crypto.subtle.digest("SHA-256", new Uint8Array(bytes).buffer);
         const capturedBytesSha256 = Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
         return Object.freeze({
           source: Object.freeze({ url: BTC_USD_TICKER_URL, capturedBytesSha256, observedAt, effectiveAt: observedAt, freshUntil }),
           satsPerUsd: Object.freeze({ numerator: (numerator / divisor).toString(), denominator: (usdPerBtc / divisor).toString() }),
         });
       },
-      async readOfficialPricing(input) {
+      async readOfficialPricing(input: Parameters<OfficialPricingSourcePort["readOfficialPricing"]>[0]) {
         const provider = WorkerProviderSchema.parse(input.provider); const url = provider === "modal" ? MODAL_PRICING_URL : FLY_PRICING_URL; const bytes = await readOfficial(options.fetch, url, undefined, timeoutMs); const document = new TextDecoder().decode(bytes); const normalized = officialText(document);
         const priceNanos = provider === "modal" ? (() => { const cpu = priceAfter(normalized, /\$?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:[0-9.\s]{0,128})\/\s*core\s*\/\s*sec/iu); const memory = priceAfter(normalized, /\$?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:[0-9.\s]{0,128})\/\s*GiB\s*\/\s*sec/iu); return (cpu * BigInt(options.workers.modal.cpuCores) + memory * BigInt(options.workers.modal.memoryGiB)) * (options.workers.modal.unit === "worker-100-seconds" ? 100n : 1n); })() : (() => flyMonthlyMachinePrice(normalized, options.workers.fly.preset, options.workers.fly.memory) * (options.workers.fly.unit === "worker-100-seconds" ? 100n : 1n))();
         const unit = provider === "modal" ? options.workers.modal.unit : options.workers.fly.unit;

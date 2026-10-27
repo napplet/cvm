@@ -5,6 +5,7 @@ COPY --from=docker /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=docker /usr/local/libexec/docker/cli-plugins /usr/local/libexec/docker/cli-plugins
 WORKDIR /app
 COPY package.json bun.lock ./
+COPY patches ./patches
 RUN bun install --frozen-lockfile
 COPY tests/dev-ui/package.json tests/dev-ui/bun.lock ./tests/dev-ui/
 RUN cd tests/dev-ui && bun install --frozen-lockfile && bun node_modules/playwright/cli.js install chromium

@@ -1,0 +1,77 @@
+diff --git a/dist/esm/relay/applesauce-relay-pool.js b/dist/esm/relay/applesauce-relay-pool.js
+index 3ece2e8d70e228fcf1db2bb100c6168c60c4dc87..3060348944f2779244782d32d77889a97989cf69 100644
+--- a/dist/esm/relay/applesauce-relay-pool.js
++++ b/dist/esm/relay/applesauce-relay-pool.js
+@@ -72,6 +72,7 @@ export class ApplesauceRelayPool {
+      */
+     constructor(relayUrls, opts) {
+         var _a, _b, _c, _d, _e, _f, _g, _h;
++        this.disconnected = false;
+         this.subscriptions = new Map();
+         this.relayGeneration = 0;
+         this.destroy$ = new Subject();
+@@ -95,6 +96,7 @@ export class ApplesauceRelayPool {
+      * Validates relay URLs and initializes the relay group.
+      */
+     async connect() {
++        if (this.disconnected) throw new Error("Relay pool is disconnected");
+         logger.debug('Connecting to relays', { relayUrls: this.relayUrls });
+         for (const url of this.relayUrls) {
+             try {
+@@ -119,6 +121,7 @@ export class ApplesauceRelayPool {
+         let lastLogAt = 0;
+         let attempt = 0;
+         while (true) {
++            if (this.disconnected) throw new Error("Relay pool is disconnected");
+             if ((_a = opts === null || opts === void 0 ? void 0 : opts.abortSignal) === null || _a === void 0 ? void 0 : _a.aborted) {
+                 throw new Error('Publish aborted');
+             }
+@@ -257,6 +260,7 @@ export class ApplesauceRelayPool {
+      * @param onEose - Optional callback function for end-of-stream events.
+      */
+     async subscribe(filters, onEvent, onEose) {
++        if (this.disconnected) throw new Error("Relay pool is disconnected");
+         const id = `sub:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+         const state = { id, filters, onEvent, onEose };
+         state.unsubscribe = this.createSubscription(filters, onEvent, onEose);
+@@ -286,6 +290,8 @@ export class ApplesauceRelayPool {
+      * Disconnects from all relays and cleans up resources.
+      */
+     async disconnect() {
++        // Fence late liveness results before tearing down subscriptions.
++        this.disconnected = true;
+         this.destroy$.next();
+         this.destroy$.complete();
+         // If a rebuild is in flight, await it (bounded) so we don't leave timers/subscriptions
+@@ -361,6 +367,7 @@ export class ApplesauceRelayPool {
+     }
+     /** Starts the liveness ping monitor (called lazily on first subscribe) */
+     startPingMonitor() {
++        if (this.disconnected) return;
+         if (this.pingSubscription) {
+             logger.debug('Ping monitor already started, skipping');
+             return;
+@@ -384,6 +391,7 @@ export class ApplesauceRelayPool {
+     }
+     /** Performs a liveness check and triggers rebuild on timeout */
+     async checkLiveness() {
++        if (this.disconnected) return;
+         // If there are no active subscriptions, don't perform liveness checks.
+         // applesauce-relay may legitimately close sockets after `keepAlive` when
+         // nothing is subscribed, and that should not trigger a rebuild.
+@@ -435,6 +443,7 @@ export class ApplesauceRelayPool {
+             }));
+         }
+         catch (error) {
++            if (this.disconnected) return;
+             if (error instanceof Error && error.name === 'TimeoutError') {
+                 logger.warn('Liveness check timed out - no response from relays', {
+                     pingTimeoutMs: this.pingTimeoutMs,
+@@ -449,6 +458,7 @@ export class ApplesauceRelayPool {
+     }
+     /** Rebuilds the relay group and replays all subscriptions (single-flight) */
+     rebuild(reason) {
++        if (this.disconnected) return;
+         if (this.rebuildInFlight)
+             return;
+         this.rebuildInFlight = (async () => {

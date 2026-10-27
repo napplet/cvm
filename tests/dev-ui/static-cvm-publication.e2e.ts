@@ -414,5 +414,5 @@ try {
   stage("CLEANUP_BROWSER");
   await browser.close(); site.stop(true); destination.stop(true); backup.stop(true); unavailable.stop(true); stage("CLEANUP_POOL"); await pool.end();
   stage("CLEANUP_CVM");
-  try { await server.close(); } finally { stage("CLEANUP_STACK"); await stack.down(true); await rm(root, { recursive: true, force: true }); clearInterval(heartbeat); }
+  try { await server.close(); } finally { stage("CLEANUP_STACK"); await stack.down(true); await rm(root, { recursive: true, force: true }); stage("CLEANUP_COMPLETE"); clearInterval(heartbeat); }
 }

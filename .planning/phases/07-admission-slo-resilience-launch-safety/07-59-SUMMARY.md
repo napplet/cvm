@@ -107,6 +107,8 @@ At `5499e7d`, payment run `40516163304` passed. GUI run `40516163434` passed the
 
 At `58cb406`, the payment workflow passes 141 tests / 926 assertions. The GUI run `40518538358` stalled for its existing ten-minute process limit in static publication, a journey that passed at `5499e7d`; its bounded stderr only showed relay liveness recovery. Added fixed stage labels and periodic stage-only diagnostics to identify whether a subsequent stall is in browser work, restart, or cleanup. No timeout or acceptance check changed. Full GUI verification remains pending.
 
+At `5ec6c1c`, GUI run `40522167383` passed publication/restart/revision/metadata assertions but the child stayed alive after cleanup. A focused subprocess regression reproduced the SDK relay pool rebuilding after a liveness ping completed past disconnect, retaining its timer (exit 137 after the test deadline). The pinned `@contextvm/sdk@0.13.10` patch fences terminal disconnect against late liveness/rebuild/publish/subscribe work; the same process now exits normally in about 220 ms. The root verifier pins the patch bytes as well as both dependency manifests, and the homelab image copies patches before frozen installation. Five focused checks pass. Full remote CI remains required.
+
 ## Next Phase Readiness
 
 PR #5 is open. Do not mark OPS-04 complete until the retained payment and GUI workflows pass remotely.

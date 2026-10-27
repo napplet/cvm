@@ -1,3 +1,6 @@
+import { createAuthorizationReceipt, createAuthorizationRequest } from "../../src/release/authorization";
+import { canonicalJson } from "../../src/promotion/schema";
+import { PostgresReleasePromotion } from "../../src/production/release-promotion";
 import { expect, test } from "bun:test";
 import { createRequire } from "node:module";
 import { PostgresOperationJournal, assertPostgresOperationJournal } from "../../src/release/deployment/postgres-operation-journal";
@@ -8,6 +11,11 @@ test("journal construction has no effects and rejects structural/prototype imper
   let calls = 0;
   const journal = new PostgresOperationJournal({ async connect() { calls++; throw new Error("unexpected I/O"); } }, { namespace: "contextvm:run-1", scopeSha256 });
   expect(calls).toBe(0);
+  const promotion = new PostgresReleasePromotion({ pool: { async connect() { calls++; throw new Error("unexpected I/O"); } }, deploymentScopeSha256: scopeSha256,
+    binding: { candidateId: scopeSha256, topologySha256: identity, authorizationReceiptSha256: identity }, expectedPreviousBundleSha256: null, authorization: { request: {}, receipt: {} } });
+  await expect(promotion.persist({ operationId: "invalid", bundleSha256: identity, authorizationReceiptSha256: identity })).rejects.toThrow();
+  expect(calls).toBe(0);
+
   expect(() => assertPostgresOperationJournal(journal)).not.toThrow();
   expect(() => assertPostgresOperationJournal({ durableAuthority: "postgres" })).toThrow("PRODUCTION_POSTGRES_OPERATION_JOURNAL_REQUIRED");
   expect(() => assertPostgresOperationJournal(Object.create(PostgresOperationJournal.prototype))).toThrow("PRODUCTION_POSTGRES_OPERATION_JOURNAL_REQUIRED");
@@ -18,6 +26,8 @@ test("journal construction has no effects and rejects structural/prototype imper
 
 const integration = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
 integration("real restricted PostgreSQL survives new instances, arbitrates concurrent claims/CAS, and preserves immutable audit", async () => {
+  const priorEffects = process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS;
+  process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS = "deny";
   const name = `napplet-cvm-journal-${crypto.randomUUID().replaceAll("-", "")}`;
   const docker = async (...args: string[]) => {
     const child = Bun.spawn(["docker", ...args], { stdout: "pipe", stderr: "pipe" });
@@ -90,5 +100,42 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
     expect(await vertex().read(entry.operationId)).toMatchObject({ interactionId: "original-result", completedReceipt: { immutable: "receipt" } });
     await expect(vertex().write({ ...entry, interactionId: "other-result" })).rejects.toThrow("PROVIDER_OPERATION_IDENTITY_CONFLICT");
     await expect(vertex().write({ ...entry, completedReceipt: { immutable: "different" } })).rejects.toThrow("PROVIDER_OPERATION_IDENTITY_CONFLICT");
-  } finally { await application?.end(); await admin?.end(); await docker("rm", "--force", name).catch(() => undefined); }
+    const request = await createAuthorizationRequest({ candidateSha256: scopeSha256, topologySha256: identity, effectPlanSha256: identity, controllerStateSha256: identity, providerCapabilitiesSha256: identity,
+      orderedEffects: [{ id: "cloud-run-control", provider: "cloud_run", operation: "create_or_update", estimatedCostMicros: 1 }], providerScopes: [{ provider: "cloud_run", accountScopeSha256: identity, projectScopeSha256: identity }],
+      estimate: { currency: "USD", maximumMicros: 1, sourceId: "contract-test", observedAtMs: 1000, freshUntilMs: 3000 }, maximumRunDurationMs: 60000, cleanupByMs: 1900, evidenceRetentionDays: 30, artifactRetentionDays: 30, gcpEffects: { projectBootstrap: false, billing: false, apiEnablement: ["run.googleapis.com"] }, expiresAtMs: 2000 });
+    const receipt = await createAuthorizationReceipt(request);
+    // A certified release pointer and original result commit together in the
+    // restricted realm. A lost COMMIT response must be queried, never inferred.
+    let promotionNow = 1400, loseCommitResponse = false;
+    const promotionPool = { async connect() {
+      const client = await application.connect();
+      return { async query(text: string, values?: readonly unknown[]) {
+        const result = await client.query(text, values);
+        if (text === "COMMIT" && loseCommitResponse) { loseCommitResponse = false; throw new Error("COMMIT_RESPONSE_LOST"); }
+        return result;
+      }, release() { client.release(); } };
+    } };
+    const binding = { candidateId: request.candidateSha256, topologySha256: request.topologySha256, authorizationReceiptSha256: receipt.authorizationReceiptSha256 };
+    const promote = (prior: string | null = null) => new PostgresReleasePromotion({ pool: promotionPool, deploymentScopeSha256: identity, binding, expectedPreviousBundleSha256: prior, authorization: { request, receipt }, now: () => promotionNow });
+    const bundleSha256 = "e".repeat(64);
+    const operationId = `promotion-${new Bun.CryptoHasher("sha256").update(canonicalJson({ candidateId: binding.candidateId, bundleSha256, authorizationReceiptSha256: binding.authorizationReceiptSha256 })).digest("hex")}`;
+    const originalPromotion = { operationId, bundleSha256 };
+    expect(await promote().observe(originalPromotion)).toBe("unknown");
+    await promote().persist({ ...originalPromotion, authorizationReceiptSha256: binding.authorizationReceiptSha256 });
+    loseCommitResponse = true;
+    await expect(promote().promote(originalPromotion)).rejects.toThrow("COMMIT_RESPONSE_LOST");
+    expect(await promote().observe(originalPromotion)).toBe("promoted");
+    expect(await Promise.all(Array.from({ length: 4 }, () => promote().promote(originalPromotion)))).toEqual(["promoted", "promoted", "promoted", "promoted"]);
+    const pointer = (await admin.query("SELECT value_json,revision FROM production_real.release_operation_journal WHERE namespace='release-promotion' AND scope_sha256=$1 AND operation_id='current'", [identity])).rows[0];
+    expect(pointer.value_json).toMatchObject({ operationId, bundleSha256, status: "promoted" }); expect(Number(pointer.revision)).toBe(2);
+    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.release_operation_audit WHERE namespace='release-promotion' AND scope_sha256=$1", [identity])).rows[0].count).toBe(4);
+    const otherBundle = "f".repeat(64), otherOperation = `promotion-${new Bun.CryptoHasher("sha256").update(canonicalJson({ candidateId: binding.candidateId, bundleSha256: otherBundle, authorizationReceiptSha256: binding.authorizationReceiptSha256 })).digest("hex")}`;
+    await promote().persist({ operationId: otherOperation, bundleSha256: otherBundle, authorizationReceiptSha256: binding.authorizationReceiptSha256 });
+    await expect(promote().promote({ operationId: otherOperation, bundleSha256: otherBundle })).rejects.toThrow("PRODUCTION_RELEASE_PROMOTION_PREVIOUS_MISMATCH");
+    expect(await promote().observe({ operationId: otherOperation, bundleSha256: otherBundle })).toBe("unknown");
+    promotionNow = 2001;
+    expect(await promote().observe(originalPromotion)).toBe("promoted");
+    await expect(promote().promote(originalPromotion)).rejects.toThrow("RELEASE_AUTHORIZATION_RECEIPT_EXPIRED");
+    await expect(promote().persist({ ...originalPromotion, authorizationReceiptSha256: binding.authorizationReceiptSha256 })).rejects.toThrow("RELEASE_AUTHORIZATION_RECEIPT_EXPIRED");
+  } finally { if (priorEffects === undefined) delete process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS; else process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS = priorEffects; await application?.end(); await admin?.end(); await docker("rm", "--force", name).catch(() => undefined); }
 }, 120000);

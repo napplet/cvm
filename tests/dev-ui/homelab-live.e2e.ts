@@ -4,7 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 if (!process.argv.includes("--allow-chatgpt-usage")) throw new Error("CHATGPT_USAGE_OPT_IN_REQUIRED");
 const origin = "https://cvm.lab.sandwich.farm";
-const browser = await chromium.launch({ headless: true });
+const browser = await chromium.launch({ headless: true, args: ["--host-resolver-rules=MAP cvm.lab.sandwich.farm 192.168.151.196, MAP cvm-preview.lab.sandwich.farm 192.168.151.196, MAP cvm-blobs.lab.sandwich.farm 192.168.151.196"] });
 try {
   const page = await browser.newPage();
   const productHttp: string[] = [];

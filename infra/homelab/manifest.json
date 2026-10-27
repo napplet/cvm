@@ -12,5 +12,7 @@
   "private_key_name": "gogs-repo-key",
   "instant_deploy": true,
   "health_check_enabled": false,
-  "docker_compose_domains": []
+  "docker_compose_domains": [],
+  "domains": "https://cvm.lab.sandwich.farm",
+  "autogenerate_domain": false
 }

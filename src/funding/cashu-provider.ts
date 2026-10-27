@@ -130,15 +130,15 @@ class CashuTsWalletOperations implements CashuWalletOperations {
     if (!input.custody) return false;
     const loaded = await input.custody.load();
     if (!loaded || loaded.journal.mintUrl !== input.mint.url || loaded.journal.keysetId !== input.keysetId || loaded.journal.amount !== input.amount) return false;
-    if (loaded.outputs) {
+    try {
+      if (loaded.outputs) {
       try {
         const outputs = JSON.parse(new TextDecoder().decode(loaded.outputs));
         this.assertOwnedOutputs(outputs, input, loaded.journal.expectedOutputAmount);
         return true;
       } finally { loaded.outputs.fill(0); }
-    }
-    if (!loaded.outputData || loaded.journal.state !== "dispatching") return false;
-    try {
+      }
+      if (!loaded.outputData || loaded.journal.state !== "dispatching") return false;
       const serialized = JSON.parse(new TextDecoder().decode(loaded.outputData));
       if (!Array.isArray(serialized) || serialized.length === 0) return false;
       const outputData = serialized.map((entry) => OutputData.deserialize(entry));
@@ -160,7 +160,7 @@ class CashuTsWalletOperations implements CashuWalletOperations {
       await input.custody.recordOwnedOutputs(outputs);
       return true;
     } catch { return false; }
-    finally { loaded.outputData.fill(0); }
+    finally { loaded.outputData?.fill(0); loaded.outputs?.fill(0); }
   }
   private assertOwnedOutputs(outputs: readonly unknown[], input: CashuWalletOperationInput, expectedAmount = input.amount): void {
     if (outputs.length === 0) throw new Error("CASHU_OUTPUT_OWNERSHIP_INVALID");

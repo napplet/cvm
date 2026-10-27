@@ -186,11 +186,19 @@ class PostgresCashuLifecycleRepository implements CashuTopUpRepository {
     await this.withClient(async (client) => { await client.query("UPDATE cashu_top_up_state SET state_json=$2,updated_at=now() WHERE top_up_id=$1", [record.result.topUpId, JSON.stringify(record)]); });
   }
 
+  async updateResult(topUpId: string, result: CashuTopUpResult): Promise<CashuTopUpRecord> {
+    return this.mutate(topUpId, (record) => {
+      const updated = frozen({ ...record, result: monotonicCashuResult(record.result, result) });
+      return [updated, updated] as const;
+    });
+  }
+
   async prepareCustody(topUpId: string, journal: Omit<CashuCustodyJournal, "state">): Promise<CashuCustodyJournal> {
     return this.mutate(topUpId, (record) => {
       if (record.custody) {
-        const { state: _state, ...existing } = record.custody;
-        if (JSON.stringify(existing) !== JSON.stringify(journal)) throw new Error("CASHU_CUSTODY_CONFLICT");
+        const { state: _state, outputDataProtectedId: _id, ...existing } = record.custody;
+        const { outputDataProtectedId: _requestedId, ...requested } = journal;
+        if (JSON.stringify(existing) !== JSON.stringify(requested)) throw new Error("CASHU_CUSTODY_CONFLICT");
         return [record, record.custody] as const;
       }
       const custody = frozen({ ...journal, state: "prepared" as const });
@@ -205,11 +213,14 @@ class PostgresCashuLifecycleRepository implements CashuTopUpRepository {
     });
   }
 
-  async recordOwnedCustodyOutputs(topUpId: string, protectedId: string): Promise<void> {
-    await this.mutate(topUpId, (record) => {
+  async recordOwnedCustodyOutputs(topUpId: string, protectedId: string, payloadDigest: string): Promise<Readonly<{ accepted: boolean; protectedId: string }>> {
+    return this.mutate(topUpId, (record) => {
       if (!record.custody || record.custody.state === "prepared") throw new Error("CASHU_CUSTODY_DISPATCH_REQUIRED");
-      if (record.custody.ownedOutputsProtectedId && record.custody.ownedOutputsProtectedId !== protectedId) throw new Error("CASHU_CUSTODY_OUTPUT_CONFLICT");
-      return [frozen({ ...record, custody: frozen({ ...record.custody, state: "owned_outputs" as const, ownedOutputsProtectedId: protectedId }) }), undefined] as const;
+      if (record.custody.ownedOutputsProtectedId) {
+        if (record.custody.ownedOutputsDigest !== payloadDigest) throw new Error("CASHU_CUSTODY_OUTPUT_CONFLICT");
+        return [record, frozen({ accepted: false, protectedId: record.custody.ownedOutputsProtectedId })] as const;
+      }
+      return [frozen({ ...record, custody: frozen({ ...record.custody, state: "owned_outputs" as const, ownedOutputsProtectedId: protectedId, ownedOutputsDigest: payloadDigest }) }), frozen({ accepted: true, protectedId })] as const;
     });
   }
 
@@ -245,6 +256,14 @@ class PostgresCashuLifecycleRepository implements CashuTopUpRepository {
     const client = await this.pool.connect();
     try { return await operation(client); } finally { client.release(); }
   }
+}
+
+function monotonicCashuResult(current: CashuTopUpResult, proposed: CashuTopUpResult): CashuTopUpResult {
+  if (current.topUpId !== proposed.topUpId || current.commitment !== proposed.commitment || current.policyVersion !== proposed.policyVersion) throw new Error("CASHU_TOP_UP_RESULT_CONFLICT");
+  if (current.state === "credited" || current.state === "failed") return current;
+  if (proposed.state === "verifying") return current;
+  if (proposed.state === "reconciliation_pending" && current.state === "reconciliation_pending") return current;
+  return proposed;
 }
 
 class PostgresProtectedRailMaterialRepository implements ProtectedRailMaterialRepository {

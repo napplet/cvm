@@ -110,7 +110,7 @@ postgresIsolation("real PostgreSQL keeps development history read-only and produ
     await database.cashu.prepareCustody(cashuWinner.result.topUpId, { operationId: `cashu-swap:${cashuWinner.result.topUpId}`, mintUrl: "https://mint.example", keysetId: "keyset", unit: "sat", amount: "21", expectedOutputAmount: "21", inputProtectedId: cashuWinner.protectedId, outputDataProtectedId: "protected:output-data" });
     const dispatches = await Promise.all([database.cashu.claimCustodyDispatch(cashuWinner.result.topUpId), database.cashu.claimCustodyDispatch(cashuWinner.result.topUpId)]);
     expect(dispatches.filter(Boolean)).toHaveLength(1);
-    await database.cashu.recordOwnedCustodyOutputs(cashuWinner.result.topUpId, "protected:owned-output");
+    await database.cashu.recordOwnedCustodyOutputs(cashuWinner.result.topUpId, "protected:owned-output", "a".repeat(64));
     expect(await database.cashu.custody(cashuWinner.result.topUpId)).toMatchObject({ state: "owned_outputs", ownedOutputsProtectedId: "protected:owned-output" });
     await expect(funding.execute({ principal, kind: "funded_admission", idempotencyKey: "test-balance-refusal", policyVersion: "live-policy", protocolVersion: "live-protocol", payload: { requestedCap: "1", unit: "sat", capacity: { reference: "capacity:test-balance", usable: true } } })).rejects.toThrow("INSUFFICIENT_SETTLED_BALANCE");
     const settlement = { principal, kind: "credit_settlement" as const, idempotencyKey: "real-credit", policyVersion: "live-policy", protocolVersion: "live-protocol", payload: { settlement: { topUpId: "real-topup", rail: "lightning" as const, unit: "sat" as const, amount: "50", externalReference: "real-external", settlementReference: "real-settlement", verifiedAt: "2026-10-27T00:00:00.000Z" } } };

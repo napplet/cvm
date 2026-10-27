@@ -17,8 +17,8 @@ export type CashuTopUpResult = Readonly<{ topUpId: string; state: CashuTopUpStat
 type Vault = Readonly<{ seal(metadata: { accountId: string; topUpId: string; rail: "cashu" }, plaintext: Uint8Array): Promise<{ id: string; payloadDigest: string }>; expire(id: string): Promise<void>; open?(request: { id: string; accountId: string; topUpId: string; rail: "cashu" }): Promise<Uint8Array> }>;
 export type CashuCustodyJournal = Readonly<{
   operationId: string; mintUrl: string; keysetId: string; unit: "sat"; amount: string; expectedOutputAmount: string;
-  inputProtectedId: string; outputDataProtectedId: string; state: "prepared" | "dispatching" | "owned_outputs";
-  ownedOutputsProtectedId?: string;
+  inputProtectedId: string; outputDataProtectedId: string; outputDataDigest: string; state: "prepared" | "dispatching" | "owned_outputs";
+  ownedOutputsProtectedId?: string; ownedOutputsDigest?: string;
 }>;
 export type CashuTopUpRecord = Readonly<{ result: CashuTopUpResult; accountId: string; policy: CashuMintPolicy; protectedId: string; semanticProofIdentities: readonly string[]; idempotencyKey: string; principal: Principal; amount: string; createdAt: string; custody?: CashuCustodyJournal }>;
 export interface CashuTopUpRepository {
@@ -26,10 +26,12 @@ export interface CashuTopUpRepository {
   claim(input: CashuTopUpRecord): Promise<Readonly<{ claimed: boolean; record: CashuTopUpRecord }>>;
   find(topUpId: string): Promise<CashuTopUpRecord | undefined>;
   update(record: CashuTopUpRecord): Promise<void>;
+  /** Row-locked, monotonic lifecycle projection update. */
+  updateResult(topUpId: string, result: CashuTopUpResult): Promise<CashuTopUpRecord>;
   /** Persist-before-effect custody journal and a durable single-dispatch fence. */
   prepareCustody(topUpId: string, journal: Omit<CashuCustodyJournal, "state">): Promise<CashuCustodyJournal>;
   claimCustodyDispatch(topUpId: string): Promise<boolean>;
-  recordOwnedCustodyOutputs(topUpId: string, protectedId: string): Promise<void>;
+  recordOwnedCustodyOutputs(topUpId: string, protectedId: string, payloadDigest: string): Promise<Readonly<{ accepted: boolean; protectedId: string }>>;
   custody(topUpId: string): Promise<CashuCustodyJournal | undefined>;
   findTreasury(topUpId: string): Promise<CashuTopUpResult | undefined>;
   recordTreasury(topUpId: string, result: CashuTopUpResult): Promise<void>;
@@ -47,11 +49,18 @@ export class InMemoryCashuTopUpRepository implements CashuTopUpRepository {
   }
   async find(topUpId: string): Promise<CashuTopUpRecord | undefined> { const value = this.#records.get(topUpId); return value && frozen(value); }
   async update(record: CashuTopUpRecord): Promise<void> { if (!this.#records.has(record.result.topUpId)) throw asError("CASHU_TOP_UP_UNKNOWN"); this.#records.set(record.result.topUpId, frozen(record)); }
+  async updateResult(topUpId: string, result: CashuTopUpResult): Promise<CashuTopUpRecord> {
+    return this.#mutate(topUpId, (record) => {
+      const updated = frozen({ ...record, result: monotonicResult(record.result, result) });
+      return [updated, updated] as const;
+    });
+  }
   async prepareCustody(topUpId: string, journal: Omit<CashuCustodyJournal, "state">): Promise<CashuCustodyJournal> {
     return this.#mutate(topUpId, (record) => {
       if (record.custody) {
-        const { state: _state, ...existing } = record.custody;
-        if (JSON.stringify(existing) !== JSON.stringify(journal)) throw asError("CASHU_CUSTODY_CONFLICT");
+        const { state: _state, outputDataProtectedId: _id, ...existing } = record.custody;
+        const { outputDataProtectedId: _requestedId, ...requested } = journal;
+        if (JSON.stringify(existing) !== JSON.stringify(requested)) throw asError("CASHU_CUSTODY_CONFLICT");
         return [record, record.custody] as const;
       }
       const custody = frozen({ ...journal, state: "prepared" as const });
@@ -64,11 +73,14 @@ export class InMemoryCashuTopUpRepository implements CashuTopUpRepository {
       return [frozen({ ...record, custody: frozen({ ...record.custody, state: "dispatching" as const }) }), true] as const;
     });
   }
-  async recordOwnedCustodyOutputs(topUpId: string, protectedId: string): Promise<void> {
-    await this.#mutate(topUpId, (record) => {
+  async recordOwnedCustodyOutputs(topUpId: string, protectedId: string, payloadDigest: string): Promise<Readonly<{ accepted: boolean; protectedId: string }>> {
+    return this.#mutate(topUpId, (record) => {
       if (!record.custody || record.custody.state === "prepared") throw asError("CASHU_CUSTODY_DISPATCH_REQUIRED");
-      if (record.custody.ownedOutputsProtectedId && record.custody.ownedOutputsProtectedId !== protectedId) throw asError("CASHU_CUSTODY_OUTPUT_CONFLICT");
-      return [frozen({ ...record, custody: frozen({ ...record.custody, state: "owned_outputs" as const, ownedOutputsProtectedId: protectedId }) }), undefined] as const;
+      if (record.custody.ownedOutputsProtectedId) {
+        if (record.custody.ownedOutputsDigest !== payloadDigest) throw asError("CASHU_CUSTODY_OUTPUT_CONFLICT");
+        return [record, frozen({ accepted: false, protectedId: record.custody.ownedOutputsProtectedId })] as const;
+      }
+      return [frozen({ ...record, custody: frozen({ ...record.custody, state: "owned_outputs" as const, ownedOutputsProtectedId: protectedId, ownedOutputsDigest: payloadDigest }) }), frozen({ accepted: true, protectedId })] as const;
     });
   }
   async custody(topUpId: string): Promise<CashuCustodyJournal | undefined> { return (await this.find(topUpId))?.custody; }
@@ -85,6 +97,13 @@ async function sha256(bytes: Uint8Array): Promise<string> {
 }
 function frozen<T>(value: T): T { return Object.freeze(structuredClone(value)); }
 function asError(code: string): Error { return new Error(code); }
+function monotonicResult(current: CashuTopUpResult, proposed: CashuTopUpResult): CashuTopUpResult {
+  if (current.topUpId !== proposed.topUpId || current.commitment !== proposed.commitment || current.policyVersion !== proposed.policyVersion) throw asError("CASHU_TOP_UP_RESULT_CONFLICT");
+  if (current.state === "credited" || current.state === "failed") return current;
+  if (proposed.state === "verifying") return current;
+  if (proposed.state === "reconciliation_pending" && current.state === "reconciliation_pending") return current;
+  return proposed;
+}
 
 /** Coordinates protected bearer material, adapter observations, and the sole credit authority. */
 export class CashuTopUpCoordinator {
@@ -148,8 +167,9 @@ export class CashuTopUpCoordinator {
       catch { token = undefined; }
     }
     const request = (signal: AbortSignal): CashuObserveRequest => ({ topUpId, accountId: record.accountId, policy: record.policy, commitment: record.result.commitment, amount: record.amount, custody: this.#custody(record), ...(token ? { token } : {}), signal });
-    // Reconciliation is query-only.  Bearer material is deliberately not supplied
-    // to a provider observation because it could be re-submitted as a swap.
+    // Reconciliation opens the original bearer only for local parse/checkstate
+    // binding inside `observe`. That adapter path is query-only and may not
+    // dispatch a replacement swap.
     let observed: CashuSettlementObservation;
     try { observed = await this.#boundedProvider((signal) => this.options.provider.observe(request(signal))); }
     catch { observed = { status: "unknown", operationReference: `cashu:${record.result.commitment}` }; }
@@ -163,13 +183,14 @@ export class CashuTopUpCoordinator {
     try { treasury = await this.#boundedProvider((signal) => this.options.provider.reconcileTreasury({ topUpId, commitment: record.result.commitment, signal })); }
     catch { treasury = { state: "unknown" }; }
     const result = frozen({ ...record.result, treasuryState: treasury.state });
-    await this.#updateResult(record, result); await this.options.repository.recordTreasury(topUpId, result);
-    return result;
+    const updated = await this.#updateResult(record, result); await this.options.repository.recordTreasury(topUpId, updated);
+    return updated;
   }
 
   async #recordObservation(record: CashuTopUpRecord, submitted: Submit, observed: CashuSettlementObservation): Promise<CashuTopUpResult> {
+    if (process.env.CASHU_FIXTURE_DEBUG === "1") console.error("cashu observed", observed);
     if (observed.status === "unknown") {
-      const result = frozen({ ...record.result, state: "reconciliation_pending" as const }); await this.#updateResult(record, result); return result;
+      const result = frozen({ ...record.result, state: "reconciliation_pending" as const }); return this.#updateResult(record, result);
     }
     if (observed.status === "failed") {
       await this.#updateResult(record, frozen({ ...record.result, state: "failed" as const }));
@@ -179,19 +200,16 @@ export class CashuTopUpCoordinator {
     const settlement = VerifiedSettlementSchema.parse({ topUpId: submitted.topUpId, rail: "cashu", unit: "sat", amount: submitted.amount, externalReference: observed.externalReference, settlementReference: observed.settlementReference, verifiedAt: observed.verifiedAt });
     const credited = await this.options.funding.execute({ principal: submitted.principal, idempotencyKey: `cashu-credit:${submitted.topUpId}`, policyVersion: record.policy.version, protocolVersion: CashuPmi, kind: "credit_settlement", payload: { settlement } });
     if (credited.status !== "credited") throw asError("CASHU_CREDIT_RESULT_INVALID");
-    const result = frozen({ ...record.result, state: "credited" as const, settlementReference: credited.settlementReference }); await this.#updateResult(record, result);
+    const result = frozen({ ...record.result, state: "credited" as const, settlementReference: credited.settlementReference }); const updated = await this.#updateResult(record, result);
     await this.options.vault.expire(record.protectedId);
     await this.options.verifiedCreditWake?.dispatchVerifiedCredit(record.accountId);
-    return result;
+    return updated;
   }
 
-  async #updateResult(record: CashuTopUpRecord, result: CashuTopUpResult): Promise<void> {
-    // The provider may have appended encrypted custody state after `record`
-    // was read. Re-read before writing the public lifecycle projection so a
-    // verified observation can never erase recovery material.
-    const latest = await this.options.repository.find(record.result.topUpId);
-    if (!latest || latest.accountId !== record.accountId) throw asError("CASHU_TOP_UP_UNKNOWN");
-    await this.options.repository.update(frozen({ ...latest, result }));
+  async #updateResult(record: CashuTopUpRecord, result: CashuTopUpResult): Promise<CashuTopUpResult> {
+    const updated = await this.options.repository.updateResult(record.result.topUpId, result);
+    if (updated.accountId !== record.accountId) throw asError("CASHU_TOP_UP_UNKNOWN");
+    return updated.result;
   }
 
   #custody(record: CashuTopUpRecord): CashuTreasuryCustody {
@@ -201,16 +219,26 @@ export class CashuTopUpCoordinator {
         const plaintext = new TextEncoder().encode(JSON.stringify(input.outputData));
         try {
           const outputData = await this.options.vault.seal(metadata, plaintext);
-          return await this.options.repository.prepareCustody(record.result.topUpId, {
+          try {
+            const journal = await this.options.repository.prepareCustody(record.result.topUpId, {
             operationId: input.operationId, mintUrl: input.mintUrl, keysetId: input.keysetId, unit: "sat", amount: record.amount,
-            expectedOutputAmount: input.expectedOutputAmount, inputProtectedId: record.protectedId, outputDataProtectedId: outputData.id,
-          });
+              expectedOutputAmount: input.expectedOutputAmount, inputProtectedId: record.protectedId, outputDataProtectedId: outputData.id, outputDataDigest: outputData.payloadDigest,
+            });
+            if (journal.outputDataProtectedId !== outputData.id) await this.options.vault.expire(outputData.id);
+            return journal;
+          } catch (error) { await this.options.vault.expire(outputData.id).catch(() => undefined); throw error; }
         } finally { plaintext.fill(0); }
       },
       claimDispatch: () => this.options.repository.claimCustodyDispatch(record.result.topUpId),
       recordOwnedOutputs: async (outputs: readonly unknown[]) => {
         const plaintext = new TextEncoder().encode(JSON.stringify(outputs));
-        try { const sealed = await this.options.vault.seal(metadata, plaintext); await this.options.repository.recordOwnedCustodyOutputs(record.result.topUpId, sealed.id); }
+        try {
+          const sealed = await this.options.vault.seal(metadata, plaintext);
+          try {
+            const recorded = await this.options.repository.recordOwnedCustodyOutputs(record.result.topUpId, sealed.id, sealed.payloadDigest);
+            if (!recorded.accepted) await this.options.vault.expire(sealed.id);
+          } catch (error) { await this.options.vault.expire(sealed.id).catch(() => undefined); throw error; }
+        }
         finally { plaintext.fill(0); }
       },
       load: async () => {

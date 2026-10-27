@@ -149,7 +149,7 @@ async function build() {
   // Validate every untrusted source fact before invoking the CLI or changing
   // the project filesystem.  The commands below match the proven fixture flow.
   await bounded(["/toolchain/bin/napplet", "create", project, "--template", "/toolchain/boilerplate-template"], WORKSPACE);
-  await bounded(["/toolchain/bin/napplet", "init", "--force", "--root", "--source-dir", "src", "--title", "Generated napplet"], project);
+  await bounded(["/toolchain/bin/napplet", "init", "--force", "--root", "--source-dir", "dist", "--title", "Generated napplet"], project);
   // Skills are policy input for the worker, not generated artifact content.
   // Keep their installed text outside the project so boilerplate guidance does
   // not see a forked skill body in the published tree.

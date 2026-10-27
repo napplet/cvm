@@ -89,6 +89,17 @@ function requireCommands(records: WorkerCommand[]) {
   for (const expected of [
     ["napplet", "create"], ["napplet", "init"], ["@napplet/skills", "install"], ["pnpm.cjs", "install", "--offline", "--frozen-lockfile"], ["pnpm.cjs", "build"], ["pnpm.cjs", "verify"], ["pnpm.cjs", "test:conformance"], ["napplet", "deploy", "--dry-run", "--json"],
   ]) if (!includes(...expected)) throw new Error(`WORKER_COMMAND_MISSING:${expected.join(" ")}`);
+  requireManifest(records.find(record => record.argv.includes("--dry-run"))!.stdout);
+}
+
+function requireManifest(stdout: string) {
+  const value = JSON.parse(stdout);
+  if (value.dryRun !== true || value.plan?.items?.length !== 1 || value.manifests?.length !== 1) throw new Error("WORKER_CLI_MANIFEST_MISSING");
+  const manifest = value.manifests[0];
+  if (!Array.isArray(manifest.files) || !manifest.files.some((file: { path: string }) => file.path === "/index.html") || !/^[a-f0-9]{64}$/u.test(manifest.aggregateHash)) throw new Error("WORKER_CLI_MANIFEST_INVALID");
+  const hash = new Bun.CryptoHasher("sha256").update(manifest.files.map((file: { path: string; sha256: string }) => `${file.sha256} ${file.path}\n`).sort().join("")).digest("hex");
+  if (hash !== manifest.aggregateHash) throw new Error("WORKER_CLI_AGGREGATE_INVALID");
+  return manifest;
 }
 
 function readinessArguments(deadline: number) {
@@ -173,6 +184,9 @@ try {
       }
       const artifactBytes = Buffer.concat(parts);
       if (new Bun.CryptoHasher("sha256").update(artifactBytes).digest("hex") !== result.artifactSha256) throw new Error("WORKER_ARTIFACT_EXPORT_INVALID");
+      const artifact = JSON.parse(artifactBytes.toString("utf8"));
+      const manifest = requireManifest(artifact.commandEvidence[7].stdout);
+      if (manifest.files.length !== artifact.files.length || manifest.files.some((file: { path: string; sha256: string }) => !artifact.files.some((actual: { path: string; sha256: string }) => `/${actual.path}` === file.path && actual.sha256 === file.sha256))) throw new Error("WORKER_CLI_FILE_BINDING_INVALID");
       checkpointWorkspace = Buffer.from(canonicalJson({ version: 1, source: JSON.parse(body), artifact: JSON.parse(artifactBytes.toString("utf8")), toolchainSha256: toolchain })); lastJobId = id;
     }
   }

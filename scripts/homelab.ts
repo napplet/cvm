@@ -17,6 +17,15 @@ const gateway = Bun.serve<Peer>({
   hostname: "0.0.0.0", port: 8080,
   async fetch(request, server) {
     const url = new URL(request.url);
+    // The launcher's semantic readiness check itself uses the public WSS route.
+    // Publish its persisted endpoints before waiting for `dev.ts up` to finish.
+    if (!record || !config || !blossomPort) {
+      try {
+        record = await Bun.file(resolve(root, '.local/napplet-cvm-dev-launcher.json')).json();
+        config = await Bun.file(resolve(root, '.local/napplet-cvm-dev-payments/payments.json')).json();
+        blossomPort = (await Bun.file(resolve(root, '.local/development-published/origin.json')).json()).port;
+      } catch { /* Initial startup has not persisted every listener yet. */ }
+    }
     if (!record || !config) return new Response("CVM is starting", { status: 503 });
     const previewPath = url.pathname.startsWith('/cvm-preview/') || url.pathname.startsWith('/cvm-artifacts/');
     if ((url.hostname === previewOrigin.hostname) !== previewPath) return new Response('not found', { status: 404 });

@@ -133,7 +133,9 @@ test("conservative certification ceilings remain distinct from exact user billin
   });
   expect(estimate.lines).toHaveLength(16);
   expect(estimate.maximumMicros).toBeGreaterThan(0);
-  expect(estimate.maximumMicros).toBeLessThanOrEqual(100_000_000);
+  // The fixed policy now budgets all 1,000 admission samples and eight suites,
+  // rather than a single 20-minute worker per provider.
+  expect(estimate.maximumMicros).toBeLessThanOrEqual(12_000_000_000);
   expect(estimate.lines.find((line) => line.provider === "model")?.maximumMicros).toBeGreaterThan(estimate.lines.find((line) => line.provider === "cloud_run")!.maximumMicros);
 });
 

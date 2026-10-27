@@ -22,6 +22,11 @@ export type ReleaseTopologyQuantityObservation = Readonly<Omit<ReleaseTopologyQu
 const component = (provider: ReleaseTopologyQuantity["provider"], componentId: string, region: string, unit: string, quantityNanos: bigint, headroomBasisPoints: number): ReleaseTopologyQuantity =>
   Object.freeze({ provider, componentId, region, unit, quantityNanos, headroomBasisPoints });
 
+/** Closed pre-authorization inventory: locked 1,000 admissions plus all
+ * eight mandatory suites; never an observed average. */
+export const PRODUCTION_CERTIFICATION_OPERATION_INVENTORY = Object.freeze({ acceptedAdmissionSamples: 1_000, protectedSuites: 8, workerLifetimeSeconds: 20 * 60, modelOperations: 1_008 });
+const WORKER_100_SECOND_UNITS = BigInt((PRODUCTION_CERTIFICATION_OPERATION_INVENTORY.acceptedAdmissionSamples + PRODUCTION_CERTIFICATION_OPERATION_INVENTORY.protectedSuites) * (PRODUCTION_CERTIFICATION_OPERATION_INVENTORY.workerLifetimeSeconds / 100));
+
 /** Every paid allocation is explicit. The 16 public authorization families are
  * derived only after checked aggregation of this ordered contract. */
 export const RELEASE_TOPOLOGY_QUANTITY_CONTRACT: readonly ReleaseTopologyQuantity[] = Object.freeze([
@@ -34,15 +39,14 @@ export const RELEASE_TOPOLOGY_QUANTITY_CONTRACT: readonly ReleaseTopologyQuantit
   // Cloud SQL REGIONAL provides its own zonal HA. It is a single authority,
   // not one database per Cloud Run control-plane region.
   component("cloud_sql_postgres", "cloud_sql_postgres.europe-west1.regional-ha", "europe-west1", "database-second", 450_000_000_000n, 1_000),
-  // Twenty minutes includes the maximum ten-minute active period plus the
-  // ten-minute continuity grace. Source quotes must use Modal's hard 2 CPU /
-  // 2 GiB billable ceiling (not its 1 CPU / 1 GiB reservation); Fly is 1/1.
-  component("modal", "modal.global", "global", "worker-100-seconds", 12_000_000_000n, 1_000),
-  component("fly", "fly.global", "global", "worker-100-seconds", 12_000_000_000n, 1_000),
+  // Each candidate is budgeted for every admission and suite at its full
+  // 10-minute active + 10-minute grace cap. Modal is hard 2 CPU/2 GiB; Fly 1/1.
+  component("modal", "modal.global", "global", "worker-100-seconds", WORKER_100_SECOND_UNITS * 1_000_000_000n, 1_000),
+  component("fly", "fly.global", "global", "worker-100-seconds", WORKER_100_SECOND_UNITS * 1_000_000_000n, 1_000),
   component("contextvm", "contextvm.global", "global", "operation", 1_000_000_000n, 0),
   component("cep8_lightning", "cep8_lightning.global", "global", "operation", 2_000_000_000n, 1_000),
   component("cashu", "cashu.global", "global", "operation", 2_000_000_000n, 1_000),
-  component("model", "model.global", "global", "operation", 4_000_000_000n, 1_000),
+  component("model", "model.global", "global", "operation", BigInt(PRODUCTION_CERTIFICATION_OPERATION_INVENTORY.modelOperations) * 1_000_000_000n, 1_000),
   component("compatible_host", "compatible_host.global", "global", "operation", 2_000_000_000n, 0),
   component("signer", "signer.global", "global", "operation", 1_000_000_000n, 0),
   component("promoted_cli", "promoted_cli.global", "global", "operation", 2_000_000_000n, 0),

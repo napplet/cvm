@@ -2,6 +2,7 @@ import { canonicalJson, parseReleaseCertificationManifest, type ReleaseCertifica
 import { validateCertificationObservation, validatePhase07DesignEvidence } from "../certification/evidence";
 import { evaluateReleaseCertification, type ReleaseCertificationDecision, type ReleaseVerificationRecords } from "./run-promotion";
 import { releaseSourceMeasurement, type ReleaseCertificationTrustRoot } from "../certification/trust";
+import { z } from "zod";
 
 export type CandidateReadinessStatus = "unverified" | "review_ready" | "quarantined";
 
@@ -40,6 +41,18 @@ const SHA256 = /^[a-f0-9]{64}$/i;
 const REVISION = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
 const INTEGRITY = /^sha512-[A-Za-z0-9+/]+={0,2}$/;
 const REVIEW_SCOPE = "provenance-intake";
+
+export const SourceBuiltCliSchema = z.object({
+  recipePath: z.literal("toolchains/recipes/napplet-cli-0.5.2-source-build.json"),
+  recipeSha256: z.string().regex(SHA256),
+  sourceArchiveSha256: z.string().regex(SHA256),
+  sourceLockSha256: z.string().regex(SHA256),
+  runtimeVersion: z.literal("2.9.6"),
+  runtimeArchiveSha256: z.string().regex(SHA256),
+  sourceDateEpoch: z.literal(1789254081),
+  executableSha256: z.object({ "x86_64-unknown-linux-gnu": z.string().regex(SHA256), "aarch64-unknown-linux-gnu": z.string().regex(SHA256) }).strict(),
+  buildReceiptSha256: z.string().regex(SHA256),
+}).strict();
 
 /**
  * These are D-04 promotion-manifest pins, not pre-install provenance facts.
@@ -197,15 +210,20 @@ function validateCandidate(record: CandidateRecord): string[] {
   requiredString(cli.packageName, "cli.packageName", blockers);
   requiredString(cli.version, "cli.version", blockers);
   requiredString(cli.distributionType, "cli.distributionType", blockers);
-  if (cli.distributionType !== "github-release-asset") blockers.push("cli.distributionType must be github-release-asset");
+  if (!["github-release-asset", "source-build"].includes(String(cli.distributionType))) blockers.push("cli.distributionType must be github-release-asset or source-build");
   requiredUrl(cli.distribution, "cli.distribution", blockers);
   requiredUrl(cli.authoritativeRepository, "cli.authoritativeRepository", blockers);
-  requiredString(cli.releaseTag, "cli.releaseTag", blockers);
-  requiredString(cli.releaseAsset, "cli.releaseAsset", blockers);
-  requiredString(cli.releaseAssetSha256, "cli.releaseAssetSha256", blockers, SHA256);
+  if (cli.distributionType === "source-build") {
+    if (!SourceBuiltCliSchema.safeParse(cli.sourceBuild).success) blockers.push("cli.sourceBuild must bind recipe, source, runtime, both artifacts and retained build receipt");
+    if ([cli.releaseTag, cli.releaseAsset, cli.releaseAssetSha256, cli.releaseEvidenceOrigin].some(value => value !== undefined)) blockers.push("source-built CLI must not assert release-asset provenance");
+  } else {
+    requiredString(cli.releaseTag, "cli.releaseTag", blockers);
+    requiredString(cli.releaseAsset, "cli.releaseAsset", blockers);
+    requiredString(cli.releaseAssetSha256, "cli.releaseAssetSha256", blockers, SHA256);
+    requiredUrl(cli.releaseEvidenceOrigin, "cli.releaseEvidenceOrigin", blockers);
+  }
   requiredString(cli.sourceCommit, "cli.sourceCommit", blockers, REVISION);
   requiredString(cli.sourceMapping, "cli.sourceMapping", blockers);
-  requiredUrl(cli.releaseEvidenceOrigin, "cli.releaseEvidenceOrigin", blockers);
   requiredUrl(cli.sourceEvidenceOrigin, "cli.sourceEvidenceOrigin", blockers);
 
   validateDeferredPromotionPins(record, cli, protocol, blockers);

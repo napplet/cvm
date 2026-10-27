@@ -2,7 +2,7 @@ import { canonicalJson } from "../promotion/schema";
 import { accountIdForPrincipal } from "../domain/account-command";
 import { PrincipalSchema, type FundingResult, type Principal, type VerifiedSettlement } from "../phase-03/contracts";
 import type { FundingService } from "./funding-service";
-import { LightningInvoiceObservationSchema, type LightningInvoiceObservation, type LightningReceiptPort } from "./lightning-provider";
+import { LightningInvoiceObservationSchema, type LightningInvoiceObservation, type LightningReceiptPort, type LightningOriginalIntent } from "./lightning-provider";
 import type { ProtectedRailMaterialVault } from "./protected-rail-material";
 import type { VerifiedCreditWakeDispatcher } from "../continuity/continuation-service";
 
@@ -24,6 +24,7 @@ export type LightningPrivateTopUp = LightningTopUpStatus & Readonly<{
   accountId: string; principal: Principal; commandFingerprint: string; commandKey: string; providerIntent: "created" | "completed" | "uncertain";
   providerReference: string; invoiceIdentityDigest?: string; paymentHashDigest?: string; protectedMaterialId?: string;
   protectedPayloadDigest?: string; creditedResult?: FundingResult;
+  originalIntent?: LightningOriginalIntent;
 }>;
 export type LightningTopUpState = { topUps: Map<string, LightningPrivateTopUp>; commands: Map<string, { fingerprint: string; topUpId: string }> };
 
@@ -70,7 +71,7 @@ export class LightningTopUpCoordinator {
   constructor(private readonly options: LightningTopUpCoordinatorOptions) {
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#providerTimeoutMs = options.providerTimeoutMs ?? 5_000;
-    if (this.#providerTimeoutMs < 1) throw new Error("INVALID_PROVIDER_TIMEOUT");
+    if (!Number.isSafeInteger(this.#providerTimeoutMs) || this.#providerTimeoutMs < 1 || this.#providerTimeoutMs > 60_000) throw new Error("INVALID_PROVIDER_TIMEOUT");
   }
 
   async begin(input: unknown): Promise<LightningTopUpResult> {
@@ -86,14 +87,23 @@ export class LightningTopUpCoordinator {
         return frozen({ mode: topUp.providerIntent !== "completed" ? "reconcile" as const : "replay" as const, topUp });
       }
       const topUpId = `lightning:${(await sha256(`${accountId}:${command.idempotencyKey}`)).slice(0, 32)}`;
-      const topUp: LightningPrivateTopUp = frozen({ topUpId, accountId, principal: command.principal, commandFingerprint: fingerprint, commandKey: key, rail: "lightning", state: "pending", amount: command.amount, unit: "sat", createdAt: this.#now(), providerIntent: "created", providerReference: `invoice-create:${topUpId}` });
+      const createdAt = this.#now();
+      const realm = this.options.receiver.accountingRealm ?? "development-test";
+      const connectionScopeDigest = this.options.receiver.connectionScopeDigest;
+      if (realm === "production-real" && (!connectionScopeDigest || !this.options.receiver.queryOriginalIntent)) throw new Error("LIGHTNING_ORIGINAL_INTENT_RECOVERY_REQUIRED");
+      const originalIntent: LightningOriginalIntent | undefined = connectionScopeDigest ? {
+        operationId: `invoice-create:${topUpId}`, realm, connectionScopeDigest, amount: command.amount, type: "incoming",
+        descriptionHash: await sha256(canonicalJson({ version: 1, realm, accountId, topUpId, fingerprint, connectionScopeDigest })),
+        from: Math.floor(Date.parse(createdAt) / 1000) - 5, until: Math.ceil((Date.parse(createdAt) + this.#providerTimeoutMs) / 1000) + 5,
+      } : undefined;
+      const topUp: LightningPrivateTopUp = frozen({ topUpId, accountId, principal: command.principal, commandFingerprint: fingerprint, commandKey: key, rail: "lightning", state: "pending", amount: command.amount, unit: "sat", createdAt, providerIntent: "created", providerReference: `invoice-create:${topUpId}`, ...(originalIntent ? { originalIntent } : {}) });
       state.topUps.set(topUpId, topUp); state.commands.set(key, { fingerprint, topUpId });
       return frozen({ mode: "dispatch" as const, topUp });
     });
     if (claim.mode === "replay") return publicResult(claim.topUp);
     if (claim.mode === "reconcile") return this.reconcileRecord(claim.topUp);
     try {
-      const observed = await this.boundedProvider((signal) => this.options.receiver.createInvoice({ topUpId: claim.topUp.topUpId, idempotencyLabel: claim.topUp.topUpId, amount: claim.topUp.amount, unit: "sat", signal }));
+      const observed = await this.boundedProvider((signal) => this.options.receiver.createInvoice({ topUpId: claim.topUp.topUpId, idempotencyLabel: claim.topUp.topUpId, amount: claim.topUp.amount, unit: "sat", originalIntent: claim.topUp.originalIntent, signal }));
       return this.recordObservation(claim.topUp.topUpId, observed);
     } catch { return this.markUnknown(claim.topUp.topUpId); }
   }
@@ -116,7 +126,19 @@ export class LightningTopUpCoordinator {
       return publicResult(topUp);
     }
     if (topUp.state === "failed") return publicResult(topUp);
-    try { return this.recordObservation(topUp.topUpId, await this.boundedProvider((signal) => this.options.receiver.queryInvoice({ topUpId: topUp.topUpId, serviceReference: topUp.providerReference, signal }))); }
+    try {
+      if (!topUp.paymentHashDigest && topUp.originalIntent) {
+        if (!this.options.receiver.queryOriginalIntent) return this.markUnknown(topUp.topUpId);
+        const recovered = await this.boundedProvider((signal) => this.options.receiver.queryOriginalIntent!({ topUpId: topUp.topUpId, intent: topUp.originalIntent!, signal }));
+        // Persist the original invoice identity before asking about settlement.
+        // A list response alone cannot authorize a credit.
+        if (recovered.status !== "created") return this.markUnknown(topUp.topUpId);
+        const result = await this.recordCreated(topUp.topUpId, recovered);
+        if (result.state === "credited") return result;
+        topUp = await this.options.repository.transact((state) => this.topUp(state, topUp.topUpId));
+      }
+      return this.recordObservation(topUp.topUpId, await this.boundedProvider((signal) => this.options.receiver.queryInvoice({ topUpId: topUp.topUpId, serviceReference: topUp.providerReference, signal })));
+    }
     catch { return this.markUnknown(topUp.topUpId); }
   }
 
@@ -125,6 +147,7 @@ export class LightningTopUpCoordinator {
     if (observed.status === "created") return this.recordCreated(topUpId, observed);
     if (observed.status === "failed") return this.options.repository.transact((state) => {
       const topUp = this.topUp(state, topUpId); this.assertObservationTarget(topUp, observed);
+      if (topUp.state === "credited") return publicResult(topUp);
       const next = frozen({ ...topUp, state: "failed" as const, providerIntent: "completed" as const }); state.topUps.set(topUpId, next); return publicResult(next);
     });
     if (observed.status === "unknown") return this.markUnknown(topUpId);

@@ -24,10 +24,17 @@ async function fixture(handler: (url: string, init: RequestInit) => Response | P
 
 test("ADC binds project, quota project, scope digest and expiry without exposing a token", async () => {
   const expected = await googleAccountScopeSha256({ projectId, quotaProjectId: projectId, principal });
-  const source = createGoogleAdcTokenSource({ projectId, quotaProjectId: projectId, principal, accountScopeSha256: expected, now: () => 1_000, identity: async () => ({ projectId, principal }), command: async () => ({ exitCode: 0, stdout: `${token}\n` }) });
+  const source = createGoogleAdcTokenSource({ projectId, quotaProjectId: projectId, principal, accountScopeSha256: expected, now: () => 1_000, auth: { getProjectId: async () => projectId, getCredentials: async () => ({ client_email: principal, quota_project_id: projectId }), getClient: async () => ({ credentials: { expiry_date: 301_000 }, getAccessToken: async () => ({ token }), getTokenInfo: async () => ({ scopes: ["https://www.googleapis.com/auth/cloud-platform"], expiry_date: 301_000, email: principal }) }) } });
   const result = await source.getAccessToken();
   expect(result).toMatchObject({ projectId, quotaProjectId: projectId, principal, accountScopeSha256: expected, scopes: ["https://www.googleapis.com/auth/cloud-platform"] });
   expect(JSON.stringify({ projectId: result.projectId, accountScopeSha256: result.accountScopeSha256 })).not.toContain(token);
+});
+
+test("authorized_user ADC binds token-info email and observed auxiliary scopes", async () => {
+  const scopes = ["https://www.googleapis.com/auth/cloud-platform", "openid", "https://www.googleapis.com/auth/userinfo.email"];
+  const expected = await googleAccountScopeSha256({ projectId, quotaProjectId: projectId, principal, scopes });
+  const source = createGoogleAdcTokenSource({ projectId, quotaProjectId: projectId, principal, accountScopeSha256: expected, now: () => 1_000, auth: { getProjectId: async () => projectId, getCredentials: async () => ({ quota_project_id: projectId }), getClient: async () => ({ credentials: { expiry_date: 301_000 }, getAccessToken: async () => ({ token }), getTokenInfo: async () => ({ scopes, expiry_date: 301_000, email: principal }) }) } });
+  await expect(source.getAccessToken()).resolves.toMatchObject({ principal, scopes, accountScopeSha256: expected });
 });
 
 test("metadata fallback requires the attached Cloud Run project and principal before it reads a token", async () => {
@@ -37,7 +44,7 @@ test("metadata fallback requires the attached Cloud Run project and principal be
     command: async () => ({ exitCode: 127, stdout: "" }),
     fetch: async (url) => { metadataCalls.push(url); return url.includes("project-id") ? new Response("wrong-project-1") : url.includes("/email") ? new Response(principal) : json({ access_token: token, expires_in: 300, token_type: "Bearer" }); },
   });
-  await expect(source.getAccessToken()).rejects.toThrow("GOOGLE_ADC_IDENTITY_INVALID");
+  await expect(source.getAccessToken()).rejects.toThrow("ADC_APPLICATION_DEFAULT_LOGIN_REQUIRED");
   expect(metadataCalls).not.toContain("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token");
 });
 
@@ -62,7 +69,7 @@ test("wrong ADC project, quota, principal, expiry, or scope fails before any Goo
   ];
   for (const credential of variants) {
     const { client, calls } = await fixture(() => json({ name: "ignored" }), credential);
-    await expect(client.cloudRun.deploy({ operationId: "deploy-auth", projectId, region: "europe-west1", serviceName: "napplet-cvm-api", imageReference: `us-docker.pkg.dev/${projectId}/control/control@sha256:${digest("a")}`, serviceAccountReference: "svc@napplet-cvm-run-1.iam.gserviceaccount.com", environmentReferenceSha256: digest("b"), secretReferences: [{ name: "DATABASE_URL", secret: "control-database-url", version: "1" }], minimumInstances: 3, ingress: "internal-and-cloud-load-balancing", concurrency: 80, admissionRefusal: "capacity_unavailable" })).rejects.toThrow("GOOGLE_CLIENT_ADC_SCOPE_INVALID");
+    await expect(client.cloudRun.deploy({ operationId: "deploy-auth", projectId, region: "europe-west1", serviceName: "napplet-cvm-api", imageReference: `us-docker.pkg.dev/${projectId}/control/control@sha256:${digest("a")}`, serviceAccountReference: "svc@napplet-cvm-run-1.iam.gserviceaccount.com", environmentReferenceSha256: digest("b"), secretReferences: [{ name: "DATABASE_URL", secret: "control-database-url", version: "1" }], minimumInstances: 3, ingress: "internal-and-cloud-load-balancing", concurrency: 80, admissionRefusal: "capacity_unavailable" })).rejects.toThrow(credential.scopes ? "GOOGLE_ADC_SCOPE_INVALID" : "GOOGLE_CLIENT_ADC_SCOPE_INVALID");
     expect(calls).toHaveLength(0);
   }
 });
@@ -78,7 +85,7 @@ test("Cloud Run observes deterministic resource then uses official create servic
 
 test("Cloud Run cleanup requires recorded ownership and sends the observed etag", async () => {
   let getCount = 0;
-  const { client, calls } = await fixture((_url, init) => {
+  const { client, calls, journal } = await fixture((_url, init) => {
     if (init.method === "POST") return json({ name: `projects/${projectId}/locations/europe-west1/operations/create-1` });
     if (init.method === "DELETE") return json({ name: `projects/${projectId}/locations/europe-west1/operations/delete-1` });
     getCount += 1;
@@ -86,6 +93,7 @@ test("Cloud Run cleanup requires recorded ownership and sends the observed etag"
   });
   const request = { operationId: "deploy-cleanup", projectId, region: "europe-west1", serviceName: "napplet-cvm-api", imageReference: `us-docker.pkg.dev/${projectId}/control/control@sha256:${digest("f")}`, serviceAccountReference: "svc@napplet-cvm-run-1.iam.gserviceaccount.com", environmentReferenceSha256: digest("e"), secretReferences: [{ name: "DATABASE_URL", secret: "control-database-url", version: "1" }], minimumInstances: 3 as const, ingress: "internal-and-cloud-load-balancing" as const, concurrency: 80, admissionRefusal: "capacity_unavailable" as const };
   await client.cloudRun.deploy(request);
+  const dispatched = await journal.read(request.operationId); await journal.markCompleted({ operationId: request.operationId, requestSha256: dispatched!.requestSha256, owned: true });
   await expect(client.cloudRun.cleanup({ operationId: request.operationId, projectId, region: request.region, serviceName: request.serviceName })).resolves.toEqual({ status: "completed" });
   expect(calls.find((call) => call.method === "DELETE")?.url).toContain("etag=service-etag-1");
   await expect(client.cloudRun.cleanup({ operationId: "not-owned", projectId, region: request.region, serviceName: request.serviceName })).rejects.toThrow("GOOGLE_CLEANUP_RUN_OWNERSHIP_REQUIRED");
@@ -93,7 +101,7 @@ test("Cloud Run cleanup requires recorded ownership and sends the observed etag"
 
 test("Cloud Run LRO observation requires terminal ready configuration before completing the journal", async () => {
   const imageReference = `us-docker.pkg.dev/${projectId}/control/control@sha256:${digest("9")}`;
-  const service = { name: `projects/${projectId}/locations/europe-west1/services/napplet-cvm-api`, ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER", template: { scaling: { minInstanceCount: 3 }, maxInstanceRequestConcurrency: 80, serviceAccount: "svc@napplet-cvm-run-1.iam.gserviceaccount.com", containers: [{ image: imageReference, env: [{ name: "GOOGLE_CLOUD_PROJECT", value: projectId }, { name: "NAPPLET_CVM_ENVIRONMENT_SHA256", value: digest("8") }, { name: "DATABASE_URL", valueSource: { secretKeyRef: { secret: "control-database-url", version: "1" } } }] }] } };
+  const service = { name: `projects/${projectId}/locations/europe-west1/services/napplet-cvm-api`, labels: { "napplet-cvm-operation": "deploy-observe" }, ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER", template: { scaling: { minInstanceCount: 3 }, maxInstanceRequestConcurrency: 80, serviceAccount: "svc@napplet-cvm-run-1.iam.gserviceaccount.com", containers: [{ image: imageReference, env: [{ name: "GOOGLE_CLOUD_PROJECT", value: projectId }, { name: "NAPPLET_CVM_ENVIRONMENT_SHA256", value: digest("8") }, { name: "DATABASE_URL", valueSource: { secretKeyRef: { secret: "control-database-url", version: "1" } } }] }] } };
   let resourceGets = 0;
   const { client, journal } = await fixture((url, init) => {
     if (init.method === "POST") return json({ name: `projects/${projectId}/locations/europe-west1/operations/ready-1` });
@@ -122,6 +130,13 @@ test("concurrent or restarted Cloud Run callers reconcile a claimed ambiguous cr
   expect(creates).toBe(1);
 });
 
+test("Cloud Run conflict never grants cleanup ownership of a rival service", async () => {
+  const { client } = await fixture((_url, init) => init.method === "POST" ? json({ error: { code: 409 } }, 409) : json({ error: { code: 404 } }, 404));
+  const request = { operationId: "deploy-rival", projectId, region: "europe-west1", serviceName: "napplet-cvm-api", imageReference: `us-docker.pkg.dev/${projectId}/control/control@sha256:${digest("7")}`, serviceAccountReference: "svc@napplet-cvm-run-1.iam.gserviceaccount.com", environmentReferenceSha256: digest("6"), secretReferences: [{ name: "DATABASE_URL", secret: "control-database-url", version: "1" }], minimumInstances: 3 as const, ingress: "internal-and-cloud-load-balancing" as const, concurrency: 80, admissionRefusal: "capacity_unavailable" as const };
+  await expect(client.cloudRun.deploy(request)).resolves.toEqual({ status: "blocked" });
+  await expect(client.cloudRun.cleanup({ operationId: request.operationId, projectId, region: request.region, serviceName: request.serviceName })).rejects.toThrow("GOOGLE_CLEANUP_RUN_OWNERSHIP_REQUIRED");
+});
+
 test("file journal persists a dispatch claim across process recreation", async () => {
   const root = await mkdtemp(join(tmpdir(), "napplet-google-journal-"));
   try {
@@ -138,9 +153,9 @@ test("GCS enforces policy then uploads create-only bytes with checksum and KMS r
   const checksum = "wdBDMA==";
   const { client, calls, journal } = await fixture((url, init) => {
     if (url.startsWith("https://storage.googleapis.com/storage/v1/b/napplet-cvm-artifacts") && !url.includes("/o/")) return json({ location: "NAM4", versioning: { enabled: true }, encryption: { defaultKmsKeyName: "projects/p/locations/us/keyRings/r/cryptoKeys/k" }, retentionPolicy: { retentionPeriod: "2592000" }, softDeletePolicy: { retentionDurationSeconds: "0" }, lifecycle: { rule: [{ action: { type: "Delete" }, condition: { age: 30 } }, { action: { type: "Delete" }, condition: { numNewerVersions: 1 } }] } });
-    if (url.includes("?generation=9")) return json({ generation: "9", crc32c: checksum, kmsKeyName: "projects/p/locations/us/keyRings/r/cryptoKeys/k" });
+    if (url.includes("?generation=9")) return json({ generation: "9", crc32c: checksum, kmsKeyName: "projects/p/locations/us/keyRings/r/cryptoKeys/k", metadata: { "napplet-cvm-content-sha256": "05080dc082c6df88129efbbe3f2c5a354e5348c963564f889914d0252f48b17d" } });
     if (init.method === "GET") return json({ error: { code: 404 } }, 404);
-    return json({ generation: "9", crc32c: checksum, kmsKeyName: "projects/p/locations/us/keyRings/r/cryptoKeys/k" });
+    return json({ generation: "9", crc32c: checksum, kmsKeyName: "projects/p/locations/us/keyRings/r/cryptoKeys/k", metadata: { "napplet-cvm-content-sha256": "05080dc082c6df88129efbbe3f2c5a354e5348c963564f889914d0252f48b17d" } });
   });
   await expect(client.gcs.writeArtifact({ operationId: "gcs-op-1", bucket: "napplet-cvm-artifacts", object: "checkpoints/a.tar.zst", bytesBase64: "YQ==", checksum, encryptionKeyReference: "projects/p/locations/us/keyRings/r/cryptoKeys/k", location: "nam4", versioning: true, retentionDays: 30 })).resolves.toEqual({ status: "completed", generation: "9", checksum });
   expect(await journal.read("gcs-op-1")).toMatchObject({ state: "completed", generation: "9" });
@@ -151,6 +166,17 @@ test("GCS enforces policy then uploads create-only bytes with checksum and KMS r
   expect(upload.headers.get("content-type")).toContain("multipart/related");
   expect(upload.body).toContain('"crc32c":"wdBDMA=="');
   expect(upload.body).toContain("\r\n\r\na\r\n--napplet-cvm-google-json-upload--");
+});
+
+test("GCS generation cleanup accepts documented bodyless 204 then verifies absence", async () => {
+  const journal = createMemoryGoogleOperationJournal([{ operationId: "gcs-delete", resource: "b/napplet-cvm-artifacts/o/checkpoints/a.tar.zst", requestSha256: digest("a"), contentSha256: digest("b"), state: "completed", generation: "9", owned: true }]);
+  let gets = 0;
+  const { client, calls } = await fixture((_url, init) => {
+    if (init.method === "DELETE") return new Response(null, { status: 204 });
+    gets += 1; return gets === 1 ? json({ generation: "9" }) : json({ error: { code: 404 } }, 404);
+  }, {}, journal);
+  await expect(client.gcs.cleanupArtifact({ operationId: "gcs-delete", bucket: "napplet-cvm-artifacts", object: "checkpoints/a.tar.zst", generation: "9" })).resolves.toEqual({ status: "completed" });
+  expect(calls.find((call) => call.method === "DELETE")?.url).toContain("ifGenerationMatch=9");
 });
 
 test("Cloud SQL observes its sole instance before official instances.insert", async () => {

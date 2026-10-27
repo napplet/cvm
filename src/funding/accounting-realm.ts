@@ -6,11 +6,12 @@ export type AccountingRealmName = typeof AccountingRealms[number];
 export type AccountingRealm = Readonly<{
   name: AccountingRealmName;
   schema: "public" | "production_real";
-  role: "napplet_development_history" | "napplet_production_real";
+  /** Only production selects a constrained database role. Development uses its private writable login. */
+  role?: "napplet_production_real";
 }>;
 
 const REALMS: Readonly<Record<AccountingRealmName, AccountingRealm>> = Object.freeze({
-  "development-test": Object.freeze({ name: "development-test", schema: "public", role: "napplet_development_history" }),
+  "development-test": Object.freeze({ name: "development-test", schema: "public" }),
   "production-real": Object.freeze({ name: "production-real", schema: "production_real", role: "napplet_production_real" }),
 });
 
@@ -48,18 +49,25 @@ export function assertProductionAccountingConfiguration(configuration: unknown):
 }
 
 /**
- * The only pool adapter allowed to select a realm. It pins search_path for each
- * checked-out connection. Deployment credentials must log in as the matching
- * least-privilege role; this adapter deliberately does not impersonate a role.
+ * The only pool adapter allowed to select a realm. Development keeps its
+ * existing private writable login and is pinned to public. Production selects
+ * its constrained role only after rejecting superuser session authority.
  */
 export function bindAccountingRealmPool(pool: PostgresSqlPool, realm: AccountingRealm): PostgresSqlPool {
   return Object.freeze({
     async connect(): Promise<PostgresSqlClient> {
       const client = await pool.connect();
       try {
-        const identity = (await client.query<{ current_user: string; is_superuser: boolean }>("SELECT current_user::text AS current_user, (SELECT rolsuper FROM pg_roles WHERE rolname=current_user) AS is_superuser")).rows[0];
-        if (!identity || identity.is_superuser || identity.current_user === "postgres") throw new Error("ACCOUNTING_REALM_SUPERUSER_DENIED");
-        await client.query(`SET ROLE ${realm.role}`);
+        if (realm.name === "development-test") {
+          // A connection returned by a pooled production caller must not retain
+          // its selected role or schema when reused for development work.
+          await client.query("RESET ROLE");
+          await client.query("SET search_path TO public, pg_catalog");
+          return client;
+        }
+        const identity = (await client.query<{ current_user: string; session_user: string; current_is_superuser: boolean; session_is_superuser: boolean }>("SELECT current_user::text AS current_user, session_user::text AS session_user, (SELECT rolsuper FROM pg_roles WHERE rolname=current_user) AS current_is_superuser, (SELECT rolsuper FROM pg_roles WHERE rolname=session_user) AS session_is_superuser")).rows[0];
+        if (!identity || identity.current_is_superuser || identity.session_is_superuser || identity.current_user === "postgres" || identity.session_user === "postgres") throw new Error("ACCOUNTING_REALM_SUPERUSER_DENIED");
+        await client.query("SET ROLE napplet_production_real");
         const selected = (await client.query<{ current_user: string }>("SELECT current_user::text AS current_user")).rows[0];
         if (!selected || selected.current_user !== realm.role) throw new Error("ACCOUNTING_REALM_ROLE_DENIED");
         await client.query(`SET search_path TO ${realm.schema}, pg_catalog`);

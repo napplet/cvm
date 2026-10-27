@@ -62,6 +62,13 @@ CREATE TABLE IF NOT EXISTS production_real.action_budget_reservations (
   reservation_id text PRIMARY KEY, account_id text NOT NULL REFERENCES production_real.funding_accounts(account_id), admission_reference text NOT NULL REFERENCES production_real.admissions(reference), idempotency_key text NOT NULL, fingerprint_sha256 char(64) NOT NULL, reservation_reference text UNIQUE NOT NULL, amount bigint NOT NULL CHECK(amount>0), unit text NOT NULL CHECK(unit='sat'), state text NOT NULL CHECK(state='authorized'),
   accounting_realm text NOT NULL DEFAULT 'production-real' CHECK(accounting_realm='production-real'), created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(account_id,idempotency_key)
 );
+-- Keep Phase 03 production rows compatible with the later Phase 04 lifecycle:
+-- a reservation is immutable in amount/identity but becomes released after its
+-- exact receipt settlement, and a fully spent hold reaches zero.
+ALTER TABLE production_real.action_budget_reservations DROP CONSTRAINT IF EXISTS action_budget_reservations_state_check;
+ALTER TABLE production_real.action_budget_reservations ADD CONSTRAINT action_budget_reservations_state_check CHECK(state IN ('authorized','released'));
+ALTER TABLE production_real.session_cap_holds DROP CONSTRAINT IF EXISTS session_cap_holds_held_amount_check;
+ALTER TABLE production_real.session_cap_holds ADD CONSTRAINT session_cap_holds_held_amount_check CHECK(held_amount >= 0);
 CREATE TABLE IF NOT EXISTS production_real.settlement_attempts (attempt_id text PRIMARY KEY, top_up_id text NOT NULL REFERENCES production_real.top_ups(top_up_id), external_reference text UNIQUE NOT NULL, proof_commitment char(64) UNIQUE, observed_state text NOT NULL, accounting_realm text NOT NULL DEFAULT 'production-real' CHECK(accounting_realm='production-real'), created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS production_real.capacity_intents (intent_id text PRIMARY KEY, account_id text NOT NULL REFERENCES production_real.funding_accounts(account_id), idempotency_key text NOT NULL, fingerprint_sha256 char(64) NOT NULL, intent_reference text UNIQUE NOT NULL, capacity_reference text, expires_at timestamptz, state text NOT NULL CHECK(state IN ('created','dispatching','available','refused','reconciliation_pending','released')), accounting_realm text NOT NULL DEFAULT 'production-real' CHECK(accounting_realm='production-real'), created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(account_id,idempotency_key));
 CREATE TABLE IF NOT EXISTS production_real.treasury_reconciliation (reconciliation_id text PRIMARY KEY, top_up_id text UNIQUE NOT NULL REFERENCES production_real.top_ups(top_up_id), state text NOT NULL, accounting_realm text NOT NULL DEFAULT 'production-real' CHECK(accounting_realm='production-real'), created_at timestamptz NOT NULL DEFAULT now());
@@ -74,10 +81,11 @@ CREATE TABLE IF NOT EXISTS production_real.funding_outbox (outbox_id text PRIMAR
 
 -- When upgrading an already-migrated authority, clone every compatible Phase
 -- 04–06 table plus indexes, checks, identities, and foreign keys into this
--- fresh realm.  `LIKE ... INCLUDING ALL` can copy a foreign-key definition
--- whose target remains public, so create every table first, then rebuild every
--- FK with production_real first on the server-side search path.  This covers
--- the complete graph instead of repairing one discovered account FK at a time.
+-- fresh realm. `LIKE ... INCLUDING ALL` copies table structure, indexes,
+-- checks, and identities but intentionally does not copy foreign keys. Create
+-- every table first, then rebuild every source FK with production_real first
+-- on the server-side search path. This covers the complete graph instead of
+-- repairing one discovered account FK at a time.
 DO $$ DECLARE t text; c record; BEGIN
   PERFORM set_config('search_path','production_real,pg_catalog',true);
   FOREACH t IN ARRAY ARRAY['model_profile_versions','price_card_versions','metered_sessions','metered_actions','provider_operations','usage_receipts','billing_line_items','session_artifacts','provider_reconciliations','profile_quarantines','continuation_pauses','continuation_wake_dispatches','continuation_checkpoints','continuation_resume_commands','continuation_restore_observations','continuation_tombstones','continuation_deletions','publication_commands','publication_intents','publication_effect_intents','publication_signed_events','publication_records'] LOOP

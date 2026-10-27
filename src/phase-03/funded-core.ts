@@ -99,6 +99,7 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
   if ([options.postgresExecutor, options.postgresPool, options.database].filter(Boolean).length > 1) throw new Error("CONFLICTING_POSTGRES_CONFIGURATION");
   if (!options.testOnly && (options.lightning || options.cashu)) throw new Error("PRODUCTION_RAIL_COMPOSITION_REQUIRED");
   const requestedRealm = options.accountingRealm ?? (options.testOnly ? "development-test" : "production-real");
+  if (options.testOnly && (requestedRealm === "production-real" || options.database?.realm.name === "production-real")) throw new Error("TEST_ACCOUNTING_REALM_DENIED");
   const railConfigurationStarted = Boolean(options.lightningReceiver || options.cashuProvider || options.cashuPolicies || options.protectedMaterialKey);
   if (!options.testOnly && railConfigurationStarted) assertProductionAccountingConfiguration(options.productionAccountingConfiguration);
   const database = options.database ?? (options.postgresPool ? new PostgresFundingDatabase(options.postgresPool, { realm: requestedRealm }) : undefined);

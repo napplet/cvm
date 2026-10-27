@@ -39,7 +39,7 @@ export function assertProductionAccountingConfiguration(configuration: unknown):
     if (!value || typeof value !== "object" || seen.has(value)) return;
     seen.add(value);
     for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-      if ((/^(developmentOnly|testOnly|faucetEnabled)$/iu.test(key) && child === true) || (/^(mode|environment)$/iu.test(key) && typeof child === "string" && /^(development|test)$/iu.test(child))) throw new Error("PRODUCTION_ACCOUNTING_DEVELOPMENT_MARKER");
+      if ((/(development|test|fixture|synthetic|fake|faucet|local.*mint)/iu.test(key) && child === true) || (/^(mode|environment)$/iu.test(key) && typeof child === "string" && /^(development|test)$/iu.test(child))) throw new Error("PRODUCTION_ACCOUNTING_DEVELOPMENT_MARKER");
       if (/^(secret|key|token|proof|ciphertext|password)$/iu.test(key)) continue;
       visit(child);
     }

@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
 import { createRequire } from "node:module";
 import { createAccountingRealm, assertProductionAccountingConfiguration } from "../../src/funding/accounting-realm";
+import { accountIdForPrincipal } from "../../src/domain/account-command";
 import { createFundedCore } from "../../src/phase-03/funded-core";
 import { PostgresFundingDatabase } from "../../src/persistence/postgres-funding-database";
+import { FundingService } from "../../src/funding/funding-service";
 
 test("production realm rejects development-only funding adapters before construction", () => {
   const descriptor = { mode: "production-real", adapters: ["lightning", "cashu", "nwc"], catalog: { kind: "live" }, keyMode: "secret-broker" };
@@ -11,6 +13,8 @@ test("production realm rejects development-only funding adapters before construc
   expect(() => assertProductionAccountingConfiguration({ ...descriptor, priceCard: "synthetic-fixture" })).toThrow("PRODUCTION_ACCOUNTING_DEVELOPMENT_MARKER");
   expect(() => assertProductionAccountingConfiguration(descriptor)).not.toThrow();
   expect(() => assertProductionAccountingConfiguration({ ...descriptor, testOnly: true })).toThrow("PRODUCTION_ACCOUNTING_DEVELOPMENT_MARKER");
+  expect(() => assertProductionAccountingConfiguration({ ...descriptor, fakeWalletEnabled: true })).toThrow("PRODUCTION_ACCOUNTING_DEVELOPMENT_MARKER");
+  expect(() => createFundedCore({ postgresExecutor: {} as never })).toThrow("PRODUCTION_POSTGRES_DATABASE_ADAPTER_REQUIRED");
   expect(() => createFundedCore({ postgresPool: { connect: async () => { throw new Error("unused"); } }, lightningReceiver: {} as never, cashuProvider: {} as never, cashuPolicies: {} as never, protectedMaterialKey: new Uint8Array(32), productionAccountingConfiguration: { ...descriptor, faucetEnabled: true } })).toThrow("PRODUCTION_ACCOUNTING_DEVELOPMENT_MARKER");
 });
 
@@ -32,6 +36,7 @@ postgresIsolation("real PostgreSQL keeps development history read-only and produ
   };
   let pool: { query(text: string, values?: readonly unknown[]): Promise<{ rows: Record<string, unknown>[] }>; end(): Promise<void> } | undefined;
   let appPool: { connect(): Promise<any>; end(): Promise<void> } | undefined;
+  let productionClient: { query(text: string, values?: readonly unknown[]): Promise<{ rows: Record<string, unknown>[] }>; release(): void } | undefined;
   try {
     await run(["run", "--detach", "--rm", "--name", name, "--network", "bridge", "--publish", "127.0.0.1::5432", "-e", "POSTGRES_HOST_AUTH_METHOD=trust", "postgres:17-alpine"]);
     const port = (await run(["port", name, "5432/tcp"])).match(/127\.0\.0\.1:(\d+)/u)?.[1];
@@ -46,8 +51,28 @@ postgresIsolation("real PostgreSQL keeps development history read-only and produ
     await pool.query("INSERT INTO account_balance_projection(account_id,unit,settled_available,held) VALUES('same-principal','sat',41,0)");
     for (const file of ["phase-04/001_metered_generation.sql", "phase-04/002_action_budget_lifecycle.sql", "phase-05/001_continuation.sql", "phase-06/001_publication.sql"]) await pool.query(await Bun.file(`migrations/${file}`).text());
     await pool.query(await Bun.file("migrations/phase-03/002_production_accounting.sql").text());
+    expect((await pool.query(`SELECT source_table.relname AS source_table, target_schema.nspname AS target_schema
+      FROM pg_constraint constraint_row
+      JOIN pg_class source_table ON source_table.oid=constraint_row.conrelid
+      JOIN pg_namespace source_schema ON source_schema.oid=source_table.relnamespace
+      JOIN pg_class target_table ON target_table.oid=constraint_row.confrelid
+      JOIN pg_namespace target_schema ON target_schema.oid=target_table.relnamespace
+      WHERE source_schema.nspname='production_real' AND constraint_row.contype='f' AND target_schema.nspname='public'`)).rows).toEqual([]);
+    expect((await pool.query(`SELECT table_row.relname AS table_name
+      FROM pg_attrdef default_row
+      JOIN pg_class table_row ON table_row.oid=default_row.adrelid
+      JOIN pg_namespace table_schema ON table_schema.oid=table_row.relnamespace
+      WHERE table_schema.nspname='production_real' AND pg_get_expr(default_row.adbin, default_row.adrelid) LIKE '%public.%'`)).rows).toEqual([]);
+    expect((await pool.query(`SELECT table_row.relname AS table_name, function_schema.nspname AS function_schema
+      FROM pg_trigger trigger_row
+      JOIN pg_class table_row ON table_row.oid=trigger_row.tgrelid
+      JOIN pg_namespace table_schema ON table_schema.oid=table_row.relnamespace
+      JOIN pg_proc function_row ON function_row.oid=trigger_row.tgfoid
+      JOIN pg_namespace function_schema ON function_schema.oid=function_row.pronamespace
+      WHERE table_schema.nspname='production_real' AND NOT trigger_row.tgisinternal AND function_schema.nspname='public'`)).rows).toEqual([]);
     await pool.query("CREATE ROLE napplet_production_test LOGIN");
     await pool.query("GRANT napplet_production_real TO napplet_production_test");
+    expect((await pool.query("SELECT has_table_privilege('napplet_production_real', 'production_real.rail_custody_material', 'INSERT') AS insert_allowed")).rows[0]).toEqual({ insert_allowed: true });
 
     expect((await pool.query("SELECT settled_available::text FROM public.account_balance_projection WHERE account_id='same-principal'")).rows[0]).toEqual({ settled_available: "41" });
     expect((await pool.query("SELECT count(*)::int AS count FROM production_real.funding_accounts")).rows[0]).toEqual({ count: 0 });
@@ -56,31 +81,56 @@ postgresIsolation("real PostgreSQL keeps development history read-only and produ
     await pool.query("INSERT INTO public.funding_commands(account_id,command_kind,idempotency_key,fingerprint_sha256,result_json) VALUES('same-principal','credit','same-key',$1,'{}')", ["a".repeat(64)]);
     await pool.query("INSERT INTO production_real.funding_commands(account_id,command_kind,idempotency_key,fingerprint_sha256,result_json) VALUES('same-principal','credit','same-key',$1,'{}')", ["b".repeat(64)]);
     appPool = new Pool({ connectionString: `postgresql://napplet_production_test@127.0.0.1:${port}/postgres`, connectionTimeoutMillis: 2_000 }) as never;
-    const database = new PostgresFundingDatabase(appPool as never, { realm: "production-real" });
+    const database = new PostgresFundingDatabase(appPool as never, { realm: "production-real", deadlineMs: 1_000 });
+    const funding = new FundingService(database.funding);
+    const principal = { pubkey: "a".repeat(64) };
+    const productionAccountId = await accountIdForPrincipal(principal);
+    const settlement = { principal, kind: "credit_settlement" as const, idempotencyKey: "real-credit", policyVersion: "live-policy", protocolVersion: "live-protocol", payload: { settlement: { topUpId: "real-topup", rail: "lightning" as const, unit: "sat" as const, amount: "50", externalReference: "real-external", settlementReference: "real-settlement", verifiedAt: "2026-10-27T00:00:00.000Z" } } };
+    const credited = [await funding.execute(settlement), await funding.execute(settlement)];
+    expect(credited[0]).toMatchObject({ status: "credited", creditedAmount: "50" });
+    expect(await funding.execute({ principal, kind: "funded_admission", idempotencyKey: "real-admission", policyVersion: "live-policy", protocolVersion: "live-protocol", payload: { requestedCap: "20", unit: "sat", capacity: { reference: "capacity:real", usable: true } } })).toMatchObject({ status: "accepted", approvedCap: "20" });
+    const competingAdmissions = await Promise.all([
+      funding.execute({ principal, kind: "funded_admission", idempotencyKey: "cap-one", policyVersion: "live-policy", protocolVersion: "live-protocol", payload: { requestedCap: "25", unit: "sat", capacity: { reference: "capacity:one", usable: true } } }),
+      funding.execute({ principal, kind: "funded_admission", idempotencyKey: "cap-two", policyVersion: "live-policy", protocolVersion: "live-protocol", payload: { requestedCap: "25", unit: "sat", capacity: { reference: "capacity:two", usable: true } } }),
+    ]);
+    expect(competingAdmissions.map((result) => Number(result.approvedCap)).reduce((total, amount) => total + amount, 0)).toBe(30);
+    expect((await funding.status(principal)).available).toBe("0");
     expect(await database.uncertainRailOperations.createOrReplay({ operationId: "op:one", accountId: "same-principal", rail: "lightning", providerLocator: "locator:one", stableLabel: "label:one", state: "created" })).toMatchObject({ created: true });
     expect(await database.uncertainRailOperations.createOrReplay({ operationId: "op:one", accountId: "same-principal", rail: "lightning", providerLocator: "locator:one", stableLabel: "label:one", state: "created" })).toMatchObject({ created: false });
     await expect(database.uncertainRailOperations.createOrReplay({ operationId: "op:one", accountId: "same-principal", rail: "lightning", providerLocator: "locator:other", stableLabel: "label:one", state: "created" })).rejects.toThrow("PRODUCTION_OPERATION_IDENTITY_CONFLICT");
     expect(await database.uncertainRailOperations.transition("op:one", "unknown")).toMatchObject({ state: "unknown" });
+    expect(await database.uncertainRailOperations.createOrReplay({ operationId: "op:one", accountId: "same-principal", rail: "lightning", providerLocator: "locator:one", stableLabel: "label:one", state: "created" })).toMatchObject({ created: false, operation: { state: "unknown" } });
+    const concurrentOperation = { operationId: "op:concurrent", accountId: "same-principal", rail: "lightning" as const, providerLocator: "locator:concurrent", stableLabel: "label:concurrent", state: "created" as const };
+    const concurrentReplays = await Promise.all([database.uncertainRailOperations.createOrReplay(concurrentOperation), database.uncertainRailOperations.createOrReplay(concurrentOperation)]);
+    expect(concurrentReplays.filter((result) => result.created).length).toBe(1);
     await expect(pool.query("UPDATE production_real.uncertain_rail_operations SET state='created' WHERE operation_id='op:one'")).rejects.toThrow("PRODUCTION_OPERATION_STATE_TRANSITION_INVALID");
     await database.uncertainRailOperations.createOrReplay({ operationId: "op:two", accountId: "same-principal", rail: "cashu", providerLocator: "locator:two", stableLabel: "label:two", state: "created" });
     const custody = { custodyId: "custody:one", operationId: "op:two", accountId: "same-principal", rail: "cashu" as const, materialKind: "cashu_input" as const, keyReference: "secret://broker/key", payloadDigest: "c".repeat(64), canonicalProofIdentity: "d".repeat(64), mintUrl: "https://mint.example", keysetId: "keyset", unit: "sat" as const, nonce: new Uint8Array(12).fill(1), ciphertext: new Uint8Array([4, 5, 6]) };
     await database.custody.put(custody);
     await database.custody.put(custody);
     await expect(database.custody.put({ ...custody, custodyId: "custody:foreign", materialKind: "cashu_output", payloadDigest: "e".repeat(64) })).rejects.toThrow();
+    await pool.query("INSERT INTO production_real.funding_accounts(account_id,unit) VALUES('other-principal','sat')");
+    await database.uncertainRailOperations.createOrReplay({ operationId: "op:other", accountId: "other-principal", rail: "cashu", providerLocator: "locator:other-account", stableLabel: "label:other-account", state: "created" });
+    await expect(database.custody.put({ ...custody, custodyId: "custody:cross-account", operationId: "op:other", accountId: "other-principal", materialKind: "cashu_output", payloadDigest: "e".repeat(64) })).rejects.toThrow();
     expect(await database.custody.get("custody:one")).toMatchObject({ operationId: "op:two", keyReference: "secret://broker/key", payloadDigest: "c".repeat(64) });
     await expect(pool.query("UPDATE production_real.rail_custody_material SET key_reference='secret://replacement' WHERE custody_id='custody:one'")).rejects.toThrow("PRODUCTION_CUSTODY_IMMUTABLE");
 
-    const productionClient = await appPool.connect();
-    expect((await productionClient.query("SELECT count(*)::int AS count FROM production_real.funding_accounts")).rows[0]).toEqual({ count: 1 });
-    await expect(productionClient.query("SELECT * FROM public.funding_accounts")).rejects.toThrow();
-    await expect(productionClient.query("UPDATE production_real.ledger_entries SET amount=2")).rejects.toThrow();
-    await expect(productionClient.query("UPDATE production_real.uncertain_rail_operation_audit SET next_state='unknown'")).rejects.toThrow();
-    productionClient.release();
+    productionClient = await appPool.connect();
+    try {
+      expect((await productionClient.query("SELECT count(*)::int AS count FROM production_real.funding_accounts")).rows[0]).toEqual({ count: 4 });
+      await expect(productionClient.query("SELECT * FROM public.funding_accounts")).rejects.toThrow();
+      await expect(productionClient.query("UPDATE production_real.ledger_entries SET amount=2 WHERE account_id=$1", [productionAccountId])).rejects.toThrow();
+      await expect(productionClient.query("UPDATE production_real.uncertain_rail_operation_audit SET next_state='unknown'")).rejects.toThrow();
+    } finally {
+      productionClient.release();
+      productionClient = undefined;
+    }
     await pool.query("SET ROLE napplet_development_history");
     expect((await pool.query("SELECT count(*)::int AS count FROM public.funding_accounts")).rows[0]).toEqual({ count: 1 });
     await expect(pool.query("SELECT * FROM production_real.funding_accounts")).rejects.toThrow();
     await pool.query("RESET ROLE");
   } finally {
+    productionClient?.release();
     await appPool?.end();
     await pool?.end();
     await run(["rm", "--force", name]).catch(() => undefined);

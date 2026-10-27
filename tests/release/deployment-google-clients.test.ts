@@ -283,6 +283,50 @@ test("Cloud SQL cleanup rejects a same-label replacement with a different immuta
   expect(calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
 });
 
+test("Cloud SQL never adopts a same-label replacement during provision or observe", async () => {
+  const request = sqlRequest("sql-immutable"); const resource = `projects/${projectId}/instances/${request.instanceId}`; let currentCreateTime = "2026-01-01T00:00:00Z"; let instanceReads = 0; let posts = 0; let deletes = 0;
+  const instance = () => ({ name: request.instanceId, createTime: currentCreateTime, region: request.region, databaseVersion: "POSTGRES_17", state: "RUNNABLE", settings: { availabilityType: "REGIONAL", tier: request.tier, userLabels: { "napplet-cvm-operation": request.operationId }, backupConfiguration: { enabled: true }, ipConfiguration: { privateNetwork: request.privateNetwork, ipv4Enabled: false, requireSsl: true }, databaseFlags: [{ name: "default_transaction_isolation", value: "serializable" }] } });
+  const { client, journal } = await fixture((url, init) => {
+    if (init.method === "POST") { posts += 1; return json({ name: "operation-immutable", status: "RUNNING" }); }
+    if (init.method === "DELETE") { deletes += 1; return json({ name: "delete-immutable", status: "RUNNING" }); }
+    if (url.includes("/operations/operation-immutable")) return json({ status: "DONE" });
+    instanceReads += 1; return instanceReads === 1 ? json({ error: { code: 404 } }, 404) : json(instance());
+  });
+  await expect(client.cloudSqlPostgres.provision(request)).resolves.toEqual({ status: "pending" });
+  await expect(client.cloudSqlPostgres.observe({ operationId: request.operationId, instanceId: request.instanceId, region: request.region, tier: request.tier, privateNetwork: request.privateNetwork })).resolves.toEqual({ status: "completed" });
+  currentCreateTime = "2026-02-01T00:00:00Z";
+  await expect(client.cloudSqlPostgres.provision(request)).resolves.toEqual({ status: "unknown" });
+  await expect(client.cloudSqlPostgres.observe({ operationId: request.operationId, instanceId: request.instanceId, region: request.region, tier: request.tier, privateNetwork: request.privateNetwork })).resolves.toEqual({ status: "unknown" });
+  await expect(client.cloudSqlPostgres.cleanup({ operationId: request.operationId, instanceId: request.instanceId })).resolves.toEqual({ status: "unknown" });
+  expect(await journal.read(request.operationId)).toMatchObject({ owned: true, createTime: "2026-01-01T00:00:00Z" });
+  expect(posts).toBe(1);
+  expect(deletes).toBe(0);
+});
+
+test("Cloud Run cleanup requires persisted uid and createTime ownership proof", async () => {
+  const operationId = "run-missing-proof"; const resource = `projects/${projectId}/locations/europe-west1/services/napplet-cvm-api`;
+  const { client, calls } = await fixture(() => json({ name: resource }), {}, createMemoryGoogleOperationJournal([{ operationId, resource, requestSha256: digest("a"), contentSha256: digest("b"), state: "completed", owned: true }]));
+  await expect(client.cloudRun.cleanup({ operationId, projectId, region: "europe-west1", serviceName: "napplet-cvm-api" })).rejects.toThrow("GOOGLE_CLEANUP_RUN_OWNERSHIP_REQUIRED");
+  expect(calls).toHaveLength(0);
+});
+
+test("Cloud Run observe never adopts a same-label replacement before cleanup", async () => {
+  const request = cloudRunRequest("run-immutable"); let current = cloudRunService(request.operationId); let serviceReads = 0; let deletes = 0;
+  const { client, journal } = await fixture((url, init) => {
+    if (init.method === "POST") return json({ name: `projects/${projectId}/locations/europe-west1/operations/run-immutable` });
+    if (init.method === "DELETE") { deletes += 1; return json({ name: `projects/${projectId}/locations/europe-west1/operations/delete-immutable` }); }
+    if (url.includes("/operations/run-immutable")) return json({ done: true });
+    serviceReads += 1; return serviceReads === 1 ? json({ error: { code: 404 } }, 404) : json(current);
+  });
+  await expect(client.cloudRun.deploy(request)).resolves.toEqual({ status: "pending" });
+  await expect(client.cloudRun.observe({ operationId: request.operationId, projectId, region: request.region, serviceName: request.serviceName, imageReference: request.imageReference, serviceAccountReference: request.serviceAccountReference, environmentReferenceSha256: request.environmentReferenceSha256, secretReferences: request.secretReferences, concurrency: request.concurrency })).resolves.toEqual({ status: "completed" });
+  current = cloudRunService(request.operationId, { uid: "replacement-uid", createTime: "2026-02-01T00:00:00Z" });
+  await expect(client.cloudRun.observe({ operationId: request.operationId, projectId, region: request.region, serviceName: request.serviceName, imageReference: request.imageReference, serviceAccountReference: request.serviceAccountReference, environmentReferenceSha256: request.environmentReferenceSha256, secretReferences: request.secretReferences, concurrency: request.concurrency })).resolves.toEqual({ status: "unknown" });
+  await expect(client.cloudRun.cleanup({ operationId: request.operationId, projectId, region: request.region, serviceName: request.serviceName })).resolves.toEqual({ status: "unknown" });
+  expect(await journal.read(request.operationId)).toMatchObject({ owned: true, resourceUid: "service-uid-1", createTime: "2026-01-01T00:00:00Z" });
+  expect(deletes).toBe(0);
+});
+
 test("GCS recovered bucket creation binds provider identity without a second POST", async () => {
   const operationId = "bucket-lost"; let gets = 0; let posts = 0;
   const bucket = { timeCreated: "2026-01-01T00:00:00Z", labels: { "napplet-cvm-operation": operationId }, location: "NAM4", versioning: { enabled: true }, encryption: { defaultKmsKeyName: "projects/p/locations/us/keyRings/r/cryptoKeys/k" }, retentionPolicy: { retentionPeriod: "2592000" }, softDeletePolicy: { retentionDurationSeconds: "0" }, lifecycle: { rule: [{ action: { type: "Delete" }, condition: { age: 30 } }, { action: { type: "Delete" }, condition: { numNewerVersions: 1 } }] } };
@@ -305,6 +349,10 @@ test("GCS refuses missing completed buckets, changed labels or keys, and replace
   const absent = await fixture((_url, init) => init.method === "POST" ? json({}) : json({ error: { code: 404 } }, 404), {}, completed);
   await expect(absent.client.gcs.provisionBucket({ operationId: "bucket-done", bucket: "napplet-cvm-artifacts", encryptionKeyReference: "projects/p/locations/us/keyRings/r/cryptoKeys/k" })).resolves.toEqual({ status: "unknown" });
   expect(absent.calls.filter((call) => call.method === "POST")).toHaveLength(0);
+  const replacementProvision = await fixture(() => json({ ...bucketPolicy, timeCreated: "2026-02-01T00:00:00Z" }), {}, completed);
+  await expect(replacementProvision.client.gcs.provisionBucket({ operationId: "bucket-done", bucket: "napplet-cvm-artifacts", encryptionKeyReference: "projects/p/locations/us/keyRings/r/cryptoKeys/k" })).resolves.toEqual({ status: "unknown" });
+  expect(await completed.read("bucket-done")).toMatchObject({ owned: true, createTime: "2026-01-01T00:00:00Z" });
+  expect(replacementProvision.calls.filter((call) => call.method === "POST" || call.method === "DELETE")).toHaveLength(0);
   const changed = await fixture(() => json({ timeCreated: "2026-01-01T00:00:00Z", labels: { "napplet-cvm-operation": "someone-else" }, location: "NAM4", versioning: { enabled: true }, encryption: { defaultKmsKeyName: "projects/p/locations/us/keyRings/r/cryptoKeys/other" }, retentionPolicy: { retentionPeriod: "2592000" }, softDeletePolicy: { retentionDurationSeconds: "0" }, lifecycle: { rule: [{ action: { type: "Delete" }, condition: { age: 30 } }, { action: { type: "Delete" }, condition: { numNewerVersions: 1 } }] } }));
   await expect(changed.client.gcs.provisionBucket({ operationId: "bucket-changed", bucket: "napplet-cvm-artifacts", encryptionKeyReference: "projects/p/locations/us/keyRings/r/cryptoKeys/k" })).resolves.toEqual({ status: "blocked" });
   const cleanup = await fixture(() => json({ timeCreated: "2026-02-01T00:00:00Z", metageneration: "1", labels: { "napplet-cvm-operation": "bucket-done" } }), {}, completed);

@@ -64,13 +64,13 @@ status: implementation_complete
 
 ## Task Commits
 
-1. **Task 1: Persist Cashu inputs and recovery material before swap** - `6e8c3b5`, `a362f82`
-2. **Task 2: Reject spent-input inference and re-encoded replay** - `30ed6ad`, `a362f82`
+1. **Task 1: Persist Cashu inputs and recovery material before swap** - `6e8c3b5`, `a362f82`, `5a5d2d6`, `a1a6c98`
+2. **Task 2: Reject spent-input inference and re-encoded replay** - `30ed6ad`, `a362f82`, `a1a6c98`, `c026fa5`, `90a172b`
 
 ## Verification
 
-- `bun test tests/funding/cashu-top-up.test.ts tests/funding/cashu-treasury-recovery.test.ts tests/dev/funding.test.ts tests/funding/funded-admission.test.ts --timeout 10000` — 36 passed.
-- `NAPPLET_RUN_POSTGRES_ISOLATION=1 bun test tests/funding/production-accounting-realm.test.ts --timeout 120000` — 3 passed, using a local `postgres:17-alpine` container.
+- `bun test tests/funding/cashu-top-up.test.ts tests/funding/cashu-treasury-recovery.test.ts --timeout 30000` — 22 passed, with one PostgreSQL-only test skipped unless enabled.
+- `NAPPLET_RUN_POSTGRES_ISOLATION=1 bun test tests/funding/cashu-treasury-recovery.test.ts tests/funding/production-accounting-realm.test.ts --timeout 120000` — 10 passed, including fresh default cashu-ts NUT-09 recovery against restricted local PostgreSQL.
 - The repository-wide TypeScript check still reports unrelated existing errors in concurrent production/pricing, worker, and legacy files; no failures were reported for the changed Cashu source files after the local fixes.
 
 ## Decisions Made
@@ -97,7 +97,17 @@ status: implementation_complete
 - **Verification:** Local PostgreSQL 17 integration passes concurrent replay and dispatch claims.
 - **Committed in:** `a362f82`
 
-**Total deviations:** 2 auto-fixed (Rule 1: 1, Rule 3: 1). All changes are required for custody correctness; no live money, mint, cloud, or protected publication effects were performed.
+**3. [Rule 1 - Replay identity] Alternate proof encodings could evade a durable claim**
+- **Fix:** Use canonical mint/unit plus SHA-256 of the exact UTF-8 secret; signature/DLEQ/denomination/keyset encodings remain validation inputs.
+- **Verification:** Re-encoding tests and malformed actual NUT-09 recovery matrix.
+- **Committed in:** `a1a6c98`
+
+**4. [Rule 2 - Production custody] Vault sealing preceded monetary settlement state**
+- **Fix:** Immutable zero-money rail material scope now exists before encrypted custody writes; settlement stays in its separate verified transaction.
+- **Verification:** Fresh restricted-PostgreSQL default-adapter coordinator restores after a lost swap and credits once.
+- **Committed in:** `7db48a3`, `c026fa5`
+
+**Total deviations:** 4 auto-fixed (Rule 1: 2, Rule 2: 1, Rule 3: 1). All changes are required for custody correctness; no live money, mint, cloud, or protected publication effects were performed.
 
 ## Known Stubs
 
@@ -111,5 +121,5 @@ Cashu custody is ready for production-integrated verification. Protected live mi
 
 ## Self-Check: PASSED
 
-- Task commits `6e8c3b5`, `30ed6ad`, and `a362f82` exist.
-- Custody source, PostgreSQL migration, and adversarial test coverage exist on disk.
+- Task commits `6e8c3b5`, `30ed6ad`, `a362f82`, `5a5d2d6`, `a1a6c98`, and `c026fa5` exist.
+- Custody source, PostgreSQL migrations, actual default-adapter recovery, and adversarial test coverage exist on disk.

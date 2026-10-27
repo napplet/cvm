@@ -1,5 +1,14 @@
 # syntax=docker/dockerfile:1.7
-# The base image is an immutable multi-platform index for Bun 1.3.14.
+# The authoritative boilerplate scripts invoke Node's native test runner.  Bun
+# is the worker runtime, but is not a drop-in `node --test` implementation, so
+# copy the real, digest-pinned Node runtime already used by the development
+# worker rather than aliasing node to Bun.
+FROM mcr.microsoft.com/playwright:v1.62.1-noble@sha256:dcc5531e97840b9b5e794f2814476b21571c5124a3fca2267d73041f56e7580e AS node-runtime
+
+# Static BusyBox provides the small `ip` applet needed before capabilities are
+# dropped.  Pin the multi-architecture OCI manifest, not a moving tag.
+FROM busybox:1.36.1-musl@sha256:3c6ae8008e2c2eedd141725c30b20d9c36b026eb796688f88205845ef17aa213 AS net-tools
+
 FROM oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4 AS intake
 ARG TARGETARCH
 
@@ -38,7 +47,8 @@ RUN bun -e 'const response = await fetch("https://registry.npmjs.org/pnpm/-/pnpm
     && mkdir -p /toolchain/pnpm-10.8 /toolchain/pnpm-store \
     && tar -xzf /tmp/pnpm-10.8.0.tgz -C /toolchain/pnpm-10.8 --strip-components=1 \
     && cd /toolchain/boilerplate-template \
-    && bun /toolchain/pnpm-10.8/bin/pnpm.cjs fetch --frozen-lockfile --store-dir /toolchain/pnpm-store
+    && bun /toolchain/pnpm-10.8/bin/pnpm.cjs fetch --frozen-lockfile --store-dir /toolchain/pnpm-store \
+    && bun /toolchain/pnpm-10.8/bin/pnpm.cjs install --offline --frozen-lockfile --ignore-scripts --store-dir /toolchain/pnpm-store
 
 FROM oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4 AS sealed
 
@@ -57,20 +67,25 @@ COPY --from=intake /toolchain/napplet /toolchain/bin/napplet
 COPY --from=intake /toolchain/boilerplate-template /toolchain/boilerplate-template
 COPY --from=intake /toolchain/pnpm-10.8 /toolchain/pnpm-10.8
 COPY --from=intake /toolchain/pnpm-store /toolchain/pnpm-store
+COPY --from=node-runtime /usr/bin/node /usr/local/bin/node
+COPY --from=net-tools /bin/busybox /toolchain/bin/busybox
 COPY infra/toolchain/denial-probe.ts /toolchain/bin/denial-probe
 COPY infra/toolchain/fixture-runner.ts /toolchain/bin/fixture-runner
 COPY infra/toolchain/production-worker.ts /usr/local/bin/napplet-cvm-worker
 COPY infra/toolchain/production-probe.ts /usr/local/bin/napplet-cvm-probe
 COPY infra/toolchain/production-bootstrap.sh /usr/local/bin/napplet-cvm-bootstrap
-RUN ln -s /usr/local/bin/bun /usr/local/bin/node \
-    && ln -s /usr/local/bin/bun /toolchain/bin/bun \
+RUN ln -s /usr/local/bin/bun /toolchain/bin/bun \
+    && ln -s /toolchain/pnpm-10.8/bin/pnpm.cjs /toolchain/bin/pnpm \
     && ln -s /toolchain/node_modules/.bin/napplet-conformance /toolchain/bin/napplet-conformance \
     && PLAYWRIGHT_BROWSERS_PATH=/toolchain/ms-playwright node -e 'const {realpathSync}=require("node:fs");const {execFileSync}=require("node:child_process");const {dirname,join}=require("node:path");const pkg=require.resolve("playwright/package.json",{paths:[realpathSync("node_modules/@napplet/conformance-cli")]});execFileSync(process.execPath,[join(dirname(pkg),"cli.js"),"install","chromium"],{stdio:"inherit"})' \
-    && chmod 0555 /toolchain/bin/denial-probe /toolchain/bin/fixture-runner /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe /usr/local/bin/napplet-cvm-bootstrap \
+    && cd /toolchain/boilerplate-template && PLAYWRIGHT_BROWSERS_PATH=/toolchain/ms-playwright node -e 'const {realpathSync}=require("node:fs");const {execFileSync}=require("node:child_process");const {dirname,join}=require("node:path");const pkg=require.resolve("playwright/package.json",{paths:[realpathSync("node_modules/@napplet/conformance-cli")]});execFileSync(process.execPath,[join(dirname(pkg),"cli.js"),"install","chromium"],{stdio:"inherit"})' \
+    && chmod 0555 /toolchain/bin/busybox /toolchain/bin/denial-probe /toolchain/bin/fixture-runner /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe /usr/local/bin/napplet-cvm-bootstrap \
     && mkdir -p /home/napplet /work /tmp \
     && chown 65532:65532 /home/napplet /work /tmp \
     && chmod -R go-w /toolchain /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe /usr/local/bin/napplet-cvm-bootstrap \
     && command -v mount \
+    && node --version \
+    && /toolchain/bin/busybox ip link show lo \
     && command -v findmnt \
     && command -v setpriv \
     && command -v mountpoint \

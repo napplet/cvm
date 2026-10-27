@@ -9,6 +9,21 @@ command -v mount >/dev/null 2>&1 || exit 126
 command -v findmnt >/dev/null 2>&1 || exit 126
 command -v setpriv >/dev/null 2>&1 || exit 126
 command -v mountpoint >/dev/null 2>&1 || exit 126
+# Provider exec calls start as the image user.  Enter a fresh network namespace
+# before any untrusted command, bring back loopback for Chromium's local test
+# server, and fail closed if the provider/kernel disallows namespace creation.
+# A fresh namespace has no external interfaces or routes; this is stronger than
+# a provider metadata flag and is independently observed by the trusted probe.
+if [ "${NAPPLET_CVM_NETWORK_NAMESPACE-}" != "1" ]; then
+  command -v unshare >/dev/null 2>&1 || exit 126
+  exec unshare --net -- env NAPPLET_CVM_NETWORK_NAMESPACE=1 "$0" "$@"
+fi
+NET=/toolchain/bin/busybox
+[ -x "$NET" ] || exit 126
+"$NET" ip link set lo up || exit 126
+ACTIVE_NON_LOOPBACK=$("$NET" ip -o link show | "$NET" grep -v '^1: lo:' | "$NET" grep '<[^>]*UP' || true)
+[ -z "$ACTIVE_NON_LOOPBACK" ] || exit 126
+[ -z "$("$NET" ip route show default)" ] || exit 126
 mount_bounded() {
   path=$1 size_limit=$2 options=$3
   mkdir -p "$path"
@@ -23,9 +38,20 @@ mount_bounded() {
 }
 # Generated work, HOME caches, and /tmp are all independently bounded.  Do
 # not accept the image overlay for any writable path: it is not a quota.
-mount_bounded /workspace 536870912 noexec
+# The generated build deliberately executes JavaScript and architecture-native
+# build helpers from this quota-controlled directory.  noexec cannot protect a
+# workload that must run its own build graph; the boundary is the bounded tmpfs
+# plus non-root/no-caps/no-new-privileges and verified network denial.  HOME
+# and /tmp do not execute project tooling and remain noexec.
+mount_bounded /workspace 536870912 exec
 mount_bounded /home/napplet 67108864 noexec
 mount_bounded /tmp 67108864 noexec
+mount_bounded /var/tmp 67108864 noexec
+mount_bounded /work 67108864 noexec
+mount_bounded /run 16777216 noexec
+# Chromium may use POSIX shared memory; keep that writable surface separately
+# quota-bound instead of inheriting Docker's provider-sized /dev/shm default.
+mount_bounded /dev/shm 67108864 exec
 # Do not leak image/build-time or provider variables to generated code.  The
 # worker's ready check consumes this exact small environment as evidence.
 policy=${NAPPLET_CVM_POLICY_VERSION-}

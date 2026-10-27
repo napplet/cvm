@@ -82,6 +82,22 @@ test("Fly records the provider creation identity after a successful original cre
   await expect(journal.read(operationId)).resolves.toMatchObject({ resourceId: "machine-created", providerCreatedAtMs: Date.parse(created.created_at), state: "dispatched" });
 });
 
+test("Fly keeps the request deadline through a stalled body and cancels it", async () => {
+  let cancelled = false;
+  const stalled = new ReadableStream<Uint8Array>({
+    pull() { return new Promise<void>(() => undefined); },
+    cancel() { cancelled = true; },
+  });
+  const transport = createFlyMachinesHttpTransport({
+    appName: "napplet-cvm-workers", getAccessToken: async () => "valid-access-token", journal: createMemoryWorkerOperationJournal(), requestTimeoutMs: 5,
+    fetch: async () => new Response(stalled, { status: 200 }),
+  });
+  const started = Date.now();
+  await expect(transport.create({ operationId: "op-stalled", region: "ams", image, policy: PRODUCTION_WORKER_POLICY, sessionLeaseSha256: digest("b"), toolchainSha256: digest("c"), providerDeadlineEpochMs: Date.now() + 60_000 })).resolves.toEqual({ status: "unknown", operationId: "op-stalled" });
+  expect(Date.now() - started).toBeLessThan(500);
+  expect(cancelled).toBeTrue();
+});
+
 test("transport refuses a malformed or credential-bearing response and does not certify metadata as network isolation", async () => {
   const transport = createFlyMachinesHttpTransport({
     appName: "napplet-cvm-workers",
@@ -172,7 +188,7 @@ test("Fly readiness exec is bounded, authenticated, and cannot run against a sub
   await expect(transport.exec({ operationId, command: ["/usr/local/bin/napplet-cvm-probe", "observe-isolation"], timeoutSeconds: 60 })).resolves.toEqual({ status: "completed", stdout: "{}", stderr: "", exitCode: 0 });
   const exec = requests.find((request) => request.init.method === "POST")!;
   expect(exec.url).toContain(`/machines/machine-probe/exec`);
-  expect(JSON.parse(String(exec.init.body))).toEqual({ command: ["/usr/local/bin/napplet-cvm-probe", "observe-isolation"], stdin: "", timeout: 60 });
+  expect(JSON.parse(String(exec.init.body))).toEqual({ command: ["/usr/local/bin/napplet-cvm-bootstrap", "/usr/local/bin/napplet-cvm-probe", "observe-isolation"], stdin: "", timeout: 60 });
   expect(exec.init.headers).toMatchObject({ authorization: "Bearer valid-access-token" });
 });
 

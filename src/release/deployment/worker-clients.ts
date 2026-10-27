@@ -87,19 +87,27 @@ const MachineSchema = z.object({
 
 const MAX_PROVIDER_RESPONSE_BYTES = 128 * 1024;
 const PROVIDER_REQUEST_TIMEOUT_MS = 15_000;
+const BOOTSTRAP = "/usr/local/bin/napplet-cvm-bootstrap";
 const ImageDigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 
 function imageDigest(image: string): string { return ImageDigestSchema.parse(ImageSchema.parse(image).split("@sha256:")[1]); }
 function createdAtMs(machine: z.infer<typeof MachineSchema>): number | undefined { const value = Date.parse(machine.created_at); return Number.isSafeInteger(value) && value > 0 ? value : undefined; }
+function isolatedExec(command: readonly string[]): readonly string[] {
+  if (command[0] === BOOTSTRAP) throw new Error("WORKER_EXEC_WRAPPER_FORBIDDEN");
+  return Object.freeze([BOOTSTRAP, ...command]);
+}
 
 /** Never use Response.json()/text() at a provider boundary: a compromised or
  * malformed endpoint must not be able to make the controller buffer an
  * unbounded body. */
-async function boundedJson(response: Response): Promise<unknown> {
+async function boundedJson(response: Response, signal?: AbortSignal): Promise<unknown> {
   if (!response.body) throw new Error("PROVIDER_RESPONSE_BODY_MISSING");
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
+  const cancel = () => { void reader.cancel(new Error("FLY_REQUEST_TIMEOUT")).catch(() => undefined); };
+  signal?.addEventListener("abort", cancel, { once: true });
+  if (signal?.aborted) cancel();
   try {
     for (;;) {
       const next = await reader.read();
@@ -111,7 +119,7 @@ async function boundedJson(response: Response): Promise<unknown> {
   } catch (error) {
     await reader.cancel(error).catch(() => undefined);
     throw error;
-  } finally { reader.releaseLock(); }
+  } finally { signal?.removeEventListener("abort", cancel); reader.releaseLock(); }
   const bytes = new Uint8Array(size); let offset = 0;
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
   return JSON.parse(new TextDecoder().decode(bytes));
@@ -161,17 +169,18 @@ export function createModalProductionTransport(input: Readonly<{ appName: string
       const claim = await input.journal.claim({ operationId, requestSha256, resourceName, image, policyVersion: PRODUCTION_WORKER_POLICY.version, createdAtMs: Date.now(), sessionLeaseSha256, toolchainSha256, providerDeadlineEpochMs });
       if (!claim.claimed) {
         if (claim.record.requestSha256 !== requestSha256 || claim.record.image !== image || claim.record.policyVersion !== PRODUCTION_WORKER_POLICY.version || claim.record.sessionLeaseSha256 !== sessionLeaseSha256 || claim.record.toolchainSha256 !== toolchainSha256 || claim.record.providerDeadlineEpochMs !== providerDeadlineEpochMs) return Object.freeze({ status: "unknown" as const, operationId });
+        // A deterministic name alone is not an immutable provider binding.  A
+        // lost create without the returned Sandbox ID remains ambiguous; never
+        // attach or replace it based on an SDK name lookup.
+        if (!claim.record.resourceId) return Object.freeze({ status: "unknown" as const, operationId });
         const observed = await find(appName, resourceName);
-        if (observed.kind !== "found" || (claim.record.resourceId && claim.record.resourceId !== observed.sandbox.id)) return Object.freeze({ status: "unknown" as const, operationId });
+        if (observed.kind !== "found" || claim.record.resourceId !== observed.sandbox.id) return Object.freeze({ status: "unknown" as const, operationId });
         await input.journal.update({ operationId, requestSha256, state: "reconciled", resourceId: observed.sandbox.id });
         return Object.freeze({ status: "reconciled" as const, operationId, resourceId: observed.sandbox.id });
       }
       const prior = await find(appName, resourceName);
       if (prior.kind === "unknown") return Object.freeze({ status: "unknown" as const, operationId });
-      if (prior.kind === "found") {
-        await input.journal.update({ operationId, requestSha256, state: "reconciled", resourceId: prior.sandbox.id });
-        return Object.freeze({ status: "reconciled" as const, operationId, resourceId: prior.sandbox.id });
-      }
+      if (prior.kind === "found") return Object.freeze({ status: "unknown" as const, operationId });
       const app = await input.sdk.apps.fromName(appName, { createIfMissing: false });
       await input.journal.update({ operationId, requestSha256, state: "dispatching" });
       try {
@@ -186,7 +195,7 @@ export function createModalProductionTransport(input: Readonly<{ appName: string
       const observed = await find(appName, record.resourceName);
       if (observed.kind !== "found" || observed.sandbox.id !== record.resourceId) return Object.freeze({ status: "unknown" as const, resourceId: record.resourceId });
       try {
-        const process = await observed.sandbox.exec([...PRODUCTION_WORKER_POLICY.probeCommand, "--session-lease-sha256", record.sessionLeaseSha256, "--provider-image", record.image, "--toolchain-sha256", record.toolchainSha256, "--provider-deadline-epoch-ms", String(record.providerDeadlineEpochMs)], { timeoutMs: 60_000 });
+        const process = await observed.sandbox.exec(isolatedExec([...PRODUCTION_WORKER_POLICY.probeCommand, "--session-lease-sha256", record.sessionLeaseSha256, "--provider-image", record.image, "--toolchain-sha256", record.toolchainSha256, "--provider-deadline-epoch-ms", String(record.providerDeadlineEpochMs)]), { timeoutMs: 60_000 });
         const output = await readBoundedModalProcessOutput(process);
         if (output.exitCode !== 0) return Object.freeze({ status: "pending" as const, resourceId: record.resourceId });
         const report = z.object({ checks: z.object({ toolchain_readonly: z.literal(true), workspace_bounded: z.literal(true), non_root: z.literal(true), no_ambient_credentials: z.literal(true), network_denied: z.literal(true), no_inbound_ports: z.literal(true), minimal_capabilities: z.literal(true) }).strict(), exactReady: z.object({ image: ImageSchema, sessionLeaseSha256: ImageDigestSchema, toolchainSha256: ImageDigestSchema, remainingLifetimeMs: z.number().int().positive().max(PRODUCTION_WORKER_POLICY.totalLifetimeMs) }).strict() }).strict().safeParse(JSON.parse(output.stdout));
@@ -243,24 +252,52 @@ export function createFlyMachinesHttpTransport(input: Readonly<{
   journal: WorkerOperationJournal;
   fetch: FlyFetch;
   apiOrigin?: string;
+  /** Test-only seam for proving that a body which stalls after headers cannot
+   * outlive the controller request deadline. */
+  requestTimeoutMs?: number;
 }>): FlyMachinesHttpTransport {
   const appName = AppNameSchema.parse(input.appName);
   const base = new URL(input.apiOrigin ?? "https://api.machines.dev");
   if (base.origin !== "https://api.machines.dev" || base.pathname !== "/" || base.search || base.username || base.password) throw new Error("FLY_API_ORIGIN_INVALID");
+  const requestTimeoutMs = z.number().int().min(1).max(PROVIDER_REQUEST_TIMEOUT_MS).parse(input.requestTimeoutMs ?? PROVIDER_REQUEST_TIMEOUT_MS);
+  const pendingResponses = new WeakMap<Response, Readonly<{ controller: AbortController; timer: ReturnType<typeof setTimeout> }>>();
   const request = async (path: string, init: RequestInit) => {
     const token = await input.getAccessToken();
     if (typeof token !== "string" || token.length < 12 || /\s/u.test(token)) throw new Error("FLY_ACCESS_TOKEN_INVALID");
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(new Error("FLY_REQUEST_TIMEOUT")), PROVIDER_REQUEST_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(new Error("FLY_REQUEST_TIMEOUT")), requestTimeoutMs);
     try {
       const response = await input.fetch(new URL(path, base).toString(), {
         ...init, signal: controller.signal, redirect: "error",
         headers: Object.freeze({ authorization: `Bearer ${token}`, "content-type": "application/json", ...(init.headers ?? {}) }),
       });
-      // Headers are not completion: keep the deadline active while the caller
-      // drains the bounded response body.
+      // Headers are not completion: retain the deadline through body draining.
+      // Every branch below consumes or explicitly disposes the response.
+      pendingResponses.set(response, Object.freeze({ controller, timer }));
       return response;
     } catch (error) { clearTimeout(timer); throw error; }
+  };
+  const dispose = async (response: Response) => {
+    const pending = pendingResponses.get(response);
+    if (pending) {
+      clearTimeout(pending.timer);
+      pendingResponses.delete(response);
+    }
+    await response.body?.cancel().catch(() => undefined);
+  };
+  const responseJson = async (response: Response): Promise<unknown> => {
+    const pending = pendingResponses.get(response);
+    let abort!: () => void;
+    const aborted = new Promise<never>((_, reject) => {
+      abort = () => reject(new Error("FLY_REQUEST_TIMEOUT"));
+      pending?.controller.signal.addEventListener("abort", abort, { once: true });
+      if (pending?.controller.signal.aborted) abort();
+    });
+    try { return await Promise.race([boundedJson(response, pending?.controller.signal), aborted]); }
+    finally {
+      pending?.controller.signal.removeEventListener("abort", abort);
+      await dispose(response);
+    }
   };
 
 function intendedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<WorkerOperationRecord, "operationId" | "resourceName" | "image" | "policyVersion">, image: string): boolean {
@@ -281,9 +318,9 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<Worke
   const findOriginal = async (operationId: string, name: string, expectedImage: string): Promise<Readonly<{ kind: "found"; id: string; providerCreatedAtMs: number }> | Readonly<{ kind: "missing" | "unknown" }>> => {
     let response: Response;
     try { response = await request(`/v1/apps/${encodeURIComponent(appName)}/machines?metadata.napplet-cvm-operation=${encodeURIComponent(operationId)}&include_deleted=true`, { method: "GET" }); } catch { return Object.freeze({ kind: "unknown" as const }); }
-    if (response.status === 404) return Object.freeze({ kind: "missing" as const });
-    if (!response.ok) return Object.freeze({ kind: "unknown" as const });
-    const machines = z.array(MachineSchema).safeParse(await boundedJson(response).catch(() => undefined));
+    if (response.status === 404) { await dispose(response); return Object.freeze({ kind: "missing" as const }); }
+    if (!response.ok) { await dispose(response); return Object.freeze({ kind: "unknown" as const }); }
+    const machines = z.array(MachineSchema).safeParse(await responseJson(response).catch(() => undefined));
     if (!machines.success) return Object.freeze({ kind: "unknown" as const });
     const matched = machines.data.filter((machine) => {
       const metadata = machine.config.metadata;
@@ -337,8 +374,8 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<Worke
       };
       try {
         const response = await request(`/v1/apps/${encodeURIComponent(appName)}/machines`, { method: "POST", body: JSON.stringify(body) });
-        if (!response.ok) { await input.journal.update({ operationId, requestSha256, state: "unknown" }); return Object.freeze({ status: "unknown" as const, operationId }); }
-        const machine = MachineSchema.safeParse(await boundedJson(response).catch(() => undefined));
+        if (!response.ok) { await dispose(response); await input.journal.update({ operationId, requestSha256, state: "unknown" }); return Object.freeze({ status: "unknown" as const, operationId }); }
+        const machine = MachineSchema.safeParse(await responseJson(response).catch(() => undefined));
         if (!machine.success || !intendedMachine(machine.data, claimed.record, image)) {
           await input.journal.update({ operationId, requestSha256, state: "unknown" }); return Object.freeze({ status: "unknown" as const, operationId });
         }
@@ -355,9 +392,9 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<Worke
       const record = await input.journal.read(OperationIdSchema.parse(value.operationId));
       if (!record?.resourceId) return Object.freeze({ status: record ? "unknown" as const : "missing" as const });
       const response = await request(`/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(record.resourceId)}`, { method: "GET" });
-      if (response.status === 404) return Object.freeze({ status: "missing" as const });
-      if (!response.ok) return Object.freeze({ status: "unknown" as const });
-      const machine = MachineSchema.safeParse(await boundedJson(response).catch(() => undefined));
+      if (response.status === 404) { await dispose(response); return Object.freeze({ status: "missing" as const }); }
+      if (!response.ok) { await dispose(response); return Object.freeze({ status: "unknown" as const }); }
+      const machine = MachineSchema.safeParse(await responseJson(response).catch(() => undefined));
       if (!machine.success || !record.image || machine.data.id !== record.resourceId || !ownedMachine(machine.data, record, record.image) || machine.data.state !== "started") return Object.freeze({ status: "unknown" as const });
       // Readiness must be executed against the Machine ID that was durably
       // recorded.  The command is diagnostic-only and cannot initiate work.
@@ -378,19 +415,22 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<Worke
       if (!record?.resourceId) return Object.freeze({ status: "blocked" as const });
       const before = await request(`/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(record.resourceId)}`, { method: "GET" });
       if (before.status === 404) {
+        await dispose(before);
         await input.journal.update({ operationId, requestSha256: record.requestSha256, state: "terminated", resourceId: record.resourceId });
         return Object.freeze({ status: "terminated" as const });
       }
-      const machine = before.ok ? MachineSchema.safeParse(await boundedJson(before).catch(() => undefined)) : undefined;
+      const machine = before.ok ? MachineSchema.safeParse(await responseJson(before).catch(() => undefined)) : (await dispose(before), undefined);
       const metadata = machine?.success ? machine.data.config.metadata : undefined;
       if (!machine?.success || machine.data.name !== record.resourceName || metadata?.["napplet-cvm-operation"] !== operationId
         || metadata?.["napplet-cvm-policy"] !== PRODUCTION_WORKER_POLICY.version || metadata?.["napplet-cvm-role"] !== "isolated-worker"
         || !record.image || !ownedMachine(machine.data, record, record.image)) return Object.freeze({ status: "unknown" as const });
       await input.journal.update({ operationId, requestSha256: record.requestSha256, state: "terminating", resourceId: record.resourceId });
       const removed = await request(`/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(record.resourceId)}?force=true`, { method: "DELETE" });
-      if (!removed.ok && removed.status !== 404) return Object.freeze({ status: "pending" as const });
+      if (!removed.ok && removed.status !== 404) { await dispose(removed); return Object.freeze({ status: "pending" as const }); }
+      await dispose(removed);
       const after = await request(`/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(record.resourceId)}`, { method: "GET" });
-      if (after.status !== 404) return Object.freeze({ status: "pending" as const });
+      if (after.status !== 404) { await dispose(after); return Object.freeze({ status: "pending" as const }); }
+      await dispose(after);
       await input.journal.update({ operationId, requestSha256: record.requestSha256, state: "terminated", resourceId: record.resourceId });
       return Object.freeze({ status: "terminated" as const });
     },
@@ -402,11 +442,11 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<Worke
       if (!record?.resourceId || !record.image) return Object.freeze({ status: "unknown" as const });
       try {
         const before = await request(`/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(record.resourceId)}`, { method: "GET" });
-        const machine = before.ok ? MachineSchema.safeParse(await boundedJson(before)) : undefined;
+        const machine = before.ok ? MachineSchema.safeParse(await responseJson(before)) : (await dispose(before), undefined);
         if (!machine?.success || !ownedMachine(machine.data, record, record.image)) return Object.freeze({ status: "unknown" as const });
-        const response = await request(`/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(record.resourceId)}/exec`, { method: "POST", body: JSON.stringify({ command, stdin, timeout }) });
-        if (!response.ok) return Object.freeze({ status: "unknown" as const });
-        const body = z.object({ stdout: z.string().max(MAX_PROVIDER_RESPONSE_BYTES).optional(), stderr: z.string().max(MAX_PROVIDER_RESPONSE_BYTES).optional(), exit_code: z.number().int().optional(), exitCode: z.number().int().optional() }).passthrough().safeParse(await boundedJson(response));
+        const response = await request(`/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(record.resourceId)}/exec`, { method: "POST", body: JSON.stringify({ command: isolatedExec(command), stdin, timeout }) });
+        if (!response.ok) { await dispose(response); return Object.freeze({ status: "unknown" as const }); }
+        const body = z.object({ stdout: z.string().max(MAX_PROVIDER_RESPONSE_BYTES).optional(), stderr: z.string().max(MAX_PROVIDER_RESPONSE_BYTES).optional(), exit_code: z.number().int().optional(), exitCode: z.number().int().optional() }).passthrough().safeParse(await responseJson(response));
         const exitCode = body.success ? (body.data.exit_code ?? body.data.exitCode) : undefined;
         return body.success && exitCode !== undefined ? Object.freeze({ status: "completed" as const, ...(body.data.stdout !== undefined ? { stdout: body.data.stdout } : {}), ...(body.data.stderr !== undefined ? { stderr: body.data.stderr } : {}), exitCode }) : Object.freeze({ status: "unknown" as const });
       } catch { return Object.freeze({ status: "unknown" as const }); }

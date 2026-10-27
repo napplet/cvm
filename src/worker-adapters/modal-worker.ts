@@ -116,6 +116,8 @@ export type ModalProcessPort = Readonly<{
 }>;
 export interface ModalSandboxPort {
   readonly id: string;
+  /** Server-held tags; production recovery uses these as request identity. */
+  getTags?(): Promise<Readonly<Record<string, string>>>;
   exec(argv: readonly string[], options: Readonly<{ timeoutMs: number }>): Promise<ModalProcessPort>;
   poll(): Promise<unknown>;
   terminate(): Promise<void>;
@@ -347,6 +349,7 @@ export async function createOfficialModalSdk(): Promise<ModalSdkPort> {
 
 function sandboxPort(sandbox: {
   sandboxId: string;
+  getTags(): Promise<Record<string, string>>;
   exec(command: string[], options: { timeoutMs: number }): Promise<ModalProcessPort>;
   poll(): Promise<unknown>;
   terminate(): Promise<void>;
@@ -354,6 +357,7 @@ function sandboxPort(sandbox: {
 }): ModalSandboxPort {
   return {
     id: sandbox.sandboxId,
+    getTags: () => sandbox.getTags(),
     exec: async (argv, options) => sandbox.exec([...argv], options),
     poll: () => sandbox.poll(),
     terminate: () => sandbox.terminate(),

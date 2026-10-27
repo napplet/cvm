@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { readBoundedModalProcessOutput, type ModalSandboxCreateOptions, type ModalSdkPort } from "../../worker-adapters/modal-worker";
+import { readBoundedModalProcessOutput, type ModalSandboxCreateOptions, type ModalSandboxPort, type ModalSdkPort } from "../../worker-adapters/modal-worker";
 import { PRODUCTION_WORKER_POLICY, type ProductionWorkerPolicy } from "../../worker-adapters/production-worker-policy";
 import { createWorkerBenchmarkSchedule, WorkerBenchmarkProfileSchema } from "../../admission/benchmark";
 
@@ -139,17 +139,22 @@ export type ModalProductionTransport = Readonly<{
   create(input: Readonly<{ operationId: string; sessionLeaseSha256: string; toolchainSha256: string; providerDeadlineEpochMs: number }>): Promise<Readonly<{ status: "created" | "reconciled" | "unknown"; operationId: string; resourceId?: string }>>;
   observe(input: Readonly<{ operationId: string }>): Promise<Readonly<{ status: "completed" | "pending" | "unknown"; resourceId?: string }>>;
   terminate(input: Readonly<{ operationId: string }>): Promise<Readonly<{ status: "terminated" | "pending" | "unknown" | "blocked" }>>;
+  /** Production-only, bounded and bootstrap-wrapped command surface. */
+  exec(input: Readonly<{ operationId: string; command: readonly string[]; timeoutMs?: number }>): Promise<Readonly<{ status: "completed" | "unknown"; stdout?: string; stderr?: string; exitCode?: number }>>;
 }>;
 
-function productionModalOptions(input: Readonly<{ operationId: string; workspaceRoot: string; tags: Readonly<Record<string, string>>; regions?: readonly string[] }>): ModalSandboxCreateOptions {
+function modalIdentityTags(input: Readonly<{ operationId: string; requestSha256: string; image: string; sessionLeaseSha256: string; toolchainSha256: string; tags: Readonly<Record<string, string>> }>) {
+  return Object.freeze({ ...input.tags, "napplet-cvm-operation": input.operationId, "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-role": "isolated-worker", "napplet-cvm-request-sha256": input.requestSha256, "napplet-cvm-image-sha256": imageDigest(input.image), "napplet-cvm-lease-sha256": input.sessionLeaseSha256, "napplet-cvm-toolchain-sha256": input.toolchainSha256 });
+}
+function productionModalOptions(input: Readonly<{ operationId: string; requestSha256: string; image: string; sessionLeaseSha256: string; toolchainSha256: string; providerDeadlineEpochMs: number; workspaceRoot: string; tags: Readonly<Record<string, string>>; regions?: readonly string[] }>): ModalSandboxCreateOptions {
   return Object.freeze({
     cpu: PRODUCTION_WORKER_POLICY.cpu, cpuLimit: PRODUCTION_WORKER_POLICY.cpuLimit,
     memoryMiB: PRODUCTION_WORKER_POLICY.memoryMiB, memoryLimitMiB: PRODUCTION_WORKER_POLICY.memoryLimitMiB,
     timeoutMs: PRODUCTION_WORKER_POLICY.totalLifetimeMs, idleTimeoutMs: PRODUCTION_WORKER_POLICY.idleGraceMs,
     workdir: input.workspaceRoot,
-    command: Object.freeze(["/usr/local/bin/napplet-cvm-bootstrap", "/bin/sh", "-c", "while true; do sleep 60; done"]),
+    command: Object.freeze([BOOTSTRAP, "/usr/local/bin/napplet-cvm-worker", "idle", "--provider-deadline-epoch-ms", String(input.providerDeadlineEpochMs)]),
     env: Object.freeze({ NAPPLET_CVM_POLICY_VERSION: PRODUCTION_WORKER_POLICY.version }), blockNetwork: true,
-    tags: Object.freeze({ ...input.tags, "napplet-cvm-operation": input.operationId, "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-role": "isolated-worker" }),
+    tags: modalIdentityTags(input),
     name: stableName(input.operationId), ...(input.regions ? { regions: Object.freeze([...input.regions]) } : {}),
   });
 }
@@ -160,6 +165,26 @@ export function createModalProductionTransport(input: Readonly<{ appName: string
   const appName = AppNameSchema.parse(input.appName); const image = ImageSchema.parse(input.image);
   if (input.workspaceRoot !== PRODUCTION_WORKER_POLICY.workspaceRoot || !input.sdk.sandboxes.findByName) throw new Error("MODAL_PRODUCTION_CAPABILITY_UNSUPPORTED");
   const find = input.sdk.sandboxes.findByName;
+  const matchesRecord = async (sandbox: ModalSandboxPort, record: WorkerOperationRecord) => {
+    if (!record.image || !record.sessionLeaseSha256 || !record.toolchainSha256 || !sandbox.getTags) return false;
+    const expected = modalIdentityTags({ operationId: record.operationId, requestSha256: record.requestSha256, image: record.image, sessionLeaseSha256: record.sessionLeaseSha256, toolchainSha256: record.toolchainSha256, tags: input.tags });
+    try {
+      const tags = await Promise.race([sandbox.getTags(), new Promise<never>((_, reject) => setTimeout(() => reject(new Error("MODAL_TAG_LOOKUP_TIMEOUT")), 15_000))]);
+      return Object.entries(expected).every(([key, value]) => tags[key] === value) && Object.keys(tags).length === Object.keys(expected).length;
+    } catch { return false; }
+  };
+  const exec = async (value: Readonly<{ operationId: string; command: readonly string[]; timeoutMs?: number }>) => {
+    const record = await input.journal.read(OperationIdSchema.parse(value.operationId));
+    const command = z.array(z.string().min(1).max(256)).min(1).max(12).parse(value.command);
+    const timeoutMs = z.number().int().min(1).max(60_000).parse(value.timeoutMs ?? 60_000);
+    if (!record?.resourceId) return Object.freeze({ status: "unknown" as const });
+    const observed = await find(appName, record.resourceName);
+    if (observed.kind !== "found" || observed.sandbox.id !== record.resourceId || !await matchesRecord(observed.sandbox, record)) return Object.freeze({ status: "unknown" as const });
+    try {
+      const output = await readBoundedModalProcessOutput(await observed.sandbox.exec(isolatedExec(command), { timeoutMs }));
+      return Object.freeze({ status: "completed" as const, stdout: output.stdout, stderr: output.stderr, exitCode: output.exitCode });
+    } catch { return Object.freeze({ status: "unknown" as const }); }
+  };
   return Object.freeze({
     async create(value) {
       const operationId = OperationIdSchema.parse(value.operationId); const sessionLeaseSha256 = ImageDigestSchema.parse(value.sessionLeaseSha256); const toolchainSha256 = ImageDigestSchema.parse(value.toolchainSha256); const providerDeadlineEpochMs = z.number().int().positive().parse(value.providerDeadlineEpochMs);
@@ -172,9 +197,14 @@ export function createModalProductionTransport(input: Readonly<{ appName: string
         // A deterministic name alone is not an immutable provider binding.  A
         // lost create without the returned Sandbox ID remains ambiguous; never
         // attach or replace it based on an SDK name lookup.
-        if (!claim.record.resourceId) return Object.freeze({ status: "unknown" as const, operationId });
+        if (!claim.record.resourceId) {
+          const observed = await find(appName, resourceName);
+          if (observed.kind !== "found" || !await matchesRecord(observed.sandbox, claim.record)) return Object.freeze({ status: "unknown" as const, operationId });
+          await input.journal.update({ operationId, requestSha256, state: "reconciled", resourceId: observed.sandbox.id });
+          return Object.freeze({ status: "reconciled" as const, operationId, resourceId: observed.sandbox.id });
+        }
         const observed = await find(appName, resourceName);
-        if (observed.kind !== "found" || claim.record.resourceId !== observed.sandbox.id) return Object.freeze({ status: "unknown" as const, operationId });
+        if (observed.kind !== "found" || claim.record.resourceId !== observed.sandbox.id || !await matchesRecord(observed.sandbox, claim.record)) return Object.freeze({ status: "unknown" as const, operationId });
         await input.journal.update({ operationId, requestSha256, state: "reconciled", resourceId: observed.sandbox.id });
         return Object.freeze({ status: "reconciled" as const, operationId, resourceId: observed.sandbox.id });
       }
@@ -184,7 +214,7 @@ export function createModalProductionTransport(input: Readonly<{ appName: string
       const app = await input.sdk.apps.fromName(appName, { createIfMissing: false });
       await input.journal.update({ operationId, requestSha256, state: "dispatching" });
       try {
-        const sandbox = await input.sdk.sandboxes.create(app, input.sdk.images.fromRegistry(image), productionModalOptions({ operationId, workspaceRoot: input.workspaceRoot, tags: input.tags, ...(input.regions ? { regions: input.regions } : {}) }));
+        const sandbox = await input.sdk.sandboxes.create(app, input.sdk.images.fromRegistry(image), productionModalOptions({ operationId, requestSha256, image, sessionLeaseSha256, toolchainSha256, providerDeadlineEpochMs, workspaceRoot: input.workspaceRoot, tags: input.tags, ...(input.regions ? { regions: input.regions } : {}) }));
         await input.journal.update({ operationId, requestSha256, state: "dispatched", resourceId: sandbox.id });
         return Object.freeze({ status: "created" as const, operationId, resourceId: sandbox.id });
       } catch { await input.journal.update({ operationId, requestSha256, state: "unknown" }); return Object.freeze({ status: "unknown" as const, operationId }); }
@@ -195,14 +225,14 @@ export function createModalProductionTransport(input: Readonly<{ appName: string
       const observed = await find(appName, record.resourceName);
       if (observed.kind !== "found" || observed.sandbox.id !== record.resourceId) return Object.freeze({ status: "unknown" as const, resourceId: record.resourceId });
       try {
-        const process = await observed.sandbox.exec(isolatedExec([...PRODUCTION_WORKER_POLICY.probeCommand, "--session-lease-sha256", record.sessionLeaseSha256, "--provider-image", record.image, "--toolchain-sha256", record.toolchainSha256, "--provider-deadline-epoch-ms", String(record.providerDeadlineEpochMs)]), { timeoutMs: 60_000 });
-        const output = await readBoundedModalProcessOutput(process);
-        if (output.exitCode !== 0) return Object.freeze({ status: "pending" as const, resourceId: record.resourceId });
+        const output = await exec({ operationId: record.operationId, command: [...PRODUCTION_WORKER_POLICY.probeCommand, "--session-lease-sha256", record.sessionLeaseSha256, "--provider-image", record.image, "--toolchain-sha256", record.toolchainSha256, "--provider-deadline-epoch-ms", String(record.providerDeadlineEpochMs)] });
+        if (output.status !== "completed" || output.exitCode !== 0 || output.stdout === undefined) return Object.freeze({ status: "pending" as const, resourceId: record.resourceId });
         const report = z.object({ checks: z.object({ toolchain_readonly: z.literal(true), workspace_bounded: z.literal(true), non_root: z.literal(true), no_ambient_credentials: z.literal(true), network_denied: z.literal(true), no_inbound_ports: z.literal(true), minimal_capabilities: z.literal(true) }).strict(), exactReady: z.object({ image: ImageSchema, sessionLeaseSha256: ImageDigestSchema, toolchainSha256: ImageDigestSchema, remainingLifetimeMs: z.number().int().positive().max(PRODUCTION_WORKER_POLICY.totalLifetimeMs) }).strict() }).strict().safeParse(JSON.parse(output.stdout));
         if (!report.success || report.data.exactReady.image !== image || report.data.exactReady.sessionLeaseSha256 !== record.sessionLeaseSha256 || report.data.exactReady.toolchainSha256 !== record.toolchainSha256) return Object.freeze({ status: "unknown" as const, resourceId: record.resourceId });
         return Object.freeze({ status: "completed" as const, resourceId: record.resourceId });
       } catch { return Object.freeze({ status: "pending" as const, resourceId: record.resourceId }); }
     },
+    exec,
     async terminate(value) {
       const record = await input.journal.read(OperationIdSchema.parse(value.operationId));
       if (!record?.resourceId || record.image !== image || record.policyVersion !== PRODUCTION_WORKER_POLICY.version) return Object.freeze({ status: "blocked" as const });
@@ -367,7 +397,7 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<Worke
         config: {
           image, auto_destroy: true, restart: { policy: "no" }, services: [],
           guest: { cpu_kind: "shared", cpus: value.policy.cpu, memory_mb: value.policy.memoryMiB },
-          init: { exec: ["/usr/local/bin/napplet-cvm-bootstrap", "/bin/sh", "-c", "while true; do sleep 60; done"] },
+          init: { exec: [BOOTSTRAP, "/usr/local/bin/napplet-cvm-worker", "idle", "--provider-deadline-epoch-ms", String(providerDeadlineEpochMs)] },
           env: { NAPPLET_CVM_POLICY_VERSION: value.policy.version },
           metadata: { "napplet-cvm-operation": operationId, "napplet-cvm-policy": value.policy.version, "napplet-cvm-role": "isolated-worker" },
         },
@@ -471,7 +501,7 @@ export function createWorkerDeploymentClients(input: Readonly<{
   const modalTransport = createModalProductionTransport({ appName: input.modalAppName, image, workspaceRoot: input.workspaceRoot, tags: input.modalTags, ...(input.modalRegions ? { regions: input.modalRegions } : {}), sdk: input.modalSdk, journal: input.journal });
   return Object.freeze({
     selection: Object.freeze({ status: "unselected" as const, reasonCode: "FRESH_PROTECTED_EVIDENCE_REQUIRED" as const }),
-    modal: Object.freeze({ definition, schedules: LOCKED_WORKER_SCHEDULE, create: modalTransport.create, observe: modalTransport.observe, terminate: modalTransport.terminate, config: Object.freeze({ image, workspaceRoot: input.workspaceRoot, policyVersion: input.policyVersion }) }),
+    modal: Object.freeze({ definition, schedules: LOCKED_WORKER_SCHEDULE, create: modalTransport.create, observe: modalTransport.observe, terminate: modalTransport.terminate, exec: modalTransport.exec, config: Object.freeze({ image, workspaceRoot: input.workspaceRoot, policyVersion: input.policyVersion }) }),
     fly: Object.freeze({ definition, schedules: LOCKED_WORKER_SCHEDULE, create: (operation: Readonly<{ operationId: string; region: string; sessionLeaseSha256: string; toolchainSha256: string; providerDeadlineEpochMs: number }>) => input.fly.create({ ...operation, image, policy: PRODUCTION_WORKER_POLICY }), observe: input.fly.observe, terminate: input.fly.terminate, exec: input.fly.exec, config: Object.freeze({ image, workspaceRoot: input.workspaceRoot, policyVersion: input.policyVersion }) }),
   });
 }

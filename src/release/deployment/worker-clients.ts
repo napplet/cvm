@@ -42,13 +42,14 @@ export type WorkerOperationRecord = Readonly<{
   sessionLeaseSha256?: string;
   toolchainSha256?: string;
   providerDeadlineEpochMs?: number;
+  providerCreatedAtMs?: number;
 }>;
 /** This is a controller persistence port. Production injects a durable CAS
  * implementation; the in-memory version below is limited to contract tests. */
 export type WorkerOperationJournal = Readonly<{
   claim(record: Omit<WorkerOperationRecord, "state" | "resourceId">): Promise<Readonly<{ claimed: boolean; record: WorkerOperationRecord }>>;
   read(operationId: string): Promise<WorkerOperationRecord | undefined>;
-  update(input: Readonly<{ operationId: string; requestSha256: string; state: WorkerOperationState; resourceId?: string }>): Promise<WorkerOperationRecord>;
+  update(input: Readonly<{ operationId: string; requestSha256: string; state: WorkerOperationState; resourceId?: string; providerCreatedAtMs?: number }>): Promise<WorkerOperationRecord>;
 }>;
 
 export function createMemoryWorkerOperationJournal(seed: readonly WorkerOperationRecord[] = []): WorkerOperationJournal {
@@ -64,7 +65,7 @@ export function createMemoryWorkerOperationJournal(seed: readonly WorkerOperatio
     async update(input) {
       const current = records.get(OperationIdSchema.parse(input.operationId));
       if (!current || current.requestSha256 !== input.requestSha256) throw new Error("WORKER_OPERATION_CAS_CONFLICT");
-      const next = Object.freeze({ ...current, state: input.state, ...(input.resourceId ? { resourceId: ResourceIdSchema.parse(input.resourceId) } : {}) });
+      const next = Object.freeze({ ...current, state: input.state, ...(input.resourceId ? { resourceId: ResourceIdSchema.parse(input.resourceId) } : {}), ...(input.providerCreatedAtMs !== undefined ? { providerCreatedAtMs: z.number().int().positive().parse(input.providerCreatedAtMs) } : {}) });
       records.set(next.operationId, next); return next;
     },
   });
@@ -80,6 +81,7 @@ const MachineSchema = z.object({
   id: ResourceIdSchema,
   name: z.string().min(1).max(128),
   state: z.string().optional(),
+  created_at: z.string().min(1).max(128),
   config: z.object({ image: ImageSchema, metadata: z.record(z.string(), z.string()).optional(), guest: z.object({ cpus: z.number().int().positive(), memory_mb: z.number().int().positive() }).optional(), services: z.array(z.unknown()).optional(), env: z.record(z.string(), z.string()).optional() }).passthrough(),
 }).passthrough();
 
@@ -88,6 +90,7 @@ const PROVIDER_REQUEST_TIMEOUT_MS = 15_000;
 const ImageDigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 
 function imageDigest(image: string): string { return ImageDigestSchema.parse(ImageSchema.parse(image).split("@sha256:")[1]); }
+function createdAtMs(machine: z.infer<typeof MachineSchema>): number | undefined { const value = Date.parse(machine.created_at); return Number.isSafeInteger(value) && value > 0 ? value : undefined; }
 
 /** Never use Response.json()/text() at a provider boundary: a compromised or
  * malformed endpoint must not be able to make the controller buffer an
@@ -250,9 +253,9 @@ export function createFlyMachinesHttpTransport(input: Readonly<{
     } finally { clearTimeout(timer); }
   };
 
-function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<WorkerOperationRecord, "operationId" | "resourceName" | "image" | "policyVersion">, image: string): boolean {
+function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<WorkerOperationRecord, "operationId" | "resourceName" | "image" | "policyVersion" | "providerCreatedAtMs">, image: string): boolean {
   const metadata = machine.config.metadata;
-  return Boolean(record.image) && machine.name === record.resourceName && machine.config.image === image && image === record.image
+  return Boolean(record.image) && Number.isSafeInteger(record.providerCreatedAtMs) && createdAtMs(machine) === record.providerCreatedAtMs && machine.name === record.resourceName && machine.config.image === image && image === record.image
     && metadata?.["napplet-cvm-operation"] === record.operationId
     && metadata?.["napplet-cvm-policy"] === record.policyVersion
     && metadata?.["napplet-cvm-role"] === "isolated-worker"
@@ -262,7 +265,7 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<Worke
     && machine.config.services?.length === 0
     && machine.config.env?.NAPPLET_CVM_POLICY_VERSION === PRODUCTION_WORKER_POLICY.version;
 }
-  const findOriginal = async (operationId: string, name: string, expectedImage: string): Promise<Readonly<{ kind: "found"; id: string }> | Readonly<{ kind: "missing" | "unknown" }>> => {
+  const findOriginal = async (operationId: string, name: string, expectedImage: string): Promise<Readonly<{ kind: "found"; id: string; providerCreatedAtMs: number }> | Readonly<{ kind: "missing" | "unknown" }>> => {
     let response: Response;
     try { response = await request(`/v1/apps/${encodeURIComponent(appName)}/machines?metadata.napplet-cvm-operation=${encodeURIComponent(operationId)}&include_deleted=true`, { method: "GET" }); } catch { return Object.freeze({ kind: "unknown" as const }); }
     if (response.status === 404) return Object.freeze({ kind: "missing" as const });
@@ -277,7 +280,8 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<Worke
         && metadata?.["napplet-cvm-role"] === "isolated-worker"
         && Object.keys(metadata).sort().join(",") === "napplet-cvm-operation,napplet-cvm-policy,napplet-cvm-role";
     });
-    return matched.length === 1 ? Object.freeze({ kind: "found" as const, id: matched[0]!.id }) : matched.length === 0 ? Object.freeze({ kind: "missing" as const }) : Object.freeze({ kind: "unknown" as const });
+    const providerCreatedAtMs = matched.length === 1 ? createdAtMs(matched[0]!) : undefined;
+    return matched.length === 1 && providerCreatedAtMs ? Object.freeze({ kind: "found" as const, id: matched[0]!.id, providerCreatedAtMs }) : matched.length === 0 ? Object.freeze({ kind: "missing" as const }) : Object.freeze({ kind: "unknown" as const });
   };
   return Object.freeze({
     async create(value) {
@@ -294,18 +298,18 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<Worke
         if (claimed.record.requestSha256 !== requestSha256 || claimed.record.image !== image || claimed.record.region !== region || claimed.record.policyVersion !== value.policy.version || claimed.record.sessionLeaseSha256 !== sessionLeaseSha256 || claimed.record.toolchainSha256 !== toolchainSha256 || claimed.record.providerDeadlineEpochMs !== providerDeadlineEpochMs || !Number.isSafeInteger(claimed.record.createdAtMs)) return Object.freeze({ status: "unknown" as const, operationId });
         if (claimed.record.resourceId) {
           const observed = await findOriginal(operationId, resourceName, image);
-          return observed.kind === "found" && observed.id === claimed.record.resourceId ? Object.freeze({ status: "reconciled" as const, operationId, resourceId: observed.id }) : Object.freeze({ status: "unknown" as const, operationId });
+          return observed.kind === "found" && observed.id === claimed.record.resourceId && observed.providerCreatedAtMs === claimed.record.providerCreatedAtMs ? Object.freeze({ status: "reconciled" as const, operationId, resourceId: observed.id }) : Object.freeze({ status: "unknown" as const, operationId });
         }
         const found = await findOriginal(operationId, resourceName, image);
         if (found.kind !== "found") return Object.freeze({ status: "unknown" as const, operationId });
-        await input.journal.update({ operationId, requestSha256: claimed.record.requestSha256, state: "reconciled", resourceId: found.id });
+        await input.journal.update({ operationId, requestSha256: claimed.record.requestSha256, state: "reconciled", resourceId: found.id, providerCreatedAtMs: found.providerCreatedAtMs });
         return Object.freeze({ status: "reconciled" as const, operationId, resourceId: found.id });
       }
       await input.journal.update({ operationId, requestSha256, state: "dispatching" });
       const existing = await findOriginal(operationId, resourceName, image);
       if (existing.kind === "unknown") return Object.freeze({ status: "unknown" as const, operationId });
       if (existing.kind === "found") {
-        await input.journal.update({ operationId, requestSha256, state: "reconciled", resourceId: existing.id });
+        await input.journal.update({ operationId, requestSha256, state: "reconciled", resourceId: existing.id, providerCreatedAtMs: existing.providerCreatedAtMs });
         return Object.freeze({ status: "reconciled" as const, operationId, resourceId: existing.id });
       }
       const body = {
@@ -325,7 +329,9 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<Worke
         if (!machine.success || !ownedMachine(machine.data, claimed.record, image)) {
           await input.journal.update({ operationId, requestSha256, state: "unknown" }); return Object.freeze({ status: "unknown" as const, operationId });
         }
-        await input.journal.update({ operationId, requestSha256, state: "dispatched", resourceId: machine.data.id });
+        const providerCreatedAtMs = createdAtMs(machine.data);
+        if (!providerCreatedAtMs) { await input.journal.update({ operationId, requestSha256, state: "unknown" }); return Object.freeze({ status: "unknown" as const, operationId }); }
+        await input.journal.update({ operationId, requestSha256, state: "dispatched", resourceId: machine.data.id, providerCreatedAtMs });
         return Object.freeze({ status: "created" as const, operationId, resourceId: machine.data.id });
       } catch {
         await input.journal.update({ operationId, requestSha256, state: "unknown" });
@@ -347,7 +353,12 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<Worke
       if (probe.status !== "completed" || probe.exitCode !== 0 || !probe.stdout) return Object.freeze({ status: "pending" as const, resourceId: record.resourceId });
       const report = z.object({ checks: z.object({ toolchain_readonly: z.literal(true), workspace_bounded: z.literal(true), non_root: z.literal(true), no_ambient_credentials: z.literal(true), network_denied: z.literal(true), no_inbound_ports: z.literal(true), minimal_capabilities: z.literal(true) }).strict(), exactReady: z.object({ image: ImageSchema, sessionLeaseSha256: ImageDigestSchema, remainingLifetimeMs: z.number().int().positive().max(PRODUCTION_WORKER_POLICY.totalLifetimeMs), toolchainSha256: ImageDigestSchema }).strict() }).strict().safeParse(JSON.parse(probe.stdout));
       if (!report.success || report.data.exactReady.image !== record.image || report.data.exactReady.sessionLeaseSha256 !== record.sessionLeaseSha256 || report.data.exactReady.toolchainSha256 !== record.toolchainSha256 || report.data.exactReady.remainingLifetimeMs > PRODUCTION_WORKER_POLICY.totalLifetimeMs) return Object.freeze({ status: "unknown" as const, resourceId: record.resourceId });
-      return Object.freeze({ status: "completed" as const, resourceId: record.resourceId });
+      // A probe from inside the Machine proves only that the image observed a
+      // denied connection.  Fly's Machines response has no authoritative
+      // egress-policy/version field, so it cannot establish provider network
+      // enforcement. Keep this pending rather than accepting a controller or
+      // worker-supplied digest as proof.
+      return Object.freeze({ status: "pending" as const, resourceId: record.resourceId });
     },
     async terminate(value) {
       const operationId = OperationIdSchema.parse(value.operationId); const record = await input.journal.read(operationId);

@@ -9,6 +9,7 @@ const DIGEST = /^[a-f0-9]{64}$/iu;
 const MAX_BYTES = 128 * 1024;
 const MAX_OUTPUT = 64 * 1024;
 const MAX_MS = 60_000;
+let activeDeadlineEpochMs = 0;
 
 function arg(name: string): string | undefined { const i = process.argv.indexOf(name); return i < 0 ? undefined : process.argv[i + 1]; }
 function digest(value: string | undefined, code: string) { if (!value || !DIGEST.test(value)) throw new Error(code); return value.toLowerCase(); }
@@ -23,7 +24,9 @@ async function bounded(argv: string[], cwd?: string) {
     return new TextDecoder().decode(Buffer.concat(chunks));
   };
   try {
-    const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { child.kill(); reject(new Error("WORKER_CHILD_TIMEOUT")); }, MAX_MS); });
+    const remaining = activeDeadlineEpochMs ? activeDeadlineEpochMs - Date.now() : MAX_MS;
+    if (remaining <= 0) throw new Error("WORKER_ACTIVE_DEADLINE_EXPIRED");
+    const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { child.kill(); reject(new Error("WORKER_CHILD_TIMEOUT")); }, Math.min(MAX_MS, remaining)); });
     const [status] = await Promise.race([Promise.all([child.exited, read(child.stdout), read(child.stderr)]), timeout]);
     if (status !== 0) throw new Error("WORKER_CHILD_FAILED");
   } finally { clearTimeout(timer); child.kill(); }
@@ -43,7 +46,7 @@ async function workspaceBounded() {
   try { await writeFile(probe, "x", { flag: "wx" }); await rm(probe, { force: true }); return true; } catch { return false; }
 }
 async function deniedProbe(probe: string) {
-  const child = Bun.spawn(["/toolchain/bin/denial-probe", `--probe=${probe}`], { stdout: "pipe", stderr: "pipe", env: { PATH: "/toolchain/bin:/usr/bin:/bin" } });
+  const child = Bun.spawn(["/toolchain/bin/bun", "/toolchain/bin/denial-probe", `--probe=${probe}`], { stdout: "pipe", stderr: "pipe", env: { PATH: "/toolchain/bin:/usr/bin:/bin" } });
   const timer = setTimeout(() => child.kill(), 5_000);
   try { const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]); return exit === 1 && stderr.includes(`CVM_DENIAL_PROBE:${probe}:denied`); }
   finally { clearTimeout(timer); child.kill(); }
@@ -51,7 +54,7 @@ async function deniedProbe(probe: string) {
 async function networkDenied() {
   const checks = await Promise.all([
     lookup("example.com").then(() => false).catch(() => true),
-    deniedProbe("http"), deniedProbe("https"), deniedProbe("tcp"), deniedProbe("metadata"), deniedProbe("websocket"),
+    deniedProbe("http"), deniedProbe("https"), deniedProbe("ipv4"), deniedProbe("ipv6"), deniedProbe("private"), deniedProbe("metadata"),
   ]);
   return checks.every(Boolean);
 }
@@ -73,6 +76,8 @@ async function ready() {
   console.log(JSON.stringify({ version: 1, policyVersion: POLICY, image, sessionLeaseSha256, toolchainSha256: toolchainDigest, remainingLifetimeMs, checks: { toolchain_readonly: true, workspace_bounded: true, non_root: true, no_ambient_credentials: true, network_denied: true, no_inbound_ports: true, minimal_capabilities: true } }));
 }
 async function build() {
+  activeDeadlineEpochMs = Number(arg("--active-deadline-epoch-ms"));
+  if (!Number.isSafeInteger(activeDeadlineEpochMs) || activeDeadlineEpochMs <= Date.now() || activeDeadlineEpochMs > Date.now() + 600_000) throw new Error("WORKER_ACTIVE_DEADLINE_INVALID");
   const sourcePath = await regularContained(arg("--source") ?? ""); const sourceBytes = await Bun.file(sourcePath).bytes();
   if (sourceBytes.byteLength > MAX_BYTES) throw new Error("WORKER_SOURCE_TOO_LARGE"); const sourceText = new TextDecoder().decode(sourceBytes);
   const source = JSON.parse(sourceText) as { files?: Array<{ path?: unknown; content?: unknown }> };

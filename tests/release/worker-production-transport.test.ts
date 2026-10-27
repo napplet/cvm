@@ -52,7 +52,7 @@ test("Fly persists its original operation before create, queries deterministic m
       requests.push({ url, init });
       if (init.method === "GET") {
         listCount += 1;
-        return new Response(JSON.stringify(listCount === 1 ? [] : [{ id: "machine-original", name: "napplet-cvm-op-lost", config: { image, metadata: { "napplet-cvm-operation": "op-lost", "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-role": "isolated-worker" } } }]), { status: 200 });
+        return new Response(JSON.stringify(listCount === 1 ? [] : [{ id: "machine-original", name: "napplet-cvm-op-lost", created_at: "2026-10-27T00:00:00.000Z", config: { image, metadata: { "napplet-cvm-operation": "op-lost", "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-role": "isolated-worker" } } }]), { status: 200 });
       }
       throw new Error("connection dropped after Fly accepted the create");
     },
@@ -78,7 +78,7 @@ test("transport refuses a malformed or credential-bearing response and does not 
     appName: "napplet-cvm-workers",
     getAccessToken: async () => "valid-access-token",
     journal: createMemoryWorkerOperationJournal(),
-    fetch: async () => new Response(JSON.stringify([{ id: "machine-1", name: "napplet-cvm-op-unsafe", config: { image, metadata: { "napplet-cvm-operation": "op-unsafe", secret: "no" } } }]), { status: 200 }),
+    fetch: async () => new Response(JSON.stringify([{ id: "machine-1", name: "napplet-cvm-op-unsafe", created_at: "2026-10-27T00:00:00.000Z", config: { image, metadata: { "napplet-cvm-operation": "op-unsafe", secret: "no" } } }]), { status: 200 }),
   });
   await expect(transport.create({ operationId: "op-unsafe", region: "ams", image, policy: PRODUCTION_WORKER_POLICY, sessionLeaseSha256: digest("b"), toolchainSha256: digest("c"), providerDeadlineEpochMs: Date.now() + 60_000 })).resolves.toEqual({ status: "unknown", operationId: "op-unsafe" });
 });
@@ -97,7 +97,7 @@ test("sealed image installs root-owned trusted worker commands and runs the pinn
   expect(dockerfile).toContain("FROM sealed AS default\nUSER 65532:65532");
   expect(dockerfile).toContain("chmod -R go-w /toolchain /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe");
   expect(dockerfile).not.toContain("--chown=65532:65532 /toolchain/node_modules");
-  for (const command of ["napplet", "--offline", "--frozen-lockfile", "test:conformance", "networkDenied", "deniedProbe", "environmentClean", "CapBnd", "NoNewPrivs", "WORKER_SOURCE_DUPLICATE"]) expect(worker).toContain(command);
+  for (const command of ["napplet", "--offline", "--frozen-lockfile", "test:conformance", "networkDenied", "deniedProbe", "ipv6", "private", "WORKER_ACTIVE_DEADLINE_INVALID", "environmentClean", "CapBnd", "NoNewPrivs", "WORKER_SOURCE_DUPLICATE"]) expect(worker).toContain(command);
   expect(probe).toContain("napplet-cvm-worker");
   for (const command of ["findmnt", "tmpfs", "setpriv", "--bounding-set=-all", "--no-new-privs", "mount_bounded /home/napplet", "mount_bounded /tmp"]) expect(bootstrap).toContain(command);
   expect(dockerfile).toContain('install","chromium');
@@ -121,7 +121,8 @@ test("readiness rejects a credential-bearing, unprobed, or incorrectly leased wo
 
 test("cleanup after controller interruption deletes only the original owned machine", async () => {
   const operationId = "op-cleanup";
-  const journal = createMemoryWorkerOperationJournal([{ operationId, requestSha256: digest("d"), state: "dispatched", resourceName: `napplet-cvm-${operationId}`, resourceId: "machine-cleanup", image, region: "ams", policyVersion: PRODUCTION_WORKER_POLICY.version, createdAtMs: 1, sessionLeaseSha256: digest("b"), toolchainSha256: digest("c"), providerDeadlineEpochMs: Date.now() + 60_000 }]);
+  const providerCreatedAtMs = Date.parse("2026-10-27T00:00:00.000Z");
+  const journal = createMemoryWorkerOperationJournal([{ operationId, requestSha256: digest("d"), state: "dispatched", resourceName: `napplet-cvm-${operationId}`, resourceId: "machine-cleanup", image, region: "ams", policyVersion: PRODUCTION_WORKER_POLICY.version, createdAtMs: 1, providerCreatedAtMs, sessionLeaseSha256: digest("b"), toolchainSha256: digest("c"), providerDeadlineEpochMs: Date.now() + 60_000 }]);
   const calls: RequestInit[] = [];
   let getCount = 0;
   const transport = createFlyMachinesHttpTransport({
@@ -129,7 +130,7 @@ test("cleanup after controller interruption deletes only the original owned mach
     fetch: async (_url, init) => {
       calls.push(init);
       if (init.method === "GET" && ++getCount > 1) return new Response(null, { status: 404 });
-      if (init.method === "GET") return new Response(JSON.stringify({ id: "machine-cleanup", name: `napplet-cvm-${operationId}`, config: { image, guest: { cpus: 1, memory_mb: 1024 }, services: [], env: { NAPPLET_CVM_POLICY_VERSION: PRODUCTION_WORKER_POLICY.version }, metadata: { "napplet-cvm-operation": operationId, "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-role": "isolated-worker" } } }), { status: 200 });
+      if (init.method === "GET") return new Response(JSON.stringify({ id: "machine-cleanup", name: `napplet-cvm-${operationId}`, created_at: "2026-10-27T00:00:00.000Z", config: { image, guest: { cpus: 1, memory_mb: 1024 }, services: [], env: { NAPPLET_CVM_POLICY_VERSION: PRODUCTION_WORKER_POLICY.version }, metadata: { "napplet-cvm-operation": operationId, "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-role": "isolated-worker" } } }), { status: 200 });
       return new Response(null, { status: 204 });
     },
   });
@@ -140,9 +141,9 @@ test("cleanup after controller interruption deletes only the original owned mach
 
 test("Fly readiness exec is bounded, authenticated, and cannot run against a substituted image", async () => {
   const operationId = "op-probe";
-  const journal = createMemoryWorkerOperationJournal([{ operationId, requestSha256: digest("d"), state: "dispatched", resourceName: `napplet-cvm-${operationId}`, resourceId: "machine-probe", image, region: "ams", policyVersion: PRODUCTION_WORKER_POLICY.version, createdAtMs: 1, sessionLeaseSha256: digest("b"), toolchainSha256: digest("c"), providerDeadlineEpochMs: Date.now() + 60_000 }]);
+  const journal = createMemoryWorkerOperationJournal([{ operationId, requestSha256: digest("d"), state: "dispatched", resourceName: `napplet-cvm-${operationId}`, resourceId: "machine-probe", image, region: "ams", policyVersion: PRODUCTION_WORKER_POLICY.version, createdAtMs: 1, providerCreatedAtMs: Date.parse("2026-10-27T00:00:00.000Z"), sessionLeaseSha256: digest("b"), toolchainSha256: digest("c"), providerDeadlineEpochMs: Date.now() + 60_000 }]);
   const requests: Array<Readonly<{ url: string; init: RequestInit }>> = [];
-  const machine = { id: "machine-probe", name: `napplet-cvm-${operationId}`, state: "started", config: { image, guest: { cpus: 1, memory_mb: 1024 }, services: [], env: { NAPPLET_CVM_POLICY_VERSION: PRODUCTION_WORKER_POLICY.version }, metadata: { "napplet-cvm-operation": operationId, "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-role": "isolated-worker" } } };
+  const machine = { id: "machine-probe", name: `napplet-cvm-${operationId}`, created_at: "2026-10-27T00:00:00.000Z", state: "started", config: { image, guest: { cpus: 1, memory_mb: 1024 }, services: [], env: { NAPPLET_CVM_POLICY_VERSION: PRODUCTION_WORKER_POLICY.version }, metadata: { "napplet-cvm-operation": operationId, "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-role": "isolated-worker" } } };
   const transport = createFlyMachinesHttpTransport({ appName: "napplet-cvm-workers", getAccessToken: async () => "valid-access-token", journal, fetch: async (url, init) => {
     requests.push({ url, init });
     return init.method === "POST" ? new Response(JSON.stringify({ stdout: "{}", stderr: "", exit_code: 0 }), { status: 200 }) : new Response(JSON.stringify(machine), { status: 200 });

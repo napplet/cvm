@@ -6,6 +6,7 @@ on:
       - "src/release/finaliz*.ts"
       - "src/release/verify-finalization.ts"
       - "src/production/release-promotion.ts"
+      - "src/production/release-verification-authority.ts"
       - "src/release/materialize-certifier.ts"
       - "src/certification/**"
       - "src/promotion/**"

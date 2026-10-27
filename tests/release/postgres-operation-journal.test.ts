@@ -3,6 +3,10 @@ import { canonicalJson } from "../../src/promotion/schema";
 import { PostgresReleasePromotion } from "../../src/production/release-promotion";
 import { expect, test } from "bun:test";
 import { createRequire } from "node:module";
+import { mkdtemp, mkdir, writeFile, rm, realpath } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { loadPromotedVerificationAuthority } from "../../src/production/release-verification-authority";
 import { PostgresOperationJournal, assertPostgresOperationJournal } from "../../src/release/deployment/postgres-operation-journal";
 import { createPostgresGoogleOperationJournal, createPostgresWorkerOperationJournal, createPostgresVertexOperationJournal } from "../../src/release/deployment/postgres-provider-journals";
 
@@ -37,6 +41,7 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
   };
   const { Pool } = createRequire(import.meta.url)("pg");
   let admin: any, application: any;
+  let verificationWorkspace: string | undefined;
   try {
     await docker("run", "--detach", "--rm", "--name", name, "--publish", "127.0.0.1::5432", "-e", "POSTGRES_HOST_AUTH_METHOD=trust", "postgres:17-alpine");
     const port = (await docker("port", name, "5432/tcp")).match(/127\.0\.0\.1:(\d+)/u)?.[1];
@@ -130,10 +135,28 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
     const operationId = `promotion-${new Bun.CryptoHasher("sha256").update(canonicalJson({ candidateId: binding.candidateId, bundleSha256, authorizationReceiptSha256: binding.authorizationReceiptSha256 })).digest("hex")}`;
     const originalPromotion = { operationId, bundleSha256 };
     expect(await promote().observe(originalPromotion)).toBe("unknown");
-    await promote().persist({ ...originalPromotion, authorizationReceiptSha256: binding.authorizationReceiptSha256 });
+    verificationWorkspace = await realpath(await mkdtemp(join(tmpdir(), "cvm-sql-verification-")));
+    const finalRoot = join(verificationWorkspace, "certifier-materializations", binding.candidateId, "d".repeat(64), "final");
+    await mkdir(finalRoot, { recursive: true });
+    const configPath = join(finalRoot, "certifier.json");
+    const modulePin = { root: finalRoot, modulePath: join(finalRoot, "trust.js"), sha256: scopeSha256 };
+    const finalConfig = { version: 1, mode: "protected", credentials: "configured", releaseProfilePath: join(finalRoot, "profile.json"), evidenceDirectory: finalRoot, adapter: modulePin, trustRoot: modulePin,
+      controller: { ...binding, releaseId: scopeSha256, sourceRevision: "a".repeat(40), sourceSha256: scopeSha256 } } as const;
+    const configBytes = canonicalJson(finalConfig);
+    const verificationAuthority = { path: configPath, sha256: new Bun.CryptoHasher("sha256").update(configBytes).digest("hex") };
+    await writeFile(configPath, configBytes);
+    const authorityInput = { pool: application, deploymentScopeSha256: identity, workspace: verificationWorkspace, bundleSha256, candidateId: binding.candidateId, topologySha256: binding.topologySha256 };
+    await promote().persist({ ...originalPromotion, authorizationReceiptSha256: binding.authorizationReceiptSha256, verificationAuthority });
+    await expect(loadPromotedVerificationAuthority(authorityInput)).rejects.toThrow();
+    await expect(promote().persist({ ...originalPromotion, authorizationReceiptSha256: binding.authorizationReceiptSha256, verificationAuthority: { ...verificationAuthority, sha256: identity } })).rejects.toThrow("PRODUCTION_RELEASE_PROMOTION_OPERATION_CONFLICT");
     loseCommitResponse = true;
     await expect(promote().promote(originalPromotion)).rejects.toThrow("COMMIT_RESPONSE_LOST");
     expect(await promote().observe(originalPromotion)).toBe("promoted");
+    expect(await loadPromotedVerificationAuthority(authorityInput)).toEqual({ config: finalConfig, configSha256: verificationAuthority.sha256 });
+    await expect(loadPromotedVerificationAuthority({ ...authorityInput, candidateId: identity })).rejects.toThrow("PRODUCTION_VERIFICATION_AUTHORITY_BINDING_INVALID");
+    await writeFile(configPath, configBytes + " ");
+    await expect(loadPromotedVerificationAuthority(authorityInput)).rejects.toThrow("PRODUCTION_VERIFICATION_AUTHORITY_PIN_INVALID");
+    await writeFile(configPath, configBytes);
     expect(await Promise.all(Array.from({ length: 4 }, () => promote().promote(originalPromotion)))).toEqual(["promoted", "promoted", "promoted", "promoted"]);
     const pointer = (await admin.query("SELECT value_json,revision FROM production_real.release_operation_journal WHERE namespace='release-promotion' AND scope_sha256=$1 AND operation_id='current'", [identity])).rows[0];
     expect(pointer.value_json).toMatchObject({ operationId, bundleSha256, status: "promoted" }); expect(Number(pointer.revision)).toBe(2);
@@ -143,8 +166,13 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
     await expect(promote().promote({ operationId: otherOperation, bundleSha256: otherBundle })).rejects.toThrow("PRODUCTION_RELEASE_PROMOTION_PREVIOUS_MISMATCH");
     expect(await promote().observe({ operationId: otherOperation, bundleSha256: otherBundle })).toBe("unknown");
     promotionNow = 2001;
+    expect((await loadPromotedVerificationAuthority(authorityInput)).configSha256).toBe(verificationAuthority.sha256);
     expect(await promote().observe(originalPromotion)).toBe("promoted");
     await expect(promote().promote(originalPromotion)).rejects.toThrow("RELEASE_AUTHORIZATION_RECEIPT_EXPIRED");
     await expect(promote().persist({ ...originalPromotion, authorizationReceiptSha256: binding.authorizationReceiptSha256 })).rejects.toThrow("RELEASE_AUTHORIZATION_RECEIPT_EXPIRED");
-  } finally { if (priorEffects === undefined) delete process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS; else process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS = priorEffects; await application?.end(); await admin?.end(); await docker("rm", "--force", name).catch(() => undefined); }
+  } finally {
+    if (priorEffects === undefined) delete process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS; else process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS = priorEffects;
+    if (verificationWorkspace) await rm(verificationWorkspace, { recursive: true, force: true });
+    await application?.end(); await admin?.end(); await docker("rm", "--force", name).catch(() => undefined);
+  }
 }, 120000);

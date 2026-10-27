@@ -2,10 +2,10 @@ import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createDevelopmentPool, type DevPayments } from "../../scripts/dev-payments";
 import { LocalDevelopmentRuntimeReadiness } from "./development-runtime-readiness";
+import { assertDevelopmentRootManifests } from "./root-manifests";
 
 const root = resolve(import.meta.dir, "../..");
 const migrationNames = ["development/001_generation.sql", "development/002_provider_observations.sql", "development/003_artifact_preview.sql", "development/004_source_proposal_bindings.sql", "development/005_pending_actions.sql", "development/006_worker_results.sql", "development/007_chatgpt_operations.sql", "development/008_chatgpt_diagnostics.sql", "development/009_operator_publication.sql", "development/010_projects.sql", "development/011_publication_relays.sql", "development/012_remix_imports.sql", "development/013_publication_tracking.sql"] as const;
-const manifestPins = { "package.json": "0c1829dce988bd001823e397c36c53e78e303249041f52b0219ca1542d185989", "bun.lock": "f6a0fc4120899cb12e99f857c5fc0253c797ed06a24647cdb7ce359cd066bd6d" } as const;
 
 export type DevelopmentMode = "deterministic-fixture" | "configured-openai" | "chatgpt-oauth";
 export type LauncherReadiness = Readonly<{ workerImageDigest: string; readinessProbeDigest: string }>;
@@ -46,7 +46,7 @@ async function hubReady(url: string): Promise<void> {
 /** Read-only development launcher gate. No credential material is returned. */
 export async function assertLauncherReadiness(input: Readonly<{ config: DevPayments; configPath: string; url?: string; stateRoot: string }>): Promise<LauncherReadiness> {
   if (!Bun.which("node")) throw new Error("DEV_PUBLICATION_NODE_REQUIRED");
-  for (const [path, expected] of Object.entries(manifestPins)) if (await sha256(resolve(root, path)) !== expected) throw new Error(`DEV_ROOT_MANIFEST_DRIFT:${path}`);
+  await assertDevelopmentRootManifests(root);
   const configStat = await stat(input.configPath);
   if (!configStat.isFile() || (configStat.mode & 0o077) !== 0) throw new Error("DEV_PRIVATE_CONFIG_INVALID");
   if (input.config.developmentOnly !== true || input.config.version !== 1) throw new Error("DEV_PRIVATE_CONFIG_INVALID");

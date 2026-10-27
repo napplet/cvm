@@ -103,6 +103,8 @@ At `7db29af`, payment run `40512008210` passed again. GUI run `40512008420` pass
 
 At `f041e7b`, payment run `40513639887` passed. GUI run `40513639935` passed the full product journey and OAuth flow, then exposed a real timeout presentation defect: cost receipts replaced the detailed failure message with a generic outcome. Failure messages now retain their request key and enrich only the matching unresolved receipt. A browser regression failed before the fix and passes after it, including repeated refresh, saved workspace reconstruction, text-only rendering, and suppression after successful reconciliation. Full remote GUI verification remains required.
 
+At `5499e7d`, payment run `40516163304` passed. GUI run `40516163434` passed the timeout, interrupted-generation, static publication, returning-project, and both-rail funding flows; the latter then failed its evidence check because it retained old root dependency hashes. Both that check and the later full-flow check now use the launcher’s existing approved pin set from one shared verifier. Three local checks prove the current manifests pass and changing either file is refused. No pin was loosened or dropped.
+
 ## Next Phase Readiness
 
 PR #5 is open. Do not mark OPS-04 complete until the retained payment and GUI workflows pass remotely.

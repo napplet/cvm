@@ -68,6 +68,7 @@ test("Fly persists its original operation before create, queries deterministic m
   expect(requests[0]!.init.headers).toMatchObject({ authorization: "Bearer fly-secret-must-not-cross-worker-boundary" });
   const body = JSON.parse(String(requests.find((request) => request.init.method === "POST")!.init.body));
   expect(body).toMatchObject({ name: "napplet-cvm-op-lost", region: "ams", config: { image, guest: { cpus: 1, memory_mb: 1024 }, services: [], metadata: { "napplet-cvm-operation": "op-lost" } } });
+  expect(body.config.init.exec).toEqual(["/usr/local/bin/napplet-cvm-bootstrap", "/usr/local/bin/napplet-cvm-worker", "idle", "--provider-deadline-epoch-ms", String(intent.providerDeadlineEpochMs)]);
   expect(body).not.toHaveProperty("image");
   expect(JSON.stringify(body)).not.toContain("fly-secret");
   await expect(journal.read("op-lost")).resolves.toMatchObject({ state: "reconciled", resourceId: "machine-original" });

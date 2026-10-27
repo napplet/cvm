@@ -30,18 +30,23 @@ ENV HOME=/home/napplet \
     PATH=/toolchain/bin:/toolchain/node_modules/.bin:/root/.bun/bin:/usr/local/bin:/usr/bin:/bin
 WORKDIR /toolchain
 COPY --from=intake /root/.bun /root/.bun
-COPY --from=intake --chown=65532:65532 /root/.bun/install/global/node_modules/pnpm /toolchain/pnpm
-COPY --from=intake --chown=65532:65532 /root/.local/share/pnpm/store /root/.local/share/pnpm/store
-COPY --from=intake --chown=65532:65532 /toolchain/package.json /toolchain/pnpm-lock.yaml /toolchain/
-COPY --from=intake --chown=65532:65532 /toolchain/node_modules /toolchain/node_modules
-COPY --from=intake --chown=65532:65532 /toolchain/napplet /toolchain/bin/napplet
-COPY --chown=65532:65532 infra/toolchain/denial-probe.ts /toolchain/bin/denial-probe
-COPY --chown=65532:65532 infra/toolchain/fixture-runner.ts /toolchain/bin/fixture-runner
+COPY --from=intake /root/.bun/install/global/node_modules/pnpm /toolchain/pnpm
+COPY --from=intake /root/.local/share/pnpm/store /root/.local/share/pnpm/store
+COPY --from=intake /toolchain/package.json /toolchain/pnpm-lock.yaml /toolchain/
+COPY --from=intake /toolchain/node_modules /toolchain/node_modules
+COPY --from=intake /toolchain/napplet /toolchain/bin/napplet
+COPY infra/toolchain/denial-probe.ts /toolchain/bin/denial-probe
+COPY infra/toolchain/fixture-runner.ts /toolchain/bin/fixture-runner
+COPY infra/toolchain/production-worker.ts /usr/local/bin/napplet-cvm-worker
+COPY infra/toolchain/production-probe.ts /usr/local/bin/napplet-cvm-probe
 RUN ln -s /usr/local/bin/bun /usr/local/bin/node \
     && ln -s /usr/local/bin/bun /toolchain/bin/bun \
     && ln -s /toolchain/node_modules/.bin/napplet-conformance /toolchain/bin/napplet-conformance \
-    && chmod 0555 /toolchain/bin/denial-probe /toolchain/bin/fixture-runner \
+    && mkdir -p /toolchain/boilerplate-template \
+    && cp -a /toolchain/node_modules/@napplet/boilerplate/. /toolchain/boilerplate-template/ \
+    && chmod 0555 /toolchain/bin/denial-probe /toolchain/bin/fixture-runner /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe \
     && mkdir -p /home/napplet /work /tmp \
-    && chmod -R go-w /toolchain
+    && chown 65532:65532 /home/napplet /work /tmp \
+    && chmod -R go-w /toolchain /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe
 USER 65532:65532
 ENTRYPOINT ["/toolchain/bin/bun"]

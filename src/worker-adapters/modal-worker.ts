@@ -331,7 +331,21 @@ function sandboxPort(sandbox: {
     filesystem: {
       copyFromLocal: (localPath, remotePath) => sandbox.filesystem.copyFromLocal(localPath, remotePath),
       copyToLocal: (remotePath, localPath) => sandbox.filesystem.copyToLocal(remotePath, localPath),
-      listFiles: (remotePath) => sandbox.filesystem.listFiles(remotePath),
+      // modal@0.9.0 returns FileInfo objects (not string paths).  Convert at
+      // the provider boundary so checkpoint validation stays provider-neutral.
+      async listFiles(remotePath) {
+        const entries = await sandbox.filesystem.listFiles(remotePath) as unknown;
+        if (!Array.isArray(entries)) throw new Error("modal filesystem inventory is malformed");
+        return entries.map((entry) => {
+          if (!entry || typeof entry !== "object" || typeof (entry as { name?: unknown }).name !== "string" || typeof (entry as { path?: unknown }).path !== "string") {
+            throw new Error("modal filesystem inventory entry is malformed");
+          }
+          const path = (entry as { path: string }).path;
+          const prefix = `${remotePath.replace(/\/$/u, "")}/`;
+          if (!path.startsWith(prefix)) throw new Error("modal filesystem inventory escaped requested root");
+          return path.slice(prefix.length);
+        });
+      },
     },
   };
 }

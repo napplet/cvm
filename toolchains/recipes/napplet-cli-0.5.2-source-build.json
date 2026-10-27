@@ -1,6 +1,6 @@
 {
-  "schemaVersion": 1,
-  "status": "local-source-build-evidence-not-promoted",
+  "schemaVersion": 2,
+  "status": "reproducible-source-build-recipe-not-promoted",
   "upstream": {
     "repository": "https://github.com/napplet/web.git",
     "commit": "976ad0549c38f93d4ed418d3ea59a615a7e5fd7f",
@@ -14,11 +14,14 @@
     "hostAssetSha256": "394f07f4da2bebe6ce6f1e7ce0fa16429b29b08c35e3fac3fe25972676dff4b2"
   },
   "build": {
-    "target": "x86_64-unknown-linux-gnu",
-    "command": "deno compile --frozen --no-check --node-modules-dir=none --allow-read --allow-write --allow-run --allow-env --allow-net --target x86_64-unknown-linux-gnu --output dist/napplet-linux-x86_64 src/standalone.ts",
-    "observedOutputSha256": "a80ee7e5f6a2edb2748155110f11f35c4d2ffd100324c8ce26ba94fbbfe440a5",
-    "observedAt": "2026-10-27",
-    "execution": "local linux/amd64 Docker container, exact source checkout and Deno 2.9.6"
+    "recipe": "bun scripts/rebuild-napplet-cli-source.ts --output /absolute/empty/directory",
+    "buildImage": "debian@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587",
+    "normalization": "Seed a frozen cache and target runtime, then normalize every source/cache mtime to sourceDateEpoch before the frozen --cached-only compile at fixed /src, /cache, and /out paths.",
+    "sourceDateEpoch": 1789254081,
+    "targets": {
+      "x86_64-unknown-linux-gnu": "54a3c5ac963b1eebe3a178a90f112f86bc3ed2914cde1632a60e89b4f2b5c524",
+      "aarch64-unknown-linux-gnu": "3573e8cda272806df011ab856357f5165a6719bb1daed8080227ee1083a112d3"
+    }
   },
   "comparison": {
     "republishedReleaseAssetSha256": "a17fd2f61beb3b1553518b517045c4e1a474ddee5db87be80e18cf1bd24d8e28",
@@ -31,8 +34,8 @@
     "protectedEvidence": null,
     "blockers": [
       "The recreated release asset has no upstream source-to-binary attestation.",
-      "Deno compile embeds build-path/cache-dependent bytes in repeated local builds; this receipt is an observed source-build digest, not a claim of bit-for-bit reproducibility.",
-      "This local source build must complete compatibility and promotion review before it can replace any historical candidate."
+      "The source build is separately reproducible but is not evidence that the recreated upstream release asset was built from this source.",
+      "The reproducible artifact must complete the offline worker-flow compatibility and protected promotion review before it can replace any historical candidate."
     ]
   }
 }

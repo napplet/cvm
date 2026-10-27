@@ -79,6 +79,7 @@ try {
   assert(await page.locator("#revision").inputValue() === "", "SUCCESSFUL_REVISION_DRAFT_NOT_CLEARED");
   assert((await page.locator("#conversation-messages").textContent())?.includes("Make the counter title shorter"), "REVISION_NOT_IN_CHAT");
   await page.getByLabel("Preview version", { exact: true }).selectOption({ label: "Version 1" });
+  await page.waitForFunction(() => (document.querySelector("#version-picker") as HTMLSelectElement)?.disabled === false);
   await page.locator("#old-version-note").waitFor(); assert(await page.locator("#revision").isDisabled(), "OLD_VERSION_CAN_REVISE");
   assert((await page.locator("#revision-blocked-reason").innerText()).includes("Restore the version you’re viewing, or return to current"), "OLD_VERSION_REVISION_BLOCK_UNEXPLAINED");
   assert(await page.locator("#restore-version").isEnabled(), "OLD_VERSION_RESTORE_UNREACHABLE");

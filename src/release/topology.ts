@@ -34,8 +34,11 @@ export const RELEASE_TOPOLOGY_QUANTITY_CONTRACT: readonly ReleaseTopologyQuantit
   // Cloud SQL REGIONAL provides its own zonal HA. It is a single authority,
   // not one database per Cloud Run control-plane region.
   component("cloud_sql_postgres", "cloud_sql_postgres.europe-west1.regional-ha", "europe-west1", "database-second", 450_000_000_000n, 1_000),
-  component("modal", "modal.global", "global", "worker-100-seconds", 18_000_000_000n, 1_000),
-  component("fly", "fly.global", "global", "worker-100-seconds", 18_000_000_000n, 1_000),
+  // Twenty minutes includes the maximum ten-minute active period plus the
+  // ten-minute continuity grace. Source quotes must use Modal's hard 2 CPU /
+  // 2 GiB billable ceiling (not its 1 CPU / 1 GiB reservation); Fly is 1/1.
+  component("modal", "modal.global", "global", "worker-100-seconds", 12_000_000_000n, 1_000),
+  component("fly", "fly.global", "global", "worker-100-seconds", 12_000_000_000n, 1_000),
   component("contextvm", "contextvm.global", "global", "operation", 1_000_000_000n, 0),
   component("cep8_lightning", "cep8_lightning.global", "global", "operation", 2_000_000_000n, 1_000),
   component("cashu", "cashu.global", "global", "operation", 2_000_000_000n, 1_000),

@@ -19,7 +19,7 @@ test("binds each regional Google component to one authenticated catalog SKU with
       const url = String(request);
       calls.push(url);
       expect(init?.redirect).toBe("error");
-      if (url === "https://cloudbilling.googleapis.com/v1/services") {
+      if (url === "https://cloudbilling.googleapis.com/v1/services?pageSize=5000") {
         expect(init?.headers).toEqual(expect.objectContaining({ authorization: "Bearer opaque-adc-token-canary-value" }));
         return new Response(JSON.stringify({ services: [{ name: "services/RUN", serviceId: "RUN", displayName: "Cloud Run" }] }));
       }
@@ -57,7 +57,7 @@ test("binds each regional Google component to one authenticated catalog SKU with
   expect(modal).toMatchObject({ quotes: [{ provider: "modal", unit: "worker-100-seconds" }] });
   expect(fly).toMatchObject({ quotes: [{ provider: "fly", unit: "worker-100-seconds" }] });
   expect(calls).toEqual([
-    "https://cloudbilling.googleapis.com/v1/services",
+    "https://cloudbilling.googleapis.com/v1/services?pageSize=5000",
     "https://cloudbilling.googleapis.com/v1/services/RUN/skus?currencyCode=USD&pageSize=5000",
     "https://modal.com/pricing",
     "https://fly.io/docs/about/pricing/",

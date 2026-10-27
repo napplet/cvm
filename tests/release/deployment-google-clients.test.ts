@@ -91,6 +91,21 @@ test("Cloud Run cleanup requires recorded ownership and sends the observed etag"
   await expect(client.cloudRun.cleanup({ operationId: "not-owned", projectId, region: request.region, serviceName: request.serviceName })).rejects.toThrow("GOOGLE_CLEANUP_RUN_OWNERSHIP_REQUIRED");
 });
 
+test("Cloud Run LRO observation requires terminal ready configuration before completing the journal", async () => {
+  const imageReference = `us-docker.pkg.dev/${projectId}/control/control@sha256:${digest("9")}`;
+  const service = { name: `projects/${projectId}/locations/europe-west1/services/napplet-cvm-api`, ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER", template: { scaling: { minInstanceCount: 3 }, maxInstanceRequestConcurrency: 80, serviceAccount: "svc@napplet-cvm-run-1.iam.gserviceaccount.com", containers: [{ image: imageReference, env: [{ name: "GOOGLE_CLOUD_PROJECT", value: projectId }, { name: "NAPPLET_CVM_ENVIRONMENT_SHA256", value: digest("8") }, { name: "DATABASE_URL", valueSource: { secretKeyRef: { secret: "control-database-url", version: "1" } } }] }] } };
+  let resourceGets = 0;
+  const { client, journal } = await fixture((url, init) => {
+    if (init.method === "POST") return json({ name: `projects/${projectId}/locations/europe-west1/operations/ready-1` });
+    if (url.includes("/operations/ready-1")) return json({ done: true });
+    resourceGets += 1; return resourceGets === 1 ? json({ error: { code: 404 } }, 404) : json(service);
+  });
+  const request = { operationId: "deploy-observe", projectId, region: "europe-west1", serviceName: "napplet-cvm-api", imageReference, serviceAccountReference: "svc@napplet-cvm-run-1.iam.gserviceaccount.com", environmentReferenceSha256: digest("8"), secretReferences: [{ name: "DATABASE_URL", secret: "control-database-url", version: "1" }], minimumInstances: 3 as const, ingress: "internal-and-cloud-load-balancing" as const, concurrency: 80, admissionRefusal: "capacity_unavailable" as const };
+  await client.cloudRun.deploy(request);
+  await expect(client.cloudRun.observe({ operationId: request.operationId, projectId, region: request.region, serviceName: request.serviceName, imageReference, serviceAccountReference: request.serviceAccountReference, environmentReferenceSha256: request.environmentReferenceSha256, secretReferences: request.secretReferences, concurrency: request.concurrency })).resolves.toEqual({ status: "completed" });
+  expect(await journal.read(request.operationId)).toMatchObject({ state: "completed" });
+});
+
 test("concurrent or restarted Cloud Run callers reconcile a claimed ambiguous create instead of posting twice", async () => {
   let creates = 0;
   const handler = (_url: string, init: RequestInit) => {

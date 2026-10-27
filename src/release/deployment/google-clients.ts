@@ -164,7 +164,7 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
       const service = { ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER", template: { scaling: { minInstanceCount: z.literal(3).parse(input.minimumInstances) }, maxInstanceRequestConcurrency: z.number().int().min(1).max(1000).parse(input.concurrency), serviceAccount: z.string().min(3).max(255).parse(input.serviceAccountReference), containers: [{ image: imageReference, env }] } };
       const observed = await request("cloudRun", `/v2/${resource}`, "GET");
       if (observed.response.ok) {
-        const matching = z.object({ name: z.literal(resource), template: z.object({ scaling: z.object({ minInstanceCount: z.literal(3) }), maxInstanceRequestConcurrency: z.literal(input.concurrency), serviceAccount: z.literal(input.serviceAccountReference), containers: z.array(z.object({ image: z.literal(imageReference), env: z.array(z.object({ name: z.string() }).passthrough()) }).passthrough()).min(1) }).passthrough() }).passthrough().safeParse(observed.payload);
+        const matching = z.object({ name: z.literal(resource), ingress: z.literal("INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"), template: z.object({ scaling: z.object({ minInstanceCount: z.literal(3) }), maxInstanceRequestConcurrency: z.literal(input.concurrency), serviceAccount: z.literal(input.serviceAccountReference), containers: z.array(z.object({ image: z.literal(imageReference), env: z.array(z.object({ name: z.string() }).passthrough()) }).passthrough()).min(1) }).passthrough() }).passthrough().safeParse(observed.payload);
         if (matching.success) {
           const observedEnv = (matching.data.template.containers[0]?.env ?? []) as readonly Readonly<{ name?: string; value?: string; valueSource?: { secretKeyRef?: { secret?: string; version?: string } } }> [];
           const required = new Map(env.map((entry) => [entry.name, entry]));
@@ -196,7 +196,9 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
         if (!terminal.success || terminal.data.error !== undefined) return Object.freeze({ status: "unknown" });
         if (terminal.data.done !== true) return Object.freeze({ status: "pending" });
       }
-      return cloudRun.deploy({ operationId, projectId, region: region.data, serviceName: serviceName.data, imageReference: input.imageReference, serviceAccountReference: input.serviceAccountReference, environmentReferenceSha256: input.environmentReferenceSha256, secretReferences: input.secretReferences, minimumInstances: 3, ingress: "internal-and-cloud-load-balancing", concurrency: input.concurrency, admissionRefusal: "capacity_unavailable" });
+      const reconciled = await cloudRun.deploy({ operationId, projectId, region: region.data, serviceName: serviceName.data, imageReference: input.imageReference, serviceAccountReference: input.serviceAccountReference, environmentReferenceSha256: input.environmentReferenceSha256, secretReferences: input.secretReferences, minimumInstances: 3, ingress: "internal-and-cloud-load-balancing", concurrency: input.concurrency, admissionRefusal: "capacity_unavailable" });
+      if (reconciled.status === "completed" && original.state !== "completed") await options.journal.markCompleted({ operationId, requestSha256: original.requestSha256 });
+      return reconciled;
     },
     async cleanup(input: Readonly<{ operationId: string; projectId: string; region: string; serviceName: string }>): Promise<SafeStatus> {
       const operationId = OperationIdSchema.parse(input.operationId); const region = RegionSchema.parse(input.region); const serviceName = ServiceNameSchema.parse(input.serviceName); if (ProjectIdSchema.parse(input.projectId) !== projectId) throw new Error("GOOGLE_CLIENT_PROJECT_SCOPE_INVALID");

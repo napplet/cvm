@@ -94,7 +94,7 @@ test("Cloud Run cleanup requires recorded ownership and sends the observed etag"
     if (init.method === "POST") return json({ name: `projects/${projectId}/locations/europe-west1/operations/create-1` });
     if (init.method === "DELETE") return json({ name: `projects/${projectId}/locations/europe-west1/operations/delete-1` });
     getCount += 1;
-    return getCount === 1 ? json({ error: { code: 404 } }, 404) : getCount === 2 ? json({ name: `projects/${projectId}/locations/europe-west1/services/napplet-cvm-api`, etag: "service-etag-1" }) : json({ error: { code: 404 } }, 404);
+    return getCount === 1 ? json({ error: { code: 404 } }, 404) : getCount === 2 ? json({ name: `projects/${projectId}/locations/europe-west1/services/napplet-cvm-api`, etag: "service-etag-1", labels: { "napplet-cvm-operation": "deploy-cleanup" } }) : json({ error: { code: 404 } }, 404);
   });
   const request = { operationId: "deploy-cleanup", projectId, region: "europe-west1", serviceName: "napplet-cvm-api", imageReference: `us-docker.pkg.dev/${projectId}/control/control@sha256:${digest("f")}`, serviceAccountReference: "svc@napplet-cvm-run-1.iam.gserviceaccount.com", environmentReferenceSha256: digest("e"), secretReferences: [{ name: "DATABASE_URL", secret: "control-database-url", version: "1" }], minimumInstances: 3 as const, ingress: "internal-and-cloud-load-balancing" as const, concurrency: 80, admissionRefusal: "capacity_unavailable" as const };
   await client.cloudRun.deploy(request);
@@ -106,7 +106,7 @@ test("Cloud Run cleanup requires recorded ownership and sends the observed etag"
 
 test("Cloud Run LRO observation requires terminal ready configuration before completing the journal", async () => {
   const imageReference = `us-docker.pkg.dev/${projectId}/control/control@sha256:${digest("9")}`;
-  const service = { name: `projects/${projectId}/locations/europe-west1/services/napplet-cvm-api`, generation: "3", observedGeneration: "3", conditions: [{ type: "Ready", state: "CONDITION_SUCCEEDED" }], labels: { "napplet-cvm-operation": "deploy-observe" }, ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER", template: { scaling: { minInstanceCount: 3 }, maxInstanceRequestConcurrency: 80, serviceAccount: "svc@napplet-cvm-run-1.iam.gserviceaccount.com", containers: [{ image: imageReference, env: [{ name: "GOOGLE_CLOUD_PROJECT", value: projectId }, { name: "NAPPLET_CVM_ENVIRONMENT_SHA256", value: digest("8") }, { name: "DATABASE_URL", valueSource: { secretKeyRef: { secret: "control-database-url", version: "1" } } }] }] } };
+  const service = { name: `projects/${projectId}/locations/europe-west1/services/napplet-cvm-api`, generation: "3", observedGeneration: "3", reconciling: false, terminalCondition: { state: "CONDITION_SUCCEEDED" }, conditions: [{ type: "ConfigurationsReady", state: "CONDITION_SUCCEEDED" }], labels: { "napplet-cvm-operation": "deploy-observe" }, ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER", template: { scaling: { minInstanceCount: 3 }, maxInstanceRequestConcurrency: 80, serviceAccount: "svc@napplet-cvm-run-1.iam.gserviceaccount.com", containers: [{ image: imageReference, env: [{ name: "GOOGLE_CLOUD_PROJECT", value: projectId }, { name: "NAPPLET_CVM_ENVIRONMENT_SHA256", value: digest("8") }, { name: "DATABASE_URL", valueSource: { secretKeyRef: { secret: "control-database-url", version: "1" } } }] }] } };
   let resourceGets = 0;
   const { client, journal } = await fixture((url, init) => {
     if (init.method === "POST") return json({ name: `projects/${projectId}/locations/europe-west1/operations/ready-1` });

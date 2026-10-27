@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ModalSdkPort } from "../../worker-adapters/modal-worker";
+import type { ModalSandboxCreateOptions, ModalSdkPort } from "../../worker-adapters/modal-worker";
 import { PRODUCTION_WORKER_POLICY, type ProductionWorkerPolicy } from "../../worker-adapters/production-worker-policy";
 import { createWorkerBenchmarkSchedule, WorkerBenchmarkProfileSchema } from "../../admission/benchmark";
 
@@ -120,6 +120,85 @@ export type FlyMachinesHttpTransport = Readonly<{
    * image's readiness probe, never to re-run generated or paid work. */
   exec(input: Readonly<{ operationId: string; command: readonly string[]; stdin?: string; timeoutSeconds?: number }>): Promise<Readonly<{ status: "completed" | "unknown"; stdout?: string; stderr?: string; exitCode?: number }>>;
 }>;
+
+export type ModalProductionTransport = Readonly<{
+  create(input: Readonly<{ operationId: string; sessionLeaseSha256: string; toolchainSha256: string; providerDeadlineEpochMs: number }>): Promise<Readonly<{ status: "created" | "reconciled" | "unknown"; operationId: string; resourceId?: string }>>;
+  observe(input: Readonly<{ operationId: string }>): Promise<Readonly<{ status: "pending" | "unknown"; resourceId?: string }>>;
+  terminate(input: Readonly<{ operationId: string }>): Promise<Readonly<{ status: "terminated" | "pending" | "unknown" | "blocked" }>>;
+}>;
+
+function productionModalOptions(input: Readonly<{ operationId: string; workspaceRoot: string; tags: Readonly<Record<string, string>>; regions?: readonly string[] }>): ModalSandboxCreateOptions {
+  return Object.freeze({
+    cpu: PRODUCTION_WORKER_POLICY.cpu, cpuLimit: PRODUCTION_WORKER_POLICY.cpuLimit,
+    memoryMiB: PRODUCTION_WORKER_POLICY.memoryMiB, memoryLimitMiB: PRODUCTION_WORKER_POLICY.memoryLimitMiB,
+    timeoutMs: PRODUCTION_WORKER_POLICY.totalLifetimeMs, idleTimeoutMs: PRODUCTION_WORKER_POLICY.idleGraceMs,
+    workdir: input.workspaceRoot,
+    command: Object.freeze(["/usr/local/bin/napplet-cvm-bootstrap", "/bin/sh", "-c", "while true; do sleep 60; done"]),
+    env: Object.freeze({ NAPPLET_CVM_POLICY_VERSION: PRODUCTION_WORKER_POLICY.version }), blockNetwork: true,
+    tags: Object.freeze({ ...input.tags, "napplet-cvm-operation": input.operationId, "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-role": "isolated-worker" }),
+    name: stableName(input.operationId), ...(input.regions ? { regions: Object.freeze([...input.regions]) } : {}),
+  });
+}
+
+/** Real controller-side Modal lifecycle.  A missing or ambiguous lookup is a
+ * terminal unknown: it deliberately never causes a replacement sandbox. */
+export function createModalProductionTransport(input: Readonly<{ appName: string; image: string; workspaceRoot: string; tags: Readonly<Record<string, string>>; regions?: readonly string[]; sdk: ModalSdkPort; journal: WorkerOperationJournal }>): ModalProductionTransport {
+  const appName = AppNameSchema.parse(input.appName); const image = ImageSchema.parse(input.image);
+  if (input.workspaceRoot !== PRODUCTION_WORKER_POLICY.workspaceRoot || !input.sdk.sandboxes.findByName) throw new Error("MODAL_PRODUCTION_CAPABILITY_UNSUPPORTED");
+  const find = input.sdk.sandboxes.findByName;
+  return Object.freeze({
+    async create(value) {
+      const operationId = OperationIdSchema.parse(value.operationId); const sessionLeaseSha256 = ImageDigestSchema.parse(value.sessionLeaseSha256); const toolchainSha256 = ImageDigestSchema.parse(value.toolchainSha256); const providerDeadlineEpochMs = z.number().int().positive().parse(value.providerDeadlineEpochMs);
+      if (providerDeadlineEpochMs <= Date.now() || providerDeadlineEpochMs > Date.now() + PRODUCTION_WORKER_POLICY.totalLifetimeMs) throw new Error("WORKER_DEADLINE_INVALID");
+      const requestSha256 = await sha256(JSON.stringify({ operationId, image, policy: PRODUCTION_WORKER_POLICY.version, sessionLeaseSha256, toolchainSha256, providerDeadlineEpochMs }));
+      const resourceName = stableName(operationId);
+      const claim = await input.journal.claim({ operationId, requestSha256, resourceName, image, policyVersion: PRODUCTION_WORKER_POLICY.version, createdAtMs: Date.now(), sessionLeaseSha256, toolchainSha256, providerDeadlineEpochMs });
+      if (!claim.claimed) {
+        if (claim.record.requestSha256 !== requestSha256 || claim.record.image !== image || claim.record.policyVersion !== PRODUCTION_WORKER_POLICY.version || claim.record.sessionLeaseSha256 !== sessionLeaseSha256 || claim.record.toolchainSha256 !== toolchainSha256 || claim.record.providerDeadlineEpochMs !== providerDeadlineEpochMs) return Object.freeze({ status: "unknown" as const, operationId });
+        const observed = await find(appName, resourceName);
+        if (observed.kind !== "found" || (claim.record.resourceId && claim.record.resourceId !== observed.sandbox.id)) return Object.freeze({ status: "unknown" as const, operationId });
+        await input.journal.update({ operationId, requestSha256, state: "reconciled", resourceId: observed.sandbox.id });
+        return Object.freeze({ status: "reconciled" as const, operationId, resourceId: observed.sandbox.id });
+      }
+      const prior = await find(appName, resourceName);
+      if (prior.kind === "unknown") return Object.freeze({ status: "unknown" as const, operationId });
+      if (prior.kind === "found") {
+        await input.journal.update({ operationId, requestSha256, state: "reconciled", resourceId: prior.sandbox.id });
+        return Object.freeze({ status: "reconciled" as const, operationId, resourceId: prior.sandbox.id });
+      }
+      const app = await input.sdk.apps.fromName(appName, { createIfMissing: false });
+      await input.journal.update({ operationId, requestSha256, state: "dispatching" });
+      try {
+        const sandbox = await input.sdk.sandboxes.create(app, input.sdk.images.fromRegistry(image), productionModalOptions({ operationId, workspaceRoot: input.workspaceRoot, tags: input.tags, ...(input.regions ? { regions: input.regions } : {}) }));
+        await input.journal.update({ operationId, requestSha256, state: "dispatched", resourceId: sandbox.id });
+        return Object.freeze({ status: "created" as const, operationId, resourceId: sandbox.id });
+      } catch { await input.journal.update({ operationId, requestSha256, state: "unknown" }); return Object.freeze({ status: "unknown" as const, operationId }); }
+    },
+    async observe(value) {
+      const record = await input.journal.read(OperationIdSchema.parse(value.operationId));
+      if (!record?.resourceId || record.image !== image || record.policyVersion !== PRODUCTION_WORKER_POLICY.version) return Object.freeze({ status: "unknown" as const });
+      const observed = await find(appName, record.resourceName);
+      if (observed.kind !== "found" || observed.sandbox.id !== record.resourceId) return Object.freeze({ status: "unknown" as const, resourceId: record.resourceId });
+      // The SDK does not expose immutable image/create-time metadata on this
+      // surface.  Do not infer it from a sandbox ID: protected eligibility is
+      // therefore pending until an authoritative provider observation exists.
+      return Object.freeze({ status: "pending" as const, resourceId: record.resourceId });
+    },
+    async terminate(value) {
+      const record = await input.journal.read(OperationIdSchema.parse(value.operationId));
+      if (!record?.resourceId || record.image !== image || record.policyVersion !== PRODUCTION_WORKER_POLICY.version) return Object.freeze({ status: "blocked" as const });
+      const observed = await find(appName, record.resourceName);
+      if (observed.kind === "missing") { await input.journal.update({ operationId: record.operationId, requestSha256: record.requestSha256, state: "terminated", resourceId: record.resourceId }); return Object.freeze({ status: "terminated" as const }); }
+      if (observed.kind !== "found" || observed.sandbox.id !== record.resourceId) return Object.freeze({ status: "unknown" as const });
+      await input.journal.update({ operationId: record.operationId, requestSha256: record.requestSha256, state: "terminating", resourceId: record.resourceId });
+      try { await observed.sandbox.terminate(); } catch { return Object.freeze({ status: "pending" as const }); }
+      const after = await find(appName, record.resourceName);
+      if (after.kind !== "missing") return Object.freeze({ status: after.kind === "unknown" ? "unknown" as const : "pending" as const });
+      await input.journal.update({ operationId: record.operationId, requestSha256: record.requestSha256, state: "terminated", resourceId: record.resourceId });
+      return Object.freeze({ status: "terminated" as const });
+    },
+  });
+}
 
 const ReadinessAttestationSchema = z.object({
   version: z.literal(1),
@@ -315,15 +394,20 @@ export function createWorkerDeploymentClients(input: Readonly<{
   image: string;
   workspaceRoot: string;
   policyVersion: string;
+  modalAppName: string;
+  modalTags: Readonly<Record<string, string>>;
+  modalRegions?: readonly string[];
+  journal: WorkerOperationJournal;
   modalSdk: ModalSdkPort;
   fly: FlyMachinesHttpTransport;
 }>) {
   const image = ImageSchema.parse(input.image);
   if (input.workspaceRoot !== PRODUCTION_WORKER_POLICY.workspaceRoot || input.policyVersion !== PRODUCTION_WORKER_POLICY.version) throw new Error("WORKER_CLIENT_CONFIG_INVALID");
   const definition = Object.freeze({ ...WORKER_RUNNER_DEFINITION });
+  const modalTransport = createModalProductionTransport({ appName: input.modalAppName, image, workspaceRoot: input.workspaceRoot, tags: input.modalTags, ...(input.modalRegions ? { regions: input.modalRegions } : {}), sdk: input.modalSdk, journal: input.journal });
   return Object.freeze({
     selection: Object.freeze({ status: "unselected" as const, reasonCode: "FRESH_PROTECTED_EVIDENCE_REQUIRED" as const }),
-    modal: Object.freeze({ definition, schedules: LOCKED_WORKER_SCHEDULE, sdk: input.modalSdk, config: Object.freeze({ image, workspaceRoot: input.workspaceRoot, policyVersion: input.policyVersion }) }),
+    modal: Object.freeze({ definition, schedules: LOCKED_WORKER_SCHEDULE, create: modalTransport.create, observe: modalTransport.observe, terminate: modalTransport.terminate, config: Object.freeze({ image, workspaceRoot: input.workspaceRoot, policyVersion: input.policyVersion }) }),
     fly: Object.freeze({ definition, schedules: LOCKED_WORKER_SCHEDULE, create: (operation: Readonly<{ operationId: string; region: string; sessionLeaseSha256: string; toolchainSha256: string; providerDeadlineEpochMs: number }>) => input.fly.create({ ...operation, image, policy: PRODUCTION_WORKER_POLICY }), observe: input.fly.observe, terminate: input.fly.terminate, exec: input.fly.exec, config: Object.freeze({ image, workspaceRoot: input.workspaceRoot, policyVersion: input.policyVersion }) }),
   });
 }

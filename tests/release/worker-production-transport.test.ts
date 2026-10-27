@@ -30,7 +30,10 @@ test("uses the verifier's locked 1,000-attempt schedule and one versioned policy
     image,
     workspaceRoot: "/workspace",
     policyVersion: PRODUCTION_WORKER_POLICY.version,
-    modalSdk: {} as never,
+    modalAppName: "napplet-cvm-workers",
+    modalTags: {},
+    journal: createMemoryWorkerOperationJournal(),
+    modalSdk: { sandboxes: { findByName: async () => ({ kind: "missing" as const }) } } as never,
     fly: {} as never,
   });
   expect(clients.modal.definition).toEqual(clients.fly.definition);

@@ -32,6 +32,7 @@ import { PHASE_02_POLICY_INITIAL } from "../policy/phase-02-policy";
 const SHA256_IMAGE = /^[a-z0-9][a-z0-9._/-]*(?::[a-z0-9._-]+)?@sha256:[a-f0-9]{64}$/i;
 const FORBIDDEN_TAG = /secret|token|password|credential|private.?key|api.?key/i;
 const MAX_OUTPUT_BYTES = PHASE_02_POLICY_INITIAL.sandbox.maxOutputBytes;
+const MODAL_LOOKUP_TIMEOUT_MS = 15_000;
 const CheckpointInventorySchema = z.array(z.string().min(1).max(PHASE_02_POLICY_INITIAL.tools.maxPathCharacters).refine(
   (path) => !path.startsWith("/") && !path.includes("\0") && !path.split("/").some((part) => part === "" || part === "." || part === ".."),
   "checkpoint inventory paths must be relative and contained",
@@ -196,6 +197,15 @@ async function sha256(value: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+/** SDK lookups are reconciliation reads.  Bound them independently so an
+ * unavailable provider cannot keep an ambiguous create path alive forever. */
+async function boundedModalLookup<T>(operation: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([operation, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("MODAL_LOOKUP_TIMEOUT")), MODAL_LOOKUP_TIMEOUT_MS); })]);
+  } finally { clearTimeout(timer); }
+}
+
 /** Candidate probe boundary: list output must exactly match a content-addressed checkpoint manifest. */
 export async function validateProbeCheckpointInventory(listing: unknown, declared: unknown, manifestSha256: unknown): Promise<readonly string[]> {
   if (typeof manifestSha256 !== "string" || !/^[a-f0-9]{64}$/iu.test(manifestSha256)) throw new Error("checkpoint manifest digest is malformed");
@@ -321,9 +331,9 @@ export async function createOfficialModalSdk(): Promise<ModalSdkPort> {
         const sandbox = await client.sandboxes.create(app as never, image as never, options as never);
         return sandboxPort(sandbox);
       },
-      async fromId(sandboxId) { return sandboxPort(await client.sandboxes.fromId(sandboxId)); },
+      async fromId(sandboxId) { return sandboxPort(await boundedModalLookup(client.sandboxes.fromId(sandboxId))); },
       async findByName(appName, name) {
-        try { return Object.freeze({ kind: "found" as const, sandbox: sandboxPort(await client.sandboxes.fromName(appName, name)) }); }
+        try { return Object.freeze({ kind: "found" as const, sandbox: sandboxPort(await boundedModalLookup(client.sandboxes.fromName(appName, name))) }); }
         catch (error) {
           // The SDK exposes NotFoundError; use its class rather than matching
           // provider text so an auth/network failure is never treated as absent.

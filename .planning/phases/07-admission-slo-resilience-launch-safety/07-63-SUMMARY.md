@@ -69,6 +69,7 @@ status: complete
 1. **Task 1: Implement ADC HTTPS and durable Google operations** — `f0ccbf9` (`feat`)
    - Follow-up reconciliation/ADC broker: `d446235` (`fix`)
    - Follow-up durable state and policy correction: `708bc52` (`fix`)
+   - Follow-up Cloud Run terminal LRO reconciliation: `4a1a510` (`fix`)
 2. **Task 2: Correct the selected topology and storage policy** — `3667aa4` (`feat`)
 
 ## Files Created/Modified
@@ -129,6 +130,6 @@ The code is local-contract verified only. Before a protected execution, producti
 
 ## Self-Check: PASSED
 
-- Confirmed task commits `f0ccbf9`, `3667aa4`, `d446235`, and `708bc52` exist and all plan artifacts exist.
-- `NAPPLET_CVM_TEST_EXTERNAL_EFFECTS=deny bun test tests/release --timeout 10000 --reporter=dot` passed: 164 tests, 836 assertions.
+- Confirmed task commits `f0ccbf9`, `3667aa4`, `d446235`, `708bc52`, and `4a1a510` exist and all plan artifacts exist.
+- `NAPPLET_CVM_TEST_EXTERNAL_EFFECTS=deny bun test tests/release --timeout 10000 --reporter=dot` passed: 165 tests, 838 assertions.
 - Final dependency manifest hashes (for the parent-owned root manifest update): `package.json` `7b9ec92ae183fb9759f6e5eb4e511ec82dfa156df9bbb8c88e4d1e5b88492e3f`; `bun.lock` `72716c6669316db9b6f461d3e520883e9db6254d87a00c4fcc4730238dc11912`.

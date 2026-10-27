@@ -19,6 +19,8 @@ on:
       - "scripts/verify-napplet-cli-source-build.ts"
       - "src/promotion/candidate.ts"
       - "tests/runner/source-build-candidate.test.ts"
+      - "tests/runner/sealed-toolchain.test.ts"
+      - "src/runner/sealed-toolchain.ts"
       - "package.json"
       - "bun.lock"
       - "patches/**"

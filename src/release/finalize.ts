@@ -183,7 +183,7 @@ export async function finalizeReleaseCertification(input: ReleaseFinalizationInp
   } else {
     try {
       promotion = await resumeFinalizationPromotion({ operationId, bundleSha256, authorizationReceiptSha256: payload.authorizationReceiptSha256,
-        status: "pending", persist: input.promotion.persist, promote: input.promotion.promote });
+        status: "pending", persist: value => input.promotion.persist(value), promote: value => input.promotion.promote(value) });
     } catch { promotion = { status: "blocked" }; }
   }
   if (promotion.status !== "promoted") {

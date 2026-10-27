@@ -49,6 +49,15 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
     await admin.query("GRANT napplet_production_real TO journal_test");
     application = new Pool({ connectionString: `postgresql://journal_test@127.0.0.1:${port}/postgres`, connectionTimeoutMillis: 2000 });
     const create = (namespace = "nwc:run-1", scope = scopeSha256) => new PostgresOperationJournal(application, { namespace, scopeSha256: scope });
+    const capped = () => create("bounded:run-1");
+    const limited = await Promise.allSettled(Array.from({ length: 4 }, (_, i) => capped().claimBounded(`limited-${i}`, identity, { state: "claimed" }, 2)));
+    const accepted = limited.filter(result => result.status === "fulfilled");
+    expect(accepted).toHaveLength(2);
+    expect(limited.filter(result => result.status === "rejected").every(result => result.status === "rejected" && result.reason.message === "PRODUCTION_CONTROL_OPERATION_LIMIT_REACHED")).toBe(true);
+    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.release_operation_journal WHERE namespace='bounded:run-1'")).rows[0].count).toBe(2);
+    for (const result of accepted) if (result.status === "fulfilled") expect((await capped().claimBounded(result.value.record.operationId, identity, { state: "claimed" }, 2)).claimed).toBe(false);
+    const boundedAudit = (await admin.query("SELECT count(*)::int AS count FROM production_real.release_operation_audit WHERE namespace='bounded:run-1'")).rows[0].count;
+    expect(boundedAudit).toBe(2);
     const claims = await Promise.all(Array.from({ length: 4 }, () => create().claim("original", identity, { state: "claimed", eventId: "encrypted-event" })));
     expect(claims.filter(result => result.claimed)).toHaveLength(1);
     expect(claims.every(result => result.record.revision === 1)).toBe(true);

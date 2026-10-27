@@ -64,8 +64,29 @@ export class PostgresOperationJournal {
     throw new Error("OPERATION_JOURNAL_RETRY_EXHAUSTED");
   }
   async claim<T>(operationId: string, identitySha256: string, value: T): Promise<Readonly<{ claimed: boolean; record: OperationRecord<T> }>> {
+    return this.#claim(operationId, identitySha256, value);
+  }
+  /** Bound new operations in the same serializable transaction as their claim.
+   * Existing originals remain readable at the cap; parallel callers cannot
+   * each spend the same final inventory slot. */
+  async claimBounded<T>(operationId: string, identitySha256: string, value: T, maximumOperations: number): Promise<Readonly<{ claimed: boolean; record: OperationRecord<T> }>> {
+    if (!Number.isSafeInteger(maximumOperations) || maximumOperations < 1 || maximumOperations > 1_000_000) throw new Error("OPERATION_LIMIT_INVALID");
+    return this.#claim(operationId, identitySha256, value, maximumOperations);
+  }
+  async #claim<T>(operationId: string, identitySha256: string, value: T, maximumOperations?: number): Promise<Readonly<{ claimed: boolean; record: OperationRecord<T> }>> {
     identifier(operationId); digest(identitySha256); const encoded = encode(value);
     return this.#transaction(async client => {
+      if (maximumOperations !== undefined) {
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`${this.#namespace}:${this.#scope}`]);
+        const prior = (await client.query("SELECT * FROM production_real.release_operation_journal WHERE namespace=$1 AND scope_sha256=$2 AND operation_id=$3", [this.#namespace, this.#scope, operationId])).rows[0];
+        if (prior) {
+          if (prior.identity_sha256 !== identitySha256) throw new Error("OPERATION_IDENTITY_CONFLICT");
+          return Object.freeze({ claimed: false, record: record<T>(prior) });
+        }
+        const count = Number((await client.query("SELECT count(*)::text AS count FROM production_real.release_operation_journal WHERE namespace=$1 AND scope_sha256=$2", [this.#namespace, this.#scope])).rows[0]?.count);
+        if (!Number.isSafeInteger(count) || count < 0) throw new Error("OPERATION_JOURNAL_COUNT_INVALID");
+        if (count >= maximumOperations) throw new Error("PRODUCTION_CONTROL_OPERATION_LIMIT_REACHED");
+      }
       const inserted = await client.query("INSERT INTO production_real.release_operation_journal(namespace,scope_sha256,operation_id,identity_sha256,value_json) VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT(namespace,scope_sha256,operation_id) DO NOTHING RETURNING *", [this.#namespace, this.#scope, operationId, identitySha256, encoded]);
       const row = inserted.rows[0] ?? (await client.query("SELECT * FROM production_real.release_operation_journal WHERE namespace=$1 AND scope_sha256=$2 AND operation_id=$3", [this.#namespace, this.#scope, operationId])).rows[0];
       if (!row) throw new Error("OPERATION_JOURNAL_RECORD_MISSING");

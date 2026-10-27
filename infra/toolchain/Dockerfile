@@ -18,7 +18,7 @@ RUN bun -e 'const response = await fetch("https://registry.npmjs.org/pnpm/-/pnpm
 
 # The reviewed standalone CLI is independently verified rather than resolved by npm.
 RUN bun -e 'const response = await fetch("https://github.com/napplet/web/releases/download/%40napplet/cli%400.5.2/napplet-linux-x86_64"); if (!response.ok) process.exit(1); await Bun.write("/toolchain/napplet", await response.arrayBuffer())' \
-    && echo '46685f2e4df516b5b2e7e2e133480c90e5c85dbd36d05c6e95f4eee6af33ec5e  /toolchain/napplet' | sha256sum --check \
+    && echo 'a17fd2f61beb3b1553518b517045c4e1a474ddee5db87be80e18cf1bd24d8e28  /toolchain/napplet' | sha256sum --check \
     && chmod 0555 /toolchain/napplet
 
 FROM oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4 AS sealed
@@ -52,6 +52,7 @@ RUN ln -s /usr/local/bin/bun /usr/local/bin/node \
     && command -v mount \
     && command -v findmnt \
     && command -v setpriv \
+    && command -v mountpoint \
     && test -x /toolchain/bin/napplet \
     && test -d /toolchain/boilerplate-template
 USER 65532:65532

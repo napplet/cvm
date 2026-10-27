@@ -26,10 +26,12 @@ try {
   await page.getByLabel("Cashu amount (sats)").fill("64");
   await page.getByRole("button", { name: "Fund with Cashu" }).click();
   await page.getByText("Cashu credited").waitFor();
-  await page.getByText("64 sats").waitFor();
+  // The Cashu request is gross; Nutshell applies its one-sat input fee and
+  // the UI intentionally displays the verified net ledger credit.
+  await page.getByText("63 sats").waitFor();
   await page.getByRole("button", { name: "Replay Cashu" }).click();
   await page.getByText("Cashu replay credited once").waitFor();
-  await page.getByText("64 sats").waitFor();
+  await page.getByText("63 sats").waitFor();
 
   if (requestedCase === "both-rails-restart-replay") {
     server.stopReconciler();
@@ -39,7 +41,7 @@ try {
     await server.assertNwcPending();
     server.restartReconciler();
     await page.getByText("NWC credited").waitFor({ timeout: 90_000 });
-    await page.getByText("3814 sats").waitFor();
+    await page.getByText("3813 sats").waitFor();
   }
 
   if (requests.some((path) => /\/(?:account|balance|top_up|generation|session)\b/.test(path))) {

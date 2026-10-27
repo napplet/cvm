@@ -265,9 +265,13 @@ async function runGeneration(request: GenerationRequest): Promise<any> {
 async function prepareTestFunds(maximum: string): Promise<void> {
   await refresh();
   const shortfall = BigInt(maximum) - BigInt(balance); if (shortfall <= 0n) return;
-  if (shortfall > 10_000n) throw new Error("TEST_FUNDING_LIMIT: lower the test maximum or fund in the development console");
+  // Cashu submits a gross bearer amount. Reserve the explicit, bounded user
+  // fee ceiling so a verified net credit actually reaches the requested cap.
+  const feeCeiling = 64n;
+  const grossAmount = shortfall + feeCeiling;
+  if (grossAmount > 10_000n) throw new Error("TEST_FUNDING_LIMIT: lower the test maximum or fund in the development console");
   setFundingStatus("Preparing local test funds");
-  const payment = await client!.fundCashu(String(shortfall)); await refresh();
+  const payment = await client!.fundCashu(String(grossAmount), String(feeCeiling)); await refresh();
   if (payment?.state !== "credited" || BigInt(balance) < BigInt(maximum)) throw new Error("TEST_FUNDING_UNCONFIRMED");
   setFundingStatus("Local test funds ready");
 }

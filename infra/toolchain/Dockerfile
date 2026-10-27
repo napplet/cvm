@@ -48,7 +48,12 @@ RUN ln -s /usr/local/bin/bun /usr/local/bin/node \
     && chmod 0555 /toolchain/bin/denial-probe /toolchain/bin/fixture-runner /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe /usr/local/bin/napplet-cvm-bootstrap \
     && mkdir -p /home/napplet /work /tmp \
     && chown 65532:65532 /home/napplet /work /tmp \
-    && chmod -R go-w /toolchain /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe /usr/local/bin/napplet-cvm-bootstrap
+    && chmod -R go-w /toolchain /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe /usr/local/bin/napplet-cvm-bootstrap \
+    && command -v mount \
+    && command -v findmnt \
+    && command -v setpriv \
+    && test -x /toolchain/bin/napplet \
+    && test -d /toolchain/boilerplate-template
 USER 65532:65532
 ENTRYPOINT ["/toolchain/bin/bun"]
 

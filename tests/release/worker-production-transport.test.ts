@@ -116,17 +116,19 @@ test("cleanup after controller interruption deletes only the original owned mach
   const operationId = "op-cleanup";
   const journal = createMemoryWorkerOperationJournal([{ operationId, requestSha256: digest("d"), state: "dispatched", resourceName: `napplet-cvm-${operationId}`, resourceId: "machine-cleanup" }]);
   const calls: RequestInit[] = [];
+  let getCount = 0;
   const transport = createFlyMachinesHttpTransport({
     appName: "napplet-cvm-workers", getAccessToken: async () => "valid-access-token", journal,
     fetch: async (_url, init) => {
       calls.push(init);
-      if (init.method === "GET") return new Response(JSON.stringify({ id: "machine-cleanup", name: `napplet-cvm-${operationId}`, config: { image, metadata: { "napplet-cvm-operation": operationId, "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-role": "isolated-worker" } } }), { status: 200 });
+      if (init.method === "GET" && ++getCount > 1) return new Response(null, { status: 404 });
+      if (init.method === "GET") return new Response(JSON.stringify({ id: "machine-cleanup", name: `napplet-cvm-${operationId}`, config: { image, guest: { cpus: 1, memory_mb: 1024 }, services: [], env: { NAPPLET_CVM_POLICY_VERSION: PRODUCTION_WORKER_POLICY.version }, metadata: { "napplet-cvm-operation": operationId, "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-role": "isolated-worker" } } }), { status: 200 });
       return new Response(null, { status: 204 });
     },
   });
   await expect(transport.terminate({ operationId })).resolves.toEqual({ status: "terminated" });
   await expect(transport.terminate({ operationId: "op-foreign" })).resolves.toEqual({ status: "blocked" });
-  expect(calls.map((call) => call.method)).toEqual(["GET", "DELETE"]);
+  expect(calls.map((call) => call.method)).toEqual(["GET", "DELETE", "GET"]);
 });
 
 test("trusted harness refuses the default unbounded workspace and never turns run-proposal into a success placeholder", async () => {

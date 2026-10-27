@@ -25,7 +25,7 @@ export const WORKER_RUNNER_DEFINITION = Object.freeze({
   durableBacklog: 0 as const,
 });
 
-type WorkerOperationState = "claimed" | "dispatching" | "dispatched" | "reconciled" | "unknown" | "terminated";
+type WorkerOperationState = "claimed" | "dispatching" | "dispatched" | "reconciled" | "unknown" | "terminating" | "terminated";
 export type WorkerOperationRecord = Readonly<{
   operationId: string;
   requestSha256: string;
@@ -69,7 +69,8 @@ async function sha256(value: string): Promise<string> {
 const MachineSchema = z.object({
   id: ResourceIdSchema,
   name: z.string().min(1).max(128),
-  config: z.object({ image: ImageSchema, metadata: z.record(z.string(), z.string()).optional() }).passthrough(),
+  state: z.string().optional(),
+  config: z.object({ image: ImageSchema, metadata: z.record(z.string(), z.string()).optional(), guest: z.object({ cpus: z.number().int().positive(), memory_mb: z.number().int().positive() }).optional(), services: z.array(z.unknown()).optional(), env: z.record(z.string(), z.string()).optional() }).passthrough(),
 }).passthrough();
 
 export type FlyCreateResult = Readonly<{ status: "created" | "reconciled"; operationId: string; resourceId: string }> | Readonly<{ status: "unknown"; operationId: string }>;
@@ -112,6 +113,10 @@ export function createFlyMachinesHttpTransport(input: Readonly<{
   journal: WorkerOperationJournal;
   fetch: FlyFetch;
   apiOrigin?: string;
+  /** A controller-owned observation channel (not Fly metadata).  Fly's
+   * Machines API has no exec endpoint, so an absent attester can only leave
+   * a started Machine pending; it can never certify it ready. */
+  trustedReadiness?: (input: Readonly<{ operationId: string; resourceId: string; image: string }>) => Promise<Readonly<{ attestation: unknown; expected: Readonly<{ image: string; sessionLeaseSha256: string; networkPolicyEvidenceSha256: string }> }>>;
 }>): FlyMachinesHttpTransport {
   const appName = AppNameSchema.parse(input.appName);
   const base = new URL(input.apiOrigin ?? "https://api.machines.dev");
@@ -125,6 +130,19 @@ export function createFlyMachinesHttpTransport(input: Readonly<{
       headers: Object.freeze({ authorization: `Bearer ${token}`, "content-type": "application/json", ...(init.headers ?? {}) }),
     });
   };
+
+function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<WorkerOperationRecord, "operationId" | "resourceName">, image: string): boolean {
+  const metadata = machine.config.metadata;
+  return machine.name === record.resourceName && machine.config.image === image
+    && metadata?.["napplet-cvm-operation"] === record.operationId
+    && metadata?.["napplet-cvm-policy"] === PRODUCTION_WORKER_POLICY.version
+    && metadata?.["napplet-cvm-role"] === "isolated-worker"
+    && Object.keys(metadata).sort().join(",") === "napplet-cvm-operation,napplet-cvm-policy,napplet-cvm-role"
+    && machine.config.guest?.cpus === PRODUCTION_WORKER_POLICY.cpu
+    && machine.config.guest?.memory_mb === PRODUCTION_WORKER_POLICY.memoryMiB
+    && machine.config.services?.length === 0
+    && machine.config.env?.NAPPLET_CVM_POLICY_VERSION === PRODUCTION_WORKER_POLICY.version;
+}
   const findOriginal = async (operationId: string, name: string, expectedImage: string): Promise<Readonly<{ kind: "found"; id: string }> | Readonly<{ kind: "missing" | "unknown" }>> => {
     let response: Response;
     try { response = await request(`/v1/apps/${encodeURIComponent(appName)}/machines?metadata.napplet-cvm-operation=${encodeURIComponent(operationId)}&include_deleted=true`, { method: "GET" }); } catch { return Object.freeze({ kind: "unknown" as const }); }
@@ -198,20 +216,32 @@ export function createFlyMachinesHttpTransport(input: Readonly<{
       if (response.status === 404) return Object.freeze({ status: "missing" as const });
       if (!response.ok) return Object.freeze({ status: "unknown" as const });
       const machine = MachineSchema.safeParse(await response.json());
-      if (!machine.success || machine.data.id !== record.resourceId || machine.data.name !== record.resourceName) return Object.freeze({ status: "unknown" as const });
-      return Object.freeze({ status: "completed" as const, resourceId: record.resourceId });
+      if (!machine.success || machine.data.id !== record.resourceId || !ownedMachine(machine.data, record, machine.data.config.image) || machine.data.state !== "started") return Object.freeze({ status: "unknown" as const });
+      if (!input.trustedReadiness) return Object.freeze({ status: "pending" as const, resourceId: record.resourceId });
+      try {
+        const readiness = await input.trustedReadiness({ operationId: record.operationId, resourceId: record.resourceId, image: machine.data.config.image });
+        validateWorkerReadinessAttestation(readiness.attestation, readiness.expected);
+        return Object.freeze({ status: "completed" as const, resourceId: record.resourceId });
+      } catch { return Object.freeze({ status: "unknown" as const, resourceId: record.resourceId }); }
     },
     async terminate(value) {
       const operationId = OperationIdSchema.parse(value.operationId); const record = await input.journal.read(operationId);
       if (!record?.resourceId) return Object.freeze({ status: "blocked" as const });
       const before = await request(`/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(record.resourceId)}`, { method: "GET" });
+      if (before.status === 404) {
+        await input.journal.update({ operationId, requestSha256: record.requestSha256, state: "terminated", resourceId: record.resourceId });
+        return Object.freeze({ status: "terminated" as const });
+      }
       const machine = before.ok ? MachineSchema.safeParse(await before.json()) : undefined;
       const metadata = machine?.success ? machine.data.config.metadata : undefined;
       if (!machine?.success || machine.data.name !== record.resourceName || metadata?.["napplet-cvm-operation"] !== operationId
         || metadata?.["napplet-cvm-policy"] !== PRODUCTION_WORKER_POLICY.version || metadata?.["napplet-cvm-role"] !== "isolated-worker"
-        || Object.keys(metadata).sort().join(",") !== "napplet-cvm-operation,napplet-cvm-policy,napplet-cvm-role") return Object.freeze({ status: "unknown" as const });
+        || !ownedMachine(machine.data, record, machine.data.config.image)) return Object.freeze({ status: "unknown" as const });
+      await input.journal.update({ operationId, requestSha256: record.requestSha256, state: "terminating", resourceId: record.resourceId });
       const removed = await request(`/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(record.resourceId)}?force=true`, { method: "DELETE" });
       if (!removed.ok && removed.status !== 404) return Object.freeze({ status: "pending" as const });
+      const after = await request(`/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(record.resourceId)}`, { method: "GET" });
+      if (after.status !== 404) return Object.freeze({ status: "pending" as const });
       await input.journal.update({ operationId, requestSha256: record.requestSha256, state: "terminated", resourceId: record.resourceId });
       return Object.freeze({ status: "terminated" as const });
     },

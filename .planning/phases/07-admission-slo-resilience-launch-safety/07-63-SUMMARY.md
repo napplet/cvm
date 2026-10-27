@@ -70,6 +70,7 @@ status: complete
    - Follow-up Cloud Run terminal LRO reconciliation: `4a1a510` (`fix`)
    - Review hardening for bounded streams and immutable provider identity: `ced02f7` (`fix`)
    - Replacement-proof immutable ownership reconciliation: `ffcaa5f` (`fix`)
+   - Direct Cloud Run deployment identity comparison: `2513670` (`fix`)
 2. **Task 2: Correct the selected topology and storage policy** — `3667aa4` (`feat`)
 
 ## Files Created/Modified
@@ -132,7 +133,7 @@ status: complete
 - **Fix:** Reconciliation now returns `unknown` on persisted identity drift; Cloud Run requires saved UID and creation time before cleanup. Added SQL, GCS, and Cloud Run replacement-to-cleanup regressions.
 - **Files modified:** `src/release/deployment/google-clients.ts`, `tests/release/deployment-google-clients.test.ts`.
 - **Verification:** 30 focused Google deployment tests and the full denied-effects release suite pass.
-- **Commit:** `ffcaa5f`
+- **Commits:** `ffcaa5f`, `2513670`
 
 **Total deviations:** 5 auto-fixed (Rules 1–2).
 
@@ -146,6 +147,6 @@ The code is local-contract verified only. Before a protected execution, producti
 
 ## Self-Check: PASSED
 
-- Confirmed task commits `f0ccbf9`, `3667aa4`, `d446235`, `708bc52`, `4a1a510`, `ced02f7`, and `ffcaa5f` exist and all plan artifacts exist.
-- `NAPPLET_CVM_TEST_EXTERNAL_EFFECTS=deny bun test tests/release --timeout 10000 --reporter=dot` passed: 184 tests, 904 assertions.
+- Confirmed task commits `f0ccbf9`, `3667aa4`, `d446235`, `708bc52`, `4a1a510`, `ced02f7`, `ffcaa5f`, and `2513670` exist and all plan artifacts exist.
+- `NAPPLET_CVM_TEST_EXTERNAL_EFFECTS=deny bun test tests/release --timeout 10000 --reporter=dot` passed: 184 tests, 905 assertions.
 - Root dependency manifest hashes are intentionally omitted: approved manifest pins are parent-owned and changed after the earlier recorded values.

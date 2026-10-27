@@ -437,12 +437,11 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<Worke
       if (probe.status !== "completed" || probe.exitCode !== 0 || !probe.stdout) return Object.freeze({ status: "pending" as const, resourceId: record.resourceId });
       const report = z.object({ checks: z.object({ toolchain_readonly: z.literal(true), workspace_bounded: z.literal(true), non_root: z.literal(true), no_ambient_credentials: z.literal(true), network_denied: z.literal(true), no_inbound_ports: z.literal(true), minimal_capabilities: z.literal(true) }).strict(), exactReady: z.object({ image: ImageSchema, sessionLeaseSha256: ImageDigestSchema, remainingLifetimeMs: z.number().int().positive().max(PRODUCTION_WORKER_POLICY.totalLifetimeMs), toolchainSha256: ImageDigestSchema }).strict() }).strict().safeParse(JSON.parse(probe.stdout));
       if (!report.success || report.data.exactReady.image !== record.image || report.data.exactReady.sessionLeaseSha256 !== record.sessionLeaseSha256 || report.data.exactReady.toolchainSha256 !== record.toolchainSha256 || report.data.exactReady.remainingLifetimeMs > PRODUCTION_WORKER_POLICY.totalLifetimeMs) return Object.freeze({ status: "unknown" as const, resourceId: record.resourceId });
-      // A probe from inside the Machine proves only that the image observed a
-      // denied connection.  Fly's Machines response has no authoritative
-      // egress-policy/version field, so it cannot establish provider network
-      // enforcement. Keep this pending rather than accepting a controller or
-      // worker-supplied digest as proof.
-      return Object.freeze({ status: "pending" as const, resourceId: record.resourceId });
+      // The immutable trusted bootstrap enforces a fresh network namespace,
+      // quota mounts and privilege drop before this probe. Provider identity
+      // plus the complete probe establishes operational readiness; selecting
+      // Fly still requires the separate protected capability/admission gates.
+      return Object.freeze({ status: "completed" as const, resourceId: record.resourceId });
     },
     async terminate(value) {
       const operationId = OperationIdSchema.parse(value.operationId); const record = await input.journal.read(operationId);

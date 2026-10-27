@@ -225,3 +225,35 @@ test("trusted harness refuses the default unbounded workspace and never turns ru
   const traversal = run(["build-source", "--source", "/tmp/not-a-worker-source.json"]);
   expect(await traversal.exited).not.toBe(0);
 });
+
+
+test("Fly readiness requires every trusted isolation check and exact original lease", async () => {
+  const operationId = "op-ready";
+  const journal = createMemoryWorkerOperationJournal();
+  let machine: Record<string, unknown> | undefined;
+  let report: Record<string, unknown> = {};
+  const transport = createFlyMachinesHttpTransport({
+    appName: "napplet-cvm-workers", getAccessToken: async () => "valid-access-token", journal,
+    fetch: async (url, init) => {
+      if (url.endsWith("/exec")) return Response.json({ stdout: JSON.stringify(report), stderr: "", exit_code: 0 });
+      if (init.method === "POST") {
+        machine = { ...JSON.parse(String(init.body)), id: "machine-ready", state: "started", created_at: new Date().toISOString() };
+        return Response.json(machine);
+      }
+      return Response.json(url.includes("?metadata.") ? [] : machine);
+    },
+  });
+  const intent = { operationId, region: "ams", image, policy: PRODUCTION_WORKER_POLICY, sessionLeaseSha256: digest("b"), toolchainSha256: digest("c"), providerDeadlineEpochMs: Date.now() + 60_000 };
+  expect((await transport.create(intent)).status).toBe("created");
+  expect((await transport.observe({ operationId })).status).toBe("unknown");
+  const checks = { toolchain_readonly: true, workspace_bounded: true, non_root: true, no_ambient_credentials: true, network_denied: true, no_inbound_ports: true, minimal_capabilities: true };
+  const exactReady = { image, sessionLeaseSha256: intent.sessionLeaseSha256, toolchainSha256: intent.toolchainSha256, remainingLifetimeMs: 50_000 };
+  report = { checks, exactReady };
+  expect((await transport.observe({ operationId })).status).toBe("completed");
+  for (const key of Object.keys(checks)) {
+    report = { checks: { ...checks, [key]: false }, exactReady };
+    expect((await transport.observe({ operationId })).status).toBe("unknown");
+  }
+  report = { checks, exactReady: { ...exactReady, sessionLeaseSha256: digest("d") } };
+  expect((await transport.observe({ operationId })).status).toBe("unknown");
+});

@@ -59,6 +59,8 @@ describe("collector lifecycle wire boundary", () => {
       expect(result!.metricSeriesCount).toBe(15);
       expect(() => parseCollectorLifecycleWindow({ windowSha256: "c".repeat(64), expected: packets, entries })).toThrow("COLLECTOR_WINDOW_INCOMPLETE");
       expect(() => parseCollectorLifecycleWindow({ windowSha256, expected: packets, entries: entries.filter((entry: any) => entry["otelcol.signal"] !== "metrics") })).toThrow("COLLECTOR_WINDOW_INCOMPLETE");
+      const staleMetrics = entries.map((entry: any) => entry["otelcol.signal"] === "metrics" && entry.msg.startsWith("ResourceMetrics #") ? { ...entry, msg: entry.msg.replaceAll(/^Timestamp: .+$/gmu, "Timestamp: 2000-01-01 00:00:00 +0000 UTC") } : entry);
+      expect(() => parseCollectorLifecycleWindow({ windowSha256, expected: packets, entries: staleMetrics })).toThrow("COLLECTOR_WINDOW_INCOMPLETE");
       const mutated = entries.map((entry: any) => entry["otelcol.signal"] === "metrics" && entry.msg.startsWith("ResourceMetrics #") ? { ...entry, msg: entry.msg.replace("Data point attributes:\n", "Data point attributes:\n     -> private.prompt: Str(secret)\n") } : entry);
       expect(() => parseCollectorLifecycleWindow({ windowSha256, expected: packets, entries: mutated })).toThrow("COLLECTOR_EXPORTED_ATTRIBUTE_INVALID");
     } finally {

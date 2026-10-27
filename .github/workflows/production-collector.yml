@@ -4,10 +4,12 @@ on:
   pull_request:
     paths:
       - "src/production/collector-wire.ts"
+      - "src/production/telemetry-certification.ts"
       - "infra/otel/collector.yaml"
       - "infra/production/collector.Dockerfile"
       - "src/telemetry/**"
       - "tests/production/collector-wire.integration.test.ts"
+      - "tests/production/telemetry-certification.integration.test.ts"
       - ".github/workflows/production-collector.yml"
 permissions:
   contents: read
@@ -27,4 +29,4 @@ jobs:
           bun-version: "1.3.14"
       - run: bun install --frozen-lockfile
       - name: Actual pinned collector export and policy boundary
-        run: bun test tests/production/collector-wire.integration.test.ts --timeout 120000
+        run: bun test tests/production/collector-wire.integration.test.ts tests/production/telemetry-certification.integration.test.ts --timeout 120000

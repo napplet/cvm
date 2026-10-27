@@ -21,7 +21,7 @@ export function collectorLifecyclePackets(input: Readonly<{ operationId: string;
   const attributes = (values: Record<string, string>) => Object.entries(values).map(([key, stringValue]) => ({ key, value: { stringValue } }));
   const metricAttributes = { "cvm.lifecycle.version": "v1", "cvm.lifecycle.stage": observation.stage, "cvm.lifecycle.outcome": observation.outcome ?? "none" };
   const scope = { name: "cvm.certification.v1" };
-  return Object.freeze({ traceId, spanId, observation,
+  return Object.freeze({ traceId, spanId, observation, timestampUnixNano: time,
     traces: { resourceSpans: [{ resource: { attributes: [] }, scopeSpans: [{ scope, spans: [{ traceId, spanId, name: `cvm.lifecycle.${observation.stage}`, kind: 1, startTimeUnixNano: time, endTimeUnixNano: time,
       attributes: attributes({ ...metricAttributes, "cvm.correlation.digest": observation.correlationDigest, "cvm.monotonic_ms": String(observation.monotonicMs), "cvm.certification.window": input.windowSha256 }) }] }] }] },
     metrics: { resourceMetrics: [{ resource: { attributes: [] }, scopeMetrics: [{ scope, metrics: [{ name: "cvm.lifecycle.observations", sum: { aggregationTemporality: 1, isMonotonic: true,
@@ -48,7 +48,7 @@ function attrs(text: string, expected: readonly string[]): Record<string, string
  * time window. Raw JSON payloads are never retained as certification evidence. */
 export function parseCollectorLifecycleWindow(input: Readonly<{
   windowSha256: string; entries: readonly unknown[];
-  expected: readonly Readonly<{ traceId: string; spanId: string; observation: LifecycleObservation }>[];
+  expected: readonly Readonly<{ traceId: string; spanId: string; timestampUnixNano: string; observation: LifecycleObservation }>[];
 }>) {
   digest(input.windowSha256);
   if (input.entries.length > 2_000 || input.expected.length < 1 || input.expected.length > 120) throw new Error("COLLECTOR_WINDOW_BOUND_EXCEEDED");
@@ -56,6 +56,7 @@ export function parseCollectorLifecycleWindow(input: Readonly<{
   if (expected.size !== input.expected.length) throw new Error("COLLECTOR_EXPECTATION_DUPLICATE");
   const observed = new Map<string, LifecycleObservation>();
   const series = new Set<string>();
+  const metricObservations = new Set<string>();
   for (const raw of input.entries) {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("COLLECTOR_EXPORT_INVALID");
     const entry = raw as Record<string, unknown>;
@@ -91,6 +92,11 @@ export function parseCollectorLifecycleWindow(input: Readonly<{
             const values = attrs(point, metricKeys);
             if (!/^Value: [1-9][0-9]*$/mu.test(point)) throw new Error("COLLECTOR_METRIC_INVALID");
             series.add(canonicalJson(values));
+            const timestamp = /^Timestamp: (.+)$/mu.exec(point)?.[1];
+            const match = timestamp && /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))? \+0000 UTC$/u.exec(timestamp);
+            if (!match) throw new Error("COLLECTOR_METRIC_TIMESTAMP_INVALID");
+            const nanos = BigInt(Date.parse(`${match[1]}T${match[2]}Z`)) * 1_000_000n + BigInt((match[3] ?? "").padEnd(9, "0"));
+            metricObservations.add(canonicalJson({ values, timestampUnixNano: nanos.toString() }));
           }
         }
       }
@@ -99,6 +105,10 @@ export function parseCollectorLifecycleWindow(input: Readonly<{
   if (observed.size !== expected.size || series.size > lifecycleCardinalityUpperBound()) throw new Error("COLLECTOR_WINDOW_INCOMPLETE");
   const observations = [...observed.values()];
   for (const value of observations) if (!series.has(canonicalJson({ "cvm.lifecycle.version": "v1", "cvm.lifecycle.stage": value.stage, "cvm.lifecycle.outcome": value.outcome ?? "none" }))) throw new Error("COLLECTOR_WINDOW_INCOMPLETE");
+  for (const value of input.expected) {
+    const values = { "cvm.lifecycle.version": "v1", "cvm.lifecycle.stage": value.observation.stage, "cvm.lifecycle.outcome": value.observation.outcome ?? "none" };
+    if (!metricObservations.has(canonicalJson({ values, timestampUnixNano: value.timestampUnixNano }))) throw new Error("COLLECTOR_WINDOW_INCOMPLETE");
+  }
   return Object.freeze({ observations, metricSeriesCount: series.size });
 }
 

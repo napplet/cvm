@@ -122,6 +122,50 @@ describe("Cashu treasury custody", () => {
     expect(store.postings[0]).toMatchObject({ amount: "18" });
   });
 
+  test("retains owned proofs through lost persistence responses and obsolete-data cleanup failures", async () => {
+    for (const failure of ["lost-owned-commit", "blind-cleanup", "after-blind-cleanup"] as const) {
+      let swaps = 0, restores = 0, failOnce = true;
+      const repository = new InMemoryCashuTopUpRepository();
+      const vault = new RecoveryVault(); const store = new TransactionalMemoryFundingStore();
+      const persist = repository.recordOwnedCustodyOutputs.bind(repository);
+      repository.recordOwnedCustodyOutputs = async (...args) => {
+        const result = await persist(...args);
+        if (failure === "lost-owned-commit" && failOnce) { failOnce = false; throw new Error("COMMIT_RESPONSE_LOST"); }
+        return result;
+      };
+      const expire = vault.expire.bind(vault);
+      vault.expire = async (id) => {
+        const custody = await repository.custody(`durable-${failure}`);
+        if (custody?.outputDataProtectedId === id && failure !== "lost-owned-commit" && failOnce) {
+          failOnce = false;
+          if (failure === "after-blind-cleanup") await expire(id);
+          throw new Error("BLIND_CLEANUP_RESPONSE_LOST");
+        }
+        await expire(id);
+      };
+      const request: RequestFn = async (input) => {
+        if (input.endpoint.endsWith("/v1/info")) return { name: "fixture", version: "1", nuts: { 12: { supported: true } } } as never;
+        if (input.endpoint.includes("/v1/keysets")) return { keysets: [{ id: fixtureKeysetId, unit: "sat", active: true, input_fee_ppk: 0 }] } as never;
+        if (input.endpoint.includes("/v1/keys")) return { keysets: [{ id: fixtureKeysetId, unit: "sat", keys: generators }] } as never;
+        if (input.endpoint.endsWith("/v1/swap")) { swaps++; return { signatures: (input.requestBody as { outputs: { B_: string; amount: string; id: string }[] }).outputs.map(output => signedOutput({ ...output, amount: output.amount.toString() })) } as never; }
+        if (input.endpoint.endsWith("/v1/restore")) { restores++; throw new Error("OWNED_PROOFS_MUST_SURVIVE"); }
+        throw new Error(`unexpected:${input.endpoint}`);
+      };
+      const policy = { ...fixture.policies[0]!, mints: fixture.policies[0]!.mints.map(mint => mint.url === mintUrl ? { ...mint, keysetIds: [fixtureKeysetId] } : mint) };
+      const create = () => new CashuTopUpCoordinator({ policies: new CashuMintPolicyRegistry(policy), provider: new CashuTsSettlementAdapter({ request }), vault, funding: new FundingService(store), repository });
+      const topUpId = `durable-${failure}`;
+      const command = { principal: { pubkey: "f".repeat(64) }, idempotencyKey: topUpId, topUpId, amount: "16", maxFee: "0", unit: "sat" as const, pmi: fixture.pmi, token: new TextEncoder().encode(getEncodedToken({ mint: mintUrl, unit: "sat", proofs: [validProof(topUpId, "16", fixtureKeysetId)] })) };
+      expect((await create().submit(command)).state).toBe("reconciliation_pending");
+      const custody = await repository.custody(topUpId);
+      expect(custody?.state).toBe("owned_outputs");
+      expect((await vault.open({ id: custody!.ownedOutputsProtectedId! })).byteLength).toBeGreaterThan(0);
+      expect((await create().reconcile(topUpId)).state).toBe("credited");
+      expect({ swaps, restores }).toEqual({ swaps: 1, restores: 0 });
+      expect(store.postings).toHaveLength(1);
+      expect(store.postings[0]).toMatchObject({ amount: "16" });
+    }
+  });
+
   test("rejects a mint or user fee ceiling before dispatching a default cashu-ts swap", async () => {
     for (const limits of [{ maxFee: "2", policyFeePpk: 1000 }, { maxFee: "3", policyFeePpk: 999 }] as const) {
       let swaps = 0;

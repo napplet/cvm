@@ -232,14 +232,14 @@ export class CashuTopUpCoordinator {
         const plaintext = new TextEncoder().encode(JSON.stringify(input.outputData));
         try {
           const outputData = await this.options.vault.seal(metadata, plaintext);
-          try {
-            const journal = await this.options.repository.prepareCustody(record.result.topUpId, {
-            operationId: input.operationId, mintUrl: input.mintUrl, keysetId: input.keysetId, unit: "sat", amount: record.amount, maxFee: record.maxFee, inputFeePpk: input.inputFeePpk, feeAmount: input.feeAmount,
-              expectedOutputAmount: input.expectedOutputAmount, inputProtectedId: record.protectedId, outputDataProtectedId: outputData.id, outputDataDigest: outputData.payloadDigest,
-            });
-            if (journal.outputDataProtectedId !== outputData.id) await this.options.vault.expire(outputData.id);
-            return journal;
-          } catch (error) { await this.options.vault.expire(outputData.id).catch(() => undefined); throw error; }
+          // A database response can be lost after commit. Keep the ciphertext
+          // until a definite competing record proves it is unreferenced.
+          const journal = await this.options.repository.prepareCustody(record.result.topUpId, {
+          operationId: input.operationId, mintUrl: input.mintUrl, keysetId: input.keysetId, unit: "sat", amount: record.amount, maxFee: record.maxFee, inputFeePpk: input.inputFeePpk, feeAmount: input.feeAmount,
+            expectedOutputAmount: input.expectedOutputAmount, inputProtectedId: record.protectedId, outputDataProtectedId: outputData.id, outputDataDigest: outputData.payloadDigest,
+          });
+          if (journal.outputDataProtectedId !== outputData.id) await this.options.vault.expire(outputData.id);
+          return journal;
         } finally { plaintext.fill(0); }
       },
       claimDispatch: () => this.options.repository.claimCustodyDispatch(record.result.topUpId),
@@ -247,28 +247,28 @@ export class CashuTopUpCoordinator {
         const plaintext = new TextEncoder().encode(JSON.stringify(outputs));
         try {
           const sealed = await this.options.vault.seal(metadata, plaintext);
-          try {
-            const recorded = await this.options.repository.recordOwnedCustodyOutputs(record.result.topUpId, sealed.id, sealed.payloadDigest);
-            if (!recorded.accepted) await this.options.vault.expire(sealed.id);
-            // Once exact service-owned proofs are durable, the original blind
-            // messages cannot aid a later recovery and are removed promptly.
-            // The owned-output ciphertext remains the treasury custody record.
-            const custody = await this.options.repository.custody(record.result.topUpId);
-            if (!custody?.ownedOutputsProtectedId || custody.outputDataProtectedId === custody.ownedOutputsProtectedId) throw asError("CASHU_CUSTODY_OUTPUT_PERSISTENCE_INVALID");
-            await this.options.vault.expire(custody.outputDataProtectedId);
-          } catch (error) { await this.options.vault.expire(sealed.id).catch(() => undefined); throw error; }
+          const recorded = await this.options.repository.recordOwnedCustodyOutputs(record.result.topUpId, sealed.id, sealed.payloadDigest);
+          if (!recorded.accepted) await this.options.vault.expire(sealed.id);
+          // Once exact service-owned proofs are durable, the original blind
+          // messages cannot aid a later recovery and are removed promptly.
+          // The owned-output ciphertext remains the treasury custody record.
+          const custody = await this.options.repository.custody(record.result.topUpId);
+          if (!custody?.ownedOutputsProtectedId || custody.outputDataProtectedId === custody.ownedOutputsProtectedId) throw asError("CASHU_CUSTODY_OUTPUT_PERSISTENCE_INVALID");
+          await this.options.vault.expire(custody.outputDataProtectedId);
         }
         finally { plaintext.fill(0); }
       },
       load: async () => {
         const custody = await this.options.repository.custody(record.result.topUpId);
         if (!custody || !this.options.vault.open) return custody ? { journal: custody } : undefined;
-        const outputData = await this.options.vault.open({ ...metadata, id: custody.outputDataProtectedId });
+        // Owned proofs are sufficient for recovery after obsolete blind data
+        // has expired. Never require the deleted material on this path.
+        const outputData = custody.ownedOutputsProtectedId ? undefined : await this.options.vault.open({ ...metadata, id: custody.outputDataProtectedId });
         try {
           let outputs: Uint8Array | undefined;
           if (custody.ownedOutputsProtectedId) outputs = await this.options.vault.open({ ...metadata, id: custody.ownedOutputsProtectedId });
-          return { journal: custody, outputData: outputData.slice(), ...(outputs ? { outputs } : {}) };
-        } finally { outputData.fill(0); }
+          return { journal: custody, ...(outputData ? { outputData: outputData.slice() } : {}), ...(outputs ? { outputs } : {}) };
+        } finally { outputData?.fill(0); }
       },
     });
   }

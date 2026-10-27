@@ -24,6 +24,7 @@ export type LiveRestorePort = Readonly<{
     restoreSubject(subject: z.infer<typeof DurabilitySubjectSchema>): Promise<FreshRestoreSubjectPort>;
     exerciseExpiryDeletion(): Promise<unknown>;
     observeTopology(): Promise<unknown>;
+    cleanup?(): Promise<void>;
   }>>;
 }>;
 
@@ -51,10 +52,11 @@ export async function runLiveRestoreCertification(input: LiveRestoreCertificatio
     return nonPass("blocked", "INPUT_UNAVAILABLE", "protected-live-restore-control-required");
   }
 
+  let fresh: Awaited<ReturnType<LiveRestorePort["createFreshInstance"]>> | undefined;
   try {
     const subjects = validateDurabilityInventory(await port.inventory());
     LocalStateLossSchema.parse(await port.loseLocalState());
-    const fresh = await port.createFreshInstance();
+    fresh = await port.createFreshInstance();
     for (const subject of subjects) {
       const restored = await fresh.restoreSubject(subject);
       const result = await runRestoreDrill({
@@ -77,5 +79,10 @@ export async function runLiveRestoreCertification(input: LiveRestoreCertificatio
     });
   } catch {
     return nonPass("blocked", "PROVIDER_UNAVAILABLE", "restore-observation-unavailable");
+  } finally {
+    if (fresh?.cleanup) {
+      try { await fresh.cleanup(); }
+      catch { return nonPass("blocked", "PROVIDER_UNAVAILABLE", "restore-cleanup-unconfirmed"); }
+    }
   }
 }

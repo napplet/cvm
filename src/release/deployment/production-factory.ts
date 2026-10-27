@@ -63,6 +63,7 @@ export function assessProductionFactoryReadiness(input: ReleaseExecutionFactoryI
 function runtime(dependencies: ProductionOperationalDependencies): DeploymentFactoryRuntime {
   return Object.freeze({
     registry: dependencies.registry,
+    ...(dependencies.collectorImage ? { collectorImage: dependencies.collectorImage } : {}),
     prepareAuthorizedExecution: dependencies.prepareAuthorizedExecution,
   });
 }

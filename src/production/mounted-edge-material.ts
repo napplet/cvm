@@ -14,7 +14,6 @@ function privateKey(value: string, code: string): Uint8Array {
   if (key.byteLength !== 32) throw new Error(code);
   return key;
 }
-
 /** Mounted keys are transformed immediately into narrow signer brokers. The
  * aggregate gets protocol capabilities, never a secret path/value or a
  * user-selected resolver. */

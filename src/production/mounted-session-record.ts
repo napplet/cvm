@@ -4,6 +4,7 @@ import { CertificationInputSchema, ReleaseObservationBindingSchema, WorkerCandid
 import { createDeploymentExecutionConfig, type DeploymentExecutionConfig } from "../release/deployment/config";
 import type { ProductionConfig } from "./config";
 import type { MountedProductionSecretMaterial } from "./secret-material";
+import { assertMountedSourceBuildPlan, materializeMountedSourceBuildPlan } from "./source-build-plan";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/iu).transform(value => value.toLowerCase());
 const Reference = z.string().regex(/^[a-z][a-z0-9:._/-]{2,255}$/iu);
@@ -55,7 +56,10 @@ const Execution = z.object({
     protectedVerificationReferences: Json,
     sourceBuild: z.object({
       candidateSha256: Digest, topologySha256: Digest, image: z.string().min(1).max(1_024), sourceSha256: Digest,
-      sealedArtifactSha256: Digest, manifestSha256: Digest, capabilitiesSha256: Digest, aggregateSha256: Digest,
+      /** A pinned golden proposal and original operation identities.  This
+       * material is purely local preapproval data; it does not claim a worker
+       * or enqueue work. */
+      plan: z.unknown(),
     }).strict(),
   }).strict(),
   finalization: z.object({
@@ -141,7 +145,24 @@ export function materializeMountedProductionSessionRecord(input: Readonly<{
   config: ProductionConfig;
   measured: unknown;
 }>): MountedProductionSessionRecord {
-  const record = RecordSchema.parse(input.measured);
+  /* Source bytes are project-owned preapproval material, never a mounted
+   * callback or an operator-authored job bag. Older measured records are
+   * enriched here before the strict schema is applied; a supplied plan still
+   * has to equal the exact deterministic plan below. */
+  const raw = input.measured && typeof input.measured === "object" && !Array.isArray(input.measured) ? input.measured as Record<string, unknown> : input.measured;
+  const execution = raw && typeof raw === "object" && "execution" in raw && raw.execution && typeof raw.execution === "object" && !Array.isArray(raw.execution) ? raw.execution as Record<string, unknown> : undefined;
+  const protectedExecution = execution && execution.protected && typeof execution.protected === "object" && !Array.isArray(execution.protected) ? execution.protected as Record<string, unknown> : undefined;
+  const sourceBuild = protectedExecution && protectedExecution.sourceBuild && typeof protectedExecution.sourceBuild === "object" && !Array.isArray(protectedExecution.sourceBuild) ? protectedExecution.sourceBuild as Record<string, unknown> : undefined;
+  const workerCandidate = raw && typeof raw === "object" && "workerCandidate" in raw && raw.workerCandidate && typeof raw.workerCandidate === "object" && !Array.isArray(raw.workerCandidate) ? raw.workerCandidate as Record<string, unknown> : undefined;
+  const provider = workerCandidate?.provider === "modal" || workerCandidate?.provider === "fly" ? workerCandidate.provider : undefined;
+  const measured = sourceBuild
+    ? { ...(raw as Record<string, unknown>), execution: { ...execution!, protected: { ...protectedExecution!, sourceBuild: (() => {
+      const { sealedArtifactSha256: _sealed, manifestSha256: _manifest, capabilitiesSha256: _capabilities, aggregateSha256: _aggregate, ...preapproval } = sourceBuild;
+      return { ...preapproval, ...(sourceBuild.plan === undefined && provider ? materializeMountedSourceBuildPreapproval({ candidateSha256: input.config.candidateSha256, topologySha256: input.config.topologySha256, provider }) : {}) };
+    })() } } }
+    : input.measured;
+  const record = RecordSchema.parse(measured);
+  const sourcePlan = assertMountedSourceBuildPlan(record.execution.protected.sourceBuild.plan, { candidateSha256: input.config.candidateSha256, topologySha256: input.config.topologySha256, provider: record.workerCandidate.provider });
   if (record.candidateSha256 !== input.config.candidateSha256
     || record.topologySha256 !== input.config.topologySha256
     || record.workerCandidate.id !== input.config.candidateSha256
@@ -163,7 +184,17 @@ export function materializeMountedProductionSessionRecord(input: Readonly<{
     || !record.serverControls.telemetry.deployment.imageReference.endsWith(`@${record.execution.protected.collector.collectorDigest}`)) {
     throw new Error("PRODUCTION_MOUNTED_PREAPPROVAL_BINDING_REQUIRED");
   }
-  return Object.freeze(record);
+  return Object.freeze({ ...record, execution: { ...record.execution, protected: { ...record.execution.protected, sourceBuild: { ...record.execution.protected.sourceBuild, plan: sourcePlan } } } });
+}
+
+/**
+ * Supplies the immutable source-build fields for the measured deployment
+ * record.  Call this while preparing the record, before a controller asks for
+ * authorization.  It does not open a journal, choose capacity, or create a
+ * provider worker.
+ */
+export function materializeMountedSourceBuildPreapproval(input: Readonly<{ candidateSha256: string; topologySha256: string; provider: "modal" | "fly" }>): Readonly<{ plan: ReturnType<typeof materializeMountedSourceBuildPlan> }> {
+  return Object.freeze({ plan: materializeMountedSourceBuildPlan(input) });
 }
 
 /**
@@ -189,6 +220,7 @@ export function createMountedDeploymentExecutionConfig(input: Readonly<{
     workspaceRoot: materialization.workspace,
     factoryModuleSha256: materialization.factoryModuleSha256,
     runtimeClosureSha256: materialization.runtimeClosureSha256,
+    collectorRegistryTarget: input.record.serverControls.telemetry.deployment.imageReference.split("@")[0]!,
     publicSettings: {
       regions: input.config.regions,
       maximumRunDurationMs: 15 * 60 * 1_000,

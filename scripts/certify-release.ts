@@ -21,7 +21,8 @@ import { createOfficialFundingRailFeePort, type SealedFundingFeePolicyProjection
 import { RELEASE_TOPOLOGY_QUANTITY_CONTRACT } from "../src/release/topology";
 import { RELEASE_COST_FAMILIES, type LiveCostCatalogPort } from "../src/release/costs/live-estimator";
 import { createDeploymentExecutionConfig } from "../src/release/deployment/config";
-import { materializePreapproval } from "../src/release/preapproval-materializer";
+import { loadPreparedCollectorPreapproval, materializePreapproval } from "../src/release/preapproval-materializer";
+import { prepareProductionCollectorImage, type PreparedCollectorImage } from "../src/release/collector-image";
 import { validateAuthorizationReceipt } from "../src/release/authorization";
 import { verifyFinalizedRelease } from "../src/release/verify-finalization";
 
@@ -164,6 +165,7 @@ async function materializeRequestPreapproval(input: Readonly<{
   facts: readonly unknown[];
   authorization: Awaited<ReturnType<ReleaseCertificationController["dryRun"]>>["authorizationRequest"];
   workspace: string;
+  collector: PreparedCollectorImage;
 }>) {
   const certifier = await loadCertifierConfig();
   if (certifier.mode !== "protected" || certifier.credentials !== "configured" || !certifier.releaseExecution || !certifier.controller) {
@@ -198,6 +200,7 @@ async function materializeRequestPreapproval(input: Readonly<{
       retentionDays: deployment.publicSettings.retentionDays,
     },
     opaqueReferenceNames: Object.keys(deployment.secretReferences).sort(),
+    collector: input.collector,
     factory: {
       root: execution.root,
       modulePath: execution.modulePath,
@@ -205,6 +208,21 @@ async function materializeRequestPreapproval(input: Readonly<{
       configPath: execution.configPath,
       configSha256: execution.configSha256,
     },
+  });
+}
+
+/** A local, no-network preparation boundary. The output is a retained OCI
+ * layout and planned immutable registry reference, not an upload claim. */
+async function prepareCollectorPreapproval(input: Readonly<{ candidateSha256: string; workspace: string }>): Promise<PreparedCollectorImage> {
+  const certifier = await loadCertifierConfig();
+  if (certifier.mode !== "protected" || certifier.credentials !== "configured" || !certifier.releaseExecution || !certifier.controller) throw new Error("RELEASE_PRODUCTION_EXECUTION_CONFIG_REQUIRED");
+  const execution = certifier.releaseExecution;
+  const deployment = createDeploymentExecutionConfig(JSON.parse(await readFile(execution.configPath, "utf8")));
+  if (deployment.candidateSha256 !== input.candidateSha256 || deployment.sourceRevision !== certifier.controller.sourceRevision || !deployment.collectorRegistryTarget) throw new Error("PREAPPROVAL_COLLECTOR_CONFIGURATION_REQUIRED");
+  return prepareProductionCollectorImage({
+    repositoryRoot: execution.root,
+    registryTarget: deployment.collectorRegistryTarget,
+    artifactDirectory: join(input.workspace, "collector-oci"),
   });
 }
 
@@ -321,6 +339,7 @@ async function main(): Promise<number> {
     // operator to fund, log in, or approve a candidate it cannot execute.
     let preparedCatalog: LiveCostCatalogPort | undefined;
     let preparedPriceFacts: readonly unknown[] | undefined;
+    let preparedCollector: PreparedCollectorImage | undefined;
     if (request) {
       const execution = await executionReadinessProjection({ candidateSha256: candidateSha256!, workspace });
       if (execution.status !== "ready") {
@@ -328,6 +347,7 @@ async function main(): Promise<number> {
         return 1;
       }
       try {
+        preparedCollector = await prepareCollectorPreapproval({ candidateSha256: candidateSha256!, workspace });
         const config = await loadCertifierConfig();
         const policy = await loadReleaseFundingFeePolicyProjection({ config, candidateSha256: candidateSha256!, workspace });
         const facts = await currentOfficialCostCatalog(policy).listPriceFacts({ providers: RELEASE_COST_FAMILIES });
@@ -338,6 +358,13 @@ async function main(): Promise<number> {
         console.log(JSON.stringify({ progress: "preapproval_blocked", candidateSha256, readiness: { execution, pricing: { status: "blocked", reasonCode } }, zeroEffectCounters: zeroEffectCounters() }));
         return 1;
       }
+    }
+    if (receipt) {
+      const receiptRequestSha256 = controllerReceipt && typeof controllerReceipt === "object" && !Array.isArray(controllerReceipt)
+        ? (controllerReceipt as { authorizationRequestSha256?: unknown }).authorizationRequestSha256
+        : undefined;
+      if (typeof receiptRequestSha256 !== "string") throw new Error("RELEASE_AUTHORIZATION_RECEIPT_INVALID");
+      preparedCollector = await loadPreparedCollectorPreapproval({ workspace, candidateId: candidateSha256!, authorizationRequestSha256: receiptRequestSha256 });
     }
     const funding = !status ? await operatorFundingReadinessProjection(workspace) : undefined;
     const certificationFunding = funding ? await releaseCertificationFundingReadiness(funding) : undefined;
@@ -357,6 +384,7 @@ async function main(): Promise<number> {
           ...(request ? { costCatalog: preparedCatalog! } : { costCatalog: createCertificationBudgetCatalog({ quantityContract: RELEASE_TOPOLOGY_QUANTITY_CONTRACT }) }),
           requireCurrentPriceCatalog: true,
           operatorFundingReadiness: certificationFunding,
+          ...(preparedCollector ? { collectorImage: preparedCollector } : {}),
         });
     } catch (error) {
       if (!status && error instanceof Error && ["RELEASE_CONTROLLER_LIVE_PRICE_CATALOG_REQUIRED", "ADC_APPLICATION_DEFAULT_LOGIN_REQUIRED"].includes(error.message)) {
@@ -398,7 +426,7 @@ async function main(): Promise<number> {
       return 1;
     }
     const materialization = request
-      ? await materializeRequestPreapproval({ candidateSha256: resolvedCandidateSha256, topologySha256: result.state.topologySha256, facts: preparedPriceFacts!, authorization: result.authorizationRequest, workspace })
+      ? await materializeRequestPreapproval({ candidateSha256: resolvedCandidateSha256, topologySha256: result.state.topologySha256, facts: preparedPriceFacts!, authorization: result.authorizationRequest, workspace, collector: preparedCollector! })
       : undefined;
     if (receipt) {
       /* No endpoint/provider object is accepted on the command line. Only a
@@ -412,7 +440,7 @@ async function main(): Promise<number> {
         workspace,
         authorization: { request: result.authorizationRequest, receipt: resolvedReceipt },
       });
-      const live = await runReleaseCertification({ candidatePath: candidatePath!, workspace, dryRun: false, session });
+      const live = await runReleaseCertification({ candidatePath: candidatePath!, workspace, dryRun: false, session, collectorImage: preparedCollector! });
       console.log(JSON.stringify({
         progress: live.state.status,
         candidateSha256: live.state.candidate.candidateSha256,

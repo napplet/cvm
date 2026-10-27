@@ -102,6 +102,19 @@ export class ProductionCheckpointCoordinator {
     } finally { client.release(); }
   }
 
+  /** Query every retained component after expiry deletion.  A SQL state change
+   * alone is not deletion proof: the exact GCS generation and wrapped DEK
+   * must both be gone before a restore drill may report success. */
+  async observeDestroyed(input: Readonly<{ checkpointId: string; accountId: string; sessionId: string }>): Promise<boolean> {
+    const stored = await this.#find(Identity.parse(input.checkpointId));
+    if (!stored || stored.manifest.accountId !== input.accountId || stored.manifest.sessionId !== input.sessionId || stored.state !== "destroyed") return false;
+    const [object, keyDestroyed] = await Promise.all([
+      this.input.objectStore.observeExactByKey({ key: stored.object.key, checksum: stored.object.checksum }),
+      this.#crypto.isDestroyed(stored.keyReference),
+    ]);
+    return object === undefined && keyDestroyed;
+  }
+
   async #find(checkpointId: string): Promise<StoredEnvelope | undefined> {
     const client = await this.input.pool.connect();
     try { const row = (await client.query<Record<string, unknown>>("SELECT checkpoint_id,account_id,session_id,action_id,operation_id,manifest_json,object_key,object_generation,object_checksum,key_reference,retention_until::text AS retention_until,state FROM production_real.checkpoint_envelopes WHERE checkpoint_id=$1", [checkpointId])).rows[0]; return row ? rowToStored(row) : undefined; }

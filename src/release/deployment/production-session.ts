@@ -39,6 +39,7 @@ export type ProductionSessionRuntime = Readonly<{
     port: ReleaseProviderPort;
   }>>>;
   protectedPorts: ProductionLiveProtectedCertificationPorts;
+  collectorImage?: ReleaseExecutionSession["collectorImage"];
   prepare: Parameters<typeof createProductionOperationalDependencies>[0]["prepare"];
   now?: () => number;
 }>;
@@ -116,6 +117,7 @@ export function createProductionSessionDependencies(runtime: ProductionSessionRu
       key,
       Object.freeze({ ...runtime.protectedPorts[key], origin: "project-owned" as const }),
     ])) as never,
+    ...(runtime.collectorImage ? { collectorImage: runtime.collectorImage } : {}),
     prepare: runtime.prepare,
     now: runtime.now,
   });

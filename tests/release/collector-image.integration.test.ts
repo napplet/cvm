@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { measureProductionCollectorImage } from "../../src/release/collector-image";
+import { measureProductionCollectorImage, observeUploadedCollectorRegistryImage, prepareProductionCollectorImage } from "../../src/release/collector-image";
 import { deriveReleaseTopology } from "../../src/release/topology";
 
 const root = new URL("../..", import.meta.url).pathname;
@@ -17,7 +17,7 @@ async function command(argv: readonly string[], cwd = root) {
 
 test("local collector build measures the derived immutable image and embeds the shipped config", async () => {
   const measured = await measureProductionCollectorImage({ repositoryRoot: root });
-  expect(measured.imageReference).toMatch(/^local\/napplet-cvm-collector@sha256:[a-f0-9]{64}$/u);
+  expect(measured.imageReference).toMatch(/^oci-layout@sha256:[a-f0-9]{64}$/u);
   expect(measured.imageReference).not.toMatch(/^otel\/opentelemetry-collector@/u);
   expect(measured.baseImage).toMatch(/^otel\/opentelemetry-collector@sha256:[a-f0-9]{64}$/u);
   expect(measured.collectorConfigSha256).toBe(sha256(await readFile(join(root, "infra/otel/collector.yaml"))));
@@ -36,11 +36,24 @@ test("local collector build measures the derived immutable image and embeds the 
   }
 });
 
-test("release topology binds the locally measured derived collector rather than its upstream base", async () => {
-  const topology = await deriveReleaseTopology("a".repeat(64));
-  expect(topology.controlPlane.collectorImage).toMatch(/^local\/napplet-cvm-collector@sha256:[a-f0-9]{64}$/u);
-  expect(topology.controlPlane.collectorBuild).toMatchObject({
-    baseImage: "otel/opentelemetry-collector@sha256:6ed874ea083d67a3085acfc75343f2ad11d9abe6006d7ea4a16e2dba9af14e49",
-    imageDigest: topology.controlPlane.collectorImage.slice("local/napplet-cvm-collector@sha256:".length),
-  });
+test("retains exact OCI bytes before authorization and requires an authenticated observation after upload", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "napplet-cvm-collector-oci-fact-"));
+  try {
+    const prepared = await prepareProductionCollectorImage({ repositoryRoot: root, registryTarget: "registry.example/napplet-cvm/collector", artifactDirectory: directory });
+    expect(prepared.registryAvailability).toBe("not_uploaded");
+    expect(sha256(await readFile(prepared.ociLayoutPath))).toBe(prepared.ociLayoutSha256);
+    const collector = await observeUploadedCollectorRegistryImage(prepared, {
+      async observeUploadedManifest(input) {
+        return { ...input, observedAtMs: 1 };
+      },
+    });
+    const topology = await deriveReleaseTopology("a".repeat(64), collector);
+    expect(topology.controlPlane.collectorImage).toBe(collector.imageReference);
+    expect(topology.controlPlane.collectorBuild).toMatchObject({
+      baseImage: "otel/opentelemetry-collector@sha256:6ed874ea083d67a3085acfc75343f2ad11d9abe6006d7ea4a16e2dba9af14e49",
+      manifestDigest: collector.localOciManifestDigest.slice(7),
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

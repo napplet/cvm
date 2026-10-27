@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createOfficialPricingSources } from "../../src/release/costs/official-sources";
 import { createCertificationBudgetCatalog, createProductionLiveCostCatalog } from "../../src/release/costs/production-catalog";
 import { createLiveCostEstimator, RELEASE_COST_FAMILIES } from "../../src/release/costs/live-estimator";
-import { materializePreapproval, verifyPreapprovalMaterialization } from "../../src/release/preapproval-materializer";
+import { loadPreparedCollectorPreapproval, materializePreapproval, verifyPreapprovalMaterialization } from "../../src/release/preapproval-materializer";
 import { deriveReleaseTopology } from "../../src/release/topology";
 import { RELEASE_TOPOLOGY_QUANTITY_CONTRACT } from "../../src/release/topology";
 
@@ -170,6 +170,9 @@ test("materializes create-only receipt-free preapproval bytes and remeasures eve
     const repositoryRoot = process.cwd();
     const factoryModule = resolve(repositoryRoot, "src/release/deployment/production-factory.ts");
     const factoryConfig = resolve(repositoryRoot, "src/release/deployment/factory.ts");
+    const collectorPath = join(workspace, "collector-oci", `${pin("manifest")}.oci.tar`);
+    await mkdir(join(workspace, "collector-oci"), { recursive: true });
+    await writeFile(collectorPath, "exact-local-oci-layout");
     const input = {
       workspace,
       repositoryRoot,
@@ -180,6 +183,7 @@ test("materializes create-only receipt-free preapproval bytes and remeasures eve
       authorization: { authorizationRequestSha256: pin("request"), controllerStateSha256: pin("state"), effectPlanSha256: pin("effects"), providerScopesSha256: pin("scopes"), maximumAuthorizedCostMicros: 1, cleanupByMs: 1_000, expiresAtMs: 2_000 },
       publicSettings: { regions: ["europe-west1", "us-central1"] as [string, string], maximumRunDurationMs: 900_000, retentionDays: 30 },
       opaqueReferenceNames: ["cloud-run", "modal"],
+      collector: { plannedRegistryReference: `registry.example/napplet-cvm/collector@sha256:${pin("manifest")}`, registryAvailability: "not_uploaded" as const, localOciManifestDigest: `sha256:${pin("manifest")}`, localOciConfigDigest: `sha256:${pin("config")}`, platform: { os: "linux" as const, architecture: "amd64" as const }, baseImage: `otel/opentelemetry-collector@sha256:${pin("base")}`, dockerfileSha256: pin("dockerfile"), collectorConfigSha256: pin("collector-config"), ociLayoutPath: collectorPath, ociLayoutSha256: sha256("exact-local-oci-layout") },
       factory: {
         root: repositoryRoot,
         modulePath: factoryModule,
@@ -194,6 +198,7 @@ test("materializes create-only receipt-free preapproval bytes and remeasures eve
     expect(first.artifactPath).toStartWith(workspace);
     expect(first.artifactSha256).toBe(sha256(await readFile(first.artifactPath)));
     expect(await verifyPreapprovalMaterialization(first)).toEqual(first);
+    await expect(loadPreparedCollectorPreapproval({ workspace, candidateId: pin("candidate"), authorizationRequestSha256: pin("request") })).resolves.toEqual(first.collector);
     const artifact = await readFile(first.artifactPath, "utf8");
     for (const forbidden of ["receipt", "workerSelection", "evidence", "trust", "evaluator", "pass", "secret://"]) expect(artifact.toLowerCase()).not.toContain(forbidden.toLowerCase());
     expect(JSON.parse(artifact)).toMatchObject({ authorization: { authorizationRequestSha256: pin("request"), controllerStateSha256: pin("state"), effectPlanSha256: pin("effects"), providerScopesSha256: pin("scopes"), maximumAuthorizedCostMicros: 1, cleanupByMs: 1_000, expiresAtMs: 2_000 } });
@@ -210,11 +215,15 @@ test("rejects authority-shaped inputs, cross-bound hashes, and paths outside the
     const repositoryRoot = process.cwd();
     const modulePath = resolve(repositoryRoot, "src/release/deployment/production-factory.ts");
     const configPath = resolve(repositoryRoot, "src/release/deployment/factory.ts");
+    const collectorPath = join(workspace, "collector-oci", `${pin("manifest")}.oci.tar`);
+    await mkdir(join(workspace, "collector-oci"), { recursive: true });
+    await writeFile(collectorPath, "exact-local-oci-layout");
     const input = {
       workspace, repositoryRoot, candidateId: pin("candidate"), source: { sourceRevision: "a".repeat(40), sourceSha256: pin("source") },
       topology: { candidateSha256: pin("candidate"), topologySha256: pin("topology") }, catalog: { catalogSha256: pin("catalog"), topologySha256: pin("topology") },
       authorization: { authorizationRequestSha256: pin("request"), controllerStateSha256: pin("state"), effectPlanSha256: pin("effects"), providerScopesSha256: pin("scopes"), maximumAuthorizedCostMicros: 1, cleanupByMs: 1_000, expiresAtMs: 2_000 },
       publicSettings: { regions: ["europe-west1", "us-central1"] as [string, string], maximumRunDurationMs: 900_000, retentionDays: 30 }, opaqueReferenceNames: ["modal"],
+      collector: { plannedRegistryReference: `registry.example/napplet-cvm/collector@sha256:${pin("manifest")}`, registryAvailability: "not_uploaded" as const, localOciManifestDigest: `sha256:${pin("manifest")}`, localOciConfigDigest: `sha256:${pin("config")}`, platform: { os: "linux" as const, architecture: "amd64" as const }, baseImage: `otel/opentelemetry-collector@sha256:${pin("base")}`, dockerfileSha256: pin("dockerfile"), collectorConfigSha256: pin("collector-config"), ociLayoutPath: collectorPath, ociLayoutSha256: sha256("exact-local-oci-layout") },
       factory: { root: repositoryRoot, modulePath, moduleSha256: sha256(await readFile(modulePath)), configPath, configSha256: sha256(await readFile(configPath)) },
     };
     await expect(materializePreapproval({ ...input, authorizationReceiptSha256: pin("receipt") } as never)).rejects.toThrow("PREAPPROVAL_INPUT_REJECTED");

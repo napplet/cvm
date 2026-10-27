@@ -48,6 +48,7 @@ export async function openProductionGenerationRuntime(input: Readonly<{ config: 
     const admissionObserver = new ProductionCertificationCoreServices({
       candidates: { modal: config.candidateSha256, fly: config.candidateSha256 },
       certificationOwnerPubkey: certificationClientPubkey,
+      authorizationRequestSha256: authorization.authorizationRequestSha256,
       requestedCap: "1",
       capacities: dependencies.certificationCapacities,
       selectedProvider: config.worker.selectedProvider,

@@ -75,6 +75,7 @@ export function registerCompleteDeploymentClientFamilies(input: Readonly<{
 
 export type DeploymentFactoryRuntime = Readonly<{
   registry: ReleaseProviderRegistry;
+  collectorImage?: ReleaseExecutionSession["collectorImage"];
   prepareAuthorizedExecution: ReleaseExecutionSession["prepareAuthorizedExecution"];
 }>;
 
@@ -137,6 +138,7 @@ export function createDeploymentReleaseExecutionSession(
   const registry = exactRegistry(runtime.registry);
   return Object.freeze({
     registry,
+    ...(runtime.collectorImage ? { collectorImage: runtime.collectorImage } : {}),
     async prepareAuthorizedExecution(authorizationInput) {
       const prepared = await runtime.prepareAuthorizedExecution(authorizationInput);
       return assertPreparedExecution(input, authorizationInput.authorizationRequest, prepared);

@@ -1,6 +1,6 @@
 import { canonicalJson } from "../promotion/schema";
 import { ReleaseTopologyObservationSchema, type ReleaseTopologyObservation } from "./contracts";
-import { measureProductionCollectorImage } from "./collector-image";
+import type { ObservedCollectorRegistryImage, PreparedCollectorImage } from "./collector-image";
 
 export const RELEASE_PROVIDER_IDS = [
   "cloud_run", "gcs", "collector", "cloud_sql_postgres", "modal", "fly",
@@ -63,19 +63,12 @@ export const RELEASE_TOPOLOGY_QUANTITY_CONTRACT: readonly ReleaseTopologyQuantit
   component("compatible_host", "compatible_host.global", "global", "operation", 2_000_000_000n, 0),
   component("signer", "signer.global", "global", "operation", 1_000_000_000n, 0),
   component("promoted_cli", "promoted_cli.global", "global", "operation", 2_000_000_000n, 0),
-  component("upload", "upload.global", "global", "operation", 2_000_000_000n, 0),
+  /** One bounded Artifact Registry upload/manifest observation is authorized
+   * separately from the two napplet publication uploads. */
+  component("upload", "upload.global", "global", "operation", 3_000_000_000n, 0),
   component("owner_relay", "owner_relay.global", "global", "operation", 2_000_000_000n, 0),
   component("attestation_relay", "attestation_relay.global", "global", "operation", 2_000_000_000n, 0),
 ]);
-
-let collectorMeasurement: ReturnType<typeof measureProductionCollectorImage> | undefined;
-function measuredCollectorImage() {
-  // A topology must bind the image built from this repository's recipe.  The
-  // one process-local promise keeps repeated reconciliation reads pure after
-  // the initial local measurement and never pushes to a registry.
-  collectorMeasurement ??= measureProductionCollectorImage({ repositoryRoot: process.cwd() });
-  return collectorMeasurement;
-}
 
 async function digest(value: unknown): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalJson(value)));
@@ -83,8 +76,9 @@ async function digest(value: unknown): Promise<string> {
 }
 
 /** Desired topology is owned by the project. Candidate bytes bind it, but never select it. */
-export async function deriveReleaseTopology(candidateSha256: string): Promise<ReleaseTopologyObservation> {
-  const collector = await measuredCollectorImage();
+/** A prepared OCI layout supplies the immutable desired image before consent;
+ * only the controller's provision gate accepts an observed registry image. */
+export async function deriveReleaseTopology(candidateSha256: string, collector?: PreparedCollectorImage | ObservedCollectorRegistryImage): Promise<ReleaseTopologyObservation> {
   const quantityContract = RELEASE_TOPOLOGY_QUANTITY_CONTRACT.map((line) => ({ ...line, quantityNanos: line.quantityNanos.toString() }));
   const base = {
     version: 1 as const,
@@ -92,12 +86,9 @@ export async function deriveReleaseTopology(candidateSha256: string): Promise<Re
     controlPlane: {
       regions: ["europe-west1", "us-central1"] as [string, string],
       minimumInstancesPerRegion: 3 as const,
-      collectorImage: collector.imageReference,
+      collectorImage: collector?.plannedRegistryReference ?? "registry-measurement-required",
       collectorBuild: {
-        imageDigest: collector.imageDigest,
-        baseImage: collector.baseImage,
-        dockerfileSha256: collector.dockerfileSha256,
-        collectorConfigSha256: collector.collectorConfigSha256,
+        ...(collector ? { manifestDigest: collector.localOciManifestDigest.slice(7), configDigest: collector.localOciConfigDigest.slice(7), baseImage: collector.baseImage, dockerfileSha256: collector.dockerfileSha256, collectorConfigSha256: collector.collectorConfigSha256 } : { baseImage: "otel/opentelemetry-collector@sha256:6ed874ea083d67a3085acfc75343f2ad11d9abe6006d7ea4a16e2dba9af14e49", dockerfileSha256: "0".repeat(64), collectorConfigSha256: "0".repeat(64) }),
       },
     },
     objectStore: { dualRegion: "nam4", versioning: true as const, retentionDays: 30 as const, encryption: "customer-managed-key-required" as const, lifecycle: "delete-after-30-days" as const },

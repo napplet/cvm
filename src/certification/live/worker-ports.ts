@@ -55,14 +55,26 @@ export async function executeIdenticalWorkerCohorts(input: Readonly<{
   const time = z.object({ observedAtMs: z.number().int().nonnegative(), expiresAtMs: z.number().int().positive() }).safeParse(input);
   if (!candidates.success || !time.success || new Set(candidates.data.map((value) => value.candidate.provider)).size !== 2) return unselected("CANDIDATE_INPUT_INVALID");
   if (candidates.data.some((value) => value.observationPort.evidenceClass !== "protected_live")) return unselected("PROTECTED_EVIDENCE_REQUIRED");
-  const now = (input.now ?? Date.now)();
-  if (time.data.observedAtMs >= time.data.expiresAtMs || now >= time.data.expiresAtMs) return unselected("EVIDENCE_STALE");
+  const clock = input.now ?? Date.now;
+  let lastNow = time.data.observedAtMs;
+  let stale = false;
+  const isFresh = () => {
+    const now = clock();
+    stale ||= !Number.isSafeInteger(now) || now < lastNow || now >= time.data.expiresAtMs || time.data.observedAtMs >= time.data.expiresAtMs;
+    lastNow = now;
+    return !stale;
+  };
+  if (!isFresh()) return unselected("EVIDENCE_STALE");
 
   try {
     const benchmarks = await Promise.all(candidates.data.map(async (entry) => ({
       entry,
-      benchmark: await runWorkerCandidateBenchmark({ candidate: entry.candidate, profile: ExactProfile, execute: (sample) => entry.observationPort.executeSample(sample) }),
+      benchmark: await runWorkerCandidateBenchmark({ candidate: entry.candidate, profile: ExactProfile, execute: (sample) => {
+        if (!isFresh()) throw new Error("WORKER_COHORT_EVIDENCE_EXPIRED");
+        return entry.observationPort.executeSample(sample);
+      } }),
     })));
+    if (!isFresh()) return unselected("EVIDENCE_STALE");
     if (!sameSchedule(benchmarks[0]!.benchmark.samples, benchmarks[1]!.benchmark.samples)) return unselected("SCHEDULE_MISMATCH");
     const evaluated = benchmarks.map((value) => ({ ...value, evaluation: evaluateAdmissionSlo(value.benchmark) }));
     if (evaluated.some((value) => value.evaluation.status !== "passed" || value.evaluation.upperP95Ms === null)) return unselected("SLO_OR_SAFETY_FAILED");
@@ -75,8 +87,9 @@ export async function executeIdenticalWorkerCohorts(input: Readonly<{
       candidates: evaluated.map(({ entry, evaluation }) => ({ candidateId: entry.candidate.id, provider: entry.candidate.provider, topologySha256: entry.topologySha256, count: evaluation.count, upperP95Ms: evaluation.upperP95Ms, rejectionRate: evaluation.rejectionRate, reasonCode: evaluation.reasonCode })),
       selected: { candidateId: winner.entry.candidate.id, provider: winner.entry.candidate.provider, topologySha256: winner.entry.topologySha256 },
     });
+    if (!isFresh()) return unselected("EVIDENCE_STALE");
     return Object.freeze({ status: "selected", provider: winner.entry.candidate.provider, topologySha256: winner.entry.topologySha256, selectionEvidenceSha256, reasonCode: "SELECTED_FROM_FRESH_EVIDENCE" });
   } catch {
-    return unselected("SLO_OR_SAFETY_FAILED");
+    return unselected(stale ? "EVIDENCE_STALE" : "SLO_OR_SAFETY_FAILED");
   }
 }

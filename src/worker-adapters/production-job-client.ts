@@ -184,6 +184,18 @@ export class ProductionWorkerJobClient {
       return validate(await this.#exec(job, ["restore", archiveSha256, String(Math.ceil(input.bytes.length / CHUNK))]));
     } catch { return { state: "unknown" as const, archiveSha256 }; }
   }
+  /** Strictly query the original restore claim.  In particular, this never
+   * claims a journal record, uploads archive chunks, or sends restore. */
+  async observeRestoreWorkspace(input: Readonly<{ operationId: string; archiveSha256: string; bindingSha256: string }>) {
+    if (!/^[a-z][a-z0-9:_-]{2,240}$/u.test(input.operationId)) throw new Error("PRODUCTION_RESTORE_OPERATION_INVALID");
+    const archiveSha256 = Digest.parse(input.archiveSha256); Digest.parse(input.bindingSha256);
+    const record = await this.input.jobJournal.read<StoredRestore>(`worker-restore:${input.operationId}`);
+    if (!record || record.identitySha256 !== sha(canonicalJson({ workerOperationId: record.value.workerOperationId, workerResourceId: record.value.workerResourceId, leaseSha256: record.value.leaseSha256, archiveSha256, bindingSha256: input.bindingSha256 })) || record.value.workerOperationId !== this.input.workerOperationId || record.value.archiveSha256 !== archiveSha256 || record.value.bindingSha256 !== input.bindingSha256) return { state: "unknown" as const, archiveSha256 };
+    try {
+      const observed = RestoreObservation.parse(await this.#exec(record.value, ["restore-status", archiveSha256]));
+      return observed.archiveSha256 === archiveSha256 ? observed : { state: "unknown" as const, archiveSha256 };
+    } catch { return { state: "unknown" as const, archiveSha256 }; }
+  }
   /** Called only after the coordinator commits encrypted checkpoint ownership.
    * Provider transports reconcile deletion of their exact original resource. */
   async terminate() {

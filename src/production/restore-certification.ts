@@ -37,9 +37,15 @@ export type ProductionFreshRestoreInstance = Readonly<{
   startAfterRestore(): Promise<void>;
   openRetainedArchive(input: Readonly<{ subject: z.infer<typeof DurabilitySubjectSchema>; expected: z.infer<typeof Expected> }>): Promise<ProductionRetainedArchive>;
   reattachOriginal(input: Readonly<{ sourceIdentity: string; archive: Uint8Array; expected: z.infer<typeof Expected> }>): Promise<Readonly<{ status: "reattached" | "replayed" | "reconciliation_pending"; workerId?: string }>>;
+  /** Query-only recovery for a lost reattach acknowledgement. */
+  observeReattach(input: Readonly<{ sourceIdentity: string; archiveSha256: string; expected: z.infer<typeof Expected> }>): Promise<Readonly<{ status: "reattached" | "replayed" | "reconciliation_pending"; workerId?: string }>>;
   exerciseExpiryDeletion(scope: ProductionRestoreScope): Promise<Readonly<{ expired: true; deleted: true }>>;
+  /** Query-only recovery for a lost retention-deletion acknowledgement. */
+  observeExpiryDeletion(scope: ProductionRestoreScope): Promise<Readonly<{ expired: true; deleted: true }>>;
   observeTopology(): Promise<unknown>;
   cleanup(): Promise<Readonly<{ state: "absent" }>>;
+  /** Query-only recovery for a lost fresh-resource cleanup acknowledgement. */
+  observeCleanup(): Promise<Readonly<{ state: "absent" | "unknown" }>>;
 }>;
 
 /** Implemented by the mounted production infrastructure client.  The control
@@ -50,11 +56,15 @@ export type ProductionFreshRestoreProvisioner = Readonly<{
   /** Observation-only reconstruction after a control-plane restart. It may
    * inspect the original resources but must never provision replacements. */
   attach(input: Readonly<{ freshInstanceId: string; sourceInstanceId: string; databaseInstanceId: string; migrationDatabaseInstanceId: string; applicationInstanceId: string; providerOperationId: string }>): Promise<ProductionFreshRestoreInstance>;
+  observeCleanup(input: Readonly<{ freshInstanceId: string; sourceInstanceId: string; databaseInstanceId: string; migrationDatabaseInstanceId: string; applicationInstanceId: string; providerOperationId: string }>): Promise<Readonly<{ state: "absent" | "unknown" }>>;
 }>;
 
 type FreshRun = Readonly<{ instance: ProductionFreshRestoreInstance; backupSha256: string; scope: ProductionRestoreScope; expected: z.infer<typeof Expected>; subjects: readonly z.infer<typeof DurabilitySubjectSchema>[] }>;
 type RestoreSubjectCommand = z.infer<typeof CoreControlPayloadSchemas["restore.subject"]>;
-const FreshRecord = z.object({ freshInstanceId: Identity, sourceInstanceId: Identity, databaseInstanceId: Identity, migrationDatabaseInstanceId: Identity, applicationInstanceId: Identity, providerOperationId: Identity, backupSha256: Digest }).strict();
+const FreshRecord = z.object({
+  freshInstanceId: Identity, sourceInstanceId: Identity, databaseInstanceId: Identity, migrationDatabaseInstanceId: Identity, applicationInstanceId: Identity, providerOperationId: Identity, backupSha256: Digest,
+  expected: Expected, subjects: z.array(DurabilitySubjectSchema).length(7),
+}).strict();
 const services = new WeakSet<object>();
 
 export function assertProductionRestoreCertification(value: unknown): asserts value is ProductionRestoreCertification {
@@ -86,7 +96,7 @@ export class ProductionRestoreCertification implements Pick<ProductionCertificat
   }>) {
     Identity.parse(input.sourceInstanceId); Identity.parse(input.scope.checkpointId); Identity.parse(input.scope.sessionId); Identity.parse(input.scope.ownerId);
     Digest.parse(input.candidateSha256); Digest.parse(input.topologySha256);
-    if (!input.provisioner || typeof input.provisioner.create !== "function" || typeof input.provisioner.attach !== "function") throw new Error("PRODUCTION_FRESH_RESTORE_PROVISIONER_REQUIRED");
+    if (!input.provisioner || typeof input.provisioner.create !== "function" || typeof input.provisioner.attach !== "function" || typeof input.provisioner.observeCleanup !== "function") throw new Error("PRODUCTION_FRESH_RESTORE_PROVISIONER_REQUIRED");
     this.#sourcePool = bindAccountingRealmPool(input.sourcePool, createAccountingRealm("production-real"));
     services.add(this);
   }
@@ -107,9 +117,30 @@ export class ProductionRestoreCertification implements Pick<ProductionCertificat
    * clone, backup, archive write, worker restore, or cleanup operation. */
   async reconcile(input: Readonly<{ operationId: string; kind: string; payload: unknown }>): Promise<unknown> {
     if (!input.kind.startsWith("restore.")) throw new Error("PRODUCTION_RESTORE_RECONCILIATION_UNAVAILABLE");
-    const run = this.#runs.get(input.operationId) ?? await this.#attach(input.operationId);
-    if (!run) throw new Error("PRODUCTION_RESTORE_ORIGINAL_OPERATION_REQUIRED");
-    return this.#fresh(run);
+    switch (input.kind) {
+      case "restore.create": {
+        CoreControlPayloadSchemas["restore.create"].parse(input.payload);
+        const run = this.#runs.get(input.operationId) ?? await this.#attach(input.operationId);
+        if (!run) throw new Error("PRODUCTION_RESTORE_ORIGINAL_OPERATION_REQUIRED");
+        return this.#fresh(run);
+      }
+      case "restore.inventory": CoreControlPayloadSchemas["restore.inventory"].parse(input.payload); return this.#inventory(this.#sourcePool, this.input.scope);
+      case "restore.lose-local": CoreControlPayloadSchemas["restore.lose-local"].parse(input.payload); return Object.freeze({ status: "lost" as const });
+      case "restore.subject": return this.#reconcileSubject(CoreControlPayloadSchemas["restore.subject"].parse(input.payload));
+      case "restore.expiry": {
+        const payload = CoreControlPayloadSchemas["restore.expiry"].parse(input.payload);
+        return (await this.#run(payload.freshInstanceId)).instance.observeExpiryDeletion(this.input.scope);
+      }
+      case "restore.topology": {
+        const payload = CoreControlPayloadSchemas["restore.topology"].parse(input.payload);
+        return this.#topology(payload.freshInstanceId);
+      }
+      case "restore.cleanup": {
+        const payload = CoreControlPayloadSchemas["restore.cleanup"].parse(input.payload);
+        return this.#observeCleanup(payload.freshInstanceId);
+      }
+      default: throw new Error("PRODUCTION_RESTORE_RECONCILIATION_UNAVAILABLE");
+    }
   }
 
   async #inventory(pool: PostgresSqlPool, scope: ProductionRestoreScope) {
@@ -141,7 +172,7 @@ export class ProductionRestoreCertification implements Pick<ProductionCertificat
       const freshPool = bindAccountingRealmPool(instance.pool, createAccountingRealm("production-real"));
       const subjects = await this.#inventory(freshPool, this.input.scope);
       const expected = await this.#expected(freshPool, this.input.scope);
-      const persisted = FreshRecord.parse({ freshInstanceId: instance.freshInstanceId, sourceInstanceId: instance.sourceInstanceId, databaseInstanceId: instance.databaseInstanceId, migrationDatabaseInstanceId: instance.migrationDatabaseInstanceId, applicationInstanceId: instance.applicationInstanceId, providerOperationId: instance.providerOperationId, backupSha256: archive.manifest.archiveSha256 });
+      const persisted = FreshRecord.parse({ freshInstanceId: instance.freshInstanceId, sourceInstanceId: instance.sourceInstanceId, databaseInstanceId: instance.databaseInstanceId, migrationDatabaseInstanceId: instance.migrationDatabaseInstanceId, applicationInstanceId: instance.applicationInstanceId, providerOperationId: instance.providerOperationId, backupSha256: archive.manifest.archiveSha256, expected, subjects });
       await this.input.journal.claim(this.#freshKey(operationId), sha(JSON.stringify(persisted)), persisted);
       const run = Object.freeze({ instance, backupSha256: archive.manifest.archiveSha256, scope: this.input.scope, expected, subjects });
       this.#runs.set(operationId, run);
@@ -156,12 +187,12 @@ export class ProductionRestoreCertification implements Pick<ProductionCertificat
   async #attach(operationId: string): Promise<FreshRun | undefined> {
     const record = await this.input.journal.read<unknown>(this.#freshKey(operationId));
     if (!record) return undefined;
-    const persisted = FreshRecord.parse(record.value);
+    return this.#fromPersisted(FreshRecord.parse(record.value), operationId);
+  }
+  async #fromPersisted(persisted: z.infer<typeof FreshRecord>, operationId: string): Promise<FreshRun> {
     const instance = await this.input.provisioner.attach(persisted);
     if (instance.freshInstanceId !== persisted.freshInstanceId || instance.sourceInstanceId !== persisted.sourceInstanceId || instance.databaseInstanceId !== persisted.databaseInstanceId || instance.migrationDatabaseInstanceId !== persisted.migrationDatabaseInstanceId || instance.applicationInstanceId !== persisted.applicationInstanceId || instance.providerOperationId !== persisted.providerOperationId) throw new Error("PRODUCTION_RESTORE_RESOURCE_BINDING_DENIED");
-    const freshPool = bindAccountingRealmPool(instance.pool, createAccountingRealm("production-real"));
-    const subjects = await this.#inventory(freshPool, this.input.scope), expected = await this.#expected(freshPool, this.input.scope);
-    const run = Object.freeze({ instance, backupSha256: persisted.backupSha256, scope: this.input.scope, expected, subjects }); this.#runs.set(operationId, run); return run;
+    const run = Object.freeze({ instance, backupSha256: persisted.backupSha256, scope: this.input.scope, expected: persisted.expected, subjects: persisted.subjects }); this.#runs.set(operationId, run); return run;
   }
   async #run(id: string): Promise<FreshRun> {
     for (const run of this.#runs.values()) if (run.instance.freshInstanceId === id) return run;
@@ -170,14 +201,12 @@ export class ProductionRestoreCertification implements Pick<ProductionCertificat
     // resource tuple written by #create; ambiguity and absence fail closed.
     const record = await this.input.journal.readUniqueByValueField<unknown>("freshInstanceId", Identity.parse(id));
     if (!record) throw new Error("PRODUCTION_RESTORE_FRESH_INSTANCE_ORIGINAL_REQUIRED");
-    const persisted = FreshRecord.parse(record.value);
-    const instance = await this.input.provisioner.attach(persisted);
-    if (instance.freshInstanceId !== persisted.freshInstanceId || instance.sourceInstanceId !== persisted.sourceInstanceId || instance.databaseInstanceId !== persisted.databaseInstanceId || instance.migrationDatabaseInstanceId !== persisted.migrationDatabaseInstanceId || instance.applicationInstanceId !== persisted.applicationInstanceId || instance.providerOperationId !== persisted.providerOperationId) throw new Error("PRODUCTION_RESTORE_RESOURCE_BINDING_DENIED");
-    const freshPool = bindAccountingRealmPool(instance.pool, createAccountingRealm("production-real"));
-    const subjects = await this.#inventory(freshPool, this.input.scope), expected = await this.#expected(freshPool, this.input.scope);
-    const rebuilt = Object.freeze({ instance, backupSha256: persisted.backupSha256, scope: this.input.scope, expected, subjects });
-    this.#runs.set(record.operationId, rebuilt);
-    return rebuilt;
+    return this.#fromPersisted(FreshRecord.parse(record.value), record.operationId);
+  }
+  async #observeCleanup(freshInstanceId: string) {
+    const record = await this.input.journal.readUniqueByValueField<unknown>("freshInstanceId", Identity.parse(freshInstanceId));
+    if (!record) throw new Error("PRODUCTION_RESTORE_FRESH_INSTANCE_ORIGINAL_REQUIRED");
+    return this.input.provisioner.observeCleanup(FreshRecord.parse(record.value));
   }
 
   async #expected(pool: PostgresSqlPool, scope: ProductionRestoreScope) {
@@ -211,6 +240,15 @@ export class ProductionRestoreCertification implements Pick<ProductionCertificat
     const material = await run.instance.openRetainedArchive({ subject: known, expected: run.expected });
     if (sha(material.archive) !== known.payloadSha256) throw new Error("PRODUCTION_RESTORE_ARCHIVE_FACTS_DENIED");
     return run.instance.reattachOriginal({ sourceIdentity: known.sourceIdentity, archive: material.archive, expected: run.expected });
+  }
+  async #reconcileSubject(payload: RestoreSubjectCommand) {
+    if (payload.action !== "reattach") return this.#subject(payload);
+    const run = await this.#run(payload.freshInstanceId);
+    const subject = DurabilitySubjectSchema.parse(payload.subject);
+    const known = run.subjects.find(item => item.kind === subject.kind && item.sourceIdentity === subject.sourceIdentity && JSON.stringify(item.object) === JSON.stringify(subject.object));
+    if (!known || JSON.stringify(known) !== JSON.stringify(subject)) throw new Error("PRODUCTION_RESTORE_SUBJECT_BINDING_DENIED");
+    if (payload.archiveSha256 !== known.payloadSha256 || JSON.stringify(payload.expected) !== JSON.stringify(run.expected)) throw new Error("PRODUCTION_RESTORE_REATTACH_BINDING_DENIED");
+    return run.instance.observeReattach({ sourceIdentity: known.sourceIdentity, archiveSha256: known.payloadSha256, expected: run.expected });
   }
   async #ciphertext(run: FreshRun, subject: z.infer<typeof DurabilitySubjectSchema>) {
     const bytes = await run.instance.objectStore.readExact(subject.object);

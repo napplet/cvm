@@ -12,6 +12,7 @@ on:
       - "src/promotion/**"
       - "src/resilience/fault-harness.ts"
       - "tests/release/live-operations-adapters.test.ts"
+      - "tests/release/worker-selection-freshness.test.ts"
       - "tests/phase-07/fault-matrix.test.ts"
       - "scripts/certify-release.ts"
       - "tests/release/finalized-bundle.test.ts"
@@ -41,3 +42,5 @@ jobs:
         run: NAPPLET_RUN_POSTGRES_ISOLATION=1 bun test tests/release/postgres-operation-journal.test.ts --timeout 120000
       - name: Independent original-operation fault oracle
         run: bun test tests/release/live-operations-adapters.test.ts tests/phase-07/fault-matrix.test.ts
+      - name: Worker selection evidence freshness
+        run: bun test tests/release/worker-selection-freshness.test.ts tests/release/modal-live-provider.test.ts tests/release/fly-live-provider.test.ts

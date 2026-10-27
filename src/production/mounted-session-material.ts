@@ -500,10 +500,9 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
     sourceBuild: createMountedProductionSourceBuildVerifier({
       config: input.config,
       record: input.resolved,
-      authorization: {
-        authorizationRequestSha256: input.generation.authorization.authorizationRequestSha256,
-        authorizationReceiptSha256: input.generation.authorization.authorizationReceiptSha256,
-      },
+      authorization: input.generation.authorization,
+      dependencies,
+      now,
     }),
   });
   const providerPorts: Partial<Record<ReleaseProviderId, ReleaseProviderPort>> = {

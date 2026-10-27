@@ -223,8 +223,8 @@ function isReleaseExecutionSession(value: unknown): value is ReleaseExecutionSes
   if (!value || typeof value !== "object") return false;
   const session = value as Partial<ReleaseExecutionSession>;
   const keys = Object.keys(session).sort();
-  if (keys.length !== 2 || keys[0] !== "prepareAuthorizedExecution" || keys[1] !== "registry") return false;
-  if (typeof session.prepareAuthorizedExecution !== "function" || !session.registry || typeof session.registry !== "object") return false;
+  if (!((keys.length === 2 && keys[0] === "prepareAuthorizedExecution" && keys[1] === "registry") || (keys.length === 3 && keys[0] === "collectorImage" && keys[1] === "prepareAuthorizedExecution" && keys[2] === "registry"))) return false;
+  if (typeof session.prepareAuthorizedExecution !== "function" || !session.registry || typeof session.registry !== "object" || (session.collectorImage !== undefined && typeof session.collectorImage.uploadAndObserve !== "function")) return false;
   const registry = session.registry as { providers?: unknown; discover?: unknown; plan?: unknown; apply?: unknown; observe?: unknown; cleanup?: unknown };
   if (typeof registry.providers !== "function" || typeof registry.discover !== "function" || typeof registry.plan !== "function" || typeof registry.apply !== "function" || typeof registry.observe !== "function" || typeof registry.cleanup !== "function") return false;
   try {
@@ -385,6 +385,7 @@ export async function loadReleaseExecutionSession(input: Readonly<{
   const completeSession = session;
   return Object.freeze({
     registry: completeSession.registry,
+    ...(completeSession.collectorImage ? { collectorImage: completeSession.collectorImage } : {}),
     async prepareAuthorizedExecution(authorizedInput) {
       const prepared = await completeSession.prepareAuthorizedExecution(authorizedInput);
       if (!isCompletePreparedExecution(prepared)) throw new Error("RELEASE_PRODUCTION_EXECUTION_PREPARATION_INVALID");

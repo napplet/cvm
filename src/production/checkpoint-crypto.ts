@@ -141,6 +141,13 @@ export class MountedKekCheckpointCrypto implements CheckpointCryptoPort {
     return Object.freeze({ keyReference: record.keyReference, nonce: new Uint8Array(record.nonce), ciphertext: new Uint8Array(record.ciphertext), ciphertextSha256: record.ciphertextSha256, aadSha256: record.aadSha256, retentionUntil: record.retentionUntil });
   }
 
+  /** Query-only destruction proof used by the independent restore authority.
+   * It intentionally exposes neither ciphertext nor key material. */
+  async isDestroyed(keyReference: string): Promise<boolean> {
+    const record = await this.#findByKeyReference(Identifier.parse(keyReference));
+    return record?.state === "destroyed" && record.wrappedDek === undefined;
+  }
+
   async #loadKek(): Promise<CryptoKey> {
     const raw = await (this.input.readFile ?? nativeReadFile)(this.input.kekPath);
     const encoded = typeof raw === "string" ? raw.trim() : new TextDecoder().decode(raw).trim();

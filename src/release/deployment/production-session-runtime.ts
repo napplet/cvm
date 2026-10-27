@@ -33,6 +33,7 @@ import {
 import { createProductionCoreSuiteAdapters } from "./production-core-suite-adapters";
 import type { DeploymentExecutionConfig } from "./config";
 import { PRODUCTION_FACTORY_SECRET_REFERENCE_NAMES } from "./production-factory";
+import { observeUploadedCollectorRegistryImage, readPreparedCollectorOci } from "../collector-image";
 
 type ProviderDescriptor = Readonly<{
   origin: "project-owned";
@@ -299,7 +300,17 @@ export function assembleProductionSessionRuntime(input: Readonly<{
     const descriptor = broker.providers[id];
     return [id, Object.freeze({ ...descriptor, port: instrument(descriptor.port, counters) })];
   })) as Record<ReleaseProviderId, ProviderDescriptor>);
-  const runtime = Object.freeze({ receipt: input.receipt, journal: broker.journal, providers, protectedPorts, prepare: broker.prepare, now: broker.now });
+  const collectorImage = Object.freeze({
+    async uploadAndObserve(value: Readonly<{ authorizationRequest: { authorizationRequestSha256: string; candidateSha256: string; topologySha256: string }; collector: Parameters<typeof readPreparedCollectorOci>[0] }>) {
+      const receiptBinding = input.receipt as Partial<{ authorizationRequestSha256: unknown; candidateSha256: unknown; topologySha256: unknown }>;
+      if (receiptBinding.authorizationRequestSha256 !== value.authorizationRequest.authorizationRequestSha256 || receiptBinding.candidateSha256 !== value.authorizationRequest.candidateSha256 || receiptBinding.topologySha256 !== value.authorizationRequest.topologySha256) throw new Error("COLLECTOR_UPLOAD_AUTHORIZATION_BINDING_REQUIRED");
+      const operationId = `collector-${new Bun.CryptoHasher("sha256").update(value.authorizationRequest.authorizationRequestSha256).digest("hex").slice(0, 40)}`;
+      const uploaded = await broker.clients.google.collector.uploadOciImage({ operationId, image: await readPreparedCollectorOci(value.collector) });
+      if (uploaded.status !== "completed") throw new Error("COLLECTOR_UPLOAD_RECONCILIATION_REQUIRED");
+      return observeUploadedCollectorRegistryImage(value.collector, broker.clients.google.collector);
+    },
+  });
+  const runtime = Object.freeze({ receipt: input.receipt, journal: broker.journal, providers, protectedPorts, collectorImage, prepare: broker.prepare, now: broker.now });
   /* Freeze the public snapshot, not its private backing store. The getters
    * expose measured invocation counts throughout the session without giving a
    * caller a writable counter or a way to reset evidence. */

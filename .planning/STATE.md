@@ -5,10 +5,10 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: in_progress
-stopped_at: Plans 07-59/60 merged with required CI green; Plan 07-63 reviewed; Plan 07-64 implementation review; no protected effects authorized
-last_updated: "2026-10-27T15:31:49.392100+00:00"
+stopped_at: Plans 07-59/60/63 merged with required CI green; Plan 07-64 implementation review; no protected effects authorized
+last_updated: "2026-10-27T15:47:40.154909+00:00"
 last_activity: 2026-10-27
-last_activity_desc: CI and accounting merged; Google transport PR pending GUI; worker enforcement gaps under repair
+last_activity_desc: CI, accounting and Google transports merged; worker enforcement and lifecycle gaps under repair
 progress:
   total_phases: 7
   completed_phases: 6
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION GAP CLOSURE RESUMED
-Plan: 60 of 74 complete; 07-59/60 merged, 07-63 reviewed in PR #7, 07-64 under implementation review
-Status: User resumed production readiness on 2026-10-27. Gap plans passed independent review; architecture/migration Plan 07-58 is complete and merged. Plans 07-59 and 07-60 passed all required checks and merged as PRs #5/#6; Plan 07-63 implementation passed review and 184 release tests; Plan 07-64 worker transports and image are executing. Implementation and all eight protected suites remain incomplete. Preserve the live private deployment and existing ChatGPT/test-credit history. No funding or approval request is ready.
-Last activity: 2026-10-27 — Plan 07-63 passes 184 no-effect release tests / 905 assertions, including immutable ownership and bounded reconciliation. PRs #5/#6 passed all payment/GUI/documentation gates and merged; PR #7 awaits its GUI result. Plan 07-64 initial patch remains unaccepted while enforcing real workspace/network/lifecycle controls. The earlier final full-flow NWC timeout was not reproduced locally. Private Beta remains healthy; no live migration, cloud provisioning, or real-money effects. See `07-PRODUCTION-RESUMPTION.md` and `07-PRODUCTION-GAP-MATRIX.md`.
+Plan: 60 of 74 complete; 07-59/60/63 merged, 07-64 under implementation review
+Status: User resumed production readiness on 2026-10-27. Gap plans passed independent review; architecture/migration Plan 07-58 is complete and merged. Plans 07-59 and 07-60 passed all required checks and merged as PRs #5/#6; Plan 07-63 passed review, 184 release tests, and all required CI checks, and merged as PR #7; Plan 07-64 worker transports and image are executing. Implementation and all eight protected suites remain incomplete. Preserve the live private deployment and existing ChatGPT/test-credit history. No funding or approval request is ready.
+Last activity: 2026-10-27 — Plan 07-63 passes 184 no-effect release tests / 905 assertions, including immutable ownership and bounded reconciliation. PRs #5/#6/#7 passed all payment/GUI/documentation gates and merged; Google merge is `1e7e76829ef6d88b1db300ded9866881bea59fd7`. Plan 07-64 initial patch remains unaccepted while enforcing real workspace/network/lifecycle controls. The earlier final full-flow NWC timeout was not reproduced locally. Private Beta remains healthy; no live migration, cloud provisioning, or real-money effects. See `07-PRODUCTION-RESUMPTION.md` and `07-PRODUCTION-GAP-MATRIX.md`.
 
 Follow-up: Stream assembly/counter verification remains complete. Latest helper-signature and compiler-feedback fix passed 29 targeted unit/integration cases plus activity and composed OAuth browser journeys. Real blinking-text generation also passed. See debug/resolved/generated-typescript-check.md.
 
@@ -424,6 +424,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-27T12:01:37.667746+00:00
-Stopped at: Checked production plans ready; architecture Plan 07-58 committed; CI Plan 07-59 next. Beta stays private and healthy; no protected effects authorized. Follow 07-PRODUCTION-RESUMPTION.md and 07-PRODUCTION-GAP-MATRIX.md.
+Last session: 2026-10-27T15:47:40.154909+00:00
+Stopped at: Plans 07-58/59/60/63 merged; Plan 07-64 worker implementation remains unaccepted pending actual provider lifecycle and isolation enforcement. Continue 07-64, then 07-65 pricing/model, then 07-61/62 treasury. Complete no-effect preparation through 07-73 before any authorization request. Beta remains private; no protected effects authorized. Follow 07-PRODUCTION-RESUMPTION.md and 07-PRODUCTION-GAP-MATRIX.md.
 Resume file: .planning/debug/resolved/admin-opener-auth.md

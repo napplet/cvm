@@ -137,9 +137,9 @@ status: complete
 
 **Total deviations:** 5 auto-fixed (Rules 1–2).
 
-## Known Stubs
+## Remaining Integration
 
-None.
+The Google transport layer deliberately leaves paid Vertex generation unresolved; Plan 07-65 owns its production request, usage receipt, and query-only recovery implementation. Plan 07-69 must supply a PostgreSQL journal for cross-region authority; the file journal is not a production Cloud Run durability claim.
 
 ## Next Phase Readiness
 
@@ -150,3 +150,9 @@ The code is local-contract verified only. Before a protected execution, producti
 - Confirmed task commits `f0ccbf9`, `3667aa4`, `d446235`, `708bc52`, `4a1a510`, `ced02f7`, `ffcaa5f`, and `2513670` exist and all plan artifacts exist.
 - `NAPPLET_CVM_TEST_EXTERNAL_EFFECTS=deny bun test tests/release --timeout 10000 --reporter=dot` passed: 184 tests, 905 assertions.
 - Root dependency manifest hashes are intentionally omitted: approved manifest pins are parent-owned and changed after the earlier recorded values.
+
+## Mainline and CI
+
+- PR [#7](https://github.com/napplet/cvm/pull/7) merged on 2026-10-27 as `1e7e76829ef6d88b1db300ded9866881bea59fd7`, from reviewed head `14394877d31d277a5aea280fa9e132c4b78a7d49`.
+- Required payment run `40529038199`, browser GUI run `40529038333`, and documentation run `40529038189` passed. Browser checks include real local builds, publication, restart/continuation, and post-cleanup liveness.
+- This merge did not deploy Beta, provision Google resources, migrate live data, or run protected production certification.

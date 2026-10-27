@@ -20,6 +20,10 @@ for (const mode of ["timeout", "overflow"] as const) {
       const commands: string[][] = (await readFile(log, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
       const run = commands.find((args) => args[0] === "run")!; const name = run[run.indexOf("--name") + 1];
       expect(name).toMatch(/^napplet-cvm-dev-worker-/u);
+      expect(run[run.indexOf("--user") + 1]).toMatch(/^[1-9]\d*:[1-9]\d*$/u);
+      expect(run[run.indexOf("--network") + 1]).toBe("none");
+      expect(run[run.indexOf("--cap-drop") + 1]).toBe("ALL");
+      expect(run[run.indexOf("--security-opt") + 1]).toBe("no-new-privileges");
       expect(run.at(-2)).toBe(`sha256:${"b".repeat(64)}`);
       expect(commands.filter((args) => args[0] === "rm")).toEqual([["rm", "--force", name!]]);
     } finally { await rm(root, { recursive: true, force: true }); }

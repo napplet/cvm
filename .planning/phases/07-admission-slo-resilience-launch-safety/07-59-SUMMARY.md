@@ -95,6 +95,8 @@ status: verification_pending
 
 The local Docker daemon had exhausted its predefined address pools. The executor did not prune networks or alter shared/operator Docker state. The isolated test command's `finally` cleanup targeted only its generated project; subsequent `docker ps` and network checks found no `napplet-cvm-payments-test-*` or relay-probe resource.
 
+Remote payment run `40508257133` completed all 138 selected tests: 135 passed and three failed. The real worker result test exposed native-Linux bind-mount ownership (`EACCES` removing a worker-owned directory); the development worker now matches a non-root launcher's numeric identity and retains UID/GID 65532 for root launchers, with network/capability/read-only controls intact. The authoring assertion was stale after the supported data-only `src/capabilities.json` surface was added; it now asserts that exact surface and the protected manifest/dependency/toolchain prohibition. Six focused lifecycle/authoring tests pass. The pre-admission real-worker failure requires the next full run to establish whether the ownership correction also resolves it; it has not been waived.
+
 ## Next Phase Readiness
 
 PR #5 is open. Do not mark OPS-04 complete until the retained payment and GUI workflows pass remotely.

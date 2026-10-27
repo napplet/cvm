@@ -49,11 +49,16 @@ test("actual finalizer output verifies through pinned authority and blocks mutat
   try {
     const fixture = await finalizationFixture(root);
     let promotions = 0, cleanupCalls = 0;
+    class Promotion {
+      #persisted = false;
+      async persist() { this.#persisted = true; }
+      async promote() { if (!this.#persisted) throw new Error("PERSIST_REQUIRED"); promotions++; return "promoted" as const; }
+    }
     const input = { workspace: root, candidateId: fixture.candidateId, topologySha256: fixture.topologySha256, authorizationReceiptSha256: fixture.authorizationReceiptSha256,
       protectedRecords: fixture.observations, trust: fixture.trust, verificationRecords: fixture.verificationRecords,
       sourceMeasurement: { version: 1, sourceRevision: fixture.manifest.sourceRevision, sourceSha256: fixture.manifest.sourceSha256 },
       cleanupPlan: { cleanupByMs: 10_000, retainedEvidenceDays: 30, retainedArtifactDays: 30, effects: [{ providerOperationId: "worker-op", resourceIdentitySha256: digest("worker") }] },
-      promotion: { async persist() {}, async promote() { promotions++; return "promoted" as const; } }, nowMs: 2_000,
+      promotion: new Promotion(), nowMs: 2_000,
     };
     const incomplete = await finalizeReleaseCertification(input);
     expect(incomplete.status).toBe("cleanup_incomplete");

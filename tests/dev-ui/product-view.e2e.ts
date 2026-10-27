@@ -111,5 +111,21 @@ try {
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.keyboard.press("Escape");
   assert(await page.locator("#open-settings").evaluate((el) => document.activeElement === el), "MODAL_FOCUS_LOST");
+  await page.evaluate(() => {
+    const w = window as any;
+    w.workspace.begin("revise"); w.workspace.requestKey("request:timeout");
+    w.workspace.failed("MODEL_RESPONSE_INTERRUPTED", false); w.workspace.settled();
+    w.workspace.explainFailure("The service reached its model time limit. <img src=x> Your draft is safe.");
+    const receipt = { id: "request:first", requestKey: "request:first", number: 1, kind: "create", prompt: "Counter", state: "verified", version: 1, createdAt: new Date().toISOString(), charge: "12", maximum: "3250", lines: [] };
+    w.receipts = { sessionId: "session:view", unit: "test_sat", total: { confirmed: "12", pending: 1, requests: 2 }, requests: [receipt, { ...receipt, id: "request:timeout", requestKey: "request:timeout", number: 2, kind: "revise", state: "usage_unknown", version: null, charge: null }], nextCursor: null };
+    w.workspace.costs(w.receipts); w.workspace.costs(w.receipts);
+  });
+  assert((await page.locator('[data-request-id="request:timeout"]').innerText()).includes("model time limit"), "COST_REFRESH_LOST_FAILURE_DETAIL");
+  assert(!(await page.locator('[data-request-id="request:first"]').innerText()).includes("model time limit"), "FAILURE_DETAIL_ATTACHED_TO_WRONG_REQUEST");
+  assert(await page.locator("#conversation-messages img").count() === 0, "FAILURE_DETAIL_INTERPRETED_AS_HTML");
+  await page.evaluate(() => { const w = window as any; w.workspace = new w.workspace.constructor(document.querySelector("#app"), { servicePubkey: "a".repeat(64), providerLabel: "Deterministic fixture", actionCeilingSat: "3250" }); w.workspace.costs(w.receipts); });
+  assert((await page.locator('[data-request-id="request:timeout"]').innerText()).includes("model time limit"), "SAVED_FAILURE_DETAIL_LOST");
+  await page.evaluate(() => { const w = window as any; w.receipts.requests[1].state = "verified"; w.receipts.requests[1].version = 2; w.workspace.costs(w.receipts); });
+  assert(!(await page.locator('[data-request-id="request:timeout"]').innerText()).includes("model time limit"), "RESOLVED_REQUEST_RETAINS_FAILURE_DETAIL");
   console.log(JSON.stringify({ status: "passed", case: "product-view", checks: ["text-only rendering", "budget validation/focus", "fixture labeling", "stale clock", "real stage projection", "uncertain recovery fence", "inline revision blockers", "draft preservation", "read-only status actions", "resolved status re-enables send", "responsive touch targets", "reduced motion", "dialog focus", "primary navigation contexts", "persistent mobile navigation", "historical estimates and separate maximum", "stale and overrun timing", "actual charge and recovery ETA"] }));
 } finally { await browser.close(); server.stop(true); }

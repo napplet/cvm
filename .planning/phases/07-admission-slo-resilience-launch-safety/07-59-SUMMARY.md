@@ -101,6 +101,8 @@ Payment run `40509872748` passed all 138 tests / 923 assertions at source `14428
 
 At `7db29af`, payment run `40512008210` passed again. GUI run `40512008420` passed remix, product-view and responsive flows, then exposed another stale older-version assertion. The product journey now requires the current restore-or-return explanation, an enabled restore control, and the current-version return button; direct edits to an older preview must remain disabled. Full GUI verification is still pending.
 
+At `f041e7b`, payment run `40513639887` passed. GUI run `40513639935` passed the full product journey and OAuth flow, then exposed a real timeout presentation defect: cost receipts replaced the detailed failure message with a generic outcome. Failure messages now retain their request key and enrich only the matching unresolved receipt. A browser regression failed before the fix and passes after it, including repeated refresh, saved workspace reconstruction, text-only rendering, and suppression after successful reconciliation. Full remote GUI verification remains required.
+
 ## Next Phase Readiness
 
 PR #5 is open. Do not mark OPS-04 complete until the retained payment and GUI workflows pass remotely.

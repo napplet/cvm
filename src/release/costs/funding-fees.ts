@@ -23,7 +23,7 @@ function usdMicros(sats: bigint, conversion: UsdSatConversion): number {
 async function mintFee(fetcher: typeof fetch, mint: { url: string; keysetIds: readonly string[] }): Promise<Readonly<{ bytes: Uint8Array; feePpk: number }>> {
   const base = new URL(mint.url);
   if (base.protocol !== "https:" || base.username || base.password || base.search || base.hash || mint.keysetIds.length === 0) throw new Error("FUNDING_FEE_POLICY_INVALID");
-  const response = await fetcher(`${base.toString().replace(/\/$/u, "")}/v1/keys`, { method: "GET", redirect: "error", headers: { accept: "application/json" } });
+  const response = await fetcher(`${base.toString().replace(/\/$/u, "")}/v1/keysets`, { method: "GET", redirect: "error", headers: { accept: "application/json" } });
   if (!response.ok || response.redirected) throw new Error("CASHU_MINT_FEE_DISCOVERY_FAILED");
   const bytes = new Uint8Array(await response.arrayBuffer());
   if (bytes.byteLength === 0 || bytes.byteLength > 1_000_000) throw new Error("CASHU_MINT_FEE_DISCOVERY_FAILED");

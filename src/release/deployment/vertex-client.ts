@@ -8,6 +8,10 @@ const InteractionIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,256}$/u);
 const CredentialReferenceSchema = z.string().regex(/^gcp:adc:[a-z][a-z0-9:_-]{2,127}$/u);
 const MAX_RECOVERY_GETS = 32;
 const RECOVERY_DEADLINE_MS = 25_000;
+/** The custom interaction carries the system text both as a top-level field
+ * and inside the canonical recovery input. UTF-8 bytes are a conservative
+ * tokenizer-independent upper bound because every token consumes >=1 byte. */
+const MAX_INPUT_TOKEN_UPPER_BOUND = 100_000;
 const PriceSchema = z.object({
   sourceUrl: z.string().url().refine((value) => new URL(value).hostname === "cloud.google.com"),
   sourceDocumentSha256: DigestSchema, quoteSha256: DigestSchema, observedAtMs: z.number().int().positive(), freshUntilMs: z.number().int().positive(), effectiveFromMs: z.number().int().positive(), effectiveUntilMs: z.number().int().positive(), currency: z.literal("USD"),
@@ -80,6 +84,7 @@ function ceilMillion(numerator: bigint): number { const charge = (numerator + 99
 function nonceFor(operationId: string, requestSha256: string): string { return `napplet-cvm:${operationId}:${requestSha256}`; }
 function interactionFrom(value: unknown): Interaction | undefined { const parsed = InteractionSchema.safeParse(value); return parsed.success ? parsed.data : undefined; }
 function requestContent(entry: JournalEntry) { return frozen([{ role: "user" as const, content: frozen([{ type: "text" as const, text: JSON.stringify({ nonce: entry.nonce, request_sha256: entry.requestSha256, idea: entry.request.idea, system_instruction: entry.request.systemInstruction, max_output_tokens: entry.request.maximumOutputTokens }) }]) }]); }
+function assertInputBound(entry: JournalEntry): void { if (new TextEncoder().encode(JSON.stringify(requestContent(entry))).byteLength + new TextEncoder().encode(entry.request.systemInstruction).byteLength > MAX_INPUT_TOKEN_UPPER_BOUND) throw new Error("VERTEX_INPUT_CAP_EXCEEDED"); }
 function sameInput(entry: JournalEntry, interaction: Interaction): boolean { return JSON.stringify(interaction.input) === JSON.stringify(requestContent(entry)); }
 function generatedResult(interaction: Interaction): string | undefined {
   const output = interaction.steps?.flatMap((step) => step.model_output?.content.map((part) => part.text) ?? []);
@@ -95,7 +100,7 @@ function completion(entry: JournalEntry, interaction: Interaction) {
   /* Gemini 4 Argon's max_output_tokens is a unified server-side ceiling for
    * response, reasoning and function-call tokens.  We send no tools, then
    * reject a receipt which cannot possibly have honoured the persisted cap. */
-  if (!usage || usage.tool_use_tokens !== 0 || usage.cached_input_tokens > usage.input_tokens || usage.output_tokens + usage.thought_tokens > entry.request.maximumOutputTokens) return undefined;
+  if (!usage || usage.tool_use_tokens !== 0 || usage.input_tokens > MAX_INPUT_TOKEN_UPPER_BOUND || usage.cached_input_tokens > usage.input_tokens || usage.output_tokens + usage.thought_tokens > entry.request.maximumOutputTokens) return undefined;
   const inputTokens = usage.input_tokens - usage.cached_input_tokens;
   const numerator = BigInt(inputTokens) * BigInt(entry.price.inputMicrosPerMillion) + BigInt(usage.cached_input_tokens) * BigInt(entry.price.cachedInputMicrosPerMillion) + BigInt(usage.output_tokens + usage.thought_tokens) * BigInt(entry.price.outputAndThoughtMicrosPerMillion);
   const costUsdMicros = ceilMillion(numerator);
@@ -173,7 +178,7 @@ export function createVertexDeploymentClient(input: Readonly<{
       if (value.requestSha256 !== undefined && DigestSchema.parse(value.requestSha256) !== requestSha256) throw new Error("VERTEX_REQUEST_DIGEST_MISMATCH");
       const existing = await input.journal.read(operationId);
       if (existing !== undefined && existing !== null) { const entry = JournalSchema.parse(existing); if (!same(entry, operationId, requestSha256) || JSON.stringify(entry.request) !== JSON.stringify(request)) throw new Error("VERTEX_OPERATION_IDENTITY_CONFLICT"); return recover(entry); }
-      assertFresh(price); const entry = JournalSchema.parse({ operationId, requestSha256, nonce: nonceFor(operationId, requestSha256), request, candidateSha256, projectId, model: "gemini-4-argon", location: "global", price }); const claim = await input.journal.claim(entry); if (!claim.claimed) { const prior = JournalSchema.parse(claim.entry); if (!same(prior, operationId, requestSha256) || JSON.stringify(prior.request) !== JSON.stringify(request)) throw new Error("VERTEX_OPERATION_IDENTITY_CONFLICT"); return recover(prior); }
+      assertFresh(price); const entry = JournalSchema.parse({ operationId, requestSha256, nonce: nonceFor(operationId, requestSha256), request, candidateSha256, projectId, model: "gemini-4-argon", location: "global", price }); assertInputBound(entry); const claim = await input.journal.claim(entry); if (!claim.claimed) { const prior = JournalSchema.parse(claim.entry); if (!same(prior, operationId, requestSha256) || JSON.stringify(prior.request) !== JSON.stringify(request)) throw new Error("VERTEX_OPERATION_IDENTITY_CONFLICT"); return recover(prior); }
       try {
         const created = interactionFrom(await input.interactions.create({ projectId, location: "global", model: "gemini-4-argon", store: true, input: requestContent(entry), systemInstruction: request.systemInstruction, responseMimeType: "application/json", responseFormat: frozen({ type: "json_schema", json_schema: frozen({ type: "object", additionalProperties: false, required: ["files"], properties: frozen({ files: frozen({ type: "array", maxItems: 32, items: frozen({ type: "object" }) }) }) }) }), generationConfig: frozen({ maxOutputTokens: request.maximumOutputTokens, thinkingLevel: "low" }) }));
         if (!created || created.model !== entry.model || !sameInput(entry, created)) return unknown(operationId, "receipt_invalid");

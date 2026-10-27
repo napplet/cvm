@@ -24,7 +24,10 @@ const component = (provider: ReleaseTopologyQuantity["provider"], componentId: s
 
 /** Closed pre-authorization inventory: locked 1,000 admissions plus all
  * eight mandatory suites; never an observed average. */
-export const PRODUCTION_CERTIFICATION_OPERATION_INVENTORY = Object.freeze({ acceptedAdmissionSamples: 1_000, protectedSuites: 8, workerLifetimeSeconds: 20 * 60, modelOperations: 1_008, modelInputTokensPerOperation: 12_000, modelOutputAndThoughtTokensPerOperation: 8_192 });
+/** `modelInputTokensPerOperation` is the enforced 100k UTF-8 wire-byte upper
+ * bound for the canonical Interaction request, including its duplicated
+ * system instruction; it is not a character-count guess. */
+export const PRODUCTION_CERTIFICATION_OPERATION_INVENTORY = Object.freeze({ acceptedAdmissionSamples: 1_000, protectedSuites: 8, workerLifetimeSeconds: 20 * 60, modelOperations: 1_008, modelInputTokensPerOperation: 100_000, modelOutputAndThoughtTokensPerOperation: 8_192 });
 const WORKER_100_SECOND_UNITS = BigInt((PRODUCTION_CERTIFICATION_OPERATION_INVENTORY.acceptedAdmissionSamples + PRODUCTION_CERTIFICATION_OPERATION_INVENTORY.protectedSuites) * (PRODUCTION_CERTIFICATION_OPERATION_INVENTORY.workerLifetimeSeconds / 100));
 
 /** Every paid allocation is explicit. The 16 public authorization families are

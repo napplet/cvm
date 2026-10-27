@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createGoogleAdcTokenSource, googleAccountScopeSha256 } from "../../src/release/deployment/google-auth";
-import { createGoogleDeploymentClients, createMemoryGoogleOperationJournal, type GoogleOperationJournal } from "../../src/release/deployment/google-clients";
+import { createFileGoogleOperationJournal, createGoogleDeploymentClients, createMemoryGoogleOperationJournal, type GoogleOperationJournal } from "../../src/release/deployment/google-clients";
 
 const projectId = "napplet-cvm-run-1";
 const principal = "napplet-cvm-control@napplet-cvm-run-1.iam.gserviceaccount.com";
@@ -32,10 +35,24 @@ test("metadata fallback requires the attached Cloud Run project and principal be
   const metadataCalls: string[] = [];
   const source = createGoogleAdcTokenSource({ projectId, quotaProjectId: projectId, principal, accountScopeSha256: expected, now: () => 1_000,
     command: async () => ({ exitCode: 127, stdout: "" }),
-    fetch: async (url) => { metadataCalls.push(url); return url.includes("project-id") ? new Response("wrong-project-1") : url.includes("/email") ? new Response(principal) : json({ access_token: token, expires_in: 300 }); },
+    fetch: async (url) => { metadataCalls.push(url); return url.includes("project-id") ? new Response("wrong-project-1") : url.includes("/email") ? new Response(principal) : json({ access_token: token, expires_in: 300, token_type: "Bearer" }); },
   });
   await expect(source.getAccessToken()).rejects.toThrow("GOOGLE_ADC_IDENTITY_INVALID");
   expect(metadataCalls).not.toContain("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token");
+});
+
+test("metadata ADC verifies documented bearer type, scope, identity, and expiry", async () => {
+  const expected = await googleAccountScopeSha256({ projectId, quotaProjectId: projectId, principal });
+  const calls: string[] = [];
+  const source = createGoogleAdcTokenSource({ projectId, quotaProjectId: projectId, principal, accountScopeSha256: expected, now: () => 1_000, command: async () => ({ exitCode: 127, stdout: "" }), fetch: async (url) => {
+    calls.push(url);
+    if (url.includes("project-id")) return new Response(projectId);
+    if (url.endsWith("/email")) return new Response(principal);
+    if (url.endsWith("/scopes")) return new Response("https://www.googleapis.com/auth/cloud-platform\n");
+    return json({ access_token: token, expires_in: 300, token_type: "Bearer" });
+  } });
+  await expect(source.getAccessToken()).resolves.toMatchObject({ projectId, principal, expiresAtMs: 301_000 });
+  expect(calls).toContain("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token");
 });
 
 test("wrong ADC project, quota, principal, expiry, or scope fails before any Google request", async () => {
@@ -45,18 +62,33 @@ test("wrong ADC project, quota, principal, expiry, or scope fails before any Goo
   ];
   for (const credential of variants) {
     const { client, calls } = await fixture(() => json({ name: "ignored" }), credential);
-    await expect(client.cloudRun.observe({ operationId: "deploy-1", projectId, region: "europe-west1", serviceName: "napplet-cvm-api" })).rejects.toThrow("GOOGLE_CLIENT_ADC_SCOPE_INVALID");
+    await expect(client.cloudRun.deploy({ operationId: "deploy-auth", projectId, region: "europe-west1", serviceName: "napplet-cvm-api", imageReference: `us-docker.pkg.dev/${projectId}/control/control@sha256:${digest("a")}`, serviceAccountReference: "svc@napplet-cvm-run-1.iam.gserviceaccount.com", environmentReferenceSha256: digest("b"), secretReferences: [{ name: "DATABASE_URL", secret: "control-database-url", version: "1" }], minimumInstances: 3, ingress: "internal-and-cloud-load-balancing", concurrency: 80, admissionRefusal: "capacity_unavailable" })).rejects.toThrow("GOOGLE_CLIENT_ADC_SCOPE_INVALID");
     expect(calls).toHaveLength(0);
   }
 });
 
 test("Cloud Run observes deterministic resource then uses official create serviceId without requestId", async () => {
   const { client, calls, journal } = await fixture((_url, init) => init.method === "GET" ? json({ error: { code: 404 } }, 404) : json({ name: `projects/${projectId}/locations/europe-west1/operations/deploy-1` }));
-  await expect(client.cloudRun.deploy({ operationId: "deploy-1", projectId, region: "europe-west1", serviceName: "napplet-cvm-api", imageDigest: `sha256:${digest("a")}`, serviceAccountReference: "svc@napplet-cvm-run-1.iam.gserviceaccount.com", environmentReferenceSha256: digest("b"), minimumInstances: 3, ingress: "internal-and-cloud-load-balancing", concurrency: 80, admissionRefusal: "capacity_unavailable" })).resolves.toEqual({ status: "pending" });
+  await expect(client.cloudRun.deploy({ operationId: "deploy-1", projectId, region: "europe-west1", serviceName: "napplet-cvm-api", imageReference: `us-docker.pkg.dev/${projectId}/control/control@sha256:${digest("a")}`, serviceAccountReference: "svc@napplet-cvm-run-1.iam.gserviceaccount.com", environmentReferenceSha256: digest("b"), secretReferences: [{ name: "DATABASE_URL", secret: "control-database-url", version: "1" }], minimumInstances: 3, ingress: "internal-and-cloud-load-balancing", concurrency: 80, admissionRefusal: "capacity_unavailable" })).resolves.toEqual({ status: "pending" });
   expect(await journal.read("deploy-1")).toMatchObject({ state: "dispatched", operationName: `projects/${projectId}/locations/europe-west1/operations/deploy-1` });
   expect(calls.map((call) => call.url)).toEqual([`https://run.googleapis.com/v2/projects/${projectId}/locations/europe-west1/services/napplet-cvm-api`, `https://run.googleapis.com/v2/projects/${projectId}/locations/europe-west1/services?serviceId=napplet-cvm-api`]);
   expect(calls[1]!.url).not.toContain("requestId=");
   expect(JSON.parse(calls[1]!.body)).toMatchObject({ ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER", template: { scaling: { minInstanceCount: 3 } } });
+});
+
+test("Cloud Run cleanup requires recorded ownership and sends the observed etag", async () => {
+  let getCount = 0;
+  const { client, calls } = await fixture((_url, init) => {
+    if (init.method === "POST") return json({ name: `projects/${projectId}/locations/europe-west1/operations/create-1` });
+    if (init.method === "DELETE") return json({ name: `projects/${projectId}/locations/europe-west1/operations/delete-1` });
+    getCount += 1;
+    return getCount === 1 ? json({ error: { code: 404 } }, 404) : getCount === 2 ? json({ name: `projects/${projectId}/locations/europe-west1/services/napplet-cvm-api`, etag: "service-etag-1" }) : json({ error: { code: 404 } }, 404);
+  });
+  const request = { operationId: "deploy-cleanup", projectId, region: "europe-west1", serviceName: "napplet-cvm-api", imageReference: `us-docker.pkg.dev/${projectId}/control/control@sha256:${digest("f")}`, serviceAccountReference: "svc@napplet-cvm-run-1.iam.gserviceaccount.com", environmentReferenceSha256: digest("e"), secretReferences: [{ name: "DATABASE_URL", secret: "control-database-url", version: "1" }], minimumInstances: 3 as const, ingress: "internal-and-cloud-load-balancing" as const, concurrency: 80, admissionRefusal: "capacity_unavailable" as const };
+  await client.cloudRun.deploy(request);
+  await expect(client.cloudRun.cleanup({ operationId: request.operationId, projectId, region: request.region, serviceName: request.serviceName })).resolves.toEqual({ status: "completed" });
+  expect(calls.find((call) => call.method === "DELETE")?.url).toContain("etag=service-etag-1");
+  await expect(client.cloudRun.cleanup({ operationId: "not-owned", projectId, region: request.region, serviceName: request.serviceName })).rejects.toThrow("GOOGLE_CLEANUP_RUN_OWNERSHIP_REQUIRED");
 });
 
 test("concurrent or restarted Cloud Run callers reconcile a claimed ambiguous create instead of posting twice", async () => {
@@ -67,7 +99,7 @@ test("concurrent or restarted Cloud Run callers reconcile a claimed ambiguous cr
     throw new Error("lost response after dispatch");
   };
   const { client, journal } = await fixture(handler);
-  const request = { operationId: "deploy-2", projectId, region: "europe-west1", serviceName: "napplet-cvm-api", imageDigest: `sha256:${digest("c")}`, serviceAccountReference: "svc@napplet-cvm-run-1.iam.gserviceaccount.com", environmentReferenceSha256: digest("d"), minimumInstances: 3 as const, ingress: "internal-and-cloud-load-balancing" as const, concurrency: 80, admissionRefusal: "capacity_unavailable" as const };
+  const request = { operationId: "deploy-2", projectId, region: "europe-west1", serviceName: "napplet-cvm-api", imageReference: `us-docker.pkg.dev/${projectId}/control/control@sha256:${digest("c")}`, serviceAccountReference: "svc@napplet-cvm-run-1.iam.gserviceaccount.com", environmentReferenceSha256: digest("d"), secretReferences: [{ name: "DATABASE_URL", secret: "control-database-url", version: "1" }], minimumInstances: 3 as const, ingress: "internal-and-cloud-load-balancing" as const, concurrency: 80, admissionRefusal: "capacity_unavailable" as const };
   await expect(client.cloudRun.deploy(request)).resolves.toEqual({ status: "unknown" });
   await expect(client.cloudRun.deploy(request)).resolves.toEqual({ status: "unknown" });
   const { client: restarted } = await fixture(handler, {}, journal);
@@ -75,10 +107,22 @@ test("concurrent or restarted Cloud Run callers reconcile a claimed ambiguous cr
   expect(creates).toBe(1);
 });
 
+test("file journal persists a dispatch claim across process recreation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "napplet-google-journal-"));
+  try {
+    const first = createFileGoogleOperationJournal(root);
+    const claimed = await first.claim({ operationId: "durable-1", resource: "projects/p/services/s", requestSha256: digest("a"), contentSha256: digest("b"), owned: true });
+    expect(claimed.claimed).toBe(true);
+    await first.markDispatching({ operationId: "durable-1", requestSha256: digest("a") });
+    const restarted = createFileGoogleOperationJournal(root);
+    await expect(restarted.claim({ operationId: "durable-1", resource: "projects/p/services/s", requestSha256: digest("a"), contentSha256: digest("b"), owned: true })).resolves.toMatchObject({ claimed: false, record: { state: "dispatching" } });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("GCS enforces policy then uploads create-only bytes with checksum and KMS reference", async () => {
   const checksum = "wdBDMA==";
   const { client, calls, journal } = await fixture((url, init) => {
-    if (url.startsWith("https://storage.googleapis.com/storage/v1/b/napplet-cvm-artifacts") && !url.includes("/o/")) return json({ location: "NAM4", versioning: { enabled: true }, encryption: { defaultKmsKeyName: "projects/p/locations/us/keyRings/r/cryptoKeys/k" }, retentionPolicy: { retentionPeriod: "2592000" }, softDeletePolicy: { retentionDurationSeconds: "2592000" }, lifecycle: { rule: [{ action: { type: "Delete" }, condition: { age: 30 } }, { action: { type: "Delete" }, condition: { numNewerVersions: 1 } }] } });
+    if (url.startsWith("https://storage.googleapis.com/storage/v1/b/napplet-cvm-artifacts") && !url.includes("/o/")) return json({ location: "NAM4", versioning: { enabled: true }, encryption: { defaultKmsKeyName: "projects/p/locations/us/keyRings/r/cryptoKeys/k" }, retentionPolicy: { retentionPeriod: "2592000" }, softDeletePolicy: { retentionDurationSeconds: "0" }, lifecycle: { rule: [{ action: { type: "Delete" }, condition: { age: 30 } }, { action: { type: "Delete" }, condition: { numNewerVersions: 1 } }] } });
     if (url.includes("?generation=9")) return json({ generation: "9", crc32c: checksum, kmsKeyName: "projects/p/locations/us/keyRings/r/cryptoKeys/k" });
     if (init.method === "GET") return json({ error: { code: 404 } }, 404);
     return json({ generation: "9", crc32c: checksum, kmsKeyName: "projects/p/locations/us/keyRings/r/cryptoKeys/k" });
@@ -87,8 +131,11 @@ test("GCS enforces policy then uploads create-only bytes with checksum and KMS r
   expect(await journal.read("gcs-op-1")).toMatchObject({ state: "completed", generation: "9" });
   const upload = calls.find((call) => call.method === "POST" && call.url.includes("/upload/storage/"))!;
   expect(upload.url).toContain("ifGenerationMatch=0");
+  expect(upload.url).toContain("uploadType=multipart");
   expect(upload.url).toContain("kmsKeyName=projects%2Fp%2Flocations%2Fus%2FkeyRings%2Fr%2FcryptoKeys%2Fk");
-  expect(upload.body).toBe("a");
+  expect(upload.headers.get("content-type")).toContain("multipart/related");
+  expect(upload.body).toContain('"crc32c":"wdBDMA=="');
+  expect(upload.body).toContain("\r\n\r\na\r\n--napplet-cvm-google-json-upload--");
 });
 
 test("Cloud SQL observes its sole instance before official instances.insert", async () => {

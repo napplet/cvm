@@ -48,7 +48,11 @@ export async function googleAccountScopeSha256(input: Readonly<{ projectId: stri
 async function runGcloud(argv: readonly string[]): Promise<Readonly<{ exitCode: number; stdout: string }>> {
   try {
     const process = Bun.spawn([...argv], { stdin: "ignore", stdout: "pipe", stderr: "ignore" });
-    return Object.freeze({ exitCode: await process.exited, stdout: await new Response(process.stdout).text() });
+    const deadline = new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 5_000));
+    const exit = await Promise.race([process.exited, deadline]);
+    if (exit === "timeout") { process.kill(); return Object.freeze({ exitCode: 124, stdout: "" }); }
+    const stdout = await new Response(process.stdout).text();
+    return Object.freeze({ exitCode: exit, stdout: stdout.slice(0, 16_384) });
   } catch {
     return Object.freeze({ exitCode: 127, stdout: "" });
   }
@@ -102,20 +106,26 @@ export function createGoogleAdcTokenSource(input: Readonly<{
           if (resolvedProject !== projectId || credential.client_email !== principal || (credential.quota_project_id !== undefined && credential.quota_project_id !== quotaProjectId)) throw new Error("GOOGLE_ADC_IDENTITY_INVALID");
           const access = await client.getAccessToken();
           const expiry = client.credentials.expiry_date;
-          if (typeof access.token === "string" && TokenSchema.safeParse(access.token).success && Number.isSafeInteger(expiry) && expiry > now() + margin) { token = access.token; expiresAtMs = expiry; }
+          const tokenInfoClient = client as typeof client & Readonly<{ getTokenInfo?: (token: string) => Promise<Readonly<{ scopes: readonly string[]; expiry_date: number }>> }>;
+          const tokenInfo = typeof access.token === "string" && typeof tokenInfoClient.getTokenInfo === "function" ? await tokenInfoClient.getTokenInfo(access.token) : undefined;
+          const scopeMatches = tokenInfo?.scopes.length === 1 && tokenInfo.scopes[0] === GOOGLE_CONTROL_PLANE_SCOPES[0];
+          const tokenExpiry = tokenInfo?.expiry_date;
+          if (typeof access.token === "string" && TokenSchema.safeParse(access.token).success && scopeMatches && Number.isSafeInteger(expiry) && expiry > now() + margin && Number.isSafeInteger(tokenExpiry) && tokenExpiry > now() + margin) { token = access.token; expiresAtMs = Math.min(expiry, tokenExpiry); }
         } catch (error) { if (error instanceof Error && error.message === "GOOGLE_ADC_IDENTITY_INVALID") throw error; }
       }
       /* Metadata is accepted only after the attached Cloud Run project and
        * service-account email exactly match the receipt-bound identity. */
       if (!token) try {
         const headers = { "Metadata-Flavor": "Google" };
-        const [metadataProject, metadataPrincipal] = await Promise.all([
+        const [metadataProject, metadataPrincipal, metadataScopes] = await Promise.all([
           fetcher("http://metadata.google.internal/computeMetadata/v1/project/project-id", { method: "GET", headers, redirect: "error" }),
           fetcher("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email", { method: "GET", headers, redirect: "error" }),
+          fetcher("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/scopes", { method: "GET", headers, redirect: "error" }),
         ]);
-        if (metadataProject.ok && metadataPrincipal.ok && (await metadataProject.text()).trim() === projectId && (await metadataPrincipal.text()).trim() === principal) {
+        const actualScopes = metadataScopes.ok ? (await metadataScopes.text()).split(/\s+/u).filter(Boolean) : [];
+        if (metadataProject.ok && metadataPrincipal.ok && actualScopes.length === 1 && actualScopes[0] === GOOGLE_CONTROL_PLANE_SCOPES[0] && (await metadataProject.text()).trim() === projectId && (await metadataPrincipal.text()).trim() === principal) {
           const response = await fetcher("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token", { method: "GET", headers, redirect: "error" });
-          const value = response.ok ? z.object({ access_token: z.string(), expires_in: z.number().int().positive().max(3600) }).strict().safeParse(await response.json()) : undefined;
+          const value = response.ok ? z.object({ access_token: z.string(), expires_in: z.number().int().positive().max(3600), token_type: z.literal("Bearer") }).passthrough().safeParse(await response.json()) : undefined;
           if (value?.success && TokenSchema.safeParse(value.data.access_token).success) { token = value.data.access_token; expiresAtMs = now() + value.data.expires_in * 1000; }
         }
       } catch { /* metadata is optional; fail closed unless local proof succeeds */ }

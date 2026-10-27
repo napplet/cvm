@@ -1,9 +1,12 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { pathToFileURL } from "node:url";
+import { loadPinnedReleaseCertificationTrustRoot } from "../certification/trust";
+import { completeFinalizationCleanup } from "./finalization-cleanup";
+import { claimFinalizationRecord } from "./finalization-files";
 import { canonicalJson, parseReleaseCertificationManifest } from "../promotion/schema";
 import { evaluateReleaseCertification, type ReleaseCertificationDecision, type ReleaseVerificationRecords } from "../promotion/run-promotion";
-import { validateCertificationObservation, type CertificationObservation } from "../certification/evidence";
+import { validateCertificationObservation } from "../certification/evidence";
+import type { CertificationObservation } from "../certification/contracts";
 import { PROTECTED_SUITES } from "../certification/runner";
 import { finalizeProtectedTrustRoot, type FinalizeProtectedTrustRootInput, type FinalizedProtectedTrustRoot } from "./materialize-certifier";
 
@@ -15,10 +18,13 @@ export type ReleaseFinalizationPromotionPort = Readonly<{
   persist(input: Readonly<{ operationId: string; bundleSha256: string; authorizationReceiptSha256: string }>): Promise<void>;
   /** The only pointer-changing effect. Replays use the same operation identity. */
   promote(input: Readonly<{ operationId: string; bundleSha256: string }>): Promise<"promoted" | "unknown">;
+  observe?(input: Readonly<{ operationId: string; bundleSha256: string }>): Promise<"promoted" | "unknown">;
 }>;
 
 export type ReleaseFinalizationCleanupPort = Readonly<{
   cleanup(input: Readonly<{ operationId: string; providerOperationId: string; resourceIdentitySha256: string }>): Promise<"cleaned" | "retained" | "unknown">;
+  /** Query the original operation after a lost response. Never redispatch. */
+  observe?(input: Readonly<{ operationId: string; providerOperationId: string; resourceIdentitySha256: string }>): Promise<"cleaned" | "retained" | "unknown">;
 }>;
 
 export type ReleaseFinalizationInput = Readonly<{
@@ -45,6 +51,7 @@ export type ReleaseFinalizationResult = Readonly<{
   bundleSha256: string | null;
   operationId: string | null;
   decision: ReleaseCertificationDecision | null;
+  verificationConfig?: Readonly<{ path: string; sha256: string }>;
 }>;
 
 /** Reconciliation never creates a second promotion operation. Unknown means
@@ -78,11 +85,8 @@ function within(root: string, value: string): boolean {
 
 async function writeImmutable(path: string, contents: string, collision: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  try { await writeFile(path, contents, { encoding: "utf8", flag: "wx", mode: 0o600 }); }
-  catch (error) {
-    if (!(error instanceof Error) || !("code" in error) || error.code !== "EEXIST") throw error;
-    if (await readFile(path, "utf8") !== contents) throw new Error(collision);
-  }
+  try { await claimFinalizationRecord(path, JSON.parse(contents)); }
+  catch { throw new Error(collision); }
 }
 
 async function advancePointer(path: string, contents: string): Promise<void> {
@@ -116,9 +120,7 @@ async function exactEight(input: ReleaseFinalizationInput): Promise<Certificatio
 }
 
 async function loadFinalTrustRoot(value: FinalizedProtectedTrustRoot): Promise<Parameters<typeof evaluateReleaseCertification>[2]["trustRoot"]> {
-  const module = await import(`${pathToFileURL(value.trustRoot.modulePath).href}?bundle=${value.trustRoot.sha256}`) as { protectedReleaseCertificationTrustRoot?: Parameters<typeof evaluateReleaseCertification>[2]["trustRoot"] };
-  if (!module.protectedReleaseCertificationTrustRoot) throw new Error("RELEASE_FINALIZATION_TRUST_ROOT_INVALID");
-  return module.protectedReleaseCertificationTrustRoot;
+  return loadPinnedReleaseCertificationTrustRoot(value.trustRoot);
 }
 
 /**
@@ -133,7 +135,7 @@ export async function finalizeReleaseCertification(input: ReleaseFinalizationInp
     throw new Error("RELEASE_FINALIZATION_INPUT_REQUIRED");
   }
   const workspace = resolve(input.workspace);
-  const trust = await finalizeProtectedTrustRoot({ ...input.trust, workspace, candidateId: input.candidateId, topologySha256: input.topologySha256, authorizationReceiptSha256: input.authorizationReceiptSha256, observations: records });
+  const trust = await finalizeProtectedTrustRoot({ ...input.trust, workspace, candidateId: input.candidateId, topologySha256: input.topologySha256, authorizationReceiptSha256: input.authorizationReceiptSha256, observations: records, nowMs: input.nowMs });
   const trustRoot = await loadFinalTrustRoot(trust);
   const manifest = parseReleaseCertificationManifest(input.trust.releaseManifest);
   const decision = await evaluateReleaseCertification(manifest, records, {
@@ -156,6 +158,7 @@ export async function finalizeReleaseCertification(input: ReleaseFinalizationInp
     version: 1 as const,
     candidateId: input.candidateId.toLowerCase(), topologySha256: input.topologySha256.toLowerCase(), authorizationReceiptSha256: input.authorizationReceiptSha256.toLowerCase(),
     evidenceRootSha256: await digest(records.map((record) => record.evidenceSha256)),
+    releaseManifest: manifest,
     protectedRecords: records, evaluatorVerdict: decision, trustRoot: { configSha256: trust.configSha256, moduleSha256: trust.trustRoot.sha256, materialPath: trust.materialPath },
     verificationRecords: input.verificationRecords, sourceMeasurement: input.sourceMeasurement,
     selectedWorker: input.selectedWorker ?? null, receipts: [...(input.receipts ?? [])].sort(), attestations: [...(input.attestations ?? [])].sort(), cleanupPlan: cleanup,
@@ -167,12 +170,22 @@ export async function finalizeReleaseCertification(input: ReleaseFinalizationInp
   await writeImmutable(join(root, "operations", `${operationId}.json`), `${canonicalJson({ version: 1, operationId, bundleSha256, authorizationReceiptSha256: payload.authorizationReceiptSha256, status: "pending" })}\n`, "RELEASE_FINALIZATION_OPERATION_COLLISION");
   const promotedPath = join(root, "operations", `${operationId}.promoted.json`);
   const unknownPath = join(root, "operations", `${operationId}.unknown.json`);
-  const promotion = await resumeFinalizationPromotion({
-    operationId, bundleSha256, authorizationReceiptSha256: payload.authorizationReceiptSha256,
-    status: await exists(promotedPath) ? "promoted" : await exists(unknownPath) ? "unknown" : "pending",
-    persist: input.promotion.persist,
-    promote: input.promotion.promote,
-  });
+  const intentPath = join(root, "operations", `${operationId}.dispatch.json`);
+  const claim = await claimFinalizationRecord(intentPath, { version: 1, operationId, bundleSha256, authorizationReceiptSha256: payload.authorizationReceiptSha256 });
+  let promotion: Readonly<{ status: "promoted" | "blocked" }>;
+  if (await exists(promotedPath)) promotion = { status: "promoted" };
+  else if (!claim || await exists(unknownPath)) {
+    // A process crash may leave only the pre-dispatch claim. Never infer that
+    // the effect was not sent; query the original provider journal instead.
+    let observed: "promoted" | "unknown" = "unknown";
+    try { observed = await input.promotion.observe?.({ operationId, bundleSha256 }) ?? "unknown"; } catch { /* remains unknown */ }
+    promotion = { status: observed === "promoted" ? "promoted" : "blocked" };
+  } else {
+    try {
+      promotion = await resumeFinalizationPromotion({ operationId, bundleSha256, authorizationReceiptSha256: payload.authorizationReceiptSha256,
+        status: "pending", persist: input.promotion.persist, promote: input.promotion.promote });
+    } catch { promotion = { status: "blocked" }; }
+  }
   if (promotion.status !== "promoted") {
     if (!await exists(unknownPath)) {
       await writeImmutable(unknownPath, `${canonicalJson({ version: 1, operationId, bundleSha256, status: "unknown" })}\n`, "RELEASE_FINALIZATION_PROMOTION_COLLISION");
@@ -182,22 +195,10 @@ export async function finalizeReleaseCertification(input: ReleaseFinalizationInp
   if (!await exists(promotedPath)) {
     await writeImmutable(promotedPath, `${canonicalJson({ version: 1, operationId, bundleSha256, status: "promoted" })}\n`, "RELEASE_FINALIZATION_PROMOTION_COLLISION");
   }
+  const completed = await completeFinalizationCleanup({ root, operationId, bundleSha256, effects: cleanup.effects, port: input.cleanup });
+  if (!completed) return { status: "cleanup_incomplete", bundleSha256, operationId, decision };
+  // A pointer visible to operator verification means both promotion and all
+  // cleanup observations are durably complete.
   await advancePointer(join(root, "current.json"), `${canonicalJson({ version: 1, candidateId: payload.candidateId, bundleSha256, operationId })}\n`);
-
-  if (!input.cleanup || cleanup.effects.length === 0) return { status: "promoted", bundleSha256, operationId, decision };
-  const results = await Promise.all(cleanup.effects.map(async (effect) => {
-    const cleanupOperationId = `${operationId}:cleanup:${effect.providerOperationId}`;
-    const observationPath = join(root, "cleanup", `${await digest(cleanupOperationId)}.json`);
-    if (await exists(observationPath)) {
-      const stored = JSON.parse(await readFile(observationPath, "utf8")) as { result?: "cleaned" | "retained" | "unknown" };
-      if (stored.result === "cleaned" || stored.result === "retained" || stored.result === "unknown") return stored.result;
-      throw new Error("RELEASE_FINALIZATION_CLEANUP_COLLISION");
-    }
-    const result = await input.cleanup!.cleanup({ operationId: cleanupOperationId, ...effect });
-    await writeImmutable(observationPath, `${canonicalJson({ version: 1, operationId: cleanupOperationId, providerOperationId: effect.providerOperationId, result })}\n`, "RELEASE_FINALIZATION_CLEANUP_COLLISION");
-    return result;
-  }));
-  return results.every((result) => result === "cleaned" || result === "retained")
-    ? { status: "promoted", bundleSha256, operationId, decision }
-    : { status: "cleanup_incomplete", bundleSha256, operationId, decision };
+  return { status: "promoted", bundleSha256, operationId, decision, verificationConfig: { path: trust.configPath, sha256: trust.configSha256 } };
 }

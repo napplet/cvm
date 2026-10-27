@@ -1,7 +1,8 @@
+import { verifyFinalizedRelease } from "../src/release/verify-finalization";
 import { ReleaseCertificationController, RELEASE_WORKSPACE_ENV, releaseCandidateSha256, runReleaseCertification } from "../src/release/controller";
 import { createNativeReleaseDiscoveryRegistry } from "../src/release/native-discovery";
 import { createReleaseControllerProviderRegistry } from "../src/release/native-registry";
-import { loadCertifierConfig } from "../src/certification/config";
+import { CERTIFIER_CONFIG_SHA256_ENV, loadCertifierConfig } from "../src/certification/config";
 import { loadReleaseExecutionReadiness, loadReleaseExecutionSession, loadReleaseFundingFeePolicyProjection } from "../src/release/production-execution";
 import { preparePreApprovalPrerequisites } from "../src/release/deployment/consent";
 import { pendingOperatorFundingReadiness, releaseCertificationFundingReadiness, validateOperatorFundingReadiness } from "../src/release/deployment/operator-funding";
@@ -119,6 +120,14 @@ function zeroEffectCounters() {
   });
 }
 
+async function verifyImmutableBundle(bundleSha256: string) {
+  if (!/^[a-f0-9]{64}$/u.test(bundleSha256)) throw new Error("RELEASE_CERTIFICATION_USAGE");
+  const config = await loadCertifierConfig();
+  if (config.mode !== "protected" || !config.trustRoot) throw new Error("TRUST_ROOT_CONFIGURATION_INVALID");
+  return verifyFinalizedRelease({ workspace: controllerWorkspace(), bundleSha256, config, configSha256: process.env[CERTIFIER_CONFIG_SHA256_ENV]! });
+}
+
+
 /** Build the controller-owned, read-only price discovery path. It neither
  * selects a project nor creates a billing account; ADC is used only as an
  * opaque request header for the public Cloud Billing catalog. */
@@ -150,7 +159,7 @@ async function preapprovalDiscoveryRegistry(input: Readonly<{ candidateSha256: s
 }
 
 async function main(): Promise<number> {
-  const allowed = new Set(["--candidate", "--resume", "--dry-run", "--status", "--request", "--setup", "--receipt"]);
+  const allowed = new Set(["--candidate", "--resume", "--dry-run", "--status", "--request", "--setup", "--receipt", "--verify-bundle"]);
   const supplied = process.argv.slice(2);
   const requiredStateArguments = supplied.filter((value) => value.startsWith(requireStatePrefix));
   if (supplied.some((value) => value.startsWith("--") && !allowed.has(value) && !value.startsWith(requireStatePrefix)) || requiredStateArguments.length > 1 || requiredStateArguments.some((value) => value.length === requireStatePrefix.length)) {
@@ -162,15 +171,21 @@ async function main(): Promise<number> {
   const request = process.argv.includes("--request");
   const setupRequested = process.argv.includes("--setup");
   const receipt = option("--receipt");
+  const verifyBundle = option("--verify-bundle");
   const dryRun = process.argv.includes("--dry-run") || request || receipt !== undefined;
   const status = process.argv.includes("--status");
   const resume = option("--resume");
-  if ((!status && !candidatePath) || (dryRun && status) || (setupRequested && (status || request || receipt !== undefined || resume !== undefined || process.argv.includes("--dry-run"))) || (requiredState !== undefined && !status) || (receipt !== undefined && !/^[a-f0-9]{64}$/iu.test(receipt)) || (resume !== undefined && !/^[a-f0-9]{64}$/iu.test(resume))) {
+  if ((verifyBundle !== undefined && (status || candidatePath || request || receipt !== undefined || resume !== undefined || setupRequested || process.argv.includes("--dry-run"))) || (!status && !candidatePath && !verifyBundle) || (dryRun && status) || (setupRequested && (status || request || receipt !== undefined || resume !== undefined || process.argv.includes("--dry-run"))) || (requiredState !== undefined && !status) || (receipt !== undefined && !/^[a-f0-9]{64}$/iu.test(receipt)) || (resume !== undefined && !/^[a-f0-9]{64}$/iu.test(resume))) {
     console.error("RELEASE_CERTIFICATION_USAGE");
     return 1;
   }
   try {
     const workspace = controllerWorkspace();
+    if (verifyBundle) {
+      const decision = await verifyImmutableBundle(verifyBundle);
+      console.log(JSON.stringify({ progress: decision.status === "promoted" ? "bundle_verified" : "bundle_blocked", status: decision.status, bundleSha256: decision.bundleSha256, evidenceSha256: decision.evidenceSha256, cleanup: decision.cleanup }));
+      return decision.status === "promoted" ? 0 : 1;
+    }
     if (setupRequested) {
       const candidateSha256 = await releaseCandidateSha256(candidatePath!);
       const execution = await executionReadinessProjection({ candidateSha256, workspace });
@@ -213,7 +228,7 @@ async function main(): Promise<number> {
       const config = await loadCertifierConfig();
       const session = await loadReleaseExecutionSession({ config, candidateSha256: await releaseCandidateSha256(candidatePath!), workspace });
       const result = await runReleaseCertification({ candidatePath: candidatePath!, workspace, dryRun: false, session });
-      console.log(JSON.stringify({ status: result.state.status, candidateSha256: result.state.candidate.candidateSha256, topologySha256: result.state.topologySha256, stateSha256: result.state.stateSha256, authorizationRequestSha256: result.authorizationRequest.authorizationRequestSha256 }));
+      console.log(JSON.stringify({ bundleSha256: result.finalization?.bundleSha256 ?? null, verificationConfigSha256: result.finalization?.verificationConfig?.sha256 ?? null, status: result.state.status, candidateSha256: result.state.candidate.candidateSha256, topologySha256: result.state.topologySha256, stateSha256: result.state.stateSha256, authorizationRequestSha256: result.authorizationRequest.authorizationRequestSha256 }));
       return result.state.status === "completed" ? 0 : 1;
     }
     const candidateSha256 = !status ? await releaseCandidateSha256(candidatePath!) : undefined;

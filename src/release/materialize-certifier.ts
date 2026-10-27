@@ -1,6 +1,9 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { canonicalJson, parseReleaseCertificationManifest, type ReleaseCertificationManifest } from "../promotion/schema";
+import { validateCertificationObservation } from "../certification/evidence";
+import { validateReproducibilityVerificationRecord } from "../certification/reproducibility";
+import { validateSupplyChainVerificationRecord } from "../certification/supply-chain";
 
 const HEX = /^[a-f0-9]{64}$/iu;
 const REVISION = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/iu;
@@ -64,6 +67,7 @@ export type FinalizeProtectedTrustRootInput = Readonly<{
   observations: readonly unknown[];
   reproducibilityRecord: unknown;
   supplyChainRecord: unknown;
+  nowMs?: number;
 }>;
 
 async function sha256(value: string | Uint8Array): Promise<Digest> {
@@ -173,24 +177,26 @@ export async function materializeProtectedCertifier(input: MaterializeProtectedC
   await mkdir(evidenceDirectory, { recursive: true, mode: 0o700 });
   const source = resolve(input.repositoryRoot, "src/certification/live/registry.ts");
   if (!under(resolve(input.repositoryRoot), source) || basename(source) !== "registry.ts") throw new Error("MATERIALIZER_ADAPTER_SOURCE_REJECTED");
-  const build = await Bun.build({ entrypoints: [source], outdir: adapterRoot, target: "bun", format: "esm", naming: "protected-adapters.js", sourcemap: "none", minify: true, write: false });
+  const build = await Bun.build({ entrypoints: [source], target: "bun", format: "esm", naming: "protected-adapters.js", sourcemap: "none", minify: true });
   if (!build.success) throw new Error("MATERIALIZER_ADAPTER_BUNDLE_REJECTED");
   const output = build.outputs.find((candidate) => candidate.kind === "entry-point");
   if (!output) throw new Error("MATERIALIZER_ADAPTER_BUNDLE_REJECTED");
   const adapterBytes = new Uint8Array(await output.arrayBuffer());
   await writeExclusiveCanonical(adapterPath, new TextDecoder().decode(adapterBytes));
   const adapter: PinnedModule = { root: adapterRoot, modulePath: adapterPath, sha256: await sha256(adapterBytes) };
-  const factoryPath = resolve(input.repositoryRoot, "src/release/deployment/factory.ts");
-  const productionFactoryPath = resolve(input.repositoryRoot, "src/release/deployment/production-factory.ts");
-  if (!under(resolve(input.repositoryRoot), factoryPath) || !under(resolve(input.repositoryRoot), productionFactoryPath)) throw new Error("MATERIALIZER_FACTORY_SOURCE_REJECTED");
-  /** The generated module contains only repository-owned source locations and
-   * inert config input. It never serializes credentials or provider payloads. */
-  const executionSource = [
-    `import { createReleaseExecutionSession as createSession } from ${JSON.stringify(factoryPath)};`,
-    `export { releaseReadiness, assessProductionFactoryReadiness } from ${JSON.stringify(productionFactoryPath)};`,
-    "export function createReleaseExecutionSession(input) { return createSession(input); }",
-    "",
-  ].join("\n");
+  const factoryPath = join(executionRoot, "factory-source.ts");
+  const sessionPath = resolve(input.repositoryRoot, "src/release/deployment/factory.ts");
+  const readinessPath = resolve(input.repositoryRoot, "src/release/deployment/production-factory.ts");
+  if (!under(resolve(input.repositoryRoot), sessionPath) || !under(resolve(input.repositoryRoot), readinessPath)) throw new Error("MATERIALIZER_FACTORY_SOURCE_REJECTED");
+  await writeExclusiveCanonical(factoryPath, `export { createReleaseExecutionSession } from ${JSON.stringify(sessionPath)};\nexport { releaseReadiness, assessProductionFactoryReadiness } from ${JSON.stringify(readinessPath)};\n`);
+  /** Seal the entire transitive factory closure. A hash over an entry module
+   * alone is insufficient because it can import changed sibling code after the
+   * review; Bun's output is a single content-addressed ESM bundle. */
+  const executionBuild = await Bun.build({ entrypoints: [factoryPath], target: "bun", format: "esm", naming: "release-execution.mjs", sourcemap: "none", minify: true });
+  if (!executionBuild.success) throw new Error("MATERIALIZER_EXECUTION_BUNDLE_REJECTED");
+  const executionOutput = executionBuild.outputs.find(candidate => candidate.kind === "entry-point");
+  if (!executionOutput) throw new Error("MATERIALIZER_EXECUTION_BUNDLE_REJECTED");
+  const executionSource = new TextDecoder("utf-8", { fatal: true }).decode(await executionOutput.arrayBuffer());
   await writeExclusiveCanonical(executionPath, executionSource);
   const executionSha256 = await sha256(executionSource);
   const deploymentConfigPath = join(executionRoot, "deployment.json");
@@ -228,29 +234,20 @@ export async function verifyMaterializedCertifier(value: MaterializedCertifier):
   return value;
 }
 
-function recordDigest(record: Record<string, unknown>): Promise<string> {
-  const { evidenceSha256: _evidenceSha256, ...contents } = record;
-  return digestJson(contents);
-}
-function expectedRecord(record: unknown, candidateId: string, binding: ReleaseCertificationManifest, status: "passed" | "verified"): record is Record<string, unknown> {
-  if (!record || typeof record !== "object" || Array.isArray(record)) return false;
-  const value = record as Record<string, unknown>;
-  return value.version === 1 && value.evidenceClass === "protected_live" && value.status === status
-    && value.candidateId === candidateId && validDigest(value.evidenceSha256)
-    && (status !== "passed" || canonicalJson(value.releaseBinding) === canonicalJson(binding));
-}
 async function assertEvidence(input: FinalizeProtectedTrustRootInput, manifest: ReleaseCertificationManifest): Promise<void> {
-  if (!Array.isArray(input.observations) || input.observations.length === 0
-    || !input.observations.every((value) => expectedRecord(value, input.candidateId, manifest, "passed"))) throw new Error("MATERIALIZER_TRUST_EVIDENCE_REJECTED");
-  const bindingSha256 = await digestJson(manifest);
-  for (const record of [input.reproducibilityRecord, input.supplyChainRecord]) {
-    if (!record || typeof record !== "object" || Array.isArray(record)) throw new Error("MATERIALIZER_TRUST_EVIDENCE_REJECTED");
-    const value = record as Record<string, unknown>;
-    if (!expectedRecord(value, input.candidateId, manifest, "verified") || value.releaseBindingSha256 !== bindingSha256 || await recordDigest(value) !== value.evidenceSha256) throw new Error("MATERIALIZER_TRUST_EVIDENCE_REJECTED");
-  }
-  for (const observation of input.observations as Record<string, unknown>[]) {
-    if (await recordDigest(observation) !== observation.evidenceSha256) throw new Error("MATERIALIZER_TRUST_EVIDENCE_REJECTED");
-  }
+  try {
+    if (!Array.isArray(input.observations) || input.observations.length === 0) throw new Error();
+    const { releaseId, sourceRevision, sourceSha256, supplyChainPolicy, inputs } = manifest;
+    const releaseBinding = { releaseId, sourceRevision, sourceSha256, supplyChainPolicy, inputs };
+    const expected = { candidateId: input.candidateId, releaseBinding, artifactSha256: inputs.workerImageDigest, nowMs: input.nowMs ?? Date.now() };
+    await validateReproducibilityVerificationRecord(input.reproducibilityRecord, expected);
+    await validateSupplyChainVerificationRecord(input.supplyChainRecord, expected);
+    for (const value of input.observations) {
+      const record = await validateCertificationObservation(value, expected);
+      if (record.evidenceClass !== "protected_live" || record.status !== "passed" || canonicalJson(record.releaseBinding) !== canonicalJson(releaseBinding)
+        || record.input.topologySha256 !== input.topologySha256) throw new Error();
+    }
+  } catch { throw new Error("MATERIALIZER_TRUST_EVIDENCE_REJECTED"); }
 }
 async function assertSourceArchive(input: FinalizeProtectedTrustRootInput, manifest: ReleaseCertificationManifest): Promise<void> {
   const archive = input.sourceArchive;
@@ -293,7 +290,7 @@ export async function finalizeProtectedTrustRoot(input: FinalizeProtectedTrustRo
   await writeExclusiveCanonical(materialPath, `${canonicalJson(material)}\n`);
   const trustSource = `import { createMaterialBackedReleaseCertificationTrustRoot } from ${JSON.stringify(resolve(input.repositoryRoot, "src/certification/trust.ts"))};\nconst material = ${canonicalJson(material)};\nexport const protectedReleaseCertificationTrustRoot = createMaterialBackedReleaseCertificationTrustRoot(material);\n`;
   await writeExclusiveCanonical(trustSourcePath, trustSource);
-  const build = await Bun.build({ entrypoints: [trustSourcePath], outdir: trustRoot, target: "bun", format: "esm", naming: "release-trust-root.js", sourcemap: "none", minify: true, write: false });
+  const build = await Bun.build({ entrypoints: [trustSourcePath], target: "bun", format: "esm", naming: "release-trust-root.js", sourcemap: "none", minify: true });
   const output = build.outputs.find((candidate) => candidate.kind === "entry-point");
   if (!build.success || !output) throw new Error("MATERIALIZER_TRUST_BUNDLE_REJECTED");
   await writeExclusiveCanonical(modulePath, new TextDecoder().decode(new Uint8Array(await output.arrayBuffer())));

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { finalizeProtectedTrustRoot, materializeProtectedCertifier } from "../../src/release/materialize-certifier";
 import { loadCertifierConfig } from "../../src/certification/config";
 import { canonicalJson } from "../../src/promotion/schema";
+import { finalizationFixture } from "./helpers/finalization-fixtures";
 import { loadPinnedReleaseCertificationTrustRoot } from "../../src/certification/trust";
 
 const sha256 = (value: string | Uint8Array): string => createHash("sha256").update(value).digest("hex");
@@ -71,7 +72,7 @@ test("materializes a candidate-bound local config, profile, adapter bundle, secr
     expect(JSON.parse(await readFile(first.configPath, "utf8"))).toMatchObject({ mode: "protected", controller: { candidateId: digest("candidate"), topologySha256: digest("topology") } });
     expect(await readFile(first.secretReferencesPath, "utf8")).toContain("secret://modal");
     expect(await readFile(first.secretReferencesPath, "utf8")).not.toContain("credential-value");
-    const releaseProfile = JSON.parse(await readFile(first.releaseProfilePath, "utf8")) as { candidate: { provider?: unknown }; worker: { selection: string } };
+    const releaseProfile = JSON.parse(await readFile(first.releaseProfilePath, "utf8")) as { candidate: { provider?: unknown }; worker: { selection: string; reasonCode: string } };
     expect(releaseProfile.candidate.provider).toBeUndefined();
     expect(releaseProfile.worker).toEqual({ selection: "unselected", reasonCode: "PROTECTED_EVIDENCE_REQUIRED" });
     expect(sha256(await readFile(first.adapter.modulePath))).toBe(first.adapter.sha256);
@@ -107,52 +108,32 @@ test("materialization rejects caller authority overrides, stale topology, and ge
   }
 });
 
-test("finalizes a project-owned candidate-bound trust root from exact local protected-record fixtures", async () => {
+test("finalizes a pinned trust root from the actual certification record schemas", async () => {
   const root = await mkdtemp(join(tmpdir(), "napplet-cvm-finalize-"));
   try {
-    const manifest = releaseManifest();
-    const candidateId = digest("candidate");
-    const sourceArchivePath = join(root, "source.tar");
-    await writeFile(sourceArchivePath, "source");
-    const materialized = await materializeProtectedCertifier({
-      workspace: root, repositoryRoot: process.cwd(), candidateId, releaseManifest: manifest,
-      topology: { candidateSha256: candidateId, topologySha256: digest("topology") },
-      authorization: { authorizationReceiptSha256: digest("receipt"), authorizationRequestSha256: digest("request") },
-      source: { sourceRevision: revision, sourceSha256: digest("source") }, secretReferences: { modal: "secret://modal" },
-    });
-    const bindingSha256 = sha256(canonicalJson(manifest));
-    const observationBase = { version: 1, evidenceClass: "protected_live", status: "passed", candidateId, releaseBinding: manifest };
-    const observation = { ...observationBase, evidenceSha256: sha256(canonicalJson(observationBase)) };
-    const verificationBase = { version: 1, evidenceClass: "protected_live", status: "verified", candidateId, releaseBindingSha256: bindingSha256 };
-    const verification = { ...verificationBase, evidenceSha256: sha256(canonicalJson(verificationBase)) };
-    const final = await finalizeProtectedTrustRoot({ materialized, workspace: root, repositoryRoot: process.cwd(), candidateId, releaseManifest: manifest, topologySha256: digest("topology"), authorizationReceiptSha256: digest("receipt"), sourceArchive: { root, relativePath: "source.tar", canonicalSourceReference: "git:napplet-cvm", sourceRevision: revision, sourceSha256: digest("source") }, observations: [observation], reproducibilityRecord: verification, supplyChainRecord: verification });
-    expect(await readFile(final.trustRoot.modulePath, "utf8")).not.toContain("credential");
+    const fixture = await finalizationFixture(root);
+    const final = await finalizeProtectedTrustRoot(fixture.trust);
     expect(final.env.NAPPLET_CVM_CERTIFIER_CONFIG_SHA256).toMatch(/^[a-f0-9]{64}$/);
-    await expect(loadCertifierConfig({ env: final.env })).resolves.toMatchObject({ trustRoot: final.trustRoot, controller: { candidateId } });
-    const rootAuthority = await loadPinnedReleaseCertificationTrustRoot(final.trustRoot);
-    expect(await rootAuthority.verifyManifest(manifest)).toBe(true);
-    expect(await rootAuthority.verifyObservation(observation)).toBe(true);
-    expect(await rootAuthority.verifyReproducibilityRecord(verification)).toBe(true);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+    await expect(loadCertifierConfig({ env: final.env })).resolves.toMatchObject({ trustRoot: final.trustRoot, controller: { candidateId: fixture.candidateId } });
+    const authority = await loadPinnedReleaseCertificationTrustRoot(final.trustRoot);
+    expect(await authority.verifyManifest(fixture.manifest)).toBe(true);
+    for (const observation of fixture.observations) expect(await authority.verifyObservation(observation)).toBe(true);
+    expect(await authority.verifyReproducibilityRecord(fixture.verificationRecords.reproducibility)).toBe(true);
+    expect(await authority.verifySupplyChainRecord(fixture.verificationRecords.supplyChain)).toBe(true);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("trust finalization rejects non-pass, cross-candidate, substituted, and changed-source fixture records without runner calls", async () => {
+test("trust finalization rejects incomplete fixture shapes, changed bindings and source mutation", async () => {
   const root = await mkdtemp(join(tmpdir(), "napplet-cvm-finalize-"));
   try {
-    const manifest = releaseManifest(); const candidateId = digest("candidate");
-    await writeFile(join(root, "source.tar"), "source");
-    const materialized = await materializeProtectedCertifier({ workspace: root, repositoryRoot: process.cwd(), candidateId, releaseManifest: manifest, topology: { candidateSha256: candidateId, topologySha256: digest("topology") }, authorization: { authorizationReceiptSha256: digest("receipt"), authorizationRequestSha256: digest("request") }, source: { sourceRevision: revision, sourceSha256: digest("source") }, secretReferences: { modal: "secret://modal" } });
-    const verificationBase = { version: 1, evidenceClass: "protected_live", status: "verified", candidateId, releaseBindingSha256: sha256(canonicalJson(manifest)) };
-    const verification = { ...verificationBase, evidenceSha256: sha256(canonicalJson(verificationBase)) };
-    const common = { materialized, workspace: root, repositoryRoot: process.cwd(), candidateId, releaseManifest: manifest, topologySha256: digest("topology"), authorizationReceiptSha256: digest("receipt"), sourceArchive: { root, relativePath: "source.tar", canonicalSourceReference: "git:napplet-cvm", sourceRevision: revision, sourceSha256: digest("source") }, reproducibilityRecord: verification, supplyChainRecord: verification };
-    await expect(finalizeProtectedTrustRoot({ ...common, observations: [{ version: 1, evidenceClass: "protected_live", status: "blocked", candidateId, releaseBinding: manifest, evidenceSha256: digest("observation") }] })).rejects.toThrow("MATERIALIZER_TRUST_EVIDENCE_REJECTED");
-    await expect(finalizeProtectedTrustRoot({ ...common, observations: [{ version: 1, evidenceClass: "protected_live", status: "passed", candidateId: digest("other"), releaseBinding: manifest, evidenceSha256: digest("observation") }] })).rejects.toThrow("MATERIALIZER_TRUST_EVIDENCE_REJECTED");
+    const { trust, observations, candidateId } = await finalizationFixture(root);
+    for (const replacement of [
+      { version: 1, evidenceClass: "protected_live", status: "passed", candidateId, releaseBinding: trust.releaseManifest, evidenceSha256: digest("observation") },
+      { ...observations[0], status: "blocked" },
+      { ...observations[0], candidate: { ...observations[0]!.candidate, id: digest("other") } },
+    ]) await expect(finalizeProtectedTrustRoot({ ...trust, observations: [replacement] })).rejects.toThrow("MATERIALIZER_TRUST_EVIDENCE_REJECTED");
+    await expect(finalizeProtectedTrustRoot({ ...trust, reproducibilityRecord: { ...trust.reproducibilityRecord, releaseBindingSha256: digest("wrong") } })).rejects.toThrow("MATERIALIZER_TRUST_EVIDENCE_REJECTED");
     await writeFile(join(root, "source.tar"), "substituted");
-    const observationBase = { version: 1, evidenceClass: "protected_live", status: "passed", candidateId, releaseBinding: manifest };
-    await expect(finalizeProtectedTrustRoot({ ...common, observations: [{ ...observationBase, evidenceSha256: sha256(canonicalJson(observationBase)) }] })).rejects.toThrow("MATERIALIZER_SOURCE_ARCHIVE_REJECTED");
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+    await expect(finalizeProtectedTrustRoot(trust)).rejects.toThrow("MATERIALIZER_SOURCE_ARCHIVE_REJECTED");
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

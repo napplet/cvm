@@ -43,8 +43,9 @@ local evidence-only configuration deliberately stops before this boundary with
 The protected completion contract is exact: `admission`, `telemetry`, `chaos`,
 `restore`, `security-host`, `supply-chain`, `contextvm-payment-model`, and
 `publication` must each have one fresh real record. The admission contract is
-locked at 1,000 accepted samples, two 200-attempt forced cohorts, p95 no higher
-than 5,000 ms, and zero accepted backlog. Missing, manual, synthetic, stale, or
+locked at 1,000 accepted samples for each worker provider, including 200 forced
+pool-hit and 200 forced pool-miss attempts per provider, a one-sided 95% upper
+confidence bound for p95 no higher than 5,000 ms, and zero accepted backlog. Missing, manual, synthetic, stale, or
 duplicate records block trust finalization and promotion.
 
 After interruption, rerun the same command with the candidate. To check the
@@ -53,3 +54,23 @@ the returned digest matches. Output contains candidate/topology/state and
 authorization digests, never secret values. Cleanup is limited to resources
 recorded as created by the approved run; an unresolved required cleanup remains
 promotion-blocking.
+
+Successful receipt execution returns the immutable `bundleSha256` handle.
+The platform must activate the finalizer's independently pinned verification
+configuration before invoking the read-only verifier:
+
+```sh
+bun run release:certify -- --verify-bundle <bundleSha256>
+```
+
+This accepts a 64-character digest, not a caller-selected file or trust module.
+It reads the finalizer's bundle, checks candidate/topology/receipt bindings,
+requires original-operation promotion and cleanup receipts, and runs the sole
+release evaluator against the actual records and pinned source archive. Status
+alone is not verification. Modified or stale evidence and missing cleanup block
+verification. Activation of the final verification authority remains part of
+the platform's production composition; users must not create a trust bundle.
+
+Promotion and cleanup persist an atomic, synced claim before dispatch. After a
+lost response or process crash, reconciliation queries that original operation;
+it does not repeat the effect. An unavailable observation remains blocked.

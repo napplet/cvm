@@ -102,6 +102,11 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
   if (options.testOnly && (requestedRealm === "production-real" || options.database?.realm.name === "production-real")) throw new Error("TEST_ACCOUNTING_REALM_DENIED");
   const railConfigurationStarted = Boolean(options.lightningReceiver || options.cashuProvider || options.cashuPolicies || options.protectedMaterialKey);
   if (!options.testOnly && railConfigurationStarted) assertProductionAccountingConfiguration(options.productionAccountingConfiguration);
+  // Test doubles and custom wallet-operation hooks cannot prove that a swap's
+  // exact output data was durably captured before credit.  Production only
+  // accepts the default cashu-ts adapter; it receives the coordinator's
+  // database-backed custody callback below.
+  if (!options.testOnly && options.cashuProvider && options.cashuProvider.productionSafe !== true) throw new Error("PRODUCTION_CASHU_CUSTODY_ADAPTER_REQUIRED");
   const database = options.database ?? (options.postgresPool ? new PostgresFundingDatabase(options.postgresPool, { realm: requestedRealm }) : undefined);
   if (!options.testOnly && database) assertProductionRealm(database.realm);
   const store = options.store ?? database?.funding ?? (options.postgresExecutor ? new PostgresFundingStore(options.postgresExecutor) : undefined);

@@ -157,6 +157,26 @@ describe("Cashu credit and treasury", () => {
     expect(store.postings).toHaveLength(1);
   });
 
+  test("threads the encrypted custody callback through the coordinator before a swap adapter reports verified", async () => {
+    const { policies, vault, funding, repository } = harness();
+    let dispatches = 0;
+    const operations = {
+      settle: async (input: { topUpId: string; keysetId: string; mint: { url: string }; custody?: { prepare(input: unknown): Promise<unknown>; claimDispatch(): Promise<boolean>; recordOwnedOutputs(outputs: readonly unknown[]): Promise<void> } }) => {
+        expect(input.custody).toBeDefined();
+        await input.custody!.prepare({ operationId: `cashu-swap:${input.topUpId}`, mintUrl: input.mint.url, keysetId: input.keysetId, expectedOutputAmount: "21", outputData: [{ blindedMessage: { amount: "21", B_: "B", id: input.keysetId }, blindingFactor: "1", secret: "00".repeat(32) }] });
+        if (await input.custody!.claimDispatch()) dispatches += 1;
+        await input.custody!.recordOwnedOutputs([{ id: input.keysetId, amount: "21", secret: "owned-output-secret", C: `02${"12".repeat(32)}`, dleq: { e: "11", s: "22" } }]);
+      },
+      observe: async () => "spent" as const,
+    };
+    const coordinator = new CashuTopUpCoordinator({ policies, vault, funding, repository, provider: new CashuTsSettlementAdapter({ operations, now: () => "2026-08-04T12:00:00.000Z" }) });
+    const result = await coordinator.submit({ ...validSubmit("durable-custody"), token: adapterToken });
+    expect(result.state).toBe("credited");
+    expect(dispatches).toBe(1);
+    expect(await repository.custody("durable-custody")).toMatchObject({ state: "owned_outputs", inputProtectedId: "protected:1", expectedOutputAmount: "21" });
+    expect(JSON.stringify(await repository.find("durable-custody"))).not.toContain("owned-output-secret");
+  });
+
   test("bounds swap and observation calls while retaining one durable reconciliation intent", async () => {
     let settles = 0; let observations = 0; const signals: AbortSignal[] = [];
     const never = () => new Promise<never>(() => undefined);

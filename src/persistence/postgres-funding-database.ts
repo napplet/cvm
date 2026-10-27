@@ -1,6 +1,6 @@
 import type { AccountTopUpStatusPort } from "../funding/account-status";
 import { bindAccountingRealmPool, createAccountingRealm, type AccountingRealm, type AccountingRealmName } from "../funding/accounting-realm";
-import type { CashuTopUpRecord, CashuTopUpRepository, CashuTopUpResult } from "../funding/cashu-top-up";
+import type { CashuCustodyJournal, CashuTopUpRecord, CashuTopUpRepository, CashuTopUpResult } from "../funding/cashu-top-up";
 import type { LightningPrivateTopUp, LightningTopUpRepository, LightningTopUpState } from "../funding/lightning-top-up";
 import type { ProtectedRailMaterialRecord, ProtectedRailMaterialRepository } from "../funding/protected-rail-material";
 import type { AccountTopUpStatus } from "../phase-03/contracts";
@@ -186,6 +186,35 @@ class PostgresCashuLifecycleRepository implements CashuTopUpRepository {
     await this.withClient(async (client) => { await client.query("UPDATE cashu_top_up_state SET state_json=$2,updated_at=now() WHERE top_up_id=$1", [record.result.topUpId, JSON.stringify(record)]); });
   }
 
+  async prepareCustody(topUpId: string, journal: Omit<CashuCustodyJournal, "state">): Promise<CashuCustodyJournal> {
+    return this.mutate(topUpId, (record) => {
+      if (record.custody) {
+        const { state: _state, ...existing } = record.custody;
+        if (JSON.stringify(existing) !== JSON.stringify(journal)) throw new Error("CASHU_CUSTODY_CONFLICT");
+        return [record, record.custody] as const;
+      }
+      const custody = frozen({ ...journal, state: "prepared" as const });
+      return [frozen({ ...record, custody }), custody] as const;
+    });
+  }
+
+  async claimCustodyDispatch(topUpId: string): Promise<boolean> {
+    return this.mutate(topUpId, (record) => {
+      if (!record.custody || record.custody.state !== "prepared") return [record, false] as const;
+      return [frozen({ ...record, custody: frozen({ ...record.custody, state: "dispatching" as const }) }), true] as const;
+    });
+  }
+
+  async recordOwnedCustodyOutputs(topUpId: string, protectedId: string): Promise<void> {
+    await this.mutate(topUpId, (record) => {
+      if (!record.custody || record.custody.state === "prepared") throw new Error("CASHU_CUSTODY_DISPATCH_REQUIRED");
+      if (record.custody.ownedOutputsProtectedId && record.custody.ownedOutputsProtectedId !== protectedId) throw new Error("CASHU_CUSTODY_OUTPUT_CONFLICT");
+      return [frozen({ ...record, custody: frozen({ ...record.custody, state: "owned_outputs" as const, ownedOutputsProtectedId: protectedId }) }), undefined] as const;
+    });
+  }
+
+  async custody(topUpId: string): Promise<CashuCustodyJournal | undefined> { return (await this.find(topUpId))?.custody; }
+
   async findTreasury(topUpId: string): Promise<CashuTopUpResult | undefined> {
     return this.readRecord(topUpId, "treasury_json");
   }
@@ -199,6 +228,16 @@ class PostgresCashuLifecycleRepository implements CashuTopUpRepository {
       const result = await client.query<Record<typeof column, T>>(`SELECT ${column} FROM cashu_top_up_state WHERE top_up_id=$1`, [topUpId]);
       const value = result.rows[0]?.[column];
       return value && frozen(value);
+    });
+  }
+
+  private async mutate<T>(topUpId: string, action: (record: CashuTopUpRecord) => readonly [CashuTopUpRecord, T]): Promise<T> {
+    return serializableProductionTransaction(this.pool, async (client) => {
+      const row = (await client.query<{ state_json: CashuTopUpRecord }>("SELECT state_json FROM cashu_top_up_state WHERE top_up_id=$1 FOR UPDATE", [topUpId])).rows[0];
+      if (!row) throw new Error("CASHU_TOP_UP_UNKNOWN");
+      const [record, result] = action(row.state_json);
+      await client.query("UPDATE cashu_top_up_state SET state_json=$2,updated_at=now() WHERE top_up_id=$1", [topUpId, JSON.stringify(record)]);
+      return result;
     });
   }
 

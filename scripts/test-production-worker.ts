@@ -15,8 +15,9 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const image = process.argv[2] ?? "napplet-cvm-production-worker:local";
 const run = `${process.pid}-${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
 const reportPath = process.env.NAPPLET_CVM_WORKER_REPORT ?? `/tmp/napplet-cvm-production-worker-${run}.json`;
-const logPath = reportPath.replace(/\.json$/u, ".log");
-const containers = [`napplet-cvm-production-worker-build-${run}`, `napplet-cvm-production-worker-idle-${run}`];
+const logPath = reportPath.replace(/\.json$/u, "") + ".log";
+const resourceArgs = ["--cpus", "1", "--memory", "1024m", "--memory-swap", "1024m"];
+const containers = [`napplet-cvm-production-worker-build-${run}`, `napplet-cvm-production-worker-idle-${run}`, `napplet-cvm-production-worker-ready-${run}`];
 const lease = "a".repeat(64);
 const imageHash = "b".repeat(64);
 const toolchain = "c".repeat(64);
@@ -90,13 +91,13 @@ function readinessArguments(deadline: number) {
   return ["/usr/local/bin/napplet-cvm-worker", "ready", "--session-lease-sha256", lease, "--provider-image", `registry.example/worker@sha256:${imageHash}`, "--toolchain-sha256", toolchain, "--provider-deadline-epoch-ms", String(deadline)];
 }
 
-const sourceJson = JSON.stringify({ files: [{ path: "src/main.ts", content: "import { runtimeHasDomain } from \"./domain-availability.js\";\nimport \"./styles.css\";\nconst root = document.querySelector<HTMLElement>(\"#app\");\nif (!root) throw new Error(\"APP_ROOT_MISSING\");\nconst message = document.createElement(\"p\");\nmessage.textContent = runtimeHasDomain(\"storage\") ? \"Local production worker proof\" : \"Local proof fallback\";\nroot.replaceChildren(message);\n" }] });
+const sourceJson = JSON.stringify({ files: [{ path: "src/main.ts", content: "import { runtimeHasDomain } from './domain-availability.js';\nimport \"./styles.css\";\nconst root = document.querySelector<HTMLElement>(\"#app\");\nif (!root) throw new Error(\"APP_ROOT_MISSING\");\nconst message = document.createElement(\"p\");\nmessage.textContent = runtimeHasDomain(\"storage\") ? \"Local production worker proof\" : \"Local proof fallback\";\nroot.replaceChildren(message);\n" }] });
 function buildCommand(deadline: number) {
   // The source is created only after bootstrap mounted the bounded workspace
   // and dropped to UID 65532. Printing the journal preserves it before the
   // tmpfs-backed container exits.
-  const quoted = sourceJson.replaceAll("'", "'\\\"'\\\"'");
-  return ["/bin/sh", "-ec", `mkdir -p /workspace/.napplet-cvm; printf '%s' '${quoted}' > /workspace/.napplet-cvm/source.json; /usr/local/bin/napplet-cvm-worker build-source --source /workspace/.napplet-cvm/source.json --active-deadline-epoch-ms ${deadline}; printf '\\nCVM_COMMANDS_NDJSON_BEGIN\\n'; cat /workspace/.napplet-cvm/commands.ndjson; printf '\\nCVM_COMMANDS_NDJSON_END\\n'`];
+  const encoded = Buffer.from(sourceJson).toString("base64");
+  return ["/usr/local/bin/napplet-cvm-bootstrap", "/bin/sh", "-ec", `mkdir -p /workspace/.napplet-cvm; printf '%s' '${encoded}' | /usr/bin/base64 -d > /workspace/.napplet-cvm/source.json; result=0; /usr/local/bin/napplet-cvm-worker build-source --source /workspace/.napplet-cvm/source.json --active-deadline-epoch-ms ${deadline} || result=$?; printf '\\nCVM_COMMANDS_NDJSON_BEGIN\\n'; cat /workspace/.napplet-cvm/commands.ndjson || true; printf '\\nCVM_COMMANDS_NDJSON_END\\n'; exit "$result"`];
 }
 
 async function containerLogs(name: string) {
@@ -107,6 +108,7 @@ async function containerLogs(name: string) {
 const report: Record<string, unknown> = {
   localMechanism: true, realProviderEvidence: false, requestedImage: image,
   startedAt: new Date().toISOString(), logPath, hostDockerNetwork: "ordinary-default (no --network override)", privilegedBootstrap: ["SYS_ADMIN", "NET_ADMIN"],
+  resources: { cpus: 1, memoryBytes: 1_073_741_824, memoryAndSwapBytes: 1_073_741_824 },
 };
 
 try {
@@ -116,15 +118,16 @@ try {
   report.image = { requested: image, id: imageId, platform };
 
   const readyDeadline = Date.now() + 60_000; const readyArgv = readinessArguments(readyDeadline);
-  const readiness = await requireDocker(["run", "--rm", "--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "-e", `NAPPLET_CVM_POLICY_VERSION=${POLICY}`, image, ...readyArgv], 90_000);
+  const readiness = await requireDocker(["run", "--name", containers[2]!, ...resourceArgs, "--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "-e", `NAPPLET_CVM_POLICY_VERSION=${POLICY}`, image, "/usr/local/bin/napplet-cvm-bootstrap", ...readyArgv], 90_000);
   const readinessJson = lastJson(readiness.stdout); const checks = readinessJson.checks;
   if (readinessJson.policyVersion !== POLICY || readinessJson.sessionLeaseSha256 !== lease || !checks || typeof checks !== "object" || !REQUIRED_READINESS_CHECKS.every((key) => (checks as Record<string, unknown>)[key] === true)) throw new Error("WORKER_READINESS_ATTESTATION_INVALID");
   report.readiness = { argv: readyArgv, attestation: readinessJson };
 
   const buildName = containers[0]!; const buildDeadline = Date.now() + 600_000;
-  await requireDocker(["create", "--name", buildName, "--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "-e", `NAPPLET_CVM_POLICY_VERSION=${POLICY}`, image, ...buildCommand(buildDeadline)]);
-  const buildNetwork = await requireDocker(["inspect", "--format", "{{.HostConfig.NetworkMode}}", buildName]);
-  if (buildNetwork.stdout.trim() !== "default") throw new Error(`HOST_NETWORK_NOT_ORDINARY:${buildNetwork.stdout.trim()}`);
+  await requireDocker(["create", "--name", buildName, ...resourceArgs, "--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "-e", `NAPPLET_CVM_POLICY_VERSION=${POLICY}`, image, ...buildCommand(buildDeadline)]);
+  const buildConfig = JSON.parse((await requireDocker(["inspect", "--format", "{{json .HostConfig}}", buildName])).stdout);
+  if (!["default", "bridge"].includes(buildConfig.NetworkMode)) throw new Error("HOST_NETWORK_NOT_ORDINARY");
+  if (buildConfig.NanoCpus !== 1_000_000_000 || buildConfig.Memory !== 1_073_741_824 || buildConfig.MemorySwap !== 1_073_741_824) throw new Error("LOCAL_RESOURCE_LIMITS_UNVERIFIED");
   await requireDocker(["start", buildName]);
   const buildExit = await requireDocker(["wait", buildName], 11 * 60_000);
   if (buildExit.stdout.trim() !== "0") throw new Error(`WORKER_BUILD_EXIT:${buildExit.stdout.trim()}`);
@@ -135,9 +138,9 @@ try {
 
   const idleName = containers[1]!; const idleDeadline = Date.now() + 12_000;
   const idleArgv = ["/usr/local/bin/napplet-cvm-worker", "idle", "--provider-deadline-epoch-ms", String(idleDeadline)];
-  await requireDocker(["run", "-d", "--name", idleName, "--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "-e", `NAPPLET_CVM_POLICY_VERSION=${POLICY}`, image, ...idleArgv]);
+  await requireDocker(["run", "-d", "--name", idleName, ...resourceArgs, "--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "-e", `NAPPLET_CVM_POLICY_VERSION=${POLICY}`, image, "/usr/local/bin/napplet-cvm-bootstrap", ...idleArgv]);
   const stopAttempt = await requireDocker(["exec", idleName, "/usr/local/bin/napplet-cvm-bootstrap", "/bin/sh", "-ec", "if kill -STOP 1; then echo CVM_SIGSTOP_UNEXPECTED; exit 1; else test $? -eq 1; echo CVM_SIGSTOP_EPERM; fi"], 30_000);
-  if (!stopAttempt.stdout.includes("CVM_SIGSTOP_EPERM")) throw new Error("WORKER_SUPERVISOR_STOP_NOT_DENIED");
+  if (!stopAttempt.stdout.includes("CVM_SIGSTOP_EPERM") || !/Operation not permitted/iu.test(stopAttempt.stderr)) throw new Error("WORKER_SUPERVISOR_STOP_NOT_DENIED");
   const idleExit = await requireDocker(["wait", idleName], 30_000);
   if (idleExit.stdout.trim() !== "0") throw new Error(`WORKER_IDLE_EXIT:${idleExit.stdout.trim()}`);
   report.idleSupervisor = { argv: idleArgv, sigstop: "EPERM", exitCode: 0 };
@@ -148,7 +151,14 @@ try {
   report.finishedAt = new Date().toISOString();
   const logs = await Promise.all(containers.map(async (name) => [name, await containerLogs(name)] as const));
   report.containerLogs = Object.fromEntries(logs.map(([name, value]) => [name, { status: value.status, stdout: value.stdout, stderr: value.stderr }]));
-  for (const name of containers) await docker(["rm", "-f", name], 15_000).catch(() => undefined);
+  const cleanup: Array<{ name: string; absent: boolean }> = [];
+  for (const name of containers) {
+    await docker(["rm", "-f", name], 10_000).catch(() => undefined);
+    const observed = await docker(["container", "inspect", name], 10_000).catch(() => undefined);
+    cleanup.push({ name, absent: Boolean(observed && observed.status !== 0 && /No such (?:container|object)/iu.test(observed.stderr)) });
+  }
+  report.cleanup = cleanup;
+  if (!cleanup.every((item) => item.absent)) { report.status = "failed"; report.cleanupError = "LOCAL_CONTAINER_ABSENCE_UNVERIFIED"; }
   await mkdir(dirname(reportPath), { recursive: true });
   await writeFile(logPath, logs.map(([name, value]) => `=== ${name} stdout ===\n${value.stdout}\n=== ${name} stderr ===\n${value.stderr}\n`).join(""), { mode: 0o600 });
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });

@@ -5,6 +5,9 @@ set -eu
 # exists, then irreversibly drops every capability.  A provider which denies
 # the mount is intentionally ineligible: an overlay workspace is not a quota.
 [ "$(id -u)" = 0 ] || exit 126
+# Providers differ in whether the image ENTRYPOINT precedes their explicit
+# command. Normalize only our own immutable wrapper before dropping privilege.
+if [ "${1-}" = /usr/local/bin/napplet-cvm-bootstrap ]; then shift; fi
 command -v mount >/dev/null 2>&1 || exit 126
 command -v findmnt >/dev/null 2>&1 || exit 126
 command -v setpriv >/dev/null 2>&1 || exit 126

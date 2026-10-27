@@ -54,7 +54,7 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
     const accepted = limited.filter(result => result.status === "fulfilled");
     expect(accepted).toHaveLength(2);
     expect(limited.filter(result => result.status === "rejected").every(result => result.status === "rejected" && result.reason.message === "PRODUCTION_CONTROL_OPERATION_LIMIT_REACHED")).toBe(true);
-    expect(await capped().countOperations()).toBe(2);
+    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.release_operation_journal WHERE namespace='bounded:run-1'")).rows[0].count).toBe(2);
     for (const result of accepted) if (result.status === "fulfilled") expect((await capped().claimBounded(result.value.record.operationId, identity, { state: "claimed" }, 2)).claimed).toBe(false);
     const boundedAudit = (await admin.query("SELECT count(*)::int AS count FROM production_real.release_operation_audit WHERE namespace='bounded:run-1'")).rows[0].count;
     expect(boundedAudit).toBe(2);

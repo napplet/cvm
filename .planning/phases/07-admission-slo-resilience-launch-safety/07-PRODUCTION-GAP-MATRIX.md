@@ -63,4 +63,3 @@ Plans 58–73 are implementation and no-effect readiness work. They must complet
 | RESEARCH | Cloud SQL 17 HA; dual-region GCS; warm Cloud Run; Modal primary with Fly measured; pinned napplet/Chromium toolchain | 58, 63–73, 26 | COVERED |
 | USER | Preserve private deployment/data; explicit test/real accounting boundary; real funding/billing; treasury closure; eight suites; final authorization; root commands; mainline config | 58–73, 20, 26 | COVERED |
 | DEFERRED | x402/L402, rich inputs, collaboration, wider untested regional continuity | excluded | EXCLUDED |
-

@@ -109,7 +109,8 @@ async function build() {
     const target = resolve(project, file.path); if (!target.startsWith(`${project}/src/`)) throw new Error("WORKER_SOURCE_INVALID");
     await mkdir(dirname(target), { recursive: true }); await writeFile(target, file.content, { mode: 0o600 });
   }
-  for (const command of [["/toolchain/pnpm/bin/pnpm.cjs", "install", "--offline", "--frozen-lockfile", "--ignore-scripts"], ["/toolchain/pnpm/bin/pnpm.cjs", "build"], ["/toolchain/pnpm/bin/pnpm.cjs", "verify"], ["/toolchain/pnpm/bin/pnpm.cjs", "test:conformance"], ["/toolchain/bin/napplet", "deploy", "--dry-run", "--json", "--root"]]) await bounded(command, project);
+  const pnpm = "/toolchain/pnpm-10.8/bin/pnpm.cjs";
+  for (const command of [[pnpm, "install", "--offline", "--frozen-lockfile", "--ignore-scripts", "--store-dir", "/toolchain/pnpm-store"], [pnpm, "build"], [pnpm, "verify"], [pnpm, "test:conformance"], ["/toolchain/bin/napplet", "deploy", "--dry-run", "--json", "--root"]]) await bounded(command, project);
   console.log(JSON.stringify({ status: "built", root: `${project}/dist` }));
 }
 try {

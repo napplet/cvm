@@ -33,6 +33,12 @@ RUN case "$TARGETARCH" in \
 ADD --checksum=sha256:7d66183c30454ec40ca2458d38dedde827fa1f8b58a2fbcd25a3b7d1c3bf538b https://codeload.github.com/napplet/boilerplate/tar.gz/cbbebe9bd56271277b054535c0a8d720a588f61d /tmp/boilerplate.tgz
 RUN mkdir -p /toolchain/boilerplate-template \
     && tar -xzf /tmp/boilerplate.tgz -C /toolchain/boilerplate-template --strip-components=1
+RUN bun -e 'const response = await fetch("https://registry.npmjs.org/pnpm/-/pnpm-10.8.0.tgz"); if (!response.ok) process.exit(1); await Bun.write("/tmp/pnpm-10.8.0.tgz", await response.arrayBuffer())' \
+    && bun -e 'const expected = "sha512-DoJxTRtbQ8dGEBk8sgc0iXwdAN6J0OGEIK68WXf6E9eAqcsFc0Yk6B69gcyHbNRkeUhQZBxIuVRDJrViLKKZcQ=="; const actual = "sha512-" + Buffer.from(await crypto.subtle.digest("SHA-512", await Bun.file("/tmp/pnpm-10.8.0.tgz").arrayBuffer())).toString("base64"); if (actual !== expected) process.exit(1)' \
+    && mkdir -p /toolchain/pnpm-10.8 /toolchain/pnpm-store \
+    && tar -xzf /tmp/pnpm-10.8.0.tgz -C /toolchain/pnpm-10.8 --strip-components=1 \
+    && cd /toolchain/boilerplate-template \
+    && bun /toolchain/pnpm-10.8/bin/pnpm.cjs fetch --frozen-lockfile --store-dir /toolchain/pnpm-store
 
 FROM oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4 AS sealed
 
@@ -49,6 +55,8 @@ COPY --from=intake /toolchain/package.json /toolchain/pnpm-lock.yaml /toolchain/
 COPY --from=intake /toolchain/node_modules /toolchain/node_modules
 COPY --from=intake /toolchain/napplet /toolchain/bin/napplet
 COPY --from=intake /toolchain/boilerplate-template /toolchain/boilerplate-template
+COPY --from=intake /toolchain/pnpm-10.8 /toolchain/pnpm-10.8
+COPY --from=intake /toolchain/pnpm-store /toolchain/pnpm-store
 COPY infra/toolchain/denial-probe.ts /toolchain/bin/denial-probe
 COPY infra/toolchain/fixture-runner.ts /toolchain/bin/fixture-runner
 COPY infra/toolchain/production-worker.ts /usr/local/bin/napplet-cvm-worker

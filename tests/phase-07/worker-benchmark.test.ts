@@ -70,3 +70,18 @@ test("worker benchmark keeps candidates unselected until identical fresh live ev
   expect(detectWorkerAuthorityDelta({ workerPort: "ModalWorkerPort", continuationPort: "ContinuationWorkerPort", evidenceIdentity: "CertificationObservation" })).toMatchObject({ status: "blocking_failure" });
   await expect(blockedFlyProbeEvidence()).resolves.toMatchObject({ provider: "fly", status: "blocked", selection: "unselected" });
 });
+
+
+test("admission upper p95 includes resampling uncertainty near the five-second boundary", async () => {
+  let index = 0;
+  const benchmark = await runWorkerCandidateBenchmark({
+    candidate,
+    profile: { acceptedFloor: 1_000, forcedPoolHitFloor: 200, forcedPoolMissColdContentionFloor: 200, bootstrapReplicates: 1_000 },
+    execute: async () => ({ outcome: "accepted", receiptMonotonicMs: 0, readyMonotonicMs: index++ < 959 ? 4_000 : 6_000, readyLeaseCount: 1, durableBacklogCount: 0, isolation: "passed", cleanup: "passed" }),
+  });
+  const result = evaluateAdmissionSlo(benchmark);
+  expect(result).toMatchObject({ count: 1_000, p95Ms: 4_000, upperP95Ms: 6_000, status: "failed", selection: "unselected" });
+  expect(evaluateAdmissionSlo(benchmark)).toEqual(result);
+  expect(evaluateAdmissionSlo({ ...benchmark, samples: [...benchmark.samples].reverse() })).toEqual(result);
+  expect(evaluateAdmissionSlo({ ...benchmark, samples: benchmark.samples.map((sample) => ({ ...sample, readyMonotonicMs: 4_000 })) })).toMatchObject({ upperP95Ms: 4_000, status: "passed" });
+});

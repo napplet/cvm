@@ -1,6 +1,8 @@
-# Deferred production readiness
+# Resumed production readiness
 
-**Decision, 2026-10-14:** prioritize a working local development environment. Production provisioning, operator funding/approval, and protected release certification are deferred at the user's direction. These items must not block local development or development e2e tests.
+**Resumed, 2026-10-27:** The user requested full production gap closure, preserving the working private Beta deployment. Implementation and no-effect preparation precede the exact bounded authorization checkpoint. Production is not certified. The scope and initial current-state audit are recorded in `.planning/phases/07-admission-slo-resilience-launch-safety/07-PRODUCTION-RESUMPTION.md`; gap plans are tracked in `07-PRODUCTION-GAP-MATRIX.md`.
+
+**Historical decision, 2026-10-14:** prioritize a working local development environment. Production provisioning, operator funding/approval, and protected release certification are deferred at the user's direction. These items must not block local development or development e2e tests.
 
 This deferral does not mark Phase 7 complete or establish production readiness. SESS-02 and OPS-01–OPS-04 retain their outstanding live-verification requirements. Plans 07-20 and 07-26 remain unexecuted.
 
@@ -32,4 +34,4 @@ Detailed source findings and the last no-effect readiness check are retained in 
 
 Revisit when the user explicitly asks for production deployment or release readiness. Start with `$gsd-plan-phase 7 --gaps`, incorporating the source findings above. Execute the resulting implementation plans before offering operator funding or approval. Then complete 07-20 and run 07-26 against the exact authorized candidate.
 
-Keep production verification deferred during development-only autonomous runs. Do not archive the milestone as complete, weaken release gates, or convert simulated payment observations into production evidence. Development success and production launch readiness remain separately reported.
+For development-only work, keep production effects outside its scope. The resumed production work follows the gap matrix and exact authorization boundary. Do not archive the milestone as complete, weaken release gates, or convert simulated payment observations into production evidence. Development success and production launch readiness remain separately reported.

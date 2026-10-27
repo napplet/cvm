@@ -4,11 +4,11 @@ milestone: v1.0
 milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
-status: verification_deferred_gaps
-stopped_at: Admin opener authentication and stopped-dependency recovery fixed and verified
-last_updated: "2026-10-27T12:01:37.667746+00:00"
-last_activity: 2026-10-17
-last_activity_desc: Opener ensures ready CVM, restores dependencies and supports reused-tab authentication; default admin reopened
+status: in_progress
+stopped_at: Production gap planning resumed; private Beta service preserved; no protected effects authorized
+last_updated: "2026-10-27T12:23:12.665676+00:00"
+last_activity: 2026-10-27
+last_activity_desc: Production-readiness implementation resumed from current live and source evidence
 progress:
   total_phases: 7
   completed_phases: 6
@@ -25,14 +25,14 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 
 **Core value:** A user can describe one focused applet and receive a safe, conformant napplet that can be previewed and placed directly into a compatible napplet runtime.
 **Active milestone:** v1.0 — Safe Napplet Generation MVP
-**Current focus:** Static applet.broker application with naddr remix, isolated source import, applesauce outbox discovery, private admin and signed publication; production remains deferred
+**Current focus:** Close production gaps while preserving the working private Beta deployment; exact bounded authorization follows implementation and no-effect preparation.
 
 ## Current Position
 
-Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION VERIFICATION DEFERRED
+Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION GAP CLOSURE RESUMED
 Plan: 56 of 58 accepted; development Plans 07-52/53/56/57/54/55 complete
-Status: Guided applet.broker workspace at http://127.0.0.1:49371; diagnostic console at /dev. Saved chatgpt-oauth mode with gpt-6.1-sol retained. Product/console browser journeys and recovery passed through real local services. Production implementation and verification remain deferred by user; do not request production funding or approval for development work.
-Last activity: 2026-10-27 — Completed quick task 261027-gsr: private homelab CVM on Beta, existing ChatGPT/test credits, signed WSS, real isolated generation/HTTPS preview and no-charge restart recovery verified. Production remains deferred.
+Status: User resumed production readiness on 2026-10-27. Gap planning is active; implementation and all eight protected suites remain incomplete. Preserve the live private deployment and existing ChatGPT/test-credit history. No funding or approval request is ready.
+Last activity: 2026-10-27 — Verified Coolify deployment 24252f7 and signed WSS without generation; reproduced missing production call sites, treasury custody gaps, budget-catalog substitution, and CI prerequisites. Full scope and evidence: `07-PRODUCTION-RESUMPTION.md`; executable work: `07-PRODUCTION-GAP-MATRIX.md`.
 
 Follow-up: Stream assembly/counter verification remains complete. Latest helper-signature and compiler-feedback fix passed 29 targeted unit/integration cases plus activity and composed OAuth browser journeys. Real blinking-text generation also passed. See debug/resolved/generated-typescript-check.md.
 
@@ -43,9 +43,9 @@ Plan execution: 96/98 milestone plans complete; Phase 7 is 56/58 complete and pr
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 96/98 milestone plans executed. Development Plans 07-52/53/56/57/54/55 are complete. Production-only 07-20 and 07-26 remain deferred; neither is a development prerequisite.
+- Plans: 96/98 milestone plans executed. Development Plans 07-52/53/56/57/54/55 are complete. Production-only 07-20 and 07-26 await the resumed implementation plans and exact authorization; neither is a development prerequisite.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
-- Development coverage: the complete local execution GUI is accepted; see `07-55-SUMMARY.md`, the dated acceptance matrix in `07-DEV-VALIDATION.md`, and `docs/runbooks/development-gui.md`. Applesauce dependencies and matching launcher manifest pins were added in quick task 261016-m8c; generated-app toolchain pins remain unchanged. Deterministic mode substitutes only the external model. This quick-task verification used a model fixture; real local publication, signed ownership and cross-browser project recovery are now covered. Remote CI was not exercised; conformance reports five passed and five skipped checks. Production resumption follows `docs/runbooks/production-readiness-deferred.md` only when requested.
+- Development coverage: the complete local execution GUI is accepted; see `07-55-SUMMARY.md`, the dated acceptance matrix in `07-DEV-VALIDATION.md`, and `docs/runbooks/development-gui.md`. Applesauce dependencies and matching launcher manifest pins were added in quick task 261016-m8c; generated-app toolchain pins remain unchanged. Deterministic mode substitutes only the external model. This quick-task verification used a model fixture; real local publication, signed ownership and cross-browser project recovery are now covered. Remote CI was not exercised; conformance reports five passed and five skipped checks. Production resumption was requested on 2026-10-27 and follows the production gap matrix.
 - Local ChatGPT OAuth support is implemented and verified with a real subscription-generated interactive artifact; see `debug/resolved/chatgpt-live-subscription.md`. Subscription usage has separate synthetic local-test-sat accounting, and unresolved calls are never automatically resent.
 
 ## Performance Metrics
@@ -338,7 +338,7 @@ Recent decisions affecting current work:
 ### Blockers/Concerns
 
 - Live ChatGPT generation is verified after reauthorization and stream assembly repair. Original uncertain operations retain their replay fences; no automatic redispatch was performed.
-- Production-only concerns are deferred: expired operator funding and missing concrete deployment/preapproval composition. See docs/runbooks/production-readiness-deferred.md. Do not reopen a production wallet setup page for local development.
+- Production gap closure resumed: concrete deployment/preapproval composition, treasury custody, source pricing, and live evidence remain required. Finish implementation before requesting funding or approval; see the production gap matrix.
 - No active Phase 1 blocker. Official `@napplet/cli@0.5.2` plus matching `@napplet/skills`/`@napplet/boilerplate@0.3.2` is recorded as review-ready candidate `a19fc7d283a4482c53728f4a931743576564fb3826d7f8fa1383d02578b69024` and was explicitly approved for design execution.
 - Local provenance, reproducibility, hostile/mutation, SBOM, promotion, and source-measurement gates are complete; genuine protected-live certification remains unavailable in this workspace.
 - T-07-W0-05 remains low severity and pending explicit owner acceptance; it grants no release authority.
@@ -412,7 +412,7 @@ Recent decisions affecting current work:
 
 | Phase | Status | Reason | Resume command |
 |---|---|---|---|
-| 7 | verification_deferred_gaps | User deferred production on 2026-10-14; local development and e2e are not blocked. Concrete adapters and live evidence remain outstanding. | `$gsd-plan-phase 7 --gaps` when production readiness is requested |
+| 7 | gaps_in_progress | User resumed production on 2026-10-27. Implementation, exact authorization, and eight fresh real suites remain required. | Execute checked production gap plans, then 07-20 and 07-26 |
 
 ## Deferred Items
 
@@ -425,5 +425,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-10-27T12:01:37.667746+00:00
-Stopped at: Private CVM deployed on Beta through Coolify. Use ~/Develop/homelab/homelab cvm open or admin. Real generation and same-artifact restart recovery pass; production remains deferred.
+Stopped at: Production gap plans under review after read-only live audit. Beta stays private and healthy; no protected effects authorized. Follow 07-PRODUCTION-RESUMPTION.md and 07-PRODUCTION-GAP-MATRIX.md.
 Resume file: .planning/debug/resolved/admin-opener-auth.md

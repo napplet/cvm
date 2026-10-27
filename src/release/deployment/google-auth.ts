@@ -50,10 +50,10 @@ async function within<T>(promise: Promise<T>, milliseconds = 5_000): Promise<T> 
   try { return await Promise.race([promise, new Promise<T>((_resolve, reject) => { timer = setTimeout(() => reject(new Error("GOOGLE_ADC_TIMEOUT")), milliseconds); })]); }
   finally { if (timer !== undefined) clearTimeout(timer); }
 }
-async function limitedText(response: Response, limit = 16_384): Promise<string> {
+async function limitedText(response: Response, limit = 16_384, timeoutMs = 5_000): Promise<string> {
   if (!response.body) throw new Error("GOOGLE_ADC_RESPONSE_INVALID");
-  const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let total = 0;
-  try { for (;;) { const part = await within(reader.read()); if (part.done) break; total += part.value.byteLength; if (total > limit) { await reader.cancel(); throw new Error("GOOGLE_ADC_RESPONSE_INVALID"); } chunks.push(part.value); } }
+  const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let total = 0; const deadline = Date.now() + timeoutMs;
+  try { for (;;) { const remaining = deadline - Date.now(); if (remaining <= 0) { await reader.cancel(); throw new Error("GOOGLE_ADC_TIMEOUT"); } const part = await within(reader.read(), remaining); if (part.done) break; total += part.value.byteLength; if (total > limit) { await reader.cancel(); throw new Error("GOOGLE_ADC_RESPONSE_INVALID"); } chunks.push(part.value); } }
   finally { reader.releaseLock(); }
   const result = new Uint8Array(total); let offset = 0; for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.byteLength; } return new TextDecoder().decode(result);
 }
@@ -118,11 +118,11 @@ export function createGoogleAdcTokenSource(input: Readonly<{
         const [metadataProject, metadataPrincipal, metadataScopes] = await Promise.all([
           metadataGet("project/project-id"), metadataGet("instance/service-accounts/default/email"), metadataGet("instance/service-accounts/default/scopes"),
         ]);
-        const metadataScopeSet = metadataScopes.ok ? (await limitedText(metadataScopes)).split(/\s+/u).filter(Boolean) : [];
+        const metadataScopeSet = metadataScopes.ok ? (await limitedText(metadataScopes, 16_384, timeoutMs)).split(/\s+/u).filter(Boolean) : [];
         const scopeValid = await googleAccountScopeSha256({ projectId, quotaProjectId, principal, scopes: metadataScopeSet }).then(() => true).catch(() => false);
-        if (metadataProject.ok && metadataPrincipal.ok && scopeValid && (await limitedText(metadataProject)).trim() === projectId && (await limitedText(metadataPrincipal)).trim() === principal) {
+        if (metadataProject.ok && metadataPrincipal.ok && scopeValid && (await limitedText(metadataProject, 16_384, timeoutMs)).trim() === projectId && (await limitedText(metadataPrincipal, 16_384, timeoutMs)).trim() === principal) {
           const response = await metadataGet("instance/service-accounts/default/token");
-          let decoded: unknown; try { decoded = JSON.parse(await limitedText(response)); } catch { decoded = undefined; }
+          let decoded: unknown; try { decoded = JSON.parse(await limitedText(response, 16_384, timeoutMs)); } catch { decoded = undefined; }
           const value = response.ok ? z.object({ access_token: z.string(), expires_in: z.number().int().positive().max(3600), token_type: z.literal("Bearer") }).passthrough().safeParse(decoded) : undefined;
           if (value?.success && TokenSchema.safeParse(value.data.access_token).success) { token = value.data.access_token; expiresAtMs = now() + value.data.expires_in * 1000; actualScopes = metadataScopeSet; }
         }

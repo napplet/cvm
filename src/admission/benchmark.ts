@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import { WorkerCandidateSchema, type WorkerCandidate } from "../certification/contracts";
 
 const SampleIdentitySchema = z.string().min(1).max(160);
@@ -132,10 +133,31 @@ export async function runWorkerCandidateBenchmark(input: Readonly<{ candidate: u
 }
 
 function quantile(values: readonly number[], fraction: number): number | null { return values.length === 0 ? null : values[Math.min(values.length - 1, Math.ceil(values.length * fraction) - 1)]!; }
-/** Deterministic one-sided bootstrap upper p95: resampling is indexed rather than time/randomness dependent. */
+/** Seeded percentile bootstrap: independent uniform draws with replacement.
+ * Counter-hashed blocks give reproducible draws without the correlations of
+ * the former affine index schedule. Rejection sampling avoids modulo bias.
+ * The 95th percentile of bootstrap p95s is the one-sided 95% upper estimate.
+ * Like an ordinary percentile bootstrap, this assumes independent samples;
+ * protected acquisition must separately check its cohort/dependence contract. */
 function bootstrapUpperP95(latencies: readonly number[], replicates: number): number | null {
-  if (latencies.length === 0) return null; const values: number[] = [];
-  for (let seed = 0; seed < replicates; seed += 1) values.push(quantile(Array.from({ length: latencies.length }, (_, index) => latencies[((index * 1103515245 + seed * 12345) >>> 0) % latencies.length]!).sort((a, b) => a - b), 0.95)!);
+  if (latencies.length === 0) return null;
+  const values: number[] = [];
+  let block = 0; let cursor = 32; let bytes: Buffer = Buffer.alloc(0);
+  const limit = Math.floor(0x1_0000_0000 / latencies.length) * latencies.length;
+  const draw = () => {
+    for (;;) {
+      if (cursor === 32) {
+        bytes = createHash("sha256").update(`napplet-cvm:admission-bootstrap:v1:${block++}`).digest();
+        cursor = 0;
+      }
+      const value = bytes.readUInt32LE(cursor); cursor += 4;
+      if (value < limit) return value % latencies.length;
+    }
+  };
+  for (let replicate = 0; replicate < replicates; replicate += 1) {
+    const sample = Array.from({ length: latencies.length }, () => latencies[draw()]!);
+    values.push(quantile(sample.sort((a, b) => a - b), 0.95)!);
+  }
   return quantile(values.sort((a, b) => a - b), 0.95);
 }
 

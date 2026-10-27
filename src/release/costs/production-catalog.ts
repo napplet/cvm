@@ -38,7 +38,10 @@ async function nonBillableFact(provider: typeof NON_BILLABLE_PROVIDERS[number], 
 function familyComponents(provider: typeof PAID_PROVIDERS[number], snapshot: Snapshot, contract: readonly ReleaseTopologyQuantity[]): readonly Quote[] {
   const expected = new Map(contract.map((component) => [component.componentId, component]));
   const actual = snapshot.quotes.filter((quote) => quote.provider === provider);
-  if (actual.length !== expected.size || actual.some((quote) => !quote.componentId || !quote.skuId || !quote.region || !expected.has(quote.componentId) || expected.get(quote.componentId)!.region !== quote.region || expected.get(quote.componentId)!.unit !== quote.unit) || new Set(actual.map((quote) => quote.componentId)).size !== actual.length || new Set(actual.map((quote) => quote.skuId)).size !== actual.length) throw new Error("PRODUCTION_CATALOG_COMPONENT_COVERAGE_REQUIRED");
+  /* A regional service can legitimately publish one SKU usable in multiple
+   * deployment regions. Component identity is the authorization key; a SKU
+   * remains retained as provenance without being an artificial unique key. */
+  if (actual.length !== expected.size || actual.some((quote) => !quote.componentId || !quote.skuId || !quote.region || !expected.has(quote.componentId) || expected.get(quote.componentId)!.region !== quote.region || expected.get(quote.componentId)!.unit !== quote.unit) || new Set(actual.map((quote) => quote.componentId)).size !== actual.length) throw new Error("PRODUCTION_CATALOG_COMPONENT_COVERAGE_REQUIRED");
   return Object.freeze(contract.map((component) => actual.find((quote) => quote.componentId === component.componentId)!));
 }
 

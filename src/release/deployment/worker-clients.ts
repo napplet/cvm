@@ -99,6 +99,11 @@ function isolatedExec(command: readonly string[]): readonly string[] {
   if (command[0] === BOOTSTRAP) throw new Error("WORKER_EXEC_WRAPPER_FORBIDDEN");
   return Object.freeze([BOOTSTRAP, ...command]);
 }
+function productionCommand(value: readonly string[]): string[] {
+  const command = z.array(z.string().min(1).max(32_768)).min(1).max(12).parse(value);
+  if (command.some((argument, index) => argument.length > 256 && !(command[0] === "/usr/local/bin/napplet-cvm-job" && command[1] === "put" && index === 4 && /^[A-Za-z0-9+/]+={0,2}$/u.test(argument)))) throw new Error("WORKER_COMMAND_ARGUMENT_INVALID");
+  return command;
+}
 
 /** Never use Response.json()/text() at a provider boundary: a compromised or
  * malformed endpoint must not be able to make the controller buffer an
@@ -179,7 +184,7 @@ export function createModalProductionTransport(input: Readonly<{ appName: string
   };
   const exec = async (value: Readonly<{ operationId: string; command: readonly string[]; timeoutMs?: number }>) => {
     const record = await input.journal.read(OperationIdSchema.parse(value.operationId));
-    const command = z.array(z.string().min(1).max(256)).min(1).max(12).parse(value.command);
+    const command = productionCommand(value.command);
     const timeoutMs = z.number().int().min(1).max(60_000).parse(value.timeoutMs ?? 60_000);
     if (!record?.resourceId) return Object.freeze({ status: "unknown" as const });
     const observed = await find(appName, record.resourceName);
@@ -467,7 +472,7 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: WorkerOper
     },
     async exec(value) {
       const operationId = OperationIdSchema.parse(value.operationId); const record = await input.journal.read(operationId);
-      const command = z.array(z.string().min(1).max(256)).min(1).max(12).parse(value.command);
+      const command = productionCommand(value.command);
       const stdin = z.string().max(32 * 1024).parse(value.stdin ?? "");
       const timeout = z.number().int().min(1).max(60).parse(value.timeoutSeconds ?? 60);
       if (!record?.resourceId || record.provider !== "fly" || record.appName !== appName || !record.image) return Object.freeze({ status: "unknown" as const });

@@ -116,9 +116,10 @@ RUN node -e 'const {realpathSync}=require("node:fs");const {execFileSync}=requir
 COPY infra/toolchain/denial-probe.ts /toolchain/bin/denial-probe
 COPY infra/toolchain/fixture-runner.ts /toolchain/bin/fixture-runner
 COPY infra/toolchain/production-worker.ts /usr/local/bin/napplet-cvm-worker
+COPY infra/toolchain/production-job.ts /usr/local/bin/napplet-cvm-job
 COPY infra/toolchain/production-probe.ts /usr/local/bin/napplet-cvm-probe
 COPY infra/toolchain/production-bootstrap.sh /usr/local/bin/napplet-cvm-bootstrap
-RUN chmod 0555 /toolchain/bin/denial-probe /toolchain/bin/fixture-runner /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe /usr/local/bin/napplet-cvm-bootstrap
+RUN chmod 0555 /toolchain/bin/denial-probe /toolchain/bin/fixture-runner /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe /usr/local/bin/napplet-cvm-bootstrap /usr/local/bin/napplet-cvm-job
 USER 65532:65532
 ENTRYPOINT ["/toolchain/bin/bun"]
 

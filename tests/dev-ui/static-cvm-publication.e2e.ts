@@ -15,6 +15,9 @@ import { DevelopmentContextVmClient } from "../../src/dev-ui/browser/contextvm-c
 import { CvmBlossom } from "../../src/dev/cvm-blossom";
 import { chatGptFixture } from "../fixtures/chatgpt";
 const assert = (value: unknown, code: string) => { if (!value) throw new Error(code); };
+let currentStage = "SETUP";
+const stage = (name: string) => { currentStage = name; console.error(`PUBLICATION_E2E_STAGE:${name}`); };
+const heartbeat = setInterval(() => console.error(`PUBLICATION_E2E_WAIT:${currentStage}`), 30_000); heartbeat.unref();
 const fixture = chatGptFixture(); fixture.setSparseCompletion(true);
 let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
 const modelFetch: typeof fixture.fetch = async (url, init) => {
@@ -22,13 +25,16 @@ const modelFetch: typeof fixture.fetch = async (url, init) => {
   const reader = response.body!.getReader();
   return new Response(new ReadableStream({ async start(controller) { try { const first = await reader.read(); if (first.value) controller.enqueue(first.value); await gate; for (;;) { const part = await reader.read(); if (part.done) break; controller.enqueue(part.value); } controller.close(); } catch (error) { controller.error(error); } } }), { headers: response.headers });
 };
-const stack = developmentStack(true); const config = await stack.up(); const root = await mkdtemp(join(tmpdir(), "static-cvm-e2e-"));
+stage("PAYMENT_STACK_START");
+const stack = developmentStack(true); const config = await stack.up(); stage("PAYMENT_STACK_READY"); const root = await mkdtemp(join(tmpdir(), "static-cvm-e2e-"));
 let server = await createDevelopmentContextVmServer({ config, stateRoot: root, chatGptFetch: modelFetch });
+stage("CVM_SERVER_READY");
 const connection = await (await fetch(`${server.url}/cvm.json`)).json() as { relayUrl: string; servicePubkey: string };
 const assets = await buildStaticWorkspace(connection);
 const site = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) { const pathname = new URL(request.url).pathname; if (!pathname.startsWith("/hosted/")) return new Response("not found", { status: 404 }); const path = pathname.slice("/hosted/".length) || "index.html"; const body = assets.get(path); return body === undefined ? new Response("not found", { status: 404 }) : new Response(body, { headers: { "content-type": path.endsWith(".js") ? "text/javascript" : path.endsWith(".css") ? "text/css" : path.endsWith(".json") ? "application/json" : "text/html" } }); } });
 const staticUrl = `http://127.0.0.1:${site.port}/hosted/`;
 const browser = await chromium.launch(); const context = await browser.newContext({ permissions: ["clipboard-read", "clipboard-write"] }); const page = await context.newPage(); const admin = await context.newPage();
+stage("BROWSER_READY");
 const pool = createDevelopmentPool(config.databaseUrl); const relay = new SimplePool();
 const userKey = generateSecretKey(); const signerKey = generateSecretKey();
 let discoveredRelayList: ReturnType<typeof finalizeEvent> | undefined;
@@ -74,14 +80,15 @@ const unauthorized = new DevelopmentContextVmClient({ ...connection, reserveSat:
 try {
   assert(Object.keys(connection).sort().join(",") === "relayUrl,servicePubkey", "PUBLIC_CONFIG_LEAK");
   for (const path of ["/bootstrap", "/dev/chatgpt/status", "/dev/faucet/cashu"]) assert((await fetch(`${server.url}${path}`)).status === 404, "HTTP_CONTROL_STILL_EXPOSED");
+  stage("PRIVATE_ADMIN_BOUNDARY");
   await unauthorized.connect({ accountStatus: false });
   assert((await unauthorized.callTool("cvm_admin", { action: "status" })).status === "denied", "UNAUTHENTICATED_ADMIN");
   const operator = JSON.parse(await readFile(join(root, "cvm-operator/operator.json"), "utf8"));
-  await openFixtureAdmin(admin, server.url, root, fixture); console.log("Admin OAuth ready");
+  await openFixtureAdmin(admin, server.url, root, fixture); stage("ADMIN_OAUTH_READY");
   await admin.getByText("Using ChatGPT plan · fixture-codex", { exact: true }).waitFor();
   await admin.getByLabel("Input price (test sats per 1,000 tokens)", { exact: true }).fill("0.5"); assert(await admin.getByLabel("Input price (test sats per 1,000 tokens)", { exact: true }).inputValue() === "0.5", "RATE_EDIT_LOST"); await admin.getByRole("button", { name: "Save rates", exact: true }).click();
   await admin.getByText("New rates saved. Existing jobs retain their price versions.", { exact: true }).waitFor();
-  console.log("Rates saved");
+  stage("RATES_SAVED");
   await page.goto(staticUrl); await page.getByText("Workspace connected", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   assert(await page.locator("#chatgpt-account").count() === 0 && !(await page.content()).includes("fixture@example"), "PUBLIC_PROVIDER_CONTROLS");
@@ -119,7 +126,7 @@ try {
   await admin.getByRole("button", { name: "Active", exact: true }).click(); await admin.locator("#jobs button").first().waitFor(); await admin.locator("#jobs button").first().click(); await admin.locator("#job-detail").waitFor();
   await admin.locator("#job-facts .job-badge").filter({ hasText: "Running" }).waitFor();
   assert((await admin.locator("#job-facts").textContent())?.includes("Running"), "ACTIVE_JOB_DETAIL_MISSING"); await admin.locator("#job-close").click();
-  console.log("Signers checked; releasing generation");
+  stage("SIGNERS_CHECKED");
   release();
   await page.waitForFunction(() => document.querySelector("#build-progress")?.getAttribute("aria-valuenow") === "5", undefined, { timeout: 180000 });
   await page.waitForFunction(() => !(document.querySelector("#preview-copy-address") as HTMLButtonElement).disabled, undefined, { timeout: 30000 });
@@ -128,7 +135,7 @@ try {
   const events = await relay.querySync([config.relayUrl], { kinds: [35129], authors: [connection.servicePubkey] }, { maxWait: 3000 }); assert(events.length === 1, "CVM_PREVIEW_EVENT_MISSING");
   const cvmBlob = events[0]!.tags.find(tag => tag[0] === "server")![1]!;
   assert((await fetch(`${cvmBlob}/upload`, { method: "PUT", body: "untrusted" })).status === 403, "CVM_BLOSSOM_ACCEPTED_PUBLIC_UPLOAD");
-  console.log("CVM preview shared");
+  stage("PREVIEW_SHARED");
   // Manual fallback first, then discover the standard kind-10063 list.
   await page.locator("#publish").click(); await page.locator("#publication-discovery").filter({ hasText: "No server list found" }).waitFor({ timeout: 20000 });
   assert(await page.locator("#workspace-nav-label").innerText() === "Publish" && await page.locator("#workspace-home").getAttribute("aria-current") === "page", "PUBLICATION_NAV_CONTEXT_MISSING");
@@ -180,6 +187,7 @@ try {
   await page.locator("#publish").click(); await page.locator("#publication-status").filter({ hasText: "Signature saved" }).waitFor();
   assert(await page.locator('#publication-files [data-state="failed"]').count() > 0, "COPY_FAILURES_NOT_RESTORED");
   assert(fixture.counts().inferences === 1, "COPY_RETRY_REGENERATED");
+  stage("COPY_RETRY");
   rejectCopies = false; await page.locator("#publication-confirm").click(); await page.locator("#publication-result").waitFor({ timeout: 60000 });
   assert(appletSignatures === 1, "COPY_RETRY_REQUESTED_NEW_APPLET_SIGNATURE");
   assert((await page.locator("#publication-completion").innerText()).includes("2 file copies"), "FAILED_SERVER_COUNTED_AS_VERIFIED");
@@ -294,10 +302,12 @@ try {
   assert(!(await page.content()).includes(operator.adminKey), "OPERATOR_KEY_IN_PRODUCT");
   assert(errors.length === 0, `BROWSER_ERRORS:${errors.join(";")}`);
   await pool.query("UPDATE development_publications SET state='unconfirmed' WHERE id=$1", [intent]);
-  const old = server.url; await server.close(); server = await createDevelopmentContextVmServer({ config, stateRoot: root, port: Number(new URL(old).port), chatGptFetch: modelFetch });
+  stage("CVM_RESTART_STOP");
+  const old = server.url; await server.close(); stage("CVM_RESTART_START"); server = await createDevelopmentContextVmServer({ config, stateRoot: root, port: Number(new URL(old).port), chatGptFetch: modelFetch });
   await page.evaluate(() => { for (const key of Object.keys(sessionStorage)) if (key.startsWith("applet-broker/publication/")) sessionStorage.removeItem(key); });
   await page.locator("#publication-close").click(); await page.reload(); await page.getByText("Workspace connected", { exact: true }).waitFor();
   await page.waitForFunction(() => !(document.querySelector("#preview-copy-address") as HTMLButtonElement).disabled, undefined, { timeout: 30000 });
+  stage("CVM_RESTART_RESTORED");
   assert(fixture.counts().inferences === 1, "RESTART_REGENERATED");
   assert((await page.locator("#nostr-sign-in").innerText()).includes("NIP-46"), "REMOTE_SIGNIN_NOT_RESTORED");
   assert(await page.locator("#publish").isEnabled(), "RESTORED_REMOTE_PUBLISH_DISABLED");
@@ -321,6 +331,7 @@ try {
   assert((await page.locator(".project-card").filter({ hasText: "Daily counter" }).innerText()).includes("Unpublished changes"), "NEW_REVISION_PUBLICATION_BADGE_MISSING");
   assert(mirrors === copiesBefore && appletSignatures === 1 && fixture.counts().inferences === 2, "REVISION_PUBLISHED_AUTOMATICALLY");
   assert((await pool.query("SELECT count(*)::int AS count FROM development_publications WHERE publisher=$1", [userPubkey])).rows[0].count === 1, "RESTORE_CREATED_DUPLICATE_PUBLICATION");
+  stage("REVISION_VERIFIED");
   // Edit a signed, unfinished version: retain history and require a new signature.
   await page.locator(".project-card").filter({hasText:"Daily counter"}).click();
   rejectCopies = true;
@@ -351,6 +362,7 @@ try {
     assert(replacement.servers.length===2 && replacement.fileResults.some((item:any)=>item.state==="verified"), "REPLACEMENT_LOST_VERIFIED_RECEIPTS");
     assert((await unauthorized.callTool("development_publication",{action:"prepare",artifactId:prior.artifact_id,sessionId:prior.session_id,publisher:userPubkey,requestKey:crypto.randomUUID(),title:"stolen",servers:replacement.servers,relays:replacement.relays,replaces:replacement.id})).status==="denied", "CROSS_OWNER_REPLACEMENT");
   } finally {await editor.close();}
+  stage("COPY_RETRY");
   rejectCopies = false; await page.locator("#publication-confirm").click(); await page.locator("#publication-result").waitFor({timeout:60000});
   assert(appletSignatures===3 && fixture.counts().inferences===2, "REPLACEMENT_SIGNATURE_OR_GENERATION_COUNT");
   assert(!(await page.locator("#publication-copy-warning").isVisible()), "REMOVED_SERVER_STILL_BLOCKS");
@@ -375,6 +387,7 @@ try {
   await page.locator("#publish").filter({hasText:"View publication"}).click(); await page.locator("#publication-result").waitFor();
   await page.locator("#publication-edit-published").click();
   assert(await page.locator("#publication-title").inputValue()==="Daily counter, shared" && await page.getByRole("button",{name:"Remove practice",exact:true}).count()===1, "EDIT_NOT_RESTORED");
+  stage("METADATA_EDIT_VERIFIED");
   // A restored older build can become the latest publication without new generation.
   await page.locator("#publication-close").click();
   const firstArtifact = await page.locator("#version-picker option").filter({hasText:"Version 1"}).getAttribute("value");
@@ -396,7 +409,10 @@ try {
   } finally { await restoredOwner.close(); }
   console.log(JSON.stringify({ status: "passed", case: "static-cvm-publication", checks: ["required and optional domains preserved from generated source into signed current-format events", "normalized hashtag chips and both event kinds", "published metadata editing keeps address, uses fresh signatures and no model calls", "edits survive reload", "offline CLI screenshot and kind-32267 application publication", "screenshot hash verified on two destinations", "both signatures persist and republish without model or copy work", "tampered and missing application signatures rejected", "separate static origin and subdirectory", "private operator OAuth", "rate version used", "job views", "all sign-in choices during generation", "real NIP46", "CVM naddr", "CVM-only Blossom writes", "manual and discovered servers", "one complete copy blocks publication in browser and CVM", "two complete copies publish despite third server HTTP 401", "warnings and verified count survive reopen", "saved signature and failures restored without browser journal", "copy retry uses one signature", "verified mirrors and user naddr", "owner-scoped publication lookup", "signed template tamper rejected", "exact event replay and repeated preparation", "pending job details", "published builder and project after CVM restart", "reopen retains address without generation", "revision shows unpublished changes", "CVM metadata ownership and editable signed description", "continue with saved two copies skips uploads and signing", "signed draft destination editing preserves history and rejects stale submission", "one relay confirms despite extra relay failure", "legacy partial success repairs on lookup and startup without republishing", "zero confirmations remain retryable", "compact success with collapsed failure details", "explicit republish from builder and result reuses event, address and files", "republish ownership and last-attempt persistence", "failed resend retains earlier publication", "restored older build becomes latest publication without model work"] }));
 } catch (error) { console.error("TEST_STAGE", error, await admin.locator("body").innerText({ timeout: 2000 }).catch(() => "admin page unavailable"), await page.locator("body").innerText({ timeout: 2000 }).catch(() => "workspace unavailable"), errors); throw error; } finally {
+  stage("CLEANUP_CLIENT");
   release(); remoteSubscription?.close(); relay.close([config.relayUrl]); relay.destroy(); await unauthorized.close();
-  await browser.close(); site.stop(true); destination.stop(true); backup.stop(true); unavailable.stop(true); await pool.end();
-  try { await server.close(); } finally { await stack.down(true); await rm(root, { recursive: true, force: true }); }
+  stage("CLEANUP_BROWSER");
+  await browser.close(); site.stop(true); destination.stop(true); backup.stop(true); unavailable.stop(true); stage("CLEANUP_POOL"); await pool.end();
+  stage("CLEANUP_CVM");
+  try { await server.close(); } finally { stage("CLEANUP_STACK"); await stack.down(true); await rm(root, { recursive: true, force: true }); stage("CLEANUP_COMPLETE"); clearInterval(heartbeat); }
 }

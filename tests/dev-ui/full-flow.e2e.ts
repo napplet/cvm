@@ -4,19 +4,19 @@ import { resolve } from "node:path";
 import { createDevelopmentPool, type DevPayments } from "../../scripts/dev-payments";
 import { accountIdForPrincipal } from "../../src/domain/account-command";
 import { runFullContinuationJourney } from "./continuation-revision.e2e";
+import { assertDevelopmentRootManifests } from "../../src/dev/root-manifests";
 
 const root = resolve(import.meta.dir, "../..");
 const instance = `test-full-${crypto.randomUUID().slice(0, 8)}`;
 const env = { ...process.env, NAPPLET_CVM_DEV_INSTANCE: instance };
 for (const name of ["OPENAI_API_KEY", "NAPPLET_CVM_OPENAI_MODEL", "NAPPLET_CVM_OPENAI_PROFILE", "NAPPLET_CVM_OPENAI_PRICE_CARD", "NAPPLET_CVM_OPENAI_PRICE_SOURCES"]) delete (env as Record<string, string | undefined>)[name];
 const evidenceRoot = resolve(root, ".local/development-gui-evidence");
-const hashes = { "package.json": "cbcc433278d32391b075576ebd847ae30039f1d86ad229a149f5566856989f23", "bun.lock": "8916ee4ec92924ae9e09bc4f315fd6656033812696e35a1b7785161d872c5ac3" };
 type Status = { ready: boolean; url: string; mode: string; configPath: string };
 type Snapshot = { stage: string; settled: string; held: string; available: string; credits: number; actions: number; providers: number; receipts: number; debits: number; artifacts: number; workers: number; charges: string };
 
 function check(condition: unknown, code: string): asserts condition { if (!condition) throw new Error(code); }
 async function integrity(): Promise<void> {
-  for (const [file, expected] of Object.entries(hashes)) check(new Bun.CryptoHasher("sha256").update(await Bun.file(resolve(root, file)).arrayBuffer()).digest("hex") === expected, `ROOT_MANIFEST_CHANGED:${file}`);
+  await assertDevelopmentRootManifests(root);
 }
 async function launch(command: string, ...args: string[]): Promise<string> {
   const child = Bun.spawn([process.execPath, "scripts/dev.ts", command, ...args], { cwd: root, env, stdout: "pipe", stderr: "pipe" });

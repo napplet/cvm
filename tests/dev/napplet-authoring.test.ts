@@ -12,7 +12,8 @@ test("installed skills reach the model with the bounded service contract intact"
   expect(instructions.indexOf("SERVICE EXECUTION CONTRACT")).toBeGreaterThan(instructions.lastIndexOf("</skill>"));
   expect(instructions).toContain("Return only the requested JSON source files.");
   expect(instructions).toContain("You have no tools in this source-generation turn");
-  expect(instructions).toContain("Only src/main.ts and src/styles.css can change");
+  expect(instructions).toContain("Only src/main.ts, src/styles.css and the data-only src/capabilities.json can change");
+  expect(instructions).toContain("do not change the manifest, tests, dependencies or toolchain");
   expect(instructions).toContain("No title header");
   // Leaves room for the existing bounded prior source + prompt + JSON framing.
   expect(Buffer.byteLength(JSON.stringify(instructions)) + 128_000 + 20_000).toBeLessThan(262_144);

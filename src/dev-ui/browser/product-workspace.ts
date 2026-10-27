@@ -5,7 +5,7 @@ import type { ActivitySnapshot } from "./activity";
 import type { DevelopmentBootstrap } from "./contextvm-client";
 
 export type WorkspaceVersion = Readonly<{ sessionId: string; version: number; artifactId: string }>;
-type Message = { role: "user" | "assistant"; text: string; version?: number; state?: "failed" | "uncertain" };
+type Message = { role: "user" | "assistant"; text: string; version?: number; state?: "failed" | "uncertain"; requestKey?: string };
 type Draft = { idea: string; revision: string; maximum: string; step: number; messages: Message[]; sessionId?: string };
 const arrow = '<span aria-hidden="true">↗</span>';
 const steps = ["Preparing", "Generating", "Building", "Checking", "Preview"];
@@ -235,7 +235,7 @@ export class ProductWorkspace {
     const auth = /CHATGPT.*(?:SIGN_IN|PERMISSION|REAUTHORIZE|LIMIT|ACCESS)/u.test(code);
     const copy = uncertain ? "We couldn’t confirm this request’s outcome. It won’t be retried automatically. Check the original request if offered below; detailed activity is available underneath." : auth ? "The CVM’s generation provider needs operator attention. Your last verified version remains available." : /WORKER|ARTIFACT|SOURCE_INVALID/u.test(code) ? "This version didn’t pass its checks. Your last verified preview is still available. Try a simpler change; the check details are below." : /ADMISSION/u.test(code) ? "The service couldn’t reserve a workspace for this request. No generation was started. You can try again when it’s available." : /FUND/u.test(code) ? "Test funds couldn’t be confirmed. Check your balance in Settings before trying again." : "We couldn’t finish this request. Your last verified preview is still available. Open execution details for the reason.";
     this.el("product-notice").hidden = false; this.text("notice-heading", uncertain ? "Outcome unconfirmed" : "This attempt stopped"); this.text("notice-copy", copy); this.el("notice-settings").hidden = true; this.el("review-request").hidden = uncertain || auth;
-    if (!this.#outcomeAdded) this.addMessage({ role: "assistant", text: copy, state: uncertain ? "uncertain" : "failed" });
+    if (!this.#outcomeAdded) this.addMessage({ role: "assistant", text: copy, state: uncertain ? "uncertain" : "failed", requestKey: this.#requestKey });
     this.#outcomeAdded = true;
     if (!this.#version) { this.text("build-heading", "Let’s get your idea working."); }
   }
@@ -394,7 +394,10 @@ export class ProductWorkspace {
   private renderMessages(scroll = true): void {
     const list = this.el("conversation-messages");
     const messages = this.#costs ? (this.#pendingFrom === undefined ? [] : this.#messages.slice(this.#pendingFrom)) : this.#messages;
-    const receipts = this.#costs ? [...this.#costs.requests].sort((a,b) => a.number - b.number).map(requestCostElement) : [];
+    const receipts = this.#costs ? [...this.#costs.requests].sort((a,b) => a.number - b.number).map(request => {
+      const failure = this.#messages.findLast(message => message.role === "assistant" && message.state && message.requestKey === request.requestKey);
+      return requestCostElement(request, failure?.text);
+    }) : [];
     const open = new Set([...list.querySelectorAll<HTMLDetailsElement>(".request-cost-details[open]")].map(el => el.closest<HTMLElement>("[data-request-id]")!.dataset.requestId));
     for (const receipt of receipts) if (open.has(receipt.dataset.requestId)) receipt.querySelector("details")!.open = true;
     list.replaceChildren(...receipts,...messages.map((message) => { const item = document.createElement("li"); item.className = `message ${message.role}`; if (message.state) item.dataset.state = message.state; const label = document.createElement("span"); label.className = "message-author"; label.textContent = message.role === "user" ? "You" : "applet.broker"; const body = document.createElement("p"); body.textContent = message.text; item.append(label, body); const cost = document.createElement("p"); cost.className = "request-note"; cost.textContent = message.role === "user" ? "Cost awaits confirmation" : "Cost included with your request"; item.append(cost); return item; }));

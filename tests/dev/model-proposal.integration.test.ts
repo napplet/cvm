@@ -1,7 +1,7 @@
 import { ProviderOperationIntentSchema } from "../../src/model/model-gateway";
 import { expect, test } from "bun:test";
 import { createDevelopmentFunding } from "../../scripts/dev-funding";
-import type { DevPayments } from "../../scripts/dev-payments";
+import { readDevelopmentPaymentConfig } from "./payment-config";
 import { DeterministicModelGateway } from "../../src/model/deterministic-model-gateway";
 import { SourceProposalStore } from "../../src/dev/source-proposal-store";
 import { DevelopmentModelGateway, configuredProviderFromEnvironment } from "../../src/dev/development-model-gateway";
@@ -21,7 +21,7 @@ const intent = (overrides: Record<string, unknown> = {}) => ProviderOperationInt
 test("deterministic proposal SQL dispatch lookup restart replay", async () => {
   let app: Awaited<ReturnType<typeof createDevelopmentFunding>> | undefined;
   try {
-    const config = await Bun.file(`${import.meta.dir}/../../.local/napplet-cvm-dev-payments/payments.json`).json() as DevPayments;
+    const config = await readDevelopmentPaymentConfig();
     app = await createDevelopmentFunding(config);
     const store = new SourceProposalStore(app.pool);
     const first = new DeterministicModelGateway({ scenario: { dispatch: "completed", lookup: "receipt_found" }, proposalStore: store });
@@ -51,7 +51,7 @@ test("deterministic proposal SQL dispatch lookup restart replay", async () => {
 }, 300_000);
 
 test("configured provider pricing usage proposal recovery", async () => {
-  const config = await Bun.file(`${import.meta.dir}/../../.local/napplet-cvm-dev-payments/payments.json`).json() as DevPayments;
+  const config = await readDevelopmentPaymentConfig();
   const app = await createDevelopmentFunding(config);
   try {
     // No credential/source fixture is a deliberate unavailable state: the
@@ -68,7 +68,7 @@ test("configured provider pricing usage proposal recovery", async () => {
 });
 
 test("ContextVM metered proposal handoff lookup only", async () => {
-  const config = await Bun.file(`${import.meta.dir}/../../.local/napplet-cvm-dev-payments/payments.json`).json() as DevPayments;
+  const config = await readDevelopmentPaymentConfig();
   const app = await createDevelopmentFunding(config);
   try {
     const store = new TransactionalMemoryFundingStore();
@@ -95,7 +95,7 @@ test("ContextVM metered proposal handoff lookup only", async () => {
 });
 
 test("configured provider pricing usage proposal recovery parses raw Responses HTTP", async () => {
-  const config = await Bun.file(`${import.meta.dir}/../../.local/napplet-cvm-dev-payments/payments.json`).json() as DevPayments;
+  const config = await readDevelopmentPaymentConfig();
   const app = await createDevelopmentFunding(config);
   try {
     const providerBytes = "official provider prices captured bytes"; const conversionBytes = "official btc usd conversion captured bytes";

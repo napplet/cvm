@@ -3,13 +3,14 @@ import { chmod, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { accountIdForPrincipal } from "../../src/domain/account-command";
-import { createDevelopmentPool, type DevPayments } from "../../scripts/dev-payments";
+import { createDevelopmentPool } from "../../scripts/dev-payments";
+import { readDevelopmentPaymentConfig } from "./payment-config";
 import { LocalArtifactRepository } from "../../src/dev/local-artifact-repository";
 import { LocalPreviewGrantStore } from "../../src/dev/local-preview-grant-store";
 import type { VerifiedArtifactFacts } from "../../src/dev/local-artifact-verifier";
 
 test("SQL artifacts and grants survive pool recreation, revoke and reject byte tampering", async () => {
-  const config = await Bun.file(`${import.meta.dir}/../../.local/napplet-cvm-dev-payments/payments.json`).json() as DevPayments;
+  const config = await readDevelopmentPaymentConfig();
   let pool = createDevelopmentPool(config.databaseUrl);
   const root = await mkdtemp(join(tmpdir(), "napplet-artifact-persistence-"));
   const ownerId = "f".repeat(64); const accountId = await accountIdForPrincipal({ pubkey: ownerId }); const nonce = crypto.randomUUID();

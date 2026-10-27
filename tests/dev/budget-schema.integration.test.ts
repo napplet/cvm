@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
-import { createDevelopmentPool, type DevPayments } from "../../scripts/dev-payments";
+import { createDevelopmentPool } from "../../scripts/dev-payments";
+import { readDevelopmentPaymentConfig } from "./payment-config";
 
 test("SQL budget lifecycle permits release and exhausted holds while rejecting negative money", async () => {
-  const config = await Bun.file(`${import.meta.dir}/../../.local/napplet-cvm-dev-payments/payments.json`).json() as DevPayments;
+  const config = await readDevelopmentPaymentConfig();
   const pool = createDevelopmentPool(config.databaseUrl); const client = await pool.connect(); const id = `schema-test:${crypto.randomUUID()}`;
   try {
     await client.query("BEGIN");

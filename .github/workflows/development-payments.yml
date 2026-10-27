@@ -5,6 +5,8 @@ on:
   pull_request:
     paths:
       - "infra/dev-payments/**"
+      - "infra/dev-ui/**"
+      - "infra/dev-publication/**"
       - "scripts/dev-*.ts"
       - "src/funding/**"
       - "src/persistence/**"
@@ -12,9 +14,11 @@ on:
       - "src/phase-03/**"
       - "migrations/**"
       - "tests/dev/**"
+      - "tests/dev-ui/**"
       - "tests/funding/**"
       - "package.json"
       - "bun.lock"
+      - "scripts/probe-development-relay.ts"
       - ".github/workflows/development-payments.yml"
 
 permissions:
@@ -23,7 +27,9 @@ permissions:
 jobs:
   payments:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    env:
+      NAPPLET_CVM_WORKER_PLATFORM: linux/amd64
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,5 +37,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.14"
+      - name: Install the Compose version required by the worker image contract
+        uses: docker/setup-compose-action@2fe291b7677a45ee1269ec56a42604c143505e7e # v1
+        with:
+          version: v2.39.4
       - run: bun install --frozen-lockfile
+      - run: bun install --cwd tests/dev-ui --frozen-lockfile
+      - name: Install host Chromium and its Linux libraries
+        run: bun tests/dev-ui/node_modules/playwright/cli.js install --with-deps chromium
+      - name: Verify the pinned native AMD64 development relay
+        run: bun scripts/probe-development-relay.ts
       - run: bun scripts/dev-payments.ts test

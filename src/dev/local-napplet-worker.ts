@@ -89,7 +89,12 @@ export class LocalNappletWorker {
     try {
       await mkdir(input); await mkdir(output); await chmod(output, 0o777);
       await writeFile(join(input, "proposal.json"), JSON.stringify({ proposalSha256: sha256, files: proposal.files }), { flag: "wx", mode: 0o444 });
-      const args = ["run", "--name", containerName, "--label", "org.napplet-cvm.development-worker=true", "--rm", "--network", "none", "--read-only", "--user", "65532:65532", "--cpus", "2", "--memory", "2g", "--pids-limit", "256", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=256m", "--tmpfs", "/work:rw,exec,nosuid,nodev,size=512m", "--tmpfs", "/home/napplet:rw,exec,nosuid,nodev,size=128m", "-v", `${input}:/input:ro`, "-v", `${output}:/output:rw`, imageId!, "/usr/local/bin/run-proposal"];
+      // Native Linux bind mounts retain numeric ownership. Match an unprivileged
+      // launcher so it can remove exported directories; a root launcher still
+      // runs the worker as the image's unprivileged identity.
+      const hostUid = process.getuid?.() ?? 0; const hostGid = process.getgid?.() ?? 0;
+      const workerUser = hostUid > 0 && hostGid > 0 ? `${hostUid}:${hostGid}` : "65532:65532";
+      const args = ["run", "--name", containerName, "--label", "org.napplet-cvm.development-worker=true", "--rm", "--network", "none", "--read-only", "--user", workerUser, "--cpus", "2", "--memory", "2g", "--pids-limit", "256", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=256m", "--tmpfs", "/work:rw,exec,nosuid,nodev,size=512m", "--tmpfs", "/home/napplet:rw,exec,nosuid,nodev,size=128m", "-v", `${input}:/input:ro`, "-v", `${output}:/output:rw`, imageId!, "/usr/local/bin/run-proposal"];
       const result = await runBoundedDevelopmentCommand([docker, ...args], { deadlineMs: Math.max(1, Math.min(this.input.deadlineMs ?? 180_000, 180_000)), maxBytes: Math.max(1, Math.min(this.input.maxOutputBytes ?? 256_000, 256_000)), signal, onStdoutLine: (line) => {
         if (!line.startsWith("NAPPLET_STAGE ")) return;
         try {

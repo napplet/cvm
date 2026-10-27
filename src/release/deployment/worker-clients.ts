@@ -32,6 +32,16 @@ export type WorkerOperationRecord = Readonly<{
   state: WorkerOperationState;
   resourceName: string;
   resourceId?: string;
+  /** Immutable request facts are persisted before a provider mutation.  They
+   * are deliberately repeated here rather than reconstructed from current
+   * configuration during reconciliation. */
+  image?: string;
+  region?: string;
+  policyVersion?: string;
+  createdAtMs?: number;
+  sessionLeaseSha256?: string;
+  toolchainSha256?: string;
+  providerDeadlineEpochMs?: number;
 }>;
 /** This is a controller persistence port. Production injects a durable CAS
  * implementation; the in-memory version below is limited to contract tests. */
@@ -73,11 +83,42 @@ const MachineSchema = z.object({
   config: z.object({ image: ImageSchema, metadata: z.record(z.string(), z.string()).optional(), guest: z.object({ cpus: z.number().int().positive(), memory_mb: z.number().int().positive() }).optional(), services: z.array(z.unknown()).optional(), env: z.record(z.string(), z.string()).optional() }).passthrough(),
 }).passthrough();
 
+const MAX_PROVIDER_RESPONSE_BYTES = 128 * 1024;
+const PROVIDER_REQUEST_TIMEOUT_MS = 15_000;
+const ImageDigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
+
+function imageDigest(image: string): string { return ImageDigestSchema.parse(ImageSchema.parse(image).split("@sha256:")[1]); }
+
+/** Never use Response.json()/text() at a provider boundary: a compromised or
+ * malformed endpoint must not be able to make the controller buffer an
+ * unbounded body. */
+async function boundedJson(response: Response): Promise<unknown> {
+  if (!response.body) throw new Error("PROVIDER_RESPONSE_BODY_MISSING");
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      size += next.value.byteLength;
+      if (size > MAX_PROVIDER_RESPONSE_BYTES) throw new Error("PROVIDER_RESPONSE_TOO_LARGE");
+      chunks.push(next.value);
+    }
+  } finally { reader.releaseLock(); }
+  const bytes = new Uint8Array(size); let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
 export type FlyCreateResult = Readonly<{ status: "created" | "reconciled"; operationId: string; resourceId: string }> | Readonly<{ status: "unknown"; operationId: string }>;
 export type FlyMachinesHttpTransport = Readonly<{
-  create(input: Readonly<{ operationId: string; region: string; image: string; policy: ProductionWorkerPolicy }>): Promise<FlyCreateResult>;
+  create(input: Readonly<{ operationId: string; region: string; image: string; policy: ProductionWorkerPolicy; sessionLeaseSha256: string; toolchainSha256: string; providerDeadlineEpochMs: number }>): Promise<FlyCreateResult>;
   observe(input: Readonly<{ operationId: string }>): Promise<Readonly<{ status: "missing" | "pending" | "completed" | "unknown"; resourceId?: string }>>;
   terminate(input: Readonly<{ operationId: string }>): Promise<Readonly<{ status: "terminated" | "pending" | "unknown" | "blocked" }>>;
+  /** Controller-only bounded Machines exec. It is used for the immutable
+   * image's readiness probe, never to re-run generated or paid work. */
+  exec(input: Readonly<{ operationId: string; command: readonly string[]; stdin?: string; timeoutSeconds?: number }>): Promise<Readonly<{ status: "completed" | "unknown"; stdout?: string; stderr?: string; exitCode?: number }>>;
 }>;
 
 const ReadinessAttestationSchema = z.object({
@@ -113,10 +154,6 @@ export function createFlyMachinesHttpTransport(input: Readonly<{
   journal: WorkerOperationJournal;
   fetch: FlyFetch;
   apiOrigin?: string;
-  /** A controller-owned observation channel (not Fly metadata).  Fly's
-   * Machines API has no exec endpoint, so an absent attester can only leave
-   * a started Machine pending; it can never certify it ready. */
-  trustedReadiness?: (input: Readonly<{ operationId: string; resourceId: string; image: string }>) => Promise<Readonly<{ attestation: unknown; expected: Readonly<{ image: string; sessionLeaseSha256: string; networkPolicyEvidenceSha256: string }> }>>;
 }>): FlyMachinesHttpTransport {
   const appName = AppNameSchema.parse(input.appName);
   const base = new URL(input.apiOrigin ?? "https://api.machines.dev");
@@ -124,18 +161,21 @@ export function createFlyMachinesHttpTransport(input: Readonly<{
   const request = async (path: string, init: RequestInit) => {
     const token = await input.getAccessToken();
     if (typeof token !== "string" || token.length < 12 || /\s/u.test(token)) throw new Error("FLY_ACCESS_TOKEN_INVALID");
-    return input.fetch(new URL(path, base).toString(), {
-      ...init,
-      redirect: "error",
-      headers: Object.freeze({ authorization: `Bearer ${token}`, "content-type": "application/json", ...(init.headers ?? {}) }),
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error("FLY_REQUEST_TIMEOUT")), PROVIDER_REQUEST_TIMEOUT_MS);
+    try {
+      return await input.fetch(new URL(path, base).toString(), {
+        ...init, signal: controller.signal, redirect: "error",
+        headers: Object.freeze({ authorization: `Bearer ${token}`, "content-type": "application/json", ...(init.headers ?? {}) }),
+      });
+    } finally { clearTimeout(timer); }
   };
 
-function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<WorkerOperationRecord, "operationId" | "resourceName">, image: string): boolean {
+function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<WorkerOperationRecord, "operationId" | "resourceName" | "image" | "policyVersion">, image: string): boolean {
   const metadata = machine.config.metadata;
-  return machine.name === record.resourceName && machine.config.image === image
+  return Boolean(record.image) && machine.name === record.resourceName && machine.config.image === image && image === record.image
     && metadata?.["napplet-cvm-operation"] === record.operationId
-    && metadata?.["napplet-cvm-policy"] === PRODUCTION_WORKER_POLICY.version
+    && metadata?.["napplet-cvm-policy"] === record.policyVersion
     && metadata?.["napplet-cvm-role"] === "isolated-worker"
     && Object.keys(metadata).sort().join(",") === "napplet-cvm-operation,napplet-cvm-policy,napplet-cvm-role"
     && machine.config.guest?.cpus === PRODUCTION_WORKER_POLICY.cpu
@@ -148,7 +188,7 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<Worke
     try { response = await request(`/v1/apps/${encodeURIComponent(appName)}/machines?metadata.napplet-cvm-operation=${encodeURIComponent(operationId)}&include_deleted=true`, { method: "GET" }); } catch { return Object.freeze({ kind: "unknown" as const }); }
     if (response.status === 404) return Object.freeze({ kind: "missing" as const });
     if (!response.ok) return Object.freeze({ kind: "unknown" as const });
-    const machines = z.array(MachineSchema).safeParse(await response.json().catch(() => undefined));
+    const machines = z.array(MachineSchema).safeParse(await boundedJson(response).catch(() => undefined));
     if (!machines.success) return Object.freeze({ kind: "unknown" as const });
     const matched = machines.data.filter((machine) => {
       const metadata = machine.config.metadata;
@@ -163,12 +203,16 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<Worke
   return Object.freeze({
     async create(value) {
       const operationId = OperationIdSchema.parse(value.operationId); const region = RegionSchema.parse(value.region); const image = ImageSchema.parse(value.image);
+      const sessionLeaseSha256 = ImageDigestSchema.parse(value.sessionLeaseSha256);
+      const toolchainSha256 = ImageDigestSchema.parse(value.toolchainSha256);
+      const providerDeadlineEpochMs = z.number().int().positive().parse(value.providerDeadlineEpochMs);
+      if (providerDeadlineEpochMs <= Date.now() || providerDeadlineEpochMs > Date.now() + PRODUCTION_WORKER_POLICY.totalLifetimeMs) throw new Error("WORKER_DEADLINE_INVALID");
       if (value.policy !== PRODUCTION_WORKER_POLICY || value.policy.blockNetwork !== true || value.policy.noInboundPorts !== true) throw new Error("WORKER_POLICY_IDENTITY_REQUIRED");
       const resourceName = stableName(operationId);
-      const requestSha256 = await sha256(JSON.stringify({ operationId, region, image, policy: value.policy.version }));
-      const claimed = await input.journal.claim({ operationId, requestSha256, resourceName });
+      const requestSha256 = await sha256(JSON.stringify({ operationId, region, image, policy: value.policy.version, sessionLeaseSha256, toolchainSha256, providerDeadlineEpochMs }));
+      const claimed = await input.journal.claim({ operationId, requestSha256, resourceName, image, region, policyVersion: value.policy.version, createdAtMs: Date.now(), sessionLeaseSha256, toolchainSha256, providerDeadlineEpochMs });
       if (!claimed.claimed) {
-        if (claimed.record.requestSha256 !== requestSha256) return Object.freeze({ status: "unknown" as const, operationId });
+        if (claimed.record.requestSha256 !== requestSha256 || claimed.record.image !== image || claimed.record.region !== region || claimed.record.policyVersion !== value.policy.version || claimed.record.sessionLeaseSha256 !== sessionLeaseSha256 || claimed.record.toolchainSha256 !== toolchainSha256 || claimed.record.providerDeadlineEpochMs !== providerDeadlineEpochMs || !Number.isSafeInteger(claimed.record.createdAtMs)) return Object.freeze({ status: "unknown" as const, operationId });
         if (claimed.record.resourceId) {
           const observed = await findOriginal(operationId, resourceName, image);
           return observed.kind === "found" && observed.id === claimed.record.resourceId ? Object.freeze({ status: "reconciled" as const, operationId, resourceId: observed.id }) : Object.freeze({ status: "unknown" as const, operationId });
@@ -198,8 +242,8 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<Worke
       try {
         const response = await request(`/v1/apps/${encodeURIComponent(appName)}/machines`, { method: "POST", body: JSON.stringify(body) });
         if (!response.ok) { await input.journal.update({ operationId, requestSha256, state: "unknown" }); return Object.freeze({ status: "unknown" as const, operationId }); }
-        const machine = MachineSchema.safeParse(await response.json());
-        if (!machine.success || machine.data.name !== resourceName || machine.data.config.image !== image || machine.data.config.metadata?.["napplet-cvm-operation"] !== operationId) {
+        const machine = MachineSchema.safeParse(await boundedJson(response).catch(() => undefined));
+        if (!machine.success || !ownedMachine(machine.data, claimed.record, image)) {
           await input.journal.update({ operationId, requestSha256, state: "unknown" }); return Object.freeze({ status: "unknown" as const, operationId });
         }
         await input.journal.update({ operationId, requestSha256, state: "dispatched", resourceId: machine.data.id });
@@ -215,14 +259,16 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<Worke
       const response = await request(`/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(record.resourceId)}`, { method: "GET" });
       if (response.status === 404) return Object.freeze({ status: "missing" as const });
       if (!response.ok) return Object.freeze({ status: "unknown" as const });
-      const machine = MachineSchema.safeParse(await response.json());
-      if (!machine.success || machine.data.id !== record.resourceId || !ownedMachine(machine.data, record, machine.data.config.image) || machine.data.state !== "started") return Object.freeze({ status: "unknown" as const });
-      if (!input.trustedReadiness) return Object.freeze({ status: "pending" as const, resourceId: record.resourceId });
-      try {
-        const readiness = await input.trustedReadiness({ operationId: record.operationId, resourceId: record.resourceId, image: machine.data.config.image });
-        validateWorkerReadinessAttestation(readiness.attestation, readiness.expected);
-        return Object.freeze({ status: "completed" as const, resourceId: record.resourceId });
-      } catch { return Object.freeze({ status: "unknown" as const, resourceId: record.resourceId }); }
+      const machine = MachineSchema.safeParse(await boundedJson(response).catch(() => undefined));
+      if (!machine.success || !record.image || machine.data.id !== record.resourceId || !ownedMachine(machine.data, record, record.image) || machine.data.state !== "started") return Object.freeze({ status: "unknown" as const });
+      // Readiness must be executed against the Machine ID that was durably
+      // recorded.  The command is diagnostic-only and cannot initiate work.
+      if (!record.sessionLeaseSha256 || !record.toolchainSha256 || !record.providerDeadlineEpochMs) return Object.freeze({ status: "unknown" as const, resourceId: record.resourceId });
+      const probe = await this.exec({ operationId: record.operationId, command: [...PRODUCTION_WORKER_POLICY.probeCommand, "--session-lease-sha256", record.sessionLeaseSha256, "--provider-image", record.image, "--toolchain-sha256", record.toolchainSha256, "--provider-deadline-epoch-ms", String(record.providerDeadlineEpochMs)], timeoutSeconds: 60 });
+      if (probe.status !== "completed" || probe.exitCode !== 0 || !probe.stdout) return Object.freeze({ status: "pending" as const, resourceId: record.resourceId });
+      const report = z.object({ checks: z.object({ toolchain_readonly: z.literal(true), workspace_bounded: z.literal(true), non_root: z.literal(true), no_ambient_credentials: z.literal(true), network_denied: z.literal(true), no_inbound_ports: z.literal(true), minimal_capabilities: z.literal(true) }).strict(), exactReady: z.object({ image: ImageSchema, sessionLeaseSha256: ImageDigestSchema, remainingLifetimeMs: z.number().int().positive().max(PRODUCTION_WORKER_POLICY.totalLifetimeMs), toolchainSha256: ImageDigestSchema }).strict() }).strict().safeParse(JSON.parse(probe.stdout));
+      if (!report.success || report.data.exactReady.image !== record.image || report.data.exactReady.sessionLeaseSha256 !== record.sessionLeaseSha256 || report.data.exactReady.toolchainSha256 !== record.toolchainSha256 || report.data.exactReady.remainingLifetimeMs > PRODUCTION_WORKER_POLICY.totalLifetimeMs) return Object.freeze({ status: "unknown" as const, resourceId: record.resourceId });
+      return Object.freeze({ status: "completed" as const, resourceId: record.resourceId });
     },
     async terminate(value) {
       const operationId = OperationIdSchema.parse(value.operationId); const record = await input.journal.read(operationId);
@@ -232,11 +278,11 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<Worke
         await input.journal.update({ operationId, requestSha256: record.requestSha256, state: "terminated", resourceId: record.resourceId });
         return Object.freeze({ status: "terminated" as const });
       }
-      const machine = before.ok ? MachineSchema.safeParse(await before.json()) : undefined;
+      const machine = before.ok ? MachineSchema.safeParse(await boundedJson(before).catch(() => undefined)) : undefined;
       const metadata = machine?.success ? machine.data.config.metadata : undefined;
       if (!machine?.success || machine.data.name !== record.resourceName || metadata?.["napplet-cvm-operation"] !== operationId
         || metadata?.["napplet-cvm-policy"] !== PRODUCTION_WORKER_POLICY.version || metadata?.["napplet-cvm-role"] !== "isolated-worker"
-        || !ownedMachine(machine.data, record, machine.data.config.image)) return Object.freeze({ status: "unknown" as const });
+        || !record.image || !ownedMachine(machine.data, record, record.image)) return Object.freeze({ status: "unknown" as const });
       await input.journal.update({ operationId, requestSha256: record.requestSha256, state: "terminating", resourceId: record.resourceId });
       const removed = await request(`/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(record.resourceId)}?force=true`, { method: "DELETE" });
       if (!removed.ok && removed.status !== 404) return Object.freeze({ status: "pending" as const });
@@ -244,6 +290,23 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<Worke
       if (after.status !== 404) return Object.freeze({ status: "pending" as const });
       await input.journal.update({ operationId, requestSha256: record.requestSha256, state: "terminated", resourceId: record.resourceId });
       return Object.freeze({ status: "terminated" as const });
+    },
+    async exec(value) {
+      const operationId = OperationIdSchema.parse(value.operationId); const record = await input.journal.read(operationId);
+      const command = z.array(z.string().min(1).max(256)).min(1).max(12).parse(value.command);
+      const stdin = z.string().max(32 * 1024).parse(value.stdin ?? "");
+      const timeout = z.number().int().min(1).max(60).parse(value.timeoutSeconds ?? 60);
+      if (!record?.resourceId || !record.image) return Object.freeze({ status: "unknown" as const });
+      try {
+        const before = await request(`/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(record.resourceId)}`, { method: "GET" });
+        const machine = before.ok ? MachineSchema.safeParse(await boundedJson(before)) : undefined;
+        if (!machine?.success || !ownedMachine(machine.data, record, record.image)) return Object.freeze({ status: "unknown" as const });
+        const response = await request(`/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(record.resourceId)}/exec`, { method: "POST", body: JSON.stringify({ command, stdin, timeout }) });
+        if (!response.ok) return Object.freeze({ status: "unknown" as const });
+        const body = z.object({ stdout: z.string().max(MAX_PROVIDER_RESPONSE_BYTES).optional(), stderr: z.string().max(MAX_PROVIDER_RESPONSE_BYTES).optional(), exit_code: z.number().int().optional(), exitCode: z.number().int().optional() }).passthrough().safeParse(await boundedJson(response));
+        const exitCode = body.success ? (body.data.exit_code ?? body.data.exitCode) : undefined;
+        return body.success && exitCode !== undefined ? Object.freeze({ status: "completed" as const, ...(body.data.stdout !== undefined ? { stdout: body.data.stdout } : {}), ...(body.data.stderr !== undefined ? { stderr: body.data.stderr } : {}), exitCode }) : Object.freeze({ status: "unknown" as const });
+      } catch { return Object.freeze({ status: "unknown" as const }); }
     },
   });
 }
@@ -261,6 +324,6 @@ export function createWorkerDeploymentClients(input: Readonly<{
   return Object.freeze({
     selection: Object.freeze({ status: "unselected" as const, reasonCode: "FRESH_PROTECTED_EVIDENCE_REQUIRED" as const }),
     modal: Object.freeze({ definition, schedules: LOCKED_WORKER_SCHEDULE, sdk: input.modalSdk, config: Object.freeze({ image, workspaceRoot: input.workspaceRoot, policyVersion: input.policyVersion }) }),
-    fly: Object.freeze({ definition, schedules: LOCKED_WORKER_SCHEDULE, create: (operation: Readonly<{ operationId: string; region: string }>) => input.fly.create({ ...operation, image, policy: PRODUCTION_WORKER_POLICY }), observe: input.fly.observe, terminate: input.fly.terminate, config: Object.freeze({ image, workspaceRoot: input.workspaceRoot, policyVersion: input.policyVersion }) }),
+    fly: Object.freeze({ definition, schedules: LOCKED_WORKER_SCHEDULE, create: (operation: Readonly<{ operationId: string; region: string; sessionLeaseSha256: string; toolchainSha256: string; providerDeadlineEpochMs: number }>) => input.fly.create({ ...operation, image, policy: PRODUCTION_WORKER_POLICY }), observe: input.fly.observe, terminate: input.fly.terminate, exec: input.fly.exec, config: Object.freeze({ image, workspaceRoot: input.workspaceRoot, policyVersion: input.policyVersion }) }),
   });
 }

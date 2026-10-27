@@ -21,7 +21,9 @@ test("uses the verifier's locked 1,000-attempt schedule and one versioned policy
     blockNetwork: true,
     noInboundPorts: true,
     nonRootUid: 65532,
-    timeoutMs: 600_000,
+    activeWorkTimeoutMs: 600_000,
+    idleGraceMs: 600_000,
+    totalLifetimeMs: 1_200_000,
     idleTimeoutMs: 600_000,
   });
   const clients = createWorkerDeploymentClients({
@@ -53,8 +55,9 @@ test("Fly persists its original operation before create, queries deterministic m
     },
   });
 
-  const first = await transport.create({ operationId: "op-lost", region: "ams", image, policy: PRODUCTION_WORKER_POLICY });
-  const retry = await transport.create({ operationId: "op-lost", region: "ams", image, policy: PRODUCTION_WORKER_POLICY });
+  const intent = { sessionLeaseSha256: digest("b"), toolchainSha256: digest("c"), providerDeadlineEpochMs: Date.now() + 60_000 };
+  const first = await transport.create({ operationId: "op-lost", region: "ams", image, policy: PRODUCTION_WORKER_POLICY, ...intent });
+  const retry = await transport.create({ operationId: "op-lost", region: "ams", image, policy: PRODUCTION_WORKER_POLICY, ...intent });
 
   expect(first).toEqual({ status: "unknown", operationId: "op-lost" });
   expect(retry).toEqual({ status: "reconciled", operationId: "op-lost", resourceId: "machine-original" });
@@ -74,7 +77,7 @@ test("transport refuses a malformed or credential-bearing response and does not 
     journal: createMemoryWorkerOperationJournal(),
     fetch: async () => new Response(JSON.stringify([{ id: "machine-1", name: "napplet-cvm-op-unsafe", config: { image, metadata: { "napplet-cvm-operation": "op-unsafe", secret: "no" } } }]), { status: 200 }),
   });
-  await expect(transport.create({ operationId: "op-unsafe", region: "ams", image, policy: PRODUCTION_WORKER_POLICY })).resolves.toEqual({ status: "unknown", operationId: "op-unsafe" });
+  await expect(transport.create({ operationId: "op-unsafe", region: "ams", image, policy: PRODUCTION_WORKER_POLICY, sessionLeaseSha256: digest("b"), toolchainSha256: digest("c"), providerDeadlineEpochMs: Date.now() + 60_000 })).resolves.toEqual({ status: "unknown", operationId: "op-unsafe" });
 });
 
 test("sealed image installs root-owned trusted worker commands and runs the pinned build/conformance flow", async () => {
@@ -91,9 +94,10 @@ test("sealed image installs root-owned trusted worker commands and runs the pinn
   expect(dockerfile).toContain("FROM sealed AS default\nUSER 65532:65532");
   expect(dockerfile).toContain("chmod -R go-w /toolchain /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe");
   expect(dockerfile).not.toContain("--chown=65532:65532 /toolchain/node_modules");
-  for (const command of ["napplet", "--offline", "--frozen-lockfile", "test:conformance", "networkDenied", "environmentClean", "CapBnd", "NoNewPrivs"]) expect(worker).toContain(command);
+  for (const command of ["napplet", "--offline", "--frozen-lockfile", "test:conformance", "networkDenied", "deniedProbe", "environmentClean", "CapBnd", "NoNewPrivs", "WORKER_SOURCE_DUPLICATE"]) expect(worker).toContain(command);
   expect(probe).toContain("napplet-cvm-worker");
-  for (const command of ["findmnt", "tmpfs", "setpriv", "--bounding-set=-all", "--no-new-privs"]) expect(bootstrap).toContain(command);
+  for (const command of ["findmnt", "tmpfs", "setpriv", "--bounding-set=-all", "--no-new-privs", "mount_bounded /home/napplet", "mount_bounded /tmp"]) expect(bootstrap).toContain(command);
+  expect(dockerfile).toContain('install","chromium');
 });
 
 test("readiness rejects a credential-bearing, unprobed, or incorrectly leased worker", () => {
@@ -114,7 +118,7 @@ test("readiness rejects a credential-bearing, unprobed, or incorrectly leased wo
 
 test("cleanup after controller interruption deletes only the original owned machine", async () => {
   const operationId = "op-cleanup";
-  const journal = createMemoryWorkerOperationJournal([{ operationId, requestSha256: digest("d"), state: "dispatched", resourceName: `napplet-cvm-${operationId}`, resourceId: "machine-cleanup" }]);
+  const journal = createMemoryWorkerOperationJournal([{ operationId, requestSha256: digest("d"), state: "dispatched", resourceName: `napplet-cvm-${operationId}`, resourceId: "machine-cleanup", image, region: "ams", policyVersion: PRODUCTION_WORKER_POLICY.version, createdAtMs: 1, sessionLeaseSha256: digest("b"), toolchainSha256: digest("c"), providerDeadlineEpochMs: Date.now() + 60_000 }]);
   const calls: RequestInit[] = [];
   let getCount = 0;
   const transport = createFlyMachinesHttpTransport({
@@ -129,6 +133,23 @@ test("cleanup after controller interruption deletes only the original owned mach
   await expect(transport.terminate({ operationId })).resolves.toEqual({ status: "terminated" });
   await expect(transport.terminate({ operationId: "op-foreign" })).resolves.toEqual({ status: "blocked" });
   expect(calls.map((call) => call.method)).toEqual(["GET", "DELETE", "GET"]);
+});
+
+test("Fly readiness exec is bounded, authenticated, and cannot run against a substituted image", async () => {
+  const operationId = "op-probe";
+  const journal = createMemoryWorkerOperationJournal([{ operationId, requestSha256: digest("d"), state: "dispatched", resourceName: `napplet-cvm-${operationId}`, resourceId: "machine-probe", image, region: "ams", policyVersion: PRODUCTION_WORKER_POLICY.version, createdAtMs: 1, sessionLeaseSha256: digest("b"), toolchainSha256: digest("c"), providerDeadlineEpochMs: Date.now() + 60_000 }]);
+  const requests: Array<Readonly<{ url: string; init: RequestInit }>> = [];
+  const machine = { id: "machine-probe", name: `napplet-cvm-${operationId}`, state: "started", config: { image, guest: { cpus: 1, memory_mb: 1024 }, services: [], env: { NAPPLET_CVM_POLICY_VERSION: PRODUCTION_WORKER_POLICY.version }, metadata: { "napplet-cvm-operation": operationId, "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-role": "isolated-worker" } } };
+  const transport = createFlyMachinesHttpTransport({ appName: "napplet-cvm-workers", getAccessToken: async () => "valid-access-token", journal, fetch: async (url, init) => {
+    requests.push({ url, init });
+    return init.method === "POST" ? new Response(JSON.stringify({ stdout: "{}", stderr: "", exit_code: 0 }), { status: 200 }) : new Response(JSON.stringify(machine), { status: 200 });
+  } });
+  await expect(transport.exec({ operationId, command: ["/usr/local/bin/napplet-cvm-probe", "observe-isolation"], timeoutSeconds: 61 })).rejects.toThrow();
+  await expect(transport.exec({ operationId, command: ["/usr/local/bin/napplet-cvm-probe", "observe-isolation"], timeoutSeconds: 60 })).resolves.toEqual({ status: "completed", stdout: "{}", stderr: "", exitCode: 0 });
+  const exec = requests.find((request) => request.init.method === "POST")!;
+  expect(exec.url).toContain(`/machines/machine-probe/exec`);
+  expect(JSON.parse(String(exec.init.body))).toEqual({ command: ["/usr/local/bin/napplet-cvm-probe", "observe-isolation"], stdin: "", timeout: 60 });
+  expect(exec.init.headers).toMatchObject({ authorization: "Bearer valid-access-token" });
 });
 
 test("trusted harness refuses the default unbounded workspace and never turns run-proposal into a success placeholder", async () => {

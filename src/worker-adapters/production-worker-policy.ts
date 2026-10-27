@@ -14,7 +14,15 @@ export const PRODUCTION_WORKER_POLICY = Object.freeze({
   cpuLimit: 2,
   memoryMiB: 1_024,
   memoryLimitMiB: 2_048,
-  timeoutMs: 600_000,
+  /** Active agent/build work is independently bounded.  This is not the
+   * continuity window: an insufficient-balance pause may retain an otherwise
+   * idle worker for a further ten minutes. */
+  activeWorkTimeoutMs: 600_000,
+  idleGraceMs: 600_000,
+  totalLifetimeMs: 1_200_000,
+  // Compatibility aliases for SDK adapters; both retain their historical
+  // meaning and must never be used to collapse active work and pause grace.
+  timeoutMs: 1_200_000,
   idleTimeoutMs: 600_000,
   blockNetwork: true as const,
   noInboundPorts: true as const,

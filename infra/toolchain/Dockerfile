@@ -43,6 +43,7 @@ COPY infra/toolchain/production-bootstrap.sh /usr/local/bin/napplet-cvm-bootstra
 RUN ln -s /usr/local/bin/bun /usr/local/bin/node \
     && ln -s /usr/local/bin/bun /toolchain/bin/bun \
     && ln -s /toolchain/node_modules/.bin/napplet-conformance /toolchain/bin/napplet-conformance \
+    && PLAYWRIGHT_BROWSERS_PATH=/toolchain/ms-playwright node -e 'const {realpathSync}=require("node:fs");const {execFileSync}=require("node:child_process");const {dirname,join}=require("node:path");const pkg=require.resolve("playwright/package.json",{paths:[realpathSync("node_modules/@napplet/conformance-cli")]});execFileSync(process.execPath,[join(dirname(pkg),"cli.js"),"install","chromium"],{stdio:"inherit"})' \
     && mkdir -p /toolchain/boilerplate-template \
     && cp -a /toolchain/node_modules/@napplet/boilerplate/. /toolchain/boilerplate-template/ \
     && chmod 0555 /toolchain/bin/denial-probe /toolchain/bin/fixture-runner /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe /usr/local/bin/napplet-cvm-bootstrap \
@@ -54,7 +55,8 @@ RUN ln -s /usr/local/bin/bun /usr/local/bin/node \
     && command -v setpriv \
     && command -v mountpoint \
     && test -x /toolchain/bin/napplet \
-    && test -d /toolchain/boilerplate-template
+    && test -d /toolchain/boilerplate-template \
+    && test -d /toolchain/ms-playwright
 USER 65532:65532
 ENTRYPOINT ["/toolchain/bin/bun"]
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { lookup } from "node:dns/promises";
-import { access, constants, lstat, mkdir, readFile, rm, statfs, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { access, constants, lstat, mkdir, readFile, realpath, rm, statfs, writeFile } from "node:fs/promises";
+import { dirname, join, resolve, relative } from "node:path";
 
 const WORKSPACE = "/workspace";
 const POLICY = "production-worker-policy-2026-10-27";
@@ -15,16 +15,25 @@ function digest(value: string | undefined, code: string) { if (!value || !DIGEST
 async function bounded(argv: string[], cwd?: string) {
   const child = Bun.spawn(argv, { cwd, stdout: "pipe", stderr: "pipe", env: { HOME: "/home/napplet", CI: "1", PLAYWRIGHT_BROWSERS_PATH: "/toolchain/ms-playwright", PATH: "/toolchain/bin:/toolchain/pnpm:/toolchain/node_modules/.bin:/usr/local/bin:/usr/bin:/bin" } });
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const read = async (stream: ReadableStream<Uint8Array>) => {
+    const reader = stream.getReader(); const chunks: Uint8Array[] = []; let length = 0;
+    try {
+      for (;;) { const next = await reader.read(); if (next.done) break; length += next.value.byteLength; if (length > MAX_OUTPUT) { child.kill(); throw new Error("WORKER_CHILD_OUTPUT_LIMIT"); } chunks.push(next.value); }
+    } finally { reader.releaseLock(); }
+    return new TextDecoder().decode(Buffer.concat(chunks));
+  };
   try {
     const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { child.kill(); reject(new Error("WORKER_CHILD_TIMEOUT")); }, MAX_MS); });
-    const [status, stdout, stderr] = await Promise.race([Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]), timeout]);
-    if (new TextEncoder().encode(stdout).byteLength + new TextEncoder().encode(stderr).byteLength > MAX_OUTPUT) throw new Error("WORKER_CHILD_OUTPUT_LIMIT");
+    const [status] = await Promise.race([Promise.all([child.exited, read(child.stdout), read(child.stderr)]), timeout]);
     if (status !== 0) throw new Error("WORKER_CHILD_FAILED");
-  } finally { clearTimeout(timer); }
+  } finally { clearTimeout(timer); child.kill(); }
 }
 async function regularContained(path: string) {
-  const resolved = resolve(path); if (!resolved.startsWith(`${WORKSPACE}/.napplet-cvm/`)) throw new Error("WORKER_PATH_INVALID");
-  const details = await lstat(resolved); if (!details.isFile() || details.isSymbolicLink() || details.nlink !== 1) throw new Error("WORKER_PATH_UNTRUSTED");
+  const root = await realpath(`${WORKSPACE}/.napplet-cvm`); const resolved = resolve(path);
+  if (relative(root, resolved).startsWith("..") || resolve(root, relative(root, resolved)) !== resolved) throw new Error("WORKER_PATH_INVALID");
+  let cursor = root;
+  for (const component of relative(root, resolved).split("/")) { cursor = join(cursor, component); const details = await lstat(cursor); if (details.isSymbolicLink()) throw new Error("WORKER_PATH_UNTRUSTED"); }
+  const details = await lstat(resolved); if (!details.isFile() || details.nlink !== 1 || details.size > MAX_BYTES) throw new Error("WORKER_PATH_UNTRUSTED");
   return resolved;
 }
 async function workspaceBounded() {
@@ -33,13 +42,16 @@ async function workspaceBounded() {
   const probe = join(WORKSPACE, `.write-${crypto.randomUUID()}`);
   try { await writeFile(probe, "x", { flag: "wx" }); await rm(probe, { force: true }); return true; } catch { return false; }
 }
-async function shellDenied(script: string) { try { await bounded(["/bin/sh", "-ec", script]); return false; } catch { return true; } }
+async function deniedProbe(probe: string) {
+  const child = Bun.spawn(["/toolchain/bin/denial-probe", `--probe=${probe}`], { stdout: "pipe", stderr: "pipe", env: { PATH: "/toolchain/bin:/usr/bin:/bin" } });
+  const timer = setTimeout(() => child.kill(), 5_000);
+  try { const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]); return exit === 1 && stderr.includes(`CVM_DENIAL_PROBE:${probe}:denied`); }
+  finally { clearTimeout(timer); child.kill(); }
+}
 async function networkDenied() {
   const checks = await Promise.all([
     lookup("example.com").then(() => false).catch(() => true),
-    shellDenied("/toolchain/bin/denial-probe --probe=http"), shellDenied("/toolchain/bin/denial-probe --probe=https"),
-    shellDenied("/toolchain/bin/denial-probe --probe=tcp"),
-    shellDenied("/toolchain/bin/denial-probe --probe=metadata"), shellDenied("/toolchain/bin/denial-probe --probe=websocket"),
+    deniedProbe("http"), deniedProbe("https"), deniedProbe("tcp"), deniedProbe("metadata"), deniedProbe("websocket"),
   ]);
   return checks.every(Boolean);
 }
@@ -49,27 +61,35 @@ async function kernelIsolation() {
 }
 async function ready() {
   const sessionLeaseSha256 = digest(arg("--session-lease-sha256"), "WORKER_LEASE_REQUIRED");
-  const imageDigest = digest(arg("--provider-image-sha256"), "WORKER_PROVIDER_IMAGE_REQUIRED");
+  const image = arg("--provider-image"); if (!image || !/^.+@sha256:[a-f0-9]{64}$/iu.test(image)) throw new Error("WORKER_PROVIDER_IMAGE_REQUIRED");
   const toolchainDigest = digest(arg("--toolchain-sha256"), "WORKER_TOOLCHAIN_REQUIRED");
   const deadlineEpochMs = Number(arg("--provider-deadline-epoch-ms"));
-  if (!Number.isSafeInteger(deadlineEpochMs) || deadlineEpochMs <= Date.now() || deadlineEpochMs > Date.now() + 600_000 || process.env.NAPPLET_CVM_POLICY_VERSION !== POLICY) throw new Error("WORKER_PROVIDER_FACTS_INVALID");
+  const remainingLifetimeMs = deadlineEpochMs - Date.now();
+  if (!Number.isSafeInteger(deadlineEpochMs) || remainingLifetimeMs <= 0 || remainingLifetimeMs > 1_200_000 || process.env.NAPPLET_CVM_POLICY_VERSION !== POLICY) throw new Error("WORKER_PROVIDER_FACTS_INVALID");
   const environmentClean = Object.keys(process.env).every((key) => ["HOME", "CI", "PATH", "PLAYWRIGHT_BROWSERS_PATH", "NAPPLET_CVM_POLICY_VERSION"].includes(key));
   const [boundedWorkspace, network, kernel, toolchain] = await Promise.all([workspaceBounded(), networkDenied(), kernelIsolation(), access("/toolchain", constants.W_OK).then(() => false).catch(() => true)]);
   const ports = await readFile("/proc/net/tcp", "utf8").then((text) => !text.split("\n").slice(1).some((line) => line.trim().split(/\s+/u)[3] === "0A")).catch(() => false);
   if (!boundedWorkspace || !network || !kernel || !toolchain || !ports || !environmentClean || process.getuid?.() !== 65532) throw new Error("WORKER_ISOLATION_REFUSED");
-  console.log(JSON.stringify({ version: 1, policyVersion: POLICY, imageDigest, toolchainDigest, sessionLeaseSha256, deadlineEpochMs, checks: { workspace_bounded: true, network_denied: true, kernel_isolated: true, toolchain_readonly: true, no_inbound_ports: true, environment_clean: true } }));
+  console.log(JSON.stringify({ version: 1, policyVersion: POLICY, image, sessionLeaseSha256, toolchainSha256: toolchainDigest, remainingLifetimeMs, checks: { toolchain_readonly: true, workspace_bounded: true, non_root: true, no_ambient_credentials: true, network_denied: true, no_inbound_ports: true, minimal_capabilities: true } }));
 }
 async function build() {
-  const sourcePath = await regularContained(arg("--source") ?? ""); const sourceText = await Bun.file(sourcePath).text();
-  if (new TextEncoder().encode(sourceText).byteLength > MAX_BYTES) throw new Error("WORKER_SOURCE_TOO_LARGE");
+  const sourcePath = await regularContained(arg("--source") ?? ""); const sourceBytes = await Bun.file(sourcePath).bytes();
+  if (sourceBytes.byteLength > MAX_BYTES) throw new Error("WORKER_SOURCE_TOO_LARGE"); const sourceText = new TextDecoder().decode(sourceBytes);
   const source = JSON.parse(sourceText) as { files?: Array<{ path?: unknown; content?: unknown }> };
   if (!Array.isArray(source.files) || source.files.length < 1 || source.files.length > 3) throw new Error("WORKER_SOURCE_INVALID");
-  const allowed = new Set(["src/main.ts", "src/styles.css", "src/capabilities.json"]); const project = `${WORKSPACE}/project`;
+  const allowed = new Set(["src/main.ts", "src/styles.css", "src/capabilities.json"]);
+  const files = source.files.map((file) => {
+    if (!file || typeof file.path !== "string" || !allowed.has(file.path) || typeof file.content !== "string" || new TextEncoder().encode(file.content).byteLength > 30_000) throw new Error("WORKER_SOURCE_INVALID");
+    return { path: file.path, content: file.content };
+  });
+  if (new Set(files.map((file) => file.path)).size !== files.length) throw new Error("WORKER_SOURCE_DUPLICATE");
+  const project = `${WORKSPACE}/project`;
+  // Validate every untrusted source fact before invoking the CLI or changing
+  // the project filesystem.  The commands below match the proven fixture flow.
   await bounded(["/toolchain/bin/napplet", "create", project, "--template", "/toolchain/boilerplate-template"], WORKSPACE);
   await bounded(["/toolchain/bin/napplet", "init", "--force", "--root", "--source-dir", "src", "--title", "Generated napplet"], project);
   await bounded(["/toolchain/bin/napplet", "skills", "install", "--to", "codex"], project);
-  for (const file of source.files) {
-    if (!file || typeof file.path !== "string" || !allowed.has(file.path) || typeof file.content !== "string" || file.content.length > 30_000) throw new Error("WORKER_SOURCE_INVALID");
+  for (const file of files) {
     const target = resolve(project, file.path); if (!target.startsWith(`${project}/src/`)) throw new Error("WORKER_SOURCE_INVALID");
     await mkdir(dirname(target), { recursive: true }); await writeFile(target, file.content, { mode: 0o600 });
   }

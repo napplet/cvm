@@ -79,7 +79,7 @@ export function createApplicationDefaultTokenPort(): ApplicationDefaultTokenPort
   return Object.freeze({
     async readAccessToken() {
       const child = (() => {
-        try { return Bun.spawn(["gcloud", "auth", "application-default", "print-access-token"], { stdin: "ignore", stdout: "pipe", stderr: "ignore" }); }
+        try { return Bun.spawn(["gcloud", "auth", "application-default", "print-access-token"], { stdin: "ignore", stdout: "pipe", stderr: "ignore", env: process.env }); }
         catch { throw new Error("ADC_APPLICATION_DEFAULT_LOGIN_REQUIRED"); }
       })();
       let timer: ReturnType<typeof setTimeout> | undefined;

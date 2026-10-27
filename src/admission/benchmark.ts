@@ -109,7 +109,9 @@ export type WorkerBenchmarkSample = z.infer<typeof WorkerBenchmarkSampleSchema>;
 export const WorkerCandidateBenchmarkSchema = z.object({ candidate: WorkerCandidateSchema, profile: WorkerBenchmarkProfileSchema, samples: z.array(WorkerBenchmarkSampleSchema).min(1) }).strict();
 export type WorkerCandidateBenchmark = z.infer<typeof WorkerCandidateBenchmarkSchema>;
 
-function schedule(profile: WorkerBenchmarkProfile): WorkerBenchmarkSample[] {
+/** Canonical locked ordering shared by the verifier and provider transports.
+ * The two forced 200-attempt cohorts are included within the 1,000 attempts. */
+export function createWorkerBenchmarkSchedule(profile: WorkerBenchmarkProfile): WorkerBenchmarkSample[] {
   const count = Math.max(profile.acceptedFloor, profile.forcedPoolHitFloor + profile.forcedPoolMissColdContentionFloor + 9);
   return Array.from({ length: count }, (_, index) => ({
     id: `benchmark-${index + 1}`, cohort: index < profile.forcedPoolHitFloor ? "pool_hit" : index < profile.forcedPoolHitFloor + profile.forcedPoolMissColdContentionFloor ? (["pool_miss", "cold", "contention"] as const)[index % 3]! : (["pool_hit", "pool_miss", "cold", "step_load", "contention", "reclaim", "ambiguity", "cleanup", "failure"] as const)[index % 9]!,
@@ -121,7 +123,7 @@ function schedule(profile: WorkerBenchmarkProfile): WorkerBenchmarkSample[] {
 export async function runWorkerCandidateBenchmark(input: Readonly<{ candidate: unknown; profile?: unknown; execute: (sample: Readonly<Pick<WorkerBenchmarkSample, "id" | "cohort">>) => Promise<unknown> }>): Promise<WorkerCandidateBenchmark> {
   const candidate = WorkerCandidateSchema.parse(input.candidate); const profile = WorkerBenchmarkProfileSchema.parse(input.profile ?? {});
   const samples: WorkerBenchmarkSample[] = [];
-  for (const planned of schedule(profile)) {
+  for (const planned of createWorkerBenchmarkSchedule(profile)) {
     const result = WorkerBenchmarkSampleSchema.parse({ ...planned, ...(await input.execute({ id: planned.id, cohort: planned.cohort })) });
     if (result.id !== planned.id || result.cohort !== planned.cohort) throw new Error("WORKER_BENCHMARK_SCHEDULE_MUTATED");
     samples.push(result);

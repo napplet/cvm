@@ -43,18 +43,18 @@ coverage:
     verification:
       - kind: integration
         ref: bun scripts/dev-payments.ts test
-        status: unknown
-    human_judgment: true
-    rationale: Local Docker address pools were exhausted before the isolated stack could start; clean remote CI remains required.
+        status: pass
+    human_judgment: false
+    rationale: Required clean-runner payment and GUI workflows passed at 5aef311.
 metrics:
-  duration: partial
+  duration: verification completed
   completed: 2026-10-27
-status: verification_pending
+status: complete
 ---
 
 # Phase 07 Plan 59: Development CI Prerequisites Summary
 
-**Run-owned payment fixtures and native AMD64 relay preflight are implemented; clean remote CI must verify the retained full suites.**
+**Run-owned payment fixtures, native AMD64 prerequisites, and the relay shutdown repair pass the complete required remote payment and GUI suites.**
 
 ## Accomplishments
 
@@ -111,7 +111,7 @@ At `5ec6c1c`, GUI run `40522167383` passed publication/restart/revision/metadata
 
 ## Next Phase Readiness
 
-PR #5 is open. Do not mark OPS-04 complete until the retained payment and GUI workflows pass remotely.
+PR #5 merged as `71efb92fd9777bbf7ab9ad3b61adec2d2883d037`. Payment run `40527439250`, GUI run `40527439398`, and documentation checks all passed at `5aef311`. The GUI workflow includes every retained journey, launcher persistence/reset, idle/GC liveness, and final primary readiness. OPS-04 remains unverified until the separate protected production suites pass. Earlier pending/failure entries above are the investigation history, superseded by these final CI results.
 
 ## Self-Check: PASSED
 

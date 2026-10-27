@@ -32,6 +32,7 @@ import { PHASE_02_POLICY_INITIAL } from "../policy/phase-02-policy";
 const SHA256_IMAGE = /^[a-z0-9][a-z0-9._/-]*(?::[a-z0-9._-]+)?@sha256:[a-f0-9]{64}$/i;
 const FORBIDDEN_TAG = /secret|token|password|credential|private.?key|api.?key/i;
 const MAX_OUTPUT_BYTES = PHASE_02_POLICY_INITIAL.sandbox.maxOutputBytes;
+const MODAL_LOOKUP_TIMEOUT_MS = 15_000;
 const CheckpointInventorySchema = z.array(z.string().min(1).max(PHASE_02_POLICY_INITIAL.tools.maxPathCharacters).refine(
   (path) => !path.startsWith("/") && !path.includes("\0") && !path.split("/").some((part) => part === "" || part === "." || part === ".."),
   "checkpoint inventory paths must be relative and contained",
@@ -104,6 +105,7 @@ export type ModalSandboxCreateOptions = Readonly<{
   env: Readonly<Record<string, string>>;
   blockNetwork: true;
   tags: Readonly<Record<string, string>>;
+  name?: string;
   regions?: readonly string[];
 }>;
 export type ModalProcessPort = Readonly<{
@@ -114,6 +116,8 @@ export type ModalProcessPort = Readonly<{
 }>;
 export interface ModalSandboxPort {
   readonly id: string;
+  /** Server-held tags; production recovery uses these as request identity. */
+  getTags?(): Promise<Readonly<Record<string, string>>>;
   exec(argv: readonly string[], options: Readonly<{ timeoutMs: number }>): Promise<ModalProcessPort>;
   poll(): Promise<unknown>;
   terminate(): Promise<void>;
@@ -127,12 +131,18 @@ export interface ModalSandboxPort {
 export interface ModalSdkPort {
   readonly apps: { fromName(name: string, options: Readonly<{ createIfMissing: false }>): Promise<unknown> };
   readonly images: { fromRegistry(image: string): unknown };
-  readonly sandboxes: { create(app: unknown, image: unknown, options: ModalSandboxCreateOptions): Promise<ModalSandboxPort> };
+  readonly sandboxes: {
+    create(app: unknown, image: unknown, options: ModalSandboxCreateOptions): Promise<ModalSandboxPort>;
+    /** Lookup separates authoritative absence from an unavailable provider.
+     * Callers must not create after `unknown`. */
+    findByName?(appName: string, name: string): Promise<Readonly<{ kind: "found"; sandbox: ModalSandboxPort }> | Readonly<{ kind: "missing" | "unknown" }>>;
+    fromId?(sandboxId: string): Promise<ModalSandboxPort>;
+  };
 }
 
 const FIXED_ENTRYPOINT = Object.freeze(["/bin/sh", "-c", "while true; do sleep 60; done"]);
-const WORKER_EXEC = Object.freeze(["/usr/local/bin/napplet-cvm-worker", "run-proposal"]);
-const PROBE_EXEC = Object.freeze(["/usr/local/bin/napplet-cvm-probe", "observe-isolation"]);
+const WORKER_EXEC = Object.freeze(["/usr/local/bin/napplet-cvm-bootstrap", "/usr/local/bin/napplet-cvm-worker", "run-proposal"]);
+const PROBE_EXEC = Object.freeze(["/usr/local/bin/napplet-cvm-bootstrap", "/usr/local/bin/napplet-cvm-probe", "observe-isolation"]);
 
 function strictCreateOptions(config: ModalWorkerConfig): ModalSandboxCreateOptions {
   const sandbox = PHASE_02_POLICY_INITIAL.sandbox;
@@ -171,7 +181,7 @@ function appendBounded(value: string, counter: { bytes: number }): string {
   return value;
 }
 
-async function processOutput(process: ModalProcessPort): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+export async function readBoundedModalProcessOutput(process: ModalProcessPort): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const counter = { bytes: 0 };
   const stdout = await streamToBoundedText(process.stdout, counter);
   const stderr = await streamToBoundedText(process.stderr, counter);
@@ -187,6 +197,15 @@ function parseWorkerResult(stdout: string): WorkerRunResult {
 async function sha256(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** SDK lookups are reconciliation reads.  Bound them independently so an
+ * unavailable provider cannot keep an ambiguous create path alive forever. */
+async function boundedModalLookup<T>(operation: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([operation, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("MODAL_LOOKUP_TIMEOUT")), MODAL_LOOKUP_TIMEOUT_MS); })]);
+  } finally { clearTimeout(timer); }
 }
 
 /** Candidate probe boundary: list output must exactly match a content-addressed checkpoint manifest. */
@@ -227,7 +246,7 @@ function failedEvidence(config: ModalWorkerConfig, checks: ModalProbeChecks | un
 }
 
 async function observeLiveModalIsolation(config: ModalWorkerConfig): Promise<ModalProbeObservation> {
-  const sdk = await productionModalSdk();
+  const sdk = await createOfficialModalSdk();
   const app = await sdk.apps.fromName(config.appName, { createIfMissing: false });
   const image = sdk.images.fromRegistry(config.image);
   const first = await sdk.sandboxes.create(app, image, strictCreateOptions(config));
@@ -243,7 +262,7 @@ async function observeLiveModalIsolation(config: ModalWorkerConfig): Promise<Mod
       first.exec(PROBE_EXEC, { timeoutMs: PHASE_02_POLICY_INITIAL.sandbox.execTimeoutSeconds * 1_000 }),
       second.exec(PROBE_EXEC, { timeoutMs: PHASE_02_POLICY_INITIAL.sandbox.execTimeoutSeconds * 1_000 }),
     ]);
-    const [firstOutput, secondOutput] = await Promise.all([processOutput(firstProcess), processOutput(secondProcess)]);
+    const [firstOutput, secondOutput] = await Promise.all([readBoundedModalProcessOutput(firstProcess), readBoundedModalProcessOutput(secondProcess)]);
     if (firstOutput.exitCode !== 0 || secondOutput.exitCode !== 0) throw new Error("probe command failed");
     const reportSchema = z.object({ checks: ProbeCheckSchema, exactReady: ExactSessionProbeSchema, gatewayRequest: ToolRequestSchema, checkpointSha256: z.string().regex(/^[a-f0-9]{64}$/i), checkpoint: z.object({ inventory: CheckpointInventorySchema, manifestSha256: z.string().regex(/^[a-f0-9]{64}$/i) }).strict() }).strict();
     const report = reportSchema.parse(JSON.parse(firstOutput.stdout));
@@ -301,7 +320,9 @@ export async function runModalIsolationProbe(input: Readonly<{
   }
 }
 
-async function productionModalSdk(): Promise<ModalSdkPort> {
+/** Controller-only official SDK construction; generated code never receives
+ * this client or Modal credentials. */
+export async function createOfficialModalSdk(): Promise<ModalSdkPort> {
   const { ModalClient } = await import("modal");
   const client = new ModalClient();
   return {
@@ -312,12 +333,23 @@ async function productionModalSdk(): Promise<ModalSdkPort> {
         const sandbox = await client.sandboxes.create(app as never, image as never, options as never);
         return sandboxPort(sandbox);
       },
+      async fromId(sandboxId) { return sandboxPort(await boundedModalLookup(client.sandboxes.fromId(sandboxId))); },
+      async findByName(appName, name) {
+        try { return Object.freeze({ kind: "found" as const, sandbox: sandboxPort(await boundedModalLookup(client.sandboxes.fromName(appName, name))) }); }
+        catch (error) {
+          // The SDK exposes NotFoundError; use its class rather than matching
+          // provider text so an auth/network failure is never treated as absent.
+          const { NotFoundError } = await import("modal");
+          return error instanceof NotFoundError ? Object.freeze({ kind: "missing" as const }) : Object.freeze({ kind: "unknown" as const });
+        }
+      },
     },
   };
 }
 
 function sandboxPort(sandbox: {
   sandboxId: string;
+  getTags(): Promise<Record<string, string>>;
   exec(command: string[], options: { timeoutMs: number }): Promise<ModalProcessPort>;
   poll(): Promise<unknown>;
   terminate(): Promise<void>;
@@ -325,13 +357,28 @@ function sandboxPort(sandbox: {
 }): ModalSandboxPort {
   return {
     id: sandbox.sandboxId,
+    getTags: () => sandbox.getTags(),
     exec: async (argv, options) => sandbox.exec([...argv], options),
     poll: () => sandbox.poll(),
     terminate: () => sandbox.terminate(),
     filesystem: {
       copyFromLocal: (localPath, remotePath) => sandbox.filesystem.copyFromLocal(localPath, remotePath),
       copyToLocal: (remotePath, localPath) => sandbox.filesystem.copyToLocal(remotePath, localPath),
-      listFiles: (remotePath) => sandbox.filesystem.listFiles(remotePath),
+      // modal@0.9.0 returns FileInfo objects (not string paths).  Convert at
+      // the provider boundary so checkpoint validation stays provider-neutral.
+      async listFiles(remotePath) {
+        const entries = await sandbox.filesystem.listFiles(remotePath) as unknown;
+        if (!Array.isArray(entries)) throw new Error("modal filesystem inventory is malformed");
+        return entries.map((entry) => {
+          if (!entry || typeof entry !== "object" || typeof (entry as { name?: unknown }).name !== "string" || typeof (entry as { path?: unknown }).path !== "string") {
+            throw new Error("modal filesystem inventory entry is malformed");
+          }
+          const path = (entry as { path: string }).path;
+          const prefix = `${remotePath.replace(/\/$/u, "")}/`;
+          if (!path.startsWith(prefix)) throw new Error("modal filesystem inventory escaped requested root");
+          return path.slice(prefix.length);
+        });
+      },
     },
   };
 }
@@ -364,7 +411,7 @@ export class ModalWorkerAdapter implements ContinuationWorkerPort {
       await writeFile(localRequestPath, canonicalJson(request.data), "utf8");
       await sandbox.filesystem.copyFromLocal(localRequestPath, remoteRequestPath);
       const process = await sandbox.exec([...WORKER_EXEC, "--request", remoteRequestPath], { timeoutMs: PHASE_02_POLICY_INITIAL.sandbox.execTimeoutSeconds * 1_000 });
-      const output = await processOutput(process);
+      const output = await readBoundedModalProcessOutput(process);
       if (output.exitCode !== 0 || signal.aborted) throw new Error("worker did not complete cleanly");
       result = parseWorkerResult(output.stdout);
     } catch {
@@ -411,5 +458,5 @@ export class ModalWorkerAdapter implements ContinuationWorkerPort {
 
 export async function createModalWorkerAdapter(config: unknown): Promise<ModalWorkerAdapter> {
   const parsed = ModalWorkerConfigSchema.parse(config);
-  return new ModalWorkerAdapter(parsed, await productionModalSdk());
+  return new ModalWorkerAdapter(parsed, await createOfficialModalSdk());
 }

@@ -78,17 +78,20 @@ test("transport refuses a malformed or credential-bearing response and does not 
 });
 
 test("sealed image installs root-owned trusted worker commands and runs the pinned build/conformance flow", async () => {
-  const [dockerfile, worker, probe] = await Promise.all([
+  const [dockerfile, worker, probe, bootstrap] = await Promise.all([
     Bun.file("infra/toolchain/Dockerfile").text(),
     Bun.file("infra/toolchain/production-worker.ts").text(),
     Bun.file("infra/toolchain/production-probe.ts").text(),
+    Bun.file("infra/toolchain/production-bootstrap.sh").text(),
   ]);
   expect(dockerfile).toContain("infra/toolchain/production-worker.ts /usr/local/bin/napplet-cvm-worker");
   expect(dockerfile).toContain("infra/toolchain/production-probe.ts /usr/local/bin/napplet-cvm-probe");
+  expect(dockerfile).toContain("infra/toolchain/production-bootstrap.sh /usr/local/bin/napplet-cvm-bootstrap");
   expect(dockerfile).toContain("chmod -R go-w /toolchain /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe");
   expect(dockerfile).not.toContain("--chown=65532:65532 /toolchain/node_modules");
   for (const command of ["napplet", "--offline", "--frozen-lockfile", "test:conformance", "networkDenied", "environmentClean", "CapBnd", "NoNewPrivs"]) expect(worker).toContain(command);
   expect(probe).toContain("napplet-cvm-worker");
+  for (const command of ["findmnt", "tmpfs", "setpriv", "--bounding-set=-all", "--no-new-privs"]) expect(bootstrap).toContain(command);
 });
 
 test("readiness rejects a credential-bearing, unprobed, or incorrectly leased worker", () => {

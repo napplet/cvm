@@ -178,7 +178,7 @@ export function createFlyMachinesHttpTransport(input: Readonly<{
         config: {
           image, auto_destroy: true, restart: { policy: "no" }, services: [],
           guest: { cpu_kind: "shared", cpus: value.policy.cpu, memory_mb: value.policy.memoryMiB },
-          init: { exec: ["/bin/sh", "-c", "while true; do sleep 60; done"] },
+          init: { exec: ["/usr/local/bin/napplet-cvm-bootstrap", "/bin/sh", "-c", "while true; do sleep 60; done"] },
           env: { NAPPLET_CVM_POLICY_VERSION: value.policy.version },
           metadata: { "napplet-cvm-operation": operationId, "napplet-cvm-policy": value.policy.version, "napplet-cvm-role": "isolated-worker" },
         },

@@ -39,14 +39,14 @@ COPY infra/toolchain/denial-probe.ts /toolchain/bin/denial-probe
 COPY infra/toolchain/fixture-runner.ts /toolchain/bin/fixture-runner
 COPY infra/toolchain/production-worker.ts /usr/local/bin/napplet-cvm-worker
 COPY infra/toolchain/production-probe.ts /usr/local/bin/napplet-cvm-probe
+COPY infra/toolchain/production-bootstrap.sh /usr/local/bin/napplet-cvm-bootstrap
 RUN ln -s /usr/local/bin/bun /usr/local/bin/node \
     && ln -s /usr/local/bin/bun /toolchain/bin/bun \
     && ln -s /toolchain/node_modules/.bin/napplet-conformance /toolchain/bin/napplet-conformance \
     && mkdir -p /toolchain/boilerplate-template \
     && cp -a /toolchain/node_modules/@napplet/boilerplate/. /toolchain/boilerplate-template/ \
-    && chmod 0555 /toolchain/bin/denial-probe /toolchain/bin/fixture-runner /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe \
+    && chmod 0555 /toolchain/bin/denial-probe /toolchain/bin/fixture-runner /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe /usr/local/bin/napplet-cvm-bootstrap \
     && mkdir -p /home/napplet /work /tmp \
     && chown 65532:65532 /home/napplet /work /tmp \
-    && chmod -R go-w /toolchain /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe
-USER 65532:65532
+    && chmod -R go-w /toolchain /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe /usr/local/bin/napplet-cvm-bootstrap
 ENTRYPOINT ["/toolchain/bin/bun"]

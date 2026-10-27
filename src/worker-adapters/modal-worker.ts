@@ -131,8 +131,8 @@ export interface ModalSdkPort {
 }
 
 const FIXED_ENTRYPOINT = Object.freeze(["/bin/sh", "-c", "while true; do sleep 60; done"]);
-const WORKER_EXEC = Object.freeze(["/usr/local/bin/napplet-cvm-worker", "run-proposal"]);
-const PROBE_EXEC = Object.freeze(["/usr/local/bin/napplet-cvm-probe", "observe-isolation"]);
+const WORKER_EXEC = Object.freeze(["/usr/local/bin/napplet-cvm-bootstrap", "/usr/local/bin/napplet-cvm-worker", "run-proposal"]);
+const PROBE_EXEC = Object.freeze(["/usr/local/bin/napplet-cvm-bootstrap", "/usr/local/bin/napplet-cvm-probe", "observe-isolation"]);
 
 function strictCreateOptions(config: ModalWorkerConfig): ModalSandboxCreateOptions {
   const sandbox = PHASE_02_POLICY_INITIAL.sandbox;

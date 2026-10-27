@@ -95,7 +95,7 @@ describe("Modal adapter contract", () => {
         env: { NAPPLET_CVM_POLICY_VERSION: PHASE_02_POLICY_INITIAL.policyVersion },
         tags: { correlation: "test-correlation" },
       })],]);
-    expect(calls.exec).toEqual([[["/usr/local/bin/napplet-cvm-worker", "run-proposal", "--request", "/workspace/.napplet-cvm/request.json"], { timeoutMs: 30_000 }]]);
+    expect(calls.exec).toEqual([[["/usr/local/bin/napplet-cvm-bootstrap", "/usr/local/bin/napplet-cvm-worker", "run-proposal", "--request", "/workspace/.napplet-cvm/request.json"], { timeoutMs: 30_000 }]]);
     expect(calls.copyFromLocal).toEqual([[request, "/workspace/.napplet-cvm/request.json"]]);
     expect(calls.terminate).toHaveLength(1);
   });

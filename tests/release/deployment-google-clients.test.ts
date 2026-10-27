@@ -158,9 +158,9 @@ test("GCS enforces policy then uploads create-only bytes with checksum and KMS r
   const checksum = "wdBDMA==";
   const { client, calls, journal } = await fixture((url, init) => {
     if (url.startsWith("https://storage.googleapis.com/storage/v1/b/napplet-cvm-artifacts") && !url.includes("/o/")) return json({ location: "NAM4", versioning: { enabled: true }, encryption: { defaultKmsKeyName: "projects/p/locations/us/keyRings/r/cryptoKeys/k" }, retentionPolicy: { retentionPeriod: "2592000" }, softDeletePolicy: { retentionDurationSeconds: "0" }, lifecycle: { rule: [{ action: { type: "Delete" }, condition: { age: 30 } }, { action: { type: "Delete" }, condition: { numNewerVersions: 1 } }] } });
-    if (url.includes("?generation=9")) return json({ generation: "9", crc32c: checksum, kmsKeyName: "projects/p/locations/us/keyRings/r/cryptoKeys/k", metadata: { "napplet-cvm-content-sha256": "05080dc082c6df88129efbbe3f2c5a354e5348c963564f889914d0252f48b17d" } });
+    if (url.includes("?generation=9")) return json({ generation: "9", crc32c: checksum, kmsKeyName: "projects/p/locations/us/keyRings/r/cryptoKeys/k", metadata: { "napplet-cvm-content-sha256": "05080dc082c6df88129efbbe3f2c5a354e5348c963564f889914d0252f48b17d", "napplet-cvm-operation": "gcs-op-1" } });
     if (init.method === "GET") return json({ error: { code: 404 } }, 404);
-    return json({ generation: "9", crc32c: checksum, kmsKeyName: "projects/p/locations/us/keyRings/r/cryptoKeys/k", metadata: { "napplet-cvm-content-sha256": "05080dc082c6df88129efbbe3f2c5a354e5348c963564f889914d0252f48b17d" } });
+    return json({ generation: "9", crc32c: checksum, kmsKeyName: "projects/p/locations/us/keyRings/r/cryptoKeys/k", metadata: { "napplet-cvm-content-sha256": "05080dc082c6df88129efbbe3f2c5a354e5348c963564f889914d0252f48b17d", "napplet-cvm-operation": "gcs-op-1" } });
   });
   await expect(client.gcs.writeArtifact({ operationId: "gcs-op-1", bucket: "napplet-cvm-artifacts", object: "checkpoints/a.tar.zst", bytesBase64: "YQ==", checksum, encryptionKeyReference: "projects/p/locations/us/keyRings/r/cryptoKeys/k", location: "nam4", versioning: true, retentionDays: 30 })).resolves.toEqual({ status: "completed", generation: "9", checksum });
   expect(await journal.read("gcs-op-1")).toMatchObject({ state: "completed", generation: "9" });

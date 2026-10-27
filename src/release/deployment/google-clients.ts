@@ -110,10 +110,10 @@ function crc32cBase64(bytes: Uint8Array): string {
   crc = (crc ^ 0xffffffff) >>> 0;
   return btoa(String.fromCharCode((crc >>> 24) & 255, (crc >>> 16) & 255, (crc >>> 8) & 255, crc & 255));
 }
-function multipartObjectUpload(object: string, checksum: string, contentSha256: string, bytes: Uint8Array): Uint8Array {
+function multipartObjectUpload(object: string, checksum: string, contentSha256: string, operationId: string, bytes: Uint8Array): Uint8Array {
   const boundary = "napplet-cvm-google-json-upload";
   const encoder = new TextEncoder();
-  const prefix = encoder.encode(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name: object, crc32c: checksum, metadata: { "napplet-cvm-content-sha256": contentSha256 } })}\r\n--${boundary}\r\nContent-Type: application/octet-stream\r\n\r\n`);
+  const prefix = encoder.encode(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name: object, crc32c: checksum, metadata: { "napplet-cvm-content-sha256": contentSha256, "napplet-cvm-operation": operationId } })}\r\n--${boundary}\r\nContent-Type: application/octet-stream\r\n\r\n`);
   const suffix = encoder.encode(`\r\n--${boundary}--\r\n`);
   const output = new Uint8Array(prefix.byteLength + bytes.byteLength + suffix.byteLength); output.set(prefix); output.set(bytes, prefix.byteLength); output.set(suffix, prefix.byteLength + bytes.byteLength); return output;
 }
@@ -268,7 +268,7 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
       const contentSha256 = await sha256([...bytes]); const resource = `b/${bucket}/o/${object}`;
       const claimed = await claim(operationId, resource, { object, checksum: input.checksum, encryptionKeyReference: input.encryptionKeyReference, contentSha256 }, bytes);
       const existing = await request("storage", `/storage/v1/b/${encodeURIComponent(bucket)}/o/${encodeURIComponent(object)}`, "GET");
-      if (existing.response.ok) { const observed = z.object({ generation: z.string(), crc32c: z.literal(input.checksum), kmsKeyName: z.literal(input.encryptionKeyReference), metadata: z.object({ "napplet-cvm-content-sha256": z.literal(contentSha256) }).passthrough() }).passthrough().safeParse(existing.payload); if (observed.success && !claimed.claimed && claimed.record.generation === observed.data.generation) return Object.freeze({ status: "completed" as const, generation: observed.data.generation, checksum: observed.data.crc32c }); return Object.freeze({ status: "blocked" as const }); }
+      if (existing.response.ok) { const observed = z.object({ generation: z.string(), crc32c: z.literal(input.checksum), kmsKeyName: z.literal(input.encryptionKeyReference), metadata: z.object({ "napplet-cvm-content-sha256": z.literal(contentSha256), "napplet-cvm-operation": z.literal(operationId) }).passthrough() }).passthrough().safeParse(existing.payload); if (observed.success && (!claimed.record.generation || claimed.record.generation === observed.data.generation)) { await options.journal.markCompleted({ operationId, requestSha256: claimed.requestSha256, generation: observed.data.generation, owned: true }); return Object.freeze({ status: "completed" as const, generation: observed.data.generation, checksum: observed.data.crc32c }); } return Object.freeze({ status: "blocked" as const }); }
       if (existing.response.status !== 404) return Object.freeze(statusFor(existing.response.status));
       if (!claimed.claimed) {
         const prior = claimed.record.generation ? await request("storage", `/storage/v1/b/${encodeURIComponent(bucket)}/o/${encodeURIComponent(object)}?generation=${encodeURIComponent(claimed.record.generation)}`, "GET") : undefined;
@@ -276,12 +276,12 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
         return Object.freeze({ status: "unknown" as const });
       }
       await options.journal.markDispatching({ operationId, requestSha256: claimed.requestSha256 });
-      const uploaded = await request("storage", `/upload/storage/v1/b/${encodeURIComponent(bucket)}/o?uploadType=multipart&ifGenerationMatch=0&kmsKeyName=${encodeURIComponent(input.encryptionKeyReference)}`, "POST", undefined, { "content-type": "multipart/related; boundary=napplet-cvm-google-json-upload" }, multipartObjectUpload(object, input.checksum, contentSha256, bytes));
+      const uploaded = await request("storage", `/upload/storage/v1/b/${encodeURIComponent(bucket)}/o?uploadType=multipart&ifGenerationMatch=0&kmsKeyName=${encodeURIComponent(input.encryptionKeyReference)}`, "POST", undefined, { "content-type": "multipart/related; boundary=napplet-cvm-google-json-upload" }, multipartObjectUpload(object, input.checksum, contentSha256, operationId, bytes));
       if (!uploaded.response.ok) return Object.freeze(statusFor(uploaded.response.status)); const stored = z.object({ generation: z.string().regex(/^\d+$/u), crc32c: z.literal(input.checksum), kmsKeyName: z.literal(input.encryptionKeyReference) }).passthrough().safeParse(uploaded.payload);
       if (!stored.success) return Object.freeze({ status: "unknown" as const });
       const exact = await request("storage", `/storage/v1/b/${encodeURIComponent(bucket)}/o/${encodeURIComponent(object)}?generation=${encodeURIComponent(stored.data.generation)}`, "GET");
       if (!exact.response.ok) return Object.freeze(statusFor(exact.response.status));
-      const observed = z.object({ generation: z.literal(stored.data.generation), crc32c: z.literal(input.checksum), kmsKeyName: z.literal(input.encryptionKeyReference), metadata: z.object({ "napplet-cvm-content-sha256": z.literal(contentSha256) }).passthrough() }).passthrough().safeParse(exact.payload);
+      const observed = z.object({ generation: z.literal(stored.data.generation), crc32c: z.literal(input.checksum), kmsKeyName: z.literal(input.encryptionKeyReference), metadata: z.object({ "napplet-cvm-content-sha256": z.literal(contentSha256), "napplet-cvm-operation": z.literal(operationId) }).passthrough() }).passthrough().safeParse(exact.payload);
       if (!observed.success) return Object.freeze({ status: "unknown" as const });
       await options.journal.markCompleted({ operationId, requestSha256: claimed.requestSha256, generation: observed.data.generation, owned: true });
       return Object.freeze({ status: "completed" as const, generation: observed.data.generation, checksum: observed.data.crc32c });

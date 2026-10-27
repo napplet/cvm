@@ -32,7 +32,7 @@ page.on("pageerror", (error) => errors.push(error.message));
 page.on("request", (request) => requests.push(new URL(request.url()).pathname));
 const evidence = resolve(".local/development-gui-evidence"); await mkdir(evidence, { recursive: true });
 async function ready(version: number) {
-  await page.waitForFunction((n) => document.querySelector("#version-picker option:checked")?.textContent === `Version ${n} · latest` && document.querySelector("#build-progress")?.getAttribute("aria-valuenow") === "5", version, { timeout: 180_000 });
+  await page.waitForFunction((n) => document.querySelector("#version-picker option:checked")?.textContent === `Version ${n} · current` && document.querySelector("#build-progress")?.getAttribute("aria-valuenow") === "5", version, { timeout: 180_000 });
   assert(await page.locator("#product-notice").isHidden(), "SUCCESS_SHOWN_AS_FAILURE");
   await server.assertGenerationSettlement();
 }
@@ -82,7 +82,7 @@ try {
   await page.locator("#old-version-note").waitFor(); assert(await page.locator("#revision").isDisabled(), "OLD_VERSION_CAN_REVISE");
   assert((await page.locator("#revision-blocked-reason").innerText()).includes("earlier version"), "OLD_VERSION_REVISION_BLOCK_UNEXPLAINED");
   await page.getByRole("button", { name: "Return to latest to make changes" }).click();
-  await page.waitForFunction(() => (document.querySelector("#version-picker") as HTMLSelectElement).selectedOptions[0]?.textContent === "Version 2 · latest");
+  await page.waitForFunction(() => (document.querySelector("#version-picker") as HTMLSelectElement).selectedOptions[0]?.textContent === "Version 2 · current");
   await page.locator("#revision").fill("Try a softer green");
   await page.reload(); await page.getByText("Workspace connected", { exact: true }).waitFor(); await ready(2);
   assert(await page.locator("#revision").inputValue() === "Try a softer green", "REVISION_DRAFT_LOST");

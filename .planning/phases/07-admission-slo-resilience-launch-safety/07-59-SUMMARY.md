@@ -97,6 +97,8 @@ The local Docker daemon had exhausted its predefined address pools. The executor
 
 Remote payment run `40508257133` completed all 138 selected tests: 135 passed and three failed. The real worker result test exposed native-Linux bind-mount ownership (`EACCES` removing a worker-owned directory); the development worker now matches a non-root launcher's numeric identity and retains UID/GID 65532 for root launchers, with network/capability/read-only controls intact. The authoring assertion was stale after the supported data-only `src/capabilities.json` surface was added; it now asserts that exact surface and the protected manifest/dependency/toolchain prohibition. Six focused lifecycle/authoring tests pass. The pre-admission real-worker failure requires the next full run to establish whether the ownership correction also resolves it; it has not been waived.
 
+Payment run `40509872748` passed all 138 tests / 923 assertions at source `1442809`, including both previously failing worker flows. GUI run `40509872944` then timed out in the remix journey: its selector still expected the old `Version N · latest` label, while version restoration now renders `Version N · current`. Updated the exact selectors in both affected browser journeys and added bounded failure-state diagnostics to the remix wait. Full GUI verification remains pending; no journey was skipped.
+
 ## Next Phase Readiness
 
 PR #5 is open. Do not mark OPS-04 complete until the retained payment and GUI workflows pass remotely.

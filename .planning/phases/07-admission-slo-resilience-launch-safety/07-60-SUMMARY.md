@@ -2,81 +2,104 @@
 phase: 07-admission-slo-resilience-launch-safety
 plan: "60"
 subsystem: production-accounting
-tags: [postgresql, accounting-realm, custody, recovery]
-dependency_graph:
-  requires: [07-58]
-  provides: [production-real-ledger-realm, encrypted-rail-custody, uncertain-operation-audit]
-  affects: [07-61, 07-62]
-tech_stack:
+tags: [postgresql, accounting-realm, custody, recovery, serializable]
+requires:
+  - phase: 07-58
+    provides: production architecture and no-effect migration boundary
+provides:
+  - Zero-funded production-real PostgreSQL monetary realm isolated from development-test history
+  - Realm-bound funding database, immutable encrypted custody, and replay-safe rail-operation persistence
+affects: [07-61, 07-62, production funding, rail reconciliation]
+tech-stack:
   added: []
-  patterns: [schema-per-realm, least-privilege-roles, serializable-operation-transitions]
-key_files:
+  patterns: [schema-per-realm, least-privilege roles, catalog-verified cloned constraints, bounded serializable retries]
+key-files:
   created: [migrations/phase-03/002_production_accounting.sql, src/funding/accounting-realm.ts, tests/funding/production-accounting-realm.test.ts]
-  modified: [src/persistence/postgres-funding-database.ts, src/phase-03/funded-core.ts]
+  modified: [src/persistence/postgres-funding-database.ts, src/phase-03/funded-core.ts, tests/persistence/postgres-sql-funding-store.test.ts]
 decisions:
-  - "Existing public monetary rows are permanently classified development-test; production money uses a fresh production_real schema and role."
-  - "Cashu/NWC recovery stores ciphertext, digests, broker key references, and original operation identities only."
+  - "Development-test history remains in public as read-only history; production-real money starts empty in its own schema and role."
+  - "Cloned Phase 04-06 foreign keys and trigger functions are reconstructed against production_real and rejected if any bind to public."
+  - "Rail custody is ciphertext-only and append-only; serializable retries resolve only the original immutable operation identity."
 metrics:
   tasks_completed: 2
-  files_changed: 5
+  files_changed: 6
   completed_at: 2026-10-27
-status: pending
+status: complete
 ---
 
 # Phase 07 Plan 60: Production Accounting Realm Summary
 
-Preserved development-test ledger history is separated from a zero-funded production-real PostgreSQL realm with role enforcement, encrypted custody metadata, and immutable rail-operation recovery identities.
+**A zero-funded, least-privilege PostgreSQL production ledger now remains structurally separate from preserved development-test history, with encrypted custody and replay-safe rail recovery.**
 
-## Reopened Review Work
+## Accomplishments
 
-The initial close-out was reopened after review. The production schema now clones compatible Phase 04–06 tables when upgrading an existing authority, requires a non-superuser member of the selected realm role, rejects an absent/non-live accounting descriptor, and uses separate login-role connections in the PostgreSQL proof. Custody now supports multiple immutable records per original operation, globally fences semantic Cashu proof identity, and requires the matching original operation/account/rail tuple.
+- Classified legacy public monetary history as `development-test` without changing its balances or receipts; production money is in the empty `production_real` schema and requires the production realm role.
+- Bound `PostgresFundingDatabase` to its selected realm and blocked superuser/wrong-role access, development markers, and custom store/executor production bypasses.
+- Added encrypted, immutable Cashu/Lightning custody records and original-operation persistence with account/rail FKs, semantic proof replay fencing, transition audits, and bounded serializable retries.
+- Rebuilt every cloned Phase 04-06 foreign key only after all production tables exist, bound cloned immutability triggers to production-local functions, and fail the migration for public FK/default/trigger bindings.
 
-Remaining required evidence before this plan can be marked complete: a restricted-role end-to-end SQL funding credit/reservation/settlement transaction against the production schema (including bounded concurrency) and a reviewable multiline rewrite of the custody/operation repository transaction methods.
+## Task Commits
 
-## Tasks Completed
-
-1. **Bind accounts, receipts, holds, and operations to an accounting realm** — `2b92e37`
-   - Added the additive migration that classifies legacy public monetary rows as `development-test` without changing balances or receipt values.
-   - Created the zero-funded `production_real` schema plus distinct production/history roles and grants.
-   - Bound `PostgresFundingDatabase` and `createFundedCore` to a finite realm contract; non-test construction defaults to `production-real` and checks development-only configuration markers.
-
-2. **Add durable custody and uncertain-operation records** — `411fd4c`
-   - Added immutable ciphertext-only custody rows with key references, digests, Cashu identity metadata, and no bearer material columns.
-   - Added an original-operation repository with serializable create/replay, state transitions, and append-only audit rows.
-   - Exposed only narrow custody and uncertain-operation ports from `PostgresFundingDatabase`.
+1. **Task 1: Bind accounts, receipts, holds, and operations to an accounting realm** — `2b92e37`, `a567ed9`, `8b40218`, `2c58eb7`
+2. **Task 2: Add durable custody and uncertain-operation records** — `411fd4c`, `2c58eb7`
 
 ## Verification
 
-- `NAPPLET_RUN_POSTGRES_ISOLATION=1 bun test tests/funding/production-accounting-realm.test.ts tests/persistence/postgres-sql-funding-store.test.ts --timeout 120000`
-  - 12 passed, 0 failed, 47 assertions.
-  - The integration test starts a uniquely named PostgreSQL 17 container on Docker's existing `bridge` network with a dynamic loopback port, and removes only that container.
-  - It proves retained test history, an empty production ledger, equal account/idempotency identifiers in separate realms, mutual role denial, replay identity conflict, invalid state-transition rejection, and immutable custody rejection.
+- `NAPPLET_RUN_POSTGRES_ISOLATION=1 bun test tests/funding/production-accounting-realm.test.ts --timeout 130000` — **3 passed, 37 assertions**.
+  - Runs one uniquely named PostgreSQL 17 container on Docker `bridge` with a dynamic loopback port and removes only that container.
+  - Proves public history remains intact/read-only, the production ledger begins empty, real credit plus concurrent cap competition stays funded, public tables are denied to the production role, and immutable ledger/audit/custody data cannot be changed by that role.
+  - Audits `pg_constraint`, defaults, and trigger function namespaces to ensure cloned production relations do not resolve to public authority.
+  - Proves original-operation replay returns the current state without redispatch, concurrent create/replay elects exactly one creator, and semantic Cashu proof reuse across accounts fails.
+- `bun test tests/funding tests/persistence tests/phase-03 tests/phase-04 --timeout 30000` — **94 passed, 1 intentional opt-in PostgreSQL skip, 0 failed**.
+- `bun test tests/funding/production-accounting-realm.test.ts tests/persistence/postgres-sql-funding-store.test.ts tests/funding/funded-admission.test.ts --timeout 30000` — **25 passed, 1 intentional opt-in PostgreSQL skip, 0 failed**.
 
 ## Decisions Made
 
-- Application SQL is realm-bound through a per-connection `search_path`; deployment credentials must log in as the matching least-privilege database role rather than application code impersonating a role.
-- `rail_custody_material` accepts ciphertext, AES-GCM nonce, digest, and secret-broker key reference. Cashu proof bytes and NWC connection material are intentionally absent.
-- Rail reconciliation in Plans 07-61/62 must call `uncertainRailOperations.createOrReplay()` before a provider dispatch, use the returned original operation ID for observation only, and persist encrypted inputs/outputs through `custody`.
+- Production deployment must connect through a least-privilege member of `napplet_production_real`; application code selects the fixed realm role and cannot impersonate a superuser.
+- Custody stores only ciphertext, a 12-byte AES-GCM nonce, digest, broker key reference, and safe rail metadata. Raw Cashu proofs, NWC connection strings, invoices, and preimages remain absent.
+- Future rail dispatch must call `uncertainRailOperations.createOrReplay()` first and observe only its returned original operation ID. Retries return stored state instead of issuing a second effect.
 
 ## Deviations from Plan
 
 ### Auto-fixed Issues
 
-**1. [Rule 2 - Missing critical verification] Added a real PostgreSQL 17 isolation test**
+**1. [Rule 2 - Missing critical verification] Added and completed real PostgreSQL 17 isolation coverage**
 - **Found during:** Task 1
-- **Issue:** The existing scripted SQL-client test cannot prove schema separation, role privileges, constraints, or trigger behavior.
-- **Fix:** Added an opt-in real container test and ran it with `NAPPLET_RUN_POSTGRES_ISOLATION=1`.
+- **Issue:** Scripted clients could not prove role privileges, production/public constraint targets, clone bindings, or real funding serialization.
+- **Fix:** Added an opt-in local PG17 test covering actual production-role credit, reservation, concurrent cap competition, custody, operation replay, and catalog isolation.
 - **Files modified:** `tests/funding/production-accounting-realm.test.ts`
-- **Commit:** `2b92e37`, `411fd4c`
+- **Verification:** Explicit `NAPPLET_RUN_POSTGRES_ISOLATION=1` command passes.
+- **Committed in:** `2c58eb7`
 
-**Total deviations:** 1 auto-fixed. **Impact:** The plan has database-engine evidence instead of mock-only coverage.
+**2. [Rule 1 - Bug] Repaired cloned realm references and the leaked test connection**
+- **Found during:** Task 1 review verification
+- **Issue:** Clone-generated FKs could resolve to public, cloned tables lacked local immutability trigger bindings, and an assertion failure held a checked-out test client so pool shutdown appeared to hang.
+- **Fix:** Rebuilt all clone FKs after creating the full graph, bound production-local trigger functions, asserted catalog isolation, and released the test client in `finally`.
+- **Files modified:** `migrations/phase-03/002_production_accounting.sql`, `tests/funding/production-accounting-realm.test.ts`
+- **Verification:** PG17 catalog audit and test shutdown pass.
+- **Committed in:** `2c58eb7`
+
+**3. [Rule 2 - Missing critical functionality] Added bounded replay-safe custody and operation transactions**
+- **Found during:** Task 2 review verification
+- **Issue:** New production repositories had unbounded/no retry handling; custody attempted `FOR UPDATE` despite the deliberate absence of UPDATE privilege.
+- **Fix:** Added a three-attempt serializable transaction helper with database lock/statement bounds and unique-key replay handling; custody remains append-only.
+- **Files modified:** `src/persistence/postgres-funding-database.ts`
+- **Verification:** Concurrent operation test and real PG custody flow pass.
+- **Committed in:** `2c58eb7`
+
+**Total deviations:** 3 auto-fixed (1 Rule 1, 2 Rule 2). **Impact:** Required production-accounting security and correctness properties are now proven locally without protected effects.
 
 ## Known Limitations
 
-- This is a no-effect schema and repository change. It does not provision Cloud SQL, assign production login credentials, migrate later Phase 4–6 tables into the production schema, or perform Lightning/Cashu/NWC I/O.
-- The PG17 check is intentionally environment-gated so ordinary unit runs do not start Docker; production accounting changes require the explicit command above in CI/release validation.
+- This is no-effect preparation: it does not provision Cloud SQL, assign production login credentials, connect Lightning/Cashu/NWC, or authorize real-money movement.
+- The PG17 proof is intentionally opt-in locally and explicitly run by the payment CI workflow; ordinary unit runs do not start Docker.
 
-## Self-Check: PENDING
+## Next Phase Readiness
 
-- Required migration, realm contract, and focused test files exist.
-- Task commits `2b92e37` and `411fd4c` exist on the current branch.
+Plans 07-61 and 07-62 can use the narrow `custody` and `uncertainRailOperations` ports for encrypted recovery and query-only reconciliation. They must keep provider dispatch outside retries and retain the original persisted operation ID.
+
+## Self-Check: PASSED
+
+- Required migration, realm contract, database capability, funded-core, and focused test files exist.
+- Task commits `2b92e37`, `411fd4c`, `a567ed9`, `8b40218`, and `2c58eb7` exist on the current branch.
+- The final real-PG and requested Phase 03/04 regression commands passed as recorded above.

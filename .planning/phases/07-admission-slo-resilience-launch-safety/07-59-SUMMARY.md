@@ -99,6 +99,8 @@ Remote payment run `40508257133` completed all 138 selected tests: 135 passed an
 
 Payment run `40509872748` passed all 138 tests / 923 assertions at source `1442809`, including both previously failing worker flows. GUI run `40509872944` then timed out in the remix journey: its selector still expected the old `Version N · latest` label, while version restoration now renders `Version N · current`. Updated the exact selectors in both affected browser journeys and added bounded failure-state diagnostics to the remix wait. Full GUI verification remains pending; no journey was skipped.
 
+At `7db29af`, payment run `40512008210` passed again. GUI run `40512008420` passed remix, product-view and responsive flows, then exposed another stale older-version assertion. The product journey now requires the current restore-or-return explanation, an enabled restore control, and the current-version return button; direct edits to an older preview must remain disabled. Full GUI verification is still pending.
+
 ## Next Phase Readiness
 
 PR #5 is open. Do not mark OPS-04 complete until the retained payment and GUI workflows pass remotely.

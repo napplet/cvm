@@ -80,8 +80,9 @@ try {
   assert((await page.locator("#conversation-messages").textContent())?.includes("Make the counter title shorter"), "REVISION_NOT_IN_CHAT");
   await page.getByLabel("Preview version", { exact: true }).selectOption({ label: "Version 1" });
   await page.locator("#old-version-note").waitFor(); assert(await page.locator("#revision").isDisabled(), "OLD_VERSION_CAN_REVISE");
-  assert((await page.locator("#revision-blocked-reason").innerText()).includes("earlier version"), "OLD_VERSION_REVISION_BLOCK_UNEXPLAINED");
-  await page.getByRole("button", { name: "Return to latest to make changes" }).click();
+  assert((await page.locator("#revision-blocked-reason").innerText()).includes("Restore the version you’re viewing, or return to current"), "OLD_VERSION_REVISION_BLOCK_UNEXPLAINED");
+  assert(await page.locator("#restore-version").isEnabled(), "OLD_VERSION_RESTORE_UNREACHABLE");
+  await page.locator("#return-current").click();
   await page.waitForFunction(() => (document.querySelector("#version-picker") as HTMLSelectElement).selectedOptions[0]?.textContent === "Version 2 · current");
   await page.locator("#revision").fill("Try a softer green");
   await page.reload(); await page.getByText("Workspace connected", { exact: true }).waitFor(); await ready(2);

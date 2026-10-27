@@ -63,3 +63,13 @@ values), so it is expressly prohibited from authorization or debit.
 No source snapshot, price-card provenance, bounded request envelope, or exact
 provider receipt may be replaced by a development fixture, a free-tier
 assumption, a synthetic sat rate, or an inferred project ceiling.
+
+The current conservative certification inventory reserves a full model envelope
+for all 1,000 accepted admissions on **each** worker provider, plus eight suite
+operations per provider: 2,016 possible model calls. Admission cancellation has
+not yet been proven to precede inference, so the quote cannot assume it avoids
+model charges. Each call is bounded to 100,000 input tokens and 8,192 combined
+output/thought tokens; both worker cohorts retain their 20-minute lifetime cap.
+The controller's $2,000 policy ceiling is only a rejection threshold, not a
+quote or approval. The exact fresh source-priced request must still be reviewed
+and authorized before effects; no amount has been authorized or spent here.

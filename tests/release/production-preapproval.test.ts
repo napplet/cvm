@@ -24,7 +24,8 @@ test("certification ceiling prices Argon input and output/thought at their disti
   });
   const model = estimate.lines.find((line) => line.provider === "model")!;
   expect(model.components?.map((component) => component.priceMicros)).toEqual([40_000_000, 200_000_000]);
-  expect(estimate.maximumMicros).toBeLessThan(1_000_000_000);
+  expect(estimate.maximumMicros).toBeGreaterThan(1_000_000_000);
+  expect(estimate.maximumMicros).toBeLessThan(2_000_000_000);
 });
 
 test("binds each regional Google component to one authenticated catalog SKU without exposing ADC", async () => {

@@ -2,8 +2,22 @@ import { expect, test } from "bun:test";
 import { createVertexDeploymentClient, createVertexInteractionsHttpPort, type VertexInteractionsPort, type VertexOperationJournal } from "../../src/release/deployment/vertex-client";
 import { BTC_USD_TICKER_URL, createOfficialPricingSources, VERTEX_GEMINI_PRICING_URL } from "../../src/release/costs/official-sources";
 import { convertUsdMicrosToSats, createVertexGeminiProductionPricing, priceReceipt } from "../../src/model/price-card";
+import { deriveReleaseTopology, PRODUCTION_CERTIFICATION_OPERATION_INVENTORY as inventory, RELEASE_TOPOLOGY_QUANTITY_CONTRACT } from "../../src/release/topology";
 
 const digest = (letter: string) => letter.repeat(64);
+test("the model envelope covers both complete admission cohorts before any pre-inference cancellation is proven", async () => {
+  const topology = await deriveReleaseTopology(digest("a"));
+  expect(inventory.workerProviders).toBe(topology.workerCandidates.length);
+  expect(inventory.modelOperations).toBe(topology.workerCandidates.length * (inventory.acceptedAdmissionSamples + inventory.protectedSuites));
+  const input = RELEASE_TOPOLOGY_QUANTITY_CONTRACT.find(line => line.componentId === "model.global.input")!;
+  const output = RELEASE_TOPOLOGY_QUANTITY_CONTRACT.find(line => line.componentId === "model.global.output-thought")!;
+  expect(input.quantityNanos).toBe(BigInt(inventory.modelOperations * inventory.modelInputTokensPerOperation) * 100n);
+  expect(output.quantityNanos).toBe(BigInt(inventory.modelOperations * inventory.modelOutputAndThoughtTokensPerOperation) * 100n);
+  // Current gross model prices alone exceed the old single-cohort $1,000
+  // guard. Neither that guard nor this test is authorization to spend.
+  const gross = BigInt(inventory.modelOperations) * (BigInt(inventory.modelInputTokensPerOperation) * 4n + BigInt(inventory.modelOutputAndThoughtTokensPerOperation) * 20n);
+  expect(gross).toBeGreaterThan(1_000_000_000n);
+});
 const price = Object.freeze({ sourceUrl: "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing", sourceDocumentSha256: digest("a"), quoteSha256: digest("b"), observedAtMs: 1_000, freshUntilMs: 2_000, effectiveFromMs: 900, effectiveUntilMs: 3_000, currency: "USD" as const, inputMicrosPerMillion: 4_000_000, cachedInputMicrosPerMillion: 200_000, outputAndThoughtMicrosPerMillion: 20_000_000 });
 const interaction = (input: unknown, overrides: Record<string, unknown> = {}) => ({ id: "original", model: "gemini-4-argon", input, status: "completed", created: "2026-10-27T00:00:00.000Z", steps: [{ model_output: { content: [{ type: "text", text: '{"files":[]}' }] } }], usage: { input_tokens: 1_000, cached_input_tokens: 200, output_tokens: 1_000, thought_tokens: 100, tool_use_tokens: 0 }, ...overrides });
 const dispatch = (subject: ReturnType<typeof createVertexDeploymentClient>, operationId = "vertex-original-op") => subject.dispatch({ operationId, idea: "A one-purpose napplet", systemInstruction: "Return only the requested JSON object.", maximumOutputTokens: 2_048 });

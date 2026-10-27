@@ -31,7 +31,7 @@ test("binds each regional Google component to one authenticated catalog SKU with
         ] }));
       }
       if (url === "https://modal.com/pricing") return new Response("Modal Sandbox $0.00003942 / core / sec $0.00000667 / GiB / sec");
-      if (url === "https://fly.io/docs/about/pricing/") return new Response("shared-cpu-1x 256MB $0.00000078 / second");
+      if (url === "https://docs.fly.io/about/pricing") return new Response("shared-cpu-1x 256MB $0.00000078 / second");
       return new Response("not found", { status: 404 });
     },
     google: {
@@ -60,7 +60,7 @@ test("binds each regional Google component to one authenticated catalog SKU with
     "https://cloudbilling.googleapis.com/v1/services?pageSize=5000",
     "https://cloudbilling.googleapis.com/v1/services/RUN/skus?currencyCode=USD&pageSize=5000",
     "https://modal.com/pricing",
-    "https://fly.io/docs/about/pricing/",
+    "https://docs.fly.io/about/pricing",
   ]);
 
   const topology = await deriveReleaseTopology(digest("a"));

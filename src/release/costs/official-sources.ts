@@ -8,7 +8,7 @@ const MAX_CATALOG_PAGES = 16;
 const DEFAULT_TIMEOUT_MS = 5_000;
 const GOOGLE_ORIGIN = "https://cloudbilling.googleapis.com";
 const MODAL_PRICING_URL = "https://modal.com/pricing";
-const FLY_PRICING_URL = "https://fly.io/docs/about/pricing/";
+const FLY_PRICING_URL = "https://docs.fly.io/about/pricing";
 export const VERTEX_GEMINI_PRICING_URL = "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing";
 const ProviderSchema = z.enum(["cloud_run", "gcs", "collector", "cloud_sql_postgres", "cep8_lightning", "cashu", "model"]);
 const WorkerProviderSchema = z.enum(["modal", "fly"]);
@@ -75,7 +75,7 @@ function validSkuId(value: string): boolean { return /^[A-Za-z0-9._-]{2,127}$/u.
 
 async function readOfficial(fetcher: OfficialFetch, url: string, token?: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<Uint8Array> {
   const parsed = new URL(url);
-  if (parsed.protocol !== "https:" || !["cloudbilling.googleapis.com", "modal.com", "fly.io", "cloud.google.com"].includes(parsed.hostname)) throw new Error("OFFICIAL_SOURCE_ORIGIN_REJECTED");
+  if (parsed.protocol !== "https:" || !["cloudbilling.googleapis.com", "modal.com", "docs.fly.io", "cloud.google.com"].includes(parsed.hostname)) throw new Error("OFFICIAL_SOURCE_ORIGIN_REJECTED");
   const headers: Record<string, string> = { accept: "application/json, text/html;q=0.9, text/plain;q=0.8" };
   if (token !== undefined) headers.authorization = `Bearer ${token}`;
   const controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined;
@@ -172,8 +172,8 @@ export function createOfficialPricingSources(options: OfficialPricingSourcesOpti
         return frozenVertexPrice({ bytes, observedAtMs, freshUntilMs: observedAtMs + freshForMs });
       },
       async readOfficialPricing(input) {
-        const provider = WorkerProviderSchema.parse(input.provider); const url = provider === "modal" ? MODAL_PRICING_URL : FLY_PRICING_URL; const bytes = await readOfficial(options.fetch, url, undefined, timeoutMs); const document = new TextDecoder().decode(bytes);
-        const priceNanos = provider === "modal" ? (() => { const cpu = priceAfter(document, /\$([0-9]+(?:\.[0-9]+)?)\s*\/\s*core\s*\/\s*sec/iu); const memory = priceAfter(document, /\$([0-9]+(?:\.[0-9]+)?)\s*\/\s*GiB\s*\/\s*sec/iu); return (cpu * BigInt(options.workers.modal.cpuCores) + memory * BigInt(options.workers.modal.memoryGiB)) * (options.workers.modal.unit === "worker-100-seconds" ? 100n : 1n); })() : (() => { const preset = options.workers.fly.preset.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"); const memory = options.workers.fly.memory.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"); const match = new RegExp(`${preset}[\\s\\S]{0,256}?${memory}[\\s\\S]{0,256}?\\$([0-9]+(?:\\.[0-9]+)?)\\s*\\/\\s*(second|sec)`, "iu").exec(document); if (!match?.[1]) throw new Error("OFFICIAL_SOURCE_UNIT_REJECTED"); return decimalToNanos(match[1]) * (options.workers.fly.unit === "worker-100-seconds" ? 100n : 1n); })();
+        const provider = WorkerProviderSchema.parse(input.provider); const url = provider === "modal" ? MODAL_PRICING_URL : FLY_PRICING_URL; const bytes = await readOfficial(options.fetch, url, undefined, timeoutMs); const document = new TextDecoder().decode(bytes); const normalized = document.replace(/<[^>]*>/gu, " ").replace(/\$\s+/gu, "$ ").replace(/\s*\.\s*/gu, ".");
+        const priceNanos = provider === "modal" ? (() => { const cpu = priceAfter(normalized, /\$\s*([0-9]+(?:\.[0-9]+)?)(?:\s+[0-9.]){0,32}\s*\/\s*core\s*\/\s*sec/iu); const memory = priceAfter(normalized, /\$\s*([0-9]+(?:\.[0-9]+)?)(?:\s+[0-9.]){0,32}\s*\/\s*GiB\s*\/\s*sec/iu); return (cpu * BigInt(options.workers.modal.cpuCores) + memory * BigInt(options.workers.modal.memoryGiB)) * (options.workers.modal.unit === "worker-100-seconds" ? 100n : 1n); })() : (() => { const preset = options.workers.fly.preset.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"); const memory = options.workers.fly.memory.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"); const match = new RegExp(`${preset}[\\s\\S]{0,256}?${memory}[\\s\\S]{0,256}?\\$([0-9]+(?:\\.[0-9]+)?)\\s*\\/\\s*(second|sec)`, "iu").exec(normalized); if (!match?.[1]) throw new Error("OFFICIAL_SOURCE_UNIT_REJECTED"); return decimalToNanos(match[1]) * (options.workers.fly.unit === "worker-100-seconds" ? 100n : 1n); })();
         const unit = provider === "modal" ? options.workers.modal.unit : options.workers.fly.unit;
         return snapshot(`${provider}-official-pricing`, bytes, [{ provider, componentId: `${provider}.global`, skuId: `${provider}-official`, region: "global", currency: "USD", unit, priceMicros: nanosToMicros(priceNanos), priceNanos: priceNanos.toString() }]);
       },

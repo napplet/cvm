@@ -74,7 +74,7 @@ status: verification_pending
 - Passed: `bun test tests/dev/payment-config.test.ts --timeout 10000` (6 tests), including Cashu v4 `cashuB` format and failure cleanup.
 - Passed: `bun scripts/probe-development-relay.ts` — exact pinned relay reported `amd64` and `websocket: ready`.
 - Pending: `bun scripts/dev-payments.ts test` installed/built the browser and native worker prerequisites, then failed before the isolated stack started because the local Docker daemon reported `all predefined address pools have been fully subnetted` while creating `napplet-cvm-payments-test-4509bf873cbe7cfe_default`.
-- Pending: clean remote payment and GUI workflow runs. No remote CI has been claimed as green.
+- Pending: clean remote payment and GUI workflow runs. GUI run `40507779530` passed the pinned relay probe but failed building the ARM64-default worker on the AMD64 runner. Both jobs now set `NAPPLET_CVM_WORKER_PLATFORM=linux/amd64`; Compose configuration checks confirm both worker images select that platform. No remote CI has been claimed as green.
 
 ## Deviations from Plan
 
@@ -97,7 +97,7 @@ The local Docker daemon had exhausted its predefined address pools. The executor
 
 ## Next Phase Readiness
 
-Source changes are ready for a push and clean remote CI. Do not mark OPS-04 complete until the retained payment and GUI workflows pass remotely.
+PR #5 is open. Do not mark OPS-04 complete until the retained payment and GUI workflows pass remotely.
 
 ## Self-Check: PASSED
 

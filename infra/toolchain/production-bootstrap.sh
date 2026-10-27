@@ -28,7 +28,7 @@ ACTIVE_NON_LOOPBACK=$("$NET" ip -o link show | "$NET" grep -v '^1: lo:' | "$NET"
 [ -z "$ACTIVE_NON_LOOPBACK" ] || exit 126
 [ -z "$("$NET" ip route show default)" ] || exit 126
 mount_bounded() {
-  path=$1 size_limit=$2 options=$3
+  path=$1 size_limit=$2 options=$3 owner=${4-65532}
   mkdir -p "$path"
   if ! mountpoint -q "$path"; then
     mount -t tmpfs -o "size=$size_limit,mode=0700,nosuid,nodev,$options" tmpfs "$path" || exit 126
@@ -36,7 +36,7 @@ mount_bounded() {
   [ "$(findmnt -n -o FSTYPE --target "$path")" = "tmpfs" ] || exit 126
   size=$(findmnt -n -o SIZE --bytes --target "$path")
   [ "$size" -gt 0 ] && [ "$size" -le "$size_limit" ] || exit 126
-  chown 65532:65532 "$path" || exit 126
+  chown "$owner:$owner" "$path" || exit 126
   chmod 0700 "$path" || exit 126
 }
 # Generated work, HOME caches, and /tmp are all independently bounded.  Do
@@ -46,7 +46,16 @@ mount_bounded() {
 # workload that must run its own build graph; the boundary is the bounded tmpfs
 # plus non-root/no-caps/no-new-privileges and verified network denial.  HOME
 # and /tmp do not execute project tooling and remain noexec.
-mount_bounded /workspace 536870912 exec
+mount_bounded /workspace 536870912 exec 0
+# Sticky, root-owned parent prevents generated code from replacing a trusted
+# job's project directory while still permitting its ordinary workspace files.
+chown 0:0 /workspace
+chmod 1777 /workspace
+[ ! -L /workspace/jobs ] || exit 126
+mkdir -p /workspace/jobs
+chown 0:0 /workspace/jobs
+chmod 0755 /workspace/jobs
+mount_bounded /run/napplet-cvm-jobs 67108864 noexec 0
 mount_bounded /home/napplet 67108864 noexec
 mount_bounded /tmp 67108864 noexec
 mount_bounded /var/tmp 67108864 noexec
@@ -64,5 +73,12 @@ policy=${NAPPLET_CVM_POLICY_VERSION-}
 # It receives no source, stdin instructions, provider credentials, or shell.
 if [ "$#" = 4 ] && [ "$1" = /usr/local/bin/napplet-cvm-worker ] && [ "$2" = idle ] && [ "$3" = --provider-deadline-epoch-ms ]; then
   exec env -i PATH=/usr/local/bin:/usr/bin:/bin NAPPLET_CVM_POLICY_VERSION="$policy" /usr/local/bin/bun /usr/local/bin/napplet-cvm-worker idle --provider-deadline-epoch-ms "$4"
+fi
+# Only the immutable fixed-operation supervisor retains privilege. Its private
+# tmpfs is unreadable to the generated UID; it never executes caller argv.
+if [ "${1-}" = /usr/local/bin/napplet-cvm-job ]; then
+  shift
+  case "${1-}" in put|start|status|artifact) ;; *) exit 126 ;; esac
+  exec env -i PATH=/usr/local/bin:/usr/bin:/bin NAPPLET_CVM_POLICY_VERSION="$policy" /usr/local/bin/bun /usr/local/bin/napplet-cvm-job "$@"
 fi
 exec env -i HOME=/home/napplet CI=1 PATH=/toolchain/bin:/toolchain/pnpm:/toolchain/node_modules/.bin:/usr/local/bin:/usr/bin:/bin PLAYWRIGHT_BROWSERS_PATH=/toolchain/ms-playwright NAPPLET_CVM_POLICY_VERSION="$policy" setpriv --reuid 65532 --regid 65532 --clear-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs -- "$@"

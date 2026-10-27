@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "status": "reproducible-source-build-not-promoted",
+  "source": {
+    "repository": "https://github.com/napplet/web.git",
+    "commit": "976ad0549c38f93d4ed418d3ea59a615a7e5fd7f",
+    "lockFile": "deno.lock",
+    "lockSha256": "914eb84228c77b83b040a23854cdf7b320f9fe4ba20a40dfff3c6ef3ff6bd9b8"
+  },
+  "runtime": {
+    "version": "2.9.6",
+    "url": "https://github.com/denoland/deno/releases/download/v2.9.6/deno-x86_64-unknown-linux-gnu.zip",
+    "sha256": "394f07f4da2bebe6ce6f1e7ce0fa16429b29b08c35e3fac3fe25972676dff4b2",
+    "archive": "/tmp/napplet-cli-source-proof-foreground.9n7YFH/deno-x86_64-unknown-linux-gnu.zip"
+  },
+  "normalization": {
+    "sourceDateEpoch": 1789254081,
+    "procedure": "seed frozen cache and target runtime, normalize every source/cache mtime, then compile frozen cached-only at fixed /src, /cache, and /out paths"
+  },
+  "images": {
+    "build": "debian@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587",
+    "probe": "oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4"
+  },
+  "targets": [
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "sha256": "54a3c5ac963b1eebe3a178a90f112f86bc3ed2914cde1632a60e89b4f2b5c524",
+      "artifact": "/tmp/napplet-cli-source-proof-foreground.9n7YFH/x86_64-unknown-linux-gnu-one/artifact/napplet",
+      "secondArtifact": "/tmp/napplet-cli-source-proof-foreground.9n7YFH/x86_64-unknown-linux-gnu-two/artifact/napplet",
+      "seedLogs": [
+        "/tmp/napplet-cli-source-proof-foreground.9n7YFH/x86_64-unknown-linux-gnu-one/seed.log",
+        "/tmp/napplet-cli-source-proof-foreground.9n7YFH/x86_64-unknown-linux-gnu-two/seed.log"
+      ],
+      "buildLogs": [
+        "/tmp/napplet-cli-source-proof-foreground.9n7YFH/x86_64-unknown-linux-gnu-one/build.log",
+        "/tmp/napplet-cli-source-proof-foreground.9n7YFH/x86_64-unknown-linux-gnu-two/build.log"
+      ],
+      "probes": {
+        "help": {
+          "exitCode": 0,
+          "stdout": "@napplet/cli\n\nUsage:\n  napplet guide\n  napplet create <directory> [--template <path-or-url>] [--force]\n  napplet init [--force] [--root] [--source-dir <dir>] [--name <dtag>] [--title <title>] [--description <text>] [--archetype <slug:napplet:<archetype>/<intent>>] [--relay <url>] [--server <url>]\n  napplet deploy [--config <file>] [--all] [--root] [--name <dtag>] [--snapshot] [--sec <secret>] [--prompt-sec] [--dry-run] [--json]\n  napplet debug [--config <file>] [--all] [--root] [--name <dtag>] [--snapshot] [--sec <secret>]\n  napplet keys store --name <ref> [--sec <secret> | --prompt-sec]\n  napplet keys connect --name <ref> [--relay <url> ...] [--config <file>]\n  napplet keys use --name <ref> [--config <file>]\n  napplet keys list\n  napplet keys delete --name <ref>\n  napplet keys doctor\n  napplet discover [--config <file>] [--all]\n  napplet conformance [--config <file>] [--all] [-- <args>]\n  napplet paja [--config <file>] [-- <args>]\n\nRun \"napplet guide\" for the complete developer workflow and documentation.\n\n",
+          "stderr": ""
+        },
+        "version": {
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Unknown command: --version\n\n@napplet/cli\n\nUsage:\n  napplet guide\n  napplet create <directory> [--template <path-or-url>] [--force]\n  napplet init [--force] [--root] [--source-dir <dir>] [--name <dtag>] [--title <title>] [--description <text>] [--archetype <slug:napplet:<archetype>/<intent>>] [--relay <url>] [--server <url>]\n  napplet deploy [--config <file>] [--all] [--root] [--name <dtag>] [--snapshot] [--sec <secret>] [--prompt-sec] [--dry-run] [--json]\n  napplet debug [--config <file>] [--all] [--root] [--name <dtag>] [--snapshot] [--sec <secret>]\n  napplet keys store --name <ref> [--sec <secret> | --prompt-sec]\n  napplet keys connect --name <ref> [--relay <url> ...] [--config <file>]\n  napplet keys use --name <ref> [--config <file>]\n  napplet keys list\n  napplet keys delete --name <ref>\n  napplet keys doctor\n  napplet discover [--config <file>] [--all]\n  napplet conformance [--config <file>] [--all] [-- <args>]\n  napplet paja [--config <file>] [-- <args>]\n\nRun \"napplet guide\" for the complete developer workflow and documentation.\n\n"
+        },
+        "guide": {
+          "exitCode": 0,
+          "stdout": "Napplet Guide\n=============\n\n2. Create the starter\n   napplet create my-napplet\n   cd my-napplet\n   Scaffold docs: https://napplet.run/docs/packages/boilerplate.html\n\n3. Configure deployment metadata\n   napplet init\n   CLI docs: https://napplet.run/docs/packages/cli.html\n\n4. Equip your agent\n   npx skills add napplet/napplet\n   Skills docs: https://napplet.run/docs/guide/agent-skills.html\n\n5. Build and verify\n   pnpm install\n   pnpm verify\n   Agent build guide: https://napplet.run/docs/guide/build-note-drafts-napplet-with-ai-agent-and-skills.html\n\n6. Preview, then deploy\n   napplet paja -- pnpm vite --host 127.0.0.1\n   napplet deploy --dry-run\n   napplet deploy\n   Deploy docs: https://napplet.run/docs/packages/cli.html\n\nDocumentation\n-------------\nGetting started: https://napplet.run/docs/guide/getting-started.html\nCLI reference: https://napplet.run/docs/packages/cli.html\nAll docs: https://napplet.run/docs/\n",
+          "stderr": ""
+        }
+      }
+    },
+    {
+      "target": "aarch64-unknown-linux-gnu",
+      "sha256": "3573e8cda272806df011ab856357f5165a6719bb1daed8080227ee1083a112d3",
+      "artifact": "/tmp/napplet-cli-source-proof-foreground.9n7YFH/aarch64-unknown-linux-gnu-one/artifact/napplet",
+      "secondArtifact": "/tmp/napplet-cli-source-proof-foreground.9n7YFH/aarch64-unknown-linux-gnu-two/artifact/napplet",
+      "seedLogs": [
+        "/tmp/napplet-cli-source-proof-foreground.9n7YFH/aarch64-unknown-linux-gnu-one/seed.log",
+        "/tmp/napplet-cli-source-proof-foreground.9n7YFH/aarch64-unknown-linux-gnu-two/seed.log"
+      ],
+      "buildLogs": [
+        "/tmp/napplet-cli-source-proof-foreground.9n7YFH/aarch64-unknown-linux-gnu-one/build.log",
+        "/tmp/napplet-cli-source-proof-foreground.9n7YFH/aarch64-unknown-linux-gnu-two/build.log"
+      ],
+      "probes": {
+        "help": {
+          "exitCode": 0,
+          "stdout": "@napplet/cli\n\nUsage:\n  napplet guide\n  napplet create <directory> [--template <path-or-url>] [--force]\n  napplet init [--force] [--root] [--source-dir <dir>] [--name <dtag>] [--title <title>] [--description <text>] [--archetype <slug:napplet:<archetype>/<intent>>] [--relay <url>] [--server <url>]\n  napplet deploy [--config <file>] [--all] [--root] [--name <dtag>] [--snapshot] [--sec <secret>] [--prompt-sec] [--dry-run] [--json]\n  napplet debug [--config <file>] [--all] [--root] [--name <dtag>] [--snapshot] [--sec <secret>]\n  napplet keys store --name <ref> [--sec <secret> | --prompt-sec]\n  napplet keys connect --name <ref> [--relay <url> ...] [--config <file>]\n  napplet keys use --name <ref> [--config <file>]\n  napplet keys list\n  napplet keys delete --name <ref>\n  napplet keys doctor\n  napplet discover [--config <file>] [--all]\n  napplet conformance [--config <file>] [--all] [-- <args>]\n  napplet paja [--config <file>] [-- <args>]\n\nRun \"napplet guide\" for the complete developer workflow and documentation.\n\n",
+          "stderr": ""
+        },
+        "version": {
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Unknown command: --version\n\n@napplet/cli\n\nUsage:\n  napplet guide\n  napplet create <directory> [--template <path-or-url>] [--force]\n  napplet init [--force] [--root] [--source-dir <dir>] [--name <dtag>] [--title <title>] [--description <text>] [--archetype <slug:napplet:<archetype>/<intent>>] [--relay <url>] [--server <url>]\n  napplet deploy [--config <file>] [--all] [--root] [--name <dtag>] [--snapshot] [--sec <secret>] [--prompt-sec] [--dry-run] [--json]\n  napplet debug [--config <file>] [--all] [--root] [--name <dtag>] [--snapshot] [--sec <secret>]\n  napplet keys store --name <ref> [--sec <secret> | --prompt-sec]\n  napplet keys connect --name <ref> [--relay <url> ...] [--config <file>]\n  napplet keys use --name <ref> [--config <file>]\n  napplet keys list\n  napplet keys delete --name <ref>\n  napplet keys doctor\n  napplet discover [--config <file>] [--all]\n  napplet conformance [--config <file>] [--all] [-- <args>]\n  napplet paja [--config <file>] [-- <args>]\n\nRun \"napplet guide\" for the complete developer workflow and documentation.\n\n"
+        },
+        "guide": {
+          "exitCode": 0,
+          "stdout": "Napplet Guide\n=============\n\n2. Create the starter\n   napplet create my-napplet\n   cd my-napplet\n   Scaffold docs: https://napplet.run/docs/packages/boilerplate.html\n\n3. Configure deployment metadata\n   napplet init\n   CLI docs: https://napplet.run/docs/packages/cli.html\n\n4. Equip your agent\n   npx skills add napplet/napplet\n   Skills docs: https://napplet.run/docs/guide/agent-skills.html\n\n5. Build and verify\n   pnpm install\n   pnpm verify\n   Agent build guide: https://napplet.run/docs/guide/build-note-drafts-napplet-with-ai-agent-and-skills.html\n\n6. Preview, then deploy\n   napplet paja -- pnpm vite --host 127.0.0.1\n   napplet deploy --dry-run\n   napplet deploy\n   Deploy docs: https://napplet.run/docs/packages/cli.html\n\nDocumentation\n-------------\nGetting started: https://napplet.run/docs/guide/getting-started.html\nCLI reference: https://napplet.run/docs/packages/cli.html\nAll docs: https://napplet.run/docs/\n",
+          "stderr": ""
+        }
+      }
+    }
+  ],
+  "promotion": {
+    "candidate": null,
+    "selected": false,
+    "protectedEvidence": null,
+    "note": "This is local reproducibility evidence only. It neither promotes a candidate nor identifies the recreated upstream release asset."
+  }
+}

@@ -121,12 +121,16 @@ export async function runSealedToolchain(request: SealedToolchainRequest): Promi
   if (policy.candidateId !== request.toolchainId) throw new Error("sealed policy candidate ID does not match the requested toolchain");
   const timeoutMs = request.timeoutMs ?? policy.resources.timeoutMs;
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > policy.resources.timeoutMs) throw new Error("sealed timeout must be within the policy ceiling");
+  // Reject invalid commands before reading or invoking a host executable.
+  const argv = dockerArgv(policy, request);
+  const executable = request.dockerExecutable ?? Bun.which("docker") ?? "/usr/local/bin/docker";
+  const executableSha256 = request.execute ? "0".repeat(64) : await sha256File(executable);
   const command: HermeticCommand = {
     id: request.id,
-    executable: request.dockerExecutable ?? "/usr/local/bin/docker",
-    executableSha256: request.execute ? "0".repeat(64) : await sha256File(request.dockerExecutable ?? "/usr/local/bin/docker"),
-    allowedExecutables: [{ path: request.dockerExecutable ?? "/usr/local/bin/docker", sha256: request.execute ? "0".repeat(64) : await sha256File(request.dockerExecutable ?? "/usr/local/bin/docker") }],
-    argv: dockerArgv(policy, request),
+    executable,
+    executableSha256,
+    allowedExecutables: [{ path: executable, sha256: executableSha256 }],
+    argv,
     cwd: request.inputDirectory,
     timeoutMs,
     outputLimitBytes: policy.resources.outputLimitBytes,

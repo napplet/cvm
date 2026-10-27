@@ -22,7 +22,7 @@ key-decisions:
   - "GCS retention, lifecycle old-version expiry, and soft-delete duration are observed separately; soft-delete is disabled so a 30-day lifecycle deletion does not retain data for another 30 days."
 patterns-established:
   - "Google mutation: durable-CAS journal exact resource/request/content digest, observe, make one official request, then reconcile by original resource or LRO."
-requirements-completed: [SESS-02, OPS-01, OPS-02, OPS-03, OPS-04]
+requirements-completed: []
 coverage:
   - id: D1
     description: ADC-bound Google deployment transports and failure handling
@@ -30,7 +30,8 @@ coverage:
     verification:
       - kind: unit
         ref: tests/release/deployment-google-clients.test.ts
-        status: pass
+        status: implementation-verified
+        live_certification: pending
     human_judgment: false
   - id: D2
     description: Single-authority Google production topology and storage policy
@@ -38,10 +39,9 @@ coverage:
     verification:
       - kind: unit
         ref: tests/release/google-production-transport.test.ts
-        status: pass
+        status: implementation-verified
+        live_certification: pending
     human_judgment: false
-duration: 33min
-completed: 2026-10-27
 status: complete
 ---
 
@@ -51,9 +51,7 @@ status: complete
 
 ## Performance
 
-- **Duration:** 33 min
-- **Started:** 2026-10-27T13:56:26Z
-- **Completed:** 2026-10-27T14:29:00Z
+- **Execution timing:** Not recorded; the original estimate predates subsequent review-hardening commits.
 - **Tasks:** 2/2
 - **Files modified:** 10
 
@@ -62,7 +60,7 @@ status: complete
 - Added the official `google-auth-library@11.3.1` ADC broker. It validates receipt-bound project, quota project, principal, observed `cloud-platform` scope, and finite expiry without serializing bearer values.
 - Added a durable file-backed CAS journal (plus injectable journal port) that records dispatch claim/LRO/generation before and after official Google REST effects. Timeout/restart paths observe the recorded resource or LRO without a blind second create.
 - Required immutable Artifact Registry-style images, service account, project/config environment, Secret Manager references, full terminal readiness comparison, etag-bound Cloud Run cleanup, Cloud SQL LRO/readiness/cleanup, and generation-bound GCS deletion.
-- Corrected the topology to two Cloud Run regions with three warm instances each, one regional-HA PostgreSQL authority, and a versioned/KMS/retention-checked `nam4` bucket. GCS lifecycle deletes at 30 days with soft delete explicitly disabled; retention policy is never locked.
+- Corrected the topology to two Cloud Run regions with three warm instances each, one regional-HA PostgreSQL authority, and a versioned/KMS/retention-checked `nam4` bucket. GCS policy makes objects eligible for lifecycle deletion at 30 days with soft delete explicitly disabled; scheduled/audited provider verification remains required and retention policy is never locked.
 
 ## Task Commits
 
@@ -71,6 +69,7 @@ status: complete
    - Follow-up durable state and policy correction: `708bc52` (`fix`)
    - Follow-up Cloud Run terminal LRO reconciliation: `4a1a510` (`fix`)
    - Review hardening for bounded streams and immutable provider identity: `ced02f7` (`fix`)
+   - Replacement-proof immutable ownership reconciliation: `ffcaa5f` (`fix`)
 2. **Task 2: Correct the selected topology and storage policy** — `3667aa4` (`feat`)
 
 ## Files Created/Modified
@@ -89,7 +88,7 @@ status: complete
 - The immutable Cloud Run image contract is a fully qualified registry reference ending in `@sha256:<digest>`; a digest alone is never sent as an image URL.
 - Vertex generation remains `unknown` at this layer: it has no durable operation lookup and Plan 65 owns query-only receipt reconciliation.
 - GCS sends CRC32C in JSON multipart upload metadata, recomputes it from exact bytes, and verifies the recorded generation before completion or deletion.
-- GCS retention policy is observed but never irreversibly locked; lifecycle deletes at exactly 30 days and soft delete is disabled to avoid a second retention window.
+- GCS retention policy is observed but never irreversibly locked; lifecycle policy makes objects eligible at 30 days, while provider-scheduled deletion must be verified by audited observation. Soft delete is disabled to avoid a second retention window.
 
 ## Deviations from Plan
 
@@ -127,7 +126,15 @@ status: complete
 - **Verification:** 27 focused Google deployment tests and the full denied-effects release suite pass.
 - **Commit:** `ced02f7`
 
-**Total deviations:** 4 auto-fixed (Rules 1–2).
+**5. [Rule 1 - Ownership correctness] Made immutable provider identities write-once during reconciliation**
+- **Found during:** Final post-review verification.
+- **Issue:** Existing-resource SQL recovery and observation could overwrite a recorded creation time with a same-label replacement, then authorize cleanup of the replacement.
+- **Fix:** Reconciliation now returns `unknown` on persisted identity drift; Cloud Run requires saved UID and creation time before cleanup. Added SQL, GCS, and Cloud Run replacement-to-cleanup regressions.
+- **Files modified:** `src/release/deployment/google-clients.ts`, `tests/release/deployment-google-clients.test.ts`.
+- **Verification:** 30 focused Google deployment tests and the full denied-effects release suite pass.
+- **Commit:** `ffcaa5f`
+
+**Total deviations:** 5 auto-fixed (Rules 1–2).
 
 ## Known Stubs
 
@@ -139,6 +146,6 @@ The code is local-contract verified only. Before a protected execution, producti
 
 ## Self-Check: PASSED
 
-- Confirmed task commits `f0ccbf9`, `3667aa4`, `d446235`, `708bc52`, `4a1a510`, and `ced02f7` exist and all plan artifacts exist.
-- `NAPPLET_CVM_TEST_EXTERNAL_EFFECTS=deny bun test tests/release --timeout 10000 --reporter=dot` passed: 181 tests, 885 assertions.
+- Confirmed task commits `f0ccbf9`, `3667aa4`, `d446235`, `708bc52`, `4a1a510`, `ced02f7`, and `ffcaa5f` exist and all plan artifacts exist.
+- `NAPPLET_CVM_TEST_EXTERNAL_EFFECTS=deny bun test tests/release --timeout 10000 --reporter=dot` passed: 184 tests, 904 assertions.
 - Root dependency manifest hashes are intentionally omitted: approved manifest pins are parent-owned and changed after the earlier recorded values.

@@ -51,9 +51,18 @@ async function deniedProbe(probe: string) {
   try { const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]); return exit === 1 && stderr.includes(`CVM_DENIAL_PROBE:${probe}:denied`); }
   finally { clearTimeout(timer); child.kill(); }
 }
+async function dnsDenied() {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    // A DNS timeout is not evidence of denial; it is an unknown and must fail
+    // readiness.  The race merely prevents a resolver outage from outliving
+    // the worker's active deadline.
+    return await Promise.race([lookup("example.com").then(() => false).catch(() => true), new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), 5_000); })]);
+  } finally { clearTimeout(timer); }
+}
 async function networkDenied() {
   const checks = await Promise.all([
-    lookup("example.com").then(() => false).catch(() => true),
+    dnsDenied(),
     deniedProbe("http"), deniedProbe("https"), deniedProbe("ipv4"), deniedProbe("ipv6"), deniedProbe("private"), deniedProbe("metadata"),
   ]);
   return checks.every(Boolean);

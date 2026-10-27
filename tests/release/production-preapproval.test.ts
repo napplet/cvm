@@ -8,8 +8,24 @@ import { createCertificationBudgetCatalog, createProductionLiveCostCatalog } fro
 import { createLiveCostEstimator, RELEASE_COST_FAMILIES } from "../../src/release/costs/live-estimator";
 import { materializePreapproval, verifyPreapprovalMaterialization } from "../../src/release/preapproval-materializer";
 import { deriveReleaseTopology } from "../../src/release/topology";
+import { RELEASE_TOPOLOGY_QUANTITY_CONTRACT } from "../../src/release/topology";
 
 const digest = (letter: string) => letter.repeat(64);
+
+test("certification ceiling prices Argon input and output/thought at their distinct official units", async () => {
+  const estimator = createLiveCostEstimator({
+    catalog: createCertificationBudgetCatalog({ quantityContract: RELEASE_TOPOLOGY_QUANTITY_CONTRACT, now: () => 1_000_000 }),
+    now: () => 1_000_000,
+  });
+  const estimate = await estimator.estimate({
+    topologySha256: digest("9"),
+    quantities: RELEASE_COST_FAMILIES.map((provider) => ({ provider, quantityNanos: 1_000_000_000n, headroomBasisPoints: 1_000 })),
+    components: RELEASE_TOPOLOGY_QUANTITY_CONTRACT,
+  });
+  const model = estimate.lines.find((line) => line.provider === "model")!;
+  expect(model.components?.map((component) => component.priceMicros)).toEqual([40_000_000, 200_000_000]);
+  expect(estimate.maximumMicros).toBeLessThan(1_000_000_000);
+});
 
 test("binds each regional Google component to one authenticated catalog SKU without exposing ADC", async () => {
   const calls: string[] = [];

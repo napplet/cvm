@@ -124,10 +124,26 @@ const CERTIFICATION_CEILING_MICROS: Readonly<Record<typeof PAID_PROVIDERS[number
   cloud_sql_postgres: 1_000,
   modal: 10_000,
   fly: 10_000,
-  // Product policy ceiling per ten-million-token unit; it is intentionally
-  // separate from (and never presented as) the source-priced Vertex quote.
-  model: 250_000_000,
+  // Model components use distinct published rates; see
+  // certificationComponentCeiling below rather than charging a synthetic
+  // uniform model rate to both input and output/thought.
+  model: 0,
 });
+
+const ARGON_CERTIFICATION_CEILING_MICROS = Object.freeze({
+  // USD $4 input and $20 output/thought per million tokens, expressed in the
+  // topology's ten-million-token unit.  These are a conservative product
+  // ceiling, deliberately separate from a fresh provider quote.
+  "model.global.input": 40_000_000,
+  "model.global.output-thought": 200_000_000,
+} as const);
+
+function certificationComponentCeiling(provider: typeof PAID_PROVIDERS[number], componentId: string): number {
+  if (provider !== "model") return CERTIFICATION_CEILING_MICROS[provider];
+  const ceiling = ARGON_CERTIFICATION_CEILING_MICROS[componentId as keyof typeof ARGON_CERTIFICATION_CEILING_MICROS];
+  if (ceiling === undefined) throw new Error("PRODUCTION_CATALOG_QUANTITY_CONTRACT_REJECTED");
+  return ceiling;
+}
 
 /**
  * Product-owned maximum-spend catalog for release certification. These are
@@ -150,18 +166,17 @@ export function createCertificationBudgetCatalog(options: Readonly<{
     // Backdate this versioned in-memory policy by one minute so that bounded
     // discovery latency cannot make the policy appear future-dated.
     const observedAtMs = Math.max(1, readAtMs - 60_000);
-    const policy = Object.freeze({ version: 1, policy: "release-certification-maximum-spend", ceilingsMicros: CERTIFICATION_CEILING_MICROS });
+    const policy = Object.freeze({ version: 1, policy: "release-certification-maximum-spend", ceilingsMicros: CERTIFICATION_CEILING_MICROS, argonComponentCeilingsMicros: ARGON_CERTIFICATION_CEILING_MICROS });
     const sourceDocumentSha256 = await sha256(policy);
     return Object.freeze(await Promise.all(RELEASE_COST_FAMILIES.map(async (provider) => {
       const components = quantities.get(provider)!;
       const paid = (PAID_PROVIDERS as readonly string[]).includes(provider);
-      const unitCeiling = paid ? CERTIFICATION_CEILING_MICROS[provider as typeof PAID_PROVIDERS[number]] : 0;
       const provenance = components.map((component) => Object.freeze({
         componentId: component.componentId,
         skuId: `budget-${component.componentId}`,
         region: component.region,
         unit: component.unit,
-        priceMicros: unitCeiling,
+        priceMicros: paid ? certificationComponentCeiling(provider as typeof PAID_PROVIDERS[number], component.componentId) : 0,
         quantityNanos: component.quantityNanos.toString(),
         headroomBasisPoints: component.headroomBasisPoints,
         sourceDocumentSha256,

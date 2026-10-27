@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createVertexDeploymentClient, type VertexInteractionsPort, type VertexOperationJournal } from "../../src/release/deployment/vertex-client";
+import { createVertexDeploymentClient, createVertexInteractionsHttpPort, type VertexInteractionsPort, type VertexOperationJournal } from "../../src/release/deployment/vertex-client";
 import { createOfficialPricingSources, VERTEX_GEMINI_PRICING_URL } from "../../src/release/costs/official-sources";
 import { convertUsdMicrosToSats } from "../../src/model/price-card";
 
@@ -16,6 +16,24 @@ function client(input: Readonly<{ port: VertexInteractionsPort; journal?: Vertex
   const [defaultJournal] = journal();
   return createVertexDeploymentClient({ candidateSha256: digest("c"), projectId: "napplet-cvm-run-1", location: "global", model: "gemini-3.8-flash", credentialReference: "gcp:adc:release", price, journal: input.journal ?? defaultJournal, interactions: input.port, now: input.now ?? (() => 1_500) });
 }
+
+test("uses the documented global Interactions REST paths and snake_case payload without a retried paid POST", async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const port = createVertexInteractionsHttpPort({ accessToken: async () => "a".repeat(32), fetch: async (url, init) => {
+    calls.push({ url: String(url), init });
+    return new Response(JSON.stringify({ id: "original", model: "gemini-3.8-flash", input: [], status: "completed", created: "2026-10-27T00:00:00.000Z", output_text: '{"files":[]}', usage: { totalInputTokens: 0, totalCachedTokens: 0, totalOutputTokens: 0, totalThoughtTokens: 0, totalToolUseTokens: 0 } }));
+  } });
+  await port.create({ projectId: "napplet-cvm-run-1", location: "global", model: "gemini-3.8-flash", store: true, input: [], systemInstruction: "Only JSON", responseMimeType: "application/json", responseFormat: { type: "json_schema" }, generationConfig: { maxOutputTokens: 512, thinkingLevel: "LOW" } });
+  await port.get({ projectId: "napplet-cvm-run-1", location: "global", id: "original" });
+  await port.list({ projectId: "napplet-cvm-run-1", location: "global", pageSize: 500, pageToken: "next" });
+  expect(calls.map((call) => call.url)).toEqual([
+    "https://aiplatform.googleapis.com/v1beta1/projects/napplet-cvm-run-1/locations/global/interactions",
+    "https://aiplatform.googleapis.com/v1beta1/projects/napplet-cvm-run-1/locations/global/interactions/original",
+    "https://aiplatform.googleapis.com/v1beta1/projects/napplet-cvm-run-1/locations/global/interactions?page_size=500&page_token=next",
+  ]);
+  expect(calls[0]!.init).toMatchObject({ method: "POST", redirect: "error", headers: { authorization: `Bearer ${"a".repeat(32)}` } });
+  expect(JSON.parse(String(calls[0]!.init!.body))).toMatchObject({ system_instruction: "Only JSON", response_mime_type: "application/json", response_format: { type: "json_schema" }, generation_config: { maxOutputTokens: 512, thinkingLevel: "LOW" }, store: true, stream: false, tools: [] });
+});
 
 test("captures only the current global gross Gemini price table and rejects pricing-page drift", async () => {
   const sources = createOfficialPricingSources({ now: () => 1_000, fetch: async (url) => {

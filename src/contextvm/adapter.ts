@@ -42,6 +42,7 @@ export const TopUpArgumentsSchema = z.object({
   pmi: SupportedPmiSchema,
   mode: InteractionModeSchema,
   amount: z.string().regex(/^[1-9][0-9]*$/u).refine((value) => BigInt(value) <= BigInt(Number.MAX_SAFE_INTEGER)),
+  maxFee: z.string().regex(/^[0-9]+$/u).refine((value) => BigInt(value) <= BigInt(Number.MAX_SAFE_INTEGER)).optional(),
   topUpId: z.string().min(1).optional(),
 }).strict();
 export const FundedAdmissionArgumentsSchema = z.object({
@@ -349,13 +350,14 @@ export class ContextVmFundingAdapter {
     if (!tags.clientPmis.includes(args.pmi) || tags.mode !== args.mode) throw new Error("CEP8_NEGOTIATION_DENIED");
     if (args.pmi === "bitcoin-cashu-v4-direct") {
       if (!tags.directPayment || !this.options.topUps) throw new Error("CASHU_DIRECT_PAYMENT_DENIED");
+      if (args.maxFee === undefined) throw new Error("CASHU_FEE_CEILING_REQUIRED");
     } else if (tags.directPayment) {
       throw new Error("LIGHTNING_DIRECT_PAYMENT_DENIED");
     }
     const canonical = this.options.transport.canonicalInvocation(verifiedPubkey, request.method, request.params);
     const result = args.pmi === "bitcoin-lightning-bolt11"
       ? await this.options.topUps?.lightning.begin({ principal: { pubkey: verifiedPubkey }, idempotencyKey: args.idempotencyKey, amount: args.amount, unit: "sat", policyVersion: this.policyVersion, protocolVersion: this.protocolVersion })
-      : await this.options.topUps?.cashu.submit({ principal: { pubkey: verifiedPubkey }, idempotencyKey: args.idempotencyKey, topUpId: args.topUpId ?? `cashu:${canonical.invocationHash}`, amount: args.amount, unit: "sat", pmi: args.pmi, token: new TextEncoder().encode(tags.directPayment!.payload) });
+      : await this.options.topUps?.cashu.submit({ principal: { pubkey: verifiedPubkey }, idempotencyKey: args.idempotencyKey, topUpId: args.topUpId ?? `cashu:${canonical.invocationHash}`, amount: args.amount, maxFee: args.maxFee!, unit: "sat", pmi: args.pmi, token: new TextEncoder().encode(tags.directPayment!.payload) });
     if (!result) throw new Error("TOP_UP_UNAVAILABLE");
     const railResult = RailTopUpResultSchema.parse(result);
     // This is an explicit response allowlist: coordinator/provider additions do

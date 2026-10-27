@@ -434,7 +434,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
         .filter((topUp) => topUp.principal.pubkey === last.verifiedClientPubkey));
       if (topUps.length !== 1 || topUps[0]?.state !== "pending" || !topUps[0].protectedMaterialId) throw new Error("DEV_UI_NWC_PENDING_ROW_MISSING");
       const status = await accountStatus.status({ pubkey: last.verifiedClientPubkey });
-      if (status.available !== "64") throw new Error("DEV_UI_NWC_CREDITED_BEFORE_RESTART");
+      if (status.available !== "63") throw new Error("DEV_UI_NWC_CREDITED_BEFORE_RESTART");
     },
     async assertFundingEvidence(caseName) {
       const last = bridge.lastInbound;
@@ -443,7 +443,9 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
         if (!bridge.observedMethods.has(method)) throw new Error(`DEV_UI_MCP_LIFECYCLE_MISSING:${method}`);
       }
       const status = await accountStatus.status({ pubkey: last.verifiedClientPubkey });
-      const expected = caseName === "cashu-wire" ? "64" : "3814";
+      // Development Cashu mint inputs are fee-bearing: the exact ledger
+      // projection deliberately reports verified net, never bearer gross.
+      const expected = caseName === "cashu-wire" ? "63" : "3813";
       if (status.available !== expected) throw new Error(`DEV_UI_BALANCE_MISMATCH:${status.available}`);
       const credits = await app.pool.query<{ count: number }>("SELECT count(*)::int AS count FROM ledger_entries WHERE account_id=$1 AND direction='credit'", [status.accountId]);
       if (credits.rows[0]?.count !== (caseName === "cashu-wire" ? 1 : 2)) throw new Error("DEV_UI_LEDGER_REPLAY_MISMATCH");

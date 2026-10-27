@@ -66,7 +66,7 @@ function cashuHarness() {
   return { ...base, policies, provider, vault, repository, coordinator };
 }
 
-const cashuSubmit = (suffix: string) => ({ principal, idempotencyKey: `cashu:${suffix}`, topUpId: `cashu:${suffix}`, amount: "21", unit: "sat" as const, pmi: cashuFixture.pmi, token: new TextEncoder().encode(`cashuB-${suffix}`) });
+const cashuSubmit = (suffix: string) => ({ principal, idempotencyKey: `cashu:${suffix}`, topUpId: `cashu:${suffix}`, amount: "21", maxFee: "0", unit: "sat" as const, pmi: cashuFixture.pmi, token: new TextEncoder().encode(`cashuB-${suffix}`) });
 const scenarioEvidence: Readonly<Record<string, readonly string[]>> = Object.freeze({
   "signed-announcement": ["announcementDigest", "noFutureTransport"],
   "verified-sender": ["verifiedPubkey", "transportFirewall"],

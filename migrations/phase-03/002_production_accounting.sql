@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS production_real.cashu_policy_versions (policy_version
 CREATE TABLE IF NOT EXISTS production_real.cashu_mints (policy_version text NOT NULL REFERENCES production_real.cashu_policy_versions(policy_version), mint_url text NOT NULL, keyset_id text NOT NULL, unit text NOT NULL CHECK(unit='sat'), PRIMARY KEY(policy_version,mint_url,keyset_id));
 CREATE TABLE IF NOT EXISTS production_real.lightning_top_up_state (state_key text PRIMARY KEY, state_json jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS production_real.cashu_top_up_state (top_up_id text PRIMARY KEY, account_id text NOT NULL REFERENCES production_real.funding_accounts(account_id), proof_commitment char(64) UNIQUE NOT NULL, state_json jsonb NOT NULL, treasury_json jsonb, updated_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS production_real.cashu_top_up_proof_identities (proof_identity char(64) PRIMARY KEY, top_up_id text NOT NULL REFERENCES production_real.cashu_top_up_state(top_up_id), account_id text NOT NULL REFERENCES production_real.funding_accounts(account_id));
 CREATE TABLE IF NOT EXISTS production_real.funding_outbox (outbox_id text PRIMARY KEY, aggregate_reference text NOT NULL, event_kind text NOT NULL, payload_json jsonb NOT NULL, state text NOT NULL DEFAULT 'pending', UNIQUE(aggregate_reference,event_kind));
 
 -- When upgrading an already-migrated authority, clone every compatible Phase

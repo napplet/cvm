@@ -4,7 +4,7 @@ import { FundingService } from "../../src/funding/funding-service";
 import { CashuMintPolicyRegistry } from "../../src/funding/cashu-mint-policy";
 import { FakeCashuSettlementPort } from "../../src/funding/cashu-provider";
 import { CashuTsSettlementAdapter } from "../../src/funding/cashu-provider";
-import { CashuTopUpCoordinator, InMemoryCashuTopUpRepository } from "../../src/funding/cashu-top-up";
+import { CashuTopUpCoordinator, InMemoryCashuTopUpRepository, type CashuTopUpRecord } from "../../src/funding/cashu-top-up";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
 import { getEncodedToken, type RequestFn } from "@cashu/cashu-ts";
 
@@ -38,7 +38,7 @@ function harness() {
 }
 
 function validSubmit(topUpId = "cashu-top-up-1") {
-  return { principal, idempotencyKey: `submit:${topUpId}`, topUpId, amount: "21", unit: "sat" as const, pmi: fixture.pmi, token };
+  return { principal, idempotencyKey: `submit:${topUpId}`, topUpId, amount: "21", maxFee: "0", unit: "sat" as const, pmi: fixture.pmi, token };
 }
 
 const adapterToken = new TextEncoder().encode(getEncodedToken({
@@ -50,6 +50,20 @@ const adapterTokenWithoutDleq = new TextEncoder().encode(getEncodedToken({
   mint: "https://mint-b.example", unit: "sat",
   proofs: [{ amount: 21n, id: defaultAdapterKeysetId, secret: "default-adapter-secret", C: `02${"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"}` }],
 }));
+
+test("Cashu lifecycle result updates cannot regress a concurrent verified custody record", async () => {
+  const repository = new InMemoryCashuTopUpRepository();
+  const record: CashuTopUpRecord = { result: { topUpId: "monotonic", state: "verifying", policyVersion: "v1", commitment: "1".repeat(64) }, accountId: "account:one", policy: firstPolicy, protectedId: "protected:input", semanticProofIdentities: ["2".repeat(64)], idempotencyKey: "monotonic", principal, amount: "21", maxFee: "0", createdAt: "2026-10-27T00:00:00.000Z" };
+  await repository.claim(record);
+  await repository.prepareCustody(record.result.topUpId, { operationId: "cashu-swap:monotonic", mintUrl: "https://mint-a.example", keysetId: "009a1b2c3d4e5f60", unit: "sat", amount: "21", maxFee: "0", inputFeePpk: 0, feeAmount: "0", expectedOutputAmount: "21", inputProtectedId: record.protectedId, outputDataProtectedId: "protected:output" });
+  await repository.claimCustodyDispatch(record.result.topUpId);
+  await repository.recordOwnedCustodyOutputs(record.result.topUpId, "protected:owned", "3".repeat(64));
+  await Promise.all([
+    repository.updateResult(record.result.topUpId, { ...record.result, state: "credited", settlementReference: "cashu:settled" }),
+    repository.updateResult(record.result.topUpId, { ...record.result, state: "reconciliation_pending" }),
+  ]);
+  expect(await repository.find(record.result.topUpId)).toMatchObject({ result: { state: "credited", settlementReference: "cashu:settled" }, custody: { state: "owned_outputs", ownedOutputsProtectedId: "protected:owned" } });
+});
 
 describe("Cashu policy", () => {
   test("policy rotation preserves policy-pinned historical mints", () => {
@@ -157,10 +171,31 @@ describe("Cashu credit and treasury", () => {
     expect(store.postings).toHaveLength(1);
   });
 
+  test("threads the encrypted custody callback through the coordinator before a swap adapter reports verified", async () => {
+    const { policies, vault, funding, repository } = harness();
+    let dispatches = 0;
+    const operations = {
+      settle: async (input: { topUpId: string; keysetId: string; mint: { url: string }; custody?: { prepare(input: unknown): Promise<unknown>; claimDispatch(): Promise<boolean>; recordOwnedOutputs(outputs: readonly unknown[]): Promise<void> } }) => {
+        expect(input.custody).toBeDefined();
+        await input.custody!.prepare({ operationId: `cashu-swap:${input.topUpId}`, mintUrl: input.mint.url, keysetId: input.keysetId, grossAmount: "21", maxFee: "0", inputFeePpk: 0, feeAmount: "0", expectedOutputAmount: "21", outputData: [{ blindedMessage: { amount: "21", B_: "B", id: input.keysetId }, blindingFactor: "1", secret: "00".repeat(32) }] });
+        if (await input.custody!.claimDispatch()) dispatches += 1;
+        await input.custody!.recordOwnedOutputs([{ id: input.keysetId, amount: "21", secret: "owned-output-secret", C: `02${"12".repeat(32)}`, dleq: { e: "11", s: "22" } }]);
+      },
+      observe: async () => "spent" as const,
+    };
+    const coordinator = new CashuTopUpCoordinator({ policies, vault, funding, repository, provider: new CashuTsSettlementAdapter({ operations, now: () => "2026-08-04T12:00:00.000Z" }) });
+    const result = await coordinator.submit({ ...validSubmit("durable-custody"), token: adapterToken });
+    expect(result.state).toBe("credited");
+    expect(dispatches).toBe(1);
+    expect(await repository.custody("durable-custody")).toMatchObject({ state: "owned_outputs", inputProtectedId: "protected:1", expectedOutputAmount: "21" });
+    expect(JSON.stringify(await repository.find("durable-custody"))).not.toContain("owned-output-secret");
+  });
+
   test("bounds swap and observation calls while retaining one durable reconciliation intent", async () => {
     let settles = 0; let observations = 0; const signals: AbortSignal[] = [];
     const never = () => new Promise<never>(() => undefined);
     const provider = {
+      identify: async (input: { token: Uint8Array }) => ({ status: "accepted" as const, semanticProofIdentities: [[...new Uint8Array(await crypto.subtle.digest("SHA-256", input.token))].map((byte) => byte.toString(16).padStart(2, "0")).join("")] }),
       settle: async (input: { signal: AbortSignal }) => { settles += 1; signals.push(input.signal); return never(); },
       observe: async (input: { signal: AbortSignal }) => { observations += 1; signals.push(input.signal); return never(); },
       reconcileTreasury: async () => never(),
@@ -202,11 +237,11 @@ describe("Cashu credit and treasury", () => {
     globalThis.fetch = (async () => new Promise<never>(() => undefined)) as typeof fetch;
     try {
       expect(await coordinator.submit(command)).toMatchObject({ state: "reconciliation_pending" });
-      expect(await coordinator.reconcile(command.topUpId)).toMatchObject({ state: "credited", settlementReference: expect.stringContaining("adapter-timeout") });
+      expect(await coordinator.reconcile(command.topUpId)).toMatchObject({ state: "reconciliation_pending" });
       expect({ swaps, observations }).toEqual({ swaps: 1, observations: 1 });
       expect(signals).toHaveLength(2);
       expect(signals[0]?.aborted).toBeTrue();
-      expect(store.postings).toHaveLength(1);
+      expect(store.postings).toHaveLength(0);
     } finally {
       globalThis.fetch = nativeFetch;
     }
@@ -233,14 +268,14 @@ describe("Cashu credit and treasury", () => {
     const adapter = new CashuTsSettlementAdapter({ request, now: () => "2026-08-04T12:00:00.000Z" });
     const commitment = [...new Uint8Array(await crypto.subtle.digest("SHA-256", adapterTokenWithoutDleq))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
     const abort = new AbortController();
-    const settling = adapter.settle({ topUpId: "default-adapter", policy: adapterPolicy, amount: "21", commitment, token: adapterTokenWithoutDleq, signal: abort.signal });
-    setTimeout(() => abort.abort(), 5);
+    const settling = adapter.settle({ topUpId: "default-adapter", policy: adapterPolicy, amount: "21", maxFee: "0", commitment, token: adapterTokenWithoutDleq, signal: abort.signal });
+    setTimeout(() => abort.abort(), 50);
 
     expect(await settling).toEqual({ status: "unknown", operationReference: `cashu:${commitment}` });
     expect(seen.some(({ endpoint }) => endpoint.endsWith("/v1/swap"))).toBeTrue();
     expect(seen.every(({ signal }) => signal === abort.signal)).toBeTrue();
     const observeAbort = new AbortController();
-    expect(await adapter.observe({ topUpId: "default-adapter", policy: adapterPolicy, amount: "21", commitment, token: adapterTokenWithoutDleq, signal: observeAbort.signal })).toMatchObject({ status: "verified", settlementReference: `cashu-swap:default-adapter:${commitment}` });
+    expect(await adapter.observe({ topUpId: "default-adapter", policy: adapterPolicy, amount: "21", maxFee: "0", commitment, token: adapterTokenWithoutDleq, signal: observeAbort.signal })).toMatchObject({ status: "unknown", operationReference: `cashu:${commitment}` });
     expect(seen.find(({ endpoint }) => endpoint.endsWith("/v1/checkstate"))?.signal).toBe(observeAbort.signal);
   });
 

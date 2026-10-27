@@ -99,8 +99,8 @@ test("native CEP-8 rail composition uses original operations, existing coordinat
     walletOperations: { settle: async () => {}, observe: async () => "spent" as const },
     coordinator: new CashuTopUpCoordinator({
       policies: new CashuMintPolicyRegistry({ version: "cashu-policy-v1", activeFrom: "2026-08-07T00:00:00.000Z", activeUntil: null, mints: [
-        { url: "https://mint-a.example", keysetIds: ["keyset-a"], requireDleq: true, proofConditions: ["none"] },
-        { url: "https://mint-b.example", keysetIds: ["keyset-b"], requireDleq: true, proofConditions: ["none"] },
+        { url: "https://mint-a.example", keysetIds: ["keyset-a"], maxInputFeePpk: 0, requireDleq: true, proofConditions: ["none"] },
+        { url: "https://mint-b.example", keysetIds: ["keyset-b"], maxInputFeePpk: 0, requireDleq: true, proofConditions: ["none"] },
       ] }),
       provider: cashuSettlement, vault: { seal: async () => ({ id: "cashu:protected", payloadDigest: digest("3") }), expire: async () => {} }, funding, repository: new InMemoryCashuTopUpRepository(), now: () => "2026-08-07T00:00:00.000Z",
     }),
@@ -109,7 +109,7 @@ test("native CEP-8 rail composition uses original operations, existing coordinat
   expect(lightningReceiver.createCalls).toBe(0);
   expect(cashuSettlement.settleCalls).toBe(0);
   const lightningInput = { principal: { pubkey }, idempotencyKey: "lightning-original-op", amount: "21", unit: "sat" as const, policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1" };
-  const cashuInput = { principal: { pubkey }, idempotencyKey: "cashu-original-op", topUpId: "cashu-original-op", amount: "21", unit: "sat" as const, pmi: "bitcoin-cashu-v4-direct" as const, token: new TextEncoder().encode("cashu-private-proof-canary") };
+  const cashuInput = { principal: { pubkey }, idempotencyKey: "cashu-original-op", topUpId: "cashu-original-op", amount: "21", maxFee: "0", unit: "sat" as const, pmi: "bitcoin-cashu-v4-direct" as const, token: new TextEncoder().encode("cashu-private-proof-canary") };
   const lightningPending = await lightning.beginAfterReceipt({ receipt: { originalOperationId: "lightning-original-op", requestSha256: digest("4") }, input: lightningInput });
   lightningReceiver.queryMode = "settled";
   const lightningSettled = await lightning.reconcileOriginal({ principal: { pubkey }, topUpId: lightningPending.topUpId });

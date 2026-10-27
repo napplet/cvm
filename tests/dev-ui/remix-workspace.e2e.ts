@@ -27,7 +27,11 @@ async function ready(version:number){
  try{await page.waitForFunction(n=>document.querySelector("#version-picker option:checked")?.textContent===`Version ${n} · current`,version,{timeout:180000});}
  catch(error){
   const state=await page.evaluate(()=>Object.fromEntries(["version-picker","progress-title","progress-detail","notice-copy"].map(id=>[id,document.getElementById(id)?.textContent?.slice(0,240)??""])));
-  console.error(JSON.stringify({test:"remix-workspace",expectedVersion:version,state,inferences:fixture.counts().inferences}));
+  const bounded=(value:unknown,limit=600)=>{const serialized=typeof value==="string"?value:JSON.stringify(value)??String(value);return serialized.slice(0,limit);};
+  const visible=await Promise.all(["#generation-error","#activity-current","#activity-connection"].map(async selector=>[selector,(await page.locator(selector).textContent().catch(()=>"")??"").slice(0,600)]));
+  const evidence=server.generationEvidence();
+  const diagnostic=await pool.query("SELECT operation_id,diagnostic_json FROM development_chatgpt_operations ORDER BY created_at DESC LIMIT 1").then(result=>result.rows[0]??null).catch(()=>null);
+  console.error(JSON.stringify({test:"remix-workspace",expectedVersion:version,state,visible:Object.fromEntries(visible),inferences:fixture.counts().inferences,generation:{provider:evidence.provider,error:evidence.error??null,result:evidence.result?{status:evidence.result.status,operationId:evidence.result.operationId}:null},latestDiagnostic:diagnostic?{operationId:diagnostic.operation_id,detail:bounded(diagnostic.diagnostic_json)}:null}));
   throw error;
  }
 }

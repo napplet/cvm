@@ -7,7 +7,7 @@ import type { FundingStore, FundingTransaction } from "../../src/persistence/fun
 import { createFundedCore } from "../../src/phase-03/funded-core";
 import cashuFixture from "../fixtures/cashu-phase-03.json";
 import { CashuMintPolicyRegistry } from "../../src/funding/cashu-mint-policy";
-import { FakeCashuSettlementPort } from "../../src/funding/cashu-provider";
+import { CashuTsSettlementAdapter, FakeCashuSettlementPort } from "../../src/funding/cashu-provider";
 import { FakeLightningReceiptPort } from "../../src/funding/lightning-provider";
 import { probePromotedCliPreSignedRoute } from "../../src/publication/napplet-cli-source-contract";
 import sourceFixture from "../fixtures/phase-06-cli-source-contract.json" with { type: "json" };
@@ -217,8 +217,9 @@ describe("FundedAdmissionService", () => {
     const transport = { configureAnnouncement: () => undefined, onInbound: () => undefined, canonicalInvocation: () => ({ invocationHash: "f".repeat(64) }), sendResponse: async () => undefined, sendNotification: async () => undefined };
     const capacity = { reserveNow: async () => ({ status: "refused" as const }), observe: async () => ({ status: "unknown" as const }), release: async () => undefined };
     const lightningReceiver = new FakeLightningReceiptPort({ create: { status: "created", serviceReference: "receiver:compose", invoice: "lnbc-compose", invoiceIdentity: "compose", paymentHash: "compose", amount: "20", unit: "sat", expiresAt: "2026-08-05T00:00:00.000Z", safeDisplayReference: "lightning:…compose" } });
-    const railOptions = { postgresPool: pool, transport, capacity, lightningReceiver, cashuProvider: new FakeCashuSettlementPort(), cashuPolicies: new CashuMintPolicyRegistry(cashuFixture.policies[0]!), admissionReceiptSecret: new Uint8Array(32).fill(6), productionAccountingConfiguration: { mode: "production-real", adapters: ["lightning", "cashu", "nwc"], catalog: { kind: "live" }, keyMode: "secret-broker" } };
+    const railOptions = { postgresPool: pool, transport, capacity, lightningReceiver, cashuProvider: new CashuTsSettlementAdapter(), cashuPolicies: new CashuMintPolicyRegistry(cashuFixture.policies[0]!), admissionReceiptSecret: new Uint8Array(32).fill(6), productionAccountingConfiguration: { mode: "production-real", adapters: ["lightning", "cashu", "nwc"], catalog: { kind: "live" }, keyMode: "secret-broker" } };
     expect(createFundedCore({ ...railOptions, protectedMaterialKey: new Uint8Array(32).fill(8) }).mode).toBe("configured");
+    expect(() => createFundedCore({ ...railOptions, cashuProvider: new FakeCashuSettlementPort(), protectedMaterialKey: new Uint8Array(32).fill(8) })).toThrow("PRODUCTION_CASHU_CUSTODY_ADAPTER_REQUIRED");
     expect(() => createFundedCore({ ...railOptions, protectedMaterialKey: new Uint8Array(31) })).toThrow("PROTECTED_MATERIAL_KEY_INVALID");
   });
 
@@ -230,7 +231,7 @@ describe("FundedAdmissionService", () => {
     const announcementFor = (publicationSourceContract: unknown) => {
       let configured: unknown;
       const transport = { configureAnnouncement: (value: unknown) => { configured = value; }, onInbound: () => undefined, canonicalInvocation: () => ({ invocationHash: "f".repeat(64) }), sendResponse: async () => undefined, sendNotification: async () => undefined };
-      const options = { postgresPool: pool, transport, capacity, publication, publicationSourceContract, lightningReceiver: new FakeLightningReceiptPort({ create: { status: "created", serviceReference: "receiver:publication-contract", invoice: "lnbc-contract", invoiceIdentity: "contract", paymentHash: "contract", amount: "20", unit: "sat" as const, expiresAt: "2026-08-05T00:00:00.000Z", safeDisplayReference: "lightning:…contract" } }), cashuProvider: new FakeCashuSettlementPort(), cashuPolicies: new CashuMintPolicyRegistry(cashuFixture.policies[0]!), protectedMaterialKey: new Uint8Array(32).fill(8), admissionReceiptSecret: new Uint8Array(32).fill(6), productionAccountingConfiguration: { mode: "production-real", adapters: ["lightning", "cashu", "nwc"], catalog: { kind: "live" }, keyMode: "secret-broker" } };
+      const options = { postgresPool: pool, transport, capacity, publication, publicationSourceContract, lightningReceiver: new FakeLightningReceiptPort({ create: { status: "created", serviceReference: "receiver:publication-contract", invoice: "lnbc-contract", invoiceIdentity: "contract", paymentHash: "contract", amount: "20", unit: "sat" as const, expiresAt: "2026-08-05T00:00:00.000Z", safeDisplayReference: "lightning:…contract" } }), cashuProvider: new CashuTsSettlementAdapter(), cashuPolicies: new CashuMintPolicyRegistry(cashuFixture.policies[0]!), protectedMaterialKey: new Uint8Array(32).fill(8), admissionReceiptSecret: new Uint8Array(32).fill(6), productionAccountingConfiguration: { mode: "production-real", adapters: ["lightning", "cashu", "nwc"], catalog: { kind: "live" }, keyMode: "secret-broker" } };
       createFundedCore(options);
       return configured as { metadata: { tools: Array<{ name: string; available: boolean; invocable: boolean }> } };
     };

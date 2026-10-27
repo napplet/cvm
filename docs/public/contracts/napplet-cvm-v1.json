@@ -45,6 +45,10 @@
             "type": "string",
             "pattern": "^[1-9][0-9]*$"
           },
+          "maxFee": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          },
           "topUpId": {
             "type": "string",
             "minLength": 1

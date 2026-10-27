@@ -1,6 +1,6 @@
 import type { AccountTopUpStatusPort } from "../funding/account-status";
 import { bindAccountingRealmPool, createAccountingRealm, type AccountingRealm, type AccountingRealmName } from "../funding/accounting-realm";
-import type { CashuTopUpRecord, CashuTopUpRepository, CashuTopUpResult } from "../funding/cashu-top-up";
+import type { CashuCustodyJournal, CashuTopUpRecord, CashuTopUpRepository, CashuTopUpResult } from "../funding/cashu-top-up";
 import type { LightningPrivateTopUp, LightningTopUpRepository, LightningTopUpState } from "../funding/lightning-top-up";
 import type { ProtectedRailMaterialRecord, ProtectedRailMaterialRepository } from "../funding/protected-rail-material";
 import type { AccountTopUpStatus } from "../phase-03/contracts";
@@ -137,22 +137,17 @@ class PostgresLightningLifecycleRepository implements LightningTopUpRepository {
   constructor(private readonly pool: PostgresSqlPool) {}
 
   async transact<T>(operation: (state: LightningTopUpState) => Promise<T> | T): Promise<T> {
-    const client = await this.pool.connect();
-    try {
-      await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
+    return serializableProductionTransaction(this.pool, async (client) => {
+      // Establish the row before locking it, including simultaneous first-ever
+      // claims. ON CONFLICT plus serializable retry fences both creators.
+      await client.query("INSERT INTO lightning_top_up_state(state_key,state_json) VALUES ('global','{}'::jsonb) ON CONFLICT (state_key) DO NOTHING");
       const found = await client.query<{ state_json: LightningJson }>("SELECT state_json FROM lightning_top_up_state WHERE state_key='global' FOR UPDATE");
       const raw = found.rows[0]?.state_json ?? {};
       const state: LightningTopUpState = { topUps: new Map(raw.topUps ?? []), commands: new Map(raw.commands ?? []) };
       const result = await operation(state);
       await client.query("INSERT INTO lightning_top_up_state(state_key,state_json) VALUES ('global',$1) ON CONFLICT (state_key) DO UPDATE SET state_json=EXCLUDED.state_json,updated_at=now()", [JSON.stringify({ topUps: [...state.topUps], commands: [...state.commands] })]);
-      await client.query("COMMIT");
       return frozen(result);
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined);
-      throw error;
-    } finally {
-      client.release();
-    }
+    });
   }
 }
 
@@ -160,23 +155,22 @@ class PostgresCashuLifecycleRepository implements CashuTopUpRepository {
   constructor(private readonly pool: PostgresSqlPool) {}
 
   async claim(input: CashuTopUpRecord): Promise<Readonly<{ claimed: boolean; record: CashuTopUpRecord }>> {
-    const client = await this.pool.connect();
-    try {
-      await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
-      const existing = await client.query<{ state_json: CashuTopUpRecord }>("SELECT state_json FROM cashu_top_up_state WHERE top_up_id=$1 OR proof_commitment=$2 FOR UPDATE", [input.result.topUpId, input.result.commitment]);
+    if (!input.semanticProofIdentities.length || new Set(input.semanticProofIdentities).size !== input.semanticProofIdentities.length || input.semanticProofIdentities.some((identity) => !/^[a-f0-9]{64}$/iu.test(identity))) throw new Error("CASHU_PROOF_IDENTITY_INVALID");
+    return serializableProductionTransaction(this.pool, async (client) => {
+      const existing = await client.query<{ state_json: CashuTopUpRecord }>("SELECT state_json FROM cashu_top_up_state WHERE top_up_id=$1 FOR UPDATE", [input.result.topUpId]);
       if (existing.rows[0]) {
-        await client.query("COMMIT");
         return frozen({ claimed: false, record: existing.rows[0].state_json });
       }
+      const collision = await client.query<{ top_up_id: string }>("SELECT top_up_id FROM cashu_top_up_proof_identities WHERE proof_identity = ANY($1::text[]) FOR UPDATE", [input.semanticProofIdentities]);
+      if (collision.rows[0]) {
+        const winner = await client.query<{ state_json: CashuTopUpRecord }>("SELECT state_json FROM cashu_top_up_state WHERE top_up_id=$1 FOR UPDATE", [collision.rows[0].top_up_id]);
+        if (!winner.rows[0]) throw new Error("CASHU_PROOF_CLAIM_INTEGRITY_INVALID");
+        return frozen({ claimed: false, record: winner.rows[0].state_json });
+      }
       await client.query("INSERT INTO cashu_top_up_state(top_up_id,account_id,proof_commitment,state_json) VALUES ($1,$2,$3,$4)", [input.result.topUpId, input.accountId, input.result.commitment, JSON.stringify(input)]);
-      await client.query("COMMIT");
+      for (const proofIdentity of input.semanticProofIdentities) await client.query("INSERT INTO cashu_top_up_proof_identities(proof_identity,top_up_id,account_id) VALUES($1,$2,$3)", [proofIdentity, input.result.topUpId, input.accountId]);
       return frozen({ claimed: true, record: input });
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined);
-      throw error;
-    } finally {
-      client.release();
-    }
+    });
   }
 
   async find(topUpId: string): Promise<CashuTopUpRecord | undefined> {
@@ -186,6 +180,46 @@ class PostgresCashuLifecycleRepository implements CashuTopUpRepository {
   async update(record: CashuTopUpRecord): Promise<void> {
     await this.withClient(async (client) => { await client.query("UPDATE cashu_top_up_state SET state_json=$2,updated_at=now() WHERE top_up_id=$1", [record.result.topUpId, JSON.stringify(record)]); });
   }
+
+  async updateResult(topUpId: string, result: CashuTopUpResult): Promise<CashuTopUpRecord> {
+    return this.mutate(topUpId, (record) => {
+      const updated = frozen({ ...record, result: monotonicCashuResult(record.result, result) });
+      return [updated, updated] as const;
+    });
+  }
+
+  async prepareCustody(topUpId: string, journal: Omit<CashuCustodyJournal, "state">): Promise<CashuCustodyJournal> {
+    return this.mutate(topUpId, (record) => {
+      if (record.custody) {
+        const { state: _state, outputDataProtectedId: _id, ...existing } = record.custody;
+        const { outputDataProtectedId: _requestedId, ...requested } = journal;
+        if (JSON.stringify(existing) !== JSON.stringify(requested)) throw new Error("CASHU_CUSTODY_CONFLICT");
+        return [record, record.custody] as const;
+      }
+      const custody = frozen({ ...journal, state: "prepared" as const });
+      return [frozen({ ...record, custody }), custody] as const;
+    });
+  }
+
+  async claimCustodyDispatch(topUpId: string): Promise<boolean> {
+    return this.mutate(topUpId, (record) => {
+      if (!record.custody || record.custody.state !== "prepared") return [record, false] as const;
+      return [frozen({ ...record, custody: frozen({ ...record.custody, state: "dispatching" as const }) }), true] as const;
+    });
+  }
+
+  async recordOwnedCustodyOutputs(topUpId: string, protectedId: string, payloadDigest: string): Promise<Readonly<{ accepted: boolean; protectedId: string }>> {
+    return this.mutate<Readonly<{ accepted: boolean; protectedId: string }>>(topUpId, (record) => {
+      if (!record.custody || record.custody.state === "prepared") throw new Error("CASHU_CUSTODY_DISPATCH_REQUIRED");
+      if (record.custody.ownedOutputsProtectedId) {
+        if (record.custody.ownedOutputsDigest !== payloadDigest) throw new Error("CASHU_CUSTODY_OUTPUT_CONFLICT");
+        return [record, frozen({ accepted: false, protectedId: record.custody.ownedOutputsProtectedId })] as const;
+      }
+      return [frozen({ ...record, custody: frozen({ ...record.custody, state: "owned_outputs" as const, ownedOutputsProtectedId: protectedId, ownedOutputsDigest: payloadDigest }) }), frozen({ accepted: true, protectedId })] as const;
+    });
+  }
+
+  async custody(topUpId: string): Promise<CashuCustodyJournal | undefined> { return (await this.find(topUpId))?.custody; }
 
   async findTreasury(topUpId: string): Promise<CashuTopUpResult | undefined> {
     return this.readRecord(topUpId, "treasury_json");
@@ -203,20 +237,45 @@ class PostgresCashuLifecycleRepository implements CashuTopUpRepository {
     });
   }
 
+  private async mutate<T>(topUpId: string, action: (record: CashuTopUpRecord) => readonly [CashuTopUpRecord, T]): Promise<T> {
+    return serializableProductionTransaction(this.pool, async (client) => {
+      const row = (await client.query<{ state_json: CashuTopUpRecord }>("SELECT state_json FROM cashu_top_up_state WHERE top_up_id=$1 FOR UPDATE", [topUpId])).rows[0];
+      if (!row) throw new Error("CASHU_TOP_UP_UNKNOWN");
+      const [record, result] = action(row.state_json);
+      await client.query("UPDATE cashu_top_up_state SET state_json=$2,updated_at=now() WHERE top_up_id=$1", [topUpId, JSON.stringify(record)]);
+      return result;
+    });
+  }
+
   private async withClient<T>(operation: (client: PostgresSqlClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
     try { return await operation(client); } finally { client.release(); }
   }
 }
 
+function monotonicCashuResult(current: CashuTopUpResult, proposed: CashuTopUpResult): CashuTopUpResult {
+  if (current.topUpId !== proposed.topUpId || current.commitment !== proposed.commitment || current.policyVersion !== proposed.policyVersion) throw new Error("CASHU_TOP_UP_RESULT_CONFLICT");
+  if (current.state === "credited" || current.state === "failed") return current;
+  if (proposed.state === "verifying") return current;
+  if (proposed.state === "reconciliation_pending" && current.state === "reconciliation_pending") return current;
+  return proposed;
+}
+
 class PostgresProtectedRailMaterialRepository implements ProtectedRailMaterialRepository {
-  constructor(private readonly pool: PostgresSqlPool) {}
+  constructor(private readonly pool: PostgresSqlPool, private readonly realm: AccountingRealm) {}
 
   async put(record: ProtectedRailMaterialRecord): Promise<void> {
-    const client = await this.pool.connect();
-    try {
+    await serializableProductionTransaction(this.pool, async (client) => {
+      if (this.realm.name === "production-real") {
+        // This creates a zero-money identity only. Settlement and all balance
+        // mutations remain exclusively in the verified funding transaction.
+        await client.query("INSERT INTO funding_accounts(account_id,unit) VALUES($1,'sat') ON CONFLICT (account_id) DO NOTHING", [record.accountId]);
+        await client.query("INSERT INTO rail_material_scopes(top_up_id,account_id,rail) VALUES($1,$2,$3) ON CONFLICT (top_up_id) DO NOTHING", [record.topUpId, record.accountId, record.rail]);
+        const scope = (await client.query<{ account_id: string; rail: string }>("SELECT account_id,rail FROM rail_material_scopes WHERE top_up_id=$1", [record.topUpId])).rows[0];
+        if (!scope || scope.account_id !== record.accountId || scope.rail !== record.rail) throw new Error("PRODUCTION_RAIL_MATERIAL_SCOPE_CONFLICT");
+      }
       await client.query("INSERT INTO protected_rail_material(material_id,account_id,top_up_id,rail,payload_digest,nonce,ciphertext,expires_at,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)", [record.id, record.accountId, record.topUpId, record.rail, record.payloadDigest, record.nonce, record.ciphertext, record.expiresAt ?? null, record.createdAt]);
-    } finally { client.release(); }
+    });
   }
 
   async get(id: string): Promise<ProtectedRailMaterialRecord | undefined> {
@@ -250,7 +309,7 @@ class PostgresRailStatusProjection implements AccountTopUpStatusPort {
         ...(record.settlementReference ? { settlementReference: record.settlementReference } : {}),
       }));
       const cashuRows = cashu.rows.map(({ state_json: record }): AccountTopUpStatus => ({
-        topUpId: record.result.topUpId, rail: "cashu", state: record.result.state, amount: record.amount, unit: "sat", createdAt: record.createdAt,
+        topUpId: record.result.topUpId, rail: "cashu", state: record.result.state, amount: record.result.amount ?? record.amount, unit: "sat", createdAt: record.createdAt,
         ...(record.result.settlementReference ? { settlementReference: record.result.settlementReference } : {}),
       }));
       return frozen([...lightningRows, ...cashuRows]);
@@ -284,7 +343,7 @@ export class PostgresFundingDatabase {
     this.continuationFunding = this.funding;
     this.lightning = new PostgresLightningLifecycleRepository(realmPool);
     this.cashu = new PostgresCashuLifecycleRepository(realmPool);
-    this.protectedMaterials = new PostgresProtectedRailMaterialRepository(realmPool);
+    this.protectedMaterials = new PostgresProtectedRailMaterialRepository(realmPool, this.realm);
     this.railStatuses = new PostgresRailStatusProjection(realmPool);
     this.custody = new PostgresProductionCustodyRepository(realmPool, this.realm);
     this.uncertainRailOperations = new PostgresUncertainRailOperationRepository(realmPool, this.realm);

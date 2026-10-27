@@ -5,6 +5,7 @@ import { accountIdForPrincipal } from "../../src/domain/account-command";
 import { createFundedCore } from "../../src/phase-03/funded-core";
 import { PostgresFundingDatabase } from "../../src/persistence/postgres-funding-database";
 import { FundingService } from "../../src/funding/funding-service";
+import type { CashuTopUpRecord } from "../../src/funding/cashu-top-up";
 
 test("production realm rejects development-only funding adapters before construction", () => {
   const descriptor = { mode: "production-real", adapters: ["lightning", "cashu", "nwc"], catalog: { kind: "live" }, keyMode: "secret-broker" };
@@ -62,6 +63,8 @@ postgresIsolation("real PostgreSQL keeps development history read-only and produ
     expect(await developmentFunding.execute({ principal, kind: "credit_settlement", idempotencyKey: "development-credit", policyVersion: "development-local", protocolVersion: "development-local", payload: { settlement: { topUpId: "development-topup", rail: "lightning", unit: "sat", amount: "9", externalReference: "development-external", settlementReference: "development-settlement", verifiedAt: "2026-10-27T00:00:00.000Z" } } })).toMatchObject({ status: "credited", creditedAmount: "9" });
     expect((await developmentFunding.status(principal)).available).toBe("41009");
     await pool.query(await Bun.file("migrations/phase-03/002_production_accounting.sql").text());
+    await pool.query(await Bun.file("migrations/phase-03/003_cashu_custody_and_identities.sql").text());
+    await pool.query(await Bun.file("migrations/phase-03/004_production_rail_material_scope.sql").text());
     const superuserProductionDatabase = new PostgresFundingDatabase(pool as never, { realm: "production-real", deadlineMs: 1_000 });
     await expect(new FundingService(superuserProductionDatabase.funding).status(principal)).rejects.toThrow("ACCOUNTING_REALM_SUPERUSER_DENIED");
     expect((await pool.query(`SELECT source_table.relname AS source_table, target_schema.nspname AS target_schema
@@ -93,6 +96,28 @@ postgresIsolation("real PostgreSQL keeps development history read-only and produ
     const database = new PostgresFundingDatabase(appPool as never, { realm: "production-real", deadlineMs: 1_000 });
     const funding = new FundingService(database.funding);
     expect((await funding.status(principal)).available).toBe("0");
+    await pool.query("INSERT INTO production_real.funding_accounts(account_id,unit) VALUES($1,'sat')", [productionAccountId]);
+    const cashuRecord = (topUpId: string, commitment: string): CashuTopUpRecord => ({
+      result: { topUpId, state: "verifying", policyVersion: "cashu-policy", commitment }, accountId: productionAccountId,
+      policy: { version: "cashu-policy", mints: [] } as never, protectedId: `protected:${topUpId}`,
+      semanticProofIdentities: ["9".repeat(64)], idempotencyKey: `cashu:${topUpId}`, principal, amount: "21", maxFee: "0", createdAt: "2026-10-27T00:00:00.000Z",
+    });
+    const [cashuOne, cashuTwo] = await Promise.all([
+      database.cashu.claim(cashuRecord("cashu:one", "1".repeat(64))),
+      database.cashu.claim(cashuRecord("cashu:two", "2".repeat(64))),
+    ]);
+    expect([cashuOne, cashuTwo].filter((claim) => claim.claimed)).toHaveLength(1);
+    const cashuWinner = cashuOne.claimed ? cashuOne.record : cashuTwo.record;
+    await database.cashu.prepareCustody(cashuWinner.result.topUpId, { operationId: `cashu-swap:${cashuWinner.result.topUpId}`, mintUrl: "https://mint.example", keysetId: "keyset", unit: "sat", amount: "21", maxFee: "0", inputFeePpk: 0, feeAmount: "0", expectedOutputAmount: "21", inputProtectedId: cashuWinner.protectedId, outputDataProtectedId: "protected:output-data" });
+    const dispatches = await Promise.all([database.cashu.claimCustodyDispatch(cashuWinner.result.topUpId), database.cashu.claimCustodyDispatch(cashuWinner.result.topUpId)]);
+    expect(dispatches.filter(Boolean)).toHaveLength(1);
+    await database.cashu.recordOwnedCustodyOutputs(cashuWinner.result.topUpId, "protected:owned-output", "a".repeat(64));
+    expect(await database.cashu.custody(cashuWinner.result.topUpId)).toMatchObject({ state: "owned_outputs", ownedOutputsProtectedId: "protected:owned-output" });
+    await Promise.all([
+      database.cashu.updateResult(cashuWinner.result.topUpId, { ...cashuWinner.result, state: "credited", settlementReference: "cashu:durable-credit" }),
+      database.cashu.updateResult(cashuWinner.result.topUpId, { ...cashuWinner.result, state: "reconciliation_pending" }),
+    ]);
+    expect(await database.cashu.find(cashuWinner.result.topUpId)).toMatchObject({ result: { state: "credited", settlementReference: "cashu:durable-credit" }, custody: { state: "owned_outputs", ownedOutputsProtectedId: "protected:owned-output" } });
     await expect(funding.execute({ principal, kind: "funded_admission", idempotencyKey: "test-balance-refusal", policyVersion: "live-policy", protocolVersion: "live-protocol", payload: { requestedCap: "1", unit: "sat", capacity: { reference: "capacity:test-balance", usable: true } } })).rejects.toThrow("INSUFFICIENT_SETTLED_BALANCE");
     const settlement = { principal, kind: "credit_settlement" as const, idempotencyKey: "real-credit", policyVersion: "live-policy", protocolVersion: "live-protocol", payload: { settlement: { topUpId: "real-topup", rail: "lightning" as const, unit: "sat" as const, amount: "50", externalReference: "real-external", settlementReference: "real-settlement", verifiedAt: "2026-10-27T00:00:00.000Z" } } };
     const credited = [await funding.execute(settlement), await funding.execute(settlement)];

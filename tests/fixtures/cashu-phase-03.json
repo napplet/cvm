@@ -6,8 +6,8 @@
       "activeFrom": "2026-08-04T00:00:00.000Z",
       "activeUntil": null,
       "mints": [
-        { "url": "https://mint-a.example", "keysetIds": ["009a1b2c3d4e5f60"], "requireDleq": true, "proofConditions": ["none"] },
-        { "url": "https://mint-b.example", "keysetIds": ["009f1e2d3c4b5a60"], "requireDleq": false, "proofConditions": ["none"] }
+        { "url": "https://mint-a.example", "keysetIds": ["009a1b2c3d4e5f60"], "maxInputFeePpk": 1000, "requireDleq": true, "proofConditions": ["none"] },
+        { "url": "https://mint-b.example", "keysetIds": ["009f1e2d3c4b5a60"], "maxInputFeePpk": 1000, "requireDleq": false, "proofConditions": ["none"] }
       ]
     },
     {
@@ -15,8 +15,8 @@
       "activeFrom": "2026-08-05T00:00:00.000Z",
       "activeUntil": null,
       "mints": [
-        { "url": "https://mint-a.example", "keysetIds": ["009a1b2c3d4e5f61"], "requireDleq": true, "proofConditions": ["none"] },
-        { "url": "https://mint-c.example", "keysetIds": ["009c1e2d3c4b5a60"], "requireDleq": false, "proofConditions": ["none"] }
+        { "url": "https://mint-a.example", "keysetIds": ["009a1b2c3d4e5f61"], "maxInputFeePpk": 1000, "requireDleq": true, "proofConditions": ["none"] },
+        { "url": "https://mint-c.example", "keysetIds": ["009c1e2d3c4b5a60"], "maxInputFeePpk": 1000, "requireDleq": false, "proofConditions": ["none"] }
       ]
     }
   ]

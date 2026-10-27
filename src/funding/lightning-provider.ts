@@ -21,13 +21,20 @@ const UnknownInvoiceObservationSchema = z.object({ status: z.literal("unknown"),
 
 export const LightningInvoiceObservationSchema = z.discriminatedUnion("status", [CreatedInvoiceObservationSchema, SettledInvoiceObservationSchema, FailedInvoiceObservationSchema, UnknownInvoiceObservationSchema]);
 export type LightningInvoiceObservation = z.infer<typeof LightningInvoiceObservationSchema>;
-export type LightningCreateInvoiceRequest = Readonly<{ topUpId: string; idempotencyLabel: string; amount: string; unit: "sat"; signal: AbortSignal }>;
+export type LightningOriginalIntent = Readonly<{
+  operationId: string; realm: "development-test" | "production-real"; descriptionHash: string;
+  connectionScopeDigest: string; amount: string; type: "incoming"; from: number; until: number;
+}>;
+export type LightningCreateInvoiceRequest = Readonly<{ topUpId: string; idempotencyLabel: string; amount: string; unit: "sat"; originalIntent?: LightningOriginalIntent; signal: AbortSignal }>;
 export type LightningQueryInvoiceRequest = Readonly<{ topUpId: string; serviceReference: string; signal: AbortSignal }>;
 
 /** Rail adapter boundary: it returns receiver observations and has no funding/ledger dependency. */
 export interface LightningReceiptPort {
+  readonly connectionScopeDigest?: string;
+  readonly accountingRealm?: "development-test" | "production-real";
   createInvoice(request: LightningCreateInvoiceRequest): Promise<LightningInvoiceObservation>;
   queryInvoice(request: LightningQueryInvoiceRequest): Promise<LightningInvoiceObservation>;
+  queryOriginalIntent?(request: Readonly<{ topUpId: string; intent: LightningOriginalIntent; signal: AbortSignal }>): Promise<LightningInvoiceObservation>;
 }
 
 type FakeOptions = Readonly<{ create: Extract<LightningInvoiceObservation, { status: "created" }> }>;

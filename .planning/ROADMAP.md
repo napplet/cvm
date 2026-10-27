@@ -305,7 +305,7 @@ Plans:
 **Validation gate**: Benchmark Modal and at least one non-AWS fallback with the production-like image, target regions, relay delay, pool misses, database contention, reclaim/failure behavior, and step load. Select a worker vendor only after receipt-to-isolated-worker-ready p95 is at most five seconds with zero durable backlog; establish the database/failover claim to match the chosen deployment scope.
 
 Phase 7 also closes the launch-hardening work intentionally deferred from Phase 1: exhaustive toolchain provenance, repeated/cross-environment reproducibility, full hostile and mutation coverage, formal golden approval, waiver drills, SBOM/provenance enforcement, and the final production promotion gate.
-**Plans**: 57/74 plans executed
+**Plans**: 58/74 plans executed
 **Wave 1**
 
 - [x] 07-00-PLAN.md
@@ -488,7 +488,7 @@ Independent plan review passed for 07-58 through 07-73. Full scope and live base
 - [ ] 07-60-PLAN.md — Establish the hard boundary between preserved test accounting and real production money.
 - [ ] 07-61-PLAN.md — Repair the concrete Cashu custody and false-credit defects.
 - [ ] 07-62-PLAN.md — Make NWC invoice creation recoverable when the response is lost before its payment hash is stored.
-- [ ] 07-63-PLAN.md — Replace loopback Google placeholders with authenticated, reconcilable production transports.
+- [x] 07-63-PLAN.md — Replace loopback Google placeholders with authenticated, reconcilable production transports.
 - [ ] 07-64-PLAN.md — Implement the real worker boundary and lifecycle transports used by admission certification.
 - [ ] 07-65-PLAN.md — Select and implement production provider billing without converting synthetic development rates into prices.
 - [ ] 07-66-PLAN.md — Replace ContextVM/payment descriptors with authenticated operational transports and the production funded core.
@@ -523,12 +523,12 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 4. Metered Generation & Revision Loop | 7/7 | Complete    | 2026-08-05 |
 | 5. Funding Interruption & Durable Resume | 7/7 | Complete    | 2026-08-05 |
 | 6. Sealed Preview & User-Owned Publication | 7/7 | Complete    | 2026-08-05 |
-| 7. Admission SLO, Resilience & Launch Safety | 57/74 | In Progress|  |
+| 7. Admission SLO, Resilience & Launch Safety | 58/74 | In Progress|  |
 
 ### Milestone Progress Roll-up
 
 - **Phases:** Phases 1–6 are verified complete; Phase 7 awaits protected live evidence and goal verification; 6/7 phases complete (86%).
-- **Known plans:** 97/114 milestone plans executed. Local payment setup and application funding/ledger e2e are complete; development GUI Plans 07-52/53/56/57/54/55 are accepted with the full local browser suite. Production-only 07-20 and 07-26 follow the resumed implementation and exact authorization gates.
+- **Known plans:** 98/114 milestone plans executed. Local payment setup and application funding/ledger e2e are complete; development GUI Plans 07-52/53/56/57/54/55 are accepted with the full local browser suite. Production-only 07-20 and 07-26 follow the resumed implementation and exact authorization gates.
 - **v1 requirements:** 54/54 assigned to exactly one Phase 1–7 owner; 49 verified complete and 5 Phase 7 requirements pending.
 - **Current checkpoint:** Development GUI is complete and running; see `07-55-SUMMARY.md` and the dated `07-DEV-VALIDATION.md` acceptance matrix. Production gaps and resumption criteria remain in `docs/runbooks/production-readiness-deferred.md`; production was resumed on 2026-10-27. Phase 7 is not certified complete.
 - **Phase 1 preservation:** Phase 1 remains complete with its review, security, validation, verification evidence, and Phase 7 deferrals unchanged.

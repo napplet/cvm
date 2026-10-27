@@ -64,7 +64,9 @@ test("binds each regional Google component to one authenticated catalog SKU with
   ]);
 
   const topology = await deriveReleaseTopology(digest("a"));
-  expect(topology.quantityContract.map((line) => line.provider)).toHaveLength(20);
+  // One Cloud SQL REGIONAL HA authority serves both ingress regions; billing
+  // must not fabricate a second database from the second Cloud Run region.
+  expect(topology.quantityContract.map((line) => line.provider)).toHaveLength(19);
   expect(new Set(topology.quantityContract.map((line) => line.quantityNanos)).size).toBeGreaterThan(1);
   expect(topology.quantityContract.find((line) => line.componentId === "cloud_run.europe-west1.cpu")?.quantityNanos).toBe("2700000000000");
   expect(topology.topologySha256).toMatch(/^[a-f0-9]{64}$/);

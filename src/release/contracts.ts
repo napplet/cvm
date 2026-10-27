@@ -46,8 +46,15 @@ export const ReleaseTopologyObservationSchema = z.object({
     minimumInstancesPerRegion: z.literal(3),
     collectorImage: z.string().regex(/^otel\/opentelemetry-collector@sha256:[a-f0-9]{64}$/iu),
   }).strict(),
-  objectStore: z.object({ dualRegion: z.string().min(1), versioning: z.literal(true), retentionDays: z.literal(30) }).strict(),
-  database: z.object({ authority: z.literal("cloud_sql_postgres"), serializable: z.literal(true) }).strict(),
+  objectStore: z.object({
+    dualRegion: z.string().min(1), versioning: z.literal(true), retentionDays: z.literal(30),
+    encryption: z.literal("customer-managed-key-required"),
+    lifecycle: z.literal("delete-after-30-days"),
+  }).strict(),
+  database: z.object({
+    authority: z.literal("cloud_sql_postgres"), serializable: z.literal(true), region: z.string().min(1),
+    availabilityType: z.literal("regional"), authorityCount: z.literal(1),
+  }).strict(),
   workerCandidates: z.tuple([z.literal("modal"), z.literal("fly")]),
   integrations: z.array(ReleaseProviderIdSchema).length(10),
   deployment: z.object({

@@ -5,15 +5,15 @@ milestone_name: Safe Napplet Generation MVP
 current_phase: 07
 current_phase_name: admission-slo-resilience-launch-safety
 status: in_progress
-stopped_at: Production gap planning resumed; private Beta service preserved; no protected effects authorized
-last_updated: "2026-10-27T12:23:12.665676+00:00"
+stopped_at: Plan 07-63 reviewed; Plans 07-59/60 await current GUI gates; Plan 07-64 next; no protected effects authorized
+last_updated: "2026-10-27T15:13:56.425418+00:00"
 last_activity: 2026-10-27
-last_activity_desc: Production-readiness implementation resumed from current live and source evidence
+last_activity_desc: Google transports reviewed; relay shutdown race fixed and payment CI passed; worker implementation next
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 114
-  completed_plans: 97
+  completed_plans: 98
   percent: 86
 ---
 
@@ -30,20 +30,20 @@ See: .planning/PROJECT.md (updated 2026-08-04)
 ## Current Position
 
 Phase: 07 (admission-slo-resilience-launch-safety) — PRODUCTION GAP CLOSURE RESUMED
-Plan: 57 of 74 complete; 07-58 complete, checked implementation 07-59–73 next
-Status: User resumed production readiness on 2026-10-27. Gap plans passed independent review; architecture/migration Plan 07-58 is complete. Implementation and all eight protected suites remain incomplete. Preserve the live private deployment and existing ChatGPT/test-credit history. No funding or approval request is ready.
-Last activity: 2026-10-27 — Verified Coolify deployment 24252f7 and signed WSS without generation; reproduced missing production call sites, treasury custody gaps, budget-catalog substitution, and CI prerequisites. Full scope and evidence: `07-PRODUCTION-RESUMPTION.md`; executable work: `07-PRODUCTION-GAP-MATRIX.md`.
+Plan: 58 of 74 complete; 07-59/60 await GUI CI, 07-63 reviewed complete, 07-64 next
+Status: User resumed production readiness on 2026-10-27. Gap plans passed independent review; architecture/migration Plan 07-58 is complete and merged. Plans 07-59 and 07-60 are under remote verification in PRs #5/#6; Plan 07-63 implementation passed review and 184 release tests; Plan 07-64 worker transports and image are next. Implementation and all eight protected suites remain incomplete. Preserve the live private deployment and existing ChatGPT/test-credit history. No funding or approval request is ready.
+Last activity: 2026-10-27 — Plan 07-63 passes 184 no-effect release tests / 905 assertions, including immutable ownership and bounded reconciliation. Current PR #5/#6 payment gates pass after a reproduced SDK relay-shutdown race repair; GUI gates remain pending. The earlier final full-flow NWC timeout was not reproduced locally. Private Beta remains healthy; no live migration, cloud provisioning, or real-money effects. See `07-PRODUCTION-RESUMPTION.md` and `07-PRODUCTION-GAP-MATRIX.md`.
 
 Follow-up: Stream assembly/counter verification remains complete. Latest helper-signature and compiler-feedback fix passed 29 targeted unit/integration cases plus activity and composed OAuth browser journeys. Real blinking-text generation also passed. See debug/resolved/generated-typescript-check.md.
 
-Plan execution: 97/114 milestone plans complete; Phase 7 is 57/74 complete and production verification remains pending
+Plan execution: 98/114 milestone plans complete; Phase 7 is 58/74 complete and production verification remains pending
 
 ## Milestone Progress
 
 **v1.0 — Safe Napplet Generation MVP**
 
 - Phases: Phases 1–6 verified complete; Phase 7 awaits protected live evidence and goal verification (6/7, 86%).
-- Plans: 97/114 milestone plans executed. Development Plans 07-52/53/56/57/54/55 are complete. Production-only 07-20 and 07-26 await the resumed implementation plans and exact authorization; neither is a development prerequisite.
+- Plans: 98/114 milestone plans executed. Development Plans 07-52/53/56/57/54/55 are complete. Production-only 07-20 and 07-26 await the resumed implementation plans and exact authorization; neither is a development prerequisite.
 - Requirements: 49/54 verified complete; SESS-02 and OPS-01–OPS-04 remain unverified pending protected live evidence.
 - Development coverage: the complete local execution GUI is accepted; see `07-55-SUMMARY.md`, the dated acceptance matrix in `07-DEV-VALIDATION.md`, and `docs/runbooks/development-gui.md`. Applesauce dependencies and matching launcher manifest pins were added in quick task 261016-m8c; generated-app toolchain pins remain unchanged. Deterministic mode substitutes only the external model. This quick-task verification used a model fixture; real local publication, signed ownership and cross-browser project recovery are now covered. Remote CI was not exercised; conformance reports five passed and five skipped checks. Production resumption was requested on 2026-10-27 and follows the production gap matrix.
 - Local ChatGPT OAuth support is implemented and verified with a real subscription-generated interactive artifact; see `debug/resolved/chatgpt-live-subscription.md`. Subscription usage has separate synthetic local-test-sat accounting, and unresolved calls are never automatically resent.

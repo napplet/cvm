@@ -5,6 +5,7 @@ import {
   createWorkerDeploymentClients,
   LOCKED_WORKER_SCHEDULE,
   PRODUCTION_WORKER_POLICY,
+  validateWorkerReadinessAttestation,
 } from "../../src/release/deployment/worker-clients";
 
 const digest = (value: string) => value.repeat(64);
@@ -88,4 +89,37 @@ test("sealed image installs root-owned trusted worker commands and runs the pinn
   expect(dockerfile).not.toContain("--chown=65532:65532 /toolchain/node_modules");
   for (const command of ["napplet", "--offline", "--frozen-lockfile", "test:conformance", "network_denied", "no_ambient_credentials"]) expect(worker).toContain(command);
   expect(probe).toContain("napplet-cvm-worker");
+});
+
+test("readiness rejects a credential-bearing, unprobed, or incorrectly leased worker", () => {
+  const lease = digest("b");
+  const valid = {
+    version: 1 as const, policyVersion: PRODUCTION_WORKER_POLICY.version, image, sessionLeaseSha256: lease,
+    remainingLifetimeMs: 600_000, providerNetworkPolicyVerified: true as const,
+    checks: { toolchain_readonly: true as const, workspace_bounded: true as const, non_root: true as const, no_ambient_credentials: true as const, network_denied: true as const, no_inbound_ports: true as const, minimal_capabilities: true as const },
+  };
+  expect(validateWorkerReadinessAttestation(valid, { image, sessionLeaseSha256: lease })).toEqual(valid);
+  for (const invalid of [
+    { ...valid, providerNetworkPolicyVerified: false },
+    { ...valid, checks: { ...valid.checks, no_ambient_credentials: false } },
+    { ...valid, checks: { ...valid.checks, network_denied: false } },
+    { ...valid, sessionLeaseSha256: digest("c") },
+  ]) expect(() => validateWorkerReadinessAttestation(invalid, { image, sessionLeaseSha256: lease })).toThrow();
+});
+
+test("cleanup after controller interruption deletes only the original owned machine", async () => {
+  const operationId = "op-cleanup";
+  const journal = createMemoryWorkerOperationJournal([{ operationId, requestSha256: digest("d"), state: "dispatched", resourceName: `napplet-cvm-${operationId}`, resourceId: "machine-cleanup" }]);
+  const calls: RequestInit[] = [];
+  const transport = createFlyMachinesHttpTransport({
+    appName: "napplet-cvm-workers", getAccessToken: async () => "valid-access-token", journal,
+    fetch: async (_url, init) => {
+      calls.push(init);
+      if (init.method === "GET") return new Response(JSON.stringify({ id: "machine-cleanup", name: `napplet-cvm-${operationId}`, config: { image, metadata: { "napplet-cvm-operation": operationId, "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-role": "isolated-worker" } } }), { status: 200 });
+      return new Response(null, { status: 204 });
+    },
+  });
+  await expect(transport.terminate({ operationId })).resolves.toEqual({ status: "terminated" });
+  await expect(transport.terminate({ operationId: "op-foreign" })).resolves.toEqual({ status: "blocked" });
+  expect(calls.map((call) => call.method)).toEqual(["GET", "DELETE"]);
 });

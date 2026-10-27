@@ -85,6 +85,30 @@ export type FlyMachinesHttpTransport = Readonly<{
   terminate(input: Readonly<{ operationId: string }>): Promise<Readonly<{ status: "terminated" | "pending" | "unknown" | "blocked" }>>;
 }>;
 
+const ReadinessAttestationSchema = z.object({
+  version: z.literal(1),
+  policyVersion: z.literal(PRODUCTION_WORKER_POLICY.version),
+  image: ImageSchema,
+  sessionLeaseSha256: z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase()),
+  remainingLifetimeMs: z.number().int().positive().max(PRODUCTION_WORKER_POLICY.timeoutMs),
+  providerNetworkPolicyVerified: z.literal(true),
+  checks: z.object({
+    toolchain_readonly: z.literal(true), workspace_bounded: z.literal(true), non_root: z.literal(true),
+    no_ambient_credentials: z.literal(true), network_denied: z.literal(true), no_inbound_ports: z.literal(true), minimal_capabilities: z.literal(true),
+  }).strict(),
+}).strict();
+
+/** The trusted controller calls this only after provider observation.  In
+ * particular Fly's metadata cannot stand in for its app-level network policy:
+ * the controller must present a verified policy plus the inner denial probe. */
+export function validateWorkerReadinessAttestation(input: unknown, expected: Readonly<{ image: string; sessionLeaseSha256: string }>) {
+  const observed = ReadinessAttestationSchema.parse(input);
+  if (observed.image !== ImageSchema.parse(expected.image) || observed.sessionLeaseSha256 !== expected.sessionLeaseSha256.toLowerCase()) {
+    throw new Error("WORKER_READINESS_BINDING_INVALID");
+  }
+  return Object.freeze(observed);
+}
+
 /** Authenticated controller-only Fly Machines transport. It never resolves
  * ambient environment credentials and never retries a create after a lost
  * response: it queries the deterministic name/metadata identity instead. */
@@ -179,7 +203,10 @@ export function createFlyMachinesHttpTransport(input: Readonly<{
       if (!record?.resourceId) return Object.freeze({ status: "blocked" as const });
       const before = await request(`/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(record.resourceId)}`, { method: "GET" });
       const machine = before.ok ? MachineSchema.safeParse(await before.json()) : undefined;
-      if (!machine?.success || machine.data.name !== record.resourceName || machine.data.config.metadata?.["napplet-cvm-operation"] !== operationId) return Object.freeze({ status: "unknown" as const });
+      const metadata = machine?.success ? machine.data.config.metadata : undefined;
+      if (!machine?.success || machine.data.name !== record.resourceName || metadata?.["napplet-cvm-operation"] !== operationId
+        || metadata?.["napplet-cvm-policy"] !== PRODUCTION_WORKER_POLICY.version || metadata?.["napplet-cvm-role"] !== "isolated-worker"
+        || Object.keys(metadata).sort().join(",") !== "napplet-cvm-operation,napplet-cvm-policy,napplet-cvm-role") return Object.freeze({ status: "unknown" as const });
       const removed = await request(`/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(record.resourceId)}?force=true`, { method: "DELETE" });
       if (!removed.ok && removed.status !== 404) return Object.freeze({ status: "pending" as const });
       await input.journal.update({ operationId, requestSha256: record.requestSha256, state: "terminated", resourceId: record.resourceId });

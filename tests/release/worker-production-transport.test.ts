@@ -99,6 +99,27 @@ test("Fly keeps the request deadline through a stalled body and cancels it", asy
   expect(cancelled).toBeTrue();
 });
 
+test("worker recovery and cleanup cannot cross the original provider application", async () => {
+  const journal = createMemoryWorkerOperationJournal();
+  const intent = { operationId: "op-scoped", region: "ams", image, policy: PRODUCTION_WORKER_POLICY, sessionLeaseSha256: digest("b"), toolchainSha256: digest("c"), providerDeadlineEpochMs: Date.now() + 60_000 };
+  const original = createFlyMachinesHttpTransport({ appName: "original-workers", journal, getAccessToken: async () => "valid-access-token", fetch: async (_url, init) => {
+    if (init.method === "GET") return Response.json([]);
+    const body = JSON.parse(String(init.body));
+    return Response.json({ id: "machine-scoped", name: body.name, created_at: new Date().toISOString(), config: body.config });
+  } });
+  expect((await original.create(intent)).status).toBe("created");
+  let calls = 0;
+  const foreign = createFlyMachinesHttpTransport({ appName: "other-workers", journal, getAccessToken: async () => "valid-access-token", fetch: async () => { calls++; throw new Error("foreign provider must not be contacted"); } });
+  expect((await foreign.create(intent)).status).toBe("unknown");
+  expect((await foreign.observe(intent)).status).toBe("unknown");
+  expect((await foreign.exec({ operationId: intent.operationId, command: ["/bin/true"] })).status).toBe("unknown");
+  expect((await foreign.terminate(intent)).status).toBe("blocked");
+  expect(calls).toBe(0);
+  const record = (await journal.read(intent.operationId))!;
+  await expect(journal.update({ operationId: intent.operationId, requestSha256: record.requestSha256, state: "reconciled", resourceId: "substituted-machine" })).rejects.toThrow("WORKER_OPERATION_IDENTITY_CONFLICT");
+  expect((await journal.read(intent.operationId))?.resourceId).toBe("machine-scoped");
+});
+
 test("transport refuses a malformed or credential-bearing response and does not certify metadata as network isolation", async () => {
   const transport = createFlyMachinesHttpTransport({
     appName: "napplet-cvm-workers",
@@ -121,7 +142,8 @@ test("sealed image installs root-owned trusted worker commands and runs the pinn
   expect(dockerfile).toContain("infra/toolchain/production-bootstrap.sh /usr/local/bin/napplet-cvm-bootstrap");
   expect(dockerfile).toContain("FROM sealed AS production-worker");
   expect(dockerfile).toContain("FROM sealed AS default\nUSER 65532:65532");
-  expect(dockerfile).toContain("chmod -R go-w /toolchain /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe");
+  expect(dockerfile).toContain("chmod -R go-w /toolchain");
+  expect(dockerfile).toContain("chmod 0555 /toolchain/bin/denial-probe /toolchain/bin/fixture-runner /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe");
   expect(dockerfile).not.toContain("--chown=65532:65532 /toolchain/node_modules");
   for (const command of ["napplet", "--offline", "--frozen-lockfile", "test:conformance", "networkDenied", "deniedProbe", "ipv6", "private", "WORKER_ACTIVE_DEADLINE_INVALID", "environmentClean", "CapBnd", "NoNewPrivs", "WORKER_SOURCE_DUPLICATE"]) expect(worker).toContain(command);
   expect(probe).toContain("napplet-cvm-worker");
@@ -148,7 +170,7 @@ test("readiness rejects a credential-bearing, unprobed, or incorrectly leased wo
 test("cleanup after controller interruption deletes only the original owned machine", async () => {
   const operationId = "op-cleanup";
   const providerCreatedAtMs = Date.parse("2026-10-27T00:00:00.000Z");
-  const journal = createMemoryWorkerOperationJournal([{ operationId, requestSha256: digest("d"), state: "dispatched", resourceName: `napplet-cvm-${operationId}`, resourceId: "machine-cleanup", image, region: "ams", policyVersion: PRODUCTION_WORKER_POLICY.version, createdAtMs: 1, providerCreatedAtMs, sessionLeaseSha256: digest("b"), toolchainSha256: digest("c"), providerDeadlineEpochMs: Date.now() + 60_000 }]);
+  const journal = createMemoryWorkerOperationJournal([{ operationId, provider: "fly", appName: "napplet-cvm-workers", requestSha256: digest("d"), state: "dispatched", resourceName: `napplet-cvm-${operationId}`, resourceId: "machine-cleanup", image, region: "ams", policyVersion: PRODUCTION_WORKER_POLICY.version, createdAtMs: 1, providerCreatedAtMs, sessionLeaseSha256: digest("b"), toolchainSha256: digest("c"), providerDeadlineEpochMs: Date.now() + 60_000 }]);
   const calls: RequestInit[] = [];
   let getCount = 0;
   const transport = createFlyMachinesHttpTransport({
@@ -167,7 +189,7 @@ test("cleanup after controller interruption deletes only the original owned mach
 
 test("Fly never executes or cleans a legacy record without persisted provider creation identity", async () => {
   const operationId = "op-legacy";
-  const journal = createMemoryWorkerOperationJournal([{ operationId, requestSha256: digest("d"), state: "dispatched", resourceName: `napplet-cvm-${operationId}`, resourceId: "machine-legacy", image, region: "ams", policyVersion: PRODUCTION_WORKER_POLICY.version, createdAtMs: 1, sessionLeaseSha256: digest("b"), toolchainSha256: digest("c"), providerDeadlineEpochMs: Date.now() + 60_000 }]);
+  const journal = createMemoryWorkerOperationJournal([{ operationId, provider: "fly", appName: "napplet-cvm-workers", requestSha256: digest("d"), state: "dispatched", resourceName: `napplet-cvm-${operationId}`, resourceId: "machine-legacy", image, region: "ams", policyVersion: PRODUCTION_WORKER_POLICY.version, createdAtMs: 1, sessionLeaseSha256: digest("b"), toolchainSha256: digest("c"), providerDeadlineEpochMs: Date.now() + 60_000 }]);
   let deletes = 0;
   const machine = { id: "machine-legacy", name: `napplet-cvm-${operationId}`, created_at: "2026-10-27T00:00:00.000Z", state: "started", config: { image, guest: { cpus: 1, memory_mb: 1024 }, services: [], env: { NAPPLET_CVM_POLICY_VERSION: PRODUCTION_WORKER_POLICY.version }, metadata: { "napplet-cvm-operation": operationId, "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-role": "isolated-worker" } } };
   const transport = createFlyMachinesHttpTransport({ appName: "napplet-cvm-workers", getAccessToken: async () => "valid-access-token", journal, fetch: async (_url, init) => { if (init.method === "DELETE") deletes += 1; return new Response(JSON.stringify(machine), { status: 200 }); } });
@@ -178,7 +200,7 @@ test("Fly never executes or cleans a legacy record without persisted provider cr
 
 test("Fly readiness exec is bounded, authenticated, and cannot run against a substituted image", async () => {
   const operationId = "op-probe";
-  const journal = createMemoryWorkerOperationJournal([{ operationId, requestSha256: digest("d"), state: "dispatched", resourceName: `napplet-cvm-${operationId}`, resourceId: "machine-probe", image, region: "ams", policyVersion: PRODUCTION_WORKER_POLICY.version, createdAtMs: 1, providerCreatedAtMs: Date.parse("2026-10-27T00:00:00.000Z"), sessionLeaseSha256: digest("b"), toolchainSha256: digest("c"), providerDeadlineEpochMs: Date.now() + 60_000 }]);
+  const journal = createMemoryWorkerOperationJournal([{ operationId, provider: "fly", appName: "napplet-cvm-workers", requestSha256: digest("d"), state: "dispatched", resourceName: `napplet-cvm-${operationId}`, resourceId: "machine-probe", image, region: "ams", policyVersion: PRODUCTION_WORKER_POLICY.version, createdAtMs: 1, providerCreatedAtMs: Date.parse("2026-10-27T00:00:00.000Z"), sessionLeaseSha256: digest("b"), toolchainSha256: digest("c"), providerDeadlineEpochMs: Date.now() + 60_000 }]);
   const requests: Array<Readonly<{ url: string; init: RequestInit }>> = [];
   const machine = { id: "machine-probe", name: `napplet-cvm-${operationId}`, created_at: "2026-10-27T00:00:00.000Z", state: "started", config: { image, guest: { cpus: 1, memory_mb: 1024 }, services: [], env: { NAPPLET_CVM_POLICY_VERSION: PRODUCTION_WORKER_POLICY.version }, metadata: { "napplet-cvm-operation": operationId, "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-role": "isolated-worker" } } };
   const transport = createFlyMachinesHttpTransport({ appName: "napplet-cvm-workers", getAccessToken: async () => "valid-access-token", journal, fetch: async (url, init) => {

@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "candidateId": "a58c2170209359cd58b381c05d9a9a51bc3878b72ab6fa450d33c155d783649e",
+  "runtime": "docker",
+  "network": "none",
+  "readOnlyRootFilesystem": true,
+  "capDrop": [
+    "ALL"
+  ],
+  "securityOpt": [
+    "no-new-privileges"
+  ],
+  "user": "65532:65532",
+  "tmpfs": [
+    "/work:rw,nosuid,nodev,size=512m",
+    "/tmp:rw,nosuid,nodev,noexec,size=128m"
+  ],
+  "resources": {
+    "pids": 64,
+    "memory": "2g",
+    "cpus": "2",
+    "timeoutMs": 60000,
+    "outputLimitBytes": 65536
+  },
+  "environment": {
+    "CI": "1",
+    "HOME": "/home/napplet"
+  },
+  "inputMount": {
+    "destination": "/input",
+    "readOnly": true
+  },
+  "entrypoint": "/toolchain/bin/bun"
+}

@@ -90,7 +90,7 @@ function readinessArguments(deadline: number) {
   return ["/usr/local/bin/napplet-cvm-worker", "ready", "--session-lease-sha256", lease, "--provider-image", `registry.example/worker@sha256:${imageHash}`, "--toolchain-sha256", toolchain, "--provider-deadline-epoch-ms", String(deadline)];
 }
 
-const sourceJson = JSON.stringify({ files: [{ path: "src/main.ts", content: "import { runtimeHasDomain } from './domain-availability.js';\nimport './styles.css';\nconst root = document.querySelector<HTMLElement>('#app');\nif (!root) throw new Error('APP_ROOT_MISSING');\nconst message = document.createElement('p');\nmessage.textContent = runtimeHasDomain('storage') ? 'Local production worker proof' : 'Local proof fallback';\nroot.replaceChildren(message);\n" }] });
+const sourceJson = JSON.stringify({ files: [{ path: "src/main.ts", content: "import { runtimeHasDomain } from \"./domain-availability.js\";\nimport \"./styles.css\";\nconst root = document.querySelector<HTMLElement>(\"#app\");\nif (!root) throw new Error(\"APP_ROOT_MISSING\");\nconst message = document.createElement(\"p\");\nmessage.textContent = runtimeHasDomain(\"storage\") ? \"Local production worker proof\" : \"Local proof fallback\";\nroot.replaceChildren(message);\n" }] });
 function buildCommand(deadline: number) {
   // The source is created only after bootstrap mounted the bounded workspace
   // and dropped to UID 65532. Printing the journal preserves it before the

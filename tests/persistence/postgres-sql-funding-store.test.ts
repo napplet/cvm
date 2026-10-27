@@ -106,6 +106,7 @@ test("durable protected material schema stores AES-GCM metadata rather than plai
 test("database-owned rail status projection filters Lightning and Cashu lifecycle rows by owner", async () => {
   const client: PostgresSqlClient = {
     query: async (text: string) => {
+      if (text.includes("SELECT current_user::text AS current_user")) return { rows: [{ current_user: "napplet_development_history", is_superuser: false }] };
       if (text.includes("FROM lightning_top_up_state")) return { rows: [{ state_json: { topUps: [
         ["lightning:own", { topUpId: "lightning:own", accountId: "account:one", rail: "lightning", state: "pending", amount: "20", unit: "sat", createdAt: "2026-08-04T00:00:00.000Z" }],
         ["lightning:other", { topUpId: "lightning:other", accountId: "account:two", rail: "lightning", state: "failed", amount: "20", unit: "sat", createdAt: "2026-08-04T00:00:00.000Z" }],

@@ -47,4 +47,6 @@ jobs:
         run: bun tests/dev-ui/node_modules/playwright/cli.js install --with-deps chromium
       - name: Verify the pinned native AMD64 development relay
         run: bun scripts/probe-development-relay.ts
+      - name: Prove PostgreSQL production accounting isolation
+        run: NAPPLET_RUN_POSTGRES_ISOLATION=1 bun test tests/funding/production-accounting-realm.test.ts --timeout 120000
       - run: bun scripts/dev-payments.ts test

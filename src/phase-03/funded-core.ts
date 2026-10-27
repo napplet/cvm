@@ -12,9 +12,10 @@ import type { CashuSettlementPort } from "../funding/cashu-provider";
 import type { CashuMintPolicyRegistry } from "../funding/cashu-mint-policy";
 import { ProtectedRailMaterialVault } from "../funding/protected-rail-material";
 import type { FundingStore, MeteredFundingStore } from "../persistence/funding-store";
-import { PostgresFundingStore, type PostgresFundingExecutor } from "../persistence/postgres-funding-store";
-import { PostgresSqlFundingStore, type PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
+import type { PostgresFundingExecutor } from "../persistence/postgres-funding-store";
+import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
 import { PostgresFundingDatabase } from "../persistence/postgres-funding-database";
+import { assertProductionAccountingConfiguration, assertProductionRealm, type AccountingRealmName } from "../funding/accounting-realm";
 import type { MeteredGenerationService } from "../phase-04/metered-generation-service";
 import { readSessionStatus } from "../phase-04/session-status";
 import type { ContinuationService } from "../continuity/continuation-service";
@@ -40,6 +41,10 @@ export type FundedCoreOptions = Readonly<{
   postgresExecutor?: PostgresFundingExecutor;
   postgresPool?: PostgresSqlPool;
   database?: PostgresFundingDatabase;
+  /** Real-money composition selects a fresh zero-funded realm, never public history. */
+  accountingRealm?: AccountingRealmName;
+  /** Non-secret adapter/catalog identity descriptor validated before real-money composition. */
+  productionAccountingConfiguration?: unknown;
   capacity?: ReadyCapacityPort;
   sessions?: AccountSessionStatusPort;
   transport?: ContextVmTransportPort;
@@ -86,17 +91,24 @@ export type FundedCore = Readonly<{
 export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
   if (!options.testOnly && options.meteredService && !options.statusCursorSecret) throw new Error("PRODUCTION_STATUS_CURSOR_SECRET_REQUIRED");
   if (options.database && !(options.database instanceof PostgresFundingDatabase)) throw new Error("PRODUCTION_POSTGRES_DATABASE_ADAPTER_REQUIRED");
-  if (options.store && !(options.store instanceof PostgresFundingStore) && !(options.store instanceof PostgresSqlFundingStore) && !options.testOnly) throw new Error("PRODUCTION_POSTGRES_FUNDING_STORE_REQUIRED");
+  // A store/executor can point at public development history while presenting
+  // the same funding interface. Real-money composition must start from the
+  // realm-bound database capability, never a caller-supplied SQL bypass.
+  if (!options.testOnly && (options.store || options.postgresExecutor)) throw new Error("PRODUCTION_POSTGRES_DATABASE_ADAPTER_REQUIRED");
   if (options.store && (options.postgresExecutor || options.postgresPool || options.database)) throw new Error("CONFLICTING_FUNDING_STORE_CONFIGURATION");
   if ([options.postgresExecutor, options.postgresPool, options.database].filter(Boolean).length > 1) throw new Error("CONFLICTING_POSTGRES_CONFIGURATION");
   if (!options.testOnly && (options.lightning || options.cashu)) throw new Error("PRODUCTION_RAIL_COMPOSITION_REQUIRED");
-  const database = options.database ?? (options.postgresPool ? new PostgresFundingDatabase(options.postgresPool) : undefined);
+  const requestedRealm = options.accountingRealm ?? (options.testOnly ? "development-test" : "production-real");
+  if (options.testOnly && (requestedRealm === "production-real" || options.database?.realm.name === "production-real")) throw new Error("TEST_ACCOUNTING_REALM_DENIED");
+  const railConfigurationStarted = Boolean(options.lightningReceiver || options.cashuProvider || options.cashuPolicies || options.protectedMaterialKey);
+  if (!options.testOnly && railConfigurationStarted) assertProductionAccountingConfiguration(options.productionAccountingConfiguration);
+  const database = options.database ?? (options.postgresPool ? new PostgresFundingDatabase(options.postgresPool, { realm: requestedRealm }) : undefined);
+  if (!options.testOnly && database) assertProductionRealm(database.realm);
   const store = options.store ?? database?.funding ?? (options.postgresExecutor ? new PostgresFundingStore(options.postgresExecutor) : undefined);
   // The deterministic test-only path has an explicit in-memory authority. It is
   // still offline design evidence, never a selected database/provider claim.
   const authority = store ?? (() => { throw new Error("POSTGRES_FUNDING_STORE_REQUIRED"); })();
   const funding = new FundingService(authority, options.lifecycle);
-  const railConfigurationStarted = Boolean(options.lightningReceiver || options.cashuProvider || options.cashuPolicies || options.protectedMaterialKey);
   if (railConfigurationStarted && (!database || !options.lightningReceiver || !options.cashuProvider || !options.cashuPolicies || !options.protectedMaterialKey)) throw new Error("PRODUCTION_RAIL_COMPOSITION_REQUIRED");
   const vault = database && options.protectedMaterialKey ? new ProtectedRailMaterialVault({ key: options.protectedMaterialKey, repository: database.protectedMaterials }) : undefined;
   const verifiedCreditWake = options.meteredService?.dispatchVerifiedCredit

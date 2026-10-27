@@ -1,4 +1,5 @@
 import type { AccountTopUpStatusPort } from "../funding/account-status";
+import { bindAccountingRealmPool, createAccountingRealm, type AccountingRealm, type AccountingRealmName } from "../funding/accounting-realm";
 import type { CashuTopUpRecord, CashuTopUpRepository, CashuTopUpResult } from "../funding/cashu-top-up";
 import type { LightningPrivateTopUp, LightningTopUpRepository, LightningTopUpState } from "../funding/lightning-top-up";
 import type { ProtectedRailMaterialRecord, ProtectedRailMaterialRepository } from "../funding/protected-rail-material";
@@ -13,6 +14,124 @@ type LightningJson = Readonly<{
 
 const frozen = <T>(value: T): T => Object.freeze(structuredClone(value));
 const bytes = (value: unknown): Uint8Array => value instanceof Uint8Array ? new Uint8Array(value) : new Uint8Array(value as ArrayBuffer);
+
+export type ProductionCustodyMaterial = Readonly<{
+  custodyId: string; operationId: string; accountId: string; rail: "cashu" | "lightning";
+  materialKind: "cashu_input" | "cashu_blinded_message" | "cashu_output" | "lightning_intent";
+  keyReference: string; payloadDigest: string; nonce: Uint8Array; ciphertext: Uint8Array;
+  canonicalProofIdentity?: string; mintUrl?: string; keysetId?: string; unit?: "sat";
+}>;
+export interface ProductionCustodyRepository { put(record: ProductionCustodyMaterial): Promise<void>; get(custodyId: string): Promise<ProductionCustodyMaterial | undefined>; }
+export type UncertainRailOperation = Readonly<{ operationId: string; accountId: string; rail: "cashu" | "lightning"; providerLocator: string; stableLabel?: string; state: "created" | "dispatching" | "unknown" | "observed_pending" | "observed_succeeded" | "observed_failed"; }>;
+export interface UncertainRailOperationRepository { createOrReplay(operation: UncertainRailOperation): Promise<Readonly<{ operation: UncertainRailOperation; created: boolean }>>; transition(operationId: string, state: UncertainRailOperation["state"]): Promise<UncertainRailOperation>; get(operationId: string): Promise<UncertainRailOperation | undefined>; }
+
+function custodyFromRow(row: Record<string, unknown>): ProductionCustodyMaterial { return frozen({ custodyId: String(row.custody_id), operationId: String(row.operation_id), accountId: String(row.account_id), rail: row.rail as "cashu" | "lightning", materialKind: row.material_kind as ProductionCustodyMaterial["materialKind"], keyReference: String(row.key_reference), payloadDigest: String(row.payload_digest), nonce: bytes(row.nonce), ciphertext: bytes(row.ciphertext), ...(row.canonical_proof_identity ? { canonicalProofIdentity: String(row.canonical_proof_identity) } : {}), ...(row.mint_url ? { mintUrl: String(row.mint_url) } : {}), ...(row.keyset_id ? { keysetId: String(row.keyset_id) } : {}), ...(row.unit ? { unit: row.unit as "sat" } : {}) }); }
+function operationFromRow(row: Record<string, unknown>): UncertainRailOperation { return frozen({ operationId: String(row.operation_id), accountId: String(row.account_id), rail: row.rail as "cashu" | "lightning", providerLocator: String(row.provider_locator), ...(row.stable_label ? { stableLabel: String(row.stable_label) } : {}), state: row.state as UncertainRailOperation["state"] }); }
+
+const RETRYABLE_SERIALIZATION_CODES = new Set(["40001", "40P01", "23505"]);
+const PRODUCTION_SERIALIZABLE_ATTEMPTS = 3;
+
+/**
+ * Rails must retain their original operation identity across a transaction
+ * retry. A unique conflict can be a concurrent exact replay; the next attempt
+ * reads the winner and compares immutable fields before returning it.
+ */
+async function serializableProductionTransaction<T>(
+  pool: PostgresSqlPool,
+  operation: (client: PostgresSqlClient) => Promise<T>,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < PRODUCTION_SERIALIZABLE_ATTEMPTS; attempt += 1) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
+      await client.query("SET LOCAL lock_timeout = '1000ms'");
+      await client.query("SET LOCAL statement_timeout = '5000ms'");
+      const result = await operation(client);
+      await client.query("COMMIT");
+      return frozen(result);
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      lastError = error;
+      const code = String((error as { code?: unknown }).code ?? "");
+      if (!RETRYABLE_SERIALIZATION_CODES.has(code) || attempt + 1 === PRODUCTION_SERIALIZABLE_ATTEMPTS) throw error;
+    } finally {
+      client.release();
+    }
+  }
+  throw lastError ?? new Error("PRODUCTION_SERIALIZATION_RETRY_EXHAUSTED");
+}
+
+class PostgresProductionCustodyRepository implements ProductionCustodyRepository {
+  constructor(private readonly pool: PostgresSqlPool, private readonly realm: AccountingRealm) {}
+
+  async put(record: ProductionCustodyMaterial): Promise<void> {
+    if (this.realm.name !== "production-real" || !/^[a-f0-9]{64}$/iu.test(record.payloadDigest) || (record.canonicalProofIdentity && !/^[a-f0-9]{64}$/iu.test(record.canonicalProofIdentity))) {
+      throw new Error("PRODUCTION_CUSTODY_INVALID");
+    }
+    await serializableProductionTransaction(this.pool, async (client) => {
+      // Custody is append-only to the application role, so SELECT FOR UPDATE
+      // would require the very UPDATE capability we intentionally revoke.
+      // SERIALIZABLE retry plus the primary/semantic unique keys safely turns
+      // a concurrent identical write into a replay without mutable authority.
+      const existing = (await client.query("SELECT custody_id,operation_id,account_id,rail,material_kind,key_reference,payload_digest,canonical_proof_identity,mint_url,keyset_id,unit,nonce,ciphertext FROM rail_custody_material WHERE custody_id=$1", [record.custodyId])).rows[0];
+      if (existing) {
+        const prior = custodyFromRow(existing);
+        const same = prior.operationId === record.operationId && prior.accountId === record.accountId && prior.rail === record.rail && prior.materialKind === record.materialKind && prior.keyReference === record.keyReference && prior.payloadDigest === record.payloadDigest && prior.canonicalProofIdentity === record.canonicalProofIdentity && prior.mintUrl === record.mintUrl && prior.keysetId === record.keysetId && prior.unit === record.unit && Buffer.from(prior.nonce).equals(Buffer.from(record.nonce)) && Buffer.from(prior.ciphertext).equals(Buffer.from(record.ciphertext));
+        if (!same) throw new Error("PRODUCTION_CUSTODY_IDENTITY_CONFLICT");
+        return;
+      }
+      await client.query("INSERT INTO rail_custody_material(custody_id,operation_id,account_id,rail,material_kind,key_reference,payload_digest,canonical_proof_identity,mint_url,keyset_id,unit,nonce,ciphertext) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)", [record.custodyId, record.operationId, record.accountId, record.rail, record.materialKind, record.keyReference, record.payloadDigest, record.canonicalProofIdentity ?? null, record.mintUrl ?? null, record.keysetId ?? null, record.unit ?? null, record.nonce, record.ciphertext]);
+    });
+  }
+
+  async get(custodyId: string): Promise<ProductionCustodyMaterial | undefined> {
+    const client = await this.pool.connect();
+    try {
+      const row = (await client.query("SELECT custody_id,operation_id,account_id,rail,material_kind,key_reference,payload_digest,canonical_proof_identity,mint_url,keyset_id,unit,nonce,ciphertext FROM rail_custody_material WHERE custody_id=$1", [custodyId])).rows[0];
+      return row && custodyFromRow(row);
+    } finally {
+      client.release();
+    }
+  }
+}
+
+class PostgresUncertainRailOperationRepository implements UncertainRailOperationRepository {
+  constructor(private readonly pool: PostgresSqlPool, private readonly realm: AccountingRealm) {}
+
+  async createOrReplay(operation: UncertainRailOperation): Promise<Readonly<{ operation: UncertainRailOperation; created: boolean }>> {
+    if (this.realm.name !== "production-real") throw new Error("PRODUCTION_ACCOUNTING_REALM_REQUIRED");
+    return serializableProductionTransaction(this.pool, async (client) => {
+      const row = (await client.query("SELECT operation_id,account_id,rail,provider_locator,stable_label,state FROM uncertain_rail_operations WHERE operation_id=$1 FOR UPDATE", [operation.operationId])).rows[0];
+      if (row) {
+        const prior = operationFromRow(row);
+        if (prior.accountId !== operation.accountId || prior.rail !== operation.rail || prior.providerLocator !== operation.providerLocator || prior.stableLabel !== operation.stableLabel) throw new Error("PRODUCTION_OPERATION_IDENTITY_CONFLICT");
+        return { operation: prior, created: false };
+      }
+      if (operation.state !== "created") throw new Error("PRODUCTION_OPERATION_INITIAL_STATE_INVALID");
+      await client.query("INSERT INTO uncertain_rail_operations(operation_id,account_id,rail,provider_locator,stable_label,state) VALUES($1,$2,$3,$4,$5,$6)", [operation.operationId, operation.accountId, operation.rail, operation.providerLocator, operation.stableLabel ?? null, operation.state]);
+      return { operation: frozen(operation), created: true };
+    });
+  }
+
+  async transition(operationId: string, state: UncertainRailOperation["state"]): Promise<UncertainRailOperation> {
+    return serializableProductionTransaction(this.pool, async (client) => {
+      const row = (await client.query("UPDATE uncertain_rail_operations SET state=$2,updated_at=now() WHERE operation_id=$1 RETURNING operation_id,account_id,rail,provider_locator,stable_label,state", [operationId, state])).rows[0];
+      if (!row) throw new Error("PRODUCTION_OPERATION_NOT_FOUND");
+      return operationFromRow(row);
+    });
+  }
+
+  async get(operationId: string): Promise<UncertainRailOperation | undefined> {
+    const client = await this.pool.connect();
+    try {
+      const row = (await client.query("SELECT operation_id,account_id,rail,provider_locator,stable_label,state FROM uncertain_rail_operations WHERE operation_id=$1", [operationId])).rows[0];
+      return row && operationFromRow(row);
+    } finally {
+      client.release();
+    }
+  }
+}
 
 class PostgresLightningLifecycleRepository implements LightningTopUpRepository {
   constructor(private readonly pool: PostgresSqlPool) {}
@@ -144,6 +263,7 @@ class PostgresRailStatusProjection implements AccountTopUpStatusPort {
  * neither issue arbitrary queries nor pass database credentials into rail code.
  */
 export class PostgresFundingDatabase {
+  readonly realm: AccountingRealm;
   readonly funding: PostgresSqlFundingStore;
   /** Alias of `funding`, not a second billing/session capability or connection. */
   readonly meteredFunding: MeteredFundingStore;
@@ -153,15 +273,21 @@ export class PostgresFundingDatabase {
   readonly cashu: CashuTopUpRepository;
   readonly protectedMaterials: ProtectedRailMaterialRepository;
   readonly railStatuses: AccountTopUpStatusPort;
+  readonly custody: ProductionCustodyRepository;
+  readonly uncertainRailOperations: UncertainRailOperationRepository;
 
-  constructor(pool: PostgresSqlPool, options: PostgresSqlStoreOptions = {}) {
-    this.funding = new PostgresSqlFundingStore(pool, options);
+  constructor(pool: PostgresSqlPool, options: PostgresSqlStoreOptions & Readonly<{ realm?: AccountingRealmName }> = {}) {
+    this.realm = createAccountingRealm(options.realm ?? "development-test");
+    const realmPool = bindAccountingRealmPool(pool, this.realm);
+    this.funding = new PostgresSqlFundingStore(realmPool, options);
     this.meteredFunding = this.funding;
     this.continuationFunding = this.funding;
-    this.lightning = new PostgresLightningLifecycleRepository(pool);
-    this.cashu = new PostgresCashuLifecycleRepository(pool);
-    this.protectedMaterials = new PostgresProtectedRailMaterialRepository(pool);
-    this.railStatuses = new PostgresRailStatusProjection(pool);
+    this.lightning = new PostgresLightningLifecycleRepository(realmPool);
+    this.cashu = new PostgresCashuLifecycleRepository(realmPool);
+    this.protectedMaterials = new PostgresProtectedRailMaterialRepository(realmPool);
+    this.railStatuses = new PostgresRailStatusProjection(realmPool);
+    this.custody = new PostgresProductionCustodyRepository(realmPool, this.realm);
+    this.uncertainRailOperations = new PostgresUncertainRailOperationRepository(realmPool, this.realm);
     Object.freeze(this);
   }
 }

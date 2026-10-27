@@ -4,7 +4,7 @@ import { FundingService } from "../../src/funding/funding-service";
 import { CashuMintPolicyRegistry } from "../../src/funding/cashu-mint-policy";
 import { FakeCashuSettlementPort } from "../../src/funding/cashu-provider";
 import { CashuTsSettlementAdapter } from "../../src/funding/cashu-provider";
-import { CashuTopUpCoordinator, InMemoryCashuTopUpRepository } from "../../src/funding/cashu-top-up";
+import { CashuTopUpCoordinator, InMemoryCashuTopUpRepository, type CashuTopUpRecord } from "../../src/funding/cashu-top-up";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
 import { getEncodedToken, type RequestFn } from "@cashu/cashu-ts";
 
@@ -50,6 +50,20 @@ const adapterTokenWithoutDleq = new TextEncoder().encode(getEncodedToken({
   mint: "https://mint-b.example", unit: "sat",
   proofs: [{ amount: 21n, id: defaultAdapterKeysetId, secret: "default-adapter-secret", C: `02${"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"}` }],
 }));
+
+test("Cashu lifecycle result updates cannot regress a concurrent verified custody record", async () => {
+  const repository = new InMemoryCashuTopUpRepository();
+  const record: CashuTopUpRecord = { result: { topUpId: "monotonic", state: "verifying", policyVersion: "v1", commitment: "1".repeat(64) }, accountId: "account:one", policy: firstPolicy, protectedId: "protected:input", semanticProofIdentities: ["2".repeat(64)], idempotencyKey: "monotonic", principal, amount: "21", createdAt: "2026-10-27T00:00:00.000Z" };
+  await repository.claim(record);
+  await repository.prepareCustody(record.result.topUpId, { operationId: "cashu-swap:monotonic", mintUrl: "https://mint-a.example", keysetId: "009a1b2c3d4e5f60", unit: "sat", amount: "21", expectedOutputAmount: "21", inputProtectedId: record.protectedId, outputDataProtectedId: "protected:output" });
+  await repository.claimCustodyDispatch(record.result.topUpId);
+  await repository.recordOwnedCustodyOutputs(record.result.topUpId, "protected:owned", "3".repeat(64));
+  await Promise.all([
+    repository.updateResult(record.result.topUpId, { ...record.result, state: "credited", settlementReference: "cashu:settled" }),
+    repository.updateResult(record.result.topUpId, { ...record.result, state: "reconciliation_pending" }),
+  ]);
+  expect(await repository.find(record.result.topUpId)).toMatchObject({ result: { state: "credited", settlementReference: "cashu:settled" }, custody: { state: "owned_outputs", ownedOutputsProtectedId: "protected:owned" } });
+});
 
 describe("Cashu policy", () => {
   test("policy rotation preserves policy-pinned historical mints", () => {

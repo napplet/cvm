@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createRequire } from "node:module";
 import { OutputData, blindMessage, createBlindSignature, createDLEQProof, deriveKeysetId, getEncodedToken, getPubKeyFromPrivKey, pointFromHex, type RequestFn } from "@cashu/cashu-ts";
 import { InMemoryCashuTreasuryCustody, canonicalCashuProofIdentities, canonicalCashuTokenIdentity } from "../../src/funding/treasury-custody";
 import { CashuTsSettlementAdapter } from "../../src/funding/cashu-provider";
@@ -6,6 +7,8 @@ import { CashuTopUpCoordinator, InMemoryCashuTopUpRepository } from "../../src/f
 import { CashuMintPolicyRegistry } from "../../src/funding/cashu-mint-policy";
 import { FundingService } from "../../src/funding/funding-service";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
+import { PostgresFundingDatabase } from "../../src/persistence/postgres-funding-database";
+import { ProtectedRailMaterialVault } from "../../src/funding/protected-rail-material";
 import fixture from "../fixtures/cashu-phase-03.json";
 
 const mintUrl = "https://mint-a.example";
@@ -36,6 +39,8 @@ class RecoveryVault {
   async expire(id: string) { this.#values.delete(id); }
   async open(request: { id: string }) { const value = this.#values.get(request.id); if (!value) throw new Error("missing"); return value.slice(); }
 }
+
+const postgresIntegration = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
 
 describe("Cashu treasury custody", () => {
   test("persists service-owned input and exact blinded recovery material before dispatch", async () => {
@@ -159,3 +164,47 @@ describe("Cashu treasury custody", () => {
     }
   });
 });
+
+postgresIntegration("restricted PostgreSQL restores a lost default Cashu swap from scoped encrypted custody", async () => {
+  const name = `napplet-cvm-cashu-${crypto.randomUUID().replaceAll("-", "")}`;
+  const docker = async (...args: string[]) => {
+    const child = Bun.spawn(["docker", ...args], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+    const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    if (code !== 0) throw new Error(`DOCKER_${args[0]}:${err.slice(0, 300)}`);
+    return out.trim();
+  };
+  const { Pool } = createRequire(import.meta.url)("pg") as { Pool: new (options: Record<string, unknown>) => any };
+  let admin: any; let application: any;
+  try {
+    await docker("run", "--detach", "--rm", "--name", name, "--publish", "127.0.0.1::5432", "-e", "POSTGRES_HOST_AUTH_METHOD=trust", "postgres:17-alpine");
+    const port = (await docker("port", name, "5432/tcp")).match(/127\.0\.0\.1:(\d+)/u)?.[1]; if (!port) throw new Error("POSTGRES_PORT_MISSING");
+    admin = new Pool({ connectionString: `postgresql://postgres@127.0.0.1:${port}/postgres`, connectionTimeoutMillis: 2_000 });
+    for (let attempt = 0; attempt < 60; attempt += 1) { try { await admin.query("SELECT 1"); break; } catch (error) { if (attempt === 59) throw error; await Bun.sleep(250); } }
+    for (const path of ["phase-03/001_funding.sql", "phase-04/001_metered_generation.sql", "phase-04/002_action_budget_lifecycle.sql", "phase-05/001_continuation.sql", "phase-06/001_publication.sql", "phase-03/002_production_accounting.sql", "phase-03/003_cashu_custody_and_identities.sql", "phase-03/004_production_rail_material_scope.sql"]) await admin.query(await Bun.file(`migrations/${path}`).text());
+    await admin.query("CREATE ROLE cashu_recovery_test LOGIN"); await admin.query("GRANT napplet_production_real TO cashu_recovery_test");
+    application = new Pool({ connectionString: `postgresql://cashu_recovery_test@127.0.0.1:${port}/postgres`, connectionTimeoutMillis: 2_000 });
+    let swaps = 0; let restores = 0; let original: { B_: string; amount: string; id: string }[] = [];
+    const request: RequestFn = async (input) => {
+      if (input.endpoint.endsWith("/v1/info")) return { name: "fixture", version: "1", nuts: { 12: { supported: true } } } as never;
+      if (input.endpoint.includes("/v1/keysets")) return { keysets: [{ id: fixtureKeysetId, unit: "sat", active: true, input_fee_ppk: 0 }] } as never;
+      if (input.endpoint.includes("/v1/keys")) return { keysets: [{ id: fixtureKeysetId, unit: "sat", keys: generators }] } as never;
+      if (input.endpoint.endsWith("/v1/swap")) { swaps += 1; original = (input.requestBody as { outputs: typeof original }).outputs; throw new Error("LOST_RESPONSE_AFTER_MINT_SWAP"); }
+      if (input.endpoint.endsWith("/v1/restore")) { restores += 1; const outputs = (input.requestBody as { outputs: typeof original }).outputs; expect(outputs.map((output) => output.B_).sort()).toEqual(original.map((output) => output.B_).sort()); return { outputs, signatures: outputs.map((output) => signedOutput({ ...output, amount: output.amount.toString() })) } as never; }
+      if (input.endpoint.endsWith("/v1/checkstate")) return { states: (input.requestBody as { Ys: string[] }).Ys.map((Y) => ({ Y, state: "SPENT", witness: null })) } as never;
+      throw new Error(`unexpected:${input.endpoint}`);
+    };
+    const policy = { ...fixture.policies[0]!, mints: fixture.policies[0]!.mints.map((mint) => mint.url === mintUrl ? { ...mint, keysetIds: [fixtureKeysetId] } : mint) };
+    const principal = { pubkey: "e".repeat(64) }; const bearer = new TextEncoder().encode(getEncodedToken({ mint: mintUrl, unit: "sat", proofs: [validProof("pg-input-16", "16", fixtureKeysetId), validProof("pg-input-4", "4", fixtureKeysetId), validProof("pg-input-1", "1", fixtureKeysetId)] }));
+    const command = { principal, idempotencyKey: "pg-recover-default", topUpId: "pg-recover-default", amount: "21", unit: "sat" as const, pmi: fixture.pmi, token: bearer };
+    const coordinator = () => {
+      const database = new PostgresFundingDatabase(application, { realm: "production-real", deadlineMs: 5_000 });
+      return { database, cashu: new CashuTopUpCoordinator({ policies: new CashuMintPolicyRegistry(policy), provider: new CashuTsSettlementAdapter({ request }), vault: new ProtectedRailMaterialVault({ key: new Uint8Array(32).fill(9), repository: database.protectedMaterials }), funding: new FundingService(database.funding), repository: database.cashu }) };
+    };
+    expect((await coordinator().cashu.submit(command)).state).toBe("reconciliation_pending");
+    expect((await coordinator().cashu.reconcile(command.topUpId)).state).toBe("credited");
+    expect({ swaps, restores }).toEqual({ swaps: 1, restores: 1 });
+    expect((await new FundingService(coordinator().database.funding).status(principal)).available).toBe("21");
+    expect((await admin.query("SELECT count(*)::int AS n FROM production_real.rail_material_scopes WHERE top_up_id='pg-recover-default'")).rows[0].n).toBe(1);
+    expect((await admin.query("SELECT count(*)::int AS n FROM production_real.top_ups WHERE top_up_id='pg-recover-default'")).rows[0].n).toBe(1);
+  } finally { await application?.end(); await admin?.end(); await docker("rm", "--force", name).catch(() => undefined); }
+}, 120_000);

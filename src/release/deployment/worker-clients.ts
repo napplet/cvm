@@ -101,7 +101,7 @@ function isolatedExec(command: readonly string[]): readonly string[] {
 }
 function productionCommand(value: readonly string[]): string[] {
   const command = z.array(z.string().min(1).max(32_768)).min(1).max(12).parse(value);
-  if (command.some((argument, index) => argument.length > 256 && !(command[0] === "/usr/local/bin/napplet-cvm-job" && command[1] === "put" && index === 4 && /^[A-Za-z0-9+/]+={0,2}$/u.test(argument)))) throw new Error("WORKER_COMMAND_ARGUMENT_INVALID");
+  if (command.some((argument, index) => argument.length > 256 && !(command[0] === "/usr/local/bin/napplet-cvm-job" && ["put", "restore-put"].includes(command[1]!) && index === 4 && /^[A-Za-z0-9+/]+={0,2}$/u.test(argument)))) throw new Error("WORKER_COMMAND_ARGUMENT_INVALID");
   return command;
 }
 

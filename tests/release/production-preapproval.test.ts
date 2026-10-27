@@ -177,6 +177,7 @@ test("materializes create-only receipt-free preapproval bytes and remeasures eve
       source: { sourceRevision: "a".repeat(40), sourceSha256: pin("source") },
       topology: { candidateSha256: pin("candidate"), topologySha256: pin("topology") },
       catalog: { catalogSha256: pin("catalog"), topologySha256: pin("topology") },
+      authorization: { authorizationRequestSha256: pin("request"), controllerStateSha256: pin("state"), effectPlanSha256: pin("effects"), providerScopesSha256: pin("scopes"), maximumAuthorizedCostMicros: 1, cleanupByMs: 1_000, expiresAtMs: 2_000 },
       publicSettings: { regions: ["europe-west1", "us-central1"] as [string, string], maximumRunDurationMs: 900_000, retentionDays: 30 },
       opaqueReferenceNames: ["cloud-run", "modal"],
       factory: {
@@ -195,6 +196,7 @@ test("materializes create-only receipt-free preapproval bytes and remeasures eve
     expect(await verifyPreapprovalMaterialization(first)).toEqual(first);
     const artifact = await readFile(first.artifactPath, "utf8");
     for (const forbidden of ["receipt", "workerSelection", "evidence", "trust", "evaluator", "pass", "secret://"]) expect(artifact.toLowerCase()).not.toContain(forbidden.toLowerCase());
+    expect(JSON.parse(artifact)).toMatchObject({ authorization: { authorizationRequestSha256: pin("request"), controllerStateSha256: pin("state"), effectPlanSha256: pin("effects"), providerScopesSha256: pin("scopes"), maximumAuthorizedCostMicros: 1, cleanupByMs: 1_000, expiresAtMs: 2_000 } });
     await writeFile(first.artifactPath, "{}\n");
     await expect(verifyPreapprovalMaterialization(first)).rejects.toThrow("PREAPPROVAL_ARTIFACT_MUTATED");
   } finally {
@@ -211,10 +213,12 @@ test("rejects authority-shaped inputs, cross-bound hashes, and paths outside the
     const input = {
       workspace, repositoryRoot, candidateId: pin("candidate"), source: { sourceRevision: "a".repeat(40), sourceSha256: pin("source") },
       topology: { candidateSha256: pin("candidate"), topologySha256: pin("topology") }, catalog: { catalogSha256: pin("catalog"), topologySha256: pin("topology") },
+      authorization: { authorizationRequestSha256: pin("request"), controllerStateSha256: pin("state"), effectPlanSha256: pin("effects"), providerScopesSha256: pin("scopes"), maximumAuthorizedCostMicros: 1, cleanupByMs: 1_000, expiresAtMs: 2_000 },
       publicSettings: { regions: ["europe-west1", "us-central1"] as [string, string], maximumRunDurationMs: 900_000, retentionDays: 30 }, opaqueReferenceNames: ["modal"],
       factory: { root: repositoryRoot, modulePath, moduleSha256: sha256(await readFile(modulePath)), configPath, configSha256: sha256(await readFile(configPath)) },
     };
     await expect(materializePreapproval({ ...input, authorizationReceiptSha256: pin("receipt") } as never)).rejects.toThrow("PREAPPROVAL_INPUT_REJECTED");
+    await expect(materializePreapproval({ ...input, authorization: { ...input.authorization, expiresAtMs: input.authorization.cleanupByMs } })).rejects.toThrow("PREAPPROVAL_BINDING_REJECTED");
     await expect(materializePreapproval({ ...input, catalog: { ...input.catalog, topologySha256: pin("other") } })).rejects.toThrow("PREAPPROVAL_BINDING_REJECTED");
     await expect(materializePreapproval({ ...input, factory: { ...input.factory, modulePath: "/tmp/outside.ts" } })).rejects.toThrow("PREAPPROVAL_FACTORY_REJECTED");
   } finally {

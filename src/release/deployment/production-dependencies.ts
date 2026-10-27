@@ -27,7 +27,10 @@ type ProjectOwnedProtectedPorts = Readonly<{
   [K in keyof ProductionLiveProtectedCertificationPorts]: ProductionLiveProtectedCertificationPorts[K] & Readonly<{ origin: "project-owned" }>;
 }>;
 
-type PreparedOperationalExecution = Omit<AuthorizedLiveExecutionInput, "registry" | "receipt" | "protected"> & Readonly<{
+/** Controller-owned output assembled only after exact receipt validation. It
+ * intentionally omits the registry/receipt/ports because this module binds
+ * those independently and rejects a materializer supplied replacement. */
+export type PreparedOperationalExecution = Omit<AuthorizedLiveExecutionInput, "registry" | "receipt" | "protected"> & Readonly<{
   protected: Omit<AuthorizedLiveExecutionInput["protected"], "ports">;
 }>;
 

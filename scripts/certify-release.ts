@@ -1,7 +1,7 @@
-import { verifyFinalizedRelease } from "../src/release/verify-finalization";
 import { ReleaseCertificationController, RELEASE_WORKSPACE_ENV, releaseCandidateSha256, runReleaseCertification } from "../src/release/controller";
 import { createNativeReleaseDiscoveryRegistry } from "../src/release/native-discovery";
 import { createReleaseControllerProviderRegistry } from "../src/release/native-registry";
+import { loadFinalizedReleaseVerificationAuthority } from "../src/release/production-execution";
 import { CERTIFIER_CONFIG_SHA256_ENV, loadCertifierConfig } from "../src/certification/config";
 import { loadReleaseExecutionReadiness, loadReleaseExecutionSession, loadReleaseFundingFeePolicyProjection } from "../src/release/production-execution";
 import { preparePreApprovalPrerequisites } from "../src/release/deployment/consent";
@@ -20,6 +20,10 @@ import { createApplicationDefaultTokenPort, createOfficialPricingSources, PRODUC
 import { createOfficialFundingRailFeePort, type SealedFundingFeePolicyProjection } from "../src/release/costs/funding-fees";
 import { RELEASE_TOPOLOGY_QUANTITY_CONTRACT } from "../src/release/topology";
 import { RELEASE_COST_FAMILIES, type LiveCostCatalogPort } from "../src/release/costs/live-estimator";
+import { createDeploymentExecutionConfig } from "../src/release/deployment/config";
+import { materializePreapproval } from "../src/release/preapproval-materializer";
+import { validateAuthorizationReceipt } from "../src/release/authorization";
+import { verifyFinalizedRelease } from "../src/release/verify-finalization";
 
 const repositoryRoot = resolve(import.meta.dir, "..");
 const defaultWorkspace = join(repositoryRoot, ".runtime", "release-certification", "native-discovery-v1");
@@ -120,13 +124,89 @@ function zeroEffectCounters() {
   });
 }
 
+async function sha256Json(value: unknown): Promise<string> {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** `--receipt` is an opaque controller receipt ID, never receipt JSON. The
+ * canonical structured receipt must already have been written by the sole
+ * consent/controller path under the confined workspace. */
+async function readControllerReceipt(workspace: string, receiptSha256: string): Promise<unknown> {
+  if (!/^[a-f0-9]{64}$/iu.test(receiptSha256)) throw new Error("RELEASE_AUTHORIZATION_RECEIPT_INVALID");
+  try {
+    return JSON.parse(await readFile(join(workspace, "authorization-receipts", `${receiptSha256.toLowerCase()}.json`), "utf8"));
+  } catch {
+    throw new Error("RELEASE_AUTHORIZATION_RECEIPT_UNAVAILABLE");
+  }
+}
+
+/** Read-only verification is deliberately kept on the product CLI so the
+ * operator lifecycle has one stable root. The bundle remains unable to choose
+ * its verifier: only the configured, pinned trust root is accepted. */
 async function verifyImmutableBundle(bundleSha256: string) {
   if (!/^[a-f0-9]{64}$/u.test(bundleSha256)) throw new Error("RELEASE_CERTIFICATION_USAGE");
   const config = await loadCertifierConfig();
-  if (config.mode !== "protected" || !config.trustRoot) throw new Error("TRUST_ROOT_CONFIGURATION_INVALID");
-  return verifyFinalizedRelease({ workspace: controllerWorkspace(), bundleSha256, config, configSha256: process.env[CERTIFIER_CONFIG_SHA256_ENV]! });
+  if (config.mode !== "protected") throw new Error("TRUST_ROOT_CONFIGURATION_INVALID");
+  const workspace = controllerWorkspace();
+  const authority = config.trustRoot ? { config, configSha256: process.env[CERTIFIER_CONFIG_SHA256_ENV]! } : await loadFinalizedReleaseVerificationAuthority({ config, workspace, bundleSha256 });
+  return verifyFinalizedRelease({ workspace, bundleSha256, ...authority });
 }
 
+/** Materialization is a bounded local write of measured, redacted readiness
+ * bytes.  The operator cannot supply any portion of this input: the protected
+ * configuration itself is hash-pinned, while candidate/topology/state and
+ * price facts come from the controller's no-effect dry run. */
+async function materializeRequestPreapproval(input: Readonly<{
+  candidateSha256: string;
+  topologySha256: string;
+  facts: readonly unknown[];
+  authorization: Awaited<ReturnType<ReleaseCertificationController["dryRun"]>>["authorizationRequest"];
+  workspace: string;
+}>) {
+  const certifier = await loadCertifierConfig();
+  if (certifier.mode !== "protected" || certifier.credentials !== "configured" || !certifier.releaseExecution || !certifier.controller) {
+    throw new Error("RELEASE_PRODUCTION_EXECUTION_CONFIG_REQUIRED");
+  }
+  const execution = certifier.releaseExecution;
+  const deployment = createDeploymentExecutionConfig(JSON.parse(await readFile(execution.configPath, "utf8")));
+  if (deployment.candidateSha256 !== input.candidateSha256 || deployment.sourceRevision !== certifier.controller.sourceRevision || deployment.factoryModuleSha256 !== execution.sha256 || deployment.publicSettings.regions.length !== 2) {
+    throw new Error("PREAPPROVAL_DEPLOYMENT_BINDING_REJECTED");
+  }
+  const catalogSha256 = await sha256Json(input.facts);
+  const providerScopesSha256 = await sha256Json(input.authorization.providerScopes);
+  return materializePreapproval({
+    workspace: input.workspace,
+    repositoryRoot: execution.root,
+    candidateId: input.candidateSha256,
+    source: { sourceRevision: certifier.controller.sourceRevision, sourceSha256: certifier.controller.sourceSha256 },
+    topology: { candidateSha256: input.candidateSha256, topologySha256: input.topologySha256 },
+    catalog: { catalogSha256, topologySha256: input.topologySha256 },
+    authorization: {
+      authorizationRequestSha256: input.authorization.authorizationRequestSha256,
+      controllerStateSha256: input.authorization.controllerStateSha256,
+      effectPlanSha256: input.authorization.effectPlanSha256,
+      providerScopesSha256,
+      maximumAuthorizedCostMicros: input.authorization.maximumAuthorizedCostMicros,
+      cleanupByMs: input.authorization.cleanupByMs,
+      expiresAtMs: input.authorization.expiresAtMs,
+    },
+    publicSettings: {
+      regions: deployment.publicSettings.regions as [string, string],
+      maximumRunDurationMs: deployment.publicSettings.maximumRunDurationMs,
+      retentionDays: deployment.publicSettings.retentionDays,
+    },
+    opaqueReferenceNames: Object.keys(deployment.secretReferences).sort(),
+    factory: {
+      root: execution.root,
+      modulePath: execution.modulePath,
+      moduleSha256: execution.sha256,
+      configPath: execution.configPath,
+      configSha256: execution.configSha256,
+    },
+  });
+}
 
 /** Build the controller-owned, read-only price discovery path. It neither
  * selects a project nor creates a billing account; ADC is used only as an
@@ -175,12 +255,17 @@ async function main(): Promise<number> {
   const dryRun = process.argv.includes("--dry-run") || request || receipt !== undefined;
   const status = process.argv.includes("--status");
   const resume = option("--resume");
-  if ((verifyBundle !== undefined && (status || candidatePath || request || receipt !== undefined || resume !== undefined || setupRequested || process.argv.includes("--dry-run"))) || (!status && !candidatePath && !verifyBundle) || (dryRun && status) || (setupRequested && (status || request || receipt !== undefined || resume !== undefined || process.argv.includes("--dry-run"))) || (requiredState !== undefined && !status) || (receipt !== undefined && !/^[a-f0-9]{64}$/iu.test(receipt)) || (resume !== undefined && !/^[a-f0-9]{64}$/iu.test(resume))) {
+  if ((!status && !candidatePath && !verifyBundle) || (dryRun && status) || (setupRequested && (status || request || receipt !== undefined || resume !== undefined || process.argv.includes("--dry-run"))) || (verifyBundle !== undefined && (status || candidatePath || request || receipt !== undefined || resume !== undefined || setupRequested || process.argv.includes("--dry-run"))) || (requiredState !== undefined && !status) || (receipt !== undefined && !/^[a-f0-9]{64}$/iu.test(receipt)) || (resume !== undefined && !/^[a-f0-9]{64}$/iu.test(resume))) {
     console.error("RELEASE_CERTIFICATION_USAGE");
     return 1;
   }
   try {
     const workspace = controllerWorkspace();
+    /* Resolve an opaque receipt reference before any candidate discovery. A
+     * nonexistent ID is not allowed to trigger pricing/provider reads just to
+     * learn that it cannot authorize anything. Structural validation remains
+     * below, against the freshly reconstructed controller request. */
+    const controllerReceipt = receipt ? await readControllerReceipt(workspace, receipt) : undefined;
     if (verifyBundle) {
       const decision = await verifyImmutableBundle(verifyBundle);
       console.log(JSON.stringify({ progress: decision.status === "promoted" ? "bundle_verified" : "bundle_blocked", status: decision.status, bundleSha256: decision.bundleSha256, evidenceSha256: decision.evidenceSha256, cleanup: decision.cleanup }));
@@ -228,13 +313,14 @@ async function main(): Promise<number> {
       const config = await loadCertifierConfig();
       const session = await loadReleaseExecutionSession({ config, candidateSha256: await releaseCandidateSha256(candidatePath!), workspace });
       const result = await runReleaseCertification({ candidatePath: candidatePath!, workspace, dryRun: false, session });
-      console.log(JSON.stringify({ bundleSha256: result.finalization?.bundleSha256 ?? null, verificationConfigSha256: result.finalization?.verificationConfig?.sha256 ?? null, status: result.state.status, candidateSha256: result.state.candidate.candidateSha256, topologySha256: result.state.topologySha256, stateSha256: result.state.stateSha256, authorizationRequestSha256: result.authorizationRequest.authorizationRequestSha256 }));
+      console.log(JSON.stringify({ status: result.state.status, candidateSha256: result.state.candidate.candidateSha256, topologySha256: result.state.topologySha256, stateSha256: result.state.stateSha256, authorizationRequestSha256: result.authorizationRequest.authorizationRequestSha256 }));
       return result.state.status === "completed" ? 0 : 1;
     }
     const candidateSha256 = !status ? await releaseCandidateSha256(candidatePath!) : undefined;
     // Implementation comes first. An incomplete factory must not ask the
     // operator to fund, log in, or approve a candidate it cannot execute.
     let preparedCatalog: LiveCostCatalogPort | undefined;
+    let preparedPriceFacts: readonly unknown[] | undefined;
     if (request) {
       const execution = await executionReadinessProjection({ candidateSha256: candidateSha256!, workspace });
       if (execution.status !== "ready") {
@@ -245,6 +331,7 @@ async function main(): Promise<number> {
         const config = await loadCertifierConfig();
         const policy = await loadReleaseFundingFeePolicyProjection({ config, candidateSha256: candidateSha256!, workspace });
         const facts = await currentOfficialCostCatalog(policy).listPriceFacts({ providers: RELEASE_COST_FAMILIES });
+        preparedPriceFacts = facts;
         preparedCatalog = Object.freeze({ async listPriceFacts() { return facts; } });
       } catch (error) {
         const reasonCode = error instanceof Error && /^[A-Z][A-Z0-9_]{2,95}$/u.test(error.message) ? error.message : "OFFICIAL_PRICE_DISCOVERY_FAILED";
@@ -255,17 +342,6 @@ async function main(): Promise<number> {
     const funding = !status ? await operatorFundingReadinessProjection(workspace) : undefined;
     const certificationFunding = funding ? await releaseCertificationFundingReadiness(funding) : undefined;
     const fundingPrerequisites = certificationFunding?.status === "pending" ? undefined : certificationFunding;
-    // Funding setup is a local, effect-free prerequisite. Surface it before
-    // attempting remote catalog reads so a transient pricing outage cannot
-    // hide the one concrete action the operator can complete locally.
-    if (request && certificationFunding?.status !== "ready") {
-      console.log(JSON.stringify({
-        progress: "local_setup_required",
-        setup: localFundingSetupDescriptor({ candidateSha256: candidateSha256! }),
-        zeroEffectCounters: zeroEffectCounters(),
-      }));
-      return 1;
-    }
     let result: Awaited<ReturnType<typeof runReleaseCertification>> | undefined;
     try {
       result = status
@@ -304,7 +380,12 @@ async function main(): Promise<number> {
     }
     if (requiredState !== undefined && requiredState !== result.state.status) throw new Error("RELEASE_CERTIFICATION_STATE_MISMATCH");
     if (resume && resume.toLowerCase() !== result.state.stateSha256 && resume.toLowerCase() !== result.authorizationRequest.resumeStateSha256) throw new Error("RELEASE_CERTIFICATION_RESUME_MISMATCH");
-    if (receipt && receipt.toLowerCase() !== result.authorizationRequest.expectedReceiptSha256) throw new Error("RELEASE_AUTHORIZATION_RECEIPT_INVALID");
+    let resolvedReceipt: unknown;
+    if (receipt) {
+      resolvedReceipt = controllerReceipt;
+      const validated = await validateAuthorizationReceipt({ request: result.authorizationRequest, receipt: resolvedReceipt, nowMs: Date.now() });
+      if (validated.authorizationReceiptSha256 !== receipt.toLowerCase()) throw new Error("RELEASE_AUTHORIZATION_RECEIPT_INVALID");
+    }
     const resolvedCandidateSha256 = result.state.candidate.candidateSha256;
     const executionReadiness = await executionReadinessProjection({ candidateSha256: resolvedCandidateSha256, workspace });
     if (request && executionReadiness.status !== "ready") {
@@ -313,6 +394,50 @@ async function main(): Promise<number> {
         candidateSha256: resolvedCandidateSha256,
         readiness: { capabilityDiscovery: { status: "completed", mode: "read_only" }, pricing: { status: "completed", mode: "read_only" }, execution: executionReadiness },
         prerequisites: preparePreApprovalPrerequisites({ funding: certificationFunding! }),
+      }));
+      return 1;
+    }
+    const materialization = request
+      ? await materializeRequestPreapproval({ candidateSha256: resolvedCandidateSha256, topologySha256: result.state.topologySha256, facts: preparedPriceFacts!, authorization: result.authorizationRequest, workspace })
+      : undefined;
+    if (receipt) {
+      /* No endpoint/provider object is accepted on the command line. Only a
+       * controller-stored receipt is resolved, validated, and carried into
+       * the pinned factory. runReleaseCertification then revalidates it at
+       * the session and every protected operation boundary. */
+      const config = await loadCertifierConfig();
+      const session = await loadReleaseExecutionSession({
+        config,
+        candidateSha256: resolvedCandidateSha256,
+        workspace,
+        authorization: { request: result.authorizationRequest, receipt: resolvedReceipt },
+      });
+      const live = await runReleaseCertification({ candidatePath: candidatePath!, workspace, dryRun: false, session });
+      console.log(JSON.stringify({
+        progress: live.state.status,
+        candidateSha256: live.state.candidate.candidateSha256,
+        topologySha256: live.state.topologySha256,
+        stateSha256: live.state.stateSha256,
+        authorizationRequestSha256: result.authorizationRequest.authorizationRequestSha256,
+        authorizationReceiptSha256: receipt.toLowerCase(),
+        bundleSha256: live.finalization?.bundleSha256 ?? null,
+        verificationConfigSha256: live.finalization?.verificationConfig?.sha256 ?? null,
+      }));
+      return live.state.status === "completed" ? 0 : 1;
+    }
+    /* Funding consent is the only remaining operator action, and is requested
+     * only after the normal candidate → implementation → official price →
+     * controller-request → sealed-materialization path has completed. This
+     * preserves a reviewable request/artifact even when NWC/Cashu setup is
+     * genuinely absent; it never opens a wallet or creates funding here. */
+    if (request && certificationFunding?.status !== "ready") {
+      console.log(JSON.stringify({
+        progress: "local_setup_required",
+        setup: localFundingSetupDescriptor({ candidateSha256: resolvedCandidateSha256, authorizationRequestSha256: result.authorizationRequest.authorizationRequestSha256 }),
+        review: reviewProjection(result.authorizationRequest),
+        executionReadiness,
+        materialization: { materializationId: materialization!.materializationId, artifactSha256: materialization!.artifactSha256 },
+        zeroEffectCounters: zeroEffectCounters(),
       }));
       return 1;
     }
@@ -325,6 +450,7 @@ async function main(): Promise<number> {
       prerequisites: preparePreApprovalPrerequisites(fundingPrerequisites ? { funding: fundingPrerequisites } : undefined),
       review: reviewProjection(result.authorizationRequest),
       executionReadiness,
+      ...(materialization ? { materialization: { materializationId: materialization.materializationId, artifactSha256: materialization.artifactSha256 } } : {}),
       zeroEffectCounters: zeroEffectCounters(),
     } : { status: result.state.status, candidateSha256: result.state.candidate.candidateSha256, topologySha256: result.state.topologySha256, stateSha256: result.state.stateSha256, authorizationRequestSha256: result.authorizationRequest.authorizationRequestSha256, expectedReceiptSha256: result.authorizationRequest.expectedReceiptSha256, controllerStateSha256: result.authorizationRequest.controllerStateSha256, resumeStateSha256: result.authorizationRequest.controllerStateSha256 }));
     return status && requiredState !== undefined ? 0 : result.exitCode;

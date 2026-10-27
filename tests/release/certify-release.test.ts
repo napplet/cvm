@@ -152,7 +152,7 @@ test("workspace overrides are confined and status/resume remain candidate-bound"
   expect(`${unsafeStdout}${unsafeStderr}`).toContain("RELEASE_CERTIFICATION_WORKSPACE_REJECTED");
 });
 
-test("a supplied receipt cannot bypass exact request matching", async () => {
+test("an unavailable receipt reference cannot bypass exact controller record lookup", async () => {
   const workspace = await isolatedReleaseWorkspace("certify-receipt-");
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "NAPPLET_CVM_RELEASE_WORKSPACE")), NAPPLET_CVM_RELEASE_WORKSPACE: workspace, PATH: "/nonexistent" } as Record<string, string>;
   try {
@@ -160,10 +160,20 @@ test("a supplied receipt cannot bypass exact request matching", async () => {
     const [receiptCode, receiptStdout, receiptStderr] = await Promise.all([receiptChild.exited, new Response(receiptChild.stdout).text(), new Response(receiptChild.stderr).text()]);
     expect(receiptCode).toBe(1);
     expect(receiptStdout).toBe("");
-    expect(receiptStderr).toContain("RELEASE_AUTHORIZATION_RECEIPT_INVALID");
+    expect(receiptStderr).toContain("RELEASE_AUTHORIZATION_RECEIPT_UNAVAILABLE");
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
+});
+
+test("immutable bundle verification rejects an absolute caller-selected path before trust loading", async () => {
+  const child = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--verify-bundle", "/tmp/forged-release.json"], {
+    cwd: process.cwd(), env: { ...process.env, PATH: "/nonexistent" }, stdout: "pipe", stderr: "pipe",
+  });
+  const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect(code).toBe(1);
+  expect(stdout).toBe("");
+  expect(stderr).toContain("RELEASE_CERTIFICATION_USAGE");
 });
 
 test("request reports missing implementation before funding setup or remote price discovery", async () => {
@@ -221,14 +231,4 @@ test("product request blocks missing execution without asking for credentials or
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
-});
-
-test("immutable bundle verification rejects an absolute caller-selected path before trust loading", async () => {
-  const child = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--verify-bundle", "/tmp/forged-release.json"], {
-    cwd: process.cwd(), env: { ...process.env, PATH: "/nonexistent" }, stdout: "pipe", stderr: "pipe",
-  });
-  const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-  expect(code).toBe(1);
-  expect(stdout).toBe("");
-  expect(stderr).toContain("RELEASE_CERTIFICATION_USAGE");
 });

@@ -5,7 +5,7 @@ import { NeedsTopUpResultSchema } from "../continuity/contracts";
 import { evaluateRisk, type RiskSignalDetector } from "../admission/risk-policy";
 import { accountIdForPrincipal } from "../domain/account-command";
 import { FundedAdmissionService } from "../funding/funded-admission";
-import { type ModelGateway, ModelObservationSchema, ProviderOperationIntentSchema } from "../model/model-gateway";
+import { type ModelGateway, ModelObservationSchema, ProviderOperationIntentSchema, type NormalizedUsageReceipt, type ProviderOperationIntent, type SourceProposalLookup } from "../model/model-gateway";
 import { PHASE_04_DETERMINISTIC_PRICE_CARD, PHASE_04_MODEL_PROFILES, maximumOperationCharge, priceReceipt, type ModelProfile, type PriceCard } from "../model/price-card";
 import { type ContinuationFundingStore, type MeteredFundingStore } from "../persistence/funding-store";
 import { type WorkerPort, WorkerRunRequestSchema, WorkerRunResultSchema } from "../phase-02/contracts";
@@ -16,7 +16,6 @@ import { canonicalJson } from "../promotion/schema";
 import { type NappletHarness, type NappletHarnessRequest } from "./napplet-harness";
 import { evaluateAutomaticRepair } from "./repair-policy";
 import { emitLifecycleObservation, type LifecycleTelemetryPort } from "../telemetry/contracts";
-import type { SourceProposalStore } from "../dev/source-proposal-store";
 
 const DecimalSchema = z.string().regex(/^[1-9][0-9]*$/u);
 const GenerationProjectionSchema = z.object({
@@ -56,6 +55,13 @@ type ContinuationWakePort = Readonly<{
   /** Lookup-only exact-operation observer used during coordinator restart. */
   observeAction?(input: Readonly<{ accountId: string; sessionId: string; pauseGeneration: number; operationId: string; actionBudgetReference: string; liveLeaseToken: string }>): Promise<"completed" | "unknown">;
 }>;
+/** Optional currency settlement seam.  The default Phase 4 path remains a
+ * same-currency card; production may bind an immutable FX quote before the
+ * reservation and turn the authoritative provider receipt into sats later. */
+export type GenerationUsageSettlement = Readonly<{
+  prepare(input: Readonly<{ accountId: string; operationId: string; card: PriceCard; profile: ModelProfile; at: string }>): Promise<Readonly<{ maximum: string }>>;
+  finalize(input: Readonly<{ accountId: string; intent: ProviderOperationIntent; receipt: NormalizedUsageReceipt; pricedAmount: string }>): Promise<Readonly<{ amount: string; providerReceiptReference: string }>>;
+}>;
 
 const TOKEN_COUNTER = Object.freeze({ version: "phase-02-whitespace-token-counter-v1", count: (idea: string) => idea.trim().split(/\s+/u).filter(Boolean).length });
 const RISK_DETECTOR: RiskSignalDetector = Object.freeze({ version: "phase-02-deterministic-risk-detector-v1", detect: () => [] });
@@ -66,7 +72,7 @@ async function hash(value: unknown): Promise<string> { const digest = await cryp
 export class MeteredGenerationService {
   #inFlight = new Map<string, Promise<SessionActionResult>>();
   #sessionTails = new Map<string, Promise<void>>();
-  constructor(private readonly options: Readonly<{ fundedAdmission: FundedAdmissionService; store: MeteredFundingStore; gateway: ModelGateway; worker: WorkerPort; artifactVerifier: ArtifactVerifier; proposalStore?: SourceProposalStore; pricing?: Readonly<{ card: PriceCard; profile: ModelProfile }>; riskDetector?: RiskSignalDetector; harness?: Readonly<{ runner: NappletHarness; toolchain: NappletHarnessRequest["toolchain"]; snapshotReference: string; priorArtifactId: string; approvedApplicationSurfaces: readonly string[] }>; continuation?: ContinuationService; clock?: Readonly<{ nowMs(): number }>; continuationWake?: ContinuationWakePort; telemetry?: LifecycleTelemetryPort }>) {}
+  constructor(private readonly options: Readonly<{ fundedAdmission: FundedAdmissionService; store: MeteredFundingStore; gateway: ModelGateway; worker: WorkerPort; artifactVerifier: ArtifactVerifier; proposalStore?: SourceProposalLookup; pricing?: Readonly<{ card: PriceCard; profile: ModelProfile }>; settlement?: GenerationUsageSettlement; riskDetector?: RiskSignalDetector; harness?: Readonly<{ runner: NappletHarness; toolchain: NappletHarnessRequest["toolchain"]; snapshotReference: string; priorArtifactId: string; approvedApplicationSurfaces: readonly string[] }>; continuation?: ContinuationService; /** Immutable worker/toolchain identity retained with any durable pause. */ toolchainIdentity?: string; clock?: Readonly<{ nowMs(): number }>; continuationWake?: ContinuationWakePort; telemetry?: LifecycleTelemetryPort }>) {}
 
   #continuation(): ContinuationService {
     const continuationStore = this.options.store as MeteredFundingStore & Partial<ContinuationFundingStore>;
@@ -254,20 +260,21 @@ export class MeteredGenerationService {
     // The profile's bounded worst-case charge is the authorization ceiling.
     // Do this before creating an action or dispatching the provider: a caller
     // may approve more than this ceiling, but never less.
-    const profileCeiling = maximumOperationCharge({ card: priceCard, profile });
+    const operationId = `operation:${(await hash({ accountId, key: command.idempotencyKey, profile: profile.id })).slice(0, 24)}`;
+    const profileCeiling = (await this.options.settlement?.prepare({ accountId, operationId, card: priceCard, profile, at: new Date().toISOString() }))?.maximum ?? maximumOperationCharge({ card: priceCard, profile });
     if (BigInt(command.maximum) < BigInt(profileCeiling)) {
       return SessionActionResultSchema.parse({ status: "denied", code: "ACTION_MAXIMUM_BELOW_PROFILE_CEILING" });
     }
     const sessionId = "sessionId" in command ? command.sessionId : `session:${(await hash({ accountId, key: command.idempotencyKey })).slice(0, 24)}`;
     const actionKind = "repair" in command ? "repair" as const : "revision" in command ? "revise_session" as const : "start_session" as const;
     const boundedPayloadHash = await hash("repair" in command ? { repair: command.originatingActionId } : "revision" in command ? { revision: command.revision } : { idea: command.idea, ...("remixReference" in command && command.remixReference ? { remixReference: command.remixReference } : {}) });
-    const pauseFingerprint = await hash({ accountId, sessionId, actionKind, boundedPayloadHash, expectedSessionVersion: command.expectedVersion, expectedArtifactVersion: command.expectedVersion, policyVersion: command.policyVersion, priceCardId: priceCard.id, profileId: profile.id, toolchainId: "phase-04-deterministic-toolchain", actionMaximum: profileCeiling, idempotencyKey: command.idempotencyKey });
+    const toolchainId = this.options.toolchainIdentity ?? "phase-04-deterministic-toolchain";
+    const pauseFingerprint = await hash({ accountId, sessionId, actionKind, boundedPayloadHash, expectedSessionVersion: command.expectedVersion, expectedArtifactVersion: command.expectedVersion, policyVersion: command.policyVersion, priceCardId: priceCard.id, profileId: profile.id, toolchainId, actionMaximum: profileCeiling, idempotencyKey: command.idempotencyKey });
     if (!options.bypassLegacyContinuation) {
       const continuation = this.#continuation();
-      const paused = await continuation.pauseForFunding({ intent: { accountId, sessionId, idempotencyKey: command.idempotencyKey, fingerprint: pauseFingerprint, reference: `pending:${(await hash({ accountId, key: command.idempotencyKey, pauseFingerprint })).slice(0, 24)}`, actionKind, boundedPayloadHash, expectedSessionVersion: command.expectedVersion, expectedArtifactVersion: command.expectedVersion, policyVersion: command.policyVersion, priceCardId: priceCard.id, profileId: profile.id, toolchainId: "phase-04-deterministic-toolchain", actionMaximum: profileCeiling, admissionReference: command.admissionReference } });
+      const paused = await continuation.pauseForFunding({ intent: { accountId, sessionId, idempotencyKey: command.idempotencyKey, fingerprint: pauseFingerprint, reference: `pending:${(await hash({ accountId, key: command.idempotencyKey, pauseFingerprint })).slice(0, 24)}`, actionKind, boundedPayloadHash, expectedSessionVersion: command.expectedVersion, expectedArtifactVersion: command.expectedVersion, policyVersion: command.policyVersion, priceCardId: priceCard.id, profileId: profile.id, toolchainId, actionMaximum: profileCeiling, admissionReference: command.admissionReference } });
       if (paused) return SessionActionResultSchema.parse(paused);
     }
-    const operationId = `operation:${(await hash({ accountId, key: command.idempotencyKey, profile: profile.id })).slice(0, 24)}`;
     const lifecycleCorrelation = [accountId, sessionId, operationId] as const;
     // Database action IDs are globally primary-keyed.  Include owner/session
     // identity while retaining lookup by the existing account-scoped command
@@ -336,7 +343,7 @@ export class MeteredGenerationService {
       await emitLifecycleObservation(this.options.telemetry, lifecycleCorrelation, "generation", "pending");
       return SessionActionResultSchema.parse({ status: "usage_unknown", code: "USAGE_UNKNOWN", accountId, sessionId, nextAction: "billing_reconciliation", operationId });
     }
-    const priced = priceReceipt({ receipt: observation.receipt, card: priceCard, profile, reservation: profileCeiling });
+    const priced = priceReceipt({ receipt: observation.receipt, card: priceCard, profile, ...(this.options.settlement ? {} : { reservation: profileCeiling }) });
     if (priced.status !== "priced") {
       const result = SessionActionResultSchema.parse({ status: "billing_invariant_failed", code: priced.code, accountId, sessionId, nextAction: "billing_reconciliation", operationId });
       await this.options.store.transact(accountId, (transaction) => transaction.finalizeMeteredAction({ idempotencyKey: command.idempotencyKey, operationId, receiptCharge: "0", providerReceiptReference: observation.receipt.provenance.protectedEvidenceReference, status: "billing_invariant_failed", result, sessionVersion: 0, artifactVersion: 0 }));
@@ -392,10 +399,16 @@ export class MeteredGenerationService {
       }
     } catch { completed = false; }
     const status = completed ? "completed" as const : "failed" as const;
+    let settlement: Readonly<{ amount: string; providerReceiptReference: string }>;
+    try { settlement = this.options.settlement ? await this.options.settlement.finalize({ accountId, intent, receipt: observation.receipt, pricedAmount: priced.total }) : { amount: priced.total, providerReceiptReference: observation.receipt.provenance.protectedEvidenceReference }; }
+    catch {
+      await this.options.store.transact(accountId, transaction => transaction.recordUsageUnknown({ operationId, providerRequestId, protectedEvidenceReference: observation.receipt.provenance.protectedEvidenceReference, reason: "uncertain_acceptance" }));
+      return SessionActionResultSchema.parse({ status: "usage_unknown", code: "USAGE_UNKNOWN", accountId, sessionId, nextAction: "billing_reconciliation", operationId });
+    }
     const result = SessionActionResultSchema.parse(completed
-      ? { status, code: "ACTION_COMMITTED", accountId, sessionId, sessionVersion: command.expectedVersion + 1, artifactVersion: command.expectedVersion + 1, artifactId: artifactId!, confirmedSpend: priced.total, remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId, generation: { provider: observation.receipt.provider, model: observation.receipt.model, profileId: observation.receipt.profileId, priceCardId: observation.receipt.priceCardId, usage: observation.receipt.usage, source: "durably recorded" as const, worker: "verified" as const } }
-      : { status, code: "WORKER_OR_ARTIFACT_FAILED", accountId, sessionId, sessionVersion: command.expectedVersion, artifactVersion: command.expectedVersion, confirmedSpend: priced.total, remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId });
-    const finalized = await this.options.store.transact(accountId, (transaction) => transaction.finalizeMeteredAction({ idempotencyKey: command.idempotencyKey, operationId, receiptCharge: priced.total, providerReceiptReference: observation.receipt.provenance.protectedEvidenceReference, status, result, sessionVersion: completed ? command.expectedVersion + 1 : command.expectedVersion, artifactVersion: completed ? command.expectedVersion + 1 : command.expectedVersion, artifact: { ...(artifactId ? { artifactId } : {}), workspaceLineage, checkpointReference, snapshotReference: `snapshot:${sessionId}:${durableActionId}`, validationEvidenceReference, ...(failedArtifactId ? { failedArtifactId } : {}), ...(validationReportReference ? { validationReportReference } : {}) } }));
+      ? { status, code: "ACTION_COMMITTED", accountId, sessionId, sessionVersion: command.expectedVersion + 1, artifactVersion: command.expectedVersion + 1, artifactId: artifactId!, confirmedSpend: settlement.amount, remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId, generation: { provider: observation.receipt.provider, model: observation.receipt.model, profileId: observation.receipt.profileId, priceCardId: observation.receipt.priceCardId, usage: observation.receipt.usage, source: "durably recorded" as const, worker: "verified" as const } }
+      : { status, code: "WORKER_OR_ARTIFACT_FAILED", accountId, sessionId, sessionVersion: command.expectedVersion, artifactVersion: command.expectedVersion, confirmedSpend: settlement.amount, remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId });
+    const finalized = await this.options.store.transact(accountId, (transaction) => transaction.finalizeMeteredAction({ idempotencyKey: command.idempotencyKey, operationId, receiptCharge: settlement.amount, providerReceiptReference: settlement.providerReceiptReference, status, result, sessionVersion: completed ? command.expectedVersion + 1 : command.expectedVersion, artifactVersion: completed ? command.expectedVersion + 1 : command.expectedVersion, artifact: { ...(artifactId ? { artifactId } : {}), workspaceLineage, checkpointReference, snapshotReference: `snapshot:${sessionId}:${durableActionId}`, validationEvidenceReference, ...(failedArtifactId ? { failedArtifactId } : {}), ...(validationReportReference ? { validationReportReference } : {}) } }));
     await emitLifecycleObservation(this.options.telemetry, lifecycleCorrelation, "generation", "succeeded");
     await emitLifecycleObservation(this.options.telemetry, lifecycleCorrelation, "ledger_settlement", "succeeded");
     return SessionActionResultSchema.parse(finalized.result);

@@ -76,6 +76,11 @@ test("materializes a candidate-bound local config, profile, adapter bundle, secr
     expect(releaseProfile.candidate.provider).toBeUndefined();
     expect(releaseProfile.worker).toEqual({ selection: "unselected", reasonCode: "PROTECTED_EVIDENCE_REQUIRED" });
     expect(sha256(await readFile(first.adapter.modulePath))).toBe(first.adapter.sha256);
+    const executionBundle = await readFile(first.releaseExecution.modulePath, "utf8");
+    expect(sha256(executionBundle)).toBe(first.releaseExecution.sha256);
+    // The materialized factory is a one-file sealed closure; it must not defer
+    // a relative import to mutable repository sources after approval.
+    expect(executionBundle).not.toMatch(/(?:from\s*|import\s*\()["']\.{1,2}\//u);
     await expect(loadCertifierConfig({ env: first.env })).resolves.toMatchObject({ mode: "protected", controller: { candidateId: digest("candidate") } });
     expect(providerCalls).toBe(0);
     expect(protectedRunnerCalls).toBe(0);

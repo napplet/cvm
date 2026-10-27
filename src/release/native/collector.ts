@@ -36,11 +36,15 @@ const ProviderObservationSchema = z.union([
   z.object({ status: z.enum(["missing", "pending", "unknown", "blocked"]) }).strict(),
 ]);
 type ProviderObservation = z.infer<typeof ProviderObservationSchema>;
+const CleanupObservationSchema = z.object({ status: z.enum(["cleaned", "missing", "pending", "unknown", "blocked"]) }).strict();
 
 export type CollectorControlPlanePort = Readonly<{
   persist(input: Readonly<{ operationId: string; kind: "configure" | "cleanup"; authorizationRequestSha256: string; authorizationReceiptSha256: string; projectScopeSha256: string }>): Promise<void>;
   observe(input: Readonly<{ operationId: string; projectId: string; endpointReferenceSha256: string }>): Promise<unknown>;
+  /** Query-only cleanup reconciliation; it must never issue a delete. */
+  observeCleanup(input: Readonly<{ operationId: string; projectId: string; endpointReferenceSha256: string }>): Promise<unknown>;
   configure(input: Readonly<{ operationId: string; projectId: string; endpointReference: string; endpointReferenceSha256: string; collectorDigest: string; configSha256: string }>): Promise<void>;
+  /** Resolves only after provider deletion is actually observed. */
   deleteCollector(input: Readonly<{ operationId: string; projectId: string; endpointReference: string; endpointReferenceSha256: string }>): Promise<void>;
   emit(input: Readonly<{ endpointReferenceSha256: string; observation: LifecycleObservation }>): Promise<void>;
   queryWindow(input: Readonly<{ endpointReferenceSha256: string; binding: z.infer<typeof WindowBindingSchema> }>): Promise<unknown>;
@@ -145,8 +149,8 @@ export function createNativeCollectorProvider(input: Readonly<{ config: unknown;
       if (EndpointReferenceSchema.safeParse(raw.runOwnedEndpointReference).data !== config.endpointReference) throw new Error("COLLECTOR_CLEANUP_SCOPE_INVALID");
       const operationId = `${authorized.operationId}:cleanup`;
       await input.port.persist({ operationId, kind: "cleanup", authorizationRequestSha256: authorized.request.authorizationRequestSha256, authorizationReceiptSha256: authorized.receipt.authorizationReceiptSha256, projectScopeSha256: config.projectScopeSha256 });
-      const existing = ProviderObservationSchema.parse(await input.port.observe({ operationId, projectId: config.projectId, endpointReferenceSha256: config.endpointReferenceSha256 }));
-      if (existing.status === "completed") throw new Error("COLLECTOR_CLEANUP_RECONCILIATION_PENDING");
+      const existing = CleanupObservationSchema.parse(await input.port.observeCleanup({ operationId, projectId: config.projectId, endpointReferenceSha256: config.endpointReferenceSha256 }));
+      if (existing.status === "cleaned") return Object.freeze({ status: "cleaned" as const, operationId, endpointReferenceSha256: config.endpointReferenceSha256, configBindingSha256: await sha256({ candidateSha256: config.candidateSha256, topologySha256: config.topologySha256, configSha256: config.configSha256 }) });
       if (existing.status !== "missing") throw new Error(existing.status === "blocked" ? "COLLECTOR_OPERATION_BLOCKED" : "COLLECTOR_RECONCILIATION_PENDING");
       const immediate = await authorize(raw, config, now());
       await input.port.deleteCollector({ operationId, projectId: config.projectId, endpointReference: config.endpointReference, endpointReferenceSha256: config.endpointReferenceSha256 });

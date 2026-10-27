@@ -5,7 +5,7 @@ import { canonicalJson } from "../promotion/schema";
 const DIGEST = /^[a-f0-9]{64}$/iu;
 const REVISION = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/iu;
 const REFERENCE = /^[a-z][a-z0-9_.-]{0,127}$/u;
-const allowedInputKeys = new Set(["workspace", "repositoryRoot", "candidateId", "source", "topology", "catalog", "publicSettings", "opaqueReferenceNames", "factory"]);
+const allowedInputKeys = new Set(["workspace", "repositoryRoot", "candidateId", "source", "topology", "catalog", "authorization", "publicSettings", "opaqueReferenceNames", "factory"]);
 
 type Digest = string;
 type PinnedFile = Readonly<{ path: string; sha256: Digest }>;
@@ -23,6 +23,18 @@ export type MaterializePreapprovalInput = Readonly<{
   source: Readonly<{ sourceRevision: string; sourceSha256: string }>;
   topology: Readonly<{ candidateSha256: string; topologySha256: string }>;
   catalog: Readonly<{ catalogSha256: string; topologySha256: string }>;
+  /** Immutable review facts from the controller's no-effect request. These
+   * are hashes/bounds only: consent receipts and credentials never enter this
+   * preapproval artifact. */
+  authorization: Readonly<{
+    authorizationRequestSha256: string;
+    controllerStateSha256: string;
+    effectPlanSha256: string;
+    providerScopesSha256: string;
+    maximumAuthorizedCostMicros: number;
+    cleanupByMs: number;
+    expiresAtMs: number;
+  }>;
   publicSettings: Readonly<{ regions: readonly [string, string]; maximumRunDurationMs: number; retentionDays: number }>;
   opaqueReferenceNames: readonly string[];
   factory: Readonly<{ root: string; modulePath: string; moduleSha256: string; configPath: string; configSha256: string }>;
@@ -66,6 +78,11 @@ async function assertInput(input: MaterializePreapprovalInput): Promise<Readonly
     || !REVISION.test(input.source?.sourceRevision ?? "") || !validDigest(input.source?.sourceSha256)
     || !validDigest(input.topology?.candidateSha256) || !validDigest(input.topology?.topologySha256)
     || !validDigest(input.catalog?.catalogSha256) || !validDigest(input.catalog?.topologySha256)
+    || !validDigest(input.authorization?.authorizationRequestSha256) || !validDigest(input.authorization?.controllerStateSha256)
+    || !validDigest(input.authorization?.effectPlanSha256) || !validDigest(input.authorization?.providerScopesSha256)
+    || !Number.isSafeInteger(input.authorization?.maximumAuthorizedCostMicros) || input.authorization.maximumAuthorizedCostMicros <= 0
+    || !Number.isSafeInteger(input.authorization?.cleanupByMs) || !Number.isSafeInteger(input.authorization?.expiresAtMs)
+    || input.authorization.cleanupByMs <= 0 || input.authorization.expiresAtMs <= input.authorization.cleanupByMs
     || input.topology.candidateSha256.toLowerCase() !== input.candidateId.toLowerCase()
     || input.catalog.topologySha256.toLowerCase() !== input.topology.topologySha256.toLowerCase()) throw new Error("PREAPPROVAL_BINDING_REJECTED");
   const settings = input.publicSettings;
@@ -91,6 +108,7 @@ export async function materializePreapproval(input: MaterializePreapprovalInput)
   const identity = await digestJson({
     candidateId: input.candidateId.toLowerCase(), source: { sourceRevision: input.source.sourceRevision.toLowerCase(), sourceSha256: input.source.sourceSha256.toLowerCase() },
     topologySha256: input.topology.topologySha256.toLowerCase(), catalogSha256: input.catalog.catalogSha256.toLowerCase(),
+    authorization: input.authorization,
     publicSettings: input.publicSettings, opaqueReferenceNames: [...input.opaqueReferenceNames].sort(),
     factory: { moduleSha256: checked.factory.module.sha256, configSha256: checked.factory.config.sha256 },
   });
@@ -101,6 +119,7 @@ export async function materializePreapproval(input: MaterializePreapprovalInput)
     version: 1 as const, kind: "execution-readiness" as const, materializationId: identity, candidateId: input.candidateId.toLowerCase(),
     source: { sourceRevision: input.source.sourceRevision.toLowerCase(), sourceSha256: input.source.sourceSha256.toLowerCase() },
     topologySha256: input.topology.topologySha256.toLowerCase(), catalogSha256: input.catalog.catalogSha256.toLowerCase(),
+    authorization: { ...input.authorization },
     publicSettings: { regions: [...input.publicSettings.regions], maximumRunDurationMs: input.publicSettings.maximumRunDurationMs, retentionDays: input.publicSettings.retentionDays },
     opaqueReferenceNames: [...input.opaqueReferenceNames].sort(),
     factory: { moduleSha256: checked.factory.module.sha256, configSha256: checked.factory.config.sha256 },

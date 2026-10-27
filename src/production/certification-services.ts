@@ -5,12 +5,13 @@ import type { ContextVmTransportPort, ContextVmInboundEnvelope } from "../contex
 import type { ReadyCapacityPort } from "../funding/funded-admission";
 import { bindAccountingRealmPool, createAccountingRealm } from "../funding/accounting-realm";
 import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
-import { WorkerBenchmarkSampleSchema } from "../admission/benchmark";
+import { WorkerBenchmarkSampleSchema, type WorkerBenchmarkSample } from "../admission/benchmark";
 import { CoreControlPayloadSchemas } from "../release/deployment/production-core-suite-protocol";
 import { PostgresOperationJournal, assertPostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
 import { assertProductionReadyCapacity, type ProductionReadyCapacityPort } from "./worker-capacity";
 import { ProductionUnusedAdmissionRelease } from "./unused-admission";
 import type { ProductionCertificationServices } from "../release/deployment/production-core-suite-protocol";
+import { ProductionRestoreCertification, assertProductionRestoreCertification } from "./restore-certification";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -31,7 +32,7 @@ export function assertProductionAdmissionObserver(value: unknown): asserts value
 /** Signed admission and its exact worker share one coordinator clock. SQL
  * supplies lease/backlog facts; the immutable worker probe supplies isolation.
  * Unsupported fault cohorts cannot be relabeled ordinary admission attempts. */
-export class ProductionCertificationCoreServices implements Pick<ProductionCertificationServices, "prepareCohort" | "observeCohort" | "reconcile"> {
+export class ProductionCertificationCoreServices implements Pick<ProductionCertificationServices, "prepareCohort" | "observeCohort" | "restore" | "reconcile"> {
   readonly #pool: PostgresSqlPool;
   readonly #coordinatorId = randomUUID();
   readonly #release: ProductionUnusedAdmissionRelease;
@@ -41,10 +42,15 @@ export class ProductionCertificationCoreServices implements Pick<ProductionCerti
     capacities: Readonly<Record<"modal" | "fly", ProductionReadyCapacityPort>>;
     selectedProvider: "modal" | "fly";
     journal: PostgresOperationJournal; pool: PostgresSqlPool;
+    /** The restore authority is constructed from mounted SQL/GCS/KEK/worker
+     * material by the server bootstrap. It is never supplied by a control
+     * payload or the session-material client graph. */
+    restore?: ProductionRestoreCertification;
   }>) {
     Digest.parse(input.candidates.modal); Digest.parse(input.candidates.fly); Digest.parse(input.certificationOwnerPubkey);
     z.literal("1").parse(input.requestedCap); assertPostgresOperationJournal(input.journal);
     assertProductionReadyCapacity(input.capacities.modal); assertProductionReadyCapacity(input.capacities.fly);
+    if (input.restore) assertProductionRestoreCertification(input.restore);
     this.#pool = bindAccountingRealmPool(input.pool, createAccountingRealm("production-real"));
     this.#release = new ProductionUnusedAdmissionRelease(input.pool); observers.add(this);
   }
@@ -148,12 +154,18 @@ export class ProductionCertificationCoreServices implements Pick<ProductionCerti
     if (!record || !record.value.observation || !record.value.requestEventId || !record.value.admissionReference) throw new Error("PRODUCTION_COHORT_ORIGINAL_OBSERVATION_REQUIRED");
     let cohort = record.value;
     if (cohort.state !== "complete") {
-      if (cohort.state === "cleaning") throw new Error("PRODUCTION_COHORT_CLEANUP_PENDING");
       if (cohort.observation!.outcome !== "accepted") throw new Error("PRODUCTION_COHORT_NON_ACCEPTED_CLEANUP_REQUIRED");
-      const cleaning = await this.input.journal.compareAndSet<Cohort>(this.#key(operation), record.identitySha256, record.revision, { ...cohort, state: "cleaning" });
+      /* A process can lose the provider termination acknowledgement after the
+       * SQL release committed.  Keep the original cleaning record and retry
+       * only idempotent/query-only recovery paths; capacity termination owns
+       * its separate durable destructive claim. */
+      const cleaning = cohort.state === "cleaning"
+        ? record
+        : await this.input.journal.compareAndSet<Cohort>(this.#key(operation), record.identitySha256, record.revision, { ...cohort, state: "cleaning" });
       if (!cleaning) throw new Error("PRODUCTION_COHORT_CLEANUP_PENDING");
       // SQL fences new actions before terminating this entirely unused worker.
-      await this.#release.release({ accountId: cohort.accountId, admissionReference: cohort.admissionReference!, intentReference: cohort.intentReference });
+      const releaseInput = { accountId: cohort.accountId, admissionReference: cohort.admissionReference!, intentReference: cohort.intentReference };
+      if (!await this.#release.observe(releaseInput)) await this.#release.release(releaseInput);
       await this.input.capacities[cohort.provider].release({ intentReference: cohort.intentReference, reference: cohort.admissionReference! });
       const next: Cohort = { ...cohort, state: "complete", observation: { ...cohort.observation!, cleanup: "passed" } };
       const saved = await this.input.journal.compareAndSet<Cohort>(this.#key(operation), record.identitySha256, cleaning.revision, next);
@@ -161,8 +173,23 @@ export class ProductionCertificationCoreServices implements Pick<ProductionCerti
     }
     return this.#project(cohort);
   }
+  /** Internal HTTP admission lookup is derived only from the durable cohort
+   * original.  It cannot trigger admission, readiness, release, or cleanup. */
+  async observeAdmissionOperation(input: Readonly<{ operationId: string }>): Promise<WorkerBenchmarkSample | undefined> {
+    const operation = z.string().regex(/^admission-(?:modal|fly)-[a-zA-Z0-9._:-]{1,192}$/u).parse(input.operationId);
+    const record = await this.input.journal.read<Cohort>(this.#key(operation));
+    return record?.value.observation;
+  }
   #project(cohort: Cohort) { return Object.freeze({ candidateId: cohort.candidateId, provider: cohort.provider, sample: cohort.observation, correlation: { clientOperationId: cohort.clientOperationId, admissionReference: cohort.admissionReference, requestEventId: cohort.requestEventId } }); }
+  async restore(input: Parameters<ProductionCertificationServices["restore"]>[0]): Promise<unknown> {
+    if (!this.input.restore) throw new Error("PRODUCTION_RESTORE_CERTIFICATION_REQUIRED");
+    return this.input.restore.restore(input);
+  }
   async reconcile(input: Parameters<ProductionCertificationServices["reconcile"]>[0]): Promise<unknown> {
+    if (input.kind.startsWith("restore.")) {
+      if (!this.input.restore) throw new Error("PRODUCTION_RESTORE_CERTIFICATION_REQUIRED");
+      return this.input.restore.reconcile(input);
+    }
     if (input.kind !== "cohort.prepare" && input.kind !== "cohort.observe") throw new Error("PRODUCTION_CORE_RECONCILIATION_UNAVAILABLE");
     const payload = CoreControlPayloadSchemas[input.kind].parse(input.payload);
     const operation = this.#operation({ operationId: input.operationId, ...payload });

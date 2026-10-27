@@ -54,8 +54,11 @@ const RedactedDiscoveryMetadataSchema = z.object({
 const NativeDiscoverySchema = z.object({ capability: z.enum(["available", "unavailable", "unsupported"]) }).extend(RedactedDiscoveryMetadataSchema.shape).strict();
 const NativeAuthenticationSchema = z.object({ authentication: z.enum(["authorized", "not_configured", "unavailable"]) }).extend(RedactedDiscoveryMetadataSchema.shape).strict();
 const NativePlanSchema = z.object({ status: z.literal("planned"), estimatedCostMicros: CostSchema }).strict();
-const NativeMutationSchema = z.object({ status: z.enum(["applied", "unknown", "blocked"]), actualCostMicros: CostSchema.optional(), resourceIdentity: z.string().min(1).max(4_096).optional() }).strict();
-const NativeObservationSchema = z.object({ status: z.enum(["completed", "pending", "unknown", "missing", "blocked"]), actualCostMicros: CostSchema.optional(), resourceIdentity: z.string().min(1).max(4_096).optional() }).strict();
+/* A mounted native adapter may already return the canonical identity digest
+ * from the provider's observation. Keep that digest intact instead of
+ * hashing a hash again while still supporting older opaque identities. */
+const NativeMutationSchema = z.object({ status: z.enum(["applied", "unknown", "blocked"]), actualCostMicros: CostSchema.optional(), resourceIdentity: z.string().min(1).max(4_096).optional(), resourceIdentitySha256: DigestSchema.optional() }).strict();
+const NativeObservationSchema = z.object({ status: z.enum(["completed", "pending", "unknown", "missing", "blocked"]), actualCostMicros: CostSchema.optional(), resourceIdentity: z.string().min(1).max(4_096).optional(), resourceIdentitySha256: DigestSchema.optional() }).strict();
 const NativeCleanupSchema = z.object({ status: z.enum(["cleaned", "pending", "blocked"]), actualCostMicros: CostSchema }).strict();
 
 export type ReleaseProviderPort = Readonly<{
@@ -172,7 +175,7 @@ export class ReleaseProviderRegistry {
     if (!port) throw new Error("RELEASE_PROVIDER_UNAVAILABLE");
     const result = NativeMutationSchema.parse(await port.apply(effectInput(authorized.operation)));
     const actualCostMicros = checkedCost(result.actualCostMicros, authorized.approvedMaximumCostMicros);
-    return Object.freeze({ status: result.status, actualCostMicros, ...(result.resourceIdentity ? { resourceIdentitySha256: await sha256(result.resourceIdentity) } : {}) });
+    return Object.freeze({ status: result.status, actualCostMicros, ...(result.resourceIdentitySha256 ? { resourceIdentitySha256: result.resourceIdentitySha256 } : result.resourceIdentity ? { resourceIdentitySha256: await sha256(result.resourceIdentity) } : {}) });
   }
 
   async observe(input: Readonly<{ receipt: unknown; operation: unknown; approvedMaximumCostMicros: unknown }>): Promise<ReleaseProviderObservationResult> {
@@ -181,7 +184,7 @@ export class ReleaseProviderRegistry {
     if (!port) throw new Error("RELEASE_PROVIDER_UNAVAILABLE");
     const result = NativeObservationSchema.parse(await port.observe({ operationId: authorized.operation.operationId }));
     const actualCostMicros = checkedCost(result.actualCostMicros, authorized.approvedMaximumCostMicros);
-    return Object.freeze({ status: result.status, actualCostMicros, ...(result.resourceIdentity ? { resourceIdentitySha256: await sha256(result.resourceIdentity) } : {}) });
+    return Object.freeze({ status: result.status, actualCostMicros, ...(result.resourceIdentitySha256 ? { resourceIdentitySha256: result.resourceIdentitySha256 } : result.resourceIdentity ? { resourceIdentitySha256: await sha256(result.resourceIdentity) } : {}) });
   }
 
   async cleanup(input: Readonly<{ receipt: unknown; operation: unknown; approvedMaximumCostMicros: unknown; resourceIdentitySha256?: string }>): Promise<ReleaseProviderCleanupResult> {

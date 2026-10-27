@@ -101,6 +101,30 @@ export class PostgresOperationJournal {
       return row ? record<T>(row) : undefined;
     });
   }
+  /**
+   * Finds one persisted resource binding without exposing a journal scan to a
+   * control-plane caller.  This is intentionally limited to a top-level,
+   * scalar JSON field and fails closed on ambiguity: a fresh-process restore
+   * may reattach only the one original resource tuple that was journaled by
+   * the create operation.
+   */
+  async readUniqueByValueField<T = unknown>(field: string, value: string): Promise<OperationRecord<T> | undefined> {
+    if (!/^[A-Za-z][A-Za-z0-9_]{0,63}$/u.test(field) || !/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$/u.test(value)) throw new Error("OPERATION_JOURNAL_LOOKUP_INVALID");
+    return this.#transaction(async client => {
+      const rows = await client.query<Record<string, unknown>>("SELECT * FROM production_real.release_operation_journal WHERE namespace=$1 AND scope_sha256=$2 AND value_json ->> $3 = $4 ORDER BY operation_id LIMIT 2", [this.#namespace, this.#scope, field, value]);
+      if (rows.rows.length > 1) throw new Error("OPERATION_JOURNAL_LOOKUP_AMBIGUOUS");
+      return rows.rows[0] ? record<T>(rows.rows[0]) : undefined;
+    });
+  }
+  /** Bounded private-control admission guard scoped to this journal binding. */
+  async countOperations(): Promise<number> {
+    return this.#transaction(async client => {
+      const row = (await client.query("SELECT count(*)::text AS count FROM production_real.release_operation_journal WHERE namespace=$1 AND scope_sha256=$2", [this.#namespace, this.#scope])).rows[0];
+      const count = Number(row?.count);
+      if (!Number.isSafeInteger(count) || count < 0) throw new Error("OPERATION_JOURNAL_COUNT_INVALID");
+      return count;
+    });
+  }
   async compareAndSet<T>(operationId: string, identitySha256: string, expectedRevision: number, value: T): Promise<OperationRecord<T> | undefined> {
     identifier(operationId); digest(identitySha256);
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) throw new Error("OPERATION_REVISION_INVALID");

@@ -7,7 +7,10 @@ import { validateAuthorizationReceipt, validateAuthorizationRequest, type Releas
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 const PubkeySchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
-const RelaySchema = z.string().url().refine((value) => value.startsWith("wss://"), "RELAY_WSS_REQUIRED");
+const RelaySchema = z.string().url().refine((value) => {
+  const url = new URL(value);
+  return url.protocol === "wss:" || (url.protocol === "ws:" && ["127.0.0.1", "::1", "localhost"].includes(url.hostname));
+}, "RELAY_WSS_REQUIRED");
 const OperationIdSchema = z.string().min(1).max(300);
 const NostrEventSchema = z.object({
   id: DigestSchema, pubkey: PubkeySchema, created_at: z.number().int().nonnegative(), kind: z.number().int().nonnegative(),

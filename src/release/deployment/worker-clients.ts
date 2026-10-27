@@ -139,6 +139,7 @@ export type FlyMachinesHttpTransport = Readonly<{
   create(input: Readonly<{ operationId: string; region: string; image: string; policy: ProductionWorkerPolicy; sessionLeaseSha256: string; toolchainSha256: string; providerDeadlineEpochMs: number }>): Promise<FlyCreateResult>;
   observe(input: Readonly<{ operationId: string }>): Promise<Readonly<{ status: "missing" | "pending" | "completed" | "unknown"; resourceId?: string; readiness?: WorkerReadinessObservation }>>;
   terminate(input: Readonly<{ operationId: string }>): Promise<Readonly<{ status: "terminated" | "pending" | "unknown" | "blocked" }>>;
+  observeTermination(input: Readonly<{ operationId: string }>): Promise<Readonly<{ status: "terminated" | "pending" | "unknown" | "blocked" }>>;
   /** Controller-only bounded Machines exec. It is used for the immutable
    * image's readiness probe, never to re-run generated or paid work. */
   exec(input: Readonly<{ operationId: string; command: readonly string[]; stdin?: string; timeoutSeconds?: number }>): Promise<Readonly<{ status: "completed" | "unknown"; stdout?: string; stderr?: string; exitCode?: number }>>;
@@ -148,6 +149,7 @@ export type ModalProductionTransport = Readonly<{
   create(input: Readonly<{ operationId: string; sessionLeaseSha256: string; toolchainSha256: string; providerDeadlineEpochMs: number }>): Promise<Readonly<{ status: "created" | "reconciled" | "unknown"; operationId: string; resourceId?: string }>>;
   observe(input: Readonly<{ operationId: string }>): Promise<Readonly<{ status: "completed" | "pending" | "unknown"; resourceId?: string; readiness?: WorkerReadinessObservation }>>;
   terminate(input: Readonly<{ operationId: string }>): Promise<Readonly<{ status: "terminated" | "pending" | "unknown" | "blocked" }>>;
+  observeTermination(input: Readonly<{ operationId: string }>): Promise<Readonly<{ status: "terminated" | "pending" | "unknown" | "blocked" }>>;
   /** Production-only, bounded and bootstrap-wrapped command surface. */
   exec(input: Readonly<{ operationId: string; command: readonly string[]; timeoutMs?: number }>): Promise<Readonly<{ status: "completed" | "unknown"; stdout?: string; stderr?: string; exitCode?: number }>>;
 }>;
@@ -249,15 +251,30 @@ export function createModalProductionTransport(input: Readonly<{ appName: string
     async terminate(value) {
       const record = await input.journal.read(OperationIdSchema.parse(value.operationId));
       if (!record?.resourceId || record.provider !== "modal" || record.appName !== appName || record.image !== image || record.policyVersion !== PRODUCTION_WORKER_POLICY.version) return Object.freeze({ status: "blocked" as const });
+      const terminationId = `t-${(await sha256(JSON.stringify({ operationId: record.operationId, resourceId: record.resourceId, image: record.image, requestSha256: record.requestSha256 }))).slice(0, 46)}`;
+      const terminationRequestSha256 = await sha256(JSON.stringify({ original: record.operationId, resourceId: record.resourceId, image: record.image, requestSha256: record.requestSha256, action: "terminate" }));
+      const termination = await input.journal.claim({ operationId: terminationId, provider: "modal", appName, requestSha256: terminationRequestSha256, resourceName: record.resourceName, image: record.image, policyVersion: record.policyVersion, createdAtMs: record.createdAtMs, sessionLeaseSha256: record.sessionLeaseSha256, toolchainSha256: record.toolchainSha256, providerDeadlineEpochMs: record.providerDeadlineEpochMs });
+      if (!termination.claimed && termination.record.requestSha256 !== terminationRequestSha256) return Object.freeze({ status: "blocked" as const });
       const observed = await find(appName, record.resourceName);
-      if (observed.kind === "missing") { await input.journal.update({ operationId: record.operationId, requestSha256: record.requestSha256, state: "terminated", resourceId: record.resourceId }); return Object.freeze({ status: "terminated" as const }); }
-      if (observed.kind !== "found" || observed.sandbox.id !== record.resourceId) return Object.freeze({ status: "unknown" as const });
-      await input.journal.update({ operationId: record.operationId, requestSha256: record.requestSha256, state: "terminating", resourceId: record.resourceId });
+      if (observed.kind === "missing") { await input.journal.update({ operationId: terminationId, requestSha256: terminationRequestSha256, state: "terminated" }); return Object.freeze({ status: "terminated" as const }); }
+      if (observed.kind !== "found" || observed.sandbox.id !== record.resourceId || !await matchesRecord(observed.sandbox, record)) return Object.freeze({ status: "unknown" as const });
+      /* A prior claim may have crossed the provider boundary. Recovery observes
+       * the exact original only; it never repeats an ambiguous terminate. */
+      if (!termination.claimed) return Object.freeze({ status: "pending" as const });
+      await input.journal.update({ operationId: terminationId, requestSha256: terminationRequestSha256, state: "terminating" });
       try { await observed.sandbox.terminate(); } catch { return Object.freeze({ status: "pending" as const }); }
       const after = await find(appName, record.resourceName);
       if (after.kind !== "missing") return Object.freeze({ status: after.kind === "unknown" ? "unknown" as const : "pending" as const });
-      await input.journal.update({ operationId: record.operationId, requestSha256: record.requestSha256, state: "terminated", resourceId: record.resourceId });
+      await input.journal.update({ operationId: terminationId, requestSha256: terminationRequestSha256, state: "terminated" });
       return Object.freeze({ status: "terminated" as const });
+    },
+    async observeTermination(value) {
+      const record = await input.journal.read(OperationIdSchema.parse(value.operationId));
+      if (!record?.resourceId || record.provider !== "modal" || record.appName !== appName || record.image !== image) return Object.freeze({ status: "blocked" as const });
+      const observed = await find(appName, record.resourceName);
+      if (observed.kind === "missing") return Object.freeze({ status: "terminated" as const });
+      return observed.kind === "found" && observed.sandbox.id === record.resourceId && await matchesRecord(observed.sandbox, record)
+        ? Object.freeze({ status: "pending" as const }) : Object.freeze({ status: "unknown" as const });
     },
   });
 }
@@ -454,10 +471,14 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: WorkerOper
     async terminate(value) {
       const operationId = OperationIdSchema.parse(value.operationId); const record = await input.journal.read(operationId);
       if (!record?.resourceId || record.provider !== "fly" || record.appName !== appName) return Object.freeze({ status: "blocked" as const });
+      const terminationId = `t-${(await sha256(JSON.stringify({ operationId: record.operationId, resourceId: record.resourceId, image: record.image, requestSha256: record.requestSha256, providerCreatedAtMs: record.providerCreatedAtMs }))).slice(0, 46)}`;
+      const terminationRequestSha256 = await sha256(JSON.stringify({ original: record.operationId, resourceId: record.resourceId, image: record.image, requestSha256: record.requestSha256, providerCreatedAtMs: record.providerCreatedAtMs, action: "terminate" }));
+      const termination = await input.journal.claim({ operationId: terminationId, provider: "fly", appName, requestSha256: terminationRequestSha256, resourceName: record.resourceName, image: record.image, region: record.region, policyVersion: record.policyVersion, createdAtMs: record.createdAtMs, sessionLeaseSha256: record.sessionLeaseSha256, toolchainSha256: record.toolchainSha256, providerDeadlineEpochMs: record.providerDeadlineEpochMs, providerCreatedAtMs: record.providerCreatedAtMs });
+      if (!termination.claimed && termination.record.requestSha256 !== terminationRequestSha256) return Object.freeze({ status: "blocked" as const });
       const before = await request(`/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(record.resourceId)}`, { method: "GET" });
       if (before.status === 404) {
         await dispose(before);
-        await input.journal.update({ operationId, requestSha256: record.requestSha256, state: "terminated", resourceId: record.resourceId });
+        await input.journal.update({ operationId: terminationId, requestSha256: terminationRequestSha256, state: "terminated" });
         return Object.freeze({ status: "terminated" as const });
       }
       const machine = before.ok ? MachineSchema.safeParse(await responseJson(before).catch(() => undefined)) : (await dispose(before), undefined);
@@ -465,15 +486,24 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: WorkerOper
       if (!machine?.success || machine.data.name !== record.resourceName || metadata?.["napplet-cvm-operation"] !== operationId
         || metadata?.["napplet-cvm-policy"] !== PRODUCTION_WORKER_POLICY.version || metadata?.["napplet-cvm-role"] !== "isolated-worker"
         || !record.image || !ownedMachine(machine.data, record, record.image)) return Object.freeze({ status: "unknown" as const });
-      await input.journal.update({ operationId, requestSha256: record.requestSha256, state: "terminating", resourceId: record.resourceId });
+      if (!termination.claimed) return Object.freeze({ status: "pending" as const });
+      await input.journal.update({ operationId: terminationId, requestSha256: terminationRequestSha256, state: "terminating" });
       const removed = await request(`/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(record.resourceId)}?force=true`, { method: "DELETE" });
       if (!removed.ok && removed.status !== 404) { await dispose(removed); return Object.freeze({ status: "pending" as const }); }
       await dispose(removed);
       const after = await request(`/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(record.resourceId)}`, { method: "GET" });
       if (after.status !== 404) { await dispose(after); return Object.freeze({ status: "pending" as const }); }
       await dispose(after);
-      await input.journal.update({ operationId, requestSha256: record.requestSha256, state: "terminated", resourceId: record.resourceId });
+      await input.journal.update({ operationId: terminationId, requestSha256: terminationRequestSha256, state: "terminated" });
       return Object.freeze({ status: "terminated" as const });
+    },
+    async observeTermination(value) {
+      const operationId = OperationIdSchema.parse(value.operationId); const record = await input.journal.read(operationId);
+      if (!record?.resourceId || record.provider !== "fly" || record.appName !== appName || !record.image) return Object.freeze({ status: "blocked" as const });
+      const current = await request(`/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(record.resourceId)}`, { method: "GET" });
+      if (current.status === 404) { await dispose(current); return Object.freeze({ status: "terminated" as const }); }
+      const machine = current.ok ? MachineSchema.safeParse(await responseJson(current).catch(() => undefined)) : (await dispose(current), undefined);
+      return machine?.success && ownedMachine(machine.data, record, record.image) ? Object.freeze({ status: "pending" as const }) : Object.freeze({ status: "unknown" as const });
     },
     async exec(value) {
       const operationId = OperationIdSchema.parse(value.operationId); const record = await input.journal.read(operationId);
@@ -512,7 +542,7 @@ export function createWorkerDeploymentClients(input: Readonly<{
   const modalTransport = createModalProductionTransport({ appName: input.modalAppName, image, workspaceRoot: input.workspaceRoot, tags: input.modalTags, ...(input.modalRegions ? { regions: input.modalRegions } : {}), sdk: input.modalSdk, journal: input.journal });
   return Object.freeze({
     selection: Object.freeze({ status: "unselected" as const, reasonCode: "FRESH_PROTECTED_EVIDENCE_REQUIRED" as const }),
-    modal: Object.freeze({ definition, schedules: LOCKED_WORKER_SCHEDULE, create: modalTransport.create, observe: modalTransport.observe, terminate: modalTransport.terminate, exec: modalTransport.exec, config: Object.freeze({ image, workspaceRoot: input.workspaceRoot, policyVersion: input.policyVersion }) }),
-    fly: Object.freeze({ definition, schedules: LOCKED_WORKER_SCHEDULE, create: (operation: Readonly<{ operationId: string; region: string; sessionLeaseSha256: string; toolchainSha256: string; providerDeadlineEpochMs: number }>) => input.fly.create({ ...operation, image, policy: PRODUCTION_WORKER_POLICY }), observe: input.fly.observe, terminate: input.fly.terminate, exec: input.fly.exec, config: Object.freeze({ image, workspaceRoot: input.workspaceRoot, policyVersion: input.policyVersion }) }),
+    modal: Object.freeze({ definition, schedules: LOCKED_WORKER_SCHEDULE, create: modalTransport.create, observe: modalTransport.observe, terminate: modalTransport.terminate, observeTermination: modalTransport.observeTermination, exec: modalTransport.exec, config: Object.freeze({ image, workspaceRoot: input.workspaceRoot, policyVersion: input.policyVersion }) }),
+    fly: Object.freeze({ definition, schedules: LOCKED_WORKER_SCHEDULE, create: (operation: Readonly<{ operationId: string; region: string; sessionLeaseSha256: string; toolchainSha256: string; providerDeadlineEpochMs: number }>) => input.fly.create({ ...operation, image, policy: PRODUCTION_WORKER_POLICY }), observe: input.fly.observe, terminate: input.fly.terminate, observeTermination: input.fly.observeTermination, exec: input.fly.exec, config: Object.freeze({ image, workspaceRoot: input.workspaceRoot, policyVersion: input.policyVersion }) }),
   });
 }

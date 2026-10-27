@@ -77,7 +77,9 @@ test("pinned release execution session construction makes no provider call", asy
       }, candidateSha256: "a".repeat(64), workspace: root,
     });
     expect(readiness.providerFamilies).toEqual(RELEASE_PRODUCTION_PROVIDER_IDS);
-    expect((globalThis as Record<string, unknown>).__nappletCvmFactoryCalls).toBe(2);
+    // Readiness verifies the same pinned bundle without constructing the
+    // receipt-bound graph; only the explicit session load invokes its factory.
+    expect((globalThis as Record<string, unknown>).__nappletCvmFactoryCalls).toBe(1);
     delete (globalThis as Record<string, unknown>).__nappletCvmFactoryCalls;
   } finally {
     await rm(root, { recursive: true, force: true });

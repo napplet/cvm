@@ -43,6 +43,9 @@ export interface CashuSettlementPort {
   reconcileTreasury(input: Readonly<{ topUpId: string; commitment: string; signal: AbortSignal }>): Promise<Readonly<{ state: CashuTreasuryState }>>;
   /** True only for the default cashu-ts bridge with persist-before-swap recovery. */
   readonly productionSafe?: boolean;
+  /** The same persisted-swap transport used by the production settlement
+   * adapter. It is absent from fixtures and never accepts a caller callback. */
+  readonly walletOperations?: CashuWalletOperations;
 }
 
 function failed(code: Extract<CashuSettlementObservation, { status: "failed" }>["code"]): Extract<CashuSettlementObservation, { status: "failed" }> { return { status: "failed", code }; }
@@ -206,6 +209,7 @@ export class CashuTsSettlementAdapter implements CashuSettlementPort {
     this.productionSafe = options.operations === undefined;
     this.#now = options.now ?? (() => new Date().toISOString());
   }
+  get walletOperations(): CashuWalletOperations { return this.#operations; }
   async identify(request: Omit<CashuSettlementRequest, "topUpId" | "commitment" | "signal">): Promise<CashuProofIdentity> {
     try {
       if (request.token.byteLength === 0 || request.token.byteLength > 8_192) return failed("malformed");

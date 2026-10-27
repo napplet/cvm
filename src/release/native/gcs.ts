@@ -90,9 +90,10 @@ export function createNativeGcsProvider(input: Readonly<{ config: unknown; port:
   const config = Object.freeze(GcsConfigSchema.parse(input.config));
   const now = input.now ?? Date.now;
   const client: VersionedObjectClientPort = Object.freeze({
-    createIfAbsent: (value) => input.port.createIfAbsent(value),
-    readGeneration: (value) => input.port.readGeneration(value),
-    scheduleGenerationDeletion: (value) => input.port.scheduleGenerationDeletion(value),
+    createIfAbsent: (value: Parameters<VersionedObjectClientPort["createIfAbsent"]>[0]) => input.port.createIfAbsent(value),
+    findExactByKey: (value: Parameters<VersionedObjectClientPort["findExactByKey"]>[0]) => input.port.findExactByKey(value),
+    readGeneration: (value: Parameters<VersionedObjectClientPort["readGeneration"]>[0]) => input.port.readGeneration(value),
+    scheduleGenerationDeletion: (value: Parameters<VersionedObjectClientPort["scheduleGenerationDeletion"]>[0]) => input.port.scheduleGenerationDeletion(value),
   });
   const rawObjectStore = new GcsObjectStoreAdapter({ config: { projectId: config.projectId, bucket: config.bucket }, client });
   const configSha256 = sha256(config);
@@ -110,7 +111,14 @@ export function createNativeGcsProvider(input: Readonly<{ config: unknown; port:
   /** Read-only restore bridge; all writes and deletion schedules remain receipt-gated below. */
   const objectStore: ObjectStorePort = Object.freeze({
     createImmutable: async () => { throw new Error("GCS_OBJECT_WRITE_REQUIRES_AUTHORIZED_OPERATION"); },
-    async readExact(reference) {
+    async observeExactByKey(value: Readonly<{ key: string; checksum: string }>) {
+      try {
+        assertRunObject(value);
+        const observed = await input.port.findExactByKey(value);
+        return observed?.checksum === value.checksum ? { key: value.key, generation: observed.generation, checksum: observed.checksum } : undefined;
+      } catch { return undefined; }
+    },
+    async readExact(reference: ImmutableObjectReference) {
       try {
         assertRunObject(reference);
         const response = await input.port.readGeneration({ key: reference.key, generation: reference.generation, expectedChecksum: reference.checksum });

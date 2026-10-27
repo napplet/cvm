@@ -44,7 +44,14 @@ export const ReleaseTopologyObservationSchema = z.object({
   controlPlane: z.object({
     regions: z.tuple([z.string().min(1), z.string().min(1)]),
     minimumInstancesPerRegion: z.literal(3),
-    collectorImage: z.string().regex(/^otel\/opentelemetry-collector@sha256:[a-f0-9]{64}$/iu),
+    /** This is the measured project recipe, never the upstream base image. */
+    collectorImage: z.string().regex(/^local\/napplet-cvm-collector@sha256:[a-f0-9]{64}$/iu),
+    collectorBuild: z.object({
+      imageDigest: DigestSchema,
+      baseImage: z.string().regex(/^otel\/opentelemetry-collector@sha256:[a-f0-9]{64}$/iu),
+      dockerfileSha256: DigestSchema,
+      collectorConfigSha256: DigestSchema,
+    }).strict(),
   }).strict(),
   objectStore: z.object({
     dualRegion: z.string().min(1), versioning: z.literal(true), retentionDays: z.literal(30),

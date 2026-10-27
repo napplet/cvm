@@ -133,7 +133,9 @@ export function createNativeCloudSqlPostgresProvider(input: Readonly<{ config: u
       const authorized = await authorize(raw, config, now());
       const observation = await observeInstance(authorized);
       if (observation.status !== "completed") return Object.freeze({ status: observation.status, operationId: authorized.operationId });
-      const probe = await observeSerializable(authorized);
+      // Revalidate immediately before the bounded probe's only run-owned SQL writes.
+      const immediate = await authorize(raw, config, now());
+      const probe = await observeSerializable(immediate);
       if (probe.status !== "completed") return Object.freeze({ status: probe.status, operationId: authorized.operationId });
       return Object.freeze({ status: "completed" as const, operationId: authorized.operationId, authority: "cloud_sql_postgres" as const, serializable: true as const, duplicateEffectCount: 0 as const, resourceIdentitySha256: await sha256({ projectId: config.projectId, region: config.region, instanceId: config.instanceId, engineVersion: config.engineVersion, availabilityType: config.availabilityType, storageGb: config.storageGb, backupEnabled: config.backupEnabled, privateNetworkReferenceSha256: config.privateNetworkReferenceSha256, serviceAccountReferenceSha256: config.serviceAccountReferenceSha256, configSha256: await configSha256 }) });
     },

@@ -100,7 +100,13 @@ export type CheckpointSealRequest = Readonly<{
 }>;
 
 export interface CheckpointCryptoPort {
-  seal(input: Readonly<{ checkpointId: string; plaintext: Uint8Array; additionalData: Uint8Array }>): Promise<Readonly<{ keyReference: string; nonce: Uint8Array; ciphertext: Uint8Array }>>;
+  /**
+   * `binding` is supplied by the coordinator-owned manifest before an object
+   * effect.  Production implementations persist it with the wrapped DEK so a
+   * retry can only reuse the original archive for its original account,
+   * session, action, and retention deadline.
+   */
+  seal(input: Readonly<{ checkpointId: string; plaintext: Uint8Array; additionalData: Uint8Array; binding?: Readonly<{ accountId: string; sessionId: string; actionId: string; operationId: string; retentionUntil: string }> }>): Promise<Readonly<{ keyReference: string; nonce: Uint8Array; ciphertext: Uint8Array }>>;
   open(input: Readonly<{ keyReference: string; nonce: Uint8Array; ciphertext: Uint8Array; additionalData: Uint8Array }>): Promise<Uint8Array>;
   destroy(keyReference: string): Promise<void>;
 }
@@ -133,8 +139,8 @@ export class PendingActionEnvelopeService {
     const header = PendingActionHeaderSchema.parse({ ...input.header, keyId: material.keyId });
     const aad = canonicalBytes(header);
     const nonce = crypto.getRandomValues(new Uint8Array(12));
-    const key = await crypto.subtle.importKey("raw", material.key, "AES-GCM", false, ["encrypt"]);
-    const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce, additionalData: aad }, key, canonicalBytes(command)));
+    const key = await crypto.subtle.importKey("raw", material.key as BufferSource, "AES-GCM", false, ["encrypt"]);
+    const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce as BufferSource, additionalData: aad as BufferSource }, key, canonicalBytes(command) as BufferSource));
     return PendingActionEnvelopeSchema.parse({ header, headerSha256: await sha256(aad), ciphertextBase64: b64(ciphertext), ciphertextSha256: await sha256(ciphertext), nonceBase64: b64(nonce) });
   }
 
@@ -154,8 +160,8 @@ export class PendingActionEnvelopeService {
       if (envelope.header.expiresAtMs <= nowMs) throw denied("PENDING_ACTION_ENVELOPE_EXPIRED");
       let plaintext: Uint8Array;
       try {
-        const key = await crypto.subtle.importKey("raw", material.key, "AES-GCM", false, ["decrypt"]);
-        plaintext = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce, additionalData: aad }, key, ciphertext));
+        const key = await crypto.subtle.importKey("raw", material.key as BufferSource, "AES-GCM", false, ["decrypt"]);
+        plaintext = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce as BufferSource, additionalData: aad as BufferSource }, key, ciphertext as BufferSource));
       } catch { throw denied("PENDING_ACTION_ENVELOPE_DECRYPT_FAILED"); }
       const command = PendingStartCommandSchema.safeParse(JSON.parse(new TextDecoder().decode(plaintext)));
       if (!command.success) throw denied("PENDING_ACTION_COMMAND_INVALID");
@@ -180,7 +186,7 @@ export class AesGcmCheckpointCrypto implements CheckpointCryptoPort {
     });
   }
 
-  async seal(input: Readonly<{ checkpointId: string; plaintext: Uint8Array; additionalData: Uint8Array }>) {
+  async seal(input: Readonly<{ checkpointId: string; plaintext: Uint8Array; additionalData: Uint8Array; binding?: Readonly<{ accountId: string; sessionId: string; actionId: string; operationId: string; retentionUntil: string }> }>) {
     if (!input.checkpointId || !(input.plaintext instanceof Uint8Array) || !(input.additionalData instanceof Uint8Array)) throw new Error("CHECKPOINT_SEAL_INVALID");
     const keyBytes = this.#randomValues(new Uint8Array(32));
     const nonce = this.#randomValues(new Uint8Array(12));
@@ -250,7 +256,18 @@ export class CheckpointEnvelopeService {
       retentionUntil: request.retentionUntil,
     });
     const additionalData = canonicalBytes(manifest);
-    const sealed = await this.#crypto.seal({ checkpointId: manifest.checkpointId, plaintext: request.archive, additionalData });
+    const sealed = await this.#crypto.seal({
+      checkpointId: manifest.checkpointId,
+      plaintext: request.archive,
+      additionalData,
+      binding: {
+        accountId: manifest.accountId,
+        sessionId: manifest.sessionId,
+        actionId: manifest.action.actionId,
+        operationId: manifest.action.operationId,
+        retentionUntil: manifest.retentionUntil,
+      },
+    });
     const ciphertextSha256 = await sha256(sealed.ciphertext);
     const object = await this.#objectStore.createImmutable({ key: `checkpoints/${manifest.checkpointId}/${ciphertextSha256}`, bytes: sealed.ciphertext });
     const envelope = CheckpointEnvelopeSchema.parse({

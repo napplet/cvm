@@ -91,7 +91,7 @@ const ReadinessAttestationSchema = z.object({
   image: ImageSchema,
   sessionLeaseSha256: z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase()),
   remainingLifetimeMs: z.number().int().positive().max(PRODUCTION_WORKER_POLICY.timeoutMs),
-  providerNetworkPolicyVerified: z.literal(true),
+  networkPolicyEvidenceSha256: z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase()),
   checks: z.object({
     toolchain_readonly: z.literal(true), workspace_bounded: z.literal(true), non_root: z.literal(true),
     no_ambient_credentials: z.literal(true), network_denied: z.literal(true), no_inbound_ports: z.literal(true), minimal_capabilities: z.literal(true),
@@ -101,9 +101,9 @@ const ReadinessAttestationSchema = z.object({
 /** The trusted controller calls this only after provider observation.  In
  * particular Fly's metadata cannot stand in for its app-level network policy:
  * the controller must present a verified policy plus the inner denial probe. */
-export function validateWorkerReadinessAttestation(input: unknown, expected: Readonly<{ image: string; sessionLeaseSha256: string }>) {
+export function validateWorkerReadinessAttestation(input: unknown, expected: Readonly<{ image: string; sessionLeaseSha256: string; networkPolicyEvidenceSha256: string }>) {
   const observed = ReadinessAttestationSchema.parse(input);
-  if (observed.image !== ImageSchema.parse(expected.image) || observed.sessionLeaseSha256 !== expected.sessionLeaseSha256.toLowerCase()) {
+  if (observed.image !== ImageSchema.parse(expected.image) || observed.sessionLeaseSha256 !== expected.sessionLeaseSha256.toLowerCase() || observed.networkPolicyEvidenceSha256 !== expected.networkPolicyEvidenceSha256.toLowerCase()) {
     throw new Error("WORKER_READINESS_BINDING_INVALID");
   }
   return Object.freeze(observed);
@@ -121,20 +121,23 @@ export function createFlyMachinesHttpTransport(input: Readonly<{
 }>): FlyMachinesHttpTransport {
   const appName = AppNameSchema.parse(input.appName);
   const base = new URL(input.apiOrigin ?? "https://api.machines.dev");
-  if (base.protocol !== "https:" || base.pathname !== "/") throw new Error("FLY_API_ORIGIN_INVALID");
+  if (base.origin !== "https://api.machines.dev" || base.pathname !== "/" || base.search || base.username || base.password) throw new Error("FLY_API_ORIGIN_INVALID");
   const request = async (path: string, init: RequestInit) => {
     const token = await input.getAccessToken();
     if (typeof token !== "string" || token.length < 12 || /\s/u.test(token)) throw new Error("FLY_ACCESS_TOKEN_INVALID");
     return input.fetch(new URL(path, base).toString(), {
       ...init,
+      redirect: "error",
       headers: Object.freeze({ authorization: `Bearer ${token}`, "content-type": "application/json", ...(init.headers ?? {}) }),
     });
   };
-  const findOriginal = async (operationId: string, name: string, expectedImage: string): Promise<string | undefined> => {
-    const response = await request(`/v1/apps/${encodeURIComponent(appName)}/machines?metadata.napplet-cvm-operation=${encodeURIComponent(operationId)}&include_deleted=true`, { method: "GET" });
-    if (!response.ok) return undefined;
-    const machines = z.array(MachineSchema).safeParse(await response.json());
-    if (!machines.success) return undefined;
+  const findOriginal = async (operationId: string, name: string, expectedImage: string): Promise<Readonly<{ kind: "found"; id: string }> | Readonly<{ kind: "missing" | "unknown" }>> => {
+    let response: Response;
+    try { response = await request(`/v1/apps/${encodeURIComponent(appName)}/machines?metadata.napplet-cvm-operation=${encodeURIComponent(operationId)}&include_deleted=true`, { method: "GET" }); } catch { return Object.freeze({ kind: "unknown" as const }); }
+    if (response.status === 404) return Object.freeze({ kind: "missing" as const });
+    if (!response.ok) return Object.freeze({ kind: "unknown" as const });
+    const machines = z.array(MachineSchema).safeParse(await response.json().catch(() => undefined));
+    if (!machines.success) return Object.freeze({ kind: "unknown" as const });
     const matched = machines.data.filter((machine) => {
       const metadata = machine.config.metadata;
       return machine.name === name && machine.config.image === expectedImage
@@ -143,7 +146,7 @@ export function createFlyMachinesHttpTransport(input: Readonly<{
         && metadata?.["napplet-cvm-role"] === "isolated-worker"
         && Object.keys(metadata).sort().join(",") === "napplet-cvm-operation,napplet-cvm-policy,napplet-cvm-role";
     });
-    return matched.length === 1 ? matched[0]!.id : undefined;
+    return matched.length === 1 ? Object.freeze({ kind: "found" as const, id: matched[0]!.id }) : matched.length === 0 ? Object.freeze({ kind: "missing" as const }) : Object.freeze({ kind: "unknown" as const });
   };
   return Object.freeze({
     async create(value) {
@@ -153,24 +156,30 @@ export function createFlyMachinesHttpTransport(input: Readonly<{
       const requestSha256 = await sha256(JSON.stringify({ operationId, region, image, policy: value.policy.version }));
       const claimed = await input.journal.claim({ operationId, requestSha256, resourceName });
       if (!claimed.claimed) {
-        if (claimed.record.resourceId) return Object.freeze({ status: "reconciled" as const, operationId, resourceId: claimed.record.resourceId });
+        if (claimed.record.requestSha256 !== requestSha256) return Object.freeze({ status: "unknown" as const, operationId });
+        if (claimed.record.resourceId) {
+          const observed = await findOriginal(operationId, resourceName, image);
+          return observed.kind === "found" && observed.id === claimed.record.resourceId ? Object.freeze({ status: "reconciled" as const, operationId, resourceId: observed.id }) : Object.freeze({ status: "unknown" as const, operationId });
+        }
         const found = await findOriginal(operationId, resourceName, image);
-        if (!found) return Object.freeze({ status: "unknown" as const, operationId });
-        await input.journal.update({ operationId, requestSha256: claimed.record.requestSha256, state: "reconciled", resourceId: found });
-        return Object.freeze({ status: "reconciled" as const, operationId, resourceId: found });
+        if (found.kind !== "found") return Object.freeze({ status: "unknown" as const, operationId });
+        await input.journal.update({ operationId, requestSha256: claimed.record.requestSha256, state: "reconciled", resourceId: found.id });
+        return Object.freeze({ status: "reconciled" as const, operationId, resourceId: found.id });
       }
       await input.journal.update({ operationId, requestSha256, state: "dispatching" });
       const existing = await findOriginal(operationId, resourceName, image);
-      if (existing) {
-        await input.journal.update({ operationId, requestSha256, state: "reconciled", resourceId: existing });
-        return Object.freeze({ status: "reconciled" as const, operationId, resourceId: existing });
+      if (existing.kind === "unknown") return Object.freeze({ status: "unknown" as const, operationId });
+      if (existing.kind === "found") {
+        await input.journal.update({ operationId, requestSha256, state: "reconciled", resourceId: existing.id });
+        return Object.freeze({ status: "reconciled" as const, operationId, resourceId: existing.id });
       }
       const body = {
         name: resourceName, region, skip_service_registration: true,
         config: {
           image, auto_destroy: true, restart: { policy: "no" }, services: [],
           guest: { cpu_kind: "shared", cpus: value.policy.cpu, memory_mb: value.policy.memoryMiB },
-          init: { exec: [...value.policy.readinessCommand] },
+          init: { exec: ["/bin/sh", "-c", "while true; do sleep 60; done"] },
+          env: { NAPPLET_CVM_POLICY_VERSION: value.policy.version },
           metadata: { "napplet-cvm-operation": operationId, "napplet-cvm-policy": value.policy.version, "napplet-cvm-role": "isolated-worker" },
         },
       };

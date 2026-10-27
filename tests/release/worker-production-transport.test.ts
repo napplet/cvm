@@ -87,7 +87,7 @@ test("sealed image installs root-owned trusted worker commands and runs the pinn
   expect(dockerfile).toContain("infra/toolchain/production-probe.ts /usr/local/bin/napplet-cvm-probe");
   expect(dockerfile).toContain("chmod -R go-w /toolchain /usr/local/bin/napplet-cvm-worker /usr/local/bin/napplet-cvm-probe");
   expect(dockerfile).not.toContain("--chown=65532:65532 /toolchain/node_modules");
-  for (const command of ["napplet", "--offline", "--frozen-lockfile", "test:conformance", "network_denied", "no_ambient_credentials"]) expect(worker).toContain(command);
+  for (const command of ["napplet", "--offline", "--frozen-lockfile", "test:conformance", "networkDenied", "environmentClean", "CapBnd", "NoNewPrivs"]) expect(worker).toContain(command);
   expect(probe).toContain("napplet-cvm-worker");
 });
 
@@ -95,16 +95,16 @@ test("readiness rejects a credential-bearing, unprobed, or incorrectly leased wo
   const lease = digest("b");
   const valid = {
     version: 1 as const, policyVersion: PRODUCTION_WORKER_POLICY.version, image, sessionLeaseSha256: lease,
-    remainingLifetimeMs: 600_000, providerNetworkPolicyVerified: true as const,
+    remainingLifetimeMs: 600_000, networkPolicyEvidenceSha256: digest("e"),
     checks: { toolchain_readonly: true as const, workspace_bounded: true as const, non_root: true as const, no_ambient_credentials: true as const, network_denied: true as const, no_inbound_ports: true as const, minimal_capabilities: true as const },
   };
-  expect(validateWorkerReadinessAttestation(valid, { image, sessionLeaseSha256: lease })).toEqual(valid);
+  expect(validateWorkerReadinessAttestation(valid, { image, sessionLeaseSha256: lease, networkPolicyEvidenceSha256: digest("e") })).toEqual(valid);
   for (const invalid of [
-    { ...valid, providerNetworkPolicyVerified: false },
+    { ...valid, networkPolicyEvidenceSha256: "not-a-digest" },
     { ...valid, checks: { ...valid.checks, no_ambient_credentials: false } },
     { ...valid, checks: { ...valid.checks, network_denied: false } },
     { ...valid, sessionLeaseSha256: digest("c") },
-  ]) expect(() => validateWorkerReadinessAttestation(invalid, { image, sessionLeaseSha256: lease })).toThrow();
+  ]) expect(() => validateWorkerReadinessAttestation(invalid, { image, sessionLeaseSha256: lease, networkPolicyEvidenceSha256: digest("e") })).toThrow();
 });
 
 test("cleanup after controller interruption deletes only the original owned machine", async () => {

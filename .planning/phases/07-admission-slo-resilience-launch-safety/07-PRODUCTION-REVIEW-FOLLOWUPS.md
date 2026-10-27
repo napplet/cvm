@@ -18,7 +18,7 @@ Observed 2026-10-27. These are implementation findings, not protected release ev
 - `infra/dev-ui/Dockerfile` already pins the replacement binary and a working boilerplate/Chromium intake. Three fresh development GUI runs passed with that substrate. This is compatibility evidence only, not a production isolation or promotion claim.
 - Preserve historical candidate/evidence files. Prepare a separate intake with truthful provenance; if necessary, build the official CLI from exact source with pinned runtime/locks and record the source, build recipe, and output digest. No user-authored checksum or protected promotion is needed for this local preparation.
 
-## Plan 70 — admission confidence calculation
+## Plan 68 — admission confidence calculation
 
 - `src/admission/benchmark.ts` currently resamples index `((index * 1103515245 + seed * 12345) >>> 0) % n`. This affine schedule does not draw independent observations with replacement.
 - Reproduction: 1000 latencies comprising 960 at 4000 ms followed by 40 at 6000 ms; 1000 resamples. The current scheme's 95th percentile slow-count is 43, yielding an upper p95 of 4000 ms. Independent with-replacement sampling using Python `random.Random(6464)` yields slow-count 51, hence upper p95 6000 ms. The existing scheme can falsely pass by understating uncertainty.

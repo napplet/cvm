@@ -50,6 +50,15 @@ jobs:
         run: |
           set -euo pipefail
           timeout 12m scripts/test-production-worker.sh napplet-cvm-production-worker:ci
+      - name: Diagnose denied bootstrap mounts
+        if: failure()
+        shell: bash
+        run: |
+          for profile in default unconfined; do
+            args=()
+            if [ "$profile" = unconfined ]; then args+=(--security-opt apparmor=unconfined); fi
+            docker run --rm --cap-add SYS_ADMIN "${args[@]}" --entrypoint /bin/sh napplet-cvm-production-worker:ci -c 'cat /proc/self/attr/current; mount -t tmpfs -o size=16777216,nosuid,nodev tmpfs /workspace; findmnt /workspace' || true
+          done
       - name: Focused worker transport contracts
         shell: bash
         run: bun test tests/release/deployment-worker-clients.test.ts tests/release/worker-production-transport.test.ts --timeout 10000

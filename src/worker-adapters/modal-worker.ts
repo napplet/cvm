@@ -179,7 +179,7 @@ function appendBounded(value: string, counter: { bytes: number }): string {
   return value;
 }
 
-async function processOutput(process: ModalProcessPort): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+export async function readBoundedModalProcessOutput(process: ModalProcessPort): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const counter = { bytes: 0 };
   const stdout = await streamToBoundedText(process.stdout, counter);
   const stderr = await streamToBoundedText(process.stderr, counter);
@@ -260,7 +260,7 @@ async function observeLiveModalIsolation(config: ModalWorkerConfig): Promise<Mod
       first.exec(PROBE_EXEC, { timeoutMs: PHASE_02_POLICY_INITIAL.sandbox.execTimeoutSeconds * 1_000 }),
       second.exec(PROBE_EXEC, { timeoutMs: PHASE_02_POLICY_INITIAL.sandbox.execTimeoutSeconds * 1_000 }),
     ]);
-    const [firstOutput, secondOutput] = await Promise.all([processOutput(firstProcess), processOutput(secondProcess)]);
+    const [firstOutput, secondOutput] = await Promise.all([readBoundedModalProcessOutput(firstProcess), readBoundedModalProcessOutput(secondProcess)]);
     if (firstOutput.exitCode !== 0 || secondOutput.exitCode !== 0) throw new Error("probe command failed");
     const reportSchema = z.object({ checks: ProbeCheckSchema, exactReady: ExactSessionProbeSchema, gatewayRequest: ToolRequestSchema, checkpointSha256: z.string().regex(/^[a-f0-9]{64}$/i), checkpoint: z.object({ inventory: CheckpointInventorySchema, manifestSha256: z.string().regex(/^[a-f0-9]{64}$/i) }).strict() }).strict();
     const report = reportSchema.parse(JSON.parse(firstOutput.stdout));
@@ -407,7 +407,7 @@ export class ModalWorkerAdapter implements ContinuationWorkerPort {
       await writeFile(localRequestPath, canonicalJson(request.data), "utf8");
       await sandbox.filesystem.copyFromLocal(localRequestPath, remoteRequestPath);
       const process = await sandbox.exec([...WORKER_EXEC, "--request", remoteRequestPath], { timeoutMs: PHASE_02_POLICY_INITIAL.sandbox.execTimeoutSeconds * 1_000 });
-      const output = await processOutput(process);
+      const output = await readBoundedModalProcessOutput(process);
       if (output.exitCode !== 0 || signal.aborted) throw new Error("worker did not complete cleanly");
       result = parseWorkerResult(output.stdout);
     } catch {

@@ -108,6 +108,9 @@ async function boundedJson(response: Response): Promise<unknown> {
       if (size > MAX_PROVIDER_RESPONSE_BYTES) throw new Error("PROVIDER_RESPONSE_TOO_LARGE");
       chunks.push(next.value);
     }
+  } catch (error) {
+    await reader.cancel(error).catch(() => undefined);
+    throw error;
   } finally { reader.releaseLock(); }
   const bytes = new Uint8Array(size); let offset = 0;
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
@@ -246,16 +249,19 @@ export function createFlyMachinesHttpTransport(input: Readonly<{
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(new Error("FLY_REQUEST_TIMEOUT")), PROVIDER_REQUEST_TIMEOUT_MS);
     try {
-      return await input.fetch(new URL(path, base).toString(), {
+      const response = await input.fetch(new URL(path, base).toString(), {
         ...init, signal: controller.signal, redirect: "error",
         headers: Object.freeze({ authorization: `Bearer ${token}`, "content-type": "application/json", ...(init.headers ?? {}) }),
       });
-    } finally { clearTimeout(timer); }
+      // Headers are not completion: keep the deadline active while the caller
+      // drains the bounded response body.
+      return response;
+    } catch (error) { clearTimeout(timer); throw error; }
   };
 
 function ownedMachine(machine: z.infer<typeof MachineSchema>, record: Pick<WorkerOperationRecord, "operationId" | "resourceName" | "image" | "policyVersion" | "providerCreatedAtMs">, image: string): boolean {
   const metadata = machine.config.metadata;
-  return Boolean(record.image) && Number.isSafeInteger(record.providerCreatedAtMs) && createdAtMs(machine) === record.providerCreatedAtMs && machine.name === record.resourceName && machine.config.image === image && image === record.image
+  return Boolean(record.image) && (!Number.isSafeInteger(record.providerCreatedAtMs) || createdAtMs(machine) === record.providerCreatedAtMs) && machine.name === record.resourceName && machine.config.image === image && image === record.image
     && metadata?.["napplet-cvm-operation"] === record.operationId
     && metadata?.["napplet-cvm-policy"] === record.policyVersion
     && metadata?.["napplet-cvm-role"] === "isolated-worker"

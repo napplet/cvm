@@ -73,6 +73,15 @@ test("Fly persists its original operation before create, queries deterministic m
   await expect(journal.read("op-lost")).resolves.toMatchObject({ state: "reconciled", resourceId: "machine-original" });
 });
 
+test("Fly records the provider creation identity after a successful original create", async () => {
+  const operationId = "op-created";
+  const journal = createMemoryWorkerOperationJournal();
+  const created = { id: "machine-created", name: `napplet-cvm-${operationId}`, created_at: "2026-10-27T00:00:00.000Z", config: { image, guest: { cpus: 1, memory_mb: 1024 }, services: [], env: { NAPPLET_CVM_POLICY_VERSION: PRODUCTION_WORKER_POLICY.version }, metadata: { "napplet-cvm-operation": operationId, "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-role": "isolated-worker" } } };
+  const transport = createFlyMachinesHttpTransport({ appName: "napplet-cvm-workers", getAccessToken: async () => "valid-access-token", journal, fetch: async (_url, init) => init.method === "GET" ? new Response(JSON.stringify([]), { status: 200 }) : new Response(JSON.stringify(created), { status: 200 }) });
+  await expect(transport.create({ operationId, region: "ams", image, policy: PRODUCTION_WORKER_POLICY, sessionLeaseSha256: digest("b"), toolchainSha256: digest("c"), providerDeadlineEpochMs: Date.now() + 60_000 })).resolves.toEqual({ status: "created", operationId, resourceId: "machine-created" });
+  await expect(journal.read(operationId)).resolves.toMatchObject({ resourceId: "machine-created", providerCreatedAtMs: Date.parse(created.created_at), state: "dispatched" });
+});
+
 test("transport refuses a malformed or credential-bearing response and does not certify metadata as network isolation", async () => {
   const transport = createFlyMachinesHttpTransport({
     appName: "napplet-cvm-workers",

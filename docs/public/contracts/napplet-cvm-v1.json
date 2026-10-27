@@ -1806,7 +1806,8 @@
                         "enum": [
                           "deterministic_fixture",
                           "openai_responses",
-                          "openai_chatgpt_development"
+                          "openai_chatgpt_development",
+                          "vertex_ai_gemini"
                         ]
                       },
                       "model": {
@@ -1889,12 +1890,16 @@
                         "enum": [
                           "deterministic_fixture",
                           "openai_responses",
-                          "openai_chatgpt_development"
+                          "openai_chatgpt_development",
+                          "vertex_ai_gemini"
                         ]
                       },
                       "currency": {
                         "type": "string",
-                        "const": "sat"
+                        "enum": [
+                          "sat",
+                          "usd_micros"
+                        ]
                       },
                       "supportedDimensions": {
                         "minItems": 1,
@@ -3967,7 +3972,8 @@
           "enum": [
             "deterministic_fixture",
             "openai_responses",
-            "openai_chatgpt_development"
+            "openai_chatgpt_development",
+            "vertex_ai_gemini"
           ]
         },
         "model": {
@@ -4051,12 +4057,16 @@
           "enum": [
             "deterministic_fixture",
             "openai_responses",
-            "openai_chatgpt_development"
+            "openai_chatgpt_development",
+            "vertex_ai_gemini"
           ]
         },
         "currency": {
           "type": "string",
-          "const": "sat"
+          "enum": [
+            "sat",
+            "usd_micros"
+          ]
         },
         "supportedDimensions": {
           "minItems": 1,

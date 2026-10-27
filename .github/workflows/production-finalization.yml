@@ -10,6 +10,9 @@ on:
       - "src/release/materialize-certifier.ts"
       - "src/certification/**"
       - "src/promotion/**"
+      - "src/resilience/fault-harness.ts"
+      - "tests/release/live-operations-adapters.test.ts"
+      - "tests/phase-07/fault-matrix.test.ts"
       - "scripts/certify-release.ts"
       - "tests/release/finalized-bundle.test.ts"
       - "tests/release/helpers/finalization-fixtures.ts"
@@ -36,3 +39,5 @@ jobs:
         run: bun test tests/release/finalized-bundle.test.ts tests/release/materialize-certifier.test.ts tests/release/live-controller.test.ts tests/release/deployment-forced-resume.test.ts tests/release/certify-release.test.ts --timeout 15000
       - name: Restricted PostgreSQL atomic pointer and lost commit recovery
         run: NAPPLET_RUN_POSTGRES_ISOLATION=1 bun test tests/release/postgres-operation-journal.test.ts --timeout 120000
+      - name: Independent original-operation fault oracle
+        run: bun test tests/release/live-operations-adapters.test.ts tests/phase-07/fault-matrix.test.ts

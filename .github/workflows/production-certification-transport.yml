@@ -15,6 +15,13 @@ on:
       - "src/production/mounted-fresh-restore-runtime.ts"
       - "src/production/mounted-worker-clients.ts"
       - "src/production/config.ts"
+      - "src/production/continuation-coordinator.ts"
+      - "src/continuity/continuation-service.ts"
+      - "src/production/pricing-catalog.ts"
+      - "src/production/mounted-vertex-material.ts"
+      - "src/model/price-card.ts"
+      - "migrations/phase-07/002_production_pricing_catalog.sql"
+      - "tests/production/funded-generation-postgres.test.ts"
       - "tests/production/worker-job-router.test.ts"
       - "tests/production/service-journals-postgres.test.ts"
       - "tests/production/certification-ingress.test.ts"
@@ -51,4 +58,4 @@ jobs:
           bun-version: "1.3.14"
       - run: bun install --frozen-lockfile
       - name: Signed TLS relay and durable original-operation recovery
-        run: bun test tests/release/contextvm-certification-client.integration.test.ts tests/release/production-core-suites.test.ts tests/production/worker-lifecycle-postgres.test.ts tests/production/service-journals-postgres.test.ts tests/production/worker-job-router.test.ts tests/release/postgres-operation-journal.test.ts tests/production/worker-bridge.test.ts tests/release/production-edge-suites.test.ts tests/production/certification-ingress.test.ts --timeout 60000
+        run: bun test tests/release/contextvm-certification-client.integration.test.ts tests/release/production-core-suites.test.ts tests/production/worker-lifecycle-postgres.test.ts tests/production/service-journals-postgres.test.ts tests/production/worker-job-router.test.ts tests/production/funded-generation-postgres.test.ts tests/release/postgres-operation-journal.test.ts tests/production/worker-bridge.test.ts tests/release/production-edge-suites.test.ts tests/production/certification-ingress.test.ts --timeout 60000

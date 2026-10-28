@@ -33,7 +33,7 @@ class ResumeWorker implements ContinuationWorkerPort {
   }
 }
 
-async function setup(input: Readonly<{ topUp?: boolean; compatible?: boolean; telemetry?: { observe(observation: LifecycleObservation): void } }> = {}) {
+async function setup(input: Readonly<{ topUp?: boolean; compatible?: boolean; includeAdmissionHold?: boolean; telemetry?: { observe(observation: LifecycleObservation): void } }> = {}) {
   const store = new TransactionalMemoryFundingStore();
   const funding = new FundingService(store);
   const accountId = await accountIdForPrincipal(principal);
@@ -77,7 +77,7 @@ async function setup(input: Readonly<{ topUp?: boolean; compatible?: boolean; te
   const worker = new ResumeWorker();
   let allocations = 0;
   const service = new ContinuationService({
-    store, clock: { nowMs: () => nowMs },
+    store, clock: { nowMs: () => nowMs }, includeAdmissionHold: input.includeAdmissionHold,
     resume: {
       compatibility: { policyVersion: "policy:resume", profileId: input.compatible === false ? "model:other" : "model:resume", priceCardId: "price:resume", toolchainId: "toolchain:resume" },
       checkpoint: { loadExact: async () => sealed, restore: (material: typeof sealed) => envelope.restore(material.envelope, material.manifest) },
@@ -101,6 +101,14 @@ describe("explicit post-grace resume", () => {
     expect(fixture.allocations()).toBe(1);
     expect(fixture.worker.restores).toBe(1);
     expect(observations).toEqual([expect.objectContaining({ stage: "resume", outcome: "succeeded", correlationDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u) })]);
+  });
+
+  test("an explicitly authorized own admission hold funds the resume budget without an extra credit", async () => {
+    const fixture = await setup({ topUp: false, includeAdmissionHold: true });
+    expect(await fixture.resume()).toMatchObject({ status: "restored" });
+    expect(fixture.allocations()).toBe(1);
+    expect(fixture.worker.restores).toBe(1);
+    expect(fixture.store.projection(fixture.accountId)).toEqual({ settledAvailable: "3250", held: "3250", unit: "sat" });
   });
 
   test("denies missing consent, altered pending approval, foreign ownership, insufficient funding, and incompatible pins before effects", async () => {

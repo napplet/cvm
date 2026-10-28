@@ -1,5 +1,6 @@
+import { canonicalJson } from "../promotion/schema";
 import { z } from "zod";
-import { createVertexGeminiProductionPricing, UsdSatConversionSchema } from "../model/price-card";
+import { createVertexGeminiProductionPricing, ModelProfileSchema, UsdSatConversionSchema } from "../model/price-card";
 import type { ProductionConfig } from "./config";
 import type { MountedProductionSecretMaterial } from "./secret-material";
 
@@ -55,5 +56,7 @@ export async function createMountedVertexMaterial(input: Readonly<{ config: Prod
     conversion: parsed.conversion, profileId: "vertex-gemini-4-argon-production-v1",
     maximumInputTokens: "4000", maximumOutputTokens: "4096", deadlineMs: 540_000,
   });
-  return Object.freeze({ credentialReference: parsed.credentialReference, vertexPrice: Object.freeze({ ...quote, currency: "USD" as const }), pricing });
+  const profileVersion = await sha256(canonicalJson(pricing.profile));
+  const versionedPricing = Object.freeze({ ...pricing, profile: Object.freeze(ModelProfileSchema.parse({ ...pricing.profile, id: `${pricing.profile.id}-${profileVersion}` })) });
+  return Object.freeze({ credentialReference: parsed.credentialReference, vertexPrice: Object.freeze({ ...quote, currency: "USD" as const }), pricing: versionedPricing });
 }

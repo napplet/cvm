@@ -1,3 +1,4 @@
+import { canonicalJson } from "../promotion/schema";
 import { z } from "zod";
 import { NormalizedUsageReceiptSchema, UsageDimensionSchema, type NormalizedUsageReceipt } from "./model-gateway";
 import { ProfitPolicySchema, profitCharge } from "./profit";
@@ -101,9 +102,8 @@ export async function createVertexGeminiProductionPricing(input: Readonly<{
   const observedAt = new Date(observation.observedAtMs).toISOString();
   const freshUntil = new Date(observation.freshUntilMs).toISOString();
   const source = freeze({ url: observation.sourceUrl, capturedBytesSha256: await sha256Bytes(observation.bytes), observedAt, effectiveAt: observedAt, freshUntil });
-  const cardId = `vertex-gemini-4-argon-${source.capturedBytesSha256.slice(0, 16)}`;
-  const card = freeze(PriceCardSchema.parse({
-    id: cardId, version: cardId, kind: "source_attributed_provider", provider: "vertex_ai_gemini", currency: "usd_micros", rounding: "ceil",
+  const cardBody = {
+    kind: "source_attributed_provider", provider: "vertex_ai_gemini", currency: "usd_micros", rounding: "ceil",
     supportedDimensions: ["input_tokens", "cached_tokens", "output_tokens", "reasoning_tokens"],
     rates: {
       input_tokens: { numerator: String(observation.inputMicrosPerMillion), denominator: "1000000" },
@@ -113,7 +113,9 @@ export async function createVertexGeminiProductionPricing(input: Readonly<{
     },
     ceilings: { inputTokens: input.maximumInputTokens, outputTokens: input.maximumOutputTokens },
     validity: { notBefore: observedAt, notAfter: freshUntil }, sources: { provider: source, conversion: conversion.source },
-  }));
+  };
+  const cardId = `vertex-gemini-4-argon-${await sha256Bytes(new TextEncoder().encode(canonicalJson({ card: cardBody, profileId: input.profileId, deadlineMs: input.deadlineMs })))}`;
+  const card = freeze(PriceCardSchema.parse({ ...cardBody, id: cardId, version: cardId }));
   const profile = freeze(ModelProfileSchema.parse({
     id: input.profileId, provider: "vertex_ai_gemini", model: "gemini-4-argon", priceCardId: card.id, selection: "unselected",
     maximumUnits: [

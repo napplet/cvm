@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { parseVertexInteraction, type VertexInteraction } from "./vertex-interaction-wire";
+import { parseStoredVertexInput, parseVertexInteraction, type VertexInteraction } from "./vertex-interaction-wire";
+import { advanceVertexRecovery, VERTEX_RECOVERY_GET_LIMIT, VERTEX_RECOVERY_PAGE_LIMIT, VERTEX_RECOVERY_DEADLINE_MS, type VertexRecoveryJournal } from "./vertex-recovery-scan";
 import type { GoogleTokenSource } from "./google-auth";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
@@ -7,8 +8,8 @@ const OperationSchema = z.string().min(3).max(256).regex(/^[a-z][a-z0-9_:-]*$/u)
 const ProjectSchema = z.string().regex(/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/u);
 const InteractionIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,256}$/u);
 const CredentialReferenceSchema = z.string().regex(/^gcp:adc:[a-z][a-z0-9:_-]{2,127}$/u);
-const MAX_RECOVERY_GETS = 32;
-const RECOVERY_DEADLINE_MS = 25_000;
+const MAX_RECOVERY_GETS = VERTEX_RECOVERY_GET_LIMIT;
+const RECOVERY_DEADLINE_MS = VERTEX_RECOVERY_DEADLINE_MS;
 /** The custom interaction carries the system text both as a top-level field
  * and inside the canonical recovery input. UTF-8 bytes are a conservative
  * tokenizer-independent upper bound because every token consumes >=1 byte. */
@@ -36,7 +37,7 @@ export type VertexProviderReceipt = z.infer<typeof ReceiptSchema>;
 export function parseVertexProviderReceipt(raw: unknown): VertexProviderReceipt | undefined { const result = ReceiptSchema.safeParse(raw); return result.success ? result.data : undefined; }
 /** Claim must be a durable transactional CAS: only the successful claimer may
  * issue POST. File/memory journals are test seams, never Cloud Run authority. */
-export type VertexOperationJournal = Readonly<{ claim(entry: JournalEntry): Promise<Readonly<{ claimed: boolean; entry: unknown }>>; read(operationId: string): Promise<unknown>; write(entry: JournalEntry): Promise<void> }>;
+export type VertexOperationJournal = Readonly<{ claim(entry: JournalEntry): Promise<Readonly<{ claimed: boolean; entry: unknown }>>; read(operationId: string): Promise<unknown>; write(entry: JournalEntry): Promise<void>; /** Actual SQL adapters retain bounded progress; legacy test journals remain query-only. */ recovery?: VertexRecoveryJournal }>;
 /** Server-owned journal reader for a separately owner-checked operational
  * recovery route. This does not relax any client candidate/project check. */
 export async function readRetainedVertexOperation(journal: VertexOperationJournal, operation: unknown) {
@@ -140,7 +141,7 @@ function pending(operationId: string) { return frozen({ status: "pending" as con
  * no idempotency key, so an ambiguous create is never resent. */
 export function createVertexDeploymentClient(input: Readonly<{
   candidateSha256: unknown; projectId: unknown; location: unknown; model: unknown; credentialReference: unknown; price: unknown;
-  journal: VertexOperationJournal; interactions: VertexInteractionsPort; now?: () => number;
+  journal: VertexOperationJournal; interactions: VertexInteractionsPort; now?: () => number; /** Internal observation-clock seam; production uses wall time. */ recoveryClock?: () => number;
 }>) {
   const candidateSha256 = DigestSchema.parse(input.candidateSha256); const projectId = ProjectSchema.parse(input.projectId);
   if (input.location !== "global" || input.model !== "gemini-4-argon") throw new Error("VERTEX_PRODUCTION_MODEL_REQUIRED");
@@ -160,8 +161,34 @@ export function createVertexDeploymentClient(input: Readonly<{
       const receipt = completion(entry, direct); if (!receipt) return unknown(entry.operationId, "receipt_invalid");
       await input.journal.write(frozen({ ...entry, completedReceipt: receipt })); return receipt;
     }
+    if (input.journal.recovery) {
+      const bound = (raw: unknown, id: string): "match" | "different" | "unproven" => {
+        const header = z.object({ id: InteractionIdSchema, model: z.string().min(1).max(256) }).passthrough().safeParse(raw);
+        if (!header.success || header.data.id !== id) return "unproven";
+        if (header.data.model !== entry.model) return "different";
+        const storedInput = parseStoredVertexInput(raw);
+        if (!storedInput) return "unproven";
+        return JSON.stringify(storedInput) === JSON.stringify(requestContent(entry)) ? "match" : "different";
+      };
+      const observed = await advanceVertexRecovery({ journal: input.journal.recovery, binding: { operationId: entry.operationId, requestSha256: entry.requestSha256 }, clock: input.recoveryClock,
+        list: pageToken => input.interactions.list({ projectId, location: "global", pageSize: 500, ...(pageToken ? { pageToken } : {}) }),
+        observe: async id => bound(await input.interactions.get({ projectId, location: "global", id }), id),
+        readFinal: id => input.interactions.get({ projectId, location: "global", id }),
+      });
+      if (observed.status !== "found") return unknown(entry.operationId, "unmatched_original");
+      if (bound(observed.raw, observed.id) !== "match") return unknown(entry.operationId, "receipt_invalid");
+      // Unique stored input establishes the original native ID independently
+      // of incomplete usage/output. Future observation can use the direct GET.
+      const saved = JournalSchema.parse({ ...entry, interactionId: observed.id });
+      await input.journal.write(saved);
+      const item = interactionFrom(observed.raw);
+      if (!item) return unknown(entry.operationId, "receipt_invalid");
+      if (item.status === "in_progress" || item.status === "queued") return pending(entry.operationId);
+      const receipt = completion(saved, item); if (!receipt) return unknown(entry.operationId, "receipt_invalid");
+      await input.journal.write(frozen({ ...saved, completedReceipt: receipt })); return receipt;
+    }
     let found: Interaction | undefined; let pageToken: string | undefined; const visitedTokens = new Set<string>(); const deadline = Date.now() + RECOVERY_DEADLINE_MS; let reads = 0;
-    for (let page = 0; page < 3; page += 1) {
+    for (let page = 0; page < VERTEX_RECOVERY_PAGE_LIMIT; page += 1) {
       if (Date.now() >= deadline) return unknown(entry.operationId, "unmatched_original");
       const raw = await input.interactions.list({ projectId, location: "global", pageSize: 500, ...(pageToken ? { pageToken } : {}) });
       const value = z.object({ interaction_metadatas: z.array(z.object({ id: InteractionIdSchema }).passthrough()).max(500), next_page_token: z.string().min(1).max(2048).optional() }).passthrough().safeParse(raw);
@@ -174,10 +201,11 @@ export function createVertexDeploymentClient(input: Readonly<{
         reads += 1;
         const item = interactionFrom(await input.interactions.get({ projectId, location: "global", id: metadata.id }));
         if (!item || item.model !== entry.model || !sameInput(entry, item)) continue;
+        if (item.id !== metadata.id) return unknown(entry.operationId, "receipt_invalid");
         if (found) return unknown(entry.operationId, "receipt_invalid"); found = item;
       }
       const next = value.data.next_page_token; if (!next) break;
-      if (page === 2 || visitedTokens.has(next)) return unknown(entry.operationId, "unmatched_original");
+      if (page === VERTEX_RECOVERY_PAGE_LIMIT - 1 || visitedTokens.has(next)) return unknown(entry.operationId, "unmatched_original");
       visitedTokens.add(next); pageToken = next;
     }
     if (!found) return unknown(entry.operationId, "unmatched_original");

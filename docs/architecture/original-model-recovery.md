@@ -65,7 +65,7 @@ The composed test runs restricted PostgreSQL and the actual HTTP adapter,
 Vertex journal/client, source store, gateway, generation core and settlement.
 The first POST loses its acknowledgement. A new controller has a different
 candidate, profile, card and FX quote; the original source expires. Its current
-price exceeds the thirteen-test-sat approved cap. Recovery performs two GETs, one
+price exceeds the thirteen-test-sat approved cap. Recovery performs three GETs (list, match and final original read), one
 build, one original action/budget and one six-test-sat charge. Terminal replay
 performs no new provider request or build. Foreign owner/budget/profile, changed
 prompt/bounds and another project are rejected before provider access. The

@@ -112,7 +112,7 @@ integration.each(["legacy-completed", "current-missing-counter"])("normal paid g
     expect(await open().startSession(command)).toEqual(result);
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.ledger_entries WHERE account_id=$1 AND direction='debit'", [result.accountId])).rows[0].count).toBe(1);
     expect({ posts, builds }).toEqual({ posts: 1, builds: 1 });
-    expect(reads).toBe(wireCase === "current-missing-counter" ? 2 : 0);
+    expect(reads).toBe(wireCase === "current-missing-counter" ? 3 : 0);
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.source_proposals")).rows[0].count).toBe(1);
     const action = await database.meteredFunding.findMeteredAction(result.accountId, command.idempotencyKey);
     if (!action) throw new Error("FIXTURE_ACTION_REQUIRED");

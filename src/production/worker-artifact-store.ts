@@ -23,8 +23,11 @@ const operation = (request: WorkerRunRequest) => `worker-artifact:${sha(canonica
  * permission; all later calls reconcile its exact key/checksum without writes.
  * This index is not a customer artifact authorization or a publication receipt. */
 export class ProductionWorkerArtifactStore {
-  constructor(private readonly input: Readonly<{ journal: PostgresOperationJournal; objects: ObjectStorePort; toolchainSha256: string }>) {
+  constructor(private readonly input: Readonly<{ journal: PostgresOperationJournal; objects: ObjectStorePort; toolchainSha256: string; retainedToolchainSha256s?: readonly string[] }>) {
     assertPostgresOperationJournal(input.journal); Digest.parse(input.toolchainSha256);
+    if ((input.retainedToolchainSha256s?.length ?? 0) > 9) throw new Error("PRODUCTION_ARTIFACT_TOOLCHAINS_INVALID");
+    input.retainedToolchainSha256s?.forEach(value => Digest.parse(value));
+    this.input = Object.freeze({ ...input, retainedToolchainSha256s: Object.freeze([...(input.retainedToolchainSha256s ?? [])]) });
   }
   async persist(input: Readonly<{ request: WorkerRunRequest; accountId: string; ownerId: string; bytes: Uint8Array; scannerReportSha256: string; conformanceReportSha256: string; result: z.input<typeof Completed> }>) {
     const request = WorkerRunRequestSchema.parse(input.request);
@@ -61,7 +64,7 @@ export class ProductionWorkerArtifactStore {
     return Object.freeze({ ...evidence, reference, bytes });
   }
   #validate(request: WorkerRunRequest, evidence: Evidence) {
-    if (evidence.requestSha256 !== sha(canonicalJson(request)) || evidence.toolchainSha256 !== this.input.toolchainSha256 || evidence.result.artifact.artifactId !== `artifact:${evidence.checksum}`) throw new Error("PRODUCTION_ARTIFACT_REQUEST_MISMATCH");
+    if (evidence.requestSha256 !== sha(canonicalJson(request)) || (evidence.toolchainSha256 !== this.input.toolchainSha256 && !this.input.retainedToolchainSha256s?.includes(evidence.toolchainSha256)) || evidence.result.artifact.artifactId !== `artifact:${evidence.checksum}`) throw new Error("PRODUCTION_ARTIFACT_REQUEST_MISMATCH");
     for (const field of ["sessionId", "actionId", "expectedVersion", "policyVersion", "capabilityGrant", "workspaceId"] as const) if (request[field] !== evidence.result.artifact[field]) throw new Error("PRODUCTION_ARTIFACT_REQUEST_MISMATCH");
   }
 }

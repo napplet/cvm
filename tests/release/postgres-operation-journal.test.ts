@@ -1,3 +1,5 @@
+import { ProductionWorkerJobRouter } from "../../src/production/worker-job-router";
+import { PRODUCTION_WORKER_POLICY } from "../../src/worker-adapters/production-worker-policy";
 import { expect, test } from "bun:test";
 import { createRequire } from "node:module";
 import { mkdtemp, mkdir, writeFile, rm, realpath } from "node:fs/promises";
@@ -118,6 +120,12 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
       await expect(artifacts().read({ ...request, idea: "changed source" })).rejects.toThrow("PRODUCTION_ARTIFACT_REQUEST_MISMATCH");
       await expect(artifacts().persist({ ...artifactInput, ownerId: scopeSha256 })).rejects.toThrow("OPERATION_IDENTITY_CONFLICT");
       await expect(new ProductionWorkerArtifactStore({ journal: create("worker-artifacts"), objects: objectPort, toolchainSha256: scopeSha256 }).read(request)).rejects.toThrow("PRODUCTION_ARTIFACT_REQUEST_MISMATCH");
+      const approved = new ProductionWorkerArtifactStore({ journal: create("worker-artifacts"), objects: objectPort, toolchainSha256: scopeSha256, retainedToolchainSha256s: [identity] });
+      const uploadsBeforeUpgrade = uploads;
+      expect((await approved.read(request))?.toolchainSha256).toBe(identity);
+      expect((await approved.read(request))?.result).toEqual(completed);
+      expect(uploads).toBe(uploadsBeforeUpgrade);
+      await expect(approved.read({ ...request, policyVersion: "changed-policy" })).rejects.toThrow("PRODUCTION_ARTIFACT_REQUEST_MISMATCH");
       corruptRead = true; expect(await artifacts().read(request)).toBeUndefined(); corruptRead = false;
       refuseCreate = true;
       const missingRequest = { ...request, actionId: "action:missing-create" };
@@ -293,7 +301,7 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
     const workerJournal = create("build-workers:run-1"), jobJournal = create("build-jobs:run-1");
     const workerRecords = createPostgresWorkerOperationJournal(workerJournal);
     const workerOperationId = "original-build-worker";
-    await workerRecords.claim({ operationId: workerOperationId, requestSha256: identity, resourceName: workerOperationId, provider: "fly", image: `registry/worker@sha256:${scopeSha256}`, sessionLeaseSha256: identity, toolchainSha256: scopeSha256, providerDeadlineEpochMs: Date.now() + 1_200_000 });
+    await workerRecords.claim({ operationId: workerOperationId, requestSha256: identity, resourceName: workerOperationId, provider: "fly", appName: "original-app", policyVersion: PRODUCTION_WORKER_POLICY.version, image: `registry/worker@sha256:${scopeSha256}`, sessionLeaseSha256: identity, toolchainSha256: scopeSha256, providerDeadlineEpochMs: Date.now() + 1_200_000 });
     await workerRecords.update({ operationId: workerOperationId, requestSha256: identity, resourceId: "original-machine", state: "reconciled" });
     let starts = 0, queries = 0, originalJobId = "", fences = 0, fenceQueries = 0, restores = 0, restoreQueries = 0;
     let restoreReceipt: unknown;
@@ -321,11 +329,33 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
       throw new Error("UNEXPECTED_REDISPATCH");
     } } };
     const jobClient = (publication?: { server: string }, artifactContract?: "nip5d-direct-v1") => new ProductionWorkerJobClient({ publication, artifactContract, provider: "fly", workerOperationId, clients: clients as never, workerJournal, jobJournal, toolchainSha256: scopeSha256 });
+    const originalImage = `registry/worker@sha256:${scopeSha256}`, changedImage = `registry/worker@sha256:${identity}`;
+    const routerClients = { modal: { config: { image: originalImage, policyVersion: PRODUCTION_WORKER_POLICY.version } }, fly: { ...clients.fly, config: { image: originalImage, policyVersion: PRODUCTION_WORKER_POLICY.version } } };
+    let wrongProfileCalls = 0;
+    const currentClients = { modal: { config: { image: changedImage, policyVersion: PRODUCTION_WORKER_POLICY.version } }, fly: { config: { image: changedImage, policyVersion: PRODUCTION_WORKER_POLICY.version }, async exec() { wrongProfileCalls++; throw new Error("WRONG_PROFILE_EXECUTED"); } } };
+    const router = (retain = true, flyAppName = "original-app") => new ProductionWorkerJobRouter({ workerJournal, jobJournal, executables: [
+      { image: changedImage, toolchainSha256: identity, modalAppName: "original-app", flyAppName, clients: currentClients as never },
+      ...(retain ? [{ image: originalImage, toolchainSha256: scopeSha256, modalAppName: "original-app", flyAppName, clients: routerClients as never }] : []),
+    ] });
     const buildRequest = { sessionId: "session", actionId: "action", expectedVersion: 0, policyVersion: "test-policy", capabilityGrant: "grant", workspaceId: "workspace", sourceProposalSha256: identity, sourceProposalReference: `proposal:sha256:${identity}`, sourceProposalFiles: [{ path: "src/main.ts", content: "console.log('bounded test');" }] };
     expect((await jobClient().start(buildRequest)).state).toBe("unknown");
     expect((await jobClient().start(buildRequest)).state).toBe("pending");
     expect((await jobClient().observe(buildRequest)).state).toBe("pending");
     expect(starts).toBe(1); expect(queries).toBe(2);
+    const retainedClient = await router().resolve({ provider: "fly", workerOperationId });
+    expect(retainedClient.toolchainSha256).toBe(scopeSha256);
+    expect((await retainedClient.start(buildRequest)).state).toBe("pending");
+    expect(starts).toBe(1); expect(wrongProfileCalls).toBe(0);
+    await expect(router(false).resolve({ provider: "fly", workerOperationId })).rejects.toThrow("PRODUCTION_WORKER_ORIGINAL_EXECUTABLE_REQUIRED");
+    await expect(router(true, "another-app").resolve({ provider: "fly", workerOperationId })).rejects.toThrow("PRODUCTION_WORKER_ORIGINAL_EXECUTABLE_REQUIRED");
+    await expect(router().resolve({ provider: "modal", workerOperationId })).rejects.toThrow("PRODUCTION_WORKER_ORIGINAL_EXECUTABLE_REQUIRED");
+    const modalOriginalId = "original-modal-worker";
+    await workerRecords.claim({ operationId: modalOriginalId, requestSha256: identity, resourceName: modalOriginalId, provider: "modal", appName: "original-app", policyVersion: PRODUCTION_WORKER_POLICY.version, image: originalImage, sessionLeaseSha256: identity, toolchainSha256: scopeSha256, providerDeadlineEpochMs: Date.now() + 1_200_000 });
+    await workerRecords.update({ operationId: modalOriginalId, requestSha256: identity, resourceId: "original-sandbox", state: "reconciled" });
+    expect((await router().resolve({ provider: "modal", workerOperationId: modalOriginalId })).toolchainSha256).toBe(scopeSha256);
+    expect(wrongProfileCalls).toBe(0);
+
+
     expect((await jobClient({ server: "https://blossom.example" }).start(buildRequest)).state).toBe("pending");
     expect(starts).toBe(1); // A new controller observes the legacy original only.
 
@@ -343,7 +373,7 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
     await expect(jobClient().start({ ...buildRequest, sourceProposalFiles: [{ path: "src/main.ts", content: "changed" }] })).rejects.toThrow("OPERATION_IDENTITY_CONFLICT");
     expect(starts).toBe(2);
     expect((await jobClient().fence(buildRequest, identity)).state).toBe("unknown");
-    expect((await jobClient().fence(buildRequest, identity)).state).toBe("fenced");
+    expect((await retainedClient.fence(buildRequest, identity)).state).toBe("fenced");
     expect(fences).toBe(1); expect(fenceQueries).toBe(1);
     await expect(jobClient().fence(buildRequest, scopeSha256)).rejects.toThrow("OPERATION_IDENTITY_CONFLICT");
     const source = { version: 1, actionId: "original-action", sessionId: "original-session", expectedVersion: 0, proposalSha256: identity, toolchainSha256: scopeSha256, deadlineEpochMs: 1, files: buildRequest.sourceProposalFiles };
@@ -378,6 +408,9 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
 
     // Separate direct-source/bundle versions preserve original bodies across
     // changed controller defaults; missing/ambiguous acknowledgements only query.
+    const restarted = await router().resolve({ provider: "fly", workerOperationId });
+    expect((await restarted.observeRestoreWorkspace({ operationId: "expanded-original-restore", archiveSha256: hash(expandedBytes), bindingSha256: identity })).state).toBe("restored");
+    expect(restores).toBe(2); expect(starts).toBe(2); expect(wrongProfileCalls).toBe(0);
     const directPublication = { server: "https://publication.example" };
     const directRequest = { ...buildRequest, actionId: "direct-action", idea: "Keep one short note", sourceProposalFiles: [...buildRequest.sourceProposalFiles, { path: "src/capabilities.json", content: capabilityContent }] };
     expect((await jobClient(directPublication, "nip5d-direct-v1").start(directRequest)).state).toBe("unknown");

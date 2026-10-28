@@ -78,13 +78,16 @@ export async function createMountedProductionWorkerClients(input: Readonly<{
   config: ProductionConfig;
   secrets: MountedProductionSecretMaterial;
   journal: WorkerOperationJournal;
+  /** Trusted retained executable, never an inbound worker request. */
+  image?: string;
 }>) {
+  const image = z.string().regex(/^.+@sha256:[a-f0-9]{64}$/iu).parse(input.image ?? input.config.worker.image);
   const modal = ModalAccess.parse(JSON.parse(await input.secrets.text("worker.modalAccessReference", 8_192)));
   const fly = FlyAccess.parse(JSON.parse(await input.secrets.text("worker.flyAccessReference", 8_192)));
   const modalTransport = modalSdk(modal);
   const flyTransport = createFlyMachinesHttpTransport({ appName: fly.appName, getAccessToken: async () => fly.token, journal: input.journal, fetch });
   const clients = createWorkerDeploymentClients({
-    image: input.config.worker.image,
+    image,
     workspaceRoot: PRODUCTION_WORKER_POLICY.workspaceRoot,
     policyVersion: PRODUCTION_WORKER_POLICY.version,
     modalAppName: modal.appName,
@@ -98,8 +101,8 @@ export async function createMountedProductionWorkerClients(input: Readonly<{
    * native certification adapters; neither is serializable or request-owned. */
   return Object.freeze({ clients, flyRegion: fly.region, certification: Object.freeze({
     modalSdk: modalTransport,
-    modalConfig: Object.freeze({ appName: modal.appName, image: input.config.worker.image, workspaceRoot: PRODUCTION_WORKER_POLICY.workspaceRoot, tags: Object.freeze({ "napplet-cvm-realm": "production-real" }), regions: input.config.regions, policyVersion: PRODUCTION_WORKER_POLICY.version }),
+    modalConfig: Object.freeze({ appName: modal.appName, image, workspaceRoot: PRODUCTION_WORKER_POLICY.workspaceRoot, tags: Object.freeze({ "napplet-cvm-realm": "production-real" }), regions: input.config.regions, policyVersion: PRODUCTION_WORKER_POLICY.version }),
     flyClient: flyTransport,
-    flyConfig: Object.freeze({ appName: fly.appName, image: input.config.worker.image, region: fly.region }),
+    flyConfig: Object.freeze({ appName: fly.appName, image, region: fly.region }),
   }) });
 }

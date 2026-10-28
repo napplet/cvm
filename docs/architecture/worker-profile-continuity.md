@@ -36,9 +36,11 @@ selecting another production worker profile:
   changing it. Ordinary journals now retain that original scope; unanchored
   history in another scope refuses startup rather than guessing or copying
   originals. Preserve the authority record and journal/audit tables in backup.
-- Resolve original worker/job clients through server-approved retained execution
-  contexts, including original provider app/region and artifact contract. The
-  bridge and job client currently accept one configured toolchain.
+- Retain approved original executable profiles in mounted candidate configuration.
+  The bridge now routes legacy aggregate jobs through the original provider
+  image/toolchain and app binding. Keep those provider apps and credentials
+  available through the resume window. Direct-profile promotion and original
+  resume allocation still require their complete compatibility wiring.
 - Select approved original checkpoint compatibility before reserving resume
   funds or allocating capacity. The continuation service currently accepts one
   current policy/model/price/toolchain tuple. Do not reprice an old action or
@@ -97,3 +99,45 @@ Never delete the authority or copy an uncertain operation into a new scope.
 Historical job/worker profile selection and resume compatibility are still
 required before changing the selected worker image. This change keeps their
 original records reachable; it does not approve a different executable profile.
+
+
+## Retained job executables
+
+Mounted `worker.retainedProfiles` holds at most eight pinned legacy aggregate
+image/toolchain pairs alongside the current default. Each retained entry has
+`artifactContract: "legacy-aggregate-v1"`. Omitting the field preserves existing
+configuration. Duplicate images, floating tags, unknown fields and contracts are
+refused. The controller/operator preparation must carry the approved original
+profiles into the next candidate configuration before its authorization; customers
+never provide these entries. Keep existing provider app identities during this
+transition; moving to another app requires separately retained access authority.
+
+The coordinator builds a client for each approved image. After the funded owner
+and original capacity resolve, the job router reads the exact durable worker
+operation, matches provider, image, toolchain, policy and original app, then creates
+the job client for that executable. Requests and checkpoint bytes cannot nominate
+an executable. An absent approved profile fails closed. Normal builds, fences,
+exports, restore operations and restore observations use this router in both the
+normal graph and the fresh recovered graph. New capacity still uses the default.
+
+The artifact index reader accepts original toolchains only from the approved
+set; request/result/owner evidence and immutable object hashes remain checked.
+Finishing an older job writes evidence with that job's actual toolchain, rather
+than relabeling it with the new default. No old request, source body, job ID or
+artifact evidence is rewritten. Uncertain job and restore operations keep the
+existing query-only recovery path. These changes do not make the internal index
+a customer publication/preview authorization endpoint.
+
+The prepared direct-artifact image remains unselected. Its policy/publication
+composition is not enabled through a legacy retained entry. Explicit post-grace
+resume still needs to select original approved compatibility and capacity before
+funding or allocation. A successful local protocol regression is not a live
+provider, 30-day resume, host or release-certification result.
+
+For a worker-default rollback, keep this control-plane reader installed, select
+the previous approved default and retain the other approved image/toolchain in
+the catalog. Preserve both sets of operation and artifact records. A binary
+without retained-profile readers must not serve a mixed-profile database until
+those readers are backported; restoring an older backup to discard newer
+customer work is not a rollback strategy. Live quiesce/checkpoint, backup and
+fresh restore remain mandatory cutover evidence.

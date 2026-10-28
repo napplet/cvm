@@ -20,14 +20,13 @@ test("mounted production session material constructs the complete native provide
   const text = await readFile(source, "utf8");
   for (const constructor of [
     "createNativeCloudRunProvider", "createNativeCloudSqlPostgresProvider", "createNativeGcsProvider", "createNativeCollectorProvider",
-    "createModalLiveWorkerProvider", "createFlyLiveWorkerProvider", "createNativeCep8LightningProvider",
+    "createProductionWorkerLifecycle", "createNativeCep8LightningProvider",
     "createNativeCashuProvider", "CompatibleHostBrowserObservationPort", "ExternalSignerBoundaryAdapter",
     "createExactSealedUploadAdapter", "createNostrRelayPublicationAdapter", "createNativePromotedNappletCliSource",
   ]) expect(text).toContain(constructor);
   for (const runtimeConstructor of [
     "createMountedProductionEdgeMaterial", "openContextVmCertificationClient",
-    "createMountedWorkerReadinessCommands", "dependencies.workerCertification.modalSdk",
-    "dependencies.workerCertification.flyClient", "loadMountedProductionSessionRecord",
+    "dependencies.certificationCapacities.modal", "dependencies.certificationCapacities.fly", "loadMountedProductionSessionRecord",
     "ProductionEdgeContexts", "openProductionNip46Signer", "createProductionCliUploadPort",
     "createProductionNostrRelayPort", "ProductionCompatibleHostPackage",
     "prepareMountedOperationalExecution", "materializeProtectedCertifier",
@@ -115,7 +114,8 @@ test("pinned execution forwards the fixed secret mount, while workers and Contex
   expect(execution).toContain("generation, authorization, secrets");
   expect(material).toContain("createMountedProductionEdgeMaterial({ config: input.config, secrets: input.secrets })");
   expect(material).toContain("openContextVmCertificationClient({");
-  expect(material).toContain("createMountedWorkerReadinessCommands({ clients: dependencies.workers");
+  expect(material).toContain("createProductionWorkerLifecycle({ provider: \"modal\", capacity: dependencies.certificationCapacities.modal");
+  expect(material).toContain("createProductionWorkerLifecycle({ provider: \"fly\", capacity: dependencies.certificationCapacities.fly");
   expect(material).not.toContain("input.resolved.contextvmCertification");
   expect(material).not.toContain("input.resolved.modalSdk");
   expect(material).not.toContain("input.resolved.flyClient");

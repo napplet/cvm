@@ -117,7 +117,7 @@ export const WorkerArtifactSchema = CorrelationSchema.extend({
   purpose: z.object({ kind: z.literal("focused"), statements: z.array(z.string().min(1)).length(1) }).strict(),
   surface: z.object({ hasBackend: z.literal(false), hasSecondPurpose: z.literal(false), serviceWorker: z.literal(false), dynamicAuthority: z.literal(false) }).strict(),
   dependencies: z.object({ appOwnedSignerOrRelay: z.literal(false), privateNappletImport: z.literal(false) }).strict(),
-  capabilities: z.object({ declaredHard: z.array(z.enum(["storage", "intent"])), observedDomains: z.array(z.enum(["storage", "intent"])), optionalIntentPresenceRead: z.boolean(), intentUsedThroughSdk: z.boolean() }).strict(),
+  capabilities: z.object({ declaredOptional: z.array(z.literal("gamepad")).optional(), declaredHard: z.array(z.enum(["storage", "intent", "gamepad"])), observedDomains: z.array(z.enum(["storage", "intent", "gamepad"])), optionalIntentPresenceRead: z.boolean(), intentUsedThroughSdk: z.boolean() }).strict(),
   upstream: z.object({ scanner: UpstreamPassSchema, conformance: UpstreamPassSchema }).strict(),
 }).strict();
 

@@ -57,3 +57,20 @@ describe("artifact contract policy", () => {
     expect(parallel).toEqual(serial);
   });
 });
+
+
+describe("GAMEPAD generation policy", () => {
+  test("accepts declared optional controllers and observed controller requirements", async () => {
+    const capabilities = { ...focused.capabilities, observedDomains: ["gamepad"], declaredOptional: ["gamepad"] };
+    expect((await evaluateArtifactContract({ ...focused, capabilities })).verdict).toBe("pass");
+    expect((await evaluateArtifactContract({ ...focused, capabilities: { ...capabilities, declaredOptional: [], declaredHard: ["gamepad"] } })).verdict).toBe("pass");
+  });
+  test("rejects undeclared, duplicate, contradictory, and unused controller requirements", async () => {
+    for (const capabilities of [
+      { ...focused.capabilities, observedDomains: ["gamepad"] },
+      { ...focused.capabilities, declaredOptional: ["gamepad", "gamepad"], observedDomains: ["gamepad"] },
+      { ...focused.capabilities, declaredOptional: ["gamepad"], declaredHard: ["gamepad"], observedDomains: ["gamepad"] },
+      { ...focused.capabilities, declaredHard: ["gamepad"] },
+    ]) expect((await evaluateArtifactContract({ ...focused, capabilities })).verdict).toBe("block");
+  });
+});

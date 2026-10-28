@@ -63,3 +63,13 @@ test("blocks missing required capabilities, exposes optional degradation, and bi
   expect(changedPolicy.capabilityDigest).not.toBe(optionalUnavailable.capabilityDigest);
   expect(changedDTag.capabilityDigest).not.toBe(optionalUnavailable.capabilityDigest);
 });
+
+
+test("GAMEPAD availability preserves the optional fallback and blocks controller-required artifacts", async () => {
+  const controller = { name: "gamepad", requirement: "optional", purpose: "Optional controller input", consent: "optional", compatibleRuntimes: [], available: false };
+  const artifact = { ...verifiedPhase06Artifact, requiredCapabilities: [], optionalCapabilities: ["gamepad"], manifestCapabilities: [controller] };
+  const review = await canonicalCapabilityReview(artifact, "napplet-host/v1");
+  expect(evaluateRuntimeCompatibility(review)).toEqual({ compatibility: "degraded", missingRequired: [], unavailableOptional: ["gamepad"] });
+  const requiredReview = await canonicalCapabilityReview({ ...artifact, requiredCapabilities: ["gamepad"], optionalCapabilities: [], manifestCapabilities: [{ ...controller, requirement: "required", consent: "required" }] }, "napplet-host/v1");
+  expect(evaluateRuntimeCompatibility(requiredReview)).toEqual({ compatibility: "incompatible", missingRequired: ["gamepad"], unavailableOptional: [] });
+});

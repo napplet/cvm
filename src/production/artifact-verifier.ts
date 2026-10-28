@@ -3,6 +3,7 @@ import { lstat, open, readdir, realpath } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { z } from "zod";
 import { ProductionWorkerPublicationSchema } from "../worker-adapters/publication-metadata";
+import { ProductionCapabilityReceiptSchema } from "../worker-adapters/capability-receipt";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const Stage = z.enum(["create", "init", "skills", "install", "build", "verify", "conformance", "dry-run"]);
@@ -12,6 +13,7 @@ const Facts = z.object({
   expectedVersion: z.number().int().nonnegative(), proposalSha256: Digest, toolchainSha256: Digest, distRoot: z.string().min(1),
   commandEvidence: z.array(Command).length(8),
   publication: ProductionWorkerPublicationSchema.optional(),
+  capabilityReceipt: ProductionCapabilityReceiptSchema.optional(),
 }).strict();
 const ManifestFile = z.object({ path: z.string().min(2).max(257), sha256: Digest }).strict();
 /** The pinned @napplet/cli dry-run report includes signing, relay, and
@@ -142,6 +144,6 @@ export class ProductionArtifactVerifier {
     if (paths.length !== manifest.files.length || paths.some(tag => tag.length !== 3 || !manifest.files.some(file => tag[1] === file.path && tag[2] === file.sha256)) || new Set(paths.map(tag => tag[1])).size !== paths.length || aggregates.length !== 1 || aggregates[0]!.length !== 3 || aggregates[0]![1] !== aggregateSha256 || aggregates[0]![2] !== "aggregate") throw new Error("PRODUCTION_ARTIFACT_MANIFEST_TAG_MISMATCH");
     const sealedObjectSha256 = sha256(JSON.stringify(files));
     const commands = facts.commandEvidence.map(command => ({ name: command.name, exitCode: command.exitCode, ...(command.stdout ? { stdout: sha256(command.stdout) } : {}), ...(command.stderr ? { stderr: sha256(command.stderr) } : {}) }));
-    return Object.freeze({ ...facts, files, aggregateSha256, sealedObjectSha256, verificationEvidenceSha256: sha256(JSON.stringify({ commands, files, aggregateSha256 })) });
+    return Object.freeze({ ...facts, files, aggregateSha256, sealedObjectSha256, verificationEvidenceSha256: sha256(JSON.stringify({ commands, files, aggregateSha256, ...(facts.capabilityReceipt ? { capabilityReceipt: facts.capabilityReceipt } : {}) })) });
   }
 }

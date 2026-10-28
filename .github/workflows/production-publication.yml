@@ -8,6 +8,8 @@ on:
       - "src/production/source-build-verifier.ts"
       - "src/production/source-build-plan.ts"
       - "src/production/artifact-verifier.ts"
+      - "src/production/sealed-worker-artifact.ts"
+      - "src/worker-adapters/capability-receipt.ts"
       - "src/worker-adapters/production-job-client.ts"
       - "src/worker-adapters/publication-metadata.ts"
       - "tests/production/source-build-plan.test.ts"

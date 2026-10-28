@@ -8,6 +8,7 @@ import { assertPostgresOperationJournal, type PostgresOperationJournal } from ".
 import { createPostgresWorkerOperationJournal } from "../release/deployment/postgres-provider-journals";
 import type { createWorkerDeploymentClients } from "../release/deployment/worker-clients";
 import { ProductionWorkerPublicationSchema, type ProductionWorkerPublication } from "./publication-metadata";
+import { ProductionCapabilityReceiptSchema } from "./capability-receipt";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const STEP_NAMES = ["create", "init", "skills", "install", "build", "verify", "conformance", "dry-run"] as const;
@@ -21,10 +22,11 @@ export const ProductionJobObservationSchema = z.discriminatedUnion("state", [
   z.object({ version: z.literal(1), state: z.literal("completed"), jobId: Digest, requestSha256: Digest, artifactSha256: Digest, artifactBytes: z.number().int().positive().max(MAX_ARTIFACT_BUNDLE), commands: z.array(Summary).length(8) }).strict(),
 ]);
 export type ProductionJobObservation = z.infer<typeof ProductionJobObservationSchema> | Readonly<{ state: "unknown"; jobId: string }>;
-const Bundle = z.object({ version: z.literal(1), jobId: Digest, proposalSha256: Digest, toolchainSha256: Digest,
+const LegacyBundle = z.object({ version: z.literal(1), jobId: Digest, proposalSha256: Digest, toolchainSha256: Digest,
   files: z.array(z.object({ path: z.string().regex(/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/u).refine(value => value.split("/").every(part => part !== "." && part !== "..")), bytesBase64: z.string().max(22_369_624), sha256: Digest, size: z.number().int().nonnegative().max(16_777_216) }).strict()).min(1).max(256),
   commandEvidence: z.array(z.object({ argv: z.array(z.string()).max(16), exitCode: z.literal(0), stdout: z.string().max(65_536), stderr: z.string().max(65_536), elapsedMs: z.number().int().nonnegative() }).strict()).length(8),
 }).strict();
+const Bundle = z.discriminatedUnion("version", [LegacyBundle, LegacyBundle.extend({ version: z.literal(2), capabilityReceipt: ProductionCapabilityReceiptSchema }).strict()]);
 type StoredJob = Readonly<{ workerOperationId: string; workerResourceId: string; leaseSha256: string; jobId: string; requestBody: string; deadlineEpochMs: number }>;
 type Input = Readonly<{ provider: "modal" | "fly"; workerOperationId: string; clients: ReturnType<typeof createWorkerDeploymentClients>; workerJournal: PostgresOperationJournal; jobJournal: PostgresOperationJournal; toolchainSha256: string; publication?: ProductionWorkerPublication; now?: () => number }>;
 const WorkspaceSource = z.object({ version: z.literal(1), actionId: z.string().min(1).max(256), sessionId: z.string().min(1).max(256), expectedVersion: z.number().int().nonnegative(), proposalSha256: Digest, toolchainSha256: Digest, deadlineEpochMs: z.number().int().positive(), files: z.array(z.object({ path: z.enum(["src/main.ts", "src/styles.css", "src/capabilities.json"]), content: z.string().refine(value => Buffer.byteLength(value) <= 30_000) }).strict()).min(1).max(3) }).strict();
@@ -132,6 +134,10 @@ export class ProductionWorkerJobClient {
     const bytes = Buffer.concat(parts); if (sha(bytes) !== observed.artifactSha256) throw new Error("PRODUCTION_JOB_ARTIFACT_DIGEST_INVALID");
     const bundle = Bundle.parse(JSON.parse(bytes.toString("utf8")));
     if (bundle.jobId !== job.jobId || bundle.proposalSha256 !== request.sourceProposalSha256 || bundle.toolchainSha256 !== this.input.toolchainSha256 || new Set(bundle.files.map(file => file.path)).size !== bundle.files.length || !bundle.files.some(file => file.path === "index.html")) throw new Error("PRODUCTION_JOB_ARTIFACT_BINDING_INVALID");
+    if (bundle.version === 2) {
+      const requested = request.sourceProposalFiles?.find(file => file.path === "src/capabilities.json");
+      if (requested && (bundle.capabilityReceipt.state !== "present" || Buffer.from(bundle.capabilityReceipt.bytesBase64, "base64").toString("utf8") !== requested.content)) throw new Error("PRODUCTION_JOB_CAPABILITY_RECEIPT_MISMATCH");
+    }
     let total = 0;
     for (const file of bundle.files) { const content = Buffer.from(file.bytesBase64, "base64"); total += content.length; if (content.length !== file.size || sha(content) !== file.sha256 || content.toString("base64") !== file.bytesBase64 || total > 16_777_216) throw new Error("PRODUCTION_JOB_FILE_INVALID"); }
     bundle.commandEvidence.forEach((entry, index) => { const fact = observed.commands[index]!; if (canonicalJson(entry.argv) !== canonicalJson(fact.argv) || entry.exitCode !== fact.exitCode || sha(entry.stdout) !== fact.stdoutSha256 || sha(entry.stderr) !== fact.stderrSha256) throw new Error("PRODUCTION_JOB_COMMAND_EVIDENCE_INVALID"); });
@@ -144,7 +150,7 @@ export class ProductionWorkerJobClient {
     const bundle = await this.readArtifact(request), distRoot = await mkdtemp(join(tmpdir(), "napplet-cvm-production-artifact-"));
     try {
       for (const file of bundle.files) { const path = join(distRoot, file.path); await mkdir(dirname(path), { recursive: true, mode: 0o700 }); await writeFile(path, Buffer.from(file.bytesBase64, "base64"), { flag: "wx", mode: 0o600 }); }
-      return Object.freeze({ ...owner, ...publication, sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, proposalSha256: bundle.proposalSha256, toolchainSha256: bundle.toolchainSha256, distRoot, commandEvidence: bundle.commandEvidence.map((entry, index) => ({ name: STEP_NAMES[index]!, exitCode: entry.exitCode, stdout: entry.stdout, stderr: entry.stderr })), cleanup: () => rm(distRoot, { recursive: true, force: true }) });
+      return Object.freeze({ ...owner, ...publication, ...(bundle.version === 2 ? { capabilityReceipt: bundle.capabilityReceipt } : {}), sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, proposalSha256: bundle.proposalSha256, toolchainSha256: bundle.toolchainSha256, distRoot, commandEvidence: bundle.commandEvidence.map((entry, index) => ({ name: STEP_NAMES[index]!, exitCode: entry.exitCode, stdout: entry.stdout, stderr: entry.stderr })), cleanup: () => rm(distRoot, { recursive: true, force: true }) });
     } catch (error) { await rm(distRoot, { recursive: true, force: true }); throw error; }
   }
   /** Persist the original fence before writing it; uncertain responses only
@@ -175,6 +181,11 @@ export class ProductionWorkerJobClient {
     const text = new TextDecoder("utf-8", { fatal: true }).decode(input.bytes), workspace = Workspace.parse(JSON.parse(text));
     const archiveSha256 = sha(input.bytes);
     if (canonicalJson(workspace) !== text || workspace.toolchainSha256 !== this.input.toolchainSha256 || workspace.source.toolchainSha256 !== workspace.toolchainSha256 || workspace.artifact.toolchainSha256 !== workspace.toolchainSha256 || workspace.artifact.jobId !== sha(canonicalJson(workspace.source)) || workspace.source.proposalSha256 !== workspace.artifact.proposalSha256) throw new Error("PRODUCTION_WORKSPACE_BINDING_INVALID");
+    if (workspace.artifact.version === 2) {
+      const requested = workspace.source.files.find(file => file.path === "src/capabilities.json");
+      const receipt = workspace.artifact.capabilityReceipt;
+      if (requested && (receipt.state !== "present" || Buffer.from(receipt.bytesBase64, "base64").toString("utf8") !== requested.content)) throw new Error("PRODUCTION_WORKSPACE_CAPABILITY_RECEIPT_MISMATCH");
+    }
     if (new Set(workspace.source.files.map(file => file.path)).size !== workspace.source.files.length || !workspace.source.files.some(file => file.path === "src/main.ts") || new Set(workspace.artifact.files.map(file => file.path)).size !== workspace.artifact.files.length || !workspace.artifact.files.some(file => file.path === "index.html")) throw new Error("PRODUCTION_WORKSPACE_FILES_INVALID");
     let total = 0;
     for (const file of workspace.artifact.files) { const content = Buffer.from(file.bytesBase64, "base64"); total += content.length; if (content.length !== file.size || sha(content) !== file.sha256 || content.toString("base64") !== file.bytesBase64 || total > 16_777_216) throw new Error("PRODUCTION_WORKSPACE_FILES_INVALID"); }

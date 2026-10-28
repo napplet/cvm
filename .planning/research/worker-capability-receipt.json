@@ -1,0 +1,152 @@
+{
+  "version": 1,
+  "profile": "local-mechanism",
+  "protectedReleaseEvidence": false,
+  "status": "passed",
+  "baseImage": "sha256:1aa0a7d4a4efdf56b20ed3310a2e2cdede2cb7c46277817d92766a232c49fa8b",
+  "image": {
+    "requested": "napplet-cvm-production-worker:diagnostic-capability-receipt",
+    "id": "sha256:b6a7f51ec57236ca6f291854758bc176f83e6c01caa9834ba95ea8e615ae188e",
+    "platform": "linux/arm64"
+  },
+  "reportSha256": "1875d238265cde185577bfdd604a05b664e090b658f74ff467ba3d7fbf6418cf",
+  "sourceHashes": {
+    "infra/toolchain/production-job.ts": "b65c5d0fe580d2c31d9dbf7c562d58d3a3f716df9941bf9631c2fdcabf578ea7",
+    "scripts/test-production-worker.ts": "0f12d0463f170eec5d9e63776a4b0c9acca921f7ac4d8335275c75d474bd9c51"
+  },
+  "capabilityReceipts": {
+    "first": "absent",
+    "second": "present",
+    "newArchiveVersion": 2,
+    "legacyFormatProjectionRestored": {
+      "state": "restored",
+      "archiveSha256": "3e9479078a08f83bd177639e89f739469e2d9507e07f4e80818348eda7d047b7",
+      "toolchainSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "sourceSha256": "7738585978bc6e20e8c8c5e95d9a565318db4190b32e4660fbfaf4f01912de71",
+      "artifactFilesSha256": "e158a36157460c77051eaa2836faaca7742d58390e2095903ed22d6b71174199",
+      "workspacePath": "/workspace/restored"
+    }
+  },
+  "actualCliManifests": [
+    {
+      "item": {
+        "candidate": {
+          "name": "..",
+          "dir": "/workspace/jobs/1c0ec2709a94dc903f9cffbc343aadfb82d08e05c0c651384604f4c8bad47137/project/dist",
+          "indexHtml": "/workspace/jobs/1c0ec2709a94dc903f9cffbc343aadfb82d08e05c0c651384604f4c8bad47137/project/dist/index.html"
+        },
+        "target": "named",
+        "kind": 35129,
+        "dTag": "cvm-1c0ec2709a94dc903f9cffbc"
+      },
+      "files": [
+        {
+          "path": "/index.html",
+          "sha256": "4c7a0075b44b2f6b677f3627119a62a423fb8d9539b8f546ff4eea2dc1a73c11"
+        }
+      ],
+      "aggregateHash": "f1619584d8dd33d1c7c44a2dab22e3786e8927bc12d125e0c4437277902af5e5",
+      "template": {
+        "kind": 35129,
+        "created_at": 1793188675,
+        "tags": [
+          [
+            "d",
+            "cvm-1c0ec2709a94dc903f9cffbc"
+          ],
+          [
+            "path",
+            "/index.html",
+            "4c7a0075b44b2f6b677f3627119a62a423fb8d9539b8f546ff4eea2dc1a73c11"
+          ],
+          [
+            "x",
+            "f1619584d8dd33d1c7c44a2dab22e3786e8927bc12d125e0c4437277902af5e5",
+            "aggregate"
+          ],
+          [
+            "title",
+            "Generated napplet"
+          ]
+        ],
+        "content": ""
+      }
+    },
+    {
+      "item": {
+        "candidate": {
+          "name": "..",
+          "dir": "/workspace/jobs/45f847b39e8aa8d7fcee0c4cac5136d6c584d1b75a12679e5da89b45c1b51c55/project/dist",
+          "indexHtml": "/workspace/jobs/45f847b39e8aa8d7fcee0c4cac5136d6c584d1b75a12679e5da89b45c1b51c55/project/dist/index.html"
+        },
+        "target": "named",
+        "kind": 35129,
+        "dTag": "cvm-45f847b39e8aa8d7fcee0c4c"
+      },
+      "files": [
+        {
+          "path": "/index.html",
+          "sha256": "4c7a0075b44b2f6b677f3627119a62a423fb8d9539b8f546ff4eea2dc1a73c11"
+        }
+      ],
+      "aggregateHash": "f1619584d8dd33d1c7c44a2dab22e3786e8927bc12d125e0c4437277902af5e5",
+      "template": {
+        "kind": 35129,
+        "created_at": 1793188683,
+        "tags": [
+          [
+            "d",
+            "cvm-45f847b39e8aa8d7fcee0c4c"
+          ],
+          [
+            "path",
+            "/index.html",
+            "4c7a0075b44b2f6b677f3627119a62a423fb8d9539b8f546ff4eea2dc1a73c11"
+          ],
+          [
+            "x",
+            "f1619584d8dd33d1c7c44a2dab22e3786e8927bc12d125e0c4437277902af5e5",
+            "aggregate"
+          ],
+          [
+            "server",
+            "https://publication.example"
+          ],
+          [
+            "title",
+            "Generated napplet"
+          ]
+        ],
+        "content": ""
+      }
+    }
+  ],
+  "cleanup": [
+    {
+      "name": "napplet-cvm-production-worker-build-31597-3c2d8bcb2972",
+      "absent": true
+    },
+    {
+      "name": "napplet-cvm-production-worker-idle-31597-3c2d8bcb2972",
+      "absent": true
+    },
+    {
+      "name": "napplet-cvm-production-worker-ready-31597-3c2d8bcb2972",
+      "absent": true
+    },
+    {
+      "name": "napplet-cvm-production-worker-jobs-31597-3c2d8bcb2972",
+      "absent": true
+    },
+    {
+      "name": "napplet-cvm-production-worker-restore-31597-3c2d8bcb2972",
+      "absent": true
+    },
+    {
+      "name": "napplet-cvm-production-worker-legacy-restore-31597-3c2d8bcb2972",
+      "absent": true
+    }
+  ],
+  "startedAt": "2026-10-28T11:57:25.388Z",
+  "finishedAt": "2026-10-28T11:58:19.649Z"
+}

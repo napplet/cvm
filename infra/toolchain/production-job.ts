@@ -53,7 +53,9 @@ function parseRestore(bytes: Uint8Array) {
   if (!value || Object.keys(value).sort().join(",") !== "artifact,source,toolchainSha256,version" || value.version !== 1 || !/^[a-f0-9]{64}$/u.test(value.toolchainSha256)) fail("RESTORE_INVALID");
   const source = parseRequest(value.source);
   const artifact = value.artifact;
-  if (source.toolchainSha256 !== value.toolchainSha256 || !artifact || Object.keys(artifact).sort().join(",") !== "commandEvidence,files,jobId,proposalSha256,toolchainSha256,version" || artifact.version !== 1 || artifact.jobId !== sha(canonical(source)) || artifact.toolchainSha256 !== value.toolchainSha256 || artifact.proposalSha256 !== source.proposalSha256 || !Array.isArray(artifact.files) || artifact.files.length < 1 || artifact.files.length > 256 || !Array.isArray(artifact.commandEvidence) || artifact.commandEvidence.length !== 8) fail("RESTORE_BINDING_INVALID");
+  const expectedArtifactKeys = artifact?.version === 2 ? "capabilityReceipt,commandEvidence,files,jobId,proposalSha256,toolchainSha256,version" : "commandEvidence,files,jobId,proposalSha256,toolchainSha256,version";
+  if (source.toolchainSha256 !== value.toolchainSha256 || !artifact || Object.keys(artifact).sort().join(",") !== expectedArtifactKeys || ![1, 2].includes(artifact.version) || artifact.jobId !== sha(canonical(source)) || artifact.toolchainSha256 !== value.toolchainSha256 || artifact.proposalSha256 !== source.proposalSha256 || !Array.isArray(artifact.files) || artifact.files.length < 1 || artifact.files.length > 256 || !Array.isArray(artifact.commandEvidence) || artifact.commandEvidence.length !== 8) fail("RESTORE_BINDING_INVALID");
+  if (artifact.version === 2) validateCapabilityReceipt(artifact.capabilityReceipt, source);
   let total = 0; const paths = new Set<string>();
   for (const file of artifact.files) {
     if (!file || Object.keys(file).sort().join(",") !== "bytesBase64,path,sha256,size" || typeof file.path !== "string" || !/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/u.test(file.path) || file.path.split("/").some((part: string) => part === "." || part === "..") || paths.has(file.path) || typeof file.bytesBase64 !== "string" || file.bytesBase64.length > 22_369_624) fail("RESTORE_FILE_INVALID");
@@ -62,6 +64,27 @@ function parseRestore(bytes: Uint8Array) {
   }
   if (!paths.has("index.html")) fail("RESTORE_ENTRY_MISSING");
   return { source, artifact, toolchainSha256: value.toolchainSha256 as string };
+}
+type CapabilityReceipt = { state: "absent"; path: "src/capabilities.json" } | { state: "present"; path: "src/capabilities.json"; sha256: string; bytesBase64: string };
+function validateCapabilityReceipt(value: CapabilityReceipt, source?: Request) {
+  if (!value || value.path !== "src/capabilities.json") fail("JOB_CAPABILITY_RECEIPT_INVALID");
+  const requested = source?.files.find(file => file.path === value.path);
+  if (value.state === "absent") {
+    if (Object.keys(value).sort().join(",") !== "path,state" || requested) fail("JOB_CAPABILITY_RECEIPT_INVALID");
+  } else if (value.state === "present") {
+    if (Object.keys(value).sort().join(",") !== "bytesBase64,path,sha256,state" || typeof value.bytesBase64 !== "string" || value.bytesBase64.length > 40_000) fail("JOB_CAPABILITY_RECEIPT_INVALID");
+    const bytes = Buffer.from(value.bytesBase64, "base64");
+    if (!bytes.length || bytes.length > 30_000 || bytes.toString("base64") !== value.bytesBase64 || sha(bytes) !== value.sha256 || requested && bytes.toString("utf8") !== requested.content) fail("JOB_CAPABILITY_RECEIPT_INVALID");
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } else fail("JOB_CAPABILITY_RECEIPT_INVALID");
+}
+async function capabilityReceipt(project: string): Promise<CapabilityReceipt> {
+  const path = join(project, "src/capabilities.json"), info = await lstat(path).catch(error => { if (error.code === "ENOENT") return undefined; throw error; });
+  if (!info) return { state: "absent", path: "src/capabilities.json" };
+  if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.uid !== 0 || info.size > 30_000) fail("JOB_CAPABILITY_RECEIPT_INVALID");
+  const bytes = await readFile(path);
+  const receipt: CapabilityReceipt = { state: "present", path: "src/capabilities.json", sha256: sha(bytes), bytesBase64: bytes.toString("base64") };
+  validateCapabilityReceipt(receipt); return receipt;
 }
 async function protect(path: string): Promise<void> {
   const info = await lstat(path);
@@ -121,6 +144,7 @@ async function run(id: string, dir: string) {
     await chown(`/workspace/jobs/${id}`, 0, 0); await chmod(`/workspace/jobs/${id}`, 0o755);
     for (const file of request.files) { const path = join(project, file.path); const info = await lstat(path).catch(() => undefined); if (info?.isSymbolicLink() || (info && !info.isFile())) fail("JOB_SOURCE_PATH_UNTRUSTED"); await writeFile(path, file.content, { mode: 0o444 }); }
     await protect(project);
+    const capabilities = await capabilityReceipt(project); validateCapabilityReceipt(capabilities, request);
     // Sticky root allows new tool reports but prevents generated UID from
     // replacing any of the root-owned package/config/source files.
     await chmod(project, 0o1777);
@@ -130,7 +154,8 @@ async function run(id: string, dir: string) {
       await execute(argv, project);
     }
     const files = await collect(join(project, "dist"));
-    const artifact = canonical({ version: 1, jobId: id, proposalSha256: request.proposalSha256, toolchainSha256: request.toolchainSha256, files, commandEvidence: commands });
+    if (canonical(capabilities) !== canonical(await capabilityReceipt(project))) fail("JOB_CAPABILITY_RECEIPT_CHANGED");
+    const artifact = canonical({ version: 2, jobId: id, proposalSha256: request.proposalSha256, toolchainSha256: request.toolchainSha256, files, commandEvidence: commands, capabilityReceipt: capabilities });
     await immutable(join(dir, "artifact.json"), artifact);
     await immutable(join(dir, "result.json"), canonical({ version: 1, jobId: id, state: "completed", requestSha256: id, artifactSha256: sha(artifact), artifactBytes: Buffer.byteLength(artifact), commands: commands.map(({ stdout, stderr, ...facts }) => ({ ...facts, stdoutSha256: sha(stdout), stderrSha256: sha(stderr) })) }));
   } catch (error) {

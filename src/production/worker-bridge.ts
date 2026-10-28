@@ -10,6 +10,7 @@ import { PostgresOperationJournal, assertPostgresOperationJournal } from "../rel
 import type { createWorkerDeploymentClients } from "../release/deployment/worker-clients";
 import { ProductionWorkerJobClient } from "../worker-adapters/production-job-client";
 import type { ProductionWorkerPublication } from "../worker-adapters/publication-metadata";
+import { sealProductionWorkerArtifact } from "./sealed-worker-artifact";
 import { ProductionWorkerRequestStore } from "./worker-request-store";
 import { ProductionWorkerArtifactStore } from "./worker-artifact-store";
 import { ProductionArtifactVerifier, readVerifiedProductionArtifactFile, type VerifiedProductionArtifact } from "./artifact-verifier";
@@ -79,7 +80,7 @@ export class ProductionWorkerBridge implements ContinuationWorkerPort, ArtifactV
       try {
         if (materialized.commandEvidence.some(command => Buffer.byteLength(command.stdout) > 40_000 || Buffer.byteLength(command.stderr) > 20_000)) throw new Error("PRODUCTION_ARTIFACT_EVIDENCE_LIMIT");
         const { cleanup: _cleanup, ...facts } = materialized; const verified = await this.#verifier.verify(facts); const contractInput = await this.#contract(request, verified);
-        const bytes = await this.#seal(verified); const artifactId = `artifact:${sha(bytes)}`;
+        const bytes = await sealProductionWorkerArtifact(verified); const artifactId = `artifact:${sha(bytes)}`;
         const result = WorkerRunResultSchema.parse({ status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events: [{ kind: "progress", turn: 1, detail: `root-owned worker job verified:${verified.verificationEvidenceSha256}` }], artifact: { sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion, capabilityGrant: request.capabilityGrant, workspaceId: request.workspaceId, artifactId, ...contractInput } });
         if (result.status !== "completed") throw new Error("PRODUCTION_ARTIFACT_RESULT_INVALID");
         await this.#artifacts.persist({ request, accountId: worker.accountId, ownerId: worker.ownerId, bytes, scannerReportSha256: verified.verificationEvidenceSha256, conformanceReportSha256: sha(verified.aggregateSha256), result }); return result;
@@ -128,7 +129,7 @@ export class ProductionWorkerBridge implements ContinuationWorkerPort, ArtifactV
     if (stored.capabilityGrant !== lookup.capabilityGrant) throw new Error("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
     return stored;
   }
-  async #seal(verified: VerifiedProductionArtifact): Promise<Uint8Array> { const files = await Promise.all(verified.files.map(async file => ({ path: file.path, sha256: file.sha256, bytesBase64: Buffer.from(await readVerifiedProductionArtifactFile(verified.distRoot, file)).toString("base64") }))); return new TextEncoder().encode(canonicalJson({ version: 1, aggregateSha256: verified.aggregateSha256, sealedObjectSha256: verified.sealedObjectSha256, verificationEvidenceSha256: verified.verificationEvidenceSha256, files })); }
+
   async #contract(request: WorkerRunRequest, verified: VerifiedProductionArtifact): Promise<ArtifactContractInput> {
     const purpose = request.idea?.trim() ?? request.sourceProposalReference;
     if (!purpose) throw new Error("PRODUCTION_ARTIFACT_PURPOSE_REQUIRED"); const source = request.sourceProposalFiles?.map(file => file.content).join("\n") ?? purpose; const output = (await Promise.all(verified.files.map(file => readVerifiedProductionArtifactFile(verified.distRoot, file).then(bytes => new TextDecoder("utf-8", { fatal: true }).decode(bytes))))).join("\n"); const actual = `${source}\n${output}`;

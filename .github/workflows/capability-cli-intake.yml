@@ -54,3 +54,4 @@ jobs:
             ${{ runner.temp }}/capability-cli-source/*/seed.log
             ${{ runner.temp }}/capability-cli-source/*/build.log
             ${{ runner.temp }}/capability-cli-source/*-one/artifact/napplet
+            ${{ runner.temp }}/capability-cli-source/*-one/artifact/probes.json

@@ -1,4 +1,4 @@
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 const SOURCE_REPOSITORY = "https://github.com/napplet/web.git";
 const DENO_VERSION = "2.9.6";
@@ -134,7 +134,8 @@ async function probeArtifact(artifact: string, target: Target): Promise<Record<s
     return Object.freeze({ exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr });
   };
   const [help, version, guide] = await Promise.all([probe("--help"), probe("--version"), probe("guide")]);
-  if (help.exitCode !== 0 || !help.stdout.includes("Usage:")) throw new Error(`${target} --help probe failed`);
+  await Bun.write(join(dirname(artifact), "probes.json"), JSON.stringify({ target, isolation, image: PROBE_IMAGE, help, version, guide }, null, 2) + "\n");
+  if (help.exitCode !== 0 || !help.stdout.includes("Usage:")) throw new Error(`${target} --help probe failed (${help.exitCode}): ${help.stderr.slice(0, 1500)} ${help.stdout.slice(0, 300)}`);
   if (guide.exitCode !== 0 || !guide.stdout.includes("Napplet Guide")) throw new Error(`${target} guide probe failed`);
   if (selectedProfile.cliVersion === "0.5.2") {
     // Preserve the historical executable contract for original sessions.

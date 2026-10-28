@@ -3,7 +3,7 @@ import { z } from "zod";
 import { canonicalJson } from "../src/promotion/schema";
 
 const RECIPE = "toolchains/recipes/napplet-cli-0.13.0-capabilities-source-build.json";
-const RECIPE_DIGEST = "67ef000cdf7c52a952d5b29f92e47c519ca76aa35ae7c4c4009006d950dc8bbc";
+const RECIPE_DIGEST = "7508b462ec3cbf45d56e656ebe3a665f3e4a6ec2b9671abd53226b6a05fcf8d0";
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const Recipe = z.object({
   schemaVersion: z.literal(3), status: z.literal("reproducible-source-build-recipe-not-promoted"), profileName: z.literal("capabilities-0.13.0"),

@@ -7,6 +7,7 @@ on:
       - "src/production/cli-upload.ts"
       - "src/production/source-build-verifier.ts"
       - "src/production/publication-context.ts"
+      - "src/production/publication-upload.ts"
       - "src/production/edge-contexts.ts"
       - "src/production/nip46-signer.ts"
       - "src/production/nostr-relay.ts"
@@ -50,4 +51,4 @@ jobs:
       - name: NIP-46 expiry and original relay operation recovery
         run: bun test tests/release/production-nostr-relay.integration.test.ts tests/release/production-edge-suites.test.ts --timeout 120000
       - name: Publication contracts and reconciliation regressions
-        run: bun test tests/phase-06 --timeout 10000
+        run: bun test tests/phase-06 tests/release/publication-live-provider.test.ts --timeout 10000

@@ -31,11 +31,13 @@ const bytesEqual = (left: Uint8Array, right: Uint8Array) => left.byteLength === 
 const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const exactSet = (left: readonly string[], right: readonly string[]) => left.length === right.length && left.every((value) => right.includes(value)) && new Set(left).size === left.length;
 
-/** Hashes the verified file-manifest facts in a deterministic path order. */
+/** Matches the pinned CLI manifest.ts computeAggregateHash: sort the complete
+ * hash/path lines, then hash their concatenation. MIME and size are separately
+ * validated sealed-file facts, not fields of the NIP-5D aggregate. */
 export function canonicalSealedDeployAggregate(files: readonly Readonly<{ path: string; mimeType: string; sha256: string; size: number }>[]): string {
   const ordered = [...files].sort((left, right) => left.path.localeCompare(right.path));
   if (!ordered.length || ordered.some((file, index) => !file.path.startsWith("/") || !file.mimeType || !SHA256.test(file.sha256) || !Number.isSafeInteger(file.size) || file.size < 0 || (index > 0 && ordered[index - 1]?.path === file.path))) throw new Error("SEALED_NAMED_DEPLOY_INVALID");
-  return createHash("sha256").update(JSON.stringify({ version: 1, files: ordered.map(({ path, mimeType, sha256, size }) => ({ path, mimeType, sha256: sha256.toLowerCase(), size })) })).digest("hex");
+  return createHash("sha256").update(ordered.map(file => `${file.sha256.toLowerCase()} ${file.path}\n`).sort().join("")).digest("hex");
 }
 
 /** Treat source responses as untrusted observations and require local completion evidence. */

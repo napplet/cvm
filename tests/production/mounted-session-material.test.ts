@@ -22,7 +22,7 @@ test("mounted production session material constructs the complete native provide
     "createNativeCloudRunProvider", "createNativeCloudSqlPostgresProvider", "createNativeGcsProvider", "createNativeCollectorProvider",
     "createProductionWorkerLifecycle", "createNativeCep8LightningProvider",
     "createNativeCashuProvider", "CompatibleHostBrowserObservationPort", "ExternalSignerBoundaryAdapter",
-    "createExactSealedUploadAdapter", "createNostrRelayPublicationAdapter", "createNativePromotedNappletCliSource",
+    "createProductionPublicationUpload", "createNostrRelayPublicationAdapter", "createNativePromotedNappletCliSource",
   ]) expect(text).toContain(constructor);
   for (const runtimeConstructor of [
     "createMountedProductionEdgeMaterial", "openContextVmCertificationClient",

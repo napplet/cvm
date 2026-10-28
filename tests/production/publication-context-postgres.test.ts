@@ -10,15 +10,19 @@ import type { PostgresSqlPool } from "../../src/persistence/postgres-sql-funding
 import { materializeMountedSourceBuildPlan, bindMountedSourceBuildExecution } from "../../src/production/source-build-plan";
 import { persistMountedSourceBuildEvidence, type MountedSourceBuildResult } from "../../src/production/source-build-verifier";
 import { ProductionPublicationContextMaterializer } from "../../src/production/publication-context";
+import { createProductionPublicationUpload } from "../../src/production/publication-upload";
 import { ProductionEdgeContexts } from "../../src/production/edge-contexts";
 
 const isolated = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
 const hash = (value: string | Uint8Array) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
 async function docker(args: string[]) {
   const process = Bun.spawn(["docker", ...args], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
-  const [stdout, stderr, code] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
-  if (code !== 0) throw new Error(`DOCKER_FAILED:${args[0]}:${stderr.slice(0, 300)}`);
-  return stdout.trim();
+  const timer = setTimeout(() => process.kill(), 15_000);
+  try {
+    const [stdout, stderr, code] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
+    if (code !== 0) throw new Error(`DOCKER_FAILED:${args[0]}:${stderr.slice(0, 300)}`);
+    return stdout.trim();
+  } finally { clearTimeout(timer); }
 }
 function adapter(pool: Pool): PostgresSqlPool {
   return { async connect() { const client = await pool.connect(); return { async query<Row extends Record<string, unknown> = Record<string, unknown>>(sql: string, values?: readonly unknown[]) { return client.query<Row>(sql, values ? [...values] : undefined); }, release() { client.release(); } }; } };
@@ -47,7 +51,7 @@ isolated("publication contexts derive exact CLI and BUD templates, recover origi
     let now = 1_000_000;
     const providers = ["gcs", "signer", "promoted_cli", "upload", "owner_relay", "attestation_relay"] as const;
     const request = await createAuthorizationRequest({ candidateSha256: scope, topologySha256: "b".repeat(64), effectPlanSha256: "c".repeat(64), controllerStateSha256: "d".repeat(64), providerCapabilitiesSha256: "e".repeat(64),
-      orderedEffects: providers.map(provider => ({ id: `verify-${provider}`, provider, operation: "verify_integration" as const, estimatedCostMicros: 1 })),
+      orderedEffects: providers.map(provider => ({ id: provider === "upload" ? "sealed-upload" : `verify-${provider}`, provider, operation: "verify_integration" as const, estimatedCostMicros: 1 })),
       providerScopes: providers.map(provider => ({ provider, accountScopeSha256: "f".repeat(64), projectScopeSha256: "0".repeat(64) })),
       estimate: { currency: "USD", maximumMicros: 6, sourceId: "fixture", observedAtMs: now - 1, freshUntilMs: now + 20_000 }, maximumRunDurationMs: 1000, cleanupByMs: now + 9000, evidenceRetentionDays: 30, artifactRetentionDays: 30,
       gcpEffects: { projectBootstrap: false, billing: false, apiEnablement: ["storage.googleapis.com"] }, expiresAtMs: now + 10_000 });
@@ -95,6 +99,21 @@ isolated("publication contexts derive exact CLI and BUD templates, recover origi
     const deployment = await contexts.publication.deploy(identity);
     expect(deployment.files[0]).toMatchObject({ path: "/index.html", mimeType: "text/html", sha256: file.sha256 });
     expect(deployment.files[0]!.bytes).toEqual(payload);
+    // The deferred adapter resolves source facts itself; no future artifact
+    // hashes or manually constructed upload config are supplied by the caller.
+    let persists = 0, sends = 0, uploaded = false;
+    const uploadAdapter = () => createProductionPublicationUpload({ materializer: open(), authorization, targetReference: "blossom:fixture", now: () => now, port: {
+      async persist(value) { persists++; expect(value).toMatchObject({ operationId: identity.operationId, sealedArtifactSha256: result.sealedArtifactSha256, aggregateSha256: aggregate, authorizationRequestSha256: request.authorizationRequestSha256 }); },
+      async observeOriginalUpload({ operationId }) { return uploaded ? { status: "complete", operationId, targetReference: "blossom:fixture", retentionDays: 30, fileChecksums: [file.sha256], locationReference: "blossom:original" } : { status: "missing" }; },
+      async uploadExact(value) { sends++; expect(value.files).toEqual(deployment.files); uploaded = true; throw new Error("LOST_UPLOAD_ACK"); },
+    } });
+    const send = { operationId: identity.operationId, files: deployment.files, authorizeExactHashes: async (hashes: readonly string[]) => { expect(hashes).toEqual([file.sha256]); return signed; } };
+    await expect(uploadAdapter().uploadExact({ ...send, operationId: "deploy:replacement" })).rejects.toThrow("PRODUCTION_PUBLICATION_UPLOAD_OPERATION_REQUIRED");
+    await expect(uploadAdapter().uploadExact({ ...send, files: [{ ...deployment.files[0]!, mimeType: "changed/type" }] })).rejects.toThrow("PRODUCTION_PUBLICATION_UPLOAD_FILES_REQUIRED");
+    await expect(uploadAdapter().uploadExact({ ...send, files: [{ ...deployment.files[0]!, bytes: new Uint8Array(payload.length) }] })).rejects.toThrow("SEALED_UPLOAD_BYTES_INVALID");
+    expect({ persists, sends }).toEqual({ persists: 0, sends: 0 });
+    expect(await uploadAdapter().uploadExact(send)).toMatchObject({ state: "complete", fullServerUploadId: "blossom:original" });
+    expect({ persists, sends }).toEqual({ persists: 1, sends: 1 });
     corruptBundle = true;
     await expect(contexts.publication.deploy(identity)).rejects.toThrow("PRODUCTION_EDGE_DEPLOY_BYTES_UNAVAILABLE");
     corruptBundle = false;
@@ -104,6 +123,9 @@ isolated("publication contexts derive exact CLI and BUD templates, recover origi
     const other = new ProductionEdgeContexts({ journal: journal(), artifactStore: objects, candidateSha256: scope, topologySha256: request.topologySha256, authorizationRequestSha256: "9".repeat(64) });
     await expect(other.publication.resolve(identity)).rejects.toThrow("PRODUCTION_EDGE_PUBLICATION_CONTEXT_UNAVAILABLE");
     now += 100_000;
+    await expect(uploadAdapter().reconcileOriginalUpload(send)).resolves.toMatchObject({ state: "complete", fullServerUploadId: "blossom:original" });
+    await expect(uploadAdapter().uploadExact(send)).rejects.toThrow("SEALED_UPLOAD_AUTHORIZATION_INVALID");
+    expect({ persists, sends }).toEqual({ persists: 1, sends: 1 });
     expect(await open().materialize()).toEqual(context);
     expect(await open().ownerEventVerifier.verify({ event: signed, intent: context.intent })).toMatchObject({ valid: true });
     expect(uploads).toBe(1);

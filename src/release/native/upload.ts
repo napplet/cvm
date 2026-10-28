@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import type { PreSignedNamedDeployFile, StructuredSourceEffect } from "../../publication/napplet-cli-adapter.js";
 import { canonicalSealedDeployAggregate } from "../../publication/napplet-cli-adapter.js";
-import { validateAuthorizationReceipt, validateAuthorizationRequest, type ReleaseAuthorizationReceipt, type ReleaseAuthorizationRequest } from "../authorization.js";
+import { ReleaseAuthorizationReceiptSchema, validateAuthorizationReceipt, validateAuthorizationRequest, type ReleaseAuthorizationReceipt, type ReleaseAuthorizationRequest } from "../authorization.js";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 const OperationIdSchema = z.string().min(1).max(300);
@@ -20,6 +20,7 @@ const UploadConfigSchema = z.object({
   aggregateSha256: DigestSchema,
   targetReference: TargetReferenceSchema,
   retentionDays: RetentionDaysSchema,
+  intentExpiresAtMs: z.number().int().positive().optional(),
 }).strict();
 type UploadConfig = z.infer<typeof UploadConfigSchema>;
 
@@ -81,10 +82,12 @@ function parseObservation(value: unknown): UploadObservation {
   return parsed.data;
 }
 
-async function authorize(input: Readonly<{ request: unknown; receipt: unknown; nowMs: number }>, config: UploadConfig): Promise<Readonly<{ request: ReleaseAuthorizationRequest; receipt: ReleaseAuthorizationReceipt }>> {
+async function authorize(input: Readonly<{ request: unknown; receipt: unknown; nowMs: number; readOnly?: boolean }>, config: UploadConfig): Promise<Readonly<{ request: ReleaseAuthorizationRequest; receipt: ReleaseAuthorizationReceipt }>> {
   try {
     const request = await validateAuthorizationRequest(input.request);
-    const receipt = await validateAuthorizationReceipt({ request, receipt: input.receipt, nowMs: input.nowMs });
+    const original = ReleaseAuthorizationReceiptSchema.parse(input.receipt);
+    const receipt = await validateAuthorizationReceipt({ request, receipt: original, nowMs: input.readOnly ? Math.min(input.nowMs, original.expiresAtMs - 1) : input.nowMs });
+    if (!input.readOnly && config.intentExpiresAtMs !== undefined && input.nowMs >= config.intentExpiresAtMs) throw new Error("intent_expired");
     const effects = request.orderedEffects.filter((effect) => effect.provider === "upload");
     const scopes = request.providerScopes.filter((scope) => scope.provider === "upload");
     if (request.candidateSha256 !== config.candidateSha256 || request.topologySha256 !== config.topologySha256 || request.effectPlanSha256 !== config.effectPlanSha256
@@ -132,7 +135,7 @@ export function createExactSealedUploadAdapter(input: Readonly<{
   async function reconcileOriginalUpload(raw: Readonly<{ operationId: string; files: readonly PreSignedNamedDeployFile[] }>): Promise<StructuredSourceEffect> {
     const operationId = OperationIdSchema.parse(raw.operationId);
     const checksums = assertExactFiles(raw.files, config);
-    await authorize({ request: input.request, receipt: input.receipt, nowMs: now() }, config);
+    await authorize({ request: input.request, receipt: input.receipt, nowMs: now(), readOnly: true }, config);
     const observation = parseObservation(await input.port.observeOriginalUpload({ operationId, targetReference: config.targetReference }));
     return completed(observation, operationId, checksums, config) ?? Object.freeze({ operationId, state: observation.status === "blocked" ? "failed" : "unknown" });
   }

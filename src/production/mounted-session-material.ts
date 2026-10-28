@@ -14,7 +14,7 @@ import { createNativeCep8LightningProvider } from "../release/native/cep8-lightn
 import { createNativeCashuProvider } from "../release/native/cashu";
 import { CompatibleHostBrowserObservationPort } from "../release/native/compatible-host";
 import { ExternalSignerBoundaryAdapter } from "../release/native/external-signer";
-import { createExactSealedUploadAdapter } from "../release/native/upload";
+import { createProductionPublicationUpload } from "./publication-upload";
 import { createNostrRelayPublicationAdapter } from "../release/native/nostr-relay";
 import { createNativePromotedNappletCliSource } from "../release/native/promoted-cli";
 import { createContextVmDeploymentClient, openContextVmCertificationClient } from "../release/deployment/contextvm-client";
@@ -497,7 +497,7 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
   const compatibleHost = new CompatibleHostBrowserObservationPort(host);
   const ownerEventVerifier = publicationMaterializer.ownerEventVerifier;
   const signer = new ExternalSignerBoundaryAdapter({ signer: signerPort, ownerEventVerifier });
-  const upload = createExactSealedUploadAdapter({ config: input.resolved.providerConfigurations.upload, request: authorization.request, receipt: authorization.receipt, port: uploadPort, now });
+  const upload = createProductionPublicationUpload({ materializer: publicationMaterializer, authorization, targetReference: input.config.publication.uploadTargetReference, port: uploadPort, now });
   const relays = createNostrRelayPublicationAdapter({ config: input.resolved.providerConfigurations.owner_relay, request: authorization.request, receipt: authorization.receipt, port: relayPort, now });
   // Owner and attestation are independently configured authorities.  Build a
   // second adapter even though the shared relay transport is deliberately the

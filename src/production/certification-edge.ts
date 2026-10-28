@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { assertProductionSessionBroker, type ProductionSessionBroker } from "../release/deployment/production-session-runtime";
+import { ProductionPublicationCertification } from "./publication-certification";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform(value => value.toLowerCase());
 const OperationIdSchema = z.string().regex(/^[a-z][a-z0-9:_-]{2,127}$/u);
@@ -56,10 +57,12 @@ const services = new WeakSet<object>();
  */
 export class ProductionCertificationEdgeService {
   readonly #broker: ProductionSessionBroker;
+  readonly #publication: ProductionPublicationCertification;
 
   constructor(input: Readonly<{ broker: unknown }>) {
     assertProductionSessionBroker(input.broker);
     this.#broker = input.broker;
+    this.#publication = new ProductionPublicationCertification(input.broker.candidateSha256, input.broker.clients);
     services.add(this);
     Object.freeze(this);
   }
@@ -103,88 +106,25 @@ export class ProductionCertificationEdgeService {
         });
         return this.#verify(command, payload, observed);
       }
-      case "edge.publication.source": {
-        // Reading the promoted source contract is local and side-effect free;
-        // `sourceBuild` then verifies the pinned source/asset/manifest facts.
-        const observed = this.#broker.clients.edge.promotedCli.contract;
-        return this.#verify(command, payload, observed);
-      }
-      case "edge.publication.submit": {
-        const context = await this.#broker.clients.publicationContext.resolve({
-          candidateSha256: this.#broker.candidateSha256,
-          sealedArtifactSha256: payload.sealedArtifactSha256 as string,
-          aggregateSha256: payload.aggregateSha256 as string,
-        });
-        if (context.artifact.sealedObjectSha256 !== payload.sealedArtifactSha256 || context.artifact.aggregateSha256 !== payload.aggregateSha256
-          || context.intent.artifactSha256 !== payload.sealedArtifactSha256 || context.intent.aggregateSha256 !== payload.aggregateSha256) {
-          throw new Error("CERTIFICATION_EDGE_PUBLICATION_CONTEXT_MISMATCH");
-        }
-        // NIP-46 signing is external-owner only. The CVM receives the public
-        // result, never a user key. The source verifier owns byte hydration
-        // and the exact promoted CLI upload/relay route for this sealed intent.
-        const owner = await this.#broker.clients.edge.signer.signExactIntent({
-          candidate: { sealedArtifactSha256: context.artifact.sealedObjectSha256, aggregateSha256: context.artifact.aggregateSha256 },
-          intent: context.intent,
-          requiredCapabilities: context.requiredSignerCapabilities,
-        });
-        const deployOperationId = `deploy:${context.intent.intentId}`;
-        const deploy = await this.#broker.clients.publicationContext.deploy({
-          candidateSha256: this.#broker.candidateSha256,
-          sealedArtifactSha256: context.artifact.sealedObjectSha256,
-          aggregateSha256: context.artifact.aggregateSha256,
-          operationId: deployOperationId,
-        });
-        if (deploy.target.kind !== 35129 || deploy.target.dTag !== context.intent.dTag || !deploy.files.length || !deploy.servers.length) {
-          throw new Error("CERTIFICATION_EDGE_PUBLICATION_DEPLOY_CONTEXT_INVALID");
-        }
-        // These are the actual reviewed CLI source operations. Both calls are
-        // bounded by the sealed artifact bytes and the externally signed owner
-        // event; no POST field can select a different target, file, relay, or
-        // authorisation hash set.
-        const upload = await this.#broker.clients.edge.promotedCli.port.uploadFilesToServers({
-          operationId: deployOperationId,
-          target: deploy.target,
-          files: deploy.files,
-          servers: deploy.servers,
-          authorizeExactHashes: deploy.authorizeExactHashes,
-        });
-        if (upload.state !== "complete") throw new Error("CERTIFICATION_EDGE_PUBLICATION_UPLOAD_UNRESOLVED");
-        const relay = await this.#broker.clients.edge.promotedCli.port.publishEventWithSimplePool({
-          operationId: `owner_manifest:${context.intent.intentId}`,
-          event: owner.signedEvent,
-          relays: context.relaySet,
-        });
-        if (relay.state !== "complete") throw new Error("CERTIFICATION_EDGE_PUBLICATION_RELAY_UNRESOLVED");
-        const attestation = await this.#broker.clients.edge.relays.attestationPort.publish({ operationId: `attestation:${context.intent.intentId}`, artifact: context.artifact, ownerEventId: owner.signedEvent.id });
-        if (attestation.state !== "completed") throw new Error("CERTIFICATION_EDGE_PUBLICATION_ATTESTATION_UNRESOLVED");
-        return this.#verify(command, payload, Object.freeze({
-          ownerEventId: owner.signedEvent.id,
-          ownerPubkey: owner.signerPubkey,
-          relaySet: context.relaySet,
-          upload,
-          relay,
-          attestation,
-          promotedContract: this.#broker.clients.edge.promotedCli.contract,
-        }));
-      }
-      case "edge.publication.reconcile": {
-        const operationIds = payload.operationIds as { deploy: string; ownerManifest: string; attestation: string };
-        const intentId = payload.intentId as string;
-        if (operationIds.deploy !== `deploy:${intentId}` || operationIds.ownerManifest !== `owner_manifest:${intentId}` || operationIds.attestation !== `attestation:${intentId}`) {
-          throw new Error("CERTIFICATION_EDGE_PUBLICATION_OPERATION_MISMATCH");
-        }
-        // Relay reconciliation is query-only and uses the durable owner and
-        // attestation original IDs separately. It never recreates an upload
-        // or republishes a user-owned event.
-        const [owner, attestation] = await Promise.all([
-          this.#broker.clients.edge.relays.reconcileOriginalEvent({ operationId: operationIds.ownerManifest }),
-          this.#broker.clients.edge.relays.reconcileOriginalEvent({ operationId: operationIds.attestation }),
-        ]);
-        return this.#verify(command, payload, Object.freeze({ owner, attestation }));
-      }
+      case "edge.publication.source": return this.#publication.source();
+      case "edge.publication.submit": return this.#publication.submit(PublicationSubmitPayloadSchema.parse(payload));
+      case "edge.publication.reconcile": return this.#publication.reconcile(PublicationReconcilePayloadSchema.parse(payload));
       default:
         return this.#verify(command, payload);
     }
+  }
+
+  /** Original control recovery never re-enters execute(), NIP-46, CLI upload
+   * or event publication. Only the three known publication kinds have a
+   * read-only recovery path; other edge suites retain their refusal. */
+  async reconcile(raw: unknown): Promise<unknown> {
+    const command = z.object({ operationId: OperationIdSchema, kind: EdgeKindSchema, payload: z.unknown() }).strict().parse(raw);
+    const payload = CertificationEdgePayloadSchemas[command.kind].parse(command.payload) as Record<string, unknown>;
+    if (payload.candidateId !== this.#broker.candidateSha256) throw new Error("CERTIFICATION_EDGE_CANDIDATE_MISMATCH");
+    if (command.kind === "edge.publication.source") return this.#publication.source();
+    if (command.kind === "edge.publication.submit") return this.#publication.observeSubmit(PublicationSubmitPayloadSchema.parse(payload));
+    if (command.kind === "edge.publication.reconcile") return this.#publication.reconcile(PublicationReconcilePayloadSchema.parse(payload));
+    throw new Error("CERTIFICATION_EDGE_ORIGINAL_RECOVERY_UNAVAILABLE");
   }
 
   async #verify(command: Readonly<{ operationId: string; kind: CertificationEdgeKind }>, payload: Record<string, unknown>, observation?: unknown): Promise<unknown> {

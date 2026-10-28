@@ -6,6 +6,7 @@ import type { Nip46SessionKeyBroker } from "./nip46-signer";
 import type { ProductionConfig } from "./config";
 import type { MountedProductionSecretMaterial } from "./secret-material";
 import { ProductionBuildAttestationSigner } from "./attestation-signer";
+import { materializeReviewedSourceBuiltCliSnapshot } from "../publication/napplet-cli-source-contract";
 
 const Hex = z.string().regex(/^[a-f0-9]{64}$/iu).transform(value => value.toLowerCase());
 const Bunker = z.string().min(16).max(2_048).refine(value => value.startsWith("bunker:"), "PRODUCTION_NIP46_BUNKER_REFERENCE_REQUIRED");
@@ -28,18 +29,15 @@ export async function createMountedProductionEdgeMaterial(input: Readonly<{
   bunkerUri: string;
   promotedCliSnapshot: unknown;
 }>> {
-  const [certificationKeyText, sessionKeyText, bunkerText, cliText, attestationKeyText] = await Promise.all([
+  const [certificationKeyText, sessionKeyText, bunkerText, attestationKeyText] = await Promise.all([
     input.secrets.text("certification.clientKeyReference", 256),
     input.secrets.text("publication.signerSessionKeyReference", 256),
     input.secrets.text("publication.signerBrokerReference", 2_048),
-    input.secrets.text("publication.cliSourceReference", 65_536),
     input.secrets.text("publication.attestationKeyReference", 256),
   ]);
   const certificationKey = Hex.parse(certificationKeyText);
   const sessionKey = privateKey(sessionKeyText, "PRODUCTION_NIP46_SESSION_KEY_INVALID");
   const bunkerUri = Bunker.parse(bunkerText);
-  let promotedCliSnapshot: unknown;
-  try { promotedCliSnapshot = JSON.parse(cliText); } catch { throw new Error("PRODUCTION_PROMOTED_CLI_MOUNT_INVALID"); }
   return Object.freeze({
     certificationSignerBroker: Object.freeze({
       async resolveContextVmCertificationSigner(request: Parameters<ContextVmCertificationSignerBroker["resolveContextVmCertificationSigner"]>[0]) {
@@ -55,6 +53,6 @@ export async function createMountedProductionEdgeMaterial(input: Readonly<{
     }),
     bunkerUri,
     attestationSigner: new ProductionBuildAttestationSigner(privateKey(attestationKeyText, "PRODUCTION_ATTESTATION_KEY_INVALID")),
-    promotedCliSnapshot,
+    promotedCliSnapshot: materializeReviewedSourceBuiltCliSnapshot(),
   });
 }

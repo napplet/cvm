@@ -9,6 +9,8 @@ on:
       - "src/production/publication-context.ts"
       - "src/production/publication-upload.ts"
       - "src/production/publication-relays.ts"
+      - "src/production/publication-operations.ts"
+      - "src/production/publication-certification.ts"
       - "src/production/attestation-signer.ts"
       - "tests/production/attestation-signer.test.ts"
       - "src/production/mounted-edge-material.ts"

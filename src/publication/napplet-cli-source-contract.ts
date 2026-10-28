@@ -67,6 +67,13 @@ export const PromotedCliSourceSnapshotSchema = z.object({
 }).strict().refine(exactIdentityFiles, "SOURCE_FILE_IDENTITY_MISMATCH");
 export type PromotedCliSourceSnapshot = Readonly<z.infer<typeof PromotedCliSourceSnapshotSchema>>;
 
+/** Image-owned reviewed metadata, never evidence of a live execution. Actual
+ * retained helper bytes and worker output must still be checked at use. */
+export function materializeReviewedSourceBuiltCliSnapshot(): PromotedCliSourceSnapshot {
+  return PromotedCliSourceSnapshotSchema.parse({ identity: SOURCE_BUILT_CLI_IDENTITY, sourceFiles: SOURCE_BUILT_CLI_SOURCE_FILE_HASHES,
+    requiredExports: [...REQUIRED_EXPORTS], rejectedRoutes: [...REJECTED_ROUTES], liveExecution: "not_observed" });
+}
+
 const UnavailableReasonSchema = z.enum([
   "SOURCE_SNAPSHOT_INVALID", "PROMOTED_IDENTITY_MISMATCH", "SOURCE_FILE_HASH_MISMATCH", "STRUCTURED_ROUTE_UNAVAILABLE", "UNSAFE_ROUTE_NOT_REJECTED",
 ]);

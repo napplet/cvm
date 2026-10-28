@@ -42,6 +42,7 @@ import { createProductionCliUploadPort } from "./cli-upload";
 import { createProductionNostrRelayPort } from "./nostr-relay";
 import { ProductionEdgeContexts } from "./edge-contexts";
 import { ProductionPublicationContextMaterializer } from "./publication-context";
+import { createProductionPublicationOperations } from "./publication-operations";
 import { materializeProtectedCertifier } from "../release/materialize-certifier";
 import { PostgresReleasePromotion } from "./release-promotion";
 import { productionReleaseScope } from "./release-verification-authority";
@@ -505,16 +506,7 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
   const promotedCli = createNativePromotedNappletCliSource({ snapshot: edgeMaterial.promotedCliSnapshot, upload, relay: relays.asPromotedCliSource() });
   void cep8; void cashu; void compatibleHost; void signer; void promotedCli;
 
-  const publicationContext = Object.freeze({
-    resolve: async (value: Parameters<typeof edgeContexts.publication.resolve>[0]) => {
-      await publicationMaterializer.materialize();
-      return edgeContexts.publicationWithSigner(signerPort).resolve(value);
-    },
-    deploy: async (value: Parameters<typeof edgeContexts.publication.deploy>[0]) => {
-      await publicationMaterializer.materialize();
-      return edgeContexts.publicationWithSigner(signerPort).deploy(value);
-    },
-  });
+  const publicationContext = createProductionPublicationOperations({ materializer: publicationMaterializer, context: edgeContexts.publicationWithSigner(signerPort), source: promotedCli, upload });
   const clients: ProductionConcreteClients = Object.freeze({
     google,
     workers: dependencies.workers,

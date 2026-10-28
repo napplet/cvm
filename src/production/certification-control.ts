@@ -70,8 +70,13 @@ export class ProductionCertificationControl {
     const record = await this.input.journal.read<unknown>(Id.parse(input.operationId));
     if (!record) throw new Error("PRODUCTION_CONTROL_ORIGINAL_REQUIRED");
     const current = StoredInternalSchema.parse(record.value);
-    if ((current.state !== "pending" && current.state !== "unknown") || current.payload === undefined || current.kind in CertificationEdgePayloadSchemas) return this.#public(current);
-    const reconciled = await this.input.services.reconcile({ operationId: current.operationId, kind: current.kind as ProductionControlKind, payload: current.payload });
+    if ((current.state !== "pending" && current.state !== "unknown") || current.payload === undefined) return this.#public(current);
+    let reconciled: unknown;
+    if (current.kind in CertificationEdgePayloadSchemas) {
+      if (!this.input.edge || !["edge.publication.source", "edge.publication.submit", "edge.publication.reconcile"].includes(current.kind)) return this.#public(current);
+      try { reconciled = await this.input.edge.reconcile({ operationId: current.operationId, kind: current.kind, payload: current.payload }); }
+      catch { return this.#public(current); }
+    } else reconciled = await this.input.services.reconcile({ operationId: current.operationId, kind: current.kind as ProductionControlKind, payload: current.payload });
     const terminal = StoredInternalSchema.parse({ ...current, state: "completed", result: reconciled });
     const saved = await this.input.journal.compareAndSet(current.operationId, current.requestSha256, record.revision, terminal);
     const latest = saved ? StoredInternalSchema.parse(saved.value) : StoredInternalSchema.parse((await this.input.journal.read<unknown>(current.operationId))?.value);

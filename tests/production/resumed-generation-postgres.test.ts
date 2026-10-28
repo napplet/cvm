@@ -78,6 +78,8 @@ integration("saved exact command consumes one resume budget and reconciles one o
     await expect(changed.prepareContinuation(live.intent)).rejects.toThrow("CONTINUATION_EXECUTION_COMPATIBILITY_DENIED");
     const foreignSettlement = new MeteredGenerationService({ fundedAdmission: admissions, store: database.meteredFunding, gateway, worker, artifactVerifier: verifier, pricing: { card, profile }, continuationCommands: commands(), toolchainIdentity: "resume-toolchain", settlement: { async prepare() { throw new Error("MUST_NOT_REPRICE"); }, async finalize() { throw new Error("MUST_NOT_SETTLE"); } } });
     await expect(foreignSettlement.prepareContinuation(live.intent)).rejects.toThrow("CONTINUATION_ORIGINAL_SETTLEMENT_REQUIRED");
+    const missingSettlement = new MeteredGenerationService({ fundedAdmission: admissions, store: database.meteredFunding, gateway, worker, artifactVerifier: verifier, pricing: { card: { ...card, currency: "usd_micros" }, profile }, continuationCommands: commands(), toolchainIdentity: "resume-toolchain" });
+    await expect(missingSettlement.prepareContinuation(live.intent)).rejects.toThrow("CONTINUATION_ORIGINAL_SETTLEMENT_REQUIRED");
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.metered_actions")).rows[0].count).toBe(0);
     now = pending.graceDeadlineMs;
     await credit("increase", "2");

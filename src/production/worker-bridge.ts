@@ -10,6 +10,7 @@ import { PostgresOperationJournal, assertPostgresOperationJournal } from "../rel
 import type { createWorkerDeploymentClients } from "../release/deployment/worker-clients";
 import { ProductionWorkerJobClient } from "../worker-adapters/production-job-client";
 import type { ProductionWorkerPublication } from "../worker-adapters/publication-metadata";
+import { ProductionWorkerArtifactStore } from "./worker-artifact-store";
 import { ProductionArtifactVerifier, readVerifiedProductionArtifactFile, type VerifiedProductionArtifact } from "./artifact-verifier";
 
 const Owner = z.object({ accountId: z.string().regex(/^account:[a-f0-9]{64}$/u), ownerId: z.string().regex(/^[a-f0-9]{64}$/u) }).strict();
@@ -20,7 +21,6 @@ const key = (request: Pick<WorkerRunRequest, "sessionId" | "actionId" | "expecte
 
 export type ProductionWorkerOwner = z.infer<typeof Owner>;
 type ResolvedWorker = ProductionWorkerOwner & Readonly<{ intentReference: string; capacityReference: string; workerOperationId: string; provider: "modal" | "fly" }>;
-type Verified = Readonly<{ requestSha256: string; artifactId: string; artifactSha256: string; scannerReportSha256: string; conformanceReportSha256: string; contractInput: ArtifactContractInput }>;
 
 /** Binds every build to its authoritative funded action and ready capacity row. */
 export class ProductionWorkerOwnershipResolver {
@@ -58,16 +58,19 @@ export class ProductionWorkerOwnershipResolver {
 /** Coordinator-only job bridge: GCS persistence occurs only after independent
  * CLI/conformance and static boundary verification of root-owned bytes. */
 export class ProductionWorkerBridge implements ContinuationWorkerPort, ArtifactVerifier {
-  readonly #verified = new Map<string, Verified>(); readonly #verifier = new ProductionArtifactVerifier();
+  readonly #artifacts: ProductionWorkerArtifactStore; readonly #verifier = new ProductionArtifactVerifier();
   constructor(private readonly input: Readonly<{ resolver: ProductionWorkerOwnershipResolver; workers: ReturnType<typeof createWorkerDeploymentClients>; workerJournal: PostgresOperationJournal; jobJournal: PostgresOperationJournal; requestJournal: PostgresOperationJournal; artifactStore: ObjectStorePort; toolchainSha256: string; publication?: ProductionWorkerPublication }>) {
     assertPostgresOperationJournal(input.workerJournal); assertPostgresOperationJournal(input.jobJournal); assertPostgresOperationJournal(input.requestJournal);
     if (!/^[a-f0-9]{64}$/u.test(input.toolchainSha256)) throw new Error("PRODUCTION_WORKER_TOOLCHAIN_REQUIRED");
+    this.#artifacts = new ProductionWorkerArtifactStore({ journal: input.requestJournal, objects: input.artifactStore, toolchainSha256: input.toolchainSha256 });
   }
   async run(value: WorkerRunRequest, signal: AbortSignal): Promise<WorkerRunResult> {
     let request: WorkerRunRequest; try { request = WorkerRunRequestSchema.parse(value); } catch { return { status: "unavailable", code: "WORKER_UNAVAILABLE" }; }
     if (signal.aborted) return { status: "interrupted", code: "WORKER_INTERRUPTED" };
     try {
-      await this.#persist(request); const worker = await this.input.resolver.resolveWorker(request); const job = this.#job(worker); const started = await job.start(request);
+      await this.#persist(request);
+      const original = await this.#artifacts.read(request); if (original) return original.result;
+      const worker = await this.input.resolver.resolveWorker(request); const job = this.#job(worker); const started = await job.start(request);
       if (started.state === "unknown" || started.state === "missing") return { status: "unavailable", code: "WORKER_UNAVAILABLE" };
       const observed = await job.wait(request, signal);
       if (observed.state === "pending" || observed.state === "unknown") return { status: "interrupted", code: "WORKER_INTERRUPTED" };
@@ -76,17 +79,22 @@ export class ProductionWorkerBridge implements ContinuationWorkerPort, ArtifactV
       try {
         if (materialized.commandEvidence.some(command => Buffer.byteLength(command.stdout) > 40_000 || Buffer.byteLength(command.stderr) > 20_000)) throw new Error("PRODUCTION_ARTIFACT_EVIDENCE_LIMIT");
         const { cleanup: _cleanup, ...facts } = materialized; const verified = await this.#verifier.verify(facts); const contractInput = await this.#contract(request, verified);
-        const object = await this.input.artifactStore.createImmutable({ key: `artifacts/${verified.sealedObjectSha256}.json`, bytes: await this.#seal(verified) }); const artifactId = `artifact:${object.checksum}`;
+        const bytes = await this.#seal(verified); const artifactId = `artifact:${sha(bytes)}`;
         const result = WorkerRunResultSchema.parse({ status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events: [{ kind: "progress", turn: 1, detail: `root-owned worker job verified:${verified.verificationEvidenceSha256}` }], artifact: { sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion, capabilityGrant: request.capabilityGrant, workspaceId: request.workspaceId, artifactId, ...contractInput } });
-        this.#verified.set(key(request), Object.freeze({ requestSha256: sha(canonicalJson(request)), artifactId, artifactSha256: object.checksum, scannerReportSha256: verified.verificationEvidenceSha256, conformanceReportSha256: sha(verified.aggregateSha256), contractInput })); return result;
+        if (result.status !== "completed") throw new Error("PRODUCTION_ARTIFACT_RESULT_INVALID");
+        await this.#artifacts.persist({ request, accountId: worker.accountId, ownerId: worker.ownerId, bytes, scannerReportSha256: verified.verificationEvidenceSha256, conformanceReportSha256: sha(verified.aggregateSha256), result }); return result;
       } finally { await materialized.cleanup(); }
     } catch (error) { return signal.aborted || error instanceof DOMException && error.name === "AbortError" ? { status: "interrupted", code: "WORKER_INTERRUPTED" } : { status: "unavailable", code: "WORKER_UNAVAILABLE" }; }
   }
   async verify(facts: Parameters<ArtifactVerifier["verify"]>[0]) {
-    const stored = this.#verified.get(key(facts.request));
-    if (!stored || stored.requestSha256 !== sha(canonicalJson(facts.request)) || facts.result.status !== "completed" || facts.result.artifact.artifactId !== stored.artifactId) return undefined;
-    return Object.freeze({ artifact: { artifactId: stored.artifactId, artifactSha256: stored.artifactSha256, scannerReportSha256: stored.scannerReportSha256, conformanceReportSha256: stored.conformanceReportSha256 }, contractInput: stored.contractInput });
+    try {
+      const stored = await this.#artifacts.read(facts.request);
+      if (!stored || facts.result.status !== "completed" || canonicalJson(facts.result.artifact) !== canonicalJson(stored.result.artifact)) return undefined;
+      const { sessionId: _session, actionId: _action, expectedVersion: _version, policyVersion: _policy, capabilityGrant: _grant, workspaceId: _workspace, artifactId, ...contractInput } = stored.result.artifact;
+      return Object.freeze({ artifact: { artifactId, artifactSha256: stored.checksum, scannerReportSha256: stored.scannerReportSha256, conformanceReportSha256: stored.conformanceReportSha256 }, contractInput });
+    } catch { return undefined; }
   }
+
   async fenceCheckpoint(value: CheckpointFenceRequest): Promise<CheckpointFenceResult> { try { const checkpoint = CheckpointFenceRequestSchema.parse(value), request = await this.#request(checkpoint), result = await this.#job(await this.input.resolver.resolveWorker(request)).fence(request, sha(canonicalJson(checkpoint))); return result.state === "fenced" ? { status: "fenced", code: "WORKER_EFFECTS_FENCED" } : { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } catch { return { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } }
   async exportCheckpoint(value: CheckpointExportRequest): Promise<CheckpointExportResult> { try { const checkpoint = CheckpointExportRequestSchema.parse(value), request = await this.#request(checkpoint), bytes = await this.#job(await this.input.resolver.resolveWorker(request)).exportWorkspace(request, sha(canonicalJson(checkpoint))); const workspace = z.object({ source: z.object({ files: z.array(z.object({ path: z.string() })) }), artifact: z.object({ files: z.array(z.object({ path: z.string() })) }) }).passthrough().parse(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))); const inventory = [...workspace.source.files, ...workspace.artifact.files].map(file => file.path).sort(); return { status: "exported", code: "WORKER_CHECKPOINT_EXPORTED", proposal: { ...checkpoint, formatVersion: "portable-checkpoint-v1", inventory, archiveBase64: Buffer.from(bytes).toString("base64"), archiveSha256: sha(bytes), evidenceSha256: sha(canonicalJson(checkpoint)), inventorySha256: sha(canonicalJson(inventory)) } }; } catch { return { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } }
   async restoreCheckpoint(value: CheckpointRestoreRequest): Promise<CheckpointRestoreResult> { try { const checkpoint = CheckpointRestoreRequestSchema.parse(value), request = await this.#request(checkpoint), result = await this.#job(await this.input.resolver.resolveWorker(request)).restoreWorkspace({ operationId: `restore:${checkpoint.checkpointId}`, bindingSha256: sha(canonicalJson(checkpoint)), bytes: checkpoint.archive }); return result.state === "restored" ? { status: "restored", code: "WORKER_CHECKPOINT_RESTORED", workspaceId: request.workspaceId, workspaceLineage: checkpoint.workspaceLineage } : { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } catch { return { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } }

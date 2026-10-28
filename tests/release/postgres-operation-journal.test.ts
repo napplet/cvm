@@ -12,6 +12,9 @@ import { createAuthorizationReceipt, createAuthorizationRequest } from "../../sr
 import { ProductionWorkerJobClient } from "../../src/worker-adapters/production-job-client";
 import { canonicalJson } from "../../src/promotion/schema";
 import { PostgresReleasePromotion } from "../../src/production/release-promotion";
+import { ProductionWorkerArtifactStore } from "../../src/production/worker-artifact-store";
+import { DeterministicObjectStore } from "../../src/continuity/object-store";
+import { WorkerRunResultSchema } from "../../src/phase-02/contracts";
 
 const scopeSha256 = "a".repeat(64), identity = "b".repeat(64);
 test("journal construction has no effects and rejects structural/prototype impersonation", async () => {
@@ -60,6 +63,53 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
     await admin.query("GRANT napplet_production_real TO journal_test");
     application = new Pool({ connectionString: `postgresql://journal_test@127.0.0.1:${port}/postgres`, connectionTimeoutMillis: 2000 });
     const create = (namespace = "nwc:run-1", scope = scopeSha256) => new PostgresOperationJournal(application, { namespace, scopeSha256: scope });
+    {
+      // The application role, a new repository instance, and an exact-generation
+      // object port exercise durable worker recovery without a worker redispatch.
+      const objects = new DeterministicObjectStore(); let uploads = 0, loseAcknowledgement = false, refuseCreate = false, corruptRead = false;
+      const objectPort = {
+        async createImmutable(input: Parameters<typeof objects.createImmutable>[0]) {
+          uploads++; if (refuseCreate) throw new Error("CREATE_UNKNOWN");
+          const reference = await objects.createImmutable(input);
+          if (loseAcknowledgement) throw new Error("ACK_LOST");
+          return reference;
+        },
+        observeExactByKey: objects.observeExactByKey.bind(objects),
+        async readExact(reference: Parameters<typeof objects.readExact>[0]) { return corruptRead ? new Uint8Array([99]) : objects.readExact(reference); },
+        scheduleExactDeletion: objects.scheduleExactDeletion.bind(objects),
+      };
+      const artifacts = () => new ProductionWorkerArtifactStore({ journal: create("worker-artifacts"), objects: objectPort, toolchainSha256: identity });
+      const request = { sessionId: "session:durable", actionId: "action:durable", expectedVersion: 0, policyVersion: "funding-policy-v1", capabilityGrant: "phase-04-coordinator-grant", workspaceId: "workspace:session:durable", idea: "One counter" };
+      const archive = new TextEncoder().encode('{"version":1,"files":[]}');
+      const checksum = new Bun.CryptoHasher("sha256").update(archive).digest("hex");
+      const contract = { purpose: { kind: "focused", statements: ["One counter"] }, surface: { hasBackend: false, hasSecondPurpose: false, serviceWorker: false, dynamicAuthority: false }, dependencies: { appOwnedSignerOrRelay: false, privateNappletImport: false }, capabilities: { declaredHard: [], observedDomains: [], optionalIntentPresenceRead: false, intentUsedThroughSdk: false }, upstream: { scanner: { verdict: "pass", checkId: "upstream:cli-verify" }, conformance: { verdict: "pass", checkId: "upstream:chromium-conformance" } } };
+      const { idea: _idea, ...correlation } = request;
+      const completed = WorkerRunResultSchema.parse({ status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events: [{ kind: "progress", turn: 1, detail: "verified" }], artifact: { ...correlation, artifactId: `artifact:${checksum}`, ...contract } });
+      if (completed.status !== "completed") throw new Error("TEST_RESULT_INVALID");
+      const artifactInput = { request, bytes: archive, result: completed, accountId: `account:${scopeSha256}`, ownerId: identity, scannerReportSha256: identity, conformanceReportSha256: scopeSha256 };
+      loseAcknowledgement = true;
+      await expect(artifacts().persist(artifactInput)).rejects.toThrow("ACK_LOST");
+      const recovered = await artifacts().read(request);
+      expect(recovered?.result).toEqual(completed); expect(recovered?.bytes).toEqual(archive); expect(recovered?.reference.generation).toBe(1);
+      loseAcknowledgement = false;
+      expect((await artifacts().persist(artifactInput)).result).toEqual(completed); expect(uploads).toBe(1);
+      expect(await artifacts().read({ ...request, actionId: "missing" })).toBeUndefined();
+      await expect(artifacts().read({ ...request, idea: "changed source" })).rejects.toThrow("PRODUCTION_ARTIFACT_REQUEST_MISMATCH");
+      await expect(artifacts().persist({ ...artifactInput, ownerId: scopeSha256 })).rejects.toThrow("OPERATION_IDENTITY_CONFLICT");
+      await expect(new ProductionWorkerArtifactStore({ journal: create("worker-artifacts"), objects: objectPort, toolchainSha256: scopeSha256 }).read(request)).rejects.toThrow("PRODUCTION_ARTIFACT_REQUEST_MISMATCH");
+      corruptRead = true; expect(await artifacts().read(request)).toBeUndefined(); corruptRead = false;
+      refuseCreate = true;
+      const missingRequest = { ...request, actionId: "action:missing-create" };
+      const missingInput = { ...artifactInput, request: missingRequest, bytes: new Uint8Array([1]), result: { ...completed, artifact: { ...completed.artifact, actionId: missingRequest.actionId, artifactId: `artifact:${new Bun.CryptoHasher("sha256").update(new Uint8Array([1])).digest("hex")}` } } };
+      await expect(artifacts().persist(missingInput)).rejects.toThrow("CREATE_UNKNOWN");
+      refuseCreate = false;
+      await expect(artifacts().persist(missingInput)).rejects.toThrow("PRODUCTION_ARTIFACT_UPLOAD_UNCERTAIN"); expect(uploads).toBe(2);
+      const parallelRequest = { ...request, actionId: "action:parallel" };
+      const parallelInput = { ...artifactInput, request: parallelRequest, result: { ...completed, artifact: { ...completed.artifact, actionId: parallelRequest.actionId } } };
+      const parallelArtifacts = await Promise.allSettled(Array.from({ length: 4 }, () => artifacts().persist(parallelInput)));
+      expect(parallelArtifacts.some(result => result.status === "fulfilled")).toBe(true); expect(uploads).toBe(3);
+      expect((await artifacts().read(parallelRequest))?.result).toEqual(parallelInput.result);
+    }
     const capped = () => create("bounded:run-1");
     const limited = await Promise.allSettled(Array.from({ length: 4 }, (_, i) => capped().claimBounded(`limited-${i}`, identity, { state: "claimed" }, 2)));
     const accepted = limited.filter(result => result.status === "fulfilled");

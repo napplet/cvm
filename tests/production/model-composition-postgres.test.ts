@@ -30,10 +30,19 @@ async function docker(args: string[]) {
 }
 function restrictedPool(native: Pool): PostgresSqlPool {
   return { async connect() {
+    const connectingAt = performance.now();
     const client = await native.connect();
+    if (performance.now() - connectingAt >= 200) console.error("MODEL_COMPOSITION_SLOW_POOL_CONNECT", Math.round(performance.now() - connectingAt));
     return { async query<Row extends Record<string, unknown>>(sql: string, values?: readonly unknown[]) {
-      const result = await client.query<Row>(sql, values ? [...values] : undefined);
-      return { rows: result.rows };
+      const startedAt = performance.now();
+      try {
+        const result = await client.query<Row>(sql, values ? [...values] : undefined);
+        return { rows: result.rows };
+      } finally {
+        // Static SQL only: never print account, prompt, credential or parameter values.
+        const elapsedMs = performance.now() - startedAt;
+        if (elapsedMs >= 200) console.error("MODEL_COMPOSITION_SLOW_SQL", Math.round(elapsedMs), sql);
+      }
     }, release() { client.release(); } };
   } };
 }

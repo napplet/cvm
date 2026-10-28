@@ -9,6 +9,7 @@ on:
       - "src/worker-adapters/**"
       - "tests/release/deployment-worker-clients.test.ts"
       - "tests/release/worker-production-transport.test.ts"
+      - "tests/release/production-job-diagnostics.test.ts"
       - "scripts/test-production-worker.sh"
       - "scripts/test-production-worker.ts"
       - "toolchains/locks/**"
@@ -74,7 +75,7 @@ jobs:
           done
       - name: Focused worker transport contracts
         shell: bash
-        run: bun test tests/release/deployment-worker-clients.test.ts tests/release/worker-production-transport.test.ts --timeout 10000
+        run: bun test tests/release/production-job-diagnostics.test.ts tests/release/deployment-worker-clients.test.ts tests/release/worker-production-transport.test.ts --timeout 10000
       - name: Upload production worker report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

@@ -16,7 +16,7 @@ const sha = (value: string | Uint8Array) => new Bun.CryptoHasher("sha256").updat
 const Summary = z.object({ argv: z.array(z.string()).max(16), exitCode: z.number().int(), elapsedMs: z.number().int().nonnegative(), stdoutSha256: Digest, stderrSha256: Digest }).strict();
 export const ProductionJobObservationSchema = z.discriminatedUnion("state", [
   z.object({ state: z.enum(["pending", "missing"]), jobId: Digest }).strict(),
-  z.object({ version: z.literal(1), state: z.literal("failed"), jobId: Digest, requestSha256: Digest, code: z.string().max(256), commands: z.array(Summary).max(8) }).strict(),
+  z.object({ version: z.literal(1), state: z.literal("failed"), jobId: Digest, requestSha256: Digest, code: z.string().max(256), commands: z.array(Summary).max(8), diagnostics: z.object({ commandIndex: z.number().int().min(0).max(7), stdoutTail: z.string().max(4096), stderrTail: z.string().max(4096) }).strict().optional() }).strict(),
   z.object({ version: z.literal(1), state: z.literal("completed"), jobId: Digest, requestSha256: Digest, artifactSha256: Digest, artifactBytes: z.number().int().positive().max(MAX_ARTIFACT_BUNDLE), commands: z.array(Summary).length(8) }).strict(),
 ]);
 export type ProductionJobObservation = z.infer<typeof ProductionJobObservationSchema> | Readonly<{ state: "unknown"; jobId: string }>;

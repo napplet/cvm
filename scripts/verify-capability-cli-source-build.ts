@@ -3,14 +3,14 @@ import { z } from "zod";
 import { canonicalJson } from "../src/promotion/schema";
 
 const RECIPE = "toolchains/recipes/napplet-cli-0.13.0-capabilities-source-build.json";
-const RECIPE_DIGEST = "7508b462ec3cbf45d56e656ebe3a665f3e4a6ec2b9671abd53226b6a05fcf8d0";
+const RECIPE_DIGEST = "0a088e524939c7149c0c4f5af16571939ab9cc139e0bff74d4786545ab146bd6";
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const Recipe = z.object({
   schemaVersion: z.literal(3), status: z.literal("reproducible-source-build-recipe-not-promoted"), profileName: z.literal("capabilities-0.13.0"),
   upstream: z.object({ repository: z.string(), commit: z.string(), version: z.string(), sourceLockSha256: Digest }).passthrough(),
   lockOverlay: z.object({ path: z.string(), sha256: Digest }).passthrough(),
   runtime: z.object({ version: z.string(), url: z.string(), sha256: Digest }).strict(),
-  build: z.object({ script: z.string(), scriptSha256: Digest, image: z.string(), probeImage: z.string(), sourceDateEpoch: z.number().int(), targets: z.record(z.string(), Digest) }).strict(),
+  build: z.object({ script: z.string(), scriptSha256: Digest, image: z.string(), probeImage: z.string(), probePlatforms: z.record(z.string(), z.string()), sourceDateEpoch: z.number().int(), targets: z.record(z.string(), Digest) }).strict(),
   promotion: z.object({ candidate: z.null(), selected: z.literal(false), protectedEvidence: z.null(), blockers: z.array(z.string()) }).strict(),
 }).strict();
 const Probe = z.object({ exitCode: z.number().int(), stdout: z.string(), stderr: z.string() }).strict();
@@ -20,7 +20,7 @@ const Receipt = z.object({
   source: z.object({ repository: z.string(), commit: z.string(), lockFile: z.literal("deno.lock"), lockSha256: Digest, buildLockSha256: Digest, lockOverlay: z.string() }).strict(),
   runtime: z.object({ version: z.string(), url: z.string(), sha256: Digest, archive: z.string() }).strict(),
   normalization: z.object({ sourceDateEpoch: z.number().int(), procedure: z.string() }).strict(),
-  images: z.object({ build: z.string(), probe: z.string() }).strict(),
+  images: z.object({ build: z.string(), probe: z.string(), probePlatforms: z.record(z.string(), z.string()) }).strict(),
   targets: z.array(z.object({ target: z.string(), sha256: Digest, artifact: z.string(), secondArtifact: z.string(), sourceCheckouts: z.array(z.string()).length(2), seedLogs: z.array(z.string()).length(2), buildLogs: z.array(z.string()).length(2), probes: z.object({ help: Probe, version: Probe, guide: Probe }).strict() }).strict()).length(2),
   promotion: z.object({ candidate: z.null(), selected: z.literal(false), protectedEvidence: z.null(), note: z.string() }).strict(),
 }).strict();
@@ -50,7 +50,7 @@ export async function verifyCapabilityCliSourceReceipt(path: string) {
   const file = Bun.file(path); if (file.size > 1_048_576) throw new Error("CAPABILITY_BUILD_RECEIPT_INVALID");
   const receipt = Receipt.parse(await file.json());
   const expectedSource = { repository: recipe.upstream.repository, commit: recipe.upstream.commit, lockFile: "deno.lock", lockSha256: recipe.upstream.sourceLockSha256, buildLockSha256: recipe.lockOverlay.sha256, lockOverlay: recipe.lockOverlay.path };
-  if (receipt.harnessSha256 !== recipe.build.scriptSha256 || canonicalJson(receipt.source) !== canonicalJson(expectedSource) || receipt.normalization.sourceDateEpoch !== recipe.build.sourceDateEpoch || receipt.images.build !== recipe.build.image || receipt.images.probe !== recipe.build.probeImage || receipt.runtime.version !== recipe.runtime.version || receipt.runtime.url !== recipe.runtime.url || receipt.runtime.sha256 !== recipe.runtime.sha256 || await fileDigest(receipt.runtime.archive) !== recipe.runtime.sha256) throw new Error("CAPABILITY_BUILD_RECEIPT_BINDING_INVALID");
+  if (receipt.harnessSha256 !== recipe.build.scriptSha256 || canonicalJson(receipt.source) !== canonicalJson(expectedSource) || receipt.normalization.sourceDateEpoch !== recipe.build.sourceDateEpoch || receipt.images.build !== recipe.build.image || receipt.images.probe !== recipe.build.probeImage || canonicalJson(receipt.images.probePlatforms) !== canonicalJson(recipe.build.probePlatforms) || receipt.runtime.version !== recipe.runtime.version || receipt.runtime.url !== recipe.runtime.url || receipt.runtime.sha256 !== recipe.runtime.sha256 || await fileDigest(receipt.runtime.archive) !== recipe.runtime.sha256) throw new Error("CAPABILITY_BUILD_RECEIPT_BINDING_INVALID");
   if (new Set(receipt.targets.map(target => target.target)).size !== 2 || receipt.targets.some(target => recipe.build.targets[target.target] !== target.sha256)) throw new Error("CAPABILITY_BUILD_TARGET_SET_INVALID");
   for (const target of receipt.targets) {
     for (const [index, artifact] of [target.artifact, target.secondArtifact].entries()) {

@@ -6,6 +6,10 @@ const DENO_ASSET_URL = "https://github.com/denoland/deno/releases/download/v2.9.
 const DENO_ASSET_SHA256 = "394f07f4da2bebe6ce6f1e7ce0fa16429b29b08c35e3fac3fe25972676dff4b2";
 const BUILD_IMAGE = "debian@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587";
 const PROBE_IMAGE = "oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4";
+const PROBE_IMAGES = Object.freeze({
+  "x86_64-unknown-linux-gnu": "oven/bun:1.3.14@sha256:50317d83cd5a5ae1d8b35b3379c69f57ce1a0dbf4def91f0965653d767851834",
+  "aarch64-unknown-linux-gnu": "oven/bun:1.3.14@sha256:d8a4c24744b290bf789d58966a6f2521fc4d8bec36ec02cead6c541147b7d550",
+});
 const TARGETS = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"] as const;
 const COMMAND_TIMEOUT_MS = 15 * 60_000;
 export const CLI_SOURCE_BUILD_PROFILES = Object.freeze({
@@ -130,11 +134,11 @@ async function probeArtifact(artifact: string, target: Target): Promise<Record<s
   const platform = target.startsWith("aarch64") ? "linux/arm64" : "linux/amd64";
   const isolation = selectedProfile.cliVersion === "0.13.0" ? ["--network", "none", "--read-only", "--cap-drop", "ALL", "--user", "65532:65532", "--workdir", "/tmp", "--cpus", "1", "--memory", "1g", "--memory-swap", "1g"] : [];
   const probe = async (name: string) => {
-    const result = await run(["docker", "run", "--platform", platform, "--rm", ...isolation, "--entrypoint", "/out/napplet", "-v", `${artifact}:/out/napplet:ro`, PROBE_IMAGE, name]);
+    const result = await run(["docker", "run", "--platform", platform, "--rm", ...isolation, "--entrypoint", "/out/napplet", "-v", `${artifact}:/out/napplet:ro`, PROBE_IMAGES[target], name]);
     return Object.freeze({ exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr });
   };
   const [help, version, guide] = await Promise.all([probe("--help"), probe("--version"), probe("guide")]);
-  await Bun.write(join(dirname(artifact), "probes.json"), JSON.stringify({ target, isolation, image: PROBE_IMAGE, help, version, guide }, null, 2) + "\n");
+  await Bun.write(join(dirname(artifact), "probes.json"), JSON.stringify({ target, isolation, image: PROBE_IMAGES[target], help, version, guide }, null, 2) + "\n");
   if (help.exitCode !== 0 || !help.stdout.includes("Usage:")) throw new Error(`${target} --help probe failed (${help.exitCode}): ${help.stderr.slice(0, 1500)} ${help.stdout.slice(0, 300)}`);
   if (guide.exitCode !== 0 || !guide.stdout.includes("Napplet Guide")) throw new Error(`${target} guide probe failed`);
   if (selectedProfile.cliVersion === "0.5.2") {
@@ -189,7 +193,7 @@ async function main(): Promise<void> {
     source: Object.freeze({ repository: SOURCE_REPOSITORY, commit: selectedProfile.commit, lockFile: "deno.lock", lockSha256: selectedProfile.lockSha256, buildLockSha256: selectedProfile.buildLockSha256, lockOverlay: selectedProfile.lockOverlay }),
     runtime: Object.freeze({ version: DENO_VERSION, url: DENO_ASSET_URL, sha256: DENO_ASSET_SHA256, archive }),
     normalization: Object.freeze({ sourceDateEpoch: Number(selectedProfile.sourceDateEpoch), procedure: "seed frozen cache and target runtime, normalize every source/cache mtime, then compile frozen cached-only at fixed /src, /cache, and /out paths" }),
-    images: Object.freeze({ build: BUILD_IMAGE, probe: PROBE_IMAGE }),
+    images: Object.freeze({ build: BUILD_IMAGE, probe: PROBE_IMAGE, probePlatforms: PROBE_IMAGES }),
     targets,
     promotion: Object.freeze({ candidate: null, selected: false, protectedEvidence: null, note: "This is local reproducibility evidence only. It neither promotes a candidate nor identifies the recreated upstream release asset." }),
   });

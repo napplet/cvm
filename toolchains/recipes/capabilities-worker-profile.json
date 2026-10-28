@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "status": "prepared-profile-not-promoted",
+  "artifactContract": "nip5d-direct-v1",
+  "sourceVersion": 2,
+  "transportBundleVersion": 3,
+  "sealedArtifactVersion": 3,
+  "cliSourceRecipe": "toolchains/recipes/napplet-cli-0.13.0-capabilities-source-build.json",
+  "inputs": [
+    {
+      "path": "infra/toolchain/capabilities.Dockerfile",
+      "sha256": "be0b4199bfec282d35347c87303337476aec8acc4f300ca5b6354ca95ca8a253"
+    },
+    {
+      "path": "infra/toolchain/production-job.ts",
+      "sha256": "62227182d8a408bbfb5fc93fbcdffa4d487a84b5742666d9f7b8e45b47d143df"
+    },
+    {
+      "path": "infra/toolchain/production-worker.ts",
+      "sha256": "0b8a810f842487348a02533a33b21fc701fd30cea98f63f54e4ca9f984e067f5"
+    },
+    {
+      "path": "infra/toolchain/production-bootstrap.sh",
+      "sha256": "4972aa599d56982a745fb66486397cb1d649bf0ac4c2605b7f3314db7342acbd"
+    },
+    {
+      "path": "infra/toolchain/production-probe.ts",
+      "sha256": "ccc598fdb69e538614f01ac3b4528ac445dfee363b36ab7a9e323d24ec06cfc7"
+    },
+    {
+      "path": "toolchains/locks/capabilities-worker/package.json",
+      "sha256": "ca0d5a088c7650407306899eaaaa535b2bd872d746d7aee10be471894944abbf"
+    },
+    {
+      "path": "toolchains/locks/capabilities-worker/pnpm-lock.yaml",
+      "sha256": "f0ac025b6f79609a159702adedfbfebd8966b1c65f78cf1e0f75912ae54a567d"
+    },
+    {
+      "path": "toolchains/overlays/capabilities-template/package.json",
+      "sha256": "81f03e8b76b15cbc025b11a67117389b579ee1ca374ddb680971f91e7293a99f"
+    },
+    {
+      "path": "toolchains/overlays/capabilities-template/pnpm-lock.yaml",
+      "sha256": "ec1eb261c06641decda0c8fbd3a96e5f121cddfcc6abdc8888f78556390e28e4"
+    },
+    {
+      "path": "toolchains/overlays/capabilities-template/vite.config.ts",
+      "sha256": "e837d17567056dc7d3e4e63b618f3b6da21b45b1f58f0310b28b48581c02321b"
+    },
+    {
+      "path": "toolchains/locks/capabilities-cli/deno.lock",
+      "sha256": "363cebbc9a8ca0cf5ef7cc7c81ccf2f598bb49ef0dfb6ae696b4a529cdc6f06d"
+    }
+  ],
+  "purpose": {
+    "source": "authenticated bounded request idea",
+    "maximumCharacters": 4096,
+    "file": ".napplet-cvm-authoring.json",
+    "authority": "root-owned data; generated source cannot edit configuration"
+  },
+  "promotion": {
+    "selected": false,
+    "protectedEvidence": null,
+    "blockers": [
+      "Original-toolchain profile selection for retries and the retained 30-day resume window remains required.",
+      "Meaningful capability policy, complete direct publication helpers, owner artifact reader and ordinary preview/publication composition remain required.",
+      "Actual compatible-host owner flow and all eight protected suites remain required."
+    ]
+  }
+}

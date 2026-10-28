@@ -1,0 +1,40 @@
+import { storage, themeGet, themeOnChanged, type Subscription, type Theme } from '@napplet/sdk';
+import { runtimeHasDomain } from './domain-availability.js';
+import './styles.css';
+
+const root = document.querySelector<HTMLElement>('#app');
+if (!root) throw new Error('APP_ROOT_MISSING');
+const editor = document.createElement('textarea');
+editor.setAttribute('aria-label', 'Note');
+editor.dataset.nappletSelect = 'text';
+editor.placeholder = 'Write a note';
+const toolbar = document.createElement('div');
+toolbar.className = 'toolbar';
+const save = document.createElement('button');
+save.type = 'button'; save.textContent = 'Save';
+const status = document.createElement('output');
+status.setAttribute('aria-live', 'polite');
+toolbar.append(save, status); root.replaceChildren(editor, toolbar);
+
+// The storage-less run is the conformance degradation fixture. A real host
+// enforces the hard requirement before loading a normal placement.
+if (runtimeHasDomain('storage')) {
+  storage.getItem('note').then(value => { editor.value = value ?? ''; }).catch(() => { status.textContent = 'Could not load the saved note'; });
+  save.addEventListener('click', () => {
+    save.disabled = true;
+    storage.setItem('note', editor.value).then(() => { status.textContent = 'Saved'; }).catch(() => { status.textContent = 'Could not save'; }).finally(() => { save.disabled = false; });
+  });
+} else { save.disabled = true; status.textContent = 'Saving is unavailable; edits stay in this view'; }
+
+function applyTheme(theme: Theme): void {
+  const style = document.documentElement.style;
+  style.setProperty('--bg', theme.colors.background);
+  style.setProperty('--fg', theme.colors.text);
+  style.setProperty('--primary', theme.colors.primary);
+}
+let subscription: Subscription | undefined;
+if (runtimeHasDomain('theme')) {
+  themeGet().then(applyTheme).catch(() => undefined);
+  subscription = themeOnChanged(applyTheme);
+}
+window.addEventListener('pagehide', () => subscription?.close(), { once: true });

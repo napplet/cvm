@@ -2,7 +2,8 @@
 /** Immutable privileged supervisor. Generated commands always run in a fresh
  * PID/network namespace as UID 65532. Only this supervisor can write results. */
 import { spawn } from "node:child_process";
-import { chmod, chown, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { chmod, chown, lstat, mkdir, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 const ROOT = "/run/napplet-cvm-jobs";
@@ -15,12 +16,15 @@ const env = { PATH: "/usr/local/bin:/usr/bin:/bin", NAPPLET_CVM_POLICY_VERSION: 
 const sha = (value: string | Uint8Array) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
 const fail = (code: string): never => { throw new Error(code); };
 const canonical = (value: unknown): string => value === null || typeof value !== "object" ? JSON.stringify(value) : Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : `{${Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`).join(",")}}`;
-type Request = { version: 1; actionId: string; sessionId: string; expectedVersion: number; proposalSha256: string; toolchainSha256: string; deadlineEpochMs: number; files: Array<{ path: string; content: string }>; publication?: { server: string } };
+type LegacyRequest = { version: 1; actionId: string; sessionId: string; expectedVersion: number; proposalSha256: string; toolchainSha256: string; deadlineEpochMs: number; files: Array<{ path: string; content: string }>; publication?: { server: string } };
+type DirectRequest = Omit<LegacyRequest, "version" | "publication"> & { version: 2; artifactContract: "nip5d-direct-v1"; purpose: string; publication: { server: string } };
+type Request = LegacyRequest | DirectRequest;
 function parseRequest(value: unknown): Request {
   if (!value || typeof value !== "object" || Array.isArray(value)) fail("JOB_REQUEST_INVALID");
   const v = value as Request;
-  const expectedKeys = v.publication === undefined ? "actionId,deadlineEpochMs,expectedVersion,files,proposalSha256,sessionId,toolchainSha256,version" : "actionId,deadlineEpochMs,expectedVersion,files,proposalSha256,publication,sessionId,toolchainSha256,version";
-  if (Object.keys(v).sort().join(",") !== expectedKeys || v.version !== 1 || ![v.actionId, v.sessionId].every(id => typeof id === "string" && id.length > 0 && id.length <= 256) || !Number.isSafeInteger(v.expectedVersion) || v.expectedVersion < 0 || ![v.proposalSha256, v.toolchainSha256].every(x => /^[a-f0-9]{64}$/u.test(x)) || !Number.isSafeInteger(v.deadlineEpochMs) || !Array.isArray(v.files) || v.files.length < 1 || v.files.length > 3) fail("JOB_REQUEST_INVALID");
+  const expectedKeys = v.version === 2 ? "actionId,artifactContract,deadlineEpochMs,expectedVersion,files,proposalSha256,publication,purpose,sessionId,toolchainSha256,version" : v.publication === undefined ? "actionId,deadlineEpochMs,expectedVersion,files,proposalSha256,sessionId,toolchainSha256,version" : "actionId,deadlineEpochMs,expectedVersion,files,proposalSha256,publication,sessionId,toolchainSha256,version";
+  if (Object.keys(v).sort().join(",") !== expectedKeys || ![1, 2].includes(v.version) || ![v.actionId, v.sessionId].every(id => typeof id === "string" && id.length > 0 && id.length <= 256) || !Number.isSafeInteger(v.expectedVersion) || v.expectedVersion < 0 || ![v.proposalSha256, v.toolchainSha256].every(x => /^[a-f0-9]{64}$/u.test(x)) || !Number.isSafeInteger(v.deadlineEpochMs) || !Array.isArray(v.files) || v.files.length < 1 || v.files.length > 3) fail("JOB_REQUEST_INVALID");
+  if (v.version === 2 && (v.artifactContract !== "nip5d-direct-v1" || typeof v.purpose !== "string" || !v.purpose.trim() || v.purpose !== v.purpose.trim() || v.purpose.length > 4096 || !v.publication)) fail("JOB_DIRECT_METADATA_INVALID");
   if (v.publication !== undefined) {
     if (!v.publication || Object.keys(v.publication).join(",") !== "server" || typeof v.publication.server !== "string" || v.publication.server.length > 512) fail("JOB_PUBLICATION_INVALID");
     const url = new URL(v.publication.server);
@@ -29,7 +33,40 @@ function parseRequest(value: unknown): Request {
   const allowed = new Set(["src/main.ts", "src/styles.css", "src/capabilities.json"]);
   for (const file of v.files) if (!file || Object.keys(file).sort().join(",") !== "content,path" || !allowed.has(file.path) || typeof file.content !== "string" || Buffer.byteLength(file.content) > 30_000) fail("JOB_SOURCE_INVALID");
   if (new Set(v.files.map(file => file.path)).size !== v.files.length || !v.files.some(file => file.path === "src/main.ts")) fail("JOB_SOURCE_INVALID");
+  if (v.version === 2) {
+    const content = v.files.find(file => file.path === "src/capabilities.json")?.content ?? fail("JOB_DIRECT_DECLARATION_REQUIRED");
+    const declaration = JSON.parse(content);
+    if (!declaration || Object.keys(declaration).sort().join(",") !== "optional,required" || ![declaration.required, declaration.optional].every(list => Array.isArray(list) && list.length <= 32 && list.every((domain: unknown) => typeof domain === "string" && /^[a-z][a-z0-9-]{0,31}$/u.test(domain)))) fail("JOB_DIRECT_DECLARATION_INVALID");
+    const domains = [...declaration.required, ...declaration.optional];
+    if (new Set(domains).size !== domains.length) fail("JOB_DIRECT_DECLARATION_INVALID");
+  }
   return v;
+}
+/** The immutable image selects its ABI; request data cannot upgrade it. */
+async function assertImageContract(request: Request) {
+  const path = "/toolchain/production-artifact-contract";
+  const info = await lstat(path).catch(error => { if (error.code === "ENOENT") return undefined; throw error; });
+  if (info && (!info.isFile() || info.isSymbolicLink() || info.uid !== 0 || info.nlink !== 1 || (info.mode & 0o022) !== 0 || info.size > 64)) fail("JOB_IMAGE_CONTRACT_INVALID");
+  const contract = info ? (await readFile(path, "utf8")).trim() : "legacy-aggregate-v1";
+  if (!["legacy-aggregate-v1", "nip5d-direct-v1"].includes(contract) || (request.version === 2) !== (contract === "nip5d-direct-v1")) fail("JOB_IMAGE_CONTRACT_MISMATCH");
+}
+async function dataReceipt(project: string, relative: string, limit: number) {
+  const handle = await open(join(project, relative), constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || info.nlink !== 1 || info.uid !== 65532 || info.size < 1 || info.size > limit) fail("JOB_DATA_RECEIPT_INVALID");
+    const bytes = Buffer.alloc(info.size + 1); let offset = 0;
+    while (offset < bytes.length) { const next = await handle.read(bytes, offset, bytes.length - offset, offset); if (!next.bytesRead) break; offset += next.bytesRead; }
+    if (offset !== info.size) fail("JOB_DATA_RECEIPT_CHANGED");
+    const content = bytes.subarray(0, offset); new TextDecoder("utf-8", { fatal: true }).decode(content);
+    return { sha256: sha(content), bytesBase64: content.toString("base64") };
+  } finally { await handle.close(); }
+}
+function validateDataReceipt(value: { path: string; sha256: string; bytesBase64: string }, path: string, limit: number) {
+  if (!value || Object.keys(value).sort().join(",") !== "bytesBase64,path,sha256" || value.path !== path || typeof value.bytesBase64 !== "string" || value.bytesBase64.length > Math.ceil(limit / 3) * 4) fail("RESTORE_DATA_RECEIPT_INVALID");
+  const bytes = Buffer.from(value.bytesBase64, "base64");
+  if (!bytes.length || bytes.length > limit || bytes.toString("base64") !== value.bytesBase64 || sha(bytes) !== value.sha256) fail("RESTORE_DATA_RECEIPT_INVALID");
+  new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 async function exists(path: string) { return lstat(path).then(() => true, error => { if (error.code === "ENOENT") return false; throw error; }); }
 async function immutable(path: string, bytes: Uint8Array | string) {
@@ -53,9 +90,15 @@ function parseRestore(bytes: Uint8Array) {
   if (!value || Object.keys(value).sort().join(",") !== "artifact,source,toolchainSha256,version" || value.version !== 1 || !/^[a-f0-9]{64}$/u.test(value.toolchainSha256)) fail("RESTORE_INVALID");
   const source = parseRequest(value.source);
   const artifact = value.artifact;
-  const expectedArtifactKeys = artifact?.version === 2 ? "capabilityReceipt,commandEvidence,files,jobId,proposalSha256,toolchainSha256,version" : "commandEvidence,files,jobId,proposalSha256,toolchainSha256,version";
-  if (source.toolchainSha256 !== value.toolchainSha256 || !artifact || Object.keys(artifact).sort().join(",") !== expectedArtifactKeys || ![1, 2].includes(artifact.version) || artifact.jobId !== sha(canonical(source)) || artifact.toolchainSha256 !== value.toolchainSha256 || artifact.proposalSha256 !== source.proposalSha256 || !Array.isArray(artifact.files) || artifact.files.length < 1 || artifact.files.length > 256 || !Array.isArray(artifact.commandEvidence) || artifact.commandEvidence.length !== 8) fail("RESTORE_BINDING_INVALID");
-  if (artifact.version === 2) validateCapabilityReceipt(artifact.capabilityReceipt, source);
+  const expectedArtifactKeys = artifact?.version === 3 ? "artifactContract,capabilityReceipt,commandEvidence,conformanceReceipt,files,jobId,manifestReceipt,proposalSha256,toolchainSha256,version" : artifact?.version === 2 ? "capabilityReceipt,commandEvidence,files,jobId,proposalSha256,toolchainSha256,version" : "commandEvidence,files,jobId,proposalSha256,toolchainSha256,version";
+  if (source.toolchainSha256 !== value.toolchainSha256 || !artifact || Object.keys(artifact).sort().join(",") !== expectedArtifactKeys || ![1, 2, 3].includes(artifact.version) || artifact.jobId !== sha(canonical(source)) || artifact.toolchainSha256 !== value.toolchainSha256 || artifact.proposalSha256 !== source.proposalSha256 || !Array.isArray(artifact.files) || artifact.files.length < 1 || artifact.files.length > 256 || !Array.isArray(artifact.commandEvidence) || artifact.commandEvidence.length !== 8) fail("RESTORE_BINDING_INVALID");
+  if ((source.version === 2) !== (artifact.version === 3)) fail("RESTORE_CONTRACT_MISMATCH");
+  if (artifact.version !== 1) validateCapabilityReceipt(artifact.capabilityReceipt, source);
+  if (artifact.version === 3) {
+    if (artifact.artifactContract !== "nip5d-direct-v1" || artifact.files.length !== 1 || artifact.files[0]?.path !== "index.html" || artifact.capabilityReceipt.state !== "present") fail("RESTORE_CONTRACT_MISMATCH");
+    validateDataReceipt(artifact.manifestReceipt, ".nip5a-manifest.json", 65_536);
+    validateDataReceipt(artifact.conformanceReceipt, "test-results/conformance.json", 262_144);
+  }
   let total = 0; const paths = new Set<string>();
   for (const file of artifact.files) {
     if (!file || Object.keys(file).sort().join(",") !== "bytesBase64,path,sha256,size" || typeof file.path !== "string" || !/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/u.test(file.path) || file.path.split("/").some((part: string) => part === "." || part === "..") || paths.has(file.path) || typeof file.bytesBase64 !== "string" || file.bytesBase64.length > 22_369_624) fail("RESTORE_FILE_INVALID");
@@ -127,6 +170,7 @@ async function collect(root: string) {
 async function run(id: string, dir: string) {
   const requestBytes = await readFile(join(dir, "request.json")); if (sha(requestBytes) !== id) fail("JOB_REQUEST_DIGEST_INVALID");
   const request = parseRequest(JSON.parse(requestBytes.toString("utf8")));
+  await assertImageContract(request);
   const commands: Awaited<ReturnType<typeof command>>[] = [];
   const project = `/workspace/jobs/${id}/project`;
   const execute = async (argv: string[], cwd: string) => { const result = await command(argv, cwd, request.deadlineEpochMs); commands.push(result); if (result.exitCode !== 0) fail("JOB_COMMAND_FAILED"); };
@@ -143,19 +187,27 @@ async function run(id: string, dir: string) {
     const originalRoot = new Set(await readdir(project));
     await chown(`/workspace/jobs/${id}`, 0, 0); await chmod(`/workspace/jobs/${id}`, 0o755);
     for (const file of request.files) { const path = join(project, file.path); const info = await lstat(path).catch(() => undefined); if (info?.isSymbolicLink() || (info && !info.isFile())) fail("JOB_SOURCE_PATH_UNTRUSTED"); await writeFile(path, file.content, { mode: 0o444 }); }
+    if (request.version === 2) await writeFile(join(project, ".napplet-cvm-authoring.json"), canonical({ purpose: request.purpose }), { flag: "wx", mode: 0o444 });
     await protect(project);
     const capabilities = await capabilityReceipt(project); validateCapabilityReceipt(capabilities, request);
     // Sticky root allows new tool reports but prevents generated UID from
     // replacing any of the root-owned package/config/source files.
     await chmod(project, 0o1777);
     for (const name of ["dist", "test-results", "playwright-report", ".cache", ".vite"]) { const path = join(project, name); await mkdir(path, { recursive: true }); await chown(path, 65532, 65532); await chmod(path, 0o700); }
-    for (const argv of [[pnpm, "build"], [pnpm, "verify"], [pnpm, "test:conformance"], ["/toolchain/bin/napplet", "deploy", "--dry-run", "--json", "--name", `cvm-${id.slice(0, 24)}`]]) {
+    for (const argv of [[pnpm, "build"], [pnpm, "verify"], [pnpm, "test:conformance", ...(request.version === 2 ? ["--reporter", "json", "--out", "test-results/conformance.json"] : [])], ["/toolchain/bin/napplet", "deploy", "--dry-run", "--json", "--name", `cvm-${id.slice(0, 24)}`, ...(request.version === 2 ? ["--no-zapstore", "--non-interactive"] : [])]]) {
       for (const name of await readdir(project)) if (!originalRoot.has(name) && /(^\.env|^\.npmrc$|^pnpm-workspace\.|\.config\.|^tsconfig\.|^napplet\.)/u.test(name)) fail("JOB_MANAGED_CONFIGURATION_CHANGED");
       await execute(argv, project);
     }
-    const files = await collect(join(project, "dist"));
+    const collected = await collect(join(project, "dist"));
+    const direct = request.version === 2 ? {
+      version: 3, artifactContract: request.artifactContract,
+      manifestReceipt: { path: ".nip5a-manifest.json", ...await dataReceipt(project, "dist/.nip5a-manifest.json", 65_536) },
+      conformanceReceipt: { path: "test-results/conformance.json", ...await dataReceipt(project, "test-results/conformance.json", 262_144) },
+    } : { version: 2 };
+    const files = request.version === 2 ? collected.filter(file => file.path !== ".nip5a-manifest.json") : collected;
+    if (request.version === 2 && (files.length !== 1 || files[0]?.path !== "index.html" || capabilities.state !== "present")) fail("JOB_DIRECT_ARTIFACT_INVALID");
     if (canonical(capabilities) !== canonical(await capabilityReceipt(project))) fail("JOB_CAPABILITY_RECEIPT_CHANGED");
-    const artifact = canonical({ version: 2, jobId: id, proposalSha256: request.proposalSha256, toolchainSha256: request.toolchainSha256, files, commandEvidence: commands, capabilityReceipt: capabilities });
+    const artifact = canonical({ ...direct, jobId: id, proposalSha256: request.proposalSha256, toolchainSha256: request.toolchainSha256, files, commandEvidence: commands, capabilityReceipt: capabilities });
     await immutable(join(dir, "artifact.json"), artifact);
     await immutable(join(dir, "result.json"), canonical({ version: 1, jobId: id, state: "completed", requestSha256: id, artifactSha256: sha(artifact), artifactBytes: Buffer.byteLength(artifact), commands: commands.map(({ stdout, stderr, ...facts }) => ({ ...facts, stdoutSha256: sha(stdout), stderrSha256: sha(stderr) })) }));
   } catch (error) {
@@ -196,7 +248,7 @@ try {
       }
       const bytes = Buffer.concat(await Promise.all(Array.from({ length: Number(argument) }, (_, index) => readFile(join(dir, `part-${index}`)))));
       if (bytes.length > MAX_REQUEST || sha(bytes) !== id) fail("JOB_REQUEST_DIGEST_INVALID");
-      const request = parseRequest(JSON.parse(bytes.toString("utf8"))); if (request.deadlineEpochMs <= Date.now() || request.deadlineEpochMs > Date.now() + 600_000) fail("JOB_DEADLINE_INVALID");
+      const request = parseRequest(JSON.parse(bytes.toString("utf8"))); await assertImageContract(request); if (request.deadlineEpochMs <= Date.now() || request.deadlineEpochMs > Date.now() + 600_000) fail("JOB_DEADLINE_INVALID");
       await immutable(join(dir, "request.json"), bytes);
       // Exclusive claim precedes process creation. An ambiguous start is never
       // dispatched again, even if the supervisor dies before spawning.
@@ -251,13 +303,18 @@ try {
       await writeFile(join(restoreDir, "claimed"), id, { flag: "wx", mode: 0o600 });
       const bytes = Buffer.concat(await Promise.all(Array.from({ length: Number(argument) }, (_, index) => readFile(join(restoreDir, `part-${index}`)))));
       if (sha(bytes) !== id) fail("RESTORE_DIGEST_INVALID");
-      const restored = parseRestore(bytes);
+      const restored = parseRestore(bytes); await assertImageContract(restored.source);
       const staging = `/workspace/restore-${id}`; await mkdir(staging, { mode: 0o755 });
       await mkdir(join(staging, "src")); await mkdir(join(staging, "dist"));
       for (const file of restored.source.files) await writeFile(join(staging, file.path), file.content, { flag: "wx", mode: 0o444 });
       for (const file of restored.artifact.files) {
         const path = join(staging, "dist", file.path); await mkdir(join(path, ".."), { recursive: true });
         await writeFile(path, Buffer.from(file.bytesBase64, "base64"), { flag: "wx", mode: 0o444 });
+      }
+      if (restored.source.version === 2) {
+        await writeFile(join(staging, ".napplet-cvm-authoring.json"), canonical({ purpose: restored.source.purpose }), { flag: "wx", mode: 0o444 });
+        const receipts = join(staging, ".napplet-cvm-receipts"); await mkdir(receipts);
+        for (const [path, value] of [["manifest.json", restored.artifact.manifestReceipt], ["conformance.json", restored.artifact.conformanceReceipt]]) await writeFile(join(receipts, path), Buffer.from(value.bytesBase64, "base64"), { flag: "wx", mode: 0o444 });
       }
       const actual = await collect(join(staging, "dist"));
       if (canonical(actual) !== canonical(restored.artifact.files)) fail("RESTORE_READBACK_MISMATCH");

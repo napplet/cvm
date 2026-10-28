@@ -1,0 +1,54 @@
+name: Direct artifact worker intake
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "infra/toolchain/**"
+      - "toolchains/locks/capabilities-worker/**"
+      - "toolchains/locks/capabilities-cli/**"
+      - "toolchains/overlays/capabilities-template/**"
+      - "toolchains/recipes/capabilities-worker-profile.json"
+      - "src/worker-adapters/**"
+      - "src/production/direct-artifact-verifier.ts"
+      - "scripts/test-production-worker.ts"
+      - "tests/fixtures/direct-worker-notes/**"
+      - "tests/release/direct-worker-protocol.test.ts"
+      - "tests/release/postgres-operation-journal.test.ts"
+      - ".github/workflows/capability-worker-intake.yml"
+permissions:
+  contents: read
+jobs:
+  direct-worker:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      NAPPLET_CVM_TEST_EXTERNAL_EFFECTS: deny
+      NAPPLET_RUN_POSTGRES_ISOLATION: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: "1.3.14"
+      - run: bun install --frozen-lockfile
+      - name: Strict supervisor and validation-harness types with the pinned compiler
+        run: bunx --package typescript@5.9.3 tsc --noEmit --skipLibCheck --strict --target ES2022 --module ESNext --moduleResolution bundler --types bun infra/toolchain/production-job.ts infra/toolchain/production-worker.ts scripts/test-production-worker.ts
+      - name: Direct metadata contracts and original operation recovery
+        run: bun test tests/release/direct-worker-protocol.test.ts tests/release/postgres-operation-journal.test.ts tests/production/direct-artifact-verifier.test.ts --timeout 120000
+      - name: Build the distinct unselected direct profile on native AMD64
+        run: |
+          mkdir -p intake
+          docker build --platform linux/amd64 --target production-worker -f infra/toolchain/capabilities.Dockerfile -t napplet-cvm-capabilities-worker:ci --provenance=false --sbom=false . > intake/capabilities-worker-build.log 2>&1
+      - name: Real build Chromium replay and fresh restore
+        env:
+          NAPPLET_CVM_WORKER_REPORT: intake/capabilities-worker-report.json
+        run: bun scripts/test-production-worker.ts napplet-cvm-capabilities-worker:ci --direct-artifact
+      - name: Retain bounded local-mechanism evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: direct-worker-native-amd64
+          path: intake/capabilities-worker-*
+          retention-days: 7
+          if-no-files-found: ignore

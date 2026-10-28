@@ -1,0 +1,16 @@
+{
+  "name": "napplet-cvm-capabilities-toolchain",
+  "private": true,
+  "packageManager": "pnpm@10.24.0",
+  "dependencies": {
+    "@napplet/boilerplate": "0.3.2",
+    "@napplet/conformance-cli": "0.4.0",
+    "@napplet/sdk": "0.30.0",
+    "@napplet/skills": "0.3.2",
+    "@napplet/vite-plugin": "0.16.1",
+    "typescript": "5.9.3",
+    "vite": "6.4.3",
+    "@napplet/core": "0.34.0",
+    "@napplet/nap": "0.34.0"
+  }
+}

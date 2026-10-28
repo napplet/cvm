@@ -1,13 +1,14 @@
 import { RemixReferenceSchema } from "../remix/reference";
 import { z } from "zod";
 import { ContinuationService, type VerifiedCreditWakeHint, type VerifiedCreditWakeResult } from "../continuity/continuation-service";
-import { NeedsTopUpResultSchema } from "../continuity/contracts";
+import { NeedsTopUpResultSchema, type PendingActionIntent } from "../continuity/contracts";
+import type { PendingCommandPort } from "../continuity/protected-command";
 import { evaluateRisk, type RiskSignalDetector } from "../admission/risk-policy";
 import { accountIdForPrincipal } from "../domain/account-command";
 import { FundedAdmissionService } from "../funding/funded-admission";
 import { type ModelGateway, ModelObservationSchema, ProviderOperationIntentSchema, type NormalizedUsageReceipt, type ProviderOperationIntent, type SourceProposalLookup } from "../model/model-gateway";
 import { PHASE_04_DETERMINISTIC_PRICE_CARD, PHASE_04_MODEL_PROFILES, maximumOperationCharge, priceReceipt, type ModelProfile, type PriceCard } from "../model/price-card";
-import { type ContinuationFundingStore, type MeteredFundingStore, type MeteredAction } from "../persistence/funding-store";
+import { type ContinuationFundingStore, type MeteredFundingStore, type MeteredAction, type MeteredFinalizeInput } from "../persistence/funding-store";
 import { type WorkerPort, WorkerRunRequestSchema, WorkerRunResultSchema } from "../phase-02/contracts";
 import { evaluateArtifactContract } from "../policy/artifact-contract";
 import { type ArtifactVerifier } from "../phase-02/trusted-core";
@@ -51,6 +52,11 @@ export type ReviseSessionCommand = z.infer<typeof ReviseSessionCommandSchema>;
 export type TriggerValidationRepairCommand = z.infer<typeof TriggerValidationRepairCommandSchema>;
 export type SessionActionResult = z.infer<typeof SessionActionResultSchema>;
 export type GenerationCommand = StartSessionCommand | ReviseSessionCommand | (TriggerValidationRepairCommand & Readonly<{ repair: true }>);
+export type ContinuationExecutionBinding = Readonly<{ accountId: string; actionKey: string; commandFingerprint: string; actionId: string; operationId: string; actionBudgetReference: string }>;
+export type PreparedContinuationExecution = Readonly<{
+  readTerminal(binding: ContinuationExecutionBinding): Promise<boolean>;
+  execute(input: ContinuationExecutionBinding & Readonly<{ finalizeTerminal(finalization: MeteredFinalizeInput): Promise<void> }>): Promise<SessionActionResult>;
+}>;
 type ContinuationWakePort = Readonly<{
   continueAction(input: Readonly<{ pendingActionReference: string; actionBudgetReference: string; operationId: string; liveLeaseToken: string }>): Promise<void>;
   /** Lookup-only exact-operation observer used during coordinator restart. */
@@ -73,7 +79,29 @@ async function hash(value: unknown): Promise<string> { const digest = await cryp
 export class MeteredGenerationService {
   #inFlight = new Map<string, Promise<SessionActionResult>>();
   #sessionTails = new Map<string, Promise<void>>();
-  constructor(private readonly options: Readonly<{ fundedAdmission: FundedAdmissionService; store: MeteredFundingStore; gateway: ModelGateway; worker: WorkerPort; artifactVerifier: ArtifactVerifier; proposalStore?: SourceProposalLookup; pricing?: Readonly<{ card: PriceCard; profile: ModelProfile }>; settlement?: GenerationUsageSettlement; riskDetector?: RiskSignalDetector; harness?: Readonly<{ runner: NappletHarness; toolchain: NappletHarnessRequest["toolchain"]; snapshotReference: string; priorArtifactId: string; approvedApplicationSurfaces: readonly string[] }>; continuation?: ContinuationService; /** Immutable worker/toolchain identity retained with any durable pause. */ toolchainIdentity?: string; clock?: Readonly<{ nowMs(): number }>; continuationWake?: ContinuationWakePort; telemetry?: LifecycleTelemetryPort }>) {}
+  constructor(private readonly options: Readonly<{ fundedAdmission: FundedAdmissionService; store: MeteredFundingStore; gateway: ModelGateway; worker: WorkerPort; artifactVerifier: ArtifactVerifier; proposalStore?: SourceProposalLookup; pricing?: Readonly<{ card: PriceCard; profile: ModelProfile }>; settlement?: GenerationUsageSettlement; riskDetector?: RiskSignalDetector; harness?: Readonly<{ runner: NappletHarness; toolchain: NappletHarnessRequest["toolchain"]; snapshotReference: string; priorArtifactId: string; approvedApplicationSurfaces: readonly string[] }>; continuation?: ContinuationService; continuationCommands?: PendingCommandPort; /** Immutable worker/toolchain identity retained with any durable pause. */ toolchainIdentity?: string; clock?: Readonly<{ nowMs(): number }>; continuationWake?: ContinuationWakePort; telemetry?: LifecycleTelemetryPort }>) {}
+
+  /** Internal continuation consumer. Decrypt and check retained compatibility
+   * before the resume authority reserves funds or allocates a worker. This
+   * same-currency path cannot silently substitute a new USD/FX authorization. */
+  async prepareContinuation(intent: PendingActionIntent): Promise<PreparedContinuationExecution> {
+    if (!this.options.continuationCommands) throw new Error("CONTINUATION_COMMAND_RESTORE_REQUIRED");
+    if (this.options.settlement) throw new Error("CONTINUATION_ORIGINAL_SETTLEMENT_REQUIRED");
+    const command = await this.options.continuationCommands.open(intent);
+    const profile = this.options.pricing?.profile ?? PHASE_04_MODEL_PROFILES["code-proposal"];
+    const priceCard = this.options.pricing?.card ?? PHASE_04_DETERMINISTIC_PRICE_CARD;
+    const profileCeiling = maximumOperationCharge({ card: priceCard, profile });
+    if (profile.id !== intent.profileId || priceCard.id !== intent.priceCardId || (this.options.toolchainIdentity ?? "phase-04-deterministic-toolchain") !== intent.toolchainId || profileCeiling !== intent.actionMaximum) throw new Error("CONTINUATION_EXECUTION_COMPATIBILITY_DENIED");
+    const loadPrepared = async (binding: ContinuationExecutionBinding): Promise<MeteredAction> => {
+      const prepared = await this.options.store.findMeteredAction(intent.accountId, binding.actionKey);
+      if (!prepared || binding.accountId !== intent.accountId || prepared.accountId !== intent.accountId || prepared.sessionId !== intent.sessionId || prepared.admissionReference !== intent.admissionReference || prepared.expectedVersion !== intent.expectedSessionVersion || prepared.fingerprint !== binding.commandFingerprint || prepared.actionId !== binding.actionId || prepared.operationId !== binding.operationId || prepared.actionBudgetReference !== binding.actionBudgetReference || prepared.maximum !== BigInt(profileCeiling) || prepared.profileId !== profile.id || prepared.priceCardId !== priceCard.id) throw new Error("CONTINUATION_PREPARED_ACTION_BINDING_DENIED");
+      return prepared;
+    };
+    return freeze({ readTerminal: async binding => { const action = await loadPrepared(binding); return Boolean(action.result && (action.status === "completed" || action.status === "failed")); }, execute: async binding => {
+      const prepared = await loadPrepared(binding);
+      return this.#executePrepared({ command, accountId: intent.accountId, fingerprint: binding.commandFingerprint, sessionId: intent.sessionId, operationId: prepared.operationId, profile, priceCard, profileCeiling, budget: { reference: prepared.actionBudgetReference }, prepared, finalizeTerminal: binding.finalizeTerminal });
+    } });
+  }
 
   #continuation(): ContinuationService {
     const continuationStore = this.options.store as MeteredFundingStore & Partial<ContinuationFundingStore>;
@@ -295,10 +323,19 @@ export class MeteredGenerationService {
   /** The one receipt-first execution path for an already prepared paid action.
    * Preparation and ownership remain with the caller; this method never reserves
    * another budget or substitutes another provider operation. */
-  async #executePrepared(input: Readonly<{ command: GenerationCommand; accountId: string; fingerprint: string; sessionId: string; operationId: string; profile: ModelProfile; priceCard: PriceCard; profileCeiling: string; budget: Readonly<{ reference: string }>; prepared: MeteredAction }>): Promise<SessionActionResult> {
+  async #executePrepared(input: Readonly<{ command: GenerationCommand; accountId: string; fingerprint: string; sessionId: string; operationId: string; profile: ModelProfile; priceCard: PriceCard; profileCeiling: string; budget: Readonly<{ reference: string }>; prepared: MeteredAction; finalizeTerminal?: (finalization: MeteredFinalizeInput) => Promise<void> }>): Promise<SessionActionResult> {
     const { command, accountId, fingerprint, sessionId, operationId, profile, priceCard, profileCeiling, budget, prepared } = input;
     const lifecycleCorrelation = [accountId, sessionId, operationId] as const;
     if (prepared.result) return SessionActionResultSchema.parse(prepared.result);
+    const finalize = async (finalization: MeteredFinalizeInput): Promise<MeteredAction> => {
+      if (input.finalizeTerminal && (finalization.status === "completed" || finalization.status === "failed")) {
+        await input.finalizeTerminal(finalization);
+        const action = await this.options.store.findMeteredAction(accountId, prepared.idempotencyKey);
+        if (!action?.result) throw new Error("RESUMED_ACTION_TERMINAL_REQUIRED");
+        return action;
+      }
+      return this.options.store.transact(accountId, transaction => transaction.finalizeMeteredAction(finalization));
+    };
     const durableActionId = prepared.actionId;
     // Construct the exact same coordinator intent before the durable claim so
     // a later process can perform lookup-only recovery of this operation.  It
@@ -341,8 +378,8 @@ export class MeteredGenerationService {
         await this.options.store.transact(accountId, (transaction) => transaction.recordUsageUnknown({ operationId, providerRequestId, protectedEvidenceReference: observation.provenance.protectedEvidenceReference, reason: "uncertain_acceptance" }));
         return SessionActionResultSchema.parse({ status: "usage_unknown", code: "USAGE_UNKNOWN", accountId, sessionId, nextAction: "billing_reconciliation", operationId });
       }
-      const result = SessionActionResultSchema.parse({ status: "failed", code: "WORKER_OR_ARTIFACT_FAILED", accountId, sessionId, sessionVersion: 0, artifactVersion: 0, confirmedSpend: "0", remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId });
-      const finalized = await this.options.store.transact(accountId, (transaction) => transaction.finalizeMeteredAction({ idempotencyKey: command.idempotencyKey, operationId, receiptCharge: "0", providerReceiptReference: observation.provenance.protectedEvidenceReference, status: "failed", result, sessionVersion: 0, artifactVersion: 0 }));
+      const result = SessionActionResultSchema.parse({ status: "failed", code: "WORKER_OR_ARTIFACT_FAILED", accountId, sessionId, sessionVersion: command.expectedVersion, artifactVersion: command.expectedVersion, confirmedSpend: "0", remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId });
+      const finalized = await finalize({ idempotencyKey: prepared.idempotencyKey, operationId, receiptCharge: "0", providerReceiptReference: observation.provenance.protectedEvidenceReference, status: "failed", result, sessionVersion: command.expectedVersion, artifactVersion: command.expectedVersion });
       await emitLifecycleObservation(this.options.telemetry, lifecycleCorrelation, "generation", "failed");
       await emitLifecycleObservation(this.options.telemetry, lifecycleCorrelation, "ledger_settlement", "succeeded");
       return SessionActionResultSchema.parse(finalized.result);
@@ -355,7 +392,7 @@ export class MeteredGenerationService {
     const priced = priceReceipt({ receipt: observation.receipt, card: priceCard, profile, ...(this.options.settlement ? {} : { reservation: profileCeiling }) });
     if (priced.status !== "priced") {
       const result = SessionActionResultSchema.parse({ status: "billing_invariant_failed", code: priced.code, accountId, sessionId, nextAction: "billing_reconciliation", operationId });
-      await this.options.store.transact(accountId, (transaction) => transaction.finalizeMeteredAction({ idempotencyKey: command.idempotencyKey, operationId, receiptCharge: "0", providerReceiptReference: observation.receipt.provenance.protectedEvidenceReference, status: "billing_invariant_failed", result, sessionVersion: 0, artifactVersion: 0 }));
+      await finalize({ idempotencyKey: prepared.idempotencyKey, operationId, receiptCharge: "0", providerReceiptReference: observation.receipt.provenance.protectedEvidenceReference, status: "billing_invariant_failed", result, sessionVersion: 0, artifactVersion: 0 });
       await emitLifecycleObservation(this.options.telemetry, lifecycleCorrelation, "generation", "succeeded");
       await emitLifecycleObservation(this.options.telemetry, lifecycleCorrelation, "ledger_settlement", "blocked");
       return result;
@@ -417,7 +454,7 @@ export class MeteredGenerationService {
     const result = SessionActionResultSchema.parse(completed
       ? { status, code: "ACTION_COMMITTED", accountId, sessionId, sessionVersion: command.expectedVersion + 1, artifactVersion: command.expectedVersion + 1, artifactId: artifactId!, confirmedSpend: settlement.amount, remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId, generation: { provider: observation.receipt.provider, model: observation.receipt.model, profileId: observation.receipt.profileId, priceCardId: observation.receipt.priceCardId, usage: observation.receipt.usage, source: "durably recorded" as const, worker: "verified" as const } }
       : { status, code: "WORKER_OR_ARTIFACT_FAILED", accountId, sessionId, sessionVersion: command.expectedVersion, artifactVersion: command.expectedVersion, confirmedSpend: settlement.amount, remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId });
-    const finalized = await this.options.store.transact(accountId, (transaction) => transaction.finalizeMeteredAction({ idempotencyKey: command.idempotencyKey, operationId, receiptCharge: settlement.amount, providerReceiptReference: settlement.providerReceiptReference, status, result, sessionVersion: completed ? command.expectedVersion + 1 : command.expectedVersion, artifactVersion: completed ? command.expectedVersion + 1 : command.expectedVersion, artifact: { ...(artifactId ? { artifactId } : {}), workspaceLineage, checkpointReference, snapshotReference: `snapshot:${sessionId}:${durableActionId}`, validationEvidenceReference, ...(failedArtifactId ? { failedArtifactId } : {}), ...(validationReportReference ? { validationReportReference } : {}) } }));
+    const finalized = await finalize({ idempotencyKey: prepared.idempotencyKey, operationId, receiptCharge: settlement.amount, providerReceiptReference: settlement.providerReceiptReference, status, result, sessionVersion: completed ? command.expectedVersion + 1 : command.expectedVersion, artifactVersion: completed ? command.expectedVersion + 1 : command.expectedVersion, artifact: { ...(artifactId ? { artifactId } : {}), workspaceLineage, checkpointReference, snapshotReference: `snapshot:${sessionId}:${durableActionId}`, validationEvidenceReference, ...(failedArtifactId ? { failedArtifactId } : {}), ...(validationReportReference ? { validationReportReference } : {}) } });
     await emitLifecycleObservation(this.options.telemetry, lifecycleCorrelation, "generation", "succeeded");
     await emitLifecycleObservation(this.options.telemetry, lifecycleCorrelation, "ledger_settlement", "succeeded");
     return SessionActionResultSchema.parse(finalized.result);

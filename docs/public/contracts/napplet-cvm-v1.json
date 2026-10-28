@@ -3175,6 +3175,110 @@
         }
       ]
     },
+    "resumeSession": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "restored"
+            },
+            "code": {
+              "type": "string",
+              "const": "RESUME_RESTORED"
+            },
+            "sessionId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "checkpointId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "pendingActionReference": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "status",
+            "code",
+            "sessionId",
+            "checkpointId",
+            "pendingActionReference"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "reconciliation_pending"
+            },
+            "code": {
+              "type": "string",
+              "enum": [
+                "RESUME_ALLOCATION_RECONCILIATION",
+                "RESUME_RESTORE_RECONCILIATION",
+                "RESUME_CHECKPOINT_RECONCILIATION",
+                "RESUME_ACTION_RECONCILIATION"
+              ]
+            },
+            "sessionId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "checkpointId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "pendingActionReference": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "status",
+            "code",
+            "sessionId",
+            "checkpointId",
+            "pendingActionReference"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "denied"
+            },
+            "code": {
+              "type": "string",
+              "enum": [
+                "RESUME_INVALID_COMMAND",
+                "RESUME_CHECKPOINT_NOT_FOUND_OR_DENIED",
+                "RESUME_PENDING_APPROVAL_REQUIRED",
+                "RESUME_PENDING_ACTION_MISMATCH",
+                "RESUME_CAP_APPROVAL_REQUIRED",
+                "RESUME_COMPATIBILITY_DENIED",
+                "RESUME_BALANCE_INSUFFICIENT",
+                "RESUME_CAP_INSUFFICIENT",
+                "RESUME_STALE_OR_CONFLICTING"
+              ]
+            }
+          },
+          "required": [
+            "status",
+            "code"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
     "sessionCapApproval": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "oneOf": [

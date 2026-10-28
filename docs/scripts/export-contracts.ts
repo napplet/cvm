@@ -8,6 +8,7 @@ import { DevelopmentPublicationArgumentsSchema } from "../../src/dev/local-publi
 import { RemixImportArgumentsSchema } from "../../src/dev/remix-imports";
 import { CvmAdminArgumentsSchema } from "../../src/dev/cvm-operator";
 import * as extra from "../../src/dev-ui/extension-schemas";
+import { ResumeSessionResultSchema } from "../../src/continuity/contracts";
 import { SessionActionResultSchema } from "../../src/phase-04/metered-generation-service";
 import { SessionStatusSchema } from "../../src/phase-04/session-status";
 import { DevelopmentProgressSchema } from "../../src/dev-ui/progress-contract";
@@ -37,7 +38,7 @@ const value = {
   format: "napplet-cvm-contract-catalog-v1", sdkVersion: "0.13.10", mcpSdkVersion: "1.30.0",
   note: "Generated structural input schemas. Runtime refinements, signatures, ownership, availability, money ceilings, URL policy and durable state remain authoritative. A listed tool is not proof its facade is installed. This catalog format is not a wire protocol negotiation version.",
   tools: entries.map(([name, description, schema, scope]) => ({ name, description, scope, inputSchema: json(schema) })),
-  results: { projectCosts: json(ProjectCostsSchema), publicationMetadata: json(PublicationMetadataSchema), generationEstimates: json(GenerationEstimatesSchema), sessionAction: json(SessionActionResultSchema), sessionCapApproval: json(core.SessionCapApprovalWireResultSchema), sessionStatus: json(SessionStatusSchema), developmentProgress: json(DevelopmentProgressSchema) },
+  results: { projectCosts: json(ProjectCostsSchema), publicationMetadata: json(PublicationMetadataSchema), generationEstimates: json(GenerationEstimatesSchema), sessionAction: json(SessionActionResultSchema), resumeSession: json(ResumeSessionResultSchema), sessionCapApproval: json(core.SessionCapApprovalWireResultSchema), sessionStatus: json(SessionStatusSchema), developmentProgress: json(DevelopmentProgressSchema) },
   operatorConfiguration: { modelProfile: json(ModelProfileSchema), priceCard: json(PriceCardSchema) },
 };
 const path = new URL("../public/contracts/napplet-cvm-v1.json", import.meta.url);

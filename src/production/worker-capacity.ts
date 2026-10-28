@@ -75,6 +75,7 @@ export function createProductionReadyCapacity(input: Readonly<{
     const original = (await input.workerJournal.read<WorkerOperationRecord>(record.workerOperationId))?.value;
     if (!original || record.provider !== provider || original.operationId !== record.workerOperationId || original.provider !== record.provider
       || original.sessionLeaseSha256 !== record.expectedSessionBindingDigest.slice("sha256:".length)
+      || original.state === "terminating" || original.state === "terminated"
       || original.providerDeadlineEpochMs !== record.deadlineEpochMs || original.policyVersion !== PRODUCTION_WORKER_POLICY.version
       || !original.image || !/^.+@sha256:[a-f0-9]{64}$/iu.test(original.image) || !Digest.safeParse(original.toolchainSha256).success) return undefined;
     if (record.execution && (record.execution.image !== original.image || record.execution.toolchainSha256 !== original.toolchainSha256

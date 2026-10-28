@@ -98,6 +98,10 @@ postgresIsolation("worker lifecycle retains originals across allocation ambiguit
       expect(await open().apply(plan)).toEqual(created);
       await expect(open().apply({ ...plan, desiredDigest: "b".repeat(64) })).rejects.toThrow("WORKER_LIFECYCLE_ORIGINAL_REQUIRED");
       await expect(open().cleanup({ operationId: plan.operationId, resourceIdentitySha256: "f".repeat(64) })).rejects.toThrow("WORKER_LIFECYCLE_RESOURCE_CHANGED");
+      const originalCapacity = await capacity.inspect(retained);
+      if (!originalCapacity) throw new Error("CAPACITY_ORIGINAL_MISSING");
+      await providerJournal.update({ operationId: originalCapacity.workerOperationId, requestSha256: "c".repeat(64), state: "terminating" });
+      expect((await capacity.observe(retained)).status).toBe("unknown");
       await expect(open().cleanup({ operationId: plan.operationId, resourceIdentitySha256: created.resourceIdentitySha256 })).rejects.toThrow("TERMINATION_ACK_LOST");
       now = 10000;
       const finalizer = createMountedReleaseCleanup({ effects: [{ provider, providerOperationId: plan.operationId, resourceIdentitySha256: created.resourceIdentitySha256! }], providers: { [provider]: { port: { async observe() { throw new Error("GENERIC_OBSERVATION_MUST_NOT_BE_USED"); } } } } as never, workers: { modal: open(), fly: open() } });

@@ -175,3 +175,22 @@ test("persists and uploads the exact sealed bytes once, then reconciles only the
   expect(replay).toEqual(first);
   expect(transcript).toEqual(["persist:deploy:intent:publication", "upload:deploy:intent:publication", "persist:deploy:intent:publication"]);
 });
+
+test("upload rechecks intent expiry after signing and permits only historical observation afterward", async () => {
+  const { config, request, receipt } = await authorization();
+  let now = 1_000, writes = 0, sends = 0, reads = 0;
+  const upload = createExactSealedUploadAdapter({
+    config: { candidateSha256: config.candidateSha256, topologySha256: config.topologySha256, effectPlanSha256: config.effectPlanSha256,
+      accountScopeSha256: config.accountScopeSha256, projectScopeSha256: config.projectScopeSha256,
+      sealedArtifactSha256: artifact.sealedObjectSha256, aggregateSha256, targetReference: "blossom:original", retentionDays: 30, intentExpiresAtMs: 1_500 },
+    request, receipt, now: () => now,
+    port: { async persist() { writes++; }, async observeOriginalUpload() { reads++; return { status: "missing" }; }, async uploadExact() { sends++; } },
+  });
+  const operation = { operationId: "deploy:intent:expires", files: [file] };
+  await expect(upload.uploadExact({ ...operation, authorizeExactHashes: async () => { now = 2_000; } })).rejects.toThrow("SEALED_UPLOAD_AUTHORIZATION_INVALID");
+  expect({ writes, sends, reads }).toEqual({ writes: 1, sends: 0, reads: 1 });
+  now = 100_000;
+  await expect(upload.reconcileOriginalUpload(operation)).resolves.toMatchObject({ state: "unknown" });
+  await expect(upload.uploadExact({ ...operation, authorizeExactHashes: async () => { throw new Error("must not sign"); } })).rejects.toThrow("SEALED_UPLOAD_AUTHORIZATION_INVALID");
+  expect({ writes, sends, reads }).toEqual({ writes: 1, sends: 0, reads: 2 });
+});

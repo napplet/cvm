@@ -4,6 +4,18 @@ import { z } from "zod";
 export const CanonicalSatSchema = z.string().regex(/^(0|[1-9][0-9]*)$/u);
 export const EpochMillisecondsSchema = z.number().int().nonnegative();
 
+export const ProtectedContinuationCommandSchema = z.object({
+  schemaVersion: z.literal("protected-continuation-command-v1"),
+  keyReference: z.string().min(1).max(256),
+  retentionUntilMs: EpochMillisecondsSchema,
+  bindingSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  nonceBase64: z.string().length(16),
+  wrapNonceBase64: z.string().length(16),
+  wrappedDekBase64: z.string().length(64),
+  ciphertextBase64: z.string().min(24).max(100_000).regex(/^[A-Za-z0-9+/]+={0,2}$/u),
+}).strict();
+export type ProtectedContinuationCommand = z.infer<typeof ProtectedContinuationCommandSchema>;
+
 /** Durable identity for work that has not crossed an effectful boundary. */
 export const PendingActionIntentSchema = z.object({
   accountId: z.string().min(1),
@@ -21,6 +33,8 @@ export const PendingActionIntentSchema = z.object({
   toolchainId: z.string().min(1),
   actionMaximum: CanonicalSatSchema,
   admissionReference: z.string().min(1),
+  /** Private encrypted command, committed atomically with the pause. */
+  protectedCommand: ProtectedContinuationCommandSchema.optional(),
 }).strict();
 
 export const NeedsTopUpResultSchema = z.object({
@@ -104,7 +118,7 @@ export const ResumeSessionCommandSchema = z.object({
 /** Safe public result: no account, archive, key, provider, or payment material. */
 export const ResumeSessionResultSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("restored"), code: z.literal("RESUME_RESTORED"), sessionId: z.string().min(1), checkpointId: z.string().min(1), pendingActionReference: z.string().min(1) }).strict(),
-  z.object({ status: z.literal("reconciliation_pending"), code: z.enum(["RESUME_ALLOCATION_RECONCILIATION", "RESUME_RESTORE_RECONCILIATION", "RESUME_CHECKPOINT_RECONCILIATION"]), sessionId: z.string().min(1), checkpointId: z.string().min(1), pendingActionReference: z.string().min(1) }).strict(),
+  z.object({ status: z.literal("reconciliation_pending"), code: z.enum(["RESUME_ALLOCATION_RECONCILIATION", "RESUME_RESTORE_RECONCILIATION", "RESUME_CHECKPOINT_RECONCILIATION", "RESUME_ACTION_RECONCILIATION"]), sessionId: z.string().min(1), checkpointId: z.string().min(1), pendingActionReference: z.string().min(1) }).strict(),
   z.object({ status: z.literal("denied"), code: z.enum(["RESUME_INVALID_COMMAND", "RESUME_CHECKPOINT_NOT_FOUND_OR_DENIED", "RESUME_PENDING_APPROVAL_REQUIRED", "RESUME_PENDING_ACTION_MISMATCH", "RESUME_CAP_APPROVAL_REQUIRED", "RESUME_COMPATIBILITY_DENIED", "RESUME_BALANCE_INSUFFICIENT", "RESUME_CAP_INSUFFICIENT", "RESUME_STALE_OR_CONFLICTING"]) }).strict(),
 ]);
 

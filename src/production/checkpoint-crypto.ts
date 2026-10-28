@@ -59,6 +59,18 @@ function parseRecord(row: Record<string, unknown>): StoredRecord {
   });
 }
 
+export async function loadMountedCheckpointKek(input: Readonly<{ kekPath: string; readFile?: (path: string) => Promise<Uint8Array | string> }>): Promise<CryptoKey> {
+  if (!isAbsolute(input.kekPath)) throw new Error("PRODUCTION_CHECKPOINT_KEK_MOUNT_REQUIRED");
+  const raw = await (input.readFile ?? nativeReadFile)(input.kekPath);
+  const encoded = typeof raw === "string" ? raw.trim() : new TextDecoder().decode(raw).trim();
+  if (!/^[A-Za-z0-9+/]{43}=$/u.test(encoded)) throw new Error("PRODUCTION_CHECKPOINT_KEK_INVALID");
+  const keyBytes = new Uint8Array(Buffer.from(encoded, "base64"));
+  try {
+    if (keyBytes.byteLength !== 32) throw new Error("PRODUCTION_CHECKPOINT_KEK_INVALID");
+    return await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["encrypt", "decrypt"]);
+  } finally { keyBytes.fill(0); }
+}
+
 /**
  * Concrete production crypto port. The KEK is read from one dedicated secret
  * mount and immediately imported as a non-extractable CryptoKey. PostgreSQL
@@ -70,7 +82,7 @@ export class MountedKekCheckpointCrypto implements CheckpointCryptoPort {
   readonly #pool: PostgresSqlPool;
   readonly #kek: Promise<CryptoKey>;
   readonly #now: () => number;
-  constructor(private readonly input: Readonly<{
+  constructor(input: Readonly<{
     pool: PostgresSqlPool;
     kekPath: string;
     readFile?: (path: string) => Promise<Uint8Array | string>;
@@ -79,7 +91,7 @@ export class MountedKekCheckpointCrypto implements CheckpointCryptoPort {
     if (!input.pool || typeof input.pool.connect !== "function" || !isAbsolute(input.kekPath)) throw new Error("PRODUCTION_CHECKPOINT_KEK_MOUNT_REQUIRED");
     this.#pool = bindAccountingRealmPool(input.pool, createAccountingRealm("production-real"));
     this.#now = input.now ?? Date.now;
-    this.#kek = this.#loadKek();
+    this.#kek = loadMountedCheckpointKek(input);
   }
 
   async seal(input: Readonly<{ checkpointId: string; plaintext: Uint8Array; additionalData: Uint8Array; binding?: CryptoBinding }>): Promise<Readonly<{ keyReference: string; nonce: Uint8Array; ciphertext: Uint8Array }>> {
@@ -152,17 +164,6 @@ export class MountedKekCheckpointCrypto implements CheckpointCryptoPort {
   async isDestroyed(keyReference: string): Promise<boolean> {
     const record = await this.#findByKeyReference(Identifier.parse(keyReference));
     return record?.state === "destroyed" && record.wrappedDek === undefined && record.ciphertext.byteLength === 0;
-  }
-
-  async #loadKek(): Promise<CryptoKey> {
-    const raw = await (this.input.readFile ?? nativeReadFile)(this.input.kekPath);
-    const encoded = typeof raw === "string" ? raw.trim() : new TextDecoder().decode(raw).trim();
-    if (!/^[A-Za-z0-9+/]{43}=$/u.test(encoded)) throw new Error("PRODUCTION_CHECKPOINT_KEK_INVALID");
-    const keyBytes = new Uint8Array(Buffer.from(encoded, "base64"));
-    try {
-      if (keyBytes.byteLength !== 32) throw new Error("PRODUCTION_CHECKPOINT_KEK_INVALID");
-      return await crypto.subtle.importKey("raw", keyBytes as BufferSource, "AES-GCM", false, ["encrypt", "decrypt"]);
-    } finally { keyBytes.fill(0); }
   }
 
   async #findByCheckpoint(checkpointId: string): Promise<StoredRecord | undefined> { return this.#one("SELECT checkpoint_id,key_reference,binding_sha256,retention_until::text AS retention_until,plaintext_sha256,aad_sha256,ciphertext_sha256,nonce,wrap_nonce,wrapped_dek,ciphertext,state FROM production_real.checkpoint_crypto_records WHERE checkpoint_id=$1", [checkpointId]); }

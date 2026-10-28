@@ -56,7 +56,7 @@ export type ContinuationCheckpointInput = Readonly<{ accountId: string; sessionI
 export type ContinuationCheckpoint = ContinuationCheckpointInput & Readonly<{ retentionDeadlineMs: number; state: "resume_required" | "claimed" | "expired"; liveLeaseToken?: string; claim?: ContinuationResumeClaim }>;
 export type BeginDeadlineCheckpointInput = Readonly<{ sessionId: string; pauseGeneration: number; liveLeaseToken: string }>;
 export type ContinuationResumeClaimInput = Readonly<{ accountId: string; sessionId: string; checkpointId: string; idempotencyKey: string; fingerprint: string; pendingFingerprint: string; expectedCheckpointVersion: number; expectedSessionVersion: number; nowMs: number; newLeaseToken: string; allocationIntentReference: string; actionId: string; operationId: string; actionBudgetReference: string }>;
-export type ContinuationResumeClaim = Readonly<{ accountId: string; checkpointId: string; idempotencyKey: string; fingerprint: string; leaseToken: string; allocationIntentReference: string; actionId: string; operationId: string; actionBudgetReference: string; claimed: boolean }>;
+export type ContinuationResumeClaim = Readonly<{ accountId: string; checkpointId: string; idempotencyKey: string; fingerprint: string; leaseToken: string; allocationIntentReference: string; actionId: string; operationId: string; actionBudgetReference: string; claimed: boolean; replayed?: boolean }>;
 export type RestoreObservationInput = Readonly<{ checkpointId: string; allocationIntentReference: string; state: "restored" | "refused" | "reconciliation_pending" }>;
 /** A coordinator-owned terminal callback for an already restored action. */
 export type CompleteResumedActionInput = Readonly<{ checkpointId: string; allocationIntentReference: string; leaseToken: string; actionId: string; operationId: string; finalization: MeteredFinalizeInput }>;
@@ -547,7 +547,7 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
           const replay = state.resumeClaims.get(command);
           if (replay) {
             if (replay.fingerprint !== input.fingerprint || replay.checkpointId !== input.checkpointId) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
-            return replay;
+            return freeze({ ...replay, replayed: true });
           }
           const checkpoint = state.checkpoints.get(input.checkpointId);
           if (!checkpoint || checkpoint.accountId !== accountId || checkpoint.sessionId !== input.sessionId) throw new Error("CHECKPOINT_NOT_FOUND_OR_DENIED");

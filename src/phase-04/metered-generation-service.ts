@@ -7,7 +7,7 @@ import { accountIdForPrincipal } from "../domain/account-command";
 import { FundedAdmissionService } from "../funding/funded-admission";
 import { type ModelGateway, ModelObservationSchema, ProviderOperationIntentSchema, type NormalizedUsageReceipt, type ProviderOperationIntent, type SourceProposalLookup } from "../model/model-gateway";
 import { PHASE_04_DETERMINISTIC_PRICE_CARD, PHASE_04_MODEL_PROFILES, maximumOperationCharge, priceReceipt, type ModelProfile, type PriceCard } from "../model/price-card";
-import { type ContinuationFundingStore, type MeteredFundingStore } from "../persistence/funding-store";
+import { type ContinuationFundingStore, type MeteredFundingStore, type MeteredAction } from "../persistence/funding-store";
 import { type WorkerPort, WorkerRunRequestSchema, WorkerRunResultSchema } from "../phase-02/contracts";
 import { evaluateArtifactContract } from "../policy/artifact-contract";
 import { type ArtifactVerifier } from "../phase-02/trusted-core";
@@ -50,6 +50,7 @@ export type StartSessionCommand = z.infer<typeof StartSessionCommandSchema>;
 export type ReviseSessionCommand = z.infer<typeof ReviseSessionCommandSchema>;
 export type TriggerValidationRepairCommand = z.infer<typeof TriggerValidationRepairCommandSchema>;
 export type SessionActionResult = z.infer<typeof SessionActionResultSchema>;
+type GenerationCommand = StartSessionCommand | ReviseSessionCommand | (TriggerValidationRepairCommand & Readonly<{ repair: true }>);
 type ContinuationWakePort = Readonly<{
   continueAction(input: Readonly<{ pendingActionReference: string; actionBudgetReference: string; operationId: string; liveLeaseToken: string }>): Promise<void>;
   /** Lookup-only exact-operation observer used during coordinator restart. */
@@ -254,7 +255,7 @@ export class MeteredGenerationService {
     return action?.result ? SessionActionResultSchema.parse(action.result) : undefined;
   }
 
-  private async execute(command: StartSessionCommand | ReviseSessionCommand | (TriggerValidationRepairCommand & Readonly<{ repair: true }>), accountId: string, fingerprint: string, options: Readonly<{ bypassLegacyContinuation?: boolean }> = {}): Promise<SessionActionResult> {
+  private async execute(command: GenerationCommand, accountId: string, fingerprint: string, options: Readonly<{ bypassLegacyContinuation?: boolean }> = {}): Promise<SessionActionResult> {
     const profile = this.options.pricing?.profile ?? PHASE_04_MODEL_PROFILES["code-proposal"];
     const priceCard = this.options.pricing?.card ?? PHASE_04_DETERMINISTIC_PRICE_CARD;
     // The profile's bounded worst-case charge is the authorization ceiling.
@@ -275,7 +276,6 @@ export class MeteredGenerationService {
       const paused = await continuation.pauseForFunding({ intent: { accountId, sessionId, idempotencyKey: command.idempotencyKey, fingerprint: pauseFingerprint, reference: `pending:${(await hash({ accountId, key: command.idempotencyKey, pauseFingerprint })).slice(0, 24)}`, actionKind, boundedPayloadHash, expectedSessionVersion: command.expectedVersion, expectedArtifactVersion: command.expectedVersion, policyVersion: command.policyVersion, priceCardId: priceCard.id, profileId: profile.id, toolchainId, actionMaximum: profileCeiling, admissionReference: command.admissionReference } });
       if (paused) return SessionActionResultSchema.parse(paused);
     }
-    const lifecycleCorrelation = [accountId, sessionId, operationId] as const;
     // Database action IDs are globally primary-keyed.  Include owner/session
     // identity while retaining lookup by the existing account-scoped command
     // key, so identical keys from different principals cannot collide.
@@ -289,6 +289,15 @@ export class MeteredGenerationService {
       const prepared = await transaction.prepareMeteredAction({ accountId, idempotencyKey: command.idempotencyKey, fingerprint, sessionId, actionId, expectedVersion: command.expectedVersion, admissionReference: command.admissionReference, actionBudgetReference: budget.reference, maximum: BigInt(profileCeiling), operationId, profileId: profile.id, priceCardId: priceCard.id });
       return { budget, prepared };
     });
+    return this.#executePrepared({ command, accountId, fingerprint, sessionId, operationId, profile, priceCard, profileCeiling, budget, prepared });
+  }
+
+  /** The one receipt-first execution path for an already prepared paid action.
+   * Preparation and ownership remain with the caller; this method never reserves
+   * another budget or substitutes another provider operation. */
+  async #executePrepared(input: Readonly<{ command: GenerationCommand; accountId: string; fingerprint: string; sessionId: string; operationId: string; profile: ModelProfile; priceCard: PriceCard; profileCeiling: string; budget: Readonly<{ reference: string }>; prepared: MeteredAction }>): Promise<SessionActionResult> {
+    const { command, accountId, fingerprint, sessionId, operationId, profile, priceCard, profileCeiling, budget, prepared } = input;
+    const lifecycleCorrelation = [accountId, sessionId, operationId] as const;
     if (prepared.result) return SessionActionResultSchema.parse(prepared.result);
     const durableActionId = prepared.actionId;
     // Construct the exact same coordinator intent before the durable claim so

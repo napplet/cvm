@@ -112,6 +112,10 @@ async function sha256(value: unknown): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value)));
   return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
+async function sha256Bytes(value: Uint8Array): Promise<string> {
+  const hash = await crypto.subtle.digest("SHA-256", value as BufferSource);
+  return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 function crc32cBase64(bytes: Uint8Array): string {
   let crc = 0xffffffff;
   for (const byte of bytes) { crc ^= byte; for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ ((crc & 1) ? 0x82f63b78 : 0); }
@@ -125,9 +129,9 @@ function multipartObjectUpload(object: string, checksum: string, contentSha256: 
   const suffix = encoder.encode(`\r\n--${boundary}--\r\n`);
   const output = new Uint8Array(prefix.byteLength + bytes.byteLength + suffix.byteLength); output.set(prefix); output.set(bytes, prefix.byteLength); output.set(suffix, prefix.byteLength + bytes.byteLength); return output;
 }
-async function body(response: Response, timeoutMs = 5_000): Promise<unknown> {
+async function readBoundedBytes(response: Response, timeoutMs = 5_000): Promise<Uint8Array> {
   const claimed = Number(response.headers.get("content-length") ?? "0");
-  if (!Number.isSafeInteger(claimed) || claimed < 0 || claimed > 1_000_000 || !response.headers.get("content-type")?.includes("application/json")) throw new Error("GOOGLE_CLIENT_RESPONSE_INVALID");
+  if (!Number.isSafeInteger(claimed) || claimed < 0 || claimed > 1_000_000) throw new Error("GOOGLE_CLIENT_RESPONSE_INVALID");
   if (!response.body) throw new Error("GOOGLE_CLIENT_RESPONSE_INVALID");
   const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let length = 0; const deadline = Date.now() + timeoutMs;
   const nextWithin = async (milliseconds: number) => { let timer: ReturnType<typeof setTimeout> | undefined; try { return await Promise.race([reader.read(), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error("GOOGLE_CLIENT_TIMEOUT")), milliseconds); })]); } finally { if (timer !== undefined) clearTimeout(timer); } };
@@ -136,6 +140,11 @@ async function body(response: Response, timeoutMs = 5_000): Promise<unknown> {
   finally { if (!complete) void reader.cancel(); reader.releaseLock(); }
   if (length === 0) throw new Error("GOOGLE_CLIENT_RESPONSE_INVALID");
   const bytes = new Uint8Array(length); let offset = 0; for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return bytes;
+}
+async function body(response: Response, timeoutMs = 5_000): Promise<unknown> {
+  if (!response.headers.get("content-type")?.includes("application/json")) throw new Error("GOOGLE_CLIENT_RESPONSE_INVALID");
+  const bytes = await readBoundedBytes(response, timeoutMs);
   try { return JSON.parse(new TextDecoder().decode(bytes)); } catch { throw new Error("GOOGLE_CLIENT_RESPONSE_INVALID"); }
 }
 
@@ -180,26 +189,29 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
     try { manifestResponse = await registryGet(`/v2/${imageProject}/${repositoryPath}/manifests/${referenceDigest}`, "application/vnd.oci.image.manifest.v1+json"); }
     catch { throw new Error("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_UNAVAILABLE"); }
     if (!manifestResponse.ok || manifestResponse.headers.get("docker-content-digest")?.toLowerCase() !== referenceDigest) throw new Error("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_UNAVAILABLE");
-    let manifest: unknown;
-    try { manifest = await manifestResponse.json(); } catch { throw new Error("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_INVALID"); }
-    const parsedManifest = z.object({ schemaVersion: z.literal(2), mediaType: z.literal("application/vnd.oci.image.manifest.v1+json"), config: z.object({ mediaType: z.literal("application/vnd.oci.image.config.v1+json"), digest: z.literal(input.configDigest.toLowerCase()) }).strict() }).passthrough().safeParse(manifest);
+    let manifest: unknown; let manifestBytes: Uint8Array;
+    try { manifestBytes = await readBoundedBytes(manifestResponse, timeoutMs); manifest = JSON.parse(new TextDecoder().decode(manifestBytes)); } catch { throw new Error("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_INVALID"); }
+    if (`sha256:${await sha256Bytes(manifestBytes)}` !== referenceDigest) throw new Error("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_INVALID");
+    const parsedManifest = z.object({ schemaVersion: z.literal(2), mediaType: z.literal("application/vnd.oci.image.manifest.v1+json"), config: z.object({ mediaType: z.literal("application/vnd.oci.image.config.v1+json"), digest: z.literal(input.configDigest.toLowerCase()), size: z.number().int().nonnegative() }).strict() }).passthrough().safeParse(manifest);
     if (!parsedManifest.success) throw new Error("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_INVALID");
     let configResponse: Response;
     try { configResponse = await registryGet(`/v2/${imageProject}/${repositoryPath}/blobs/${input.configDigest.toLowerCase()}`, "application/vnd.oci.image.config.v1+json"); }
     catch { throw new Error("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_UNAVAILABLE"); }
     if (!configResponse.ok || configResponse.headers.get("docker-content-digest")?.toLowerCase() !== input.configDigest.toLowerCase()) throw new Error("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_UNAVAILABLE");
-    let config: unknown;
-    try { config = await configResponse.json(); } catch { throw new Error("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_INVALID"); }
+    let config: unknown; let configBytes: Uint8Array;
+    try { configBytes = await readBoundedBytes(configResponse, timeoutMs); config = JSON.parse(new TextDecoder().decode(configBytes)); } catch { throw new Error("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_INVALID"); }
+    if (`sha256:${await sha256Bytes(configBytes)}` !== input.configDigest.toLowerCase() || configBytes.byteLength !== parsedManifest.data.config.size) throw new Error("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_INVALID");
     if (!z.object({ os: z.literal("linux"), architecture: z.literal("amd64") }).passthrough().safeParse(config).success) throw new Error("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_INVALID");
     return Object.freeze({ imageReference: input.imageReference, manifestDigest: input.manifestDigest.toLowerCase(), configDigest: input.configDigest.toLowerCase(), platform: Object.freeze({ os: "linux" as const, architecture: "amd64" as const }), observedAtMs: now() });
   }
-  async function uploadArtifactRegistryImage(input: Readonly<{ operationId: string; image: PreparedCollectorOciUpload }>): Promise<Readonly<{ status: "completed" | "unknown" }>> {
+  async function uploadArtifactRegistryImage(input: Readonly<{ operationId: string; image: PreparedCollectorOciUpload; expiresAtMs: number }>): Promise<Readonly<{ status: "completed" | "unknown" }>> {
     const operationId = DeploymentOperationIdSchema.parse(input.operationId);
     const image = input.image;
     const parsed = ArtifactRegistryImagePattern.exec(ArtifactRegistryImageSchema.parse(image.imageReference));
     if (!parsed || image.manifestDigest !== `sha256:${parsed[4]!.toLowerCase()}` || image.configDigest !== image.blobs[0]?.digest || image.platform.os !== "linux" || image.platform.architecture !== "amd64") throw new Error("GOOGLE_ARTIFACT_REGISTRY_UPLOAD_INVALID");
     const host = parsed[1]!.toLowerCase(), imageProject = parsed[2]!, repositoryPath = parsed[3]!;
     if (imageProject !== projectId || image.blobs.length < 1 || image.blobs.some(blob => !/^sha256:[a-f0-9]{64}$/iu.test(blob.digest) || blob.bytes.byteLength > 268_435_456)) throw new Error("GOOGLE_ARTIFACT_REGISTRY_UPLOAD_INVALID");
+    if (`sha256:${await sha256Bytes(image.manifest)}` !== image.manifestDigest || (await Promise.all(image.blobs.map(async blob => `sha256:${await sha256Bytes(blob.bytes)}` === blob.digest))).some(valid => !valid)) throw new Error("GOOGLE_ARTIFACT_REGISTRY_UPLOAD_INVALID");
     const resource = `artifactregistry://${host}/${imageProject}/${repositoryPath}@${image.manifestDigest}`;
     const intent = { imageReference: image.imageReference, manifestDigest: image.manifestDigest, configDigest: image.configDigest, blobs: image.blobs.map(blob => ({ digest: blob.digest, mediaType: blob.mediaType, size: blob.bytes.byteLength })) };
     const claimed = await claim(operationId, resource, intent);
@@ -211,27 +223,37 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
       if (await observe()) { await options.journal.markCompleted({ operationId, requestSha256: claimed.requestSha256, resourceUid: image.manifestDigest, owned: true }); return Object.freeze({ status: "completed" as const }); }
       return Object.freeze({ status: "unknown" as const });
     }
+    const assertCurrent = () => { if (!Number.isSafeInteger(input.expiresAtMs) || now() >= input.expiresAtMs) throw new Error("COLLECTOR_UPLOAD_AUTHORIZATION_EXPIRED"); };
+    assertCurrent();
     await options.journal.markDispatching({ operationId, requestSha256: claimed.requestSha256 });
     const token = await tokenSource.getAccessToken(); const scope = await googleAccountScopeSha256({ projectId, quotaProjectId, principal, scopes: token.scopes });
     if (token.projectId !== projectId || token.quotaProjectId !== quotaProjectId || token.principal !== principal || token.accountScopeSha256 !== scope || token.expiresAtMs - 60_000 <= now()) throw new Error("GOOGLE_CLIENT_ADC_SCOPE_INVALID");
     const headers = { authorization: `Bearer ${token.token}`, "x-goog-user-project": quotaProjectId };
-    const put = async (url: string, body: BodyInit, contentType: string) => fetcher(url, { method: "PUT", redirect: "error", headers: { ...headers, "content-type": contentType }, body });
+    const registryRequest = async (url: string, init: RequestInit) => {
+      assertCurrent();
+      const controller = new AbortController();
+      const duration = Math.min(timeoutMs, input.expiresAtMs - now());
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try { return await Promise.race([fetcher(url, { ...init, redirect: "error", signal: controller.signal }), new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error("GOOGLE_CLIENT_TIMEOUT")); }, duration); })]); }
+      finally { clearTimeout(timer); }
+    };
+    const put = async (url: string, body: BodyInit, contentType: string) => registryRequest(url, { method: "PUT", headers: { ...headers, "content-type": contentType }, body });
     try {
       for (const blob of image.blobs) {
         const base = `https://${host}/v2/${imageProject}/${repositoryPath}`;
-        const existing = await fetcher(`${base}/blobs/${blob.digest}`, { method: "HEAD", redirect: "error", headers });
+        const existing = await registryRequest(`${base}/blobs/${blob.digest}`, { method: "HEAD", headers });
         if (existing.status === 200) continue;
         if (existing.status !== 404) throw new Error("GOOGLE_ARTIFACT_REGISTRY_UPLOAD_UNAVAILABLE");
-        const begin = await fetcher(`${base}/blobs/uploads/`, { method: "POST", redirect: "error", headers });
+        const begin = await registryRequest(`${base}/blobs/uploads/`, { method: "POST", headers });
         const location = begin.headers.get("location");
         if (![201, 202].includes(begin.status) || !location) throw new Error("GOOGLE_ARTIFACT_REGISTRY_UPLOAD_UNAVAILABLE");
         const target = new URL(location, base);
         if (target.protocol !== "https:" || target.host !== host) throw new Error("GOOGLE_ARTIFACT_REGISTRY_UPLOAD_LOCATION_INVALID");
         target.searchParams.set("digest", blob.digest);
-        const uploaded = await put(target.toString(), blob.bytes, blob.mediaType);
+        const uploaded = await put(target.toString(), new Uint8Array(blob.bytes).buffer, blob.mediaType);
         if (![201, 202].includes(uploaded.status) || uploaded.headers.get("docker-content-digest")?.toLowerCase() !== blob.digest) throw new Error("GOOGLE_ARTIFACT_REGISTRY_UPLOAD_UNAVAILABLE");
       }
-      const manifest = await put(`https://${host}/v2/${imageProject}/${repositoryPath}/manifests/${image.manifestDigest}`, image.manifest, image.manifestMediaType);
+      const manifest = await put(`https://${host}/v2/${imageProject}/${repositoryPath}/manifests/${image.manifestDigest}`, new Uint8Array(image.manifest).buffer, image.manifestMediaType);
       if (![200, 201].includes(manifest.status) || manifest.headers.get("docker-content-digest")?.toLowerCase() !== image.manifestDigest) throw new Error("GOOGLE_ARTIFACT_REGISTRY_UPLOAD_UNAVAILABLE");
     } catch {
       return Object.freeze({ status: "unknown" as const });

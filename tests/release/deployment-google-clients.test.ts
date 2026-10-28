@@ -82,13 +82,19 @@ test("wrong ADC project, quota, principal, expiry, or scope fails before any Goo
   }
 });
 
+function collectorFixture() {
+  const bytes = new TextEncoder().encode(JSON.stringify({ os: "linux", architecture: "amd64" }));
+  const configDigest = `sha256:${new Bun.CryptoHasher("sha256").update(bytes).digest("hex")}`;
+  const manifest = new TextEncoder().encode(JSON.stringify({ schemaVersion: 2, mediaType: "application/vnd.oci.image.manifest.v1+json", config: { mediaType: "application/vnd.oci.image.config.v1+json", digest: configDigest, size: bytes.byteLength }, layers: [] }));
+  const manifestDigest = `sha256:${new Bun.CryptoHasher("sha256").update(manifest).digest("hex")}`;
+  return { bytes, configDigest, manifest, manifestDigest, imageReference: `us-docker.pkg.dev/${projectId}/control/collector@${manifestDigest}` };
+}
+
 test("collector registry observation uses authenticated immutable manifest and config GETs only", async () => {
-  const manifestDigest = `sha256:${digest("a")}`;
-  const configDigest = `sha256:${digest("b")}`;
-  const imageReference = `us-docker.pkg.dev/${projectId}/control/collector@${manifestDigest}`;
+  const { bytes, manifest, manifestDigest, configDigest, imageReference } = collectorFixture();
   const { client, calls } = await fixture((url) => {
-    if (url.includes("/manifests/")) return new Response(JSON.stringify({ schemaVersion: 2, mediaType: "application/vnd.oci.image.manifest.v1+json", config: { mediaType: "application/vnd.oci.image.config.v1+json", digest: configDigest } }), { headers: { "content-type": "application/vnd.oci.image.manifest.v1+json", "docker-content-digest": manifestDigest } });
-    return new Response(JSON.stringify({ os: "linux", architecture: "amd64" }), { headers: { "content-type": "application/vnd.oci.image.config.v1+json", "docker-content-digest": configDigest } });
+    if (url.includes("/manifests/")) return new Response(manifest, { headers: { "content-type": "application/vnd.oci.image.manifest.v1+json", "docker-content-digest": manifestDigest } });
+    return new Response(bytes, { headers: { "content-type": "application/vnd.oci.image.config.v1+json", "docker-content-digest": configDigest } });
   });
   const observed = await client.collector.observeUploadedManifest({ imageReference, manifestDigest, configDigest, platform: { os: "linux", architecture: "amd64" } });
   expect(observed).toMatchObject({ imageReference, manifestDigest, configDigest, platform: { os: "linux", architecture: "amd64" } });
@@ -101,38 +107,53 @@ test("collector registry observation uses authenticated immutable manifest and c
 });
 
 test("collector upload journals one original operation and observes the uploaded manifest", async () => {
-  const manifestDigest = `sha256:${digest("d")}`, configDigest = `sha256:${digest("e")}`;
-  const imageReference = `us-docker.pkg.dev/${projectId}/control/collector@${manifestDigest}`;
-  const bytes = new TextEncoder().encode("config");
+  const { bytes, manifest, manifestDigest, configDigest, imageReference } = collectorFixture();
   let posts = 0, puts = 0;
   const { client, journal } = await fixture((url, init) => {
     if (init.method === "HEAD") return new Response(null, { status: 404 });
     if (init.method === "POST") { posts += 1; return new Response(null, { status: 202, headers: { location: "/upload/original" } }); }
     if (init.method === "PUT" && url.includes("/upload/original")) { puts += 1; return new Response(null, { status: 201, headers: { "docker-content-digest": configDigest } }); }
     if (init.method === "PUT") { puts += 1; return new Response(null, { status: 201, headers: { "docker-content-digest": manifestDigest } }); }
-    if (url.includes("/manifests/")) return new Response(JSON.stringify({ schemaVersion: 2, mediaType: "application/vnd.oci.image.manifest.v1+json", config: { mediaType: "application/vnd.oci.image.config.v1+json", digest: configDigest } }), { headers: { "docker-content-digest": manifestDigest } });
-    return new Response(JSON.stringify({ os: "linux", architecture: "amd64" }), { headers: { "docker-content-digest": configDigest } });
+    if (url.includes("/manifests/")) return new Response(manifest, { headers: { "docker-content-digest": manifestDigest } });
+    return new Response(bytes, { headers: { "docker-content-digest": configDigest } });
   });
-  const image = { imageReference, manifestDigest, manifestMediaType: "application/vnd.oci.image.manifest.v1+json" as const, manifest: new TextEncoder().encode(JSON.stringify({ schemaVersion: 2 })), configDigest, platform: { os: "linux" as const, architecture: "amd64" as const }, blobs: [{ digest: configDigest, mediaType: "application/vnd.oci.image.config.v1+json", bytes }] };
-  await expect(client.collector.uploadOciImage({ operationId: "collector-upload-original", image })).resolves.toEqual({ status: "completed" });
+  const image = { imageReference, manifestDigest, manifestMediaType: "application/vnd.oci.image.manifest.v1+json" as const, manifest, configDigest, platform: { os: "linux" as const, architecture: "amd64" as const }, blobs: [{ digest: configDigest, mediaType: "application/vnd.oci.image.config.v1+json", bytes }] };
+  await expect(client.collector.uploadOciImage({ operationId: "collector-upload-original", image, expiresAtMs: 10_000 })).resolves.toEqual({ status: "completed" });
   expect(posts).toBe(1); expect(puts).toBe(2);
   expect(await journal.read("collector-upload-original")).toMatchObject({ state: "completed", owned: true, resourceUid: manifestDigest });
-  await expect(client.collector.uploadOciImage({ operationId: "collector-upload-original", image })).resolves.toEqual({ status: "completed" });
+  await expect(client.collector.uploadOciImage({ operationId: "collector-upload-original", image, expiresAtMs: 10_000 })).resolves.toEqual({ status: "completed" });
   expect(posts).toBe(1);
 });
 
+test("collector rejects altered registry bytes even when digest headers match", async () => {
+  const image = collectorFixture();
+  for (const corrupt of ["manifest", "config"] as const) {
+    const { client } = await fixture(url => url.includes("/manifests/")
+      ? new Response(corrupt === "manifest" ? "{}" : image.manifest, { headers: { "docker-content-digest": image.manifestDigest } })
+      : new Response(corrupt === "config" ? "{}" : image.bytes, { headers: { "docker-content-digest": image.configDigest } }));
+    await expect(client.collector.observeUploadedManifest({ ...image, platform: { os: "linux", architecture: "amd64" } })).rejects.toThrow("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_INVALID");
+  }
+});
+
+test("expired collector authorization cannot dispatch a new upload", async () => {
+  const source = collectorFixture();
+  const image = { ...source, manifestMediaType: "application/vnd.oci.image.manifest.v1+json" as const, platform: { os: "linux" as const, architecture: "amd64" as const }, blobs: [{ digest: source.configDigest, mediaType: "application/vnd.oci.image.config.v1+json", bytes: source.bytes }] };
+  const { client, calls } = await fixture(() => { throw new Error("UNEXPECTED_NETWORK"); });
+  await expect(client.collector.uploadOciImage({ operationId: "collector-expired", image, expiresAtMs: 1000 })).rejects.toThrow("COLLECTOR_UPLOAD_AUTHORIZATION_EXPIRED");
+  expect(calls).toHaveLength(0);
+});
+
 test("collector upload lost acknowledgement is reconciled by GET without a second POST", async () => {
-  const manifestDigest = `sha256:${digest("a")}`, configDigest = `sha256:${digest("b")}`;
-  const imageReference = `us-docker.pkg.dev/${projectId}/control/collector@${manifestDigest}`;
+  const { bytes, manifest, manifestDigest, configDigest, imageReference } = collectorFixture();
   let posts = 0;
   const { client } = await fixture((_url, init) => {
     if (init.method === "HEAD" || init.method === "GET") return new Response(null, { status: 404 });
     if (init.method === "POST") { posts += 1; return new Response(null, { status: 202, headers: { location: "/upload/lost-ack" } }); }
     throw new Error("lost acknowledgement");
   });
-  const image = { imageReference, manifestDigest, manifestMediaType: "application/vnd.oci.image.manifest.v1+json" as const, manifest: new Uint8Array([1]), configDigest, platform: { os: "linux" as const, architecture: "amd64" as const }, blobs: [{ digest: configDigest, mediaType: "application/vnd.oci.image.config.v1+json", bytes: new Uint8Array([2]) }] };
-  await expect(client.collector.uploadOciImage({ operationId: "collector-upload-lost", image })).resolves.toEqual({ status: "unknown" });
-  await expect(client.collector.uploadOciImage({ operationId: "collector-upload-lost", image })).resolves.toEqual({ status: "unknown" });
+  const image = { imageReference, manifestDigest, manifestMediaType: "application/vnd.oci.image.manifest.v1+json" as const, manifest, configDigest, platform: { os: "linux" as const, architecture: "amd64" as const }, blobs: [{ digest: configDigest, mediaType: "application/vnd.oci.image.config.v1+json", bytes }] };
+  await expect(client.collector.uploadOciImage({ operationId: "collector-upload-lost", image, expiresAtMs: 10_000 })).resolves.toEqual({ status: "unknown" });
+  await expect(client.collector.uploadOciImage({ operationId: "collector-upload-lost", image, expiresAtMs: 1000 })).resolves.toEqual({ status: "unknown" });
   expect(posts).toBe(1);
 });
 

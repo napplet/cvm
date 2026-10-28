@@ -5,6 +5,8 @@ on:
   pull_request:
     paths:
       - "src/production/cli-upload.ts"
+      - "src/production/source-build-verifier.ts"
+      - "tests/production/source-build-verifier-postgres.test.ts"
       - "src/production/pinned-cli-network.ts"
       - "src/publication/napplet-cli-*.ts"
       - "src/release/native/upload.ts"
@@ -34,5 +36,7 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: Actual CLI function with local HTTP and restricted PostgreSQL
         run: bun test tests/release/production-cli-upload.integration.test.ts --timeout 130000
+      - name: Original source evidence bytes and mutation refusal
+        run: bun test tests/production/source-build-verifier-postgres.test.ts --timeout 120000
       - name: Publication contracts and reconciliation regressions
         run: bun test tests/phase-06 --timeout 10000

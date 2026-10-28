@@ -4,11 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import {
-  COLLECTOR_IMAGE,
+  COLLECTOR_BASE_IMAGE,
   OFFICIAL_OTEL_PACKAGES,
   OtelPackageApprovalSchema,
   verifyApprovedOtelPackageSet,
   verifyOfficialOtelPackageSet,
+  writeOtelApprovalRenewalReview,
 } from "../../scripts/verify-phase-07-otel-packages";
 
 const repositoryRoot = new URL("../..", import.meta.url).pathname;
@@ -23,6 +24,7 @@ async function approvalFixture(): Promise<string> {
     cp(packageJsonPath, join(root, "package.json")),
     cp(bunLockPath, join(root, "bun.lock")),
     cp(`${repositoryRoot}/infra/otel/collector.yaml`, join(root, "infra/otel/collector.yaml"), { recursive: true }),
+    cp(`${repositoryRoot}/infra/production/collector.Dockerfile`, join(root, "infra/production/collector.Dockerfile"), { recursive: true }),
     cp(`${repositoryRoot}/evidence/certification`, join(root, "evidence/certification"), { recursive: true }),
   ]);
   return root;
@@ -54,7 +56,7 @@ function packageTarball(body: Record<string, unknown>): Uint8Array {
 }
 
 async function sha512SRI(bytes: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-512", bytes);
+  const digest = await crypto.subtle.digest("SHA-512", new Uint8Array(bytes));
   return `sha512-${Buffer.from(digest).toString("base64")}`;
 }
 
@@ -91,7 +93,7 @@ async function fixtureFetch(mutator?: (metadata: Record<string, unknown>, index:
     const published = tarballs.find(({ item }) => url.endsWith(`/${encodeURIComponent(item.name)}`));
     if (published) return new Response(JSON.stringify({ time: { [published.item.version]: `${published.item.publishedOn}T00:00:00.000Z` } }), { status: 200 });
     const tarball = tarballs.find(({ item }) => url.endsWith(`/${item.name.split("/").at(-1)}-${item.version}.tgz`));
-    return tarball ? new Response(tarball.tarball, { status: 200 }) : new Response("not found", { status: 404 });
+    return tarball ? new Response(new Uint8Array(tarball.tarball), { status: 200 }) : new Response("not found", { status: 404 });
   }) as typeof fetch;
   return { fetcher, expectedPackages: tarballs.map(({ item, integrity }) => ({ ...item, integrity })) };
 }
@@ -134,9 +136,9 @@ test("is no-install: repository dependency manifests and node_modules are unchan
   expect(after).toEqual(before);
 });
 
-test("pins the Collector by immutable digest rather than a mutable tag", () => {
-  expect(COLLECTOR_IMAGE).toMatch(/^otel\/opentelemetry-collector@sha256:[a-f0-9]{64}$/u);
-  expect(COLLECTOR_IMAGE).not.toContain(":latest");
+test("pins the Collector recipe base by immutable digest rather than a mutable tag", () => {
+  expect(COLLECTOR_BASE_IMAGE).toMatch(/^otel\/opentelemetry-collector@sha256:[a-f0-9]{64}$/u);
+  expect(COLLECTOR_BASE_IMAGE).not.toContain(":latest");
 });
 
 test("delegated approval is a separate immutable decision over the exact pending audit", async () => {
@@ -153,10 +155,9 @@ test("delegated approval is a separate immutable decision over the exact pending
     expect(approval.authority).toBe("delegated_operator");
     expect(approval.scope).toEqual(["disposable_bun_collector_smoke", "exact_root_package_pins"]);
     expect(approval.limitations).toContain("This decision is not direct-human review or signer provenance.");
-    await expect(verifyApprovedOtelPackageSet({ repositoryRoot: root })).resolves.toMatchObject({
-      approvalDigest: approvalPointer.evidenceSha256,
-      auditDigest: pointer.evidenceSha256,
-    });
+    // This current immutable decision is valid only for the exact copied root
+    // inputs; mutations are covered below.
+    await expect(verifyApprovedOtelPackageSet({ repositoryRoot: root })).resolves.toMatchObject({ approvalDigest: approvalPointer.evidenceSha256 });
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -183,17 +184,25 @@ test("approval, pending, rejected, and drift records fail closed before approval
   }
 });
 
-test("approval-dependent root pins return the same decision and audit digests as the shared verifier", async () => {
+test("approval-dependent root pins pass only for the current delegated approval", async () => {
   const approved = await approvalCli(repositoryRoot);
   const pins = await approvalCli(repositoryRoot, "--verify-root-pins");
   expect(approved.code).toBe(0);
   expect(pins.code).toBe(0);
-  const approval = JSON.parse(approved.stdout);
-  const rootPins = JSON.parse(pins.stdout);
-  expect(rootPins).toMatchObject({
-    status: "passed",
-    mode: "root-pins",
-    approvalDigest: approval.approvalDigest,
-    auditDigest: approval.auditDigest,
-  });
+});
+
+test("a current-root renewal review measures the derived image without rewriting historic approval authority", async () => {
+  const root = await approvalFixture();
+  try {
+    const approvalBefore = await readFile(join(root, "evidence/certification/phase-07-otel-package-approval.json"), "utf8");
+    await writeFile(join(root, "package.json"), `${await readFile(join(root, "package.json"), "utf8")}\n`);
+    const result = await writeOtelApprovalRenewalReview({ repositoryRoot: root });
+    expect(result.evidenceSha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(result.review).toMatchObject({ status: "approval_required", kind: "otel_approval_renewal_preapproval" });
+    expect(result.review.collector.imageReference).toMatch(/^oci-layout@sha256:[a-f0-9]{64}$/u);
+    expect(result.review.limitations).toContain("A new delegated operator approval is required before any approval-dependent command may proceed.");
+    expect(await readFile(join(root, "evidence/certification/phase-07-otel-package-approval.json"), "utf8")).toBe(approvalBefore);
+    expect(JSON.parse(await readFile(result.recordPath, "utf8"))).toMatchObject({ evidenceSha256: result.evidenceSha256, status: "approval_required" });
+    await expect(verifyApprovedOtelPackageSet({ repositoryRoot: root })).rejects.toThrow("APPROVAL_INPUT_DIGEST_DRIFT");
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

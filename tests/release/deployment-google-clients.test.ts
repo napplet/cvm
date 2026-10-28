@@ -82,6 +82,81 @@ test("wrong ADC project, quota, principal, expiry, or scope fails before any Goo
   }
 });
 
+function collectorFixture() {
+  const bytes = new TextEncoder().encode(JSON.stringify({ os: "linux", architecture: "amd64" }));
+  const configDigest = `sha256:${new Bun.CryptoHasher("sha256").update(bytes).digest("hex")}`;
+  const manifest = new TextEncoder().encode(JSON.stringify({ schemaVersion: 2, mediaType: "application/vnd.oci.image.manifest.v1+json", config: { mediaType: "application/vnd.oci.image.config.v1+json", digest: configDigest, size: bytes.byteLength }, layers: [] }));
+  const manifestDigest = `sha256:${new Bun.CryptoHasher("sha256").update(manifest).digest("hex")}`;
+  return { bytes, configDigest, manifest, manifestDigest, imageReference: `us-docker.pkg.dev/${projectId}/control/collector@${manifestDigest}` };
+}
+
+test("collector registry observation uses authenticated immutable manifest and config GETs only", async () => {
+  const { bytes, manifest, manifestDigest, configDigest, imageReference } = collectorFixture();
+  const { client, calls } = await fixture((url) => {
+    if (url.includes("/manifests/")) return new Response(manifest, { headers: { "content-type": "application/vnd.oci.image.manifest.v1+json", "docker-content-digest": manifestDigest } });
+    return new Response(bytes, { headers: { "content-type": "application/vnd.oci.image.config.v1+json", "docker-content-digest": configDigest } });
+  });
+  const observed = await client.collector.observeUploadedManifest({ imageReference, manifestDigest, configDigest, platform: { os: "linux", architecture: "amd64" } });
+  expect(observed).toMatchObject({ imageReference, manifestDigest, configDigest, platform: { os: "linux", architecture: "amd64" } });
+  expect(calls.map(call => call.method)).toEqual(["GET", "GET"]);
+  expect(calls.map(call => call.url)).toEqual([
+    `https://us-docker.pkg.dev/v2/${projectId}/control/collector/manifests/${manifestDigest}`,
+    `https://us-docker.pkg.dev/v2/${projectId}/control/collector/blobs/${configDigest}`,
+  ]);
+  expect(calls.every(call => call.headers.get("authorization") === `Bearer ${token}` && call.headers.get("x-goog-user-project") === projectId)).toBe(true);
+});
+
+test("collector upload journals one original operation and observes the uploaded manifest", async () => {
+  const { bytes, manifest, manifestDigest, configDigest, imageReference } = collectorFixture();
+  let posts = 0, puts = 0;
+  const { client, journal } = await fixture((url, init) => {
+    if (init.method === "HEAD") return new Response(null, { status: 404 });
+    if (init.method === "POST") { posts += 1; return new Response(null, { status: 202, headers: { location: "/upload/original" } }); }
+    if (init.method === "PUT" && url.includes("/upload/original")) { puts += 1; return new Response(null, { status: 201, headers: { "docker-content-digest": configDigest } }); }
+    if (init.method === "PUT") { puts += 1; return new Response(null, { status: 201, headers: { "docker-content-digest": manifestDigest } }); }
+    if (url.includes("/manifests/")) return new Response(manifest, { headers: { "docker-content-digest": manifestDigest } });
+    return new Response(bytes, { headers: { "docker-content-digest": configDigest } });
+  });
+  const image = { imageReference, manifestDigest, manifestMediaType: "application/vnd.oci.image.manifest.v1+json" as const, manifest, configDigest, platform: { os: "linux" as const, architecture: "amd64" as const }, blobs: [{ digest: configDigest, mediaType: "application/vnd.oci.image.config.v1+json", bytes }] };
+  await expect(client.collector.uploadOciImage({ operationId: "collector-upload-original", image, expiresAtMs: 10_000 })).resolves.toEqual({ status: "completed" });
+  expect(posts).toBe(1); expect(puts).toBe(2);
+  expect(await journal.read("collector-upload-original")).toMatchObject({ state: "completed", owned: true, resourceUid: manifestDigest });
+  await expect(client.collector.uploadOciImage({ operationId: "collector-upload-original", image, expiresAtMs: 10_000 })).resolves.toEqual({ status: "completed" });
+  expect(posts).toBe(1);
+});
+
+test("collector rejects altered registry bytes even when digest headers match", async () => {
+  const image = collectorFixture();
+  for (const corrupt of ["manifest", "config"] as const) {
+    const { client } = await fixture(url => url.includes("/manifests/")
+      ? new Response(corrupt === "manifest" ? "{}" : image.manifest, { headers: { "docker-content-digest": image.manifestDigest } })
+      : new Response(corrupt === "config" ? "{}" : image.bytes, { headers: { "docker-content-digest": image.configDigest } }));
+    await expect(client.collector.observeUploadedManifest({ ...image, platform: { os: "linux", architecture: "amd64" } })).rejects.toThrow("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_INVALID");
+  }
+});
+
+test("expired collector authorization cannot dispatch a new upload", async () => {
+  const source = collectorFixture();
+  const image = { ...source, manifestMediaType: "application/vnd.oci.image.manifest.v1+json" as const, platform: { os: "linux" as const, architecture: "amd64" as const }, blobs: [{ digest: source.configDigest, mediaType: "application/vnd.oci.image.config.v1+json", bytes: source.bytes }] };
+  const { client, calls } = await fixture(() => { throw new Error("UNEXPECTED_NETWORK"); });
+  await expect(client.collector.uploadOciImage({ operationId: "collector-expired", image, expiresAtMs: 1000 })).rejects.toThrow("COLLECTOR_UPLOAD_AUTHORIZATION_EXPIRED");
+  expect(calls).toHaveLength(0);
+});
+
+test("collector upload lost acknowledgement is reconciled by GET without a second POST", async () => {
+  const { bytes, manifest, manifestDigest, configDigest, imageReference } = collectorFixture();
+  let posts = 0;
+  const { client } = await fixture((_url, init) => {
+    if (init.method === "HEAD" || init.method === "GET") return new Response(null, { status: 404 });
+    if (init.method === "POST") { posts += 1; return new Response(null, { status: 202, headers: { location: "/upload/lost-ack" } }); }
+    throw new Error("lost acknowledgement");
+  });
+  const image = { imageReference, manifestDigest, manifestMediaType: "application/vnd.oci.image.manifest.v1+json" as const, manifest, configDigest, platform: { os: "linux" as const, architecture: "amd64" as const }, blobs: [{ digest: configDigest, mediaType: "application/vnd.oci.image.config.v1+json", bytes }] };
+  await expect(client.collector.uploadOciImage({ operationId: "collector-upload-lost", image, expiresAtMs: 10_000 })).resolves.toEqual({ status: "unknown" });
+  await expect(client.collector.uploadOciImage({ operationId: "collector-upload-lost", image, expiresAtMs: 1000 })).resolves.toEqual({ status: "unknown" });
+  expect(posts).toBe(1);
+});
+
 test("Cloud Run observes deterministic resource then uses official create serviceId without requestId", async () => {
   const { client, calls, journal } = await fixture((_url, init) => init.method === "GET" ? json({ error: { code: 404 } }, 404) : json({ name: `projects/${projectId}/locations/europe-west1/operations/deploy-1` }));
   await expect(client.cloudRun.deploy({ operationId: "deploy-1", projectId, region: "europe-west1", serviceName: "napplet-cvm-api", imageReference: `us-docker.pkg.dev/${projectId}/control/control@sha256:${digest("a")}`, serviceAccountReference: "svc@napplet-cvm-run-1.iam.gserviceaccount.com", environmentReferenceSha256: digest("b"), secretReferences: [{ name: "DATABASE_URL", secret: "control-database-url", version: "1" }], minimumInstances: 3, ingress: "internal-and-cloud-load-balancing", concurrency: 80, admissionRefusal: "capacity_unavailable" })).resolves.toEqual({ status: "pending" });
@@ -89,6 +164,18 @@ test("Cloud Run observes deterministic resource then uses official create servic
   expect(calls.map((call) => call.url)).toEqual([`https://run.googleapis.com/v2/projects/${projectId}/locations/europe-west1/services/napplet-cvm-api`, `https://run.googleapis.com/v2/projects/${projectId}/locations/europe-west1/services?serviceId=napplet-cvm-api`]);
   expect(calls[1]!.url).not.toContain("requestId=");
   expect(JSON.parse(calls[1]!.body)).toMatchObject({ ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER", template: { scaling: { minInstanceCount: 3 } } });
+});
+
+test("Cloud Run pins an explicitly mounted collector port in create and observation", async () => {
+  const request = { ...cloudRunRequest("collector-otel"), containerPort: 4318 };
+  const { client, calls } = await fixture((_url, init) => init.method === "GET" ? json({ error: { code: 404 } }, 404) : json({ name: `projects/${projectId}/locations/europe-west1/operations/collector-otel` }));
+  await expect(client.cloudRun.deploy(request)).resolves.toEqual({ status: "pending" });
+  expect(JSON.parse(calls[1]!.body)).toMatchObject({ template: { containers: [{ ports: [{ containerPort: 4318 }] }] } });
+  const observed = cloudRunService("collector-otel", { template: { ...cloudRunService("collector-otel").template, containers: [{ ...cloudRunService("collector-otel").template.containers[0], ports: [{ containerPort: 4318 }] }] } });
+  const completed = await fixture(() => json(observed));
+  await expect(completed.client.cloudRun.deploy(request)).resolves.toEqual({ status: "completed" });
+  const wrongPort = await fixture(() => json({ ...observed, template: { ...observed.template, containers: [{ ...observed.template.containers[0], ports: [{ containerPort: 4317 }] }] } }));
+  await expect(wrongPort.client.cloudRun.deploy(request)).resolves.not.toEqual({ status: "completed" });
 });
 
 test("Cloud Run cleanup requires recorded ownership and sends the observed etag", async () => {
@@ -195,6 +282,49 @@ test("Cloud SQL observes its sole instance before official instances.insert", as
   expect(JSON.parse(calls[1]!.body)).toMatchObject({ databaseVersion: "POSTGRES_17", settings: { availabilityType: "REGIONAL", tier: "db-custom-2-7680", ipConfiguration: { privateNetwork: "projects/napplet-cvm-run-1/global/networks/production", ipv4Enabled: false, requireSsl: true } } });
 });
 
+test("Cloud SQL pins mounted storage size in both create intent and exact observation", async () => {
+  const request = { ...sqlRequest("sql-storage"), storageGb: 20 };
+  let reads = 0;
+  const instance = (storageGb: number) => ({ name: request.instanceId, createTime: "2026-10-27T00:00:00Z", region: request.region, databaseVersion: "POSTGRES_17", state: "RUNNABLE", settings: { availabilityType: "REGIONAL", tier: request.tier, dataDiskSizeGb: storageGb, userLabels: { "napplet-cvm-operation": request.operationId }, backupConfiguration: { enabled: true }, ipConfiguration: { privateNetwork: request.privateNetwork, ipv4Enabled: false, requireSsl: true }, databaseFlags: [{ name: "default_transaction_isolation", value: "serializable" }] } });
+  const { client, calls } = await fixture((url, init) => {
+    if (init.method === "POST") return json({ name: "storage-operation", status: "PENDING" });
+    if (url.includes("/operations/storage-operation")) return json({ status: "DONE" });
+    reads += 1; return reads === 1 ? json({ error: { code: 404 } }, 404) : json(instance(20));
+  });
+  await expect(client.cloudSqlPostgres.provision(request)).resolves.toEqual({ status: "pending" });
+  expect(JSON.parse(calls[1]!.body)).toMatchObject({ settings: { dataDiskSizeGb: 20 } });
+  await expect(client.cloudSqlPostgres.observe({ operationId: request.operationId, instanceId: request.instanceId, region: request.region, tier: request.tier, privateNetwork: request.privateNetwork, storageGb: 20 })).resolves.toEqual({ status: "completed" });
+  const wrong = await fixture(() => json(instance(21)));
+  await expect(wrong.client.cloudSqlPostgres.provision(request)).resolves.not.toEqual({ status: "completed" });
+});
+
+test("Cloud SQL clone records the original source/destination operation and only observes its LRO", async () => {
+  const input = { operationId: "restore-clone-1", sourceInstanceId: "napplet-cvm-sql-1", destinationInstanceId: "napplet-cvm-restore-1" };
+  let destinationReads = 0;
+  const { client, calls, journal } = await fixture((url, init) => {
+    if (init.method === "POST") return json({ name: "clone-operation-1", status: "PENDING" });
+    if (url.includes("/operations/clone-operation-1")) return json({ status: "DONE" });
+    destinationReads += 1;
+    return destinationReads === 1 ? json({ error: { code: 404 } }, 404) : json({ name: input.destinationInstanceId, createTime: "2026-10-27T00:00:00Z", state: "RUNNABLE" });
+  });
+  await expect(client.cloudSqlPostgres.clone(input)).resolves.toEqual({ status: "pending" });
+  expect(calls.map(call => call.url)).toEqual([
+    `https://sqladmin.googleapis.com/v1/projects/${projectId}/instances/${input.destinationInstanceId}`,
+    `https://sqladmin.googleapis.com/v1/projects/${projectId}/instances/${input.sourceInstanceId}/clone`,
+  ]);
+  expect(JSON.parse(calls[1]!.body)).toEqual({ cloneContext: { kind: "sql#cloneContext", destinationInstanceName: input.destinationInstanceId } });
+  expect(await journal.read(input.operationId)).toMatchObject({ state: "dispatched", operationName: "clone-operation-1" });
+  await expect(client.cloudSqlPostgres.observeClone(input)).resolves.toEqual({ status: "completed" });
+  expect(calls.filter(call => call.method === "POST")).toHaveLength(1);
+});
+
+test("Cloud SQL fresh-pool address is an observed unique private address", async () => {
+  const { client } = await fixture(() => json({ name: "napplet-cvm-restore-1", state: "RUNNABLE", ipAddresses: [{ type: "PRIVATE", ipAddress: "10.12.1.7" }] }));
+  await expect(client.cloudSqlPostgres.observePrivateAddress({ instanceId: "napplet-cvm-restore-1" })).resolves.toEqual({ status: "completed", privateAddress: "10.12.1.7" });
+  const ambiguous = await fixture(() => json({ name: "napplet-cvm-restore-1", state: "RUNNABLE", ipAddresses: [{ type: "PRIVATE", ipAddress: "10.12.1.7" }, { type: "PRIVATE", ipAddress: "10.12.1.8" }] }));
+  await expect(ambiguous.client.cloudSqlPostgres.observePrivateAddress({ instanceId: "napplet-cvm-restore-1" })).resolves.toEqual({ status: "unknown" });
+});
+
 test("ADC total deadline cancels a dribbling metadata body and aborts its requests", async () => {
   const expected = await googleAccountScopeSha256({ projectId, quotaProjectId: projectId, principal });
   let cancelled = false; const signals: AbortSignal[] = [];
@@ -251,6 +381,38 @@ test("Cloud Run never treats a completed cleanup journal as deletion while the s
   expect(calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
 });
 
+test("Cloud Run cleanup recovery reads a durable lost-ack journal and never sends a second DELETE", async () => {
+  const operationId = "run-lost-cleanup"; const resource = `projects/${projectId}/locations/europe-west1/services/napplet-cvm-api`;
+  const root = await mkdtemp(join(tmpdir(), "napplet-google-cleanup-recovery-"));
+  let deleted = false; let deletes = 0;
+  const service = { name: resource, etag: "service-etag-1", uid: "service-uid-1", createTime: "2026-01-01T00:00:00Z", labels: { "napplet-cvm-operation": operationId } };
+  const handler = (_url: string, init: RequestInit) => {
+    if (init.method === "DELETE") { deletes += 1; deleted = true; throw new Error("lost acknowledgement after delete"); }
+    return deleted ? json({ error: { code: 404 } }, 404) : json(service);
+  };
+  try {
+    const firstJournal = createFileGoogleOperationJournal(root);
+    const original = await firstJournal.claim({ operationId, resource, requestSha256: digest("a"), contentSha256: digest("b"), owned: false });
+    await firstJournal.markCompleted({ operationId, requestSha256: original.record.requestSha256, resourceUid: service.uid, createTime: service.createTime, owned: true });
+    const first = await fixture(handler, {}, firstJournal);
+    await expect(first.client.cloudRun.cleanup({ operationId, projectId, region: "europe-west1", serviceName: "napplet-cvm-api" })).resolves.toEqual({ status: "unknown" });
+    expect(deletes).toBe(1);
+    const fresh = await fixture(handler, {}, createFileGoogleOperationJournal(root));
+    await expect(fresh.client.cloudRun.observeCleanup({ operationId, projectId, region: "europe-west1", serviceName: "napplet-cvm-api" })).resolves.toEqual({ status: "completed" });
+    expect(deletes).toBe(1);
+    expect(fresh.calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("Cloud Run query-only cleanup refuses a same-name replacement without claiming completion or deleting it", async () => {
+  const operationId = "run-cleanup-replacement"; const resource = `projects/${projectId}/locations/europe-west1/services/napplet-cvm-api`;
+  const journal = createMemoryGoogleOperationJournal([{ operationId, resource, requestSha256: digest("a"), contentSha256: digest("b"), state: "completed", owned: true, resourceUid: "original-uid", createTime: "2026-01-01T00:00:00Z" }]);
+  const replacement = await fixture(() => json({ name: resource, etag: "replacement-etag", uid: "replacement-uid", createTime: "2026-02-01T00:00:00Z", labels: { "napplet-cvm-operation": operationId } }), {}, journal);
+  await expect(replacement.client.cloudRun.observeCleanup({ operationId, projectId, region: "europe-west1", serviceName: "napplet-cvm-api" })).resolves.toEqual({ status: "unknown" });
+  expect(replacement.calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
+  expect(await journal.read(`${operationId}-cleanup`)).toBeUndefined();
+});
+
 test("Cloud Run accepts actual v2 terminal success but rejects unsafe reconciliation variants", async () => {
   const valid = await fixture(() => json(cloudRunService("run-v2")));
   await expect(valid.client.cloudRun.deploy(cloudRunRequest("run-v2"))).resolves.toEqual({ status: "completed" });
@@ -281,6 +443,28 @@ test("Cloud SQL cleanup rejects a same-label replacement with a different immuta
   const { client, calls } = await fixture(() => json({ name: request.instanceId, createTime: "2026-02-01T00:00:00Z", settings: { userLabels: { "napplet-cvm-operation": request.operationId } } }), {}, createMemoryGoogleOperationJournal([{ operationId: request.operationId, resource, requestSha256: digest("a"), contentSha256: digest("b"), state: "completed", owned: true, createTime: "2026-01-01T00:00:00Z" }]));
   await expect(client.cloudSqlPostgres.cleanup({ operationId: request.operationId, instanceId: request.instanceId })).resolves.toEqual({ status: "unknown" });
   expect(calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
+});
+
+test("Cloud SQL cleanup observation reads only original ownership, deletion LRO and actual absence", async () => {
+  const request = sqlRequest("sql-cleanup-read"), resource = `projects/${projectId}/instances/${request.instanceId}`;
+  for (const scenario of ["absent", "replacement", "running", "done-still-present", "done-absent", "wrong-cleanup-resource"] as const) {
+    const original = { operationId: request.operationId, resource, requestSha256: digest("a"), contentSha256: digest("b"), state: "completed" as const, owned: true, createTime: "2026-01-01T00:00:00Z" };
+    const cleanup = { operationId: `${request.operationId}-cleanup`, resource: scenario === "wrong-cleanup-resource" ? "different-resource" : resource, requestSha256: digest("c"), contentSha256: digest("d"), state: "dispatched" as const, owned: false, operationName: "delete-original" };
+    const journal = createMemoryGoogleOperationJournal([original, cleanup]);
+    let reads = 0;
+    const { client, calls } = await fixture(url => {
+      if (url.endsWith("/operations/delete-original")) return json({ status: scenario === "running" ? "RUNNING" : "DONE" });
+      reads++;
+      if (scenario === "absent" || scenario === "done-absent" && reads === 2) return json({}, 404);
+      return json({ name: request.instanceId, createTime: scenario === "replacement" ? "2026-02-01T00:00:00Z" : original.createTime, settings: { userLabels: { "napplet-cvm-operation": request.operationId } } });
+    }, {}, journal);
+    expect(await client.cloudSqlPostgres.observeCleanup({ operationId: request.operationId, instanceId: request.instanceId })).toEqual({ status: scenario === "absent" || scenario === "done-absent" ? "completed" : scenario === "replacement" || scenario === "wrong-cleanup-resource" ? "unknown" : "pending" });
+    expect(calls.every(call => call.method === "GET")).toBe(true);
+    expect(await journal.read(cleanup.operationId)).toEqual(cleanup);
+  }
+  const { client, calls } = await fixture(() => json({}, 404));
+  await expect(client.cloudSqlPostgres.observeCleanup({ operationId: request.operationId, instanceId: request.instanceId })).rejects.toThrow("GOOGLE_CLEANUP_RUN_OWNERSHIP_REQUIRED");
+  expect(calls).toHaveLength(0);
 });
 
 test("Cloud SQL never adopts a same-label replacement during provision or observe", async () => {

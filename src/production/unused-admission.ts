@@ -12,6 +12,20 @@ const Result = z.object({ state: z.literal("released"), amount: z.string().regex
 export class ProductionUnusedAdmissionRelease {
   readonly #pool: PostgresSqlPool;
   constructor(pool: PostgresSqlPool) { this.#pool = bindAccountingRealmPool(pool, createAccountingRealm("production-real")); }
+  /** Recovery proof only. It deliberately takes no locks and performs no
+   * balance, hold, or capacity mutation. */
+  async observe(value: z.infer<typeof Input>): Promise<z.infer<typeof Result> | undefined> {
+    const input = Input.parse(value); const fingerprint = createHash("sha256").update(JSON.stringify(input)).digest("hex"); const id = `unused-admission:${fingerprint}`;
+    const client = await this.#pool.connect();
+    try {
+      const command = (await client.query("SELECT fingerprint_sha256,result_json FROM production_real.funding_commands WHERE account_id=$1 AND command_kind='release_unused_admission' AND idempotency_key=$2", [input.accountId, id])).rows[0];
+      if (!command) return undefined;
+      if (command.fingerprint_sha256 !== fingerprint) throw new Error("ADMISSION_RELEASE_IDENTITY_CONFLICT");
+      const fence = (await client.query("SELECT h.state AS hold_state,c.state AS capacity_state, EXISTS(SELECT 1 FROM production_real.action_budget_reservations b WHERE b.account_id=h.account_id AND b.admission_reference=h.reference) AS has_budget, EXISTS(SELECT 1 FROM production_real.metered_actions a WHERE a.account_id=h.account_id AND a.admission_reference=h.reference) AS has_action FROM production_real.session_cap_holds h JOIN production_real.admissions a ON a.account_id=h.account_id AND a.reference=h.reference JOIN production_real.capacity_intents c ON c.account_id=a.account_id AND c.capacity_reference=a.capacity_reference WHERE h.account_id=$1 AND h.reference=$2 AND c.intent_reference=$3", [input.accountId, input.admissionReference, input.intentReference])).rows[0];
+      if (!fence || fence.hold_state !== "released" || fence.capacity_state !== "released" || fence.has_budget || fence.has_action) throw new Error("UNUSED_ADMISSION_RELEASE_PROOF_INVALID");
+      return Result.parse(command.result_json);
+    } finally { client.release(); }
+  }
   async release(value: z.infer<typeof Input>): Promise<z.infer<typeof Result>> {
     const input = Input.parse(value);
     const fingerprint = createHash("sha256").update(JSON.stringify(input)).digest("hex");

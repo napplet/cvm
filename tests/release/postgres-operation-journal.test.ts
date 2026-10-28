@@ -1,6 +1,3 @@
-import { createAuthorizationReceipt, createAuthorizationRequest } from "../../src/release/authorization";
-import { canonicalJson } from "../../src/promotion/schema";
-import { PostgresReleasePromotion } from "../../src/production/release-promotion";
 import { expect, test } from "bun:test";
 import { createRequire } from "node:module";
 import { mkdtemp, mkdir, writeFile, rm, realpath } from "node:fs/promises";
@@ -9,6 +6,12 @@ import { join } from "node:path";
 import { loadPromotedVerificationAuthority } from "../../src/production/release-verification-authority";
 import { PostgresOperationJournal, assertPostgresOperationJournal } from "../../src/release/deployment/postgres-operation-journal";
 import { createPostgresGoogleOperationJournal, createPostgresWorkerOperationJournal, createPostgresVertexOperationJournal } from "../../src/release/deployment/postgres-provider-journals";
+import { ProductionCoreControlClient } from "../../src/release/deployment/production-core-control";
+import { ProductionCertificationControl, type ProductionCertificationServices } from "../../src/production/certification-control";
+import { createAuthorizationReceipt, createAuthorizationRequest } from "../../src/release/authorization";
+import { ProductionWorkerJobClient } from "../../src/worker-adapters/production-job-client";
+import { canonicalJson } from "../../src/promotion/schema";
+import { PostgresReleasePromotion } from "../../src/production/release-promotion";
 
 const scopeSha256 = "a".repeat(64), identity = "b".repeat(64);
 test("journal construction has no effects and rejects structural/prototype impersonation", async () => {
@@ -19,7 +22,10 @@ test("journal construction has no effects and rejects structural/prototype imper
     binding: { candidateId: scopeSha256, topologySha256: identity, authorizationReceiptSha256: identity }, expectedPreviousBundleSha256: null, authorization: { request: {}, receipt: {} } });
   await expect(promotion.persist({ operationId: "invalid", bundleSha256: identity, authorizationReceiptSha256: identity })).rejects.toThrow();
   expect(calls).toBe(0);
-
+  let network = 0;
+  const control = new ProductionCoreControlClient({ serviceUrl: "https://candidate-example.run.app", candidateSha256: scopeSha256, topologySha256: identity, request: {}, receipt: {}, journal, identity: { async token() { network++; return "x".repeat(32); } }, fetch: async () => { network++; return new Response(); } });
+  await expect(control.execute({ operationId: "no-authority", kind: "fault.inject", payload: {} })).rejects.toThrow();
+  expect(network).toBe(0); expect(calls).toBe(0);
   expect(() => assertPostgresOperationJournal(journal)).not.toThrow();
   expect(() => assertPostgresOperationJournal({ durableAuthority: "postgres" })).toThrow("PRODUCTION_POSTGRES_OPERATION_JOURNAL_REQUIRED");
   expect(() => assertPostgresOperationJournal(Object.create(PostgresOperationJournal.prototype))).toThrow("PRODUCTION_POSTGRES_OPERATION_JOURNAL_REQUIRED");
@@ -30,7 +36,7 @@ test("journal construction has no effects and rejects structural/prototype imper
 
 const integration = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
 integration("real restricted PostgreSQL survives new instances, arbitrates concurrent claims/CAS, and preserves immutable audit", async () => {
-  const priorEffects = process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS;
+  const previousEffects = process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS;
   process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS = "deny";
   const name = `napplet-cvm-journal-${crypto.randomUUID().replaceAll("-", "")}`;
   const docker = async (...args: string[]) => {
@@ -170,8 +176,97 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
     expect(await promote().observe(originalPromotion)).toBe("promoted");
     await expect(promote().promote(originalPromotion)).rejects.toThrow("RELEASE_AUTHORIZATION_RECEIPT_EXPIRED");
     await expect(promote().persist({ ...originalPromotion, authorizationReceiptSha256: binding.authorizationReceiptSha256 })).rejects.toThrow("RELEASE_AUTHORIZATION_RECEIPT_EXPIRED");
+    let posts = 0, gets = 0, tokens = 0, now = 1400; let original: any;
+    const control = () => new ProductionCoreControlClient({ serviceUrl: "https://candidate-example.run.app", candidateSha256: scopeSha256, topologySha256: identity, request, receipt, journal: create("core:run-1"), now: () => now,
+      identity: { async token(audience) { expect(audience).toBe("https://candidate-example.run.app"); tokens++; return "x".repeat(32); } },
+      fetch: async (url, init) => {
+        expect(String(url)).toStartWith("https://candidate-example.run.app/internal/certification/operations");
+        expect(init?.redirect).toBe("error");
+        if (init?.method === "POST") { posts++; original = JSON.parse(String(init.body)); throw new Error("response lost after accepted operation"); }
+        gets++;
+        return new Response(JSON.stringify({ operationId: original.operationId, kind: original.kind, requestSha256: original.requestSha256, state: "completed", result: { evidenceClass: "deterministic" } }));
+      },
+    });
+    const command = { operationId: "restore-original", kind: "restore.expiry" as const, payload: { freshInstanceId: "immutable-backup" } };
+    expect((await control().execute(command)).state).toBe("unknown");
+    expect((await control().execute(command)).state).toBe("completed");
+    expect(posts).toBe(1); expect(gets).toBe(1);
+    await expect(control().execute({ ...command, payload: { freshInstanceId: "replacement" } })).rejects.toThrow("OPERATION_IDENTITY_CONFLICT");
+    now = 2001;
+    await expect(control().execute({ ...command, operationId: "new-after-expiry" })).rejects.toThrow("RELEASE_AUTHORIZATION_RECEIPT_EXPIRED");
+    expect(posts).toBe(1); expect(gets).toBe(1); expect(tokens).toBe(2);
+    expect((await control().observe({ operationId: command.operationId, kind: command.kind, requestSha256: original.requestSha256 })).state).toBe("completed");
+    expect(posts).toBe(1); expect(gets).toBe(2); expect(tokens).toBe(3);
+    await expect(control().observe({ operationId: "missing-original", kind: command.kind, requestSha256: original.requestSha256 })).rejects.toThrow("CORE_CONTROL_ORIGINAL_REQUIRED");
+    expect(tokens).toBe(3);
+    expect((await control().execute(command)).state).toBe("completed");
+    expect(posts).toBe(1); expect(gets).toBe(3); expect(tokens).toBe(4);
+    let serverNow = 1400, serverEffects = 0, serverQueries = 0;
+    const unexpected = async () => { throw new Error("UNEXPECTED_SERVICE_OPERATION"); };
+    const services: ProductionCertificationServices = {
+      prepareCohort: unexpected, observeCohort: unexpected, emitTelemetry: unexpected, telemetryWindow: unexpected,
+      injectFault: unexpected, observeFault: unexpected,
+      async restore() { serverEffects++; throw new Error("lost original result"); },
+      async reconcile(value) { serverQueries++; expect(value.kind).toBe("restore.expiry"); return { expired: true, deleted: true }; },
+    };
+    const server = () => new ProductionCertificationControl({ candidateSha256: scopeSha256, topologySha256: identity, authorizationRequestSha256: request.authorizationRequestSha256, authorizationRequest: request, authorizationReceipt: receipt, journal: create("server:run-1"), services, now: () => serverNow });
+    expect((await server().execute(original)).state).toBe("unknown");
+    expect(serverEffects).toBe(1);
+    serverNow = 2001;
+    expect((await server().observe({ operationId: original.operationId })).state).toBe("completed");
+    expect(serverQueries).toBe(1); expect(serverEffects).toBe(1);
+    expect((await server().observe({ operationId: original.operationId })).state).toBe("completed");
+    expect(serverQueries).toBe(1);
+    await expect(server().execute(original)).rejects.toThrow("RELEASE_AUTHORIZATION_RECEIPT_EXPIRED");
+    expect(serverEffects).toBe(1);
+    const workerJournal = create("build-workers:run-1"), jobJournal = create("build-jobs:run-1");
+    const workerRecords = createPostgresWorkerOperationJournal(workerJournal);
+    const workerOperationId = "original-build-worker";
+    await workerRecords.claim({ operationId: workerOperationId, requestSha256: identity, resourceName: workerOperationId, provider: "fly", image: `registry/worker@sha256:${scopeSha256}`, sessionLeaseSha256: identity, toolchainSha256: scopeSha256, providerDeadlineEpochMs: Date.now() + 1_200_000 });
+    await workerRecords.update({ operationId: workerOperationId, requestSha256: identity, resourceId: "original-machine", state: "reconciled" });
+    let starts = 0, queries = 0, originalJobId = "", fences = 0, fenceQueries = 0, restores = 0, restoreQueries = 0;
+    let restoreReceipt: unknown;
+    const clients = { fly: { async exec(value: { command: string[] }) {
+      const [, action, id, index, data] = value.command;
+      if (action === "put") return { status: "completed", exitCode: 0, stdout: JSON.stringify({ state: "stored", jobId: id, chunk: Number(index), sha256: new Bun.CryptoHasher("sha256").update(Buffer.from(data!, "base64")).digest("hex") }) };
+      if (action === "start") { starts++; originalJobId = id!; throw new Error("accepted original job; response lost"); }
+      if (action === "status") { queries++; expect(id).toBe(originalJobId); return { status: "completed", exitCode: 0, stdout: JSON.stringify({ state: "pending", jobId: id }) }; }
+      if (action === "fence") { fences++; throw new Error("fenced original lease; response lost"); }
+      if (action === "fence-status") { fenceQueries++; return { status: "completed", exitCode: 0, stdout: JSON.stringify({ state: "fenced", jobId: id, fenceSha256: index }) }; }
+      if (action === "restore-put") return { status: "completed", exitCode: 0, stdout: JSON.stringify({ state: "stored", archiveSha256: id, chunk: Number(index), sha256: new Bun.CryptoHasher("sha256").update(Buffer.from(data!, "base64")).digest("hex") }) };
+      if (action === "restore") { restores++; throw new Error("restored bytes; response lost"); }
+      if (action === "restore-status") { restoreQueries++; return { status: "completed", exitCode: 0, stdout: JSON.stringify(restoreReceipt) }; }
+      throw new Error("UNEXPECTED_REDISPATCH");
+    } } };
+    const jobClient = () => new ProductionWorkerJobClient({ provider: "fly", workerOperationId, clients: clients as never, workerJournal, jobJournal, toolchainSha256: scopeSha256 });
+    const buildRequest = { sessionId: "session", actionId: "action", expectedVersion: 0, policyVersion: "test-policy", capabilityGrant: "grant", workspaceId: "workspace", sourceProposalSha256: identity, sourceProposalReference: `proposal:sha256:${identity}`, sourceProposalFiles: [{ path: "src/main.ts", content: "console.log('bounded test');" }] };
+    expect((await jobClient().start(buildRequest)).state).toBe("unknown");
+    expect((await jobClient().start(buildRequest)).state).toBe("pending");
+    expect((await jobClient().observe(buildRequest)).state).toBe("pending");
+    expect(starts).toBe(1); expect(queries).toBe(2);
+    await expect(jobClient().start({ ...buildRequest, sourceProposalFiles: [{ path: "src/main.ts", content: "changed" }] })).rejects.toThrow("OPERATION_IDENTITY_CONFLICT");
+    expect(starts).toBe(1);
+    expect((await jobClient().fence(buildRequest, identity)).state).toBe("unknown");
+    expect((await jobClient().fence(buildRequest, identity)).state).toBe("fenced");
+    expect(fences).toBe(1); expect(fenceQueries).toBe(1);
+    await expect(jobClient().fence(buildRequest, scopeSha256)).rejects.toThrow("OPERATION_IDENTITY_CONFLICT");
+    const hash = (value: string | Uint8Array) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
+    const source = { version: 1, actionId: "original-action", sessionId: "original-session", expectedVersion: 0, proposalSha256: identity, toolchainSha256: scopeSha256, deadlineEpochMs: 1, files: buildRequest.sourceProposalFiles };
+    const files = [{ path: "index.html", bytesBase64: Buffer.from("<html></html>").toString("base64"), sha256: hash("<html></html>"), size: 13 }];
+    const workspace = Buffer.from(canonicalJson({ version: 1, source, toolchainSha256: scopeSha256, artifact: { version: 1, jobId: hash(canonicalJson(source)), proposalSha256: identity, toolchainSha256: scopeSha256, files, commandEvidence: Array.from({ length: 8 }, () => ({ argv: ["contract-test"], exitCode: 0, stdout: "", stderr: "", elapsedMs: 1 })) } }));
+    restoreReceipt = { state: "restored", archiveSha256: hash(workspace), toolchainSha256: scopeSha256, sourceSha256: hash(canonicalJson(source.files)), artifactFilesSha256: hash(canonicalJson(files)), workspacePath: "/workspace/restored" };
+    const restoreInput = { operationId: "original-restore", bindingSha256: identity, bytes: workspace };
+    expect((await jobClient().restoreWorkspace(restoreInput)).state).toBe("unknown");
+    expect((await jobClient().restoreWorkspace(restoreInput)).state).toBe("restored");
+    expect(restores).toBe(1); expect(restoreQueries).toBe(1);
+    /* A fresh control process only queries the exact original restore claim;
+     * it does not upload archive chunks or send another restore command. */
+    expect((await jobClient().observeRestoreWorkspace({ operationId: restoreInput.operationId, archiveSha256: hash(workspace), bindingSha256: identity })).state).toBe("restored");
+    expect(restores).toBe(1); expect(restoreQueries).toBe(2);
+    await expect(jobClient().restoreWorkspace({ ...restoreInput, bindingSha256: scopeSha256 })).rejects.toThrow("OPERATION_IDENTITY_CONFLICT");
+    expect(restores).toBe(1);
   } finally {
-    if (priorEffects === undefined) delete process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS; else process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS = priorEffects;
+    if (previousEffects === undefined) delete process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS; else process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS = previousEffects;
     if (verificationWorkspace) await rm(verificationWorkspace, { recursive: true, force: true });
     await application?.end(); await admin?.end(); await docker("rm", "--force", name).catch(() => undefined);
   }

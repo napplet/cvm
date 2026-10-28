@@ -11,16 +11,15 @@ const digest = (letter: string) => letter.repeat(64);
 const vertexPrice = { sourceUrl: "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing", sourceDocumentSha256: digest("1"), quoteSha256: digest("2"), observedAtMs: 1_000, freshUntilMs: 2_000, effectiveFromMs: 900, effectiveUntilMs: 3_000, currency: "USD" as const, inputMicrosPerMillion: 750_000, cachedInputMicrosPerMillion: 75_000, outputAndThoughtMicrosPerMillion: 3_750_000 };
 function vertexJournal() { const values = new Map<string, unknown>(); return { async claim(entry: { operationId: string }) { const prior = values.get(entry.operationId); if (prior) return { claimed: false, entry: prior }; values.set(entry.operationId, entry); return { claimed: true, entry }; }, async read(operationId: string) { return values.get(operationId); }, async write(entry: { operationId: string }) { values.set(entry.operationId, entry); } }; }
 
-test("host: binds a sealed artifact to the promoted reference-host Chromium fixture", async () => {
+test("host: rejects unmeasured summary booleans from the reference-host fixture", async () => {
   const calls: unknown[] = [];
   const host = createCompatibleHostDeploymentClient({
     referenceHostReference: "napplet:reference-host:0.3.1",
     chromiumReference: "chromium:fixture:123",
     packageHost: { loadSealedNapplet: async (value) => ({ ...value, hostVersion: "reference-host-0.3.1", packageVersion: "napplet-sdk-0.27.2", runtimeVersion: "nip-5d" }) },
-    browser: { kind: "chromium", observe: async (value) => { calls.push(value); return { browserVersion: "fixture-chromium", reportSha256: digest("a"), consoleErrors: [], directAuthorityDenied: true, responsiveAccessible: true, capabilityMediated: true, minimumMeasuredTargetPx: 44, noClippedStepLabels: true, noNestedHorizontalScroll: true }; } },
+    browser: { kind: "chromium", observe: async (value) => { calls.push(value); return { browserVersion: "fixture-chromium", observations: [], hostPreview: "not_observed", hostSigner: "not_observed", externalSigner: "not_observed", reconciliation: "not_observed", launchCertificationBlockedState: "not_observed", reportSha256: digest("a"), consoleErrors: [], directAuthorityDenied: true, responsiveAccessible: true, capabilityMediated: true, minimumMeasuredTargetPx: 44, noClippedStepLabels: true, noNestedHorizontalScroll: true }; } },
   });
-  const result = await host.observe({ sealedArtifactSha256: digest("b"), aggregateSha256: digest("c") });
-  expect(result.hostPreview).toBe("pass");
+  await expect(host.observe({ sealedArtifactSha256: digest("b"), aggregateSha256: digest("c") })).rejects.toThrow("COMPATIBLE_HOST_BROWSER_EVIDENCE_UNAVAILABLE");
   expect(calls).toHaveLength(1);
   expect(host.discovery()).toEqual({ referenceHostReference: "napplet:reference-host:0.3.1", chromiumReference: "chromium:fixture:123", command: "pnpm verify && pnpm test:conformance" });
   expect(() => createCompatibleHostDeploymentClient({ referenceHostReference: "https://external-host.example", chromiumReference: "chromium:fixture:123", packageHost: {} as never, browser: {} as never })).toThrow("DEPLOYMENT_REFERENCE_HOST_INVALID");

@@ -59,6 +59,11 @@ let page: Page | undefined;
 const consoleMessages: string[] = [];
 const requestUrls: string[] = [];
 const relayFrames: string[] = [];
+const previewResponses: Array<{ path: string; status?: number; failure?: string }> = [];
+function diagnosticPath(value: string): string {
+  try { return new URL(value).pathname.replace(/[a-f0-9]{64}/giu, "[digest]").slice(0, 256); } catch { return "unresolved"; }
+}
+
 
 try {
   for (const route of ["/account", "/balance", "/top_up", "/generation", "/session", "/api/generate", "/api/account"]) {
@@ -71,6 +76,8 @@ try {
   page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   page.on("console", (message) => consoleMessages.push(message.text()));
   page.on("request", (request) => requestUrls.push(request.url()));
+  page.on("response", response => { const path = diagnosticPath(response.url()); if (path.startsWith("/__kehto/")) previewResponses.push({ path, status: response.status() }); });
+  page.on("requestfailed", request => { const path = diagnosticPath(request.url()); if (path.startsWith("/__kehto/")) previewResponses.push({ path, failure: /^net::[A-Z_0-9]+$/u.test(request.failure()?.errorText ?? "") ? request.failure()!.errorText : "request_failed" }); });
   page.on("websocket", (socket: any) => {
     socket.on("framesent", (event: { payload: string | Buffer }) => relayFrames.push(String(event.payload)));
     socket.on("framereceived", (event: { payload: string | Buffer }) => relayFrames.push(String(event.payload)));
@@ -122,7 +129,7 @@ try {
   requireThat(reducedMotion, "REDUCED_MOTION_NOT_HONORED");
   console.log(JSON.stringify({ status: "passed", case: requestedCase, url: server.url, mode, requests: requestUrls.map((url) => new URL(url).pathname), canaryRequests }));
 } catch (error) {
-  console.error(JSON.stringify({ case: requestedCase, connection: await page?.locator("#connection-status").textContent(), funding: await page?.locator("#funding-status").textContent(), generation: await page?.locator("#generation-status").textContent(), error: error instanceof Error ? error.message : String(error) }));
+  console.error(JSON.stringify({ case: requestedCase, previewResponses: previewResponses.slice(-20), frames: page?.frames().map(frame => diagnosticPath(frame.url())), connection: await page?.locator("#connection-status").textContent(), funding: await page?.locator("#funding-status").textContent(), generation: await page?.locator("#generation-status").textContent(), error: error instanceof Error ? error.message : String(error) }));
   throw error;
 } finally {
   try { await server.close(); }

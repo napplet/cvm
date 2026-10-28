@@ -16,6 +16,7 @@ import {
   type ReleaseTopologyObservation,
 } from "./contracts";
 import { deriveReleaseTopology, RELEASE_PROVIDER_IDS, RELEASE_TOPOLOGY_QUANTITY_CONTRACT } from "./topology";
+import { isObservedCollectorRegistryImage, type ObservedCollectorRegistryImage, type PreparedCollectorImage } from "./collector-image";
 import { createAuthorizationRequest, createOfficialConsentReceipt, validateAuthorizationReceipt, validateAuthorizationRequest, type ReleaseAuthorizationReceipt } from "./authorization";
 import type { OfficialConsentPort } from "./deployment/consent";
 import { ReleaseProviderOperationSchema, type ReleaseProviderOperation, type ReleaseProviderRegistry as AuthorizedProviderRegistry } from "./providers";
@@ -25,7 +26,8 @@ import { finalizeReleaseCertification, type ReleaseFinalizationInput, type Relea
 import { createProductionLiveProtectedCertificationRegistry, type LiveProtectedRegistryInput } from "../certification/live/registry";
 import type { ProductionLiveProtectedCertificationPorts } from "../certification/live/production-ports";
 import { PROTECTED_SUITES, runProtectedCertificationProfile, type ProtectedCertificationRun } from "../certification/runner";
-import { validateCertificationObservation, type CertificationObservation } from "../certification/evidence";
+import { validateCertificationObservation } from "../certification/evidence";
+import type { CertificationObservation } from "../certification/contracts";
 import { createLiveCostEstimator, RELEASE_COST_FAMILIES, type LiveCostCatalogPort } from "./costs/live-estimator";
 import { validateOperatorFundingReadiness, type OperatorFundingReadiness } from "./deployment/operator-funding";
 
@@ -49,6 +51,9 @@ type ControllerOptions = Readonly<{
    * same product request. Values are revalidated before they enter the
    * immutable authorization request; no wallet material is accepted here. */
   operatorFundingReadiness?: OperatorFundingReadiness;
+  /** Local preapproval may supply only a prepared OCI layout. Provider work is
+   * refused until the same layout has a post-upload registry observation. */
+  collectorImage?: PreparedCollectorImage | ObservedCollectorRegistryImage;
   now?: () => number;
 }>;
 export type ReleaseCertificationResult = Readonly<{
@@ -70,7 +75,7 @@ export type AuthorizedLiveExecutionInput = Readonly<{
   receipt: unknown;
   /** The one project-owned production registry from native-registry.ts. */
   registry: AuthorizedProviderRegistry;
-  materialization: Omit<MaterializeProtectedCertifierInput, "workerSelection" | "nowMs">;
+  materialization: Omit<MaterializeProtectedCertifierInput, "workerSelection" | "nowMs" | "authorization">;
   workerSelection: NonNullable<MaterializeProtectedCertifierInput["workerSelection"]>;
   protected: Omit<LiveProtectedRegistryInput, "ports"> & Readonly<{ ports: ProductionLiveProtectedCertificationPorts }>;
   protectedVerificationReferences?: Parameters<typeof runProtectedCertificationProfile>[0]["profile"]["protectedVerificationReferences"];
@@ -89,6 +94,9 @@ export type AuthorizedLiveExecutionResult = ReleaseProvisioningResult & Readonly
  * candidate-bound state machine and receives no ambient credentials. */
 export type ReleaseExecutionSession = Readonly<{
   registry: AuthorizedProviderRegistry;
+  collectorImage?: Readonly<{
+    uploadAndObserve(input: Readonly<{ authorizationRequest: ReleaseAuthorizationRequest; collector: PreparedCollectorImage }>): Promise<ObservedCollectorRegistryImage>;
+  }>;
   prepareAuthorizedExecution(input: Readonly<{ authorizationRequest: ReleaseAuthorizationRequest }>): Promise<Omit<AuthorizedLiveExecutionInput, "registry">>;
 }>;
 
@@ -289,6 +297,7 @@ export class ReleaseCertificationController {
   readonly #costCatalog: LiveCostCatalogPort | undefined;
   readonly #requireCurrentPriceCatalog: boolean;
   readonly #operatorFundingReadiness: OperatorFundingReadiness | undefined;
+  readonly #collectorImage: PreparedCollectorImage | ObservedCollectorRegistryImage | undefined;
   readonly #now: () => number;
 
   constructor(options: ControllerOptions) {
@@ -299,6 +308,7 @@ export class ReleaseCertificationController {
     this.#costCatalog = options.costCatalog;
     this.#requireCurrentPriceCatalog = options.requireCurrentPriceCatalog ?? false;
     this.#operatorFundingReadiness = options.operatorFundingReadiness;
+    this.#collectorImage = options.collectorImage;
     this.#now = options.now ?? Date.now;
   }
 
@@ -331,7 +341,7 @@ export class ReleaseCertificationController {
 
   async dryRun(): Promise<ReleaseCertificationResult> {
     const candidate = await candidateIdentity(this.#candidatePath);
-    const topology = await deriveReleaseTopology(candidate.candidateSha256);
+    const topology = await deriveReleaseTopology(candidate.candidateSha256, this.#collectorImage);
     const capabilities = await discoverProviders(this.#providers);
     const nowMs = this.#now();
     const operatorFundingReadiness = this.#operatorFundingReadiness === undefined
@@ -464,6 +474,7 @@ export class ReleaseCertificationController {
   /** Local-only composition path. The protected runner injects authenticated ports later;
    * this controller neither constructs them nor writes certification evidence. */
   async provision(input: Readonly<{ receipt: unknown; registry: AuthorizedProviderRegistry }>): Promise<ReleaseProvisioningResult> {
+    if (!isObservedCollectorRegistryImage(this.#collectorImage)) throw new Error("COLLECTOR_REGISTRY_OBSERVATION_REQUIRED");
     const current = await this.#loadCurrent();
     if (!current.state.authorizationRequestSha256) throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID");
     const request = await this.#readRequest(current.state.authorizationRequestSha256);
@@ -547,7 +558,7 @@ export class ReleaseCertificationController {
         capability: discovered[index]!.capability, status: "observed" as const,
       };
     }));
-    const desired = await deriveReleaseTopology(current.state.candidate.candidateSha256);
+    const desired = await deriveReleaseTopology(current.state.candidate.candidateSha256, this.#collectorImage);
     const { topologySha256: _desiredTopologySha256, ...topologyBase } = desired;
     const deployment = {
       resources,
@@ -782,15 +793,26 @@ export async function runReleaseCertification(options: ControllerOptions & Reado
 export async function runReleaseCertification(options: ControllerOptions & Readonly<{ dryRun: boolean; session?: ReleaseExecutionSession }>): Promise<ReleaseCertificationResult | AuthorizedLiveExecutionResult> {
   if (!options.dryRun) {
     if (!options.session) throw new Error("RELEASE_PRODUCTION_EXECUTION_CONFIG_REQUIRED");
+    const preapprovalCollector = options.collectorImage;
     const controller = new ReleaseCertificationController({
       candidatePath: options.candidatePath,
       workspace: options.workspace,
       providers: createReleaseControllerProviderRegistry(options.session.registry),
+      ...(options.collectorImage ? { collectorImage: options.collectorImage } : {}),
       ...(options.now ? { now: options.now } : {}),
     });
     const pending = await controller.dryRun();
+    const collectorImage = preapprovalCollector && !isObservedCollectorRegistryImage(preapprovalCollector)
+      ? await options.session.collectorImage?.uploadAndObserve({ authorizationRequest: pending.authorizationRequest, collector: preapprovalCollector })
+      : preapprovalCollector;
+    if (!isObservedCollectorRegistryImage(collectorImage)) throw new Error("COLLECTOR_REGISTRY_OBSERVATION_REQUIRED");
+    const observedController = new ReleaseCertificationController({
+      candidatePath: options.candidatePath, workspace: options.workspace,
+      providers: createReleaseControllerProviderRegistry(options.session.registry), collectorImage,
+      ...(options.now ? { now: options.now } : {}),
+    });
     const execution = await options.session.prepareAuthorizedExecution({ authorizationRequest: pending.authorizationRequest });
-    return controller.executeAuthorized({ ...execution, registry: options.session.registry });
+    return observedController.executeAuthorized({ ...execution, registry: options.session.registry });
   }
   const progress = await new ReleaseCertificationController(options).certify();
   return progress;

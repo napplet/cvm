@@ -14,6 +14,17 @@ const PinnedDeploymentExecutionSchema = PinnedModuleSchema.extend({
   configPath: AbsolutePathSchema,
   configSha256: DigestSchema,
 }).strict();
+/** Controller-owned closure required only at the receipt-bound transition.
+ * The runtime configuration is a reference-only ProductionConfig document;
+ * the companion module builds the concrete authenticated session graph from
+ * mounted references. Neither is accepted from a CLI flag or environment. */
+const PinnedProductionRuntimeClosureSchema = PinnedModuleSchema.extend({
+  configPath: AbsolutePathSchema,
+  configSha256: DigestSchema,
+}).strict();
+const PinnedDeploymentExecutionWithRuntimeSchema = PinnedDeploymentExecutionSchema.extend({
+  runtime: PinnedProductionRuntimeClosureSchema.optional(),
+}).strict();
 const SecretReferencesSchema = z.object({
   path: AbsolutePathSchema,
   sha256: DigestSchema,
@@ -47,7 +58,7 @@ const ProtectedCertifierConfigSchema = z.object({
   adapter: PinnedModuleSchema,
   /** One deployment-owned, hash-pinned factory for the receipt-bound release
    * session. It supplies external handles at runtime; this config never does. */
-  releaseExecution: PinnedDeploymentExecutionSchema.optional(),
+  releaseExecution: PinnedDeploymentExecutionWithRuntimeSchema.optional(),
   trustRoot: PinnedModuleSchema.optional(),
   controller: ControllerProvenanceSchema.optional(),
   secretReferences: SecretReferencesSchema.optional(),
@@ -67,7 +78,8 @@ const ProtectedCertifierConfigSchema = z.object({
 const CertifierConfigSchema = z.discriminatedUnion("mode", [LocalCertifierConfigSchema, ProtectedCertifierConfigSchema]);
 type ParsedCertifierConfig = z.infer<typeof CertifierConfigSchema>;
 export type PinnedCertifierModule = z.infer<typeof PinnedModuleSchema>;
-export type PinnedDeploymentExecution = z.infer<typeof PinnedDeploymentExecutionSchema>;
+export type PinnedDeploymentExecution = z.infer<typeof PinnedDeploymentExecutionWithRuntimeSchema>;
+export type PinnedProductionRuntimeClosure = z.infer<typeof PinnedProductionRuntimeClosureSchema>;
 export type ProtectedCertifierConfig = z.infer<typeof ProtectedCertifierConfigSchema>;
 export type CertifierConfig = ProtectedCertifierConfig | Readonly<{
   version: 1;

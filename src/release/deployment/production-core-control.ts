@@ -1,7 +1,7 @@
 import { GoogleAuth, OAuth2Client } from "google-auth-library";
 import { z } from "zod";
 import { canonicalJson } from "../../promotion/schema";
-import { validateAuthorizationReceipt, validateAuthorizationRequest } from "../authorization";
+import { ReleaseAuthorizationReceiptSchema, validateAuthorizationReceipt, validateAuthorizationRequest } from "../authorization";
 import { assertPostgresOperationJournal, type PostgresOperationJournal } from "./postgres-operation-journal";
 import { CoreControlPayloadSchemas } from "./production-core-suite-protocol";
 
@@ -60,20 +60,24 @@ export class ProductionCoreControlClient {
     this.binding = Object.freeze({ candidateSha256: input.candidateSha256.toLowerCase(), topologySha256: input.topologySha256.toLowerCase() });
     Object.freeze(this);
   }
-  async #authorize() {
+  async #authorize(readOnly = false) {
     const request = await validateAuthorizationRequest(this.#input.request);
-    await validateAuthorizationReceipt({ request, receipt: this.#input.receipt, nowMs: (this.#input.now ?? Date.now)() });
+    const receipt = ReleaseAuthorizationReceiptSchema.parse(this.#input.receipt);
+    const now = (this.#input.now ?? Date.now)();
+    // Expiry closes dispatch authority. It must not strand observation of a
+    // previously claimed operation after a lost response or process restart.
+    await validateAuthorizationReceipt({ request, receipt, nowMs: readOnly ? Math.min(now, receipt.expiresAtMs - 1) : now });
     if (request.candidateSha256 !== this.#input.candidateSha256 || request.topologySha256 !== this.#input.topologySha256 || !request.orderedEffects.some(effect => effect.provider === "cloud_run") || !request.providerScopes.some(scope => scope.provider === "cloud_run")) throw new Error("CORE_CONTROL_BINDING_INVALID");
     return request;
   }
   async #http(path: string, method: "GET" | "POST", body?: string): Promise<unknown> {
     // Independently revalidate immediately before authentication/network I/O.
-    await this.#authorize();
+    await this.#authorize(method === "GET");
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 15_000);
     try {
       const token = await bounded(this.#input.identity.token(this.#input.serviceUrl), 5_000);
       if (!/^[A-Za-z0-9_.-]{20,16384}$/u.test(token)) throw new Error("CORE_CONTROL_TOKEN_INVALID");
-      await this.#authorize();
+      await this.#authorize(method === "GET");
       const response = await (this.#input.fetch ?? fetch)(`${this.#input.serviceUrl}${path}`, { method, body, headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, redirect: "error", signal: controller.signal });
       if (!response.ok || !response.body) throw new Error("CORE_CONTROL_RESPONSE_UNAVAILABLE");
       const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let length = 0; let finished = false;
@@ -84,12 +88,19 @@ export class ProductionCoreControlClient {
     } finally { clearTimeout(timer); controller.abort(); }
   }
   async execute(input: Readonly<{ operationId: string; kind: CoreControlKind; payload: unknown }>): Promise<CoreControlObservation> {
-    const request = await this.#authorize(); const operationId = Id.parse(input.operationId); const kind = CoreControlKindSchema.parse(input.kind);
+    const request = await this.#authorize(true); const operationId = Id.parse(input.operationId); const kind = CoreControlKindSchema.parse(input.kind);
     const schema = CoreControlPayloadSchemas[kind as keyof typeof CoreControlPayloadSchemas];
     const payload = schema ? schema.parse(input.payload) : input.payload;
     const command = { operationId, kind, payload, candidateSha256: this.#input.candidateSha256, topologySha256: this.#input.topologySha256, authorizationRequestSha256: request.authorizationRequestSha256 };
     const body = canonicalJson(command); if (Buffer.byteLength(body) > LIMIT) throw new Error("CORE_CONTROL_REQUEST_TOO_LARGE");
     const requestSha256 = await sha256(command);
+    const original = await this.#input.journal.read(operationId);
+    if (original) {
+      if (original.identitySha256 !== requestSha256) throw new Error("OPERATION_IDENTITY_CONFLICT");
+      return this.observe({ operationId, kind, requestSha256 });
+    }
+    // Only a new claim can reach POST, and it needs unexpired authority.
+    await this.#authorize();
     const claim = await this.#input.journal.claim(operationId, requestSha256, { state: "pending", kind });
     if (!claim.claimed) return this.observe({ operationId, kind, requestSha256 });
     try {
@@ -99,7 +110,7 @@ export class ProductionCoreControlClient {
     } catch { return Object.freeze({ operationId, kind, requestSha256, state: "unknown" }); }
   }
   async observe(input: Readonly<{ operationId: string; kind: CoreControlKind; requestSha256: string }>): Promise<CoreControlObservation> {
-    await this.#authorize(); const operationId = Id.parse(input.operationId); const kind = CoreControlKindSchema.parse(input.kind); const requestSha256 = Digest.parse(input.requestSha256);
+    await this.#authorize(true); const operationId = Id.parse(input.operationId); const kind = CoreControlKindSchema.parse(input.kind); const requestSha256 = Digest.parse(input.requestSha256);
     const original = await this.#input.journal.read(operationId);
     if (!original || original.identitySha256 !== requestSha256) throw new Error("CORE_CONTROL_ORIGINAL_REQUIRED");
     try {

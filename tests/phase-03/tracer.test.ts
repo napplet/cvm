@@ -1,3 +1,4 @@
+import { DeterministicPostgresFundingExecutor } from "../../src/persistence/postgres-funding-store";
 import { describe, expect, test } from "bun:test";
 import { FundingService } from "../../src/funding/funding-service";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
@@ -108,4 +109,13 @@ describe("Phase 3 funded-account tracer", () => {
     expect(throwingResult).toEqual(collectedResult);
     expect(throwingStore.snapshot()).toEqual(collectorStore.snapshot());
   });
+});
+
+
+test("explicit test-only SQL executor composition constructs its store and credits once", async () => {
+  const core = createFundedCore({ testOnly: true, postgresExecutor: new DeterministicPostgresFundingExecutor() });
+  const first = await core.funding.execute(command("credit_settlement", "executor-credit-1", { settlement }));
+  const replay = await core.funding.execute(command("credit_settlement", "executor-credit-1", { settlement }));
+  expect(first).toMatchObject({ status: "credited", creditedAmount: "300" });
+  expect(replay).toEqual(first);
 });

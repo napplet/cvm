@@ -77,6 +77,87 @@ async function sha256(value: string | Uint8Array): Promise<Digest> {
 }
 const digestJson = (value: unknown) => sha256(canonicalJson(value));
 const validDigest = (value: unknown): value is string => typeof value === "string" && HEX.test(value);
+const relativeModule = (value: string): boolean => value === "." || value === ".." || value.startsWith("./") || value.startsWith("../");
+const identifierCharacter = (value: string | undefined): boolean => value !== undefined && /[A-Za-z0-9_$]/u.test(value);
+
+type CodeScan = Readonly<{ next: number; relativeRequire: boolean }>;
+
+/** Read a JavaScript string literal without treating its content as executable
+ * syntax. This complements Bun's import parser, whose public import list does
+ * not include CommonJS require calls. */
+function quotedString(source: string, start: number): Readonly<{ next: number; value: string }> | null {
+  const quote = source[start];
+  if (quote !== "\"" && quote !== "'") return null;
+  let value = "";
+  for (let index = start + 1; index < source.length; index += 1) {
+    const character = source[index]!;
+    if (character === quote) return { next: index + 1, value };
+    if (character !== "\\") { value += character; continue; }
+    const escape = source[++index];
+    if (escape === undefined) return null;
+    if (escape === "x") {
+      const hex = source.slice(index + 1, index + 3);
+      if (!/^[a-f0-9]{2}$/iu.test(hex)) return null;
+      value += String.fromCharCode(Number.parseInt(hex, 16)); index += 2; continue;
+    }
+    if (escape === "u") {
+      const braced = source[index + 1] === "{";
+      const end = braced ? source.indexOf("}", index + 2) : index + 5;
+      const hex = braced ? source.slice(index + 2, end) : source.slice(index + 1, end);
+      if (end < 0 || !/^[a-f0-9]{1,6}$/iu.test(hex)) return null;
+      value += String.fromCodePoint(Number.parseInt(hex, 16)); index = braced ? end : end - 1; continue;
+    }
+    value += ({ n: "\n", r: "\r", t: "\t", b: "\b", f: "\f", v: "\v", 0: "\0" } as Readonly<Record<string, string>>)[escape] ?? escape;
+  }
+  return null;
+}
+
+function codeScan(source: string, start: number, stopAtTemplateExpression: boolean): CodeScan {
+  let braces = 0;
+  for (let index = start; index < source.length; index += 1) {
+    const character = source[index]!;
+    if (character === "\"" || character === "'") {
+      const string = quotedString(source, index);
+      if (!string) return { next: source.length, relativeRequire: false };
+      index = string.next - 1; continue;
+    }
+    if (character === "`") {
+      let cursor = index + 1;
+      for (; cursor < source.length; cursor += 1) {
+        if (source[cursor] === "\\") { cursor += 1; continue; }
+        if (source[cursor] === "`") break;
+        if (source[cursor] === "$" && source[cursor + 1] === "{") {
+          const nested = codeScan(source, cursor + 2, true);
+          if (nested.relativeRequire) return nested;
+          cursor = nested.next - 1;
+        }
+      }
+      index = cursor; continue;
+    }
+    if (character === "/" && source[index + 1] === "/") { index = source.indexOf("\n", index + 2); if (index < 0) return { next: source.length, relativeRequire: false }; continue; }
+    if (character === "/" && source[index + 1] === "*") { index = source.indexOf("*/", index + 2); if (index < 0) return { next: source.length, relativeRequire: false }; index += 1; continue; }
+    if (character === "{") { braces += 1; continue; }
+    if (character === "}") { if (stopAtTemplateExpression && braces === 0) return { next: index + 1, relativeRequire: false }; braces -= 1; continue; }
+    if (source.startsWith("require", index) && !identifierCharacter(source[index - 1]) && !identifierCharacter(source[index + 7])) {
+      let cursor = index + 7;
+      while (/\s/u.test(source[cursor] ?? "")) cursor += 1;
+      if (source.slice(cursor, cursor + 2) === "?.") { cursor += 2; while (/\s/u.test(source[cursor] ?? "")) cursor += 1; }
+      if (source[cursor] === "(") {
+        cursor += 1; while (/\s/u.test(source[cursor] ?? "")) cursor += 1;
+        const specifier = quotedString(source, cursor);
+        if (specifier && relativeModule(specifier.value)) return { next: specifier.next, relativeRequire: true };
+      }
+    }
+  }
+  return { next: source.length, relativeRequire: false };
+}
+
+export function assertSealedExecutionBundle(source: string): void {
+  let imports: readonly Readonly<{ path: string }>[];
+  try { imports = new Bun.Transpiler({ loader: "js" }).scan(source).imports; }
+  catch { throw new Error("MATERIALIZER_EXECUTION_BUNDLE_REJECTED"); }
+  if (imports.some((entry) => relativeModule(entry.path)) || codeScan(source, 0, false).relativeRequire) throw new Error("MATERIALIZER_EXECUTION_BUNDLE_EXTERNAL_IMPORT");
+}
 const under = (root: string, child: string) => {
   const value = relative(root, child);
   return value !== "" && value !== ".." && !value.startsWith(`..${sep}`) && !isAbsolute(value);
@@ -184,11 +265,8 @@ export async function materializeProtectedCertifier(input: MaterializeProtectedC
   const adapterBytes = new Uint8Array(await output.arrayBuffer());
   await writeExclusiveCanonical(adapterPath, new TextDecoder().decode(adapterBytes));
   const adapter: PinnedModule = { root: adapterRoot, modulePath: adapterPath, sha256: await sha256(adapterBytes) };
-  const factoryPath = join(executionRoot, "factory-source.ts");
-  const sessionPath = resolve(input.repositoryRoot, "src/release/deployment/factory.ts");
-  const readinessPath = resolve(input.repositoryRoot, "src/release/deployment/production-factory.ts");
-  if (!under(resolve(input.repositoryRoot), sessionPath) || !under(resolve(input.repositoryRoot), readinessPath)) throw new Error("MATERIALIZER_FACTORY_SOURCE_REJECTED");
-  await writeExclusiveCanonical(factoryPath, `export { createReleaseExecutionSession } from ${JSON.stringify(sessionPath)};\nexport { releaseReadiness, assessProductionFactoryReadiness } from ${JSON.stringify(readinessPath)};\n`);
+  const factoryPath = resolve(input.repositoryRoot, "src/release/deployment/production-session.ts");
+  if (!under(resolve(input.repositoryRoot), factoryPath)) throw new Error("MATERIALIZER_FACTORY_SOURCE_REJECTED");
   /** Seal the entire transitive factory closure. A hash over an entry module
    * alone is insufficient because it can import changed sibling code after the
    * review; Bun's output is a single content-addressed ESM bundle. */
@@ -197,6 +275,7 @@ export async function materializeProtectedCertifier(input: MaterializeProtectedC
   const executionOutput = executionBuild.outputs.find(candidate => candidate.kind === "entry-point");
   if (!executionOutput) throw new Error("MATERIALIZER_EXECUTION_BUNDLE_REJECTED");
   const executionSource = new TextDecoder("utf-8", { fatal: true }).decode(await executionOutput.arrayBuffer());
+  assertSealedExecutionBundle(executionSource);
   await writeExclusiveCanonical(executionPath, executionSource);
   const executionSha256 = await sha256(executionSource);
   const deploymentConfigPath = join(executionRoot, "deployment.json");

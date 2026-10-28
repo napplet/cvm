@@ -26,6 +26,7 @@ function port(transcript: string[], records: unknown[] = []): CollectorControlPl
       if (operationId === "collector-1" && !configured) return { status: "missing" as const };
       return { status: "completed" as const, endpointReferenceSha256: digest("f") };
     },
+    observeCleanup: async () => ({ status: "missing" as const }),
     configure: async ({ operationId }) => { transcript.push(`configure:${operationId}`); configured = true; },
     deleteCollector: async ({ operationId }) => { transcript.push(`delete:${operationId}`); },
     emit: async ({ observation }) => { records.push(observation); },
@@ -69,4 +70,29 @@ test("revalidates before configure and scopes cleanup to the candidate-bound col
   await expect(provider.apply(input)).rejects.toThrow("COLLECTOR_AUTHORIZATION_INVALID");
   clock = now;
   await expect(provider.cleanup({ ...input, runOwnedEndpointReference: "collector/other" })).rejects.toThrow("COLLECTOR_CLEANUP_SCOPE_INVALID");
+});
+
+test("cleanup accepts a terminal query-only recovery observation without redispatching deletion", async () => {
+  const transcript: string[] = [];
+  const { config, request, receipt } = await authorized();
+  const base = port(transcript);
+  const provider = createNativeCollectorProvider({ config, port: { ...base, observeCleanup: async () => ({ status: "cleaned" as const }) }, now: () => now });
+  await expect(provider.cleanup({ request, receipt, operationId: "collector-1", runOwnedEndpointReference: config.endpointReference })).resolves.toMatchObject({ status: "cleaned" });
+  expect(transcript).toEqual(["persist:collector-1:cleanup"]);
+});
+
+
+test("historical cleanup observation validates original scope and receipt without writes or deletion", async () => {
+  const { config, request, receipt } = await authorized();
+  const transcript: string[] = [];
+  for (const status of ["cleaned", "missing", "pending", "unknown", "blocked"] as const) {
+    const provider = createNativeCollectorProvider({ config, port: { ...port(transcript), async observeCleanup(value) { transcript.push(value.operationId); return { status }; } }, now: () => 10_000 });
+    const original = { request, receipt, operationId: "collector-1", runOwnedEndpointReference: config.endpointReference };
+    expect(await provider.observeCleanup(original)).toEqual({ status });
+    expect(transcript.splice(0)).toEqual(["collector-1:cleanup"]);
+    await expect(provider.observeCleanup({ ...original, runOwnedEndpointReference: "collector/other" })).rejects.toThrow("CLEANUP_SCOPE_INVALID");
+    await expect(provider.observeCleanup({ ...original, receipt: { ...receipt, authorizationReceiptSha256: digest("9") } })).rejects.toThrow("AUTHORIZATION_INVALID");
+    await expect(provider.cleanup(original)).rejects.toThrow("AUTHORIZATION_INVALID");
+    expect(transcript).toEqual([]);
+  }
 });

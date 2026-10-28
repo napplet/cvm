@@ -1,5 +1,6 @@
 import { canonicalJson } from "../promotion/schema";
 import { ReleaseTopologyObservationSchema, type ReleaseTopologyObservation } from "./contracts";
+import type { ObservedCollectorRegistryImage, PreparedCollectorImage } from "./collector-image";
 
 export const RELEASE_PROVIDER_IDS = [
   "cloud_run", "gcs", "collector", "cloud_sql_postgres", "modal", "fly",
@@ -62,12 +63,12 @@ export const RELEASE_TOPOLOGY_QUANTITY_CONTRACT: readonly ReleaseTopologyQuantit
   component("compatible_host", "compatible_host.global", "global", "operation", 2_000_000_000n, 0),
   component("signer", "signer.global", "global", "operation", 1_000_000_000n, 0),
   component("promoted_cli", "promoted_cli.global", "global", "operation", 2_000_000_000n, 0),
-  component("upload", "upload.global", "global", "operation", 2_000_000_000n, 0),
+  /** One bounded Artifact Registry upload/manifest observation is authorized
+   * separately from the two napplet publication uploads. */
+  component("upload", "upload.global", "global", "operation", 3_000_000_000n, 0),
   component("owner_relay", "owner_relay.global", "global", "operation", 2_000_000_000n, 0),
   component("attestation_relay", "attestation_relay.global", "global", "operation", 2_000_000_000n, 0),
 ]);
-
-const COLLECTOR_IMAGE = "otel/opentelemetry-collector@sha256:6ed874ea083d67a3085acfc75343f2ad11d9abe6006d7ea4a16e2dba9af14e49";
 
 async function digest(value: unknown): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalJson(value)));
@@ -75,12 +76,21 @@ async function digest(value: unknown): Promise<string> {
 }
 
 /** Desired topology is owned by the project. Candidate bytes bind it, but never select it. */
-export async function deriveReleaseTopology(candidateSha256: string): Promise<ReleaseTopologyObservation> {
+/** A prepared OCI layout supplies the immutable desired image before consent;
+ * only the controller's provision gate accepts an observed registry image. */
+export async function deriveReleaseTopology(candidateSha256: string, collector?: PreparedCollectorImage | ObservedCollectorRegistryImage): Promise<ReleaseTopologyObservation & Readonly<{ quantityContract: readonly ReleaseTopologyQuantityObservation[] }>> {
   const quantityContract = RELEASE_TOPOLOGY_QUANTITY_CONTRACT.map((line) => ({ ...line, quantityNanos: line.quantityNanos.toString() }));
   const base = {
     version: 1 as const,
     candidateSha256,
-    controlPlane: { regions: ["europe-west1", "us-central1"] as [string, string], minimumInstancesPerRegion: 3 as const, collectorImage: COLLECTOR_IMAGE },
+    controlPlane: {
+      regions: ["europe-west1", "us-central1"] as [string, string],
+      minimumInstancesPerRegion: 3 as const,
+      collectorImage: collector?.plannedRegistryReference ?? "registry-measurement-required",
+      collectorBuild: {
+        ...(collector ? { manifestDigest: collector.localOciManifestDigest.slice(7), configDigest: collector.localOciConfigDigest.slice(7), baseImage: collector.baseImage, dockerfileSha256: collector.dockerfileSha256, collectorConfigSha256: collector.collectorConfigSha256 } : { baseImage: "otel/opentelemetry-collector@sha256:6ed874ea083d67a3085acfc75343f2ad11d9abe6006d7ea4a16e2dba9af14e49", dockerfileSha256: "0".repeat(64), collectorConfigSha256: "0".repeat(64) }),
+      },
+    },
     objectStore: { dualRegion: "nam4", versioning: true as const, retentionDays: 30 as const, encryption: "customer-managed-key-required" as const, lifecycle: "delete-after-30-days" as const },
     database: { authority: "cloud_sql_postgres" as const, serializable: true as const, region: "europe-west1", availabilityType: "regional" as const, authorityCount: 1 as const },
     workerCandidates: ["modal", "fly"] as ["modal", "fly"],

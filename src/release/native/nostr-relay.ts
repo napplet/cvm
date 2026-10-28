@@ -7,7 +7,10 @@ import { validateAuthorizationReceipt, validateAuthorizationRequest, type Releas
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 const PubkeySchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
-const RelaySchema = z.string().url().refine((value) => value.startsWith("wss://"), "RELAY_WSS_REQUIRED");
+const RelaySchema = z.string().url().refine((value) => {
+  const url = new URL(value);
+  return url.protocol === "wss:" || (url.protocol === "ws:" && ["127.0.0.1", "::1", "localhost"].includes(url.hostname));
+}, "RELAY_WSS_REQUIRED");
 const OperationIdSchema = z.string().min(1).max(300);
 const NostrEventSchema = z.object({
   id: DigestSchema, pubkey: PubkeySchema, created_at: z.number().int().nonnegative(), kind: z.number().int().nonnegative(),
@@ -176,7 +179,7 @@ export function createNostrRelayPublicationAdapter(input: Readonly<{ config: unk
     publishOwnerManifest,
     publishAttestation,
     reconcileOriginalEvent: async ({ operationId }) => operationId.startsWith("owner_manifest:") ? reconcile("owner", { operationId }) : reconcile("attestation", { operationId }),
-    asPromotedCliSource: () => Object.freeze({
+    asPromotedCliSource: () => Object.freeze<ReturnType<NostrRelayPublicationAdapter["asPromotedCliSource"]>>({
       async publishOriginalEvent(value) {
         const result = await publishOwnerManifest(value);
         return Object.freeze({ operationId: result.operationId, state: result.state === "completed" ? "complete" : result.state === "failed" ? "failed" : "unknown", relayObservation: result.relayObservation });
@@ -186,7 +189,7 @@ export function createNostrRelayPublicationAdapter(input: Readonly<{ config: unk
         return Object.freeze({ operationId: result.operationId, state: result.state === "completed" ? "complete" : result.state === "failed" ? "failed" : "unknown", relayObservation: result.relayObservation });
       },
     }),
-    attestationPort: Object.freeze({
+    attestationPort: Object.freeze<NostrRelayPublicationAdapter["attestationPort"]>({
       async publish(value) {
         if (value.artifact.sealedObjectSha256 !== config.sealedArtifactSha256 || value.artifact.aggregateSha256 !== config.aggregateSha256 || value.ownerEventId !== config.ownerEvent.id) throw new Error("NOSTR_RELAY_EVENT_INVALID");
         return publishAttestation({ operationId: value.operationId, event: config.attestationEvent, relays: config.relays });

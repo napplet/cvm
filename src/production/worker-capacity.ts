@@ -26,6 +26,8 @@ export type ProductionReadyCapacityPort = ReadyCapacityPort & Readonly<{
   /** Prepare this exact authenticated future binding; never credit or admit it. */
   prewarm(input: Readonly<{ intentReference: string; expectedSessionBindingDigest: string }>): Promise<CapacityObservation>;
   inspect(input: Readonly<{ intentReference: string }>): Promise<CapacityRecord | undefined>;
+  /** Query-only proof for a previously requested worker release. */
+  observeRelease(input: Readonly<{ intentReference: string; reference: string }>): Promise<Readonly<{ status: "terminated" | "pending" | "unknown" | "blocked" }>>;
 }>;
 const capacities = new WeakSet<object>();
 export function assertProductionReadyCapacity(value: unknown): asserts value is ProductionReadyCapacityPort {
@@ -34,7 +36,9 @@ export function assertProductionReadyCapacity(value: unknown): asserts value is 
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 const canonical = (value: unknown) => JSON.stringify(value);
-const workerOperationId = (intentReference: string, binding: string) => `capacity-${digest(`${intentReference}:${binding}`).slice(0, 48)}`;
+/* `capacity-` is nine bytes; keep the provider operation under the worker
+ * client's 49-character validation ceiling while retaining 160 bits. */
+const workerOperationId = (intentReference: string, binding: string) => `capacity-${digest(`${intentReference}:${binding}`).slice(0, 40)}`;
 
 /**
  * Immediate-only, durable worker capacity.  It creates/reconciles exactly one
@@ -143,10 +147,22 @@ export function createProductionReadyCapacity(input: Readonly<{
     async release(value: Readonly<{ intentReference: string; reference: string }>) {
       const intentReference = Intent.parse(value.intentReference); const reference = Reference.parse(value.reference); const record = await load(intentReference);
       if (!record || record.reference !== reference) throw new Error("PRODUCTION_CAPACITY_RELEASE_BINDING_REQUIRED");
+      const observed = provider === "modal"
+        ? await input.workers.modal.observeTermination({ operationId: record.workerOperationId })
+        : await input.workers.fly.observeTermination({ operationId: record.workerOperationId });
+      if (observed.status === "terminated") return;
+      if (observed.status !== "pending") throw new Error("PRODUCTION_CAPACITY_RELEASE_UNCONFIRMED");
       const terminated = provider === "modal"
         ? await input.workers.modal.terminate({ operationId: record.workerOperationId })
         : await input.workers.fly.terminate({ operationId: record.workerOperationId });
       if (terminated.status !== "terminated") throw new Error("PRODUCTION_CAPACITY_RELEASE_UNCONFIRMED");
+    },
+    async observeRelease(value) {
+      const intentReference = Intent.parse(value.intentReference); const reference = Reference.parse(value.reference); const record = await load(intentReference);
+      if (!record || record.reference !== reference) return Object.freeze({ status: "blocked" as const });
+      return provider === "modal"
+        ? input.workers.modal.observeTermination({ operationId: record.workerOperationId })
+        : input.workers.fly.observeTermination({ operationId: record.workerOperationId });
     },
   });
   capacities.add(capacity);

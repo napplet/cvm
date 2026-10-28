@@ -65,11 +65,18 @@ export const ModelLookupObservationSchema = z.discriminatedUnion("status", [
 export const ModelObservationSchema = ModelDispatchObservationSchema;
 
 export type ProviderOperationIntent = z.infer<typeof ProviderOperationIntentSchema>;
+export type SourceProposalFile = z.infer<typeof SourceProposalFileSchema>;
 export type SourceProposal = z.infer<typeof SourceProposalSchema>;
 export type NormalizedUsageReceipt = z.infer<typeof NormalizedUsageReceiptSchema>;
 export type ModelDispatchObservation = z.infer<typeof ModelDispatchObservationSchema>;
 export type ModelObservation = ModelDispatchObservation;
 export type ModelLookupObservation = z.infer<typeof ModelLookupObservationSchema>;
+
+/** Production-neutral durable generated-source lookup. Implementations may
+ * persist richer provider evidence, but Phase 4 needs only this scoped read. */
+export interface SourceProposalLookup {
+  lookup(input: Readonly<{ intent: ProviderOperationIntent; reference?: string; sha256?: string }>): Promise<Readonly<{ proposal: SourceProposal }> | undefined>;
+}
 
 /** The sole provider boundary: project-owned values in, safe normalized observations out. */
 export interface ModelGateway {

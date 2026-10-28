@@ -37,7 +37,7 @@ integration("signed WSS admissions use real SQL original-operation claims withou
     await run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", cert, "-days", "1", "-subj", "/CN=localhost", "-addext", "subjectAltName=IP:127.0.0.1,DNS:localhost"]);
     const output = await run([process.execPath, "tests/release/helpers/contextvm-certification-fixture.ts", `postgresql://certification_test@127.0.0.1:${port}/postgres`, cert, key], 45000, { ...process.env, NODE_EXTRA_CA_CERTS: cert, NAPPLET_CVM_TEST_EXTERNAL_EFFECTS: "deny" });
     const result = JSON.parse(output.split("\n").find(line => line.startsWith('{"passed":'))!);
-    expect(result).toEqual({ passed: true, signedAdmissionCalls: 3, signedGenerationCalls: 0, lostResponseRedispatches: 0 });
-    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.release_operation_journal WHERE namespace='contextvm-client-test'")).rows[0].count).toBe(7);
+    expect(result).toEqual({ passed: true, signedAdmissionCalls: 5, signedGenerationCalls: 0, lostResponseRedispatches: 0 });
+    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.release_operation_journal WHERE namespace='contextvm-client-test'")).rows[0].count).toBe(15);
   } finally { await admin?.end(); await run(["docker", "rm", "-f", name]).catch(() => undefined); await rm(directory, { recursive: true, force: true }); }
 }, 60000);

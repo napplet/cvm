@@ -30,7 +30,12 @@ export function createProductionCoreSuiteAdapters(input: Input): ProductionCoreS
     const operationId = `core:${candidate.provider}:${kind.replaceAll(".", "-")}:${digest(payload)}`;
     // Re-entry makes the client observe the same original operation. A pending
     // result blocks this run; the suite never supplies a replacement ID.
-    const result = await input.control.execute({ operationId, kind, payload });
+    let result = await input.control.execute({ operationId, kind, payload });
+    if (result.state === "unknown" || result.state === "pending") {
+      // One bounded original GET may recover an acknowledgement lost after
+      // the effect. An unresolved result stays blocked; never POST again.
+      result = await input.control.observe({ operationId, kind, requestSha256: result.requestSha256 });
+    }
     if (result.state !== "completed" || result.result === undefined) throw new Error("CORE_SUITE_ORIGINAL_OPERATION_PENDING");
     return result.result;
   }

@@ -28,16 +28,16 @@ ACTIVE_NON_LOOPBACK=$("$NET" ip -o link show | "$NET" grep -v '^1: lo:' | "$NET"
 [ -z "$ACTIVE_NON_LOOPBACK" ] || exit 126
 [ -z "$("$NET" ip route show default)" ] || exit 126
 mount_bounded() {
-  path=$1 size_limit=$2 options=$3 owner=${4-65532}
+  path=$1 size_limit=$2 options=$3 owner=${4-65532} mode=${5-0700}
   mkdir -p "$path"
   if ! mountpoint -q "$path"; then
-    mount -t tmpfs -o "size=$size_limit,mode=0700,nosuid,nodev,$options" tmpfs "$path" || exit 126
+    mount -t tmpfs -o "size=$size_limit,mode=$mode,nosuid,nodev,$options" tmpfs "$path" || exit 126
   fi
   [ "$(findmnt -n -o FSTYPE --target "$path")" = "tmpfs" ] || exit 126
   size=$(findmnt -n -o SIZE --bytes --target "$path")
   [ "$size" -gt 0 ] && [ "$size" -le "$size_limit" ] || exit 126
   chown "$owner:$owner" "$path" || exit 126
-  chmod 0700 "$path" || exit 126
+  chmod "$mode" "$path" || exit 126
 }
 # Generated work, HOME caches, and /tmp are all independently bounded.  Do
 # not accept the image overlay for any writable path: it is not a quota.
@@ -46,11 +46,12 @@ mount_bounded() {
 # workload that must run its own build graph; the boundary is the bounded tmpfs
 # plus non-root/no-caps/no-new-privileges and verified network denial.  HOME
 # and /tmp do not execute project tooling and remain noexec.
-mount_bounded /workspace 536870912 exec 0
+# Status queries share the existing mount with running builds. Never narrow
+# its traversal permissions even momentarily: a concurrent compiler read can
+# otherwise receive EACCES and report an immutable library as missing.
+mount_bounded /workspace 536870912 exec 0 1777
 # Sticky, root-owned parent prevents generated code from replacing a trusted
 # job's project directory while still permitting its ordinary workspace files.
-chown 0:0 /workspace
-chmod 1777 /workspace
 [ ! -L /workspace/jobs ] || exit 126
 mkdir -p /workspace/jobs
 chown 0:0 /workspace/jobs

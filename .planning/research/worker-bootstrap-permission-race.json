@@ -1,0 +1,39 @@
+{
+  "after": {
+    "image": "napplet-cvm-production-worker:diagnostic-bootstrap-stable",
+    "localMechanism": true,
+    "originalStatusPolls": 80,
+    "probe": {
+      "errors": {},
+      "reads": 3717150,
+      "uid": 65532
+    },
+    "realProviderEvidence": false
+  },
+  "afterBootstrapSha256": "4972aa599d56982a745fb66486397cb1d649bf0ac4c2605b7f3314db7342acbd",
+  "before": {
+    "image": "napplet-cvm-production-worker:diagnostic-readable",
+    "localMechanism": true,
+    "originalStatusPolls": 82,
+    "probe": {
+      "errors": {
+        "EACCES": 9459
+      },
+      "reads": 3631740,
+      "uid": 65532
+    },
+    "realProviderEvidence": false
+  },
+  "beforeBootstrapSha256": "e3cd9ad0c363606884a67c08c29b2ab16990d0feb507a762d91b9a1eee56bebe",
+  "ciFailure": {
+    "code": "JOB_COMMAND_FAILED",
+    "diagnostic": "TS6053: lib.dom.d.ts not found",
+    "failedCommand": "pnpm verify",
+    "jobId": 122722343577,
+    "runId": 40660590119
+  },
+  "conclusion": "Repeated bootstrap status queries temporarily applied root-only workspace traversal mode, causing concurrent generated-UID reads to fail with EACCES. Preserve the existing sticky workspace mode for every mount entry.",
+  "kind": "worker-bootstrap-permission-race",
+  "localMechanism": true,
+  "realProviderEvidence": false
+}

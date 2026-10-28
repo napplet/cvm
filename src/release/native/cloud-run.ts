@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  ReleaseAuthorizationReceiptSchema,
   validateAuthorizationReceipt,
   validateAuthorizationRequest,
   type ReleaseAuthorizationReceipt,
@@ -46,14 +47,17 @@ const ObservationSchema = z.union([
   z.object({ status: z.enum(["missing", "pending", "unknown", "blocked"]) }).strict(),
 ]);
 type CloudRunObservation = z.infer<typeof ObservationSchema>;
+const CleanupObservationSchema = z.object({ status: z.enum(["cleaned", "missing", "pending", "unknown", "blocked"]) }).strict();
 
 export type CloudRunControlPlanePort = Readonly<{
   /** Persisting an original operation is a coordinator-owned, injected durability seam. */
   persist(input: Readonly<{ operationId: string; kind: "deploy" | "cleanup"; authorizationRequestSha256: string; authorizationReceiptSha256: string; projectScopeSha256: string }>): Promise<void>;
   /** Read-only reconciliation of exactly one run-owned service operation. */
   observe(input: Readonly<{ operationId: string; projectId: string; region: string; serviceName: string }>): Promise<unknown>;
+  /** Read-only reconciliation of the original service and its cleanup intent. Never dispatches deletion. */
+  observeCleanup(input: Readonly<{ operationId: string; projectId: string; region: string; serviceName: string }>): Promise<unknown>;
   deploy(input: Readonly<{ operationId: string; projectId: string; region: string; serviceName: string; imageDigest: string; serviceAccountReference: string; environmentReferenceSha256: string; minimumInstances: 3; ingress: "internal-and-cloud-load-balancing"; concurrency: number; admissionRefusal: "capacity_unavailable" }>): Promise<void>;
-  /** Never accepts arbitrary service names: this adapter supplies the bound run-owned name. */
+  /** Never accepts arbitrary service names. It resolves only after deletion is actually confirmed. */
   deleteService(input: Readonly<{ operationId: string; projectId: string; region: string; serviceName: string }>): Promise<void>;
 }>;
 
@@ -73,10 +77,11 @@ function cloudRunScopeIsBound(request: ReleaseAuthorizationRequest, config: Clou
     && scopes.length === 1 && scopes[0]?.accountScopeSha256 === config.accountScopeSha256 && scopes[0]?.projectScopeSha256 === config.projectScopeSha256;
 }
 
-async function authorize(input: CloudRunProviderInput, config: CloudRunConfig, nowMs: number): Promise<Authorized> {
+async function authorize(input: CloudRunProviderInput, config: CloudRunConfig, nowMs: number, readOnly = false): Promise<Authorized> {
   try {
     const request = await validateAuthorizationRequest(input.request);
-    const receipt = await validateAuthorizationReceipt({ request, receipt: input.receipt, nowMs });
+    const originalReceipt = ReleaseAuthorizationReceiptSchema.parse(input.receipt);
+    const receipt = await validateAuthorizationReceipt({ request, receipt: originalReceipt, nowMs: readOnly ? Math.min(nowMs, originalReceipt.expiresAtMs - 1) : nowMs });
     const operationId = OperationIdSchema.parse(input.operationId);
     const region = RegionSchema.parse(input.region);
     if (request.candidateSha256 !== config.candidateSha256 || request.topologySha256 !== config.topologySha256
@@ -135,13 +140,18 @@ export function createNativeCloudRunProvider(input: Readonly<{ config: unknown; 
       if (observation.status !== "completed") return Object.freeze({ status: observation.status, operationId: authorized.operationId });
       return Object.freeze({ status: "completed" as const, operationId: authorized.operationId, revisionSha256: await sha256(observation.revisionName), resourceIdentitySha256: await sha256({ projectId: config.projectId, region: authorized.region, serviceName: config.serviceName, imageDigest: config.imageDigest, configSha256: await configSha256 }) });
     },
+    async observeCleanup(raw: CloudRunProviderInput & Readonly<{ runOwnedServiceName: string }>) {
+      const authorized = await authorize(raw, config, now(), true);
+      if (ServiceNameSchema.safeParse(raw.runOwnedServiceName).data !== config.serviceName) throw new Error("CLOUD_RUN_CLEANUP_SCOPE_INVALID");
+      return CleanupObservationSchema.parse(await input.port.observeCleanup({ operationId: `${authorized.operationId}:cleanup`, projectId: config.projectId, region: authorized.region, serviceName: config.serviceName }));
+    },
     async cleanup(raw: CloudRunProviderInput & Readonly<{ runOwnedServiceName: string }>) {
       const authorized = await authorize(raw, config, now());
       if (ServiceNameSchema.safeParse(raw.runOwnedServiceName).data !== config.serviceName) throw new Error("CLOUD_RUN_CLEANUP_SCOPE_INVALID");
       const operationId = `${authorized.operationId}:cleanup`;
       await input.port.persist({ operationId, kind: "cleanup", authorizationRequestSha256: authorized.request.authorizationRequestSha256, authorizationReceiptSha256: authorized.receipt.authorizationReceiptSha256, projectScopeSha256: config.projectScopeSha256 });
-      const existing = ObservationSchema.parse(await input.port.observe({ operationId, projectId: config.projectId, region: authorized.region, serviceName: config.serviceName }));
-      if (existing.status === "completed") throw new Error("CLOUD_RUN_CLEANUP_RECONCILIATION_PENDING");
+      const existing = CleanupObservationSchema.parse(await input.port.observeCleanup({ operationId, projectId: config.projectId, region: authorized.region, serviceName: config.serviceName }));
+      if (existing.status === "cleaned") return Object.freeze({ status: "cleaned" as const, operationId });
       if (existing.status !== "missing") throw new Error(existing.status === "blocked" ? "CLOUD_RUN_OPERATION_BLOCKED" : "CLOUD_RUN_RECONCILIATION_PENDING");
       const immediate = await authorize(raw, config, now());
       await input.port.deleteService({ operationId, projectId: config.projectId, region: immediate.region, serviceName: config.serviceName });

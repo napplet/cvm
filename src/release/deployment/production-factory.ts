@@ -8,6 +8,12 @@ import {
   type ProductionOperationalDependencies,
 } from "./production-dependencies";
 
+/** Hash-pinned receipt execution imports this named factory from the same
+ * production module as the static readiness inventory. The implementation is
+ * intentionally mounted/runtime-owned: preapproval only reads this export and
+ * never constructs it. */
+export { createProductionCertificationSessionMaterial } from "../../production/mounted-session-material";
+
 /**
  * Names are controller-owned opaque locators, never environment variable names
  * or secret values.  NWC Lightning and funded Cashu remain independent
@@ -57,6 +63,7 @@ export function assessProductionFactoryReadiness(input: ReleaseExecutionFactoryI
 function runtime(dependencies: ProductionOperationalDependencies): DeploymentFactoryRuntime {
   return Object.freeze({
     registry: dependencies.registry,
+    ...(dependencies.collectorImage ? { collectorImage: dependencies.collectorImage } : {}),
     prepareAuthorizedExecution: dependencies.prepareAuthorizedExecution,
   });
 }

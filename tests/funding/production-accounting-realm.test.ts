@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createRequire } from "node:module";
+import { Pool, type PoolClient } from "pg";
 import { createAccountingRealm, assertProductionAccountingConfiguration } from "../../src/funding/accounting-realm";
 import { accountIdForPrincipal } from "../../src/domain/account-command";
 import { createFundedCore } from "../../src/phase-03/funded-core";
@@ -38,14 +38,13 @@ postgresIsolation("real PostgreSQL keeps development history read-only and produ
     if (code !== 0) throw new Error(`DOCKER_FAILED:${args[0]}:${stderr.slice(0, 300)}`);
     return stdout.trim();
   };
-  let pool: { query(text: string, values?: readonly unknown[]): Promise<{ rows: Record<string, unknown>[] }>; end(): Promise<void> } | undefined;
-  let appPool: { connect(): Promise<any>; end(): Promise<void> } | undefined;
-  let productionClient: { query(text: string, values?: readonly unknown[]): Promise<{ rows: Record<string, unknown>[] }>; release(): void } | undefined;
+  let pool: Pool | undefined;
+  let appPool: Pool | undefined;
+  let productionClient: PoolClient | undefined;
   try {
     await run(["run", "--detach", "--rm", "--name", name, "--network", "bridge", "--publish", "127.0.0.1::5432", "-e", "POSTGRES_HOST_AUTH_METHOD=trust", "postgres:17-alpine"]);
     const port = (await run(["port", name, "5432/tcp"])).match(/127\.0\.0\.1:(\d+)/u)?.[1];
     if (!port) throw new Error("POSTGRES_PORT_UNAVAILABLE");
-    const { Pool } = createRequire(import.meta.url)("pg") as { Pool: new (options: Record<string, unknown>) => typeof pool };
     pool = new Pool({ connectionString: `postgresql://postgres@127.0.0.1:${port}/postgres`, connectionTimeoutMillis: 2_000 });
     for (let attempt = 0; attempt < 90; attempt += 1) {
       try { await pool.query("SELECT 1"); break; } catch (error) { if (attempt === 89) throw error; await Bun.sleep(250); }
@@ -92,7 +91,7 @@ postgresIsolation("real PostgreSQL keeps development history read-only and produ
 
     expect((await pool.query("SELECT settled_available::text FROM public.account_balance_projection WHERE account_id=$1", [productionAccountId])).rows[0]).toEqual({ settled_available: "41009" });
     expect((await pool.query("SELECT count(*)::int AS count FROM production_real.funding_accounts")).rows[0]).toEqual({ count: 0 });
-    appPool = new Pool({ connectionString: `postgresql://napplet_production_test@127.0.0.1:${port}/postgres`, connectionTimeoutMillis: 2_000 }) as never;
+    appPool = new Pool({ connectionString: `postgresql://napplet_production_test@127.0.0.1:${port}/postgres`, connectionTimeoutMillis: 2_000 });
     const database = new PostgresFundingDatabase(appPool as never, { realm: "production-real", deadlineMs: 1_000 });
     const funding = new FundingService(database.funding);
     expect((await funding.status(principal)).available).toBe("0");
@@ -108,7 +107,7 @@ postgresIsolation("real PostgreSQL keeps development history read-only and produ
     ]);
     expect([cashuOne, cashuTwo].filter((claim) => claim.claimed)).toHaveLength(1);
     const cashuWinner = cashuOne.claimed ? cashuOne.record : cashuTwo.record;
-    await database.cashu.prepareCustody(cashuWinner.result.topUpId, { operationId: `cashu-swap:${cashuWinner.result.topUpId}`, mintUrl: "https://mint.example", keysetId: "keyset", unit: "sat", amount: "21", maxFee: "0", inputFeePpk: 0, feeAmount: "0", expectedOutputAmount: "21", inputProtectedId: cashuWinner.protectedId, outputDataProtectedId: "protected:output-data" });
+    await database.cashu.prepareCustody(cashuWinner.result.topUpId, { operationId: `cashu-swap:${cashuWinner.result.topUpId}`, mintUrl: "https://mint.example", keysetId: "keyset", unit: "sat", amount: "21", maxFee: "0", inputFeePpk: 0, feeAmount: "0", expectedOutputAmount: "21", inputProtectedId: cashuWinner.protectedId, outputDataProtectedId: "protected:output-data", outputDataDigest: "4".repeat(64) });
     const dispatches = await Promise.all([database.cashu.claimCustodyDispatch(cashuWinner.result.topUpId), database.cashu.claimCustodyDispatch(cashuWinner.result.topUpId)]);
     expect(dispatches.filter(Boolean)).toHaveLength(1);
     await database.cashu.recordOwnedCustodyOutputs(cashuWinner.result.topUpId, "protected:owned-output", "a".repeat(64));
@@ -140,7 +139,7 @@ postgresIsolation("real PostgreSQL keeps development history read-only and produ
       funding.execute({ principal, kind: "funded_admission", idempotencyKey: "cap-one", policyVersion: "live-policy", protocolVersion: "live-protocol", payload: { requestedCap: "25", unit: "sat", capacity: { reference: "capacity:one", usable: true } } }),
       funding.execute({ principal, kind: "funded_admission", idempotencyKey: "cap-two", policyVersion: "live-policy", protocolVersion: "live-protocol", payload: { requestedCap: "25", unit: "sat", capacity: { reference: "capacity:two", usable: true } } }),
     ]);
-    expect(competingAdmissions.map((result) => Number(result.approvedCap)).reduce((total, amount) => total + amount, 0)).toBe(30);
+    expect(competingAdmissions.map((result) => { if (result.status !== "accepted") throw new Error("ADMISSION_RESULT_REQUIRED"); return Number(result.approvedCap); }).reduce((total, amount) => total + amount, 0)).toBe(30);
     expect((await funding.status(principal)).available).toBe("0");
     expect(await database.uncertainRailOperations.createOrReplay({ operationId: "op:one", accountId: productionAccountId, rail: "lightning", providerLocator: "locator:one", stableLabel: "label:one", state: "created" })).toMatchObject({ created: true });
     expect(await database.uncertainRailOperations.createOrReplay({ operationId: "op:one", accountId: productionAccountId, rail: "lightning", providerLocator: "locator:one", stableLabel: "label:one", state: "created" })).toMatchObject({ created: false });

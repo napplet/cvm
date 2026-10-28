@@ -31,14 +31,30 @@ export interface CompatibleHostBrowserPort {
     interactions: typeof INTERACTIONS;
   }>): Promise<Readonly<{
     browserVersion: string;
-    reportSha256: string;
     consoleErrors: readonly string[];
-    directAuthorityDenied: boolean;
-    responsiveAccessible: boolean;
-    capabilityMediated: boolean;
-    minimumMeasuredTargetPx?: number;
-    noClippedStepLabels?: boolean;
-    noNestedHorizontalScroll?: boolean;
+    observations: readonly Readonly<{
+      viewportWidthPx: number;
+      screenshotSha256: string;
+      reportSha256: string;
+      layout: "pass" | "blocked" | "not_observed";
+      targets: "pass" | "blocked" | "not_observed";
+      accessibility: "pass" | "blocked" | "not_observed";
+      keyboardFocus: "pass" | "blocked" | "not_observed";
+      dialog: "pass" | "blocked" | "not_observed";
+      liveRegion: "pass" | "blocked" | "not_observed";
+      contrast: "pass" | "blocked" | "not_observed";
+      reducedMotion: "pass" | "blocked" | "not_observed";
+      stateInventory: "pass" | "blocked" | "not_observed";
+      identifierCoverage: "pass" | "blocked" | "not_observed";
+      minimumMeasuredTargetPx: number;
+      noClippedStepLabels: boolean;
+      noNestedHorizontalScroll: boolean;
+    }>[];
+    hostPreview: "pass" | "blocked" | "not_observed";
+    hostSigner: "pass" | "blocked" | "not_observed";
+    externalSigner: "pass" | "blocked" | "not_observed";
+    reconciliation: "pass" | "blocked" | "not_observed";
+    launchCertificationBlockedState: "pass" | "blocked" | "not_observed";
   }>>;
 }
 
@@ -53,72 +69,22 @@ export class CompatibleHostBrowserObservationPort {
   async runBrowser(identity: CompatibleHostIdentity): Promise<HostBrowserEvidence> {
     try {
       const loaded = await this.dependencies.packageHost.loadSealedNapplet(identity);
-      if (loaded.sealedArtifactSha256 !== identity.sealedArtifactSha256 || loaded.aggregateSha256 !== identity.aggregateSha256) {
-        return blockedEvidence(identity, "identity-mismatch");
-      }
+      if (loaded.sealedArtifactSha256 !== identity.sealedArtifactSha256 || loaded.aggregateSha256 !== identity.aggregateSha256) throw new Error("COMPATIBLE_HOST_IDENTITY_MISMATCH");
       const browser = await this.dependencies.browser.observe({ ...identity, viewports: VIEWPORTS, interactions: INTERACTIONS });
-      const passed = this.dependencies.browser.kind === "chromium"
-        && browser.consoleErrors.length === 0
-        && browser.directAuthorityDenied
-        && browser.responsiveAccessible
-        && browser.capabilityMediated
-        && (browser.minimumMeasuredTargetPx ?? 44) >= 44
-        && (browser.noClippedStepLabels ?? true)
-        && (browser.noNestedHorizontalScroll ?? true);
-      const status = passed ? "pass" : "blocked" as const;
+      if (this.dependencies.browser.kind !== "chromium" || browser.consoleErrors.length !== 0 || browser.observations.length !== VIEWPORTS.length) throw new Error("COMPATIBLE_HOST_BROWSER_EVIDENCE_INVALID");
       return HostBrowserEvidenceSchema.parse({
         hostVersion: `${loaded.hostVersion};${loaded.packageVersion}`,
         runtimeVersion: `${loaded.runtimeVersion};${browser.browserVersion}`,
         sealedArtifactSha256: identity.sealedArtifactSha256,
         presentationInputSha256: identity.aggregateSha256,
         execution: "real_compatible_host_browser",
-        observations: VIEWPORTS.map(({ width }) => observation(width, browser.reportSha256, status, browser)),
-        hostPreview: status,
-        hostSigner: status,
-        externalSigner: status,
-        reconciliation: status,
-        launchCertificationBlockedState: status,
+        observations: browser.observations,
+        hostPreview: browser.hostPreview,
+        hostSigner: browser.hostSigner,
+        externalSigner: browser.externalSigner,
+        reconciliation: browser.reconciliation,
+        launchCertificationBlockedState: browser.launchCertificationBlockedState,
       });
-    } catch {
-      return blockedEvidence(identity, "host-or-browser-unavailable");
-    }
+    } catch { throw new Error("COMPATIBLE_HOST_BROWSER_EVIDENCE_UNAVAILABLE"); }
   }
-}
-
-function observation(viewportWidthPx: number, reportSha256: string, status: "pass" | "blocked", browser: Readonly<{ minimumMeasuredTargetPx?: number; noClippedStepLabels?: boolean; noNestedHorizontalScroll?: boolean }>) {
-  return {
-    viewportWidthPx,
-    screenshotSha256: reportSha256,
-    reportSha256,
-    layout: status,
-    targets: status,
-    accessibility: status,
-    keyboardFocus: status,
-    dialog: status,
-    liveRegion: status,
-    contrast: status,
-    reducedMotion: status,
-    stateInventory: status,
-    identifierCoverage: status,
-    minimumMeasuredTargetPx: browser.minimumMeasuredTargetPx ?? 44,
-    noClippedStepLabels: browser.noClippedStepLabels ?? true,
-    noNestedHorizontalScroll: browser.noNestedHorizontalScroll ?? true,
-  } as const;
-}
-
-function blockedEvidence(identity: CompatibleHostIdentity, version: string): HostBrowserEvidence {
-  const status = "blocked" as const;
-  return HostBrowserEvidenceSchema.parse({
-    hostVersion: version,
-    runtimeVersion: version,
-    sealedArtifactSha256: identity.sealedArtifactSha256,
-    presentationInputSha256: identity.aggregateSha256,
-    execution: "real_compatible_host_browser",
-    observations: VIEWPORTS.map(({ width }) => observation(width, identity.aggregateSha256, status, {})),
-    hostPreview: status,
-    hostSigner: status,
-    externalSigner: status,
-    reconciliation: status,
-    launchCertificationBlockedState: status,
-  });
 }

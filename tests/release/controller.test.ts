@@ -7,12 +7,23 @@ import { createAuthorizationReceipt, createAuthorizationRequest, validateAuthori
 import { canonicalJson } from "../../src/promotion/schema";
 import { createReleaseProviderRegistry, type ReleaseAuthorizationReceipt } from "../../src/release/providers";
 import { RELEASE_PROVIDER_IDS } from "../../src/release/topology";
+import { observeUploadedCollectorRegistryImage } from "../../src/release/collector-image";
 
 const repositoryRoot = join(import.meta.dir, "..", "..");
 const candidatePath = join(repositoryRoot, "toolchains/candidates/initial.json");
 
 async function workspace(): Promise<string> {
   return mkdtemp(join(tmpdir(), "napplet-cvm-release-controller-"));
+}
+
+async function observedCollector() {
+  const digest = "c".repeat(64);
+  return observeUploadedCollectorRegistryImage({
+    plannedRegistryReference: `registry.example/napplet-cvm/collector@sha256:${digest}`,
+    registryAvailability: "not_uploaded", localOciManifestDigest: `sha256:${digest}`, localOciConfigDigest: `sha256:${"d".repeat(64)}`,
+    platform: { os: "linux", architecture: "amd64" }, baseImage: `otel/opentelemetry-collector@sha256:${"e".repeat(64)}`,
+    dockerfileSha256: "f".repeat(64), collectorConfigSha256: "a".repeat(64), ociLayoutPath: "/tmp/collector.oci.tar", ociLayoutSha256: "b".repeat(64),
+  }, { async observeUploadedManifest(input) { return { ...input, observedAtMs: 1 }; } });
 }
 
 test("authorization receipt integrity rejects changed scope, expired receipt, and cost ceiling tampering before effects", async () => {
@@ -188,7 +199,8 @@ test("authorization-required state requires an intact monotonic prior discovery 
 
 test("authorized provider execution records one exact deployed topology and resumes without duplicate mutations", async () => {
   const root = await workspace();
-  const dryRun = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000 });
+  const collectorImage = await observedCollector();
+  const dryRun = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000, collectorImage });
   const effects: string[] = [];
   const registry = createReleaseProviderRegistry({
     now: () => 1_000,
@@ -203,21 +215,22 @@ test("authorized provider execution records one exact deployed topology and resu
   });
   const receipt = await createAuthorizationReceipt(dryRun.authorizationRequest);
 
-  const controller = new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000 });
+  const controller = new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000, collectorImage });
   const first = await controller.provision({ receipt, registry });
   expect(first.state.status).toBe("topology_ready");
   expect(first.topology.deployment.resources).toHaveLength(16);
   expect(first.topology.deployment.limitations).toContain("DATABASE_CONTINUITY_NOT_CERTIFIED");
   expect(effects).toHaveLength(16);
 
-  const resumed = await new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 2_000 }).provision({ receipt, registry });
+  const resumed = await new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 2_000, collectorImage }).provision({ receipt, registry });
   expect(resumed.topology.topologySha256).toBe(first.topology.topologySha256);
   expect(effects).toHaveLength(16);
 });
 
 test("ambiguous provider execution resumes by observing the original operation without protected evidence writes", async () => {
   const root = await workspace();
-  const dryRun = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000 });
+  const collectorImage = await observedCollector();
+  const dryRun = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000, collectorImage });
   let modalApplies = 0;
   let modalObserves = 0;
   let protectedEvidenceWrites = 0;
@@ -240,8 +253,8 @@ test("ambiguous provider execution resumes by observing the original operation w
   });
   const receipt = await createAuthorizationReceipt(dryRun.authorizationRequest);
 
-  await expect(new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000 }).provision({ receipt, registry })).rejects.toThrow("RELEASE_CONTROLLER_PROVIDER_AMBIGUOUS");
-  const resumed = await new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 2_000 }).provision({ receipt, registry });
+  await expect(new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000, collectorImage }).provision({ receipt, registry })).rejects.toThrow("RELEASE_CONTROLLER_PROVIDER_AMBIGUOUS");
+  const resumed = await new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 2_000, collectorImage }).provision({ receipt, registry });
   expect(resumed.state.status).toBe("topology_ready");
   expect(modalApplies).toBe(1);
   expect(modalObserves).toBe(1);

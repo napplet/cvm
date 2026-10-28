@@ -2,11 +2,13 @@ import { computeCanonicalInvocationIdentity } from "@contextvm/sdk/payments/cano
 import { ApplesauceRelayPool } from "@contextvm/sdk/relay";
 import { EncryptionMode, type NostrSigner } from "@contextvm/sdk/core";
 import { NostrClientTransport, NostrServerTransport } from "@contextvm/sdk/transport";
+import type { NostrEvent } from "nostr-tools";
 import { z } from "zod";
 import { ContextVmSdkBridge, type ContextVmInboundEnvelope, type ContextVmTransportPort, type ContextVmWireNotification, type ContextVmWireResponse } from "../../contextvm/sdk-bridge";
 import { PostgresOperationJournal, assertPostgresOperationJournal } from "./postgres-operation-journal";
 import { validateAuthorizationReceipt, validateAuthorizationRequest } from "../authorization";
 import { assertProductionAdmissionObserver, type ProductionCertificationCoreServices } from "../../production/certification-services";
+import { ProductionCertificationIngress } from "../../production/certification-ingress";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 const PubkeySchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
@@ -52,6 +54,16 @@ export type ContextVmCertificationClient = Readonly<{
   generate(input: Readonly<{ operationId: unknown; candidateId: unknown; admissionReference: unknown; maximum: unknown; idea: unknown }>): Promise<Readonly<{ operationId: string; state: "responded" | "unknown"; sessionId?: string; serverOperationId?: string }>>;
   /** Uses ContextVM's signed status tool only; it has no redispatch path. */
   observeOriginal(input: Readonly<{ operationId: unknown }>): Promise<Readonly<{ operationId: string; state: "pending" | "observed" | "unknown"; sessionId?: string; serverOperationId?: string }>>;
+  /** Re-delivers actual SDK-signed request events through the configured TLS
+   * relay pool. This is a bounded certification seam: it accepts only the
+   * two D-122 relay schedules and uses durable operation IDs supplied before
+   * any relay publication. */
+  exerciseRelayDeliveryFault(input: Readonly<{
+    fault: "duplicate" | "out_of_order";
+    first: Readonly<{ operationId: unknown; candidateId: unknown; requestedCap: unknown }>;
+    /** A ping is a signed transport-status query, not another admission. */
+    second?: Readonly<{ operationId: unknown; candidateId: unknown }>;
+  }>): Promise<Readonly<{ fault: "duplicate" | "out_of_order"; operationIds: readonly string[]; eventIds: readonly string[]; deliveryOrder: readonly string[] }>>;
   close(): Promise<void>;
 }>;
 
@@ -71,6 +83,62 @@ const CertificationMaximumSchema = z.string().regex(/^(?:0|[1-9][0-9]{0,15})$/u)
 const CertificationIdeaSchema = z.string().min(1).max(20_000);
 
 type InvocationState = Readonly<{ state: "pending" }> | Readonly<{ state: "completed"; response: ContextVmWireResponse }>;
+
+type CapturedRelayEvent = NostrEvent;
+type RelayCapture = Readonly<{ held: boolean; events: CapturedRelayEvent[]; waiters: Set<() => void> }>;
+
+/** Captures the exact signed outer Nostr event emitted by the official SDK.
+ * A held capture intentionally delays only its own finite certification
+ * request(s), then republishes the same event objects through the real pool.
+ * It is not a replacement transport and it never manufactures event IDs. */
+class CapturingRelayHandler {
+  #active: RelayCapture | undefined;
+  constructor(private readonly pool: ApplesauceRelayPool) {}
+  connect() { return this.pool.connect(); }
+  disconnect() { return this.pool.disconnect(); }
+  unsubscribe() { return this.pool.unsubscribe(); }
+  getRelayUrls() { return this.pool.getRelayUrls(); }
+  subscribe(...args: Parameters<ApplesauceRelayPool["subscribe"]>) { return this.pool.subscribe(...args); }
+  async publish(event: NostrEvent, options?: { abortSignal?: AbortSignal }): Promise<void> {
+    const active = this.#active;
+    if (active) {
+      active.events.push(structuredClone(event));
+      for (const notify of active.waiters) notify();
+      if (active.held) return;
+    }
+    await this.pool.publish(event, options);
+  }
+  begin(held: boolean): RelayCapture {
+    if (this.#active) throw new Error("CONTEXTVM_RELAY_CAPTURE_BUSY");
+    const capture: RelayCapture = { held, events: [], waiters: new Set() };
+    this.#active = capture;
+    return capture;
+  }
+  finish(capture: RelayCapture, expected: number): readonly CapturedRelayEvent[] {
+    if (this.#active !== capture || capture.events.length !== expected) throw new Error("CONTEXTVM_RELAY_CAPTURE_INVALID");
+    this.#active = undefined;
+    return Object.freeze(capture.events.map(event => structuredClone(event)));
+  }
+  cancel(capture: RelayCapture): void {
+    if (this.#active !== capture) return;
+    this.#active = undefined;
+    for (const notify of capture.waiters) notify();
+    capture.waiters.clear();
+  }
+  async waitFor(capture: RelayCapture, count: number): Promise<void> {
+    if (capture.events.length >= count) return;
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => { capture.waiters.delete(ready); reject(new Error("CONTEXTVM_RELAY_CAPTURE_TIMEOUT")); }, 10_000);
+      const ready = () => {
+        if (capture.events.length < count) return;
+        clearTimeout(timer); capture.waiters.delete(ready); resolve();
+      };
+      capture.waiters.add(ready);
+    });
+  }
+  async publishCaptured(event: CapturedRelayEvent): Promise<void> { await this.pool.publish(event); }
+}
+
 async function digest(value: unknown): Promise<string> {
   const bytes = new TextEncoder().encode(JSON.stringify(value));
   return [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -118,6 +186,9 @@ export async function openContextVmRelayTransport(input: Readonly<{
   serviceKeyReference: unknown; relaySetSha256: unknown; relays: unknown;
   signerBroker: ContextVmServiceSignerBroker; journal: ContextVmInvocationJournal;
   admissionObserver?: ProductionCertificationCoreServices;
+  /** Staged production accepts only this mounted disposable certification
+   * principal. Public ContextVM cutover is a separate authority. */
+  certificationClientPubkey?: unknown;
 }>): Promise<Readonly<{ transport: ContextVmTransportPort; start(): Promise<void>; close(): Promise<void> }>> {
   const serviceKeyReference = reference(input.serviceKeyReference);
   const relaySetSha256 = DigestSchema.parse(input.relaySetSha256);
@@ -125,13 +196,16 @@ export async function openContextVmRelayTransport(input: Readonly<{
   if (new Set(relays).size !== relays.length) throw new Error("CONTEXTVM_RELAY_SET_INVALID");
   try { assertPostgresOperationJournal(input.journal); } catch { throw new Error("CONTEXTVM_DURABLE_JOURNAL_REQUIRED"); }
   if (input.admissionObserver) assertProductionAdmissionObserver(input.admissionObserver);
+  const certificationClientPubkey = input.certificationClientPubkey === undefined ? undefined : PubkeySchema.parse(input.certificationClientPubkey);
   if (!input.signerBroker || typeof input.signerBroker.resolveContextVmSigner !== "function") throw new Error("CONTEXTVM_SIGNER_BROKER_REQUIRED");
   const signer = await input.signerBroker.resolveContextVmSigner({ reference: serviceKeyReference, purpose: "contextvm_service" });
   if (!signer || typeof signer.getPublicKey !== "function" || typeof signer.signEvent !== "function") throw new Error("CONTEXTVM_SIGNER_BROKER_INVALID");
   const pool = new ApplesauceRelayPool(relays, { reconnectBaseDelayMs: 1_000, reconnectMaxDelayMs: 30_000, publishOptions: { retries: 1, timeout: 10_000 } });
   const sdk = new NostrServerTransport({ signer, relayHandler: pool, encryptionMode: EncryptionMode.REQUIRED, injectClientPubkey: true, injectRequestEventId: true, isAnnouncedServer: true, logLevel: "warn" });
   const source = new ContextVmSdkBridge(sdk);
-  return Object.freeze({ transport: createDurableContextVmTransport({ source: input.admissionObserver ? input.admissionObserver.wrap(source) : source, journal: input.journal, relaySetSha256 }), start: () => sdk.start(), close: () => sdk.close() });
+  const ingress = certificationClientPubkey ? new ProductionCertificationIngress(certificationClientPubkey).wrap(source) : source;
+  const observed = input.admissionObserver ? input.admissionObserver.wrap(ingress) : ingress;
+  return Object.freeze({ transport: createDurableContextVmTransport({ source: observed, journal: input.journal, relaySetSha256 }), start: () => sdk.start(), close: () => sdk.close() });
 }
 
 /**
@@ -172,7 +246,9 @@ export async function openContextVmCertificationClient(input: Readonly<{
   await authorize();
   const signer = await input.signerBroker.resolveContextVmCertificationSigner({ reference: certificationKeyReference, purpose: "contextvm_certification_client" });
   if (!signer || typeof signer.getPublicKey !== "function" || typeof signer.signEvent !== "function") throw new Error("CONTEXTVM_CERTIFICATION_SIGNER_INVALID");
-  const client = new NostrClientTransport({ signer, relayHandler: relays, serverPubkey, encryptionMode: EncryptionMode.REQUIRED, logLevel: "warn" });
+  const relayPool = new ApplesauceRelayPool(relays, { reconnectBaseDelayMs: 1_000, reconnectMaxDelayMs: 30_000, publishOptions: { retries: 1, timeout: 10_000 } });
+  const relayHandler = new CapturingRelayHandler(relayPool);
+  const client = new NostrClientTransport({ signer, relayHandler, serverPubkey, encryptionMode: EncryptionMode.REQUIRED, logLevel: "warn" });
   const pending = new Map<string, Readonly<{ resolve(value: unknown): void; reject(reason: Error): void; timer: ReturnType<typeof setTimeout> }>>();
   client.onmessage = (message: unknown) => {
     if (!message || typeof message !== "object" || !("id" in message)) return;
@@ -201,6 +277,34 @@ export async function openContextVmCertificationClient(input: Readonly<{
     const principal = await signer.getPublicKey();
     return DigestSchema.parse(computeCanonicalInvocationIdentity(principal, "tools/call", { name: "start_session", arguments: inputValue }).invocationHash);
   }
+  async function queryRelayStatus(value: Readonly<{ operationId: string; candidateId: string }>): Promise<void> {
+    await authorize();
+    if (value.candidateId !== configuredCandidate) throw new Error("CONTEXTVM_CERTIFICATION_CANDIDATE_MISMATCH");
+    const requestIdentitySha256 = await digest({ candidateId: value.candidateId, topologySha256, serverPubkey, method: "ping" });
+    type StatusState = Readonly<{ operationId: string; candidateId: string; requestIdentitySha256: string; state: "pending" | "responded" | "method_unavailable" }>;
+    const key = `contextvm-relay-status:${value.operationId}`;
+    const claim = await input.journal.claim<StatusState>(key, requestIdentitySha256, { operationId: value.operationId, candidateId: value.candidateId, requestIdentitySha256, state: "pending" });
+    if (!claim.claimed) {
+      if (claim.record.value.operationId !== value.operationId || claim.record.value.candidateId !== value.candidateId || claim.record.value.requestIdentitySha256 !== requestIdentitySha256) throw new Error("CONTEXTVM_CERTIFICATION_OPERATION_CONFLICT");
+      if (claim.record.value.state === "pending") throw new Error("CONTEXTVM_RELAY_STATUS_ORIGINAL_UNRESOLVED");
+      return;
+    }
+    try {
+      await call(value.operationId, "ping", {});
+      if (!await input.journal.compareAndSet<StatusState>(key, requestIdentitySha256, claim.record.revision, { ...claim.record.value, state: "responded" })) throw new Error("CONTEXTVM_CERTIFICATION_JOURNAL_CONFLICT");
+    } catch (error) {
+      // The official server transport may reject the standard ping before it
+      // reaches a mounted application handler. That signed method-unavailable
+      // response is still the precise, read-only reordered transport result.
+      if (error instanceof Error && error.message === "ContextVM method unavailable") {
+        if (!await input.journal.compareAndSet<StatusState>(key, requestIdentitySha256, claim.record.revision, { ...claim.record.value, state: "method_unavailable" })) throw new Error("CONTEXTVM_CERTIFICATION_JOURNAL_CONFLICT");
+        return;
+      }
+      // This durable pending record is intentionally terminal for dispatch:
+      // recovery may observe it but cannot send a replacement ping event.
+      throw error;
+    }
+  }
   // Authenticate the supported MCP/ContextVM session before any funded tool
   // call. This is protocol setup only; it is neither a generation dispatch nor
   // a substitute for the durable original-operation record below.
@@ -211,6 +315,12 @@ export async function openContextVmCertificationClient(input: Readonly<{
   });
   await authorize();
   await client.send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} } as never);
+  type AdmissionInput = Readonly<{ operationId: string; candidateId: string; requestedCap: string }>;
+  const completeAdmission = (value: Awaited<ReturnType<ContextVmCertificationClient["admit"]>>): void => {
+    if (value.state !== "responded" || !value.admissionReference || value.outcome !== "accepted") {
+      throw new Error("CONTEXTVM_RELAY_FAULT_ORIGINAL_UNRESOLVED");
+    }
+  };
   const certificationClient: ContextVmCertificationClient = Object.freeze({
     async admit(value) {
       await authorize();
@@ -280,6 +390,46 @@ export async function openContextVmCertificationClient(input: Readonly<{
       const saved = await input.journal.compareAndSet(`contextvm-generate:${operationId}`, record.identitySha256, record.revision, { ...record.value, state: "observed" });
       if (!saved) throw new Error("CONTEXTVM_CERTIFICATION_JOURNAL_CONFLICT");
       return Object.freeze({ operationId, state: "observed" as const, sessionId: record.value.sessionId, ...(record.value.serverOperationId ? { serverOperationId: record.value.serverOperationId } : {}) });
+    },
+    async exerciseRelayDeliveryFault(value) {
+      await authorize();
+      const fault = z.enum(["duplicate", "out_of_order"]).parse(value.fault);
+      const first: AdmissionInput = {
+        operationId: CertificationOperationSchema.parse(value.first.operationId),
+        candidateId: CertificationCandidateSchema.parse(value.first.candidateId),
+        requestedCap: CertificationMaximumSchema.refine(item => BigInt(item) > 0n).parse(value.first.requestedCap),
+      };
+      if (first.candidateId !== configuredCandidate) throw new Error("CONTEXTVM_CERTIFICATION_CANDIDATE_MISMATCH");
+      if (fault === "duplicate") {
+        if (value.second !== undefined) throw new Error("CONTEXTVM_RELAY_FAULT_SECOND_OPERATION_INVALID");
+        const capture = relayHandler.begin(false);
+        try {
+          const original = await certificationClient.admit(first);
+          completeAdmission(original);
+          const [event] = relayHandler.finish(capture, 1);
+          await relayHandler.publishCaptured(event!);
+          return Object.freeze({ fault, operationIds: Object.freeze([first.operationId]), eventIds: Object.freeze([event!.id]), deliveryOrder: Object.freeze([event!.id, event!.id]) });
+        } finally { relayHandler.cancel(capture); }
+      }
+      if (!value.second) throw new Error("CONTEXTVM_RELAY_FAULT_SECOND_OPERATION_REQUIRED");
+      const second = {
+        operationId: CertificationOperationSchema.parse(value.second.operationId),
+        candidateId: CertificationCandidateSchema.parse(value.second.candidateId),
+      } as const;
+      if (second.candidateId !== configuredCandidate || second.operationId === first.operationId) throw new Error("CONTEXTVM_RELAY_FAULT_OPERATION_BINDING_INVALID");
+      const capture = relayHandler.begin(true);
+      try {
+        const firstDispatch = certificationClient.admit(first);
+        await relayHandler.waitFor(capture, 1);
+        const secondDispatch = queryRelayStatus(second);
+        await relayHandler.waitFor(capture, 2);
+        const [firstEvent, secondEvent] = relayHandler.finish(capture, 2);
+        await relayHandler.publishCaptured(secondEvent!);
+        await relayHandler.publishCaptured(firstEvent!);
+        const [firstResult] = await Promise.all([firstDispatch, secondDispatch]);
+        completeAdmission(firstResult);
+        return Object.freeze({ fault, operationIds: Object.freeze([first.operationId, second.operationId]), eventIds: Object.freeze([firstEvent!.id, secondEvent!.id]), deliveryOrder: Object.freeze([secondEvent!.id, firstEvent!.id]) });
+      } finally { relayHandler.cancel(capture); }
     },
     async close() {
       for (const active of pending.values()) { clearTimeout(active.timer); active.reject(new Error("CONTEXTVM_CERTIFICATION_CLOSED")); }

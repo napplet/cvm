@@ -4,28 +4,29 @@ import { dirname, join, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { z } from "zod";
 import { canonicalJson } from "../src/promotion/schema";
+import { measureProductionCollectorImage } from "../src/release/collector-image";
 
 const REGISTRY = "https://registry.npmjs.org";
-const OFFICIAL_REPOSITORY = "https://github.com/open-telemetry/opentelemetry-js";
-const OFFICIAL_DOCUMENTATION = "https://opentelemetry.io/docs/languages/js/exporters/";
+const OFFICIAL_REPOSITORY = "https://github.com/open-telemetry/opentelemetry-js" as const;
+const OFFICIAL_DOCUMENTATION = "https://opentelemetry.io/docs/languages/js/exporters/" as const;
 const CERTIFICATION_DIRECTORY = "evidence/certification";
 const AUDIT_POINTER_PATH = `${CERTIFICATION_DIRECTORY}/phase-07-otel-package-audit.json`;
 const APPROVAL_POINTER_PATH = `${CERTIFICATION_DIRECTORY}/phase-07-otel-package-approval.json`;
 const RECORD_DIRECTORY = `${CERTIFICATION_DIRECTORY}/otel-package-audits`;
 const APPROVAL_RECORD_DIRECTORY = `${CERTIFICATION_DIRECTORY}/otel-package-approvals`;
 const SMOKE_DIRECTORY = `${CERTIFICATION_DIRECTORY}/otel-package-smokes`;
+const RENEWAL_REVIEW_DIRECTORY = `${CERTIFICATION_DIRECTORY}/otel-package-renewal-reviews`;
 const FORBIDDEN_LIFECYCLE_SCRIPTS = new Set(["preinstall", "install", "postinstall", "prepare"]);
 const APPROVED_AUDIT_DIGEST = "d7fedf16f62e4088cf17442aa39786c33bb4af8f3377e8d121d76b108eaf22b3";
-const APPROVED_OPERATOR_RECORD_DIGEST = "09594baf4025de3081ec59005b529d2e031c06c38523b8c086efd97dd6e6cc7c";
-/** The second digest is the exact package manifest that adds the local-only
- * candidate certification command. It changes no dependency or package pin;
- * any other package.json byte sequence remains an approval-input drift. */
-const APPROVED_ROOT_PACKAGE_JSON_SHA256 = new Set([
-  "3d4df39618c30be83c425f794e861aa3543133b92bbacf05c5696065aaf566a9",
-  "cbcc433278d32391b075576ebd847ae30039f1d86ad229a149f5566856989f23",
-]);
-/** Official Docker Hub Collector manifest digest reviewed on 2026-08-05. */
-export const COLLECTOR_IMAGE = "otel/opentelemetry-collector@sha256:6ed874ea083d67a3085acfc75343f2ad11d9abe6006d7ea4a16e2dba9af14e49";
+/** Immutable 2026-10-28 delegated-operator decision for the unchanged
+ * six-package closure and current root inputs. The pending audit remains
+ * separate and never gains approval authority. */
+const APPROVED_OPERATOR_RECORD_DIGEST = "20b068453e1a39dd1411a9e66e13f732be66c6ffc52cf4adfa9f3564654c96ac";
+const APPROVED_ROOT_INPUTS = Object.freeze({ packageJsonSha256: "046a7ffc858c393c5289ffa106290fb8f01fe0365b84d9daa47aaaaa2f1a5b00", bunLockSha256: "0a2027fd7eaa6f6f609c9f1ec430a7b9095d6b45472f8833a3e00e6f0604c187" });
+/** The upstream base is only a recipe input. Smoke records bind the locally
+ * measured derived collector image instead of mounting configuration into a
+ * bare upstream container. */
+export const COLLECTOR_BASE_IMAGE = "otel/opentelemetry-collector@sha256:6ed874ea083d67a3085acfc75343f2ad11d9abe6006d7ea4a16e2dba9af14e49" as const;
 const EXACT_NAMES = [
   "@opentelemetry/api",
   "@opentelemetry/resources",
@@ -36,7 +37,7 @@ const EXACT_NAMES = [
 ] as const;
 
 type ExpectedPackage = {
-  readonly name: typeof EXACT_NAMES[number];
+  readonly name: string;
   readonly version: string;
   readonly integrity: string;
   readonly disposition: "APPROVED" | "SUS";
@@ -103,16 +104,34 @@ const SmokeRecordSchema = z.object({
   schemaVersion: z.literal(1), status: z.enum(["passed", "failed", "blocked"]), mode: z.literal("bun-collector-smoke"),
   approvedApprovalDigest: DigestSchema, approvedAuditDigest: DigestSchema, packageSetSha256: DigestSchema, bunVersion: z.string().min(1),
   packages: z.array(z.object({ name: z.string(), version: z.string() })).length(6),
-  collectorImageDigest: z.string().regex(/^otel\/opentelemetry-collector@sha256:[a-f0-9]{64}$/u).optional(),
+  collectorImageDigest: z.string().regex(/^oci-layout@sha256:[a-f0-9]{64}$/u).optional(),
+  collectorDockerfileSha256: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  collectorBaseImage: z.literal(COLLECTOR_BASE_IMAGE).optional(),
   collectorConfigSha256: z.string().regex(/^[a-f0-9]{64}$/u), otlpEndpoint: z.literal("http/protobuf /v1/traces,/v1/metrics"),
   outputSha256: z.string().regex(/^[a-f0-9]{64}$/u).optional(), limitations: z.array(z.string()).min(1),
   inputDigests: z.object({ packageJsonSha256: z.string().regex(/^[a-f0-9]{64}$/), bunLockSha256: z.string().regex(/^[a-f0-9]{64}$/) }),
   errorCode: z.string().regex(/^[A-Z0-9_]+$/u).optional(), evidenceSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 }).strict();
 
-function sha256(value: Uint8Array | string): string { return createHash("sha256").update(value).digest("hex"); }
+/** A local preapproval fact for a changed root.  It is deliberately not an
+ * approval record: it gives an operator the exact bounded inputs to review
+ * without changing the historical decision, pointer, or smoke evidence. */
+const RenewalReviewSchema = z.object({
+  schemaVersion: z.literal(1), kind: z.literal("otel_approval_renewal_preapproval"), status: z.literal("approval_required"),
+  historicalApprovalDigest: DigestSchema, auditDigest: DigestSchema, packageSetSha256: DigestSchema,
+  historicalRootInputDigests: InputDigestsSchema, currentRootInputDigests: InputDigestsSchema,
+  collector: z.object({ imageReference: z.string().regex(/^oci-layout@sha256:[a-f0-9]{64}$/u), imageDigest: DigestSchema, baseImage: z.literal(COLLECTOR_BASE_IMAGE), dockerfileSha256: DigestSchema, collectorConfigSha256: DigestSchema }).strict(),
+  limitations: z.tuple([
+    z.literal("This artifact is review input only and does not authorize package installation, smoke, or release."),
+    z.literal("The historical delegated decision remains immutable and is not valid for these current root input digests."),
+    z.literal("A new delegated operator approval is required before any approval-dependent command may proceed."),
+  ]),
+}).strict();
+export type OtelApprovalRenewalReview = z.infer<typeof RenewalReviewSchema>;
+
+function sha256(value: Uint8Array | string): string { return createHash("sha256").update(typeof value === "string" ? value : new Uint8Array(value)).digest("hex"); }
 function sriMatches(bytes: Uint8Array, integrity: string): boolean {
-  return integrity.split(/\s+/u).some((item) => item === `sha512-${createHash("sha512").update(bytes).digest("base64")}`);
+  return integrity.split(/\s+/u).some((item) => item === `sha512-${createHash("sha512").update(new Uint8Array(bytes)).digest("base64")}`);
 }
 function normalizeRepository(value: unknown): string | null {
   const url = typeof value === "string" ? value : value && typeof value === "object" && "url" in value ? (value as { url?: unknown }).url : null;
@@ -127,7 +146,7 @@ function exactSet(expected: readonly ExpectedPackage[]): boolean {
   return expected.length === EXACT_NAMES.length && new Set(expected.map((item) => item.name)).size === EXACT_NAMES.length && EXACT_NAMES.every((name) => expected.some((item) => item.name === name));
 }
 function tarPackageJson(bytes: Uint8Array): Record<string, unknown> {
-  const tar = new Uint8Array(Bun.gunzipSync(bytes));
+  const tar = new Uint8Array(Bun.gunzipSync(new Uint8Array(bytes)));
   for (let offset = 0; offset + 512 <= tar.length; ) {
     const header = tar.subarray(offset, offset + 512);
     const name = new TextDecoder().decode(header.subarray(0, 100)).replace(/\0.*$/u, "");
@@ -172,12 +191,21 @@ async function exactRootPins(root = process.cwd()): Promise<boolean> {
   return OFFICIAL_OTEL_PACKAGES.every((item) => dependencies[item.name] === item.version);
 }
 function approvedRootInputs(recorded: z.infer<typeof InputDigestsSchema>, current: z.infer<typeof InputDigestsSchema>): boolean {
-  return recorded.bunLockSha256 === current.bunLockSha256
-    && APPROVED_ROOT_PACKAGE_JSON_SHA256.has(recorded.packageJsonSha256)
-    && APPROVED_ROOT_PACKAGE_JSON_SHA256.has(current.packageJsonSha256);
+  return recorded.packageJsonSha256 === APPROVED_ROOT_INPUTS.packageJsonSha256
+    && recorded.bunLockSha256 === APPROVED_ROOT_INPUTS.bunLockSha256
+    && current.packageJsonSha256 === APPROVED_ROOT_INPUTS.packageJsonSha256
+    && current.bunLockSha256 === APPROVED_ROOT_INPUTS.bunLockSha256;
 }
 
 export async function verifyApprovedOtelPackageSet(options: { readonly repositoryRoot?: string } = {}): Promise<{ readonly approvalDigest: string; readonly auditDigest: string; readonly packageSetSha256: string }> {
+  const approved = await readHistoricalApproval(options);
+  const root = options.repositoryRoot ?? process.cwd();
+  const rootInputs = { packageJsonSha256: await snapshot(join(root, "package.json")), bunLockSha256: await snapshot(join(root, "bun.lock")) };
+  if (!approvedRootInputs(approved.approval.rootInputDigests, rootInputs)) throw new Error("APPROVAL_INPUT_DIGEST_DRIFT");
+  return { approvalDigest: approved.pointer.evidenceSha256, auditDigest: approved.pointer.auditEvidenceSha256, packageSetSha256: approved.pointer.packageSetSha256 };
+}
+
+async function readHistoricalApproval(options: { readonly repositoryRoot?: string } = {}) {
   const root = options.repositoryRoot ?? process.cwd();
   const paths = certificationPaths(root);
   await verifyPointer({ repositoryRoot: root });
@@ -209,12 +237,42 @@ export async function verifyApprovedOtelPackageSet(options: { readonly repositor
   const audit = OtelPackageAuditSchema.parse(auditPayload);
   if (audit.status !== "passed" || audit.approvalStatus !== "pending_human" || packageSetDigest(audit.packages) !== pointer.packageSetSha256) throw new Error("APPROVAL_AUDIT_PACKAGE_SET_DRIFT");
   if (canonicalJson(audit.inputDigests) !== canonicalJson(approval.auditInputDigests)) throw new Error("APPROVAL_AUDIT_INPUT_DRIFT");
-  const rootInputs = { packageJsonSha256: await snapshot(join(root, "package.json")), bunLockSha256: await snapshot(join(root, "bun.lock")) };
-  if (!approvedRootInputs(approval.rootInputDigests, rootInputs)) throw new Error("APPROVAL_INPUT_DIGEST_DRIFT");
-  return { approvalDigest: pointer.evidenceSha256, auditDigest: pointer.auditEvidenceSha256, packageSetSha256: pointer.packageSetSha256 };
+  return Object.freeze({ root, pointer, approval });
+}
+
+/**
+ * Writes a content-addressed, no-effect renewal-review artifact when the
+ * current dependency graph is outside the historical delegated decision.
+ * It never changes the approval pointer or treats this review artifact as an
+ * authorization token.
+ */
+export async function writeOtelApprovalRenewalReview(options: { readonly repositoryRoot?: string } = {}): Promise<Readonly<{ evidenceSha256: string; recordPath: string; review: OtelApprovalRenewalReview }>> {
+  const approved = await readHistoricalApproval(options);
+  const currentRootInputDigests = { packageJsonSha256: await snapshot(join(approved.root, "package.json")), bunLockSha256: await snapshot(join(approved.root, "bun.lock")) };
+  if (approvedRootInputs(approved.approval.rootInputDigests, currentRootInputDigests)) throw new Error("APPROVAL_RENEWAL_NOT_REQUIRED");
+  const measured = await measureProductionCollectorImage({ repositoryRoot: approved.root });
+  const review = RenewalReviewSchema.parse({
+    schemaVersion: 1, kind: "otel_approval_renewal_preapproval", status: "approval_required",
+    historicalApprovalDigest: approved.pointer.evidenceSha256, auditDigest: approved.pointer.auditEvidenceSha256, packageSetSha256: approved.pointer.packageSetSha256,
+    historicalRootInputDigests: approved.approval.rootInputDigests, currentRootInputDigests,
+    collector: { imageReference: measured.imageReference, imageDigest: measured.imageDigest, baseImage: measured.baseImage, dockerfileSha256: measured.dockerfileSha256, collectorConfigSha256: measured.collectorConfigSha256 },
+    limitations: [
+      "This artifact is review input only and does not authorize package installation, smoke, or release.",
+      "The historical delegated decision remains immutable and is not valid for these current root input digests.",
+      "A new delegated operator approval is required before any approval-dependent command may proceed.",
+    ],
+  });
+  const evidenceSha256 = sha256(canonicalJson(review));
+  const recordPath = join(approved.root, RENEWAL_REVIEW_DIRECTORY, `${evidenceSha256}.json`);
+  const content = `${canonicalJson({ ...review, evidenceSha256 })}\n`;
+  await mkdir(dirname(recordPath), { recursive: true });
+  try { await writeFile(recordPath, content, { encoding: "utf8", flag: "wx" }); }
+  catch (error) { if (!(error instanceof Error) || !((error as NodeJS.ErrnoException).code === "EEXIST") || await readFile(recordPath, "utf8") !== content) throw new Error("IMMUTABLE_RENEWAL_REVIEW_COLLISION"); }
+  return Object.freeze({ evidenceSha256, recordPath, review });
 }
 async function verifyCurrentSmokeRecord(approval: { readonly approvalDigest: string; readonly auditDigest: string; readonly packageSetSha256: string }): Promise<void> {
   const root = process.cwd();
+  const collector = await measureProductionCollectorImage({ repositoryRoot: root });
   const expectedInputs = { packageJsonSha256: await snapshot(join(root, "package.json")), bunLockSha256: await snapshot(join(root, "bun.lock")) };
   const expectedConfig = await snapshot(join(root, "infra/otel/collector.yaml"));
   let names: string[];
@@ -225,7 +283,7 @@ async function verifyCurrentSmokeRecord(approval: { readonly approvalDigest: str
       const { evidenceSha256, ...payload } = value;
       if (value.status !== "passed" || !evidenceSha256 || sha256(canonicalJson(payload)) !== evidenceSha256) continue;
       if (value.approvedApprovalDigest !== approval.approvalDigest || value.approvedAuditDigest !== approval.auditDigest || value.packageSetSha256 !== approval.packageSetSha256) continue;
-      if (value.collectorImageDigest !== COLLECTOR_IMAGE || !value.outputSha256 || value.bunVersion !== Bun.version || value.collectorConfigSha256 !== expectedConfig) continue;
+      if (value.collectorImageDigest !== collector.imageReference || value.collectorDockerfileSha256 !== collector.dockerfileSha256 || value.collectorBaseImage !== collector.baseImage || !value.outputSha256 || value.bunVersion !== Bun.version || value.collectorConfigSha256 !== expectedConfig) continue;
       if (!approvedRootInputs(value.inputDigests, expectedInputs)) continue;
       if (value.packages.length !== OFFICIAL_OTEL_PACKAGES.length || OFFICIAL_OTEL_PACKAGES.some((expected) => !value.packages.some((item) => item.name === expected.name && item.version === expected.version))) continue;
       return;
@@ -246,6 +304,7 @@ async function writeSmokeRecord(record: z.input<typeof SmokeRecordSchema>): Prom
 async function smoke(): Promise<{ readonly evidenceSha256: string; readonly recordPath: string }> {
   const root = process.cwd();
   const approval = await verifyApprovedOtelPackageSet();
+  const collector = await measureProductionCollectorImage({ repositoryRoot: root });
   const inputDigests = { packageJsonSha256: await snapshot(join(root, "package.json")), bunLockSha256: await snapshot(join(root, "bun.lock")) };
   const collectorConfigSha256 = await snapshot(join(root, "infra/otel/collector.yaml"));
   const base = { schemaVersion: 1 as const, mode: "bun-collector-smoke" as const, approvedApprovalDigest: approval.approvalDigest, approvedAuditDigest: approval.auditDigest, packageSetSha256: approval.packageSetSha256, bunVersion: Bun.version, packages: OFFICIAL_OTEL_PACKAGES.map(({ name, version }) => ({ name, version })), collectorConfigSha256, otlpEndpoint: "http/protobuf /v1/traces,/v1/metrics" as const, inputDigests, limitations: ["Certification smoke sends only fixed finite attributes to a local Collector debug sink.", "This is package and protocol compatibility evidence, not live service certification."], };
@@ -253,10 +312,7 @@ async function smoke(): Promise<{ readonly evidenceSha256: string; readonly reco
   try {
     const dockerReady = await run(["docker", "info", "--format", "{{.ServerVersion}}"]);
     if (dockerReady.code !== 0) throw new Error("DOCKER_UNAVAILABLE");
-    const pull = await run(["docker", "pull", COLLECTOR_IMAGE]);
-    if (pull.code !== 0) throw new Error("COLLECTOR_PULL_FAILED");
-    const config = join(root, "infra/otel/collector.yaml");
-    const started = await run(["docker", "run", "-d", "--rm", "-p", "127.0.0.1::4318", "-v", `${config}:/etc/otelcol/config.yaml:ro`, COLLECTOR_IMAGE, "--config=/etc/otelcol/config.yaml"]);
+    const started = await run(["docker", "run", "-d", "--rm", "-p", "127.0.0.1::4318", collector.buildTag]);
     if (started.code !== 0 || !/^[a-f0-9]{12,}$/u.test(started.stdout.trim())) throw new Error("COLLECTOR_START_FAILED");
     container = started.stdout.trim();
     const port = (await run(["docker", "port", container, "4318/tcp"])).stdout.trim().match(/127\.0\.0\.1:(\d+)/u)?.[1];
@@ -276,7 +332,7 @@ async function smoke(): Promise<{ readonly evidenceSha256: string; readonly reco
     if (!output.includes("cvm.lifecycle.exact_session_ready")) throw new Error("COLLECTOR_TRACE_MISSING");
     if (!output.includes("cvm.lifecycle.observations")) throw new Error("COLLECTOR_METRIC_MISSING");
     for (const expected of ["exact_session_ready", "accepted", smokeCorrelation]) if (!output.includes(expected)) throw new Error("COLLECTOR_SAFE_ATTRIBUTE_MISSING");
-    const record = await writeSmokeRecord({ ...base, status: "passed", collectorImageDigest: COLLECTOR_IMAGE, outputSha256: sha256(output) });
+    const record = await writeSmokeRecord({ ...base, status: "passed", collectorImageDigest: collector.imageReference, collectorDockerfileSha256: collector.dockerfileSha256, collectorBaseImage: z.literal(COLLECTOR_BASE_IMAGE).parse(collector.baseImage), outputSha256: sha256(output) });
     const after = { packageJsonSha256: await snapshot(join(root, "package.json")), bunLockSha256: await snapshot(join(root, "bun.lock")) };
     if (after.packageJsonSha256 !== inputDigests.packageJsonSha256 || after.bunLockSha256 !== inputDigests.bunLockSha256) throw new Error("ROOT_DEPENDENCY_GRAPH_MUTATED");
     return record;
@@ -289,7 +345,7 @@ async function smoke(): Promise<{ readonly evidenceSha256: string; readonly reco
     if (temp) await rm(temp, { recursive: true, force: true });
   }
 }
-function failedRow(expected: ExpectedPackage, errors: string[], digests: Partial<z.infer<typeof PackageRowSchema>> = {}) {
+function failedRow(expected: ExpectedPackage, errors: string[], digests: Partial<z.infer<typeof PackageRowSchema>> = {}): z.infer<typeof PackageRowSchema> {
   return { name: expected.name, version: expected.version, registryIntegrity: expected.integrity, tarballSha256: digests.tarballSha256 ?? "0".repeat(64), metadataSha256: digests.metadataSha256 ?? "0".repeat(64), publishMetadataSha256: digests.publishMetadataSha256 ?? "0".repeat(64), sourceRepository: OFFICIAL_REPOSITORY, sourceUrls: [OFFICIAL_REPOSITORY, OFFICIAL_DOCUMENTATION], license: "Apache-2.0", publisher: "GitHub Actions", publishedAt: `${expected.publishedOn}T00:00:00.000Z`, lifecycleScripts: [], requiredDependencies: expected.requiredDependencies, disposition: expected.disposition, verdict: "failed" as const, errors };
 }
 
@@ -358,10 +414,11 @@ export async function verifyPointer(options: { readonly repositoryRoot?: string 
 }
 
 async function main(): Promise<void> {
-  const args = Bun.argv.slice(2); const offline = args.includes("--offline-fixture"); const pointerOnly = args.includes("--verify-pointer"); const preinstall = args.includes("--mode=preinstall"); const requireApproved = args.includes("--require-approved"); const verifyRootPins = args.includes("--verify-root-pins"); const runSmoke = args.includes("--bun-collector-smoke");
-  if (args.length === 0 || args.some((argument) => !["--mode=preinstall", "--offline-fixture", "--verify-pointer", "--require-approved", "--verify-root-pins", "--bun-collector-smoke"].includes(argument)) || [offline, pointerOnly, preinstall, requireApproved, verifyRootPins, runSmoke].filter(Boolean).length > 1) throw new Error("usage: --mode=preinstall | --offline-fixture | --verify-pointer | --require-approved | --verify-root-pins | --bun-collector-smoke");
+  const args = Bun.argv.slice(2); const offline = args.includes("--offline-fixture"); const pointerOnly = args.includes("--verify-pointer"); const preinstall = args.includes("--mode=preinstall"); const requireApproved = args.includes("--require-approved"); const verifyRootPins = args.includes("--verify-root-pins"); const runSmoke = args.includes("--bun-collector-smoke"); const renewalReview = args.includes("--write-renewal-review");
+  if (args.length === 0 || args.some((argument) => !["--mode=preinstall", "--offline-fixture", "--verify-pointer", "--require-approved", "--verify-root-pins", "--bun-collector-smoke", "--write-renewal-review"].includes(argument)) || [offline, pointerOnly, preinstall, requireApproved, verifyRootPins, runSmoke, renewalReview].filter(Boolean).length > 1) throw new Error("usage: --mode=preinstall | --offline-fixture | --verify-pointer | --require-approved | --verify-root-pins | --bun-collector-smoke | --write-renewal-review");
+  if (renewalReview) { const review = await writeOtelApprovalRenewalReview(); console.log(JSON.stringify({ status: "approval_required", mode: "renewal-review", evidenceSha256: review.evidenceSha256, recordPath: relative(process.cwd(), review.recordPath) })); return; }
   if (requireApproved) { const approval = await verifyApprovedOtelPackageSet(); console.log(JSON.stringify({ status: "passed", mode: "approved-operator", ...approval })); return; }
-  if (verifyRootPins) { const approval = await verifyApprovedOtelPackageSet(); if (!await exactRootPins()) throw new Error("ROOT_PINS_INVALID"); await verifyCurrentSmokeRecord(approval); console.log(JSON.stringify({ status: "passed", mode: "root-pins", collectorImageDigest: COLLECTOR_IMAGE, ...approval })); return; }
+  if (verifyRootPins) { const approval = await verifyApprovedOtelPackageSet(); if (!await exactRootPins()) throw new Error("ROOT_PINS_INVALID"); await verifyCurrentSmokeRecord(approval); console.log(JSON.stringify({ status: "passed", mode: "root-pins", ...approval })); return; }
   if (runSmoke) { console.log(JSON.stringify({ status: "passed", mode: "bun-collector-smoke", ...await smoke() })); return; }
   if (offline || pointerOnly) { await verifyPointer(); console.log(JSON.stringify({ status: "passed", mode: "offline-fixture", approvalStatus: "pending_human" })); return; }
   if (!preinstall) throw new Error("mode=preinstall is required");

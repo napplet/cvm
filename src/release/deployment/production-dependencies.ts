@@ -27,7 +27,10 @@ type ProjectOwnedProtectedPorts = Readonly<{
   [K in keyof ProductionLiveProtectedCertificationPorts]: ProductionLiveProtectedCertificationPorts[K] & Readonly<{ origin: "project-owned" }>;
 }>;
 
-type PreparedOperationalExecution = Omit<AuthorizedLiveExecutionInput, "registry" | "receipt" | "protected"> & Readonly<{
+/** Controller-owned output assembled only after exact receipt validation. It
+ * intentionally omits the registry/receipt/ports because this module binds
+ * those independently and rejects a materializer supplied replacement. */
+export type PreparedOperationalExecution = Omit<AuthorizedLiveExecutionInput, "registry" | "receipt" | "protected"> & Readonly<{
   protected: Omit<AuthorizedLiveExecutionInput["protected"], "ports">;
 }>;
 
@@ -37,6 +40,7 @@ export type ProductionOperationalDependenciesInput = Readonly<{
   receipt: unknown;
   providers: Readonly<Record<ReleaseProviderId, ProjectOwned<ReleaseProviderPort>>>;
   protectedPorts: ProjectOwnedProtectedPorts;
+  collectorImage?: ReleaseExecutionSession["collectorImage"];
   prepare(input: Readonly<{
     authorizationRequest: ReleaseAuthorizationRequest;
     receipt: ReleaseAuthorizationReceipt;
@@ -46,6 +50,7 @@ export type ProductionOperationalDependenciesInput = Readonly<{
 
 export type ProductionOperationalDependencies = Readonly<{
   registry: ReturnType<typeof createNativeReleaseProviderRegistry>;
+  collectorImage?: ReleaseExecutionSession["collectorImage"];
   prepareAuthorizedExecution: ReleaseExecutionSession["prepareAuthorizedExecution"];
   [OPERATIONAL_DEPENDENCIES]: true;
 }>;
@@ -123,7 +128,7 @@ export function isProductionOperationalDependencies(value: unknown): value is Pr
  * or any operational adapter.
  */
 export function createProductionOperationalDependencies(input: ProductionOperationalDependenciesInput): ProductionOperationalDependencies {
-  if (typeof input.prepare !== "function") throw new Error("PRODUCTION_DEPENDENCY_PREPARATION_REQUIRED");
+  if (typeof input.prepare !== "function" || (input.collectorImage !== undefined && typeof input.collectorImage.uploadAndObserve !== "function")) throw new Error("PRODUCTION_DEPENDENCY_PREPARATION_REQUIRED");
   const providers = assertProviderDependencies(input);
   const protectedPorts = assertProtectedDependencies(input);
   const registry = createNativeReleaseProviderRegistry({
@@ -134,6 +139,7 @@ export function createProductionOperationalDependencies(input: ProductionOperati
 
   return Object.freeze({
     registry,
+    ...(input.collectorImage ? { collectorImage: input.collectorImage } : {}),
     async prepareAuthorizedExecution({ authorizationRequest }) {
       const request = await validateAuthorizationRequest(authorizationRequest);
       assertCanonicalRequest(request);

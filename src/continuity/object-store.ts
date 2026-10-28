@@ -23,6 +23,8 @@ const VersionedObjectReadResponseSchema = VersionedObjectResponseSchema.extend({
 /** Provider-neutral, generation-only subset of a versioned object API. */
 export interface VersionedObjectClientPort {
   createIfAbsent(input: Readonly<{ key: string; bytes: Uint8Array; checksum: string }>): Promise<z.infer<typeof VersionedObjectResponseSchema>>;
+  /** Read-only metadata reconciliation for a controller-owned immutable key. */
+  findExactByKey(input: Readonly<{ key: string; checksum: string }>): Promise<z.infer<typeof VersionedObjectResponseSchema> | undefined>;
   readGeneration(input: Readonly<{ key: string; generation: number; expectedChecksum: string }>): Promise<z.infer<typeof VersionedObjectReadResponseSchema> | undefined>;
   scheduleGenerationDeletion(input: Readonly<{ key: string; generation: number; expectedChecksum: string; deleteAfter: string }>): Promise<z.infer<typeof VersionedObjectResponseSchema>>;
 }
@@ -36,6 +38,8 @@ export const GcsObjectStoreConfigSchema = z.object({
 /** Exact-generation port; storage implementation selection stays outside this contract. */
 export interface ObjectStorePort {
   createImmutable(request: ImmutableObjectCreateRequest): Promise<ImmutableObjectReference>;
+  /** Read-only reconciliation by an already journaled immutable key/checksum. */
+  observeExactByKey(input: Readonly<{ key: string; checksum: string }>): Promise<ImmutableObjectReference | undefined>;
   readExact(reference: ImmutableObjectReference): Promise<Uint8Array | undefined>;
   scheduleExactDeletion(reference: ImmutableObjectReference, deleteAfter: string): Promise<void>;
 }
@@ -65,6 +69,14 @@ export class GcsObjectStoreAdapter implements ObjectStorePort {
     const created = VersionedObjectResponseSchema.parse(await this.#client.createIfAbsent({ key: request.key, bytes: new Uint8Array(request.bytes), checksum }));
     if (created.checksum !== checksum) throw new Error("OBJECT_IMMUTABLE_CONFLICT");
     return ImmutableObjectReferenceSchema.parse({ key: request.key, generation: created.generation, checksum: created.checksum });
+  }
+
+  async observeExactByKey(input: Readonly<{ key: string; checksum: string }>): Promise<ImmutableObjectReference | undefined> {
+    const key = z.string().min(1).safeParse(input.key); const checksum = Sha256Schema.safeParse(input.checksum);
+    if (!key.success || !checksum.success) return undefined;
+    const observed = await this.#client.findExactByKey({ key: key.data, checksum: checksum.data });
+    if (!observed || observed.checksum !== checksum.data) return undefined;
+    return ImmutableObjectReferenceSchema.safeParse({ key: key.data, generation: observed.generation, checksum: observed.checksum }).data;
   }
 
   async readExact(reference: ImmutableObjectReference): Promise<Uint8Array | undefined> {
@@ -107,6 +119,13 @@ export class DeterministicObjectStore implements ObjectStorePort {
     const entry: Entry = Object.freeze({ key: request.key, generation: 1, checksum, bytes: new Uint8Array(request.bytes) });
     this.#entries.set(request.key, entry);
     return { key: entry.key, generation: entry.generation, checksum: entry.checksum };
+  }
+
+  async observeExactByKey(input: Readonly<{ key: string; checksum: string }>): Promise<ImmutableObjectReference | undefined> {
+    const key = z.string().min(1).safeParse(input.key); const checksum = Sha256Schema.safeParse(input.checksum);
+    if (!key.success || !checksum.success) return undefined;
+    const entry = this.#entries.get(key.data);
+    return entry?.checksum === checksum.data ? { key: entry.key, generation: entry.generation, checksum: entry.checksum } : undefined;
   }
 
   async readExact(reference: ImmutableObjectReference): Promise<Uint8Array | undefined> {

@@ -1,0 +1,18 @@
+{
+  "baselineRevision": "7786840b8541be7335475e871a1b8be1d886ee74",
+  "kind": "compiler-diagnostic-comparison",
+  "limitations": [
+    "Both compilations fail. This is a diagnostic comparison, not a passing compile gate or protected release evidence.",
+    "Both runs use the same installed declaration graph, including @types/pg@8.15.5, to isolate source differences.",
+    "Comparison normalizes line/column numbers and compares complete first-line diagnostic signatures. Additional continuation lines remain in the retained logs."
+  ],
+  "logSha256": {
+    "mainline": "d6f3e69f045216cb3ff76d553b46edea73fa9b04abd718dfb2ac52ad5d7d8d85",
+    "review": "f3345cd8279f8880059a3e2f4466f0c863d18e12969632b3839d59e0ec218acb"
+  },
+  "mainlineDiagnosticCount": 564,
+  "newDiagnosticSignatures": [],
+  "reviewDiagnosticCount": 455,
+  "reviewRevision": "753e55a5062a989b16d3aa3c117a27097ad61968",
+  "typescriptVersion": "Version 7.0.2"
+}

@@ -1,4 +1,4 @@
-import { CheckpointEnvelopeService } from "./checkpoint-envelope";
+import type { CheckpointEnvelopeService } from "./checkpoint-envelope";
 import type { ContinuationFundingStore } from "../persistence/funding-store";
 import {
   CheckpointProposalSchema,
@@ -33,6 +33,8 @@ export interface DeadlineCandidatePort {
   /** Durable scheduler query; candidates are hints and SQL remains the authority. */
   listRetentionDue?(nowMs: number): Promise<readonly RetentionCandidate[]>;
 }
+type CheckpointSealPort = Pick<CheckpointEnvelopeService, "seal">;
+type RetentionDeletionPort = Readonly<{ destroyExpired(input: Readonly<{ accountId: string; sessionId: string; checkpointId: string }>): Promise<void> }>;
 
 /**
  * Reconciles a fixed grace deadline with three failure-independent systems.
@@ -48,7 +50,8 @@ export class ContinuationDeadlineReconciler {
   constructor(private readonly options: Readonly<{
     store: ContinuationFundingStore;
     worker: ContinuationWorkerPort;
-    envelope: CheckpointEnvelopeService;
+    envelope: CheckpointSealPort;
+    retention?: RetentionDeletionPort;
     candidates: DeadlineCandidatePort;
     clock: Readonly<{ nowMs(): number }>;
   }>) {}
@@ -104,8 +107,14 @@ export class ContinuationDeadlineReconciler {
     await this.options.store.transact(candidate.accountId, (transaction) => transaction.recordDeletionOutcome({ checkpointId: checkpoint.checkpointId, objectGeneration: checkpoint.objectGeneration, state: "scheduled" }));
     const object = { key: checkpoint.objectKey, generation: Number(checkpoint.objectGeneration), checksum: checkpoint.objectChecksum };
     try {
-      await this.options.envelope.destroyKey(checkpoint.keyReference);
-      await this.options.envelope.scheduleDeleteGeneration(object, nowMs);
+      if (this.options.retention) await this.options.retention.destroyExpired({ accountId: candidate.accountId, sessionId: candidate.sessionId, checkpointId: checkpoint.checkpointId });
+      else {
+        // Legacy/test envelope adapter. Production passes the coordinator
+        // above so deletion remains owner-bound and cannot target a raw key.
+        const envelope = this.options.envelope as CheckpointEnvelopeService;
+        await envelope.destroyKey(checkpoint.keyReference);
+        await envelope.scheduleDeleteGeneration(object, nowMs);
+      }
       await this.options.store.transact(candidate.accountId, (transaction) => transaction.recordDeletionOutcome({ checkpointId: checkpoint.checkpointId, objectGeneration: checkpoint.objectGeneration, state: "deleted" }));
       return frozen({ status: "expired", code: "RETENTION_EXPIRED_AND_DELETE_SCHEDULED", checkpointId: checkpoint.checkpointId });
     } catch {

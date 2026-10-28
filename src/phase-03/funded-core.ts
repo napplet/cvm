@@ -8,11 +8,11 @@ import { HmacAdmissionReceiptAuthority, type AdmissionReceiptAuthority } from ".
 import { LightningTopUpCoordinator } from "../funding/lightning-top-up";
 import { CashuTopUpCoordinator } from "../funding/cashu-top-up";
 import type { LightningReceiptPort } from "../funding/lightning-provider";
-import type { CashuSettlementPort } from "../funding/cashu-provider";
+import type { CashuSettlementPort, CashuWalletOperations } from "../funding/cashu-provider";
 import type { CashuMintPolicyRegistry } from "../funding/cashu-mint-policy";
 import { ProtectedRailMaterialVault } from "../funding/protected-rail-material";
 import type { FundingStore, MeteredFundingStore } from "../persistence/funding-store";
-import type { PostgresFundingExecutor } from "../persistence/postgres-funding-store";
+import { PostgresFundingStore, type PostgresFundingExecutor } from "../persistence/postgres-funding-store";
 import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
 import { PostgresFundingDatabase } from "../persistence/postgres-funding-database";
 import { assertProductionAccountingConfiguration, assertProductionRealm, type AccountingRealmName } from "../funding/accounting-realm";
@@ -79,6 +79,13 @@ export type FundedCore = Readonly<{
   admissions: FundedAdmissionService;
   accountStatus: AccountStatusService;
   contextvm?: ContextVmFundingAdapter;
+  /** Project-owned rail authorities exposed only to the production session
+   * compositor. They are the same coordinators used by the public funding
+   * surface, never reconstructed from mounted JSON. */
+  rails?: Readonly<{
+    lightning: Readonly<{ receiver: LightningReceiptPort; coordinator: LightningTopUpCoordinator }>;
+    cashu: Readonly<{ settlement: CashuSettlementPort; walletOperations: CashuWalletOperations; coordinator: CashuTopUpCoordinator }>;
+  }>;
   /** Coordinator-only restart lifecycle; this discovers durable wake effects, never queues generation. */
   continuationRecovery?: Readonly<{ reconcileOutstandingWakeDispatches(accountId: string): ReturnType<MeteredGenerationService["reconcileOutstandingWakeDispatches"]> }>;
   externalSurfaces: Readonly<{ contextvm: SurfaceState; lightning: SurfaceState; cashu: SurfaceState; postgres: SurfaceState; capacity: SurfaceState; modal: "unselected" }>;
@@ -172,9 +179,18 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
   const continuationRecovery = options.meteredService?.reconcileOutstandingWakeDispatches
     ? Object.freeze({ reconcileOutstandingWakeDispatches: (accountId: string) => options.meteredService!.reconcileOutstandingWakeDispatches!(accountId) })
     : undefined;
+  const rails = lightning && cashu && options.lightningReceiver && options.cashuProvider?.walletOperations
+    ? Object.freeze({
+      lightning: Object.freeze({ receiver: options.lightningReceiver, coordinator: lightning }),
+      /* This is the default adapter's bounded persisted-swap transport, not
+       * a separately injected wallet callback. */
+      cashu: Object.freeze({ settlement: options.cashuProvider, walletOperations: options.cashuProvider.walletOperations, coordinator: cashu }),
+    })
+    : undefined;
   return Object.freeze({
     mode: offline ? "offline_design_ready" as const : "configured" as const,
     funding, admissions, accountStatus, ...(contextvm ? { contextvm } : {}), ...(continuationRecovery ? { continuationRecovery } : {}),
+    ...(rails ? { rails } : {}),
     externalSurfaces: Object.freeze({
       contextvm: contextvm ? "configured" as const : "blocked" as const,
       lightning: lightning && publicFundingSurface ? "configured" as const : "blocked" as const,

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createGoogleAdcTokenSource, googleAccountScopeSha256, type GoogleAccessToken, type GoogleTokenSource } from "./google-auth";
+import type { PreparedCollectorOciUpload } from "../collector-image";
 
 export type { GoogleAccessToken, GoogleTokenSource } from "./google-auth";
 export type GoogleFetch = (url: string, init: RequestInit) => Promise<Response>;
@@ -17,6 +18,8 @@ const RegionSchema = z.string().regex(/^[a-z]+-[a-z]+[0-9]$/u);
 const ServiceNameSchema = z.string().regex(/^[a-z][a-z0-9-]{2,48}[a-z0-9]$/u);
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 const ImageReferenceSchema = z.string().regex(/^[a-z0-9.-]+(?:\/[a-z0-9._-]+)+@sha256:[a-f0-9]{64}$/iu, "immutable registry image reference required");
+const ArtifactRegistryImagePattern = /^([a-z]+-docker\.pkg\.dev)\/([a-z][a-z0-9-]{4,28}[a-z0-9])\/([a-z0-9][a-z0-9._/-]{1,250})@sha256:([a-f0-9]{64})$/iu;
+const ArtifactRegistryImageSchema = z.string().regex(ArtifactRegistryImagePattern);
 const BucketSchema = z.string().regex(/^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$/u);
 const ObjectSchema = z.string().min(1).max(1024).refine((value) => !value.startsWith("/") && !value.includes(".."), "object path required");
 const InstanceSchema = z.string().regex(/^[a-z][a-z0-9-]{2,96}[a-z0-9]$/u);
@@ -94,7 +97,7 @@ type GoogleClientOptions = Readonly<{
   journal: GoogleOperationJournal; now?: () => number; timeoutMs?: number;
 }>;
 
-function statusFor(status: number): SafeStatus {
+function statusFor(status: number): Readonly<{ status: "missing" | "unknown" | "blocked" }> {
   if (status === 404) return Object.freeze({ status: "missing" });
   if ([401, 403, 400, 409, 412].includes(status)) return Object.freeze({ status: "blocked" });
   if (status === 408 || status === 429 || status >= 500) return Object.freeze({ status: "unknown" });
@@ -109,22 +112,26 @@ async function sha256(value: unknown): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value)));
   return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
+async function sha256Bytes(value: Uint8Array): Promise<string> {
+  const hash = await crypto.subtle.digest("SHA-256", value as BufferSource);
+  return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 function crc32cBase64(bytes: Uint8Array): string {
   let crc = 0xffffffff;
   for (const byte of bytes) { crc ^= byte; for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ ((crc & 1) ? 0x82f63b78 : 0); }
   crc = (crc ^ 0xffffffff) >>> 0;
   return btoa(String.fromCharCode((crc >>> 24) & 255, (crc >>> 16) & 255, (crc >>> 8) & 255, crc & 255));
 }
-function multipartObjectUpload(object: string, checksum: string, contentSha256: string, operationId: string, bytes: Uint8Array): Uint8Array {
+function multipartObjectUpload(object: string, checksum: string, contentSha256: string, operationId: string, bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   const boundary = "napplet-cvm-google-json-upload";
   const encoder = new TextEncoder();
   const prefix = encoder.encode(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name: object, crc32c: checksum, metadata: { "napplet-cvm-content-sha256": contentSha256, "napplet-cvm-operation": operationId } })}\r\n--${boundary}\r\nContent-Type: application/octet-stream\r\n\r\n`);
   const suffix = encoder.encode(`\r\n--${boundary}--\r\n`);
   const output = new Uint8Array(prefix.byteLength + bytes.byteLength + suffix.byteLength); output.set(prefix); output.set(bytes, prefix.byteLength); output.set(suffix, prefix.byteLength + bytes.byteLength); return output;
 }
-async function body(response: Response, timeoutMs = 5_000): Promise<unknown> {
+async function readBoundedBytes(response: Response, timeoutMs = 5_000): Promise<Uint8Array> {
   const claimed = Number(response.headers.get("content-length") ?? "0");
-  if (!Number.isSafeInteger(claimed) || claimed < 0 || claimed > 1_000_000 || !response.headers.get("content-type")?.includes("application/json")) throw new Error("GOOGLE_CLIENT_RESPONSE_INVALID");
+  if (!Number.isSafeInteger(claimed) || claimed < 0 || claimed > 1_000_000) throw new Error("GOOGLE_CLIENT_RESPONSE_INVALID");
   if (!response.body) throw new Error("GOOGLE_CLIENT_RESPONSE_INVALID");
   const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let length = 0; const deadline = Date.now() + timeoutMs;
   const nextWithin = async (milliseconds: number) => { let timer: ReturnType<typeof setTimeout> | undefined; try { return await Promise.race([reader.read(), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error("GOOGLE_CLIENT_TIMEOUT")), milliseconds); })]); } finally { if (timer !== undefined) clearTimeout(timer); } };
@@ -133,6 +140,11 @@ async function body(response: Response, timeoutMs = 5_000): Promise<unknown> {
   finally { if (!complete) void reader.cancel(); reader.releaseLock(); }
   if (length === 0) throw new Error("GOOGLE_CLIENT_RESPONSE_INVALID");
   const bytes = new Uint8Array(length); let offset = 0; for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return bytes;
+}
+async function body(response: Response, timeoutMs = 5_000): Promise<unknown> {
+  if (!response.headers.get("content-type")?.includes("application/json")) throw new Error("GOOGLE_CLIENT_RESPONSE_INVALID");
+  const bytes = await readBoundedBytes(response, timeoutMs);
   try { return JSON.parse(new TextDecoder().decode(bytes)); } catch { throw new Error("GOOGLE_CLIENT_RESPONSE_INVALID"); }
 }
 
@@ -156,6 +168,101 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
     try { return Object.freeze({ response, payload: await body(response, timeoutMs) }); }
     catch { controller.abort(); return Object.freeze({ response: new Response(null, { status: 503 }) }); }
   }
+  /** Registry inspection is read-only and invoked only after the separate
+   * authorized upload boundary. It cannot make an upload or deploy a service. */
+  async function observeArtifactRegistryManifest(input: Readonly<{ imageReference: string; manifestDigest: string; configDigest: string; platform: Readonly<{ os: "linux"; architecture: "amd64" }> }>) {
+    const image = ArtifactRegistryImagePattern.exec(ArtifactRegistryImageSchema.parse(input.imageReference));
+    if (!image) throw new Error("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_INVALID");
+    const host = image[1]!.toLowerCase(), imageProject = image[2]!, repositoryPath = image[3]!, referenceDigest = `sha256:${image[4]!.toLowerCase()}`;
+    if (imageProject !== projectId) throw new Error("GOOGLE_ARTIFACT_REGISTRY_PROJECT_SCOPE_INVALID");
+    if (referenceDigest !== input.manifestDigest.toLowerCase()) throw new Error("GOOGLE_ARTIFACT_REGISTRY_MANIFEST_BINDING_INVALID");
+    if (!/^sha256:[a-f0-9]{64}$/iu.test(input.configDigest) || input.platform.os !== "linux" || input.platform.architecture !== "amd64") throw new Error("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_INVALID");
+    const token = await tokenSource.getAccessToken(); const scope = await googleAccountScopeSha256({ projectId, quotaProjectId, principal, scopes: token.scopes });
+    if (token.projectId !== projectId || token.quotaProjectId !== quotaProjectId || token.principal !== principal || token.accountScopeSha256 !== scope || token.expiresAtMs - 60_000 <= now()) throw new Error("GOOGLE_CLIENT_ADC_SCOPE_INVALID");
+    const headers = { authorization: `Bearer ${token.token}`, "x-goog-user-project": quotaProjectId };
+    const registryGet = async (path: string, accept: string) => {
+      const controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined;
+      try { return await Promise.race([fetcher(`https://${host}${path}`, { method: "GET", redirect: "error", signal: controller.signal, headers: { ...headers, accept } }), new Promise<Response>((_resolve, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error("GOOGLE_CLIENT_TIMEOUT")); }, timeoutMs); })]); }
+      finally { if (timer !== undefined) clearTimeout(timer); }
+    };
+    let manifestResponse: Response;
+    try { manifestResponse = await registryGet(`/v2/${imageProject}/${repositoryPath}/manifests/${referenceDigest}`, "application/vnd.oci.image.manifest.v1+json"); }
+    catch { throw new Error("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_UNAVAILABLE"); }
+    if (!manifestResponse.ok || manifestResponse.headers.get("docker-content-digest")?.toLowerCase() !== referenceDigest) throw new Error("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_UNAVAILABLE");
+    let manifest: unknown; let manifestBytes: Uint8Array;
+    try { manifestBytes = await readBoundedBytes(manifestResponse, timeoutMs); manifest = JSON.parse(new TextDecoder().decode(manifestBytes)); } catch { throw new Error("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_INVALID"); }
+    if (`sha256:${await sha256Bytes(manifestBytes)}` !== referenceDigest) throw new Error("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_INVALID");
+    const parsedManifest = z.object({ schemaVersion: z.literal(2), mediaType: z.literal("application/vnd.oci.image.manifest.v1+json"), config: z.object({ mediaType: z.literal("application/vnd.oci.image.config.v1+json"), digest: z.literal(input.configDigest.toLowerCase()), size: z.number().int().nonnegative() }).strict() }).passthrough().safeParse(manifest);
+    if (!parsedManifest.success) throw new Error("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_INVALID");
+    let configResponse: Response;
+    try { configResponse = await registryGet(`/v2/${imageProject}/${repositoryPath}/blobs/${input.configDigest.toLowerCase()}`, "application/vnd.oci.image.config.v1+json"); }
+    catch { throw new Error("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_UNAVAILABLE"); }
+    if (!configResponse.ok || configResponse.headers.get("docker-content-digest")?.toLowerCase() !== input.configDigest.toLowerCase()) throw new Error("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_UNAVAILABLE");
+    let config: unknown; let configBytes: Uint8Array;
+    try { configBytes = await readBoundedBytes(configResponse, timeoutMs); config = JSON.parse(new TextDecoder().decode(configBytes)); } catch { throw new Error("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_INVALID"); }
+    if (`sha256:${await sha256Bytes(configBytes)}` !== input.configDigest.toLowerCase() || configBytes.byteLength !== parsedManifest.data.config.size) throw new Error("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_INVALID");
+    if (!z.object({ os: z.literal("linux"), architecture: z.literal("amd64") }).passthrough().safeParse(config).success) throw new Error("GOOGLE_ARTIFACT_REGISTRY_OBSERVATION_INVALID");
+    return Object.freeze({ imageReference: input.imageReference, manifestDigest: input.manifestDigest.toLowerCase(), configDigest: input.configDigest.toLowerCase(), platform: Object.freeze({ os: "linux" as const, architecture: "amd64" as const }), observedAtMs: now() });
+  }
+  async function uploadArtifactRegistryImage(input: Readonly<{ operationId: string; image: PreparedCollectorOciUpload; expiresAtMs: number }>): Promise<Readonly<{ status: "completed" | "unknown" }>> {
+    const operationId = DeploymentOperationIdSchema.parse(input.operationId);
+    const image = input.image;
+    const parsed = ArtifactRegistryImagePattern.exec(ArtifactRegistryImageSchema.parse(image.imageReference));
+    if (!parsed || image.manifestDigest !== `sha256:${parsed[4]!.toLowerCase()}` || image.configDigest !== image.blobs[0]?.digest || image.platform.os !== "linux" || image.platform.architecture !== "amd64") throw new Error("GOOGLE_ARTIFACT_REGISTRY_UPLOAD_INVALID");
+    const host = parsed[1]!.toLowerCase(), imageProject = parsed[2]!, repositoryPath = parsed[3]!;
+    if (imageProject !== projectId || image.blobs.length < 1 || image.blobs.some(blob => !/^sha256:[a-f0-9]{64}$/iu.test(blob.digest) || blob.bytes.byteLength > 268_435_456)) throw new Error("GOOGLE_ARTIFACT_REGISTRY_UPLOAD_INVALID");
+    if (`sha256:${await sha256Bytes(image.manifest)}` !== image.manifestDigest || (await Promise.all(image.blobs.map(async blob => `sha256:${await sha256Bytes(blob.bytes)}` === blob.digest))).some(valid => !valid)) throw new Error("GOOGLE_ARTIFACT_REGISTRY_UPLOAD_INVALID");
+    const resource = `artifactregistry://${host}/${imageProject}/${repositoryPath}@${image.manifestDigest}`;
+    const intent = { imageReference: image.imageReference, manifestDigest: image.manifestDigest, configDigest: image.configDigest, blobs: image.blobs.map(blob => ({ digest: blob.digest, mediaType: blob.mediaType, size: blob.bytes.byteLength })) };
+    const claimed = await claim(operationId, resource, intent);
+    const observe = async () => {
+      try { await observeArtifactRegistryManifest({ imageReference: image.imageReference, manifestDigest: image.manifestDigest, configDigest: image.configDigest, platform: image.platform }); return true; }
+      catch { return false; }
+    };
+    if (!claimed.claimed) {
+      if (await observe()) { await options.journal.markCompleted({ operationId, requestSha256: claimed.requestSha256, resourceUid: image.manifestDigest, owned: true }); return Object.freeze({ status: "completed" as const }); }
+      return Object.freeze({ status: "unknown" as const });
+    }
+    const assertCurrent = () => { if (!Number.isSafeInteger(input.expiresAtMs) || now() >= input.expiresAtMs) throw new Error("COLLECTOR_UPLOAD_AUTHORIZATION_EXPIRED"); };
+    assertCurrent();
+    await options.journal.markDispatching({ operationId, requestSha256: claimed.requestSha256 });
+    const token = await tokenSource.getAccessToken(); const scope = await googleAccountScopeSha256({ projectId, quotaProjectId, principal, scopes: token.scopes });
+    if (token.projectId !== projectId || token.quotaProjectId !== quotaProjectId || token.principal !== principal || token.accountScopeSha256 !== scope || token.expiresAtMs - 60_000 <= now()) throw new Error("GOOGLE_CLIENT_ADC_SCOPE_INVALID");
+    const headers = { authorization: `Bearer ${token.token}`, "x-goog-user-project": quotaProjectId };
+    const registryRequest = async (url: string, init: RequestInit) => {
+      assertCurrent();
+      const controller = new AbortController();
+      const duration = Math.min(timeoutMs, input.expiresAtMs - now());
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try { return await Promise.race([fetcher(url, { ...init, redirect: "error", signal: controller.signal }), new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error("GOOGLE_CLIENT_TIMEOUT")); }, duration); })]); }
+      finally { clearTimeout(timer); }
+    };
+    const put = async (url: string, body: BodyInit, contentType: string) => registryRequest(url, { method: "PUT", headers: { ...headers, "content-type": contentType }, body });
+    try {
+      for (const blob of image.blobs) {
+        const base = `https://${host}/v2/${imageProject}/${repositoryPath}`;
+        const existing = await registryRequest(`${base}/blobs/${blob.digest}`, { method: "HEAD", headers });
+        if (existing.status === 200) continue;
+        if (existing.status !== 404) throw new Error("GOOGLE_ARTIFACT_REGISTRY_UPLOAD_UNAVAILABLE");
+        const begin = await registryRequest(`${base}/blobs/uploads/`, { method: "POST", headers });
+        const location = begin.headers.get("location");
+        if (![201, 202].includes(begin.status) || !location) throw new Error("GOOGLE_ARTIFACT_REGISTRY_UPLOAD_UNAVAILABLE");
+        const target = new URL(location, base);
+        if (target.protocol !== "https:" || target.host !== host) throw new Error("GOOGLE_ARTIFACT_REGISTRY_UPLOAD_LOCATION_INVALID");
+        target.searchParams.set("digest", blob.digest);
+        const uploaded = await put(target.toString(), new Uint8Array(blob.bytes).buffer, blob.mediaType);
+        if (![201, 202].includes(uploaded.status) || uploaded.headers.get("docker-content-digest")?.toLowerCase() !== blob.digest) throw new Error("GOOGLE_ARTIFACT_REGISTRY_UPLOAD_UNAVAILABLE");
+      }
+      const manifest = await put(`https://${host}/v2/${imageProject}/${repositoryPath}/manifests/${image.manifestDigest}`, new Uint8Array(image.manifest).buffer, image.manifestMediaType);
+      if (![200, 201].includes(manifest.status) || manifest.headers.get("docker-content-digest")?.toLowerCase() !== image.manifestDigest) throw new Error("GOOGLE_ARTIFACT_REGISTRY_UPLOAD_UNAVAILABLE");
+    } catch {
+      return Object.freeze({ status: "unknown" as const });
+    }
+    await options.journal.markDispatched({ operationId, requestSha256: claimed.requestSha256 });
+    if (!await observe()) return Object.freeze({ status: "unknown" as const });
+    await options.journal.markCompleted({ operationId, requestSha256: claimed.requestSha256, resourceUid: image.manifestDigest, owned: true });
+    return Object.freeze({ status: "completed" as const });
+  }
   async function claim(operationId: string, resource: string, payload: unknown, content: unknown = payload) {
     const requestSha256 = await sha256(payload); const contentSha256 = await sha256(content);
     const claimed = await options.journal.claim({ operationId, resource, requestSha256, contentSha256, ownershipMarker: operationId, owned: false });
@@ -164,18 +271,18 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
   }
 
   const cloudRun = Object.freeze({ projectId,
-    async deploy(input: Readonly<{ operationId: string; projectId: string; region: string; serviceName: string; imageReference: string; serviceAccountReference: string; environmentReferenceSha256: string; secretReferences: readonly Readonly<{ name: string; secret: string; version: string }>[]; minimumInstances: 3; ingress: "internal-and-cloud-load-balancing"; concurrency: number; admissionRefusal: "capacity_unavailable" }>): Promise<SafeStatus> {
+    async deploy(input: Readonly<{ operationId: string; projectId: string; region: string; serviceName: string; imageReference: string; serviceAccountReference: string; environmentReferenceSha256: string; secretReferences: readonly Readonly<{ name: string; secret: string; version: string }>[]; minimumInstances: 3; ingress: "internal-and-cloud-load-balancing"; concurrency: number; admissionRefusal: "capacity_unavailable"; containerPort?: number }>): Promise<SafeStatus> {
       const operationId = DeploymentOperationIdSchema.parse(input.operationId); if (ProjectIdSchema.parse(input.projectId) !== projectId) throw new Error("GOOGLE_CLIENT_PROJECT_SCOPE_INVALID");
       const region = RegionSchema.parse(input.region); const serviceName = ServiceNameSchema.parse(input.serviceName); const resource = `projects/${projectId}/locations/${region}/services/${serviceName}`;
       const secrets = z.array(z.object({ name: z.string().regex(/^[A-Z][A-Z0-9_]{1,62}$/u), secret: z.string().min(3).max(255), version: z.string().regex(/^[1-9][0-9]*$/u) })).min(1).parse(input.secretReferences);
       if (new Set(secrets.map((secret) => secret.name)).size !== secrets.length) throw new Error("GOOGLE_CLOUD_RUN_SECRET_CONFIG_INVALID");
-      const imageReference = ImageReferenceSchema.parse(input.imageReference);
+      const imageReference = ImageReferenceSchema.parse(input.imageReference); const containerPort = input.containerPort === undefined ? undefined : z.number().int().min(1).max(65_535).parse(input.containerPort);
       const env = [{ name: "GOOGLE_CLOUD_PROJECT", value: projectId }, { name: "NAPPLET_CVM_ENVIRONMENT_SHA256", value: DigestSchema.parse(input.environmentReferenceSha256) }, ...secrets.map((secret) => ({ name: secret.name, valueSource: { secretKeyRef: { secret: secret.secret, version: secret.version } } }))];
-      const service = { labels: { "napplet-cvm-operation": operationId }, ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER", template: { scaling: { minInstanceCount: z.literal(3).parse(input.minimumInstances) }, maxInstanceRequestConcurrency: z.number().int().min(1).max(1000).parse(input.concurrency), serviceAccount: z.string().min(3).max(255).parse(input.serviceAccountReference), containers: [{ image: imageReference, env }] } };
+      const service = { labels: { "napplet-cvm-operation": operationId }, ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER", template: { scaling: { minInstanceCount: z.literal(3).parse(input.minimumInstances) }, maxInstanceRequestConcurrency: z.number().int().min(1).max(1000).parse(input.concurrency), serviceAccount: z.string().min(3).max(255).parse(input.serviceAccountReference), containers: [{ image: imageReference, ...(containerPort === undefined ? {} : { ports: [{ containerPort }] }), env }] } };
       const prior = await options.journal.read(operationId); if (prior && prior.requestSha256 !== await sha256(service)) return Object.freeze({ status: "blocked" });
       const observed = await request("cloudRun", `/v2/${resource}`, "GET");
       if (observed.response.ok) {
-        const matching = z.object({ name: z.literal(resource), uid: z.string().min(1), createTime: z.string().min(1), generation: z.string().min(1), observedGeneration: z.string().min(1), reconciling: z.literal(false), terminalCondition: z.object({ state: z.literal("CONDITION_SUCCEEDED") }).passthrough(), labels: z.object({ "napplet-cvm-operation": z.literal(operationId) }).passthrough(), ingress: z.literal("INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"), template: z.object({ scaling: z.object({ minInstanceCount: z.literal(3) }), maxInstanceRequestConcurrency: z.literal(input.concurrency), serviceAccount: z.literal(input.serviceAccountReference), containers: z.array(z.object({ image: z.literal(imageReference), env: z.array(z.object({ name: z.string() }).passthrough()) }).passthrough()).length(1) }).passthrough() }).passthrough().safeParse(observed.payload);
+        const matching = z.object({ name: z.literal(resource), uid: z.string().min(1), createTime: z.string().min(1), generation: z.string().min(1), observedGeneration: z.string().min(1), reconciling: z.literal(false), terminalCondition: z.object({ state: z.literal("CONDITION_SUCCEEDED") }).passthrough(), labels: z.object({ "napplet-cvm-operation": z.literal(operationId) }).passthrough(), ingress: z.literal("INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"), template: z.object({ scaling: z.object({ minInstanceCount: z.literal(3) }), maxInstanceRequestConcurrency: z.literal(input.concurrency), serviceAccount: z.literal(input.serviceAccountReference), containers: z.array(z.object({ image: z.literal(imageReference), ...(containerPort === undefined ? {} : { ports: z.array(z.object({ containerPort: z.literal(containerPort) }).passthrough()).length(1) }), env: z.array(z.object({ name: z.string() }).passthrough()) }).passthrough()).length(1) }).passthrough() }).passthrough().safeParse(observed.payload);
         if (matching.success) {
           const observedEnv = (matching.data.template.containers[0]?.env ?? []) as readonly Readonly<{ name?: string; value?: string; valueSource?: { secretKeyRef?: { secret?: string; version?: string } } }> [];
           const required = new Map(env.map((entry) => [entry.name, entry]));
@@ -196,7 +303,7 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
       await options.journal.markDispatched({ operationId, requestSha256: claimed.requestSha256, operationName: operation.data.name });
       return Object.freeze({ status: "pending" });
     },
-    async observe(input: Readonly<{ operationId: string; projectId: string; region: string; serviceName: string; imageReference: string; serviceAccountReference: string; environmentReferenceSha256: string; secretReferences: readonly Readonly<{ name: string; secret: string; version: string }>[]; concurrency: number }>): Promise<SafeStatus> {
+    async observe(input: Readonly<{ operationId: string; projectId: string; region: string; serviceName: string; imageReference: string; serviceAccountReference: string; environmentReferenceSha256: string; secretReferences: readonly Readonly<{ name: string; secret: string; version: string }>[]; concurrency: number; containerPort?: number }>): Promise<SafeStatus> {
       const operationId = DeploymentOperationIdSchema.parse(input.operationId); if (ProjectIdSchema.safeParse(input.projectId).data !== projectId) return Object.freeze({ status: "blocked" });
       const region = RegionSchema.safeParse(input.region); const serviceName = ServiceNameSchema.safeParse(input.serviceName); if (!region.success || !serviceName.success) return Object.freeze({ status: "blocked" });
       const resource = `projects/${projectId}/locations/${region.data}/services/${serviceName.data}`;
@@ -208,7 +315,7 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
         if (!terminal.success || terminal.data.error !== undefined) return Object.freeze({ status: "unknown" });
         if (terminal.data.done !== true) return Object.freeze({ status: "pending" });
       }
-      const reconciled = await cloudRun.deploy({ operationId, projectId, region: region.data, serviceName: serviceName.data, imageReference: input.imageReference, serviceAccountReference: input.serviceAccountReference, environmentReferenceSha256: input.environmentReferenceSha256, secretReferences: input.secretReferences, minimumInstances: 3, ingress: "internal-and-cloud-load-balancing", concurrency: input.concurrency, admissionRefusal: "capacity_unavailable" });
+      const reconciled = await cloudRun.deploy({ operationId, projectId, region: region.data, serviceName: serviceName.data, imageReference: input.imageReference, serviceAccountReference: input.serviceAccountReference, environmentReferenceSha256: input.environmentReferenceSha256, secretReferences: input.secretReferences, minimumInstances: 3, ingress: "internal-and-cloud-load-balancing", concurrency: input.concurrency, admissionRefusal: "capacity_unavailable", ...(input.containerPort === undefined ? {} : { containerPort: input.containerPort }) });
       if (reconciled.status === "completed") {
         const service = await request("cloudRun", `/v2/${resource}`, "GET"); const identity = z.object({ uid: z.string().min(1), createTime: z.string().min(1) }).passthrough().safeParse(service.payload);
         if (!identity.success || (original.owned && (!original.resourceUid || !original.createTime || original.resourceUid !== identity.data.uid || original.createTime !== identity.data.createTime))) return Object.freeze({ status: "unknown" });
@@ -217,6 +324,36 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
         await options.journal.markCompleted({ operationId, requestSha256: original.requestSha256, resourceUid: identity.data.uid, createTime: identity.data.createTime, owned: true });
       }
       return reconciled;
+    },
+    /** Reconcile cleanup without claiming or dispatching it.  In particular, a
+     * caller recovering after a lost DELETE acknowledgement may only inspect
+     * the original identity, the recorded deletion LRO, and the resource. */
+    async observeCleanup(input: Readonly<{ operationId: string; projectId: string; region: string; serviceName: string }>): Promise<SafeStatus> {
+      const operationId = DeploymentOperationIdSchema.parse(input.operationId); const region = RegionSchema.parse(input.region); const serviceName = ServiceNameSchema.parse(input.serviceName); if (ProjectIdSchema.parse(input.projectId) !== projectId) throw new Error("GOOGLE_CLIENT_PROJECT_SCOPE_INVALID");
+      const resource = `projects/${projectId}/locations/${region}/services/${serviceName}`;
+      const original = await options.journal.read(operationId);
+      if (!original?.owned || !original.resourceUid || !original.createTime || original.resource !== resource) throw new Error("GOOGLE_CLEANUP_RUN_OWNERSHIP_REQUIRED");
+      const current = await request("cloudRun", `/v2/${resource}`, "GET");
+      /* A service absent after a recorded, owned original operation is the
+       * only terminal cleanup proof.  Do not require a cleanup journal record:
+       * the process may have died between provider completion and its ACK. */
+      if (current.response.status === 404) return Object.freeze({ status: "completed" });
+      if (!current.response.ok) return statusFor(current.response.status);
+      const ownedService = z.object({ name: z.literal(resource), uid: z.literal(original.resourceUid), createTime: z.literal(original.createTime), labels: z.object({ "napplet-cvm-operation": z.literal(operationId) }).passthrough() }).passthrough().safeParse(current.payload);
+      /* A same-name recreation is never ours to delete and can never become a
+       * cleaned result merely because an earlier name was removed. */
+      if (!ownedService.success) return Object.freeze({ status: "unknown" });
+      const cleanup = await options.journal.read(`${operationId}-cleanup`);
+      if (!cleanup) return Object.freeze({ status: "missing" });
+      if (!cleanup.operationName) return cleanup.state === "completed" ? Object.freeze({ status: "pending" }) : Object.freeze({ status: "unknown" });
+      const deletion = await request("cloudRun", `/v2/${cleanup.operationName}`, "GET");
+      if (!deletion.response.ok) return statusFor(deletion.response.status);
+      const terminal = z.object({ done: z.boolean().optional(), error: z.unknown().optional() }).passthrough().safeParse(deletion.payload);
+      if (!terminal.success || terminal.data.error !== undefined) return Object.freeze({ status: "unknown" });
+      if (terminal.data.done !== true) return Object.freeze({ status: "pending" });
+      const absent = await request("cloudRun", `/v2/${resource}`, "GET");
+      if (absent.response.status === 404) return Object.freeze({ status: "completed" });
+      return absent.response.ok ? Object.freeze({ status: "pending" }) : statusFor(absent.response.status);
     },
     async cleanup(input: Readonly<{ operationId: string; projectId: string; region: string; serviceName: string }>): Promise<SafeStatus> {
       const operationId = DeploymentOperationIdSchema.parse(input.operationId); const region = RegionSchema.parse(input.region); const serviceName = ServiceNameSchema.parse(input.serviceName); if (ProjectIdSchema.parse(input.projectId) !== projectId) throw new Error("GOOGLE_CLIENT_PROJECT_SCOPE_INVALID");
@@ -340,17 +477,28 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
   });
 
   const cloudSqlPostgres = Object.freeze({ projectId,
-    async provision(input: Readonly<{ operationId: string; instanceId: string; region: string; databaseVersion: "POSTGRES_17"; availabilityType: "REGIONAL"; tier: string; privateNetwork: string; requireSsl: true; serializablePolicy: true }>): Promise<SafeStatus> {
-      const operationId = DeploymentOperationIdSchema.parse(input.operationId); const instanceId = InstanceSchema.parse(input.instanceId); const region = RegionSchema.parse(input.region); if (input.databaseVersion !== "POSTGRES_17" || input.availabilityType !== "REGIONAL" || input.serializablePolicy !== true || !/^db-custom-[1-9][0-9]*-[1-9][0-9]*$/u.test(input.tier) || !/^projects\/[a-z][a-z0-9-]{4,28}[a-z0-9]\/global\/networks\/[a-z][a-z0-9-]{0,62}$/u.test(input.privateNetwork) || input.requireSsl !== true) throw new Error("GOOGLE_CLOUD_SQL_AUTHORITY_INVALID");
+    /** Read-only address observation for an already-owned restore instance.
+     * The returned RFC1918 address is never accepted from configuration. */
+    async observePrivateAddress(input: Readonly<{ instanceId: string }>): Promise<Readonly<{ status: "completed"; privateAddress: string }> | SafeStatus> {
+      const instanceId = InstanceSchema.parse(input.instanceId);
+      const instance = await request("cloudSql", `/v1/projects/${projectId}/instances/${instanceId}`, "GET");
+      if (!instance.response.ok) return statusFor(instance.response.status);
+      const observed = z.object({ name: z.literal(instanceId), state: z.literal("RUNNABLE"), ipAddresses: z.array(z.object({ type: z.literal("PRIVATE"), ipAddress: z.string().regex(/^(?:10\.|192\.168\.|172\.(?:1[6-9]|2[0-9]|3[0-1])\.)/u) }).passthrough()).min(1) }).passthrough().safeParse(instance.payload);
+      if (!observed.success) return Object.freeze({ status: "unknown" });
+      const addresses = [...new Set(observed.data.ipAddresses.map(item => item.ipAddress))];
+      return addresses.length === 1 ? Object.freeze({ status: "completed" as const, privateAddress: addresses[0]! }) : Object.freeze({ status: "unknown" });
+    },
+    async provision(input: Readonly<{ operationId: string; instanceId: string; region: string; databaseVersion: "POSTGRES_17"; availabilityType: "REGIONAL"; tier: string; privateNetwork: string; storageGb?: number; requireSsl: true; serializablePolicy: true }>): Promise<SafeStatus> {
+      const operationId = DeploymentOperationIdSchema.parse(input.operationId); const instanceId = InstanceSchema.parse(input.instanceId); const region = RegionSchema.parse(input.region); const storageGb = input.storageGb === undefined ? undefined : z.number().int().min(10).max(65_536).parse(input.storageGb); if (input.databaseVersion !== "POSTGRES_17" || input.availabilityType !== "REGIONAL" || input.serializablePolicy !== true || !/^db-custom-[1-9][0-9]*-[1-9][0-9]*$/u.test(input.tier) || !/^projects\/[a-z][a-z0-9-]{4,28}[a-z0-9]\/global\/networks\/[a-z][a-z0-9-]{0,62}$/u.test(input.privateNetwork) || input.requireSsl !== true) throw new Error("GOOGLE_CLOUD_SQL_AUTHORITY_INVALID");
       const resource = `projects/${projectId}/instances/${instanceId}`;
-      const instance = { name: instanceId, region, databaseVersion: "POSTGRES_17", settings: { tier: input.tier, availabilityType: "REGIONAL", userLabels: { "napplet-cvm-operation": operationId }, backupConfiguration: { enabled: true }, ipConfiguration: { privateNetwork: input.privateNetwork, ipv4Enabled: false, requireSsl: true }, databaseFlags: [{ name: "default_transaction_isolation", value: "serializable" }] } };
+      const instance = { name: instanceId, region, databaseVersion: "POSTGRES_17", settings: { tier: input.tier, availabilityType: "REGIONAL", ...(storageGb === undefined ? {} : { dataDiskSizeGb: storageGb }), userLabels: { "napplet-cvm-operation": operationId }, backupConfiguration: { enabled: true }, ipConfiguration: { privateNetwork: input.privateNetwork, ipv4Enabled: false, requireSsl: true }, databaseFlags: [{ name: "default_transaction_isolation", value: "serializable" }] } };
       /* Claim and compare intent before considering an existing resource
        * complete. This prevents a same-name, same-label instance from
        * satisfying a later request with altered authority settings. */
       const claimed = await claim(operationId, resource, instance);
       const existing = await request("cloudSql", `/v1/projects/${projectId}/instances/${instanceId}`, "GET");
       if (existing.response.ok) {
-        const matching = z.object({ name: z.literal(instanceId), createTime: z.string().min(1), region: z.literal(region), databaseVersion: z.literal("POSTGRES_17"), state: z.literal("RUNNABLE"), settings: z.object({ availabilityType: z.literal("REGIONAL"), tier: z.literal(input.tier), userLabels: z.object({ "napplet-cvm-operation": z.literal(operationId) }).passthrough(), backupConfiguration: z.object({ enabled: z.literal(true) }).passthrough(), ipConfiguration: z.object({ privateNetwork: z.literal(input.privateNetwork), ipv4Enabled: z.literal(false), requireSsl: z.literal(true) }).passthrough(), databaseFlags: z.array(z.object({ name: z.literal("default_transaction_isolation"), value: z.literal("serializable") })).min(1) }).passthrough() }).passthrough().safeParse(existing.payload);
+        const matching = z.object({ name: z.literal(instanceId), createTime: z.string().min(1), region: z.literal(region), databaseVersion: z.literal("POSTGRES_17"), state: z.literal("RUNNABLE"), settings: z.object({ availabilityType: z.literal("REGIONAL"), tier: z.literal(input.tier), ...(storageGb === undefined ? {} : { dataDiskSizeGb: z.literal(storageGb) }), userLabels: z.object({ "napplet-cvm-operation": z.literal(operationId) }).passthrough(), backupConfiguration: z.object({ enabled: z.literal(true) }).passthrough(), ipConfiguration: z.object({ privateNetwork: z.literal(input.privateNetwork), ipv4Enabled: z.literal(false), requireSsl: z.literal(true) }).passthrough(), databaseFlags: z.array(z.object({ name: z.literal("default_transaction_isolation"), value: z.literal("serializable") })).min(1) }).passthrough() }).passthrough().safeParse(existing.payload);
         const priorMutation = claimed.record.state === "dispatching" || claimed.record.state === "dispatched";
         if (!matching.success) return Object.freeze({ status: "unknown" });
         if (claimed.record.owned) return claimed.record.createTime === matching.data.createTime ? Object.freeze({ status: "completed" }) : Object.freeze({ status: "unknown" });
@@ -362,10 +510,45 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
       if (!claimed.claimed) return Object.freeze({ status: "unknown" }); await options.journal.markDispatching({ operationId, requestSha256: claimed.requestSha256 });
       const created = await request("cloudSql", `/v1/projects/${projectId}/instances`, "POST", instance); if (!created.response.ok) return statusFor(created.response.status); const operation = z.object({ name: z.string().min(1) }).passthrough().safeParse(created.payload); if (!operation.success) return Object.freeze({ status: "unknown" }); await options.journal.markDispatched({ operationId, requestSha256: claimed.requestSha256, operationName: operation.data.name }); return Object.freeze({ status: "pending" });
     },
-    async observe(input: Readonly<{ operationId: string; instanceId: string; region: string; tier: string; privateNetwork: string }>): Promise<SafeStatus> {
-      const operationId = DeploymentOperationIdSchema.parse(input.operationId); const instanceId = InstanceSchema.parse(input.instanceId); const region = RegionSchema.parse(input.region); const tier = z.string().regex(/^db-custom-[1-9][0-9]*-[1-9][0-9]*$/u).parse(input.tier); const privateNetwork = z.string().regex(/^projects\/[a-z][a-z0-9-]{4,28}[a-z0-9]\/global\/networks\/[a-z][a-z0-9-]{0,62}$/u).parse(input.privateNetwork); const resource = `projects/${projectId}/instances/${instanceId}`;
+    /** Cloud SQL clone is a fresh, independent copy of the source.  A clone
+     * response is never enough to adopt a destination: the original journal
+     * operation and its LRO must both agree before it becomes owned. */
+    async clone(input: Readonly<{ operationId: string; sourceInstanceId: string; destinationInstanceId: string }>): Promise<SafeStatus> {
+      const operationId = DeploymentOperationIdSchema.parse(input.operationId); const sourceInstanceId = InstanceSchema.parse(input.sourceInstanceId); const destinationInstanceId = InstanceSchema.parse(input.destinationInstanceId);
+      if (sourceInstanceId === destinationInstanceId) throw new Error("GOOGLE_CLOUD_SQL_CLONE_SOURCE_DESTINATION_INVALID");
+      const resource = `projects/${projectId}/instances/${destinationInstanceId}`;
+      const intent = { cloneContext: { kind: "sql#cloneContext", destinationInstanceName: destinationInstanceId } };
+      const claimed = await claim(operationId, resource, { sourceInstanceId, destinationInstanceId, intent });
+      const destination = await request("cloudSql", `/v1/projects/${projectId}/instances/${destinationInstanceId}`, "GET");
+      if (destination.response.ok) {
+        const observed = z.object({ name: z.literal(destinationInstanceId), createTime: z.string().min(1), state: z.literal("RUNNABLE") }).passthrough().safeParse(destination.payload);
+        if (!observed.success || !(claimed.record.state === "dispatching" || claimed.record.state === "dispatched" || claimed.record.state === "completed")) return Object.freeze({ status: "unknown" });
+        if (claimed.record.owned) return claimed.record.createTime === observed.data.createTime ? Object.freeze({ status: "completed" }) : Object.freeze({ status: "unknown" });
+        await options.journal.markCompleted({ operationId, requestSha256: claimed.requestSha256, createTime: observed.data.createTime, owned: true }); return Object.freeze({ status: "completed" });
+      }
+      if (destination.response.status !== 404) return statusFor(destination.response.status);
+      if (!claimed.claimed) return Object.freeze({ status: "unknown" });
+      await options.journal.markDispatching({ operationId, requestSha256: claimed.requestSha256 });
+      const created = await request("cloudSql", `/v1/projects/${projectId}/instances/${sourceInstanceId}/clone`, "POST", intent);
+      if (!created.response.ok) return statusFor(created.response.status);
+      const operation = z.object({ name: z.string().min(1) }).passthrough().safeParse(created.payload); if (!operation.success) return Object.freeze({ status: "unknown" });
+      await options.journal.markDispatched({ operationId, requestSha256: claimed.requestSha256, operationName: operation.data.name }); return Object.freeze({ status: "pending" });
+    },
+    async observeClone(input: Readonly<{ operationId: string; sourceInstanceId: string; destinationInstanceId: string }>): Promise<SafeStatus> {
+      const operationId = DeploymentOperationIdSchema.parse(input.operationId); const sourceInstanceId = InstanceSchema.parse(input.sourceInstanceId); const destinationInstanceId = InstanceSchema.parse(input.destinationInstanceId);
+      const original = await options.journal.read(operationId); const resource = `projects/${projectId}/instances/${destinationInstanceId}`;
+      const intent = { sourceInstanceId, destinationInstanceId, intent: { cloneContext: { kind: "sql#cloneContext", destinationInstanceName: destinationInstanceId } } };
+      if (!original || original.resource !== resource || original.requestSha256 !== await sha256(intent)) return Object.freeze({ status: "blocked" });
+      if (original.operationName) { const operation = await request("cloudSql", `/v1/projects/${projectId}/operations/${encodeURIComponent(original.operationName)}`, "GET"); const terminal = operation.response.ok && z.object({ status: z.enum(["PENDING", "RUNNING", "DONE"]), error: z.unknown().optional() }).passthrough().safeParse(operation.payload); if (!terminal || !terminal.success || terminal.data.error !== undefined) return operation.response.ok ? Object.freeze({ status: "unknown" }) : statusFor(operation.response.status); if (terminal.data.status !== "DONE") return Object.freeze({ status: "pending" }); }
+      const destination = await request("cloudSql", `/v1/projects/${projectId}/instances/${destinationInstanceId}`, "GET"); if (!destination.response.ok) return statusFor(destination.response.status);
+      const observed = z.object({ name: z.literal(destinationInstanceId), createTime: z.string().min(1), state: z.literal("RUNNABLE") }).passthrough().safeParse(destination.payload); if (!observed.success) return Object.freeze({ status: "unknown" });
+      if (original.owned) return original.createTime === observed.data.createTime ? Object.freeze({ status: "completed" }) : Object.freeze({ status: "unknown" });
+      if (original.state !== "dispatched") return Object.freeze({ status: "unknown" }); await options.journal.markCompleted({ operationId, requestSha256: original.requestSha256, createTime: observed.data.createTime, owned: true }); return Object.freeze({ status: "completed" });
+    },
+    async observe(input: Readonly<{ operationId: string; instanceId: string; region: string; tier: string; privateNetwork: string; storageGb?: number }>): Promise<SafeStatus> {
+      const operationId = DeploymentOperationIdSchema.parse(input.operationId); const instanceId = InstanceSchema.parse(input.instanceId); const region = RegionSchema.parse(input.region); const tier = z.string().regex(/^db-custom-[1-9][0-9]*-[1-9][0-9]*$/u).parse(input.tier); const privateNetwork = z.string().regex(/^projects\/[a-z][a-z0-9-]{4,28}[a-z0-9]\/global\/networks\/[a-z][a-z0-9-]{0,62}$/u).parse(input.privateNetwork); const storageGb = input.storageGb === undefined ? undefined : z.number().int().min(10).max(65_536).parse(input.storageGb); const resource = `projects/${projectId}/instances/${instanceId}`;
       const original = await options.journal.read(operationId); if (!original || original.resource !== resource) return Object.freeze({ status: "blocked" });
-      const intent = { name: instanceId, region, databaseVersion: "POSTGRES_17", settings: { tier, availabilityType: "REGIONAL", userLabels: { "napplet-cvm-operation": operationId }, backupConfiguration: { enabled: true }, ipConfiguration: { privateNetwork, ipv4Enabled: false, requireSsl: true }, databaseFlags: [{ name: "default_transaction_isolation", value: "serializable" }] } };
+      const intent = { name: instanceId, region, databaseVersion: "POSTGRES_17", settings: { tier, availabilityType: "REGIONAL", ...(storageGb === undefined ? {} : { dataDiskSizeGb: storageGb }), userLabels: { "napplet-cvm-operation": operationId }, backupConfiguration: { enabled: true }, ipConfiguration: { privateNetwork, ipv4Enabled: false, requireSsl: true }, databaseFlags: [{ name: "default_transaction_isolation", value: "serializable" }] } };
       if (await sha256(intent) !== original.requestSha256) return Object.freeze({ status: "blocked" });
       if (original.operationName) {
         const operation = await request("cloudSql", `/v1/projects/${projectId}/operations/${encodeURIComponent(original.operationName)}`, "GET"); if (!operation.response.ok) return statusFor(operation.response.status);
@@ -373,10 +556,31 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
         if (!terminal.success || terminal.data.error !== undefined) return Object.freeze({ status: "unknown" }); if (terminal.data.status !== "DONE") return Object.freeze({ status: "pending" });
       }
       const instance = await request("cloudSql", `/v1/projects/${projectId}/instances/${instanceId}`, "GET"); if (!instance.response.ok) return statusFor(instance.response.status);
-      const ready = z.object({ name: z.literal(instanceId), createTime: z.string().min(1), region: z.literal(region), databaseVersion: z.literal("POSTGRES_17"), state: z.literal("RUNNABLE"), settings: z.object({ tier: z.literal(tier), availabilityType: z.literal("REGIONAL"), userLabels: z.object({ "napplet-cvm-operation": z.literal(operationId) }).passthrough(), backupConfiguration: z.object({ enabled: z.literal(true) }).passthrough(), ipConfiguration: z.object({ privateNetwork: z.literal(privateNetwork), ipv4Enabled: z.literal(false), requireSsl: z.literal(true) }).passthrough(), databaseFlags: z.array(z.object({ name: z.literal("default_transaction_isolation"), value: z.literal("serializable") })).min(1) }).passthrough() }).passthrough().safeParse(instance.payload); if (!ready.success) return Object.freeze({ status: "unknown" });
+      const ready = z.object({ name: z.literal(instanceId), createTime: z.string().min(1), region: z.literal(region), databaseVersion: z.literal("POSTGRES_17"), state: z.literal("RUNNABLE"), settings: z.object({ tier: z.literal(tier), availabilityType: z.literal("REGIONAL"), ...(storageGb === undefined ? {} : { dataDiskSizeGb: z.literal(storageGb) }), userLabels: z.object({ "napplet-cvm-operation": z.literal(operationId) }).passthrough(), backupConfiguration: z.object({ enabled: z.literal(true) }).passthrough(), ipConfiguration: z.object({ privateNetwork: z.literal(privateNetwork), ipv4Enabled: z.literal(false), requireSsl: z.literal(true) }).passthrough(), databaseFlags: z.array(z.object({ name: z.literal("default_transaction_isolation"), value: z.literal("serializable") })).min(1) }).passthrough() }).passthrough().safeParse(instance.payload); if (!ready.success) return Object.freeze({ status: "unknown" });
       if (original.owned) return original.createTime === ready.data.createTime ? Object.freeze({ status: "completed" }) : Object.freeze({ status: "unknown" });
       if (original.state === "completed") return Object.freeze({ status: "unknown" });
       await options.journal.markCompleted({ operationId, requestSha256: original.requestSha256, createTime: ready.data.createTime, owned: true }); return Object.freeze({ status: "completed" });
+    },
+    async observeCleanup(input: Readonly<{ operationId: string; instanceId: string }>): Promise<SafeStatus> {
+      const operationId = DeploymentOperationIdSchema.parse(input.operationId), instanceId = InstanceSchema.parse(input.instanceId);
+      const resource = `projects/${projectId}/instances/${instanceId}`;
+      const original = await options.journal.read(operationId);
+      if (!original?.owned || !original.createTime || original.resource !== resource) throw new Error("GOOGLE_CLEANUP_RUN_OWNERSHIP_REQUIRED");
+      const current = await request("cloudSql", `/v1/projects/${projectId}/instances/${instanceId}`, "GET");
+      if (current.response.status === 404) return Object.freeze({ status: "completed" });
+      if (!current.response.ok) return statusFor(current.response.status);
+      const owned = z.object({ name: z.literal(instanceId), createTime: z.literal(original.createTime), settings: z.object({ userLabels: z.object({ "napplet-cvm-operation": z.literal(operationId) }).passthrough() }).passthrough() }).passthrough().safeParse(current.payload);
+      if (!owned.success) return Object.freeze({ status: "unknown" });
+      const cleanup = await options.journal.read(`${operationId}-cleanup`);
+      if (!cleanup) return Object.freeze({ status: "missing" });
+      if (cleanup.resource !== resource || !cleanup.operationName) return Object.freeze({ status: "unknown" });
+      const deletion = await request("cloudSql", `/v1/projects/${projectId}/operations/${encodeURIComponent(cleanup.operationName)}`, "GET");
+      if (!deletion.response.ok) return statusFor(deletion.response.status);
+      const terminal = z.object({ status: z.enum(["PENDING", "RUNNING", "DONE"]), error: z.unknown().optional() }).passthrough().safeParse(deletion.payload);
+      if (!terminal.success || terminal.data.error !== undefined) return Object.freeze({ status: "unknown" });
+      if (terminal.data.status !== "DONE") return Object.freeze({ status: "pending" });
+      const absent = await request("cloudSql", `/v1/projects/${projectId}/instances/${instanceId}`, "GET");
+      return absent.response.status === 404 ? Object.freeze({ status: "completed" }) : absent.response.ok ? Object.freeze({ status: "pending" }) : statusFor(absent.response.status);
     },
     async cleanup(input: Readonly<{ operationId: string; instanceId: string }>): Promise<SafeStatus> {
       const operationId = DeploymentOperationIdSchema.parse(input.operationId); const instanceId = InstanceSchema.parse(input.instanceId); const resource = `projects/${projectId}/instances/${instanceId}`;
@@ -398,7 +602,7 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
   /* Collector deployment is Cloud Run. Vertex generation has no durable
    * operation lookup: Plan 65 owns its query-only reconciliation, so this
    * lower-level boundary deliberately returns unknown instead of inventing one. */
-  const collector = Object.freeze({ projectId, deploy: cloudRun.deploy });
+  const collector = Object.freeze({ projectId, deploy: cloudRun.deploy, observeUploadedManifest: observeArtifactRegistryManifest, uploadOciImage: uploadArtifactRegistryImage });
   const vertex = Object.freeze({ projectId, async predict(_input: Readonly<{ operationId: string; region: string; modelReference: string; requestDigest: string }>): Promise<SafeStatus> { return Object.freeze({ status: "unknown" }); } });
   return Object.freeze({ projectId, quotaProjectId, cloudRun, gcs, cloudSqlPostgres, collector, vertex });
 }

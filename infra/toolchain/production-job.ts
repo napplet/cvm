@@ -60,7 +60,10 @@ function parseRestore(bytes: Uint8Array) {
 async function protect(path: string): Promise<void> {
   const info = await lstat(path);
   if (info.isSymbolicLink()) return; // pnpm links target the immutable image store.
-  await chown(path, 0, 0); await chmod(path, info.mode & 0o555);
+  // Files were created by the build UID, possibly with private mode bits.
+  // Ownership conversion must preserve its ability to read the immutable
+  // substrate. Merely stripping write bits can turn 0600 into root-only 0400.
+  await chown(path, 0, 0); await chmod(path, info.isDirectory() ? 0o555 : 0o444 | (info.mode & 0o111 ? 0o111 : 0));
   if (info.isDirectory()) for (const child of await readdir(path)) await protect(join(path, child));
 }
 async function command(argv: string[], cwd: string, deadline: number) {
@@ -125,7 +128,13 @@ async function run(id: string, dir: string) {
     await immutable(join(dir, "artifact.json"), artifact);
     await immutable(join(dir, "result.json"), canonical({ version: 1, jobId: id, state: "completed", requestSha256: id, artifactSha256: sha(artifact), artifactBytes: Buffer.byteLength(artifact), commands: commands.map(({ stdout, stderr, ...facts }) => ({ ...facts, stdoutSha256: sha(stdout), stderrSha256: sha(stderr) })) }));
   } catch (error) {
-    await immutable(join(dir, "result.json"), canonical({ version: 1, jobId: id, state: "failed", requestSha256: id, code: error instanceof Error ? error.message : "JOB_FAILED", commands: commands.map(({ stdout, stderr, ...facts }) => ({ ...facts, stdoutSha256: sha(stdout), stderrSha256: sha(stderr) })) })).catch(() => undefined);
+    // Failure status is private coordinator output. Preserve bounded tails
+    // from the last command so a failed build can be diagnosed after the
+    // ephemeral workspace is removed. These are untrusted diagnostic bytes,
+    // never conformance or artifact evidence; full output hashes stay intact.
+    const last = commands.at(-1);
+    const diagnostics = last ? { commandIndex: commands.length - 1, stdoutTail: last.stdout.slice(-4096), stderrTail: last.stderr.slice(-4096) } : undefined;
+    await immutable(join(dir, "result.json"), canonical({ version: 1, jobId: id, state: "failed", requestSha256: id, code: error instanceof Error ? error.message : "JOB_FAILED", commands: commands.map(({ stdout, stderr, ...facts }) => ({ ...facts, stdoutSha256: sha(stdout), stderrSha256: sha(stderr) })), ...(diagnostics ? { diagnostics } : {}) })).catch(() => undefined);
   } finally {
     // The immutable input and artifact are retained under the root-only job
     // record. Free ephemeral installs so revisions cannot fill the workspace.

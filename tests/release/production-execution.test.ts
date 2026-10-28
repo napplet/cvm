@@ -1,3 +1,4 @@
+import { observeUploadedCollectorRegistryImage } from "../../src/release/collector-image";
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -77,7 +78,9 @@ test("pinned release execution session construction makes no provider call", asy
       }, candidateSha256: "a".repeat(64), workspace: root,
     });
     expect(readiness.providerFamilies).toEqual(RELEASE_PRODUCTION_PROVIDER_IDS);
-    expect((globalThis as Record<string, unknown>).__nappletCvmFactoryCalls).toBe(2);
+    // Readiness verifies the same pinned bundle without constructing the
+    // receipt-bound graph; only the explicit session load invokes its factory.
+    expect((globalThis as Record<string, unknown>).__nappletCvmFactoryCalls).toBe(1);
     delete (globalThis as Record<string, unknown>).__nappletCvmFactoryCalls;
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -102,7 +105,7 @@ test("protected configuration marked credential-unavailable cannot load a produc
       evidenceDirectory: join(root, "evidence"),
       credentials: "unavailable",
       adapter: { root, modulePath: join(root, "adapter.mjs"), sha256: "a".repeat(64) },
-      releaseExecution: { root, modulePath: join(root, "release-execution.mjs"), sha256: "b".repeat(64) },
+      releaseExecution: { root, modulePath: join(root, "release-execution.mjs"), sha256: "b".repeat(64), configPath: join(root, "deployment-config.json"), configSha256: "c".repeat(64) },
     },
     candidateSha256: "a".repeat(64),
     workspace: root,
@@ -131,6 +134,13 @@ test("non-dry execution reaches the same-session approval boundary before any pr
       candidatePath,
       workspace,
       dryRun: false,
+      // Already-observed local contract fixture; no registry or release evidence.
+      collectorImage: await observeUploadedCollectorRegistryImage({
+        plannedRegistryReference: `registry.example/napplet-cvm/collector@sha256:${"c".repeat(64)}`,
+        registryAvailability: "not_uploaded", localOciManifestDigest: `sha256:${"c".repeat(64)}`, localOciConfigDigest: `sha256:${"d".repeat(64)}`,
+        platform: { os: "linux", architecture: "amd64" }, baseImage: `otel/opentelemetry-collector@sha256:${"e".repeat(64)}`,
+        dockerfileSha256: "f".repeat(64), collectorConfigSha256: "a".repeat(64), ociLayoutPath: "/tmp/collector.oci.tar", ociLayoutSha256: "b".repeat(64),
+      }, { async observeUploadedManifest(input) { return { ...input, observedAtMs: 1 }; } }),
       now: () => 1_000,
       session: {
         registry,

@@ -21,11 +21,11 @@ export type ResumeDependencies = Readonly<{
   compatibility: ResumeCompatibility;
   /** Server-owned exact-generation reader; it never accepts checkpoint material from a caller. */
   checkpoint: Readonly<{
-    loadExact(checkpointId: string): Promise<ResumeCheckpointMaterial>;
+    loadExact(input: Readonly<{ checkpointId: string; accountId: string; sessionId: string }>): Promise<ResumeCheckpointMaterial>;
     restore(material: ResumeCheckpointMaterial): Promise<Uint8Array>;
   }>;
   /** The allocation implementation must reconcile this durable intent, never allocate by a fresh caller-generated key. */
-  allocate(input: Readonly<{ accountId: string; sessionId: string; checkpointId: string; leaseToken: string; allocationIntentReference: string }>): Promise<ResumeAllocation>;
+  allocate(input: Readonly<{ accountId: string; sessionId: string; checkpointId: string; leaseToken: string; allocationIntentReference: string; actionId: string; expectedVersion: number; policyVersion: string; workspaceId: string; sourceActionId: string }>): Promise<ResumeAllocation>;
 }>;
 
 export type VerifiedCreditWakeHint = Readonly<{
@@ -268,7 +268,7 @@ export class ContinuationService {
     let material: ResumeCheckpointMaterial;
     let archive: Uint8Array;
     try {
-      material = await dependencies.checkpoint.loadExact(command.checkpointId);
+      material = await dependencies.checkpoint.loadExact({ checkpointId: command.checkpointId, accountId, sessionId: command.sessionId });
       if (!this.#materialMatches(material.manifest, command, continuation.intent, dependencies.compatibility)) throw new Error("CHECKPOINT_BINDING_DENIED");
       archive = await dependencies.checkpoint.restore(material);
     } catch {
@@ -306,7 +306,7 @@ export class ContinuationService {
 
     let allocation: ResumeAllocation;
     try {
-      allocation = await dependencies.allocate({ accountId, sessionId: command.sessionId, checkpointId: command.checkpointId, leaseToken: claimed.leaseToken, allocationIntentReference: claimed.allocationIntentReference });
+      allocation = await dependencies.allocate({ accountId, sessionId: command.sessionId, checkpointId: command.checkpointId, leaseToken: claimed.leaseToken, allocationIntentReference: claimed.allocationIntentReference, actionId: claimed.actionId, expectedVersion: command.expectedSessionVersion, policyVersion: continuation.intent.policyVersion, workspaceId: material.manifest.workspaceLineage, sourceActionId: material.manifest.action.actionId });
     } catch { allocation = { status: "unknown" }; }
     if (allocation.status !== "allocated") {
       await this.#recordRestoreObservation(accountId, command.checkpointId, claimed.allocationIntentReference, allocation.status === "refused" ? "refused" : "reconciliation_pending");
@@ -315,10 +315,10 @@ export class ContinuationService {
 
     try {
       const restored = await allocation.worker.restoreCheckpoint({
-        accountId, sessionId: command.sessionId, actionId: material.manifest.action.actionId, expectedVersion: command.expectedSessionVersion,
+        accountId, sessionId: command.sessionId, actionId: claimed.actionId, expectedVersion: command.expectedSessionVersion,
         policyVersion: continuation.intent.policyVersion, capabilityGrant: "phase-05-continuation-grant", workspaceId: material.manifest.workspaceLineage,
         checkpointId: command.checkpointId, pauseGeneration: material.manifest.pauseGeneration, actionVersion: material.manifest.actionVersion,
-        workspaceLineage: material.manifest.workspaceLineage, leaseToken: claimed.leaseToken, resumeClaim: claimed.allocationIntentReference, archive, archiveSha256: material.manifest.archiveSha256,
+        workspaceLineage: material.manifest.workspaceLineage, leaseToken: claimed.leaseToken, resumeClaim: claimed.allocationIntentReference, archive: archive as Uint8Array<ArrayBuffer>, archiveSha256: material.manifest.archiveSha256,
       } satisfies CheckpointRestoreRequest);
       if (restored.status !== "restored") throw new Error("WORKER_RESTORE_DENIED");
       await this.#recordRestoreObservation(accountId, command.checkpointId, claimed.allocationIntentReference, "restored");

@@ -27,21 +27,21 @@ async function boundedBytes(response: Response, ceiling = MAX_RESPONSE_BYTES): P
   return result;
 }
 
-async function metadata(response: Response): Promise<StorageMetadata | undefined> {
-  if (!response.ok) return undefined;
+async function metadata(response: Response): Promise<StorageMetadata> {
+  if (!response.ok) { await response.body?.cancel().catch(() => undefined); throw new Error("GCS_METADATA_UNAVAILABLE"); }
   try {
     const parsed = z.object({ generation: z.union([z.string().regex(/^\d+$/u), z.number().int().positive()]), metadata: z.record(z.string(), z.string()).optional() }).passthrough().parse(JSON.parse(new TextDecoder().decode(await boundedBytes(response, 128 * 1024))));
     const generation = Number(parsed.generation);
-    if (!Number.isSafeInteger(generation)) return undefined;
+    if (!Number.isSafeInteger(generation)) throw new Error("GCS_OBJECT_METADATA_INVALID");
     return Object.freeze({ generation: Generation.parse(generation), metadata: Object.freeze({ ...(parsed.metadata ?? {}) }) });
-  } catch { return undefined; }
+  } catch { throw new Error("GCS_OBJECT_METADATA_INVALID"); }
 }
 
 /**
  * The only production GCS data-plane client.  It uses ADC for every request,
  * never lists objects, and pins every read/mutation to a generation.  Object
- * deletion is scheduled by writing the exact retained-generation's immutable
- * deletion marker; the 30-day lifecycle controller consumes that marker.
+ * deletion executes only after the retention deadline, using a generation-
+ * pinned DELETE. Only an explicit provider 404 proves an absent generation.
  */
 export function createProductionGcsObjectClient(input: Readonly<{
   bucket: string;
@@ -65,6 +65,7 @@ export function createProductionGcsObjectClient(input: Readonly<{
   };
   const readMetadata = async (key: string, generation?: number) => {
     const response = await request(objectUrl(key, generation === undefined ? {} : { generation: String(generation) }), { method: "GET" });
+    if (response.status === 404) { await response.body?.cancel().catch(() => undefined); return undefined; }
     const result = await metadata(response);
     if (!result && response.body) await response.body.cancel().catch(() => undefined);
     return result;
@@ -101,11 +102,12 @@ export function createProductionGcsObjectClient(input: Readonly<{
     async readGeneration(input: Readonly<{ key: string; generation: number; expectedChecksum: string }>) {
       const key = ObjectKey.parse(input.key); const generation = Generation.parse(input.generation); const expectedChecksum = Digest.parse(input.expectedChecksum);
       const current = await readMetadata(key, generation);
-      if (!current || current.generation !== generation || current.metadata.sha256 !== expectedChecksum) return undefined;
+      if (!current) return undefined;
+      if (current.generation !== generation || current.metadata.sha256 !== expectedChecksum) throw new Error("GCS_OBJECT_EXACT_GENERATION_REQUIRED");
       const response = await request(objectUrl(key, { generation: String(generation), alt: "media" }), { method: "GET" });
-      if (!response.ok) { await response.body?.cancel().catch(() => undefined); return undefined; }
+      if (!response.ok) { await response.body?.cancel().catch(() => undefined); if (response.status === 404) return undefined; throw new Error("GCS_OBJECT_READ_UNAVAILABLE"); }
       const headerGeneration = response.headers.get("x-goog-generation");
-      if (headerGeneration !== null && Number(headerGeneration) !== generation) { await response.body?.cancel().catch(() => undefined); return undefined; }
+      if (headerGeneration !== null && Number(headerGeneration) !== generation) { await response.body?.cancel().catch(() => undefined); throw new Error("GCS_OBJECT_EXACT_GENERATION_REQUIRED"); }
       return Object.freeze({ generation, checksum: expectedChecksum, bytes: await boundedBytes(response) });
     },
     async scheduleGenerationDeletion(input: Readonly<{ key: string; generation: number; expectedChecksum: string; deleteAfter: string }>) {

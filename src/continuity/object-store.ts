@@ -85,7 +85,7 @@ export class GcsObjectStoreAdapter implements ObjectStorePort {
     const response = await this.#client.readGeneration({ key: parsed.data.key, generation: parsed.data.generation, expectedChecksum: parsed.data.checksum });
     if (!response) return undefined;
     const exact = VersionedObjectReadResponseSchema.safeParse(response);
-    if (!exact.success || exact.data.generation !== parsed.data.generation || exact.data.checksum !== parsed.data.checksum || await sha256(exact.data.bytes) !== parsed.data.checksum) return undefined;
+    if (!exact.success || exact.data.generation !== parsed.data.generation || exact.data.checksum !== parsed.data.checksum || await sha256(exact.data.bytes) !== parsed.data.checksum) throw new Error("OBJECT_EXACT_GENERATION_REQUIRED");
     return new Uint8Array(exact.data.bytes);
   }
 

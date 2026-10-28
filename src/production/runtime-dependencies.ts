@@ -18,11 +18,13 @@ import { ProductionVertexModelGateway } from "./vertex-model-gateway";
 import { createProductionReadyCapacity } from "./worker-capacity";
 import { ProductionWorkerBridge, ProductionWorkerOwnershipResolver } from "./worker-bridge";
 import { ProductionCheckpointCoordinator } from "./checkpoint-coordinator";
+import { assertProductionCheckpointSchema } from "./checkpoint-schema";
 
 /** Coordinator-only actual provider graph. It owns only durable project
  * transports; generated workers see the bounded bridge, never ADC or rails. */
 export async function materializeProductionRuntimeDependencies(input: Readonly<{ config: ProductionConfig; servicePubkey: string; pool: PostgresSqlPool; secrets: MountedProductionSecretMaterial; now?: () => number }>) {
   if (input.servicePubkey !== input.config.certification.serverPubkey) throw new Error("PRODUCTION_SERVICE_SIGNER_IDENTITY_MISMATCH");
+  await assertProductionCheckpointSchema(input.pool);
   const serviceJournals = await openProductionServiceJournals({ pool: input.pool, servicePubkey: input.servicePubkey, initialTopologySha256: input.config.topologySha256 });
   const scopeSha256 = input.config.topologySha256;
   const journal = new PostgresOperationJournal(input.pool, { namespace: "production-runtime", scopeSha256 });

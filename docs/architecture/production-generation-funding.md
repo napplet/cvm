@@ -56,7 +56,9 @@ Full post-grace continuation remains unfinished. The deadline path's synthetic
 action binding must resolve the real original workspace/request, the pending
 command must survive in durable protected material, and an explicit resume must
 execute and settle its approved pending action through a real producer. Original
-profile/pricing selection must precede budget or allocation. Required checkpoint
-schema, live encrypted storage/fresh restore, cap-extension consent, ten-minute
+profile/pricing selection must precede budget or allocation. The additive
+[checkpoint storage schema](production-checkpoint-storage.md) now has local
+encryption and fresh-SQL restore proof. Live encrypted storage/fresh restore,
+cap-extension consent, ten-minute
 live grace and the 30-day window still need composed production proof. A restored
 workspace alone is not a completed generation or release certification.

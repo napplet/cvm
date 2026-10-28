@@ -145,7 +145,7 @@ export async function openSignedNwcTransport(input: Readonly<{
     const observed = await response(event.id, method, signal); if (observed === undefined) throw new Error("NWC_ORIGINAL_RESPONSE_UNKNOWN"); return observed;
   }
   return Object.freeze({ journal: input.journal, connectionScopeDigest, consentedMethods: Object.freeze([...consentedMethods]), request,
-    observeOriginalResponse: async (operationId, signal) => { const stored = await input.journal.read<OriginalState>(`nwc:${operationId}`); return stored ? response(stored.value.eventId, stored.value.method, signal) : undefined; },
+    observeOriginalResponse: async (operationId: string, signal: AbortSignal) => { const stored = await input.journal.read<OriginalState>(`nwc:${operationId}`); return stored ? response(stored.value.eventId, stored.value.method, signal) : undefined; },
     close: () => pool.disconnect(),
   });
 }

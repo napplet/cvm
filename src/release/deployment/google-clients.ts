@@ -122,7 +122,7 @@ function crc32cBase64(bytes: Uint8Array): string {
   crc = (crc ^ 0xffffffff) >>> 0;
   return btoa(String.fromCharCode((crc >>> 24) & 255, (crc >>> 16) & 255, (crc >>> 8) & 255, crc & 255));
 }
-function multipartObjectUpload(object: string, checksum: string, contentSha256: string, operationId: string, bytes: Uint8Array): Uint8Array {
+function multipartObjectUpload(object: string, checksum: string, contentSha256: string, operationId: string, bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   const boundary = "napplet-cvm-google-json-upload";
   const encoder = new TextEncoder();
   const prefix = encoder.encode(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name: object, crc32c: checksum, metadata: { "napplet-cvm-content-sha256": contentSha256, "napplet-cvm-operation": operationId } })}\r\n--${boundary}\r\nContent-Type: application/octet-stream\r\n\r\n`);

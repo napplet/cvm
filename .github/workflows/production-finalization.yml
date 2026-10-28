@@ -6,6 +6,8 @@ on:
       - "src/release/finaliz*.ts"
       - "src/release/verify-finalization.ts"
       - "src/production/release-promotion.ts"
+      - "src/production/release-cleanup.ts"
+      - "tests/production/release-cleanup.test.ts"
       - "src/production/release-verification-authority.ts"
       - "src/release/materialize-certifier.ts"
       - "src/certification/**"
@@ -37,7 +39,7 @@ jobs:
           bun-version: "1.3.14"
       - run: bun install --frozen-lockfile
       - name: Finalizer output, independent authority and original-operation recovery
-        run: bun test tests/release/finalized-bundle.test.ts tests/release/materialize-certifier.test.ts tests/release/live-controller.test.ts tests/release/deployment-forced-resume.test.ts tests/release/certify-release.test.ts --timeout 15000
+        run: bun test tests/production/release-cleanup.test.ts tests/release/finalized-bundle.test.ts tests/release/materialize-certifier.test.ts tests/release/live-controller.test.ts tests/release/deployment-forced-resume.test.ts tests/release/certify-release.test.ts --timeout 15000
       - name: Restricted PostgreSQL atomic pointer and lost commit recovery
         run: NAPPLET_RUN_POSTGRES_ISOLATION=1 bun test tests/release/postgres-operation-journal.test.ts --timeout 120000
       - name: Independent original-operation fault oracle

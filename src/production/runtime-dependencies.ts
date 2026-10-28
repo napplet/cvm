@@ -64,7 +64,7 @@ export async function materializeProductionRuntimeDependencies(input: Readonly<{
   const makeCapacity = (provider: "modal" | "fly") => createProductionReadyCapacity({ provider, workers: worker.clients, journal: serviceJournals.capacity, workerJournal, image: input.config.worker.image, toolchainSha256: input.config.worker.toolchainSha256, ...(provider === "fly" ? { flyRegion: worker.flyRegion } : {}), now: input.now });
   const certificationCapacities = Object.freeze({ modal: makeCapacity("modal"), fly: makeCapacity("fly") });
   const capacity = certificationCapacities[input.config.worker.selectedProvider];
-  const vertexInteractions = createVertexInteractionsHttpPort({ tokenSource });
+  const vertexInteractions = createVertexInteractionsHttpPort({ tokenSource, creationTimeoutMs: vertexMaterial.pricing.profile.deadlineMs });
   const retainedPricing = createProductionRetainedPricing(input.pool);
   const vertex = createVertexDeploymentClient({ candidateSha256: input.config.candidateSha256, projectId: input.config.projectId, location: "global", model: input.config.vertex.model, credentialReference: vertexMaterial.credentialReference, price: vertexMaterial.vertexPrice, journal: createPostgresVertexOperationJournal(vertexJournal), interactions: vertexInteractions, now: input.now });
   const proposals = new ProductionSourceProposalStore(input.pool);

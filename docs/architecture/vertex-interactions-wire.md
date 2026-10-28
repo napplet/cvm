@@ -68,3 +68,20 @@ isolation or release-suite evidence. Stored-provider retention and bounded
 pagination behavior still need separate operational proof.
 [Durable scan progress](./vertex-recovery-progress.md) fixes the local restart
 starvation mechanism without increasing per-window read limits.
+
+
+## Creation and observation timing
+
+Production binds the creation HTTP budget to its captured model profile
+(currently540000ms), capped by the transport at540000ms. GET/list retain their
+separate short timeout (default10000ms, allowed1000–30000ms), so a long generation
+budget cannot extend a recovery read. Existing callers that omit the separate
+creation budget keep their historical shared timeout. This changes no request
+body, background/streaming mode, price, worker policy or public tool schema.
+
+A genuine creation timeout still leaves the owned original unknown and
+query-only. Local real-timer/AbortSignal tests and the restricted SQL/core path
+prove a delayed first response can complete past the lookup timeout within its
+creation budget, while lookup still aborts at its short bound. They do not prove
+real provider latency or close the full pending/cancellation/controller-loss
+lifecycle. Worker active/idle/total timing and final live evidence remain gates.

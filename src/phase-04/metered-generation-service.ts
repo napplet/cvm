@@ -1,3 +1,4 @@
+import type { GenerationCommandProtector } from "../model/retained-generation-command";
 import { RemixReferenceSchema } from "../remix/reference";
 import { z } from "zod";
 import { ContinuationService, type VerifiedCreditWakeHint, type VerifiedCreditWakeResult } from "../continuity/continuation-service";
@@ -79,7 +80,7 @@ async function hash(value: unknown): Promise<string> { const digest = await cryp
 export class MeteredGenerationService {
   #inFlight = new Map<string, Promise<SessionActionResult>>();
   #sessionTails = new Map<string, Promise<void>>();
-  constructor(private readonly options: Readonly<{ fundedAdmission: FundedAdmissionService; store: MeteredFundingStore; gateway: ModelGateway; worker: WorkerPort; artifactVerifier: ArtifactVerifier; proposalStore?: SourceProposalLookup; pricing?: Readonly<{ card: PriceCard; profile: ModelProfile }>; settlement?: GenerationUsageSettlement; retainedPricing?: RetainedGenerationPricing; riskDetector?: RiskSignalDetector; harness?: Readonly<{ runner: NappletHarness; toolchain: NappletHarnessRequest["toolchain"]; snapshotReference: string; priorArtifactId: string; approvedApplicationSurfaces: readonly string[] }>; continuation?: ContinuationService; continuationCommands?: PendingCommandPort; /** Immutable worker/toolchain identity retained with any durable pause. */ toolchainIdentity?: string; clock?: Readonly<{ nowMs(): number }>; continuationWake?: ContinuationWakePort; telemetry?: LifecycleTelemetryPort }>) {}
+  constructor(private readonly options: Readonly<{ fundedAdmission: FundedAdmissionService; store: MeteredFundingStore; gateway: ModelGateway; worker: WorkerPort; artifactVerifier: ArtifactVerifier; proposalStore?: SourceProposalLookup; pricing?: Readonly<{ card: PriceCard; profile: ModelProfile }>; settlement?: GenerationUsageSettlement; retainedPricing?: RetainedGenerationPricing; recoveryCommands?: GenerationCommandProtector; riskDetector?: RiskSignalDetector; harness?: Readonly<{ runner: NappletHarness; toolchain: NappletHarnessRequest["toolchain"]; snapshotReference: string; priorArtifactId: string; approvedApplicationSurfaces: readonly string[] }>; continuation?: ContinuationService; continuationCommands?: PendingCommandPort; /** Immutable worker/toolchain identity retained with any durable pause. */ toolchainIdentity?: string; clock?: Readonly<{ nowMs(): number }>; continuationWake?: ContinuationWakePort; telemetry?: LifecycleTelemetryPort }>) {}
 
   /** Internal continuation consumer. Decrypt and check retained compatibility
    * before the resume authority reserves funds or allocates a worker. This
@@ -317,12 +318,27 @@ export class MeteredGenerationService {
       : "revision" in command
         ? `revision:${(await hash({ accountId, sessionId, key: command.idempotencyKey })).slice(0, 24)}`
         : `start:${(await hash({ accountId, sessionId, key: command.idempotencyKey })).slice(0, 24)}`;
+    const recoveryCommand = await this.options.recoveryCommands?.seal({ command, binding: { accountId, sessionId, actionId, operationId, idempotencyKey: command.idempotencyKey, fingerprint, admissionReference: command.admissionReference, expectedVersion: command.expectedVersion, maximum: profileCeiling, profileId: profile.id, priceCardId: priceCard.id, toolchainId } });
     const { budget, prepared } = await this.options.store.transact(accountId, async (transaction) => {
       const budget = await this.options.fundedAdmission.authorizeActionBudget({ principal: command.principal, admissionReference: command.admissionReference, idempotencyKey: `phase-04:${command.idempotencyKey}`, maximum: profileCeiling, unit: "sat" }, transaction);
-      const prepared = await transaction.prepareMeteredAction({ accountId, idempotencyKey: command.idempotencyKey, fingerprint, sessionId, actionId, expectedVersion: command.expectedVersion, admissionReference: command.admissionReference, actionBudgetReference: budget.reference, maximum: BigInt(profileCeiling), operationId, profileId: profile.id, priceCardId: priceCard.id });
+      const prepared = await transaction.prepareMeteredAction({ accountId, idempotencyKey: command.idempotencyKey, fingerprint, sessionId, actionId, expectedVersion: command.expectedVersion, admissionReference: command.admissionReference, actionBudgetReference: budget.reference, maximum: BigInt(profileCeiling), operationId, profileId: profile.id, priceCardId: priceCard.id, ...(recoveryCommand ? { recoveryCommand } : {}) });
       return { budget, prepared };
     });
     return this.#executePrepared({ command, accountId, fingerprint, sessionId, operationId, profile, priceCard, profileCeiling, budget, prepared });
+  }
+
+  /** Coordinator-private recovery of an already funded original; no admission or
+   * replacement budget path. Existing provider claim remains lookup-only. */
+  async recoverRecordedAction(input: Readonly<{ command: GenerationCommand; operationId: string }>): Promise<SessionActionResult> {
+    const command = "repair" in input.command ? TriggerValidationRepairCommandSchema.extend({ repair: z.literal(true) }).parse(input.command) : "revision" in input.command ? ReviseSessionCommandSchema.parse(input.command) : StartSessionCommandSchema.parse(input.command);
+    const accountId = await accountIdForPrincipal(command.principal), fingerprint = await hash({ accountId, command });
+    const prepared = await this.options.store.findMeteredAction(accountId, command.idempotencyKey);
+    if (!prepared || prepared.operationId !== input.operationId) throw new Error("RECORDED_ACTION_REQUIRED");
+    if (prepared.fingerprint !== fingerprint) throw new Error("RECORDED_ACTION_BINDING_DENIED");
+    const key = `${accountId}\u0000${command.idempotencyKey}`;
+    const active = this.#inFlight.get(key); if (active) return active;
+    const run = this.#executeRecorded(command, accountId, fingerprint, prepared).finally(() => this.#inFlight.delete(key));
+    this.#inFlight.set(key, run); return run;
   }
 
   /** Recovery precedes current affordability, profile selection and FX preparation.

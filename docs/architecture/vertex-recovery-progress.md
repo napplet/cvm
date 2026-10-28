@@ -58,3 +58,5 @@ acknowledgements and concurrent CAS. The original-at40 case uses three fresh
 controllers with32/32/2 native reads, one listing and one POST. Existing core
 billing/owner/legacy-wire tests remain required. Objects, API responses, clocks
 and funds are explicit fixtures, not live provider or release certification.
+
+Ordinary accepted work also needs the [encrypted command and private restart executor](./production-generation-recovery.md); native lookup progress alone cannot reconstruct the complete authorized command.

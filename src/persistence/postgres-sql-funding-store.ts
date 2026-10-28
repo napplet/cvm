@@ -1,3 +1,4 @@
+import { RetainedGenerationCommandSchema } from "../model/retained-generation-command";
 import { SessionCapApprovalResultSchema, type SessionCapApprovalInput, type SessionCapApprovalResult, type SessionCapTransaction, type SessionCapFundingStore } from "../funding/session-cap";
 import type { AccountStatus, FundedAdmission, FundingResult } from "../phase-03/contracts";
 import { AccountStatusSchema, FundingResultSchema } from "../phase-03/contracts";
@@ -685,7 +686,13 @@ class PgFundingTransaction implements MeteredFundingTransaction, ContinuationFun
     await this.client.query("UPDATE metered_sessions SET state='active' WHERE id=$1", [input.sessionId]);
     await this.client.query("INSERT INTO metered_actions(id,account_id,session_id,idempotency_key,fingerprint,expected_session_version,admission_reference,budget_reference,reservation_sat,operation_id,profile_id,price_card_id,state) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'prepared')", [input.actionId, this.accountId, input.sessionId, input.idempotencyKey, input.fingerprint, input.expectedVersion, input.admissionReference, input.actionBudgetReference, input.maximum.toString(), input.operationId, input.profileId, input.priceCardId]);
     await this.client.query("INSERT INTO provider_operations(id,account_id,action_id,provider,model,provider_request_id,sub_reservation_sat,state) VALUES ($1,$2,$3,$4,$5,$6,$7,'prepared')", [input.operationId, this.accountId, input.actionId, input.profileId, input.profileId, input.operationId, input.maximum.toString()]);
-    return frozen({ ...input, status: "prepared" as const });
+    if (input.recoveryCommand) {
+      const record = RetainedGenerationCommandSchema.parse(input.recoveryCommand), b = record.binding;
+      if (b.accountId !== this.accountId || b.sessionId !== input.sessionId || b.actionId !== input.actionId || b.operationId !== input.operationId || b.idempotencyKey !== input.idempotencyKey || b.fingerprint !== input.fingerprint || b.admissionReference !== input.admissionReference || b.expectedVersion !== input.expectedVersion || b.maximum !== input.maximum.toString() || b.profileId !== input.profileId || b.priceCardId !== input.priceCardId) throw new Error("GENERATION_COMMAND_ACTION_BINDING_DENIED");
+      await this.client.query("INSERT INTO production_real.generation_recovery_commands(operation_id,account_id,action_id,binding_json,envelope_json,command_sha256,retention_until) VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7)", [input.operationId, this.accountId, input.actionId, JSON.stringify(b), JSON.stringify(record.envelope), record.envelope.commandSha256, new Date(record.envelope.retentionUntilMs).toISOString()]);
+    }
+    const { recoveryCommand: _encryptedCommand, ...action } = input;
+    return frozen({ ...action, status: "prepared" as const });
   }
   async claimProviderOperation(operationId: string): Promise<MeteredOperationClaim> {
     const operation = first(await this.client.query("SELECT o.id AS provider_operation_id,a.account_id,a.idempotency_key,a.fingerprint,a.session_id,a.id,a.expected_session_version,a.admission_reference,a.budget_reference,a.reservation_sat,a.operation_id,a.profile_id,a.price_card_id,a.state,a.terminal_result,a.session_version,a.artifact_version,a.remaining_cap_sat,a.remaining_balance_sat FROM provider_operations o JOIN metered_actions a ON a.id=o.action_id WHERE o.id=$1 AND a.account_id=$2 FOR UPDATE", [operationId, this.accountId]), "METERED_OPERATION_NOT_FOUND"); const action = actionFromOperationRow(operation, operationId);

@@ -1,3 +1,4 @@
+import { listProductionRetentionCandidates } from "./checkpoint-retention";
 import { createHash } from "node:crypto";
 import { bindAccountingRealmPool, createAccountingRealm } from "../funding/accounting-realm";
 import { ContinuationDeadlineReconciler, type DeadlineCandidate, type RetentionCandidate } from "../continuity/deadline-reconciler";
@@ -69,11 +70,7 @@ export class ProductionContinuationCoordinator {
     } finally { client.release(); }
   }
   async #retention(nowMs: number): Promise<readonly RetentionCandidate[]> {
-    const client = await this.#pool.connect();
-    try {
-      const rows = await client.query<Record<string, unknown>>("SELECT account_id,session_id,pause_generation,checkpoint_id FROM continuation_checkpoints WHERE state='resume_required' AND retention_deadline_ms <= $1 ORDER BY retention_deadline_ms,checkpoint_id LIMIT 100", [nowMs]);
-      return frozen(rows.rows.map(row => frozen({ accountId: String(row.account_id), sessionId: String(row.session_id), pauseGeneration: Number(row.pause_generation), checkpointId: String(row.checkpoint_id) })));
-    } finally { client.release(); }
+    return listProductionRetentionCandidates(this.input.pool, nowMs);
   }
   async #allocate(input: Readonly<{ accountId: string; sessionId: string; checkpointId: string; leaseToken: string; allocationIntentReference: string; actionId: string; expectedVersion: number; policyVersion: string; workspaceId: string; sourceActionId: string; payloadKind?: "pending_command" }>) {
     const capacityIntentReference = `capacity-intent:${sha({ checkpointId: input.checkpointId, allocation: input.allocationIntentReference })}`;

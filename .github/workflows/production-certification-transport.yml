@@ -28,6 +28,8 @@ on:
       - "tests/production/gcs-generation-recovery.test.ts"
       - "src/production/checkpoint-schema.ts"
       - "src/production/checkpoint-coordinator.ts"
+      - "src/production/checkpoint-retention.ts"
+      - "tests/production/checkpoint-retention-postgres.test.ts"
       - "src/production/initial-pending-checkpoint.ts"
       - "src/continuity/checkpoint-envelope.ts"
       - "migrations/phase-07/006_production_pending_checkpoints.sql"
@@ -95,4 +97,4 @@ jobs:
           bun-version: "1.3.14"
       - run: bun install --frozen-lockfile
       - name: Signed TLS relay and durable original-operation recovery
-        run: bun test tests/phase-04/revision.test.ts tests/production/original-model-recovery-postgres.test.ts tests/production/initial-pending-checkpoint-postgres.test.ts tests/production/protected-command.test.ts tests/production/resumed-generation-postgres.test.ts tests/production/session-cap-postgres.test.ts tests/production/model-composition-postgres.test.ts tests/release/contextvm-certification-client.integration.test.ts tests/release/production-core-suites.test.ts tests/production/worker-lifecycle-postgres.test.ts tests/production/service-journals-postgres.test.ts tests/production/worker-job-router.test.ts tests/production/funded-generation-postgres.test.ts tests/production/checkpoint-postgres.test.ts tests/production/gcs-generation-recovery.test.ts tests/production/resume-retry-postgres.test.ts tests/phase-05/resume-session.test.ts tests/phase-05/checkpoint-envelope.test.ts tests/release/postgres-operation-journal.test.ts tests/production/worker-bridge.test.ts tests/release/production-edge-suites.test.ts tests/production/certification-ingress.test.ts --timeout 60000
+        run: bun test tests/production/checkpoint-retention-postgres.test.ts tests/phase-04/revision.test.ts tests/production/original-model-recovery-postgres.test.ts tests/production/initial-pending-checkpoint-postgres.test.ts tests/production/protected-command.test.ts tests/production/resumed-generation-postgres.test.ts tests/production/session-cap-postgres.test.ts tests/production/model-composition-postgres.test.ts tests/release/contextvm-certification-client.integration.test.ts tests/release/production-core-suites.test.ts tests/production/worker-lifecycle-postgres.test.ts tests/production/service-journals-postgres.test.ts tests/production/worker-job-router.test.ts tests/production/funded-generation-postgres.test.ts tests/production/checkpoint-postgres.test.ts tests/production/gcs-generation-recovery.test.ts tests/production/resume-retry-postgres.test.ts tests/phase-05/resume-session.test.ts tests/phase-05/checkpoint-envelope.test.ts tests/release/postgres-operation-journal.test.ts tests/production/worker-bridge.test.ts tests/release/production-edge-suites.test.ts tests/production/certification-ingress.test.ts --timeout 60000

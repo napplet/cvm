@@ -155,6 +155,16 @@ try {
   const jobName = containers[3]!;
   await requireDocker(["run", "-d", "--name", jobName, ...resourceArgs, "--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "-e", `NAPPLET_CVM_POLICY_VERSION=${POLICY}`, image, "/usr/local/bin/napplet-cvm-worker", "idle", "--provider-deadline-epoch-ms", String(Date.now() + 1_200_000)]);
   const jobCommand = async (...args: string[]) => lastJson((await requireDocker(["exec", jobName, "/usr/local/bin/napplet-cvm-bootstrap", "/usr/local/bin/napplet-cvm-job", ...args])).stdout);
+  // Queries re-enter trusted bootstrap while untrusted build processes keep
+  // reading the same mount. Fixed metadata must not transiently revoke access.
+  const readProbe = `const fs=require("node:fs");const path="/workspace/bootstrap-read-probe.txt";fs.writeFileSync(path,"immutable readability");const end=Date.now()+8000;let reads=0;const errors={};while(Date.now()<end){try{if(fs.readFileSync(path,"utf8")!=="immutable readability")throw Error("content changed");reads++}catch(e){errors[e.code||e.message]=(errors[e.code||e.message]||0)+1}}console.log(JSON.stringify({reads,errors,uid:process.getuid()}))`;
+  const [concurrentRead] = await Promise.all([
+    requireDocker(["exec", jobName, "/usr/local/bin/napplet-cvm-bootstrap", "/usr/local/bin/node", "-e", readProbe], 20_000),
+    (async () => { for (let query = 0; query < 64; query++) await jobCommand("status", "a".repeat(64)); })(),
+  ]);
+  const readability = lastJson(concurrentRead.stdout);
+  report.concurrentBootstrapReadability = { ...readability, statusQueries: 64 };
+  if (readability.uid !== 65532 || typeof readability.reads !== "number" || readability.reads < 1 || !readability.errors || typeof readability.errors !== "object" || Object.keys(readability.errors).length !== 0) throw new Error("WORKER_CONCURRENT_BOOTSTRAP_READABILITY_FAILED");
   const jobs: unknown[] = [];
   let checkpointWorkspace: Buffer | undefined, lastJobId = "";
   const jobManifests: unknown[] = [];

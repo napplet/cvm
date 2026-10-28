@@ -21,14 +21,14 @@ function browserFixture(): Awaited<ReturnType<CompatibleHostBrowserPort["observe
 test("candidate-bound compatible host forwards complete viewport observations", async () => {
   const requests: unknown[] = [];
   const port = new CompatibleHostBrowserObservationPort({
-    packageHost: { async loadSealedNapplet(input) { requests.push(input); return { ...input, hostVersion: "host", packageVersion: "package", runtimeVersion: "runtime" }; } },
+    packageHost: { async loadSealedNapplet(input) { requests.push(input); return { ...input, hostVersion: "nip-5d-host@1.0.0", packageVersion: "@napplet/sdk@0.27.2", runtimeVersion: "nip-5d@4.0.0" }; } },
     browser: { kind: "chromium", async observe(input) {
       expect(input.viewports).toEqual([{ name: "desktop", width: 1280 }, { name: "tablet", width: 768 }, { name: "mobile", width: 375 }]);
       expect(input.interactions).toEqual(["keyboard", "touch", "focus", "dialog", "live_region", "capability_mediation"]);
       return browserFixture();
     } },
   });
-  expect(await port.runBrowser({ sealedArtifactSha256: DIGEST_A, aggregateSha256: DIGEST_B })).toMatchObject({ execution: "real_compatible_host_browser", certificationStatus: "pass", sealedArtifactSha256: DIGEST_A, presentationInputSha256: DIGEST_B });
+  expect(await port.runBrowser({ sealedArtifactSha256: DIGEST_A, aggregateSha256: DIGEST_B })).toMatchObject({ execution: "real_compatible_host_browser", certificationStatus: "pass", sealedArtifactSha256: DIGEST_A, presentationInputSha256: DIGEST_B, hostVersion: "nip-5d-host@1.0.0;@napplet/sdk@0.27.2", runtimeVersion: "nip-5d@4.0.0;Chromium 127" });
   expect(requests).toEqual([{ sealedArtifactSha256: DIGEST_A, aggregateSha256: DIGEST_B }]);
 });
 
@@ -36,17 +36,17 @@ test("compatible host rejects missing observations, non-Chromium, console errors
   for (const failure of ["missing", "browser", "console", "identity"] as const) {
     const port = new CompatibleHostBrowserObservationPort({
       packageHost: { async loadSealedNapplet(input) { return { ...input, sealedArtifactSha256: failure === "identity" ? DIGEST_B : input.sealedArtifactSha256, hostVersion: "h", packageVersion: "p", runtimeVersion: "r" }; } },
-      browser: { kind: failure === "browser" ? "webkit" : "chromium", async observe() { return { ...browserFixture(), ...(failure === "missing" ? { observations: [] } : {}), ...(failure === "console" ? { consoleErrors: ["boom"] } : {}) }; } },
+      browser: { kind: failure === "browser" ? "webkit" : "chromium", async observe() { return { ...browserFixture(), ...(failure === "missing" ? { observations: browserFixture().observations.slice(0, 2) } : {}), ...(failure === "console" ? { consoleErrors: ["boom"] } : {}) }; } },
     });
     await expect(port.runBrowser({ sealedArtifactSha256: DIGEST_A, aggregateSha256: DIGEST_B })).rejects.toThrow("COMPATIBLE_HOST_BROWSER_EVIDENCE_UNAVAILABLE");
   }
 });
 
 test("compatible host retains non-pass measured viewport and signer outcomes", async () => {
-  for (const failure of ["layout", "hostSigner", "externalSigner"] as const) {
+  for (const failure of ["layout", "dialog", "hostSigner", "externalSigner"] as const) {
     const port = new CompatibleHostBrowserObservationPort({
       packageHost: { async loadSealedNapplet(input) { return { ...input, hostVersion: "h", packageVersion: "p", runtimeVersion: "r" }; } },
-      browser: { kind: "chromium", async observe() { const result = browserFixture(); return failure === "layout" ? { ...result, observations: result.observations.map(row => ({ ...row, layout: "blocked" as const })) } : { ...result, [failure]: "blocked" }; } },
+      browser: { kind: "chromium", async observe() { const result = browserFixture(); return failure === "layout" || failure === "dialog" ? { ...result, observations: result.observations.map(row => ({ ...row, [failure]: "blocked" as const })) } : { ...result, [failure]: "blocked" }; } },
     });
     expect(await port.runBrowser({ sealedArtifactSha256: DIGEST_A, aggregateSha256: DIGEST_B })).toMatchObject({ certificationStatus: "non_pass" });
   }

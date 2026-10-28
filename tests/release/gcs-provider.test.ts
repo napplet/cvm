@@ -38,7 +38,10 @@ function port(transcript: string[], objects = new Map<string, { generation: numb
       objects.set(key, { generation: 1, checksum, bytes: new Uint8Array(objectBytes) });
       return { generation: 1, checksum };
     },
-    findExactByKey: async ({ key, checksum }) => { const object = objects.get(key); return object && object.checksum === checksum ? { generation: object.generation, checksum: object.checksum } : undefined; },
+    findExactByKey: async ({ key, checksum }) => {
+      const object = objects.get(key);
+      return object?.checksum === checksum ? { generation: object.generation, checksum } : undefined;
+    },
     readGeneration: async ({ key, generation, expectedChecksum }) => {
       transcript.push(`read:${key}:${generation}`);
       const object = objects.get(key);

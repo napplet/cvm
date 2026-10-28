@@ -297,11 +297,22 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
     await workerRecords.update({ operationId: workerOperationId, requestSha256: identity, resourceId: "original-machine", state: "reconciled" });
     let starts = 0, queries = 0, originalJobId = "", fences = 0, fenceQueries = 0, restores = 0, restoreQueries = 0;
     let restoreReceipt: unknown;
+    let completedJobBytes: Buffer | undefined;
+    let completedCommands: Array<{ argv: string[]; exitCode: number; stdout: string; stderr: string; elapsedMs: number }> = [];
     const clients = { fly: { async exec(value: { command: string[] }) {
       const [, action, id, index, data] = value.command;
       if (action === "put") return { status: "completed", exitCode: 0, stdout: JSON.stringify({ state: "stored", jobId: id, chunk: Number(index), sha256: new Bun.CryptoHasher("sha256").update(Buffer.from(data!, "base64")).digest("hex") }) };
       if (action === "start") { starts++; originalJobId = id!; throw new Error("accepted original job; response lost"); }
-      if (action === "status") { queries++; expect(id).toBe(originalJobId); return { status: "completed", exitCode: 0, stdout: JSON.stringify({ state: "pending", jobId: id }) }; }
+      if (action === "status") {
+        queries++; expect(id).toBe(originalJobId);
+        const sha = (value: string | Uint8Array) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
+        const completed = completedJobBytes ? { version: 1, state: "completed", jobId: id, requestSha256: id, artifactBytes: completedJobBytes.length, artifactSha256: sha(completedJobBytes), commands: completedCommands.map(({ stdout, stderr, ...entry }) => ({ ...entry, stdoutSha256: sha(stdout), stderrSha256: sha(stderr) })) } : { state: "pending", jobId: id };
+        return { status: "completed", exitCode: 0, stdout: JSON.stringify(completed) };
+      }
+      if (action === "artifact") {
+        if (!completedJobBytes) throw new Error("NO_COMPLETED_ARTIFACT");
+        return { status: "completed", exitCode: 0, stdout: JSON.stringify({ jobId: id, offset: Number(index), totalBytes: completedJobBytes.length, artifactSha256: new Bun.CryptoHasher("sha256").update(completedJobBytes).digest("hex"), bytesBase64: completedJobBytes.subarray(Number(index), Number(index) + 24_576).toString("base64") }) };
+      }
       if (action === "fence") { fences++; throw new Error("fenced original lease; response lost"); }
       if (action === "fence-status") { fenceQueries++; return { status: "completed", exitCode: 0, stdout: JSON.stringify({ state: "fenced", jobId: id, fenceSha256: index }) }; }
       if (action === "restore-put") return { status: "completed", exitCode: 0, stdout: JSON.stringify({ state: "stored", archiveSha256: id, chunk: Number(index), sha256: new Bun.CryptoHasher("sha256").update(Buffer.from(data!, "base64")).digest("hex") }) };
@@ -309,7 +320,7 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
       if (action === "restore-status") { restoreQueries++; return { status: "completed", exitCode: 0, stdout: JSON.stringify(restoreReceipt) }; }
       throw new Error("UNEXPECTED_REDISPATCH");
     } } };
-    const jobClient = (publication?: { server: string }) => new ProductionWorkerJobClient({ publication, provider: "fly", workerOperationId, clients: clients as never, workerJournal, jobJournal, toolchainSha256: scopeSha256 });
+    const jobClient = (publication?: { server: string }, artifactContract?: "nip5d-direct-v1") => new ProductionWorkerJobClient({ publication, artifactContract, provider: "fly", workerOperationId, clients: clients as never, workerJournal, jobJournal, toolchainSha256: scopeSha256 });
     const buildRequest = { sessionId: "session", actionId: "action", expectedVersion: 0, policyVersion: "test-policy", capabilityGrant: "grant", workspaceId: "workspace", sourceProposalSha256: identity, sourceProposalReference: `proposal:sha256:${identity}`, sourceProposalFiles: [{ path: "src/main.ts", content: "console.log('bounded test');" }] };
     expect((await jobClient().start(buildRequest)).state).toBe("unknown");
     expect((await jobClient().start(buildRequest)).state).toBe("pending");
@@ -364,6 +375,64 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
     expect((await jobClient().restoreWorkspace({ operationId: "expanded-original-restore", bindingSha256: identity, bytes: expandedBytes })).state).toBe("unknown");
     expect((await jobClient().restoreWorkspace({ operationId: "expanded-original-restore", bindingSha256: identity, bytes: expandedBytes })).state).toBe("restored");
     expect(restores).toBe(2);
+
+    // Separate direct-source/bundle versions preserve original bodies across
+    // changed controller defaults; missing/ambiguous acknowledgements only query.
+    const directPublication = { server: "https://publication.example" };
+    const directRequest = { ...buildRequest, actionId: "direct-action", idea: "Keep one short note", sourceProposalFiles: [...buildRequest.sourceProposalFiles, { path: "src/capabilities.json", content: capabilityContent }] };
+    expect((await jobClient(directPublication, "nip5d-direct-v1").start(directRequest)).state).toBe("unknown");
+    expect(starts).toBe(3);
+    expect((await jobClient({ server: "https://changed.example" }).start(directRequest)).state).toBe("pending");
+    expect(starts).toBe(3);
+    const directKey = `worker-build:${hash(canonicalJson({ sessionId: directRequest.sessionId, actionId: directRequest.actionId, expectedVersion: directRequest.expectedVersion }))}`;
+    const directOriginal = await jobJournal.read<{ requestBody: string; jobId: string }>(directKey);
+    expect(JSON.parse(directOriginal!.value.requestBody)).toMatchObject({ version: 2, artifactContract: "nip5d-direct-v1", purpose: directRequest.idea, publication: directPublication });
+    expect(directOriginal!.identitySha256).toBe(hash(canonicalJson({ request: directRequest, publication: directPublication, artifactContract: "nip5d-direct-v1" })));
+    await expect(jobClient(directPublication, "nip5d-direct-v1").start({ ...directRequest, idea: "changed purpose" })).rejects.toThrow("OPERATION_IDENTITY_CONFLICT");
+    const badDeclaration = { ...directRequest, actionId: "bad-declaration", sourceProposalFiles: [buildRequest.sourceProposalFiles[0]!, { path: "src/capabilities.json", content: '{"required":["storage"],"optional":["storage"]}' }] };
+    await expect(jobClient(directPublication, "nip5d-direct-v1").start(badDeclaration)).rejects.toThrow();
+    expect(starts).toBe(3);
+    const badKey = `worker-build:${hash(canonicalJson({ sessionId: badDeclaration.sessionId, actionId: badDeclaration.actionId, expectedVersion: badDeclaration.expectedVersion }))}`;
+    expect(await jobJournal.read(badKey)).toBeUndefined();
+
+    const directWorkspace = JSON.parse(expandedBytes.toString("utf8"));
+    Object.assign(directWorkspace.source, { version: 2, artifactContract: "nip5d-direct-v1", purpose: directRequest.idea, publication: directPublication });
+    const report = await Bun.file("tests/fixtures/direct-artifact/conformance-current.json").json();
+    const sidecar = { kind: 35129, created_at: 1, tags: [["d", "my-napplet"], ["x", files[0]!.sha256]], content: directRequest.idea, artifactHash: files[0]!.sha256 };
+    const observedReceipt = (path: string, value: unknown) => { const bytes = Buffer.from(JSON.stringify(value)); return { path, sha256: hash(bytes), bytesBase64: bytes.toString("base64") }; };
+    Object.assign(directWorkspace.artifact, { version: 3, artifactContract: "nip5d-direct-v1", jobId: hash(canonicalJson(directWorkspace.source)), manifestReceipt: observedReceipt(".nip5a-manifest.json", sidecar), conformanceReceipt: observedReceipt("test-results/conformance.json", report) });
+    const directBytes = Buffer.from(canonicalJson(directWorkspace));
+    restoreReceipt = { state: "restored", archiveSha256: hash(directBytes), toolchainSha256: scopeSha256, sourceSha256: hash(canonicalJson(directWorkspace.source.files)), artifactFilesSha256: hash(canonicalJson(files)), workspacePath: "/workspace/restored" };
+    expect((await jobClient(directPublication, "nip5d-direct-v1").restoreWorkspace({ operationId: "direct-original-restore", bindingSha256: identity, bytes: directBytes })).state).toBe("unknown");
+    expect((await jobClient().restoreWorkspace({ operationId: "direct-original-restore", bindingSha256: identity, bytes: directBytes })).state).toBe("restored");
+    expect((await jobClient().observeRestoreWorkspace({ operationId: "direct-original-restore", archiveSha256: hash(directBytes), bindingSha256: identity })).state).toBe("restored");
+    expect(restores).toBe(3);
+    for (const fault of ["mixed-contract", "sidecar-hash", "purpose", "report", "extra-file"] as const) {
+      const changed = structuredClone(directWorkspace);
+      if (fault === "mixed-contract") { changed.artifact.version = 2; delete changed.artifact.artifactContract; delete changed.artifact.manifestReceipt; delete changed.artifact.conformanceReceipt; }
+      if (fault === "sidecar-hash") changed.artifact.manifestReceipt = observedReceipt(".nip5a-manifest.json", { ...sidecar, artifactHash: "0".repeat(64) });
+      if (fault === "purpose") { changed.source.purpose = "Substituted purpose"; changed.artifact.jobId = hash(canonicalJson(changed.source)); }
+      if (fault === "report") changed.artifact.conformanceReceipt = observedReceipt("test-results/conformance.json", { ...report, ok: false });
+      if (fault === "extra-file") changed.artifact.files.push({ ...files[0], path: "extra.html" });
+      const operationId = `bad-direct-${fault}`;
+      await expect(jobClient().restoreWorkspace({ operationId, bindingSha256: identity, bytes: Buffer.from(canonicalJson(changed)) })).rejects.toThrow();
+      expect(await jobJournal.read(`worker-restore:${operationId}`)).toBeUndefined();
+    }
+    expect(restores).toBe(3);
+    const directBundle = { ...directWorkspace.artifact, jobId: directOriginal!.value.jobId };
+    completedCommands = directBundle.commandEvidence;
+    completedJobBytes = Buffer.from(canonicalJson(directBundle));
+    expect((await jobClient().readArtifact(directRequest)).version).toBe(3);
+    const materialized = await jobClient().materializeArtifact(directRequest, { ownerId: "f".repeat(64), accountId: "unit:account" });
+    try {
+      expect(materialized).toMatchObject({ artifactContract: "nip5d-direct-v1", publication: directPublication, manifestReceipt: directBundle.manifestReceipt, conformanceReceipt: directBundle.conformanceReceipt });
+      expect(await Bun.file(join(materialized.distRoot, "index.html")).text()).toBe("<html></html>");
+      expect(await Bun.file(join(materialized.distRoot, ".nip5a-manifest.json")).exists()).toBe(false);
+    } finally { await materialized.cleanup(); }
+    const downgraded = structuredClone(directBundle); downgraded.version = 2; delete downgraded.artifactContract; delete downgraded.manifestReceipt; delete downgraded.conformanceReceipt;
+    completedJobBytes = Buffer.from(canonicalJson(downgraded));
+    await expect(jobClient().readArtifact(directRequest)).rejects.toThrow("PRODUCTION_JOB_ARTIFACT_CONTRACT_MISMATCH");
+    expect(starts).toBe(3);
 
   } finally {
     if (previousEffects === undefined) delete process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS; else process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS = previousEffects;

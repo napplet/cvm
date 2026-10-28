@@ -130,6 +130,8 @@ async function ready() {
   console.log(JSON.stringify({ version: 1, policyVersion: POLICY, image, sessionLeaseSha256, toolchainSha256: toolchainDigest, remainingLifetimeMs, checks: { toolchain_readonly: true, workspace_bounded: true, non_root: true, no_ambient_credentials: true, network_denied: true, no_inbound_ports: true, minimal_capabilities: true } }));
 }
 async function build() {
+  const profile = Bun.file("/toolchain/production-artifact-contract");
+  if (await profile.exists() && (await profile.text()).trim() === "nip5d-direct-v1") throw new Error("WORKER_ASYNC_DIRECT_JOB_REQUIRED");
   activeDeadlineEpochMs = Number(arg("--active-deadline-epoch-ms"));
   if (!Number.isSafeInteger(activeDeadlineEpochMs) || activeDeadlineEpochMs <= Date.now() || activeDeadlineEpochMs > Date.now() + 600_000) throw new Error("WORKER_ACTIVE_DEADLINE_INVALID");
   const sourcePath = await regularContained(arg("--source") ?? ""); const sourceBytes = await Bun.file(sourcePath).bytes();

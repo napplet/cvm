@@ -12,3 +12,9 @@ export const ProductionCapabilityReceiptSchema = z.discriminatedUnion("state", [
   try { new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { context.addIssue({ code: "custom", message: "CAPABILITY_RECEIPT_ENCODING_INVALID" }); }
 });
 export type ProductionCapabilityReceipt = z.infer<typeof ProductionCapabilityReceiptSchema>;
+
+const Domain = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/u);
+export const ProductionCapabilityDeclarationSchema = z.object({ required: z.array(Domain).max(32), optional: z.array(Domain).max(32) }).strict().superRefine((value, context) => {
+  const all = [...value.required, ...value.optional];
+  if (new Set(all).size !== all.length) context.addIssue({ code: "custom", message: "CAPABILITY_DECLARATION_DUPLICATED_OR_CONFLICTING" });
+});

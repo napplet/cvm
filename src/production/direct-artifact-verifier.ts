@@ -1,15 +1,14 @@
 import { z } from "zod";
+import { ProductionDirectManifestReceiptSchema } from "../worker-adapters/direct-manifest-receipt";
+export { ProductionCapabilityDeclarationSchema } from "../worker-adapters/capability-receipt";
+export { ProductionDirectManifestReceiptSchema } from "../worker-adapters/direct-manifest-receipt";
 import { canonicalJson } from "../promotion/schema";
-import { ProductionCapabilityReceiptSchema } from "../worker-adapters/capability-receipt";
+import { ProductionCapabilityDeclarationSchema, ProductionCapabilityReceiptSchema } from "../worker-adapters/capability-receipt";
 import { ProductionConformanceReceiptSchema, verifyProductionConformanceReceipt } from "../worker-adapters/conformance-receipt";
 import { ProductionArtifactFactsSchema, inventoryProductionArtifactFiles, readVerifiedProductionArtifactFile } from "./artifact-verifier";
 import { verifyDirectArtifactHtml } from "./direct-html-policy";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
-export const ProductionDirectManifestReceiptSchema = z.object({ path: z.literal(".nip5a-manifest.json"), sha256: Digest, bytesBase64: z.string().min(1).max(87_384) }).strict().superRefine((value, context) => {
-  const bytes = Buffer.from(value.bytesBase64, "base64");
-  if (!bytes.length || bytes.length > 65_536 || bytes.toString("base64") !== value.bytesBase64 || sha(bytes) !== value.sha256) context.addIssue({ code: "custom", message: "DIRECT_MANIFEST_RECEIPT_INVALID" });
-});
 const Facts = ProductionArtifactFactsSchema.extend({
   artifactContract: z.literal("nip5d-direct-v1"),
   publication: ProductionArtifactFactsSchema.shape.publication.unwrap(),
@@ -17,11 +16,6 @@ const Facts = ProductionArtifactFactsSchema.extend({
   conformanceReceipt: ProductionConformanceReceiptSchema,
   manifestReceipt: ProductionDirectManifestReceiptSchema,
 }).strict();
-const Domain = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/u);
-export const ProductionCapabilityDeclarationSchema = z.object({ required: z.array(Domain).max(32), optional: z.array(Domain).max(32) }).strict().superRefine((value, context) => {
-  const all = [...value.required, ...value.optional];
-  if (new Set(all).size !== all.length) context.addIssue({ code: "custom", message: "CAPABILITY_DECLARATION_DUPLICATED_OR_CONFLICTING" });
-});
 const Target = z.object({ target: z.literal("named"), kind: z.literal(35129), dTag: z.string().regex(/^[a-z0-9][a-z0-9-]{0,127}$/u) }).passthrough();
 const Template = z.object({ kind: z.literal(35129), created_at: z.number().int().nonnegative(), tags: z.array(z.array(z.string().max(4096)).min(1).max(16)).max(128), content: z.string().min(1).max(4096) }).strict();
 const Sidecar = Template.extend({ artifactHash: Digest }).strict();

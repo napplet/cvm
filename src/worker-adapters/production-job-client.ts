@@ -8,7 +8,9 @@ import { assertPostgresOperationJournal, type PostgresOperationJournal } from ".
 import { createPostgresWorkerOperationJournal } from "../release/deployment/postgres-provider-journals";
 import type { createWorkerDeploymentClients } from "../release/deployment/worker-clients";
 import { ProductionWorkerPublicationSchema, type ProductionWorkerPublication } from "./publication-metadata";
-import { ProductionCapabilityReceiptSchema } from "./capability-receipt";
+import { ProductionCapabilityDeclarationSchema, ProductionCapabilityReceiptSchema } from "./capability-receipt";
+import { ProductionConformanceReceiptSchema, verifyProductionConformanceReceipt } from "./conformance-receipt";
+import { ProductionDirectManifestReceiptSchema, verifyProductionDirectManifestReceipt } from "./direct-manifest-receipt";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const STEP_NAMES = ["create", "init", "skills", "install", "build", "verify", "conformance", "dry-run"] as const;
@@ -26,12 +28,27 @@ const LegacyBundle = z.object({ version: z.literal(1), jobId: Digest, proposalSh
   files: z.array(z.object({ path: z.string().regex(/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/u).refine(value => value.split("/").every(part => part !== "." && part !== "..")), bytesBase64: z.string().max(22_369_624), sha256: Digest, size: z.number().int().nonnegative().max(16_777_216) }).strict()).min(1).max(256),
   commandEvidence: z.array(z.object({ argv: z.array(z.string()).max(16), exitCode: z.literal(0), stdout: z.string().max(65_536), stderr: z.string().max(65_536), elapsedMs: z.number().int().nonnegative() }).strict()).length(8),
 }).strict();
-const Bundle = z.discriminatedUnion("version", [LegacyBundle, LegacyBundle.extend({ version: z.literal(2), capabilityReceipt: ProductionCapabilityReceiptSchema }).strict()]);
+const Bundle = z.discriminatedUnion("version", [LegacyBundle, LegacyBundle.extend({ version: z.literal(2), capabilityReceipt: ProductionCapabilityReceiptSchema }).strict(), LegacyBundle.extend({ version: z.literal(3), artifactContract: z.literal("nip5d-direct-v1"), capabilityReceipt: ProductionCapabilityReceiptSchema, conformanceReceipt: ProductionConformanceReceiptSchema, manifestReceipt: ProductionDirectManifestReceiptSchema }).strict()]);
 type StoredJob = Readonly<{ workerOperationId: string; workerResourceId: string; leaseSha256: string; jobId: string; requestBody: string; deadlineEpochMs: number }>;
-type Input = Readonly<{ provider: "modal" | "fly"; workerOperationId: string; clients: ReturnType<typeof createWorkerDeploymentClients>; workerJournal: PostgresOperationJournal; jobJournal: PostgresOperationJournal; toolchainSha256: string; publication?: ProductionWorkerPublication; now?: () => number }>;
+type Input = Readonly<{ provider: "modal" | "fly"; workerOperationId: string; clients: ReturnType<typeof createWorkerDeploymentClients>; workerJournal: PostgresOperationJournal; jobJournal: PostgresOperationJournal; toolchainSha256: string; artifactContract?: "nip5d-direct-v1"; publication?: ProductionWorkerPublication; now?: () => number }>;
 const WorkspaceSource = z.object({ version: z.literal(1), actionId: z.string().min(1).max(256), sessionId: z.string().min(1).max(256), expectedVersion: z.number().int().nonnegative(), proposalSha256: Digest, toolchainSha256: Digest, deadlineEpochMs: z.number().int().positive(), files: z.array(z.object({ path: z.enum(["src/main.ts", "src/styles.css", "src/capabilities.json"]), content: z.string().refine(value => Buffer.byteLength(value) <= 30_000) }).strict()).min(1).max(3) }).strict();
-const PublishedWorkspaceSource = WorkspaceSource.extend({ publication: ProductionWorkerPublicationSchema.optional() }).strict();
+const LegacySource = WorkspaceSource.extend({ publication: ProductionWorkerPublicationSchema.optional() }).strict();
+const DirectSource = WorkspaceSource.extend({ version: z.literal(2), artifactContract: z.literal("nip5d-direct-v1"), purpose: z.string().trim().min(1).max(4096), publication: ProductionWorkerPublicationSchema }).strict().superRefine((source, context) => {
+  const content = source.files.find(file => file.path === "src/capabilities.json")?.content;
+  try { ProductionCapabilityDeclarationSchema.parse(JSON.parse(content ?? "null")); }
+  catch { context.addIssue({ code: "custom", message: "PRODUCTION_DIRECT_DECLARATION_INVALID" }); }
+});
+const PublishedWorkspaceSource = z.discriminatedUnion("version", [LegacySource, DirectSource]);
 const Workspace = z.object({ version: z.literal(1), source: PublishedWorkspaceSource, artifact: Bundle, toolchainSha256: Digest }).strict();
+function validateDirectBundle(source: z.infer<typeof PublishedWorkspaceSource>, bundle: z.infer<typeof Bundle>) {
+  if ((source.version === 2) !== (bundle.version === 3)) throw new Error("PRODUCTION_JOB_ARTIFACT_CONTRACT_MISMATCH");
+  if (source.version === 2 && bundle.version === 3) {
+    if (bundle.files.length !== 1 || bundle.files[0]?.path !== "index.html" || bundle.capabilityReceipt.state !== "present") throw new Error("PRODUCTION_JOB_ARTIFACT_CONTRACT_MISMATCH");
+    verifyProductionConformanceReceipt(bundle.conformanceReceipt);
+    const declaration = ProductionCapabilityDeclarationSchema.parse(JSON.parse(source.files.find(file => file.path === "src/capabilities.json")!.content));
+    verifyProductionDirectManifestReceipt(bundle.manifestReceipt, { artifactHash: bundle.files[0].sha256, purpose: source.purpose, declaration });
+  }
+}
 const RestoreObservation = z.discriminatedUnion("state", [
   z.object({ state: z.enum(["pending", "missing"]), archiveSha256: Digest }).strict(),
   z.object({ state: z.literal("restored"), archiveSha256: Digest, toolchainSha256: Digest, sourceSha256: Digest, artifactFilesSha256: Digest, workspacePath: z.literal("/workspace/restored") }).strict(),
@@ -45,10 +62,11 @@ export class ProductionWorkerJobClient {
     this.input = Object.freeze({ ...input, ...(input.publication === undefined ? {} : { publication: ProductionWorkerPublicationSchema.parse(input.publication) }) });
     assertPostgresOperationJournal(input.workerJournal); assertPostgresOperationJournal(input.jobJournal);
     Digest.parse(input.toolchainSha256);
+    if (input.artifactContract !== undefined) { z.literal("nip5d-direct-v1").parse(input.artifactContract); if (!input.publication) throw new Error("PRODUCTION_DIRECT_PUBLICATION_REQUIRED"); }
     if (!["modal", "fly"].includes(input.provider) || !/^[a-z][a-z0-9_-]{2,48}$/u.test(input.workerOperationId)) throw new Error("PRODUCTION_JOB_WORKER_INVALID");
   }
   #key(request: WorkerRunRequest) { return `worker-build:${sha(canonicalJson({ sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion }))}`; }
-  #identity(request: WorkerRunRequest, publication?: ProductionWorkerPublication) { return sha(canonicalJson(publication === undefined ? request : { request, publication })); }
+  #identity(request: WorkerRunRequest, publication?: ProductionWorkerPublication, artifactContract?: "nip5d-direct-v1") { return sha(canonicalJson(artifactContract ? { request, publication, artifactContract } : publication === undefined ? request : { request, publication })); }
   async #worker() {
     const record = await createPostgresWorkerOperationJournal(this.input.workerJournal).read(this.input.workerOperationId);
     if (!record || record.provider !== this.input.provider || !record.resourceId || !record.sessionLeaseSha256 || record.toolchainSha256 !== this.input.toolchainSha256 || !record.providerDeadlineEpochMs || !["dispatched", "reconciled"].includes(record.state)) throw new Error("PRODUCTION_JOB_READY_WORKER_REQUIRED");
@@ -59,8 +77,8 @@ export class ProductionWorkerJobClient {
     const record = await this.input.jobJournal.read<StoredJob>(this.#key(request));
     if (!record || record.value.workerOperationId !== this.input.workerOperationId || typeof record.value.requestBody !== "string" || Buffer.byteLength(record.value.requestBody) > 131_072 || sha(record.value.requestBody) !== record.value.jobId) throw new Error("PRODUCTION_JOB_ORIGINAL_REQUIRED");
     const source = PublishedWorkspaceSource.parse(JSON.parse(record.value.requestBody));
-    if (record.identitySha256 !== this.#identity(request, source.publication) || source.sessionId !== request.sessionId || source.actionId !== request.actionId || source.expectedVersion !== request.expectedVersion
-      || source.proposalSha256 !== request.sourceProposalSha256 || source.toolchainSha256 !== this.input.toolchainSha256 || canonicalJson(source.files) !== canonicalJson(request.sourceProposalFiles)) throw new Error("PRODUCTION_JOB_ORIGINAL_REQUIRED");
+    if (record.identitySha256 !== this.#identity(request, source.publication, source.version === 2 ? source.artifactContract : undefined) || source.sessionId !== request.sessionId || source.actionId !== request.actionId || source.expectedVersion !== request.expectedVersion
+      || source.version === 2 && source.purpose !== request.idea?.trim() || source.proposalSha256 !== request.sourceProposalSha256 || source.toolchainSha256 !== this.input.toolchainSha256 || canonicalJson(source.files) !== canonicalJson(request.sourceProposalFiles)) throw new Error("PRODUCTION_JOB_ORIGINAL_REQUIRED");
     return record.value;
   }
   async #exec(job: Pick<StoredJob, "workerResourceId" | "leaseSha256">, args: string[]): Promise<unknown> {
@@ -91,10 +109,13 @@ export class ProductionWorkerJobClient {
     const deadlineEpochMs = Math.min(now + 600_000, worker.providerDeadlineEpochMs! - 600_000);
     if (deadlineEpochMs <= now) throw new Error("PRODUCTION_JOB_LEASE_EXPIRED");
     const publication = this.input.publication === undefined ? {} : { publication: this.input.publication };
-    const requestBody = canonicalJson({ version: 1, actionId: request.actionId, sessionId: request.sessionId, expectedVersion: request.expectedVersion, proposalSha256: request.sourceProposalSha256, toolchainSha256: this.input.toolchainSha256, deadlineEpochMs, files: request.sourceProposalFiles, ...publication });
+    const profile = this.input.artifactContract ? { version: 2, artifactContract: this.input.artifactContract, purpose: DirectSource.shape.purpose.parse(request.idea) } : { version: 1 };
+    if (this.input.artifactContract && !request.sourceProposalFiles.some(file => file.path === "src/capabilities.json")) throw new Error("PRODUCTION_DIRECT_DECLARATION_REQUIRED");
+    const requestBody = canonicalJson({ ...profile, actionId: request.actionId, sessionId: request.sessionId, expectedVersion: request.expectedVersion, proposalSha256: request.sourceProposalSha256, toolchainSha256: this.input.toolchainSha256, deadlineEpochMs, files: request.sourceProposalFiles, ...publication });
+    PublishedWorkspaceSource.parse(JSON.parse(requestBody));
     const bytes = Buffer.from(requestBody); if (bytes.length > 131_072) throw new Error("PRODUCTION_JOB_REQUEST_TOO_LARGE");
     const jobId = sha(bytes);
-    const claim = await this.input.jobJournal.claim<StoredJob>(this.#key(request), this.#identity(request, this.input.publication), { workerOperationId: this.input.workerOperationId, workerResourceId: worker.resourceId!, leaseSha256: worker.sessionLeaseSha256!, jobId, requestBody, deadlineEpochMs });
+    const claim = await this.input.jobJournal.claim<StoredJob>(this.#key(request), this.#identity(request, this.input.publication, this.input.artifactContract), { workerOperationId: this.input.workerOperationId, workerResourceId: worker.resourceId!, leaseSha256: worker.sessionLeaseSha256!, jobId, requestBody, deadlineEpochMs });
     if (!claim.claimed) return this.observe(request);
     const job = claim.record.value;
     try {
@@ -133,8 +154,10 @@ export class ProductionWorkerJobClient {
     }
     const bytes = Buffer.concat(parts); if (sha(bytes) !== observed.artifactSha256) throw new Error("PRODUCTION_JOB_ARTIFACT_DIGEST_INVALID");
     const bundle = Bundle.parse(JSON.parse(bytes.toString("utf8")));
+    const source = PublishedWorkspaceSource.parse(JSON.parse(job.requestBody));
+    validateDirectBundle(source, bundle);
     if (bundle.jobId !== job.jobId || bundle.proposalSha256 !== request.sourceProposalSha256 || bundle.toolchainSha256 !== this.input.toolchainSha256 || new Set(bundle.files.map(file => file.path)).size !== bundle.files.length || !bundle.files.some(file => file.path === "index.html")) throw new Error("PRODUCTION_JOB_ARTIFACT_BINDING_INVALID");
-    if (bundle.version === 2) {
+    if (bundle.version !== 1) {
       const requested = request.sourceProposalFiles?.find(file => file.path === "src/capabilities.json");
       if (requested && (bundle.capabilityReceipt.state !== "present" || Buffer.from(bundle.capabilityReceipt.bytesBase64, "base64").toString("utf8") !== requested.content)) throw new Error("PRODUCTION_JOB_CAPABILITY_RECEIPT_MISMATCH");
     }
@@ -150,7 +173,7 @@ export class ProductionWorkerJobClient {
     const bundle = await this.readArtifact(request), distRoot = await mkdtemp(join(tmpdir(), "napplet-cvm-production-artifact-"));
     try {
       for (const file of bundle.files) { const path = join(distRoot, file.path); await mkdir(dirname(path), { recursive: true, mode: 0o700 }); await writeFile(path, Buffer.from(file.bytesBase64, "base64"), { flag: "wx", mode: 0o600 }); }
-      return Object.freeze({ ...owner, ...publication, ...(bundle.version === 2 ? { capabilityReceipt: bundle.capabilityReceipt } : {}), sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, proposalSha256: bundle.proposalSha256, toolchainSha256: bundle.toolchainSha256, distRoot, commandEvidence: bundle.commandEvidence.map((entry, index) => ({ name: STEP_NAMES[index]!, exitCode: entry.exitCode, stdout: entry.stdout, stderr: entry.stderr })), cleanup: () => rm(distRoot, { recursive: true, force: true }) });
+      return Object.freeze({ ...owner, ...publication, ...(bundle.version !== 1 ? { capabilityReceipt: bundle.capabilityReceipt } : {}), ...(bundle.version === 3 ? { artifactContract: bundle.artifactContract, conformanceReceipt: bundle.conformanceReceipt, manifestReceipt: bundle.manifestReceipt } : {}), sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, proposalSha256: bundle.proposalSha256, toolchainSha256: bundle.toolchainSha256, distRoot, commandEvidence: bundle.commandEvidence.map((entry, index) => ({ name: STEP_NAMES[index]!, exitCode: entry.exitCode, stdout: entry.stdout, stderr: entry.stderr })), cleanup: () => rm(distRoot, { recursive: true, force: true }) });
     } catch (error) { await rm(distRoot, { recursive: true, force: true }); throw error; }
   }
   /** Persist the original fence before writing it; uncertain responses only
@@ -181,7 +204,8 @@ export class ProductionWorkerJobClient {
     const text = new TextDecoder("utf-8", { fatal: true }).decode(input.bytes), workspace = Workspace.parse(JSON.parse(text));
     const archiveSha256 = sha(input.bytes);
     if (canonicalJson(workspace) !== text || workspace.toolchainSha256 !== this.input.toolchainSha256 || workspace.source.toolchainSha256 !== workspace.toolchainSha256 || workspace.artifact.toolchainSha256 !== workspace.toolchainSha256 || workspace.artifact.jobId !== sha(canonicalJson(workspace.source)) || workspace.source.proposalSha256 !== workspace.artifact.proposalSha256) throw new Error("PRODUCTION_WORKSPACE_BINDING_INVALID");
-    if (workspace.artifact.version === 2) {
+    validateDirectBundle(workspace.source, workspace.artifact);
+    if (workspace.artifact.version !== 1) {
       const requested = workspace.source.files.find(file => file.path === "src/capabilities.json");
       const receipt = workspace.artifact.capabilityReceipt;
       if (requested && (receipt.state !== "present" || Buffer.from(receipt.bytesBase64, "base64").toString("utf8") !== requested.content)) throw new Error("PRODUCTION_WORKSPACE_CAPABILITY_RECEIPT_MISMATCH");

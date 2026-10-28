@@ -7,8 +7,8 @@ import { canonicalJson } from "../src/promotion/schema";
 import { measureProductionCollectorImage } from "../src/release/collector-image";
 
 const REGISTRY = "https://registry.npmjs.org";
-const OFFICIAL_REPOSITORY = "https://github.com/open-telemetry/opentelemetry-js";
-const OFFICIAL_DOCUMENTATION = "https://opentelemetry.io/docs/languages/js/exporters/";
+const OFFICIAL_REPOSITORY = "https://github.com/open-telemetry/opentelemetry-js" as const;
+const OFFICIAL_DOCUMENTATION = "https://opentelemetry.io/docs/languages/js/exporters/" as const;
 const CERTIFICATION_DIRECTORY = "evidence/certification";
 const AUDIT_POINTER_PATH = `${CERTIFICATION_DIRECTORY}/phase-07-otel-package-audit.json`;
 const APPROVAL_POINTER_PATH = `${CERTIFICATION_DIRECTORY}/phase-07-otel-package-approval.json`;
@@ -26,7 +26,7 @@ const APPROVED_ROOT_INPUTS = Object.freeze({ packageJsonSha256: "dca9aebd2cbdb6a
 /** The upstream base is only a recipe input. Smoke records bind the locally
  * measured derived collector image instead of mounting configuration into a
  * bare upstream container. */
-export const COLLECTOR_BASE_IMAGE = "otel/opentelemetry-collector@sha256:6ed874ea083d67a3085acfc75343f2ad11d9abe6006d7ea4a16e2dba9af14e49";
+export const COLLECTOR_BASE_IMAGE = "otel/opentelemetry-collector@sha256:6ed874ea083d67a3085acfc75343f2ad11d9abe6006d7ea4a16e2dba9af14e49" as const;
 const EXACT_NAMES = [
   "@opentelemetry/api",
   "@opentelemetry/resources",
@@ -129,9 +129,9 @@ const RenewalReviewSchema = z.object({
 }).strict();
 export type OtelApprovalRenewalReview = z.infer<typeof RenewalReviewSchema>;
 
-function sha256(value: Uint8Array | string): string { return createHash("sha256").update(value).digest("hex"); }
+function sha256(value: Uint8Array | string): string { return createHash("sha256").update(typeof value === "string" ? value : new Uint8Array(value)).digest("hex"); }
 function sriMatches(bytes: Uint8Array, integrity: string): boolean {
-  return integrity.split(/\s+/u).some((item) => item === `sha512-${createHash("sha512").update(bytes).digest("base64")}`);
+  return integrity.split(/\s+/u).some((item) => item === `sha512-${createHash("sha512").update(new Uint8Array(bytes)).digest("base64")}`);
 }
 function normalizeRepository(value: unknown): string | null {
   const url = typeof value === "string" ? value : value && typeof value === "object" && "url" in value ? (value as { url?: unknown }).url : null;
@@ -332,7 +332,7 @@ async function smoke(): Promise<{ readonly evidenceSha256: string; readonly reco
     if (!output.includes("cvm.lifecycle.exact_session_ready")) throw new Error("COLLECTOR_TRACE_MISSING");
     if (!output.includes("cvm.lifecycle.observations")) throw new Error("COLLECTOR_METRIC_MISSING");
     for (const expected of ["exact_session_ready", "accepted", smokeCorrelation]) if (!output.includes(expected)) throw new Error("COLLECTOR_SAFE_ATTRIBUTE_MISSING");
-    const record = await writeSmokeRecord({ ...base, status: "passed", collectorImageDigest: collector.imageReference, collectorDockerfileSha256: collector.dockerfileSha256, collectorBaseImage: collector.baseImage, outputSha256: sha256(output) });
+    const record = await writeSmokeRecord({ ...base, status: "passed", collectorImageDigest: collector.imageReference, collectorDockerfileSha256: collector.dockerfileSha256, collectorBaseImage: z.literal(COLLECTOR_BASE_IMAGE).parse(collector.baseImage), outputSha256: sha256(output) });
     const after = { packageJsonSha256: await snapshot(join(root, "package.json")), bunLockSha256: await snapshot(join(root, "bun.lock")) };
     if (after.packageJsonSha256 !== inputDigests.packageJsonSha256 || after.bunLockSha256 !== inputDigests.bunLockSha256) throw new Error("ROOT_DEPENDENCY_GRAPH_MUTATED");
     return record;

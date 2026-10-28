@@ -1,8 +1,9 @@
 import { z } from "zod";
 import type { GcsObjectStoreAdapter } from "../continuity/object-store";
 import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
-import { PostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
-import type { createWorkerDeploymentClients } from "../release/deployment/worker-clients";
+import { openProductionServiceJournals } from "./service-journals";
+import { createMountedProductionWorkerClients } from "./mounted-worker-clients";
+import { createPostgresWorkerOperationJournal } from "../release/deployment/postgres-provider-journals";
 import type { DurabilitySubjectSchema, RestoreDrillInputSchema } from "../resilience/fault-harness";
 import type { createGoogleDeploymentClients } from "../release/deployment/google-clients";
 import type { ProductionConfig } from "./config";
@@ -33,11 +34,10 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
   secrets: MountedProductionSecretMaterial;
   google: Google;
   artifactStore: GcsObjectStoreAdapter;
-  workerClients: ReturnType<typeof createWorkerDeploymentClients>;
   observeTopology(): Promise<unknown>;
   now?: () => number;
 }>): MountedFreshRestoreRuntime {
-  if (!input.google || !input.artifactStore || !input.workerClients || typeof input.observeTopology !== "function") throw new Error("MOUNTED_FRESH_RESTORE_RUNTIME_REQUIRED");
+  if (!input.google || !input.artifactStore || typeof input.observeTopology !== "function") throw new Error("MOUNTED_FRESH_RESTORE_RUNTIME_REQUIRED");
   const now = input.now ?? Date.now;
   const poolFor = async (instanceId: string, binding: "cloudSql.restoreRecoveredRoleCredentialReference" | "cloudSql.restoreMigrationRoleCredentialReference") => {
     const observed = await input.google.cloudSqlPostgres.observePrivateAddress({ instanceId });
@@ -67,21 +67,22 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
       /* Recreate every authority from the recovered database.  Retaining the
        * source-pool coordinator/bridge here would let a supposedly fresh drill
        * read or mutate the source authority after the clone completed. */
-      const scopeSha256 = input.config.topologySha256;
+      const serviceJournals = await openProductionServiceJournals({ pool: recovered.pool, servicePubkey: input.config.certification.serverPubkey, initialTopologySha256: input.config.topologySha256, requireExisting: true }).catch(async error => { await Promise.all([recovered.close(), migration.close()]); throw error; });
+      const workerClients = await createMountedProductionWorkerClients({ config: input.config, secrets: input.secrets, journal: createPostgresWorkerOperationJournal(serviceJournals.worker) }).catch(async error => { await Promise.all([recovered.close(), migration.close()]); throw error; });
       const checkpoint = new ProductionCheckpointCoordinator({
         pool: recovered.pool,
         objectStore: input.artifactStore,
-        journal: new PostgresOperationJournal(recovered.pool, { namespace: "production-checkpoint", scopeSha256 }),
+        journal: serviceJournals.checkpoint,
         kekPath: input.secrets.path("checkpoint.kekReference"),
         now,
       });
-      const capacityJournal = new PostgresOperationJournal(recovered.pool, { namespace: "production-runtime", scopeSha256 });
+      const capacityJournal = serviceJournals.capacity;
       const worker = new ProductionWorkerBridge({
         resolver: new ProductionWorkerOwnershipResolver({ pool: recovered.pool, policyVersion: input.config.worker.policyVersion, capacityJournal }),
-        workers: input.workerClients,
-        workerJournal: new PostgresOperationJournal(recovered.pool, { namespace: "production-worker", scopeSha256 }),
-        jobJournal: new PostgresOperationJournal(recovered.pool, { namespace: "production-worker-job", scopeSha256 }),
-        requestJournal: new PostgresOperationJournal(recovered.pool, { namespace: "production-worker-request", scopeSha256 }),
+        workers: workerClients.clients,
+        workerJournal: serviceJournals.worker,
+        jobJournal: serviceJournals.job,
+        requestJournal: serviceJournals.request,
         artifactStore: input.artifactStore,
         toolchainSha256: input.config.worker.toolchainSha256,
         publication: { server: input.config.publication.uploadServer },

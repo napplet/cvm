@@ -160,7 +160,11 @@ export class ProductionCertificationCoreServices implements Pick<ProductionCerti
       const record = await this.input.journal.read<{ operation: string; provider: "modal" | "fly"; binding: string }>(`cohort-route:${hash(value.intentReference)}`);
       if (record && value.expectedSessionBindingDigest !== undefined && record.value.binding !== value.expectedSessionBindingDigest) throw new Error("PRODUCTION_COHORT_WORKER_BINDING_CHANGED");
       const cohort = record ? await this.#load(record.value.operation) : undefined;
-      return { capacity: this.input.capacities[record?.value.provider ?? this.input.selectedProvider], cohort };
+      // The selected provider applies only to a new ordinary intent. Existing
+      // capacity keeps its original provider even after the default changes.
+      const original = record ? undefined : await this.input.capacities.modal.inspect(value);
+      const provider = z.enum(["modal", "fly"]).parse(record?.value.provider ?? original?.provider ?? this.input.selectedProvider);
+      return { capacity: this.input.capacities[provider], cohort };
     };
     const router = Object.freeze<ReadyCapacityPort>({
       reserveNow: async value => {

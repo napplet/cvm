@@ -53,7 +53,11 @@ const Execution = z.object({
     input: CertificationInputSchema, topology: z.object({ candidateSha256: Digest, topologySha256: Digest }).passthrough(),
     collector: z.object({ collectorDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/iu), configSha256: Digest }).strict(),
     releaseBinding: ReleaseObservationBindingSchema,
-    protectedVerificationReferences: Json,
+    protectedVerificationReferences: z.object({
+      root: AbsolutePath,
+      reproducibility: z.object({ relativePath: z.string().min(1).max(4096).refine(path => !path.startsWith("/") && !path.split(/[\\/]/u).some(part => part === "..")), evidenceSha256: Digest }).strict(),
+      supplyChain: z.object({ relativePath: z.string().min(1).max(4096).refine(path => !path.startsWith("/") && !path.split(/[\\/]/u).some(part => part === "..")), evidenceSha256: Digest }).strict(),
+    }).strict(),
     sourceBuild: z.object({
       candidateSha256: Digest, topologySha256: Digest, image: z.string().min(1).max(1_024), sourceSha256: Digest,
       /** A pinned golden proposal and original operation identities.  This
@@ -68,7 +72,7 @@ const Execution = z.object({
       sourceArchive: z.object({ root: AbsolutePath, relativePath: z.string().min(1).max(1_024), canonicalSourceReference: z.string().min(1).max(1_024), sourceRevision: Revision, sourceSha256: Digest }).strict(),
       reproducibilityRecord: Json, supplyChainRecord: Json,
     }).strict(),
-    verificationRecords: Json, sourceMeasurement: Json,
+    verificationRecords: z.object({ reproducibility: Json, supplyChain: Json }).strict(), sourceMeasurement: Json,
     receipts: z.array(z.string().min(1).max(512)).max(256), attestations: z.array(z.string().min(1).max(512)).max(256),
     cleanupPlan: z.object({ cleanupByMs: z.number().int().positive(), retainedEvidenceDays: z.number().int().min(30), retainedArtifactDays: z.number().int().min(30), effects: z.array(CleanupEffect).max(64) }).strict(),
     expectedPreviousBundleSha256: Digest.nullable(),

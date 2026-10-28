@@ -1,3 +1,6 @@
+import { createMountedReleaseCleanup } from "./release-cleanup";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { ReleaseProviderId } from "../release/contracts";
 import { validateAuthorizationReceipt, validateAuthorizationRequest } from "../release/authorization";
 import type { ReleaseProviderPort } from "../release/providers";
@@ -6,7 +9,6 @@ import { createNativeCloudRunProvider } from "../release/native/cloud-run";
 import { createNativeCloudSqlPostgresProvider } from "../release/native/cloud-sql-postgres";
 import { createNativeGcsProvider } from "../release/native/gcs";
 import { createNativeCollectorProvider } from "../release/native/collector";
-import { measureProductionCollectorImage } from "../release/collector-image";
 import { createProductionWorkerLifecycle, type ProductionWorkerLifecyclePort } from "./worker-lifecycle";
 import { createNativeCep8LightningProvider } from "../release/native/cep8-lightning";
 import { createNativeCashuProvider } from "../release/native/cashu";
@@ -318,8 +320,9 @@ async function prepareMountedOperationalExecution(input: Readonly<{
     throw new Error("PRODUCTION_MOUNTED_PREPARATION_BINDING_REQUIRED");
   }
   const topology = Object.freeze({ candidateSha256: input.config.candidateSha256, topologySha256: input.config.topologySha256 });
-  const measuredCollector = await measureProductionCollectorImage({ repositoryRoot: execution.materialization.repositoryRoot });
-  if (measuredCollector.collectorConfigSha256 !== execution.protected.collector.configSha256.toLowerCase()) {
+  const collectorConfig = await readFile(join(execution.materialization.repositoryRoot, "infra/otel/collector.yaml"));
+  const collectorConfigSha256 = new Bun.CryptoHasher("sha256").update(collectorConfig).digest("hex");
+  if (collectorConfigSha256 !== execution.protected.collector.configSha256.toLowerCase()) {
     throw new Error("PRODUCTION_MOUNTED_COLLECTOR_CONFIG_DRIFT");
   }
   const materialization = Object.freeze({
@@ -336,7 +339,6 @@ async function prepareMountedOperationalExecution(input: Readonly<{
    * produces the exact material the controller will independently verify/use
    * before it invokes a protected suite. */
   const materialized = await materializeProtectedCertifier({ ...materialization, workerSelection: execution.workerSelection, nowMs: input.now?.() });
-  const cleanupByOperation = new Map(execution.finalization.cleanupPlan.effects.map(effect => [effect.providerOperationId, effect] as const));
   const promotion = new PostgresReleasePromotion({
     pool: input.dependencies.pool,
     deploymentScopeSha256: productionReleaseScope(input.config),
@@ -352,7 +354,7 @@ async function prepareMountedOperationalExecution(input: Readonly<{
       candidate: input.resolved.workerCandidate,
       input: execution.protected.input,
       topology: execution.protected.topology,
-      collector: Object.freeze({ ...execution.protected.collector, imageReference: measuredCollector.imageReference }),
+      collector: Object.freeze({ ...execution.protected.collector, imageReference: input.resolved.serverControls.telemetry.deployment.imageReference }),
       releaseBinding: execution.protected.releaseBinding,
     }),
     protectedVerificationReferences: execution.protected.protectedVerificationReferences,
@@ -365,22 +367,7 @@ async function prepareMountedOperationalExecution(input: Readonly<{
       attestations: execution.finalization.attestations,
       cleanupPlan: Object.freeze({ ...execution.finalization.cleanupPlan, effects: execution.finalization.cleanupPlan.effects.map(({ provider: _provider, ...effect }) => Object.freeze(effect)) }),
       promotion,
-      cleanup: Object.freeze({
-        async cleanup(effect: Readonly<{ operationId: string; providerOperationId: string; resourceIdentitySha256: string }>) {
-          const original = cleanupByOperation.get(effect.providerOperationId);
-          if (!original || original.resourceIdentitySha256 !== effect.resourceIdentitySha256) throw new Error("PRODUCTION_MOUNTED_CLEANUP_ORIGINAL_REQUIRED");
-          const provider = input.providers[original.provider].port;
-          try { await provider.cleanup({ operationId: original.providerOperationId }); return "cleaned" as const; }
-          catch { return "unknown" as const; }
-        },
-        async observe(effect: Readonly<{ operationId: string; providerOperationId: string; resourceIdentitySha256: string }>) {
-          const original = cleanupByOperation.get(effect.providerOperationId);
-          if (!original || original.resourceIdentitySha256 !== effect.resourceIdentitySha256) throw new Error("PRODUCTION_MOUNTED_CLEANUP_ORIGINAL_REQUIRED");
-          const provider = input.providers[original.provider].port;
-          try { const observed = await provider.observe({ operationId: original.providerOperationId }); return observed.status === "completed" ? "cleaned" as const : observed.status === "blocked" ? "retained" as const : "unknown" as const; }
-          catch { return "unknown" as const; }
-        },
-      }),
+      cleanup: createMountedReleaseCleanup({ effects: execution.finalization.cleanupPlan.effects, providers: input.providers }),
     }),
   });
 }
@@ -525,8 +512,9 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
   if (missingPorts.length > 0) throw new Error(`PRODUCTION_NATIVE_PROVIDER_BRIDGE_REQUIRED:${missingPorts.join(",")}`);
   const providers = Object.freeze(Object.fromEntries(RELEASE_PRODUCTION_PROVIDER_IDS.map(id => [id, descriptor(providerPorts[id]!, `native:${id}:${input.config.topologySha256}`)])) as ProductionCertificationSessionMaterial["providers"]);
   if (!input.deploymentConfig || input.deploymentConfig.candidateSha256 !== input.config.candidateSha256) throw new Error("PRODUCTION_MOUNTED_SESSION_DEPLOYMENT_CONFIG_REQUIRED");
+  const deploymentConfig = input.deploymentConfig;
   return Object.freeze({
-    realm: "production-real", deploymentConfig: input.deploymentConfig, journal: dependencies.journal, clients, providers,
+    realm: "production-real", deploymentConfig, journal: dependencies.journal, clients, providers,
     workerCandidate: input.resolved.workerCandidate, control, checkpointCoordinator: dependencies.checkpointCoordinator,
     prepare: async ({ authorizationRequest, receipt }) => {
       const [requested, supplied] = await Promise.all([
@@ -541,7 +529,7 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
         || requestedReceipt.authorizationReceiptSha256 !== suppliedReceipt.authorizationReceiptSha256) {
         throw new Error("PRODUCTION_MOUNTED_PREPARATION_AUTHORIZATION_REQUIRED");
       }
-      return prepareMountedOperationalExecution({ config: input.config, deploymentConfig: input.deploymentConfig, resolved: input.resolved, authorization, dependencies, providers, now });
+      return prepareMountedOperationalExecution({ config: input.config, deploymentConfig, resolved: input.resolved, authorization, dependencies, providers, now });
     },
   });
 }

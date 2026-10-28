@@ -246,7 +246,7 @@ export function assertProductionSessionBroker(value: unknown): asserts value is 
   if (!value || typeof value !== "object" || !brokers.has(value)) throw new Error("PRODUCTION_SESSION_BROKER_REQUIRED");
 }
 
-function instrument(port: ReleaseProviderPort, counters: { [K in keyof ProductionEffectCounters]: number }): ReleaseProviderPort {
+function instrument(port: ReleaseProviderPort, counters: { -readonly [K in keyof ProductionEffectCounters]: number }): ReleaseProviderPort {
   const wrapped = Object.fromEntries(([
     "discoverCapabilities", "discoverAuthentication", "plan", "apply", "observe", "cleanup",
   ] as const).map(method => [method, async (...args: unknown[]) => {
@@ -256,7 +256,7 @@ function instrument(port: ReleaseProviderPort, counters: { [K in keyof Productio
   return Object.freeze(wrapped) as ReleaseProviderPort;
 }
 
-function instrumentSuite<T extends object>(port: T, counters: { [K in keyof ProductionEffectCounters]: number }): T {
+function instrumentSuite<T extends object>(port: T, counters: { -readonly [K in keyof ProductionEffectCounters]: number }): T {
   return new Proxy(port, {
     get(target, property, receiver) {
       const value = Reflect.get(target, property, receiver);
@@ -286,7 +286,7 @@ export function assembleProductionSessionRuntime(input: Readonly<{
   if (receipt.candidateSha256 !== broker.candidateSha256 || receipt.topologySha256 !== broker.topologySha256) {
     throw new Error("PRODUCTION_SESSION_RECEIPT_BINDING_REQUIRED");
   }
-  const counters: { [K in keyof ProductionEffectCounters]: number } = {
+  const counters: { -readonly [K in keyof ProductionEffectCounters]: number } = {
     discoverCapabilities: 0, discoverAuthentication: 0, plan: 0, apply: 0, observe: 0, cleanup: 0, suites: 0,
   };
   const core = createProductionCoreSuiteAdapters({ candidate: broker.workerCandidate, control: broker.control, contextvm: broker.clients.contextvmCertification });

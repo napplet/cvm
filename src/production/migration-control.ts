@@ -63,11 +63,11 @@ const SOURCE_PROJECTIONS: readonly SourceProjection[] = [
 /** Encrypted archive envelope. Key bytes are mounted only into sealed server
  * material and never serialized into journals, CLI output, or config. */
 export class MigrationArchiveCipher {
-  readonly #key: Uint8Array;
+  readonly #key: Uint8Array<ArrayBuffer>;
   constructor(key: Uint8Array) { if (!(key instanceof Uint8Array) || key.byteLength !== 32) throw new Error("MIGRATION_ARCHIVE_KEY_INVALID"); this.#key = new Uint8Array(key); Object.freeze(this); }
   async seal(bytes: Uint8Array): Promise<Uint8Array> {
     const nonce = crypto.getRandomValues(new Uint8Array(12)); const key = await crypto.subtle.importKey("raw", this.#key, "AES-GCM", false, ["encrypt"]);
-    const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, key, bytes));
+    const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, key, new Uint8Array(bytes)));
     return new TextEncoder().encode(JSON.stringify({ version: 1, nonceBase64: Buffer.from(nonce).toString("base64"), ciphertextBase64: Buffer.from(ciphertext).toString("base64") }));
   }
   async open(bytes: Uint8Array): Promise<Uint8Array> {

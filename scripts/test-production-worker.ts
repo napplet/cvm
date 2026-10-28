@@ -169,7 +169,7 @@ try {
   let checkpointWorkspace: Buffer | undefined, lastJobId = "";
   const jobManifests: unknown[] = [];
   for (let revision = 1; revision <= 2; revision++) {
-    const body = canonicalJson({ version: 1, sessionId: "local-job-proof", actionId: `revision-${revision}`, expectedVersion: revision - 1, proposalSha256: lease, toolchainSha256: toolchain, deadlineEpochMs: Date.now() + 600_000, files: JSON.parse(sourceJson).files });
+    const body = canonicalJson({ version: 1, sessionId: "local-job-proof", actionId: `revision-${revision}`, expectedVersion: revision - 1, proposalSha256: lease, toolchainSha256: toolchain, deadlineEpochMs: Date.now() + 600_000, files: JSON.parse(sourceJson).files, ...(revision === 2 ? { publication: { server: "https://publication.example" } } : {}) });
     const bytes = Buffer.from(body), id = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
     for (let offset = 0, index = 0; offset < bytes.length; offset += 24_576, index++) {
       const stored = await jobCommand("put", id, String(index), bytes.subarray(offset, offset + 24_576).toString("base64"));
@@ -199,6 +199,9 @@ try {
       const manifest = requireManifest(artifact.commandEvidence[7].stdout);
       const named = JSON.parse(artifact.commandEvidence[7].stdout).plan.items[0];
       if (named.kind !== 35129 || named.target !== "named" || named.dTag !== `cvm-${id.slice(0, 24)}` || manifest.template?.kind !== 35129 || manifest.template.tags.filter((tag: string[]) => tag[0] === "d").length !== 1 || !manifest.template.tags.some((tag: string[]) => tag.length === 2 && tag[0] === "d" && tag[1] === named.dTag)) throw new Error("WORKER_CLI_NAMED_TARGET_REQUIRED");
+      const serverTags = manifest.template.tags.filter((tag: string[]) => tag[0] === "server");
+      const cliServers = JSON.parse(artifact.commandEvidence[7].stdout).blossomServers;
+      if (canonicalJson(serverTags) !== canonicalJson([["server", "https://publication.example"]]) || canonicalJson(cliServers) !== canonicalJson(["https://publication.example"])) throw new Error("WORKER_CLI_APPROVED_SERVER_REQUIRED");
       jobManifests.push(manifest);
       if (manifest.files.length !== artifact.files.length || manifest.files.some((file: { path: string; sha256: string }) => !artifact.files.some((actual: { path: string; sha256: string }) => `/${actual.path}` === file.path && actual.sha256 === file.sha256))) throw new Error("WORKER_CLI_FILE_BINDING_INVALID");
       checkpointWorkspace = Buffer.from(canonicalJson({ version: 1, source: JSON.parse(body), artifact: JSON.parse(artifactBytes.toString("utf8")), toolchainSha256: toolchain })); lastJobId = id;

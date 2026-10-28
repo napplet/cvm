@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { canonicalJson } from "../promotion/schema";
+import { ProductionWorkerPublicationSchema, type ProductionWorkerPublication } from "../worker-adapters/publication-metadata";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u).transform(value => value.toLowerCase());
 const SourceFile = z.object({
@@ -22,6 +23,7 @@ const SourceBuildPlan = z.object({
   actionId: z.string().regex(/^source-build:[a-f0-9]{64}$/u),
   jobId: Digest,
   files: z.array(SourceFile).min(3).max(3),
+  publication: ProductionWorkerPublicationSchema.optional(),
 }).strict().superRefine((value, context) => {
   if (new Set(value.files.map(file => file.path)).size !== value.files.length) {
     context.addIssue({ code: "custom", message: "PRODUCTION_SOURCE_BUILD_FILES_INVALID" });
@@ -29,8 +31,8 @@ const SourceBuildPlan = z.object({
 });
 
 export type MountedSourceBuildPlan = z.infer<typeof SourceBuildPlan>;
-export type MountedSourceBuildBinding = Readonly<{ candidateSha256: string; topologySha256: string; provider: "modal" | "fly" }>;
-export type MountedSourceBuildExecution = Readonly<Pick<MountedSourceBuildPlan, "proposalSha256" | "files" | "candidateSha256" | "topologySha256" | "provider"> & { authorizationRequestSha256: string; operationId: string; capacityIntentReference: string; sessionBindingDigest: string; workerOperationId: string; sessionId: string; actionId: string; jobId: string }>;
+export type MountedSourceBuildBinding = Readonly<{ candidateSha256: string; topologySha256: string; provider: "modal" | "fly"; publication?: ProductionWorkerPublication }>;
+export type MountedSourceBuildExecution = Readonly<Pick<MountedSourceBuildPlan, "proposalSha256" | "files" | "candidateSha256" | "topologySha256" | "provider" | "publication"> & { authorizationRequestSha256: string; operationId: string; capacityIntentReference: string; sessionBindingDigest: string; workerOperationId: string; sessionId: string; actionId: string; jobId: string }>;
 
 const sourceSha256 = (value: string | Uint8Array) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
 
@@ -60,17 +62,18 @@ export function materializeMountedSourceBuildPlan(binding: MountedSourceBuildBin
   const topologySha256 = Digest.parse(binding.topologySha256);
   const provider = z.enum(["modal", "fly"]).parse(binding.provider);
   const files = MINIMAL_GOLDEN_SOURCE.map(file => ({ ...file }));
+  const publication = binding.publication === undefined ? {} : { publication: ProductionWorkerPublicationSchema.parse(binding.publication) };
   // Match ProductionSourceProposalStore and the model boundary exactly: a
   // proposal digest is over its `{ files }` envelope, never a bare array.
   const proposalSha256 = sourceSha256(canonicalJson({ files }));
-  const operationId = `source-build:${sourceSha256(canonicalJson({ candidateSha256, topologySha256, provider, proposalSha256, fixture: "fixtures/minimal" }))}`;
+  const operationId = `source-build:${sourceSha256(canonicalJson({ candidateSha256, topologySha256, provider, proposalSha256, fixture: "fixtures/minimal", ...publication }))}`;
   const sessionBindingDigest = `sha256:${sourceSha256(canonicalJson({ operationId, candidateSha256, topologySha256, provider, proposalSha256, fixture: "fixtures/minimal" }))}`;
   const capacityIntentReference = `capacity-intent:${sourceSha256(operationId)}`;
   const workerOperationId = `capacity-${sourceSha256(`${capacityIntentReference}:${sessionBindingDigest}`).slice(0, 40)}`;
   const sessionId = operationId;
   const actionId = operationId;
   const jobId = sourceSha256(canonicalJson({ version: 1, operationId, candidateSha256, topologySha256, provider, capacityIntentReference, sessionBindingDigest, workerOperationId, sessionId, actionId, proposalSha256, files }));
-  return SourceBuildPlan.parse({ version: 1, fixture: "fixtures/minimal", candidateSha256, topologySha256, provider, proposalSha256, operationId, capacityIntentReference, sessionBindingDigest, workerOperationId, sessionId, actionId, jobId, files });
+  return SourceBuildPlan.parse({ version: 1, fixture: "fixtures/minimal", candidateSha256, topologySha256, provider, proposalSha256, operationId, capacityIntentReference, sessionBindingDigest, workerOperationId, sessionId, actionId, jobId, files, ...publication });
 }
 
 export function assertMountedSourceBuildPlan(value: unknown, binding: MountedSourceBuildBinding): MountedSourceBuildPlan {
@@ -91,5 +94,5 @@ export function bindMountedSourceBuildExecution(plan: MountedSourceBuildPlan, in
   const workerOperationId = `capacity-${sourceSha256(`${capacityIntentReference}:${sessionBindingDigest}`).slice(0, 40)}`;
   const sessionId = operationId, actionId = operationId;
   const jobId = sourceSha256(canonicalJson({ planJobId: plan.jobId, authorizationRequestSha256, operationId, capacityIntentReference, sessionBindingDigest, workerOperationId, sessionId, actionId }));
-  return Object.freeze({ candidateSha256: plan.candidateSha256, topologySha256: plan.topologySha256, provider: plan.provider, proposalSha256: plan.proposalSha256, files: plan.files, authorizationRequestSha256, operationId, capacityIntentReference, sessionBindingDigest, workerOperationId, sessionId, actionId, jobId });
+  return Object.freeze({ candidateSha256: plan.candidateSha256, topologySha256: plan.topologySha256, provider: plan.provider, proposalSha256: plan.proposalSha256, files: plan.files, ...(plan.publication === undefined ? {} : { publication: plan.publication }), authorizationRequestSha256, operationId, capacityIntentReference, sessionBindingDigest, workerOperationId, sessionId, actionId, jobId });
 }

@@ -11,6 +11,7 @@ import { assertMountedSourceBuildPlan, bindMountedSourceBuildExecution, type Mou
 import { readMountedSourceBuildEvidence } from "./source-build-verifier";
 import { originalSigningKey, publicationKey, signingKey, ProductionPublicationRecordSchema } from "./edge-contexts";
 import type { ProductionGenerationRuntime } from "./generation-runtime";
+import { ProductionWorkerPublicationSchema } from "../worker-adapters/publication-metadata";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const Url = z.string().url().refine(value => { const url = new URL(value); return url.protocol === "https:" && !url.username && !url.password && !url.hash; });
@@ -39,7 +40,8 @@ export class ProductionPublicationContextMaterializer {
     assertPostgresOperationJournal(input.journal); assertPostgresOperationJournal(input.sourceJournal);
     Digest.parse(input.candidateSha256); Digest.parse(input.topologySha256); Digest.parse(input.ownerPubkey); Digest.parse(input.compatibleHostSha256);
     z.array(Relay).min(1).max(16).parse(input.relaySet); z.array(Url).length(1).parse(input.uploadServers);
-    assertMountedSourceBuildPlan(input.sourcePlan, { candidateSha256: input.candidateSha256, topologySha256: input.topologySha256, provider: input.sourcePlan.provider });
+    assertMountedSourceBuildPlan(input.sourcePlan, { candidateSha256: input.candidateSha256, topologySha256: input.topologySha256, provider: input.sourcePlan.provider, publication: input.sourcePlan.publication });
+    if (input.sourcePlan.publication && input.sourcePlan.publication.server !== ProductionWorkerPublicationSchema.parse({ server: input.uploadServers[0] }).server) throw new Error("PRODUCTION_PUBLICATION_APPROVED_SERVER_REQUIRED");
   }
 
   async #authorize(readOnly: boolean) {
@@ -108,6 +110,8 @@ export class ProductionPublicationContextMaterializer {
       return Object.freeze({ artifact: record.artifact, intent: record.intent, intentDigest: record.intent.fingerprint, relaySet: Object.freeze([...record.relaySet]) });
     }
     const manifest = NamedManifest.parse(evidence.evidence.receipts.manifest);
+    const servers = manifest.template.tags.filter(tag => tag[0] === "server");
+    if (!this.input.sourcePlan.publication || servers.length !== 1 || servers[0]!.length !== 2 || servers[0]![1] !== this.input.sourcePlan.publication.server) throw new Error("PRODUCTION_PUBLICATION_APPROVED_SERVER_REQUIRED");
     const names = manifest.template.tags.filter(tag => tag[0] === "d");
     const files = evidence.evidence.artifact.files.map(file => ({ path: `/${file.path}`, mimeType: mime.get(extname(file.path)) ?? "application/octet-stream", sha256: file.sha256, size: file.size, bytes: Buffer.from(file.bytesBase64, "base64").toString("base64url") }));
     if (manifest.aggregateHash !== evidence.result.aggregateSha256 || names.length !== 1 || names[0]!.length !== 2 || names[0]![1] !== manifest.item.dTag

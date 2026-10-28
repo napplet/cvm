@@ -54,6 +54,6 @@ export async function materializeProductionRuntimeDependencies(input: Readonly<{
   const gateway = new ProductionVertexModelGateway({ vertex, proposals });
   const settlement = createProductionVertexGenerationSettlement({ gateway, conversion: vertexMaterial.pricing.conversion, journal: vertexJournal });
   const resolver = new ProductionWorkerOwnershipResolver({ pool: input.pool, policyVersion: input.config.worker.policyVersion, capacityJournal: journal });
-  const workerBridge = new ProductionWorkerBridge({ resolver, workers: worker.clients, workerJournal, jobJournal, requestJournal, artifactStore, toolchainSha256: input.config.worker.toolchainSha256 });
+  const workerBridge = new ProductionWorkerBridge({ resolver, workers: worker.clients, workerJournal, jobJournal, requestJournal, artifactStore, toolchainSha256: input.config.worker.toolchainSha256, publication: { server: input.config.publication.uploadServer } });
   return Object.freeze({ pool: input.pool, journal, googleControlJournal, googleIntentJournal, workerJournal, jobJournal, requestJournal, vertexJournal, checkpointJournal, checkpointCoordinator, tokenSource, gcs, artifactStore, workers: worker.clients, workerCertification: worker.certification, flyRegion: worker.flyRegion, capacity, certificationCapacities, vertexMaterial, vertex, proposals, gateway, settlement, resolver, workerBridge });
 }

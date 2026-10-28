@@ -7,6 +7,7 @@ import { WorkerRunRequestSchema, type WorkerRunRequest } from "../phase-02/contr
 import { assertPostgresOperationJournal, type PostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
 import { createPostgresWorkerOperationJournal } from "../release/deployment/postgres-provider-journals";
 import type { createWorkerDeploymentClients } from "../release/deployment/worker-clients";
+import { ProductionWorkerPublicationSchema, type ProductionWorkerPublication } from "./publication-metadata";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const STEP_NAMES = ["create", "init", "skills", "install", "build", "verify", "conformance", "dry-run"] as const;
@@ -25,9 +26,10 @@ const Bundle = z.object({ version: z.literal(1), jobId: Digest, proposalSha256: 
   commandEvidence: z.array(z.object({ argv: z.array(z.string()).max(16), exitCode: z.literal(0), stdout: z.string().max(65_536), stderr: z.string().max(65_536), elapsedMs: z.number().int().nonnegative() }).strict()).length(8),
 }).strict();
 type StoredJob = Readonly<{ workerOperationId: string; workerResourceId: string; leaseSha256: string; jobId: string; requestBody: string; deadlineEpochMs: number }>;
-type Input = Readonly<{ provider: "modal" | "fly"; workerOperationId: string; clients: ReturnType<typeof createWorkerDeploymentClients>; workerJournal: PostgresOperationJournal; jobJournal: PostgresOperationJournal; toolchainSha256: string; now?: () => number }>;
+type Input = Readonly<{ provider: "modal" | "fly"; workerOperationId: string; clients: ReturnType<typeof createWorkerDeploymentClients>; workerJournal: PostgresOperationJournal; jobJournal: PostgresOperationJournal; toolchainSha256: string; publication?: ProductionWorkerPublication; now?: () => number }>;
 const WorkspaceSource = z.object({ version: z.literal(1), actionId: z.string().min(1).max(256), sessionId: z.string().min(1).max(256), expectedVersion: z.number().int().nonnegative(), proposalSha256: Digest, toolchainSha256: Digest, deadlineEpochMs: z.number().int().positive(), files: z.array(z.object({ path: z.enum(["src/main.ts", "src/styles.css", "src/capabilities.json"]), content: z.string().refine(value => Buffer.byteLength(value) <= 30_000) }).strict()).min(1).max(3) }).strict();
-const Workspace = z.object({ version: z.literal(1), source: WorkspaceSource, artifact: Bundle, toolchainSha256: Digest }).strict();
+const PublishedWorkspaceSource = WorkspaceSource.extend({ publication: ProductionWorkerPublicationSchema.optional() }).strict();
+const Workspace = z.object({ version: z.literal(1), source: PublishedWorkspaceSource, artifact: Bundle, toolchainSha256: Digest }).strict();
 const RestoreObservation = z.discriminatedUnion("state", [
   z.object({ state: z.enum(["pending", "missing"]), archiveSha256: Digest }).strict(),
   z.object({ state: z.literal("restored"), archiveSha256: Digest, toolchainSha256: Digest, sourceSha256: Digest, artifactFilesSha256: Digest, workspacePath: z.literal("/workspace/restored") }).strict(),
@@ -38,11 +40,13 @@ type StoredRestore = Readonly<{ workerOperationId: string; workerResourceId: str
  * supervisor for <=15s; generated build work runs asynchronously exactly once. */
 export class ProductionWorkerJobClient {
   constructor(private readonly input: Input) {
+    this.input = Object.freeze({ ...input, ...(input.publication === undefined ? {} : { publication: ProductionWorkerPublicationSchema.parse(input.publication) }) });
     assertPostgresOperationJournal(input.workerJournal); assertPostgresOperationJournal(input.jobJournal);
     Digest.parse(input.toolchainSha256);
     if (!["modal", "fly"].includes(input.provider) || !/^[a-z][a-z0-9_-]{2,48}$/u.test(input.workerOperationId)) throw new Error("PRODUCTION_JOB_WORKER_INVALID");
   }
   #key(request: WorkerRunRequest) { return `worker-build:${sha(canonicalJson({ sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion }))}`; }
+  #identity(request: WorkerRunRequest, publication?: ProductionWorkerPublication) { return sha(canonicalJson(publication === undefined ? request : { request, publication })); }
   async #worker() {
     const record = await createPostgresWorkerOperationJournal(this.input.workerJournal).read(this.input.workerOperationId);
     if (!record || record.provider !== this.input.provider || !record.resourceId || !record.sessionLeaseSha256 || record.toolchainSha256 !== this.input.toolchainSha256 || !record.providerDeadlineEpochMs || !["dispatched", "reconciled"].includes(record.state)) throw new Error("PRODUCTION_JOB_READY_WORKER_REQUIRED");
@@ -51,7 +55,10 @@ export class ProductionWorkerJobClient {
   async #original(request: WorkerRunRequest) {
     WorkerRunRequestSchema.parse(request);
     const record = await this.input.jobJournal.read<StoredJob>(this.#key(request));
-    if (!record || record.identitySha256 !== sha(canonicalJson(request)) || record.value.workerOperationId !== this.input.workerOperationId) throw new Error("PRODUCTION_JOB_ORIGINAL_REQUIRED");
+    if (!record || record.value.workerOperationId !== this.input.workerOperationId || typeof record.value.requestBody !== "string" || Buffer.byteLength(record.value.requestBody) > 131_072 || sha(record.value.requestBody) !== record.value.jobId) throw new Error("PRODUCTION_JOB_ORIGINAL_REQUIRED");
+    const source = PublishedWorkspaceSource.parse(JSON.parse(record.value.requestBody));
+    if (record.identitySha256 !== this.#identity(request, source.publication) || source.sessionId !== request.sessionId || source.actionId !== request.actionId || source.expectedVersion !== request.expectedVersion
+      || source.proposalSha256 !== request.sourceProposalSha256 || source.toolchainSha256 !== this.input.toolchainSha256 || canonicalJson(source.files) !== canonicalJson(request.sourceProposalFiles)) throw new Error("PRODUCTION_JOB_ORIGINAL_REQUIRED");
     return record.value;
   }
   async #exec(job: Pick<StoredJob, "workerResourceId" | "leaseSha256">, args: string[]): Promise<unknown> {
@@ -71,7 +78,9 @@ export class ProductionWorkerJobClient {
     if (request.sourceProposalFiles.length > 3 || !request.sourceProposalFiles.some(file => file.path === "src/main.ts") || new Set(request.sourceProposalFiles.map(file => file.path)).size !== request.sourceProposalFiles.length || request.sourceProposalFiles.some(file => !allowed.has(file.path) || Buffer.byteLength(file.content) > 30_000)) throw new Error("PRODUCTION_JOB_SOURCE_INVALID");
     const original = await this.input.jobJournal.read<StoredJob>(this.#key(request));
     if (original) {
-      if (original.identitySha256 !== sha(canonicalJson(request)) || original.value.workerOperationId !== this.input.workerOperationId) throw new Error("OPERATION_IDENTITY_CONFLICT");
+      // Re-entry always observes the retained original, including a legacy
+      // job or an action created before controller publication settings changed.
+      try { await this.#original(request); } catch { throw new Error("OPERATION_IDENTITY_CONFLICT"); }
       return this.observe(request);
     }
     const worker = await this.#worker(); const now = (this.input.now ?? Date.now)();
@@ -79,10 +88,11 @@ export class ProductionWorkerJobClient {
     // boundary. Expiring capacity is rejected before any upload/start effect.
     const deadlineEpochMs = Math.min(now + 600_000, worker.providerDeadlineEpochMs! - 600_000);
     if (deadlineEpochMs <= now) throw new Error("PRODUCTION_JOB_LEASE_EXPIRED");
-    const requestBody = canonicalJson({ version: 1, actionId: request.actionId, sessionId: request.sessionId, expectedVersion: request.expectedVersion, proposalSha256: request.sourceProposalSha256, toolchainSha256: this.input.toolchainSha256, deadlineEpochMs, files: request.sourceProposalFiles });
+    const publication = this.input.publication === undefined ? {} : { publication: this.input.publication };
+    const requestBody = canonicalJson({ version: 1, actionId: request.actionId, sessionId: request.sessionId, expectedVersion: request.expectedVersion, proposalSha256: request.sourceProposalSha256, toolchainSha256: this.input.toolchainSha256, deadlineEpochMs, files: request.sourceProposalFiles, ...publication });
     const bytes = Buffer.from(requestBody); if (bytes.length > 131_072) throw new Error("PRODUCTION_JOB_REQUEST_TOO_LARGE");
     const jobId = sha(bytes);
-    const claim = await this.input.jobJournal.claim<StoredJob>(this.#key(request), sha(canonicalJson(request)), { workerOperationId: this.input.workerOperationId, workerResourceId: worker.resourceId!, leaseSha256: worker.sessionLeaseSha256!, jobId, requestBody, deadlineEpochMs });
+    const claim = await this.input.jobJournal.claim<StoredJob>(this.#key(request), this.#identity(request, this.input.publication), { workerOperationId: this.input.workerOperationId, workerResourceId: worker.resourceId!, leaseSha256: worker.sessionLeaseSha256!, jobId, requestBody, deadlineEpochMs });
     if (!claim.claimed) return this.observe(request);
     const job = claim.record.value;
     try {
@@ -129,10 +139,12 @@ export class ProductionWorkerJobClient {
   }
   async materializeArtifact(request: WorkerRunRequest, owner: Readonly<{ ownerId: string; accountId: string }>) {
     if (!/^[a-f0-9]{64}$/u.test(owner.ownerId) || !owner.accountId) throw new Error("PRODUCTION_JOB_OWNER_REQUIRED");
+    const source = PublishedWorkspaceSource.parse(JSON.parse((await this.#original(request)).requestBody));
+    const publication = source.publication === undefined ? {} : { publication: source.publication };
     const bundle = await this.readArtifact(request), distRoot = await mkdtemp(join(tmpdir(), "napplet-cvm-production-artifact-"));
     try {
       for (const file of bundle.files) { const path = join(distRoot, file.path); await mkdir(dirname(path), { recursive: true, mode: 0o700 }); await writeFile(path, Buffer.from(file.bytesBase64, "base64"), { flag: "wx", mode: 0o600 }); }
-      return Object.freeze({ ...owner, sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, proposalSha256: bundle.proposalSha256, toolchainSha256: bundle.toolchainSha256, distRoot, commandEvidence: bundle.commandEvidence.map((entry, index) => ({ name: STEP_NAMES[index]!, exitCode: entry.exitCode, stdout: entry.stdout, stderr: entry.stderr })), cleanup: () => rm(distRoot, { recursive: true, force: true }) });
+      return Object.freeze({ ...owner, ...publication, sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, proposalSha256: bundle.proposalSha256, toolchainSha256: bundle.toolchainSha256, distRoot, commandEvidence: bundle.commandEvidence.map((entry, index) => ({ name: STEP_NAMES[index]!, exitCode: entry.exitCode, stdout: entry.stdout, stderr: entry.stderr })), cleanup: () => rm(distRoot, { recursive: true, force: true }) });
     } catch (error) { await rm(distRoot, { recursive: true, force: true }); throw error; }
   }
   /** Persist the original fence before writing it; uncertain responses only

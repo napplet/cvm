@@ -180,7 +180,7 @@ export function createMountedProductionSourceBuildVerifier(input: Readonly<{
   dependencies: ProductionGenerationRuntime["dependencies"];
   now?: () => number;
 }>): ProductionSourceBuildVerifier {
-  const execution = input.record.execution, build = execution.protected.sourceBuild, plan = assertMountedSourceBuildPlan(build.plan, { candidateSha256: input.config.candidateSha256, topologySha256: input.config.topologySha256, provider: input.record.workerCandidate.provider });
+  const execution = input.record.execution, build = execution.protected.sourceBuild, plan = assertMountedSourceBuildPlan(build.plan, { candidateSha256: input.config.candidateSha256, topologySha256: input.config.topologySha256, provider: input.record.workerCandidate.provider, publication: { server: input.config.publication.uploadServer } });
   if (build.candidateSha256 !== input.config.candidateSha256 || build.topologySha256 !== input.config.topologySha256 || build.image !== input.config.worker.image
     || build.sourceSha256 !== execution.materialization.source.sourceSha256 || input.record.workerCandidate.sourceSha256 !== build.sourceSha256
     || input.record.workerCandidate.provider !== execution.workerSelection.provider) throw new Error("PRODUCTION_SOURCE_BUILD_BINDING_REQUIRED");
@@ -226,7 +226,7 @@ export function createMountedProductionSourceBuildVerifier(input: Readonly<{
       if (reserved.status !== "available") throw new Error("PRODUCTION_SOURCE_BUILD_WORKER_UNAVAILABLE");
       record = exactCapacity(await capacity.inspect({ intentReference: run.capacityIntentReference }), run);
     }
-    const job = new ProductionWorkerJobClient({ provider, workerOperationId: record.workerOperationId, clients: input.dependencies.workers, workerJournal: input.dependencies.workerJournal, jobJournal: input.dependencies.jobJournal, toolchainSha256: input.config.worker.toolchainSha256, now: input.now });
+    const job = new ProductionWorkerJobClient({ provider, workerOperationId: record.workerOperationId, clients: input.dependencies.workers, workerJournal: input.dependencies.workerJournal, jobJournal: input.dependencies.jobJournal, toolchainSha256: input.config.worker.toolchainSha256, publication: plan.publication, now: input.now });
     const requestForWorker = workerRequest(run);
     const initial = await job.start(requestForWorker);
     if (initial.state === "unknown") throw new Error("PRODUCTION_SOURCE_BUILD_ORIGINAL_UNKNOWN");
@@ -235,9 +235,10 @@ export function createMountedProductionSourceBuildVerifier(input: Readonly<{
     if (completed.state !== "completed") throw new Error(`PRODUCTION_SOURCE_BUILD_NONPASS:${completed.state}`);
     const materialized = await job.materializeArtifact(requestForWorker, { ownerId: input.config.candidateSha256, accountId: `certification:${input.config.candidateSha256}` });
     try {
-      const artifact = await new ProductionArtifactVerifier().verify(materialized);
+      const { cleanup: _cleanup, ...facts } = materialized;
+      const artifact = await new ProductionArtifactVerifier().verify(facts);
       const workspace = Workspace.parse(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await job.exportWorkspace(requestForWorker, sha256(canonicalJson(run))))));
-      if (canonicalJson(workspace.source.files) !== canonicalJson(plan.files)) throw new Error("PRODUCTION_SOURCE_BUILD_WORKSPACE_BINDING_REQUIRED");
+      if (canonicalJson(workspace.source.files) !== canonicalJson(plan.files) || canonicalJson(workspace.source.publication ?? null) !== canonicalJson(plan.publication ?? null)) throw new Error("PRODUCTION_SOURCE_BUILD_WORKSPACE_BINDING_REQUIRED");
       const capabilities = workspace.source.files.find(file => file.path === "src/capabilities.json");
       if (!capabilities) throw new Error("PRODUCTION_SOURCE_BUILD_CAPABILITIES_REQUIRED");
       const dryRun = DryRun.parse(JSON.parse(materialized.commandEvidence[7]!.stdout));

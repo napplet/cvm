@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import { lstat, open, readdir, realpath } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { z } from "zod";
+import { ProductionWorkerPublicationSchema } from "../worker-adapters/publication-metadata";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const Stage = z.enum(["create", "init", "skills", "install", "build", "verify", "conformance", "dry-run"]);
@@ -10,6 +11,7 @@ const Facts = z.object({
   ownerId: z.string().regex(/^[a-f0-9]{64}$/u), accountId: z.string().min(1), sessionId: z.string().min(1), actionId: z.string().min(1),
   expectedVersion: z.number().int().nonnegative(), proposalSha256: Digest, toolchainSha256: Digest, distRoot: z.string().min(1),
   commandEvidence: z.array(Command).length(8),
+  publication: ProductionWorkerPublicationSchema.optional(),
 }).strict();
 const ManifestFile = z.object({ path: z.string().min(2).max(257), sha256: Digest }).strict();
 /** The pinned @napplet/cli dry-run report includes signing, relay, and
@@ -117,6 +119,10 @@ export class ProductionArtifactVerifier {
     const conformance = facts.commandEvidence[6]!.stdout ?? "";
     if (!/\b[1-9][0-9]* passed, 0 failed, [0-9]+ skipped\b/u.test(conformance) || !/\bRESULT: CONFORMANT\b/u.test(conformance)) throw new Error("PRODUCTION_ARTIFACT_CONFORMANCE_REJECTED");
     const dryRun = DryRun.parse(JSON.parse(facts.commandEvidence[7]!.stdout ?? "null"));
+    if (facts.publication) {
+      const servers = dryRun.manifests[0]!.template.tags.filter(tag => tag[0] === "server");
+      if (dryRun.blossomServers.length !== 1 || dryRun.blossomServers[0] !== facts.publication.server || servers.length !== 1 || servers[0]!.length !== 2 || servers[0]![1] !== facts.publication.server) throw new Error("PRODUCTION_ARTIFACT_PUBLICATION_SERVER_MISMATCH");
+    }
     const files = await inventory(facts.distRoot); const index = files.find(file => file.path === "index.html");
     if (!index) throw new Error("PRODUCTION_ARTIFACT_OUTPUT_EMPTY");
     await verifyHtml(facts.distRoot, index);

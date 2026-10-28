@@ -9,10 +9,22 @@ import { finalizeReleaseCertification } from "../../src/release/finalize";
 import { createAuthorizationReceipt } from "../../src/release/authorization";
 import { createReleaseProviderRegistry } from "../../src/release/providers";
 import { RELEASE_PROVIDER_IDS } from "../../src/release/topology";
+import { observeUploadedCollectorRegistryImage } from "../../src/release/collector-image";
 
 const repositoryRoot = join(import.meta.dir, "..", "..");
 const candidatePath = join(repositoryRoot, "toolchains/candidates/initial.json");
 const digest = (value: string) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
+
+// Local controller contract fixture; never used as release evidence.
+async function observedCollector() {
+  const digest = "c".repeat(64);
+  return observeUploadedCollectorRegistryImage({
+    plannedRegistryReference: `registry.example/napplet-cvm/collector@sha256:${digest}`,
+    registryAvailability: "not_uploaded", localOciManifestDigest: `sha256:${digest}`, localOciConfigDigest: `sha256:${"d".repeat(64)}`,
+    platform: { os: "linux", architecture: "amd64" }, baseImage: `otel/opentelemetry-collector@sha256:${"e".repeat(64)}`,
+    dockerfileSha256: "f".repeat(64), collectorConfigSha256: "a".repeat(64), ociLayoutPath: "/tmp/collector.oci.tar", ociLayoutSha256: "b".repeat(64),
+  }, { async observeUploadedManifest(input) { return { ...input, observedAtMs: 1 }; } });
+}
 
 const manifest = () => ({
   version: 1,
@@ -65,14 +77,15 @@ test("authorized tracer rejects absent or mismatched receipt before a native eff
 test("all protected-suite records are retained and block finalization when real evidence is unavailable", async () => {
   const root = await mkdtemp(join(tmpdir(), "napplet-cvm-live-controller-"));
   try {
-    const dry = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000 });
+    const collectorImage = await observedCollector();
+    const dry = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000, collectorImage });
     const registry = createReleaseProviderRegistry({ now: () => 1_000, ports: Object.fromEntries(RELEASE_PROVIDER_IDS.map((provider) => [provider, {
       discoverCapabilities: async () => ({ capability: "available" as const }), discoverAuthentication: async () => ({ authentication: "authorized" as const }),
       plan: async () => ({ status: "planned" as const, estimatedCostMicros: 0 }), apply: async () => ({ status: "applied" as const, actualCostMicros: 0, resourceIdentity: provider }),
       observe: async () => ({ status: "completed" as const, actualCostMicros: 0, resourceIdentity: provider }), cleanup: async () => ({ status: "cleaned" as const, actualCostMicros: 0 }),
     }])) as never });
     const receipt = await createAuthorizationReceipt(dry.authorizationRequest);
-    const controller = new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000 });
+    const controller = new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000, collectorImage });
     const provisioned = await controller.provision({ receipt, registry });
     const candidate = { id: provisioned.state.candidate.candidateSha256, provider: "modal" as const, image: `napplet-cvm/worker@sha256:${digest("worker")}`, sourceSha256: digest("source") };
     const real = { evidenceClass: "real" as const } as never;

@@ -1,3 +1,4 @@
+import { registerProductionPricing } from "./pricing-catalog";
 import { createMountedProductionWorkerJobRouter } from "./mounted-worker-profiles";
 import { openProductionServiceJournals } from "./service-journals";
 import { GcsObjectStoreAdapter } from "../continuity/object-store";
@@ -50,6 +51,7 @@ export async function materializeProductionRuntimeDependencies(input: Readonly<{
     createMountedProductionWorkerClients({ config: input.config, secrets: input.secrets, journal: createPostgresWorkerOperationJournal(workerJournal) }),
     createMountedVertexMaterial({ config: input.config, secrets: input.secrets, now: input.now }),
   ]);
+  await registerProductionPricing({ pool: input.pool, profile: vertexMaterial.pricing.profile, card: vertexMaterial.pricing.card });
   const jobRouter = await createMountedProductionWorkerJobRouter({ config: input.config, secrets: input.secrets, workerJournal, jobJournal, current: worker });
   const makeCapacity = (provider: "modal" | "fly") => createProductionReadyCapacity({ provider, workers: worker.clients, journal: serviceJournals.capacity, workerJournal, image: input.config.worker.image, toolchainSha256: input.config.worker.toolchainSha256, ...(provider === "fly" ? { flyRegion: worker.flyRegion } : {}), now: input.now });
   const certificationCapacities = Object.freeze({ modal: makeCapacity("modal"), fly: makeCapacity("fly") });

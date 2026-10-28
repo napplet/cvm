@@ -40,7 +40,7 @@ export class ProductionContinuationCoordinator {
       },
     });
     this.service = new ContinuationService({
-      store: input.store, clock: { nowMs: now },
+      store: input.store, clock: { nowMs: now }, includeAdmissionHold: true,
       resume: {
         compatibility: input.compatibility,
         checkpoint: {

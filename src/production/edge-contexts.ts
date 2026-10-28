@@ -1,8 +1,10 @@
 import { z } from "zod";
+import { verifyEvent } from "nostr-tools/pure";
 
 import {
   PublicationIntentSchema,
   SealedArtifactIdentitySchema,
+  SignedOwnerManifestEventSchema,
   type PublicationIntent,
   type SealedArtifactIdentity,
 } from "../publication/contracts";
@@ -39,6 +41,7 @@ const UploadTemplate = z.object({
   kind: z.literal(24242), content: z.literal("Upload blobs via napplet"),
   tags: z.array(z.array(z.string().max(4_096)).min(1).max(16)).min(5).max(128), created_at: z.number().int().positive(),
 }).strict();
+const UploadSigningResult = z.object({ pubkey: Digest, intentDigest: Digest, authorizationReceipt: z.string().min(1).max(400), event: SignedOwnerManifestEventSchema.extend({ kind: z.literal(24242) }) }).strict();
 
 export const ProductionPublicationRecordSchema = z.object({
   candidateSha256: Digest, topologySha256: Digest, authorizationRequestSha256: Digest,
@@ -185,7 +188,12 @@ export class ProductionEdgeContexts {
           authorizeExactHashes: async hashes => {
             const actual = [...hashes].map(value => Digest.parse(value)).sort();
             if (actual.length !== expected.length || actual.some((value, index) => value !== expected[index])) throw new Error("PRODUCTION_EDGE_UPLOAD_HASH_SCOPE_INVALID");
-            return signer.signExactOperation({ operationId, purpose: "upload_authorization" });
+            const original = await this.signer.resolveOriginal({ operationId, purpose: "upload_authorization" });
+            const signed = UploadSigningResult.parse(await signer.signExactOperation({ operationId, purpose: "upload_authorization" }));
+            const event = signed.event;
+            if (signed.pubkey !== original.ownerPubkey || event.pubkey !== original.ownerPubkey || signed.intentDigest !== original.intentDigest || signed.authorizationReceipt !== `nip46:${operationId}` || !verifyEvent(event)
+              || canonicalJson({ kind: event.kind, created_at: event.created_at, content: event.content, tags: event.tags }) !== canonicalJson(original.template)) throw new Error("PRODUCTION_EDGE_UPLOAD_SIGNATURE_INVALID");
+            return event;
           },
         });
       },

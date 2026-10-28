@@ -1,6 +1,8 @@
 import { Pool } from "pg";
 import { expect, test } from "bun:test";
 import { z } from "zod";
+import * as nip44 from "nostr-tools/nip44";
+import { matchFilters } from "nostr-tools/filter";
 import { finalizeEvent, getPublicKey, verifyEvent, type Event } from "nostr-tools/pure";
 import { SignedOwnerManifestEventSchema } from "../../src/publication/contracts";
 import { canonicalJson } from "../../src/promotion/schema";
@@ -16,6 +18,13 @@ import { ProductionBuildAttestationSigner } from "../../src/production/attestati
 import { createProductionPublicationRelays } from "../../src/production/publication-relays";
 import { createProductionNostrRelayPort } from "../../src/production/nostr-relay";
 import type { CvmBuildAttestation } from "../../src/publication/contracts";
+import { openProductionNip46Signer } from "../../src/production/nip46-signer";
+import { createProductionCliUploadPort } from "../../src/production/cli-upload";
+import { createProductionPublicationOperations } from "../../src/production/publication-operations";
+import { ProductionPublicationCertification } from "../../src/production/publication-certification";
+import { ExternalSignerBoundaryAdapter } from "../../src/release/native/external-signer";
+import { createNativePromotedNappletCliSource } from "../../src/release/native/promoted-cli";
+import { materializeReviewedSourceBuiltCliSnapshot } from "../../src/publication/napplet-cli-source-contract";
 import { ProductionEdgeContexts } from "../../src/production/edge-contexts";
 
 const isolated = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
@@ -38,7 +47,11 @@ function adapter(pool: Pool): PostgresSqlPool {
 isolated("publication contexts derive exact CLI and BUD templates, recover original bundle only, and retain scoped historical reads", async () => {
   const name = `napplet-cvm-publication-context-${crypto.randomUUID().replaceAll("-", "")}`;
   let admin: Pool | undefined, application: Pool | undefined;
-  let closeRelay = () => {};
+  let closeRelay = () => {}, closeOwnerClient = async () => {};
+  const fixtureOwnerKey = new Uint8Array(32).fill(7), bunkerKey = new Uint8Array(32).fill(17);
+  let retainedOwner: Event | undefined;
+  const blobs = new Map<string, Uint8Array>(), nipRequests: string[] = [];
+  let actualUploads = 0;
   const events = new Map<string, Event>(), publishes: string[] = [];
   let hideOwner = false, localSigns = 0;
   const serviceKey = new Uint8Array(32).fill(11);
@@ -50,18 +63,52 @@ isolated("publication contexts derive exact CLI and BUD templates, recover origi
     const cert = process.env.NAPPLET_PUBLICATION_TEST_TLS_CERT, key = process.env.NAPPLET_PUBLICATION_TEST_TLS_KEY;
     if (!cert || !key) throw new Error("RUN_BUN_SCRIPTS_TEST_PUBLICATION_CONTEXT_FOR_LOCAL_TLS");
     const relay = Bun.serve({ hostname: "127.0.0.1", port: 0, tls: { cert: Bun.file(cert), key: Bun.file(key) },
-      fetch(request, server) { return server.upgrade(request) ? undefined : new Response("not found", { status: 404 }); },
+      async fetch(request, server) {
+        if (server.upgrade(request)) return undefined;
+        const path = new URL(request.url).pathname;
+        if (request.method === "PUT" && path === "/upload") {
+          const authorization = request.headers.get("authorization");
+          if (!authorization?.startsWith("Nostr ")) return new Response("missing owner authorization", { status: 401 });
+          const event = JSON.parse(Buffer.from(authorization.slice(6), "base64").toString("utf8"));
+          expect(verifyEvent(event)).toBe(true);
+          expect(event.pubkey).toBe(getPublicKey(fixtureOwnerKey));
+          const bytes = new Uint8Array(await request.arrayBuffer());
+          expect(event.tags).toContainEqual(["x", hash(bytes)]);
+          blobs.set(hash(bytes), bytes); actualUploads++;
+          return new Response("fixture lost upload acknowledgement", { status: 503 });
+        }
+        const bytes = blobs.get(path.slice(1));
+        return bytes ? new Response(request.method === "HEAD" ? null : new Uint8Array(bytes).buffer) : new Response(null, { status: 404 });
+      },
       websocket: { message(socket, bytes) {
         const wire = JSON.parse(String(bytes));
         if (wire[0] === "EVENT") {
           const event = SignedOwnerManifestEventSchema.extend({ kind: z.number().int().nonnegative() }).parse(wire[1]);
           if (!verifyEvent(event)) throw new Error("INVALID_LOCAL_RELAY_EVENT");
-          events.set(event.id, event); publishes.push(event.id);
+          events.set(event.id, event);
+          if (event.kind === 24133) {
+            const conversation = nip44.v2.utils.getConversationKey(bunkerKey, event.pubkey);
+            const decoded = z.object({ id: z.string(), method: z.enum(["connect", "get_public_key", "sign_event"]), params: z.array(z.string()) }).strict().parse(JSON.parse(nip44.v2.decrypt(event.content, conversation)));
+            nipRequests.push(decoded.method);
+            let result: string;
+            if (decoded.method === "connect") result = "ack";
+            else if (decoded.method === "get_public_key") result = getPublicKey(fixtureOwnerKey);
+            else {
+              const template = JSON.parse(decoded.params[0]!);
+              if (template.kind === 35129) {
+                if (!retainedOwner) throw new Error("OWNER_FIXTURE_NOT_READY");
+                expect(template).toEqual({ kind: retainedOwner.kind, content: retainedOwner.content, tags: retainedOwner.tags, created_at: retainedOwner.created_at });
+                result = JSON.stringify(retainedOwner);
+              } else result = JSON.stringify(finalizeEvent(template, fixtureOwnerKey));
+            }
+            const response = finalizeEvent({ kind: 24133, created_at: event.created_at, tags: [["p", event.pubkey]], content: nip44.v2.encrypt(JSON.stringify({ id: decoded.id, result }), conversation) }, bunkerKey);
+            events.set(response.id, response);
+          } else publishes.push(event.id);
           // Retain exact bytes but deliberately lose every EVENT acknowledgement.
           socket.close(1011, "fixture ack loss");
         } else if (wire[0] === "REQ") {
-          const filters = z.array(z.object({ ids: z.array(z.string()) }).passthrough()).parse(wire.slice(2));
-          for (const event of events.values()) if ((!hideOwner || event.kind !== 35129) && filters.some(filter => filter.ids.includes(event.id))) socket.send(JSON.stringify(["EVENT", wire[1], event]));
+          const filters = z.array(z.object({ ids: z.array(z.string()).optional(), authors: z.array(z.string()).optional(), kinds: z.array(z.number()).optional(), "#p": z.array(z.string()).optional(), limit: z.number().optional() }).strict()).parse(wire.slice(2));
+          for (const event of events.values()) if ((!hideOwner || event.kind !== 35129) && matchFilters(filters, event)) socket.send(JSON.stringify(["EVENT", wire[1], event]));
           socket.send(JSON.stringify(["EOSE", wire[1]]));
         }
       } },
@@ -82,7 +129,7 @@ isolated("publication contexts derive exact CLI and BUD templates, recover origi
     const pool = adapter(application), scope = "a".repeat(64);
     const journal = () => new PostgresOperationJournal(pool, { namespace: "publication-context", scopeSha256: scope });
     const sourceJournal = () => new PostgresOperationJournal(pool, { namespace: "publication-source", scopeSha256: scope });
-    let now = 1_000_000;
+    let now = Math.floor(Date.now() / 1000) * 1000;
     const providers = ["gcs", "signer", "promoted_cli", "upload", "owner_relay", "attestation_relay"] as const;
     const request = await createAuthorizationRequest({ candidateSha256: scope, topologySha256: "b".repeat(64), effectPlanSha256: "c".repeat(64), controllerStateSha256: "d".repeat(64), providerCapabilitiesSha256: "e".repeat(64),
       orderedEffects: providers.map(provider => ({ id: provider === "upload" ? "sealed-upload" : provider === "owner_relay" ? "owner-relay" : provider === "attestation_relay" ? "attestation-relay" : `verify-${provider}`, provider, operation: "verify_integration" as const, estimatedCostMicros: 1 })),
@@ -111,8 +158,10 @@ isolated("publication contexts derive exact CLI and BUD templates, recover origi
       scheduleExactDeletion: (value, after) => base.scheduleExactDeletion(value, after),
     };
     const secret = new Uint8Array(32).fill(7), ownerPubkey = getPublicKey(secret);
-    const configuration = { candidateSha256: scope, topologySha256: request.topologySha256, ownerPubkey, policyVersion: "fixture-policy", toolchainIdentity: "5".repeat(64), compatibleHostReference: "host:fixture", compatibleHostSha256: "6".repeat(64), sourcePlan: plan, authorization, journal: journal(), sourceJournal: sourceJournal(), artifactStore: objects, relaySet, uploadServers: ["https://uploads.example"], now: () => now };
+    const configuration = { candidateSha256: scope, topologySha256: request.topologySha256, ownerPubkey, policyVersion: "fixture-policy", toolchainIdentity: "5".repeat(64), compatibleHostReference: "host:fixture", compatibleHostSha256: "6".repeat(64), sourcePlan: plan, authorization, journal: journal(), sourceJournal: sourceJournal(), artifactStore: objects, relaySet, uploadServers: [`https://127.0.0.1:${relay.port}`], now: () => now };
     const open = () => new ProductionPublicationContextMaterializer({ ...configuration, journal: journal(), sourceJournal: sourceJournal() });
+    expect(await open().source()).toEqual({ candidateId: scope, sealedArtifactSha256: result.sealedArtifactSha256, aggregateSha256: aggregate });
+    expect(uploads).toBe(0);
     await expect(open().materialize()).rejects.toThrow("PRODUCTION_PUBLICATION_BUNDLE_UNAVAILABLE");
     expect(uploads).toBe(1);
     hideBundle = false;
@@ -124,8 +173,9 @@ isolated("publication contexts derive exact CLI and BUD templates, recover origi
     const contexts = new ProductionEdgeContexts({ journal: journal(), artifactStore: objects, candidateSha256: scope, topologySha256: request.topologySha256, authorizationRequestSha256: request.authorizationRequestSha256 });
     expect(await contexts.signer.resolve({ intentDigest: context.intentDigest })).toMatchObject({ ownerPubkey, template });
     const upload = await contexts.signer.resolveOriginal({ operationId: `upload_authorization:${context.intent.intentId}`, purpose: "upload_authorization" });
-    expect(upload.template).toEqual({ kind: 24242, created_at: template.created_at, content: "Upload blobs via napplet", tags: [["t", "upload"], ["x", file.sha256], ["expiration", String(template.created_at + 3600)], ["client", "napplet"], ["server", "uploads.example"]] });
+    expect(upload.template).toEqual({ kind: 24242, created_at: template.created_at, content: "Upload blobs via napplet", tags: [["t", "upload"], ["x", file.sha256], ["expiration", String(template.created_at + 3600)], ["client", "napplet"], ["server", "127.0.0.1"]] });
     const signed = SignedOwnerManifestEventSchema.parse(finalizeEvent(structuredClone(template), secret));
+    retainedOwner = signed;
     expect(await open().ownerEventVerifier.verify({ event: signed, intent: context.intent })).toEqual({ valid: true, accepted: true, eventId: signed.id });
     expect(await open().ownerEventVerifier.verify({ event: { ...signed, content: "changed" }, intent: context.intent })).toMatchObject({ valid: false });
     expect(await open().ownerEventVerifier.verify({ event: SignedOwnerManifestEventSchema.parse(finalizeEvent(structuredClone(template), new Uint8Array(32).fill(8))), intent: context.intent })).toMatchObject({ valid: false });
@@ -180,10 +230,52 @@ isolated("publication contexts derive exact CLI and BUD templates, recover origi
     expect(actualAttestation.pubkey).toBe(serviceSigner.publicKey);
     expect(JSON.parse(actualAttestation.content)).toMatchObject({ type: "cvm_build_attestation", ownerEventId: signed.id, ownerPubkey, aggregateSha256: aggregate });
     expect(actualAttestation.pubkey).not.toBe(ownerPubkey);
+    const ownerClient = await openProductionNip46Signer({ bunkerUri: `bunker://${getPublicKey(bunkerKey)}?relay=${encodeURIComponent(relaySet[0]!)}&secret=public-fixture-secret`,
+      sessionKeyReference: "nostr:disposable-fixture", sessionKeyBroker: { async resolve() { return new Uint8Array(32).fill(13); } },
+      authorization, now: () => now, context: contexts.signer, originalOperationContext: contexts.signer, journal: journal(), timeoutMs: 1_000 });
+    closeOwnerClient = () => ownerClient.close();
+    const actualPort = await createProductionCliUploadPort({ server: configuration.uploadServers[0]!, targetReference: "blossom:actual-fixture", ownerPubkey, journal: journal() });
+    const actualUpload = createProductionPublicationUpload({ materializer: open(), authorization, targetReference: "blossom:actual-fixture", port: actualPort, now: () => now });
+    const actualRelays = openRelays();
+    const promoted = createNativePromotedNappletCliSource({ snapshot: materializeReviewedSourceBuiltCliSnapshot(), upload: actualUpload, relay: actualRelays.asPromotedCliSource() });
+    const operations = createProductionPublicationOperations({ materializer: open(), context: contexts.publicationWithSigner(ownerClient), source: promoted, upload: actualUpload });
+    const certification = new ProductionPublicationCertification(scope, { publicationContext: operations, edge: { signer: new ExternalSignerBoundaryAdapter({ signer: ownerClient, ownerEventVerifier: open().ownerEventVerifier }), promotedCli: promoted, relays: actualRelays } });
+    const unavailableSource = createNativePromotedNappletCliSource({ snapshot: {}, upload: actualUpload, relay: actualRelays.asPromotedCliSource() });
+    const unavailable = createProductionPublicationOperations({ materializer: open(), context: contexts.publicationWithSigner(ownerClient), source: unavailableSource, upload: actualUpload });
+    await expect(unavailable.source()).rejects.toThrow("PRODUCTION_PUBLICATION_CLI_SOURCE_REQUIRED");
+    await expect(operations.original({ candidateSha256: scope, sealedArtifactSha256: "9".repeat(64), aggregateSha256: aggregate })).rejects.toThrow("PRODUCTION_PUBLICATION_ORIGINAL_SOURCE_CHANGED");
+    const actualSource = await certification.source();
+    expect(actualSource).toMatchObject({ status: "passed", candidateId: scope, sealedArtifactSha256: result.sealedArtifactSha256, aggregateSha256: aggregate });
+    const submitted = await certification.submit(actualSource);
+    expect(submitted).toMatchObject({ status: "submitted", intentId: context.intent.intentId, userSigningExternal: true });
+    expect(await certification.reconcile({ candidateId: scope, ...submitted })).toMatchObject({ status: "complete", deploymentObserved: true, ownerRelayObserved: true, attestationRelayObserved: true });
+    const originalUploadOperation = `upload_authorization:${context.intent.intentId}`;
+    const signedUpload = z.object({ pubkey: z.string(), intentDigest: z.string(), authorizationReceipt: z.string(), event: z.unknown() }).strict().parse(await ownerClient.signExactOperation({ operationId: originalUploadOperation, purpose: "upload_authorization" }));
+    const badSigningContext = contexts.publicationWithSigner({ async signExactOperation() { return { ...signedUpload, pubkey: "0".repeat(64) }; } });
+    const badDeploy = await badSigningContext.deploy(identity);
+    await expect(badDeploy.authorizeExactHashes([file.sha256])).rejects.toThrow("PRODUCTION_EDGE_UPLOAD_SIGNATURE_INVALID");
+    const actualDeploy = await contexts.publicationWithSigner(ownerClient).deploy(identity);
+    expect(await actualDeploy.authorizeExactHashes([file.sha256])).toMatchObject({ kind: 24242, pubkey: ownerPubkey });
+    expect(actualUploads).toBe(1);
+    expect(nipRequests).toEqual(["connect", "get_public_key", "sign_event", "sign_event"]);
     now += 100_000;
     await expect(uploadAdapter().reconcileOriginalUpload(send)).resolves.toMatchObject({ state: "complete", fullServerUploadId: "blossom:original" });
     await expect(uploadAdapter().uploadExact(send)).rejects.toThrow("SEALED_UPLOAD_AUTHORIZATION_INVALID");
     expect({ persists, sends }).toEqual({ persists: 1, sends: 1 });
+    await ownerClient.close();
+    const processSigner = new MeasuredAttestationSigner(serviceKey);
+    const processRelays = openRelays(processSigner);
+    const processUploadPort = await createProductionCliUploadPort({ server: configuration.uploadServers[0]!, targetReference: "blossom:actual-fixture", ownerPubkey, journal: journal() });
+    const processUpload = createProductionPublicationUpload({ materializer: open(), authorization, targetReference: "blossom:actual-fixture", port: processUploadPort, now: () => now });
+    const processSource = createNativePromotedNappletCliSource({ snapshot: materializeReviewedSourceBuiltCliSnapshot(), upload: processUpload, relay: processRelays.asPromotedCliSource() });
+    const processOperations = createProductionPublicationOperations({ materializer: open(), context: contexts.publicationWithSigner(ownerClient), source: processSource, upload: processUpload });
+    const recoveredCertification = new ProductionPublicationCertification(scope, { publicationContext: processOperations, edge: { signer: new ExternalSignerBoundaryAdapter({ signer: ownerClient, ownerEventVerifier: open().ownerEventVerifier }), promotedCli: processSource, relays: processRelays } });
+    expect(await recoveredCertification.observeSubmit(actualSource)).toEqual(submitted);
+    expect(await recoveredCertification.reconcile({ candidateId: scope, ...submitted })).toMatchObject({ status: "complete" });
+    processSigner.close();
+    expect(actualUploads).toBe(1);
+    expect(nipRequests).toHaveLength(4);
+    await expect(operations.observeUpload({ intentId: submitted.intentId, operationId: "deploy:replacement" })).rejects.toThrow("PRODUCTION_PUBLICATION_ORIGINAL_OPERATION_REQUIRED");
     expect(await open().materialize()).toEqual(context);
     expect(await open().ownerEventVerifier.verify({ event: signed, intent: context.intent })).toMatchObject({ valid: true });
     expect(uploads).toBe(1);
@@ -203,7 +295,7 @@ isolated("publication contexts derive exact CLI and BUD templates, recover origi
     await expect(new ProductionPublicationContextMaterializer({ ...configuration, authorization: invalid }).materialize()).rejects.toThrow();
     expect(uploads).toBe(1);
   } finally {
-    closeRelay(); serviceSigner.close();
+    await closeOwnerClient(); closeRelay(); serviceSigner.close();
     await application?.end(); await admin?.end();
     await docker(["rm", "--force", name]).catch(() => undefined);
   }

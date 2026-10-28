@@ -144,6 +144,15 @@ export class ProductionPublicationContextMaterializer {
     return Object.freeze({ artifact: final.artifact, intent: final.intent, intentDigest: final.intent.fingerprint, relaySet: Object.freeze([...final.relaySet]) });
   }
 
+  /** Original source verification only: never creates a publication bundle,
+   * intent, signing request or provider operation. */
+  async source() {
+    const { request } = await this.#authorize(true);
+    const run = bindMountedSourceBuildExecution(this.input.sourcePlan, { authorizationRequestSha256: request.authorizationRequestSha256 });
+    const evidence = await readMountedSourceBuildEvidence({ journal: this.input.sourceJournal, artifactStore: this.input.artifactStore, candidateSha256: this.input.candidateSha256, run });
+    return Object.freeze({ candidateId: this.input.candidateSha256, sealedArtifactSha256: evidence.result.sealedArtifactSha256, aggregateSha256: evidence.result.aggregateSha256 });
+  }
+
   /** Signature verification is read-only and remains available for historical
    * original-operation recovery. It cannot initiate signing or publication. */
   readonly ownerEventVerifier: OwnerEventVerifierPort = Object.freeze<OwnerEventVerifierPort>({ verify: async input => {

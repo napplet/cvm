@@ -25,7 +25,7 @@ import type { NativeCashuProvider } from "../native/cashu";
 import type { NativePromotedCliSource } from "../native/promoted-cli";
 import type { NostrRelayPublicationAdapter } from "../native/nostr-relay";
 import type { PublicationIntent, SealedArtifactIdentity } from "../../publication/contracts";
-import type { PreSignedNamedDeployFile } from "../../publication/napplet-cli-adapter";
+import type { PreSignedNamedDeployFile, StructuredSourceEffect } from "../../publication/napplet-cli-adapter";
 import {
   composeProductionProtectedPorts,
   type ProductionSessionRuntime,
@@ -81,6 +81,12 @@ export type ProductionPublicationContext = Readonly<{
   }>>;
 }>;
 
+export type ProductionPublicationOperations = ProductionPublicationContext & Readonly<{
+  source(): Promise<Readonly<{ status: "passed"; candidateId: string; sealedArtifactSha256: string; aggregateSha256: string; promotedCliSourceVerified: true; promotedCliAssetVerified: true }>>;
+  original(input: Parameters<ProductionPublicationContext["resolve"]>[0]): ReturnType<ProductionPublicationContext["resolve"]>;
+  observeUpload(input: Readonly<{ intentId: string; operationId: string }>): Promise<StructuredSourceEffect>;
+}>;
+
 /** CEP-8/Cashu exercise data is similarly read by original operation from the
  * controller's durable ledger. This capability deliberately exposes neither
  * a wallet secret nor a free-form token/receipt input to the control route. */
@@ -114,7 +120,7 @@ export type ProductionConcreteClients = Readonly<{
     promotedCli: NativePromotedCliSource;
     relays: NostrRelayPublicationAdapter;
   }>;
-  publicationContext: ProductionPublicationContext;
+  publicationContext: ProductionPublicationOperations;
   paymentScenarioContext: ProductionPaymentScenarioContext;
   sourceBuild: ProductionSourceBuildVerifier;
 }>;
@@ -172,6 +178,7 @@ function assertConcreteClients(value: unknown): asserts value is ProductionConcr
     if (!clients.edge![key] || typeof clients.edge![key] !== "object") throw new Error("PRODUCTION_SESSION_BROKER_CLIENTS_REQUIRED");
   }
   if (!clients.publicationContext || typeof clients.publicationContext.resolve !== "function" || typeof clients.publicationContext.deploy !== "function"
+    || typeof clients.publicationContext.source !== "function" || typeof clients.publicationContext.original !== "function" || typeof clients.publicationContext.observeUpload !== "function"
     || !clients.paymentScenarioContext || typeof clients.paymentScenarioContext.resolve !== "function") {
     throw new Error("PRODUCTION_SESSION_BROKER_CLIENTS_REQUIRED");
   }

@@ -1,3 +1,4 @@
+import { createMountedProductionWorkerJobRouter } from "./mounted-worker-profiles";
 import { z } from "zod";
 import type { GcsObjectStoreAdapter } from "../continuity/object-store";
 import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
@@ -69,6 +70,7 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
        * read or mutate the source authority after the clone completed. */
       const serviceJournals = await openProductionServiceJournals({ pool: recovered.pool, servicePubkey: input.config.certification.serverPubkey, initialTopologySha256: input.config.topologySha256, requireExisting: true }).catch(async error => { await Promise.all([recovered.close(), migration.close()]); throw error; });
       const workerClients = await createMountedProductionWorkerClients({ config: input.config, secrets: input.secrets, journal: createPostgresWorkerOperationJournal(serviceJournals.worker) }).catch(async error => { await Promise.all([recovered.close(), migration.close()]); throw error; });
+      const jobRouter = await createMountedProductionWorkerJobRouter({ config: input.config, secrets: input.secrets, workerJournal: serviceJournals.worker, jobJournal: serviceJournals.job, current: workerClients }).catch(async error => { await Promise.all([recovered.close(), migration.close()]); throw error; });
       const checkpoint = new ProductionCheckpointCoordinator({
         pool: recovered.pool,
         objectStore: input.artifactStore,
@@ -80,6 +82,7 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
       const worker = new ProductionWorkerBridge({
         resolver: new ProductionWorkerOwnershipResolver({ pool: recovered.pool, policyVersion: input.config.worker.policyVersion, capacityJournal }),
         workers: workerClients.clients,
+        jobRouter,
         workerJournal: serviceJournals.worker,
         jobJournal: serviceJournals.job,
         requestJournal: serviceJournals.request,

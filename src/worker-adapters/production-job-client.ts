@@ -65,6 +65,7 @@ export class ProductionWorkerJobClient {
     if (input.artifactContract !== undefined) { z.literal("nip5d-direct-v1").parse(input.artifactContract); if (!input.publication) throw new Error("PRODUCTION_DIRECT_PUBLICATION_REQUIRED"); }
     if (!["modal", "fly"].includes(input.provider) || !/^[a-z][a-z0-9_-]{2,48}$/u.test(input.workerOperationId)) throw new Error("PRODUCTION_JOB_WORKER_INVALID");
   }
+  get toolchainSha256(): string { return this.input.toolchainSha256; }
   #key(request: WorkerRunRequest) { return `worker-build:${sha(canonicalJson({ sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion }))}`; }
   #identity(request: WorkerRunRequest, publication?: ProductionWorkerPublication, artifactContract?: "nip5d-direct-v1") { return sha(canonicalJson(artifactContract ? { request, publication, artifactContract } : publication === undefined ? request : { request, publication })); }
   async #worker() {

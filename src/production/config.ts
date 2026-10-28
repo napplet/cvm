@@ -27,7 +27,7 @@ export const ProductionConfigSchema = z.object({
   certification: z.object({ authorizationRequestReference: reference, authorizationReceiptReference: reference, clientKeyReference: reference, sessionMaterialReference: reference, serverPubkey: publicKey }).strict(),
   funding: z.object({ nwcConnectionReference: reference, cashuConsentReference: reference, protectedMaterialReference: reference, admissionReceiptReference: reference, statusCursorReference: reference }).strict(),
   vertex: z.object({ projectReference: reference, credentialReference: reference, model: z.literal("gemini-4-argon"), priceSnapshotSha256: digest }).strict(),
-  worker: z.object({ selectedProvider: z.enum(["modal", "fly"]), evidenceReference: reference, modalAccessReference: reference, flyAccessReference: reference, image: z.string().regex(/^.+@sha256:[a-f0-9]{64}$/iu), toolchainSha256: digest, policyVersion: z.string().min(1) }).strict(),
+  worker: z.object({ selectedProvider: z.enum(["modal", "fly"]), evidenceReference: reference, modalAccessReference: reference, flyAccessReference: reference, image: z.string().regex(/^.+@sha256:[a-f0-9]{64}$/iu), toolchainSha256: digest, policyVersion: z.string().min(1), retainedProfiles: z.array(z.object({ image: z.string().regex(/^.+@sha256:[a-f0-9]{64}$/iu), toolchainSha256: digest, artifactContract: z.literal("legacy-aggregate-v1") }).strict()).max(8).optional() }).strict(),
   compatibleHost: z.object({ targetUrl: origin, targetSha256: digest, chromiumExecutable: absolutePath }).strict(),
   publication: z.object({
     cliSourceReference: reference, signerBrokerReference: reference, signerSessionKeyReference: reference, attestationKeyReference: reference,
@@ -58,6 +58,8 @@ export function loadProductionConfig(value: unknown): ProductionConfig {
     && config.worker.toolchainSha256 !== config.image.toolchainSha256) {
     throw new Error("PRODUCTION_TOOLCHAIN_IDENTITY_MISMATCH");
   }
+  const images = [config.worker.image, ...(config.worker.retainedProfiles ?? []).map(profile => profile.image)];
+  if (new Set(images).size !== images.length) throw new Error("PRODUCTION_WORKER_EXECUTABLES_INVALID");
   return immutable(structuredClone(config));
 }
 

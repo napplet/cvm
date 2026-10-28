@@ -1,3 +1,4 @@
+import { createMountedProductionWorkerJobRouter } from "./mounted-worker-profiles";
 import { openProductionServiceJournals } from "./service-journals";
 import { GcsObjectStoreAdapter } from "../continuity/object-store";
 import { createGoogleAdcTokenSource } from "../release/deployment/google-auth";
@@ -49,6 +50,7 @@ export async function materializeProductionRuntimeDependencies(input: Readonly<{
     createMountedProductionWorkerClients({ config: input.config, secrets: input.secrets, journal: createPostgresWorkerOperationJournal(workerJournal) }),
     createMountedVertexMaterial({ config: input.config, secrets: input.secrets, now: input.now }),
   ]);
+  const jobRouter = await createMountedProductionWorkerJobRouter({ config: input.config, secrets: input.secrets, workerJournal, jobJournal, current: worker });
   const makeCapacity = (provider: "modal" | "fly") => createProductionReadyCapacity({ provider, workers: worker.clients, journal: serviceJournals.capacity, workerJournal, image: input.config.worker.image, toolchainSha256: input.config.worker.toolchainSha256, ...(provider === "fly" ? { flyRegion: worker.flyRegion } : {}), now: input.now });
   const certificationCapacities = Object.freeze({ modal: makeCapacity("modal"), fly: makeCapacity("fly") });
   const capacity = certificationCapacities[input.config.worker.selectedProvider];
@@ -57,6 +59,6 @@ export async function materializeProductionRuntimeDependencies(input: Readonly<{
   const gateway = new ProductionVertexModelGateway({ vertex, proposals });
   const settlement = createProductionVertexGenerationSettlement({ gateway, conversion: vertexMaterial.pricing.conversion, journal: vertexJournal });
   const resolver = new ProductionWorkerOwnershipResolver({ pool: input.pool, policyVersion: input.config.worker.policyVersion, capacityJournal: serviceJournals.capacity });
-  const workerBridge = new ProductionWorkerBridge({ resolver, workers: worker.clients, workerJournal, jobJournal, requestJournal, artifactStore, toolchainSha256: input.config.worker.toolchainSha256, publication: { server: input.config.publication.uploadServer } });
-  return Object.freeze({ pool: input.pool, journal, serviceJournals, googleControlJournal, googleIntentJournal, workerJournal, jobJournal, requestJournal, vertexJournal, checkpointJournal, checkpointCoordinator, tokenSource, gcs, artifactStore, workers: worker.clients, workerCertification: worker.certification, flyRegion: worker.flyRegion, capacity, certificationCapacities, vertexMaterial, vertex, proposals, gateway, settlement, resolver, workerBridge });
+  const workerBridge = new ProductionWorkerBridge({ resolver, workers: worker.clients, workerJournal, jobJournal, requestJournal, artifactStore, jobRouter, toolchainSha256: input.config.worker.toolchainSha256, publication: { server: input.config.publication.uploadServer } });
+  return Object.freeze({ pool: input.pool, journal, serviceJournals, googleControlJournal, googleIntentJournal, workerJournal, jobJournal, requestJournal, vertexJournal, checkpointJournal, checkpointCoordinator, tokenSource, gcs, artifactStore, workers: worker.clients, jobRouter, workerCertification: worker.certification, flyRegion: worker.flyRegion, capacity, certificationCapacities, vertexMaterial, vertex, proposals, gateway, settlement, resolver, workerBridge });
 }

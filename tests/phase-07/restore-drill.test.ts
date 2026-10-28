@@ -25,6 +25,7 @@ function restoreInput(overrides: Partial<RestoreDrillInput> = {}): RestoreDrillI
   return {
     objectStore: {
       async createImmutable() { return reference; },
+      async observeExactByKey(value) { return value.key === reference.key && value.checksum === reference.checksum ? reference : undefined; },
       async readExact(value) {
         return value.key === reference.key && value.generation === reference.generation && value.checksum === reference.checksum
           ? new Uint8Array(ciphertext)
@@ -155,6 +156,7 @@ test("the GCS-shaped adapter only permits exact generation/checksum client opera
   const calls: string[] = [];
   const client: VersionedObjectClientPort = {
     async createIfAbsent(input) { calls.push(`create:${input.key}`); return { generation: 2, checksum: input.checksum }; },
+    async findExactByKey(input) { return input.key === "checkpoints/a" && input.checksum === checksum(ciphertext) ? { generation: 2, checksum: input.checksum } : undefined; },
     async readGeneration(input) { calls.push(`read:${input.key}:${input.generation}`); return { generation: input.generation, checksum: input.expectedChecksum, bytes: new Uint8Array(ciphertext) }; },
     async scheduleGenerationDeletion(input) { calls.push(`delete:${input.key}:${input.generation}`); return { generation: input.generation, checksum: input.expectedChecksum }; },
   };

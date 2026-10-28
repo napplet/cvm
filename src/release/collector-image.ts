@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
-import { link, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 export const COLLECTOR_BASE_IMAGE = "otel/opentelemetry-collector@sha256:6ed874ea083d67a3085acfc75343f2ad11d9abe6006d7ea4a16e2dba9af14e49";
+// Recorded timestamp of recipe/config commit 0aef4600b9b44292da7ea50f0fd6e9f3d566e8fb.
+// Bind creation and copied-file times independently of checkout/cache state.
+export const COLLECTOR_SOURCE_DATE_EPOCH = 1793138507;
 const REGISTRY_TARGET = /^[a-z0-9.-]+(?:\/[a-z0-9._-]+)+$/iu;
 const sha256 = (value: Uint8Array | string) => createHash("sha256").update(value).digest("hex");
 const OBSERVED_REGISTRY_IMAGE = Symbol("observed-registry-image");
@@ -117,7 +120,17 @@ export async function prepareProductionCollectorImage(input: Readonly<{ reposito
   const localLoadTag = `napplet-cvm-collector:oci-${dockerfileSha256.slice(0, 16)}-${collectorConfigSha256.slice(0, 16)}`;
   const command = input.command ?? defaultCommand;
   try {
-    const built = await command(["docker", "buildx", "build", "--platform", "linux/amd64", "--pull=false", "--file", "infra/production/collector.Dockerfile", "--output", `type=oci,dest=${archive},name=${localLoadTag}`, "."], root);
+    // BuildKit's epoch clamps newer timestamps; it does not raise older ones.
+    // Supply only the measured inputs, with exact file times, and bypass COPY
+    // cache entries whose keys intentionally ignore source mtimes.
+    const contextRoot = join(directory, "context");
+    for (const [path, bytes] of [["infra/production/collector.Dockerfile", dockerfile], ["infra/otel/collector.yaml", config]] as const) {
+      const target = join(contextRoot, path);
+      await mkdir(resolve(target, ".."), { recursive: true });
+      await writeFile(target, bytes, { mode: 0o644 });
+      await utimes(target, COLLECTOR_SOURCE_DATE_EPOCH, COLLECTOR_SOURCE_DATE_EPOCH);
+    }
+    const built = await command(["docker", "buildx", "build", "--no-cache", "--platform", "linux/amd64", "--pull=false", "--build-arg", `SOURCE_DATE_EPOCH=${COLLECTOR_SOURCE_DATE_EPOCH}`, "--file", "infra/production/collector.Dockerfile", "--output", `type=oci,dest=${archive},name=${localLoadTag},rewrite-timestamp=true`, "."], contextRoot);
     if (built.code !== 0) throw new Error("COLLECTOR_LOCAL_OCI_BUILD_FAILED");
     const index = JSON.parse(new TextDecoder().decode(await tarEntryText(archive, "index.json", root))) as { manifests?: unknown[] };
     if (!Array.isArray(index.manifests) || index.manifests.length !== 1) throw new Error("COLLECTOR_OCI_LAYOUT_INVALID");

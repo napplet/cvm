@@ -9,6 +9,7 @@ import type { DurabilitySubjectSchema, RestoreDrillInputSchema } from "../resili
 import type { createGoogleDeploymentClients } from "../release/deployment/google-clients";
 import type { ProductionConfig } from "./config";
 import { ProductionCheckpointCoordinator } from "./checkpoint-coordinator";
+import { assertProductionCheckpointSchema } from "./checkpoint-schema";
 import { type MountedFreshRestoreRuntime } from "./fresh-restore-provisioner";
 import { openFreshRestorePostgresPool } from "./postgres";
 import type { ProductionRetainedArchive, ProductionRestoreScope } from "./restore-certification";
@@ -63,7 +64,7 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
         poolFor(binding.databaseInstanceId, "cloudSql.restoreRecoveredRoleCredentialReference"),
         poolFor(binding.migrationDatabaseInstanceId, "cloudSql.restoreMigrationRoleCredentialReference"),
       ]);
-      try { await assertZeroFundedVerificationPool(migration.pool); }
+      try { await assertZeroFundedVerificationPool(migration.pool); await assertProductionCheckpointSchema(recovered.pool); }
       catch (error) { await Promise.all([recovered.close(), migration.close()]); throw error; }
       /* Recreate every authority from the recovered database.  Retaining the
        * source-pool coordinator/bridge here would let a supposedly fresh drill

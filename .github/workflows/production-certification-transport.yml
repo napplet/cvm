@@ -7,6 +7,14 @@ on:
       - "src/production/certification-ingress.ts"
       - "src/production/generation-runtime.ts"
       - "src/production/runtime-dependencies.ts"
+      - "src/production/gcs-object-client.ts"
+      - "src/continuity/object-store.ts"
+      - "tests/production/gcs-generation-recovery.test.ts"
+      - "src/production/checkpoint-schema.ts"
+      - "src/production/checkpoint-coordinator.ts"
+      - "src/production/checkpoint-crypto.ts"
+      - "migrations/phase-07/003_production_checkpoints.sql"
+      - "tests/production/checkpoint-postgres.test.ts"
       - "src/production/service-journals.ts"
       - "src/production/worker-job-router.ts"
       - "src/production/mounted-worker-profiles.ts"
@@ -58,4 +66,4 @@ jobs:
           bun-version: "1.3.14"
       - run: bun install --frozen-lockfile
       - name: Signed TLS relay and durable original-operation recovery
-        run: bun test tests/release/contextvm-certification-client.integration.test.ts tests/release/production-core-suites.test.ts tests/production/worker-lifecycle-postgres.test.ts tests/production/service-journals-postgres.test.ts tests/production/worker-job-router.test.ts tests/production/funded-generation-postgres.test.ts tests/release/postgres-operation-journal.test.ts tests/production/worker-bridge.test.ts tests/release/production-edge-suites.test.ts tests/production/certification-ingress.test.ts --timeout 60000
+        run: bun test tests/release/contextvm-certification-client.integration.test.ts tests/release/production-core-suites.test.ts tests/production/worker-lifecycle-postgres.test.ts tests/production/service-journals-postgres.test.ts tests/production/worker-job-router.test.ts tests/production/funded-generation-postgres.test.ts tests/production/checkpoint-postgres.test.ts tests/production/gcs-generation-recovery.test.ts tests/phase-05/checkpoint-envelope.test.ts tests/release/postgres-operation-journal.test.ts tests/production/worker-bridge.test.ts tests/release/production-edge-suites.test.ts tests/production/certification-ingress.test.ts --timeout 60000

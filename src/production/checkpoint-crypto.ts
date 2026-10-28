@@ -1,3 +1,4 @@
+import { bindAccountingRealmPool, createAccountingRealm } from "../funding/accounting-realm";
 import { readFile as nativeReadFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { createHash } from "node:crypto";
@@ -66,6 +67,7 @@ function parseRecord(row: Record<string, unknown>): StoredRecord {
  * ambiguous GCS create can be reconciled using its original nonce/ciphertext.
  */
 export class MountedKekCheckpointCrypto implements CheckpointCryptoPort {
+  readonly #pool: PostgresSqlPool;
   readonly #kek: Promise<CryptoKey>;
   readonly #now: () => number;
   constructor(private readonly input: Readonly<{
@@ -75,6 +77,7 @@ export class MountedKekCheckpointCrypto implements CheckpointCryptoPort {
     now?: () => number;
   }>) {
     if (!input.pool || typeof input.pool.connect !== "function" || !isAbsolute(input.kekPath)) throw new Error("PRODUCTION_CHECKPOINT_KEK_MOUNT_REQUIRED");
+    this.#pool = bindAccountingRealmPool(input.pool, createAccountingRealm("production-real"));
     this.#now = input.now ?? Date.now;
     this.#kek = this.#loadKek();
   }
@@ -126,12 +129,15 @@ export class MountedKekCheckpointCrypto implements CheckpointCryptoPort {
     const record = await this.#findByKeyReference(Identifier.parse(keyReference));
     if (!record) throw new Error("CHECKPOINT_DELETE_BINDING_REQUIRED");
     if (record.state === "destroyed") return;
-    const client = await this.input.pool.connect();
+    const client = await this.#pool.connect();
     try {
-      const result = await client.query<Record<string, unknown>>("UPDATE production_real.checkpoint_crypto_records SET wrapped_dek=NULL,state='destroyed',destroyed_at=clock_timestamp() WHERE key_reference=$1 AND state='active' RETURNING checkpoint_id,key_reference,binding_sha256,retention_until::text AS retention_until,plaintext_sha256,aad_sha256,ciphertext_sha256,nonce,wrap_nonce,ciphertext,state", [record.keyReference]);
+      await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
+      const result = await client.query<Record<string, unknown>>("UPDATE production_real.checkpoint_crypto_records SET wrapped_dek=NULL,ciphertext=''::bytea,state='destroyed',destroyed_at=clock_timestamp() WHERE key_reference=$1 AND state='active' RETURNING checkpoint_id,key_reference,binding_sha256,retention_until::text AS retention_until,plaintext_sha256,aad_sha256,ciphertext_sha256,nonce,wrap_nonce,ciphertext,state", [record.keyReference]);
       if (result.rows.length !== 1) throw new Error("CHECKPOINT_DELETE_BINDING_REQUIRED");
       await this.#audit(record, "destroyed", record.ciphertextSha256, client);
-    } finally { client.release(); }
+      await client.query("COMMIT");
+    } catch (error) { await client.query("ROLLBACK").catch(() => undefined); throw error; }
+    finally { client.release(); }
   }
 
   /** Coordinator-only original-material reader. It cannot reveal a DEK/KEK. */
@@ -145,7 +151,7 @@ export class MountedKekCheckpointCrypto implements CheckpointCryptoPort {
    * It intentionally exposes neither ciphertext nor key material. */
   async isDestroyed(keyReference: string): Promise<boolean> {
     const record = await this.#findByKeyReference(Identifier.parse(keyReference));
-    return record?.state === "destroyed" && record.wrappedDek === undefined;
+    return record?.state === "destroyed" && record.wrappedDek === undefined && record.ciphertext.byteLength === 0;
   }
 
   async #loadKek(): Promise<CryptoKey> {
@@ -162,30 +168,38 @@ export class MountedKekCheckpointCrypto implements CheckpointCryptoPort {
   async #findByCheckpoint(checkpointId: string): Promise<StoredRecord | undefined> { return this.#one("SELECT checkpoint_id,key_reference,binding_sha256,retention_until::text AS retention_until,plaintext_sha256,aad_sha256,ciphertext_sha256,nonce,wrap_nonce,wrapped_dek,ciphertext,state FROM production_real.checkpoint_crypto_records WHERE checkpoint_id=$1", [checkpointId]); }
   async #findByKeyReference(keyReference: string): Promise<StoredRecord | undefined> { return this.#one("SELECT checkpoint_id,key_reference,binding_sha256,retention_until::text AS retention_until,plaintext_sha256,aad_sha256,ciphertext_sha256,nonce,wrap_nonce,wrapped_dek,ciphertext,state FROM production_real.checkpoint_crypto_records WHERE key_reference=$1", [keyReference]); }
   async #one(text: string, values: readonly unknown[]): Promise<StoredRecord | undefined> {
-    const client = await this.input.pool.connect();
+    const client = await this.#pool.connect();
     try { const row = (await client.query<Record<string, unknown>>(text, values)).rows[0]; return row ? parseRecord(row) : undefined; }
     finally { client.release(); }
   }
   async #insert(input: Readonly<{ checkpointId: string; keyReference: string; binding: CryptoBinding; bindingSha256: string; plaintextSha256: string; aadSha256: string; ciphertextSha256: string; nonce: Uint8Array; wrapNonce: Uint8Array; wrappedDek: Uint8Array; ciphertext: Uint8Array }>): Promise<StoredRecord> {
-    const client = await this.input.pool.connect();
-    try {
-      await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
-      const inserted = await client.query<Record<string, unknown>>("INSERT INTO production_real.checkpoint_crypto_records(checkpoint_id,key_reference,binding_sha256,account_id,session_id,action_id,operation_id,retention_until,plaintext_sha256,aad_sha256,ciphertext_sha256,nonce,wrap_nonce,wrapped_dek,ciphertext,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'active') ON CONFLICT(checkpoint_id) DO NOTHING RETURNING checkpoint_id,key_reference,binding_sha256,retention_until::text AS retention_until,plaintext_sha256,aad_sha256,ciphertext_sha256,nonce,wrap_nonce,wrapped_dek,ciphertext,state", [input.checkpointId, input.keyReference, input.bindingSha256, input.binding.accountId, input.binding.sessionId, input.binding.actionId, input.binding.operationId, input.binding.retentionUntil, input.plaintextSha256, input.aadSha256, input.ciphertextSha256, Buffer.from(input.nonce), Buffer.from(input.wrapNonce), Buffer.from(input.wrappedDek), Buffer.from(input.ciphertext)]);
-      const row = inserted.rows[0] ?? (await client.query<Record<string, unknown>>("SELECT checkpoint_id,key_reference,binding_sha256,retention_until::text AS retention_until,plaintext_sha256,aad_sha256,ciphertext_sha256,nonce,wrap_nonce,wrapped_dek,ciphertext,state FROM production_real.checkpoint_crypto_records WHERE checkpoint_id=$1 FOR UPDATE", [input.checkpointId])).rows[0];
-      if (!row) throw new Error("PRODUCTION_CHECKPOINT_CRYPTO_RECORD_MISSING");
-      const record = parseRecord(row);
-      await this.#audit(record, "sealed", record.ciphertextSha256, client);
-      await client.query("COMMIT");
-      return record;
-    } catch (error) { await client.query("ROLLBACK").catch(() => undefined); throw error; }
-    finally { client.release(); }
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const client = await this.#pool.connect();
+      try {
+        await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
+        const inserted = await client.query<Record<string, unknown>>("INSERT INTO production_real.checkpoint_crypto_records(checkpoint_id,key_reference,binding_sha256,account_id,session_id,action_id,operation_id,retention_until,plaintext_sha256,aad_sha256,ciphertext_sha256,nonce,wrap_nonce,wrapped_dek,ciphertext,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'active') ON CONFLICT(checkpoint_id) DO NOTHING RETURNING checkpoint_id,key_reference,binding_sha256,retention_until::text AS retention_until,plaintext_sha256,aad_sha256,ciphertext_sha256,nonce,wrap_nonce,wrapped_dek,ciphertext,state", [input.checkpointId, input.keyReference, input.bindingSha256, input.binding.accountId, input.binding.sessionId, input.binding.actionId, input.binding.operationId, input.binding.retentionUntil, input.plaintextSha256, input.aadSha256, input.ciphertextSha256, Buffer.from(input.nonce), Buffer.from(input.wrapNonce), Buffer.from(input.wrappedDek), Buffer.from(input.ciphertext)]);
+        const row = inserted.rows[0] ?? (await client.query<Record<string, unknown>>("SELECT checkpoint_id,key_reference,binding_sha256,retention_until::text AS retention_until,plaintext_sha256,aad_sha256,ciphertext_sha256,nonce,wrap_nonce,wrapped_dek,ciphertext,state FROM production_real.checkpoint_crypto_records WHERE checkpoint_id=$1 FOR UPDATE", [input.checkpointId])).rows[0];
+        if (!row) throw new Error("PRODUCTION_CHECKPOINT_CRYPTO_RECORD_MISSING");
+        const record = parseRecord(row);
+        if (inserted.rows.length) await this.#audit(record, "sealed", record.ciphertextSha256, client);
+        await client.query("COMMIT");
+        return record;
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+        if (attempt === 3 || !["40001", "40P01", "23505"].includes(code)) throw error;
+      }
+      finally { client.release(); }
+    }
+    throw new Error("PRODUCTION_CHECKPOINT_CRYPTO_RETRY_EXHAUSTED");
   }
+
   #replay(record: StoredRecord, bindingSha256: string, plaintextSha256: string, aadSha256: string) {
     if (record.state !== "active" || !record.wrappedDek || record.bindingSha256 !== bindingSha256 || record.plaintextSha256 !== plaintextSha256 || record.aadSha256 !== aadSha256 || record.ciphertextSha256 !== sha256(record.ciphertext)) throw new Error("CHECKPOINT_IDENTITY_CONFLICT");
     return Object.freeze({ keyReference: record.keyReference, nonce: new Uint8Array(record.nonce), ciphertext: new Uint8Array(record.ciphertext) });
   }
   async #audit(record: StoredRecord, event: "sealed" | "opened" | "destroyed", detailsSha256: string, supplied?: PostgresSqlClient): Promise<void> {
-    const client = supplied ?? await this.input.pool.connect();
+    const client = supplied ?? await this.#pool.connect();
     try { await client.query("INSERT INTO production_real.checkpoint_crypto_audit(checkpoint_id,key_reference,event,details_sha256) VALUES($1,$2,$3,$4)", [record.checkpointId, record.keyReference, event, Digest.parse(detailsSha256)]); }
     finally { if (!supplied) client.release(); }
   }

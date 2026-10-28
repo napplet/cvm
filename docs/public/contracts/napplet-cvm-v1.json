@@ -93,6 +93,51 @@
       }
     },
     {
+      "name": "approve_session_cap",
+      "description": "Approve a higher maximum for one owned session and reserve only its funded increase.",
+      "scope": "core-optional",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+          },
+          "admissionReference": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "expectedApprovedCap": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$"
+          },
+          "maximum": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$"
+          },
+          "unit": {
+            "type": "string",
+            "const": "sat"
+          }
+        },
+        "required": [
+          "sessionId",
+          "admissionReference",
+          "idempotencyKey",
+          "expectedApprovedCap",
+          "maximum",
+          "unit"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "start_session",
       "description": "Generate an applet after admission, or save a development pending action.",
       "scope": "core",
@@ -3120,6 +3165,83 @@
             "code": {
               "type": "string",
               "minLength": 1
+            }
+          },
+          "required": [
+            "status",
+            "code"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "sessionCapApproval": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "approved"
+            },
+            "sessionId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+            },
+            "admissionReference": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+            },
+            "approvalReference": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$"
+            },
+            "previousApprovedCap": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*$"
+            },
+            "approvedCap": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*$"
+            },
+            "heldAmount": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$"
+            },
+            "unit": {
+              "type": "string",
+              "const": "sat"
+            }
+          },
+          "required": [
+            "status",
+            "sessionId",
+            "admissionReference",
+            "approvalReference",
+            "previousApprovedCap",
+            "approvedCap",
+            "heldAmount",
+            "unit"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "denied"
+            },
+            "code": {
+              "type": "string",
+              "enum": [
+                "SESSION_CAP_NOT_FOUND_OR_DENIED",
+                "SESSION_CAP_STALE_APPROVAL",
+                "SESSION_CAP_INSUFFICIENT_BALANCE",
+                "SESSION_CAP_INCREASE_REQUIRED",
+                "SESSION_CAP_IDEMPOTENCY_CONFLICT"
+              ]
             }
           },
           "required": [

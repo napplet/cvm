@@ -31,16 +31,18 @@ describe("documented MCP bridge", () => {
     const forwarded: JSONRPCMessage[] = []; bridge.onmessage = message => { forwarded.push(message); };
     await bridge.start();
     host.onmessage!(call(1, "start_session"));
+    host.onmessage!(call(5, "approve_session_cap"));
     host.onmessage!(call(2, "projects", { action: "rename", id: "example", title: "example" }));
-    expect(forwarded).toHaveLength(0); expect(host.sent).toHaveLength(2);
+    expect(forwarded).toHaveLength(0); expect(host.sent).toHaveLength(3);
     expect(host.sent.every(message => "error" in message)).toBe(true);
     host.onmessage!(call(3, "projects", { action: "list" }));
     const value = { status: "ok", projects: [], nextCursor: null };
     await bridge.send({ jsonrpc: "2.0", id: 3, result: value });
-    expect((host.sent[2] as any).result).toEqual({ content: [{ type: "text", text: JSON.stringify(value) }], structuredContent: value });
+    const wrapped = host.sent[3];
+    expect(wrapped && "result" in wrapped ? wrapped.result : undefined).toEqual({ content: [{ type: "text", text: JSON.stringify(value) }], structuredContent: value });
     host.onmessage!(call(4, "session_status", { sessionId: "invalid" }));
     const error: JSONRPCMessage = { jsonrpc: "2.0", id: 4, error: { code: -32602, message: "invalid" } };
-    await bridge.send(error); expect(host.sent[3]).toEqual(error);
+    await bridge.send(error); expect(host.sent[4]).toEqual(error);
   });
   test("explicit opt-in allows generation but still denies admin and funding", async () => {
     const host = new Host(); const bridge = new CvmMcpCompatibility(host, true);
@@ -49,6 +51,7 @@ describe("documented MCP bridge", () => {
     host.onmessage!(call(1, "start_session"));
     host.onmessage!(call(2, "cvm_admin"));
     host.onmessage!(call(3, "top_up"));
-    expect(forwarded).toHaveLength(1); expect(host.sent).toHaveLength(2);
+    host.onmessage!(call(4, "approve_session_cap"));
+    expect(forwarded).toHaveLength(2); expect(host.sent).toHaveLength(2);
   });
 });

@@ -5,6 +5,7 @@ const ToolNameSchema = z.enum([
   "account_status",
   "top_up",
   "funded_admission",
+  "approve_session_cap",
   "start_session",
   "revise_session",
   "resume_session",
@@ -25,7 +26,7 @@ const ContextVmAnnouncementInputSchema = z.object({
     name: ToolNameSchema,
     available: z.boolean(),
     planned: z.boolean(),
-  }).strict()).min(8).max(9),
+  }).strict()).min(8).max(10),
 }).strict().superRefine((value, context) => {
   if (new Set(value.pmis).size !== 2) context.addIssue({ code: "custom", message: "PMIs must be unique" });
   if (new Set(value.paymentInteraction).size !== 2) context.addIssue({ code: "custom", message: "payment interactions must be unique" });
@@ -45,12 +46,14 @@ export type ContextVmAnnouncementInput = z.infer<typeof ContextVmAnnouncementInp
  * tool registry, but preview and publication cannot be advertised merely by
  * configuration: their availability is overwritten by installed safe facades.
  */
-export function configureContextVmToolAvailability(input: unknown, availability: Readonly<{ preview: boolean; publicationSourceContract?: unknown }>): ContextVmAnnouncementInput {
+export function configureContextVmToolAvailability(input: unknown, availability: Readonly<{ preview: boolean; publicationSourceContract?: unknown; sessionCaps?: boolean }>): ContextVmAnnouncementInput {
   const parsed = ContextVmAnnouncementInputSchema.parse(input);
   const publication = Boolean(validatedAvailablePromotedCliSourceContract(availability.publicationSourceContract));
   return ContextVmAnnouncementInputSchema.parse({
     ...parsed,
-    tools: parsed.tools.map((tool) => tool.name === "preview"
+    tools: [...parsed.tools, ...(availability.sessionCaps && !parsed.tools.some(tool => tool.name === "approve_session_cap") ? [{ name: "approve_session_cap" as const, available: true, planned: false }] : [])].map((tool) => tool.name === "approve_session_cap"
+      ? { ...tool, available: Boolean(availability.sessionCaps), planned: !availability.sessionCaps }
+      : tool.name === "preview"
       ? { ...tool, available: availability.preview, planned: !availability.preview }
       : tool.name === "publication"
         ? { ...tool, available: publication, planned: !publication }

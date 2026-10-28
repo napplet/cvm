@@ -56,6 +56,7 @@ export class ContextVmSdkBridge implements ContextVmTransportPort {
    */
   lastInbound?: Readonly<{ verifiedClientPubkey: string; requestEventId: string; method: string }>;
   readonly observedMethods = new Set<string>();
+  #sessionCapsAvailable = false;
 
   constructor(private readonly transport: NostrServerTransport, private readonly extraTools: readonly string[] = []) {}
 
@@ -70,6 +71,7 @@ export class ContextVmSdkBridge implements ContextVmTransportPort {
   }
 
   configureAnnouncement(announcement: ContextVmAnnouncement): void {
+    this.#sessionCapsAvailable = announcement.metadata.tools.some(tool => tool.name === "approve_session_cap" && tool.available && tool.invocable);
     const pricing = announcement.tags.filter((tag) => tag[0] === "cap").map((tag) => [...tag]);
     const extra = announcement.tags.filter((tag) => tag[0] !== "cap").map((tag) => [...tag]);
     this.transport.setAnnouncementExtraTags(extra);
@@ -112,7 +114,7 @@ export class ContextVmSdkBridge implements ContextVmTransportPort {
     if (parsed.method === "tools/list") {
       await this.sendResponse(clientPubkey, {
         jsonrpc: "2.0", id: parsed.id,
-        result: { tools: ["account_status", "top_up", "funded_admission", "start_session", "revise_session", "resume_session", "session_status", "preview", "publication", ...this.extraTools].map((name) => ({ name })) },
+        result: { tools: ["account_status", "top_up", "funded_admission", ...(this.#sessionCapsAvailable ? ["approve_session_cap"] : []), "start_session", "revise_session", "resume_session", "session_status", "preview", "publication", ...this.extraTools].map((name) => ({ name })) },
       }, requestEventId);
       return;
     }

@@ -1,3 +1,6 @@
+import { ApproveSessionCapArgumentsSchema, SessionCapApprovalResultSchema, SessionCapDeniedCodeSchema, type SessionCapApprovalService } from "../funding/session-cap";
+export { ApproveSessionCapArgumentsSchema } from "../funding/session-cap";
+export const SessionCapApprovalWireResultSchema = z.discriminatedUnion("status", [SessionCapApprovalResultSchema.omit({ accountId: true }), z.object({ status: z.literal("denied"), code: SessionCapDeniedCodeSchema }).strict()]);
 import { RemixReferenceSchema } from "../remix/reference";
 import { z } from "zod";
 import { FundingService } from "../funding/funding-service";
@@ -24,7 +27,7 @@ const RequestSchema = z.object({
   id: z.union([z.string(), z.number(), z.null()]),
   method: z.literal("tools/call"),
   params: z.object({
-    name: z.enum(["account_status", "top_up", "funded_admission", "start_session", "revise_session", "resume_session", "session_status", "preview", "publication", "service_info", "development_faucet", "development_publication", "cvm_admin", "operation_diagnostic", "projects", "remix_import"]),
+    name: z.enum(["account_status", "top_up", "funded_admission", "approve_session_cap", "start_session", "revise_session", "resume_session", "session_status", "preview", "publication", "service_info", "development_faucet", "development_publication", "cvm_admin", "operation_diagnostic", "projects", "remix_import"]),
     arguments: z.unknown(),
     _meta: z.unknown().optional(),
   }).strict(),
@@ -121,6 +124,8 @@ export interface ContextVmFundingAdapterOptions {
   transport: ContextVmTransportPort;
   /** Server-owned facades. Their absence makes their public tool unavailable. */
   admissions?: FundedAdmissionService;
+  /** Only a verified owner command can increase a funded session maximum. */
+  sessionCaps?: Pick<SessionCapApprovalService, "approve">;
   /** Server-held issuer for receipt-before-capacity admission authority. */
   admissionReceipts?: AdmissionReceiptAuthority;
   accountStatus?: AccountStatusService;
@@ -264,7 +269,7 @@ export class ContextVmFundingAdapter {
     }
     if (name === "session_status") {
       const args = SessionStatusArgumentsSchema.parse(argumentsInput);
-      if ("kind" in args && args.kind === "pending_action") {
+      if ("kind" in args) {
         if (!this.options.preAdmission) throw new Error("PRE_ADMISSION_UNAVAILABLE");
         const accountId = await accountIdForPrincipal({ pubkey: verifiedPubkey });
         const result = PendingActionStatusProjectionSchema.parse(await this.options.preAdmission.status({ owner: { ownerId: verifiedPubkey, accountId }, checkpointId: args.checkpointId }));
@@ -311,6 +316,21 @@ export class ContextVmFundingAdapter {
       const notification = freeze<ContextVmWireNotification>({ jsonrpc: "2.0", method: "notifications/account_status", params: status });
       await this.options.transport.sendNotification(verifiedPubkey, notification, requestEventId);
       return freeze({ jsonrpc: "2.0" as const, id: request.id, result: status });
+    }
+    if (name === "approve_session_cap") {
+      const args = ApproveSessionCapArgumentsSchema.parse(argumentsInput);
+      if (!this.options.sessionCaps) throw new Error("SESSION_CAP_APPROVAL_UNAVAILABLE");
+      let result;
+      try {
+        result = SessionCapApprovalResultSchema.parse(await this.options.sessionCaps.approve({ ...args, principal: { pubkey: verifiedPubkey }, policyVersion: this.policyVersion, protocolVersion: this.protocolVersion }, { consentReference: `nostr:${requestEventId}` }));
+      } catch (error) {
+        const code = SessionCapDeniedCodeSchema.safeParse(error instanceof Error && error.message === "IDEMPOTENCY_KEY_CONFLICT" ? "SESSION_CAP_IDEMPOTENCY_CONFLICT" : error instanceof Error ? error.message : undefined);
+        if (!code.success) throw error;
+        return freeze({ jsonrpc: "2.0" as const, id: request.id, result: SessionCapApprovalWireResultSchema.parse({ status: "denied", code: code.data }) });
+      }
+      const wireResult = freeze(SessionCapApprovalWireResultSchema.parse({ status: result.status, sessionId: result.sessionId, admissionReference: result.admissionReference, approvalReference: result.approvalReference, previousApprovedCap: result.previousApprovedCap, approvedCap: result.approvedCap, heldAmount: result.heldAmount, unit: result.unit }));
+      await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({ jsonrpc: "2.0", method: "notifications/approve_session_cap", params: wireResult }), requestEventId);
+      return freeze({ jsonrpc: "2.0" as const, id: request.id, result: wireResult });
     }
     if (name === "funded_admission") {
       const args = FundedAdmissionArgumentsSchema.parse(argumentsInput);
@@ -390,7 +410,7 @@ export class ContextVmFundingAdapter {
     return `sha256:${[...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
   }
 
-  private async generationResponse(name: "start_session" | "revise_session", verifiedPubkey: string, requestEventId: string, id: string | number | null, result: z.infer<typeof SessionActionResultSchema>): Promise<ContextVmWireResponse> {
+  private async generationResponse(name: "start_session" | "revise_session" | "resume_session", verifiedPubkey: string, requestEventId: string, id: string | number | null, result: z.infer<typeof SessionActionResultSchema>): Promise<ContextVmWireResponse> {
     const wireResult = result.status === "completed" || result.status === "failed"
       ? freeze({ status: result.status, code: result.code, sessionId: result.sessionId, sessionVersion: result.sessionVersion, artifactVersion: result.artifactVersion, ...(result.status === "completed" && result.artifactId ? { artifactId: result.artifactId } : {}), ...(result.status === "completed" && result.generation ? { generation: result.generation } : {}), confirmedSpend: result.confirmedSpend, remainingCap: result.remainingCap, remainingBalance: result.remainingBalance, nextAction: result.nextAction, operationId: result.operationId })
       : result.status === "billing_invariant_failed" || result.status === "usage_unknown"

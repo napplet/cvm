@@ -1,3 +1,8 @@
+import { createDurableContextVmTransport } from "../../src/release/deployment/contextvm-client";
+import { ProductionContextVmGenerationIntakes } from "../../src/production/contextvm-generation-intake";
+import { ContextVmFundingAdapter } from "../../src/contextvm/adapter";
+import type { ContextVmTransportPort, ContextVmInboundEnvelope, ContextVmWireResponse } from "../../src/contextvm/sdk-bridge";
+import { canonicalJson } from "../../src/promotion/schema";
 import { ProtectedGenerationCommands, RetainedGenerationCommandSchema } from "../../src/model/retained-generation-command";
 import { ProductionGenerationRecovery } from "../../src/production/generation-recovery";
 import { loadMountedCheckpointKek } from "../../src/production/checkpoint-crypto";
@@ -31,15 +36,16 @@ async function docker(args: string[]) {
   if (code !== 0) throw new Error(`DOCKER_FAILED:${args[0]}:${err.slice(0, 300)}`);
   return out.trim();
 }
-type PrepareFault = { commit?: "before" | "after" };
+type PrepareFault = { commit?: "before" | "after"; intakeAckLost?: boolean };
 function restrictedPool(native: Pool, fault: PrepareFault = {}): PostgresSqlPool {
   return { async connect() {
     const connectingAt = performance.now();
     const client = await native.connect();
-    let archiveInserted = false;
+    let archiveInserted = false, intakeInserted = false;
     if (performance.now() - connectingAt >= 200) console.error("MODEL_COMPOSITION_SLOW_POOL_CONNECT", Math.round(performance.now() - connectingAt));
     return { async query<Row extends Record<string, unknown>>(sql: string, values?: readonly unknown[]) {
       if (sql.startsWith("INSERT INTO production_real.generation_recovery_commands")) archiveInserted = true;
+      if (sql.startsWith("INSERT INTO production_real.release_operation_journal") && String(values?.[2]).startsWith("contextvm-intake:")) intakeInserted = true;
       const commitFault = sql === "COMMIT" && archiveInserted ? fault.commit : undefined;
       if (commitFault) delete fault.commit;
       if (commitFault === "before") throw new Error("FIXTURE_PREPARE_ROLLBACK");
@@ -47,6 +53,7 @@ function restrictedPool(native: Pool, fault: PrepareFault = {}): PostgresSqlPool
       try {
         const result = await client.query<Row>(sql, values ? [...values] : undefined);
         if (commitFault === "after") throw new Error("FIXTURE_PREPARE_COMMIT_ACK_LOST");
+        if (sql === "COMMIT" && intakeInserted && fault.intakeAckLost) { delete fault.intakeAckLost; throw new Error("FIXTURE_INTAKE_COMMIT_ACK_LOST"); }
         return { rows: result.rows };
       } finally {
         // Static SQL only: never print account, prompt, credential or parameter values.
@@ -57,7 +64,7 @@ function restrictedPool(native: Pool, fault: PrepareFault = {}): PostgresSqlPool
   } };
 }
 
-integration.each(["legacy-completed", "current-missing-counter", "delayed-current", "retained-restart", "retained-rollback", "retained-commit-ack", "retained-concurrent", "retained-restored", "retained-expired", "retained-lease-reclaim"])("normal paid graph preserves real operation IDs, source and exact cached settlement (%s)", async (wireCase) => {
+integration.each(["legacy-completed", "current-missing-counter", "delayed-current", "retained-restart", "retained-rollback", "retained-commit-ack", "retained-concurrent", "retained-restored", "retained-expired", "retained-lease-reclaim", "retained-intake-before-handler", "retained-intake-lost-commit-ack"])("normal paid graph preserves real operation IDs, source and exact cached settlement (%s)", async (wireCase) => {
   const name = `cvm-model-composition-${crypto.randomUUID().replaceAll("-", "")}`;
   let admin: Pool | undefined, native: Pool | undefined;
   try {
@@ -130,6 +137,45 @@ integration.each(["legacy-completed", "current-missing-counter", "delayed-curren
     const open = () => new MeteredGenerationService({ ...(retained ? { recoveryCommands: commands } : {}), fundedAdmission: admissions, store: database.meteredFunding, gateway, worker, artifactVerifier: verifier, proposalStore: sources, pricing, settlement, continuation: new ContinuationService({ store: database.funding, includeAdmissionHold: true }), toolchainIdentity: "b".repeat(64), clock: { nowMs: () => now } });
     const command = StartSessionCommandSchema.parse({ principal, admissionReference: admission.reference, idempotencyKey: "start", expectedVersion: 0, maximum: "3250", policyVersion: "funding-policy-v1", idea: "One focused timer." });
     let recoveredInitial: SessionActionResult | undefined;
+    if(wireCase.startsWith("retained-intake-")){
+      let intakeNow=Date.now();
+      const intakeJournal=new PostgresOperationJournal(pool,{namespace:"composed-contextvm",scopeSha256:"a".repeat(64)});
+      const responses:ContextVmWireResponse[]=[];
+      const envelope:ContextVmInboundEnvelope={verifiedClientPubkey:principal.pubkey,requestEventId:"f".repeat(64),rawEvent:{id:"f".repeat(64),tags:[]},request:{id:1,method:"tools/call",params:{name:"start_session",arguments:{admissionReference:command.admissionReference,idempotencyKey:command.idempotencyKey,maximum:command.maximum,idea:command.idea}}}};
+      function controller(context="c".repeat(64),crash=false){
+        let inbound:((v:ContextVmInboundEnvelope)=>Promise<void>)|undefined;
+        const source:ContextVmTransportPort={onInbound(h){inbound=h;},configureAnnouncement(){},async sendResponse(_owner,response){responses.push(response);},async sendNotification(){},canonicalInvocation(clientPubkey,method,params){return {clientPubkey,invocationHash:new Bun.CryptoHasher("sha256").update(canonicalJson({method,params})).digest("hex")};}};
+        const intakes=new ProductionContextVmGenerationIntakes({journal:intakeJournal,executionContextSha256:context,key:{reference:"test:checkpoint-kek",load:()=>loadMountedCheckpointKek({kekPath:"/test/kek",readFile:async()=>Buffer.alloc(32,9).toString("base64")})},now:()=>intakeNow});
+        const transport=createDurableContextVmTransport({source,journal:intakeJournal,generationIntakes:intakes});
+        const core=open();
+        new ContextVmFundingAdapter({service:funding,transport,generation:{async startSession(input){recoveredInitial=await core.startSession(input);return recoveredInitial;},reviseSession:input=>core.reviseSession(input)}});
+        if(crash)transport.onInbound(async()=>{throw new Error("FIXTURE_CONTROLLER_LOSS_BEFORE_ADAPTER");});
+        return {transport,async deliver(value=envelope){if(!inbound)throw new Error("INBOUND_REQUIRED");await inbound(value);}};
+      }
+      const lostAck = wireCase === "retained-intake-lost-commit-ack";
+      if (lostAck) prepareFault.intakeAckLost = true;
+      await expect(controller(undefined,!lostAck).deliver()).rejects.toThrow(lostAck ? "FIXTURE_INTAKE_COMMIT_ACK_LOST" : "FIXTURE_CONTROLLER_LOSS_BEFORE_ADAPTER");
+      expect({posts,builds}).toEqual({posts:0,builds:0});
+      expect((await admin.query("SELECT count(*)::int AS n FROM production_real.metered_actions")).rows[0].n).toBe(0);
+      const original=await intakeJournal.read(envelope.requestEventId);
+      expect(original?.value).toEqual({state:"pending"});
+      const protectedRecord=await intakeJournal.read(`contextvm-intake:${envelope.requestEventId}`);
+      expect(JSON.stringify(protectedRecord)).not.toContain(command.idea);
+      expect(protectedRecord?.value).toMatchObject({schemaVersion:"protected-contextvm-generation-intake-v1",state:"pending"});
+      intakeNow+=61_000;
+      expect(await controller("d".repeat(64)).transport.recoverPendingGenerations()).toBe(1);
+      expect({posts,builds}).toEqual({posts:0,builds:0});
+      intakeNow+=31_000;
+      const resumed=controller();
+      expect(await resumed.transport.recoverPendingGenerations()).toBe(1);
+      expect(recoveredInitial?.status).toBe("usage_unknown");
+      expect({posts,builds}).toEqual({posts:1,builds:0});
+      expect((await intakeJournal.read(`contextvm-intake:${envelope.requestEventId}`))?.value).toMatchObject({state:"erased"});
+      expect(JSON.stringify((await intakeJournal.read(`contextvm-intake:${envelope.requestEventId}`))?.value)).not.toContain("wrappedDekBase64");
+      const cached=responses.at(-1);
+      await resumed.deliver();expect(responses.at(-1)).toEqual(cached);
+      expect({posts,builds}).toEqual({posts:1,builds:0});
+    }
     if (wireCase === "retained-rollback" || wireCase === "retained-commit-ack") {
       prepareFault.commit = wireCase === "retained-rollback" ? "before" : "after";
       await expect(open().startSession(command)).rejects.toThrow(wireCase === "retained-rollback" ? "FIXTURE_PREPARE_ROLLBACK" : "FIXTURE_PREPARE_COMMIT_ACK_LOST");

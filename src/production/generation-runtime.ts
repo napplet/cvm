@@ -1,3 +1,4 @@
+import { ProductionContextVmGenerationIntakes } from "./contextvm-generation-intake";
 import { ProtectedGenerationCommands } from "../model/retained-generation-command";
 import { loadMountedCheckpointKek } from "./checkpoint-crypto";
 import { ProductionGenerationRecovery } from "./generation-recovery";
@@ -60,7 +61,10 @@ export async function openProductionGenerationRuntime(input: Readonly<{ config: 
       journal: dependencies.journal,
       pool: postgres.pool,
     });
-    relay = await openContextVmRelayTransport({ serviceKeyReference: config.contextvm.serviceKeyReference, relaySetSha256: await digest([config.contextvm.relay]), relays: [config.contextvm.relay], signerBroker: materials.contextvmSignerBroker, journal: dependencies.serviceJournals.contextvm, admissionObserver, certificationClientPubkey });
+    const generationIntakes = new ProductionContextVmGenerationIntakes({ journal: dependencies.serviceJournals.contextvm,
+      executionContextSha256: await digest({ processor: "contextvm-funded-generation-v1", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", candidateSha256: config.candidateSha256, servicePubkey, config, pricing: dependencies.vertexMaterial.pricing }),
+      key: { reference: config.checkpoint.kekReference, load: () => loadMountedCheckpointKek({ kekPath: secrets.path("checkpoint.kekReference") }) }, now: input.now });
+    relay = await openContextVmRelayTransport({ serviceKeyReference: config.contextvm.serviceKeyReference, relaySetSha256: await digest([config.contextvm.relay]), relays: [config.contextvm.relay], signerBroker: materials.contextvmSignerBroker, journal: dependencies.serviceJournals.contextvm, admissionObserver, certificationClientPubkey, generationIntakes });
     const facade = new SealedProductionGenerationFacade();
     funding = await openProductionFunding({ postgresPool: postgres.pool, transport: relay.transport, cashuPolicies: materials.cashuPolicies, capacity: admissionObserver.capacityRouter(), protectedMaterialKey: await secrets.bytes32("funding.protectedMaterialReference"), admissionReceiptSecret: await secrets.bytes32("funding.admissionReceiptReference"), statusCursorSecret: await secrets.bytes32("funding.statusCursorReference"), accountingConfiguration: Object.freeze({ mode: "production-real", adapters: ["lightning", "cashu", "nwc"], catalog: { kind: "live" }, keyMode: "secret-broker" }), meteredService: facade, continuationService: continuation.service, nwcConnectionReference: config.funding.nwcConnectionReference, nwcCredentialBroker: materials.nwcCredentialBroker, nwcJournal: dependencies.serviceJournals.nwc });
     const recoveryCommands = new ProtectedGenerationCommands({ reference: config.checkpoint.kekReference, load: () => loadMountedCheckpointKek({ kekPath: secrets.path("checkpoint.kekReference") }) }, input.now);
@@ -74,6 +78,8 @@ export async function openProductionGenerationRuntime(input: Readonly<{ config: 
     continuationTimer.unref?.();
     const recoveryTimer = setInterval(() => { void generationRecovery.scan().catch(() => undefined); }, 30_000);
     recoveryTimer.unref?.();
+    const intakeTimer = setInterval(() => { void relay!.transport.recoverPendingGenerations().catch(() => undefined); },30_000);
+    intakeTimer.unref?.();
     const mountedClosers = new Set<() => Promise<void>>();
     return Object.freeze({
       config, certificationClientPubkey, authorization, generation, continuation, facade, funding, dependencies, admissionObserver,
@@ -84,6 +90,8 @@ export async function openProductionGenerationRuntime(input: Readonly<{ config: 
       close: async () => {
         clearInterval(continuationTimer);
         clearInterval(recoveryTimer);
+        clearInterval(intakeTimer);
+        await generationIntakes.close().catch(() => undefined);
         await generationRecovery.close().catch(() => undefined);
         for (const close of mountedClosers) await close().catch(() => undefined);
         mountedClosers.clear();

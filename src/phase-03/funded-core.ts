@@ -12,7 +12,7 @@ import type { CashuSettlementPort, CashuWalletOperations } from "../funding/cash
 import type { CashuMintPolicyRegistry } from "../funding/cashu-mint-policy";
 import { ProtectedRailMaterialVault } from "../funding/protected-rail-material";
 import type { FundingStore, MeteredFundingStore } from "../persistence/funding-store";
-import type { PostgresFundingExecutor } from "../persistence/postgres-funding-store";
+import { PostgresFundingStore, type PostgresFundingExecutor } from "../persistence/postgres-funding-store";
 import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
 import { PostgresFundingDatabase } from "../persistence/postgres-funding-database";
 import { assertProductionAccountingConfiguration, assertProductionRealm, type AccountingRealmName } from "../funding/accounting-realm";

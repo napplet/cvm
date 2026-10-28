@@ -140,6 +140,7 @@ test("hash-pinned runtime factory requires the fixed immutable mount record rath
     deploymentConfig: {} as never,
     generation: {} as never,
     authorization: {} as never,
+    secrets: {} as never,
   })).rejects.toThrow("PRODUCTION_MOUNTED_SESSION_RECORD_INVALID");
 });
 

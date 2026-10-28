@@ -56,7 +56,7 @@ function packageTarball(body: Record<string, unknown>): Uint8Array {
 }
 
 async function sha512SRI(bytes: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-512", bytes);
+  const digest = await crypto.subtle.digest("SHA-512", new Uint8Array(bytes));
   return `sha512-${Buffer.from(digest).toString("base64")}`;
 }
 
@@ -93,7 +93,7 @@ async function fixtureFetch(mutator?: (metadata: Record<string, unknown>, index:
     const published = tarballs.find(({ item }) => url.endsWith(`/${encodeURIComponent(item.name)}`));
     if (published) return new Response(JSON.stringify({ time: { [published.item.version]: `${published.item.publishedOn}T00:00:00.000Z` } }), { status: 200 });
     const tarball = tarballs.find(({ item }) => url.endsWith(`/${item.name.split("/").at(-1)}-${item.version}.tgz`));
-    return tarball ? new Response(tarball.tarball, { status: 200 }) : new Response("not found", { status: 404 });
+    return tarball ? new Response(new Uint8Array(tarball.tarball), { status: 200 }) : new Response("not found", { status: 404 });
   }) as typeof fetch;
   return { fetcher, expectedPackages: tarballs.map(({ item, integrity }) => ({ ...item, integrity })) };
 }

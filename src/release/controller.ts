@@ -26,7 +26,8 @@ import { finalizeReleaseCertification, type ReleaseFinalizationInput, type Relea
 import { createProductionLiveProtectedCertificationRegistry, type LiveProtectedRegistryInput } from "../certification/live/registry";
 import type { ProductionLiveProtectedCertificationPorts } from "../certification/live/production-ports";
 import { PROTECTED_SUITES, runProtectedCertificationProfile, type ProtectedCertificationRun } from "../certification/runner";
-import { validateCertificationObservation, type CertificationObservation } from "../certification/evidence";
+import { validateCertificationObservation } from "../certification/evidence";
+import type { CertificationObservation } from "../certification/contracts";
 import { createLiveCostEstimator, RELEASE_COST_FAMILIES, type LiveCostCatalogPort } from "./costs/live-estimator";
 import { validateOperatorFundingReadiness, type OperatorFundingReadiness } from "./deployment/operator-funding";
 
@@ -74,7 +75,7 @@ export type AuthorizedLiveExecutionInput = Readonly<{
   receipt: unknown;
   /** The one project-owned production registry from native-registry.ts. */
   registry: AuthorizedProviderRegistry;
-  materialization: Omit<MaterializeProtectedCertifierInput, "workerSelection" | "nowMs">;
+  materialization: Omit<MaterializeProtectedCertifierInput, "workerSelection" | "nowMs" | "topology" | "authorization">;
   workerSelection: NonNullable<MaterializeProtectedCertifierInput["workerSelection"]>;
   protected: Omit<LiveProtectedRegistryInput, "ports"> & Readonly<{ ports: ProductionLiveProtectedCertificationPorts }>;
   protectedVerificationReferences?: Parameters<typeof runProtectedCertificationProfile>[0]["profile"]["protectedVerificationReferences"];

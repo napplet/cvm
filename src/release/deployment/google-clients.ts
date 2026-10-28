@@ -97,7 +97,7 @@ type GoogleClientOptions = Readonly<{
   journal: GoogleOperationJournal; now?: () => number; timeoutMs?: number;
 }>;
 
-function statusFor(status: number): SafeStatus {
+function statusFor(status: number): Readonly<{ status: "missing" | "unknown" | "blocked" }> {
   if (status === 404) return Object.freeze({ status: "missing" });
   if ([401, 403, 400, 409, 412].includes(status)) return Object.freeze({ status: "blocked" });
   if (status === 408 || status === 429 || status >= 500) return Object.freeze({ status: "unknown" });

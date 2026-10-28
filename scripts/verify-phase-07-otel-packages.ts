@@ -37,7 +37,7 @@ const EXACT_NAMES = [
 ] as const;
 
 type ExpectedPackage = {
-  readonly name: typeof EXACT_NAMES[number];
+  readonly name: string;
   readonly version: string;
   readonly integrity: string;
   readonly disposition: "APPROVED" | "SUS";
@@ -146,7 +146,7 @@ function exactSet(expected: readonly ExpectedPackage[]): boolean {
   return expected.length === EXACT_NAMES.length && new Set(expected.map((item) => item.name)).size === EXACT_NAMES.length && EXACT_NAMES.every((name) => expected.some((item) => item.name === name));
 }
 function tarPackageJson(bytes: Uint8Array): Record<string, unknown> {
-  const tar = new Uint8Array(Bun.gunzipSync(bytes));
+  const tar = new Uint8Array(Bun.gunzipSync(new Uint8Array(bytes)));
   for (let offset = 0; offset + 512 <= tar.length; ) {
     const header = tar.subarray(offset, offset + 512);
     const name = new TextDecoder().decode(header.subarray(0, 100)).replace(/\0.*$/u, "");
@@ -345,7 +345,7 @@ async function smoke(): Promise<{ readonly evidenceSha256: string; readonly reco
     if (temp) await rm(temp, { recursive: true, force: true });
   }
 }
-function failedRow(expected: ExpectedPackage, errors: string[], digests: Partial<z.infer<typeof PackageRowSchema>> = {}) {
+function failedRow(expected: ExpectedPackage, errors: string[], digests: Partial<z.infer<typeof PackageRowSchema>> = {}): z.infer<typeof PackageRowSchema> {
   return { name: expected.name, version: expected.version, registryIntegrity: expected.integrity, tarballSha256: digests.tarballSha256 ?? "0".repeat(64), metadataSha256: digests.metadataSha256 ?? "0".repeat(64), publishMetadataSha256: digests.publishMetadataSha256 ?? "0".repeat(64), sourceRepository: OFFICIAL_REPOSITORY, sourceUrls: [OFFICIAL_REPOSITORY, OFFICIAL_DOCUMENTATION], license: "Apache-2.0", publisher: "GitHub Actions", publishedAt: `${expected.publishedOn}T00:00:00.000Z`, lifecycleScripts: [], requiredDependencies: expected.requiredDependencies, disposition: expected.disposition, verdict: "failed" as const, errors };
 }
 

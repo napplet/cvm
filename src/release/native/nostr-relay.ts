@@ -179,7 +179,7 @@ export function createNostrRelayPublicationAdapter(input: Readonly<{ config: unk
     publishOwnerManifest,
     publishAttestation,
     reconcileOriginalEvent: async ({ operationId }) => operationId.startsWith("owner_manifest:") ? reconcile("owner", { operationId }) : reconcile("attestation", { operationId }),
-    asPromotedCliSource: () => Object.freeze({
+    asPromotedCliSource: () => Object.freeze<ReturnType<NostrRelayPublicationAdapter["asPromotedCliSource"]>>({
       async publishOriginalEvent(value) {
         const result = await publishOwnerManifest(value);
         return Object.freeze({ operationId: result.operationId, state: result.state === "completed" ? "complete" : result.state === "failed" ? "failed" : "unknown", relayObservation: result.relayObservation });
@@ -189,7 +189,7 @@ export function createNostrRelayPublicationAdapter(input: Readonly<{ config: unk
         return Object.freeze({ operationId: result.operationId, state: result.state === "completed" ? "complete" : result.state === "failed" ? "failed" : "unknown", relayObservation: result.relayObservation });
       },
     }),
-    attestationPort: Object.freeze({
+    attestationPort: Object.freeze<NostrRelayPublicationAdapter["attestationPort"]>({
       async publish(value) {
         if (value.artifact.sealedObjectSha256 !== config.sealedArtifactSha256 || value.artifact.aggregateSha256 !== config.aggregateSha256 || value.ownerEventId !== config.ownerEvent.id) throw new Error("NOSTR_RELAY_EVENT_INVALID");
         return publishAttestation({ operationId: value.operationId, event: config.attestationEvent, relays: config.relays });

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createOfficialPricingSources } from "../../src/release/costs/official-sources";
 import { createCertificationBudgetCatalog, createProductionLiveCostCatalog } from "../../src/release/costs/production-catalog";
-import { createLiveCostEstimator, RELEASE_COST_FAMILIES } from "../../src/release/costs/live-estimator";
+import { PriceFactSchema, createLiveCostEstimator, RELEASE_COST_FAMILIES } from "../../src/release/costs/live-estimator";
 import { loadPreparedCollectorPreapproval, materializePreapproval, verifyPreapprovalMaterialization } from "../../src/release/preapproval-materializer";
 import { deriveReleaseTopology } from "../../src/release/topology";
 import { RELEASE_TOPOLOGY_QUANTITY_CONTRACT } from "../../src/release/topology";
@@ -120,7 +120,7 @@ test("aggregates component receipts into one family line with complete provenanc
       { provider: "cashu", sourceId: "operator-cashu-fee-contract", sourceDocumentSha256: digest("f"), quoteSha256: digest("0"), currency: "USD", unit: "operation", priceMicros: 1, observedAtMs: 999_999, freshUntilMs: 1_060_000 },
     ]; } },
   });
-  const facts = await catalog.listPriceFacts({ providers: RELEASE_COST_FAMILIES });
+  const facts = (await catalog.listPriceFacts({ providers: RELEASE_COST_FAMILIES })).map(value => PriceFactSchema.parse(value));
   const cloudRun = facts.find((fact) => fact.provider === "cloud_run");
   expect(cloudRun).toMatchObject({ components: [
     { componentId: "cloud_run.europe-west1.cpu", region: "europe-west1" },
@@ -135,7 +135,7 @@ test("aggregates component receipts into one family line with complete provenanc
     { componentId: "cloud_run.europe-west1.cpu", skuId: "sku-0" },
     { componentId: "cloud_run.us-central1.cpu", skuId: "sku-1" },
   ] });
-  await expect(createLiveCostEstimator({ catalog: { listPriceFacts: async () => facts.map((fact) => fact.provider === "cloud_run" ? { ...fact, components: [...fact.components, fact.components[0]] } : fact) }, now }).estimate({ topologySha256: topology.topologySha256,
+  await expect(createLiveCostEstimator({ catalog: { listPriceFacts: async () => facts.map((fact) => fact.provider === "cloud_run" && fact.components ? { ...fact, components: [...fact.components, fact.components[0]] } : fact) }, now }).estimate({ topologySha256: topology.topologySha256,
     quantities: RELEASE_COST_FAMILIES.map((provider) => ({ provider, quantityNanos: 1_000_000_000n, headroomBasisPoints: 1_000 })), components: topology.quantityContract.map((component) => ({ ...component, quantityNanos: BigInt(component.quantityNanos) })),
   })).rejects.toThrow("LIVE_COST_COMPONENT_COVERAGE_REQUIRED");
 });
@@ -145,7 +145,7 @@ test("conservative certification ceilings remain distinct from exact user billin
   const now = () => 1_000_000;
   const components = topology.quantityContract.map((component) => ({ ...component, quantityNanos: BigInt(component.quantityNanos) }));
   const catalog = createCertificationBudgetCatalog({ quantityContract: components, now });
-  const facts = await catalog.listPriceFacts({ providers: RELEASE_COST_FAMILIES });
+  const facts = (await catalog.listPriceFacts({ providers: RELEASE_COST_FAMILIES })).map(value => PriceFactSchema.parse(value));
   expect(facts).toHaveLength(16);
   expect(facts.every((fact) => (fact as { sourceId: string }).sourceId === "napplet-cvm-certification-budget-v1")).toBe(true);
   const estimate = await createLiveCostEstimator({ catalog, now }).estimate({

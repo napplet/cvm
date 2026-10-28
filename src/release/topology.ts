@@ -78,7 +78,7 @@ async function digest(value: unknown): Promise<string> {
 /** Desired topology is owned by the project. Candidate bytes bind it, but never select it. */
 /** A prepared OCI layout supplies the immutable desired image before consent;
  * only the controller's provision gate accepts an observed registry image. */
-export async function deriveReleaseTopology(candidateSha256: string, collector?: PreparedCollectorImage | ObservedCollectorRegistryImage): Promise<ReleaseTopologyObservation> {
+export async function deriveReleaseTopology(candidateSha256: string, collector?: PreparedCollectorImage | ObservedCollectorRegistryImage): Promise<ReleaseTopologyObservation & Readonly<{ quantityContract: readonly ReleaseTopologyQuantityObservation[] }>> {
   const quantityContract = RELEASE_TOPOLOGY_QUANTITY_CONTRACT.map((line) => ({ ...line, quantityNanos: line.quantityNanos.toString() }));
   const base = {
     version: 1 as const,

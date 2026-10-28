@@ -22,7 +22,7 @@ const PriceSchema = z.object({
  * camelCase payload can be accepted by a mock yet be silently ignored by the
  * Preview service. */
 const UsageSchema = z.object({ input_tokens: z.number().int().nonnegative(), cached_input_tokens: z.number().int().nonnegative(), output_tokens: z.number().int().nonnegative(), thought_tokens: z.number().int().nonnegative(), tool_use_tokens: z.number().int().nonnegative() }).strict();
-const RequestSchema = z.object({ idea: z.string().min(1).max(4_000), systemInstruction: z.string().min(1).max(8_000), maximumOutputTokens: z.number().int().min(1).max(8_192) }).strict();
+const RequestSchema = z.object({ idea: z.string().min(1).max(4_000), systemInstruction: z.string().min(1).max(8_000), maximumOutputTokens: z.number().int().min(1).max(8_192), maximumInputTokens: z.number().int().min(1).max(MAX_INPUT_TOKEN_UPPER_BOUND).optional() }).strict();
 /* The raw REST Interaction has optional server additions. Normalize only the
  * documented fields this financial adapter needs; `.passthrough()` avoids
  * falsely rejecting valid receipts merely because the preview API grew an
@@ -84,7 +84,7 @@ function ceilMillion(numerator: bigint): number { const charge = (numerator + 99
 function nonceFor(operationId: string, requestSha256: string): string { return `napplet-cvm:${operationId}:${requestSha256}`; }
 function interactionFrom(value: unknown): Interaction | undefined { const parsed = InteractionSchema.safeParse(value); return parsed.success ? parsed.data : undefined; }
 function requestContent(entry: JournalEntry) { return frozen([{ role: "user" as const, content: frozen([{ type: "text" as const, text: JSON.stringify({ nonce: entry.nonce, request_sha256: entry.requestSha256, idea: entry.request.idea, system_instruction: entry.request.systemInstruction, max_output_tokens: entry.request.maximumOutputTokens }) }]) }]); }
-function assertInputBound(entry: JournalEntry): void { if (new TextEncoder().encode(JSON.stringify(requestContent(entry))).byteLength + new TextEncoder().encode(entry.request.systemInstruction).byteLength > MAX_INPUT_TOKEN_UPPER_BOUND) throw new Error("VERTEX_INPUT_CAP_EXCEEDED"); }
+function assertInputBound(entry: JournalEntry): void { if (new TextEncoder().encode(JSON.stringify(requestContent(entry))).byteLength + new TextEncoder().encode(entry.request.systemInstruction).byteLength > (entry.request.maximumInputTokens ?? MAX_INPUT_TOKEN_UPPER_BOUND)) throw new Error("VERTEX_INPUT_CAP_EXCEEDED"); }
 function sameInput(entry: JournalEntry, interaction: Interaction): boolean { return JSON.stringify(interaction.input) === JSON.stringify(requestContent(entry)); }
 function generatedResult(interaction: Interaction): string | undefined {
   const output = interaction.steps?.flatMap((step) => step.model_output?.content.map((part) => part.text) ?? []);
@@ -100,7 +100,7 @@ function completion(entry: JournalEntry, interaction: Interaction) {
   /* Gemini 4 Argon's max_output_tokens is a unified server-side ceiling for
    * response, reasoning and function-call tokens.  We send no tools, then
    * reject a receipt which cannot possibly have honoured the persisted cap. */
-  if (!usage || usage.tool_use_tokens !== 0 || usage.input_tokens > MAX_INPUT_TOKEN_UPPER_BOUND || usage.cached_input_tokens > usage.input_tokens || usage.output_tokens + usage.thought_tokens > entry.request.maximumOutputTokens) return undefined;
+  if (!usage || usage.tool_use_tokens !== 0 || usage.input_tokens > (entry.request.maximumInputTokens ?? MAX_INPUT_TOKEN_UPPER_BOUND) || usage.cached_input_tokens > usage.input_tokens || usage.output_tokens + usage.thought_tokens > entry.request.maximumOutputTokens) return undefined;
   const inputTokens = usage.input_tokens - usage.cached_input_tokens;
   const numerator = BigInt(inputTokens) * BigInt(entry.price.inputMicrosPerMillion) + BigInt(usage.cached_input_tokens) * BigInt(entry.price.cachedInputMicrosPerMillion) + BigInt(usage.output_tokens + usage.thought_tokens) * BigInt(entry.price.outputAndThoughtMicrosPerMillion);
   const costUsdMicros = ceilMillion(numerator);
@@ -115,7 +115,7 @@ function persistedReceipt(entry: JournalEntry, raw: unknown) {
   const usage = receipt.data.usage;
   // completion() already separates uncached input from cached input. Replaying
   // must price those same dimensions once, including a fully cached request.
-  if (usage.inputTokens + usage.cachedInputTokens > MAX_INPUT_TOKEN_UPPER_BOUND || usage.outputTokens + usage.thoughtTokens > entry.request.maximumOutputTokens || (receipt.data.status === "completed" && (!receipt.data.generatedResult || !validStructuredResult(receipt.data.generatedResult))) || (receipt.data.status === "incomplete" && receipt.data.generatedResult !== undefined)) return undefined;
+  if (usage.inputTokens + usage.cachedInputTokens > (entry.request.maximumInputTokens ?? MAX_INPUT_TOKEN_UPPER_BOUND) || usage.outputTokens + usage.thoughtTokens > entry.request.maximumOutputTokens || (receipt.data.status === "completed" && (!receipt.data.generatedResult || !validStructuredResult(receipt.data.generatedResult))) || (receipt.data.status === "incomplete" && receipt.data.generatedResult !== undefined)) return undefined;
   const recomputed = ceilMillion(BigInt(usage.inputTokens) * BigInt(entry.price.inputMicrosPerMillion) + BigInt(usage.cachedInputTokens) * BigInt(entry.price.cachedInputMicrosPerMillion) + BigInt(usage.outputTokens + usage.thoughtTokens) * BigInt(entry.price.outputAndThoughtMicrosPerMillion));
   if (receipt.data.cost.currency !== "USD" || receipt.data.cost.micros !== recomputed) return undefined;
   return receipt.data;
@@ -175,8 +175,8 @@ export function createVertexDeploymentClient(input: Readonly<{
   }
   return frozen({
     discovery: () => frozen({ candidateSha256, projectId, location: "global" as const, model: "gemini-4-argon" as const, credentialReference, provider: "vertex_ai_gemini" as const, price }),
-    async dispatch(value: Readonly<{ operationId: unknown; requestSha256?: unknown; idea: unknown; systemInstruction: unknown; maximumOutputTokens: unknown }>) {
-      const operationId = OperationSchema.parse(value.operationId); const request = RequestSchema.parse({ idea: value.idea, systemInstruction: value.systemInstruction, maximumOutputTokens: value.maximumOutputTokens }); const requestSha256 = await requestDigest({ candidateSha256, projectId, model: "gemini-4-argon", location: "global", request });
+    async dispatch(value: Readonly<{ operationId: unknown; requestSha256?: unknown; idea: unknown; systemInstruction: unknown; maximumOutputTokens: unknown; maximumInputTokens?: unknown }>) {
+      const operationId = OperationSchema.parse(value.operationId); const request = RequestSchema.parse({ idea: value.idea, systemInstruction: value.systemInstruction, maximumOutputTokens: value.maximumOutputTokens, ...(value.maximumInputTokens !== undefined ? { maximumInputTokens: value.maximumInputTokens } : {}) }); const requestSha256 = await requestDigest({ candidateSha256, projectId, model: "gemini-4-argon", location: "global", request });
       if (value.requestSha256 !== undefined && DigestSchema.parse(value.requestSha256) !== requestSha256) throw new Error("VERTEX_REQUEST_DIGEST_MISMATCH");
       const existing = await input.journal.read(operationId);
       if (existing !== undefined && existing !== null) { const entry = JournalSchema.parse(existing); if (!same(entry, operationId, requestSha256) || JSON.stringify(entry.request) !== JSON.stringify(request)) throw new Error("VERTEX_OPERATION_IDENTITY_CONFLICT"); return recover(entry); }

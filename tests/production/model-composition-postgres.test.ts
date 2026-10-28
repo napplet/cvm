@@ -104,6 +104,11 @@ integration("normal paid graph preserves real operation IDs, persists source and
     await expect(sources.persist({ intent, provider: "vertex_ai_gemini", model: "gemini-4-argon", proposal: { files: [{ path: "src/main.ts", content: "changed source" }] } })).rejects.toThrow("PRODUCTION_SOURCE_PROPOSAL_CONFLICT");
     expect(await sources.lookup({ intent: { ...intent, accountId: `account:${"0".repeat(64)}` } })).toBeUndefined();
     expect({ posts, builds }).toEqual({ posts: 1, builds: 1 });
+    const oversized = { ...command, idempotencyKey: "oversized", idea: Array.from({ length: 10 }, () => "a".repeat(200)).join("\n") };
+    const refused = await open().startSession(oversized);
+    expect(refused).toMatchObject({ status: "failed", confirmedSpend: "0", remainingCap: "3244" });
+    expect(await open().startSession(oversized)).toEqual(refused);
+    expect({ posts, builds }).toEqual({ posts: 1, builds: 1 });
     await expect(native.query("UPDATE production_real.source_proposals SET proposal_json='{}'::jsonb")).rejects.toThrow();
     await expect(admin.query("DELETE FROM production_real.source_proposals")).rejects.toThrow("PRODUCTION_SOURCE_PROPOSAL_IMMUTABLE");
   } finally { await native?.end(); await admin?.end(); await docker(["rm", "--force", name]).catch(() => undefined); }

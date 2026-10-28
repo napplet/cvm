@@ -49,6 +49,15 @@ prices those dimensions once, including a completely cached request. It never
 subtracts cached input a second time or issues another model POST to repair a
 receipt mismatch.
 
+New normal operations pass the selected profile's input ceiling into the Vertex
+client. It bounds the UTF-8 bytes of the complete encoded recovery input and
+system text before a fresh provider journal claim or POST. Completion/replay
+validate total input against that retained bound. A known local bound rejection
+finalizes without a model call or debit; ambiguous transport outcomes stay unknown.
+The field is optional only for historical journals and existing certification
+callers, which retain their prior global bound. Never rewrite old requests or
+redispatch them with a newly selected bound.
+
 Apply `migrations/phase-07/004_production_source_proposals.sql` after the reviewed
 checkpoint migration through the approved bundle. This additive table binds
 source to the existing account/session/action, expected version, fingerprint and
@@ -67,8 +76,8 @@ operation journals, gateway, source store, pricing/FX settlement and metered cor
 Its provider responses, funding and worker are explicit protocol fixtures. It
 proves one model POST, source persistence, cached-usage settlement and terminal
 replay under restricted SQL; it does not prove a real paid API call, actual rails,
-isolated build or any protected release suite. Profile-specific input bounds,
-historical pricing selection and full pending-action execution still require
+isolated build or any protected release suite. Historical pricing selection and
+full pending-action execution still require
 their own composed proof before live authorization.
 
 ## Proof boundaries and remaining continuity work

@@ -57,6 +57,15 @@ test("fully cached input replays the original cost without subtracting cached to
   expect(await subject.reconcileOriginal({ operationId: "vertex-original-op" })).toEqual(original);
 });
 
+test("a profile input bound checks complete encoded input before the original journal claim or POST", async () => {
+  const [records, values] = journal();
+  let creates = 0;
+  const subject = client({ journal: records, port: { async create(value) { creates++; return interaction(value.input); }, async get() { throw new Error("UNUSED"); }, async list() { throw new Error("UNUSED"); } } });
+  await expect(subject.dispatch({ operationId: "operation:input-bound", idea: "a", systemInstruction: "JSON only", maximumOutputTokens: 32, maximumInputTokens: 16 })).rejects.toThrow("VERTEX_INPUT_CAP_EXCEEDED");
+  expect(creates).toBe(0);
+  expect(values.size).toBe(0);
+});
+
 test("uses the documented global Interactions REST paths and snake_case payload without a retried paid POST", async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const port = createVertexInteractionsHttpPort({ accessToken: async () => "a".repeat(32), fetch: Object.assign(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {

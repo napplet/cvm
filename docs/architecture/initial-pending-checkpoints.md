@@ -73,6 +73,9 @@ already-dispatched operations across controller and price changes.
 The accepted funded hold stays reserved for explicit continuation. Only the
 original capacity linked to the owned admission is released. The existing
 provider client owns original termination identity and ambiguity handling.
+[Interrupted retention deletion recovery](./checkpoint-retention-recovery.md)
+keeps expired originals discoverable after tombstoning.
+
 Confirmed release appends its immutable outbox evidence; a bounded scan of
 already committed pending checkpoints recovers a crash after commit or a lost
 termination acknowledgement. It cannot choose another worker or create work.

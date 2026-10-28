@@ -78,6 +78,7 @@ export function createReceiptBoundReleaseProviderPort(input: Readonly<{
   /** Native cleanup mandates a controller-bound resource name. The bridge
    * supplies it from parsed configuration; a registry command never can. */
   cleanup?: (input: Readonly<{ operationId: string; region?: string }>) => Promise<unknown>;
+  observeCleanup?: (input: Readonly<{ operationId: string }>) => Promise<unknown>;
 }>): ReleaseProviderPort {
   const exactCost = (value: unknown, code: string) => {
     if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error(code);
@@ -125,6 +126,13 @@ export function createReceiptBoundReleaseProviderPort(input: Readonly<{
       if (state === "invalid") throw new Error("PRODUCTION_NATIVE_OBSERVATION_INVALID");
       if (state === "blocked") return { status: "blocked" as const };
       return { status: "unknown" as const, ...(identity(result) ? { resourceIdentitySha256: identity(result) } : {}) };
+    },
+    async observeCleanup(value) {
+      if (!input.observeCleanup) return { status: "unknown" as const };
+      const result = await input.observeCleanup({ operationId: value.operationId });
+      const state = status(result, ["cleaned", "missing", "pending", "unknown", "blocked"], "invalid");
+      if (state === "invalid") throw new Error("PRODUCTION_NATIVE_CLEANUP_OBSERVATION_INVALID");
+      return { status: state as "cleaned" | "missing" | "pending" | "unknown" | "blocked" };
     },
     async cleanup(value) {
       const result = input.cleanup
@@ -492,10 +500,10 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
     }),
   });
   const providerPorts: Partial<Record<ReleaseProviderId, ReleaseProviderPort>> = {
-    cloud_run: createReceiptBoundReleaseProviderPort({ native: cloudRun as ReceiptBoundNative, authorization, discovery: input.resolved.discoveries.cloud_run, quote: input.resolved.quotes.cloud_run, cleanup: ({ operationId }) => cloudRun.cleanup({ request: authorization.request, receipt: authorization.receipt, operationId, region: input.resolved.cleanupScopes.cloudRunRegion, runOwnedServiceName: input.resolved.cleanupScopes.cloudRunServiceName }) }),
-    cloud_sql_postgres: createReceiptBoundReleaseProviderPort({ native: cloudSql as ReceiptBoundNative, authorization, discovery: input.resolved.discoveries.cloud_sql_postgres, quote: input.resolved.quotes.cloud_sql_postgres, cleanup: ({ operationId }) => cloudSql.cleanup({ request: authorization.request, receipt: authorization.receipt, operationId, runOwnedInstanceId: input.resolved.cleanupScopes.cloudSqlInstanceId }) }),
+    cloud_run: createReceiptBoundReleaseProviderPort({ native: cloudRun as ReceiptBoundNative, authorization, discovery: input.resolved.discoveries.cloud_run, quote: input.resolved.quotes.cloud_run, observeCleanup: ({ operationId }) => cloudRun.observeCleanup({ request: authorization.request, receipt: authorization.receipt, operationId, region: input.resolved.cleanupScopes.cloudRunRegion, runOwnedServiceName: input.resolved.cleanupScopes.cloudRunServiceName }), cleanup: ({ operationId }) => cloudRun.cleanup({ request: authorization.request, receipt: authorization.receipt, operationId, region: input.resolved.cleanupScopes.cloudRunRegion, runOwnedServiceName: input.resolved.cleanupScopes.cloudRunServiceName }) }),
+    cloud_sql_postgres: createReceiptBoundReleaseProviderPort({ native: cloudSql as ReceiptBoundNative, authorization, discovery: input.resolved.discoveries.cloud_sql_postgres, quote: input.resolved.quotes.cloud_sql_postgres, observeCleanup: ({ operationId }) => cloudSql.observeCleanup({ request: authorization.request, receipt: authorization.receipt, operationId, runOwnedInstanceId: input.resolved.cleanupScopes.cloudSqlInstanceId }), cleanup: ({ operationId }) => cloudSql.cleanup({ request: authorization.request, receipt: authorization.receipt, operationId, runOwnedInstanceId: input.resolved.cleanupScopes.cloudSqlInstanceId }) }),
     gcs: bridgeGcs({ native: gcs, authorization, discovery: input.resolved.discoveries.gcs, quote: input.resolved.quotes.gcs, object: input.resolved.gcsProvisionObject, runOwnedNamespace: input.resolved.cleanupScopes.gcsRunOwnedNamespace }),
-    collector: createReceiptBoundReleaseProviderPort({ native: collector as ReceiptBoundNative, authorization, discovery: input.resolved.discoveries.collector, quote: input.resolved.quotes.collector, cleanup: ({ operationId }) => collector.cleanup({ request: authorization.request, receipt: authorization.receipt, operationId, runOwnedEndpointReference: input.resolved.cleanupScopes.collectorEndpointReference }) }),
+    collector: createReceiptBoundReleaseProviderPort({ native: collector as ReceiptBoundNative, authorization, discovery: input.resolved.discoveries.collector, quote: input.resolved.quotes.collector, observeCleanup: ({ operationId }) => collector.observeCleanup({ request: authorization.request, receipt: authorization.receipt, operationId, runOwnedEndpointReference: input.resolved.cleanupScopes.collectorEndpointReference }), cleanup: ({ operationId }) => collector.cleanup({ request: authorization.request, receipt: authorization.receipt, operationId, runOwnedEndpointReference: input.resolved.cleanupScopes.collectorEndpointReference }) }),
     modal: createMeasuredWorkerProviderPort({ native: modal, discovery: input.resolved.discoveries.modal, quote: input.resolved.quotes.modal }),
     fly: createMeasuredWorkerProviderPort({ native: fly, discovery: input.resolved.discoveries.fly, quote: input.resolved.quotes.fly }),
     contextvm: createProtectedSuiteProviderPort({ provider: "contextvm", discovery: input.resolved.discoveries.contextvm, quote: input.resolved.quotes.contextvm }),

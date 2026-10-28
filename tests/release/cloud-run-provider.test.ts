@@ -33,6 +33,10 @@ function port(transcript: string[], deployed = new Set<string>()): CloudRunContr
       if (!deployed.has(operationId)) return { status: "missing" };
       return { status: "completed", operationId, projectId, region, serviceName, revisionName: "napplet-control-00001-abc", imageDigest: `sha256:${digest("f")}`, serviceAccountReference: "serviceAccounts/control@napplet-cvm-run-1.iam.gserviceaccount.com", environmentReferenceSha256: digest("1"), minimumInstances: 3, ingress: "internal-and-cloud-load-balancing", concurrency: 80, admissionRefusal: "capacity_unavailable", generationQueueResourceCount: 0 };
     },
+    observeCleanup: async ({ operationId }) => {
+      transcript.push(`observe-cleanup:${operationId}`);
+      return { status: deployed.has(operationId.slice(0, -":cleanup".length)) ? "missing" as const : "cleaned" as const };
+    },
     deploy: async ({ operationId, projectId, region, serviceName }) => { transcript.push(`deploy:${operationId}:${projectId}:${region}:${serviceName}`); deployed.add(operationId); },
     deleteService: async ({ operationId, projectId, region, serviceName }) => { transcript.push(`delete:${operationId}:${projectId}:${region}:${serviceName}`); deployed.delete(operationId); },
   };
@@ -70,6 +74,18 @@ test("reuses the original operation on retry, rejects invalid receipts before ef
   expect(transcript.at(-1)).toBe("delete:cloud-run-1:cleanup:napplet-cvm-run-1:europe-west1:napplet-control");
 });
 
+test("cleanup returns terminal cleaned from a query-only recovery observation without a second delete", async () => {
+  const transcript: string[] = [];
+  const { config, request, receipt } = await authorized();
+  const base = port(transcript);
+  const provider = createNativeCloudRunProvider({ config, port: { ...base, observeCleanup: async ({ operationId }) => {
+    transcript.push(`observe-cleanup:${operationId}`);
+    return { status: "cleaned" as const };
+  } }, now: () => now });
+  await expect(provider.cleanup({ request, receipt, operationId: "cloud-run-1", region: "europe-west1", runOwnedServiceName: config.serviceName })).resolves.toMatchObject({ status: "cleaned" });
+  expect(transcript).toEqual(["persist:cloud-run-1:cleanup", "observe-cleanup:cloud-run-1:cleanup"]);
+});
+
 test("revalidates the exact receipt immediately before deployment after reconciliation", async () => {
   let clock = now;
   const transcript: string[] = [];
@@ -78,4 +94,20 @@ test("revalidates the exact receipt immediately before deployment after reconcil
   const provider = createNativeCloudRunProvider({ config, port: { ...base, observe: async (input) => { clock = 9_000; return base.observe(input); } }, now: () => clock });
   await expect(provider.apply({ request, receipt, operationId: "cloud-run-1", region: "europe-west1" })).rejects.toThrow("CLOUD_RUN_AUTHORIZATION_INVALID");
   expect(transcript.some((entry) => entry.startsWith("deploy:"))).toBeFalse();
+});
+
+
+test("historical cleanup observation validates original scope and receipt without writes or deletion", async () => {
+  const { config, request, receipt } = await authorized();
+  const transcript: string[] = [];
+  for (const status of ["cleaned", "missing", "pending", "unknown", "blocked"] as const) {
+    const provider = createNativeCloudRunProvider({ config, port: { ...port(transcript), async observeCleanup(value) { transcript.push(value.operationId); return { status }; } }, now: () => 10_000 });
+    const original = { request, receipt, operationId: "cloud-run-1", region: "europe-west1", runOwnedServiceName: config.serviceName };
+    expect(await provider.observeCleanup(original)).toEqual({ status });
+    expect(transcript.splice(0)).toEqual(["cloud-run-1:cleanup"]);
+    await expect(provider.observeCleanup({ ...original, runOwnedServiceName: "another-service" })).rejects.toThrow("CLEANUP_SCOPE_INVALID");
+    await expect(provider.observeCleanup({ ...original, receipt: { ...receipt, authorizationReceiptSha256: digest("9") } })).rejects.toThrow("AUTHORIZATION_INVALID");
+    await expect(provider.cleanup(original)).rejects.toThrow("AUTHORIZATION_INVALID");
+    expect(transcript).toEqual([]);
+  }
 });

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  ReleaseAuthorizationReceiptSchema,
   validateAuthorizationReceipt,
   validateAuthorizationRequest,
   type ReleaseAuthorizationReceipt,
@@ -74,10 +75,11 @@ function collectorScopeIsBound(request: ReleaseAuthorizationRequest, config: Col
     && scopes.length === 1 && scopes[0]?.accountScopeSha256 === config.accountScopeSha256 && scopes[0]?.projectScopeSha256 === config.projectScopeSha256;
 }
 
-async function authorize(input: CollectorProviderInput, config: CollectorConfig, nowMs: number): Promise<Authorized> {
+async function authorize(input: CollectorProviderInput, config: CollectorConfig, nowMs: number, readOnly = false): Promise<Authorized> {
   try {
     const request = await validateAuthorizationRequest(input.request);
-    const receipt = await validateAuthorizationReceipt({ request, receipt: input.receipt, nowMs });
+    const originalReceipt = ReleaseAuthorizationReceiptSchema.parse(input.receipt);
+    const receipt = await validateAuthorizationReceipt({ request, receipt: originalReceipt, nowMs: readOnly ? Math.min(nowMs, originalReceipt.expiresAtMs - 1) : nowMs });
     const operationId = OperationIdSchema.parse(input.operationId);
     if (request.candidateSha256 !== config.candidateSha256 || request.topologySha256 !== config.topologySha256 || request.effectPlanSha256 !== config.effectPlanSha256
       || receipt.candidateSha256 !== config.candidateSha256 || receipt.topologySha256 !== config.topologySha256 || receipt.effectPlanSha256 !== config.effectPlanSha256
@@ -143,6 +145,11 @@ export function createNativeCollectorProvider(input: Readonly<{ config: unknown;
       const authorized = await authorize(raw, config, now());
       const observation = await observeAuthorized(authorized);
       return Object.freeze({ status: observation.status, operationId: authorized.operationId, ...(observation.status === "completed" ? { endpointReferenceSha256: config.endpointReferenceSha256 } : {}) });
+    },
+    async observeCleanup(raw: CollectorProviderInput & Readonly<{ runOwnedEndpointReference: string }>) {
+      const authorized = await authorize(raw, config, now(), true);
+      if (EndpointReferenceSchema.safeParse(raw.runOwnedEndpointReference).data !== config.endpointReference) throw new Error("COLLECTOR_CLEANUP_SCOPE_INVALID");
+      return CleanupObservationSchema.parse(await input.port.observeCleanup({ operationId: `${authorized.operationId}:cleanup`, projectId: config.projectId, endpointReferenceSha256: config.endpointReferenceSha256 }));
     },
     async cleanup(raw: CollectorProviderInput & Readonly<{ runOwnedEndpointReference: string }>) {
       const authorized = await authorize(raw, config, now());

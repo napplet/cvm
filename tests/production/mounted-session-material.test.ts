@@ -173,3 +173,21 @@ test("protected provider readiness remains unknown until an actual cost observat
   await expect(port.observe({ operationId: "operation-1" })).resolves.toEqual({ status: "unknown", resourceIdentitySha256: "c".repeat(64) });
   await expect(port.cleanup({ operationId: "operation-1" })).rejects.toThrow("PRODUCTION_PROVIDER_ACTUAL_COST_UNOBSERVED");
 });
+
+
+test("receipt-bound bridge validates dedicated cleanup observations separately from unsettled cost", async () => {
+  for (const status of ["cleaned", "pending", "missing", "unknown", "blocked", "completed", "retained"] as const) {
+    const calls: unknown[] = [];
+    const port = createReceiptBoundReleaseProviderPort({
+      native: { async plan() { throw new Error("UNEXPECTED"); }, async apply() { throw new Error("UNEXPECTED"); }, async observe() { throw new Error("UNEXPECTED"); }, async cleanup() { throw new Error("UNEXPECTED"); } },
+      authorization: { request: {}, receipt: {} },
+      discovery: { capability: "available", authentication: "authorized", accountScopeSha256: "b".repeat(64), costEstimateSha256: "c".repeat(64), resourceIdentitySha256: "d".repeat(64), secretReferenceNames: [] },
+      quote: { estimatedCostMicros: 47, actualCostMicros: 53 },
+      async observeCleanup(value) { calls.push(value); return { status }; },
+    });
+    const result = port.observeCleanup!({ operationId: "original-cleanup" });
+    if (status === "completed" || status === "retained") await expect(result).rejects.toThrow("PRODUCTION_NATIVE_CLEANUP_OBSERVATION_INVALID");
+    else expect(await result).toEqual({ status });
+    expect(calls).toEqual([{ operationId: "original-cleanup" }]);
+  }
+});

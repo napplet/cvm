@@ -67,6 +67,8 @@ export type ReleaseProviderPort = Readonly<{
   plan(input: Readonly<{ operationId: string; effectId: string; region: string; desiredDigest: string }>): Promise<z.input<typeof NativePlanSchema>>;
   apply(input: Readonly<{ operationId: string; effectId: string; region: string; desiredDigest: string }>): Promise<z.input<typeof NativeMutationSchema>>;
   observe(input: Readonly<{ operationId: string }>): Promise<z.input<typeof NativeObservationSchema>>;
+  /** Query the original cleanup only; this neither dispatches deletion nor settles cost. */
+  observeCleanup?(input: Readonly<{ operationId: string; resourceIdentitySha256?: string }>): Promise<Readonly<{ status: "cleaned" | "missing" | "pending" | "unknown" | "blocked" }>>;
   cleanup(input: Readonly<{ operationId: string; resourceIdentitySha256?: string }>): Promise<z.input<typeof NativeCleanupSchema>>;
 }>;
 

@@ -32,3 +32,20 @@ test("cleanup observation rejects unbranded worker reports before any invocation
   expect(() => createMountedReleaseCleanup({ effects: [original], providers: {} as never, workers: { modal: fake, fly: fake } as never })).toThrow("PRODUCTION_WORKER_LIFECYCLE_REQUIRED");
   expect(calls).toBe(0);
 });
+
+
+test("Google cleanup recovery uses dedicated original-cleanup observation and never repeats deletion", async () => {
+  for (const provider of ["cloud_run", "cloud_sql_postgres", "collector"] as const) {
+    for (const status of ["cleaned", "pending", "missing", "unknown", "blocked"] as const) {
+      const queries: unknown[] = [];
+      const effect = { ...original, provider };
+      const cleanup = createMountedReleaseCleanup({ effects: [effect], providers: { [provider]: { port: {
+        async observeCleanup(value: unknown) { queries.push(value); return { status }; },
+        async observe() { throw new Error("GENERIC_RESOURCE_READ_FORBIDDEN"); },
+        async cleanup() { throw new Error("REPEATED_DELETE_FORBIDDEN"); },
+      } } } as never });
+      expect(await cleanup.observe!(command)).toBe(status === "cleaned" ? "cleaned" : "unknown");
+      expect(queries).toEqual([{ operationId: original.providerOperationId, resourceIdentitySha256: original.resourceIdentitySha256 }]);
+    }
+  }
+});

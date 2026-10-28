@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { canonicalJson } from "../../promotion/schema";
 import {
+  ReleaseAuthorizationReceiptSchema,
   validateAuthorizationReceipt,
   validateAuthorizationRequest,
   type ReleaseAuthorizationReceipt,
@@ -47,11 +48,14 @@ const SerializableProbeSchema = z.union([
 ]);
 type SerializableProbe = z.infer<typeof SerializableProbeSchema>;
 
+const CleanupObservationSchema = z.object({ status: z.enum(["cleaned", "missing", "pending", "unknown", "blocked"]) }).strict();
+
 export type CloudSqlPostgresControlPlanePort = Readonly<{
   persist(input: Readonly<{ operationId: string; kind: "provision" | "cleanup"; authorizationRequestSha256: string; authorizationReceiptSha256: string; projectScopeSha256: string }>): Promise<void>;
   observeInstance(input: Readonly<{ operationId: string; projectId: string; region: string; instanceId: string }>): Promise<unknown>;
   createInstance(input: Readonly<{ operationId: string; projectId: string; region: string; instanceId: string; engineVersion: "POSTGRES_17"; availabilityType: "REGIONAL"; storageGb: number; backupEnabled: true; privateNetworkReferenceSha256: string; serviceAccountReferenceSha256: string }>): Promise<void>;
   probeSerializable(input: Readonly<{ operationId: string; instanceId: string }>): Promise<unknown>;
+  observeCleanup(input: Readonly<{ operationId: string; projectId: string; region: string; instanceId: string }>): Promise<unknown>;
   deleteInstance(input: Readonly<{ operationId: string; projectId: string; region: string; instanceId: string }>): Promise<void>;
 }>;
 
@@ -70,10 +74,11 @@ function cloudSqlScopeIsBound(request: ReleaseAuthorizationRequest, config: Clou
     && scopes.length === 1 && scopes[0]?.accountScopeSha256 === config.accountScopeSha256 && scopes[0]?.projectScopeSha256 === config.projectScopeSha256;
 }
 
-async function authorize(input: CloudSqlPostgresProviderInput, config: CloudSqlPostgresConfig, nowMs: number): Promise<Authorized> {
+async function authorize(input: CloudSqlPostgresProviderInput, config: CloudSqlPostgresConfig, nowMs: number, readOnly = false): Promise<Authorized> {
   try {
     const request = await validateAuthorizationRequest(input.request);
-    const receipt = await validateAuthorizationReceipt({ request, receipt: input.receipt, nowMs });
+    const originalReceipt = ReleaseAuthorizationReceiptSchema.parse(input.receipt);
+    const receipt = await validateAuthorizationReceipt({ request, receipt: originalReceipt, nowMs: readOnly ? Math.min(nowMs, originalReceipt.expiresAtMs - 1) : nowMs });
     const operationId = OperationIdSchema.parse(input.operationId);
     if (request.candidateSha256 !== config.candidateSha256 || request.topologySha256 !== config.topologySha256 || request.effectPlanSha256 !== config.effectPlanSha256
       || receipt.candidateSha256 !== config.candidateSha256 || receipt.topologySha256 !== config.topologySha256 || receipt.effectPlanSha256 !== config.effectPlanSha256
@@ -139,11 +144,19 @@ export function createNativeCloudSqlPostgresProvider(input: Readonly<{ config: u
       if (probe.status !== "completed") return Object.freeze({ status: probe.status, operationId: authorized.operationId });
       return Object.freeze({ status: "completed" as const, operationId: authorized.operationId, authority: "cloud_sql_postgres" as const, serializable: true as const, duplicateEffectCount: 0 as const, resourceIdentitySha256: await sha256({ projectId: config.projectId, region: config.region, instanceId: config.instanceId, engineVersion: config.engineVersion, availabilityType: config.availabilityType, storageGb: config.storageGb, backupEnabled: config.backupEnabled, privateNetworkReferenceSha256: config.privateNetworkReferenceSha256, serviceAccountReferenceSha256: config.serviceAccountReferenceSha256, configSha256: await configSha256 }) });
     },
+    async observeCleanup(raw: CloudSqlPostgresProviderInput & Readonly<{ runOwnedInstanceId: string }>) {
+      const authorized = await authorize(raw, config, now(), true);
+      if (InstanceIdSchema.safeParse(raw.runOwnedInstanceId).data !== config.instanceId) throw new Error("CLOUD_SQL_POSTGRES_CLEANUP_SCOPE_INVALID");
+      return CleanupObservationSchema.parse(await input.port.observeCleanup({ operationId: `${authorized.operationId}:cleanup`, projectId: config.projectId, region: config.region, instanceId: config.instanceId }));
+    },
     async cleanup(raw: CloudSqlPostgresProviderInput & Readonly<{ runOwnedInstanceId: string }>) {
       const authorized = await authorize(raw, config, now());
       if (InstanceIdSchema.safeParse(raw.runOwnedInstanceId).data !== config.instanceId) throw new Error("CLOUD_SQL_POSTGRES_CLEANUP_SCOPE_INVALID");
       const operationId = `${authorized.operationId}:cleanup`;
       await input.port.persist({ operationId, kind: "cleanup", authorizationRequestSha256: authorized.request.authorizationRequestSha256, authorizationReceiptSha256: authorized.receipt.authorizationReceiptSha256, projectScopeSha256: config.projectScopeSha256 });
+      const existing = CleanupObservationSchema.parse(await input.port.observeCleanup({ operationId, projectId: config.projectId, region: config.region, instanceId: config.instanceId }));
+      if (existing.status === "cleaned") return Object.freeze({ status: "cleaned" as const, operationId });
+      if (existing.status !== "missing") throw new Error(existing.status === "blocked" ? "CLOUD_SQL_POSTGRES_OPERATION_BLOCKED" : "CLOUD_SQL_POSTGRES_RECONCILIATION_PENDING");
       const immediate = await authorize(raw, config, now());
       await input.port.deleteInstance({ operationId, projectId: config.projectId, region: config.region, instanceId: config.instanceId });
       return Object.freeze({ status: "cleaned" as const, operationId, authority: "cloud_sql_postgres" as const, resourceIdentitySha256: await sha256({ projectId: config.projectId, region: config.region, instanceId: config.instanceId }) });

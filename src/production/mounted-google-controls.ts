@@ -216,6 +216,11 @@ export function createMountedGoogleControls(input: Readonly<{
       if (value.instanceId !== configuration.cloudSql.authorityInstanceId) return Object.freeze({ status: "unknown" as const });
       return probeCloudSqlSerializable({ pool: generation.dependencies.pool, journal: generation.dependencies.googleIntentJournal, operationId: value.operationId, instanceId: value.instanceId });
     },
+    async observeCleanup(value) {
+      if (value.projectId !== config.projectId) throw new Error("CLOUD_SQL_MOUNTED_CONFIGURATION_MISMATCH");
+      const state = await google.cloudSqlPostgres.observeCleanup({ operationId: await googleOperationId(provisionOperationId(value.operationId)), instanceId: value.instanceId });
+      return state.status === "completed" ? Object.freeze({ status: "cleaned" as const }) : state;
+    },
     async deleteInstance(value) { releaseUnlessPending(await google.cloudSqlPostgres.cleanup({ operationId: await googleOperationId(provisionOperationId(value.operationId)), instanceId: value.instanceId }), "CLOUD_SQL_CLEANUP"); },
   });
   const gcs: GcsControlPlanePort = Object.freeze({

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  ReleaseAuthorizationReceiptSchema,
   validateAuthorizationReceipt,
   validateAuthorizationRequest,
   type ReleaseAuthorizationReceipt,
@@ -76,10 +77,11 @@ function cloudRunScopeIsBound(request: ReleaseAuthorizationRequest, config: Clou
     && scopes.length === 1 && scopes[0]?.accountScopeSha256 === config.accountScopeSha256 && scopes[0]?.projectScopeSha256 === config.projectScopeSha256;
 }
 
-async function authorize(input: CloudRunProviderInput, config: CloudRunConfig, nowMs: number): Promise<Authorized> {
+async function authorize(input: CloudRunProviderInput, config: CloudRunConfig, nowMs: number, readOnly = false): Promise<Authorized> {
   try {
     const request = await validateAuthorizationRequest(input.request);
-    const receipt = await validateAuthorizationReceipt({ request, receipt: input.receipt, nowMs });
+    const originalReceipt = ReleaseAuthorizationReceiptSchema.parse(input.receipt);
+    const receipt = await validateAuthorizationReceipt({ request, receipt: originalReceipt, nowMs: readOnly ? Math.min(nowMs, originalReceipt.expiresAtMs - 1) : nowMs });
     const operationId = OperationIdSchema.parse(input.operationId);
     const region = RegionSchema.parse(input.region);
     if (request.candidateSha256 !== config.candidateSha256 || request.topologySha256 !== config.topologySha256
@@ -137,6 +139,11 @@ export function createNativeCloudRunProvider(input: Readonly<{ config: unknown; 
       const observation = await observeAuthorized(authorized);
       if (observation.status !== "completed") return Object.freeze({ status: observation.status, operationId: authorized.operationId });
       return Object.freeze({ status: "completed" as const, operationId: authorized.operationId, revisionSha256: await sha256(observation.revisionName), resourceIdentitySha256: await sha256({ projectId: config.projectId, region: authorized.region, serviceName: config.serviceName, imageDigest: config.imageDigest, configSha256: await configSha256 }) });
+    },
+    async observeCleanup(raw: CloudRunProviderInput & Readonly<{ runOwnedServiceName: string }>) {
+      const authorized = await authorize(raw, config, now(), true);
+      if (ServiceNameSchema.safeParse(raw.runOwnedServiceName).data !== config.serviceName) throw new Error("CLOUD_RUN_CLEANUP_SCOPE_INVALID");
+      return CleanupObservationSchema.parse(await input.port.observeCleanup({ operationId: `${authorized.operationId}:cleanup`, projectId: config.projectId, region: authorized.region, serviceName: config.serviceName }));
     },
     async cleanup(raw: CloudRunProviderInput & Readonly<{ runOwnedServiceName: string }>) {
       const authorized = await authorize(raw, config, now());

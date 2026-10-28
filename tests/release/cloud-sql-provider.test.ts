@@ -35,6 +35,7 @@ function port(transcript: string[], provisioned = new Set<string>()): CloudSqlPo
     },
     createInstance: async ({ operationId, projectId, region, instanceId }) => { transcript.push(`create:${operationId}:${projectId}:${region}:${instanceId}`); provisioned.add(operationId); },
     probeSerializable: async ({ operationId, instanceId }) => { transcript.push(`probe:${operationId}:${instanceId}`); return { status: "completed", operationId, isolationLevel: "serializable", duplicateEffectCount: 0 }; },
+    observeCleanup: async ({ operationId }) => { transcript.push(`observe-cleanup:${operationId}`); return { status: "missing" }; },
     deleteInstance: async ({ operationId, projectId, region, instanceId }) => { transcript.push(`delete:${operationId}:${projectId}:${region}:${instanceId}`); provisioned.delete(operationId); },
   };
 }
@@ -75,4 +76,20 @@ test("revalidates the exact receipt immediately before provisioning after reconc
   const provider = createNativeCloudSqlPostgresProvider({ config, port: { ...base, observeInstance: async () => { clock = 9_000; return { status: "missing" as const }; } }, now: () => clock });
   await expect(provider.apply({ request, receipt, operationId: "cloud-sql-1" })).rejects.toThrow("CLOUD_SQL_POSTGRES_AUTHORIZATION_INVALID");
   expect(transcript.some((entry) => entry.startsWith("create:"))).toBeFalse();
+});
+
+
+test("historical cleanup observation validates original scope and receipt without writes or deletion", async () => {
+  const { config, request, receipt } = await authorized();
+  const transcript: string[] = [];
+  for (const status of ["cleaned", "missing", "pending", "unknown", "blocked"] as const) {
+    const provider = createNativeCloudSqlPostgresProvider({ config, port: { ...port(transcript), async observeCleanup(value) { transcript.push(value.operationId); return { status }; } }, now: () => 10_000 });
+    const original = { request, receipt, operationId: "cloud-sql-1", runOwnedInstanceId: config.instanceId };
+    expect(await provider.observeCleanup(original)).toEqual({ status });
+    expect(transcript.splice(0)).toEqual(["cloud-sql-1:cleanup"]);
+    await expect(provider.observeCleanup({ ...original, runOwnedInstanceId: "another-instance" })).rejects.toThrow("CLEANUP_SCOPE_INVALID");
+    await expect(provider.observeCleanup({ ...original, receipt: { ...receipt, authorizationReceiptSha256: digest("9") } })).rejects.toThrow("AUTHORIZATION_INVALID");
+    await expect(provider.cleanup(original)).rejects.toThrow("AUTHORIZATION_INVALID");
+    expect(transcript).toEqual([]);
+  }
 });

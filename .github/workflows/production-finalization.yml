@@ -7,6 +7,12 @@ on:
       - "src/release/verify-finalization.ts"
       - "src/production/release-promotion.ts"
       - "src/production/release-cleanup.ts"
+      - "src/production/mounted-session-material.ts"
+      - "src/production/mounted-google-controls.ts"
+      - "src/release/native/**"
+      - "tests/release/cloud-run-provider.test.ts"
+      - "tests/release/cloud-sql-provider.test.ts"
+      - "tests/release/collector-provider.test.ts"
       - "tests/production/release-cleanup.test.ts"
       - "src/production/release-verification-authority.ts"
       - "src/release/materialize-certifier.ts"
@@ -40,6 +46,8 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: Finalizer output, independent authority and original-operation recovery
         run: bun test tests/production/release-cleanup.test.ts tests/release/finalized-bundle.test.ts tests/release/materialize-certifier.test.ts tests/release/live-controller.test.ts tests/release/deployment-forced-resume.test.ts tests/release/certify-release.test.ts --timeout 15000
+      - name: Native owned cleanup and mounted composition
+        run: bun test tests/release/cloud-run-provider.test.ts tests/release/cloud-sql-provider.test.ts tests/release/collector-provider.test.ts tests/production/mounted-session-material.test.ts
       - name: Restricted PostgreSQL atomic pointer and lost commit recovery
         run: NAPPLET_RUN_POSTGRES_ISOLATION=1 bun test tests/release/postgres-operation-journal.test.ts --timeout 120000
       - name: Independent original-operation fault oracle

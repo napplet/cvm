@@ -38,6 +38,12 @@ export function createMountedReleaseCleanup(input: Readonly<{
           return result.status === "cleaned" ? "cleaned" as const : "unknown" as const;
         } catch { return "unknown" as const; }
       }
+      if ((original.provider === "cloud_run" || original.provider === "cloud_sql_postgres" || original.provider === "collector") && provider.observeCleanup) {
+        try {
+          const result = await provider.observeCleanup({ operationId: effect.providerOperationId, resourceIdentitySha256: effect.resourceIdentitySha256 });
+          return result.status === "cleaned" ? "cleaned" as const : "unknown" as const;
+        } catch { return "unknown" as const; }
+      }
       // A generic completed result proves an applied resource still exists.
       // Even missing is insufficient without a dedicated original-cleanup
       // observation (it can mean an unknown local operation). Keep recovery

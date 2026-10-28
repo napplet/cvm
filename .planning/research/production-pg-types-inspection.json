@@ -1,0 +1,31 @@
+{
+  "files": [
+    "pg/LICENSE",
+    "pg/README.md",
+    "pg/index.d.mts",
+    "pg/index.d.ts",
+    "pg/package.json",
+    "pg/lib/connection-parameters.d.ts",
+    "pg/lib/type-overrides.d.ts"
+  ],
+  "integrity": "sha512-LF7lF6zWEKxuT3/OR8wAZGzkg4ENGXFNyiV/JeOt9z5B+0ZVwbql9McqX5c/WStFq1GaGso7H1AzP/qSzmlCKQ==",
+  "kind": "development-dependency-inspection",
+  "lifecycleScripts": {},
+  "limitations": [
+    "Compile-time declaration package only; no protected certification or live provider evidence.",
+    "Installation used --ignore-scripts; existing runtime dependency versions remain unchanged."
+  ],
+  "metadataSha256": "b1d507c7637eefdf4ef90dacec9c975ca06276c9fd85054dff1309eb9076a92c",
+  "name": "@types/pg",
+  "observedAt": "2026-10-28T08:41:34.899152+00:00",
+  "registryUrl": "https://registry.npmjs.org/@types%2fpg/8.15.5",
+  "runtimeDependencyChanges": false,
+  "source": {
+    "directory": "types/pg",
+    "type": "git",
+    "url": "https://github.com/DefinitelyTyped/DefinitelyTyped.git"
+  },
+  "tarballSha256": "c82bd2fe458b6597d5cde34f78554dccf1eb7d812af04f88dc46448a64b05c0f",
+  "tarballUrl": "https://registry.npmjs.org/@types/pg/-/pg-8.15.5.tgz",
+  "version": "8.15.5"
+}

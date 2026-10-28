@@ -54,7 +54,8 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@types/bun": "1.3.14"
+    "@types/bun": "1.3.14",
+    "@types/pg": "8.15.5"
   },
   "patchedDependencies": {
     "@contextvm/sdk@0.13.10": "patches/@contextvm%2Fsdk@0.13.10.patch"

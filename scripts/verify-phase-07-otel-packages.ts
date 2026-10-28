@@ -18,11 +18,11 @@ const SMOKE_DIRECTORY = `${CERTIFICATION_DIRECTORY}/otel-package-smokes`;
 const RENEWAL_REVIEW_DIRECTORY = `${CERTIFICATION_DIRECTORY}/otel-package-renewal-reviews`;
 const FORBIDDEN_LIFECYCLE_SCRIPTS = new Set(["preinstall", "install", "postinstall", "prepare"]);
 const APPROVED_AUDIT_DIGEST = "d7fedf16f62e4088cf17442aa39786c33bb4af8f3377e8d121d76b108eaf22b3";
-/** Immutable 2026-10-27 delegated-operator decision for the unchanged
+/** Immutable 2026-10-28 delegated-operator decision for the unchanged
  * six-package closure and current root inputs. The pending audit remains
  * separate and never gains approval authority. */
-const APPROVED_OPERATOR_RECORD_DIGEST = "57ccba52b5fe5fb7455248e00fe9809031d63e495f2ada206f7947e1b71cc003";
-const APPROVED_ROOT_INPUTS = Object.freeze({ packageJsonSha256: "dca9aebd2cbdb6a10b1dad1565667107807839545a98e10a76ff6e1bdd58891c", bunLockSha256: "2043b92ba436bba778d338bad0af0255abd61363535e06f72ae3f8a9a71630f6" });
+const APPROVED_OPERATOR_RECORD_DIGEST = "20b068453e1a39dd1411a9e66e13f732be66c6ffc52cf4adfa9f3564654c96ac";
+const APPROVED_ROOT_INPUTS = Object.freeze({ packageJsonSha256: "046a7ffc858c393c5289ffa106290fb8f01fe0365b84d9daa47aaaaa2f1a5b00", bunLockSha256: "0a2027fd7eaa6f6f609c9f1ec430a7b9095d6b45472f8833a3e00e6f0604c187" });
 /** The upstream base is only a recipe input. Smoke records bind the locally
  * measured derived collector image instead of mounting configuration into a
  * bare upstream container. */

@@ -4,6 +4,7 @@ import type { ContinuationFundingStore, ContinuationFundingSnapshot } from "../p
 import type { CheckpointRestoreRequest, ContinuationWorkerPort } from "../phase-02/contracts";
 import { canonicalJson } from "../promotion/schema";
 import { emitLifecycleObservation, type LifecycleTelemetryPort } from "../telemetry/contracts";
+import type { PendingCommandPort } from "./protected-command";
 
 const GRACE_WINDOW_MS = 600_000;
 
@@ -79,13 +80,13 @@ export type WakeEffectReconciliationPort = Readonly<{
 export class ContinuationService {
   #resumeInFlight = new Map<string, Promise<ResumeSessionResult>>();
   #resumeResults = new Map<string, ResumeSessionResult>();
-  constructor(private readonly options: Readonly<{ store: ContinuationFundingStore; clock?: Readonly<{ nowMs(): number }>; resume?: ResumeDependencies; wakeReconciliation?: WakeEffectReconciliationPort; telemetry?: LifecycleTelemetryPort; includeAdmissionHold?: boolean }>) {}
+  constructor(private readonly options: Readonly<{ store: ContinuationFundingStore; clock?: Readonly<{ nowMs(): number }>; resume?: ResumeDependencies; wakeReconciliation?: WakeEffectReconciliationPort; telemetry?: LifecycleTelemetryPort; includeAdmissionHold?: boolean; pendingCommands?: PendingCommandPort }>) {}
 
   #spendable(funding: ContinuationFundingSnapshot): bigint {
     return funding.availableBalance + (this.options.includeAdmissionHold ? funding.remainingCap : 0n);
   }
 
-  async pauseForFunding(input: Readonly<{ intent: PendingActionIntent }>): Promise<NeedsTopUpResult | undefined> {
+  async pauseForFunding(input: Readonly<{ intent: PendingActionIntent; command?: unknown }>): Promise<NeedsTopUpResult | undefined> {
     const intent = PendingActionIntentSchema.parse(input.intent);
     return this.options.store.transact(intent.accountId, async (transaction) => {
       const existing = await transaction.findContinuation(intent.idempotencyKey);
@@ -103,6 +104,7 @@ export class ContinuationService {
       const requiredCapApproval = shortfall(actionMaximum, funding.remainingCap);
       if (requiredAdditionalFunding === 0n && requiredCapApproval === 0n) return undefined;
       const deadline = (this.options.clock ?? { nowMs: Date.now }).nowMs() + GRACE_WINDOW_MS;
+      const protectedCommand = this.options.pendingCommands ? await this.options.pendingCommands.seal({ command: input.command, intent, retentionUntilMs: deadline + 2_592_000_000 }) : undefined;
       const nextRequiredAction = requiredAdditionalFunding > 0n && requiredCapApproval > 0n ? "top_up_and_approve_cap" as const : requiredAdditionalFunding > 0n ? "top_up" as const : "approve_cap" as const;
       const result = NeedsTopUpResultSchema.parse({
         status: "needs_top_up", code: "ACTION_AFFORDABILITY_REQUIRED", accountId: intent.accountId, sessionId: intent.sessionId,
@@ -125,7 +127,7 @@ export class ContinuationService {
         pauseGeneration: await transaction.nextPauseGeneration(intent.sessionId),
         graceDeadlineMs: deadline,
         liveLeaseToken: `lease:live:${intent.reference}:${intent.fingerprint.slice(0, 24)}`,
-        intent,
+        intent: protectedCommand ? { ...intent, protectedCommand } : intent,
         result,
       });
       return result;

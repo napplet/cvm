@@ -4,6 +4,18 @@ import { z } from "zod";
 export const CanonicalSatSchema = z.string().regex(/^(0|[1-9][0-9]*)$/u);
 export const EpochMillisecondsSchema = z.number().int().nonnegative();
 
+export const ProtectedContinuationCommandSchema = z.object({
+  schemaVersion: z.literal("protected-continuation-command-v1"),
+  keyReference: z.string().min(1).max(256),
+  retentionUntilMs: EpochMillisecondsSchema,
+  bindingSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  nonceBase64: z.string().length(16),
+  wrapNonceBase64: z.string().length(16),
+  wrappedDekBase64: z.string().length(64),
+  ciphertextBase64: z.string().min(24).max(100_000).regex(/^[A-Za-z0-9+/]+={0,2}$/u),
+}).strict();
+export type ProtectedContinuationCommand = z.infer<typeof ProtectedContinuationCommandSchema>;
+
 /** Durable identity for work that has not crossed an effectful boundary. */
 export const PendingActionIntentSchema = z.object({
   accountId: z.string().min(1),
@@ -21,6 +33,8 @@ export const PendingActionIntentSchema = z.object({
   toolchainId: z.string().min(1),
   actionMaximum: CanonicalSatSchema,
   admissionReference: z.string().min(1),
+  /** Private encrypted command, committed atomically with the pause. */
+  protectedCommand: ProtectedContinuationCommandSchema.optional(),
 }).strict();
 
 export const NeedsTopUpResultSchema = z.object({

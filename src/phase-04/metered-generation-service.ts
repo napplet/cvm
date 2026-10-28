@@ -50,7 +50,7 @@ export type StartSessionCommand = z.infer<typeof StartSessionCommandSchema>;
 export type ReviseSessionCommand = z.infer<typeof ReviseSessionCommandSchema>;
 export type TriggerValidationRepairCommand = z.infer<typeof TriggerValidationRepairCommandSchema>;
 export type SessionActionResult = z.infer<typeof SessionActionResultSchema>;
-type GenerationCommand = StartSessionCommand | ReviseSessionCommand | (TriggerValidationRepairCommand & Readonly<{ repair: true }>);
+export type GenerationCommand = StartSessionCommand | ReviseSessionCommand | (TriggerValidationRepairCommand & Readonly<{ repair: true }>);
 type ContinuationWakePort = Readonly<{
   continueAction(input: Readonly<{ pendingActionReference: string; actionBudgetReference: string; operationId: string; liveLeaseToken: string }>): Promise<void>;
   /** Lookup-only exact-operation observer used during coordinator restart. */
@@ -273,7 +273,7 @@ export class MeteredGenerationService {
     const pauseFingerprint = await hash({ accountId, sessionId, actionKind, boundedPayloadHash, expectedSessionVersion: command.expectedVersion, expectedArtifactVersion: command.expectedVersion, policyVersion: command.policyVersion, priceCardId: priceCard.id, profileId: profile.id, toolchainId, actionMaximum: profileCeiling, idempotencyKey: command.idempotencyKey });
     if (!options.bypassLegacyContinuation) {
       const continuation = this.#continuation();
-      const paused = await continuation.pauseForFunding({ intent: { accountId, sessionId, idempotencyKey: command.idempotencyKey, fingerprint: pauseFingerprint, reference: `pending:${(await hash({ accountId, key: command.idempotencyKey, pauseFingerprint })).slice(0, 24)}`, actionKind, boundedPayloadHash, expectedSessionVersion: command.expectedVersion, expectedArtifactVersion: command.expectedVersion, policyVersion: command.policyVersion, priceCardId: priceCard.id, profileId: profile.id, toolchainId, actionMaximum: profileCeiling, admissionReference: command.admissionReference } });
+      const paused = await continuation.pauseForFunding({ command, intent: { accountId, sessionId, idempotencyKey: command.idempotencyKey, fingerprint: pauseFingerprint, reference: `pending:${(await hash({ accountId, key: command.idempotencyKey, pauseFingerprint })).slice(0, 24)}`, actionKind, boundedPayloadHash, expectedSessionVersion: command.expectedVersion, expectedArtifactVersion: command.expectedVersion, policyVersion: command.policyVersion, priceCardId: priceCard.id, profileId: profile.id, toolchainId, actionMaximum: profileCeiling, admissionReference: command.admissionReference } });
       if (paused) return SessionActionResultSchema.parse(paused);
     }
     // Database action IDs are globally primary-keyed.  Include owner/session

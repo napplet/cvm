@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
 import { Pool } from "pg";
+import { canonicalJson } from "../../src/promotion/schema";
+import { ProtectedContinuationCommands } from "../../src/continuity/protected-command";
+import { loadMountedCheckpointKek } from "../../src/production/checkpoint-crypto";
 import { ContinuationService } from "../../src/continuity/continuation-service";
 import { AesGcmCheckpointCrypto, CheckpointEnvelopeService } from "../../src/continuity/checkpoint-envelope";
 import { DeterministicObjectStore } from "../../src/continuity/object-store";
@@ -46,13 +49,32 @@ integration("same-controller resume retries after credit and uncertain allocatio
     const accountId = (await credit("initial")).accountId;
     const admission = await funding.execute({ principal, kind: "funded_admission", idempotencyKey: "admit:retry", policyVersion: "fixture", protocolVersion: "fixture", payload: { requestedCap: "10", unit: "sat", capacity: { usable: true, reference: "capacity:retry" } } });
     if (admission.status !== "accepted") throw new Error("FIXTURE_ADMISSION_REQUIRED");
-    const admissionReference = admission.reference, sessionId = "session:retry", checkpointId = "checkpoint:retry";
-    const intent = { accountId, sessionId, idempotencyKey: "pending:retry", fingerprint: "a".repeat(64), reference: "pending:retry", actionKind: "start_session" as const, boundedPayloadHash: "b".repeat(64), expectedSessionVersion: 0, expectedArtifactVersion: 0, policyVersion: "fixture", priceCardId: "retry-card", profileId: "retry-profile", toolchainId: "retry-toolchain", actionMaximum: "10", admissionReference };
-    const pause = await new ContinuationService({ store, clock: { nowMs: () => now } }).pauseForFunding({ intent });
+    const admissionReference = admission.reference, checkpointId = "checkpoint:retry";
+    const hash = (value: unknown) => new Bun.CryptoHasher("sha256").update(canonicalJson(value)).digest("hex");
+    const pendingCommand = { principal, admissionReference, idempotencyKey: "pending:retry", expectedVersion: 0 as const, maximum: "10", policyVersion: "fixture", idea: "Private bounded timer command retained across pause." };
+    const sessionId = `session:${hash({ accountId, key: pendingCommand.idempotencyKey }).slice(0, 24)}`;
+    const commands = () => new ProtectedContinuationCommands({ reference: "test:checkpoint-kek", load: () => loadMountedCheckpointKek({ kekPath: "/test/kek", readFile: async () => Buffer.alloc(32, 9).toString("base64") }) }, () => now);
+    const intent = { accountId, sessionId, idempotencyKey: "pending:retry", fingerprint: "a".repeat(64), reference: "pending:retry", actionKind: "start_session" as const, boundedPayloadHash: hash({ idea: pendingCommand.idea }), expectedSessionVersion: 0, expectedArtifactVersion: 0, policyVersion: "fixture", priceCardId: "retry-card", profileId: "retry-profile", toolchainId: "retry-toolchain", actionMaximum: "10", admissionReference };
+    // Interrupt after the INSERT but before commit: neither the pause nor
+    // its encrypted command may survive independently of the transaction.
+    const rawPool = sqlPool(native);
+    const failedPool: PostgresSqlPool = { async connect() { const client = await rawPool.connect(); return {
+      async query<Row extends Record<string, unknown>>(sql: string, values?: readonly unknown[]) { const result = await client.query<Row>(sql, values); if (sql.startsWith("INSERT INTO continuation_pauses")) throw new Error("PAUSE_WRITE_INTERRUPTED"); return result; },
+      release() { client.release(); },
+    }; } };
+    const failedStore = new PostgresFundingDatabase(failedPool, { realm: "production-real" }).funding;
+    await expect(new ContinuationService({ store: failedStore, clock: { nowMs: () => now }, pendingCommands: commands() }).pauseForFunding({ intent, command: pendingCommand })).rejects.toThrow("PAUSE_WRITE_INTERRUPTED");
+    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.continuation_pauses")).rows[0].count).toBe(0);
+    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.metered_sessions")).rows[0].count).toBe(0);
+    const pause = await new ContinuationService({ store, clock: { nowMs: () => now }, pendingCommands: commands() }).pauseForFunding({ intent, command: pendingCommand });
     if (!pause) throw new Error("FIXTURE_PAUSE_REQUIRED");
     now = pause.graceDeadlineMs;
     const live = await store.findContinuationPause(accountId, sessionId, 1);
     if (!live?.liveLeaseToken) throw new Error("FIXTURE_LIVE_LEASE_REQUIRED");
+    expect(JSON.stringify(live)).not.toContain(pendingCommand.idea);
+    expect(await commands().open(live.intent)).toEqual(pendingCommand); // New protector/controller.
+    expect(JSON.stringify(pause)).not.toContain("protectedCommand");
+    expect(JSON.stringify(pause)).not.toContain("ciphertextBase64");
     await store.transact(accountId, (tx: ContinuationFundingTransaction) => tx.beginDeadlineCheckpoint({ sessionId, pauseGeneration: 1, liveLeaseToken: live.liveLeaseToken! }));
     const envelope = new CheckpointEnvelopeService({ crypto: new AesGcmCheckpointCrypto(), objectStore: new DeterministicObjectStore(), now: () => new Date(now).toISOString() });
     const material = await envelope.seal({ checkpointId, accountId, sessionId, pauseGeneration: 1, sessionVersion: 0, actionVersion: 0, artifactVersion: 0, workspaceVersion: 0, workspaceLineage: "workspace:retry", action: { actionId: "action:fixture", operationId: "operation:fixture", ledgerReference: admissionReference, pendingActionReference: intent.reference, idempotencyKey: intent.idempotencyKey }, archive: new TextEncoder().encode("explicit protocol archive fixture"), inventory: ["harness_state", "workspace", "artifact_lineage", "validation_evidence", "financial_action", "pending_action", "compatibility_metadata"], evidenceSha256: "e".repeat(64), compatibility: { policyVersion: "fixture", modelIdentity: "retry-profile", nappletSdkIdentity: "retry-card", toolchainIdentity: "retry-toolchain" }, retentionUntil: new Date(now + 2_592_000_000).toISOString() });

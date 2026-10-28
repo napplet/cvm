@@ -26,6 +26,11 @@ function maximum(intent: ProviderOperationIntent): number {
   if (!Number.isSafeInteger(units) || units < 1 || units > 100_000) throw new Error("PRODUCTION_VERTEX_OUTPUT_BOUND_REQUIRED");
   return units;
 }
+function maximumInput(intent: ProviderOperationIntent): number {
+  const bound = Number(intent.maximumUnits.find(unit => unit.dimension === "input_tokens")?.units);
+  if (!Number.isSafeInteger(bound) || bound < 1 || bound > 100_000) throw new Error("PRODUCTION_VERTEX_INPUT_BOUND_REQUIRED");
+  return bound;
+}
 
 /** Adapts the durable Vertex original-operation client to the transport-neutral
  * generation core. It has no retries: ambiguous Vertex observations become
@@ -34,8 +39,13 @@ export class ProductionVertexModelGateway implements ModelGateway {
   constructor(private readonly input: Readonly<{ vertex: ReturnType<typeof createVertexDeploymentClient>; proposals: ProductionSourceProposalStore }>) {}
   async dispatch(intent: ProviderOperationIntent, signal: AbortSignal): Promise<ModelDispatchObservation> {
     if (signal.aborted) return { status: "usage_unknown", operationId: intent.operationId, providerRequestId: intent.providerRequestId, reason: "aborted", provenance: { protectedEvidenceReference: `vertex-operation:${intent.operationId}` } };
-    try { return await this.#observation(intent, await this.input.vertex.dispatch({ operationId: intent.operationId, idea: intent.prompt, systemInstruction: SYSTEM, maximumOutputTokens: maximum(intent) })); }
-    catch { return { status: "usage_unknown", operationId: intent.operationId, providerRequestId: intent.providerRequestId, reason: "lost_response", provenance: { protectedEvidenceReference: `vertex-operation:${intent.operationId}` } }; }
+    try { return await this.#observation(intent, await this.input.vertex.dispatch({ operationId: intent.operationId, idea: intent.prompt, systemInstruction: SYSTEM, maximumOutputTokens: maximum(intent), maximumInputTokens: maximumInput(intent) })); }
+    catch (error) {
+      // These checks run before a fresh provider journal claim/POST. Transport
+      // failures occur inside the client and remain original-only unknowns.
+      if (error instanceof Error && ["VERTEX_INPUT_CAP_EXCEEDED", "VERTEX_PRICE_SNAPSHOT_STALE", "PRODUCTION_VERTEX_INPUT_BOUND_REQUIRED"].includes(error.message)) return { status: "definitive_not_accepted", operationId: intent.operationId, providerRequestId: intent.providerRequestId, reason: "pre_dispatch_rejected", provenance: { protectedEvidenceReference: `vertex-pre-dispatch:${intent.operationId}` } };
+      return { status: "usage_unknown", operationId: intent.operationId, providerRequestId: intent.providerRequestId, reason: "lost_response", provenance: { protectedEvidenceReference: `vertex-operation:${intent.operationId}` } };
+    }
   }
   async lookup(intent: ProviderOperationIntent, signal: AbortSignal): Promise<ModelLookupObservation> {
     if (signal.aborted) return { status: "unresolved", operationId: intent.operationId, providerRequestId: intent.providerRequestId, provenance: { protectedEvidenceReference: `vertex-operation:${intent.operationId}` } };

@@ -31,12 +31,47 @@ function client(input: Readonly<{ port: VertexInteractionsPort; journal?: Vertex
   return createVertexDeploymentClient({ candidateSha256: digest("c"), projectId: "napplet-cvm-run-1", location: "global", model: "gemini-4-argon", credentialReference: "gcp:adc:release", price, journal: input.journal ?? defaultJournal, interactions: input.port, now: input.now ?? (() => 1_500) });
 }
 
+test.each([`operation:${"a".repeat(24)}`, `resume-operation:checkpoint:session:${"b".repeat(24)}:1:${"c".repeat(24)}`])("actual generation operation %s retains its identity through dispatch and original lookup", async operationId => {
+  let creates = 0;
+  const subject = client({ port: {
+    async create(value) { creates++; return interaction(value.input); },
+    async get() { throw new Error("CACHED_ORIGINAL_EXPECTED"); },
+    async list() { throw new Error("CACHED_ORIGINAL_EXPECTED"); },
+  } });
+  expect(await dispatch(subject, operationId)).toMatchObject({ status: "completed", operationId });
+  expect(await subject.reconcileOriginal({ operationId })).toMatchObject({ status: "completed", operationId });
+  expect(creates).toBe(1);
+});
+
+test("invalid or oversized operation IDs cannot dispatch a model request", async () => {
+  let creates = 0;
+  const subject = client({ port: { async create(value) { creates++; return interaction(value.input); }, async get() { throw new Error("UNUSED"); }, async list() { throw new Error("UNUSED"); } } });
+  for (const id of ["../operation:bad", "operation:/bad", "operation:\ninvalid", `operation:${"a".repeat(256)}`]) await expect(dispatch(subject, id)).rejects.toThrow();
+  expect(creates).toBe(0);
+});
+
+test("fully cached input replays the original cost without subtracting cached tokens again", async () => {
+  const subject = client({ port: { async create(value) { return interaction(value.input, { usage: { input_tokens: 1000, cached_input_tokens: 1000, output_tokens: 1, thought_tokens: 0, tool_use_tokens: 0 } }); }, async get() { throw new Error("CACHED_ORIGINAL_EXPECTED"); }, async list() { throw new Error("CACHED_ORIGINAL_EXPECTED"); } } });
+  const original = await dispatch(subject);
+  expect(original).toMatchObject({ status: "completed", usage: { inputTokens: 0, cachedInputTokens: 1000 }, cost: { currency: "USD", micros: 220 } });
+  expect(await subject.reconcileOriginal({ operationId: "vertex-original-op" })).toEqual(original);
+});
+
+test("a profile input bound checks complete encoded input before the original journal claim or POST", async () => {
+  const [records, values] = journal();
+  let creates = 0;
+  const subject = client({ journal: records, port: { async create(value) { creates++; return interaction(value.input); }, async get() { throw new Error("UNUSED"); }, async list() { throw new Error("UNUSED"); } } });
+  await expect(subject.dispatch({ operationId: "operation:input-bound", idea: "a", systemInstruction: "JSON only", maximumOutputTokens: 32, maximumInputTokens: 16 })).rejects.toThrow("VERTEX_INPUT_CAP_EXCEEDED");
+  expect(creates).toBe(0);
+  expect(values.size).toBe(0);
+});
+
 test("uses the documented global Interactions REST paths and snake_case payload without a retried paid POST", async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
-  const port = createVertexInteractionsHttpPort({ accessToken: async () => "a".repeat(32), fetch: async (url, init) => {
+  const port = createVertexInteractionsHttpPort({ accessToken: async () => "a".repeat(32), fetch: Object.assign(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
     calls.push({ url: String(url), init });
     return new Response(JSON.stringify(interaction([], { usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, thought_tokens: 0, tool_use_tokens: 0 } })));
-  } });
+  }, { preconnect() {} }) });
   await port.create({ projectId: "napplet-cvm-run-1", location: "global", model: "gemini-4-argon", store: true, input: [], systemInstruction: "Only JSON", responseMimeType: "application/json", responseFormat: { type: "json_schema" }, generationConfig: { maxOutputTokens: 512, thinkingLevel: "low" } });
   expect(calls.map((call) => call.url)).toEqual([
     "https://aiplatform.googleapis.com/v1beta1/projects/napplet-cvm-run-1/locations/global/interactions",
@@ -47,10 +82,10 @@ test("uses the documented global Interactions REST paths and snake_case payload 
 
 test("uses the Plan 63 ADC source directly without accepting a caller-supplied bearer string", async () => {
   let tokenReads = 0;
-  const port = createVertexInteractionsHttpPort({ tokenSource: { async getAccessToken() { tokenReads += 1; return { token: "a".repeat(32), projectId: "napplet-cvm-run-1", quotaProjectId: "napplet-cvm-run-1", principal: "release@example.com", scopes: ["https://www.googleapis.com/auth/cloud-platform"], accountScopeSha256: digest("a"), expiresAtMs: 2_000_000 }; } }, fetch: async (_url, init) => {
-    expect(init.headers).toEqual(expect.objectContaining({ authorization: `Bearer ${"a".repeat(32)}` }));
+  const port = createVertexInteractionsHttpPort({ tokenSource: { async getAccessToken() { tokenReads += 1; return { token: "a".repeat(32), projectId: "napplet-cvm-run-1", quotaProjectId: "napplet-cvm-run-1", principal: "release@example.com", scopes: ["https://www.googleapis.com/auth/cloud-platform"], accountScopeSha256: digest("a"), expiresAtMs: 2_000_000 }; } }, fetch: Object.assign(async (_url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    expect(init?.headers).toEqual(expect.objectContaining({ authorization: `Bearer ${"a".repeat(32)}` }));
     return new Response(JSON.stringify(interaction([], { usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, thought_tokens: 0, tool_use_tokens: 0 } })));
-  } });
+  }, { preconnect() {} }) });
   await port.create({ projectId: "napplet-cvm-run-1", location: "global", model: "gemini-4-argon", store: true, input: [], systemInstruction: "Only JSON", responseMimeType: "application/json", responseFormat: { type: "json_schema" }, generationConfig: { maxOutputTokens: 512, thinkingLevel: "low" } });
   expect(tokenReads).toBe(1);
   expect(() => createVertexInteractionsHttpPort({ accessToken: async () => "a".repeat(32), tokenSource: { async getAccessToken() { throw new Error("not used"); } } })).toThrow("VERTEX_HTTP_CONFIGURATION_INVALID");

@@ -12,7 +12,7 @@ import { createProductionGcsObjectClient } from "./gcs-object-client";
 import { createMountedProductionWorkerClients } from "./mounted-worker-clients";
 import { createMountedVertexMaterial } from "./mounted-vertex-material";
 import type { MountedProductionSecretMaterial } from "./secret-material";
-import { ProductionSourceProposalStore } from "./source-proposal-store";
+import { ProductionSourceProposalStore, assertProductionSourceProposalSchema } from "./source-proposal-store";
 import { createProductionVertexGenerationSettlement } from "./vertex-generation-settlement";
 import { ProductionVertexModelGateway } from "./vertex-model-gateway";
 import { createProductionReadyCapacity } from "./worker-capacity";
@@ -25,6 +25,7 @@ import { assertProductionCheckpointSchema } from "./checkpoint-schema";
 export async function materializeProductionRuntimeDependencies(input: Readonly<{ config: ProductionConfig; servicePubkey: string; pool: PostgresSqlPool; secrets: MountedProductionSecretMaterial; now?: () => number }>) {
   if (input.servicePubkey !== input.config.certification.serverPubkey) throw new Error("PRODUCTION_SERVICE_SIGNER_IDENTITY_MISMATCH");
   await assertProductionCheckpointSchema(input.pool);
+  await assertProductionSourceProposalSchema(input.pool);
   const serviceJournals = await openProductionServiceJournals({ pool: input.pool, servicePubkey: input.servicePubkey, initialTopologySha256: input.config.topologySha256 });
   const scopeSha256 = input.config.topologySha256;
   const journal = new PostgresOperationJournal(input.pool, { namespace: "production-runtime", scopeSha256 });

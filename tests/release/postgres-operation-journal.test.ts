@@ -350,6 +350,21 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
     await expect(jobClient().restoreWorkspace({ ...restoreInput, bindingSha256: scopeSha256 })).rejects.toThrow("OPERATION_IDENTITY_CONFLICT");
     expect(restores).toBe(1);
 
+    const capabilityContent = '{"required":[],"optional":[]}', capabilityReceipt = { state: "present", path: "src/capabilities.json", sha256: hash(capabilityContent), bytesBase64: Buffer.from(capabilityContent).toString("base64") };
+    const expanded = JSON.parse(workspace.toString("utf8")); expanded.artifact.version = 2; expanded.artifact.capabilityReceipt = capabilityReceipt;
+    expanded.source.files.push({ path: "src/capabilities.json", content: capabilityContent }); expanded.artifact.jobId = hash(canonicalJson(expanded.source));
+    const changedCapabilities = structuredClone(expanded); changedCapabilities.artifact.capabilityReceipt.sha256 = scopeSha256;
+    await expect(jobClient().restoreWorkspace({ operationId: "bad-capability-restore", bindingSha256: identity, bytes: Buffer.from(canonicalJson(changedCapabilities)) })).rejects.toThrow();
+    expect(await jobJournal.read("worker-restore:bad-capability-restore")).toBeUndefined(); expect(restores).toBe(1);
+    const changedSource = structuredClone(expanded); changedSource.source.files[1].content = "changed"; changedSource.artifact.jobId = hash(canonicalJson(changedSource.source));
+    await expect(jobClient().restoreWorkspace({ operationId: "changed-capability-restore", bindingSha256: identity, bytes: Buffer.from(canonicalJson(changedSource)) })).rejects.toThrow("PRODUCTION_WORKSPACE_CAPABILITY_RECEIPT_MISMATCH");
+    expect(await jobJournal.read("worker-restore:changed-capability-restore")).toBeUndefined(); expect(restores).toBe(1);
+    const expandedBytes = Buffer.from(canonicalJson(expanded));
+    restoreReceipt = { state: "restored", archiveSha256: hash(expandedBytes), toolchainSha256: scopeSha256, sourceSha256: hash(canonicalJson(expanded.source.files)), artifactFilesSha256: hash(canonicalJson(files)), workspacePath: "/workspace/restored" };
+    expect((await jobClient().restoreWorkspace({ operationId: "expanded-original-restore", bindingSha256: identity, bytes: expandedBytes })).state).toBe("unknown");
+    expect((await jobClient().restoreWorkspace({ operationId: "expanded-original-restore", bindingSha256: identity, bytes: expandedBytes })).state).toBe("restored");
+    expect(restores).toBe(2);
+
   } finally {
     if (previousEffects === undefined) delete process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS; else process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS = previousEffects;
     if (verificationWorkspace) await rm(verificationWorkspace, { recursive: true, force: true });

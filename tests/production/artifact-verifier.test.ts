@@ -2,6 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ProductionArtifactVerifier } from "../../src/production/artifact-verifier";
+import { sealProductionWorkerArtifact } from "../../src/production/sealed-worker-artifact";
+import { canonicalJson } from "../../src/promotion/schema";
 
 const directories: string[] = [];
 const hash = (value: string) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
@@ -22,6 +24,22 @@ async function facts() {
 }
 
 describe("production artifact verifier", () => {
+  test("seals actual receipts and identity while preserving the legacy archive encoding", async () => {
+    const input = await facts(), legacy = await new ProductionArtifactVerifier().verify(input);
+    const legacyBytes = await sealProductionWorkerArtifact(legacy), old = JSON.parse(new TextDecoder().decode(legacyBytes));
+    expect(new TextDecoder().decode(legacyBytes)).toBe(canonicalJson({ version: 1, aggregateSha256: legacy.aggregateSha256, sealedObjectSha256: legacy.sealedObjectSha256, verificationEvidenceSha256: legacy.verificationEvidenceSha256, files: old.files }));
+    const content = '{"required":[],"optional":["intent"]}';
+    const present = { state: "present", path: "src/capabilities.json", sha256: hash(content), bytesBase64: Buffer.from(content).toString("base64") };
+    const verified = await new ProductionArtifactVerifier().verify({ ...input, capabilityReceipt: present });
+    const sealed = JSON.parse(new TextDecoder().decode(await sealProductionWorkerArtifact(verified)));
+    expect(sealed.version).toBe(2); expect(sealed.receipts.capability).toEqual(present);
+    expect(sealed.receipts.commands).toEqual(input.commandEvidence);
+    expect(sealed.build).toMatchObject({ accountId: input.accountId, ownerId: input.ownerId, actionId: input.actionId, proposalSha256: input.proposalSha256, toolchainSha256: input.toolchainSha256 });
+    expect(verified.verificationEvidenceSha256).not.toBe(legacy.verificationEvidenceSha256);
+    const absent = await new ProductionArtifactVerifier().verify({ ...input, capabilityReceipt: { state: "absent", path: "src/capabilities.json" } });
+    expect(absent.verificationEvidenceSha256).not.toBe(verified.verificationEvidenceSha256);
+    for (const receipt of [{ ...present, sha256: "0".repeat(64) }, { ...present, bytesBase64: present.bytesBase64 + "\n" }, { ...present, path: "../config" }, { state: "absent", path: "src/capabilities.json", required: [] }]) await expect(new ProductionArtifactVerifier().verify({ ...input, capabilityReceipt: receipt })).rejects.toThrow();
+  });
   test("approved server must match both the actual CLI configuration and manifest", async () => {
     const input = await facts(), publication = { server: "https://blossom.example" };
     const report = JSON.parse(input.commandEvidence[7]!.stdout);

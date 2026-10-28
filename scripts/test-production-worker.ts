@@ -21,7 +21,7 @@ const logPath = reportPath.replace(/\.json$/u, "") + ".log";
 // Docker's default AppArmor profile denies mounts even with CAP_SYS_ADMIN.
 // This is deliberately not a production provider isolation certificate.
 const resourceArgs = ["--cpus", "1", "--memory", "1024m", "--memory-swap", "1024m", "--security-opt", "apparmor=unconfined"];
-const containers = [`napplet-cvm-production-worker-build-${run}`, `napplet-cvm-production-worker-idle-${run}`, `napplet-cvm-production-worker-ready-${run}`, `napplet-cvm-production-worker-jobs-${run}`, `napplet-cvm-production-worker-restore-${run}`];
+const containers = [`napplet-cvm-production-worker-build-${run}`, `napplet-cvm-production-worker-idle-${run}`, `napplet-cvm-production-worker-ready-${run}`, `napplet-cvm-production-worker-jobs-${run}`, `napplet-cvm-production-worker-restore-${run}`, `napplet-cvm-production-worker-legacy-restore-${run}`];
 const lease = "a".repeat(64);
 const imageHash = "b".repeat(64);
 const toolchain = "c".repeat(64);
@@ -169,7 +169,7 @@ try {
   let checkpointWorkspace: Buffer | undefined, lastJobId = "";
   const jobManifests: unknown[] = [];
   for (let revision = 1; revision <= 2; revision++) {
-    const body = canonicalJson({ version: 1, sessionId: "local-job-proof", actionId: `revision-${revision}`, expectedVersion: revision - 1, proposalSha256: lease, toolchainSha256: toolchain, deadlineEpochMs: Date.now() + 600_000, files: JSON.parse(sourceJson).files, ...(revision === 2 ? { publication: { server: "https://publication.example" } } : {}) });
+    const body = canonicalJson({ version: 1, sessionId: "local-job-proof", actionId: `revision-${revision}`, expectedVersion: revision - 1, proposalSha256: lease, toolchainSha256: toolchain, deadlineEpochMs: Date.now() + 600_000, files: [...JSON.parse(sourceJson).files, ...(revision === 2 ? [{ path: "src/capabilities.json", content: '{"required":[],"optional":[]}' }] : [])], ...(revision === 2 ? { publication: { server: "https://publication.example" } } : {}) });
     const bytes = Buffer.from(body), id = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
     for (let offset = 0, index = 0; offset < bytes.length; offset += 24_576, index++) {
       const stored = await jobCommand("put", id, String(index), bytes.subarray(offset, offset + 24_576).toString("base64"));
@@ -188,7 +188,7 @@ try {
     const observedAgain = await jobCommand("status", id);
     if (replayed.jobId !== id || canonicalJson(observedAgain) !== canonicalJson(result)) throw new Error("WORKER_JOB_REDISPATCHED");
     jobs.push({ ...result, revision, resultAccess: "denied-to-generated-uid" });
-    if (revision === 2) {
+    {
       const parts: Buffer[] = [];
       for (let offset = 0; offset < Number(result.artifactBytes); offset += 24_576) {
         const part = await jobCommand("artifact", id, String(offset)); parts.push(Buffer.from(String(part.bytesBase64), "base64"));
@@ -196,12 +196,17 @@ try {
       const artifactBytes = Buffer.concat(parts);
       if (new Bun.CryptoHasher("sha256").update(artifactBytes).digest("hex") !== result.artifactSha256) throw new Error("WORKER_ARTIFACT_EXPORT_INVALID");
       const artifact = JSON.parse(artifactBytes.toString("utf8"));
+      if (artifact.version !== 2 || artifact.capabilityReceipt?.path !== "src/capabilities.json" || artifact.capabilityReceipt.state !== (revision === 1 ? "absent" : "present")) throw new Error("WORKER_CAPABILITY_RECEIPT_MISSING");
+      if (revision === 2) {
+        const bytes = Buffer.from(artifact.capabilityReceipt.bytesBase64, "base64");
+        if (bytes.toString("utf8") !== '{"required":[],"optional":[]}' || new Bun.CryptoHasher("sha256").update(bytes).digest("hex") !== artifact.capabilityReceipt.sha256) throw new Error("WORKER_CAPABILITY_RECEIPT_INVALID");
+      }
       const manifest = requireManifest(artifact.commandEvidence[7].stdout);
       const named = JSON.parse(artifact.commandEvidence[7].stdout).plan.items[0];
       if (named.kind !== 35129 || named.target !== "named" || named.dTag !== `cvm-${id.slice(0, 24)}` || manifest.template?.kind !== 35129 || manifest.template.tags.filter((tag: string[]) => tag[0] === "d").length !== 1 || !manifest.template.tags.some((tag: string[]) => tag.length === 2 && tag[0] === "d" && tag[1] === named.dTag)) throw new Error("WORKER_CLI_NAMED_TARGET_REQUIRED");
       const serverTags = manifest.template.tags.filter((tag: string[]) => tag[0] === "server");
       const cliServers = JSON.parse(artifact.commandEvidence[7].stdout).blossomServers;
-      if (canonicalJson(serverTags) !== canonicalJson([["server", "https://publication.example"]]) || canonicalJson(cliServers) !== canonicalJson(["https://publication.example"])) throw new Error("WORKER_CLI_APPROVED_SERVER_REQUIRED");
+      if (revision === 2 && (canonicalJson(serverTags) !== canonicalJson([["server", "https://publication.example"]]) || canonicalJson(cliServers) !== canonicalJson(["https://publication.example"]))) throw new Error("WORKER_CLI_APPROVED_SERVER_REQUIRED");
       jobManifests.push(manifest);
       if (manifest.files.length !== artifact.files.length || manifest.files.some((file: { path: string; sha256: string }) => !artifact.files.some((actual: { path: string; sha256: string }) => `/${actual.path}` === file.path && actual.sha256 === file.sha256))) throw new Error("WORKER_CLI_FILE_BINDING_INVALID");
       checkpointWorkspace = Buffer.from(canonicalJson({ version: 1, source: JSON.parse(body), artifact: JSON.parse(artifactBytes.toString("utf8")), toolchainSha256: toolchain })); lastJobId = id;
@@ -229,6 +234,16 @@ try {
   await requireDocker(["exec", freshName, "/usr/local/bin/napplet-cvm-bootstrap", "/bin/sh", "-ec", "test -r /workspace/restored/src/main.ts; test -r /workspace/restored/dist/index.html; test ! -w /workspace/restored/src/main.ts; test ! -r /run/napplet-cvm-jobs/restoring"]);
   const originalAbsent = await restoreCommand("status", lastJobId);
   if (originalAbsent.state !== "missing") throw new Error("WORKER_RESTORE_DISPATCHED_BUILD");
+  // Real new-job bytes projected into the historical format exercise reader
+  // compatibility. This is not an observation from an old provider/image.
+  const legacyWorkspace = JSON.parse(archive.toString("utf8")); legacyWorkspace.artifact.version = 1; delete legacyWorkspace.artifact.capabilityReceipt;
+  const legacyArchive = Buffer.from(canonicalJson(legacyWorkspace)), legacySha = new Bun.CryptoHasher("sha256").update(legacyArchive).digest("hex"), legacyName = containers[5]!;
+  await requireDocker(["run", "-d", "--name", legacyName, ...resourceArgs, "--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "-e", `NAPPLET_CVM_POLICY_VERSION=${POLICY}`, image, "/usr/local/bin/napplet-cvm-worker", "idle", "--provider-deadline-epoch-ms", String(Date.now() + 1_200_000)]);
+  const legacyCommand = async (...args: string[]) => lastJson((await requireDocker(["exec", legacyName, "/usr/local/bin/napplet-cvm-bootstrap", "/usr/local/bin/napplet-cvm-job", ...args])).stdout);
+  for (let offset = 0, index = 0; offset < legacyArchive.length; offset += 24_576, index++) await legacyCommand("restore-put", legacySha, String(index), legacyArchive.subarray(offset, offset + 24_576).toString("base64"));
+  const legacyRestored = await legacyCommand("restore", legacySha, String(Math.ceil(legacyArchive.length / 24_576)));
+  if (legacyRestored.state !== "restored" || canonicalJson(legacyRestored) !== canonicalJson(await legacyCommand("restore-status", legacySha))) throw new Error("WORKER_LEGACY_RESTORE_FAILED");
+  report.capabilityReceipts = { first: "absent", second: "present", newArchiveVersion: 2, legacyFormatProjectionRestored: legacyRestored };
   report.checkpoint = { fence, deniedNewStart: true, restored, repeatedObservationStable: true, originalJobAbsent: true, restoreChunks: Math.ceil(archive.length / 24_576), sourceBytes: Buffer.byteLength(sourceJson), freshContainer: freshName };
 
   const idleName = containers[1]!; const idleDeadline = Date.now() + 12_000;

@@ -1,22 +1,29 @@
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 const SOURCE_REPOSITORY = "https://github.com/napplet/web.git";
-const SOURCE_COMMIT = "976ad0549c38f93d4ed418d3ea59a615a7e5fd7f";
-const SOURCE_LOCK_SHA256 = "914eb84228c77b83b040a23854cdf7b320f9fe4ba20a40dfff3c6ef3ff6bd9b8";
 const DENO_VERSION = "2.9.6";
 const DENO_ASSET_URL = "https://github.com/denoland/deno/releases/download/v2.9.6/deno-x86_64-unknown-linux-gnu.zip";
 const DENO_ASSET_SHA256 = "394f07f4da2bebe6ce6f1e7ce0fa16429b29b08c35e3fac3fe25972676dff4b2";
-const SOURCE_DATE_EPOCH = "1789254081";
 const BUILD_IMAGE = "debian@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587";
 const PROBE_IMAGE = "oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4";
+const PROBE_IMAGES = Object.freeze({
+  "x86_64-unknown-linux-gnu": "oven/bun:1.3.14@sha256:50317d83cd5a5ae1d8b35b3379c69f57ce1a0dbf4def91f0965653d767851834",
+  "aarch64-unknown-linux-gnu": "oven/bun:1.3.14@sha256:d8a4c24744b290bf789d58966a6f2521fc4d8bec36ec02cead6c541147b7d550",
+});
 const TARGETS = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"] as const;
 const COMMAND_TIMEOUT_MS = 15 * 60_000;
+export const CLI_SOURCE_BUILD_PROFILES = Object.freeze({
+  legacy: Object.freeze({ cliVersion: "0.5.2", commit: "976ad0549c38f93d4ed418d3ea59a615a7e5fd7f", lockSha256: "914eb84228c77b83b040a23854cdf7b320f9fe4ba20a40dfff3c6ef3ff6bd9b8", sourceDateEpoch: "1789254081", buildLockSha256: "914eb84228c77b83b040a23854cdf7b320f9fe4ba20a40dfff3c6ef3ff6bd9b8", lockOverlay: null }),
+  "capabilities-0.13.0": Object.freeze({ cliVersion: "0.13.0", commit: "3c6e3ae33fea425b2f151740c0bd8c02f509ef7b", lockSha256: "7b08677e37bbfedfde17343a3612d223a547b8bf058df7e6c9c73881f9e7c0eb", sourceDateEpoch: "1793178237", buildLockSha256: "363cebbc9a8ca0cf5ef7cc7c81ccf2f598bb49ef0dfb6ae696b4a529cdc6f06d", lockOverlay: "toolchains/locks/capabilities-cli/deno.lock" }),
+});
+type ProfileName = keyof typeof CLI_SOURCE_BUILD_PROFILES;
+let selectedProfile: (typeof CLI_SOURCE_BUILD_PROFILES)[ProfileName] = CLI_SOURCE_BUILD_PROFILES.legacy;
 
 type Target = (typeof TARGETS)[number];
 type CommandResult = Readonly<{ argv: readonly string[]; exitCode: number; stdout: string; stderr: string }>;
 
 function usage(): never {
-  throw new Error("Usage: bun scripts/rebuild-napplet-cli-source.ts --output /absolute/empty/directory");
+  throw new Error("Usage: bun scripts/rebuild-napplet-cli-source.ts [--profile legacy|capabilities-0.13.0] --output /absolute/empty/directory");
 }
 
 function sha256(bytes: Uint8Array): string {
@@ -55,7 +62,7 @@ async function writeLog(path: string, result: CommandResult): Promise<void> {
 }
 
 async function digestFile(path: string): Promise<string> {
-  return sha256(await Bun.file(path).arrayBuffer());
+  return sha256(new Uint8Array(await Bun.file(path).arrayBuffer()));
 }
 
 async function ensureEmptyDirectory(path: string): Promise<void> {
@@ -78,11 +85,11 @@ function buildCommand(target: Target, output: string, cachedOnly: boolean): read
 
 function dockerCommand(source: string, cache: string, runtime: string, output: string, command: readonly string[], normalize = false): readonly string[] {
   const script = normalize
-    ? `set -eu; find /src /cache -exec touch -h -d @${SOURCE_DATE_EPOCH} {} +; exec "$@"`
-    : "set -eu; exec \"$@\"";
+    ? `set -eu; find /src /cache -exec touch -h -d @${selectedProfile.sourceDateEpoch} {} +; exec timeout --signal=TERM --kill-after=15s 840 "$@"`
+    : 'set -eu; exec timeout --signal=TERM --kill-after=15s 840 "$@"';
   return [
-    "docker", "run", "--platform", "linux/amd64", "--rm",
-    "-e", "DENO_DIR=/cache", "-e", `SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}`, "-e", "TZ=UTC", "-e", "LC_ALL=C", "-e", "LANG=C", "-e", "HOME=/home/deno",
+    "docker", "run", "--platform", "linux/amd64", "--rm", "--cpus", "2", "--memory", "2g", "--memory-swap", "2g", ...(normalize ? ["--network", "none"] : []),
+    "-e", "DENO_DIR=/cache", "-e", `SOURCE_DATE_EPOCH=${selectedProfile.sourceDateEpoch}`, "-e", "TZ=UTC", "-e", "LC_ALL=C", "-e", "LANG=C", "-e", "HOME=/home/deno",
     "-v", `${source}:/src`, "-v", `${cache}:/cache`, "-v", `${runtime}:/runtime:ro`, "-v", `${output}:/out`, "-w", "/src/packages/cli",
     BUILD_IMAGE, "sh", "-ec", script, "rebuild-napplet-cli", ...command,
   ];
@@ -91,10 +98,17 @@ function dockerCommand(source: string, cache: string, runtime: string, output: s
 async function sourceCheckout(root: string, name: string): Promise<string> {
   const checkout = join(root, name, "source");
   await requireSuccess(["git", "clone", "--quiet", "--no-checkout", SOURCE_REPOSITORY, checkout]);
-  await requireSuccess(["git", "-C", checkout, "checkout", "--quiet", "--detach", SOURCE_COMMIT]);
+  await requireSuccess(["git", "-C", checkout, "checkout", "--quiet", "--detach", selectedProfile.commit]);
   const revision = (await requireSuccess(["git", "-C", checkout, "rev-parse", "HEAD"])).stdout.trim();
-  if (revision !== SOURCE_COMMIT) throw new Error(`source checkout resolved ${revision}, expected ${SOURCE_COMMIT}`);
-  if (await digestFile(join(checkout, "deno.lock")) !== SOURCE_LOCK_SHA256) throw new Error("source deno.lock digest mismatch");
+  if (revision !== selectedProfile.commit) throw new Error(`source checkout resolved ${revision}, expected ${selectedProfile.commit}`);
+  if (await digestFile(join(checkout, "deno.lock")) !== selectedProfile.lockSha256) throw new Error("source deno.lock digest mismatch");
+  if (selectedProfile.lockOverlay) {
+    const bytes = new Uint8Array(await Bun.file(join(import.meta.dir, "..", selectedProfile.lockOverlay)).arrayBuffer());
+    if (sha256(bytes) !== selectedProfile.buildLockSha256) throw new Error("source build-lock overlay digest mismatch");
+    await Bun.write(join(checkout, "deno.lock"), bytes);
+  }
+  const metadata = await Bun.file(join(checkout, "packages/cli/deno.json")).json();
+  if (metadata.version !== selectedProfile.cliVersion) throw new Error("source CLI version mismatch");
   return checkout;
 }
 
@@ -118,25 +132,35 @@ async function seedAndBuild(root: string, name: string, target: Target, runtime:
 
 async function probeArtifact(artifact: string, target: Target): Promise<Record<string, unknown>> {
   const platform = target.startsWith("aarch64") ? "linux/arm64" : "linux/amd64";
+  const isolation = selectedProfile.cliVersion === "0.13.0" ? ["--network", "none", "--read-only", "--cap-drop", "ALL", "--user", "65532:65532", "--workdir", "/tmp", "--cpus", "1", "--memory", "1g", "--memory-swap", "1g"] : [];
   const probe = async (name: string) => {
-    const result = await run(["docker", "run", "--platform", platform, "--rm", "--entrypoint", "/out/napplet", "-v", `${artifact}:/out/napplet:ro`, PROBE_IMAGE, name]);
+    const result = await run(["docker", "run", "--platform", platform, "--rm", ...isolation, "--entrypoint", "/out/napplet", "-v", `${artifact}:/out/napplet:ro`, PROBE_IMAGES[target], name]);
     return Object.freeze({ exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr });
   };
   const [help, version, guide] = await Promise.all([probe("--help"), probe("--version"), probe("guide")]);
-  if (help.exitCode !== 0 || !help.stdout.includes("Usage:")) throw new Error(`${target} --help probe failed`);
+  await Bun.write(join(dirname(artifact), "probes.json"), JSON.stringify({ target, isolation, image: PROBE_IMAGES[target], help, version, guide }, null, 2) + "\n");
+  if (help.exitCode !== 0 || !help.stdout.includes("Usage:")) throw new Error(`${target} --help probe failed (${help.exitCode}): ${help.stderr.slice(0, 1500)} ${help.stdout.slice(0, 300)}`);
   if (guide.exitCode !== 0 || !guide.stdout.includes("Napplet Guide")) throw new Error(`${target} guide probe failed`);
-  // CLI 0.5.2 has no --version command; retaining this probe makes that contract explicit.
-  if (version.exitCode !== 2 || !version.stderr.includes("Unknown command: --version")) throw new Error(`${target} --version contract changed unexpectedly`);
+  if (selectedProfile.cliVersion === "0.5.2") {
+    // Preserve the historical executable contract for original sessions.
+    if (version.exitCode !== 2 || !version.stderr.includes("Unknown command: --version")) throw new Error(`${target} --version contract changed unexpectedly`);
+  } else if (version.exitCode !== 0 || version.stdout.trim() !== `napplet ${selectedProfile.cliVersion}`) throw new Error(`${target} --version contract changed unexpectedly`);
   return Object.freeze({ help, version, guide });
 }
 
-function parseOutputPath(argv: readonly string[]): string {
-  if (argv.length !== 2 || argv[0] !== "--output") usage();
-  return resolve(argv[1]);
+export function parseCliSourceBuildArguments(argv: readonly string[]): Readonly<{ output: string; profileName: ProfileName }> {
+  const explicit = argv.length === 4 && argv[0] === "--profile";
+  const profileName = explicit ? argv[1] : "legacy";
+  if (profileName !== "legacy" && profileName !== "capabilities-0.13.0") usage();
+  const rest = explicit ? argv.slice(2) : argv;
+  if (rest.length !== 2 || rest[0] !== "--output" || !rest[1]) usage();
+  return Object.freeze({ output: resolve(rest[1]), profileName });
 }
 
 async function main(): Promise<void> {
-  const output = parseOutputPath(process.argv.slice(2));
+  const { output, profileName } = parseCliSourceBuildArguments(process.argv.slice(2));
+  selectedProfile = CLI_SOURCE_BUILD_PROFILES[profileName];
+  const harnessSha256 = await digestFile(import.meta.path);
   await ensureEmptyDirectory(output);
   const runtime = join(output, "runtime");
   await requireSuccess(["mkdir", "-p", runtime]);
@@ -147,7 +171,7 @@ async function main(): Promise<void> {
   if (sha256(bytes) !== DENO_ASSET_SHA256) throw new Error("Deno runtime digest mismatch");
   await Bun.write(archive, bytes);
   await requireSuccess(["unzip", "-q", archive, "-d", runtime]);
-  const denoVersion = (await requireSuccess(["docker", "run", "--platform", "linux/amd64", "--rm", "-v", `${runtime}:/runtime:ro`, BUILD_IMAGE, "/runtime/deno", "--version"])).stdout;
+  const denoVersion = (await requireSuccess(["docker", "run", "--platform", "linux/amd64", "--rm", "--cpus", "2", "--memory", "2g", "--memory-swap", "2g",  "-v", `${runtime}:/runtime:ro`, BUILD_IMAGE, "/runtime/deno", "--version"])).stdout;
   if (!denoVersion.startsWith(`deno ${DENO_VERSION} `)) throw new Error(`unexpected Deno version: ${denoVersion}`);
 
   const targets = [] as Array<Record<string, unknown>>;
@@ -163,14 +187,17 @@ async function main(): Promise<void> {
   }
   const receipt = Object.freeze({
     schemaVersion: 1,
+    profileName,
+    ...(profileName === "legacy" ? {} : { harnessSha256 }),
     status: "reproducible-source-build-not-promoted",
-    source: Object.freeze({ repository: SOURCE_REPOSITORY, commit: SOURCE_COMMIT, lockFile: "deno.lock", lockSha256: SOURCE_LOCK_SHA256 }),
+    source: Object.freeze({ repository: SOURCE_REPOSITORY, commit: selectedProfile.commit, lockFile: "deno.lock", lockSha256: selectedProfile.lockSha256, buildLockSha256: selectedProfile.buildLockSha256, lockOverlay: selectedProfile.lockOverlay }),
     runtime: Object.freeze({ version: DENO_VERSION, url: DENO_ASSET_URL, sha256: DENO_ASSET_SHA256, archive }),
-    normalization: Object.freeze({ sourceDateEpoch: Number(SOURCE_DATE_EPOCH), procedure: "seed frozen cache and target runtime, normalize every source/cache mtime, then compile frozen cached-only at fixed /src, /cache, and /out paths" }),
-    images: Object.freeze({ build: BUILD_IMAGE, probe: PROBE_IMAGE }),
+    normalization: Object.freeze({ sourceDateEpoch: Number(selectedProfile.sourceDateEpoch), procedure: "seed frozen cache and target runtime, normalize every source/cache mtime, then compile frozen cached-only at fixed /src, /cache, and /out paths" }),
+    images: Object.freeze({ build: BUILD_IMAGE, probe: PROBE_IMAGE, probePlatforms: PROBE_IMAGES }),
     targets,
     promotion: Object.freeze({ candidate: null, selected: false, protectedEvidence: null, note: "This is local reproducibility evidence only. It neither promotes a candidate nor identifies the recreated upstream release asset." }),
   });
+  if (await digestFile(import.meta.path) !== harnessSha256) throw new Error("source-build harness changed during execution");
   await Bun.write(join(output, "receipt.json"), `${JSON.stringify(receipt, null, 2)}\n`);
   console.log(JSON.stringify(receipt, null, 2));
 }

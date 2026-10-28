@@ -58,7 +58,7 @@ async function docker(argv: string[], timeoutMs = DEFAULT_TIMEOUT_MS): Promise<C
 
 async function requireDocker(argv: string[], timeoutMs?: number) {
   const result = await docker(argv, timeoutMs);
-  if (result.status !== 0) throw new Error(`HOST_DOCKER_FAILED:${argv[0] ?? ""}:${result.status}:${result.stderr.slice(0, 2_000)}`);
+  if (result.status !== 0) throw new Error(`HOST_DOCKER_FAILED:${JSON.stringify({ argv: argv.slice(0, 5), status: result.status, stdout: result.stdout.slice(0, 2_000), stderr: result.stderr.slice(0, 2_000) })}`);
   return result;
 }
 

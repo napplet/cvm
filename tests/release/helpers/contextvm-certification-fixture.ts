@@ -1,3 +1,5 @@
+import { createPostgresWorkerOperationJournal } from "../../../src/release/deployment/postgres-provider-journals";
+import { PRODUCTION_WORKER_POLICY } from "../../../src/worker-adapters/production-worker-policy";
 // Disposable local transport fixture. Its responses are not release evidence.
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
@@ -129,15 +131,20 @@ try {
   // Modal/Fly evidence. The signed adapter, holds, journal and cleanup are real.
   const workers = new Map<string, { provider: string; terminated: boolean }>();
   let creates = 0, terminations = 0, readinessQueries = 0, loseTerminationAck = false;
-  const provider = (name: string) => ({
-    async create(input: { operationId: string }) { assert(!workers.has(input.operationId)); creates++; workers.set(input.operationId, { provider: name, terminated: false }); return { status: "created", operationId: input.operationId, resourceId: input.operationId }; },
+  const workerJournal = journal("cohort-worker-test");
+  const providerJournal = createPostgresWorkerOperationJournal(workerJournal);
+  const provider = (name: "modal" | "fly") => ({
+    async create(input: { operationId: string; sessionLeaseSha256: string; toolchainSha256: string; providerDeadlineEpochMs: number; region?: string }) { assert(!workers.has(input.operationId)); creates++; workers.set(input.operationId, { provider: name, terminated: false });
+      await providerJournal.claim({ ...input, provider: name, resourceName: input.operationId, requestSha256: "c".repeat(64), image: `registry/worker@sha256:${candidate}`, policyVersion: PRODUCTION_WORKER_POLICY.version, createdAtMs: now });
+      await providerJournal.update({ operationId: input.operationId, requestSha256: "c".repeat(64), state: "dispatched", resourceId: input.operationId });
+      return { status: "created", operationId: input.operationId, resourceId: input.operationId }; },
     async observe(input: { operationId: string }) { readinessQueries++; const found = workers.get(input.operationId); assert(found && found.provider === name && !found.terminated); return { status: "completed", resourceId: input.operationId, readiness: { readyMonotonicMs: Math.floor(performance.now()), readinessProbeDigest: `sha256:${"9".repeat(64)}` } }; },
     async terminate(input: { operationId: string }) { const found = workers.get(input.operationId); assert(found && found.provider === name); if (!found.terminated) terminations++; found.terminated = true; if (loseTerminationAck) { loseTerminationAck = false; throw new Error("TERMINATION_ACK_LOST"); } return { status: "terminated" }; },
     async observeTermination(input: { operationId: string }) { const found = workers.get(input.operationId); assert(found && found.provider === name); return { status: found.terminated ? "terminated" as const : "pending" as const }; },
   });
   const workerClients = { modal: provider("modal"), fly: provider("fly") };
   const capacityJournal = journal("cohort-capacity-test");
-  const makeCapacity = (name: "modal" | "fly") => createProductionReadyCapacity({ provider: name, workers: workerClients as never, journal: capacityJournal, image: `registry/worker@sha256:${candidate}`, toolchainSha256: "2".repeat(64), flyRegion: "ams" });
+  const makeCapacity = (name: "modal" | "fly") => createProductionReadyCapacity({ provider: name, workers: workerClients as never, journal: capacityJournal, workerJournal, image: `registry/worker@sha256:${candidate}`, toolchainSha256: "2".repeat(64), flyRegion: "ams" });
   const capacities = { modal: makeCapacity("modal"), fly: makeCapacity("fly") };
   const observerInput = { candidates: { modal: candidate, fly: candidate }, certificationOwnerPubkey: await clientSigner.getPublicKey(), authorizationRequestSha256: request.authorizationRequestSha256, requestedCap: "1", capacities, selectedProvider: "modal" as const, journal: journal("cohort-observer-test"), pool };
   const observer = new ProductionCertificationCoreServices(observerInput);

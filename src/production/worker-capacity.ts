@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { CapacityObservation, ReadyCapacityPort } from "../funding/funded-admission";
 import { PRODUCTION_WORKER_POLICY } from "../worker-adapters/production-worker-policy";
-import type { createWorkerDeploymentClients } from "../release/deployment/worker-clients";
+import type { createWorkerDeploymentClients, WorkerOperationRecord } from "../release/deployment/worker-clients";
 import { PostgresOperationJournal, assertPostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
 
 const Intent = z.string().regex(/^capacity-intent:[a-f0-9]{64}$/u);
@@ -18,6 +18,8 @@ type CapacityRecord = Readonly<{
   workerOperationId: string;
   provider: "modal" | "fly";
   deadlineEpochMs: number;
+  /** Immutable execution facts; absent only on retained pre-profile records. */
+  execution?: Readonly<{ image: string; toolchainSha256: string; policyVersion: string; flyRegion?: string }>;
   prewarmed?: boolean;
   readiness?: Readonly<{ readyMonotonicMs: number; readinessProbeDigest: string }>;
 }>;
@@ -51,6 +53,7 @@ export function createProductionReadyCapacity(input: Readonly<{
   provider: "modal" | "fly";
   workers: ReturnType<typeof createWorkerDeploymentClients>;
   journal: PostgresOperationJournal;
+  workerJournal: PostgresOperationJournal;
   image: string;
   toolchainSha256: string;
   flyRegion?: string;
@@ -58,34 +61,63 @@ export function createProductionReadyCapacity(input: Readonly<{
 }>): ProductionReadyCapacityPort {
   const provider = Provider.parse(input.provider);
   assertPostgresOperationJournal(input.journal);
+  assertPostgresOperationJournal(input.workerJournal);
   const image = z.string().regex(/^.+@sha256:[a-f0-9]{64}$/iu).parse(input.image);
-  const imageSha256 = Digest.parse(image.split("@sha256:")[1]!.toLowerCase());
+  Digest.parse(image.split("@sha256:")[1]!.toLowerCase());
   const toolchainSha256 = Digest.parse(input.toolchainSha256);
   const flyRegion = input.flyRegion === undefined ? undefined : z.string().regex(/^[a-z0-9-]{2,32}$/u).parse(input.flyRegion);
   if (provider === "fly" && !flyRegion) throw new Error("PRODUCTION_FLY_CAPACITY_REGION_REQUIRED");
+  const execution = Object.freeze({ image, toolchainSha256, policyVersion: PRODUCTION_WORKER_POLICY.version, ...(provider === "fly" ? { flyRegion } : {}) });
   const now = input.now ?? Date.now;
   const capacityKey = (intentReference: string) => `capacity-intent:${digest(intentReference)}`;
   const load = async (intentReference: string): Promise<CapacityRecord | undefined> => (await input.journal.read<CapacityRecord>(capacityKey(Intent.parse(intentReference))))?.value;
+  const originalWorker = async (record: CapacityRecord): Promise<WorkerOperationRecord | undefined> => {
+    const original = (await input.workerJournal.read<WorkerOperationRecord>(record.workerOperationId))?.value;
+    if (!original || record.provider !== provider || original.operationId !== record.workerOperationId || original.provider !== record.provider
+      || original.sessionLeaseSha256 !== record.expectedSessionBindingDigest.slice("sha256:".length)
+      || original.state === "terminating" || original.state === "terminated"
+      || original.providerDeadlineEpochMs !== record.deadlineEpochMs || original.policyVersion !== PRODUCTION_WORKER_POLICY.version
+      || !original.image || !/^.+@sha256:[a-f0-9]{64}$/iu.test(original.image) || !Digest.safeParse(original.toolchainSha256).success) return undefined;
+    if (record.execution && (record.execution.image !== original.image || record.execution.toolchainSha256 !== original.toolchainSha256
+      || record.execution.policyVersion !== original.policyVersion || (provider === "fly" && record.execution.flyRegion !== original.region))) return undefined;
+    return original;
+  };
   const ensure = async (intentReferenceRaw: string, expectedBindingRaw: string): Promise<CapacityRecord> => {
     const intentReference = Intent.parse(intentReferenceRaw); const expectedSessionBindingDigest = Binding.parse(expectedBindingRaw);
-    const value = Object.freeze({ intentReference, expectedSessionBindingDigest, reference: `capacity:${digest(`${intentReference}:${expectedSessionBindingDigest}`)}`, workerOperationId: workerOperationId(intentReference, expectedSessionBindingDigest), provider, deadlineEpochMs: now() + PRODUCTION_WORKER_POLICY.totalLifetimeMs });
+    const value = Object.freeze({ intentReference, expectedSessionBindingDigest, reference: `capacity:${digest(`${intentReference}:${expectedSessionBindingDigest}`)}`, workerOperationId: workerOperationId(intentReference, expectedSessionBindingDigest), provider, execution, deadlineEpochMs: now() + PRODUCTION_WORKER_POLICY.totalLifetimeMs });
     const claimed = await input.journal.claim<CapacityRecord>(capacityKey(intentReference), digest(canonical({ intentReference, expectedSessionBindingDigest, provider })), value);
     const record = claimed.record.value;
     if (record.intentReference !== intentReference || record.expectedSessionBindingDigest !== expectedSessionBindingDigest || record.provider !== provider || record.reference !== value.reference || record.workerOperationId !== value.workerOperationId || !Number.isSafeInteger(record.deadlineEpochMs) || record.deadlineEpochMs <= now()) throw new Error("PRODUCTION_CAPACITY_BINDING_CONFLICT");
+    if (record.execution) {
+      if (record.execution.image !== image || record.execution.toolchainSha256 !== toolchainSha256 || record.execution.policyVersion !== execution.policyVersion
+        || record.execution.flyRegion !== execution.flyRegion) throw new Error("PRODUCTION_CAPACITY_ORIGINAL_PROFILE_REQUIRED");
+    } else {
+      // Never stamp current defaults onto an old record. Only its original
+      // provider intent can establish compatibility without a rewrite.
+      const original = await originalWorker(record);
+      if (!original || original.image !== image || original.toolchainSha256 !== toolchainSha256
+        || (provider === "fly" && original.region !== flyRegion)) throw new Error("PRODUCTION_CAPACITY_ORIGINAL_PROFILE_REQUIRED");
+    }
     return record;
   };
   const dispatch = async (record: CapacityRecord) => {
+    // Once the original resource is bound, retries need only readiness. A
+    // missing resource ID still enters the provider client's durable claim
+    // branch, which reconciles the original request without another create.
+    if ((await input.workerJournal.read<WorkerOperationRecord>(record.workerOperationId))?.value.resourceId) return { status: "reconciled" as const };
     const leaseSha256 = record.expectedSessionBindingDigest.slice("sha256:".length);
     return provider === "modal"
       ? input.workers.modal.create({ operationId: record.workerOperationId, sessionLeaseSha256: leaseSha256, toolchainSha256, providerDeadlineEpochMs: record.deadlineEpochMs })
       : input.workers.fly.create({ operationId: record.workerOperationId, region: flyRegion!, sessionLeaseSha256: leaseSha256, toolchainSha256, providerDeadlineEpochMs: record.deadlineEpochMs });
   };
   const observe = async (record: CapacityRecord, persistAdmissionReadiness = true): Promise<CapacityObservation> => {
+    const original = await originalWorker(record);
+    if (!original?.resourceId) return Object.freeze({ status: "unknown" as const, reference: record.reference });
     const status = provider === "modal"
       ? await input.workers.modal.observe({ operationId: record.workerOperationId })
       : await input.workers.fly.observe({ operationId: record.workerOperationId });
     if (status.status === "missing") return Object.freeze({ status: "refused" as const, reason: "worker_missing" });
-    if (status.status !== "completed" || !status.readiness) return Object.freeze({ status: "unknown" as const, reference: record.reference });
+    if (status.status !== "completed" || status.resourceId !== original.resourceId || !status.readiness) return Object.freeze({ status: "unknown" as const, reference: record.reference });
     const observed = z.object({ readyMonotonicMs: z.number().int().nonnegative(), readinessProbeDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/u) }).safeParse(status.readiness);
     if (!observed.success) return Object.freeze({ status: "unknown" as const, reference: record.reference });
     let readiness = persistAdmissionReadiness ? record.readiness : observed.data;
@@ -109,7 +141,7 @@ export function createProductionReadyCapacity(input: Readonly<{
         intentReference: record.intentReference,
         leaseReference: record.reference,
         sessionBindingDigest: record.expectedSessionBindingDigest,
-        imageDigest: `sha256:${imageSha256}`,
+        imageDigest: `sha256:${original.image!.split("@sha256:")[1]!.toLowerCase()}`,
         readinessProbeDigest: readiness.readinessProbeDigest,
         readyMonotonicMs: readiness.readyMonotonicMs,
       }),

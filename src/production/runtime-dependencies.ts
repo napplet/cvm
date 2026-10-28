@@ -46,7 +46,7 @@ export async function materializeProductionRuntimeDependencies(input: Readonly<{
     createMountedProductionWorkerClients({ config: input.config, secrets: input.secrets, journal: createPostgresWorkerOperationJournal(workerJournal) }),
     createMountedVertexMaterial({ config: input.config, secrets: input.secrets, now: input.now }),
   ]);
-  const makeCapacity = (provider: "modal" | "fly") => createProductionReadyCapacity({ provider, workers: worker.clients, journal, image: input.config.worker.image, toolchainSha256: input.config.worker.toolchainSha256, ...(provider === "fly" ? { flyRegion: worker.flyRegion } : {}), now: input.now });
+  const makeCapacity = (provider: "modal" | "fly") => createProductionReadyCapacity({ provider, workers: worker.clients, journal, workerJournal, image: input.config.worker.image, toolchainSha256: input.config.worker.toolchainSha256, ...(provider === "fly" ? { flyRegion: worker.flyRegion } : {}), now: input.now });
   const certificationCapacities = Object.freeze({ modal: makeCapacity("modal"), fly: makeCapacity("fly") });
   const capacity = certificationCapacities[input.config.worker.selectedProvider];
   const vertex = createVertexDeploymentClient({ candidateSha256: input.config.candidateSha256, projectId: input.config.projectId, location: "global", model: input.config.vertex.model, credentialReference: vertexMaterial.credentialReference, price: vertexMaterial.vertexPrice, journal: createPostgresVertexOperationJournal(vertexJournal), interactions: createVertexInteractionsHttpPort({ tokenSource }), now: input.now });

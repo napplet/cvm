@@ -1,8 +1,8 @@
 import { resolve } from "node:path";
 
 const manifestPins = Object.freeze({
-  "package.json": "dca9aebd2cbdb6a10b1dad1565667107807839545a98e10a76ff6e1bdd58891c",
-  "bun.lock": "2043b92ba436bba778d338bad0af0255abd61363535e06f72ae3f8a9a71630f6",
+  "package.json": "046a7ffc858c393c5289ffa106290fb8f01fe0365b84d9daa47aaaaa2f1a5b00",
+  "bun.lock": "0a2027fd7eaa6f6f609c9f1ec430a7b9095d6b45472f8833a3e00e6f0604c187",
   "patches/@contextvm%2Fsdk@0.13.10.patch": "89bd6447fbc11cc78869bc44395b8ef6e24ce3bc1bbc9fbae21d1b5dbb88b599",
 });
 

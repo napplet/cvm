@@ -6,12 +6,13 @@ const hash = (text: string) => new Bun.CryptoHasher("sha256").update(text).diges
 const artifactHash = "a".repeat(64);
 const declaration = { required: ["storage"], optional: ["theme"] };
 const purpose = "Keep one short note";
-const manifest = { kind: 35129, created_at: 1, content: purpose, artifactHash, tags: [["d", "my-napplet"], ["x", artifactHash], ["R", "storage"], ["O", "theme"]] };
+const manifest: ReturnType<typeof verifyProductionDirectManifestReceipt> = { kind: 35129, created_at: 1, content: purpose, artifactHash, tags: [["d", "my-napplet"], ["x", artifactHash], ["R", "storage"], ["O", "theme"]] };
 const receipt = (value: unknown) => { const text = JSON.stringify(value); return { path: ".nip5a-manifest.json", sha256: hash(text), bytesBase64: Buffer.from(text).toString("base64") }; };
 
 test("direct receipt preserves raw identity, purpose and required/optional metadata", () => {
   expect(verifyProductionDirectManifestReceipt(receipt(manifest), { artifactHash, declaration, purpose })).toEqual(manifest);
   for (const changed of [
+    { ...manifest, kind: 15129 },
     { ...manifest, artifactHash: "b".repeat(64) },
     { ...manifest, content: "A different purpose" },
     { ...manifest, pubkey: "f".repeat(64) },

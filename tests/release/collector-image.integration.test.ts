@@ -1,13 +1,31 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { measureProductionCollectorImage, observeUploadedCollectorRegistryImage, prepareProductionCollectorImage } from "../../src/release/collector-image";
 import { deriveReleaseTopology } from "../../src/release/topology";
 
 const root = new URL("../..", import.meta.url).pathname;
 const sha256 = (value: Uint8Array) => createHash("sha256").update(value).digest("hex");
+
+test("clean collector builds preserve exact OCI bytes across checkout timestamps", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "napplet-cvm-collector-repro-"));
+  try {
+    const copies = [join(temporary, "older"), join(temporary, "newer")];
+    for (const [index, directory] of copies.entries()) for (const path of ["infra/production/collector.Dockerfile", "infra/otel/collector.yaml"]) {
+      await mkdir(dirname(join(directory, path)), { recursive: true });
+      await cp(join(root, path), join(directory, path));
+      const timestamp = index === 0 ? 1_600_000_000 : 1_900_000_000;
+      await utimes(join(directory, path), timestamp, timestamp);
+    }
+    const results = [];
+    for (const [index, directory] of copies.entries()) results.push(await prepareProductionCollectorImage({ repositoryRoot: directory, registryTarget: "registry.example/napplet-cvm/collector", artifactDirectory: join(temporary, `oci-${index}`) }));
+    expect(results[0]!.localOciManifestDigest).toBe(results[1]!.localOciManifestDigest);
+    expect(results[0]!.localOciConfigDigest).toBe(results[1]!.localOciConfigDigest);
+    expect(results[0]!.ociLayoutSha256).toBe(results[1]!.ociLayoutSha256);
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+});
 
 async function command(argv: readonly string[], cwd = root) {
   const child = Bun.spawn([...argv], { cwd, stdout: "pipe", stderr: "pipe" });

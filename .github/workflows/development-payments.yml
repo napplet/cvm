@@ -44,6 +44,8 @@ jobs:
         with:
           version: v2.39.4
       - run: bun install --frozen-lockfile
+      - name: Verify launcher dependency pins before building browser infrastructure
+        run: bun test tests/dev/root-manifests.test.ts
       - run: bun install --cwd tests/dev-ui --frozen-lockfile
       - name: Install host Chromium and its Linux libraries
         run: bun tests/dev-ui/node_modules/playwright/cli.js install --with-deps chromium

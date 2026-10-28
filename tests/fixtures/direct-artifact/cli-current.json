@@ -1,0 +1,91 @@
+{
+  "signing": {
+    "type": "none",
+    "canSignWithoutPrompt": false,
+    "requiresSecretLookup": false,
+    "notes": [
+      "no signing input configured"
+    ]
+  },
+  "plan": {
+    "configPath": "/work/.napplet/config.yaml",
+    "items": [
+      {
+        "candidate": {
+          "name": "..",
+          "publishingId": "my-napplet",
+          "dir": "/work/dist",
+          "indexHtml": "/work/dist/index.html",
+          "manifestPath": "/work/dist/.nip5a-manifest.json"
+        },
+        "target": "named",
+        "kind": 35129,
+        "dTag": "cvm-capability-intake"
+      }
+    ]
+  },
+  "manifests": [
+    {
+      "item": {
+        "candidate": {
+          "name": "..",
+          "publishingId": "my-napplet",
+          "dir": "/work/dist",
+          "indexHtml": "/work/dist/index.html",
+          "manifestPath": "/work/dist/.nip5a-manifest.json"
+        },
+        "target": "named",
+        "kind": 35129,
+        "dTag": "cvm-capability-intake"
+      },
+      "files": [
+        {
+          "path": "/index.html",
+          "sha256": "47c19988a3498e97601768116092afd614615b6730a2a2987e9fa67ee251b067"
+        }
+      ],
+      "format": "current",
+      "artifactHash": "47c19988a3498e97601768116092afd614615b6730a2a2987e9fa67ee251b067",
+      "template": {
+        "kind": 35129,
+        "created_at": 1793192858,
+        "tags": [
+          [
+            "d",
+            "cvm-capability-intake"
+          ],
+          [
+            "x",
+            "47c19988a3498e97601768116092afd614615b6730a2a2987e9fa67ee251b067"
+          ],
+          [
+            "R",
+            "storage"
+          ],
+          [
+            "O",
+            "intent"
+          ],
+          [
+            "title",
+            "Capability compatibility"
+          ],
+          [
+            "server",
+            "https://publication.example"
+          ],
+          [
+            "client",
+            "napplet.run"
+          ]
+        ],
+        "content": "Scaffold compatibility check"
+      }
+    }
+  ],
+  "relays": [],
+  "blossomServers": [
+    "https://publication.example"
+  ],
+  "dryRun": true
+}

@@ -8,12 +8,27 @@ on:
       - "src/production/source-build-verifier.ts"
       - "src/production/source-build-plan.ts"
       - "src/production/artifact-verifier.ts"
+      - "src/production/direct-artifact-verifier.ts"
+      - "src/production/direct-html-policy.ts"
       - "src/production/sealed-worker-artifact.ts"
       - "src/worker-adapters/capability-receipt.ts"
+      - "src/worker-adapters/conformance-receipt.ts"
       - "src/worker-adapters/production-job-client.ts"
       - "src/worker-adapters/publication-metadata.ts"
       - "tests/production/source-build-plan.test.ts"
       - "tests/production/artifact-verifier.test.ts"
+      - "tests/production/direct-artifact-verifier.test.ts"
+      - "tests/production/direct-html-policy.test.ts"
+      - "tests/fixtures/direct-artifact/**"
+      - "package.json"
+      - "bun.lock"
+      - "src/dev/root-manifests.ts"
+      - "scripts/verify-phase-07-otel-packages.ts"
+      - "tests/phase-07/otel-package-legitimacy.test.ts"
+      - "src/release/collector-image.ts"
+      - "tests/release/collector-image.integration.test.ts"
+      - "evidence/certification/otel-package-*/**"
+      - "evidence/certification/phase-07-otel-package-approval.json"
       - "src/production/publication-context.ts"
       - "src/production/publication-upload.ts"
       - "src/production/publication-relays.ts"
@@ -58,12 +73,37 @@ jobs:
         with:
           bun-version: "1.3.14"
       - run: bun install --frozen-lockfile
+      - name: Enable OCI image loading on this disposable runner
+        run: |
+          sudo python3 - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path('/etc/docker/daemon.json')
+          config = json.loads(path.read_text()) if path.exists() else {}
+          config.setdefault('features', {})['containerd-snapshotter'] = True
+          path.write_text(json.dumps(config))
+          PY
+          sudo systemctl restart docker
+      - name: Prepare the OCI-exporting builder for dependency compatibility checks
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          version: v0.30.1
+          driver-opts: image=moby/buildkit@sha256:de10faf919fc71ba4eb1dd7bd6449566d012b0c9436b1c61bfee21d621b009aa
+      - name: Diagnose collector OCI export prerequisites
+        run: |
+          docker buildx inspect --bootstrap
+          docker buildx build --platform linux/amd64 --pull=false --file infra/production/collector.Dockerfile --output type=oci,dest=/tmp/cvm-publication-collector-probe.oci.tar .
+          docker load --input /tmp/cvm-publication-collector-probe.oci.tar
+      - name: Dependency pins and unchanged OpenTelemetry closure approval
+        run: bun test tests/dev/root-manifests.test.ts tests/phase-07/otel-package-legitimacy.test.ts tests/release/collector-image.integration.test.ts --timeout 120000
       - name: Actual CLI function with local HTTP and restricted PostgreSQL
         run: bun test tests/release/production-cli-upload.integration.test.ts --timeout 130000
       - name: Original source evidence bytes and mutation refusal
         run: bun test tests/production/source-build-verifier-postgres.test.ts --timeout 120000
       - name: Approved publication metadata and legacy source compatibility
         run: bun test tests/production/source-build-plan.test.ts tests/production/artifact-verifier.test.ts tests/production/mounted-session-material.test.ts --timeout 10000
+      - name: Direct artifact identity, parsed containment and structured receipts
+        run: bun test tests/production/direct-artifact-verifier.test.ts tests/production/direct-html-policy.test.ts --timeout 10000
       - name: Derived publication contexts and original bundle recovery
         run: bun scripts/test-publication-context.ts
       - name: NIP-46 expiry and original relay operation recovery

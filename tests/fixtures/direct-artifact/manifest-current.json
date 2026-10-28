@@ -1,0 +1,28 @@
+{
+  "kind": 35129,
+  "created_at": 1793192858,
+  "tags": [
+    [
+      "d",
+      "my-napplet"
+    ],
+    [
+      "x",
+      "47c19988a3498e97601768116092afd614615b6730a2a2987e9fa67ee251b067"
+    ],
+    [
+      "title",
+      "My Napplet"
+    ],
+    [
+      "R",
+      "storage"
+    ],
+    [
+      "O",
+      "intent"
+    ]
+  ],
+  "content": "Scaffold compatibility check",
+  "artifactHash": "47c19988a3498e97601768116092afd614615b6730a2a2987e9fa67ee251b067"
+}

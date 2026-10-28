@@ -1,0 +1,61 @@
+{
+  "operationId": "operation:legacy-evidence",
+  "requestSha256": "20e84098efb8bdf85f18f18343dc96bba6fd8524404f5f4b3faae222f44b0afd",
+  "nonce": "napplet-cvm:operation:legacy-evidence:20e84098efb8bdf85f18f18343dc96bba6fd8524404f5f4b3faae222f44b0afd",
+  "request": {
+    "idea": "One synthetic counter",
+    "systemInstruction": "JSON only",
+    "maximumOutputTokens": 200,
+    "maximumInputTokens": 2000
+  },
+  "candidateSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "projectId": "napplet-cvm-test",
+  "model": "gemini-4-argon",
+  "location": "global",
+  "price": {
+    "sourceUrl": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+    "sourceDocumentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "quoteSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "observedAtMs": 1000,
+    "freshUntilMs": 2000,
+    "effectiveFromMs": 900,
+    "effectiveUntilMs": 3000,
+    "currency": "USD",
+    "inputMicrosPerMillion": 4000000,
+    "cachedInputMicrosPerMillion": 200000,
+    "outputAndThoughtMicrosPerMillion": 20000000
+  },
+  "interactionId": "legacy-original",
+  "completedReceipt": {
+    "status": "completed",
+    "operationId": "operation:legacy-evidence",
+    "interactionId": "legacy-original",
+    "model": "gemini-4-argon",
+    "requestSha256": "20e84098efb8bdf85f18f18343dc96bba6fd8524404f5f4b3faae222f44b0afd",
+    "price": {
+      "sourceUrl": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+      "sourceDocumentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "quoteSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "observedAtMs": 1000,
+      "freshUntilMs": 2000,
+      "effectiveFromMs": 900,
+      "effectiveUntilMs": 3000,
+      "currency": "USD",
+      "inputMicrosPerMillion": 4000000,
+      "cachedInputMicrosPerMillion": 200000,
+      "outputAndThoughtMicrosPerMillion": 20000000
+    },
+    "generatedResult": "{\"files\":[]}",
+    "usage": {
+      "inputTokens": 800,
+      "cachedInputTokens": 200,
+      "outputTokens": 100,
+      "thoughtTokens": 10
+    },
+    "cost": {
+      "currency": "USD",
+      "micros": 5440
+    },
+    "completedAt": "1970-01-01T00:00:01.500Z"
+  }
+}

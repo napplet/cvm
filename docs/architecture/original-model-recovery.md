@@ -1,6 +1,8 @@
 # Original paid-model recovery
 
-Tracked in [issue55](https://github.com/napplet/cvm/issues/55). This internal
+Tracked in [issue55](https://github.com/napplet/cvm/issues/55).
+[Current raw Interactions handling](./vertex-interactions-wire.md) covers the
+provider wire separately from this original-action recovery authority. This internal
 recovery expansion changes no public tool schema, checkpoint format or SQL table.
 
 A paid call can outlive its controller deployment and current price quote. At
@@ -63,7 +65,7 @@ The composed test runs restricted PostgreSQL and the actual HTTP adapter,
 Vertex journal/client, source store, gateway, generation core and settlement.
 The first POST loses its acknowledgement. A new controller has a different
 candidate, profile, card and FX quote; the original source expires. Its current
-price exceeds the nine-test-sat approved cap. Recovery performs two GETs, one
+price exceeds the thirteen-test-sat approved cap. Recovery performs two GETs, one
 build, one original action/budget and one six-test-sat charge. Terminal replay
 performs no new provider request or build. Foreign owner/budget/profile, changed
 prompt/bounds and another project are rejected before provider access. The

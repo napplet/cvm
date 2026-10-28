@@ -453,6 +453,7 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
     candidateSha256: input.config.candidateSha256,
     topologySha256: input.config.topologySha256,
     provider: input.resolved.workerCandidate.provider,
+    publication: { server: input.config.publication.uploadServer },
   });
   const publicationMaterializer = new ProductionPublicationContextMaterializer({
     candidateSha256: input.config.candidateSha256,

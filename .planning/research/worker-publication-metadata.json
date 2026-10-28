@@ -1,0 +1,116 @@
+{
+  "version": 1,
+  "profile": "local-mechanism",
+  "protectedReleaseEvidence": false,
+  "status": "passed",
+  "baseImage": "sha256:fc83ea30c7967b18cc5fd5bcf49bda175c1f7077900110ebaafcb23c74830de8",
+  "image": {
+    "requested": "napplet-cvm-production-worker:diagnostic-publication-metadata",
+    "id": "sha256:1aa0a7d4a4efdf56b20ed3310a2e2cdede2cb7c46277817d92766a232c49fa8b",
+    "platform": "linux/arm64"
+  },
+  "reportSha256": "ff843604cc58b760d8ee6b185bfad55ec18eec94a4886a343cdf7d7f9cdc53a6",
+  "sourceHashes": {
+    "infra/toolchain/production-job.ts": "7f028cae1d95f758c1549eff102389cb797d9c8e04e8129eed468410eaaa12e1",
+    "scripts/test-production-worker.ts": "f355434e47da29fe1270f9dc86c3e575498e13ead361bbd44da85dc4d3375a86"
+  },
+  "legacyAndExpandedJobs": 2,
+  "actualCliManifests": [
+    {
+      "item": {
+        "candidate": {
+          "name": "..",
+          "dir": "/workspace/jobs/ac26576ee823765bbfd4aefdd0c79f49eb58e12592ae6030a2c378c7a112e20b/project/dist",
+          "indexHtml": "/workspace/jobs/ac26576ee823765bbfd4aefdd0c79f49eb58e12592ae6030a2c378c7a112e20b/project/dist/index.html"
+        },
+        "target": "named",
+        "kind": 35129,
+        "dTag": "cvm-ac26576ee823765bbfd4aefd"
+      },
+      "files": [
+        {
+          "path": "/index.html",
+          "sha256": "4c7a0075b44b2f6b677f3627119a62a423fb8d9539b8f546ff4eea2dc1a73c11"
+        }
+      ],
+      "aggregateHash": "f1619584d8dd33d1c7c44a2dab22e3786e8927bc12d125e0c4437277902af5e5",
+      "template": {
+        "kind": 35129,
+        "created_at": 1793185392,
+        "tags": [
+          [
+            "d",
+            "cvm-ac26576ee823765bbfd4aefd"
+          ],
+          [
+            "path",
+            "/index.html",
+            "4c7a0075b44b2f6b677f3627119a62a423fb8d9539b8f546ff4eea2dc1a73c11"
+          ],
+          [
+            "x",
+            "f1619584d8dd33d1c7c44a2dab22e3786e8927bc12d125e0c4437277902af5e5",
+            "aggregate"
+          ],
+          [
+            "server",
+            "https://publication.example"
+          ],
+          [
+            "title",
+            "Generated napplet"
+          ]
+        ],
+        "content": ""
+      }
+    }
+  ],
+  "checkpoint": {
+    "fence": {
+      "state": "fenced",
+      "jobId": "ac26576ee823765bbfd4aefdd0c79f49eb58e12592ae6030a2c378c7a112e20b",
+      "fenceSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "deniedNewStart": true,
+    "restored": {
+      "state": "restored",
+      "archiveSha256": "1cb4d4135c01bf5ddfc505743d1478bcee5fb96642512773555d7335d75cbe80",
+      "toolchainSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "sourceSha256": "0f0dbae81bf0c6ba8be1992a3d521ec40f67460338a3c72b2fe096a860728e90",
+      "artifactFilesSha256": "e158a36157460c77051eaa2836faaca7742d58390e2095903ed22d6b71174199",
+      "workspacePath": "/workspace/restored"
+    },
+    "repeatedObservationStable": true,
+    "originalJobAbsent": true,
+    "restoreChunks": 2,
+    "sourceBytes": 27448,
+    "freshContainer": "napplet-cvm-production-worker-restore-45037-792772a274b2"
+  },
+  "cleanup": [
+    {
+      "name": "napplet-cvm-production-worker-build-45037-792772a274b2",
+      "absent": true
+    },
+    {
+      "name": "napplet-cvm-production-worker-idle-45037-792772a274b2",
+      "absent": true
+    },
+    {
+      "name": "napplet-cvm-production-worker-ready-45037-792772a274b2",
+      "absent": true
+    },
+    {
+      "name": "napplet-cvm-production-worker-jobs-45037-792772a274b2",
+      "absent": true
+    },
+    {
+      "name": "napplet-cvm-production-worker-restore-45037-792772a274b2",
+      "absent": true
+    }
+  ],
+  "limitations": [
+    "Local ARM64 Docker mechanism only; not Modal/Fly provider certification.",
+    "No protected effects, model call, registry push or user signature.",
+    "The CLI server is intentionally a non-networked example origin; full compatible-host retrieval remains separately required."
+  ]
+}

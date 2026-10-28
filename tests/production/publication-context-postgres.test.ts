@@ -138,12 +138,12 @@ isolated("publication contexts derive exact CLI and BUD templates, recover origi
       gcpEffects: { projectBootstrap: false, billing: false, apiEnablement: ["storage.googleapis.com"] }, expiresAtMs: now + 10_000 });
     const receipt = await createAuthorizationReceipt(request);
     const authorization = { request, receipt, authorizationRequestSha256: request.authorizationRequestSha256, authorizationReceiptSha256: receipt.authorizationReceiptSha256 };
-    const plan = materializeMountedSourceBuildPlan({ candidateSha256: scope, topologySha256: request.topologySha256, provider: "modal" });
+    const plan = materializeMountedSourceBuildPlan({ candidateSha256: scope, topologySha256: request.topologySha256, provider: "modal", publication: { server: `https://127.0.0.1:${relay.port}` } });
     const run = bindMountedSourceBuildExecution(plan, { authorizationRequestSha256: request.authorizationRequestSha256 });
     const payload = new TextEncoder().encode(`<!doctype html><main>${"Fixture bytes ".repeat(800)}</main>`);
     const file = { path: "index.html", sha256: hash(payload), size: payload.length, bytesBase64: Buffer.from(payload).toString("base64") };
     const aggregate = hash(`${file.sha256} /index.html\n`), dTag = "cvm-actual-cli-shape";
-    const template = { kind: 35129 as const, created_at: now / 1000, tags: [["d", dTag], ["path", "/index.html", file.sha256], ["x", aggregate, "aggregate"], ["title", "Generated napplet"]], content: "" };
+    const template = { kind: 35129 as const, created_at: now / 1000, tags: [["d", dTag], ["path", "/index.html", file.sha256], ["x", aggregate, "aggregate"], ["server", `https://127.0.0.1:${relay.port}`], ["title", "Generated napplet"]], content: "" };
     const manifest = { item: { kind: 35129, target: "named", dTag }, files: [{ path: "/index.html", sha256: file.sha256 }], aggregateHash: aggregate, template };
     const capabilities = '{"required":[],"optional":[]}';
     const result: MountedSourceBuildResult = { candidateId: scope, sealedArtifactSha256: hash(JSON.stringify([{ path: file.path, sha256: file.sha256, bytes: file.size }])), manifestSha256: hash(canonicalJson(manifest)), capabilitiesSha256: hash(capabilities), aggregateSha256: aggregate, jobId: "1".repeat(64), workerOperationId: run.workerOperationId, capacityReference: `capacity:${"2".repeat(64)}` };
@@ -256,6 +256,13 @@ isolated("publication contexts derive exact CLI and BUD templates, recover origi
     await expect(badDeploy.authorizeExactHashes([file.sha256])).rejects.toThrow("PRODUCTION_EDGE_UPLOAD_SIGNATURE_INVALID");
     const actualDeploy = await contexts.publicationWithSigner(ownerClient).deploy(identity);
     expect(await actualDeploy.authorizeExactHashes([file.sha256])).toMatchObject({ kind: 24242, pubkey: ownerPubkey });
+    const publishedOwner = events.get(signed.id)!;
+    const publishedServer = publishedOwner.tags.find(tag => tag[0] === "server")![1]!;
+    const publishedPath = publishedOwner.tags.find(tag => tag[0] === "path")!;
+    const retrieval = await fetch(`${publishedServer}/${publishedPath[2]}`);
+    expect(retrieval.status).toBe(200);
+    expect(hash(new Uint8Array(await retrieval.arrayBuffer()))).toBe(publishedPath[2]);
+    expect(publishedServer).toBe(configuration.uploadServers[0]);
     expect(actualUploads).toBe(1);
     expect(nipRequests).toEqual(["connect", "get_public_key", "sign_event", "sign_event"]);
     now += 100_000;
@@ -290,7 +297,7 @@ isolated("publication contexts derive exact CLI and BUD templates, recover origi
     await journal().compareAndSet(savedRelay.operation_id, savedRelay.identity_sha256, Number(savedRelay.revision), { ...preparing, state: "preparing" });
     await expect(openRelays().reconcileOriginalEvent({ operationId: relayInput.operationId })).rejects.toThrow("PRODUCTION_PUBLICATION_RELAY_SIGNING_UNKNOWN");
     expect({ localSigns, sends: publishes.length }).toEqual({ localSigns: 1, sends: 2 });
-    await expect(new ProductionPublicationContextMaterializer({ ...configuration, uploadServers: ["https://changed.example"] }).materialize()).rejects.toThrow("PRODUCTION_PUBLICATION_CONTEXT_BINDING_REQUIRED");
+    expect(() => new ProductionPublicationContextMaterializer({ ...configuration, uploadServers: ["https://changed.example"] })).toThrow("PRODUCTION_PUBLICATION_APPROVED_SERVER_REQUIRED");
     const invalid = { ...authorization, receipt: { ...receipt, authorizationReceiptSha256: "9".repeat(64) } };
     await expect(new ProductionPublicationContextMaterializer({ ...configuration, authorization: invalid }).materialize()).rejects.toThrow();
     expect(uploads).toBe(1);

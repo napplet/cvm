@@ -162,11 +162,11 @@ export function materializeMountedProductionSessionRecord(input: Readonly<{
   const measured = sourceBuild
     ? { ...(raw as Record<string, unknown>), execution: { ...execution!, protected: { ...protectedExecution!, sourceBuild: (() => {
       const { sealedArtifactSha256: _sealed, manifestSha256: _manifest, capabilitiesSha256: _capabilities, aggregateSha256: _aggregate, ...preapproval } = sourceBuild;
-      return { ...preapproval, ...(sourceBuild.plan === undefined && provider ? materializeMountedSourceBuildPreapproval({ candidateSha256: input.config.candidateSha256, topologySha256: input.config.topologySha256, provider }) : {}) };
+      return { ...preapproval, ...(sourceBuild.plan === undefined && provider ? materializeMountedSourceBuildPreapproval({ candidateSha256: input.config.candidateSha256, topologySha256: input.config.topologySha256, provider, publication: { server: input.config.publication.uploadServer } }) : {}) };
     })() } } }
     : input.measured;
   const record = RecordSchema.parse(measured);
-  const sourcePlan = assertMountedSourceBuildPlan(record.execution.protected.sourceBuild.plan, { candidateSha256: input.config.candidateSha256, topologySha256: input.config.topologySha256, provider: record.workerCandidate.provider });
+  const sourcePlan = assertMountedSourceBuildPlan(record.execution.protected.sourceBuild.plan, { candidateSha256: input.config.candidateSha256, topologySha256: input.config.topologySha256, provider: record.workerCandidate.provider, publication: { server: input.config.publication.uploadServer } });
   if (record.candidateSha256 !== input.config.candidateSha256
     || record.topologySha256 !== input.config.topologySha256
     || record.workerCandidate.id !== input.config.candidateSha256
@@ -197,7 +197,7 @@ export function materializeMountedProductionSessionRecord(input: Readonly<{
  * authorization.  It does not open a journal, choose capacity, or create a
  * provider worker.
  */
-export function materializeMountedSourceBuildPreapproval(input: Readonly<{ candidateSha256: string; topologySha256: string; provider: "modal" | "fly" }>): Readonly<{ plan: ReturnType<typeof materializeMountedSourceBuildPlan> }> {
+export function materializeMountedSourceBuildPreapproval(input: Readonly<{ candidateSha256: string; topologySha256: string; provider: "modal" | "fly"; publication?: { server: string } }>): Readonly<{ plan: ReturnType<typeof materializeMountedSourceBuildPlan> }> {
   return Object.freeze({ plan: materializeMountedSourceBuildPlan(input) });
 }
 

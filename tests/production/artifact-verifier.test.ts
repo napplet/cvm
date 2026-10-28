@@ -22,6 +22,23 @@ async function facts() {
 }
 
 describe("production artifact verifier", () => {
+  test("approved server must match both the actual CLI configuration and manifest", async () => {
+    const input = await facts(), publication = { server: "https://blossom.example" };
+    const report = JSON.parse(input.commandEvidence[7]!.stdout);
+    report.blossomServers = [publication.server];
+    report.manifests[0].template.tags.push(["server", publication.server]);
+    input.commandEvidence[7]!.stdout = JSON.stringify(report);
+    expect((await new ProductionArtifactVerifier().verify({ ...input, publication })).publication).toEqual(publication);
+    for (const fault of ["config", "missing", "duplicate", "changed"] as const) {
+      const changed = structuredClone(report);
+      if (fault === "config") changed.blossomServers = ["https://other.example"];
+      if (fault === "missing") changed.manifests[0].template.tags = changed.manifests[0].template.tags.filter((tag: string[]) => tag[0] !== "server");
+      if (fault === "duplicate") changed.manifests[0].template.tags.push(["server", publication.server]);
+      if (fault === "changed") changed.manifests[0].template.tags.find((tag: string[]) => tag[0] === "server")[1] = "https://other.example";
+      input.commandEvidence[7]!.stdout = JSON.stringify(changed);
+      await expect(new ProductionArtifactVerifier().verify({ ...input, publication })).rejects.toThrow("PRODUCTION_ARTIFACT_PUBLICATION_SERVER_MISMATCH");
+    }
+  });
   test("accepts the pinned CLI dry-run report and Vite's local asset layout", async () => {
     const verified = await new ProductionArtifactVerifier().verify(await facts());
     expect(verified.files.map((file) => file.path)).toEqual(["assets/app.css", "assets/app.js", "index.html"]);

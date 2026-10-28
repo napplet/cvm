@@ -9,6 +9,7 @@ import { canonicalJson } from "../promotion/schema";
 import { PostgresOperationJournal, assertPostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
 import type { createWorkerDeploymentClients } from "../release/deployment/worker-clients";
 import { ProductionWorkerJobClient } from "../worker-adapters/production-job-client";
+import type { ProductionWorkerPublication } from "../worker-adapters/publication-metadata";
 import { ProductionArtifactVerifier, readVerifiedProductionArtifactFile, type VerifiedProductionArtifact } from "./artifact-verifier";
 
 const Owner = z.object({ accountId: z.string().regex(/^account:[a-f0-9]{64}$/u), ownerId: z.string().regex(/^[a-f0-9]{64}$/u) }).strict();
@@ -58,7 +59,7 @@ export class ProductionWorkerOwnershipResolver {
  * CLI/conformance and static boundary verification of root-owned bytes. */
 export class ProductionWorkerBridge implements ContinuationWorkerPort, ArtifactVerifier {
   readonly #verified = new Map<string, Verified>(); readonly #verifier = new ProductionArtifactVerifier();
-  constructor(private readonly input: Readonly<{ resolver: ProductionWorkerOwnershipResolver; workers: ReturnType<typeof createWorkerDeploymentClients>; workerJournal: PostgresOperationJournal; jobJournal: PostgresOperationJournal; requestJournal: PostgresOperationJournal; artifactStore: ObjectStorePort; toolchainSha256: string }>) {
+  constructor(private readonly input: Readonly<{ resolver: ProductionWorkerOwnershipResolver; workers: ReturnType<typeof createWorkerDeploymentClients>; workerJournal: PostgresOperationJournal; jobJournal: PostgresOperationJournal; requestJournal: PostgresOperationJournal; artifactStore: ObjectStorePort; toolchainSha256: string; publication?: ProductionWorkerPublication }>) {
     assertPostgresOperationJournal(input.workerJournal); assertPostgresOperationJournal(input.jobJournal); assertPostgresOperationJournal(input.requestJournal);
     if (!/^[a-f0-9]{64}$/u.test(input.toolchainSha256)) throw new Error("PRODUCTION_WORKER_TOOLCHAIN_REQUIRED");
   }
@@ -109,7 +110,7 @@ export class ProductionWorkerBridge implements ContinuationWorkerPort, ArtifactV
     if (source.sessionId !== input.sessionId || source.expectedVersion !== input.expectedVersion || source.policyVersion !== input.policyVersion) throw new Error("PRODUCTION_CONTINUATION_SOURCE_BINDING_INVALID");
     await this.#persist(WorkerRunRequestSchema.parse({ ...source, actionId: input.actionId, workspaceId: input.workspaceId }));
   }
-  #job(worker: ResolvedWorker) { return new ProductionWorkerJobClient({ provider: worker.provider, workerOperationId: worker.workerOperationId, clients: this.input.workers, workerJournal: this.input.workerJournal, jobJournal: this.input.jobJournal, toolchainSha256: this.input.toolchainSha256 }); }
+  #job(worker: ResolvedWorker) { return new ProductionWorkerJobClient({ provider: worker.provider, workerOperationId: worker.workerOperationId, clients: this.input.workers, workerJournal: this.input.workerJournal, jobJournal: this.input.jobJournal, toolchainSha256: this.input.toolchainSha256, publication: this.input.publication }); }
   async #persist(request: WorkerRunRequest): Promise<void> { await this.input.requestJournal.claim(key(request), sha(canonicalJson(request)), { request }); }
   async #request(binding: Pick<CheckpointFenceRequest, "sessionId" | "actionId" | "expectedVersion" | "policyVersion" | "capabilityGrant" | "workspaceId">): Promise<WorkerRunRequest> {
     const lookup = { ...binding, capabilityGrant: binding.capabilityGrant === "phase-05-continuation-grant" ? "phase-04-coordinator-grant" : binding.capabilityGrant };

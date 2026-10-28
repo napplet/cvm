@@ -84,6 +84,7 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
         requestJournal: new PostgresOperationJournal(recovered.pool, { namespace: "production-worker-request", scopeSha256 }),
         artifactStore: input.artifactStore,
         toolchainSha256: input.config.worker.toolchainSha256,
+        publication: { server: input.config.publication.uploadServer },
       });
       const checkpointFacts = async (expected: Expected, subject?: z.infer<typeof DurabilitySubjectSchema>) => {
         const client = await recovered.pool.connect();

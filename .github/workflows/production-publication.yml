@@ -6,6 +6,12 @@ on:
     paths:
       - "src/production/cli-upload.ts"
       - "src/production/source-build-verifier.ts"
+      - "src/production/source-build-plan.ts"
+      - "src/production/artifact-verifier.ts"
+      - "src/worker-adapters/production-job-client.ts"
+      - "src/worker-adapters/publication-metadata.ts"
+      - "tests/production/source-build-plan.test.ts"
+      - "tests/production/artifact-verifier.test.ts"
       - "src/production/publication-context.ts"
       - "src/production/publication-upload.ts"
       - "src/production/publication-relays.ts"
@@ -54,6 +60,8 @@ jobs:
         run: bun test tests/release/production-cli-upload.integration.test.ts --timeout 130000
       - name: Original source evidence bytes and mutation refusal
         run: bun test tests/production/source-build-verifier-postgres.test.ts --timeout 120000
+      - name: Approved publication metadata and legacy source compatibility
+        run: bun test tests/production/source-build-plan.test.ts tests/production/artifact-verifier.test.ts tests/production/mounted-session-material.test.ts --timeout 10000
       - name: Derived publication contexts and original bundle recovery
         run: bun scripts/test-publication-context.ts
       - name: NIP-46 expiry and original relay operation recovery

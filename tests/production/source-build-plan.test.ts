@@ -22,7 +22,23 @@ test("mounted source-build preapproval is a stable bounded golden proposal", () 
   expect(first.candidateSha256).toBe(binding.candidateSha256);
   expect(first.topologySha256).toBe(binding.topologySha256);
   expect(first.provider).toBe(binding.provider);
+  // Captured from the pre-metadata mainline reader; keep old records addressable.
+  expect(first.operationId).toBe("source-build:ee5915b15ee91896506a5a7575be197d5611492a67a9c9dd1de7fd1f50c45f7d");
+  expect(first.jobId).toBe("80b2193ef642dbdba789571a2469980e26d0191fd56b57ad82824c364bc7eac5");
   expect(assertMountedSourceBuildPlan(first, binding)).toEqual(first);
+});
+
+test("approved publication origin changes job identity without changing generated source", () => {
+  const legacy = materializeMountedSourceBuildPlan(binding);
+  const first = materializeMountedSourceBuildPlan({ ...binding, publication: { server: "https://blossom.example/" } });
+  const changed = materializeMountedSourceBuildPlan({ ...binding, publication: { server: "https://other.example" } });
+  expect(first.publication).toEqual({ server: "https://blossom.example" });
+  expect(first.files).toEqual(legacy.files);
+  expect(first.proposalSha256).toBe(legacy.proposalSha256);
+  expect(first.jobId).not.toBe(legacy.jobId);
+  expect(first.jobId).not.toBe(changed.jobId);
+  expect(() => assertMountedSourceBuildPlan(first, { ...binding, publication: changed.publication })).toThrow("PRODUCTION_SOURCE_BUILD_PLAN_BINDING_REQUIRED");
+  for (const server of ["http://blossom.example", "https://user@blossom.example", "https://blossom.example/path", "https://blossom.example?token=x", "https://blossom.example#fragment"]) expect(() => materializeMountedSourceBuildPlan({ ...binding, publication: { server } })).toThrow();
 });
 
 test("mounted source-build preapproval rejects a substituted source or worker identity", () => {

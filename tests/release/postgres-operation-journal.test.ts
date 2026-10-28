@@ -238,19 +238,32 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
       if (action === "restore-status") { restoreQueries++; return { status: "completed", exitCode: 0, stdout: JSON.stringify(restoreReceipt) }; }
       throw new Error("UNEXPECTED_REDISPATCH");
     } } };
-    const jobClient = () => new ProductionWorkerJobClient({ provider: "fly", workerOperationId, clients: clients as never, workerJournal, jobJournal, toolchainSha256: scopeSha256 });
+    const jobClient = (publication?: { server: string }) => new ProductionWorkerJobClient({ publication, provider: "fly", workerOperationId, clients: clients as never, workerJournal, jobJournal, toolchainSha256: scopeSha256 });
     const buildRequest = { sessionId: "session", actionId: "action", expectedVersion: 0, policyVersion: "test-policy", capabilityGrant: "grant", workspaceId: "workspace", sourceProposalSha256: identity, sourceProposalReference: `proposal:sha256:${identity}`, sourceProposalFiles: [{ path: "src/main.ts", content: "console.log('bounded test');" }] };
     expect((await jobClient().start(buildRequest)).state).toBe("unknown");
     expect((await jobClient().start(buildRequest)).state).toBe("pending");
     expect((await jobClient().observe(buildRequest)).state).toBe("pending");
     expect(starts).toBe(1); expect(queries).toBe(2);
+    expect((await jobClient({ server: "https://blossom.example" }).start(buildRequest)).state).toBe("pending");
+    expect(starts).toBe(1); // A new controller observes the legacy original only.
+
+    const hash = (value: string | Uint8Array) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
+    const publishedRequest = { ...buildRequest, actionId: "published-action" };
+    expect((await jobClient({ server: "https://blossom.example/" }).start(publishedRequest)).state).toBe("unknown");
+    expect(starts).toBe(2);
+    const publishedKey = `worker-build:${hash(canonicalJson({ sessionId: publishedRequest.sessionId, actionId: publishedRequest.actionId, expectedVersion: publishedRequest.expectedVersion }))}`;
+    const published = await jobJournal.read<{ requestBody: string; jobId: string }>(publishedKey);
+    expect(JSON.parse(published!.value.requestBody).publication).toEqual({ server: "https://blossom.example" });
+    expect(published!.identitySha256).toBe(hash(canonicalJson({ request: publishedRequest, publication: { server: "https://blossom.example" } })));
+    expect(published!.value.jobId).toBe(hash(published!.value.requestBody));
+    expect((await jobClient({ server: "https://different.example" }).start(publishedRequest)).state).toBe("pending");
+    expect(starts).toBe(2); // Changed settings cannot dispatch a replacement.
     await expect(jobClient().start({ ...buildRequest, sourceProposalFiles: [{ path: "src/main.ts", content: "changed" }] })).rejects.toThrow("OPERATION_IDENTITY_CONFLICT");
-    expect(starts).toBe(1);
+    expect(starts).toBe(2);
     expect((await jobClient().fence(buildRequest, identity)).state).toBe("unknown");
     expect((await jobClient().fence(buildRequest, identity)).state).toBe("fenced");
     expect(fences).toBe(1); expect(fenceQueries).toBe(1);
     await expect(jobClient().fence(buildRequest, scopeSha256)).rejects.toThrow("OPERATION_IDENTITY_CONFLICT");
-    const hash = (value: string | Uint8Array) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
     const source = { version: 1, actionId: "original-action", sessionId: "original-session", expectedVersion: 0, proposalSha256: identity, toolchainSha256: scopeSha256, deadlineEpochMs: 1, files: buildRequest.sourceProposalFiles };
     const files = [{ path: "index.html", bytesBase64: Buffer.from("<html></html>").toString("base64"), sha256: hash("<html></html>"), size: 13 }];
     const workspace = Buffer.from(canonicalJson({ version: 1, source, toolchainSha256: scopeSha256, artifact: { version: 1, jobId: hash(canonicalJson(source)), proposalSha256: identity, toolchainSha256: scopeSha256, files, commandEvidence: Array.from({ length: 8 }, () => ({ argv: ["contract-test"], exitCode: 0, stdout: "", stderr: "", elapsedMs: 1 })) } }));
@@ -265,6 +278,7 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
     expect(restores).toBe(1); expect(restoreQueries).toBe(2);
     await expect(jobClient().restoreWorkspace({ ...restoreInput, bindingSha256: scopeSha256 })).rejects.toThrow("OPERATION_IDENTITY_CONFLICT");
     expect(restores).toBe(1);
+
   } finally {
     if (previousEffects === undefined) delete process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS; else process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS = previousEffects;
     if (verificationWorkspace) await rm(verificationWorkspace, { recursive: true, force: true });

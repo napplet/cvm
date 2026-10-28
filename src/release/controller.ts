@@ -75,7 +75,7 @@ export type AuthorizedLiveExecutionInput = Readonly<{
   receipt: unknown;
   /** The one project-owned production registry from native-registry.ts. */
   registry: AuthorizedProviderRegistry;
-  materialization: Omit<MaterializeProtectedCertifierInput, "workerSelection" | "nowMs" | "topology" | "authorization">;
+  materialization: Omit<MaterializeProtectedCertifierInput, "workerSelection" | "nowMs" | "authorization">;
   workerSelection: NonNullable<MaterializeProtectedCertifierInput["workerSelection"]>;
   protected: Omit<LiveProtectedRegistryInput, "ports"> & Readonly<{ ports: ProductionLiveProtectedCertificationPorts }>;
   protectedVerificationReferences?: Parameters<typeof runProtectedCertificationProfile>[0]["profile"]["protectedVerificationReferences"];

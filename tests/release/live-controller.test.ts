@@ -91,7 +91,7 @@ test("all protected-suite records are retained and block finalization when real 
     const real = { evidenceClass: "real" as const } as never;
     await expect(controller.executeAuthorized({
       receipt, registry,
-      materialization: { workspace: root, repositoryRoot, candidateId: candidate.id, releaseManifest: manifest(), source: { sourceRevision: "a".repeat(40), sourceSha256: digest("source") }, secretReferences: {} },
+      materialization: { topology: provisioned.topology, workspace: root, repositoryRoot, candidateId: candidate.id, releaseManifest: manifest(), source: { sourceRevision: "a".repeat(40), sourceSha256: digest("source") }, secretReferences: {} },
       workerSelection: { provider: "modal", status: "selected", candidateSha256: candidate.id, topologySha256: provisioned.topology.topologySha256, selectionEvidenceSha256: digest("selection"), observedAtMs: 1, expiresAtMs: 2_000 },
       protected: { candidate, input: { datasetSha256: digest("dataset"), profileSha256: digest("profile"), topologySha256: provisioned.topology.topologySha256, command: ["bun", "test"] }, topology: provisioned.topology, collector: { collectorDigest: `sha256:${digest("collector")}`, configSha256: digest("config") }, ports: { admission: real, telemetry: real, chaos: real, durability: real, "security-host": real, "supply-chain": real, "ContextVM-payment-model": real, publication: real } },
     })).rejects.toThrow("RELEASE_CONTROLLER_PROTECTED_SUITE_BLOCKED");

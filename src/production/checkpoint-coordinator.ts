@@ -6,7 +6,8 @@ import { ImmutableObjectReferenceSchema, type ObjectStorePort } from "../continu
 import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
 import { canonicalJson } from "../promotion/schema";
 import { assertPostgresOperationJournal, type PostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
-import { MountedKekCheckpointCrypto } from "./checkpoint-crypto";
+import { ProtectedContinuationCommands } from "../continuity/protected-command";
+import { MountedKekCheckpointCrypto, loadMountedCheckpointKek } from "./checkpoint-crypto";
 
 const Identity = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]*$/u);
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -43,6 +44,7 @@ function rowToStored(row: Record<string, unknown>): StoredEnvelope {
 export class ProductionCheckpointCoordinator {
   readonly #pool: PostgresSqlPool;
   readonly #crypto: MountedKekCheckpointCrypto;
+  readonly pendingCommands: ProtectedContinuationCommands;
   constructor(private readonly input: Readonly<{
     pool: PostgresSqlPool;
     objectStore: ObjectStorePort;
@@ -55,17 +57,28 @@ export class ProductionCheckpointCoordinator {
     this.#pool = bindAccountingRealmPool(input.pool, createAccountingRealm("production-real"));
     if (!input.objectStore || typeof input.objectStore.createImmutable !== "function") throw new Error("PRODUCTION_CHECKPOINT_OBJECT_STORE_REQUIRED");
     this.#crypto = new MountedKekCheckpointCrypto({ pool: input.pool, kekPath: input.kekPath, readFile: input.readKekFile, now: input.now });
+    this.pendingCommands = new ProtectedContinuationCommands({ reference: "mounted-checkpoint-command-kek-v1", load: () => loadMountedCheckpointKek({ kekPath: input.kekPath, readFile: input.readKekFile }) }, input.now ?? Date.now);
     coordinators.add(this);
   }
 
   /** Implements the neutral seal contract but carries its own original-operation journal. */
   async seal(request: CheckpointSealRequest): Promise<Readonly<{ manifest: CheckpointManifest; envelope: CheckpointEnvelope }>> {
-    const checkpointId = Identity.parse(request.checkpointId);
-    const requestSha256 = sha256(canonicalBytes({ ...request, archive: undefined, archiveSha256: sha256(request.archive) }));
+    if (request.payloadKind === "pending_command") throw new Error("PENDING_CHECKPOINT_FIXED_RETENTION_REQUIRED");
+    return this.#seal(request);
+  }
+
+  async sealPending(request: Omit<CheckpointSealRequest, "retentionUntil"> & Readonly<{ payloadKind: "pending_command" }>): Promise<Readonly<{ manifest: CheckpointManifest; envelope: CheckpointEnvelope }>> {
+    return this.#seal(request);
+  }
+
+  async #seal(originalRequest: CheckpointSealRequest | (Omit<CheckpointSealRequest, "retentionUntil"> & Readonly<{ payloadKind: "pending_command" }>)): Promise<Readonly<{ manifest: CheckpointManifest; envelope: CheckpointEnvelope }>> {
+    const checkpointId = Identity.parse(originalRequest.checkpointId);
+    const requestSha256 = sha256(canonicalBytes({ ...originalRequest, archive: undefined, archiveSha256: sha256(originalRequest.archive) }));
     const operationId = `checkpoint-seal:${checkpointId}`;
     const claimed = await this.input.journal.claim<CoordinatorIntent>(operationId, requestSha256, Object.freeze({ formatVersion: 2, checkpointId, requestSha256, committedAt: new Date((this.input.now ?? Date.now)()).toISOString() }));
     const intent = claimed.record.value;
     if (intent.checkpointId !== checkpointId || intent.requestSha256 !== requestSha256 || Number.isNaN(Date.parse(intent.committedAt))) throw new Error("CHECKPOINT_IDENTITY_CONFLICT");
+    const request: CheckpointSealRequest = { ...originalRequest, retentionUntil: "retentionUntil" in originalRequest ? originalRequest.retentionUntil : new Date(Date.parse(intent.committedAt) + 2_592_000_000).toISOString() };
     const existing = await this.#find(checkpointId);
     if (existing) return this.#readback(existing, request);
     // A legacy unresolved operation has no trustworthy upload-dispatch fence.

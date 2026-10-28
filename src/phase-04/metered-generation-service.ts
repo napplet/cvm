@@ -84,12 +84,12 @@ export class MeteredGenerationService {
   /** Internal continuation consumer. Decrypt and check retained compatibility
    * before the resume authority reserves funds or allocates a worker. This
    * same-currency path cannot silently substitute a new USD/FX authorization. */
-  async prepareContinuation(intent: PendingActionIntent): Promise<PreparedContinuationExecution> {
+  async prepareContinuation(intent: PendingActionIntent, restoredCommand?: unknown): Promise<PreparedContinuationExecution> {
     if (!this.options.continuationCommands) throw new Error("CONTINUATION_COMMAND_RESTORE_REQUIRED");
     const profile = this.options.pricing?.profile ?? PHASE_04_MODEL_PROFILES["code-proposal"];
     const priceCard = this.options.pricing?.card ?? PHASE_04_DETERMINISTIC_PRICE_CARD;
     if (this.options.settlement || priceCard.currency !== "sat") throw new Error("CONTINUATION_ORIGINAL_SETTLEMENT_REQUIRED");
-    const command = await this.options.continuationCommands.open(intent);
+    const command = restoredCommand === undefined ? await this.options.continuationCommands.open(intent) : await this.options.continuationCommands.validateRetained(restoredCommand, intent);
     const profileCeiling = maximumOperationCharge({ card: priceCard, profile });
     if (profile.id !== intent.profileId || priceCard.id !== intent.priceCardId || (this.options.toolchainIdentity ?? "phase-04-deterministic-toolchain") !== intent.toolchainId || profileCeiling !== intent.actionMaximum) throw new Error("CONTINUATION_EXECUTION_COMPATIBILITY_DENIED");
     const loadPrepared = async (binding: ContinuationExecutionBinding): Promise<MeteredAction> => {

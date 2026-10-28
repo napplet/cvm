@@ -19,6 +19,7 @@ import { createProductionReadyCapacity } from "./worker-capacity";
 import { ProductionWorkerBridge, ProductionWorkerOwnershipResolver } from "./worker-bridge";
 import { ProductionCheckpointCoordinator } from "./checkpoint-coordinator";
 import { assertProductionCheckpointSchema } from "./checkpoint-schema";
+import { assertProductionPendingCheckpointSchema } from "./initial-pending-checkpoint";
 import { assertProductionSessionCapSchema } from "./session-cap-schema";
 
 /** Coordinator-only actual provider graph. It owns only durable project
@@ -26,6 +27,7 @@ import { assertProductionSessionCapSchema } from "./session-cap-schema";
 export async function materializeProductionRuntimeDependencies(input: Readonly<{ config: ProductionConfig; servicePubkey: string; pool: PostgresSqlPool; secrets: MountedProductionSecretMaterial; now?: () => number }>) {
   if (input.servicePubkey !== input.config.certification.serverPubkey) throw new Error("PRODUCTION_SERVICE_SIGNER_IDENTITY_MISMATCH");
   await assertProductionCheckpointSchema(input.pool);
+  await assertProductionPendingCheckpointSchema(input.pool);
   await assertProductionSourceProposalSchema(input.pool);
   await assertProductionSessionCapSchema(input.pool);
   const serviceJournals = await openProductionServiceJournals({ pool: input.pool, servicePubkey: input.servicePubkey, initialTopologySha256: input.config.topologySha256 });

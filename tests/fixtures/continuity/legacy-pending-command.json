@@ -1,0 +1,42 @@
+{
+  "sourceRevision": "eda4529a8024249430dca6802982b708d568a741",
+  "nowMs": 1793145600000,
+  "command": {
+    "principal": {
+      "pubkey": "8888888888888888888888888888888888888888888888888888888888888888"
+    },
+    "admissionReference": "admission:legacy",
+    "idempotencyKey": "start:legacy",
+    "expectedVersion": 0,
+    "maximum": "10",
+    "policyVersion": "fixture",
+    "idea": "Synthetic legacy timer instruction."
+  },
+  "intent": {
+    "accountId": "account:b6014ac4130be89cbfa3f14daba903aadb0910531ecf3f783ca92e377f2b3287",
+    "sessionId": "session:323b65cfafafd227dc43647d",
+    "idempotencyKey": "start:legacy",
+    "fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "reference": "pending:legacy",
+    "actionKind": "start_session",
+    "boundedPayloadHash": "dfa983912cc72af935001d1874191ea398d556c4de93230dea5b9ab9183d5c52",
+    "expectedSessionVersion": 0,
+    "expectedArtifactVersion": 0,
+    "policyVersion": "fixture",
+    "priceCardId": "price:fixture",
+    "profileId": "model:fixture",
+    "toolchainId": "toolchain:fixture",
+    "actionMaximum": "10",
+    "admissionReference": "admission:legacy",
+    "protectedCommand": {
+      "schemaVersion": "protected-continuation-command-v1",
+      "keyReference": "test:checkpoint-kek-v1",
+      "retentionUntilMs": 1795738200000,
+      "bindingSha256": "c2c0005dc5cb4c38b868ece78433053338681d1bd796262dfd128dbb64adf726",
+      "nonceBase64": "qKASF9+EA7onsH96",
+      "wrapNonceBase64": "sDzarNZRbt6ERHU+",
+      "wrappedDekBase64": "/R3nGzk5JBg/kIgRX6vP9HR685d9LAKqvfR7lb9Cy+tEvH/b0Z4fgi1p1bX+N44S",
+      "ciphertextBase64": "BXTbWh8KslGfAq6pQkDZVbQkxkgWDdqXtWpCb+zf8WvX3TkCJoFc3qmCh2e8p8pVwFrYXqL298ACPjdwWO56+RewFNge+MYSJvqbU+7THSBbie7l2nwjmwhQntFbmdR1Diziwi/nJ8Sd9TxiAFBzkYDOyNHyoPFAmtIQBHvou+k/UA82ih56PgSjxvP1Zfvw3Mcry/AQGWI1EaMwNpQzgL31iYvrt67px1bVNuzhZ0YaX82aAHiLp2ZHflinBj3VkoCIv2dY7y7EiomRs19I0KD7anu0gIM6UH8zKgQV0+/5JAL2H2AJqFjX6VoadxGTNmpdrGwmq5tsFPn/LaHbp+Vdvp7Eu3+HZahIqb60gjlbwsw8qotq5hsxlVzE"
+    }
+  }
+}

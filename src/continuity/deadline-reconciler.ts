@@ -1,5 +1,5 @@
 import type { CheckpointEnvelopeService } from "./checkpoint-envelope";
-import type { ContinuationFundingStore } from "../persistence/funding-store";
+import type { ContinuationFundingStore, ContinuationPause } from "../persistence/funding-store";
 import {
   CheckpointProposalSchema,
   type CheckpointExportRequest,
@@ -51,6 +51,7 @@ export class ContinuationDeadlineReconciler {
     store: ContinuationFundingStore;
     worker: ContinuationWorkerPort;
     envelope: CheckpointSealPort;
+    initialPending?: Readonly<{ seal(pause: ContinuationPause): ReturnType<CheckpointEnvelopeService["seal"]>; release(pause: ContinuationPause): Promise<void> }>;
     retention?: RetentionDeletionPort;
     candidates: DeadlineCandidatePort;
     clock: Readonly<{ nowMs(): number }>;
@@ -155,38 +156,46 @@ export class ContinuationDeadlineReconciler {
       leaseToken: candidate.liveLeaseToken,
     };
 
-    // Fencing is an acknowledged worker-side boundary, not merely a database
-    // state label.  Export is forbidden until the worker has stopped accepting
-    // model/tool/build/network effects for this exact lease.
-    const fence = await this.options.worker.fenceCheckpoint(binding as CheckpointFenceRequest);
-    if (fence.status !== "fenced") return frozen({ status: "checkpoint_retryable", code: "CHECKPOINT_FENCE_RETRYABLE", sessionId: candidate.sessionId, pauseGeneration: candidate.pauseGeneration });
-    const exported = await this.options.worker.exportCheckpoint(binding as CheckpointExportRequest);
-    if (exported.status !== "exported") return frozen({ status: "checkpoint_retryable", code: "CHECKPOINT_EXPORT_DENIED", sessionId: candidate.sessionId, pauseGeneration: candidate.pauseGeneration });
-
+    const initialPending = continuation.actionKind === "start_session" && continuation.expectedSessionVersion === 0 && (continuation.protectedCommand !== undefined || this.options.initialPending !== undefined);
     let sealed: Awaited<ReturnType<CheckpointEnvelopeService["seal"]>>;
-    try {
-      const proposal = CheckpointProposalSchema.parse(exported.proposal);
-      const archive = new Uint8Array(Buffer.from(proposal.archiveBase64, "base64"));
-      if (Buffer.from(archive).toString("base64") !== proposal.archiveBase64) throw new Error("CHECKPOINT_ARCHIVE_INVALID");
-      sealed = await this.options.envelope.seal({
-        checkpointId: proposal.checkpointId,
-        accountId: candidate.accountId,
-        sessionId: candidate.sessionId,
-        pauseGeneration: candidate.pauseGeneration,
-        sessionVersion: pause.expectedSessionVersion,
-        actionVersion: pause.expectedSessionVersion,
-        artifactVersion: continuation.expectedArtifactVersion,
-        workspaceVersion: pause.expectedSessionVersion,
-        workspaceLineage: binding.workspaceLineage,
-        action: { actionId: binding.actionId, operationId: `operation:${continuation.reference}`, ledgerReference: pause.admissionReference, pendingActionReference: continuation.reference, idempotencyKey: continuation.idempotencyKey },
-        archive,
-        inventory: proposal.inventory,
-        evidenceSha256: proposal.evidenceSha256,
-        compatibility: { policyVersion: continuation.policyVersion, modelIdentity: continuation.profileId, nappletSdkIdentity: continuation.priceCardId, toolchainIdentity: continuation.toolchainId },
-        retentionUntil: new Date(nowMs + RETENTION_MS).toISOString(),
-      });
-    } catch {
-      return frozen({ status: "checkpoint_retryable", code: "CHECKPOINT_SEAL_RETRYABLE", sessionId: candidate.sessionId, pauseGeneration: candidate.pauseGeneration });
+    if (initialPending) {
+      if (!this.options.initialPending) return frozen({ status: "checkpoint_retryable", code: "INITIAL_PENDING_CHECKPOINT_REQUIRED", sessionId: candidate.sessionId, pauseGeneration: candidate.pauseGeneration });
+      try { sealed = await this.options.initialPending.seal(pause); }
+      catch { return frozen({ status: "checkpoint_retryable", code: "INITIAL_PENDING_CHECKPOINT_RETRYABLE", sessionId: candidate.sessionId, pauseGeneration: candidate.pauseGeneration }); }
+    } else {
+      // Fencing is an acknowledged worker-side boundary, not merely a database
+      // state label.  Export is forbidden until the worker has stopped accepting
+      // model/tool/build/network effects for this exact lease.
+      const fence = await this.options.worker.fenceCheckpoint(binding as CheckpointFenceRequest);
+      if (fence.status !== "fenced") return frozen({ status: "checkpoint_retryable", code: "CHECKPOINT_FENCE_RETRYABLE", sessionId: candidate.sessionId, pauseGeneration: candidate.pauseGeneration });
+      const exported = await this.options.worker.exportCheckpoint(binding as CheckpointExportRequest);
+      if (exported.status !== "exported") return frozen({ status: "checkpoint_retryable", code: "CHECKPOINT_EXPORT_DENIED", sessionId: candidate.sessionId, pauseGeneration: candidate.pauseGeneration });
+
+      try {
+        const proposal = CheckpointProposalSchema.parse(exported.proposal);
+        const archive = new Uint8Array(Buffer.from(proposal.archiveBase64, "base64"));
+        if (Buffer.from(archive).toString("base64") !== proposal.archiveBase64) throw new Error("CHECKPOINT_ARCHIVE_INVALID");
+        sealed = await this.options.envelope.seal({
+          checkpointId: proposal.checkpointId,
+          accountId: candidate.accountId,
+          sessionId: candidate.sessionId,
+          pauseGeneration: candidate.pauseGeneration,
+          sessionVersion: pause.expectedSessionVersion,
+          actionVersion: pause.expectedSessionVersion,
+          artifactVersion: continuation.expectedArtifactVersion,
+          workspaceVersion: pause.expectedSessionVersion,
+          workspaceLineage: binding.workspaceLineage,
+          action: { actionId: binding.actionId, operationId: `operation:${continuation.reference}`, ledgerReference: pause.admissionReference, pendingActionReference: continuation.reference, idempotencyKey: continuation.idempotencyKey },
+          archive,
+          inventory: proposal.inventory,
+          evidenceSha256: proposal.evidenceSha256,
+          compatibility: { policyVersion: continuation.policyVersion, modelIdentity: continuation.profileId, nappletSdkIdentity: continuation.priceCardId, toolchainIdentity: continuation.toolchainId },
+          retentionUntil: new Date(nowMs + RETENTION_MS).toISOString(),
+        });
+      } catch {
+        return frozen({ status: "checkpoint_retryable", code: "CHECKPOINT_SEAL_RETRYABLE", sessionId: candidate.sessionId, pauseGeneration: candidate.pauseGeneration });
+      }
+
     }
 
     try {
@@ -204,7 +213,7 @@ export class ContinuationDeadlineReconciler {
         objectChecksum: sealed.envelope.object.checksum,
         keyReference: sealed.envelope.crypto.keyReference,
         compatibilityIdentity: continuation.toolchainId,
-        checkpointCommittedAtMs: nowMs,
+        checkpointCommittedAtMs: Date.parse(sealed.manifest.committedAt),
       }));
       if (this.#failpoint === "after_commit") { this.#failpoint = undefined; throw new Error("CHECKPOINT_AFTER_COMMIT_FAULT"); }
     } catch {
@@ -212,7 +221,11 @@ export class ContinuationDeadlineReconciler {
     }
 
     try {
-      await this.options.worker.terminateCheckpoint({ ...binding, checkpointId: sealed.manifest.checkpointId } as CheckpointTerminationRequest);
+      if (initialPending) await this.options.initialPending!.release(pause);
+      else {
+        const terminated = await this.options.worker.terminateCheckpoint({ ...binding, checkpointId: sealed.manifest.checkpointId } as CheckpointTerminationRequest);
+        if (terminated.status !== "terminated") throw new Error("CHECKPOINT_TERMINATION_NOT_CONFIRMED");
+      }
       return frozen({ status: "checkpointed", code: "CHECKPOINT_COMMITTED", sessionId: candidate.sessionId, pauseGeneration: candidate.pauseGeneration, checkpointId: sealed.manifest.checkpointId });
     } catch {
       return frozen({ status: "checkpointed", code: "TERMINATION_RETRYABLE", sessionId: candidate.sessionId, pauseGeneration: candidate.pauseGeneration, checkpointId: sealed.manifest.checkpointId });

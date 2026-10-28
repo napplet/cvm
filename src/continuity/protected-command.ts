@@ -13,6 +13,7 @@ const base64 = (value: ArrayBuffer | Uint8Array) => Buffer.from(value instanceof
 export type PendingCommandPort = Readonly<{
   seal(input: Readonly<{ command: unknown; intent: PendingActionIntent; retentionUntilMs: number }>): Promise<ProtectedContinuationCommand>;
   open(intent: PendingActionIntent): Promise<GenerationCommand>;
+  validateRetained(command: unknown, intent: PendingActionIntent): Promise<GenerationCommand>;
 }>;
 
 /** Pure encryption: the returned envelope is stored in the pause transaction,
@@ -26,7 +27,7 @@ export class ProtectedContinuationCommands implements PendingCommandPort {
     await this.#validate(command, input.intent);
     const plaintext = canonicalBytes(command);
     if (plaintext.byteLength > 65_536 || input.retentionUntilMs <= this.now()) throw new Error("CONTINUATION_COMMAND_INVALID");
-    const header = { schemaVersion: "protected-continuation-command-v1" as const, keyReference: this.key.reference, retentionUntilMs: input.retentionUntilMs, bindingSha256: await this.#binding(input.intent) };
+    const header = { schemaVersion: "protected-continuation-command-v1" as const, keyReference: this.key.reference, retentionUntilMs: input.retentionUntilMs, bindingSha256: await this.#binding(input.intent), plaintextSha256: await digest(command) };
     const aad = canonicalBytes(header), nonce = crypto.getRandomValues(new Uint8Array(12)), wrapNonce = crypto.getRandomValues(new Uint8Array(12)), rawDek = crypto.getRandomValues(new Uint8Array(32));
     try {
       const dek = await crypto.subtle.importKey("raw", rawDek, "AES-GCM", false, ["encrypt"]);
@@ -52,15 +53,26 @@ export class ProtectedContinuationCommands implements PendingCommandPort {
           if (plaintext.byteLength > 65_536) throw new Error();
           const command = Command.parse(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(plaintext)));
           await this.#validate(command, intent);
+          if (header.plaintextSha256 && header.plaintextSha256 !== await digest(command)) throw new Error();
           return command;
         } finally { plaintext.fill(0); }
       } finally { rawDek.fill(0); }
     } catch { throw new Error("CONTINUATION_COMMAND_RESTORE_DENIED"); }
   }
 
-  #binding(intent: PendingActionIntent) { return digest({ ...intent, protectedCommand: undefined }); }
+  /** Only a server-authenticated, unexpired outer checkpoint may supply this
+   * plaintext. The retained SQL hash and full semantic bindings remain authority. */
+  async validateRetained(raw: unknown, intent: PendingActionIntent): Promise<GenerationCommand> {
+    const command = Command.parse(raw);
+    if (!intent.commandSha256 || await digest(command) !== intent.commandSha256) throw new Error("CONTINUATION_RETAINED_COMMAND_BINDING_INVALID");
+    await this.#validate(command, intent);
+    return command;
+  }
+
+  #binding(intent: PendingActionIntent) { const { commandSha256: _retainedHash, ...binding } = intent; return digest({ ...binding, protectedCommand: undefined }); }
   async #validate(command: GenerationCommand, intent: PendingActionIntent): Promise<void> {
     const accountId = await accountIdForPrincipal(command.principal);
+    if (intent.commandSha256 && await digest(command) !== intent.commandSha256) throw new Error("CONTINUATION_COMMAND_BINDING_INVALID");
     const kind = "repair" in command ? "repair" : "revision" in command ? "revise_session" : "start_session";
     const payload = "repair" in command ? { repair: command.originatingActionId } : "revision" in command ? { revision: command.revision } : { idea: command.idea, ...(command.remixReference ? { remixReference: command.remixReference } : {}) };
     const sessionId = "sessionId" in command ? command.sessionId : `session:${(await digest({ accountId, key: command.idempotencyKey })).slice(0, 24)}`;

@@ -8,6 +8,7 @@ import type { ContinuationFundingStore } from "../persistence/funding-store";
 import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
 import { canonicalJson } from "../promotion/schema";
 import { ProductionCheckpointCoordinator, assertProductionCheckpointCoordinator } from "./checkpoint-coordinator";
+import { ProductionInitialPendingCheckpoint } from "./initial-pending-checkpoint";
 import { ProductionWorkerBridge } from "./worker-bridge";
 
 const sha = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex");
@@ -19,6 +20,7 @@ const frozen = <T>(value: T): T => Object.freeze(value);
 export class ProductionContinuationCoordinator {
   readonly service: ContinuationService;
   readonly deadlines: ContinuationDeadlineReconciler;
+  readonly initialPending: ProductionInitialPendingCheckpoint;
   readonly #pool: PostgresSqlPool;
   constructor(private readonly input: Readonly<{
     pool: PostgresSqlPool;
@@ -32,7 +34,9 @@ export class ProductionContinuationCoordinator {
     assertProductionCheckpointCoordinator(input.checkpoint);
     this.#pool = bindAccountingRealmPool(input.pool, createAccountingRealm("production-real"));
     const now = input.now ?? Date.now;
+    this.initialPending = new ProductionInitialPendingCheckpoint({ pool: input.pool, checkpoint: input.checkpoint, capacity: input.capacity, commands: input.checkpoint.pendingCommands, now });
     this.deadlines = new ContinuationDeadlineReconciler({
+      initialPending: this.initialPending,
       store: input.store, worker: input.worker, envelope: input.checkpoint,
       retention: { destroyExpired: value => input.checkpoint.destroyExpired(value) },
       clock: { nowMs: now }, candidates: {
@@ -40,7 +44,7 @@ export class ProductionContinuationCoordinator {
       },
     });
     this.service = new ContinuationService({
-      store: input.store, clock: { nowMs: now }, includeAdmissionHold: true,
+      store: input.store, clock: { nowMs: now }, includeAdmissionHold: true, pendingCommands: input.checkpoint.pendingCommands,
       resume: {
         compatibility: input.compatibility,
         checkpoint: {
@@ -52,8 +56,8 @@ export class ProductionContinuationCoordinator {
     });
   }
 
-  async scan(): Promise<Readonly<{ deadline: readonly unknown[]; retention: readonly unknown[] }>> {
-    return frozen({ deadline: await this.deadlines.scan(), retention: await this.deadlines.scanRetention() });
+  async scan(): Promise<Readonly<{ deadline: readonly unknown[]; retention: readonly unknown[]; capacityReleases: readonly unknown[] }>> {
+    return frozen({ deadline: await this.deadlines.scan(), capacityReleases: await this.initialPending.reconcileReleases(), retention: await this.deadlines.scanRetention() });
   }
   async resumeSession(input: unknown) { return this.service.resumeSession(input); }
 
@@ -71,7 +75,7 @@ export class ProductionContinuationCoordinator {
       return frozen(rows.rows.map(row => frozen({ accountId: String(row.account_id), sessionId: String(row.session_id), pauseGeneration: Number(row.pause_generation), checkpointId: String(row.checkpoint_id) })));
     } finally { client.release(); }
   }
-  async #allocate(input: Readonly<{ accountId: string; sessionId: string; checkpointId: string; leaseToken: string; allocationIntentReference: string; actionId: string; expectedVersion: number; policyVersion: string; workspaceId: string; sourceActionId: string }>) {
+  async #allocate(input: Readonly<{ accountId: string; sessionId: string; checkpointId: string; leaseToken: string; allocationIntentReference: string; actionId: string; expectedVersion: number; policyVersion: string; workspaceId: string; sourceActionId: string; payloadKind?: "pending_command" }>) {
     const capacityIntentReference = `capacity-intent:${sha({ checkpointId: input.checkpointId, allocation: input.allocationIntentReference })}`;
     const fingerprint = sha({ accountId: input.accountId, sessionId: input.sessionId, checkpointId: input.checkpointId, actionId: input.actionId, capacityIntentReference });
     const binding = `sha256:${sha({ accountId: input.accountId, sessionId: input.sessionId, actionId: input.actionId, expectedVersion: input.expectedVersion, leaseToken: input.leaseToken })}`;
@@ -100,7 +104,7 @@ export class ProductionContinuationCoordinator {
       }
     } finally { client.release(); }
     try {
-      await this.input.worker.registerContinuationRequest({ accountId: input.accountId, sessionId: input.sessionId, sourceActionId: input.sourceActionId, actionId: input.actionId, expectedVersion: input.expectedVersion, policyVersion: input.policyVersion, workspaceId: input.workspaceId });
+      if (input.payloadKind !== "pending_command") await this.input.worker.registerContinuationRequest({ accountId: input.accountId, sessionId: input.sessionId, sourceActionId: input.sourceActionId, actionId: input.actionId, expectedVersion: input.expectedVersion, policyVersion: input.policyVersion, workspaceId: input.workspaceId });
       return frozen({ status: "allocated" as const, worker: this.input.worker });
     } catch { return frozen({ status: "unknown" as const }); }
   }

@@ -116,6 +116,17 @@ export class PostgresOperationJournal {
       return rows.rows[0] ? record<T>(rows.rows[0]) : undefined;
     });
   }
+  /** Bounded compatibility lookup for a retained nested request. Extra request
+   * fields are allowed; multiple matching originals never select a winner. */
+  async readUniqueByObjectFields<T = unknown>(field: string, fields: Readonly<Record<string, string | number>>): Promise<OperationRecord<T> | undefined> {
+    const entries = Object.entries(fields);
+    if (!/^[A-Za-z][A-Za-z0-9_]{0,63}$/u.test(field) || entries.length < 1 || entries.length > 8 || entries.some(([key, value]) => !/^[A-Za-z][A-Za-z0-9_]{0,63}$/u.test(key) || !(typeof value === "string" && value.length > 0 && value.length <= 512 || typeof value === "number" && Number.isSafeInteger(value) && value >= 0))) throw new Error("OPERATION_JOURNAL_LOOKUP_INVALID");
+    return this.#transaction(async client => {
+      const rows = await client.query<Record<string, unknown>>("SELECT * FROM production_real.release_operation_journal WHERE namespace=$1 AND scope_sha256=$2 AND value_json -> $3 @> $4::jsonb ORDER BY operation_id LIMIT 2", [this.#namespace, this.#scope, field, JSON.stringify(fields)]);
+      if (rows.rows.length > 1) throw new Error("OPERATION_JOURNAL_LOOKUP_AMBIGUOUS");
+      return rows.rows[0] ? record<T>(rows.rows[0]) : undefined;
+    });
+  }
   /** Bounded private-control admission guard scoped to this journal binding. */
   async countOperations(): Promise<number> {
     return this.#transaction(async client => {

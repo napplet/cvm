@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ImmutableObjectReferenceSchema, type ObjectStorePort } from "../continuity/object-store";
 
 import { validateAuthorizationReceipt, validateAuthorizationRequest } from "../release/authorization";
 import type { ProductionSourceBuildVerifier } from "../release/deployment/production-session-runtime";
@@ -28,6 +29,14 @@ const Workspace = z.object({
 export const MountedSourceBuildResultSchema = z.object({ candidateId: Digest, sealedArtifactSha256: Digest, manifestSha256: Digest, capabilitiesSha256: Digest, aggregateSha256: Digest, jobId: Digest, workerOperationId: z.string().regex(/^capacity-[a-f0-9]{40}$/u), capacityReference: z.string().regex(/^capacity:[a-f0-9]{64}$/u) }).strict();
 const StoredEvidence = z.object({ key: z.string().min(1).max(512), checksum: Digest, result: MountedSourceBuildResultSchema }).strict();
 export type MountedSourceBuildResult = z.infer<typeof MountedSourceBuildResultSchema>;
+const ImmutableReference = ImmutableObjectReferenceSchema;
+export const MountedSourceBuildEvidenceSchema = z.object({
+  version: z.literal(1),
+  artifact: z.object({ sealedObjectSha256: Digest, aggregateSha256: Digest, files: z.array(z.object({ path: z.string().max(256).regex(/^[A-Za-z0-9._/-]+$/u).refine(value => value.split("/").every(part => part !== "" && part !== "." && part !== "..")), sha256: Digest, size: z.number().int().nonnegative().max(16_777_216), bytesBase64: z.string().max(22_369_624) }).strict()).min(1).max(256) }).strict(),
+  receipts: z.object({ manifest: z.unknown(), manifestSha256: Digest, capabilities: z.object({ content: z.string().max(30_000), capabilitiesSha256: Digest }).strict(), workerArtifactSha256: Digest, commandEvidenceSha256: Digest }).strict(),
+  operation: z.object({ operationId: z.string().min(1), planJobId: Digest, authorizationRequestSha256: Digest, topologySha256: Digest }).merge(MountedSourceBuildResultSchema).strict(),
+}).strict();
+export type MountedSourceBuildEvidence = z.infer<typeof MountedSourceBuildEvidenceSchema>;
 const sha256 = (value: string | Uint8Array) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
 const MAX_EVIDENCE_BYTES = 24 * 1_024 * 1_024;
 
@@ -40,7 +49,7 @@ function abortAfter(ms: number): Readonly<{ signal: AbortSignal; dispose(): void
  * only observe the exact original after an acknowledgement is lost. */
 export async function resumeMountedSourceBuildEvidence(input: Readonly<{
   journal: ProductionGenerationRuntime["dependencies"]["jobJournal"];
-  artifactStore: ProductionGenerationRuntime["dependencies"]["artifactStore"];
+  artifactStore: ObjectStorePort;
   candidateSha256: string;
   run: MountedSourceBuildExecution;
 }>): Promise<Readonly<{ status: "passed"; artifactReceipt: Readonly<{ evidenceObject: unknown }> }> & MountedSourceBuildResult | undefined> {
@@ -56,9 +65,49 @@ export async function resumeMountedSourceBuildEvidence(input: Readonly<{
   return Object.freeze({ status: "passed" as const, ...value.result, artifactReceipt: Object.freeze({ evidenceObject }) });
 }
 
+/** Reads the immutable source-build receipt after its durable original has
+ * already been claimed. Consumers get verified bytes from object storage,
+ * never large build payloads from a PostgreSQL journal row. */
+export async function readMountedSourceBuildEvidence(input: Readonly<{
+  journal: ProductionGenerationRuntime["dependencies"]["jobJournal"];
+  artifactStore: ObjectStorePort;
+  candidateSha256: string;
+  run: MountedSourceBuildExecution;
+}>): Promise<Readonly<{ result: MountedSourceBuildResult; evidenceObject: z.infer<typeof ImmutableReference>; evidence: MountedSourceBuildEvidence }>> {
+  const resumed = await resumeMountedSourceBuildEvidence(input);
+  if (!resumed) throw new Error("PRODUCTION_SOURCE_BUILD_EVIDENCE_UNAVAILABLE");
+  const evidenceObject = ImmutableReference.parse(resumed.artifactReceipt.evidenceObject);
+  const bytes = await input.artifactStore.readExact(evidenceObject);
+  if (!bytes || bytes.byteLength > MAX_EVIDENCE_BYTES || sha256(bytes) !== evidenceObject.checksum) throw new Error("PRODUCTION_SOURCE_BUILD_EVIDENCE_BYTES_REQUIRED");
+  const evidence = MountedSourceBuildEvidenceSchema.parse(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
+  const { operationId: _operationId, planJobId: _planJobId, authorizationRequestSha256: _authorizationRequestSha256, topologySha256: _topologySha256, ...result } = evidence.operation;
+  const { status: _status, artifactReceipt: _artifactReceipt, ...resumedResult } = resumed;
+  const sealedFiles = evidence.artifact.files.map(file => {
+    const decoded = Buffer.from(file.bytesBase64, "base64");
+    if (decoded.toString("base64") !== file.bytesBase64 || decoded.byteLength !== file.size || sha256(decoded) !== file.sha256) throw new Error("PRODUCTION_SOURCE_BUILD_EVIDENCE_FILE_CHANGED");
+    return { path: file.path, sha256: file.sha256, bytes: file.size };
+  });
+  if (new Set(sealedFiles.map(file => file.path)).size !== sealedFiles.length
+    || sha256(JSON.stringify(sealedFiles)) !== evidence.artifact.sealedObjectSha256
+    || sha256(sealedFiles.map(file => `${file.sha256} /${file.path}\n`).sort().join("")) !== evidence.artifact.aggregateSha256
+    || evidence.artifact.sealedObjectSha256 !== resumedResult.sealedArtifactSha256
+    || evidence.artifact.aggregateSha256 !== resumedResult.aggregateSha256
+    || sha256(canonicalJson(evidence.receipts.manifest)) !== evidence.receipts.manifestSha256
+    || evidence.receipts.manifestSha256 !== resumedResult.manifestSha256
+    || sha256(evidence.receipts.capabilities.content) !== evidence.receipts.capabilities.capabilitiesSha256
+    || evidence.receipts.capabilities.capabilitiesSha256 !== resumedResult.capabilitiesSha256) throw new Error("PRODUCTION_SOURCE_BUILD_EVIDENCE_CONTENT_BINDING_REQUIRED");
+  if (evidence.operation.topologySha256 !== input.run.topologySha256 || evidence.operation.candidateId !== input.candidateSha256 || evidence.operation.workerOperationId !== input.run.workerOperationId
+    || evidence.operation.authorizationRequestSha256 !== input.run.authorizationRequestSha256
+    || evidence.operation.operationId !== input.run.operationId
+    || canonicalJson(result) !== canonicalJson(MountedSourceBuildResultSchema.parse(resumedResult))) {
+    throw new Error("PRODUCTION_SOURCE_BUILD_EVIDENCE_BINDING_REQUIRED");
+  }
+  return Object.freeze({ result: MountedSourceBuildResultSchema.parse(resumedResult), evidenceObject, evidence });
+}
+
 export async function persistMountedSourceBuildEvidence(input: Readonly<{
   journal: ProductionGenerationRuntime["dependencies"]["jobJournal"];
-  artifactStore: ProductionGenerationRuntime["dependencies"]["artifactStore"];
+  artifactStore: ObjectStorePort;
   run: MountedSourceBuildExecution;
   value: Readonly<{ key: string; checksum: string; result: MountedSourceBuildResult }>;
   bytes: Uint8Array;

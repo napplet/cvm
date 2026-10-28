@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { SealedArtifactIdentitySchema } from "../../src/publication/contracts";
 
 import { PromotedNappletCliAdapter, canonicalSealedDeployAggregate } from "../../src/publication/napplet-cli-adapter";
 import { createAuthorizationReceipt, createAuthorizationRequest } from "../../src/release/authorization";
@@ -15,17 +16,17 @@ const file = { path: "/index.html", mimeType: "text/html", bytes, sha256: await 
 const aggregateSha256 = canonicalSealedDeployAggregate([file]);
 
 async function sha256(value: Uint8Array): Promise<string> {
-  const result = await crypto.subtle.digest("SHA-256", value);
+  const result = await crypto.subtle.digest("SHA-256", new Uint8Array(value).buffer);
   return Array.from(new Uint8Array(result), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-const artifact = {
+const artifact = SealedArtifactIdentitySchema.parse({
   accountId: "account:publication", sessionId: "session:publication", artifactId: "artifact:publication", artifactVersion: 1,
   aggregateSha256, manifestSha256: digest("b"), verificationEvidenceSha256: digest("c"), sealedObjectGeneration: "generation:1",
   sealedObjectSha256: digest("d"), sealedFiles: [{ path: file.path, mimeType: file.mimeType, sha256: file.sha256, size: file.size }],
   entrypoint: "/index.html", normalizedDTag: "sealed-napplet", requiredCapabilities: [], optionalCapabilities: [],
   policyIdentity: "policy:publication", toolchainIdentity: "toolchain:publication", runtimeCompatibilityIdentity: "runtime:publication",
-} as const;
+});
 const ownerEvent = { id: digest("e"), pubkey, created_at: 1, kind: 35129 as const, tags: [["d", artifact.normalizedDTag]], content: "", sig: "c".repeat(128) };
 const sourceSnapshot = {
   identity: { version: "0.5.2" as const, sourceCommit: "1a38b9150f3a3da148091c11bce4d0365f7298e5", linuxSha256: "46685f2e4df516b5b2e7e2e133480c90e5c85dbd36d05c6e95f4eee6af33ec5e" },
@@ -69,8 +70,8 @@ test("wrong promoted source blocks before the sealed bytes leave the controller"
   let uploads = 0;
   const source = createNativePromotedNappletCliSource({
     snapshot: { ...sourceSnapshot, identity: { ...sourceSnapshot.identity, linuxSha256: digest("0") } },
-    upload: { uploadExact: async () => { uploads += 1; return {}; }, reconcileOriginalUpload: async () => ({ status: "missing" }) },
-    relay: { publishOriginalEvent: async () => ({ state: "complete", relayObservation: "relay:unused" }), reconcileOriginalEvent: async () => ({ state: "unknown" }) },
+    upload: { uploadExact: async () => { uploads += 1; throw new Error("UNEXPECTED_UPLOAD"); }, reconcileOriginalUpload: async () => { throw new Error("UNEXPECTED_OBSERVATION"); } },
+    relay: { publishOriginalEvent: async () => { throw new Error("UNEXPECTED_RELAY"); }, reconcileOriginalEvent: async () => { throw new Error("UNEXPECTED_RELAY_OBSERVATION"); } },
   });
   const adapter = new PromotedNappletCliAdapter({ contract: source.contract, source: source.port });
   const result = await adapter.deployPreSignedNamed({

@@ -3,6 +3,7 @@ import { Pool, type PoolClient } from "pg";
 import { createAccountingRealm, assertProductionAccountingConfiguration } from "../../src/funding/accounting-realm";
 import { accountIdForPrincipal } from "../../src/domain/account-command";
 import { createFundedCore } from "../../src/phase-03/funded-core";
+import type { PostgresSqlPool } from "../../src/persistence/postgres-sql-funding-store";
 import { PostgresFundingDatabase } from "../../src/persistence/postgres-funding-database";
 import { FundingService } from "../../src/funding/funding-service";
 import type { CashuTopUpRecord } from "../../src/funding/cashu-top-up";
@@ -92,7 +93,14 @@ postgresIsolation("real PostgreSQL keeps development history read-only and produ
     expect((await pool.query("SELECT settled_available::text FROM public.account_balance_projection WHERE account_id=$1", [productionAccountId])).rows[0]).toEqual({ settled_available: "41009" });
     expect((await pool.query("SELECT count(*)::int AS count FROM production_real.funding_accounts")).rows[0]).toEqual({ count: 0 });
     appPool = new Pool({ connectionString: `postgresql://napplet_production_test@127.0.0.1:${port}/postgres`, connectionTimeoutMillis: 2_000 });
-    const database = new PostgresFundingDatabase(appPool as never, { realm: "production-real", deadlineMs: 1_000 });
+    const nativeAppPool = appPool;
+    const tracedAppPool: PostgresSqlPool = { async connect() { const client = await nativeAppPool.connect(); return {
+      async query<Row extends Record<string, unknown>>(sql: string, values?: readonly unknown[]) {
+        try { return { rows: (await client.query<Row>(sql, values ? [...values] : undefined)).rows }; }
+        catch (error) { if (error instanceof Error && "code" in error && error.code === "40001") error.message += ` [statement: ${sql.slice(0, 180)}]`; throw error; }
+      }, release() { client.release(); },
+    }; } };
+    const database = new PostgresFundingDatabase(tracedAppPool, { realm: "production-real", deadlineMs: 1_000 });
     const funding = new FundingService(database.funding);
     expect((await funding.status(principal)).available).toBe("0");
     await pool.query("INSERT INTO production_real.funding_accounts(account_id,unit) VALUES($1,'sat')", [productionAccountId]);

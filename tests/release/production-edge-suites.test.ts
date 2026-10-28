@@ -89,5 +89,5 @@ test("native edge factory rejects a non-Chromium mounted browser before any prov
 });
 
 test("NIP-46 signer rejects non-bunker references before resolving any session key", async () => {
-  await expect(openProductionNip46Signer({ bunkerUri: "https://invalid", sessionKeyReference: "nostr:session", sessionKeyBroker: {} as never, context: {} as never, journal: {} as never })).rejects.toThrow("NIP46_REFERENCE_INVALID");
+  await expect(openProductionNip46Signer({ authorization: {} as never, bunkerUri: "https://invalid", sessionKeyReference: "nostr:session", sessionKeyBroker: {} as never, context: {} as never, journal: {} as never })).rejects.toThrow("NIP46_REFERENCE_INVALID");
 });

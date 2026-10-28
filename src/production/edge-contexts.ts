@@ -52,6 +52,7 @@ export const ProductionPublicationRecordSchema = z.object({
 const PaymentRecord = z.object({ candidateSha256: Digest, topologySha256: Digest, lightning: z.unknown(), cashu: z.unknown() }).strict();
 const SigningRecord = z.object({
   candidateSha256: Digest, topologySha256: Digest, authorizationRequestSha256: Digest, operationId: Operation, ownerPubkey: Digest,
+  expiresAtMs: z.number().int().positive(),
   capabilities: z.array(z.string().min(1).max(256)).max(32), template: z.union([EventTemplate, UploadTemplate]),
 }).strict();
 
@@ -153,7 +154,7 @@ export class ProductionEdgeContexts {
       const value = SigningRecord.parse(record.value); this.#assertBinding(value);
       if (value.authorizationRequestSha256 !== this.#authorizationRequestSha256 || record.identitySha256 !== new Bun.CryptoHasher("sha256").update(canonicalJson(value)).digest("hex")) throw new Error("PRODUCTION_EDGE_CONTEXT_AUTHORIZATION_CHANGED");
       if (value.template.kind !== 35129) throw new Error("PRODUCTION_EDGE_SIGNER_CONTEXT_INVALID");
-      return Object.freeze({ operationId: value.operationId, ownerPubkey: value.ownerPubkey, capabilities: Object.freeze([...value.capabilities]), template: value.template });
+      return Object.freeze({ operationId: value.operationId, ownerPubkey: value.ownerPubkey, capabilities: Object.freeze([...value.capabilities]), template: value.template, expiresAtMs: value.expiresAtMs });
     },
     resolveOriginal: async input => {
       const operationId = Operation.parse(input.operationId);
@@ -163,7 +164,7 @@ export class ProductionEdgeContexts {
       const value = SigningRecord.parse(record.value); this.#assertBinding(value);
       if (value.authorizationRequestSha256 !== this.#authorizationRequestSha256 || record.identitySha256 !== new Bun.CryptoHasher("sha256").update(canonicalJson(value)).digest("hex")) throw new Error("PRODUCTION_EDGE_CONTEXT_AUTHORIZATION_CHANGED");
       if (value.operationId !== operationId || value.template.kind !== 24242) throw new Error("PRODUCTION_EDGE_SIGNER_CONTEXT_INVALID");
-      return Object.freeze({ intentDigest: record.identitySha256, ownerPubkey: value.ownerPubkey, capabilities: Object.freeze([...value.capabilities]), template: value.template });
+      return Object.freeze({ intentDigest: record.identitySha256, ownerPubkey: value.ownerPubkey, capabilities: Object.freeze([...value.capabilities]), template: value.template, expiresAtMs: value.expiresAtMs });
     },
   });
 

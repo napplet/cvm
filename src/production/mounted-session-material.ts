@@ -481,6 +481,8 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
     context: edgeContexts.signer,
     originalOperationContext: edgeContexts.signer,
     journal: dependencies.journal,
+    authorization,
+    now,
   });
   input.generation.registerClose(() => signerPort.close());
   const uploadPort = await createProductionCliUploadPort({

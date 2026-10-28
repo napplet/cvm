@@ -7,6 +7,7 @@ This is the tool surface of the current repository. **Core** means a transport-n
 | `account_status` | Owner's balances and work | `{}`; decimal balances, top-ups/admissions/sessions |
 | `top_up` | Separate funding | `idempotencyKey`, `pmi`, `mode`, `amount`, optional `topUpId`; payment tags also required |
 | `funded_admission` | Capacity and cap reservation | `idempotencyKey`, `requestedCap`, `unit: "sat"`; accepted reference or refusal |
+| `approve_session_cap` | Optional higher session maximum | Session/admission, key, `expectedApprovedCap`, absolute `maximum`, `unit: "sat"`; approved receipt or finite denial |
 | `start_session` | First generation or development pending draft | Bounded `idea`, `maximum`, key, admission or `mode: "pre_admission"`; optional `remixReference` |
 | `revise_session` | Next metered action | Session, admission, `expectedVersion`, maximum, key, bounded `revision` |
 | `resume_session` | Explicit exact-action continuation | Checkpoint/version, pending reference/fingerprint, key, approval and funding/cap reference |
@@ -22,6 +23,23 @@ This is the tool surface of the current repository. **Core** means a transport-n
 | `cvm_admin` | Operator configuration and jobs | Operator signer only; status, accounts, rates, BTC/USD quote, jobs and job details |
 
 See [complete structural input schemas](./schemas) for unions, required fields and bounds. Ordinary callers must not pass `principal` or an owner override. `publisher` in a publication preparation selects the eventual event signer; it does not grant access to someone else's artifact.
+
+## Approve a higher session maximum
+
+Discover `approve_session_cap` before using it. The production SQL composition
+installs this optional capability; the current private development deployment
+does not advertise it. Read the approved total from `account_status`, then send
+the same owned session/admission with `expectedApprovedCap` and the new absolute
+`maximum`. A top-up alone cannot increase permission to spend.
+
+Approval reserves only the increase from unheld settled funds. It does not make
+a model request or automatically resume a checkpoint. Retry the exact command
+and key after a lost response; changed arguments require a new key. A stale
+approval requires rereading the current maximum. Success includes the new
+approved total and remaining held amount, which may differ after spending.
+Denials use `status: denied` and a finite `SESSION_CAP_*` code. The MCP example
+requires its generation opt-in for this spending permission, as for admission.
+See the [authority and migration contract](../architecture/session-cap-approval).
 
 ## Project and request costs
 

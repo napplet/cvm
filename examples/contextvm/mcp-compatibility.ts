@@ -3,7 +3,7 @@ import type { JSONRPCMessage } from "@contextvm/mcp-sdk/types";
 import catalog from "../../docs/public/contracts/napplet-cvm-v1.json";
 
 const readTools = new Set(["service_info", "account_status", "projects", "session_status", "preview", "operation_diagnostic"]);
-const generationTools = new Set(["funded_admission", "start_session", "revise_session", "resume_session"]);
+const generationTools = new Set(["funded_admission", "approve_session_cap", "start_session", "revise_session", "resume_session"]);
 
 /** Local compatibility for this repository's domain-result wire format. No HTTP API. */
 export class CvmMcpCompatibility implements Transport {

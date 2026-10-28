@@ -2,7 +2,7 @@
 
 [Download the JSON schema catalog](/contracts/napplet-cvm-v1.json).
 
-The catalog includes all 16 tool input schemas, session action/status results, development progress, and model-profile/price-card configuration. It is generated from the **same Zod validators used by the service**, rather than a second handwritten API specification.
+The catalog includes all 17 tool input schemas, session action/status and cap-approval results, development progress, and model-profile/price-card configuration. It is generated from the **same Zod validators used by the service**, rather than a second handwritten API specification.
 
 ```sh
 bun docs/scripts/export-contracts.ts

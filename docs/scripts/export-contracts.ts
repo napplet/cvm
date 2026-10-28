@@ -17,6 +17,7 @@ const entries: [string, string, z.ZodType, string][] = [
   ["account_status", "Read balances for the signed request identity.", core.AccountStatusArgumentsSchema, "core"],
   ["top_up", "Start or submit a separate CEP-8 funding operation.", core.TopUpArgumentsSchema, "core"],
   ["funded_admission", "Reserve capacity and a sat-denominated cap before work.", core.FundedAdmissionArgumentsSchema, "core"],
+  ["approve_session_cap", "Approve a higher maximum for one owned session and reserve only its funded increase.", core.ApproveSessionCapArgumentsSchema, "core-optional"],
   ["start_session", "Generate an applet after admission, or save a development pending action.", core.StartSessionArgumentsSchema, "core"],
   ["revise_session", "Create a metered revision of an owned session at the expected version.", core.ReviseSessionArgumentsSchema, "core"],
   ["resume_session", "Explicitly approve continuation of one exact pending action.", core.ResumeSessionArgumentsSchema, "core"],
@@ -36,7 +37,7 @@ const value = {
   format: "napplet-cvm-contract-catalog-v1", sdkVersion: "0.13.10", mcpSdkVersion: "1.30.0",
   note: "Generated structural input schemas. Runtime refinements, signatures, ownership, availability, money ceilings, URL policy and durable state remain authoritative. A listed tool is not proof its facade is installed. This catalog format is not a wire protocol negotiation version.",
   tools: entries.map(([name, description, schema, scope]) => ({ name, description, scope, inputSchema: json(schema) })),
-  results: { projectCosts: json(ProjectCostsSchema), publicationMetadata: json(PublicationMetadataSchema), generationEstimates: json(GenerationEstimatesSchema), sessionAction: json(SessionActionResultSchema), sessionStatus: json(SessionStatusSchema), developmentProgress: json(DevelopmentProgressSchema) },
+  results: { projectCosts: json(ProjectCostsSchema), publicationMetadata: json(PublicationMetadataSchema), generationEstimates: json(GenerationEstimatesSchema), sessionAction: json(SessionActionResultSchema), sessionCapApproval: json(core.SessionCapApprovalWireResultSchema), sessionStatus: json(SessionStatusSchema), developmentProgress: json(DevelopmentProgressSchema) },
   operatorConfiguration: { modelProfile: json(ModelProfileSchema), priceCard: json(PriceCardSchema) },
 };
 const path = new URL("../public/contracts/napplet-cvm-v1.json", import.meta.url);

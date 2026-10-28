@@ -1,3 +1,4 @@
+import { SessionCapApprovalService } from "../funding/session-cap";
 import { ContextVmFundingAdapter } from "../contextvm/adapter";
 import { buildContextVmAnnouncement, configureContextVmToolAvailability, type ContextVmAnnouncementInput } from "../contextvm/announcement";
 import type { ContextVmTransportPort } from "../contextvm/sdk-bridge";
@@ -140,6 +141,7 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
   const publicFundingSurface = Boolean(otherwisePublicFundingSurface && options.admissionReceiptSecret);
   const publicGenerationSurface = Boolean(publicFundingSurface && options.meteredService);
   if (publicGenerationSurface && !verifiedCreditWake) throw new Error("PRODUCTION_VERIFIED_CREDIT_WAKE_REQUIRED");
+  const sessionCaps = publicGenerationSurface && database ? new SessionCapApprovalService(database.funding) : undefined;
   const publicContinuationSurface = Boolean(publicFundingSurface && options.continuationService);
   const publicPreviewSurface = Boolean(publicFundingSurface && options.preview);
   // Do not let a caller-provided `{ status: "available" }` become a public
@@ -163,12 +165,13 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
     };
     options.transport.configureAnnouncement(buildContextVmAnnouncement(configureContextVmToolAvailability(announcement, {
       preview: publicPreviewSurface,
+      sessionCaps: Boolean(sessionCaps),
       publicationSourceContract: publicPublicationSurface ? sourceContract : undefined,
     })));
   }
   const statusCursorSecret = options.statusCursorSecret ?? crypto.getRandomValues(new Uint8Array(32));
   const contextvm = publicFundingSurface && options.transport && lightning && cashu
-    ? new ContextVmFundingAdapter({ service: funding, transport: options.transport, admissions, admissionReceipts, accountStatus, topUps: { lightning, cashu },
+    ? new ContextVmFundingAdapter({ ...(sessionCaps ? { sessionCaps } : {}), service: funding, transport: options.transport, admissions, admissionReceipts, accountStatus, topUps: { lightning, cashu },
       ...(options.meteredService ? { generation: options.meteredService, sessionStatus: { read: (query: unknown) => readSessionStatus({ store: authority as MeteredFundingStore, query, cursorSecret: statusCursorSecret }) } } : {}),
       ...(options.continuationService ? { continuation: options.continuationService } : {}),
       ...(options.preview ? { preview: options.preview } : {}),

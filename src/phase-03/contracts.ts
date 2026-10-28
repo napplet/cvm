@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const DecimalSatSchema = z.string().regex(/^[1-9][0-9]*$/u, "must be a positive canonical integer string").refine(
+export const DecimalSatSchema = z.string().regex(/^[1-9][0-9]*$/u, "must be a positive canonical integer string").refine(
   (value) => BigInt(value) <= BigInt(Number.MAX_SAFE_INTEGER),
   "must be within the explicitly supported safe-integer sat limit",
 );
@@ -68,7 +68,7 @@ export const AccountStatusSchema = z.object({
   available: NonNegativeDecimalSatSchema,
   held: NonNegativeDecimalSatSchema,
   topUps: z.array(AccountTopUpStatusSchema),
-  admissions: z.array(z.object({ reference: z.string().min(1), approvedCap: DecimalSatSchema, heldAmount: DecimalSatSchema, unit: z.literal("sat") }).strict()),
+  admissions: z.array(z.object({ reference: z.string().min(1), approvedCap: DecimalSatSchema, heldAmount: NonNegativeDecimalSatSchema, unit: z.literal("sat") }).strict()),
 }).strict();
 
 export const FundedAdmissionSchema = z.object({

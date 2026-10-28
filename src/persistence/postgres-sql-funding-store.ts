@@ -1,3 +1,4 @@
+import { SessionCapApprovalResultSchema, type SessionCapApprovalInput, type SessionCapApprovalResult, type SessionCapTransaction, type SessionCapFundingStore } from "../funding/session-cap";
 import type { AccountStatus, FundedAdmission, FundingResult } from "../phase-03/contracts";
 import { AccountStatusSchema, FundingResultSchema } from "../phase-03/contracts";
 import { canonicalMeteredTerminalResult, type ActionBudget, type ActionBudgetInput, type AdmissionInput, type BeginDeadlineCheckpointInput, type BillingLineItem, type BillingLineItemPage, type BillingLineItemPageRequest, type CapacityDispatchClaim, type CapacityIntent, type CapacityIntentInput, type CapacityObservationInput, type CompleteResumedActionInput, type ContinuationCheckpoint, type ContinuationCheckpointInput, type ContinuationFundingStore, type ContinuationFundingTransaction, type ContinuationPause, type ContinuationPauseInput, type ContinuationRecord, type ContinuationResumeClaim, type ContinuationResumeClaimInput, type ContinuationWakeDispatch, type CreditInput, type DeletionOutcomeInput, type MeteredAction, type MeteredFinalizeInput, type MeteredFundingStore, type MeteredFundingTransaction, type MeteredOperationClaim, type MeteredSessionRecord, type PendingActionCreateInput, type PendingActionResumeClaim, type PendingActionResumeClaimInput, type PendingActionTerminalInput, type PreAdmissionFundingStore, type PrepareMeteredActionInput, type PublicationFundingStore, type ReconciliationClaim, type RestoreObservationInput, type StoredFundingCommand, type UsageUnknownInput, type WakeDispatchClaim, type WakeDispatchOutcomeInput } from "./funding-store";
@@ -74,7 +75,7 @@ class DeadlineSqlClient implements PostgresSqlClient {
  * one checked-out pg client after `BEGIN ... SERIALIZABLE`; the deterministic
  * map executor remains a test double in its own module.
  */
-export class PostgresSqlFundingStore implements MeteredFundingStore, ContinuationFundingStore, PreAdmissionFundingStore, PublicationFundingStore {
+export class PostgresSqlFundingStore implements MeteredFundingStore, ContinuationFundingStore, PreAdmissionFundingStore, PublicationFundingStore, SessionCapFundingStore {
   readonly production = true as const;
   readonly #maxAttempts: number;
   readonly #deadlineMs: number;
@@ -238,7 +239,8 @@ export class PostgresSqlFundingStore implements MeteredFundingStore, Continuatio
 
   async transact<T>(accountId: string, operation: (transaction: MeteredFundingTransaction) => Promise<T> | T): Promise<T>;
   async transact<T>(accountId: string, operation: (transaction: ContinuationFundingTransaction) => Promise<T> | T): Promise<T>;
-  async transact<T>(accountId: string, operation: (transaction: MeteredFundingTransaction & ContinuationFundingTransaction) => Promise<T> | T): Promise<T> {
+  async transact<T>(accountId: string, operation: (transaction: SessionCapTransaction) => Promise<T> | T): Promise<T>;
+  async transact<T>(accountId: string, operation: (transaction: MeteredFundingTransaction & ContinuationFundingTransaction & SessionCapTransaction) => Promise<T> | T): Promise<T> {
     const deadline = this.#now() + this.#deadlineMs;
     let last: unknown;
     for (let attempt = 0; attempt < this.#maxAttempts && this.#now() < deadline; attempt += 1) {
@@ -339,9 +341,9 @@ export class PostgresSqlFundingStore implements MeteredFundingStore, Continuatio
       const balance = await client.query<{ settled_available: string; held: string }>("SELECT settled_available, held FROM account_balance_projection WHERE account_id = $1", [accountId]);
       if (!balance.rows[0]) return undefined;
       const topUps = await client.query<{ top_up_id: string; state: "pending" | "verifying" | "settled" | "credited" | "failed" | "reconciliation_pending"; amount: string; unit: "sat"; rail: "lightning" | "cashu"; created_at: string; settlement_reference: string }>("SELECT top_up_id, state, amount, unit, rail, created_at, settlement_reference FROM top_ups WHERE account_id = $1 ORDER BY created_at", [accountId]);
-      const admissions = await client.query<{ reference: string; requested_cap: string; held_amount: string }>("SELECT reference, requested_cap, held_amount FROM session_cap_holds WHERE account_id = $1 AND state = 'active' ORDER BY created_at", [accountId]);
+      const admissions = await client.query<{ reference: string; requested_cap: string; held_amount: string; approved_cap?: string }>("SELECT h.reference,h.requested_cap,h.held_amount,COALESCE((to_jsonb(h)->>'approved_cap')::bigint,(SELECT MAX((c.result_json->>'approvedCap')::bigint) FROM funding_commands c WHERE c.account_id=h.account_id AND c.result_json->>'status'='accepted' AND c.result_json->>'reference'=h.reference),h.held_amount) AS approved_cap FROM session_cap_holds h WHERE h.account_id = $1 AND h.state = 'active' ORDER BY h.created_at", [accountId]);
       const row = first(balance, "ACCOUNT_BALANCE_NOT_FOUND");
-      return AccountStatusSchema.parse({ accountId, unit: "sat", available: (asBigInt(row.settled_available) - asBigInt(row.held)).toString(), held: asText(row.held), topUps: topUps.rows.map((topUp) => ({ topUpId: topUp.top_up_id, state: topUp.state, amount: asText(topUp.amount), unit: topUp.unit, rail: topUp.rail, createdAt: new Date(topUp.created_at).toISOString(), verifiedAt: new Date(topUp.created_at).toISOString(), settlementReference: topUp.settlement_reference })), admissions: admissions.rows.map((hold) => ({ reference: hold.reference, approvedCap: asText(hold.held_amount), heldAmount: asText(hold.held_amount), unit: "sat" })) });
+      return AccountStatusSchema.parse({ accountId, unit: "sat", available: (asBigInt(row.settled_available) - asBigInt(row.held)).toString(), held: asText(row.held), topUps: topUps.rows.map((topUp) => ({ topUpId: topUp.top_up_id, state: topUp.state, amount: asText(topUp.amount), unit: topUp.unit, rail: topUp.rail, createdAt: new Date(topUp.created_at).toISOString(), verifiedAt: new Date(topUp.created_at).toISOString(), settlementReference: topUp.settlement_reference })), admissions: admissions.rows.map((hold) => ({ reference: hold.reference, approvedCap: asText(hold.approved_cap ?? hold.held_amount), heldAmount: asText(hold.held_amount), unit: "sat" })) });
     } finally { client.release(); }
   }
 }
@@ -423,7 +425,7 @@ export class PostgresSqlPublicationStore implements DurablePublicationStore {
   }
 }
 
-class PgFundingTransaction implements MeteredFundingTransaction, ContinuationFundingTransaction {
+class PgFundingTransaction implements MeteredFundingTransaction, ContinuationFundingTransaction, SessionCapTransaction {
   constructor(private readonly client: PostgresSqlClient, private readonly accountId: string) {}
   async findRecordedResult(idempotencyKey: string): Promise<StoredFundingCommand | undefined> {
     const result = await this.client.query<{ fingerprint_sha256: string; result_json: FundingResult }>("SELECT fingerprint_sha256, result_json FROM funding_commands WHERE account_id = $1 AND idempotency_key = $2 ORDER BY created_at DESC LIMIT 1", [this.accountId, idempotencyKey]);
@@ -617,6 +619,36 @@ class PgFundingTransaction implements MeteredFundingTransaction, ContinuationFun
     await this.client.query("INSERT INTO ledger_entries(entry_id, transaction_id, account_id, direction, amount, unit, entry_reference) VALUES ($1,$2,$3,'credit',$4,'sat',$5), ($6,$2,'treasury:clearing','debit',$4,'sat',$7)", [id("entry", `${input.settlement.settlementReference}:credit`), id("ledger", input.settlement.settlementReference), this.accountId, amount.toString(), id("entry-ref", `${input.settlement.settlementReference}:credit`), id("entry", `${input.settlement.settlementReference}:debit`), id("entry-ref", `${input.settlement.settlementReference}:debit`)]);
     const result = frozen({ status: "credited" as const, accountId: this.accountId, topUpId: input.settlement.topUpId, creditedAmount: amount.toString(), unit: "sat" as const, settlementReference: input.settlement.settlementReference });
     await this.command(input.idempotencyKey, input.fingerprint, result); await this.outbox(input.settlement.settlementReference, "account_credited", result); return result;
+  }
+  async approveSessionCap(input: SessionCapApprovalInput): Promise<SessionCapApprovalResult> {
+    this.assertScope(input.accountId);
+    const prior = (await this.client.query("SELECT fingerprint_sha256,result_json FROM session_cap_approvals WHERE account_id=$1 AND idempotency_key=$2", [this.accountId, input.idempotencyKey])).rows[0];
+    if (prior) {
+      if (asText(prior.fingerprint_sha256) !== input.fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
+      return SessionCapApprovalResultSchema.parse(typeof prior.result_json === "string" ? JSON.parse(prior.result_json) : prior.result_json);
+    }
+    const session = (await this.client.query("SELECT admission_reference,confirmed_spend_sat FROM metered_sessions WHERE account_id=$1 AND id=$2", [this.accountId, input.sessionId])).rows[0];
+    if (!session || session.admission_reference !== input.admissionReference) throw new Error("SESSION_CAP_NOT_FOUND_OR_DENIED");
+    const balance = first(await this.client.query("SELECT settled_available,held FROM account_balance_projection WHERE account_id=$1 FOR UPDATE", [this.accountId]), "ACCOUNT_BALANCE_NOT_FOUND");
+    const hold = (await this.client.query("SELECT h.approved_cap,h.held_amount,h.requested_cap FROM session_cap_holds h JOIN admissions a ON a.account_id=h.account_id AND a.reference=h.reference WHERE h.account_id=$1 AND h.reference=$2 AND h.state='active' AND a.state='accepted' FOR UPDATE OF h", [this.accountId, input.admissionReference])).rows[0];
+    if (!hold) throw new Error("SESSION_CAP_NOT_FOUND_OR_DENIED");
+    const approved = asBigInt(hold.approved_cap), held = asBigInt(hold.held_amount);
+    if (approved !== input.expectedApprovedCap) throw new Error("SESSION_CAP_STALE_APPROVAL");
+    const increase = input.maximum - approved;
+    if (increase <= 0n) throw new Error("SESSION_CAP_INCREASE_REQUIRED");
+    if (held > approved || held > asBigInt(balance.held)) throw new Error("SESSION_CAP_BALANCE_INVARIANT");
+    if (asBigInt(balance.settled_available) - asBigInt(balance.held) < increase) throw new Error("SESSION_CAP_INSUFFICIENT_BALANCE");
+    const newHeld = held + increase;
+    const result = SessionCapApprovalResultSchema.parse({ status: "approved", accountId: this.accountId, sessionId: input.sessionId, admissionReference: input.admissionReference, approvalReference: input.approvalReference, previousApprovedCap: approved.toString(), approvedCap: input.maximum.toString(), heldAmount: newHeld.toString(), unit: "sat" });
+    await this.client.query("INSERT INTO session_cap_approvals(approval_reference,account_id,session_id,admission_reference,idempotency_key,fingerprint_sha256,consent_reference,policy_version,protocol_version,previous_approved_cap,approved_cap,previous_held_amount,held_amount,previous_requested_cap,requested_cap,result_json) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb)", [input.approvalReference, this.accountId, input.sessionId, input.admissionReference, input.idempotencyKey, input.fingerprint, input.consentReference, input.policyVersion, input.protocolVersion, approved.toString(), input.maximum.toString(), held.toString(), newHeld.toString(), asText(hold.requested_cap), (asBigInt(hold.requested_cap) > input.maximum ? asBigInt(hold.requested_cap) : input.maximum).toString(), JSON.stringify(result)]);
+    const changed = await this.client.query("UPDATE session_cap_holds SET approved_cap=$3,requested_cap=GREATEST(requested_cap,$3),held_amount=$4 WHERE account_id=$1 AND reference=$2 AND approved_cap=$5 RETURNING reference", [this.accountId, input.admissionReference, input.maximum.toString(), newHeld.toString(), approved.toString()]);
+    if (changed.rows.length !== 1) throw new Error("SESSION_CAP_STALE_APPROVAL");
+    const projection = (await this.client.query("UPDATE account_balance_projection SET held=held+$2 WHERE account_id=$1 AND settled_available-held >= $2 RETURNING settled_available,held", [this.accountId, increase.toString()])).rows[0];
+    if (!projection) throw new Error("SESSION_CAP_INSUFFICIENT_BALANCE");
+    const source = `cap_hold:${input.approvalReference}`;
+    await this.client.query("INSERT INTO billing_line_items(id,account_id,session_id,source_identity,kind,unit,amount_sat,settled_available_sat,held_sat,session_spend_sat) VALUES($1,$2,$3,$4,'cap_hold','sat',$5,$6,$7,$8)", [id("line", source), this.accountId, input.sessionId, source, increase.toString(), asText(projection.settled_available), asText(projection.held), asText(session.confirmed_spend_sat)]);
+    await this.outbox(input.approvalReference, "session_cap_approved", result);
+    return frozen(result);
   }
   async acceptFundedAdmission(input: AdmissionInput): Promise<FundedAdmission> {
     this.assertScope(input.accountId); await this.ensureAccount(this.accountId);

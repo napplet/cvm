@@ -15,7 +15,7 @@ import { createNativeCashuProvider } from "../release/native/cashu";
 import { CompatibleHostBrowserObservationPort } from "../release/native/compatible-host";
 import { ExternalSignerBoundaryAdapter } from "../release/native/external-signer";
 import { createProductionPublicationUpload } from "./publication-upload";
-import { createNostrRelayPublicationAdapter } from "../release/native/nostr-relay";
+import { createProductionPublicationRelays } from "./publication-relays";
 import { createNativePromotedNappletCliSource } from "../release/native/promoted-cli";
 import { createContextVmDeploymentClient, openContextVmCertificationClient } from "../release/deployment/contextvm-client";
 import { createPaymentDeploymentClients } from "../release/deployment/payment-clients";
@@ -409,6 +409,7 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
   const now = input.now;
   const authorization = input.generation.authorization;
   const edgeMaterial = await createMountedProductionEdgeMaterial({ config: input.config, secrets: input.secrets });
+  input.generation.registerClose(async () => edgeMaterial.attestationSigner.close());
   /* The certification client is opened from the fixed relay, mounted
    * disposable signer, canonical authorization pair, and durable runtime
    * journal.  A serialized session record cannot substitute a callback bag
@@ -498,14 +499,11 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
   const ownerEventVerifier = publicationMaterializer.ownerEventVerifier;
   const signer = new ExternalSignerBoundaryAdapter({ signer: signerPort, ownerEventVerifier });
   const upload = createProductionPublicationUpload({ materializer: publicationMaterializer, authorization, targetReference: input.config.publication.uploadTargetReference, port: uploadPort, now });
-  const relays = createNostrRelayPublicationAdapter({ config: input.resolved.providerConfigurations.owner_relay, request: authorization.request, receipt: authorization.receipt, port: relayPort, now });
-  // Owner and attestation are independently configured authorities.  Build a
-  // second adapter even though the shared relay transport is deliberately the
-  // same official client; this prevents a future caller from collapsing their
-  // receipt/config bindings into one ambiguous role.
-  const attestationRelays = createNostrRelayPublicationAdapter({ config: input.resolved.providerConfigurations.attestation_relay, request: authorization.request, receipt: authorization.receipt, port: relayPort, now });
+  const relays = createProductionPublicationRelays({ materializer: publicationMaterializer, attestationSigner: edgeMaterial.attestationSigner, authorization,
+    journal: dependencies.journal, port: relayPort, relaySetReference: input.resolved.descriptorReferences.contextvmRelaySetReference,
+    relaySetSha256: input.resolved.descriptorReferences.contextvmRelaySetSha256, now });
   const promotedCli = createNativePromotedNappletCliSource({ snapshot: edgeMaterial.promotedCliSnapshot, upload, relay: relays.asPromotedCliSource() });
-  void cep8; void cashu; void compatibleHost; void signer; void promotedCli; void attestationRelays;
+  void cep8; void cashu; void compatibleHost; void signer; void promotedCli;
 
   const publicationContext = Object.freeze({
     resolve: async (value: Parameters<typeof edgeContexts.publication.resolve>[0]) => {

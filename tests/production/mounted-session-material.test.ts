@@ -22,7 +22,7 @@ test("mounted production session material constructs the complete native provide
     "createNativeCloudRunProvider", "createNativeCloudSqlPostgresProvider", "createNativeGcsProvider", "createNativeCollectorProvider",
     "createProductionWorkerLifecycle", "createNativeCep8LightningProvider",
     "createNativeCashuProvider", "CompatibleHostBrowserObservationPort", "ExternalSignerBoundaryAdapter",
-    "createProductionPublicationUpload", "createNostrRelayPublicationAdapter", "createNativePromotedNappletCliSource",
+    "createProductionPublicationUpload", "createProductionPublicationRelays", "createNativePromotedNappletCliSource",
   ]) expect(text).toContain(constructor);
   for (const runtimeConstructor of [
     "createMountedProductionEdgeMaterial", "openContextVmCertificationClient",
@@ -36,7 +36,8 @@ test("mounted production session material constructs the complete native provide
   for (const injectedField of ["contextvmCertification:", "modalSdk:", "modalJournal:", "flyClient:"]) {
     expect(text).not.toContain(injectedField);
   }
-  expect((text.match(/createNostrRelayPublicationAdapter\(/g) ?? []).length).toBe(2);
+  expect((text.match(/createProductionPublicationRelays\(/g) ?? []).length).toBe(1);
+  expect(text).toContain("attestationSigner: edgeMaterial.attestationSigner");
   expect(text).not.toContain("unavailableNativePort");
   expect(text).not.toContain("actualCostMicros: exactCost(input.quote.actualCostMicros");
   expect(text).not.toContain("const records = new Map");

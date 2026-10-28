@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { bindAccountingRealmPool, createAccountingRealm } from "../funding/accounting-realm";
 import { ModelProfileSchema, PriceCardSchema } from "../model/price-card";
 import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
+import type { RetainedGenerationPricing } from "../phase-04/metered-generation-service";
 import { canonicalJson } from "../promotion/schema";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -39,4 +40,21 @@ export async function registerProductionPricing(input: Readonly<{ pool: Postgres
       if (attempt === 3 || !["40001", "40P01", "23505"].includes(code)) throw error;
     } finally { client.release(); }
   }
+}
+
+/** Read-only authority for an existing action, never a fresh quote. All tuple
+ * fields come from the owner-scoped action store and are rechecked in SQL. */
+export function createProductionRetainedPricing(input: PostgresSqlPool): RetainedGenerationPricing {
+  const pool = bindAccountingRealmPool(input, createAccountingRealm("production-real"));
+  return Object.freeze({ async readOriginal(action) {
+    const client = await pool.connect();
+    try {
+      const rows = (await client.query<{ profile_hash: string; card_hash: string; normalized_profile: unknown; normalized_card: unknown; profile_id: string; card_profile_id: string }>("SELECT m.profile_hash,m.normalized_profile,c.card_hash,c.normalized_card,a.profile_id,c.profile_id AS card_profile_id FROM metered_actions a JOIN model_profile_versions m ON m.id=a.profile_id JOIN price_card_versions c ON c.id=a.price_card_id WHERE a.account_id=$1 AND a.session_id=$2 AND a.id=$3 AND a.idempotency_key=$4 AND a.fingerprint=$5 AND a.operation_id=$6 AND a.budget_reference=$7 AND a.profile_id=$8 AND a.price_card_id=$9 AND a.expected_session_version=$10 AND a.admission_reference=$11 AND a.reservation_sat=$12", [action.accountId, action.sessionId, action.actionId, action.idempotencyKey, action.fingerprint, action.operationId, action.actionBudgetReference, action.profileId, action.priceCardId, action.expectedVersion, action.admissionReference, action.maximum.toString()])).rows;
+      if (rows.length !== 1) return undefined;
+      const row = rows[0]!;
+      const profile = ModelProfileSchema.parse(row.normalized_profile), card = PriceCardSchema.parse(row.normalized_card);
+      if (profile.id !== action.profileId || card.id !== action.priceCardId || profile.priceCardId !== card.id || row.card_profile_id !== profile.id || row.profile_hash !== hash(canonicalJson(profile)) || row.card_hash !== hash(canonicalJson(card)) || card.provider !== profile.provider || profile.model !== "gemini-4-argon" || card.provider !== "vertex_ai_gemini" || card.kind !== "source_attributed_provider" || card.currency !== "usd_micros") throw new Error("PRODUCTION_RETAINED_PRICING_BINDING_INVALID");
+      return Object.freeze({ profile, card });
+    } finally { client.release(); }
+  } });
 }

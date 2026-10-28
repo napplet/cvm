@@ -38,9 +38,20 @@ type Interaction = z.infer<typeof InteractionSchema>;
  * completed/incomplete receipt is debit-eligible; pending/unknown outcomes
  * must remain unresolved and may never be converted to sats. */
 export type VertexProviderReceipt = z.infer<typeof ReceiptSchema>;
+export function parseVertexProviderReceipt(raw: unknown): VertexProviderReceipt | undefined { const result = ReceiptSchema.safeParse(raw); return result.success ? result.data : undefined; }
 /** Claim must be a durable transactional CAS: only the successful claimer may
  * issue POST. File/memory journals are test seams, never Cloud Run authority. */
 export type VertexOperationJournal = Readonly<{ claim(entry: JournalEntry): Promise<Readonly<{ claimed: boolean; entry: unknown }>>; read(operationId: string): Promise<unknown>; write(entry: JournalEntry): Promise<void> }>;
+/** Server-owned journal reader for a separately owner-checked operational
+ * recovery route. This does not relax any client candidate/project check. */
+export async function readRetainedVertexOperation(journal: VertexOperationJournal, operation: unknown) {
+  const operationId = OperationSchema.parse(operation);
+  const raw = await journal.read(operationId);
+  if (raw === undefined || raw === null) return undefined;
+  const entry = JournalSchema.parse(raw);
+  if (entry.operationId !== operationId || entry.nonce !== nonceFor(operationId, entry.requestSha256) || entry.requestSha256 !== await requestDigest({ candidateSha256: entry.candidateSha256, projectId: entry.projectId, model: entry.model, location: entry.location, request: entry.request })) throw new Error("VERTEX_RETAINED_OPERATION_BINDING_INVALID");
+  return entry;
+}
 export type VertexInteractionsPort = Readonly<{
   create(input: Readonly<{ projectId: string; location: "global"; model: "gemini-4-argon"; store: true; input: readonly unknown[]; systemInstruction: string; responseMimeType: "application/json"; responseFormat: Readonly<Record<string, unknown>>; generationConfig: Readonly<{ maxOutputTokens: number; thinkingLevel: "low" }> }>): Promise<unknown>;
   get(input: Readonly<{ projectId: string; location: "global"; id: string }>): Promise<unknown>;

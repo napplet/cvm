@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { ModelDispatchObservation, ModelGateway, ModelLookupObservation, NormalizedUsageReceipt, ProviderOperationIntent } from "../model/model-gateway";
-import type { createVertexDeploymentClient, VertexProviderReceipt } from "../release/deployment/vertex-client";
+import { parseVertexProviderReceipt, type createVertexDeploymentClient, type VertexProviderReceipt } from "../release/deployment/vertex-client";
 import { ProductionSourceProposalStore } from "./source-proposal-store";
+import { assertProductionVertexReceiptRecovery, type ProductionVertexReceiptRecovery } from "./vertex-receipt-recovery";
 
 const Result = z.object({ files: z.array(z.object({ path: z.enum(["src/main.ts", "src/styles.css", "src/capabilities.json"]), content: z.string().min(1).max(30_000) }).strict()).min(1).max(3) }).strict();
 const SYSTEM = "Return one focused napplet as JSON with only files src/main.ts, src/styles.css, and optional src/capabilities.json. Do not use network, relay, signer, storage outside declared SDK capabilities, dynamic imports, workers, or server code.";
@@ -36,7 +37,10 @@ function maximumInput(intent: ProviderOperationIntent): number {
  * generation core. It has no retries: ambiguous Vertex observations become
  * query-only reconciliation states and no source proposal is persisted. */
 export class ProductionVertexModelGateway implements ModelGateway {
-  constructor(private readonly input: Readonly<{ vertex: ReturnType<typeof createVertexDeploymentClient>; proposals: ProductionSourceProposalStore }>) {}
+  constructor(private readonly input: Readonly<{ vertex: ReturnType<typeof createVertexDeploymentClient>; proposals: ProductionSourceProposalStore; recovery?: ProductionVertexReceiptRecovery }>) {
+    if (input.recovery) assertProductionVertexReceiptRecovery(input.recovery);
+  }
+  #original(intent: ProviderOperationIntent): Promise<unknown> { return this.input.recovery ? this.input.recovery.reconcile(intent) : this.input.vertex.reconcileOriginal({ operationId: intent.operationId }); }
   async dispatch(intent: ProviderOperationIntent, signal: AbortSignal): Promise<ModelDispatchObservation> {
     if (signal.aborted) return { status: "usage_unknown", operationId: intent.operationId, providerRequestId: intent.providerRequestId, reason: "aborted", provenance: { protectedEvidenceReference: `vertex-operation:${intent.operationId}` } };
     try { return await this.#observation(intent, await this.input.vertex.dispatch({ operationId: intent.operationId, idea: intent.prompt, systemInstruction: SYSTEM, maximumOutputTokens: maximum(intent), maximumInputTokens: maximumInput(intent) })); }
@@ -50,7 +54,7 @@ export class ProductionVertexModelGateway implements ModelGateway {
   async lookup(intent: ProviderOperationIntent, signal: AbortSignal): Promise<ModelLookupObservation> {
     if (signal.aborted) return { status: "unresolved", operationId: intent.operationId, providerRequestId: intent.providerRequestId, provenance: { protectedEvidenceReference: `vertex-operation:${intent.operationId}` } };
     try {
-      const observed = await this.input.vertex.reconcileOriginal({ operationId: intent.operationId });
+      const observed = await this.#original(intent);
       const state = z.object({ status: z.enum(["completed", "incomplete", "pending", "unknown"]), operationId: z.string() }).passthrough().safeParse(observed);
       if (!state.success || state.data.operationId !== intent.operationId) return { status: "unresolved", operationId: intent.operationId, providerRequestId: intent.providerRequestId, provenance: { protectedEvidenceReference: `vertex-operation:${intent.operationId}` } };
       // A durable operation is known but not terminal.  This is distinct from
@@ -67,19 +71,21 @@ export class ProductionVertexModelGateway implements ModelGateway {
   /** Coordinator-only exact original receipt for sat settlement.  It is a
    * read/reconcile operation, never a second model dispatch. */
   async providerReceipt(intent: ProviderOperationIntent): Promise<VertexProviderReceipt | undefined> {
-    const observed = await this.input.vertex.reconcileOriginal({ operationId: intent.operationId });
-    const value = observed as Partial<VertexProviderReceipt>;
-    if ((value.status !== "completed" && value.status !== "incomplete") || value.operationId !== intent.operationId) return undefined;
-    const normalized = receipt(intent, value as VertexProviderReceipt);
+    const observed = await this.#original(intent);
+    const value = parseVertexProviderReceipt(observed);
+    if (!value || value.operationId !== intent.operationId) return undefined;
+    const normalized = receipt(intent, value);
     if (normalized.providerRequestId !== intent.providerRequestId) return undefined;
-    return value as VertexProviderReceipt;
+    return value;
   }
   async #observation(intent: ProviderOperationIntent, raw: unknown): Promise<ModelDispatchObservation> {
     const result = z.object({ status: z.enum(["completed", "incomplete", "pending", "unknown"]), operationId: z.string(), interactionId: z.string().optional(), generatedResult: z.string().optional() }).passthrough().safeParse(raw);
     if (!result.success || result.data.operationId !== intent.operationId) return { status: "usage_unknown", operationId: intent.operationId, providerRequestId: intent.providerRequestId, reason: "mismatched_receipt", provenance: { protectedEvidenceReference: `vertex-operation:${intent.operationId}` } };
     if (result.data.status === "pending") return { status: "usage_unknown", operationId: intent.operationId, providerRequestId: intent.providerRequestId, reason: "accepted_timeout", provenance: { protectedEvidenceReference: `vertex-operation:${intent.operationId}` } };
     if (result.data.status === "unknown") return { status: "usage_unknown", operationId: intent.operationId, providerRequestId: intent.providerRequestId, reason: "uncertain_acceptance", provenance: { protectedEvidenceReference: `vertex-operation:${intent.operationId}` } };
-    const parsedReceipt = raw as VertexProviderReceipt; const normalized = receipt(intent, parsedReceipt);
+    const parsedReceipt = parseVertexProviderReceipt(raw);
+    if (!parsedReceipt) throw new Error("PRODUCTION_VERTEX_RECEIPT_INVALID");
+    const normalized = receipt(intent, parsedReceipt);
     if (result.data.status === "incomplete") return { status: "failed", receipt: normalized };
     let decoded: unknown;
     try { decoded = JSON.parse(result.data.generatedResult ?? "null"); }

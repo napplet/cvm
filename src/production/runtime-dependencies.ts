@@ -1,4 +1,4 @@
-import { registerProductionPricing } from "./pricing-catalog";
+import { createProductionRetainedPricing, registerProductionPricing } from "./pricing-catalog";
 import { createMountedProductionWorkerJobRouter } from "./mounted-worker-profiles";
 import { openProductionServiceJournals } from "./service-journals";
 import { GcsObjectStoreAdapter } from "../continuity/object-store";
@@ -14,6 +14,7 @@ import { createMountedVertexMaterial } from "./mounted-vertex-material";
 import type { MountedProductionSecretMaterial } from "./secret-material";
 import { ProductionSourceProposalStore, assertProductionSourceProposalSchema } from "./source-proposal-store";
 import { createProductionVertexGenerationSettlement } from "./vertex-generation-settlement";
+import { ProductionVertexReceiptRecovery } from "./vertex-receipt-recovery";
 import { ProductionVertexModelGateway } from "./vertex-model-gateway";
 import { createProductionReadyCapacity } from "./worker-capacity";
 import { ProductionWorkerBridge, ProductionWorkerOwnershipResolver } from "./worker-bridge";
@@ -63,11 +64,14 @@ export async function materializeProductionRuntimeDependencies(input: Readonly<{
   const makeCapacity = (provider: "modal" | "fly") => createProductionReadyCapacity({ provider, workers: worker.clients, journal: serviceJournals.capacity, workerJournal, image: input.config.worker.image, toolchainSha256: input.config.worker.toolchainSha256, ...(provider === "fly" ? { flyRegion: worker.flyRegion } : {}), now: input.now });
   const certificationCapacities = Object.freeze({ modal: makeCapacity("modal"), fly: makeCapacity("fly") });
   const capacity = certificationCapacities[input.config.worker.selectedProvider];
-  const vertex = createVertexDeploymentClient({ candidateSha256: input.config.candidateSha256, projectId: input.config.projectId, location: "global", model: input.config.vertex.model, credentialReference: vertexMaterial.credentialReference, price: vertexMaterial.vertexPrice, journal: createPostgresVertexOperationJournal(vertexJournal), interactions: createVertexInteractionsHttpPort({ tokenSource }), now: input.now });
+  const vertexInteractions = createVertexInteractionsHttpPort({ tokenSource });
+  const retainedPricing = createProductionRetainedPricing(input.pool);
+  const vertex = createVertexDeploymentClient({ candidateSha256: input.config.candidateSha256, projectId: input.config.projectId, location: "global", model: input.config.vertex.model, credentialReference: vertexMaterial.credentialReference, price: vertexMaterial.vertexPrice, journal: createPostgresVertexOperationJournal(vertexJournal), interactions: vertexInteractions, now: input.now });
   const proposals = new ProductionSourceProposalStore(input.pool);
-  const gateway = new ProductionVertexModelGateway({ vertex, proposals });
+  const recovery = new ProductionVertexReceiptRecovery({ pool: input.pool, journal: vertexJournal, interactions: vertexInteractions, current: vertex, now: input.now });
+  const gateway = new ProductionVertexModelGateway({ vertex, proposals, recovery });
   const settlement = createProductionVertexGenerationSettlement({ gateway, conversion: vertexMaterial.pricing.conversion, journal: vertexJournal });
   const resolver = new ProductionWorkerOwnershipResolver({ pool: input.pool, policyVersion: input.config.worker.policyVersion, capacityJournal: serviceJournals.capacity });
   const workerBridge = new ProductionWorkerBridge({ resolver, workers: worker.clients, workerJournal, jobJournal, requestJournal, artifactStore, jobRouter, toolchainSha256: input.config.worker.toolchainSha256, publication: { server: input.config.publication.uploadServer } });
-  return Object.freeze({ pool: input.pool, journal, serviceJournals, googleControlJournal, googleIntentJournal, workerJournal, jobJournal, requestJournal, vertexJournal, checkpointJournal, checkpointCoordinator, tokenSource, gcs, artifactStore, workers: worker.clients, jobRouter, workerCertification: worker.certification, flyRegion: worker.flyRegion, capacity, certificationCapacities, vertexMaterial, vertex, proposals, gateway, settlement, resolver, workerBridge });
+  return Object.freeze({ pool: input.pool, journal, serviceJournals, googleControlJournal, googleIntentJournal, workerJournal, jobJournal, requestJournal, vertexJournal, checkpointJournal, checkpointCoordinator, tokenSource, gcs, artifactStore, workers: worker.clients, jobRouter, workerCertification: worker.certification, flyRegion: worker.flyRegion, capacity, certificationCapacities, vertexMaterial, vertex, proposals, gateway, settlement, retainedPricing, resolver, workerBridge });
 }

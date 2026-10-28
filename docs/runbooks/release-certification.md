@@ -48,6 +48,22 @@ pool-hit and 200 forced pool-miss attempts per provider, a one-sided 95% upper
 confidence bound for p95 no higher than 5,000 ms, and zero accepted backlog. Missing, manual, synthetic, stale, or
 duplicate records block trust finalization and promotion.
 
+The local publication mechanism check is `bun scripts/test-publication-context.ts`.
+It prepares a disposable trusted TLS certificate, starts restricted PostgreSQL,
+and exercises NIP-46, the pinned CLI HTTPS upload and relay helpers, separate
+service attestation signing, lost acknowledgements, and original-operation
+observation after expiry. It requires Docker and OpenSSL. It does not contact
+production providers or create protected release evidence.
+
+Owner manifests retain the exact CLI-generated kind-35129 template. The separate
+service key signs a kind-1 provenance note containing the typed
+`cvm_build_attestation` record and owner-event/owner-pubkey/aggregate links.
+The attestation is sent only after observing the original owner manifest. An
+interrupted prepare without a retained signature stays unresolved. Historical
+recovery observes the original upload and both event IDs; it cannot request a
+signature, upload again, or publish another event. Full runtime restart recovery
+and all eight protected suites remain release gates, even when local checks pass.
+
 After interruption, rerun the same command with the candidate. To check the
 stored redacted state, use `--status`; use `--resume <state-digest>` only when
 the returned digest matches. Output contains candidate/topology/state and

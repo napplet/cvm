@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { GoogleTokenSource } from "./google-auth";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
-const OperationSchema = z.string().regex(/^[a-z][a-z0-9_-]{2,127}$/u);
+const OperationSchema = z.string().min(3).max(256).regex(/^[a-z][a-z0-9_:-]*$/u);
 const ProjectSchema = z.string().regex(/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/u);
 const InteractionIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,256}$/u);
 const CredentialReferenceSchema = z.string().regex(/^gcp:adc:[a-z][a-z0-9:_-]{2,127}$/u);
@@ -113,8 +113,10 @@ function persistedReceipt(entry: JournalEntry, raw: unknown) {
   const receipt = ReceiptSchema.safeParse(raw);
   if (!receipt.success || receipt.data.operationId !== entry.operationId || receipt.data.requestSha256 !== entry.requestSha256 || receipt.data.model !== entry.model || entry.interactionId === undefined || receipt.data.interactionId !== entry.interactionId || JSON.stringify(receipt.data.price) !== JSON.stringify(entry.price)) return undefined;
   const usage = receipt.data.usage;
-  if (usage.cachedInputTokens > usage.inputTokens || usage.outputTokens + usage.thoughtTokens > entry.request.maximumOutputTokens || (receipt.data.status === "completed" && (!receipt.data.generatedResult || !validStructuredResult(receipt.data.generatedResult))) || (receipt.data.status === "incomplete" && receipt.data.generatedResult !== undefined)) return undefined;
-  const recomputed = ceilMillion(BigInt(usage.inputTokens - usage.cachedInputTokens) * BigInt(entry.price.inputMicrosPerMillion) + BigInt(usage.cachedInputTokens) * BigInt(entry.price.cachedInputMicrosPerMillion) + BigInt(usage.outputTokens + usage.thoughtTokens) * BigInt(entry.price.outputAndThoughtMicrosPerMillion));
+  // completion() already separates uncached input from cached input. Replaying
+  // must price those same dimensions once, including a fully cached request.
+  if (usage.inputTokens + usage.cachedInputTokens > MAX_INPUT_TOKEN_UPPER_BOUND || usage.outputTokens + usage.thoughtTokens > entry.request.maximumOutputTokens || (receipt.data.status === "completed" && (!receipt.data.generatedResult || !validStructuredResult(receipt.data.generatedResult))) || (receipt.data.status === "incomplete" && receipt.data.generatedResult !== undefined)) return undefined;
+  const recomputed = ceilMillion(BigInt(usage.inputTokens) * BigInt(entry.price.inputMicrosPerMillion) + BigInt(usage.cachedInputTokens) * BigInt(entry.price.cachedInputMicrosPerMillion) + BigInt(usage.outputTokens + usage.thoughtTokens) * BigInt(entry.price.outputAndThoughtMicrosPerMillion));
   if (receipt.data.cost.currency !== "USD" || receipt.data.cost.micros !== recomputed) return undefined;
   return receipt.data;
 }

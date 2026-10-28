@@ -40,6 +40,37 @@ or changing a snapshot produces new versions while retaining previous rows.
 Unknown old model operations must still use their original pricing context; these
 new IDs do not permit redispatch or silently reprice an interrupted operation.
 
+## Operational model and source persistence
+
+The Vertex client accepts the generation core's colon-delimited normal/resume
+operation IDs unchanged. Invalid or oversized IDs fail before dispatch. Retained
+Vertex receipts represent uncached input and cached input separately; replay
+prices those dimensions once, including a completely cached request. It never
+subtracts cached input a second time or issues another model POST to repair a
+receipt mismatch.
+
+Apply `migrations/phase-07/004_production_source_proposals.sql` after the reviewed
+checkpoint migration through the approved bundle. This additive table binds
+source to the existing account/session/action, expected version, fingerprint and
+provider operation. Runtime has insert/read privileges only; an immutable trigger
+rejects edits/deletion. The startup graph checks the schema and grants before
+provider construction, so a missing source store cannot be discovered after a
+paid completion. No live migration is authorized here.
+
+Identical source writes use serializable insert-and-compare replay with bounded
+transaction retry. They need no `FOR UPDATE` on immutable rows and no runtime
+update grant. Conflicting source never replaces an original; foreign-owner reads
+return no proposal. Rollback preserves source rows and a compatible reader.
+
+The composed local PostgreSQL test uses actual production Vertex HTTP encoding,
+operation journals, gateway, source store, pricing/FX settlement and metered core.
+Its provider responses, funding and worker are explicit protocol fixtures. It
+proves one model POST, source persistence, cached-usage settlement and terminal
+replay under restricted SQL; it does not prove a real paid API call, actual rails,
+isolated build or any protected release suite. Profile-specific input bounds,
+historical pricing selection and full pending-action execution still require
+their own composed proof before live authorization.
+
 ## Proof boundaries and remaining continuity work
 
 The restricted-PostgreSQL regression uses explicit model/worker/credit protocol

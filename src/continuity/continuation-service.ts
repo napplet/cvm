@@ -1,5 +1,5 @@
 import { NeedsTopUpResultSchema, PendingActionIntentSchema, ResumeSessionCommandSchema, ResumeSessionResultSchema, type NeedsTopUpResult, type PendingActionIntent, type ResumeCompatibility, type ResumeSessionCommand, type ResumeSessionResult } from "./contracts";
-import type { CheckpointEnvelope, CheckpointEnvelopeService, CheckpointManifest } from "./checkpoint-envelope";
+import { validatePendingCommandCheckpointArchive, type CheckpointEnvelope, type CheckpointEnvelopeService, type CheckpointManifest } from "./checkpoint-envelope";
 import type { ContinuationFundingStore, ContinuationFundingSnapshot } from "../persistence/funding-store";
 import type { CheckpointRestoreRequest, ContinuationWorkerPort } from "../phase-02/contracts";
 import { canonicalJson } from "../promotion/schema";
@@ -30,7 +30,7 @@ export type ResumeDependencies = Readonly<{
     restore(material: ResumeCheckpointMaterial): Promise<Uint8Array>;
   }>;
   /** The allocation implementation must reconcile this durable intent, never allocate by a fresh caller-generated key. */
-  allocate(input: Readonly<{ accountId: string; sessionId: string; checkpointId: string; leaseToken: string; allocationIntentReference: string; actionId: string; expectedVersion: number; policyVersion: string; workspaceId: string; sourceActionId: string }>): Promise<ResumeAllocation>;
+  allocate(input: Readonly<{ accountId: string; sessionId: string; checkpointId: string; leaseToken: string; allocationIntentReference: string; actionId: string; expectedVersion: number; policyVersion: string; workspaceId: string; sourceActionId: string; payloadKind?: "pending_command" }>): Promise<ResumeAllocation>;
 }>;
 
 export type VerifiedCreditWakeHint = Readonly<{
@@ -131,7 +131,7 @@ export class ContinuationService {
         pauseGeneration: await transaction.nextPauseGeneration(intent.sessionId),
         graceDeadlineMs: deadline,
         liveLeaseToken: `lease:live:${intent.reference}:${intent.fingerprint.slice(0, 24)}`,
-        intent: protectedCommand ? { ...intent, protectedCommand } : intent,
+        intent: protectedCommand ? { ...intent, protectedCommand, ...(protectedCommand.plaintextSha256 ? { commandSha256: protectedCommand.plaintextSha256 } : {}) } : intent,
         result,
       });
       return result;
@@ -278,21 +278,29 @@ export class ContinuationService {
     if (!this.#compatible(continuation.intent, dependencies.compatibility)) return ResumeSessionResultSchema.parse({ status: "denied", code: "RESUME_COMPATIBILITY_DENIED" });
 
     let execution: PreparedContinuationExecution | undefined;
-    try { execution = await dependencies.execution?.prepareContinuation(continuation.intent); }
-    catch { return ResumeSessionResultSchema.parse({ status: "denied", code: "RESUME_COMPATIBILITY_DENIED" }); }
 
     // A replacement instance must prove the retained encrypted object and all
     // durable bindings before it can claim budget, provider authority, or a
     // worker allocation. Object presence alone is never resume authority.
     let material: ResumeCheckpointMaterial;
     let archive: Uint8Array;
+    let restoredCommand: unknown;
     try {
       material = await dependencies.checkpoint.loadExact({ checkpointId: command.checkpointId, accountId, sessionId: command.sessionId });
       if (!this.#materialMatches(material.manifest, command, continuation.intent, dependencies.compatibility)) throw new Error("CHECKPOINT_BINDING_DENIED");
+      if (material.envelope.object.key !== checkpoint.objectKey || String(material.envelope.object.generation) !== checkpoint.objectGeneration || material.envelope.object.checksum !== checkpoint.objectChecksum || material.envelope.crypto.keyReference !== checkpoint.keyReference) throw new Error("CHECKPOINT_ORIGINAL_OBJECT_BINDING_DENIED");
       archive = await dependencies.checkpoint.restore(material);
+      if (material.manifest.payloadKind === "pending_command") {
+        if (!dependencies.execution) throw new Error("PENDING_CHECKPOINT_EXECUTOR_REQUIRED");
+        try { restoredCommand = validatePendingCommandCheckpointArchive(archive, continuation.intent); }
+        finally { archive.fill(0); }
+      }
     } catch {
       return ResumeSessionResultSchema.parse({ status: "reconciliation_pending", code: "RESUME_CHECKPOINT_RECONCILIATION", sessionId: command.sessionId, checkpointId: command.checkpointId, pendingActionReference: continuation.intent.reference });
     }
+
+    try { execution = await dependencies.execution?.prepareContinuation(continuation.intent, restoredCommand); }
+    catch { return ResumeSessionResultSchema.parse({ status: "denied", code: "RESUME_COMPATIBILITY_DENIED" }); }
 
     const commandFingerprint = await fingerprint({ principal: command.principal, sessionId: command.sessionId, checkpointId: command.checkpointId, expectedSessionVersion: command.expectedSessionVersion, expectedCheckpointVersion: command.expectedCheckpointVersion, idempotencyKey: command.idempotencyKey, pendingAction: command.pendingAction, capApprovalReference: command.capApprovalReference });
     const leaseToken = `lease:resume:${commandFingerprint.slice(0, 24)}`;
@@ -340,7 +348,7 @@ export class ContinuationService {
 
     let allocation: ResumeAllocation;
     try {
-      allocation = await dependencies.allocate({ accountId, sessionId: command.sessionId, checkpointId: command.checkpointId, leaseToken: claimed.leaseToken, allocationIntentReference: claimed.allocationIntentReference, actionId: claimed.actionId, expectedVersion: command.expectedSessionVersion, policyVersion: continuation.intent.policyVersion, workspaceId: material.manifest.workspaceLineage, sourceActionId: material.manifest.action.actionId });
+      allocation = await dependencies.allocate({ accountId, sessionId: command.sessionId, checkpointId: command.checkpointId, leaseToken: claimed.leaseToken, allocationIntentReference: claimed.allocationIntentReference, actionId: claimed.actionId, expectedVersion: command.expectedSessionVersion, policyVersion: continuation.intent.policyVersion, workspaceId: material.manifest.workspaceLineage, sourceActionId: material.manifest.action.actionId, ...(material.manifest.payloadKind ? { payloadKind: material.manifest.payloadKind } : {}) });
     } catch { allocation = { status: "unknown" }; }
     if (allocation.status !== "allocated") {
       await this.#recordRestoreObservation(accountId, command.checkpointId, claimed.allocationIntentReference, allocation.status === "refused" ? "refused" : "reconciliation_pending");
@@ -348,13 +356,17 @@ export class ContinuationService {
     }
 
     try {
-      const restored = await allocation.worker.restoreCheckpoint({
-        accountId, sessionId: command.sessionId, actionId: claimed.actionId, expectedVersion: command.expectedSessionVersion,
-        policyVersion: continuation.intent.policyVersion, capabilityGrant: "phase-05-continuation-grant", workspaceId: material.manifest.workspaceLineage,
-        checkpointId: command.checkpointId, pauseGeneration: material.manifest.pauseGeneration, actionVersion: material.manifest.actionVersion,
-        workspaceLineage: material.manifest.workspaceLineage, leaseToken: claimed.leaseToken, resumeClaim: claimed.allocationIntentReference, archive: archive as Uint8Array<ArrayBuffer>, archiveSha256: material.manifest.archiveSha256,
-      } satisfies CheckpointRestoreRequest);
-      if (restored.status !== "restored") throw new Error("WORKER_RESTORE_DENIED");
+      if (material.manifest.payloadKind !== "pending_command") {
+        const restored = await allocation.worker.restoreCheckpoint({
+          accountId, sessionId: command.sessionId, actionId: claimed.actionId, expectedVersion: command.expectedSessionVersion,
+          policyVersion: continuation.intent.policyVersion, capabilityGrant: "phase-05-continuation-grant", workspaceId: material.manifest.workspaceLineage,
+          checkpointId: command.checkpointId, pauseGeneration: material.manifest.pauseGeneration, actionVersion: material.manifest.actionVersion,
+          workspaceLineage: material.manifest.workspaceLineage, leaseToken: claimed.leaseToken, resumeClaim: claimed.allocationIntentReference, archive: archive as Uint8Array<ArrayBuffer>, archiveSha256: material.manifest.archiveSha256,
+        } satisfies CheckpointRestoreRequest);
+        if (restored.status !== "restored") throw new Error("WORKER_RESTORE_DENIED");
+      }
+      // Pending-only material was restored by the coordinator above. It has
+      // no workspace archive and cannot enter a worker restore contract.
       if (!await this.#recordRestoreObservation(accountId, command.checkpointId, claimed.allocationIntentReference, "restored")) throw new Error("RESTORE_OBSERVATION_NOT_COMMITTED");
     } catch {
       await this.#recordRestoreObservation(accountId, command.checkpointId, claimed.allocationIntentReference, "refused");

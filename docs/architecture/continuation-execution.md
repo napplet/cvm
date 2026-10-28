@@ -1,10 +1,9 @@
 # Exact pending-action execution
 
-Schema proposal: [issue51](https://github.com/napplet/cvm/issues/51), pending
-compatibility review alongside the implementation.
+Implementation compatibility decision: [issue51](https://github.com/napplet/cvm/issues/51), recorded with merged PR52.
 
 This is an internal, unselected continuation implementation. The production
-runtime does not install its executor or command protector yet. It is not a
+runtime does not install its executor yet. The [initial checkpoint expansion](./initial-pending-checkpoints) adds the mounted command protector and producer. It is not a
 claim of working production resume, real API usage or release certification.
 It builds on the [session-cap proposal](./session-cap-approval).
 
@@ -90,7 +89,7 @@ does not allocate. The test verifies one claim, budget, action and operation,
 cleared lease, changed-context denial and no USD/FX repricing fallback.
 Its rail, archive, model and worker are explicit protocol fixtures.
 
-Production still needs an actual pending-only initial archive/release producer,
+The initial checkpoint producer is described separately. Production still needs
 real prior-workspace lineage for revisions, retained original provider/FX
 context, within-grace credit/cap wake execution, production constructor wiring,
 command-key erasure and claimed-checkpoint retention cleanup. Expiry refusal

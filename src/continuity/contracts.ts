@@ -9,6 +9,7 @@ export const ProtectedContinuationCommandSchema = z.object({
   keyReference: z.string().min(1).max(256),
   retentionUntilMs: EpochMillisecondsSchema,
   bindingSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  plaintextSha256: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
   nonceBase64: z.string().length(16),
   wrapNonceBase64: z.string().length(16),
   wrappedDekBase64: z.string().length(64),
@@ -25,6 +26,8 @@ export const PendingActionIntentSchema = z.object({
   reference: z.string().min(1),
   actionKind: z.enum(["start_session", "revise_session", "repair"]),
   boundedPayloadHash: z.string().regex(/^[a-f0-9]{64}$/u),
+  /** Exact bounded command identity retained after its live envelope expires. */
+  commandSha256: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
   expectedSessionVersion: z.number().int().nonnegative(),
   expectedArtifactVersion: z.number().int().nonnegative(),
   policyVersion: z.string().min(1),

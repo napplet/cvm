@@ -2,7 +2,7 @@ import { z } from "zod";
 import { canonicalJson } from "../promotion/schema";
 import { ImmutableObjectReferenceSchema, type ImmutableObjectReference, type ObjectStorePort } from "./object-store";
 import { emitLifecycleObservation, type LifecycleTelemetryPort } from "../telemetry/contracts";
-import { PendingActionEnvelopeSchema, PendingActionHeaderSchema, PendingStartCommandSchema, type PendingActionEnvelope, type PendingActionHeader, type PendingStartCommand } from "./contracts";
+import { PendingActionEnvelopeSchema, PendingActionHeaderSchema, PendingStartCommandSchema, PendingActionIntentSchema, type PendingActionIntent, type PendingActionEnvelope, type PendingActionHeader, type PendingStartCommand } from "./contracts";
 
 const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/iu);
 const Base64Schema = z.string().min(1).regex(/^[A-Za-z0-9+/]+={0,2}$/u);
@@ -14,8 +14,10 @@ const InventoryClassSchema = z.enum([
   "financial_action",
   "pending_action",
   "compatibility_metadata",
+  "admission_state",
 ]);
-const REQUIRED_INVENTORY: ReadonlySet<string> = new Set(InventoryClassSchema.options);
+const REQUIRED_INVENTORY: ReadonlySet<string> = new Set(InventoryClassSchema.options.filter(value => value !== "admission_state"));
+const PENDING_INVENTORY: ReadonlySet<string> = new Set(["pending_action", "admission_state", "compatibility_metadata"]);
 const FORBIDDEN_INVENTORY = new Set([
   "nostr_private_key",
   "worker_credential",
@@ -41,7 +43,8 @@ const CompatibilitySchema = z.object({
 
 /** Canonical coordinator-owned state required to resume one paid checkpoint. */
 export const CheckpointManifestSchema = z.object({
-  schemaVersion: z.literal("checkpoint-manifest-v1"),
+  schemaVersion: z.enum(["checkpoint-manifest-v1", "checkpoint-manifest-v2"]),
+  payloadKind: z.literal("pending_command").optional(),
   checkpointId: z.string().min(1),
   accountId: z.string().min(1),
   sessionId: z.string().min(1),
@@ -52,7 +55,7 @@ export const CheckpointManifestSchema = z.object({
   workspaceVersion: z.number().int().nonnegative(),
   workspaceLineage: z.string().min(1),
   action: ActionBindingSchema,
-  inventory: z.array(InventoryClassSchema).min(REQUIRED_INVENTORY.size).max(REQUIRED_INVENTORY.size),
+  inventory: z.array(InventoryClassSchema).min(PENDING_INVENTORY.size).max(REQUIRED_INVENTORY.size),
   inventorySha256: Sha256Schema,
   archiveSha256: Sha256Schema,
   evidenceSha256: Sha256Schema,
@@ -60,7 +63,10 @@ export const CheckpointManifestSchema = z.object({
   committedAt: z.string().datetime(),
   retentionUntil: z.string().datetime(),
 }).strict().superRefine((value, ctx) => {
-  if (new Set(value.inventory).size !== value.inventory.length || value.inventory.some((entry) => !REQUIRED_INVENTORY.has(entry))) {
+  const pending = value.schemaVersion === "checkpoint-manifest-v2" && value.payloadKind === "pending_command";
+  const required = pending ? PENDING_INVENTORY : REQUIRED_INVENTORY;
+  if ((!pending && (value.schemaVersion !== "checkpoint-manifest-v1" || value.payloadKind !== undefined)) || (pending && [value.sessionVersion, value.actionVersion, value.artifactVersion, value.workspaceVersion].some(version => version !== 0))) ctx.addIssue({ code: "custom", message: "checkpoint payload format/version mismatch" });
+  if (value.inventory.length !== required.size || new Set(value.inventory).size !== value.inventory.length || value.inventory.some((entry) => !required.has(entry))) {
     ctx.addIssue({ code: "custom", message: "checkpoint inventory must be complete and unique" });
   }
 });
@@ -82,6 +88,7 @@ export const CheckpointEnvelopeSchema = z.object({
 export type CheckpointManifest = z.infer<typeof CheckpointManifestSchema>;
 export type CheckpointEnvelope = z.infer<typeof CheckpointEnvelopeSchema>;
 export type CheckpointSealRequest = Readonly<{
+  payloadKind?: "pending_command";
   checkpointId: string;
   accountId: string;
   sessionId: string;
@@ -211,9 +218,22 @@ export class AesGcmCheckpointCrypto implements CheckpointCryptoPort {
   keyReferences(): readonly string[] { return Object.freeze([...this.#keys.keys()]); }
 }
 
-function validateInventory(inventory: readonly string[]): asserts inventory is readonly z.infer<typeof InventoryClassSchema>[] {
+function validateInventory(inventory: readonly string[], pending = false): asserts inventory is readonly z.infer<typeof InventoryClassSchema>[] {
   if (inventory.some((entry) => FORBIDDEN_INVENTORY.has(entry))) throw new Error("CHECKPOINT_FORBIDDEN_CONTENT");
-  if (inventory.length !== REQUIRED_INVENTORY.size || new Set(inventory).size !== inventory.length || inventory.some((entry) => !REQUIRED_INVENTORY.has(entry))) throw new Error("CHECKPOINT_INCOMPLETE");
+  const required = pending ? PENDING_INVENTORY : REQUIRED_INVENTORY;
+  if (inventory.length !== required.size || new Set(inventory).size !== inventory.length || inventory.some((entry) => !required.has(entry))) throw new Error("CHECKPOINT_INCOMPLETE");
+}
+
+export const PendingCommandCheckpointArchiveSchema = z.object({ schemaVersion: z.literal("pending-command-checkpoint-v1"), intent: PendingActionIntentSchema.omit({ protectedCommand: true }), command: z.record(z.string(), z.unknown()) }).strict().superRefine((value, ctx) => {
+  if (value.intent.actionKind !== "start_session" || value.intent.expectedSessionVersion !== 0 || value.intent.expectedArtifactVersion !== 0 || !value.intent.commandSha256) ctx.addIssue({ code: "custom", message: "initial protected command required" });
+});
+/** The authenticated object is data; the SQL intent remains authority. */
+export function validatePendingCommandCheckpointArchive(archive: Uint8Array, intent: PendingActionIntent): unknown {
+  if (archive.byteLength > 131_072) throw new Error("PENDING_CHECKPOINT_ARCHIVE_INVALID");
+  const parsed = PendingCommandCheckpointArchiveSchema.parse(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(archive)));
+  const { protectedCommand: _liveEnvelope, ...retainedIntent } = intent;
+  if (canonicalJson(parsed.intent) !== canonicalJson(retainedIntent)) throw new Error("PENDING_CHECKPOINT_ARCHIVE_BINDING_INVALID");
+  return parsed.command;
 }
 
 /** Coordinator-owned sealing/restore service. It accepts no worker/provider authority. */
@@ -232,11 +252,12 @@ export class CheckpointEnvelopeService {
   readonly #telemetry?: LifecycleTelemetryPort;
 
   async seal(request: CheckpointSealRequest): Promise<Readonly<{ manifest: CheckpointManifest; envelope: CheckpointEnvelope }>> {
-    validateInventory(request.inventory);
+    validateInventory(request.inventory, request.payloadKind === "pending_command");
     if (!(request.archive instanceof Uint8Array) || Number.isNaN(Date.parse(request.retentionUntil))) throw new Error("CHECKPOINT_INCOMPLETE");
     const inventory = [...request.inventory].sort() as z.infer<typeof InventoryClassSchema>[];
     const manifest = CheckpointManifestSchema.parse({
-      schemaVersion: "checkpoint-manifest-v1",
+      schemaVersion: request.payloadKind === "pending_command" ? "checkpoint-manifest-v2" : "checkpoint-manifest-v1",
+      ...(request.payloadKind ? { payloadKind: request.payloadKind } : {}),
       checkpointId: request.checkpointId,
       accountId: request.accountId,
       sessionId: request.sessionId,

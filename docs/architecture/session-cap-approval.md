@@ -1,7 +1,6 @@
 # Explicit session-cap approval
 
-Schema proposal: [issue49](https://github.com/napplet/cvm/issues/49). The proposed
-compatibility decision is recorded there for review; no prior acceptance is implied.
+Implementation compatibility decision: [issue49](https://github.com/napplet/cvm/issues/49), recorded with merged PR50.
 
 This project-schema amendment completes the existing `approve_cap` instruction.
 At base revision `f2bcd4e`, a paused session can require a higher maximum but no

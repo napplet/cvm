@@ -65,6 +65,8 @@ The production constructor now installs the mounted command protector, initial
 producer and bounded release recovery. It still does not install the generation
 executor: retained USD/FX/provider context and revision lineage remain required.
 An old or unsupported pending command cannot trigger a paid fallback.
+[Original paid-model recovery](./original-model-recovery.md) separately covers
+already-dispatched operations across controller and price changes.
 
 ## Release and crash recovery
 

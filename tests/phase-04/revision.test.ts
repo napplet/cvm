@@ -43,14 +43,30 @@ async function setup(artifactVerifier = verifier) {
   const gateway: ModelGateway = { async dispatch(intent) {
     effects.dispatches += 1;
     return { status: "completed", receipt: { operationId: intent.operationId, providerRequestId: intent.providerRequestId, provider: "deterministic_fixture", model: "phase-04-fixture-model", profileId: intent.profileId, priceCardId: intent.priceCardId, selection: "unselected", completedAt: "2026-08-04T00:00:01.000Z", provenance: { protectedEvidenceReference: `receipt:${intent.operationId}` }, usage: [{ dimension: "input_tokens", units: "10" }, { dimension: "output_tokens", units: "5" }] } };
-  }, async lookup() { return { status: "not_found" }; } };
+  }, async lookup(intent) { return { status: "unresolved", operationId: intent.operationId, providerRequestId: intent.providerRequestId, provenance: { protectedEvidenceReference: `unresolved:${intent.operationId}` } }; } };
   const service = new MeteredGenerationService({ fundedAdmission: admissions, store, gateway, worker: completedWorker(effects), artifactVerifier });
   const initial = await service.startSession({ principal, admissionReference: admission.reference, idempotencyKey: "start", expectedVersion: 0, maximum: "3250", policyVersion: "phase-02-policy-2026-08-04", idea: "Build one focused counter napplet." });
   if (initial.status !== "completed") throw new Error("test start must be completed");
-  return { admission, effects, gateway, initial, service, store };
+  return { admission, admissions, effects, gateway, initial, service, store };
 }
 
 describe("same-lineage revisions", () => {
+  test("a claimed revision recovers before readiness and affordability checks using the same held budget", async () => {
+    const { admission, admissions, effects, gateway, initial, service, store } = await setup();
+    const command = { principal, sessionId: initial.sessionId, admissionReference: admission.reference, idempotencyKey: "lost-revision", expectedVersion: 1, maximum: "3250", policyVersion: "phase-02-policy-2026-08-04", revision: "Change the counter color." };
+    gateway.dispatch = async () => { effects.dispatches++; throw new Error("FIXTURE_LOST_ACK"); };
+    gateway.lookup = async intent => ({ status: "receipt_found", receipt: { operationId: intent.operationId, providerRequestId: intent.providerRequestId, provider: "deterministic_fixture", model: "phase-04-fixture-model", profileId: intent.profileId, priceCardId: intent.priceCardId, selection: "unselected", completedAt: "2026-08-04T00:00:02.000Z", provenance: { protectedEvidenceReference: `receipt:${intent.operationId}` }, usage: [{ dimension: "input_tokens", units: "10" }, { dimension: "output_tokens", units: "5" }] } });
+    expect((await service.reviseSession(command)).status).toBe("usage_unknown");
+    const prepared = await store.findMeteredAction(initial.accountId, command.idempotencyKey);
+    const recovered = new MeteredGenerationService({ fundedAdmission: admissions, store, gateway, worker: completedWorker(effects), artifactVerifier: verifier });
+    const result = await recovered.reviseSession(command);
+    expect(result).toMatchObject({ status: "completed", sessionVersion: 2, confirmedSpend: "15" });
+    expect(await recovered.reviseSession(command)).toEqual(result);
+    expect(effects).toEqual({ dispatches: 2, workers: 2 });
+    expect((await store.findMeteredAction(initial.accountId, command.idempotencyKey))?.actionBudgetReference).toBe(prepared?.actionBudgetReference);
+    expect((await store.listMeteredActionsForSession(initial.accountId, initial.sessionId)).length).toBe(2);
+  });
+
   test("a fresh coordinator recovers a claimed operation by lookup without a second provider post", async () => {
     const store = new TransactionalMemoryFundingStore();
     const funding = new FundingService(store);

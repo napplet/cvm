@@ -62,9 +62,9 @@ type ContinuationWakePort = Readonly<{
   /** Lookup-only exact-operation observer used during coordinator restart. */
   observeAction?(input: Readonly<{ accountId: string; sessionId: string; pauseGeneration: number; operationId: string; actionBudgetReference: string; liveLeaseToken: string }>): Promise<"completed" | "unknown">;
 }>;
-/** Optional currency settlement seam.  The default Phase 4 path remains a
- * same-currency card; production may bind an immutable FX quote before the
- * reservation and turn the authoritative provider receipt into sats later. */
+/** Original action-bound catalog reader, with no fresh pricing authority. */
+export type RetainedGenerationPricing = Readonly<{ readOriginal(action: MeteredAction): Promise<Readonly<{ profile: ModelProfile; card: PriceCard }> | undefined> }>;
+/** Optional currency settlement seam. The original FX binding survives replay. */
 export type GenerationUsageSettlement = Readonly<{
   prepare(input: Readonly<{ accountId: string; operationId: string; card: PriceCard; profile: ModelProfile; at: string }>): Promise<Readonly<{ maximum: string }>>;
   finalize(input: Readonly<{ accountId: string; intent: ProviderOperationIntent; receipt: NormalizedUsageReceipt; pricedAmount: string }>): Promise<Readonly<{ amount: string; providerReceiptReference: string }>>;
@@ -79,7 +79,7 @@ async function hash(value: unknown): Promise<string> { const digest = await cryp
 export class MeteredGenerationService {
   #inFlight = new Map<string, Promise<SessionActionResult>>();
   #sessionTails = new Map<string, Promise<void>>();
-  constructor(private readonly options: Readonly<{ fundedAdmission: FundedAdmissionService; store: MeteredFundingStore; gateway: ModelGateway; worker: WorkerPort; artifactVerifier: ArtifactVerifier; proposalStore?: SourceProposalLookup; pricing?: Readonly<{ card: PriceCard; profile: ModelProfile }>; settlement?: GenerationUsageSettlement; riskDetector?: RiskSignalDetector; harness?: Readonly<{ runner: NappletHarness; toolchain: NappletHarnessRequest["toolchain"]; snapshotReference: string; priorArtifactId: string; approvedApplicationSurfaces: readonly string[] }>; continuation?: ContinuationService; continuationCommands?: PendingCommandPort; /** Immutable worker/toolchain identity retained with any durable pause. */ toolchainIdentity?: string; clock?: Readonly<{ nowMs(): number }>; continuationWake?: ContinuationWakePort; telemetry?: LifecycleTelemetryPort }>) {}
+  constructor(private readonly options: Readonly<{ fundedAdmission: FundedAdmissionService; store: MeteredFundingStore; gateway: ModelGateway; worker: WorkerPort; artifactVerifier: ArtifactVerifier; proposalStore?: SourceProposalLookup; pricing?: Readonly<{ card: PriceCard; profile: ModelProfile }>; settlement?: GenerationUsageSettlement; retainedPricing?: RetainedGenerationPricing; riskDetector?: RiskSignalDetector; harness?: Readonly<{ runner: NappletHarness; toolchain: NappletHarnessRequest["toolchain"]; snapshotReference: string; priorArtifactId: string; approvedApplicationSurfaces: readonly string[] }>; continuation?: ContinuationService; continuationCommands?: PendingCommandPort; /** Immutable worker/toolchain identity retained with any durable pause. */ toolchainIdentity?: string; clock?: Readonly<{ nowMs(): number }>; continuationWake?: ContinuationWakePort; telemetry?: LifecycleTelemetryPort }>) {}
 
   /** Internal continuation consumer. Decrypt and check retained compatibility
    * before the resume authority reserves funds or allocates a worker. This
@@ -230,6 +230,7 @@ export class MeteredGenerationService {
       const replay = await this.options.store.findMeteredAction(accountId, command.idempotencyKey);
       if (replay?.fingerprint !== undefined && replay.fingerprint !== fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
       if (replay?.result) return SessionActionResultSchema.parse(replay.result);
+      if (replay) return this.#executeRecorded(command, accountId, fingerprint, replay);
       const session = await this.options.store.sessionStatus(accountId, command.sessionId);
       if (!session) return SessionActionResultSchema.parse({ status: "denied", code: "SESSION_LINEAGE_MISMATCH" });
       if (session.version !== command.expectedVersion) return SessionActionResultSchema.parse({ status: "denied", code: "STALE_SESSION_VERSION" });
@@ -259,6 +260,8 @@ export class MeteredGenerationService {
     if (recorded?.result) return SessionActionResultSchema.parse(recorded.result);
     const active = this.#inFlight.get(key); if (active) return active;
     const run = this.#serializeSession(accountId, command.sessionId, async () => {
+      const replay = await this.options.store.findMeteredAction(accountId, command.idempotencyKey);
+      if (replay) return this.#executeRecorded({ ...command, repair: true }, accountId, fingerprint, replay);
       const origin = await this.options.store.findMeteredAction(accountId, command.originatingIdempotencyKey);
       const session = await this.options.store.sessionStatus(accountId, command.sessionId);
       const sessionActions = await this.options.store.listMeteredActionsForSession(accountId, command.sessionId);
@@ -284,6 +287,8 @@ export class MeteredGenerationService {
   }
 
   private async execute(command: GenerationCommand, accountId: string, fingerprint: string, options: Readonly<{ bypassLegacyContinuation?: boolean }> = {}): Promise<SessionActionResult> {
+    const recorded = await this.options.store.findMeteredAction(accountId, command.idempotencyKey);
+    if (recorded) return this.#executeRecorded(command, accountId, fingerprint, recorded);
     const profile = this.options.pricing?.profile ?? PHASE_04_MODEL_PROFILES["code-proposal"];
     const priceCard = this.options.pricing?.card ?? PHASE_04_DETERMINISTIC_PRICE_CARD;
     // The profile's bounded worst-case charge is the authorization ceiling.
@@ -318,6 +323,20 @@ export class MeteredGenerationService {
       return { budget, prepared };
     });
     return this.#executePrepared({ command, accountId, fingerprint, sessionId, operationId, profile, priceCard, profileCeiling, budget, prepared });
+  }
+
+  /** Recovery precedes current affordability, profile selection and FX preparation.
+   * A durable paid claim retains its own budget, operation and immutable prices. */
+  async #executeRecorded(command: GenerationCommand, accountId: string, fingerprint: string, prepared: MeteredAction): Promise<SessionActionResult> {
+    if (prepared.accountId !== accountId || prepared.idempotencyKey !== command.idempotencyKey || prepared.fingerprint !== fingerprint || prepared.admissionReference !== command.admissionReference || prepared.expectedVersion !== command.expectedVersion || ("sessionId" in command && prepared.sessionId !== command.sessionId) || prepared.maximum > BigInt(command.maximum)) throw new Error("RECORDED_ACTION_BINDING_DENIED");
+    if (prepared.result) return SessionActionResultSchema.parse(prepared.result);
+    const current = this.options.pricing ?? { profile: PHASE_04_MODEL_PROFILES["code-proposal"], card: PHASE_04_DETERMINISTIC_PRICE_CARD };
+    const prices = this.options.retainedPricing ? await this.options.retainedPricing.readOriginal(prepared) : current.profile.id === prepared.profileId && current.card.id === prepared.priceCardId ? current : undefined;
+    if (!prices || prices.profile.id !== prepared.profileId || prices.card.id !== prepared.priceCardId || prices.profile.priceCardId !== prices.card.id) throw new Error("RECORDED_ACTION_PRICING_REQUIRED");
+    // A not-yet-dispatched action needs a separately compatible fresh execution
+    // context. Retained prices authorize receipt recovery, not new paid work.
+    if (prepared.status === "prepared" && (current.profile.id !== prepared.profileId || current.card.id !== prepared.priceCardId)) throw new Error("RECORDED_ACTION_FRESH_EXECUTION_REQUIRED");
+    return this.#executePrepared({ command, accountId, fingerprint, sessionId: prepared.sessionId, operationId: prepared.operationId, profile: prices.profile, priceCard: prices.card, profileCeiling: prepared.maximum.toString(), budget: { reference: prepared.actionBudgetReference }, prepared });
   }
 
   /** The one receipt-first execution path for an already prepared paid action.

@@ -4,7 +4,7 @@ import { ContinuationService } from "../../src/continuity/continuation-service";
 import { DeterministicObjectStore } from "../../src/continuity/object-store";
 import { accountIdForPrincipal } from "../../src/domain/account-command";
 import { FundingService } from "../../src/funding/funding-service";
-import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
+import { type ContinuationFundingTransaction, TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
 import type { CheckpointRestoreRequest, CheckpointRestoreResult, ContinuationWorkerPort, WorkerRunRequest, WorkerRunResult } from "../../src/phase-02/contracts";
 import { readSessionStatus } from "../../src/phase-04/session-status";
 import { MeteredGenerationService } from "../../src/phase-04/metered-generation-service";
@@ -46,7 +46,7 @@ async function setup(input: Readonly<{ topUp?: boolean; compatible?: boolean; in
     payload: { requestedCap: "3250", unit: "sat", capacity: { usable: true, reference: admissionReference } },
   });
 
-  await store.transact(accountId, async (transaction) => {
+  await store.transact(accountId, async (transaction: ContinuationFundingTransaction) => {
     await transaction.pauseForFunding({
       accountId, sessionId: "session:resume", admissionReference, idempotencyKey: "pause:resume", fingerprint: "c".repeat(64), pendingFingerprint,
       expectedSessionVersion: 4, pauseGeneration: 1, graceDeadlineMs: nowMs - 1, liveLeaseToken: "lease:old",
@@ -63,7 +63,7 @@ async function setup(input: Readonly<{ topUp?: boolean; compatible?: boolean; in
     archive: new TextEncoder().encode("sealed workspace"), inventory: ["harness_state", "workspace", "artifact_lineage", "validation_evidence", "financial_action", "pending_action", "compatibility_metadata"], evidenceSha256: await digest({ evidence: "resume" }),
     compatibility: { policyVersion: "policy:resume", modelIdentity: "model:resume", nappletSdkIdentity: "price:resume", toolchainIdentity: "toolchain:resume" }, retentionUntil: new Date(nowMs + 2_592_000_000).toISOString(),
   });
-  await store.transact(accountId, (transaction) => transaction.commitDeadlineCheckpoint({
+  await store.transact(accountId, (transaction: ContinuationFundingTransaction) => transaction.commitDeadlineCheckpoint({
     accountId, sessionId: "session:resume", pauseGeneration: 1, checkpointId: "checkpoint:resume", expectedSessionVersion: 4, expectedArtifactVersion: 4,
     manifestReference: `manifest:${sealed.envelope.manifestSha256}`, objectKey: sealed.envelope.object.key, objectGeneration: sealed.envelope.object.generation.toString(), objectChecksum: sealed.envelope.object.checksum, keyReference: sealed.envelope.crypto.keyReference, compatibilityIdentity: "toolchain:resume", checkpointCommittedAtMs: nowMs,
   }));
@@ -84,10 +84,10 @@ async function setup(input: Readonly<{ topUp?: boolean; compatible?: boolean; in
       allocate: async () => { allocations += 1; return { status: "allocated" as const, worker }; },
     },
     telemetry: input.telemetry,
-  } as never);
+  });
   const command = { principal: { id: accountId }, sessionId: "session:resume", checkpointId: "checkpoint:resume", expectedSessionVersion: 4, expectedCheckpointVersion: 1, idempotencyKey: "resume:one", approvePendingAction: true, capApprovalReference: admissionReference, pendingAction: { reference: "pending:resume", fingerprint: pendingFingerprint, kind: "revise_session", maximum: "3250" } };
-  const resume = (overrides: Record<string, unknown> = {}) => (service as unknown as { resumeSession(input: unknown): Promise<unknown> }).resumeSession({ ...command, ...overrides });
-  return { accountId, allocations: () => allocations, command, principal, resume, service, store, worker };
+  const resume = (overrides: Record<string, unknown> = {}) => service.resumeSession({ ...command, ...overrides });
+  return { accountId, allocations: () => allocations, command, principal, resume, service, store, worker, funding };
 }
 
 describe("explicit post-grace resume", () => {
@@ -101,6 +101,29 @@ describe("explicit post-grace resume", () => {
     expect(fixture.allocations()).toBe(1);
     expect(fixture.worker.restores).toBe(1);
     expect(observations).toEqual([expect.objectContaining({ stage: "resume", outcome: "succeeded", correlationDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u) })]);
+  });
+
+  test("a later verified credit lets the exact previously denied owner command retry", async () => {
+    const fixture = await setup({ topUp: false });
+    expect(await fixture.resume()).toMatchObject({ status: "denied", code: "RESUME_BALANCE_INSUFFICIENT" });
+    await fixture.funding.execute({
+      principal, kind: "credit_settlement", idempotencyKey: "credit:retry", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1",
+      payload: { settlement: { topUpId: "retry", rail: "cashu", unit: "sat", amount: "3250", externalReference: "external:resume:retry", settlementReference: "settlement:resume:retry", verifiedAt: "2026-08-05T00:21:00.000Z" } },
+    });
+    expect(await fixture.resume()).toMatchObject({ status: "restored" });
+    expect(fixture.allocations()).toBe(1);
+    expect(fixture.worker.restores).toBe(1);
+  });
+
+  test("completed replay is bound to the complete consent command", async () => {
+    const fixture = await setup();
+    const altered = { pendingAction: { ...fixture.command.pendingAction, fingerprint: "d".repeat(64) } };
+    const [original, changed] = await Promise.all([fixture.resume(), fixture.resume(altered)]);
+    expect(original).toMatchObject({ status: "restored" });
+    expect(changed).toMatchObject({ status: "denied", code: "RESUME_PENDING_ACTION_MISMATCH" });
+    expect(await fixture.resume(altered)).toMatchObject({ status: "denied", code: "RESUME_PENDING_ACTION_MISMATCH" });
+    expect(fixture.allocations()).toBe(1);
+    expect(fixture.worker.restores).toBe(1);
   });
 
   test("an explicitly authorized own admission hold funds the resume budget without an extra credit", async () => {
@@ -157,13 +180,13 @@ describe("explicit post-grace resume", () => {
     await expect(coordinator.completeResumedAction({ ...completion, leaseToken: "lease:forged" })).rejects.toThrow("RESUMED_ACTION_FENCE_INVALID");
     await expect(coordinator.completeResumedAction({ ...completion, operationId: "operation:forged" })).rejects.toThrow("RESUMED_ACTION_FENCE_INVALID");
     await expect(coordinator.completeResumedAction(({ ...completion, finalization: undefined } as unknown) as typeof completion)).rejects.toThrow("RESUMED_ACTION_ACCOUNTING_INVALID");
-    expect(await fixture.store.transact(fixture.accountId, (tx) => tx.findContinuationPause("session:resume", 1))).toMatchObject({ state: "restored" });
+    expect(await fixture.store.transact(fixture.accountId, (tx: ContinuationFundingTransaction) => tx.findContinuationPause("session:resume", 1))).toMatchObject({ state: "restored" });
 
     await coordinator.completeResumedAction(completion);
     await coordinator.completeResumedAction(completion);
     await expect(coordinator.completeResumedAction({ ...completion, finalization: { ...completion.finalization, providerReceiptReference: "receipt:resume:conflict" } })).rejects.toThrow("METERED_FINALIZATION_IDENTITY_CONFLICT");
     await expect(coordinator.completeResumedAction({ ...completion, finalization: { ...completion.finalization, sessionVersion: 6 } })).rejects.toThrow("METERED_FINALIZATION_IDENTITY_CONFLICT");
-    expect(await fixture.store.transact(fixture.accountId, (tx) => tx.findContinuationPause("session:resume", 1))).toMatchObject({ state: "completed", liveLeaseToken: undefined });
+    expect(await fixture.store.transact(fixture.accountId, (tx: ContinuationFundingTransaction) => tx.findContinuationPause("session:resume", 1))).toMatchObject({ state: "completed", liveLeaseToken: undefined });
     const terminal = await readSessionStatus({ store: fixture.store, cursorSecret: "resume-status-secret", query: { principal: fixture.principal, sessionId: fixture.command.sessionId } });
     expect(terminal).toMatchObject({ status: "ok", session: { state: "verified", progress: "verified", nextAction: "revise_session", continuation: null } });
   });

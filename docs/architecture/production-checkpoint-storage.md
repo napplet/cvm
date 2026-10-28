@@ -51,6 +51,13 @@ roll back to an uploader that lacks dispatch fencing while unresolved new
 operations exist; quiesce first and retain a compatible recovery reader.
 There is no automatic schema contraction or historical data rewrite.
 
+Explicit resume coalesces concurrent copies of the complete owner consent
+command. Only a restored result is memoized; funding denials and pending original
+observations can be retried after external state changes. Changed consent never
+inherits a cached success. Cross-controller idempotency remains in SQL, so retries
+reuse the same claim, budget, action, operation, allocation and lease. This does
+not authorize a new provider dispatch or implement terminal resumed generation.
+
 The local integration test uses real PostgreSQL/AES-GCM, a restricted login,
 actual pg_dump/psql into a new database, and a disk-backed object protocol fixture
 behind the GCS adapter. It checks concurrent sealing, upload/delete acknowledgement

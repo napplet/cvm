@@ -37,7 +37,7 @@ export async function verifyDirectArtifactHtml(html: string): Promise<void> {
       if (attribute === "style") verifyCss(value, "declarationList");
       if (svgCssAttributes.has(attribute)) verifyCss(`${attribute}:${value}`, "declarationList");
       if (!resourceAttributes.has(attribute)) continue;
-      const fragment = ["href", "xlink:href"].includes(attribute) && value.startsWith("#");
+      const fragment = ["a", "use"].includes(tag) && ["href", "xlink:href"].includes(attribute) && value.startsWith("#");
       const media = ["img", "image", "audio", "video", "source"].includes(tag) && ["src", "href", "xlink:href", "poster"].includes(attribute) && /^(?:data:(?:image|audio|video)\/|blob:)/iu.test(value);
       const icon = tag === "link" && element.getAttribute("rel")?.toLowerCase() === "icon" && attribute === "href" && /^data:image\//iu.test(value);
       if (!fragment && !media && !icon) denied = true;

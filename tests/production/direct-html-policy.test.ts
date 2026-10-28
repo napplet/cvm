@@ -14,6 +14,7 @@ describe("single-file direct HTML containment", () => {
   });
   for (const body of [
     '<script src="assets/app.js"></script>', '<link rel="stylesheet" href="/app.css">',
+    '<link rel="stylesheet" href="#sheet">', '<image href="#image"/>',
     '<img src="https://remote.invalid/image">', '<a href="#section" ping="https://remote.invalid">x</a>',
     '<img srcset="data:image/png;base64,YQ== 1x, https://remote.invalid/i 2x">',
     '<base href="https://remote.invalid"><iframe srcdoc="hi"></iframe>',

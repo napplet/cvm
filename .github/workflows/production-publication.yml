@@ -8,9 +8,12 @@ on:
       - "src/production/source-build-verifier.ts"
       - "src/production/publication-context.ts"
       - "src/production/edge-contexts.ts"
+      - "src/production/nip46-signer.ts"
+      - "src/production/nostr-relay.ts"
       - "src/production/mounted-session-material.ts"
       - "tests/production/source-build-verifier-postgres.test.ts"
       - "tests/production/publication-context-postgres.test.ts"
+      - "tests/release/production-nostr-relay.integration.test.ts"
       - "src/production/pinned-cli-network.ts"
       - "src/publication/napplet-cli-*.ts"
       - "src/release/native/upload.ts"
@@ -44,5 +47,7 @@ jobs:
         run: bun test tests/production/source-build-verifier-postgres.test.ts --timeout 120000
       - name: Derived publication contexts and original bundle recovery
         run: bun test tests/production/publication-context-postgres.test.ts --timeout 120000
+      - name: NIP-46 expiry and original relay operation recovery
+        run: bun test tests/release/production-nostr-relay.integration.test.ts tests/release/production-edge-suites.test.ts --timeout 120000
       - name: Publication contracts and reconciliation regressions
         run: bun test tests/phase-06 --timeout 10000

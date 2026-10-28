@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import type { ExternalSignerPort } from "../release/native/external-signer";
 import { assertPostgresOperationJournal, type PostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
+import { ReleaseAuthorizationReceiptSchema, validateAuthorizationRequest, validateAuthorizationReceipt } from "../release/authorization";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/iu).transform(value => value.toLowerCase());
 const Operation = z.string().regex(/^[a-z][a-z0-9:_-]{2,300}$/u);
@@ -24,12 +25,12 @@ const SignRecord = z.object({
 
 export type Nip46SessionKeyBroker = Readonly<{ resolve(input: Readonly<{ reference: string; purpose: "nip46_disposable_client" }>): Promise<Uint8Array> }>;
 export type Nip46PublicationContext = Readonly<{
-  resolve(input: Readonly<{ intentDigest: string }>): Promise<Readonly<{ operationId: string; ownerPubkey: string; capabilities: readonly string[]; template: z.infer<typeof Template> }>>;
+  resolve(input: Readonly<{ intentDigest: string }>): Promise<Readonly<{ operationId: string; ownerPubkey: string; capabilities: readonly string[]; template: z.infer<typeof Template>; expiresAtMs: number }>>;
 }>;
 export type Nip46OriginalOperationContext = Readonly<{
-  resolveOriginal(input: Readonly<{ operationId: string; purpose: "upload_authorization" }>): Promise<Readonly<{ intentDigest: string; ownerPubkey: string; capabilities: readonly string[]; template: z.infer<typeof ExactTemplate> }>>;
+  resolveOriginal(input: Readonly<{ operationId: string; purpose: "upload_authorization" }>): Promise<Readonly<{ intentDigest: string; ownerPubkey: string; capabilities: readonly string[]; template: z.infer<typeof ExactTemplate>; expiresAtMs: number }>>;
 }>;
-type SigningContext = Readonly<{ operationId: string; ownerPubkey: string; capabilities: readonly string[]; template: z.infer<typeof ExactTemplate> }>;
+type SigningContext = Readonly<{ operationId: string; ownerPubkey: string; capabilities: readonly string[]; template: z.infer<typeof ExactTemplate>; expiresAtMs: number }>;
 
 type Bunker = Readonly<{ pubkey: string; relays: readonly string[]; secret: string | null }>;
 const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -50,10 +51,23 @@ function parseBunker(value: string): Bunker {
 export async function openProductionNip46Signer(input: Readonly<{
   bunkerUri: string; sessionKeyReference: string; sessionKeyBroker: Nip46SessionKeyBroker;
   context: Nip46PublicationContext; originalOperationContext?: Nip46OriginalOperationContext; journal: PostgresOperationJournal; timeoutMs?: number;
+  authorization: Readonly<{ request: unknown; receipt: unknown; authorizationRequestSha256: string; authorizationReceiptSha256: string }>;
+  now?: () => number;
 }>): Promise<ExternalSignerPort & Readonly<{ close(): Promise<void>; signExactOperation(input: Readonly<{ operationId: string; purpose: "upload_authorization" }>): Promise<unknown> }>> {
   const bunker = parseBunker(input.bunkerUri);
   if (!input.sessionKeyReference.startsWith("nostr:") || /(?:nsec|owner|private|secret|password)/iu.test(input.sessionKeyReference)) throw new Error("NIP46_REFERENCE_INVALID");
   assertPostgresOperationJournal(input.journal);
+  const now = input.now ?? Date.now;
+  const authorize = async (readOnly: boolean, expiresAtMs?: number) => {
+    const request = await validateAuthorizationRequest(input.authorization.request);
+    const original = ReleaseAuthorizationReceiptSchema.parse(input.authorization.receipt);
+    const receipt = await validateAuthorizationReceipt({ request, receipt: original, nowMs: readOnly ? Math.min(now(), original.expiresAtMs - 1) : now() });
+    if (request.authorizationRequestSha256 !== input.authorization.authorizationRequestSha256 || receipt.authorizationReceiptSha256 !== input.authorization.authorizationReceiptSha256
+      || !request.providerScopes.some(scope => scope.provider === "signer") || !request.orderedEffects.some(effect => effect.provider === "signer")
+      || (!readOnly && expiresAtMs !== undefined && now() >= expiresAtMs)) throw new Error("NIP46_AUTHORIZATION_REQUIRED");
+    return request;
+  };
+  await authorize(true);
   const timeoutMs = input.timeoutMs ?? 30_000;
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 60_000) throw new Error("NIP46_TIMEOUT_INVALID");
   const brokerKey = await input.sessionKeyBroker.resolve({ reference: input.sessionKeyReference, purpose: "nip46_disposable_client" });
@@ -84,15 +98,37 @@ export async function openProductionNip46Signer(input: Readonly<{
     } finally { pool.destroy(); }
   };
   const requestResponse = async (method: "connect" | "get_public_key", params: readonly string[]) => {
-    const requestId = `nip46:discovery:${clientPubkey}:${method}`;
-    const requestEvent = BunkerEvent.parse(finalizeEvent({ kind: 24133, created_at: Math.floor(Date.now() / 1000), tags: [["p", bunker.pubkey]], content: nip44.v2.encrypt(JSON.stringify({ id: requestId, method, params }), conversationKey) }, key));
+    await authorize(true);
+    const identity = sha256(JSON.stringify({ authorizationRequestSha256: input.authorization.authorizationRequestSha256, clientPubkey, bunkerPubkey: bunker.pubkey, method, params }));
+    const requestId = `nip46:discovery:${identity}`;
+    const operationId = `nip46-discovery:${identity}`;
+    const prior = await input.journal.read(operationId);
+    const schema = z.object({ state: z.enum(["request_persisted", "dispatching"]), requestId: z.string(), requestEvent: BunkerEvent }).strict();
+    let record;
+    if (prior) {
+      if (prior.identitySha256 !== identity) throw new Error("NIP46_ORIGINAL_SIGNING_REQUIRES_RECONCILIATION");
+      record = { ...prior, value: schema.parse(prior.value) };
+    } else {
+      await authorize(false);
+      const requestEvent = BunkerEvent.parse(finalizeEvent({ kind: 24133, created_at: Math.floor(now() / 1000), tags: [["p", bunker.pubkey]], content: nip44.v2.encrypt(JSON.stringify({ id: requestId, method, params }), conversationKey) }, key));
+      const claimed = await input.journal.claim(operationId, identity, { state: "request_persisted", requestId, requestEvent });
+      record = { ...claimed.record, value: schema.parse(claimed.record.value) };
+    }
+    if (record.value.requestId !== requestId) throw new Error("NIP46_ORIGINAL_SIGNING_REQUIRES_RECONCILIATION");
+    const response = await responseFor(requestId);
+    if (response || record.value.state === "dispatching") return response;
+    await authorize(false);
+    const dispatching = await input.journal.compareAndSet(operationId, identity, record.revision, { ...record.value, state: "dispatching" });
+    if (!dispatching) return responseFor(requestId);
+    await authorize(false);
     const pool = new SimplePool();
-    try { await bounded(Promise.any(pool.publish([...bunker.relays], requestEvent)), "NIP46_REQUEST_TIMEOUT"); }
+    try { await bounded(Promise.any(pool.publish([...bunker.relays], record.value.requestEvent)), "NIP46_REQUEST_TIMEOUT"); }
     catch { /* A retained response is still authoritative; query it below. */ }
     finally { pool.destroy(); }
     return responseFor(requestId);
   };
   const observeDiscovery = async () => {
+    await authorize(true);
     if (discovery) return discovery;
     if (!bunker.secret) return Object.freeze({ pubkey: bunker.pubkey, capabilities: [], consentState: "pending" as const });
     try {
@@ -105,24 +141,29 @@ export async function openProductionNip46Signer(input: Readonly<{
       return discovery;
     } catch { return Object.freeze({ pubkey: bunker.pubkey, capabilities: [], consentState: "pending" as const }); }
   };
-  const sign = async (record: z.infer<typeof SignRecord>, revision: number, context: SigningContext, intentDigest: string) => {
-    const response = await responseFor(record.requestId);
-    if (!response || response.error || !response.result) throw new Error("NIP46_SIGNING_OUTCOME_UNKNOWN");
-    const event = SignedEvent.parse(JSON.parse(response.result));
+  const exactSignedEvent = (raw: unknown, context: SigningContext) => {
+    const event = SignedEvent.parse(raw);
     if (event.pubkey !== context.ownerPubkey.toLowerCase() || !verifyEvent(event)
       || event.kind !== context.template.kind || event.content !== context.template.content
       || JSON.stringify(event.tags) !== JSON.stringify(context.template.tags) || event.created_at !== context.template.created_at) throw new Error("NIP46_OWNER_MISMATCH");
+    return event;
+  };
+  const sign = async (record: z.infer<typeof SignRecord>, revision: number, context: SigningContext, intentDigest: string) => {
+    const response = await responseFor(record.requestId);
+    if (!response || response.error || !response.result) throw new Error("NIP46_SIGNING_OUTCOME_UNKNOWN");
+    const event = exactSignedEvent(JSON.parse(response.result), context);
     const identity = sha256(`${intentDigest}:${context.operationId}:${JSON.stringify(context.template)}`);
     const stored = await input.journal.compareAndSet(`nip46:${context.operationId}`, identity, revision, { ...record, state: "signed", event });
     const final = stored ? SignRecord.parse(stored.value) : SignRecord.parse((await input.journal.read(`nip46:${context.operationId}`))?.value);
     if (final.state !== "signed" || final.intentDigest !== intentDigest) throw new Error("NIP46_SIGNING_OUTCOME_UNKNOWN");
-    const signed = SignedEvent.parse(final.event);
+    const signed = exactSignedEvent(final.event, context);
     return Object.freeze({ pubkey: signed.pubkey, intentDigest, authorizationReceipt: `nip46:${context.operationId}`, event: signed });
   };
   const signContext = async (rawContext: SigningContext, rawIntentDigest: string) => {
       if (closed) throw new Error("NIP46_CLOSED");
+      await authorize(true);
       const intentDigest = Digest.parse(rawIntentDigest);
-      const context: SigningContext = { operationId: Operation.parse(rawContext.operationId), ownerPubkey: Digest.parse(rawContext.ownerPubkey), capabilities: rawContext.capabilities, template: ExactTemplate.parse(rawContext.template) };
+      const context: SigningContext = { operationId: Operation.parse(rawContext.operationId), ownerPubkey: Digest.parse(rawContext.ownerPubkey), capabilities: rawContext.capabilities, template: ExactTemplate.parse(rawContext.template), expiresAtMs: z.number().int().positive().parse(rawContext.expiresAtMs) };
       const operationId = Operation.parse(context.operationId);
       const ownerPubkey = Digest.parse(context.ownerPubkey);
       const observedSigner = await observeDiscovery();
@@ -133,18 +174,21 @@ export async function openProductionNip46Signer(input: Readonly<{
       let record: z.infer<typeof SignRecord>;
       let revision: number;
       if (existing) {
+        if (existing.identitySha256 !== identity) throw new Error("NIP46_ORIGINAL_SIGNING_REQUIRES_RECONCILIATION");
         record = SignRecord.parse(existing.value); revision = existing.revision;
       } else {
-        const requestEvent = BunkerEvent.parse(finalizeEvent({ kind: 24133, created_at: Math.floor(Date.now() / 1000), tags: [["p", bunker.pubkey]], content: nip44.v2.encrypt(JSON.stringify({ id: requestId, method: "sign_event", params: [JSON.stringify(context.template)] }), conversationKey) }, key));
+        await authorize(false, context.expiresAtMs);
+        const requestEvent = BunkerEvent.parse(finalizeEvent({ kind: 24133, created_at: Math.floor(now() / 1000), tags: [["p", bunker.pubkey]], content: nip44.v2.encrypt(JSON.stringify({ id: requestId, method: "sign_event", params: [JSON.stringify(context.template)] }), conversationKey) }, key));
         const claimed = await input.journal.claim(`nip46:${operationId}`, identity, { state: "request_persisted", intentDigest, requestId, ownerPubkey, requestEvent });
         record = SignRecord.parse(claimed.record.value); revision = claimed.record.revision;
       }
       if (record.intentDigest !== intentDigest || record.ownerPubkey !== ownerPubkey || record.requestId !== requestId) throw new Error("NIP46_ORIGINAL_SIGNING_REQUIRES_RECONCILIATION");
       if (record.state === "signed") {
-        const event = SignedEvent.parse(record.event);
+        const event = exactSignedEvent(record.event, context);
         return Object.freeze({ pubkey: event.pubkey, intentDigest, authorizationReceipt: `nip46:${operationId}`, event });
       }
       if (record.state === "dispatching") return sign(record, revision, context, intentDigest);
+      await authorize(false, context.expiresAtMs);
       const dispatching = SignRecord.parse({ ...record, state: "dispatching" });
       const transitioned = await input.journal.compareAndSet(`nip46:${operationId}`, identity, revision, dispatching);
       if (!transitioned) {
@@ -152,11 +196,12 @@ export async function openProductionNip46Signer(input: Readonly<{
         if (!latest) throw new Error("NIP46_SIGNING_OUTCOME_UNKNOWN");
         const latestRecord = SignRecord.parse(latest.value);
         if (latestRecord.state === "signed") {
-          const event = SignedEvent.parse(latestRecord.event);
+          const event = exactSignedEvent(latestRecord.event, context);
           return Object.freeze({ pubkey: event.pubkey, intentDigest, authorizationReceipt: `nip46:${operationId}`, event });
         }
         return sign(latestRecord, latest.revision, context, intentDigest);
       }
+      await authorize(false, context.expiresAtMs);
       const pool = new SimplePool();
       try { await bounded(Promise.any(pool.publish([...bunker.relays], record.requestEvent)), "NIP46_REQUEST_TIMEOUT"); }
       catch { /* The persisted request may have reached the bunker; query only. */ }
@@ -173,7 +218,7 @@ export async function openProductionNip46Signer(input: Readonly<{
       if (!input.originalOperationContext || purpose !== "upload_authorization") throw new Error("NIP46_OPERATION_CONTEXT_REQUIRED");
       const context = await input.originalOperationContext.resolveOriginal({ operationId: Operation.parse(operationId), purpose });
       if (context.template.kind !== 24242) throw new Error("NIP46_OPERATION_CONTEXT_INVALID");
-      return signContext({ operationId, ownerPubkey: context.ownerPubkey, capabilities: context.capabilities, template: context.template }, context.intentDigest);
+      return signContext({ operationId, ownerPubkey: context.ownerPubkey, capabilities: context.capabilities, template: context.template, expiresAtMs: context.expiresAtMs }, context.intentDigest);
     },
     async close() { closed = true; key.fill(0); conversationKey.fill(0); },
   });

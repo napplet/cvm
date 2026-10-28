@@ -57,14 +57,14 @@ export type VertexInteractionsPort = Readonly<{
 /** Exact, bounded REST wire adapter for the documented Preview Interactions API.
  * It receives a short-lived ADC token from the Plan 63 transport; it never
  * selects a project, emits credentials, or retries a paid POST. */
-export function createVertexInteractionsHttpPort(input: Readonly<{ accessToken?: () => Promise<string>; tokenSource?: GoogleTokenSource; fetch?: typeof fetch; timeoutMs?: number }>): VertexInteractionsPort {
-  const requestFetch = input.fetch ?? fetch; const timeoutMs = input.timeoutMs ?? 10_000;
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 30_000 || (!!input.accessToken === !!input.tokenSource)) throw new Error("VERTEX_HTTP_CONFIGURATION_INVALID");
+export function createVertexInteractionsHttpPort(input: Readonly<{ accessToken?: () => Promise<string>; tokenSource?: GoogleTokenSource; fetch?: typeof fetch; timeoutMs?: number; creationTimeoutMs?: number }>): VertexInteractionsPort {
+  const requestFetch = input.fetch ?? fetch; const timeoutMs = input.timeoutMs ?? 10_000; const creationTimeoutMs = input.creationTimeoutMs ?? timeoutMs;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 30_000 || !Number.isSafeInteger(creationTimeoutMs) || creationTimeoutMs < 1_000 || creationTimeoutMs > 540_000 || (!!input.accessToken === !!input.tokenSource)) throw new Error("VERTEX_HTTP_CONFIGURATION_INVALID");
   const accessToken = input.accessToken ?? (async () => (await input.tokenSource!.getAccessToken()).token);
   const parent = (projectId: string) => `https://aiplatform.googleapis.com/v1beta1/projects/${encodeURIComponent(projectId)}/locations/global/interactions`;
-  async function request(url: string, init: RequestInit): Promise<unknown> {
+  async function request(url: string, init: RequestInit, requestTimeoutMs = timeoutMs): Promise<unknown> {
     const token = await accessToken(); if (!/^[A-Za-z0-9._~-]{20,4096}$/u.test(token)) throw new Error("VERTEX_ADC_TOKEN_INVALID");
-    const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), requestTimeoutMs);
     try { const response = await requestFetch(url, { ...init, redirect: "error", signal: controller.signal, headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...(init.headers ?? {}) } });
       if (!response.ok) throw new Error(`VERTEX_HTTP_${response.status}`);
       if (!response.body) throw new Error("VERTEX_HTTP_BODY_INVALID");
@@ -76,7 +76,7 @@ export function createVertexInteractionsHttpPort(input: Readonly<{ accessToken?:
     } finally { clearTimeout(timer); }
   }
   return frozen({
-    create: async (value) => request(parent(value.projectId), { method: "POST", body: JSON.stringify({ model: value.model, input: value.input, system_instruction: value.systemInstruction, response_mime_type: value.responseMimeType, response_format: value.responseFormat, generation_config: { max_output_tokens: value.generationConfig.maxOutputTokens, thinking_level: value.generationConfig.thinkingLevel }, store: value.store, stream: false, background: false, tools: [] }) }),
+    create: async (value) => request(parent(value.projectId), { method: "POST", body: JSON.stringify({ model: value.model, input: value.input, system_instruction: value.systemInstruction, response_mime_type: value.responseMimeType, response_format: value.responseFormat, generation_config: { max_output_tokens: value.generationConfig.maxOutputTokens, thinking_level: value.generationConfig.thinkingLevel }, store: value.store, stream: false, background: false, tools: [] }) }, creationTimeoutMs),
     get: async (value) => request(`${parent(value.projectId)}/${encodeURIComponent(value.id)}`, { method: "GET" }),
     list: async (value) => request(`${parent(value.projectId)}?page_size=500${value.pageToken ? `&page_token=${encodeURIComponent(value.pageToken)}` : ""}`, { method: "GET" }),
   });

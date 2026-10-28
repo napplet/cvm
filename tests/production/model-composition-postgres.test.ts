@@ -1,3 +1,4 @@
+import { delayedResponse } from "../fixtures/model/delayed-response";
 import { expect, test } from "bun:test";
 import { z } from "zod";
 import { Pool } from "pg";
@@ -37,7 +38,7 @@ function restrictedPool(native: Pool): PostgresSqlPool {
   } };
 }
 
-integration.each(["legacy-completed", "current-missing-counter"])("normal paid graph preserves real operation IDs, source and exact cached settlement (%s)", async (wireCase) => {
+integration.each(["legacy-completed", "current-missing-counter", "delayed-current"])("normal paid graph preserves real operation IDs, source and exact cached settlement (%s)", async (wireCase) => {
   const name = `cvm-model-composition-${crypto.randomUUID().replaceAll("-", "")}`;
   let admin: Pool | undefined, native: Pool | undefined;
   try {
@@ -68,7 +69,7 @@ integration.each(["legacy-completed", "current-missing-counter"])("normal paid g
     await assertProductionSourceProposalSchema(pool);
     const sources = new ProductionSourceProposalStore(pool);
     const journal = new PostgresOperationJournal(pool, { namespace: "composed-model", scopeSha256: "a".repeat(64) });
-    const interactions = createVertexInteractionsHttpPort({ accessToken: async () => "test-only-token-aaaaaaaaaaaaaaaaaaaa", fetch: Object.assign(async (_url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    const interactions = createVertexInteractionsHttpPort({ timeoutMs: 1000, creationTimeoutMs: 2500, accessToken: async () => "test-only-token-aaaaaaaaaaaaaaaaaaaa", fetch: Object.assign(async (_url: Parameters<typeof fetch>[0], init?: RequestInit) => {
       if (init?.method === "GET") {
         reads++;
         if (!storedCurrent) throw new Error("ORIGINAL_INTERACTION_REQUIRED");
@@ -81,6 +82,7 @@ integration.each(["legacy-completed", "current-missing-counter"])("normal paid g
       if (wireCase === "legacy-completed") return Response.json({ id: "composed-original", model: "gemini-4-argon", input: wire.input, status: "completed", created: new Date(now).toISOString(), steps: [{ model_output: { content } }], usage: { input_tokens: 1000, cached_input_tokens: 200, output_tokens: 100, thought_tokens: 0, tool_use_tokens: 0 } });
       const currentUsage = { total_input_tokens: 1000, total_cached_tokens: 200, total_output_tokens: 100, total_thought_tokens: 0, total_tool_use_tokens: 0, total_tokens: 1100 };
       storedCurrent = { id: "composed-original", model: "gemini-4-argon", status: "completed", created: new Date(now).toISOString(), steps: [{ type: "user_input", content: wire.input }, { type: "model_output", content }], usage: currentUsage };
+      if (wireCase === "delayed-current") return delayedResponse(1200, init.signal, Response.json({ id: "composed-original", model: "gemini-4-argon", status: "completed", created: new Date(now).toISOString(), steps: [{ type: "model_output", content }], usage: currentUsage }));
       return Response.json({ id: "composed-original", model: "gemini-4-argon", status: "completed", created: new Date(now).toISOString(), steps: [{ type: "model_output", content }], usage: { ...currentUsage, total_cached_tokens: undefined } });
     }, { preconnect() {} }) });
     const vertex = createVertexDeploymentClient({ candidateSha256: "b".repeat(64), projectId: "napplet-cvm-test", location: "global", model: "gemini-4-argon", credentialReference: "gcp:adc:test", price: { sourceUrl: "https://cloud.google.com/vertex-ai/generative-ai/pricing", sourceDocumentSha256: pricing.card.sources!.provider.capturedBytesSha256, quoteSha256: "c".repeat(64), observedAtMs: now, freshUntilMs: now + 60_000, effectiveFromMs: now, effectiveUntilMs: now + 60_000, currency: "USD", inputMicrosPerMillion: 4_000_000, cachedInputMicrosPerMillion: 200_000, outputAndThoughtMicrosPerMillion: 20_000_000 }, journal: createPostgresVertexOperationJournal(journal), interactions, now: () => now });

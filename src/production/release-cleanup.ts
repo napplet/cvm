@@ -1,6 +1,7 @@
 import type { ReleaseProviderId } from "../release/contracts";
 import type { ReleaseProviderPort } from "../release/providers";
 import type { ReleaseFinalizationCleanupPort } from "../release/finalize";
+import { assertProductionWorkerLifecycle, type ProductionWorkerLifecyclePort } from "./worker-lifecycle";
 
 type Effect = Readonly<{ provider: ReleaseProviderId; providerOperationId: string; resourceIdentitySha256: string }>;
 
@@ -10,7 +11,9 @@ type Effect = Readonly<{ provider: ReleaseProviderId; providerOperationId: strin
 export function createMountedReleaseCleanup(input: Readonly<{
   effects: readonly Effect[];
   providers: Readonly<Record<ReleaseProviderId, Readonly<{ port: ReleaseProviderPort }>>>;
+  workers?: Readonly<Record<"modal" | "fly", ProductionWorkerLifecyclePort>>;
 }>): ReleaseFinalizationCleanupPort {
+  if (input.workers) { assertProductionWorkerLifecycle(input.workers.modal); assertProductionWorkerLifecycle(input.workers.fly); }
   const effects = new Map(input.effects.map(effect => [effect.providerOperationId, effect]));
   if (effects.size !== input.effects.length) throw new Error("PRODUCTION_MOUNTED_CLEANUP_DUPLICATE_ORIGINAL");
   const resolve = (effect: Parameters<ReleaseFinalizationCleanupPort["cleanup"]>[0]) => {
@@ -28,6 +31,13 @@ export function createMountedReleaseCleanup(input: Readonly<{
     },
     async observe(effect) {
       const provider = resolve(effect);
+      const original = effects.get(effect.providerOperationId)!;
+      if (input.workers && (original.provider === "modal" || original.provider === "fly")) {
+        try {
+          const result = await input.workers[original.provider].observeCleanup({ operationId: effect.providerOperationId, resourceIdentitySha256: effect.resourceIdentitySha256 });
+          return result.status === "cleaned" ? "cleaned" as const : "unknown" as const;
+        } catch { return "unknown" as const; }
+      }
       // A generic completed result proves an applied resource still exists.
       // Even missing is insufficient without a dedicated original-cleanup
       // observation (it can mean an unknown local operation). Keep recovery

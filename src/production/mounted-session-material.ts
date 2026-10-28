@@ -298,6 +298,7 @@ async function prepareMountedOperationalExecution(input: Readonly<{
   authorization: ProductionSessionAuthorizationMaterial;
   dependencies: ProductionGenerationRuntime["dependencies"];
   providers: ProductionCertificationSessionMaterial["providers"];
+  workerLifecycles: Readonly<Record<"modal" | "fly", ProductionWorkerLifecyclePort>>;
   now?: () => number;
 }>) {
   const execution = input.resolved.execution;
@@ -367,7 +368,7 @@ async function prepareMountedOperationalExecution(input: Readonly<{
       attestations: execution.finalization.attestations,
       cleanupPlan: Object.freeze({ ...execution.finalization.cleanupPlan, effects: execution.finalization.cleanupPlan.effects.map(({ provider: _provider, ...effect }) => Object.freeze(effect)) }),
       promotion,
-      cleanup: createMountedReleaseCleanup({ effects: execution.finalization.cleanupPlan.effects, providers: input.providers }),
+      cleanup: createMountedReleaseCleanup({ effects: execution.finalization.cleanupPlan.effects, providers: input.providers, workers: input.workerLifecycles }),
     }),
   });
 }
@@ -529,7 +530,7 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
         || requestedReceipt.authorizationReceiptSha256 !== suppliedReceipt.authorizationReceiptSha256) {
         throw new Error("PRODUCTION_MOUNTED_PREPARATION_AUTHORIZATION_REQUIRED");
       }
-      return prepareMountedOperationalExecution({ config: input.config, deploymentConfig, resolved: input.resolved, authorization, dependencies, providers, now });
+      return prepareMountedOperationalExecution({ config: input.config, deploymentConfig, resolved: input.resolved, authorization, dependencies, providers, workerLifecycles: { modal, fly }, now });
     },
   });
 }

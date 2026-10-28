@@ -9,7 +9,12 @@ import type { ProductionGenerationRuntime } from "./generation-runtime";
 
 export type ProductionWorkerLifecyclePort = Pick<ReleaseProviderPort, "plan" | "apply" | "observe"> & Readonly<{
   cleanup(input: Parameters<ReleaseProviderPort["cleanup"]>[0]): Promise<Readonly<{ status: "cleaned" | "pending" | "blocked" }>>;
+  observeCleanup(input: Parameters<ReleaseProviderPort["cleanup"]>[0]): Promise<Readonly<{ status: "cleaned" | "pending" | "blocked" }>>;
 }>;
+const lifecycles = new WeakSet<object>();
+export function assertProductionWorkerLifecycle(value: unknown): asserts value is ProductionWorkerLifecyclePort {
+  if (!value || typeof value !== "object" || !lifecycles.has(value)) throw new Error("PRODUCTION_WORKER_LIFECYCLE_REQUIRED");
+}
 const hash = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex");
 const Plan = z.object({ operationId: z.string().regex(/^[a-z][a-z0-9_-]{2,127}$/u), effectId: z.string().min(1).max(128), region: z.string().min(1).max(64), desiredDigest: z.string().regex(/^[a-f0-9]{64}$/u) }).strict();
 
@@ -53,7 +58,7 @@ export function createProductionWorkerLifecycle(input: Readonly<{
     const ready = await input.capacity.observe({ ...value, reference: record.reference });
     return { status: ready.status === "available" ? "completed" as const : ready.status === "refused" ? "missing" as const : "unknown" as const, resourceIdentitySha256: hash({ provider: record.provider, intentReference: record.intentReference, reference: record.reference, workerOperationId: record.workerOperationId }) };
   };
-  return Object.freeze({
+  const port = Object.freeze<ProductionWorkerLifecyclePort>({
     async plan(raw) {
       await authorize(true);
       const plan = Plan.parse(raw);
@@ -74,6 +79,17 @@ export function createProductionWorkerLifecycle(input: Readonly<{
       return { ...result, status: result.status === "completed" ? "applied" as const : "unknown" as const };
     },
     async observe(value) { await authorize(true); return observe(value.operationId); },
+    async observeCleanup(value) {
+      await authorize(true);
+      const original = await load(value.operationId);
+      if (!original) return { status: "blocked" as const };
+      const binding = facts(original.value), record = await input.capacity.inspect(binding);
+      if (!record || record.provider !== input.provider || record.expectedSessionBindingDigest !== binding.expectedSessionBindingDigest) return { status: "blocked" as const };
+      const identity = hash({ provider: record.provider, intentReference: record.intentReference, reference: record.reference, workerOperationId: record.workerOperationId });
+      if (value.resourceIdentitySha256 !== identity) throw new Error("WORKER_LIFECYCLE_RESOURCE_CHANGED");
+      const status = await input.capacity.observeRelease({ intentReference: record.intentReference, reference: record.reference });
+      return { status: status.status === "terminated" ? "cleaned" as const : "pending" as const };
+    },
     async cleanup(value) {
       await authorize(true);
       const original = await load(value.operationId);
@@ -93,4 +109,6 @@ export function createProductionWorkerLifecycle(input: Readonly<{
       return { status: (await input.capacity.observeRelease(release)).status === "terminated" ? "cleaned" as const : "pending" as const };
     },
   });
+  lifecycles.add(port);
+  return port;
 }

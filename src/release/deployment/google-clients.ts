@@ -561,6 +561,27 @@ export function createGoogleDeploymentClients(options: GoogleClientOptions) {
       if (original.state === "completed") return Object.freeze({ status: "unknown" });
       await options.journal.markCompleted({ operationId, requestSha256: original.requestSha256, createTime: ready.data.createTime, owned: true }); return Object.freeze({ status: "completed" });
     },
+    async observeCleanup(input: Readonly<{ operationId: string; instanceId: string }>): Promise<SafeStatus> {
+      const operationId = DeploymentOperationIdSchema.parse(input.operationId), instanceId = InstanceSchema.parse(input.instanceId);
+      const resource = `projects/${projectId}/instances/${instanceId}`;
+      const original = await options.journal.read(operationId);
+      if (!original?.owned || !original.createTime || original.resource !== resource) throw new Error("GOOGLE_CLEANUP_RUN_OWNERSHIP_REQUIRED");
+      const current = await request("cloudSql", `/v1/projects/${projectId}/instances/${instanceId}`, "GET");
+      if (current.response.status === 404) return Object.freeze({ status: "completed" });
+      if (!current.response.ok) return statusFor(current.response.status);
+      const owned = z.object({ name: z.literal(instanceId), createTime: z.literal(original.createTime), settings: z.object({ userLabels: z.object({ "napplet-cvm-operation": z.literal(operationId) }).passthrough() }).passthrough() }).passthrough().safeParse(current.payload);
+      if (!owned.success) return Object.freeze({ status: "unknown" });
+      const cleanup = await options.journal.read(`${operationId}-cleanup`);
+      if (!cleanup) return Object.freeze({ status: "missing" });
+      if (cleanup.resource !== resource || !cleanup.operationName) return Object.freeze({ status: "unknown" });
+      const deletion = await request("cloudSql", `/v1/projects/${projectId}/operations/${encodeURIComponent(cleanup.operationName)}`, "GET");
+      if (!deletion.response.ok) return statusFor(deletion.response.status);
+      const terminal = z.object({ status: z.enum(["PENDING", "RUNNING", "DONE"]), error: z.unknown().optional() }).passthrough().safeParse(deletion.payload);
+      if (!terminal.success || terminal.data.error !== undefined) return Object.freeze({ status: "unknown" });
+      if (terminal.data.status !== "DONE") return Object.freeze({ status: "pending" });
+      const absent = await request("cloudSql", `/v1/projects/${projectId}/instances/${instanceId}`, "GET");
+      return absent.response.status === 404 ? Object.freeze({ status: "completed" }) : absent.response.ok ? Object.freeze({ status: "pending" }) : statusFor(absent.response.status);
+    },
     async cleanup(input: Readonly<{ operationId: string; instanceId: string }>): Promise<SafeStatus> {
       const operationId = DeploymentOperationIdSchema.parse(input.operationId); const instanceId = InstanceSchema.parse(input.instanceId); const resource = `projects/${projectId}/instances/${instanceId}`;
       const original = await options.journal.read(operationId); if (!original?.owned || !original.createTime || original.resource !== resource) throw new Error("GOOGLE_CLEANUP_RUN_OWNERSHIP_REQUIRED");

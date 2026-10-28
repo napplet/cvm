@@ -4,6 +4,7 @@ import { PostgresOperationJournal } from "../../src/release/deployment/postgres-
 import { createAuthorizationRequest, createAuthorizationReceipt } from "../../src/release/authorization";
 import { createProductionReadyCapacity } from "../../src/production/worker-capacity";
 import { createProductionWorkerLifecycle } from "../../src/production/worker-lifecycle";
+import { createMountedReleaseCleanup } from "../../src/production/release-cleanup";
 const postgresIsolation = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
 async function docker(args: string[]): Promise<string> {
   const child = Bun.spawn(["docker", ...args], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
@@ -53,12 +54,15 @@ postgresIsolation("worker lifecycle retains originals across allocation ambiguit
       await open().plan(plan);
       const created = await open().apply(plan);
       expect(created.status).toBe("applied");
+      expect(await open().observeCleanup({ operationId: plan.operationId, resourceIdentitySha256: created.resourceIdentitySha256 })).toEqual({ status: "pending" });
       expect(creates).toBe(before.creates + 1);
       expect(await open().apply(plan)).toEqual(created);
       await expect(open().apply({ ...plan, desiredDigest: "b".repeat(64) })).rejects.toThrow("WORKER_LIFECYCLE_ORIGINAL_REQUIRED");
       await expect(open().cleanup({ operationId: plan.operationId, resourceIdentitySha256: "f".repeat(64) })).rejects.toThrow("WORKER_LIFECYCLE_RESOURCE_CHANGED");
       await expect(open().cleanup({ operationId: plan.operationId, resourceIdentitySha256: created.resourceIdentitySha256 })).rejects.toThrow("TERMINATION_ACK_LOST");
       now = 10000;
+      const finalizer = createMountedReleaseCleanup({ effects: [{ provider, providerOperationId: plan.operationId, resourceIdentitySha256: created.resourceIdentitySha256! }], providers: { [provider]: { port: { async observe() { throw new Error("GENERIC_OBSERVATION_MUST_NOT_BE_USED"); } } } } as never, workers: { modal: open(), fly: open() } });
+      expect(await finalizer.observe!({ operationId: "finalize-original", providerOperationId: plan.operationId, resourceIdentitySha256: created.resourceIdentitySha256! })).toBe("cleaned");
       expect(await open().cleanup({ operationId: plan.operationId, resourceIdentitySha256: created.resourceIdentitySha256 })).toEqual({ status: "cleaned" });
       expect(creates).toBe(before.creates + 1); expect(deletes).toBe(before.deletes + 1);
       await expect(open().apply({ ...plan, operationId: "new-after-expiry" })).rejects.toThrow("WORKER_LIFECYCLE_ORIGINAL_REQUIRED");

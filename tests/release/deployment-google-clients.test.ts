@@ -445,6 +445,28 @@ test("Cloud SQL cleanup rejects a same-label replacement with a different immuta
   expect(calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
 });
 
+test("Cloud SQL cleanup observation reads only original ownership, deletion LRO and actual absence", async () => {
+  const request = sqlRequest("sql-cleanup-read"), resource = `projects/${projectId}/instances/${request.instanceId}`;
+  for (const scenario of ["absent", "replacement", "running", "done-still-present", "done-absent", "wrong-cleanup-resource"] as const) {
+    const original = { operationId: request.operationId, resource, requestSha256: digest("a"), contentSha256: digest("b"), state: "completed" as const, owned: true, createTime: "2026-01-01T00:00:00Z" };
+    const cleanup = { operationId: `${request.operationId}-cleanup`, resource: scenario === "wrong-cleanup-resource" ? "different-resource" : resource, requestSha256: digest("c"), contentSha256: digest("d"), state: "dispatched" as const, owned: false, operationName: "delete-original" };
+    const journal = createMemoryGoogleOperationJournal([original, cleanup]);
+    let reads = 0;
+    const { client, calls } = await fixture(url => {
+      if (url.endsWith("/operations/delete-original")) return json({ status: scenario === "running" ? "RUNNING" : "DONE" });
+      reads++;
+      if (scenario === "absent" || scenario === "done-absent" && reads === 2) return json({}, 404);
+      return json({ name: request.instanceId, createTime: scenario === "replacement" ? "2026-02-01T00:00:00Z" : original.createTime, settings: { userLabels: { "napplet-cvm-operation": request.operationId } } });
+    }, {}, journal);
+    expect(await client.cloudSqlPostgres.observeCleanup({ operationId: request.operationId, instanceId: request.instanceId })).toEqual({ status: scenario === "absent" || scenario === "done-absent" ? "completed" : scenario === "replacement" || scenario === "wrong-cleanup-resource" ? "unknown" : "pending" });
+    expect(calls.every(call => call.method === "GET")).toBe(true);
+    expect(await journal.read(cleanup.operationId)).toEqual(cleanup);
+  }
+  const { client, calls } = await fixture(() => json({}, 404));
+  await expect(client.cloudSqlPostgres.observeCleanup({ operationId: request.operationId, instanceId: request.instanceId })).rejects.toThrow("GOOGLE_CLEANUP_RUN_OWNERSHIP_REQUIRED");
+  expect(calls).toHaveLength(0);
+});
+
 test("Cloud SQL never adopts a same-label replacement during provision or observe", async () => {
   const request = sqlRequest("sql-immutable"); const resource = `projects/${projectId}/instances/${request.instanceId}`; let currentCreateTime = "2026-01-01T00:00:00Z"; let instanceReads = 0; let posts = 0; let deletes = 0;
   const instance = () => ({ name: request.instanceId, createTime: currentCreateTime, region: request.region, databaseVersion: "POSTGRES_17", state: "RUNNABLE", settings: { availabilityType: "REGIONAL", tier: request.tier, userLabels: { "napplet-cvm-operation": request.operationId }, backupConfiguration: { enabled: true }, ipConfiguration: { privateNetwork: request.privateNetwork, ipv4Enabled: false, requireSsl: true }, databaseFlags: [{ name: "default_transaction_isolation", value: "serializable" }] } });

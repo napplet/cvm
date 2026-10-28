@@ -24,3 +24,11 @@ test("original resource observation cannot manufacture cleaned or retained statu
   }
   expect(() => createMountedReleaseCleanup({ effects: [original, original], providers: {} as never })).toThrow("DUPLICATE_ORIGINAL");
 });
+
+
+test("cleanup observation rejects unbranded worker reports before any invocation", () => {
+  let calls = 0;
+  const fake = { async observeCleanup() { calls++; return { status: "cleaned" }; } };
+  expect(() => createMountedReleaseCleanup({ effects: [original], providers: {} as never, workers: { modal: fake, fly: fake } as never })).toThrow("PRODUCTION_WORKER_LIFECYCLE_REQUIRED");
+  expect(calls).toBe(0);
+});

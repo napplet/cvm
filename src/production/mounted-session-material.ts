@@ -41,12 +41,13 @@ import { openProductionNip46Signer } from "./nip46-signer";
 import { createProductionCliUploadPort } from "./cli-upload";
 import { createProductionNostrRelayPort } from "./nostr-relay";
 import { ProductionEdgeContexts } from "./edge-contexts";
-import { NostrToolsOwnerEventVerifier } from "../publication/manifest-event";
+import { ProductionPublicationContextMaterializer } from "./publication-context";
 import { materializeProtectedCertifier } from "../release/materialize-certifier";
 import { PostgresReleasePromotion } from "./release-promotion";
 import { productionReleaseScope } from "./release-verification-authority";
 import { canonicalJson } from "../promotion/schema";
 import { createMountedProductionSourceBuildVerifier } from "./source-build-verifier";
+import { assertMountedSourceBuildPlan } from "./source-build-plan";
 
 /** Immutable JSON-only controller facts. Runtime ports are constructed below
  * from these facts and the already-opened production authorities. */
@@ -439,7 +440,36 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
   const fly = createProductionWorkerLifecycle({ provider: "fly", capacity: dependencies.certificationCapacities.fly, journal: dependencies.journal, authorization, estimatedCostMicros: input.resolved.quotes.fly.estimatedCostMicros, now });
   const rails = input.generation.funding.core.rails;
   if (!rails) throw new Error("PRODUCTION_MOUNTED_PAYMENT_RAILS_REQUIRED");
-  const edgeContexts = new ProductionEdgeContexts({ journal: dependencies.journal, candidateSha256: input.config.candidateSha256, topologySha256: input.config.topologySha256 });
+  const sourceBuild = createMountedProductionSourceBuildVerifier({
+    config: input.config,
+    record: input.resolved,
+    authorization: input.generation.authorization,
+    dependencies,
+    now,
+  });
+  const sourcePlan = assertMountedSourceBuildPlan(input.resolved.execution.protected.sourceBuild.plan, {
+    candidateSha256: input.config.candidateSha256,
+    topologySha256: input.config.topologySha256,
+    provider: input.resolved.workerCandidate.provider,
+  });
+  const publicationMaterializer = new ProductionPublicationContextMaterializer({
+    candidateSha256: input.config.candidateSha256,
+    topologySha256: input.config.topologySha256,
+    ownerPubkey: input.resolved.edge.ownerPubkey,
+    policyVersion: input.config.worker.policyVersion,
+    toolchainIdentity: input.config.worker.toolchainSha256,
+    compatibleHostReference: input.resolved.descriptorReferences.compatibleHostReference,
+    compatibleHostSha256: input.resolved.edge.compatibleHost.hostSha256,
+    sourcePlan,
+    authorization: input.generation.authorization,
+    journal: dependencies.journal,
+    sourceJournal: dependencies.jobJournal,
+    artifactStore: dependencies.artifactStore,
+    relaySet: input.resolved.edge.relays,
+    uploadServers: [input.resolved.edge.uploadServer],
+    now,
+  });
+  const edgeContexts = new ProductionEdgeContexts({ journal: dependencies.journal, artifactStore: dependencies.artifactStore, candidateSha256: input.config.candidateSha256, topologySha256: input.config.topologySha256, authorizationRequestSha256: authorization.authorizationRequestSha256 });
   const host = {
     packageHost: new ProductionCompatibleHostPackage(input.resolved.edge.compatibleHost),
     browser: new ProductionChromiumCompatibleHost(input.resolved.edge.compatibleHost),
@@ -463,7 +493,7 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
   const cep8 = createNativeCep8LightningProvider({ config: input.resolved.providerConfigurations.cep8_lightning, ...rails.lightning });
   const cashu = createNativeCashuProvider({ config: input.resolved.providerConfigurations.cashu, ...rails.cashu });
   const compatibleHost = new CompatibleHostBrowserObservationPort(host);
-  const ownerEventVerifier = new NostrToolsOwnerEventVerifier({ nowMs: now ?? Date.now });
+  const ownerEventVerifier = publicationMaterializer.ownerEventVerifier;
   const signer = new ExternalSignerBoundaryAdapter({ signer: signerPort, ownerEventVerifier });
   const upload = createExactSealedUploadAdapter({ config: input.resolved.providerConfigurations.upload, request: authorization.request, receipt: authorization.receipt, port: uploadPort, now });
   const relays = createNostrRelayPublicationAdapter({ config: input.resolved.providerConfigurations.owner_relay, request: authorization.request, receipt: authorization.receipt, port: relayPort, now });
@@ -475,6 +505,16 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
   const promotedCli = createNativePromotedNappletCliSource({ snapshot: edgeMaterial.promotedCliSnapshot, upload, relay: relays.asPromotedCliSource() });
   void cep8; void cashu; void compatibleHost; void signer; void promotedCli; void attestationRelays;
 
+  const publicationContext = Object.freeze({
+    resolve: async (value: Parameters<typeof edgeContexts.publication.resolve>[0]) => {
+      await publicationMaterializer.materialize();
+      return edgeContexts.publicationWithSigner(signerPort).resolve(value);
+    },
+    deploy: async (value: Parameters<typeof edgeContexts.publication.deploy>[0]) => {
+      await publicationMaterializer.materialize();
+      return edgeContexts.publicationWithSigner(signerPort).deploy(value);
+    },
+  });
   const clients: ProductionConcreteClients = Object.freeze({
     google,
     workers: dependencies.workers,
@@ -489,15 +529,9 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
       relays: createRelayDeploymentClients({ ownerKeyReference: input.resolved.descriptorReferences.ownerKeyReference, attestationKeyReference: input.resolved.descriptorReferences.attestationKeyReference, relaySetReference: input.resolved.descriptorReferences.contextvmRelaySetReference, relaySetSha256: input.resolved.descriptorReferences.contextvmRelaySetSha256 }),
     }),
     edge: Object.freeze({ compatibleHost, signer, cep8, cashu, promotedCli, relays }),
-    publicationContext: edgeContexts.publicationWithSigner(signerPort),
+    publicationContext,
     paymentScenarioContext: edgeContexts.payments,
-    sourceBuild: createMountedProductionSourceBuildVerifier({
-      config: input.config,
-      record: input.resolved,
-      authorization: input.generation.authorization,
-      dependencies,
-      now,
-    }),
+    sourceBuild,
   });
   const providerPorts: Partial<Record<ReleaseProviderId, ReleaseProviderPort>> = {
     cloud_run: createReceiptBoundReleaseProviderPort({ native: cloudRun as ReceiptBoundNative, authorization, discovery: input.resolved.discoveries.cloud_run, quote: input.resolved.quotes.cloud_run, observeCleanup: ({ operationId }) => cloudRun.observeCleanup({ request: authorization.request, receipt: authorization.receipt, operationId, region: input.resolved.cleanupScopes.cloudRunRegion, runOwnedServiceName: input.resolved.cleanupScopes.cloudRunServiceName }), cleanup: ({ operationId }) => cloudRun.cleanup({ request: authorization.request, receipt: authorization.receipt, operationId, region: input.resolved.cleanupScopes.cloudRunRegion, runOwnedServiceName: input.resolved.cleanupScopes.cloudRunServiceName }) }),

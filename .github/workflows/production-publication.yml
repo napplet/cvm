@@ -8,12 +8,20 @@ on:
       - "src/production/source-build-verifier.ts"
       - "src/production/source-build-plan.ts"
       - "src/production/artifact-verifier.ts"
+      - "src/production/direct-artifact-verifier.ts"
+      - "src/production/direct-html-policy.ts"
       - "src/production/sealed-worker-artifact.ts"
       - "src/worker-adapters/capability-receipt.ts"
+      - "src/worker-adapters/conformance-receipt.ts"
       - "src/worker-adapters/production-job-client.ts"
       - "src/worker-adapters/publication-metadata.ts"
       - "tests/production/source-build-plan.test.ts"
       - "tests/production/artifact-verifier.test.ts"
+      - "tests/production/direct-artifact-verifier.test.ts"
+      - "tests/production/direct-html-policy.test.ts"
+      - "tests/fixtures/direct-artifact/**"
+      - "package.json"
+      - "bun.lock"
       - "src/production/publication-context.ts"
       - "src/production/publication-upload.ts"
       - "src/production/publication-relays.ts"
@@ -64,6 +72,8 @@ jobs:
         run: bun test tests/production/source-build-verifier-postgres.test.ts --timeout 120000
       - name: Approved publication metadata and legacy source compatibility
         run: bun test tests/production/source-build-plan.test.ts tests/production/artifact-verifier.test.ts tests/production/mounted-session-material.test.ts --timeout 10000
+      - name: Direct artifact identity, parsed containment and structured receipts
+        run: bun test tests/production/direct-artifact-verifier.test.ts tests/production/direct-html-policy.test.ts --timeout 10000
       - name: Derived publication contexts and original bundle recovery
         run: bun scripts/test-publication-context.ts
       - name: NIP-46 expiry and original relay operation recovery

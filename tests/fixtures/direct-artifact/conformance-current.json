@@ -1,0 +1,98 @@
+{
+  "startedAt": 1793194799105,
+  "finishedAt": 1793194799105,
+  "checks": [
+    {
+      "id": "manifest/event-kind",
+      "area": "manifest",
+      "severity": "error",
+      "title": "Resolved event is a NIP-5D napplet manifest",
+      "status": "skip",
+      "detail": "No NIP-5D manifest event was resolved"
+    },
+    {
+      "id": "manifest/index-html",
+      "area": "manifest",
+      "severity": "error",
+      "title": "Manifest declares a hashed /index.html",
+      "status": "skip",
+      "detail": "No NIP-5D manifest event was resolved"
+    },
+    {
+      "id": "manifest/requires",
+      "area": "manifest",
+      "severity": "error",
+      "title": "R/O tags name bare NAP domains",
+      "status": "skip",
+      "detail": "No NIP-5D manifest event was resolved"
+    },
+    {
+      "id": "manifest/requires-known",
+      "area": "manifest",
+      "severity": "warning",
+      "title": "R/O domains are in this toolchain registry (advisory)",
+      "status": "skip",
+      "detail": "No NIP-5D manifest event was resolved"
+    },
+    {
+      "id": "boot/sandbox-allow-scripts",
+      "area": "boot",
+      "severity": "error",
+      "title": "Runs under allow-scripts without allow-same-origin",
+      "status": "pass"
+    },
+    {
+      "id": "boot/installs-global",
+      "area": "boot",
+      "severity": "error",
+      "title": "Runs after runtime-injected window.napplet is installed",
+      "status": "pass"
+    },
+    {
+      "id": "boot/no-boot-error",
+      "area": "boot",
+      "severity": "error",
+      "title": "Boots without an uncaught error",
+      "status": "pass"
+    },
+    {
+      "id": "boot/no-forbidden-globals",
+      "area": "boot",
+      "severity": "error",
+      "title": "Does not access forbidden browser authority surfaces",
+      "status": "pass"
+    },
+    {
+      "id": "wire/envelope-well-formed",
+      "area": "wire",
+      "severity": "error",
+      "title": "Every emitted envelope is well-formed",
+      "status": "pass",
+      "detail": "2 envelope(s) valid"
+    },
+    {
+      "id": "degrade/domain-absence",
+      "area": "degradation",
+      "severity": "error",
+      "title": "Does not crash when no NAP domains are injected",
+      "status": "pass"
+    },
+    {
+      "id": "lifecycle/clean-teardown",
+      "area": "lifecycle",
+      "severity": "warning",
+      "title": "Tears down listeners on unload",
+      "status": "skip",
+      "detail": "Lifecycle not measured"
+    }
+  ],
+  "summary": {
+    "total": 11,
+    "passed": 6,
+    "failed": 0,
+    "skipped": 5,
+    "errors": 0,
+    "warnings": 0
+  },
+  "ok": true
+}

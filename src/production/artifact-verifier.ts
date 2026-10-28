@@ -121,6 +121,7 @@ export class ProductionArtifactVerifier {
     const conformance = facts.commandEvidence[6]!.stdout ?? "";
     if (!/\b[1-9][0-9]* passed, 0 failed, [0-9]+ skipped\b/u.test(conformance) || !/\bRESULT: CONFORMANT\b/u.test(conformance)) throw new Error("PRODUCTION_ARTIFACT_CONFORMANCE_REJECTED");
     const dryRun = DryRun.parse(JSON.parse(facts.commandEvidence[7]!.stdout ?? "null"));
+    if (dryRun.manifests.some(manifest => manifest.format === "current" || "artifactHash" in manifest)) throw new Error("PRODUCTION_ARTIFACT_CONTRACT_MISMATCH");
     if (facts.publication) {
       const servers = dryRun.manifests[0]!.template.tags.filter(tag => tag[0] === "server");
       if (dryRun.blossomServers.length !== 1 || dryRun.blossomServers[0] !== facts.publication.server || servers.length !== 1 || servers[0]!.length !== 2 || servers[0]![1] !== facts.publication.server) throw new Error("PRODUCTION_ARTIFACT_PUBLICATION_SERVER_MISMATCH");
@@ -147,3 +148,5 @@ export class ProductionArtifactVerifier {
     return Object.freeze({ ...facts, files, aggregateSha256, sealedObjectSha256, verificationEvidenceSha256: sha256(JSON.stringify({ commands, files, aggregateSha256, ...(facts.capabilityReceipt ? { capabilityReceipt: facts.capabilityReceipt } : {}) })) });
   }
 }
+
+export { Facts as ProductionArtifactFactsSchema, inventory as inventoryProductionArtifactFiles };

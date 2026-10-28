@@ -62,6 +62,15 @@ describe("production artifact verifier", () => {
     expect(verified.files.map((file) => file.path)).toEqual(["assets/app.css", "assets/app.js", "index.html"]);
   });
 
+  test("rejects direct-format evidence mixed with legacy aggregates", async () => {
+    const input = await facts(), report = JSON.parse(input.commandEvidence[7]!.stdout);
+    for (const metadata of [{ format: "current" }, { artifactHash: "0".repeat(64) }]) {
+      const changed = structuredClone(report); Object.assign(changed.manifests[0], metadata);
+      input.commandEvidence[7]!.stdout = JSON.stringify(changed);
+      await expect(new ProductionArtifactVerifier().verify(input)).rejects.toThrow("PRODUCTION_ARTIFACT_CONTRACT_MISMATCH");
+    }
+  });
+
   test("accepts the actual named-target CLI shape and fences kind, d-tag and plan substitutions", async () => {
     const input = await facts();
     const report = JSON.parse(input.commandEvidence[7]!.stdout);

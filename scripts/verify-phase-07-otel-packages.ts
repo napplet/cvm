@@ -21,8 +21,8 @@ const APPROVED_AUDIT_DIGEST = "d7fedf16f62e4088cf17442aa39786c33bb4af8f3377e8d12
 /** Immutable 2026-10-28 delegated-operator decision for the unchanged
  * six-package closure and current root inputs. The pending audit remains
  * separate and never gains approval authority. */
-const APPROVED_OPERATOR_RECORD_DIGEST = "20b068453e1a39dd1411a9e66e13f732be66c6ffc52cf4adfa9f3564654c96ac";
-const APPROVED_ROOT_INPUTS = Object.freeze({ packageJsonSha256: "046a7ffc858c393c5289ffa106290fb8f01fe0365b84d9daa47aaaaa2f1a5b00", bunLockSha256: "0a2027fd7eaa6f6f609c9f1ec430a7b9095d6b45472f8833a3e00e6f0604c187" });
+const APPROVED_OPERATOR_RECORD_DIGEST = "5918f0a2a0c85b2fb6bb91adb529249dba3372d8f22802d15e29767eeac92c98";
+const APPROVED_ROOT_INPUTS = Object.freeze({ packageJsonSha256: "48db1af57f71711833851c4c5c6f3c2d5cb306c9c95a6cfc8d9be1913a4d188b", bunLockSha256: "7b1a312b47a2d6a3f7b18a84ee72e09a821aaf13043a7d8dcc1a05ea5c49a385" });
 /** The upstream base is only a recipe input. Smoke records bind the locally
  * measured derived collector image instead of mounting configuration into a
  * bare upstream container. */

@@ -65,4 +65,6 @@ legacy replay. Missing current usage counters also produce zero ledger debits
 and zero builds in the actual SQL graph; a later complete original lookup
 settles once. These are protocol fixtures, not paid API, live price, worker
 isolation or release-suite evidence. Stored-provider retention and bounded
-pagination fairness still need separate operational proof.
+pagination behavior still need separate operational proof.
+[Durable scan progress](./vertex-recovery-progress.md) fixes the local restart
+starvation mechanism without increasing per-window read limits.

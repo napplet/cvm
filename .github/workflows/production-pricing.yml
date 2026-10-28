@@ -6,6 +6,9 @@ on:
     paths:
       - "src/release/costs/**"
       - "src/release/deployment/vertex-client.ts"
+      - "src/release/deployment/vertex-recovery-scan.ts"
+      - "src/release/deployment/postgres-provider-journals.ts"
+      - "tests/release/vertex-recovery-progress-postgres.test.ts"
       - "src/release/deployment/vertex-interaction-wire.ts"
       - "tests/release/vertex-current-wire.test.ts"
       - "tests/fixtures/model/legacy-vertex-original.json"

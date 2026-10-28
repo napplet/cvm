@@ -40,6 +40,32 @@ export type VertexInteraction = Readonly<{
   input?: z.infer<typeof LegacyInput>; usage?: z.infer<typeof LegacyUsage>; steps?: readonly OutputStep[];
 }>;
 
+/** Input-only ownership observation. Malformed/missing usage cannot prevent
+ * recognizing an unrelated resource, or erase the native ID of our original.
+ * No output/usage from this helper is debit-eligible. */
+export function parseStoredVertexInput(raw: unknown): z.infer<typeof LegacyInput> | undefined {
+  const value = z.object({ input: z.unknown().optional(), steps: z.array(z.unknown()).max(128).optional() }).passthrough().safeParse(raw);
+  if (!value.success) return undefined;
+  let input: z.infer<typeof LegacyInput> | undefined;
+  if (value.data.input !== undefined) {
+    const parsed = Input.safeParse(value.data.input);
+    if (!parsed.success) return undefined;
+    input = parsed.data;
+  }
+  let users = 0;
+  for (const rawStep of value.data.steps ?? []) {
+    const header = z.object({ type: z.unknown().optional() }).passthrough().safeParse(rawStep);
+    if (!header.success) return undefined;
+    if (header.data.type !== "user_input") continue;
+    const user = UserStep.safeParse(rawStep);
+    if (!user.success || ++users > 1) return undefined;
+    const evidence = [{ role: "user" as const, content: user.data.content }];
+    if (input && JSON.stringify(input) !== JSON.stringify(evidence)) return undefined;
+    input = evidence;
+  }
+  return input;
+}
+
 /** Current raw REST and retained legacy evidence are decoded explicitly. This
  * module has no effect or financial authority and never invents missing usage.
  * Official current types: Interactions API reference and googleapis/js-genai's

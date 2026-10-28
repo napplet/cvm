@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { assertPostgresOperationJournal, type PostgresOperationJournal } from "./postgres-operation-journal";
 import type { GoogleOperationJournal, GoogleOperationRecord } from "./google-clients";
 import type { WorkerOperationJournal, WorkerOperationRecord } from "./worker-clients";
+import { initialVertexRecoveryState, VertexRecoveryBindingSchema, VertexRecoveryStateSchema, type VertexRecoveryBinding } from "./vertex-recovery-scan";
 import type { VertexOperationJournal } from "./vertex-client";
 
 function canonical(value: unknown): string {
@@ -61,7 +62,29 @@ type VertexEntry = Parameters<VertexOperationJournal["write"]>[0];
 function vertexIdentity(entry: VertexEntry) { const { interactionId: _id, completedReceipt: _receipt, ...facts } = entry; return identity(facts); }
 export function createPostgresVertexOperationJournal(journal: PostgresOperationJournal): VertexOperationJournal {
   assertPostgresOperationJournal(journal);
+  const recoveryKey = (binding: VertexRecoveryBinding) => `vertex-recovery:${identity(binding)}`;
+  const requireOriginal = async (raw: VertexRecoveryBinding) => {
+    const binding = VertexRecoveryBindingSchema.parse(raw);
+    const original = await journal.read<VertexEntry>(binding.operationId);
+    if (!original || original.value.operationId !== binding.operationId || original.value.requestSha256 !== binding.requestSha256 || original.identitySha256 !== vertexIdentity(original.value)) throw new Error("VERTEX_RECOVERY_ORIGINAL_REQUIRED");
+    return binding;
+  };
   return Object.freeze({
+    recovery: {
+      async load(raw) {
+        const binding = await requireOriginal(raw), initial = initialVertexRecoveryState(binding);
+        const claimed = await journal.claim(recoveryKey(binding), identity(binding), clean(initial));
+        const state = VertexRecoveryStateSchema.parse(claimed.record.value);
+        if (state.operationId !== binding.operationId || state.requestSha256 !== binding.requestSha256) throw new Error("VERTEX_RECOVERY_BINDING_INVALID");
+        return { revision: claimed.record.revision, state };
+      },
+      async compareAndSet(value) {
+        const binding = await requireOriginal(value.binding), state = VertexRecoveryStateSchema.parse(value.state);
+        if (state.operationId !== binding.operationId || state.requestSha256 !== binding.requestSha256) throw new Error("VERTEX_RECOVERY_BINDING_INVALID");
+        const saved = await journal.compareAndSet(recoveryKey(binding), identity(binding), value.revision, clean(state));
+        return saved ? { revision: saved.revision, state: VertexRecoveryStateSchema.parse(saved.value) } : undefined;
+      },
+    },
     async claim(entry) {
       if (entry.interactionId !== undefined || entry.completedReceipt !== undefined) throw new Error("VERTEX_INITIAL_OPERATION_INVALID");
       const claimed = await journal.claim(entry.operationId, vertexIdentity(entry), clean(entry));

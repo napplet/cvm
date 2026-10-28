@@ -127,3 +127,16 @@ test("current text modality details agree with the complete usage totals without
   const { open } = setup(async () => Response.json(current({ usage: { ...usage, input_tokens_by_modality: [{ modality: "text", tokens: 1000 }], cached_tokens_by_modality: [{ modality: "text", tokens: 200 }], output_tokens_by_modality: [{ modality: "text", tokens: 100 }], tool_use_tokens_by_modality: [], grounding_tool_count: [] } })));
   expect(await open().dispatch(request)).toMatchObject({ status: "completed", cost: { micros: 5440 } });
 });
+
+
+test("even a legacy journal cannot select a native resource whose response ID differs from its requested ID", async () => {
+  let input: ReturnType<typeof contents> = [], posts = 0;
+  const { open } = setup(async (url, init) => {
+    if (init?.method === "POST") { posts++; input = contents(JSON.parse(String(init.body)).input); throw new Error("FIXTURE_LOST_ACK"); }
+    if (url.includes("page_size=")) return Response.json({ interaction_metadatas: [{ id: "listed" }] });
+    return Response.json(current({ id: "different", steps: [{ type: "user_input", content: input }, output] }));
+  });
+  expect(await open().dispatch(request)).toMatchObject({ status: "unknown" });
+  expect(await open().reconcileOriginal({ operationId: request.operationId })).toMatchObject({ status: "unknown", reason: "receipt_invalid" });
+  expect(posts).toBe(1);
+});

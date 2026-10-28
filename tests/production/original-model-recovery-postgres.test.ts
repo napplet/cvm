@@ -137,7 +137,7 @@ integration("lost creation ACK recovers the original paid model across candidate
     expect(await upgraded().startSession(command)).toEqual(result);
     expect({ posts, builds }).toEqual({ posts: 1, builds: 1 });
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.source_proposals")).rows[0].count).toBe(1);
-    expect(reads).toBe(2);
+    expect(reads).toBe(3);
     const finalAction = await database.meteredFunding.findMeteredAction(result.accountId, command.idempotencyKey);
     expect(finalAction?.operationId).toBe(prepared.operationId);
     expect(finalAction?.actionBudgetReference).toBe(prepared.actionBudgetReference);
@@ -145,7 +145,7 @@ integration("lost creation ACK recovers the original paid model across candidate
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.metered_actions")).rows[0].count).toBe(1);
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.action_budget_reservations")).rows[0].count).toBe(1);
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.ledger_entries WHERE direction='debit' AND account_id=$1", [prepared.accountId])).rows[0].count).toBe(1);
-    expect({ posts, builds, reads }).toEqual({ posts: 1, builds: 1, reads: 2 });
+    expect({ posts, builds, reads }).toEqual({ posts: 1, builds: 1, reads: 3 });
     await expect(native.query("UPDATE production_real.source_proposals SET proposal_json='{}'::jsonb")).rejects.toThrow();
     await expect(admin.query("DELETE FROM production_real.source_proposals")).rejects.toThrow("PRODUCTION_SOURCE_PROPOSAL_IMMUTABLE");
   } finally { await native?.end(); await admin?.end(); await docker(["rm", "--force", name]).catch(() => undefined); }

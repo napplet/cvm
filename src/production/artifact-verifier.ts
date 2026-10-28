@@ -15,12 +15,16 @@ const ManifestFile = z.object({ path: z.string().min(2).max(257), sha256: Digest
 /** The pinned @napplet/cli dry-run report includes signing, relay, and
  * Blossom diagnostics in addition to the deploy plan. Parse its security
  * facts while permitting those documented report extras. */
+const DeployTarget = z.discriminatedUnion("target", [
+  z.object({ target: z.literal("root"), kind: z.literal(15129) }).passthrough(),
+  z.object({ target: z.literal("named"), kind: z.literal(35129), dTag: z.string().regex(/^[a-z0-9][a-z0-9-]{0,127}$/u) }).passthrough(),
+]);
 const DryRun = z.object({
   dryRun: z.literal(true),
   signing: z.object({ type: z.string().min(1) }).passthrough(),
-  plan: z.object({ items: z.array(z.object({ kind: z.literal(15129), target: z.literal("root") }).passthrough()).length(1) }).passthrough(),
-  manifests: z.array(z.object({ files: z.array(ManifestFile).min(1).max(256), aggregateHash: Digest,
-    template: z.object({ kind: z.literal(15129), tags: z.array(z.array(z.string()).min(1)).max(512) }).passthrough(),
+  plan: z.object({ items: z.array(DeployTarget).length(1) }).passthrough(),
+  manifests: z.array(z.object({ item: DeployTarget, files: z.array(ManifestFile).min(1).max(256), aggregateHash: Digest,
+    template: z.object({ kind: z.union([z.literal(15129), z.literal(35129)]), tags: z.array(z.array(z.string()).min(1)).max(512) }).passthrough(),
   }).passthrough()).length(1),
   relays: z.array(z.string().url()).max(32),
   blossomServers: z.array(z.string().url()).max(32),
@@ -117,6 +121,10 @@ export class ProductionArtifactVerifier {
     if (!index) throw new Error("PRODUCTION_ARTIFACT_OUTPUT_EMPTY");
     await verifyHtml(facts.distRoot, index);
     const manifest = dryRun.manifests[0]!;
+    const target = dryRun.plan.items[0]!;
+    const names = manifest.template.tags.filter(tag => tag[0] === "d");
+    if (manifest.item.target !== target.target || manifest.item.kind !== target.kind || manifest.template.kind !== target.kind
+      || (target.target === "root" ? names.length !== 0 : manifest.item.target !== "named" || manifest.item.dTag !== target.dTag || names.length !== 1 || names[0]!.length !== 2 || names[0]![1] !== target.dTag)) throw new Error("PRODUCTION_ARTIFACT_MANIFEST_TARGET_MISMATCH");
     if (manifest.files.length !== files.length || new Set(manifest.files.map(file => file.path)).size !== manifest.files.length) throw new Error("PRODUCTION_ARTIFACT_MANIFEST_FILE_SET_MISMATCH");
     for (const listed of manifest.files) {
       if (!listed.path.startsWith("/") || !safePath(listed.path.slice(1))) throw new Error("PRODUCTION_ARTIFACT_MANIFEST_FILE_INVALID");

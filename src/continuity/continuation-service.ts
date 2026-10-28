@@ -230,13 +230,17 @@ export class ContinuationService {
     if (!parsed.success) return ResumeSessionResultSchema.parse({ status: "denied", code: "RESUME_INVALID_COMMAND" });
     if (!this.options.resume) return ResumeSessionResultSchema.parse({ status: "denied", code: "RESUME_CHECKPOINT_NOT_FOUND_OR_DENIED" });
     const command = parsed.data;
-    const replayKey = `${command.principal.id}\u0000${command.idempotencyKey}`;
+    // Coalesce only identical consent. Durable SQL still owns idempotency;
+    // a changed command must reach its validation and cannot inherit success.
+    const replayKey = await fingerprint(command);
     const remembered = this.#resumeResults.get(replayKey);
     if (remembered) return remembered;
     const active = this.#resumeInFlight.get(replayKey);
     if (active) return active;
     const run = this.#claimAndRestore(command).then(async (result) => {
-      this.#resumeResults.set(replayKey, result);
+      // Funding and original-operation observations can change. Keeping a
+      // denied/pending result here would prevent explicit query-only recovery.
+      if (result.status === "restored") this.#resumeResults.set(replayKey, result);
       await emitLifecycleObservation(this.options.telemetry, [command.principal.id, command.sessionId, command.checkpointId], "resume", result.status === "restored" ? "succeeded" : result.status === "reconciliation_pending" ? "pending" : "blocked", (this.options.clock ?? { nowMs: Date.now }).nowMs());
       return result;
     }).finally(() => this.#resumeInFlight.delete(replayKey));

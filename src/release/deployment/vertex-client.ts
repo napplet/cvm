@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseVertexInteraction, type VertexInteraction } from "./vertex-interaction-wire";
 import type { GoogleTokenSource } from "./google-auth";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
@@ -21,19 +22,13 @@ const PriceSchema = z.object({
  * Its request and usage fields are snake_case. Keep this boundary literal: a
  * camelCase payload can be accepted by a mock yet be silently ignored by the
  * Preview service. */
-const UsageSchema = z.object({ input_tokens: z.number().int().nonnegative(), cached_input_tokens: z.number().int().nonnegative(), output_tokens: z.number().int().nonnegative(), thought_tokens: z.number().int().nonnegative(), tool_use_tokens: z.number().int().nonnegative() }).strict();
 const RequestSchema = z.object({ idea: z.string().min(1).max(4_000), systemInstruction: z.string().min(1).max(8_000), maximumOutputTokens: z.number().int().min(1).max(8_192), maximumInputTokens: z.number().int().min(1).max(MAX_INPUT_TOKEN_UPPER_BOUND).optional() }).strict();
-/* The raw REST Interaction has optional server additions. Normalize only the
- * documented fields this financial adapter needs; `.passthrough()` avoids
- * falsely rejecting valid receipts merely because the preview API grew an
- * output-only field. */
-const InteractionSchema = z.object({ id: InteractionIdSchema, model: z.literal("gemini-4-argon"), input: z.array(z.object({ role: z.literal("user"), content: z.array(z.object({ type: z.literal("text"), text: z.string().min(1).max(32_000) }).strict()).length(1) }).strict()).length(1), status: z.enum(["in_progress", "completed", "incomplete", "failed", "cancelled", "queued", "requires_action"]), created: z.string().datetime(), usage: UsageSchema.passthrough().optional(), steps: z.array(z.object({ model_output: z.object({ content: z.array(z.object({ type: z.literal("text"), text: z.string().min(1).max(1_000_000) }).strict()).min(1).max(64) }).strict().optional() }).passthrough()).max(128).optional() }).passthrough();
 const JournalSchema = z.object({ operationId: OperationSchema, requestSha256: DigestSchema, nonce: z.string().min(1).max(512), request: RequestSchema, candidateSha256: DigestSchema, projectId: ProjectSchema, model: z.literal("gemini-4-argon"), location: z.literal("global"), price: PriceSchema, interactionId: InteractionIdSchema.optional(), completedReceipt: z.unknown().optional() }).strict();
 const ReceiptSchema = z.object({ status: z.enum(["completed", "incomplete"]), operationId: OperationSchema, interactionId: InteractionIdSchema, model: z.literal("gemini-4-argon"), requestSha256: DigestSchema, price: PriceSchema, generatedResult: z.string().min(1).max(1_000_000).optional(), usage: z.object({ inputTokens: z.number().int().nonnegative(), cachedInputTokens: z.number().int().nonnegative(), outputTokens: z.number().int().nonnegative(), thoughtTokens: z.number().int().nonnegative() }).strict(), cost: z.object({ currency: z.literal("USD"), micros: z.number().int().nonnegative() }).strict(), completedAt: z.string().datetime() }).strict().superRefine((value, context) => { if (value.status === "completed" && value.generatedResult === undefined) context.addIssue({ code: "custom", message: "VERTEX_RECEIPT_RESULT_REQUIRED" }); if (value.status === "incomplete" && value.generatedResult !== undefined) context.addIssue({ code: "custom", message: "VERTEX_RECEIPT_INCOMPLETE_RESULT_REJECTED" }); });
 
 type PriceSnapshot = z.infer<typeof PriceSchema>;
 type JournalEntry = z.infer<typeof JournalSchema>;
-type Interaction = z.infer<typeof InteractionSchema>;
+type Interaction = VertexInteraction;
 /** Immutable, source-priced USD evidence for the funding finalizer. Only a
  * completed/incomplete receipt is debit-eligible; pending/unknown outcomes
  * must remain unresolved and may never be converted to sats. */
@@ -93,9 +88,15 @@ async function requestDigest(input: Readonly<{ candidateSha256: string; projectI
 }
 function ceilMillion(numerator: bigint): number { const charge = (numerator + 999_999n) / 1_000_000n; if (charge > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("VERTEX_RECEIPT_COST_OVERFLOW"); return Number(charge); }
 function nonceFor(operationId: string, requestSha256: string): string { return `napplet-cvm:${operationId}:${requestSha256}`; }
-function interactionFrom(value: unknown): Interaction | undefined { const parsed = InteractionSchema.safeParse(value); return parsed.success ? parsed.data : undefined; }
+const interactionFrom = parseVertexInteraction;
 function requestContent(entry: JournalEntry) { return frozen([{ role: "user" as const, content: frozen([{ type: "text" as const, text: JSON.stringify({ nonce: entry.nonce, request_sha256: entry.requestSha256, idea: entry.request.idea, system_instruction: entry.request.systemInstruction, max_output_tokens: entry.request.maximumOutputTokens }) }]) }]); }
-function assertInputBound(entry: JournalEntry): void { if (new TextEncoder().encode(JSON.stringify(requestContent(entry))).byteLength + new TextEncoder().encode(entry.request.systemInstruction).byteLength > (entry.request.maximumInputTokens ?? MAX_INPUT_TOKEN_UPPER_BOUND)) throw new Error("VERTEX_INPUT_CAP_EXCEEDED"); }
+function responseFormat() { return frozen({ type: "text", mime_type: "application/json", schema: frozen({ type: "object", additionalProperties: false, required: ["files"], properties: frozen({ files: frozen({ type: "array", maxItems: 32, items: frozen({ type: "object" }) }) }) }) }); }
+function assertInputBound(entry: JournalEntry): void {
+  // Include the structured-output schema and request framing before claiming
+  // a paid operation. The profile's input ceiling must cover the actual wire.
+  const encoded = JSON.stringify({ input: requestContent(entry)[0]!.content, system_instruction: entry.request.systemInstruction, response_format: responseFormat() });
+  if (new TextEncoder().encode(encoded).byteLength > (entry.request.maximumInputTokens ?? MAX_INPUT_TOKEN_UPPER_BOUND)) throw new Error("VERTEX_INPUT_CAP_EXCEEDED");
+}
 function sameInput(entry: JournalEntry, interaction: Interaction): boolean { return JSON.stringify(interaction.input) === JSON.stringify(requestContent(entry)); }
 function generatedResult(interaction: Interaction): string | undefined {
   const output = interaction.steps?.flatMap((step) => step.model_output?.content.map((part) => part.text) ?? []);
@@ -193,8 +194,8 @@ export function createVertexDeploymentClient(input: Readonly<{
       if (existing !== undefined && existing !== null) { const entry = JournalSchema.parse(existing); if (!same(entry, operationId, requestSha256) || JSON.stringify(entry.request) !== JSON.stringify(request)) throw new Error("VERTEX_OPERATION_IDENTITY_CONFLICT"); return recover(entry); }
       assertFresh(price); const entry = JournalSchema.parse({ operationId, requestSha256, nonce: nonceFor(operationId, requestSha256), request, candidateSha256, projectId, model: "gemini-4-argon", location: "global", price }); assertInputBound(entry); const claim = await input.journal.claim(entry); if (!claim.claimed) { const prior = JournalSchema.parse(claim.entry); if (!same(prior, operationId, requestSha256) || JSON.stringify(prior.request) !== JSON.stringify(request)) throw new Error("VERTEX_OPERATION_IDENTITY_CONFLICT"); return recover(prior); }
       try {
-        const created = interactionFrom(await input.interactions.create({ projectId, location: "global", model: "gemini-4-argon", store: true, input: requestContent(entry), systemInstruction: request.systemInstruction, responseMimeType: "application/json", responseFormat: frozen({ type: "json_schema", json_schema: frozen({ type: "object", additionalProperties: false, required: ["files"], properties: frozen({ files: frozen({ type: "array", maxItems: 32, items: frozen({ type: "object" }) }) }) }) }), generationConfig: frozen({ maxOutputTokens: request.maximumOutputTokens, thinkingLevel: "low" }) }));
-        if (!created || created.model !== entry.model || !sameInput(entry, created)) return unknown(operationId, "receipt_invalid");
+        const created = interactionFrom(await input.interactions.create({ projectId, location: "global", model: "gemini-4-argon", store: true, input: requestContent(entry)[0]!.content, systemInstruction: request.systemInstruction, responseMimeType: "application/json", responseFormat: responseFormat(), generationConfig: frozen({ maxOutputTokens: request.maximumOutputTokens, thinkingLevel: "low" }) }));
+        if (!created || created.model !== entry.model || (!sameInput(entry, created) && !(created.wire === "current" && created.input === undefined))) return unknown(operationId, "receipt_invalid");
         const saved = JournalSchema.parse({ ...entry, interactionId: created.id }); await input.journal.write(saved);
         if (created.status === "in_progress" || created.status === "queued") return pending(operationId);
         const receipt = completion(saved, created); if (!receipt) return unknown(operationId, "receipt_invalid"); await input.journal.write(frozen({ ...saved, completedReceipt: receipt })); return receipt;

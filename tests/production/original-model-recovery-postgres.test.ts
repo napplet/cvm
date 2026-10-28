@@ -57,7 +57,7 @@ integration("lost creation ACK recovers the original paid model across candidate
     const pricing = await createVertexGeminiProductionPricing({
       observation: { sourceUrl: "https://cloud.google.com/vertex-ai/generative-ai/pricing", bytes: new TextEncoder().encode("explicit composed model pricing fixture"), observedAtMs: now, freshUntilMs: now + 60_000, currency: "USD", location: "global", model: "gemini-4-argon", inputMicrosPerMillion: 4_000_000, cachedInputMicrosPerMillion: 200_000, outputAndThoughtMicrosPerMillion: 20_000_000 },
       conversion: { source: { url: "https://blockchain.info/ticker", capturedBytesSha256: "e".repeat(64), observedAt: new Date(now).toISOString(), effectiveAt: new Date(now).toISOString(), freshUntil: new Date(now + 60_000).toISOString() }, satsPerUsd: { numerator: "1000", denominator: "1" } },
-      profileId: "composed-model-fixture", maximumInputTokens: "1000", maximumOutputTokens: "100", deadlineMs: 30_000,
+      profileId: "composed-model-fixture", maximumInputTokens: "2000", maximumOutputTokens: "100", deadlineMs: 30_000,
     });
     await registerProductionPricing({ pool, ...pricing });
     let posts = 0, builds = 0, reads = 0, at = now;
@@ -77,7 +77,7 @@ integration("lost creation ACK recovers the original paid model across candidate
       if (init?.method !== "POST") throw new Error("ONLY_ORIGINAL_POST_EXPECTED");
       posts++;
       const wire = z.object({ input: z.array(z.unknown()), system_instruction: z.string(), generation_config: z.object({ max_output_tokens: z.literal(200) }).passthrough() }).passthrough().parse(JSON.parse(String(init.body)));
-      originalInteraction = { id: "composed-original", model: "gemini-4-argon", input: wire.input, status: "completed", created: new Date(now).toISOString(), steps: [{ model_output: { content: [{ type: "text", text: JSON.stringify({ files: [{ path: "src/main.ts", content: "document.body.textContent = 'One timer';" }] }) }] } }], usage: { input_tokens: 1000, cached_input_tokens: 200, output_tokens: 100, thought_tokens: 0, tool_use_tokens: 0 } };
+      originalInteraction = { id: "composed-original", model: "gemini-4-argon", status: "completed", created: new Date(now).toISOString(), steps: [{ type: "user_input", content: wire.input }, { type: "model_output", content: [{ type: "text", text: JSON.stringify({ files: [{ path: "src/main.ts", content: "document.body.textContent = 'One timer';" }] }) }] }], usage: { total_input_tokens: 1000, total_cached_tokens: 200, total_output_tokens: 100, total_thought_tokens: 0, total_tool_use_tokens: 0, total_tokens: 1100 } };
       throw new Error("FIXTURE_LOST_CREATION_ACK");
     }, { preconnect() {} }) });
     const vertex = createVertexDeploymentClient({ candidateSha256: "b".repeat(64), projectId: "napplet-cvm-test", location: "global", model: "gemini-4-argon", credentialReference: "gcp:adc:test", price: { sourceUrl: "https://cloud.google.com/vertex-ai/generative-ai/pricing", sourceDocumentSha256: pricing.card.sources!.provider.capturedBytesSha256, quoteSha256: "c".repeat(64), observedAtMs: now, freshUntilMs: now + 60_000, effectiveFromMs: now, effectiveUntilMs: now + 60_000, currency: "USD", inputMicrosPerMillion: 4_000_000, cachedInputMicrosPerMillion: 200_000, outputAndThoughtMicrosPerMillion: 20_000_000 }, journal: createPostgresVertexOperationJournal(journal), interactions, now: () => at });
@@ -86,16 +86,16 @@ integration("lost creation ACK recovers the original paid model across candidate
     const principal = { pubkey: "9".repeat(64) }, funding = new FundingService(database.funding);
     // Local credit, HTTP and worker protocol fixtures: production classes run,
     // but no real funding, model API, isolated build or release suite is claimed.
-    await funding.execute({ principal, kind: "credit_settlement", idempotencyKey: "seed-credit", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { settlement: { topUpId: "seed-topup", rail: "lightning", unit: "sat", amount: "9", externalReference: "seed-external", settlementReference: "seed-settlement", verifiedAt: new Date(now).toISOString() } } });
+    await funding.execute({ principal, kind: "credit_settlement", idempotencyKey: "seed-credit", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { settlement: { topUpId: "seed-topup", rail: "lightning", unit: "sat", amount: "13", externalReference: "seed-external", settlementReference: "seed-settlement", verifiedAt: new Date(now).toISOString() } } });
     const capacity = { async reserveNow(value: { intentReference: string }) { return exactReadyReservation(value.intentReference, `capacity:${value.intentReference.split(":")[1]}`, new Date(now + 1_200_000).toISOString()); }, async observe(value: { intentReference: string }) { return this.reserveNow(value); }, async release() {} };
     const admissions = new FundedAdmissionService({ funding, store: database.funding, capacity, receiptAuthority: trustedAdmissionReceiptAuthority, now: () => now });
-    const admissionCommand = { principal, idempotencyKey: "admit", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "9", unit: "sat" } };
+    const admissionCommand = { principal, idempotencyKey: "admit", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "13", unit: "sat" } };
     const admission = await admissions.admit(admissionCommand, await trustedAdmissionReceipt(admissionCommand));
     if (admission.status !== "accepted") throw new Error("FIXTURE_ADMISSION_REQUIRED");
     const worker: WorkerPort = { async run(request) { builds++; return { status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events: [{ kind: "progress", turn: 1, detail: "explicit protocol fixture completed" }], artifact: { sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion, capabilityGrant: request.capabilityGrant, workspaceId: request.workspaceId, artifactId: "fixture:artifact", purpose: { kind: "focused", statements: ["one counter"] }, surface: { hasBackend: false, hasSecondPurpose: false, serviceWorker: false, dynamicAuthority: false }, dependencies: { appOwnedSignerOrRelay: false, privateNappletImport: false }, capabilities: { declaredHard: [], observedDomains: [], optionalIntentPresenceRead: false, intentUsedThroughSdk: false }, upstream: { scanner: { verdict: "pass", checkId: "upstream:fixture-scanner" }, conformance: { verdict: "pass", checkId: "upstream:fixture-browser" } } } }; } };
     const verifier: ArtifactVerifier = { async verify(facts) { if (facts.result.status !== "completed") return undefined; return { artifact: { artifactId: facts.result.artifact.artifactId, artifactSha256: "a".repeat(64), scannerReportSha256: "b".repeat(64), conformanceReportSha256: "c".repeat(64) }, contractInput: facts.result.artifact }; } };
     const open = () => new MeteredGenerationService({ fundedAdmission: admissions, store: database.meteredFunding, gateway, worker, artifactVerifier: verifier, proposalStore: sources, pricing, settlement, continuation: new ContinuationService({ store: database.funding, includeAdmissionHold: true }), toolchainIdentity: "b".repeat(64), clock: { nowMs: () => now } });
-    const command = { principal, admissionReference: admission.reference, idempotencyKey: "start", expectedVersion: 0, maximum: "9", policyVersion: "funding-policy-v1", idea: "One focused timer." };
+    const command = { principal, admissionReference: admission.reference, idempotencyKey: "start", expectedVersion: 0, maximum: "13", policyVersion: "funding-policy-v1", idea: "One focused timer." };
     const first = await open().startSession(command);
     expect(first.status).toBe("usage_unknown");
     expect({ posts, builds, reads }).toEqual({ posts: 1, builds: 0, reads: 0 });
@@ -107,7 +107,7 @@ integration("lost creation ACK recovers the original paid model across candidate
     const nextPricing = await createVertexGeminiProductionPricing({
       observation: { sourceUrl: "https://cloud.google.com/vertex-ai/generative-ai/pricing", bytes: new TextEncoder().encode("new explicit fixture source"), observedAtMs: at, freshUntilMs: at + 60_000, currency: "USD", location: "global", model: "gemini-4-argon", inputMicrosPerMillion: 8_000_000, cachedInputMicrosPerMillion: 400_000, outputAndThoughtMicrosPerMillion: 40_000_000 },
       conversion: { source: { url: "https://blockchain.info/ticker", capturedBytesSha256: "f".repeat(64), observedAt: new Date(at).toISOString(), effectiveAt: new Date(at).toISOString(), freshUntil: new Date(at + 60_000).toISOString() }, satsPerUsd: { numerator: "2000", denominator: "1" } },
-      profileId: "upgraded-model-fixture", maximumInputTokens: "1000", maximumOutputTokens: "100", deadlineMs: 30_000,
+      profileId: "upgraded-model-fixture", maximumInputTokens: "2000", maximumOutputTokens: "100", deadlineMs: 30_000,
     });
     await registerProductionPricing({ pool, ...nextPricing });
     const originalConfig = vertex.discovery();
@@ -132,7 +132,7 @@ integration("lost creation ACK recovers the original paid model across candidate
     await expect(missingCatalog.startSession(command)).rejects.toThrow("RECORDED_ACTION_PRICING_REQUIRED");
     expect(reads).toBe(0);
     const result = await upgraded().startSession(command);
-    expect(result).toMatchObject({ status: "completed", confirmedSpend: "6", remainingCap: "3" });
+    expect(result).toMatchObject({ status: "completed", confirmedSpend: "6", remainingCap: "7" });
     if (result.status !== "completed") throw new Error("FIXTURE_COMPLETION_REQUIRED");
     expect(await upgraded().startSession(command)).toEqual(result);
     expect({ posts, builds }).toEqual({ posts: 1, builds: 1 });

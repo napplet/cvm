@@ -197,6 +197,8 @@ try {
       if (new Bun.CryptoHasher("sha256").update(artifactBytes).digest("hex") !== result.artifactSha256) throw new Error("WORKER_ARTIFACT_EXPORT_INVALID");
       const artifact = JSON.parse(artifactBytes.toString("utf8"));
       const manifest = requireManifest(artifact.commandEvidence[7].stdout);
+      const named = JSON.parse(artifact.commandEvidence[7].stdout).plan.items[0];
+      if (named.kind !== 35129 || named.target !== "named" || named.dTag !== `cvm-${id.slice(0, 24)}` || manifest.template?.kind !== 35129 || manifest.template.tags.filter((tag: string[]) => tag[0] === "d").length !== 1 || !manifest.template.tags.some((tag: string[]) => tag.length === 2 && tag[0] === "d" && tag[1] === named.dTag)) throw new Error("WORKER_CLI_NAMED_TARGET_REQUIRED");
       jobManifests.push(manifest);
       if (manifest.files.length !== artifact.files.length || manifest.files.some((file: { path: string; sha256: string }) => !artifact.files.some((actual: { path: string; sha256: string }) => `/${actual.path}` === file.path && actual.sha256 === file.sha256))) throw new Error("WORKER_CLI_FILE_BINDING_INVALID");
       checkpointWorkspace = Buffer.from(canonicalJson({ version: 1, source: JSON.parse(body), artifact: JSON.parse(artifactBytes.toString("utf8")), toolchainSha256: toolchain })); lastJobId = id;

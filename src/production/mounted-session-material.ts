@@ -7,8 +7,7 @@ import { createNativeCloudSqlPostgresProvider } from "../release/native/cloud-sq
 import { createNativeGcsProvider } from "../release/native/gcs";
 import { createNativeCollectorProvider } from "../release/native/collector";
 import { measureProductionCollectorImage } from "../release/collector-image";
-import { createModalLiveWorkerProvider } from "../release/native/modal";
-import { createFlyLiveWorkerProvider } from "../release/native/fly";
+import { createProductionWorkerLifecycle, type ProductionWorkerLifecyclePort } from "./worker-lifecycle";
 import { createNativeCep8LightningProvider } from "../release/native/cep8-lightning";
 import { createNativeCashuProvider } from "../release/native/cashu";
 import { CompatibleHostBrowserObservationPort } from "../release/native/compatible-host";
@@ -193,7 +192,7 @@ function bridgeGcs(input: Readonly<{
  * their fixture-era discovery/cost projection with controller observations and
  * measured quotes; native status and resource identity remain authoritative. */
 function createMeasuredWorkerProviderPort(input: Readonly<{
-  native: ReleaseProviderPort;
+  native: ProductionWorkerLifecyclePort;
   discovery: MountedProductionSessionReferences["discoveries"][ReleaseProviderId];
   quote: MountedProductionSessionReferences["quotes"][ReleaseProviderId];
 }>): ReleaseProviderPort {
@@ -440,9 +439,8 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
   const cloudSql = createNativeCloudSqlPostgresProvider({ config: input.resolved.providerConfigurations.cloud_sql_postgres, port: mountedGoogle.cloudSql, now });
   const gcs = createNativeGcsProvider({ config: input.resolved.providerConfigurations.gcs, port: mountedGoogle.gcs, now });
   const collector = createNativeCollectorProvider({ config: input.resolved.providerConfigurations.collector, port: mountedGoogle.collector, now });
-  const readiness = createMountedWorkerReadinessCommands({ clients: dependencies.workers, journal: createPostgresWorkerOperationJournal(dependencies.workerJournal) });
-  const modal = createModalLiveWorkerProvider({ config: input.resolved.providerConfigurations.modal, sdk: dependencies.workerCertification.modalSdk, command: readiness.modal, journal: createPostgresWorkerOperationJournal(dependencies.workerJournal), now });
-  const fly = createFlyLiveWorkerProvider({ config: input.resolved.providerConfigurations.fly, client: dependencies.workerCertification.flyClient, command: readiness.fly, now });
+  const modal = createProductionWorkerLifecycle({ provider: "modal", capacity: dependencies.certificationCapacities.modal, journal: dependencies.journal, authorization, estimatedCostMicros: input.resolved.quotes.modal.estimatedCostMicros, now });
+  const fly = createProductionWorkerLifecycle({ provider: "fly", capacity: dependencies.certificationCapacities.fly, journal: dependencies.journal, authorization, estimatedCostMicros: input.resolved.quotes.fly.estimatedCostMicros, now });
   const rails = input.generation.funding.core.rails;
   if (!rails) throw new Error("PRODUCTION_MOUNTED_PAYMENT_RAILS_REQUIRED");
   const edgeContexts = new ProductionEdgeContexts({ journal: dependencies.journal, candidateSha256: input.config.candidateSha256, topologySha256: input.config.topologySha256 });

@@ -5,6 +5,8 @@ on:
     paths:
       - "src/release/finaliz*.ts"
       - "src/release/verify-finalization.ts"
+      - "src/production/worker-request-store.ts"
+      - "src/release/deployment/postgres-operation-journal.ts"
       - "src/production/worker-artifact-store.ts"
       - "src/production/worker-bridge.ts"
       - "tests/production/worker-bridge.test.ts"

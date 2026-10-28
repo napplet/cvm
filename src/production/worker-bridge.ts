@@ -10,14 +10,13 @@ import { PostgresOperationJournal, assertPostgresOperationJournal } from "../rel
 import type { createWorkerDeploymentClients } from "../release/deployment/worker-clients";
 import { ProductionWorkerJobClient } from "../worker-adapters/production-job-client";
 import type { ProductionWorkerPublication } from "../worker-adapters/publication-metadata";
+import { ProductionWorkerRequestStore } from "./worker-request-store";
 import { ProductionWorkerArtifactStore } from "./worker-artifact-store";
 import { ProductionArtifactVerifier, readVerifiedProductionArtifactFile, type VerifiedProductionArtifact } from "./artifact-verifier";
 
 const Owner = z.object({ accountId: z.string().regex(/^account:[a-f0-9]{64}$/u), ownerId: z.string().regex(/^[a-f0-9]{64}$/u) }).strict();
-const Capacity = z.object({ intentReference: z.string().regex(/^capacity-intent:[a-f0-9]{64}$/u), reference: z.string().regex(/^capacity:[a-f0-9]{64}$/u), workerOperationId: z.string().regex(/^capacity-[a-f0-9]{48}$/u), provider: z.enum(["modal", "fly"]), deadlineEpochMs: z.number().int().positive() }).passthrough();
-const StoredRequest = z.object({ request: WorkerRunRequestSchema }).strict();
+const Capacity = z.object({ intentReference: z.string().regex(/^capacity-intent:[a-f0-9]{64}$/u), reference: z.string().regex(/^capacity:[a-f0-9]{64}$/u), workerOperationId: z.string().regex(/^capacity-[a-f0-9]{40}$/u), provider: z.enum(["modal", "fly"]), deadlineEpochMs: z.number().int().positive() }).passthrough();
 const sha = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
-const key = (request: Pick<WorkerRunRequest, "sessionId" | "actionId" | "expectedVersion">) => `worker-request:${sha(canonicalJson(request))}`;
 
 export type ProductionWorkerOwner = z.infer<typeof Owner>;
 type ResolvedWorker = ProductionWorkerOwner & Readonly<{ intentReference: string; capacityReference: string; workerOperationId: string; provider: "modal" | "fly" }>;
@@ -58,10 +57,11 @@ export class ProductionWorkerOwnershipResolver {
 /** Coordinator-only job bridge: GCS persistence occurs only after independent
  * CLI/conformance and static boundary verification of root-owned bytes. */
 export class ProductionWorkerBridge implements ContinuationWorkerPort, ArtifactVerifier {
-  readonly #artifacts: ProductionWorkerArtifactStore; readonly #verifier = new ProductionArtifactVerifier();
+  readonly #requests: ProductionWorkerRequestStore; readonly #artifacts: ProductionWorkerArtifactStore; readonly #verifier = new ProductionArtifactVerifier();
   constructor(private readonly input: Readonly<{ resolver: ProductionWorkerOwnershipResolver; workers: ReturnType<typeof createWorkerDeploymentClients>; workerJournal: PostgresOperationJournal; jobJournal: PostgresOperationJournal; requestJournal: PostgresOperationJournal; artifactStore: ObjectStorePort; toolchainSha256: string; publication?: ProductionWorkerPublication }>) {
     assertPostgresOperationJournal(input.workerJournal); assertPostgresOperationJournal(input.jobJournal); assertPostgresOperationJournal(input.requestJournal);
     if (!/^[a-f0-9]{64}$/u.test(input.toolchainSha256)) throw new Error("PRODUCTION_WORKER_TOOLCHAIN_REQUIRED");
+    this.#requests = new ProductionWorkerRequestStore(input.requestJournal);
     this.#artifacts = new ProductionWorkerArtifactStore({ journal: input.requestJournal, objects: input.artifactStore, toolchainSha256: input.toolchainSha256 });
   }
   async run(value: WorkerRunRequest, signal: AbortSignal): Promise<WorkerRunResult> {
@@ -119,10 +119,11 @@ export class ProductionWorkerBridge implements ContinuationWorkerPort, ArtifactV
     await this.#persist(WorkerRunRequestSchema.parse({ ...source, actionId: input.actionId, workspaceId: input.workspaceId }));
   }
   #job(worker: ResolvedWorker) { return new ProductionWorkerJobClient({ provider: worker.provider, workerOperationId: worker.workerOperationId, clients: this.input.workers, workerJournal: this.input.workerJournal, jobJournal: this.input.jobJournal, toolchainSha256: this.input.toolchainSha256, publication: this.input.publication }); }
-  async #persist(request: WorkerRunRequest): Promise<void> { await this.input.requestJournal.claim(key(request), sha(canonicalJson(request)), { request }); }
+  async #persist(request: WorkerRunRequest): Promise<void> { await this.#requests.persist(request); }
   async #request(binding: Pick<CheckpointFenceRequest, "sessionId" | "actionId" | "expectedVersion" | "policyVersion" | "capabilityGrant" | "workspaceId">): Promise<WorkerRunRequest> {
     const lookup = { ...binding, capabilityGrant: binding.capabilityGrant === "phase-05-continuation-grant" ? "phase-04-coordinator-grant" : binding.capabilityGrant };
-    const stored = StoredRequest.parse((await this.input.requestJournal.read<unknown>(key(lookup)))?.value).request;
+    const stored = await this.#requests.read(lookup);
+    if (!stored) throw new Error("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
     for (const property of ["sessionId", "actionId", "expectedVersion", "policyVersion", "workspaceId"] as const) if (stored[property] !== binding[property]) throw new Error("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
     if (stored.capabilityGrant !== lookup.capabilityGrant) throw new Error("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
     return stored;

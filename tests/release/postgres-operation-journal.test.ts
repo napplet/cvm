@@ -15,6 +15,7 @@ import { PostgresReleasePromotion } from "../../src/production/release-promotion
 import { ProductionWorkerArtifactStore } from "../../src/production/worker-artifact-store";
 import { DeterministicObjectStore } from "../../src/continuity/object-store";
 import { WorkerRunResultSchema } from "../../src/phase-02/contracts";
+import { ProductionWorkerRequestStore } from "../../src/production/worker-request-store";
 
 const scopeSha256 = "a".repeat(64), identity = "b".repeat(64);
 test("journal construction has no effects and rejects structural/prototype impersonation", async () => {
@@ -87,6 +88,26 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
       const completed = WorkerRunResultSchema.parse({ status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events: [{ kind: "progress", turn: 1, detail: "verified" }], artifact: { ...correlation, artifactId: `artifact:${checksum}`, ...contract } });
       if (completed.status !== "completed") throw new Error("TEST_RESULT_INVALID");
       const artifactInput = { request, bytes: archive, result: completed, accountId: `account:${scopeSha256}`, ownerId: identity, scannerReportSha256: identity, conformanceReportSha256: scopeSha256 };
+      const requests = () => new ProductionWorkerRequestStore(create("worker-requests"));
+      const { idea: _source, ...lookup } = request;
+      const requestDigest = (value: unknown) => new Bun.CryptoHasher("sha256").update(canonicalJson(value)).digest("hex");
+      // Reproduce a pre-index full-request record: lookup has no proposal bytes.
+      await create("worker-requests").claim(`worker-request:${requestDigest(request)}`, requestDigest(request), { request });
+      expect(await requests().read(lookup)).toEqual(request);
+      await expect(requests().persist({ ...request, idea: "replacement source" })).rejects.toThrow("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
+      await requests().persist(request); expect(await requests().read(lookup)).toEqual(request);
+      await expect(requests().read({ ...lookup, workspaceId: "workspace:other" })).rejects.toThrow("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
+      const newRequest = { ...request, actionId: "action:new-index" };
+      await Promise.all(Array.from({ length: 3 }, () => requests().persist(newRequest)));
+      expect(await requests().read({ ...lookup, actionId: newRequest.actionId })).toEqual(newRequest);
+      const partial = { ...request, actionId: "action:partial-index" };
+      await create("worker-requests").claim(`worker-request-index:${requestDigest({ sessionId: partial.sessionId, actionId: partial.actionId, expectedVersion: partial.expectedVersion })}`, requestDigest(partial), { originalOperationId: `worker-request:${requestDigest(partial)}`, requestSha256: requestDigest(partial) });
+      expect(await requests().read({ ...lookup, actionId: partial.actionId })).toBeUndefined();
+      await requests().persist(partial);
+      expect(await requests().read({ ...lookup, actionId: partial.actionId })).toEqual(partial);
+      const ambiguous = { ...request, actionId: "action:legacy-ambiguous" }, changed = { ...request, actionId: "action:legacy-ambiguous", idea: "other" };
+      for (const value of [ambiguous, changed]) await create("worker-requests").claim(`worker-request:${requestDigest(value)}`, requestDigest(value), { request: value });
+      await expect(requests().read({ ...lookup, actionId: ambiguous.actionId })).rejects.toThrow("OPERATION_JOURNAL_LOOKUP_AMBIGUOUS");
       loseAcknowledgement = true;
       await expect(artifacts().persist(artifactInput)).rejects.toThrow("ACK_LOST");
       const recovered = await artifacts().read(request);

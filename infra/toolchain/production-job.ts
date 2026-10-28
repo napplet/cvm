@@ -34,8 +34,7 @@ function parseRequest(value: unknown): Request {
   for (const file of v.files) if (!file || Object.keys(file).sort().join(",") !== "content,path" || !allowed.has(file.path) || typeof file.content !== "string" || Buffer.byteLength(file.content) > 30_000) fail("JOB_SOURCE_INVALID");
   if (new Set(v.files.map(file => file.path)).size !== v.files.length || !v.files.some(file => file.path === "src/main.ts")) fail("JOB_SOURCE_INVALID");
   if (v.version === 2) {
-    const content = v.files.find(file => file.path === "src/capabilities.json")?.content;
-    if (content === undefined) fail("JOB_DIRECT_DECLARATION_REQUIRED");
+    const content = v.files.find(file => file.path === "src/capabilities.json")?.content ?? fail("JOB_DIRECT_DECLARATION_REQUIRED");
     const declaration = JSON.parse(content);
     if (!declaration || Object.keys(declaration).sort().join(",") !== "optional,required" || ![declaration.required, declaration.optional].every(list => Array.isArray(list) && list.length <= 32 && list.every((domain: unknown) => typeof domain === "string" && /^[a-z][a-z0-9-]{0,31}$/u.test(domain)))) fail("JOB_DIRECT_DECLARATION_INVALID");
     const domains = [...declaration.required, ...declaration.optional];

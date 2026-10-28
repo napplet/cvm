@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ImmutableObjectReferenceSchema, type ObjectStorePort } from "../continuity/object-store";
 
 import { validateAuthorizationReceipt, validateAuthorizationRequest } from "../release/authorization";
 import type { ProductionSourceBuildVerifier } from "../release/deployment/production-session-runtime";
@@ -28,7 +29,7 @@ const Workspace = z.object({
 export const MountedSourceBuildResultSchema = z.object({ candidateId: Digest, sealedArtifactSha256: Digest, manifestSha256: Digest, capabilitiesSha256: Digest, aggregateSha256: Digest, jobId: Digest, workerOperationId: z.string().regex(/^capacity-[a-f0-9]{40}$/u), capacityReference: z.string().regex(/^capacity:[a-f0-9]{64}$/u) }).strict();
 const StoredEvidence = z.object({ key: z.string().min(1).max(512), checksum: Digest, result: MountedSourceBuildResultSchema }).strict();
 export type MountedSourceBuildResult = z.infer<typeof MountedSourceBuildResultSchema>;
-const ImmutableReference = z.object({ key: z.string().min(1).max(512), generation: z.union([z.string(), z.number().int().nonnegative()]), checksum: Digest }).strict();
+const ImmutableReference = ImmutableObjectReferenceSchema;
 export const MountedSourceBuildEvidenceSchema = z.object({
   version: z.literal(1),
   artifact: z.object({ sealedObjectSha256: Digest, aggregateSha256: Digest, files: z.array(z.object({ path: z.string().max(256).regex(/^[A-Za-z0-9._/-]+$/u).refine(value => value.split("/").every(part => part !== "" && part !== "." && part !== "..")), sha256: Digest, size: z.number().int().nonnegative().max(16_777_216), bytesBase64: z.string().max(22_369_624) }).strict()).min(1).max(256) }).strict(),
@@ -48,7 +49,7 @@ function abortAfter(ms: number): Readonly<{ signal: AbortSignal; dispose(): void
  * only observe the exact original after an acknowledgement is lost. */
 export async function resumeMountedSourceBuildEvidence(input: Readonly<{
   journal: ProductionGenerationRuntime["dependencies"]["jobJournal"];
-  artifactStore: ProductionGenerationRuntime["dependencies"]["artifactStore"];
+  artifactStore: ObjectStorePort;
   candidateSha256: string;
   run: MountedSourceBuildExecution;
 }>): Promise<Readonly<{ status: "passed"; artifactReceipt: Readonly<{ evidenceObject: unknown }> }> & MountedSourceBuildResult | undefined> {
@@ -69,7 +70,7 @@ export async function resumeMountedSourceBuildEvidence(input: Readonly<{
  * never large build payloads from a PostgreSQL journal row. */
 export async function readMountedSourceBuildEvidence(input: Readonly<{
   journal: ProductionGenerationRuntime["dependencies"]["jobJournal"];
-  artifactStore: ProductionGenerationRuntime["dependencies"]["artifactStore"];
+  artifactStore: ObjectStorePort;
   candidateSha256: string;
   run: MountedSourceBuildExecution;
 }>): Promise<Readonly<{ result: MountedSourceBuildResult; evidenceObject: z.infer<typeof ImmutableReference>; evidence: MountedSourceBuildEvidence }>> {
@@ -106,7 +107,7 @@ export async function readMountedSourceBuildEvidence(input: Readonly<{
 
 export async function persistMountedSourceBuildEvidence(input: Readonly<{
   journal: ProductionGenerationRuntime["dependencies"]["jobJournal"];
-  artifactStore: ProductionGenerationRuntime["dependencies"]["artifactStore"];
+  artifactStore: ObjectStorePort;
   run: MountedSourceBuildExecution;
   value: Readonly<{ key: string; checksum: string; result: MountedSourceBuildResult }>;
   bytes: Uint8Array;

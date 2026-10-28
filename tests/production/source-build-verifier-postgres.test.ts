@@ -10,7 +10,7 @@ import {
   readMountedSourceBuildEvidence,
   type MountedSourceBuildResult,
 } from "../../src/production/source-build-verifier";
-import { DeterministicObjectStore } from "../../src/continuity/object-store";
+import { DeterministicObjectStore, type ObjectStorePort } from "../../src/continuity/object-store";
 import { canonicalJson } from "../../src/promotion/schema";
 import { bindMountedSourceBuildExecution, materializeMountedSourceBuildPlan } from "../../src/production/source-build-plan";
 
@@ -55,14 +55,15 @@ postgresIsolation("restricted PostgreSQL recovers one source evidence upload and
       candidateId: plan.candidateSha256, sealedArtifactSha256: digest(JSON.stringify(files.map(file => ({ path: file.path, sha256: file.sha256, bytes: file.size })))), manifestSha256: digest(canonicalJson(manifest)), capabilitiesSha256: digest(capabilities), aggregateSha256: aggregate,
       jobId: "2".repeat(64), workerOperationId: run.workerOperationId, capacityReference: `capacity:${"3".repeat(64)}`,
     };
-    const evidence = { version: 1, artifact: { sealedObjectSha256: result.sealedArtifactSha256, aggregateSha256: aggregate, files }, receipts: { manifest, manifestSha256: result.manifestSha256, capabilities: { content: capabilities, capabilitiesSha256: result.capabilitiesSha256 }, workerArtifactSha256: "5".repeat(64), commandEvidenceSha256: "6".repeat(64) }, operation: { operationId: run.operationId, planJobId: plan.jobId, authorizationRequestSha256: run.authorizationRequestSha256, topologySha256: plan.topologySha256, ...result } };
+    const evidence = { version: 1 as const, artifact: { sealedObjectSha256: result.sealedArtifactSha256, aggregateSha256: aggregate, files }, receipts: { manifest, manifestSha256: result.manifestSha256, capabilities: { content: capabilities, capabilitiesSha256: result.capabilitiesSha256 }, workerArtifactSha256: "5".repeat(64), commandEvidenceSha256: "6".repeat(64) }, operation: { operationId: run.operationId, planJobId: plan.jobId, authorizationRequestSha256: run.authorizationRequestSha256, topologySha256: plan.topologySha256, ...result } };
     const bytes = new TextEncoder().encode(canonicalJson(evidence));
     const value = { key: `certification/source-build/${plan.candidateSha256}/${run.jobId}/evidence.json`, checksum: digest(bytes), result };
     let uploads = 0;
     const object = { key: value.key, generation: 1, checksum: value.checksum };
     let persisted = false;
     let returnedBytes = bytes;
-    const store = {
+    const store: ObjectStorePort = {
+      async scheduleExactDeletion() { throw new Error("UNEXPECTED_DELETION"); },
       async readExact() { return returnedBytes; },
       async createImmutable(request: Readonly<{ key: string; bytes: Uint8Array }>) {
         uploads += 1;
@@ -75,15 +76,15 @@ postgresIsolation("restricted PostgreSQL recovers one source evidence upload and
       },
     };
     const journal = () => new PostgresOperationJournal(application as never, { namespace: "source-build-recovery", scopeSha256: "4".repeat(64) });
-    await expect(persistMountedSourceBuildEvidence({ journal: journal(), artifactStore: store as never, run, value, bytes })).resolves.toEqual(object);
-    const restored = await resumeMountedSourceBuildEvidence({ journal: journal(), artifactStore: store as never, candidateSha256: plan.candidateSha256, run });
+    await expect(persistMountedSourceBuildEvidence({ journal: journal(), artifactStore: store, run, value, bytes })).resolves.toEqual(object);
+    const restored = await resumeMountedSourceBuildEvidence({ journal: journal(), artifactStore: store, candidateSha256: plan.candidateSha256, run });
     expect(restored).toMatchObject({ status: "passed", ...result });
     expect(uploads).toBe(1);
-    expect(await readMountedSourceBuildEvidence({ journal: journal(), artifactStore: store as never, candidateSha256: plan.candidateSha256, run })).toEqual({ result, evidenceObject: object, evidence });
+    expect(await readMountedSourceBuildEvidence({ journal: journal(), artifactStore: store, candidateSha256: plan.candidateSha256, run })).toEqual({ result, evidenceObject: object, evidence });
     returnedBytes = new TextEncoder().encode("corrupt immutable response");
-    await expect(readMountedSourceBuildEvidence({ journal: journal(), artifactStore: store as never, candidateSha256: plan.candidateSha256, run })).rejects.toThrow("PRODUCTION_SOURCE_BUILD_EVIDENCE_BYTES_REQUIRED");
+    await expect(readMountedSourceBuildEvidence({ journal: journal(), artifactStore: store, candidateSha256: plan.candidateSha256, run })).rejects.toThrow("PRODUCTION_SOURCE_BUILD_EVIDENCE_BYTES_REQUIRED");
     returnedBytes = bytes;
-    await expect(readMountedSourceBuildEvidence({ journal: journal(), artifactStore: store as never, candidateSha256: plan.candidateSha256, run: { ...run, topologySha256: "9".repeat(64) } })).rejects.toThrow("PRODUCTION_SOURCE_BUILD_EVIDENCE_BINDING_REQUIRED");
+    await expect(readMountedSourceBuildEvidence({ journal: journal(), artifactStore: store, candidateSha256: plan.candidateSha256, run: { ...run, topologySha256: "9".repeat(64) } })).rejects.toThrow("PRODUCTION_SOURCE_BUILD_EVIDENCE_BINDING_REQUIRED");
     expect(uploads).toBe(1);
 
     for (const [index, fault] of ["file-bytes", "manifest-digest", "aggregate", "traversal"].entries()) {

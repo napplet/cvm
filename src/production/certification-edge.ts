@@ -155,12 +155,15 @@ export class ProductionCertificationEdgeService {
           relays: context.relaySet,
         });
         if (relay.state !== "complete") throw new Error("CERTIFICATION_EDGE_PUBLICATION_RELAY_UNRESOLVED");
+        const attestation = await this.#broker.clients.edge.relays.attestationPort.publish({ operationId: `attestation:${context.intent.intentId}`, artifact: context.artifact, ownerEventId: owner.signedEvent.id });
+        if (attestation.state !== "completed") throw new Error("CERTIFICATION_EDGE_PUBLICATION_ATTESTATION_UNRESOLVED");
         return this.#verify(command, payload, Object.freeze({
           ownerEventId: owner.signedEvent.id,
           ownerPubkey: owner.signerPubkey,
           relaySet: context.relaySet,
           upload,
           relay,
+          attestation,
           promotedContract: this.#broker.clients.edge.promotedCli.contract,
         }));
       }

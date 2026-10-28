@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { SignedOwnerManifestEventSchema, type PublicationObservation, type SealedArtifactIdentity } from "../../publication/contracts.js";
 import type { StructuredSourceEffect } from "../../publication/napplet-cli-adapter.js";
-import { validateAuthorizationReceipt, validateAuthorizationRequest, type ReleaseAuthorizationReceipt, type ReleaseAuthorizationRequest } from "../authorization.js";
+import { ReleaseAuthorizationReceiptSchema, validateAuthorizationReceipt, validateAuthorizationRequest, type ReleaseAuthorizationReceipt, type ReleaseAuthorizationRequest } from "../authorization.js";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 const PubkeySchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
@@ -36,6 +36,7 @@ const RelayConfigSchema = z.object({
   attestationEvent: NostrEventSchema,
   ownerSignerPubkey: PubkeySchema,
   attestationSignerPubkey: PubkeySchema,
+  intentExpiresAtMs: z.number().int().positive().optional(),
 }).strict();
 type RelayConfig = z.infer<typeof RelayConfigSchema>;
 
@@ -82,10 +83,12 @@ function parseObservation(value: unknown): RelayObservation {
   return parsed.data;
 }
 
-async function authorize(input: Readonly<{ request: unknown; receipt: unknown; nowMs: number; kind: "owner" | "attestation" }>, config: RelayConfig): Promise<Readonly<{ request: ReleaseAuthorizationRequest; receipt: ReleaseAuthorizationReceipt }>> {
+async function authorize(input: Readonly<{ request: unknown; receipt: unknown; nowMs: number; kind: "owner" | "attestation"; readOnly?: boolean }>, config: RelayConfig): Promise<Readonly<{ request: ReleaseAuthorizationRequest; receipt: ReleaseAuthorizationReceipt }>> {
   try {
     const request = await validateAuthorizationRequest(input.request);
-    const receipt = await validateAuthorizationReceipt({ request, receipt: input.receipt, nowMs: input.nowMs });
+    const original = ReleaseAuthorizationReceiptSchema.parse(input.receipt);
+    const receipt = await validateAuthorizationReceipt({ request, receipt: original, nowMs: input.readOnly ? Math.min(input.nowMs, original.expiresAtMs - 1) : input.nowMs });
+    if (!input.readOnly && config.intentExpiresAtMs !== undefined && input.nowMs >= config.intentExpiresAtMs) throw new Error("intent_expired");
     const provider = input.kind === "owner" ? "owner_relay" : "attestation_relay";
     const effectId = input.kind === "owner" ? "owner-relay" : "attestation-relay";
     const expectedAccountScope = input.kind === "owner" ? config.ownerAccountScopeSha256 : config.attestationAccountScopeSha256;
@@ -143,7 +146,7 @@ export function createNostrRelayPublicationAdapter(input: Readonly<{ config: unk
   async function reconcile(kind: "owner" | "attestation", raw: Readonly<{ operationId: string }>): Promise<PublicationObservation> {
     const expectedValue = expected(config, kind);
     if (OperationIdSchema.parse(raw.operationId) !== expectedValue.operationId) throw new Error("NOSTR_RELAY_EVENT_INVALID");
-    await authorize({ request: input.request, receipt: input.receipt, nowMs: now(), kind }, config);
+    await authorize({ request: input.request, receipt: input.receipt, nowMs: now(), kind, readOnly: true }, config);
     const observation = parseObservation(await input.port.observeOriginalEvent({ operationId: expectedValue.operationId, eventId: expectedValue.event.id, relaySetReference: config.relaySetReference }));
     const prior = complete(observation, expectedValue.operationId, expectedValue.event.id, config);
     if (prior) return prior;

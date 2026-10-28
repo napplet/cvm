@@ -105,7 +105,7 @@ export class ProductionPublicationContextMaterializer {
     const prior = await this.input.journal.read(key);
     if (prior) {
       const record = this.#validateRecord(prior.value, prior.identitySha256);
-      return Object.freeze({ artifact: record.artifact, intent: record.intent, intentDigest: record.intent.fingerprint });
+      return Object.freeze({ artifact: record.artifact, intent: record.intent, intentDigest: record.intent.fingerprint, relaySet: Object.freeze([...record.relaySet]) });
     }
     const manifest = NamedManifest.parse(evidence.evidence.receipts.manifest);
     const names = manifest.template.tags.filter(tag => tag[0] === "d");
@@ -141,7 +141,7 @@ export class ProductionPublicationContextMaterializer {
     const record = ProductionPublicationRecordSchema.parse({ ...binding, artifact, intent, ownerTemplate: manifest.template, requiredSignerCapabilities: ["sign_event"], relaySet: this.input.relaySet, deploy: { target: { kind: 35129, dTag: manifest.item.dTag }, object: bundleObject, files: sealedFiles, servers: this.input.uploadServers } });
     const saved = await this.#claim(key, record);
     const final = this.#validateRecord(saved.value, saved.identitySha256);
-    return Object.freeze({ artifact: final.artifact, intent: final.intent, intentDigest: final.intent.fingerprint });
+    return Object.freeze({ artifact: final.artifact, intent: final.intent, intentDigest: final.intent.fingerprint, relaySet: Object.freeze([...final.relaySet]) });
   }
 
   /** Signature verification is read-only and remains available for historical

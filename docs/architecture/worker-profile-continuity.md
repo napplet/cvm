@@ -32,9 +32,10 @@ rolling a default back does not migrate an active job.
 This change is a safety prerequisite, not complete upgrade recovery. Before
 selecting another production worker profile:
 
-- Preserve access to original topology-scoped runtime, worker, job and request
-  journals. The current runtime reconstructs every scope from the current
-  topology hash; changing configuration can otherwise hide history.
+- Establish the service journal authority under the original topology before
+  changing it. Ordinary journals now retain that original scope; unanchored
+  history in another scope refuses startup rather than guessing or copying
+  originals. Preserve the authority record and journal/audit tables in backup.
 - Resolve original worker/job clients through server-approved retained execution
   contexts, including original provider app/region and artifact contract. The
   bridge and job client currently accept one configured toolchain.
@@ -49,3 +50,50 @@ selecting another production worker profile:
 The prepared direct-artifact image remains unselected. Restricted-Postgres and
 transport fixture tests establish local regression behavior; they are not live
 Modal/Fly, admission SLO, host or release-certification evidence.
+
+
+## Service journal authority
+
+Ordinary capacity, worker, job, request, Vertex, checkpoint, ContextVM and NWC
+journals now share the service's initial scope across releases. Bootstrap derives
+the service public key from the mounted signer and checks it against the configured
+service identity before opening these journals. No user key or inbound principal
+can select this identity.
+
+The authority is a strict version-one value in the existing restricted SQL
+operation journal, with a fixed namespace/key and a fixed discovery scope. Its
+identity digest commits to the service public key and original scope. Readers
+require revision one and an exact digest. Changed identity, edited authority or
+unanchored history in any other ordinary scope refuses startup. Later
+ordinary records in a competing scope also refuse startup; current-topology
+certification records are excluded from that ordinary-history check. The existing
+audit trigger records creation; no extra schema or implicit row migration is
+required. The exclusive service database is the ownership boundary for initial
+adoption; it must not be shared across independent service identities.
+
+The first rollout is an expansion under the existing configuration. Quiesce and
+back up as required by the migration runbook, install this reader/writer, and
+establish the authority before changing topology. Retained operation keys, row
+values and identities remain byte-for-byte unchanged. Concurrent regional boots
+serialize authority establishment. Future topology changes read the same anchor.
+Ordinary capacity also selects an existing intent's original provider before
+applying the configured default to new work.
+
+Certification/control journals, including the receipt broker and Google mutation
+journals, retain their current topology scope. Service continuity grants neither
+new provider authority nor an expired certification receipt. Shared provider
+originals still retain their exact original operation identity and profile checks.
+
+Back up and restore the complete SQL operation journal and audit, including the
+service-continuity authority. A local PostgreSQL dump/fresh-database drill proves
+this record and uncertain operation IDs survive a database restore. It does not
+prove live Cloud SQL/GCS recovery, the full encrypted checkpoint path or any of
+the eight protected suites. Rollback retains the authority; a pre-continuity binary
+must use the original topology configuration until the same reader is backported.
+Fresh restore requires the backed-up authority and rebuilds worker clients against
+the recovered database instead of retaining source-pool provider journals.
+Never delete the authority or copy an uncertain operation into a new scope.
+
+Historical job/worker profile selection and resume compatibility are still
+required before changing the selected worker image. This change keeps their
+original records reachable; it does not approve a different executable profile.

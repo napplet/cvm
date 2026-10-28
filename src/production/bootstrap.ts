@@ -135,7 +135,6 @@ export async function createMountedProductionControlServices(input: Readonly<{
     secrets: input.secrets,
     google: mountedGoogle.google,
     artifactStore: generation.dependencies.artifactStore,
-    workerClients: generation.dependencies.workers,
     observeTopology: async () => Object.freeze({ candidateSha256: config.candidateSha256, topologySha256: config.topologySha256 }),
   });
   const provisioner = new ProductionGoogleFreshRestoreProvisioner({

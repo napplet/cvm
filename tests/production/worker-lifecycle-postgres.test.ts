@@ -1,3 +1,4 @@
+import { ProductionCertificationCoreServices } from "../../src/production/certification-services";
 import { createPostgresWorkerOperationJournal } from "../../src/release/deployment/postgres-provider-journals";
 import { PRODUCTION_WORKER_POLICY } from "../../src/worker-adapters/production-worker-policy";
 import { createRequire } from "node:module";
@@ -77,6 +78,9 @@ postgresIsolation("worker lifecycle retains originals across allocation ambiguit
         const incompatible = createProductionReadyCapacity({ provider, workers, journal: journal(), workerJournal, ...pin, now: () => now });
         await expect(incompatible.reserveNow(retained)).rejects.toThrow("PRODUCTION_CAPACITY_ORIGINAL_PROFILE_REQUIRED");
       }
+      const makeCapacity = (name: "modal" | "fly") => createProductionReadyCapacity({ provider: name, workers, journal: journal(), workerJournal, image: `registry.example/worker@sha256:${"a".repeat(64)}`, toolchainSha256: "b".repeat(64), flyRegion: "ams", now: () => now });
+      const router = new ProductionCertificationCoreServices({ candidates: { modal: "a".repeat(64), fly: "a".repeat(64) }, certificationOwnerPubkey: "b".repeat(64), requestedCap: "1", authorizationRequestSha256: request.authorizationRequestSha256, capacities: { modal: makeCapacity("modal"), fly: makeCapacity("fly") }, selectedProvider: provider === "modal" ? "fly" : "modal", journal: new PostgresOperationJournal(application as never, { namespace: "changed-cert-topology", scopeSha256: "f".repeat(64) }), pool: application as never }).capacityRouter();
+      expect((await router.observe(retained)).status).toBe("available");
       const originalReady = await changed.observe(retained);
       expect(originalReady.status).toBe("available");
       if (originalReady.status === "available") expect(originalReady.ready.imageDigest).toBe(`sha256:${"a".repeat(64)}`);

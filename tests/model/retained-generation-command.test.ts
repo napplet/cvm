@@ -1,0 +1,23 @@
+import { expect, test } from "bun:test";
+import { ProtectedGenerationCommands, type GenerationRecoveryBinding } from "../../src/model/retained-generation-command";
+import { loadMountedCheckpointKek } from "../../src/production/checkpoint-crypto";
+import { accountIdForPrincipal } from "../../src/domain/account-command";
+import { canonicalJson } from "../../src/promotion/schema";
+const hash = (v: unknown) => new Bun.CryptoHasher("sha256").update(canonicalJson(v)).digest("hex");
+test("retained ordinary command binds exact owner/caller maximum/action/prices, survives a new controller, and denies tamper/expiry", async () => {
+  let now = Date.now();
+  const command = { principal: { pubkey: "8".repeat(64) }, admissionReference: "admission:fixture", idempotencyKey: "fixture", expectedVersion: 0 as const, maximum: "50", policyVersion: "policy:original", idea: "Private bounded timer." };
+  const accountId = await accountIdForPrincipal(command.principal);
+  const binding: GenerationRecoveryBinding = { accountId, sessionId: `session:${hash({ accountId,key:command.idempotencyKey }).slice(0,24)}`, actionId: "start:fixture", operationId: "operation:fixture", idempotencyKey: command.idempotencyKey, fingerprint: hash({ accountId,command }), admissionReference: command.admissionReference, expectedVersion: 0, maximum: "13", profileId: "model:original", priceCardId: "card:original", toolchainId: "toolchain:original" };
+  const open = (key = 9) => new ProtectedGenerationCommands({ reference: "test:checkpoint-kek", load: () => loadMountedCheckpointKek({ kekPath: "/test/kek", readFile: async () => Buffer.alloc(32,key).toString("base64") }) }, () => now);
+  const record = await open().seal({ command,binding });
+  expect(JSON.stringify(record)).not.toContain(command.idea);
+  expect(await open().open(record)).toEqual(command);
+  expect((await open().open(record)).maximum).toBe("50");
+  for (const change of [{ accountId:"account:foreign" },{ operationId:"operation:foreign" },{ priceCardId:"card:current" },{ maximum:"50" },{ toolchainId:"toolchain:current" }]) await expect(open().open({ ...record,binding:{...binding,...change} })).rejects.toThrow("GENERATION_COMMAND_RESTORE_DENIED");
+  await expect(open(8).open(record)).rejects.toThrow("GENERATION_COMMAND_RESTORE_DENIED");
+  for (const change of [{ wrappedDekBase64: Buffer.alloc(48).toString("base64") },{ ciphertextBase64:Buffer.alloc(50).toString("base64") },{ nonceBase64:Buffer.alloc(11).toString("base64") },{ commandSha256:"f".repeat(64) },{ keyReference:"test:foreign" }]) await expect(open().open({...record,envelope:{...record.envelope,...change}})).rejects.toThrow("GENERATION_COMMAND_RESTORE_DENIED");
+  await expect(open().seal({command:{...command,maximum:"51"},binding})).rejects.toThrow("GENERATION_COMMAND_BINDING_DENIED");
+  now = record.envelope.retentionUntilMs;
+  await expect(open().open(record)).rejects.toThrow("GENERATION_COMMAND_RESTORE_DENIED");
+});

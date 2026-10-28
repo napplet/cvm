@@ -1,3 +1,4 @@
+import type { RetainedGenerationCommand } from "../model/retained-generation-command";
 import type { AccountStatus, FundedAdmission, FundingResult, VerifiedSettlement } from "../phase-03/contracts";
 import type { NeedsTopUpResult, PendingActionIntent, PendingActionRecord } from "../continuity/contracts";
 import type { ClaimPublicationEffectInput, ClaimPublicationEffectResult, CreatePublicationIntentInput, CreatePublicationIntentResult, DurablePublicationEffect, PublicationRecord, RecordPublicationObservationInput } from "./publication-store";
@@ -19,7 +20,7 @@ export type ActionBudgetInput = Readonly<{ accountId: string; admissionReference
 export type MeteredActionStatus = "prepared" | "dispatching" | "usage_unknown" | "completed" | "failed" | "billing_invariant_failed";
 export type MeteredArtifactLineage = Readonly<{ artifactId?: string; workspaceLineage: string; checkpointReference: string; snapshotReference: string; validationEvidenceReference: string; failedArtifactId?: string; validationReportReference?: string }>;
 export type MeteredAction = Readonly<{ accountId: string; idempotencyKey: string; fingerprint: string; sessionId: string; actionId: string; expectedVersion: number; admissionReference: string; actionBudgetReference: string; maximum: bigint; operationId: string; profileId: string; priceCardId: string; status: MeteredActionStatus; receiptCharge?: string; providerReceiptReference?: string; providerRequestId?: string; reconciliationReason?: string; reconciliationClaimed?: boolean; result?: unknown; sessionVersion?: number; artifactVersion?: number; remainingCap?: string; remainingBalance?: string; artifact?: MeteredArtifactLineage }>;
-export type PrepareMeteredActionInput = Omit<MeteredAction, "status" | "receiptCharge" | "providerReceiptReference" | "result" | "sessionVersion" | "artifactVersion">;
+export type PrepareMeteredActionInput = Omit<MeteredAction, "status" | "receiptCharge" | "providerReceiptReference" | "result" | "sessionVersion" | "artifactVersion"> & Readonly<{ recoveryCommand?: RetainedGenerationCommand }>;
 export type MeteredOperationClaim = Readonly<{ action: MeteredAction; claimed: boolean }>;
 export type ReconciliationClaim = Readonly<{ action: MeteredAction; claimed: boolean }>;
 export type UsageUnknownInput = Readonly<{ operationId: string; providerRequestId: string; protectedEvidenceReference: string; reason: string }>;

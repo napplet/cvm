@@ -1,3 +1,6 @@
+import { ProtectedGenerationCommands } from "../model/retained-generation-command";
+import { loadMountedCheckpointKek } from "./checkpoint-crypto";
+import { ProductionGenerationRecovery } from "./generation-recovery";
 import { MeteredGenerationService } from "../phase-04/metered-generation-service";
 import { openContextVmRelayTransport } from "../release/deployment/contextvm-client";
 import { openProductionFunding } from "../release/deployment/production-funding";
@@ -60,12 +63,17 @@ export async function openProductionGenerationRuntime(input: Readonly<{ config: 
     relay = await openContextVmRelayTransport({ serviceKeyReference: config.contextvm.serviceKeyReference, relaySetSha256: await digest([config.contextvm.relay]), relays: [config.contextvm.relay], signerBroker: materials.contextvmSignerBroker, journal: dependencies.serviceJournals.contextvm, admissionObserver, certificationClientPubkey });
     const facade = new SealedProductionGenerationFacade();
     funding = await openProductionFunding({ postgresPool: postgres.pool, transport: relay.transport, cashuPolicies: materials.cashuPolicies, capacity: admissionObserver.capacityRouter(), protectedMaterialKey: await secrets.bytes32("funding.protectedMaterialReference"), admissionReceiptSecret: await secrets.bytes32("funding.admissionReceiptReference"), statusCursorSecret: await secrets.bytes32("funding.statusCursorReference"), accountingConfiguration: Object.freeze({ mode: "production-real", adapters: ["lightning", "cashu", "nwc"], catalog: { kind: "live" }, keyMode: "secret-broker" }), meteredService: facade, continuationService: continuation.service, nwcConnectionReference: config.funding.nwcConnectionReference, nwcCredentialBroker: materials.nwcCredentialBroker, nwcJournal: dependencies.serviceJournals.nwc });
-    const generation = new MeteredGenerationService({ fundedAdmission: funding.core.admissions, store: funding.database.meteredFunding, gateway: dependencies.gateway, worker: dependencies.workerBridge, artifactVerifier: dependencies.workerBridge, proposalStore: dependencies.proposals, pricing: { card: dependencies.vertexMaterial.pricing.card, profile: dependencies.vertexMaterial.pricing.profile }, settlement: dependencies.settlement, retainedPricing: dependencies.retainedPricing, continuation: continuation.service, toolchainIdentity: config.worker.toolchainSha256, clock: { nowMs: input.now ?? Date.now } });
+    const recoveryCommands = new ProtectedGenerationCommands({ reference: config.checkpoint.kekReference, load: () => loadMountedCheckpointKek({ kekPath: secrets.path("checkpoint.kekReference") }) }, input.now);
+    const generation = new MeteredGenerationService({ fundedAdmission: funding.core.admissions, store: funding.database.meteredFunding, gateway: dependencies.gateway, worker: dependencies.workerBridge, artifactVerifier: dependencies.workerBridge, proposalStore: dependencies.proposals, pricing: { card: dependencies.vertexMaterial.pricing.card, profile: dependencies.vertexMaterial.pricing.profile }, settlement: dependencies.settlement, retainedPricing: dependencies.retainedPricing, recoveryCommands, continuation: continuation.service, toolchainIdentity: config.worker.toolchainSha256, clock: { nowMs: input.now ?? Date.now } });
+    const generationRecovery = new ProductionGenerationRecovery({ pool: postgres.pool, commands: recoveryCommands, acceptedToolchains: dependencies.jobRouter.toolchainSha256s, generation });
+    await generationRecovery.assertReady();
     facade.bind(generation); await relay.start();
     // This is a bounded reconciliation poll over already-paused SQL rows, not
     // an admission queue. Every candidate remains fenced by the transaction.
     const continuationTimer = setInterval(() => { void continuation.scan(); }, 30_000);
     continuationTimer.unref?.();
+    const recoveryTimer = setInterval(() => { void generationRecovery.scan().catch(() => undefined); }, 30_000);
+    recoveryTimer.unref?.();
     const mountedClosers = new Set<() => Promise<void>>();
     return Object.freeze({
       config, certificationClientPubkey, authorization, generation, continuation, facade, funding, dependencies, admissionObserver,
@@ -75,6 +83,8 @@ export async function openProductionGenerationRuntime(input: Readonly<{ config: 
       },
       close: async () => {
         clearInterval(continuationTimer);
+        clearInterval(recoveryTimer);
+        await generationRecovery.close().catch(() => undefined);
         for (const close of mountedClosers) await close().catch(() => undefined);
         mountedClosers.clear();
         await relay!.close().catch(() => undefined);

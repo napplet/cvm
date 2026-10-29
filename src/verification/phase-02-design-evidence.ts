@@ -72,8 +72,8 @@ export async function evaluatePhase02Design(input: Phase02DesignInput): Promise<
     if (!REQUIRED_CHECK_IDS.includes(check.id) || !["critical", "high"].includes(check.severity) || !isDigest(check.evidenceSha256) || check.status !== "passed") add(reasons, `deterministic check ${check.id} is missing, malformed, or not passed`);
   }
   validateProvider(input.providerObservation, input.policy.identity, reasons);
-  const offlineVerdict = reasons.length === 0 ? "passed" : "blocked";
-  const verdict = offlineVerdict === "passed" ? "design-ready" : "blocked";
+  const offlineVerdict: Phase02DesignEvidence["offlineVerdict"] = reasons.length === 0 ? "passed" : "blocked";
+  const verdict: Phase02DesignEvidence["verdict"] = offlineVerdict === "passed" ? "design-ready" : "blocked";
   const withoutDigest = {
     version: 1 as const,
     certificationProfile: "design" as const,

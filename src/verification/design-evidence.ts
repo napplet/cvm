@@ -86,7 +86,7 @@ export async function evaluateDesignVerification(input: DesignVerificationInput)
   const fixtureEvidence = Object.freeze(input.fixtures.map(evidenceForFixture));
   const blockedNative = input.fixtures.some((fixture) => fixture.status !== "passed");
   if (blockedNative) reason(reasons, "native fixture execution remains blocked pending Phase 7 compatible sealed scaffold closure");
-  const verdict = reasons.length === 0 ? "design-ready" : "blocked";
+  const verdict: DesignVerificationEvidence["verdict"] = reasons.length === 0 ? "design-ready" : "blocked";
   const withoutDigest = {
     version: 1 as const, certificationProfile: "design" as const, verdict, candidateId: input.candidateId, imageDigest: input.imageDigest,
     policySha256: input.policySha256, fixtures: fixtureEvidence, policyResults: Object.freeze(input.policyResults.map((result) => Object.freeze({ ...result }))),

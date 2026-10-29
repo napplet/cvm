@@ -51,6 +51,16 @@ function createGateway() {
 }
 
 describe("ScopedToolGateway", () => {
+  test("rejects non-object untrusted tool inputs without throwing or dispatching", async () => {
+    const {gateway,calls}=createGateway();
+    for(const input of [undefined,null,false,42,"workspace_write",[]]) {
+      await expect(gateway.authorizeAndDispatch(input)).resolves.toEqual({status:"denied",code:"TOOL_REQUEST_INVALID"});
+    }
+    expect(calls).toHaveLength(0);
+    expect(gateway.evidence).toHaveLength(6);
+    expect(gateway.evidence.every(item=>item.code==="TOOL_REQUEST_INVALID"&&!item.allowed)).toBeTrue();
+  });
+
   test("mediates a strict request and replays an exact duplicate without a second effect", async () => {
     const { gateway, calls } = createGateway();
     const first = await gateway.authorizeAndDispatch(request());

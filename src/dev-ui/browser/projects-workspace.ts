@@ -71,6 +71,7 @@ export class ProjectsWorkspace {
   private liveStatus() {
     this.el("projects-live").textContent = this.busy() ? "Your current request continues in the workspace." : "Status updates automatically.";
     this.el<HTMLButtonElement>("projects-new").disabled = this.busy();
+    for (const card of this.#page.querySelectorAll<HTMLButtonElement>(".project-card")) card.disabled = this.busy() || this.#opening;
   }
   private async load(more = false, quiet = false) {
     const epoch = ++this.#epoch; this.#loading = true; this.liveStatus();
@@ -121,7 +122,7 @@ export class ProjectsWorkspace {
     const entries = this.#sources.flatMap(source => source.projects.map(project => ({ source, project }))).sort((a, b) => b.project.createdAt.localeCompare(a.project.createdAt) || b.project.id.localeCompare(a.project.id));
     const list = this.el("projects-list"); list.replaceChildren();
     for (const { source, project } of entries) {
-      const li = document.createElement("li"); const button = document.createElement("button"); button.className = "project-card"; button.dataset.projectId = project.id;
+      const li = document.createElement("li"); const button = document.createElement("button"); button.className = "project-card"; button.dataset.projectId = project.id; button.disabled = this.busy();
       const badge = document.createElement("span"); badge.className = "project-stage"; badge.dataset.stage = project.stage; badge.textContent = project.unpublishedChanges && project.stage === "verified" ? "Unpublished changes" : stages[project.stage] ?? project.stage;
       const title = document.createElement("strong"); title.textContent = project.title; title.title = project.title;
       const detail = document.createElement("span"); detail.className = "project-detail"; detail.textContent = `${source.scope === "browser" ? "This browser" : "Your account"} · ${new Date(project.createdAt).toLocaleDateString()}${project.verifiedVersion ? ` · Version ${project.verifiedVersion}` : ""}`;

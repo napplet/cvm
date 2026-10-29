@@ -12,7 +12,7 @@ const checkpointId = "checkpoint:retention";
 const committedAtMs = 1_700_000_000_000;
 
 async function fixture(nowMs: number, options: Readonly<{ failDelete?: boolean }> = {}) {
-  const store = new TransactionalMemoryFundingStore() as TransactionalMemoryFundingStore & ContinuationFundingStore;
+  const store = new TransactionalMemoryFundingStore();
   await store.transact(accountId, (transaction) => transaction.pauseForFunding({
     accountId, sessionId: "session:retention", admissionReference: "admission:retention", idempotencyKey: "pause:retention",
     fingerprint: "a".repeat(64), pendingFingerprint: "b".repeat(64), expectedSessionVersion: 2, pauseGeneration: 1,

@@ -28,8 +28,10 @@ test("canonical WorkerPort schemas are strict and exclude durable authority", ()
   expect(ToolRequestSchema.safeParse({ ...binding, tool: "publish", callId: "c", evidenceId: "e" }).success).toBeFalse();
   expect(ToolRequestSchema.safeParse({ ...binding, tool: "workspace_write", callId: "c", evidenceId: "e", path: "a", content: "x", shell: "sh" }).success).toBeFalse();
   const event: WorkerEvent = WorkerEventSchema.parse({ kind: "progress", turn: 1, detail: "proposal prepared" });
+  if (!("kind" in event)) throw new Error("EXPECTED_WORKER_PROGRESS_EVENT");
   expect(event.kind).toBe("progress");
   const result: WorkerRunResult = WorkerRunResultSchema.parse({ status: "unavailable", code: "WORKER_UNAVAILABLE" });
+  if (result.status !== "unavailable") throw new Error("EXPECTED_WORKER_UNAVAILABLE_RESULT");
   expect(result.code).toBe("WORKER_UNAVAILABLE");
   expect(WorkerRunResultSchema.safeParse({ status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events: [] }).success).toBeFalse();
   expect(WorkerRunResultSchema.safeParse({ status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events: Array.from({ length: PHASE_02_POLICY_INITIAL.action.maxTurns + 1 }, (_, index) => ({ kind: "progress", turn: index + 1, detail: "too many" })) }).success).toBeFalse();

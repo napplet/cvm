@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  type AuthorizationRequestInput,
   createOfficialConsentReceipt,
   createAuthorizationReceipt,
   createAuthorizationRequest,
@@ -43,7 +44,7 @@ const input = (overrides: Record<string, unknown> = {}) => ({
   gcpEffects: { projectBootstrap: true, billing: true, apiEnablement: ["run.googleapis.com", "sqladmin.googleapis.com", "storage.googleapis.com"] },
   expiresAtMs: 1_500,
   ...overrides,
-});
+} satisfies AuthorizationRequestInput);
 
 test("creates one canonical USD request and exact expected receipt", async () => {
   const request = await createAuthorizationRequest(input());

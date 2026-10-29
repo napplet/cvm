@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createProductionLiveCostCatalog } from "../../src/release/costs/production-catalog";
-import { RELEASE_COST_FAMILIES } from "../../src/release/costs/live-estimator";
+import { PriceFactSchema, RELEASE_COST_FAMILIES } from "../../src/release/costs/live-estimator";
 
 const digest = (letter: string) => letter.repeat(64);
 const nowMs = 1_000_000;
@@ -64,10 +64,10 @@ function catalog(overrides: Partial<Record<string, unknown>> = {}) {
 
 test("derives one complete current sixteen-family catalog from public sources without selecting a future project", async () => {
   const fixture = catalog();
-  const facts = await fixture.catalog.listPriceFacts({ providers: RELEASE_COST_FAMILIES });
+  const facts = (await fixture.catalog.listPriceFacts({ providers: RELEASE_COST_FAMILIES })).map((fact) => PriceFactSchema.parse(fact));
   expect(fixture.calls()).toBe(1);
   expect(facts).toHaveLength(16);
-  expect(facts.map((fact) => fact.provider)).toEqual(RELEASE_COST_FAMILIES);
+  expect(facts.map((fact) => fact.provider)).toEqual([...RELEASE_COST_FAMILIES]);
   expect(facts.find((fact) => fact.provider === "contextvm")).toMatchObject({ priceMicros: 0, sourceId: "napplet-cvm-nonbillable-policy-v1", unit: "operation" });
   expect(facts.find((fact) => fact.provider === "modal")).toMatchObject({ priceMicros: 18, sourceId: "modal-official-pricing" });
   expect(facts.find((fact) => fact.provider === "fly")).toMatchObject({ priceMicros: 19, sourceId: "fly-official-pricing" });

@@ -3,11 +3,11 @@ import { mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadProtectedCertificationAdapterRegistry } from "../../src/certification/adapters";
-import { runProtectedCertificationProfile } from "../../src/certification/runner";
+import { runProtectedCertificationProfile, type ProtectedCertificationProfile } from "../../src/certification/runner";
 import { canonicalJson } from "../../src/promotion/schema";
 
 const digest = (value: string) => value.repeat(64).slice(0, 64);
-const binding = {
+const binding: NonNullable<ProtectedCertificationProfile["releaseBinding"]> = {
   releaseId: digest("1"), sourceRevision: "a".repeat(40), sourceSha256: digest("e"), supplyChainPolicy: { cosign: { executableSha256: digest("0"), signerIdentity: "https://github.com/acme/napplet/.github/workflows/release.yml@refs/heads/main", issuer: "https://token.actions.githubusercontent.com", predicateType: "https://slsa.dev/provenance/v1" }, sbom: { bomFormat: "CycloneDX", specVersion: "1.5", generator: { vendor: "acme", name: "sealed-toolchain", version: "1" } } }, inputs: {
     controlImageDigest: digest("2"), workerImageDigest: digest("3"), packageLockSha256: digest("4"), toolchainSha256: digest("5"),
     migrationSha256: digest("6"), configSha256: digest("7"), policySha256: digest("8"), datasetSha256: digest("9"), goldenSha256: digest("a"), sbomSha256: digest("b"), provenanceSha256: digest("c"),

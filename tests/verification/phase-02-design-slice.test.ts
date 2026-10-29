@@ -12,7 +12,7 @@ const digest = (value: string) => value.repeat(64).slice(0, 64);
 const deterministicChecks = [
   "tracer", "admission", "risk", "session", "gateway", "fake-worker", "artifact-contract", "reference-set",
 ] as const;
-const provider = { version: 1, provider: "modal", status: "blocked" as const, selection: "unselected" as const, reasonCode: "PROVIDER_UNSELECTED", policyVersion: "phase-02-policy-2026-08-04", failedChecks: [], limitations: ["NOT_PRODUCTION_CERTIFIED", "SLO_NOT_MEASURED"] as const, evidenceSha256: digest("a") };
+const provider: Phase02DesignInput["providerObservation"] = { version: 1, provider: "modal", status: "blocked" as const, selection: "unselected" as const, reasonCode: "PROVIDER_UNSELECTED", policyVersion: "phase-02-policy-2026-08-04", failedChecks: [], limitations: ["NOT_PRODUCTION_CERTIFIED", "SLO_NOT_MEASURED"] as const, evidenceSha256: digest("a") };
 const input: Phase02DesignInput = {
   policy: { identity: "phase-02-policy-2026-08-04", sha256: digest("b") },
   sqlite: { identity: "phase-02-sqlite-session-store-v1", schemaSha256: digest("c") },
@@ -51,7 +51,9 @@ describe("Phase 02 design evidence", () => {
     const decision = await evaluatePhase02Design(input);
     await expect(validatePhase02DesignEvidence({ ...decision.evidence, offlineVerdict: "blocked" })).rejects.toThrow();
     await expect(validatePhase02DesignEvidence({ ...decision.evidence, rawPrompt: "synthetic" } as unknown as typeof decision.evidence)).rejects.toThrow();
-    await expect(validatePhase02DesignEvidence({ ...decision.evidence, deferrals: ["launch-certification", "unknown"] })).rejects.toThrow();
+    const unknownDeferrals = structuredClone(decision.evidence);
+    Reflect.set(unknownDeferrals, "deferrals", ["launch-certification", "unknown"]);
+    await expect(validatePhase02DesignEvidence(unknownDeferrals)).rejects.toThrow();
     const directory = await mkdtemp(join(process.env.TMPDIR ?? "/tmp", "napplet-phase-02-design-"));
     try {
       const evidence = await writePhase02DesignEvidence(directory, input);

@@ -20,13 +20,13 @@ const canaries = [
   "native receipt", "cli output", "runtime message", "provider payload", "/private/local/path", "user-defined-label",
 ];
 
-function observation(stage = LIFECYCLE_STAGES[0], outcome = LIFECYCLE_OUTCOMES[0]) {
+function observation(stage: typeof LIFECYCLE_STAGES[number] = LIFECYCLE_STAGES[0], outcome: typeof LIFECYCLE_OUTCOMES[number] = LIFECYCLE_OUTCOMES[0]) {
   return { version: "cvm.lifecycle.v1", correlationId: "account/session/action", stage, outcome, monotonicMs: 42 };
 }
 
 test("uses the same closed lifecycle vocabulary at trusted coordinator and exporter boundaries", () => {
-  expect(LifecycleStageSchema.options).toEqual(LIFECYCLE_STAGES);
-  expect(LifecycleOutcomeSchema.options).toEqual(LIFECYCLE_OUTCOMES);
+  expect(LifecycleStageSchema.options).toEqual([...LIFECYCLE_STAGES]);
+  expect(LifecycleOutcomeSchema.options).toEqual([...LIFECYCLE_OUTCOMES]);
 });
 
 test("every finite lifecycle stage and outcome exports with protected correlation and no unknown attributes", async () => {

@@ -15,7 +15,7 @@ const inventory = ["harness_state", "workspace", "artifact_lineage", "validation
 
 async function digest(value: Uint8Array | unknown): Promise<string> {
   const bytes = value instanceof Uint8Array ? value : new TextEncoder().encode(JSON.stringify(value));
-  const hash = await crypto.subtle.digest("SHA-256", bytes);
+  const hash = await crypto.subtle.digest("SHA-256", new Uint8Array(bytes).buffer);
   return [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 

@@ -38,7 +38,7 @@ async function setup(input: Readonly<{ credit: string; requestedCap: string }>) 
   const admission = await admissions.admit(command, await trustedAdmissionReceipt(command));
   if (admission.status !== "accepted") throw new Error("test admission must be accepted");
   const effects = { dispatches: 0, workers: 0 };
-  const gateway: ModelGateway = { async dispatch() { effects.dispatches += 1; throw new Error("must not dispatch"); }, async lookup() { return { status: "not_found" }; } };
+  const gateway: ModelGateway = { async dispatch() { effects.dispatches += 1; throw new Error("must not dispatch"); }, async lookup() { throw new Error("UNEXPECTED_PROVIDER_LOOKUP"); } };
   const service = new MeteredGenerationService({ fundedAdmission: admissions, store, gateway, worker: worker(effects), artifactVerifier: verifier, clock: { nowMs: () => 1_700_000_000_000 } });
   return { admission, budgetAuthorizations: () => budgetAuthorizations, effects, service, store };
 }
@@ -60,6 +60,7 @@ describe("funding interruption before every new effect", () => {
     expect(fixture.effects).toEqual({ dispatches: 0, workers: 0 });
     expect(fixture.store.meteredActions).toEqual([]);
     expect(fixture.store.postings).toHaveLength(1);
+    if (first.status !== "needs_top_up") throw new Error("EXPECTED_FUNDING_PAUSE");
     const durablePause = await fixture.store.transact(first.accountId, (transaction) => transaction.findContinuationPause(first.sessionId, 1));
     expect(durablePause).toMatchObject({
       state: "needs_top_up",

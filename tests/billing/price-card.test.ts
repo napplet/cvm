@@ -5,7 +5,7 @@ function receipt(usage: readonly { dimension: "input_tokens" | "output_tokens" |
   return {
     operationId: "operation-1", providerRequestId: "provider-request-1", provider: "deterministic_fixture" as const, model: "phase-04-fixture-model",
     profileId: "code-proposal", priceCardId: PHASE_04_DETERMINISTIC_PRICE_CARD.id, selection: "unselected" as const,
-    completedAt: "2026-08-04T00:00:01.000Z", provenance: { protectedEvidenceReference: "provider-evidence-1" }, usage,
+    completedAt: "2026-08-04T00:00:01.000Z", provenance: { protectedEvidenceReference: "provider-evidence-1" }, usage: usage.map((line) => ({ ...line })),
   };
 }
 

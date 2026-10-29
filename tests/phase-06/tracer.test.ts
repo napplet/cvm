@@ -6,6 +6,7 @@ import type {
   OwnerEventVerifierPort,
   PreviewHostPort,
   SealedArtifactPort,
+  SealedArtifactIdentity,
 } from "../../src/publication/contracts.js";
 import { PreviewService } from "../../src/publication/preview-service.js";
 import { PublicationService } from "../../src/publication/publication-service.js";
@@ -17,7 +18,7 @@ import { reportPhase06Observation } from "./reference-observation.js";
 const sealedFiles = Object.freeze([
   Object.freeze({ path: "/index.html", mimeType: "text/html", sha256: "e1572f5549c18871efdf707d9d28292dae1b32b0b21f98c3def8ff045f540b85", size: 18 }),
 ]);
-const artifact = Object.freeze({
+const artifact = Object.freeze<SealedArtifactIdentity>({
   accountId: "account:owner",
   sessionId: "session:tracer",
   artifactId: "artifact:tracer",
@@ -53,7 +54,7 @@ const completedEvent = Object.freeze({
 
 class TracerSealedArtifactPort implements SealedArtifactPort {
   calls = 0;
-  async readVerified(input: { accountId: string; sessionId: string; artifactId: string }) {
+  async readVerified(input: Parameters<SealedArtifactPort["readVerified"]>[0]) {
     this.calls += 1;
     expect(input).toEqual({ accountId: artifact.accountId, sessionId: artifact.sessionId, artifactId: artifact.artifactId });
     return artifact;
@@ -61,14 +62,14 @@ class TracerSealedArtifactPort implements SealedArtifactPort {
 }
 class TracerPreviewHostPort implements PreviewHostPort {
   calls = 0;
-  async createDescriptor(input: { artifact: typeof artifact; review: typeof review; nowMs: number; expiresAtMs: number }) {
+  async createDescriptor(input: Parameters<PreviewHostPort["createDescriptor"]>[0]) {
     this.calls += 1;
     return { ...input, previewGrantId: "grant:tracer", iframeSandbox: "allow-scripts" as const, authority: "preview_read_only" as const };
   }
 }
 class TracerOwnerEventVerifierPort implements OwnerEventVerifierPort {
   calls = 0;
-  async verify(input: { event: typeof completedEvent; intent: { ownerPubkey: string; artifact: { aggregateSha256: string }; capabilityDigest: string } }) {
+  async verify(input: Parameters<OwnerEventVerifierPort["verify"]>[0]) {
     this.calls += 1;
     expect(input.event).toEqual(completedEvent);
     expect(input.intent.ownerPubkey).toBe(completedEvent.pubkey);
@@ -79,25 +80,25 @@ class TracerOwnerEventVerifierPort implements OwnerEventVerifierPort {
 }
 class TracerNappletDeploymentPort implements NappletDeploymentPort {
   calls: string[] = [];
-  async deployExact(input: { operationId: string; artifact: typeof artifact; signedOwnerManifest: typeof completedEvent }) {
+  async deployExact(input: Parameters<NappletDeploymentPort["deployExact"]>[0]) {
     this.calls.push(input.operationId);
     expect(input.artifact.aggregateSha256).toBe(artifact.aggregateSha256);
     expect(input.signedOwnerManifest.id).toBe(completedEvent.id);
-    return { state: "completed" as const, observationId: "observation:deploy", deploymentId: "deployment:tracer", fullServerUploadId: "upload:full" };
+    return { operationId: input.operationId, state: "completed" as const, observationId: "observation:deploy", deploymentId: "deployment:tracer", fullServerUploadId: "upload:full" };
   }
-  async publishOwnerManifest(input: { operationId: string; event: typeof completedEvent }) {
+  async publishOwnerManifest(input: Parameters<NappletDeploymentPort["publishOwnerManifest"]>[0]) {
     this.calls.push(input.operationId);
     expect(input.event.id).toBe(completedEvent.id);
-    return { state: "completed" as const, observationId: "observation:owner", relayObservation: "relay:owner-manifest" };
+    return { operationId: input.operationId, state: "completed" as const, observationId: "observation:owner", relayObservation: "relay:owner-manifest" };
   }
 }
 class TracerAttestationPort implements AttestationPort {
   calls: string[] = [];
-  async publish(input: { operationId: string; artifact: typeof artifact; ownerEventId: string }) {
+  async publish(input: Parameters<AttestationPort["publish"]>[0]) {
     this.calls.push(input.operationId);
     expect(input.artifact.aggregateSha256).toBe(artifact.aggregateSha256);
     expect(input.ownerEventId).toBe(completedEvent.id);
-    return { state: "completed" as const, observationId: "observation:attestation", attestationId: "attestation:tracer", relayObservation: "relay:attestation" };
+    return { operationId: input.operationId, state: "completed" as const, observationId: "observation:attestation", attestationId: "attestation:tracer", relayObservation: "relay:attestation" };
   }
 }
 class TracerClock { nowMs = () => 1_700_000_000_000; }
@@ -120,11 +121,12 @@ function harness() {
 test("verified artifact becomes an exact preview and persisted intent before signing or deployment", async () => {
   const h = harness();
   const descriptor = await h.preview.previewVerifiedArtifact({ accountId: artifact.accountId, sessionId: artifact.sessionId, artifactId: artifact.artifactId, runtimeVariant: "napplet-host/v1" });
+  if (!("artifact" in descriptor)) throw new Error("TRACER_PREVIEW_DENIED");
   expect(descriptor.artifact.aggregateSha256).toBe(artifact.aggregateSha256);
   expect(descriptor.iframeSandbox).toBe("allow-scripts");
   expect(descriptor.authority).toBe("preview_read_only");
   expect(descriptor.review.capabilityDigest).toBe(review.capabilityDigest);
-  const intent = await h.publication.createIntent({ accountId: artifact.accountId, sessionId: artifact.sessionId, artifact, review, ownerPubkey: completedEvent.pubkey, idempotencyKey: "intent:tracer", fingerprint: "fingerprint:tracer", purpose: "Publish tracer", consent: "approved", runtimeVariant: "napplet-host/v1" });
+  const intent = await h.publication.createIntent({ accountId: artifact.accountId, sessionId: artifact.sessionId, artifact, review, ownerPubkey: completedEvent.pubkey, idempotencyKey: "intent:tracer", purpose: "Publish tracer", consent: "approved", runtimeVariant: "napplet-host/v1" });
   expect(intent.status).toBe("intent_ready");
   expect(h.verifier.calls).toBe(0);
   expect(h.deployment.calls).toEqual([]);
@@ -133,7 +135,7 @@ test("verified artifact becomes an exact preview and persisted intent before sig
 
 test("verified owner event claims each persisted effect before its deterministic call", async () => {
   const h = harness();
-  const intent = await h.publication.createIntent({ accountId: artifact.accountId, sessionId: artifact.sessionId, artifact, review, ownerPubkey: completedEvent.pubkey, idempotencyKey: "intent:tracer", fingerprint: "fingerprint:tracer", purpose: "Publish tracer", consent: "approved", runtimeVariant: "napplet-host/v1" });
+  const intent = await h.publication.createIntent({ accountId: artifact.accountId, sessionId: artifact.sessionId, artifact, review, ownerPubkey: completedEvent.pubkey, idempotencyKey: "intent:tracer", purpose: "Publish tracer", consent: "approved", runtimeVariant: "napplet-host/v1" });
   const result = await h.publication.submitSignedManifest({ accountId: artifact.accountId, intentId: intent.intentId, command: { commandId: "contextvm:tracer", intentId: intent.intentId, intentFingerprint: intent.fingerprint, operationIds: { deploy: `deploy:${intent.intentId}`, ownerManifest: `owner_manifest:${intent.intentId}`, attestation: `attestation:${intent.intentId}` } }, event: completedEvent });
   expect(h.verifier.calls).toBe(1);
   expect(h.deployment.calls).toEqual([`deploy:${intent.intentId}`, `owner_manifest:${intent.intentId}`]);
@@ -143,7 +145,7 @@ test("verified owner event claims each persisted effect before its deterministic
 
 test("terminal result links every exact identity and exact replay produces no effects", async () => {
   const h = harness();
-  const intent = await h.publication.createIntent({ accountId: artifact.accountId, sessionId: artifact.sessionId, artifact, review, ownerPubkey: completedEvent.pubkey, idempotencyKey: "intent:tracer", fingerprint: "fingerprint:tracer", purpose: "Publish tracer", consent: "approved", runtimeVariant: "napplet-host/v1" });
+  const intent = await h.publication.createIntent({ accountId: artifact.accountId, sessionId: artifact.sessionId, artifact, review, ownerPubkey: completedEvent.pubkey, idempotencyKey: "intent:tracer", purpose: "Publish tracer", consent: "approved", runtimeVariant: "napplet-host/v1" });
   const command = { commandId: "contextvm:tracer", intentId: intent.intentId, intentFingerprint: intent.fingerprint, operationIds: { deploy: `deploy:${intent.intentId}`, ownerManifest: `owner_manifest:${intent.intentId}`, attestation: `attestation:${intent.intentId}` } };
   const first = await h.publication.submitSignedManifest({ accountId: artifact.accountId, intentId: intent.intentId, command, event: completedEvent });
   const replay = await h.publication.submitSignedManifest({ accountId: artifact.accountId, intentId: intent.intentId, command, event: completedEvent });

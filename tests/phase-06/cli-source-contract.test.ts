@@ -45,6 +45,7 @@ describe("promoted napplet CLI exact-source contract", () => {
     });
     expect(validatedAvailablePromotedCliSourceContract(available)).toBeDefined();
 
+    if (available.status !== "available") throw new Error("PROMOTED_CLI_SOURCE_UNAVAILABLE");
     for (const forgedOrMutated of [
       { status: "available", liveExecution: "not_observed" },
       { ...available, identity: { ...available.identity, sourceCommit: "0".repeat(40) } },

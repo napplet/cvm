@@ -55,7 +55,7 @@ export function validatePhase06ReferenceSet(value: unknown) {
   const mapped = (key: "requirements" | "decisions" | "threats", ids: readonly string[]) => ids.every((id) => parsed.cases.some((item) => item[key].includes(id)));
   if (!mapped("requirements", REQUIREMENTS) || !mapped("decisions", DECISIONS) || !mapped("threats", THREATS) || !EDGES.every((edge) => parsed.cases.some((item) => item.edge === edge)) || !parsed.cases.some((item) => item.edge === "HOST-SURFACE")) throw new Error("Phase 06 requirement, decision, threat, UI, or edge coverage is incomplete");
   for (const item of parsed.cases) assertNoNumericApproximation({ input: item.input, expected: item.expected, expectedEffects: item.expectedEffects });
-  return Object.freeze({ ...parsed, cases: Object.freeze(parsed.cases.map(Object.freeze)) });
+  return Object.freeze({ ...parsed, cases: Object.freeze(parsed.cases.map((item) => Object.freeze(item))) });
 }
 
 export async function executePhase06ReferenceCase(item: Phase06ReferenceCase) {

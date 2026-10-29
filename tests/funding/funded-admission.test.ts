@@ -1,5 +1,7 @@
+import type { ContextVmTransportPort } from "../../src/contextvm/sdk-bridge";
+import type { ContextVmAnnouncement } from "../../src/contextvm/announcement";
 import { describe, expect, test } from "bun:test";
-import { FundedAdmissionService } from "../../src/funding/funded-admission";
+import { FundedAdmissionService, type ReadyCapacityPort } from "../../src/funding/funded-admission";
 import { AccountStatusService } from "../../src/funding/account-status";
 import { FundingService } from "../../src/funding/funding-service";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
@@ -84,7 +86,7 @@ describe("FundedAdmissionService", () => {
     const store = new TransactionalMemoryFundingStore();
     const funding = new FundingService(store);
     await funding.execute(creditCommand());
-    const capacity = {
+    const capacity: ReadyCapacityPort = {
       reserveNow: async ({ intentReference }) => exactReadyReservation(intentReference, "capacity:one", "2026-08-05T00:00:00.000Z"),
       observe: async () => ({ status: "unknown" as const }),
       release: async () => undefined,
@@ -104,7 +106,7 @@ describe("FundedAdmissionService", () => {
     await funding.execute(creditCommand());
     let reserves = 0;
     let observations = 0;
-    const capacity = {
+    const capacity: ReadyCapacityPort = {
       reserveNow: async () => { reserves += 1; throw new Error("timeout after effect"); },
       observe: async ({ intentReference }) => {
         observations += 1;
@@ -130,7 +132,7 @@ describe("FundedAdmissionService", () => {
     const started = new Promise<void>((resolve) => { release = resolve; });
     let signalEntered!: () => void;
     const entered = new Promise<void>((resolve) => { signalEntered = resolve; });
-    const capacity = {
+    const capacity: ReadyCapacityPort = {
       reserveNow: async ({ intentReference }) => { reserves += 1; signalEntered(); await started; return exactReadyReservation(intentReference, "capacity:fenced", "2026-08-05T00:00:00.000Z"); },
       observe: async () => ({ status: "unknown" as const }), release: async () => undefined,
     };
@@ -183,7 +185,7 @@ describe("FundedAdmissionService", () => {
       store,
       sessions: { list: async () => ({ active: [], resumable: [], pendingActions: [] }) },
       rails: {
-        list: async ({ accountId }) => accountId === (await funding.status(principal)).accountId ? [
+        list: async ({ accountId }: { accountId: string }) => accountId === (await funding.status(principal)).accountId ? [
           { topUpId: "lightning-pending", rail: "lightning", state: "pending", amount: "20", unit: "sat", createdAt: "2026-08-04T00:01:00.000Z", safeDisplayReference: "lightning:…pending" },
           { topUpId: "lightning-failed", rail: "lightning", state: "failed", amount: "30", unit: "sat", createdAt: "2026-08-04T00:02:00.000Z" },
           { topUpId: "cashu-reconcile", rail: "cashu", state: "reconciliation_pending", amount: "40", unit: "sat", createdAt: "2026-08-04T00:03:00.000Z" },
@@ -205,8 +207,8 @@ describe("FundedAdmissionService", () => {
 
   test("production composition rejects structural durability claims without a database-owned encrypted vault", () => {
     const pool = { connect: async () => { throw new Error("unused"); } };
-    const transport = { configureAnnouncement: () => undefined, onInbound: () => undefined, canonicalInvocation: () => ({ invocationHash: "f".repeat(64) }), sendResponse: async () => undefined, sendNotification: async () => undefined };
-    const capacity = { reserveNow: async () => ({ status: "refused" as const }), observe: async () => ({ status: "unknown" as const }), release: async () => undefined };
+    const transport: ContextVmTransportPort = { configureAnnouncement: () => undefined, onInbound: () => undefined, canonicalInvocation: (clientPubkey) => ({ clientPubkey, invocationHash: "f".repeat(64) }), sendResponse: async () => undefined, sendNotification: async () => undefined };
+    const capacity: ReadyCapacityPort = { reserveNow: async () => ({ status: "refused" as const }), observe: async () => ({ status: "unknown" as const }), release: async () => undefined };
     const forgedLightning = { durable: true, begin: async () => ({ topUpId: "forged", state: "pending" }) };
     const forgedCashu = { durable: true, submit: async () => ({ topUpId: "forged", state: "verifying" }) };
     expect(() => createFundedCore({ postgresPool: pool, transport, capacity, lightning: forgedLightning, cashu: forgedCashu } as never)).toThrow("PRODUCTION_RAIL_COMPOSITION_REQUIRED");
@@ -214,8 +216,8 @@ describe("FundedAdmissionService", () => {
 
   test("production composition builds both durable rails around one database-owned AES-GCM vault", () => {
     const pool = { connect: async () => { throw new Error("unused"); } };
-    const transport = { configureAnnouncement: () => undefined, onInbound: () => undefined, canonicalInvocation: () => ({ invocationHash: "f".repeat(64) }), sendResponse: async () => undefined, sendNotification: async () => undefined };
-    const capacity = { reserveNow: async () => ({ status: "refused" as const }), observe: async () => ({ status: "unknown" as const }), release: async () => undefined };
+    const transport: ContextVmTransportPort = { configureAnnouncement: () => undefined, onInbound: () => undefined, canonicalInvocation: (clientPubkey) => ({ clientPubkey, invocationHash: "f".repeat(64) }), sendResponse: async () => undefined, sendNotification: async () => undefined };
+    const capacity: ReadyCapacityPort = { reserveNow: async () => ({ status: "refused" as const }), observe: async () => ({ status: "unknown" as const }), release: async () => undefined };
     const lightningReceiver = new FakeLightningReceiptPort({ create: { status: "created", serviceReference: "receiver:compose", invoice: "lnbc-compose", invoiceIdentity: "compose", paymentHash: "compose", amount: "20", unit: "sat", expiresAt: "2026-08-05T00:00:00.000Z", safeDisplayReference: "lightning:…compose" } });
     const railOptions = { postgresPool: pool, transport, capacity, lightningReceiver, cashuProvider: new CashuTsSettlementAdapter(), cashuPolicies: new CashuMintPolicyRegistry(cashuFixture.policies[0]!), admissionReceiptSecret: new Uint8Array(32).fill(6), productionAccountingConfiguration: { mode: "production-real", adapters: ["lightning", "cashu", "nwc"], catalog: { kind: "live" }, keyMode: "secret-broker" } };
     expect(createFundedCore({ ...railOptions, protectedMaterialKey: new Uint8Array(32).fill(8) }).mode).toBe("configured");
@@ -225,15 +227,18 @@ describe("FundedAdmissionService", () => {
 
   test("funded composition announces publication only for the fully validated promoted source contract", () => {
     const pool = { connect: async () => { throw new Error("unused"); } };
-    const capacity = { reserveNow: async () => ({ status: "refused" as const }), observe: async () => ({ status: "unknown" as const }), release: async () => undefined };
+    const capacity: ReadyCapacityPort = { reserveNow: async () => ({ status: "refused" as const }), observe: async () => ({ status: "unknown" as const }), release: async () => undefined };
     const publication = { createIntent: async () => ({}), submitSignedManifest: async () => ({}), status: async () => ({}), reconcile: async () => ({}) };
     const source = probePromotedCliPreSignedRoute(sourceFixture);
+    if (source.status !== "available") throw new Error("FIXTURE_PROMOTED_SOURCE_REQUIRED");
     const announcementFor = (publicationSourceContract: unknown) => {
-      let configured: unknown;
-      const transport = { configureAnnouncement: (value: unknown) => { configured = value; }, onInbound: () => undefined, canonicalInvocation: () => ({ invocationHash: "f".repeat(64) }), sendResponse: async () => undefined, sendNotification: async () => undefined };
+      const configured: ContextVmAnnouncement[] = [];
+      const transport: ContextVmTransportPort = { configureAnnouncement: (value) => { configured.push(value); }, onInbound: () => undefined, canonicalInvocation: (clientPubkey) => ({ clientPubkey, invocationHash: "f".repeat(64) }), sendResponse: async () => undefined, sendNotification: async () => undefined };
       const options = { postgresPool: pool, transport, capacity, publication, publicationSourceContract, lightningReceiver: new FakeLightningReceiptPort({ create: { status: "created", serviceReference: "receiver:publication-contract", invoice: "lnbc-contract", invoiceIdentity: "contract", paymentHash: "contract", amount: "20", unit: "sat" as const, expiresAt: "2026-08-05T00:00:00.000Z", safeDisplayReference: "lightning:…contract" } }), cashuProvider: new CashuTsSettlementAdapter(), cashuPolicies: new CashuMintPolicyRegistry(cashuFixture.policies[0]!), protectedMaterialKey: new Uint8Array(32).fill(8), admissionReceiptSecret: new Uint8Array(32).fill(6), productionAccountingConfiguration: { mode: "production-real", adapters: ["lightning", "cashu", "nwc"], catalog: { kind: "live" }, keyMode: "secret-broker" } };
       createFundedCore(options);
-      return configured as { metadata: { tools: Array<{ name: string; available: boolean; invocable: boolean }> } };
+      const announcement = configured[0];
+      if (!announcement) throw new Error("FIXTURE_ANNOUNCEMENT_REQUIRED");
+      return announcement;
     };
     const isAvailable = (announcement: ReturnType<typeof announcementFor>) => announcement.metadata.tools.find((tool) => tool.name === "publication");
     expect(isAvailable(announcementFor(source))).toEqual({ name: "publication", available: true, planned: false, invocable: true });
@@ -262,7 +267,7 @@ describe("FundedAdmissionService", () => {
       await new FundingService(inner).execute({ ...creditCommand(), idempotencyKey: `credit-compensation:${failOn}`, payload: { settlement: { ...settlement, topUpId: `topup-compensation:${failOn}`, externalReference: `external-compensation:${failOn}`, settlementReference: `settlement-compensation:${failOn}` } } });
       const store = new FailOnceFundingStore(inner, failOn);
       let reserves = 0; let releases = 0;
-      const capacity = {
+      const capacity: ReadyCapacityPort = {
         reserveNow: async ({ intentReference }) => { reserves += 1; return exactReadyReservation(intentReference, `capacity:compensation:${failOn}`, "2026-08-05T00:00:00.000Z"); },
         observe: async () => ({ status: "unknown" as const }),
         release: async () => { releases += 1; },
@@ -283,7 +288,7 @@ describe("FundedAdmissionService", () => {
     await new FundingService(inner).execute({ ...creditCommand(), idempotencyKey: "credit-release-ambiguous", payload: { settlement: { ...settlement, topUpId: "topup-release-ambiguous", externalReference: "external-release-ambiguous", settlementReference: "settlement-release-ambiguous" } } });
     const store = new FailOnceFundingStore(inner, 4);
     let reserves = 0; let releases = 0; let observations = 0;
-    const capacity = {
+    const capacity: ReadyCapacityPort = {
       reserveNow: async ({ intentReference }) => { reserves += 1; return exactReadyReservation(intentReference, "capacity:release-ambiguous", "2026-08-05T00:00:00.000Z"); },
       observe: async () => { observations += 1; return { status: "unknown" as const, reference: "capacity:release-ambiguous" }; },
       release: async () => { releases += 1; throw new Error("CAPACITY_RELEASE_UNKNOWN"); },
@@ -302,7 +307,7 @@ describe("FundedAdmissionService", () => {
     await new FundingService(inner).execute({ ...creditCommand(), idempotencyKey: "credit-fail-4", payload: { settlement: { ...settlement, topUpId: "topup-fail-4", externalReference: "external-fail-4", settlementReference: "settlement-fail-4" } } });
     const store = new FailAvailableAndPreFenceStore(inner);
     let reserves = 0; let releases = 0; let observations = 0;
-    const capacity = {
+    const capacity: ReadyCapacityPort = {
       reserveNow: async ({ intentReference }) => { reserves += 1; return exactReadyReservation(intentReference, "capacity:fail-4", "2026-08-05T00:00:00.000Z"); },
       release: async () => { releases += 1; },
       observe: async () => { observations += 1; return { status: "refused" as const, reason: "already-released" }; },
@@ -323,7 +328,7 @@ describe("FundedAdmissionService", () => {
     await new FundingService(inner).execute({ ...creditCommand(), idempotencyKey: "credit-fail-5", payload: { settlement: { ...settlement, topUpId: "topup-fail-5", externalReference: "external-fail-5", settlementReference: "settlement-fail-5" } } });
     const store = new FailReleaseFinalizationStore(inner);
     let reserves = 0; let releases = 0; let observations = 0;
-    const capacity = {
+    const capacity: ReadyCapacityPort = {
       reserveNow: async ({ intentReference }) => { reserves += 1; return exactReadyReservation(intentReference, "capacity:fail-5", "2026-08-05T00:00:00.000Z"); },
       release: async () => { releases += 1; },
       observe: async () => { observations += 1; return { status: "refused" as const, reason: "already-released" }; },

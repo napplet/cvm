@@ -1,6 +1,6 @@
 import { NostrClientTransport } from "@contextvm/sdk/transport";
 import { PrivateKeySigner } from "@contextvm/sdk/signer";
-import type { NostrSigner } from "@contextvm/sdk/core";
+import { EncryptionMode, type NostrSigner } from "@contextvm/sdk/core";
 export type ContextVmSigner = NostrSigner & { release?(): void };
 import { acceptDevelopmentProgress, progressMethod, progressTools, type DevelopmentProgress } from "../progress-contract";
 
@@ -25,7 +25,7 @@ class PaymentTaggedClient extends NostrClientTransport {
 
   setPaymentTags(id: string | number, tags: readonly PaymentTag[]): void {
     // Tags are immutable and scoped to exactly one outbound request.
-    this.#requestTags.set(id, Object.freeze(tags.map((tag) => Object.freeze([...tag]))));
+    this.#requestTags.set(id, Object.freeze(tags.map((tag) => Object.freeze<PaymentTag>([...tag]))));
   }
 
   clearPaymentTags(id: string | number): void { this.#requestTags.delete(id); }
@@ -59,7 +59,7 @@ export class DevelopmentContextVmClient {
     // This key remains in the trusted development host's session storage. It
     // never enters bootstrap, ContextVM arguments, logs, or generated preview.
     this.#signer = typeof this.signingKey === "object" ? this.signingKey : new PrivateKeySigner(this.signingKey ?? browserSignerKey(this.bootstrap.servicePubkey));
-    const client = new PaymentTaggedClient({ signer: this.#signer, relayHandler: [this.bootstrap.relayUrl], serverPubkey: this.bootstrap.servicePubkey, encryptionMode: "required", logLevel: "silent" });
+    const client = new PaymentTaggedClient({ signer: this.#signer, relayHandler: [this.bootstrap.relayUrl], serverPubkey: this.bootstrap.servicePubkey, encryptionMode: EncryptionMode.REQUIRED, logLevel: "silent" });
     client.setClientPmis(["bitcoin-lightning-bolt11", "bitcoin-cashu-v4-direct"]);
     client.onmessage = (message: any) => {
       if (message?.method === progressMethod && !("id" in message)) {

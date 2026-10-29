@@ -1,3 +1,4 @@
+import { EncryptionMode } from "@contextvm/sdk/core";
 import { recoverRecordedReceipt } from "../dev/receipt-recovery";
 import { assertDevelopmentRootManifests } from "../dev/root-manifests";
 import { readGenerationEstimates } from "../dev/generation-estimates";
@@ -148,7 +149,7 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
     : maximumOperationCharge({ card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile: PHASE_04_MODEL_PROFILES["code-proposal"] });
   const identity = developmentServiceIdentity(config.fundingKey);
   const signer = new PrivateKeySigner(identity.signerPrivateKey);
-  const transport = new NostrServerTransport({ signer, relayHandler: [config.relayUrl], encryptionMode: "required", publishRelayList: false, injectRequestEventId: true, logLevel: "silent" });
+  const transport = new NostrServerTransport({ signer, relayHandler: [config.relayUrl], encryptionMode: EncryptionMode.REQUIRED, publishRelayList: false, injectRequestEventId: true, logLevel: "silent" });
   const bridge = new ContextVmSdkBridge(transport, ["service_info", "development_faucet", "development_publication", "cvm_admin", "operation_diagnostic", "projects", "remix_import"]);
   const progress = new DevelopmentProgressTransport(bridge);
   remixImports = new DevelopmentRemixImports(app.pool, new LocalRemixSourceImporter(readiness.imageDigest), state => progress.emit("source_import", state));
@@ -224,9 +225,9 @@ export async function createDevelopmentContextVmServer(options: Readonly<{ testM
         if (event.stage === "ledger_settlement" && event.outcome === "succeeded") progress.emit("ledger", "completed");
       } },
       proposalStore: composition.proposals,
-      continuation: new ContinuationService({ store: app.database.meteredFunding, includeAdmissionHold: true }), pricing,
+      continuation: new ContinuationService({ store: app.database.continuationFunding, includeAdmissionHold: true }), pricing,
     });
-    const preAdmission = new PreAdmissionSessionService({ store: app.database.meteredFunding, envelope: new PendingActionEnvelopeService(new LocalCheckpointStore({ root: resolve(stateRoot, "development-checkpoints") })), generation, pricing,
+    const preAdmission = new PreAdmissionSessionService({ store: app.database.funding, envelope: new PendingActionEnvelopeService(new LocalCheckpointStore({ root: resolve(stateRoot, "development-checkpoints") })), generation, pricing,
       pins: { policyVersion: "development-local-v1", profileId: pricing.profile.id, priceCardId: pricing.card.id, toolchainId: readiness.imageDigest, rootManifestSha256: new Bun.CryptoHasher("sha256").update(`${packageHash}:${lockHash}`).digest("hex") } });
     return { generation, preAdmission, pricing };
   };

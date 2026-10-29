@@ -123,7 +123,7 @@ export interface ContextVmFundingAdapterOptions {
   service: FundingService;
   transport: ContextVmTransportPort;
   /** Server-owned facades. Their absence makes their public tool unavailable. */
-  admissions?: FundedAdmissionService;
+  admissions?: Pick<FundedAdmissionService, "admit">;
   /** Only a verified owner command can increase a funded session maximum. */
   sessionCaps?: Pick<SessionCapApprovalService, "approve">;
   /** Server-held issuer for receipt-before-capacity admission authority. */

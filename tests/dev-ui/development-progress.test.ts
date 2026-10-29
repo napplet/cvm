@@ -1,3 +1,4 @@
+import {ProviderOperationIntentSchema,type ModelGateway,type ModelDispatchObservation} from "../../src/model/model-gateway";
 import { expect, test } from "bun:test";
 import { DevelopmentProgressTransport } from "../../src/dev-ui/development-progress";
 import { acceptDevelopmentProgress, DevelopmentProgressSchema } from "../../src/dev-ui/progress-contract";
@@ -65,4 +66,23 @@ test("MCP progress token survives the SDK rewriting the RPC id to a Nostr event 
   await inbound({ verifiedClientPubkey: "verified-owner", requestEventId: "signed-event", rawEvent: { id: "signed-event", tags: [] }, request: { id: "sdk-rewritten-id", method: "tools/call", params: { name: "start_session", _meta: { progressToken: "browser-id" }, arguments: { pubkey: "forged-owner" } } } });
   expect(notifications.length).toBe(2);
   for (const [owner, event, correlation] of notifications) { expect(owner).toBe("verified-owner"); expect(event.params.requestId).toBe("browser-id"); expect(correlation).toBe("signed-event"); }
+});
+
+
+test("an unsupported provider label cannot suppress model progress or change the authoritative operation",async()=>{
+ const f=fixture();let dispatches=0,lookups=0;
+ const observation={status:"definitive_not_accepted",operationId:"operation:fixture",providerRequestId:"provider:fixture",reason:"pre_dispatch_rejected",provenance:{protectedEvidenceReference:"evidence:fixture"}} satisfies ModelDispatchObservation;
+ const raw:ModelGateway={async dispatch(){dispatches++;return observation;},async lookup(){lookups++;return observation;}};
+ const gateway=f.progress.gateway(raw,{provider:"vertex_ai_gemini",model:"fixture-model"});
+ const intent=ProviderOperationIntentSchema.parse({operationId:observation.operationId,providerRequestId:observation.providerRequestId,accountId:"account:fixture",sessionId:"session:fixture",actionId:"action:fixture",expectedVersion:0,actionBudgetReference:"budget:fixture",profileId:"profile:fixture",priceCardId:"price:fixture",requestFingerprint:"a".repeat(64),prompt:"One fixture counter",maximumUnits:[{dimension:"input_tokens",units:"10"}],selection:"unselected"});
+ f.progress.onInbound(async input=>{
+  expect(await gateway.dispatch(intent,new AbortController().signal)).toBe(observation);
+  expect(await gateway.lookup(intent,new AbortController().signal)).toBe(observation);
+  await f.progress.sendResponse(input.verifiedClientPubkey,{jsonrpc:"2.0",id:input.request.id,result:"original"},input.requestEventId);
+ });
+ await f.invoke("projection");
+ const events=f.notifications.map(entry=>DevelopmentProgressSchema.parse(entry[1].params)).filter(event=>event.stage==="model");
+ expect(events).toHaveLength(4);
+ for(const event of events){expect(event).not.toHaveProperty("provider");expect(event.model).toBe("fixture-model");}
+ expect(dispatches).toBe(1);expect(lookups).toBe(1);expect(f.responses[0][1].result).toBe("original");
 });

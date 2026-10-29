@@ -395,7 +395,7 @@ export class ProductWorkspace {
     const list = this.el("conversation-messages");
     const messages = this.#costs ? (this.#pendingFrom === undefined ? [] : this.#messages.slice(this.#pendingFrom)) : this.#messages;
     const receipts = this.#costs ? [...this.#costs.requests].sort((a,b) => a.number - b.number).map(request => {
-      const failure = this.#messages.findLast(message => message.role === "assistant" && message.state && message.requestKey === request.requestKey);
+      const failure = this.#messages.slice().reverse().find(message => message.role === "assistant" && message.state && message.requestKey === request.requestKey);
       return requestCostElement(request, failure?.text);
     }) : [];
     const open = new Set([...list.querySelectorAll<HTMLDetailsElement>(".request-cost-details[open]")].map(el => el.closest<HTMLElement>("[data-request-id]")!.dataset.requestId));

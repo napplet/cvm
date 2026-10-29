@@ -40,7 +40,7 @@ export type SupplyChainDependencies = Readonly<{ readExecutable?: (path: string)
 
 async function sha256(value: unknown): Promise<string> {
   const bytes = value instanceof Uint8Array ? value : new TextEncoder().encode(typeof value === "string" ? value : canonicalJson(value));
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const digest = await crypto.subtle.digest("SHA-256", new Uint8Array(bytes));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 

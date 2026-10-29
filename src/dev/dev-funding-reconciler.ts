@@ -12,7 +12,7 @@ type DevelopmentFunding = Awaited<ReturnType<typeof createDevelopmentFunding>>;
 export class DevelopmentNwcSettlementReconciler {
   #timer: ReturnType<typeof setInterval> | undefined;
   #running = false;
-  #lastScan = Object.freeze({ checked: 0, observed: 0, deadlineReached: false, at: "" });
+  #lastScan: Readonly<{ checked: number; observed: number; deadlineReached: boolean; at: string }> = Object.freeze({ checked: 0, observed: 0, deadlineReached: false, at: "" });
 
   constructor(private readonly app: DevelopmentFunding, private readonly intervalMs = 300, private readonly deadlineMs = 15_000) {}
 

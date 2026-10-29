@@ -39,6 +39,8 @@ on:
       - "tests/phase-07/certification-runner.test.ts"
       - "tests/phase-07/promotion-gate.test.ts"
       - "tests/persistence/sqlite-session-store.test.ts"
+      - "tests/evidence/**"
+      - "tests/verification/phase-03-design-slice.test.ts"
       - "tests/verification/design-evidence.test.ts"
       - "tests/verification/phase-02-design-slice.test.ts"
       - "tests/runner/hermetic-command.test.ts"
@@ -67,4 +69,4 @@ jobs:
       - name: Install pinned Chromium and Linux browser libraries
         run: bun tests/dev-ui/node_modules/playwright/cli.js install --with-deps chromium
       - name: Byte ownership, transaction results and preserved evidence contracts
-        run: bun test tests/evals/phase-04-reference-set.test.ts tests/billing/price-card.test.ts tests/evals/phase-05-reference-set.test.ts tests/evals/phase-06-reference-set.test.ts tests/dev-ui/development-progress.test.ts tests/contextvm tests/dev/local-proposal-ownership.test.ts tests/capabilities tests/phase-02 tests/phase-04 tests/phase-07/supply-chain.test.ts tests/phase-07/certification-runner.test.ts tests/phase-07/promotion-gate.test.ts tests/persistence/sqlite-session-store.test.ts tests/verification/design-evidence.test.ts tests/verification/phase-02-design-slice.test.ts tests/runner/hermetic-command.test.ts tests/dev-ui/preview-server.boundaries.test.ts tests/dev-ui/homelab-preview.test.ts tests/worker-port tests/phase-05 tests/persistence/continuation-store.test.ts --timeout 10000
+        run: bun test tests/evals/phase-05-reference-set.test.ts tests/evals/phase-06-reference-set.test.ts tests/dev-ui/development-progress.test.ts tests/contextvm tests/dev/local-proposal-ownership.test.ts tests/capabilities tests/phase-02 tests/phase-04 tests/phase-07/supply-chain.test.ts tests/phase-07/certification-runner.test.ts tests/phase-07/promotion-gate.test.ts tests/persistence/sqlite-session-store.test.ts tests/evidence/bundle.test.ts tests/verification/phase-03-design-slice.test.ts tests/verification/design-evidence.test.ts tests/verification/phase-02-design-slice.test.ts tests/runner/hermetic-command.test.ts tests/dev-ui/preview-server.boundaries.test.ts tests/dev-ui/homelab-preview.test.ts tests/worker-port tests/evals/phase-04-reference-set.test.ts tests/billing/price-card.test.ts tests/phase-05 tests/persistence/continuation-store.test.ts --timeout 10000

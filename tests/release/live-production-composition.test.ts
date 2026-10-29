@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { unexecutedProtectedPorts } from "../fixtures/unexecuted-protected-ports";
 
 import { createNativeReleaseProviderRegistry, createReleaseControllerProviderRegistry, RELEASE_PRODUCTION_PROVIDER_IDS } from "../../src/release/native-registry";
 import { createProductionLiveProtectedCertificationPorts } from "../../src/certification/live/production-ports";
@@ -19,8 +20,6 @@ const references = Object.fromEntries(RELEASE_PRODUCTION_PROVIDER_IDS.map((id) =
   referenceSha256: digest("b"),
 }]));
 
-const real = <T extends Record<string, unknown>>(port: T) => Object.freeze({ ...port, evidenceClass: "real" as const });
-
 test("production tracer constructs all controller providers and exact real ports without effects", async () => {
   const calls: string[] = [];
   const native = createNativeReleaseProviderRegistry({
@@ -29,16 +28,7 @@ test("production tracer constructs all controller providers and exact real ports
     providers: Object.fromEntries(RELEASE_PRODUCTION_PROVIDER_IDS.map((id) => [id, provider(calls)])),
   });
   const controller = createReleaseControllerProviderRegistry(native);
-  const ports = createProductionLiveProtectedCertificationPorts({
-    admission: real({ executeSample: async () => { calls.push("admission"); return {}; } }),
-    telemetry: real({ emit: async () => { calls.push("telemetry"); }, queryWindow: async () => ({}) }),
-    chaos: real({ executeFault: async () => { calls.push("chaos"); return {}; }, observeOriginal: async () => ({}), observeTopology: async () => ({}) }),
-    durability: real({ inventory: async () => [], loseLocalState: async () => ({ status: "lost" }), createFreshInstance: async () => ({}) }),
-    "security-host": real({ runSealedBuild: async () => ({}), runHostileMatrix: async () => ({}), runBrowser: async () => ({}), inspectSignerBoundary: async () => ({}) }),
-    "supply-chain": real({ runBuild: async () => ({}), supplyChainInput: async () => ({}) }),
-    "ContextVM-payment-model": real({ exerciseSignedTransport: async () => ({}), exerciseCep8Settlement: async () => ({}), reconcileOriginalModelOperation: async () => ({}) }),
-    publication: real({ verifyPromotedSource: async () => ({}), submitOriginalPublication: async () => ({}), reconcileOriginalPublication: async () => ({}) }),
-  });
+  const ports = createProductionLiveProtectedCertificationPorts(unexecutedProtectedPorts(() => calls.push("unexpected-protected-suite")));
 
   expect(native.providers()).toEqual([...RELEASE_PRODUCTION_PROVIDER_IDS]);
   expect(Object.keys(controller).sort()).toEqual([...RELEASE_PRODUCTION_PROVIDER_IDS].sort());

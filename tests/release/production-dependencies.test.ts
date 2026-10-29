@@ -1,10 +1,32 @@
 import { expect, test } from "bun:test";
+import { unexecutedProtectedPorts } from "../fixtures/unexecuted-protected-ports";
 
 import { createAuthorizationReceipt, createAuthorizationRequest } from "../../src/release/authorization";
 import { PRODUCTION_LIVE_PROTECTED_PORT_KEYS } from "../../src/certification/live/production-ports";
 import { createProductionOperationalDependencies } from "../../src/release/deployment/production-dependencies";
 import { createProductionReleaseExecutionSession, PRODUCTION_FACTORY_SECRET_REFERENCE_NAMES } from "../../src/release/deployment/production-factory";
 import { RELEASE_PRODUCTION_PROVIDER_IDS } from "../../src/release/native-registry";
+
+function providerRecords<T>(make: (id: typeof RELEASE_PRODUCTION_PROVIDER_IDS[number]) => T): Readonly<Record<typeof RELEASE_PRODUCTION_PROVIDER_IDS[number], T>> {
+  return {
+    cloud_run: make("cloud_run"),
+    gcs: make("gcs"),
+    collector: make("collector"),
+    cloud_sql_postgres: make("cloud_sql_postgres"),
+    modal: make("modal"),
+    fly: make("fly"),
+    contextvm: make("contextvm"),
+    cep8_lightning: make("cep8_lightning"),
+    cashu: make("cashu"),
+    model: make("model"),
+    compatible_host: make("compatible_host"),
+    signer: make("signer"),
+    promoted_cli: make("promoted_cli"),
+    upload: make("upload"),
+    owner_relay: make("owner_relay"),
+    attestation_relay: make("attestation_relay"),
+  };
+}
 
 const digest = (letter: string) => letter.repeat(64);
 
@@ -47,8 +69,8 @@ function dependencyGraph(receipt: unknown, counters: { operational: number; sign
       async cleanup() { counters.operational += 1; return { status: "blocked" as const, actualCostMicros: 0 }; },
     }),
   });
-  const providers = Object.fromEntries(RELEASE_PRODUCTION_PROVIDER_IDS.map((id) => [id, provider(id)]));
-  const protectedPorts = Object.fromEntries(PRODUCTION_LIVE_PROTECTED_PORT_KEYS.map((key) => [key, Object.freeze({ origin: "project-owned" as const, evidenceClass: "real" as const, async run() { counters.operational += 1; } })]));
+  const providers = providerRecords(provider);
+  const protectedPorts = unexecutedProtectedPorts(() => { counters.operational += 1; });
   return createProductionOperationalDependencies({
     receipt,
     providers,
@@ -91,14 +113,15 @@ test("aliased, incomplete, and non-real dependencies are rejected before an oper
   const { receipt } = await requestAndReceipt();
   const counters = { operational: 0, signer: 0, prepared: 0 };
   const graph = dependencyGraph(receipt, counters);
-  expect(graph.registry.providers()).toEqual(RELEASE_PRODUCTION_PROVIDER_IDS);
+  expect(graph.registry.providers()).toEqual([...RELEASE_PRODUCTION_PROVIDER_IDS]);
   expect(counters.operational).toBe(0);
 
-  const shared = Object.freeze({ origin: "project-owned" as const, evidenceClass: "real" as const, brokerReference: "broker:shared:port", port: {} });
+  const unexpected = async () => { throw new Error("UNEXPECTED_PROVIDER_EXECUTION"); };
+  const shared = Object.freeze({ origin: "project-owned" as const, evidenceClass: "real" as const, brokerReference: "broker:shared:port", port: { discoverCapabilities: unexpected, discoverAuthentication: unexpected, plan: unexpected, apply: unexpected, observe: unexpected, cleanup: unexpected } });
   await expect(Promise.resolve().then(() => createProductionOperationalDependencies({
     receipt,
-    providers: Object.fromEntries(RELEASE_PRODUCTION_PROVIDER_IDS.map((id) => [id, shared])),
-    protectedPorts: Object.fromEntries(PRODUCTION_LIVE_PROTECTED_PORT_KEYS.map((key) => [key, Object.freeze({ origin: "project-owned" as const, evidenceClass: "real" as const })])),
+    providers: providerRecords(() => shared),
+    protectedPorts: unexecutedProtectedPorts(),
     prepare: async () => ({} as never),
   }))).rejects.toThrow("PRODUCTION_DEPENDENCY_PROVIDER_IDENTITY_REQUIRED");
   expect(counters.operational).toBe(0);

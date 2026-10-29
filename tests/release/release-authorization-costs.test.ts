@@ -38,7 +38,7 @@ test("fresh sixteen-family price facts produce an exact immutable authorization 
     expect(request.priceLines).toHaveLength(16);
     expect(request.currency).toBe("USD");
     expect(request.maximumAuthorizedCostMicros).toBe(request.orderedEffects.reduce((sum, effect) => sum + effect.estimatedCostMicros, 0));
-    expect(request.priceLines!.map((line) => line.provider)).toEqual(RELEASE_COST_FAMILIES);
+    expect(request.priceLines!.map((line) => line.provider)).toEqual([...RELEASE_COST_FAMILIES]);
     expect(request.priceLines!.every((line) => line.sourceDocumentSha256.length === 64 && line.quoteSha256.length === 64 && line.quantityNanos > 0)).toBeTrue();
     expect(request.estimateSourceId).not.toContain("release-effect-plan");
     expect(request.estimateSourceSha256).toMatch(/^[a-f0-9]{64}$/);

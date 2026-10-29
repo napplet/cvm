@@ -1,21 +1,9 @@
 import { expect, test } from "bun:test";
+import { unexecutedProtectedPorts } from "../fixtures/unexecuted-protected-ports";
 
 import { createDeploymentProtectedPorts } from "../../src/release/deployment/protected-ports";
 
-const real = <T extends Record<string, unknown>>(port: T) => Object.freeze({ ...port, evidenceClass: "real" as const });
-
-function ports() {
-  return {
-    admission: real({ executeSample: async () => ({}) }),
-    telemetry: real({ emit: async () => {}, queryWindow: async () => ({}) }),
-    chaos: real({ executeFault: async () => ({}), observeOriginal: async () => ({}), observeTopology: async () => ({}) }),
-    durability: real({ inventory: async () => [], loseLocalState: async () => ({ status: "lost" }), createFreshInstance: async () => ({}) }),
-    "security-host": real({ runSealedBuild: async () => ({}), runHostileMatrix: async () => ({}), runBrowser: async () => ({}), inspectSignerBoundary: async () => ({}) }),
-    "supply-chain": real({ runBuild: async () => ({}), supplyChainInput: async () => ({}) }),
-    "ContextVM-payment-model": real({ exerciseSignedTransport: async () => ({}), exerciseCep8Settlement: async () => ({}), reconcileOriginalModelOperation: async () => ({}) }),
-    publication: real({ verifyPromotedSource: async () => ({}), submitOriginalPublication: async () => ({}), reconcileOriginalPublication: async () => ({}) }),
-  } as const;
-}
+const ports = unexecutedProtectedPorts;
 
 test("deployment protected factory returns exactly eight distinct real suite ports without effects", () => {
   const constructed = createDeploymentProtectedPorts(ports());

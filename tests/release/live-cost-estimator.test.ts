@@ -15,7 +15,7 @@ function input(overrides: Record<string, unknown> = {}) {
 test("requires a fresh, ordered USD fact and bounded headroom for every sixteen provider family", async () => {
   const estimator = createLiveCostEstimator({ catalog: { listPriceFacts: async () => facts() }, now: () => now });
   const estimate = await estimator.estimate(input());
-  expect(estimate.lines.map((line) => line.provider)).toEqual(RELEASE_COST_FAMILIES);
+  expect(estimate.lines.map((line) => line.provider)).toEqual([...RELEASE_COST_FAMILIES]);
   expect(estimate.lines).toHaveLength(16);
   expect(estimate.maximumMicros).toBeGreaterThan(estimate.subtotalMicros);
   expect(estimate.lines.every((line) => line.sourceDocumentSha256.length === 64 && line.quoteSha256.length === 64)).toBeTrue();

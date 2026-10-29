@@ -4,13 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { ReleaseCertificationController } from "../../src/release/controller";
-import { RELEASE_COST_FAMILIES } from "../../src/release/costs/live-estimator";
+import { type LiveCostCatalogPort, RELEASE_COST_FAMILIES } from "../../src/release/costs/live-estimator";
 import { createAuthorizationReceipt } from "../../src/release/authorization";
 
 const candidatePath = join(import.meta.dir, "..", "..", "toolchains/candidates/initial.json");
 const digest = (letter: string) => letter.repeat(64);
 
-function fixtureCatalog() {
+function fixtureCatalog(): LiveCostCatalogPort {
   return { listPriceFacts: async () => RELEASE_COST_FAMILIES.map((provider, index) => ({
     provider, sourceId: `${provider}-loopback`, sourceDocumentSha256: digest((index % 16).toString(16)), quoteSha256: digest(((index + 1) % 16).toString(16)),
     currency: "USD", unit: "operation", priceMicros: index + 1, observedAtMs: 900, freshUntilMs: 20_000, status: "available",

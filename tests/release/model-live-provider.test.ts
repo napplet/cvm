@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { ProviderOperationIntentSchema } from "../../src/model/model-gateway";
 import { createAuthorizationReceipt, createAuthorizationRequest } from "../../src/release/authorization";
 import { canonicalJson } from "../../src/promotion/schema";
 import { createNativeHttpModelGateway } from "../../src/release/native/model";
@@ -70,7 +71,7 @@ async function authorizedCapability(
 }
 
 function intent(operationId = "model-original-op") {
-  return {
+  return ProviderOperationIntentSchema.parse({
     operationId,
     providerRequestId: operationId,
     accountId: "account:model",
@@ -83,7 +84,7 @@ function intent(operationId = "model-original-op") {
     requestFingerprint: digest("2"),
     maximumUnits: [{ dimension: "input_tokens" as const, units: "1" }],
     selection: "unselected" as const,
-  };
+  });
 }
 
 test("native model gateway binds a candidate capability to one authorized dispatch and redacts credential material", async () => {

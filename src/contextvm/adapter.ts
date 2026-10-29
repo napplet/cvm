@@ -416,7 +416,9 @@ export class ContextVmFundingAdapter {
       : result.status === "billing_invariant_failed" || result.status === "usage_unknown"
         ? freeze({ status: result.status, code: result.code, sessionId: result.sessionId, nextAction: result.nextAction, operationId: result.operationId })
         : freeze({ status: result.status, code: result.code });
-    await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({ jsonrpc: "2.0", method: `notifications/${name}`, params: wireResult }), requestEventId);
+    // The core result is authoritative. A disconnected SDK session or failed
+    // notification cannot turn a committed action into an invalid request.
+    await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({ jsonrpc: "2.0", method: `notifications/${name}`, params: wireResult }), requestEventId).catch(() => undefined);
     return freeze({ jsonrpc: "2.0" as const, id, result: wireResult });
   }
 

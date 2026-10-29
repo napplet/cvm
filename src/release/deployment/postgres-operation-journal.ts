@@ -66,6 +66,35 @@ export class PostgresOperationJournal {
   async claim<T>(operationId: string, identitySha256: string, value: T): Promise<Readonly<{ claimed: boolean; record: OperationRecord<T> }>> {
     return this.#claim(operationId, identitySha256, value);
   }
+  /** One original claim and its protected recovery companion share a commit.
+   * Existing originals are never backfilled or rewritten by this operation. */
+  async claimWithCompanion<T,C>(input: Readonly<{ operationId: string; identitySha256: string; value: T; companion: Readonly<{ operationId: string; identitySha256: string; value: C }> }>): Promise<Readonly<{ claimed: boolean; record: OperationRecord<T>; companion?: OperationRecord<C> }>> {
+    identifier(input.operationId); digest(input.identitySha256);
+    identifier(input.companion.operationId); digest(input.companion.identitySha256);
+    if (input.operationId === input.companion.operationId) throw new Error("OPERATION_COMPANION_ID_CONFLICT");
+    const encoded = encode(input.value), companionEncoded = encode(input.companion.value);
+    return this.#transaction(async client => {
+      const inserted = await client.query("INSERT INTO production_real.release_operation_journal(namespace,scope_sha256,operation_id,identity_sha256,value_json) VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT(namespace,scope_sha256,operation_id) DO NOTHING RETURNING *", [this.#namespace,this.#scope,input.operationId,input.identitySha256,encoded]);
+      const original = inserted.rows[0] ?? (await client.query("SELECT * FROM production_real.release_operation_journal WHERE namespace=$1 AND scope_sha256=$2 AND operation_id=$3",[this.#namespace,this.#scope,input.operationId])).rows[0];
+      if (!original || original.identity_sha256 !== input.identitySha256) throw new Error("OPERATION_IDENTITY_CONFLICT");
+      if (inserted.rows.length) await client.query("INSERT INTO production_real.release_operation_journal(namespace,scope_sha256,operation_id,identity_sha256,value_json) VALUES($1,$2,$3,$4,$5::jsonb)",[this.#namespace,this.#scope,input.companion.operationId,input.companion.identitySha256,companionEncoded]);
+      const companion = (await client.query("SELECT * FROM production_real.release_operation_journal WHERE namespace=$1 AND scope_sha256=$2 AND operation_id=$3",[this.#namespace,this.#scope,input.companion.operationId])).rows[0];
+      if (companion && companion.identity_sha256 !== input.companion.identitySha256) throw new Error("OPERATION_COMPANION_IDENTITY_CONFLICT");
+      return Object.freeze({claimed:inserted.rows.length===1,record:record<T>(original),...(companion?{companion:record<C>(companion)}:{})});
+    });
+  }
+  /** Fair bounded discovery inside this exact namespace/scope. Companion
+   * consumers validate their strict version and all original identity bindings. */
+  async listDueCompanions<T>(input: Readonly<{ schemaVersion: string; nowMs: number; limit?: number }>): Promise<readonly OperationRecord<T>[]> {
+    identifier(input.schemaVersion);
+    const limit = input.limit ?? 100;
+    if (!Number.isSafeInteger(input.nowMs) || input.nowMs <= 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("OPERATION_DISCOVERY_BOUNDS_INVALID");
+    const client = await this.#pool.connect();
+    try {
+      const rows = await client.query("SELECT * FROM production_real.release_operation_journal WHERE namespace=$1 AND scope_sha256=$2 AND value_json->>'schemaVersion'=$3 AND value_json->>'state'='pending' AND CASE WHEN jsonb_typeof(value_json->'nextAttemptAtMs')='number' THEN (value_json->>'nextAttemptAtMs')::numeric ELSE NULL END <= $4 ORDER BY (value_json->>'nextAttemptAtMs')::numeric,operation_id LIMIT $5",[this.#namespace,this.#scope,input.schemaVersion,input.nowMs,limit]);
+      return Object.freeze(rows.rows.map(row=>record<T>(row)));
+    } finally { client.release(); }
+  }
   /** Bound new operations in the same serializable transaction as their claim.
    * Existing originals remain readable at the cap; parallel callers cannot
    * each spend the same final inventory slot. */

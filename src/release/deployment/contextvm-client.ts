@@ -1,3 +1,4 @@
+import { assertProductionContextVmGenerationIntakes, type ProductionContextVmGenerationIntakes } from "../../production/contextvm-generation-intake";
 import { computeCanonicalInvocationIdentity } from "@contextvm/sdk/payments/canonical-identity";
 import { ApplesauceRelayPool } from "@contextvm/sdk/relay";
 import { EncryptionMode, type NostrSigner } from "@contextvm/sdk/core";
@@ -5,7 +6,7 @@ import { NostrClientTransport, NostrServerTransport } from "@contextvm/sdk/trans
 import type { NostrEvent } from "nostr-tools";
 import { z } from "zod";
 import { ContextVmSdkBridge, type ContextVmInboundEnvelope, type ContextVmTransportPort, type ContextVmWireNotification, type ContextVmWireResponse } from "../../contextvm/sdk-bridge";
-import { PostgresOperationJournal, assertPostgresOperationJournal } from "./postgres-operation-journal";
+import { PostgresOperationJournal, assertPostgresOperationJournal, type OperationRecord } from "./postgres-operation-journal";
 import { validateAuthorizationReceipt, validateAuthorizationRequest } from "../authorization";
 import { assertProductionAdmissionObserver, type ProductionCertificationCoreServices } from "../../production/certification-services";
 import { ProductionCertificationIngress } from "../../production/certification-ingress";
@@ -146,35 +147,59 @@ async function digest(value: unknown): Promise<string> {
 
 /** Persists a signed original event before the core is invoked. Redelivery
  * returns the one durable response; it never creates another funded action. */
-export function createDurableContextVmTransport(input: Readonly<{ source: ContextVmTransportPort; journal: ContextVmInvocationJournal; relaySetSha256?: unknown }>): ContextVmTransportPort {
+type DurableContextVmTransport = ContextVmTransportPort & Readonly<{ recoverPendingGenerations(): Promise<number> }>;
+export function createDurableContextVmTransport(input: Readonly<{ source: ContextVmTransportPort; journal: ContextVmInvocationJournal; relaySetSha256?: unknown; generationIntakes?: ProductionContextVmGenerationIntakes }>): DurableContextVmTransport {
   try { assertPostgresOperationJournal(input.journal); } catch { throw new Error("CONTEXTVM_DURABLE_JOURNAL_REQUIRED"); }
+  if (input.generationIntakes) assertProductionContextVmGenerationIntakes(input.generationIntakes,input.journal);
   const relaySetSha256 = input.relaySetSha256 === undefined ? undefined : DigestSchema.parse(input.relaySetSha256);
   let handler: ((value: ContextVmInboundEnvelope) => Promise<void>) | undefined;
-  const dispatching = new Map<string, Readonly<{ envelope: ContextVmInboundEnvelope; identitySha256: string; revision: number }>>();
-  input.source.onInbound(async (envelope) => {
+  const dispatching = new Map<string, Readonly<{ envelope: ContextVmInboundEnvelope; identitySha256: string; revision: number; recovered: boolean }>>();
+  const identityFor = async (envelope: ContextVmInboundEnvelope) => {
     const requestEventId = EventIdSchema.parse(envelope.requestEventId);
     if (envelope.rawEvent.id !== requestEventId) throw new Error("CONTEXTVM_ORIGINAL_EVENT_MISMATCH");
     const canonical = input.source.canonicalInvocation(envelope.verifiedClientPubkey, envelope.request.method, envelope.request.params);
-    const identitySha256 = await digest({ requestEventId, clientPubkey: canonical.clientPubkey, invocationSha256: DigestSchema.parse(canonical.invocationHash), relaySetSha256 });
-    const claim = await input.journal.claim<InvocationState>(requestEventId, identitySha256, { state: "pending" });
+    if (canonical.clientPubkey !== envelope.verifiedClientPubkey) throw new Error("CONTEXTVM_ORIGINAL_OWNER_MISMATCH");
+    return digest({ requestEventId, clientPubkey: canonical.clientPubkey, invocationSha256: DigestSchema.parse(canonical.invocationHash), relaySetSha256 });
+  };
+  const dispatchOriginal = async (envelope: ContextVmInboundEnvelope, original: Readonly<{ identitySha256: string; revision: number }>, recovered = false) => {
+    const identitySha256 = await identityFor(envelope), requestEventId = envelope.requestEventId;
+    if (identitySha256 !== original.identitySha256) throw new Error("CONTEXTVM_INTAKE_IDENTITY_MISMATCH");
+    if (dispatching.has(requestEventId)) return;
+    if (!handler) throw new Error("CONTEXTVM_INBOUND_HANDLER_UNAVAILABLE");
+    dispatching.set(requestEventId, { envelope, identitySha256, revision: original.revision, recovered });
+    try { await handler(envelope); } finally { dispatching.delete(requestEventId); }
+  };
+  input.source.onInbound(async (envelope) => {
+    const requestEventId = envelope.requestEventId, identitySha256 = await identityFor(envelope);
+    const claim: Readonly<{ claimed: boolean; record: OperationRecord<InvocationState>; companion?: OperationRecord<unknown> }> = input.generationIntakes ? await input.generationIntakes.claim(envelope,identitySha256) : await input.journal.claim<InvocationState>(requestEventId, identitySha256, { state: "pending" });
     if (!claim.claimed && claim.record.value.state === "completed") return input.source.sendResponse(envelope.verifiedClientPubkey, claim.record.value.response, requestEventId);
     if (!claim.claimed) return input.source.sendResponse(envelope.verifiedClientPubkey, { jsonrpc: "2.0", id: envelope.request.id, error: { code: -32001, message: "original ContextVM invocation pending reconciliation" } }, requestEventId);
-    if (!handler) throw new Error("CONTEXTVM_INBOUND_HANDLER_UNAVAILABLE");
-    dispatching.set(requestEventId, { envelope, identitySha256, revision: claim.record.revision });
-    try { await handler(envelope); } finally { dispatching.delete(requestEventId); }
+    if (input.generationIntakes && claim.companion) return input.generationIntakes.run(claim.companion,dispatchOriginal);
+    await dispatchOriginal(envelope,claim.record);
   });
-  const certificationClient = Object.freeze<ContextVmTransportPort>({
+  const certificationClient = Object.freeze<DurableContextVmTransport>({
+    recoverPendingGenerations: () => input.generationIntakes?.scan((envelope,original) => dispatchOriginal(envelope,original,true)) ?? Promise.resolve(0),
     onInbound(value) { handler = value; },
     configureAnnouncement: (announcement) => input.source.configureAnnouncement(announcement),
     async sendResponse(clientPubkey, response, requestEventId) {
       const active = dispatching.get(requestEventId);
       if (active && active.envelope.verifiedClientPubkey === clientPubkey) {
-        const completed = await input.journal.compareAndSet<InvocationState>(requestEventId, active.identitySha256, active.revision, { state: "completed", response });
-        if (!completed) throw new Error("CONTEXTVM_RESPONSE_JOURNAL_CONFLICT");
+        try {
+          const completed = await input.journal.compareAndSet<InvocationState>(requestEventId, active.identitySha256, active.revision, { state: "completed", response });
+          if (!completed) throw new Error("CONTEXTVM_RESPONSE_JOURNAL_CONFLICT");
+        } catch (error) {
+          const original = await input.journal.read<InvocationState>(requestEventId);
+          if (!original || original.identitySha256 !== active.identitySha256 || original.value.state !== "completed") throw error;
+          response = original.value.response;
+        }
       }
-      await input.source.sendResponse(clientPubkey, response, requestEventId);
+      // Recovery may precede the client's SDK session reconnect. The original
+      // reply is already durable; only authenticated SDK delivery is attempted.
+      if (active?.recovered && active.envelope.verifiedClientPubkey === clientPubkey) {
+        await input.source.sendResponse(clientPubkey,response,requestEventId).catch(() => undefined);
+      } else await input.source.sendResponse(clientPubkey, response, requestEventId);
     },
-    sendNotification(clientPubkey: string, notification: ContextVmWireNotification, requestEventId: string) { return input.source.sendNotification(clientPubkey, notification, requestEventId); },
+    sendNotification(clientPubkey: string, notification: ContextVmWireNotification, requestEventId: string) { return input.source.sendNotification(clientPubkey,notification,requestEventId); },
     canonicalInvocation(clientPubkey: string, method: string, params: unknown) { return input.source.canonicalInvocation(clientPubkey, method, params); },
   });
   return certificationClient;
@@ -186,10 +211,11 @@ export async function openContextVmRelayTransport(input: Readonly<{
   serviceKeyReference: unknown; relaySetSha256: unknown; relays: unknown;
   signerBroker: ContextVmServiceSignerBroker; journal: ContextVmInvocationJournal;
   admissionObserver?: ProductionCertificationCoreServices;
+  generationIntakes?: ProductionContextVmGenerationIntakes;
   /** Staged production accepts only this mounted disposable certification
    * principal. Public ContextVM cutover is a separate authority. */
   certificationClientPubkey?: unknown;
-}>): Promise<Readonly<{ transport: ContextVmTransportPort; start(): Promise<void>; close(): Promise<void> }>> {
+}>): Promise<Readonly<{ transport: DurableContextVmTransport; start(): Promise<void>; close(): Promise<void> }>> {
   const serviceKeyReference = reference(input.serviceKeyReference);
   const relaySetSha256 = DigestSchema.parse(input.relaySetSha256);
   const relays = z.array(RelaySchema).min(1).max(16).parse(input.relays);
@@ -205,7 +231,7 @@ export async function openContextVmRelayTransport(input: Readonly<{
   const source = new ContextVmSdkBridge(sdk);
   const ingress = certificationClientPubkey ? new ProductionCertificationIngress(certificationClientPubkey).wrap(source) : source;
   const observed = input.admissionObserver ? input.admissionObserver.wrap(ingress) : ingress;
-  return Object.freeze({ transport: createDurableContextVmTransport({ source: observed, journal: input.journal, relaySetSha256 }), start: () => sdk.start(), close: () => sdk.close() });
+  return Object.freeze({ transport: createDurableContextVmTransport({ source: observed, journal: input.journal, relaySetSha256, generationIntakes: input.generationIntakes }), start: () => sdk.start(), close: async () => { await input.generationIntakes?.close(); await sdk.close(); } });
 }
 
 /**

@@ -82,7 +82,7 @@ describe("ContextVM v1 announcement", () => {
       { name: "top_up", available: true, planned: false, invocable: true },
     ]);
     expect(JSON.stringify(first)).not.toMatch(/x402|l402|private|secret|invoice|preimage/i);
-    expect(first.metadata.generationPrice).toBeUndefined();
+    expect(first.metadata).not.toHaveProperty("generationPrice");
   });
 });
 
@@ -295,4 +295,18 @@ test("remote preview descriptors accept only the configured HTTPS grant origin",
   for (const publicPreviewOrigin of ["http://preview.lab.example", "https://preview.lab.example/path", "https://user:pass@preview.lab.example"]) {
     expect(() => new ContextVmFundingAdapter({ service: new FundingService(new TransactionalMemoryFundingStore()), transport: new FakeContextVmTransport(), publicPreviewOrigin })).toThrow("PUBLIC_PREVIEW_ORIGIN_INVALID");
   }
+});
+
+test("notification delivery failure preserves the committed generation reply", async () => {
+  const transport = new FakeContextVmTransport();
+  let calls = 0, notifications = 0;
+  transport.sendNotification = async () => { notifications++; throw new Error("FIXTURE_SDK_SESSION_GONE"); };
+  const adapter = new ContextVmFundingAdapter({ service: new FundingService(new TransactionalMemoryFundingStore()), transport,
+    generation: { async startSession() { calls++; return { status: "completed", code: "ACTION_COMMITTED", accountId: "account:internal", sessionId: "session:one", sessionVersion: 1, artifactVersion: 1, confirmedSpend: "7", remainingCap: "93", remainingBalance: "493", nextAction: "revise_session", operationId: "operation:one" }; }, async reviseSession() { throw new Error("UNEXPECTED_REVISION"); } },
+  });
+  await adapter.handle(envelope({ request: { id: "start-offline", method: "tools/call", params: { name: "start_session", arguments: { admissionReference: "admission:one", idempotencyKey: "start-one", maximum: "100", idea: "One tiny focused napplet" } } } }));
+  expect({calls,notifications}).toEqual({calls:1,notifications:1});
+  expect(transport.responses).toHaveLength(1);
+  expect(transport.responses[0]?.response).toMatchObject({result:{status:"completed",sessionId:"session:one",confirmedSpend:"7"}});
+  expect(transport.responses[0]?.response.error).toBeUndefined();
 });

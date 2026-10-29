@@ -1,3 +1,4 @@
+import { fundedReplayAuthorityFixture } from "../fixtures/funded-replay-authority";
 import { ProtectedGenerationCommands } from "../../src/model/retained-generation-command";
 import { ProductionGenerationRecovery } from "../../src/production/generation-recovery";
 import { loadMountedCheckpointKek } from "../../src/production/checkpoint-crypto";
@@ -52,7 +53,7 @@ integration.each([false,true])("lost creation ACK recovers the original paid mod
     for (let attempt = 0; attempt < 90; attempt++) {
       try { await admin.query("SELECT 1"); break; } catch (error) { if (attempt === 89) throw error; await Bun.sleep(250); }
     }
-    for (const file of ["phase-03/001_funding.sql", "phase-04/001_metered_generation.sql", "phase-04/002_action_budget_lifecycle.sql", "phase-05/001_continuation.sql", "phase-06/001_publication.sql", "phase-03/002_production_accounting.sql", "phase-07/001_production_operation_journal.sql", "phase-07/002_production_pricing_catalog.sql", "phase-07/003_production_checkpoints.sql"]) await admin.query(await Bun.file(`migrations/${file}`).text());
+    for (const file of ["phase-03/001_funding.sql", "phase-04/001_metered_generation.sql", "phase-04/002_action_budget_lifecycle.sql", "phase-05/001_continuation.sql", "phase-06/001_publication.sql", "phase-03/002_production_accounting.sql", "phase-07/001_production_operation_journal.sql", "phase-07/002_production_pricing_catalog.sql", "phase-07/003_production_checkpoints.sql", "phase-07/008_production_account_owners.sql"]) await admin.query(await Bun.file(`migrations/${file}`).text());
     await admin.query("CREATE ROLE funded_generation_test LOGIN");
     await admin.query("GRANT napplet_production_real TO funded_generation_test");
     native = new Pool({ connectionString: `postgresql://funded_generation_test@127.0.0.1:${port}/postgres`, connectionTimeoutMillis: 2000 });
@@ -97,6 +98,7 @@ integration.each([false,true])("lost creation ACK recovers the original paid mod
     const admissionCommand = { principal, idempotencyKey: "admit", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "13", unit: "sat" } };
     const admission = await admissions.admit(admissionCommand, await trustedAdmissionReceipt(admissionCommand));
     if (admission.status !== "accepted") throw new Error("FIXTURE_ADMISSION_REQUIRED");
+    const replay = await fundedReplayAuthorityFixture({pool,principal,admissionReference:admission.reference});
     const worker: WorkerPort = { async run(request) { builds++; return { status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events: [{ kind: "progress", turn: 1, detail: "explicit protocol fixture completed" }], artifact: { sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion, capabilityGrant: request.capabilityGrant, workspaceId: request.workspaceId, artifactId: "fixture:artifact", purpose: { kind: "focused", statements: ["one counter"] }, surface: { hasBackend: false, hasSecondPurpose: false, serviceWorker: false, dynamicAuthority: false }, dependencies: { appOwnedSignerOrRelay: false, privateNappletImport: false }, capabilities: { declaredHard: [], observedDomains: [], optionalIntentPresenceRead: false, intentUsedThroughSdk: false }, upstream: { scanner: { verdict: "pass", checkId: "upstream:fixture-scanner" }, conformance: { verdict: "pass", checkId: "upstream:fixture-browser" } } } }; } };
     const verifier: ArtifactVerifier = { async verify(facts) { if (facts.result.status !== "completed") return undefined; return { artifact: { artifactId: facts.result.artifact.artifactId, artifactSha256: "a".repeat(64), scannerReportSha256: "b".repeat(64), conformanceReportSha256: "c".repeat(64) }, contractInput: facts.result.artifact }; } };
     const open = () => new MeteredGenerationService({ ...(retained ? {recoveryCommands:commands}:{}), fundedAdmission: admissions, store: database.meteredFunding, gateway, worker, artifactVerifier: verifier, proposalStore: sources, pricing, settlement, continuation: new ContinuationService({ store: database.funding, includeAdmissionHold: true }), toolchainIdentity: "b".repeat(64), clock: { nowMs: () => now } });
@@ -138,10 +140,10 @@ integration.each([false,true])("lost creation ACK recovers the original paid mod
     expect(reads).toBe(0);
     if(retained){
       await admin.query("UPDATE production_real.generation_recovery_commands SET next_attempt_at=clock_timestamp()-interval '1 second'");
-      expect(await new ProductionGenerationRecovery({pool,commands,acceptedToolchains:["f".repeat(64)],generation:upgraded()}).scan()).toEqual({attempted:1,erased:0});
+      expect(await new ProductionGenerationRecovery({pool,commands,replayAuthority:replay.authority,acceptedToolchains:["f".repeat(64)],generation:upgraded()}).scan()).toEqual({attempted:1,erased:0});
       expect({posts,reads,builds}).toEqual({posts:1,reads:0,builds:0});
       await admin.query("UPDATE production_real.generation_recovery_commands SET next_attempt_at=clock_timestamp()-interval '1 second'");
-      expect(await new ProductionGenerationRecovery({pool,commands,acceptedToolchains:["b".repeat(64)],generation:upgraded()}).scan()).toEqual({attempted:1,erased:0});
+      expect(await new ProductionGenerationRecovery({pool,commands,replayAuthority:replay.authority,acceptedToolchains:["b".repeat(64)],generation:upgraded()}).scan()).toEqual({attempted:1,erased:0});
     }
     const result = retained ? SessionActionResultSchema.parse((await database.meteredFunding.findMeteredAction(prepared.accountId,command.idempotencyKey))?.result) : await upgraded().startSession(command);
     expect(result).toMatchObject({ status: "completed", confirmedSpend: "6", remainingCap: "7" });

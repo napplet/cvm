@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { evaluatePhase04Design, validatePhase04DesignEvidence, writePhase04DesignEvidence } from "../../src/verification/phase-04-design-evidence";
+import { type Phase04DesignInput, type Phase04Check, evaluatePhase04Design, validatePhase04DesignEvidence, writePhase04DesignEvidence } from "../../src/verification/phase-04-design-evidence";
 import { comparePhase04Case, executePhase04ReferenceGate, observePhase04Case } from "./phase-04-runtime-observation";
 import { runPhase04DesignGate } from "../../scripts/verify-phase-04-design-slice";
 
@@ -16,7 +16,7 @@ type ReferenceCase = Readonly<{
   boundedInput: Record<string, unknown>;
   initialState: Record<string, unknown>;
   schedule: readonly string[];
-  expected: Readonly<{ providerDispatches: number; providerLookups: number; workerCalls: number; receiptWrites: number; debitPostings: number; creditPostings: number; releases: number; actionState: string; sessionState: string; artifactVersion: number; evidence: string; providerSelection: "unselected"; status: string; nextAction: string; oracle: string }>;
+  expected: { providerDispatches: number; providerLookups: number; workerCalls: number; receiptWrites: number; debitPostings: number; creditPostings: number; releases: number; actionState: string; sessionState: string; artifactVersion: number; evidence: string; providerSelection: "unselected"; status: string; nextAction: string; oracle: string };
   execution: Readonly<{ file: string; testName: string }>;
 }>;
 
@@ -27,7 +27,7 @@ const requiredCategories = new Map([
 const requiredRequirements = ["BILL-03", "BILL-04", "BILL-05", "SESS-01", "SESS-03", "SESS-04", "GEN-05", "GEN-06"];
 const requiredDecisions = Array.from({ length: 20 }, (_, index) => `D-${index + 59}`);
 const requiredThreats = ["T-04-ADAPTER", "T-04-AMBIGUITY", "T-04-ATOMIC", "T-04-AUTHORITY", "T-04-BLOCK", "T-04-DIAGNOSTIC", "T-04-DISCLOSE", "T-04-DOUBLE", "T-04-EFFECT", "T-04-EVIDENCE", "T-04-EVIDENCE-LEAK", "T-04-HISTORY-DOS", "T-04-HONESTY", "T-04-INJECTION", "T-04-INPUT", "T-04-MISMATCH", "T-04-NATIVE", "T-04-ORACLE", "T-04-PRICE", "T-04-QUARANTINE", "T-04-RACE", "T-04-READINESS", "T-04-REPAIR", "T-04-REPLAY", "T-04-RETRY", "T-04-SC", "T-04-STATUS-LEAK", "T-04-STATUS-OWNER"];
-const requiredExpectedFields = ["providerDispatches", "providerLookups", "workerCalls", "receiptWrites", "debitPostings", "creditPostings", "releases", "actionState", "sessionState", "artifactVersion", "evidence", "providerSelection", "status", "nextAction", "oracle"];
+const requiredExpectedFields: readonly (keyof ReferenceCase["expected"])[] = ["providerDispatches", "providerLookups", "workerCalls", "receiptWrites", "debitPostings", "creditPostings", "releases", "actionState", "sessionState", "artifactVersion", "evidence", "providerSelection", "status", "nextAction", "oracle"];
 const oracleFor = (expected: ReferenceCase["expected"]): string => [expected.providerDispatches, expected.providerLookups, expected.workerCalls, expected.receiptWrites, expected.debitPostings, expected.creditPostings, expected.releases, expected.actionState, expected.sessionState, expected.artifactVersion, expected.evidence, expected.providerSelection, expected.status, expected.nextAction].join("|");
 
 export function validateReferenceSet(value: unknown): readonly ReferenceCase[] {
@@ -54,12 +54,13 @@ async function referenceSet(): Promise<readonly ReferenceCase[]> {
 }
 
 const digest = (character: string): string => character.repeat(64);
-async function evidenceInput() {
+async function evidenceInput(): Promise<Phase04DesignInput> {
   const cases = await referenceSet();
   const caseIds = cases.map((item) => item.id);
+  const checkIds: readonly Phase04Check["id"][] = ["reference-set", "metered-authority", "reconciliation", "artifact-honesty", "owner-status", "contextvm-boundary"];
   return {
     identities: { referenceSet: fixturePath, meteredService: "src/phase-04/metered-generation-service.ts", gateway: "src/model/deterministic-model-gateway.ts", reconciliation: "src/model/reconciliation.ts", status: "src/phase-04/session-status.ts", adapter: "src/contextvm/adapter.ts" },
-    checks: ["reference-set", "metered-authority", "reconciliation", "artifact-honesty", "owner-status", "contextvm-boundary"].map((id, index) => ({ id, severity: id === "reference-set" ? "critical" as const : "high" as const, status: "passed" as const, evidenceSha256: digest(String(index + 1)) })),
+    checks: checkIds.map((id, index) => ({ id, severity: id === "reference-set" ? "critical" as const : "high" as const, status: "passed" as const, evidenceSha256: digest(String(index + 1)) })),
     caseComparisons: [],
     requirementMappings: Object.fromEntries(requiredRequirements.map((id) => [id, caseIds.filter((caseId, index) => cases[index]!.requirements.includes(id))])),
     decisionMappings: requiredDecisions,
@@ -106,7 +107,7 @@ describe("Phase 04 deterministic reference set", () => {
       target.expected.oracle = oracleFor(target.expected);
       const gate = await executePhase04ReferenceGate(altered, { runChildAssertions: false });
       expect(gate.verdict, field).toBe("blocked");
-      expect(gate.comparisons.find((comparison) => comparison.id === target.id)?.mismatches).toContain(field);
+      expect([...(gate.comparisons.find((comparison) => comparison.id === target.id)?.mismatches ?? [])]).toContain(field);
     }
   }, 60_000);
 
@@ -147,7 +148,7 @@ describe("Phase 04 deterministic reference set", () => {
   test("numeric, state, evidence, and next-action mismatches across cases block recomputed-oracle evidence", async () => {
     const fixture = JSON.parse(await readFile(fixturePath, "utf8")) as { cases: ReferenceCase[] };
     const altered = structuredClone(fixture);
-    const changes: readonly [string, keyof ReferenceCase["expected"]][] = [
+    const changes: readonly [string, Exclude<keyof ReferenceCase["expected"], "oracle">][] = [
       ["P04-ACCT-03", "providerDispatches"],
       ["P04-ART-02", "sessionState"],
       ["P04-AMB-01", "evidence"],
@@ -163,7 +164,7 @@ describe("Phase 04 deterministic reference set", () => {
     const gate = await executePhase04ReferenceGate(altered, { runChildAssertions: false });
     expect(gate.verdict).toBe("blocked");
     expect(gate.aggregateEffects).toBeUndefined();
-    for (const [id, field] of changes) expect(gate.comparisons.find((item) => item.id === id)?.mismatches).toContain(field);
+    for (const [id, field] of changes) expect([...(gate.comparisons.find((item) => item.id === id)?.mismatches ?? [])]).toContain(field);
   }, 60_000);
 
   test("requires twenty complete, uniquely mapped actual-service cases", async () => {
@@ -241,7 +242,7 @@ describe("Phase 04 immutable design evidence", () => {
     const gate = await executePhase04ReferenceGate(JSON.parse(await readFile(fixturePath, "utf8")));
     const input = await evidenceInput();
     const decision = await evaluatePhase04Design({ ...input, caseComparisons: gate.comparisons.map(({ id, expected, observed }) => ({ id: id as never, expected, observed })) });
-    expect(decision.evidence.caseResults).toEqual(gate.comparisons.map(({ id, status }) => ({ id, status })));
+    expect(gate.comparisons.map(({ id, status }) => ({ id, status }))).toEqual([...decision.evidence.caseResults]);
     expect(decision.evidence.aggregateEffects).toEqual(gate.aggregateEffects);
     await expect(validatePhase04DesignEvidence({ ...decision.evidence, aggregateEffects: { ...decision.evidence.aggregateEffects!, providerDispatches: 999 } })).rejects.toThrow();
     await expect(validatePhase04DesignEvidence({ ...decision.evidence, caseResults: decision.evidence.caseResults.map((item) => ({ ...item, status: "failed" as const })) })).rejects.toThrow();

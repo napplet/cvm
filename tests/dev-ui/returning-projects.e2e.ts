@@ -57,6 +57,7 @@ try {
   assert((await owner.callTool("projects",{action:"get",id:pending.checkpointId})).status==="not_found_or_denied","OTHER_PENDING_LEAK");
   await page.locator("#your-applets").click(); await page.locator('#projects-page').waitFor({state:"visible"});
   await page.locator(`.project-card[data-project-id="${id}"]`).waitFor();
+  assert(await page.locator(`.project-card[data-project-id="${id}"]`).isDisabled(),"ACTIVE_REQUEST_PROJECT_CARD_MUST_WAIT_FOR_ACK");
   assert(await page.locator("#your-applets").getAttribute("aria-current")==="page" && await page.locator("#workspace-home").getAttribute("aria-current")===null,"COLLECTION_NAV_CONTEXT_MISSING");
   assert(await page.locator("#workspace-nav-status").isVisible(),"COLLECTION_HIDES_RUNNING_BUILDER");
   assert(await page.locator("#creation-workspace").isHidden() && await page.locator("#projects-dialog").count()===0,"PROJECTS_NOT_DEDICATED_PAGE");

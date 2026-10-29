@@ -1,7 +1,7 @@
 import { chromium } from "playwright";
 import { resolve } from "node:path";
 
-const build = await Bun.build({ entrypoints: [resolve("src/dev-ui/browser/activity.ts")], target: "browser", format: "esm", write: false });
+const build = await Bun.build({ entrypoints: [resolve("src/dev-ui/browser/activity.ts")], target: "browser", format: "esm" });
 if (!build.success) throw new Error("ACTIVITY_BUILD_FAILED");
 const script = await build.outputs[0]!.text();
 const browser = await chromium.launch({ headless: true });

@@ -30,14 +30,15 @@ try {
   if (requests.some((path) => /\/(?:account|balance|top_up|generation|session)\b/.test(path))) throw new Error(`HTTP product command detected: ${requests.join(",")}`);
   let configuredProvider = "not_requested";
   if (requestedCase === "boundaries-platform-provider-recovery") {
-    const boundary = await appFrame.locator("body").evaluate(async (url) => {
+    const boundary = await appFrame.locator("body").evaluate(async (_body, url) => {
+      if (typeof url !== "string") throw new Error("CANARY_URL_REQUIRED");
       let parentStorageBlocked = false;
       try { void window.parent.localStorage.length; } catch { parentStorageBlocked = true; }
       let directFetchBlocked = false;
       try { await fetch(url); } catch { directFetchBlocked = true; }
-      return { parentStorageBlocked, directFetchBlocked };
+      return { parentStorageBlocked, directFetchBlocked, canaryTarget: url };
     }, canaryUrl);
-    if (!boundary.parentStorageBlocked || !boundary.directFetchBlocked || canaryRequests !== 0) throw new Error("PAJA_FRAME_AUTHORITY_BOUNDARY_FAILED");
+    if (boundary.canaryTarget !== canaryUrl || !boundary.parentStorageBlocked || !boundary.directFetchBlocked || canaryRequests !== 0) throw new Error("PAJA_FRAME_AUTHORITY_BOUNDARY_FAILED");
     configuredProvider = evidence.provider === "Configured OpenAI Responses" ? "exercised" : allowSkipWithoutProviderCredentials ? "skipped_without_credentials" : "missing_required_credentials";
     if (configuredProvider === "missing_required_credentials") throw new Error("CONFIGURED_PROVIDER_CREDENTIALS_REQUIRED");
   }

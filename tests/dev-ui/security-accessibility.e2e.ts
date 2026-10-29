@@ -41,7 +41,7 @@ async function assertResponsiveWorkspace(page: Page, width: number): Promise<voi
     if (control.hidden || control.width === 0 || control.height === 0) continue;
     requireThat(control.width >= 44 && control.height >= 44, `TARGET_TOO_SMALL:${width}:${control.tag}:${control.width}x${control.height}`);
   }
-  const labelled = await page.locator("input").evaluateAll((inputs) => inputs.map((input) => ({ id: input.id, labels: [...input.labels ?? []].map((label) => label.textContent?.trim() ?? "") })));
+  const labelled = await page.locator("input").evaluateAll((inputs) => inputs.map((input) => { if (!(input instanceof HTMLInputElement)) throw new Error("INPUT_ELEMENT_REQUIRED"); return { id: input.id, labels: [...input.labels ?? []].map((label) => label.textContent?.trim() ?? "") }; }));
   requireThat(labelled.length > 0 && labelled.every((input) => input.labels.some(Boolean)), `INPUT_ACCESSIBLE_NAME_MISSING:${width}`);
   await page.keyboard.press("Tab");
   const focused = await page.evaluate(() => {
@@ -107,16 +107,18 @@ try {
   const preview = page.frameLocator("#preview");
   const nestedPreview = preview.frameLocator("iframe").first();
   requireThat(await preview.locator("iframe").first().getAttribute("sandbox") === "allow-scripts", "PREVIEW_SANDBOX_POLICY_INVALID");
-  const frameBoundary = await nestedPreview.locator("body").evaluate(async (canaryUrl) => {
+  const fetchTarget = `http://127.0.0.1:${canary.port}/LISTENING`;
+  const frameBoundary = await nestedPreview.locator("body").evaluate(async (_body, canaryUrl) => {
+    if (typeof canaryUrl !== "string") throw new Error("CANARY_URL_REQUIRED");
     let storageDenied = false;
     try { void localStorage.length; } catch { storageDenied = true; }
     let parentStorageDenied = false;
     try { void window.parent.localStorage.length; } catch { parentStorageDenied = true; }
     let fetchDenied = false;
     try { await fetch(canaryUrl); } catch { fetchDenied = true; }
-    return { origin: location.origin, storageDenied, parentStorageDenied, fetchDenied, nostr: typeof (window as any).nostr };
-  }, `http://127.0.0.1:${canary.port}/LISTENING`);
-  requireThat(frameBoundary.origin === "null" && frameBoundary.storageDenied && frameBoundary.parentStorageDenied && frameBoundary.fetchDenied && frameBoundary.nostr === "undefined" && canaryRequests.length === 0, `OPAQUE_PREVIEW_BOUNDARY_FAILED:${JSON.stringify(frameBoundary)}`);
+    return { canaryTarget: canaryUrl, origin: location.origin, storageDenied, parentStorageDenied, fetchDenied, nostr: typeof (window as any).nostr };
+  }, fetchTarget);
+  requireThat(frameBoundary.canaryTarget === fetchTarget && frameBoundary.origin === "null" && frameBoundary.storageDenied && frameBoundary.parentStorageDenied && frameBoundary.fetchDenied && frameBoundary.nostr === "undefined" && canaryRequests.length === 0, `OPAQUE_PREVIEW_BOUNDARY_FAILED:${JSON.stringify(frameBoundary)}`);
 
   // Re-open fresh pages to ensure each breakpoint measures the static workspace
   // rather than a post-generation iframe's internal scrolling surface.

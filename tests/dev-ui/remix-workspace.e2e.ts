@@ -31,7 +31,7 @@ async function ready(version:number){
   const visible=await Promise.all(["#generation-error","#activity-current","#activity-connection"].map(async selector=>[selector,(await page.locator(selector).textContent().catch(()=>"")??"").slice(0,600)]));
   const evidence=server.generationEvidence();
   const diagnostic=await pool.query("SELECT operation_id,diagnostic_json FROM development_chatgpt_operations ORDER BY created_at DESC LIMIT 1").then(result=>result.rows[0]??null).catch(()=>null);
-  console.error(JSON.stringify({test:"remix-workspace",expectedVersion:version,state,visible:Object.fromEntries(visible),inferences:fixture.counts().inferences,generation:{provider:evidence.provider,error:evidence.error??null,result:evidence.result?{status:evidence.result.status,operationId:evidence.result.operationId}:null},latestDiagnostic:diagnostic?{operationId:diagnostic.operation_id,detail:bounded(diagnostic.diagnostic_json)}:null}));
+  console.error(JSON.stringify({test:"remix-workspace",expectedVersion:version,state,visible:Object.fromEntries(visible),inferences:fixture.counts().inferences,generation:{provider:evidence.provider,error:evidence.error??null,result:evidence.result?{status:evidence.result.status,operationId:"operationId" in evidence.result?evidence.result.operationId:undefined}:null},latestDiagnostic:diagnostic?{operationId:diagnostic.operation_id,detail:bounded(diagnostic.diagnostic_json)}:null}));
   throw error;
  }
 }

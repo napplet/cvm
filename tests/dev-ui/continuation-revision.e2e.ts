@@ -98,7 +98,7 @@ async function revisionCase(): Promise<void> {
     await page.reload({ waitUntil: "networkidle" }); await page.getByRole("button", { name: "Connect" }).click(); await page.getByText("Connected").waitFor();
     await eventually(async () => (await page.locator("#versions li").count()) === 3, "revision-restart-history");
     await page.getByRole("button", { name: /Version 1:/ }).click(); await eventually(async () => !(await page.locator("#preview").isHidden()), "prior-preview");
-    const evidence = server.generationEvidence(); if (evidence.result?.artifactVersion !== 3) throw new Error("REVISION_SQL_VERSION_MISMATCH");
+    const evidence = server.generationEvidence(); if (evidence.result?.status !== "completed" || evidence.result.artifactVersion !== 3) throw new Error("REVISION_SQL_VERSION_MISMATCH");
     await server.assertGenerationSettlement();
     // Exercise the same low-balance pending action after a populated revision
     // lineage, then restart before explicit funding/resume.

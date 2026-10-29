@@ -44,7 +44,7 @@ for (const mode of ["reject", "stall"] as const) test(`notification ${mode} cann
 });
 
 test("browser accepts only matching, increasing, bounded progress with no arbitrary payload fields", () => {
-  const event = { version: 1, requestId: "one", tool: "start_session", sequence: 2, at: 1, elapsedMs: 0, kind: "stage", stage: "model_stream", state: "running", bytes: 17 };
+  const event: NonNullable<ReturnType<typeof acceptDevelopmentProgress>> = { version: 1, requestId: "one", tool: "start_session", sequence: 2, at: 1, elapsedMs: 0, kind: "stage", stage: "model_stream", state: "running", bytes: 17 };
   const pending = { id: "one", tool: "start_session", sequence: 1 };
   expect(acceptDevelopmentProgress(event, pending)).toEqual(event);
   for (const change of [{ requestId: "other" }, { tool: "revise_session" }, { sequence: 1 }, { sequence: 0 }, { bytes: Infinity }, { rawOutput: "secret" }, { stage: "untrusted" }]) expect(acceptDevelopmentProgress({ ...event, ...change }, pending)).toBeUndefined();

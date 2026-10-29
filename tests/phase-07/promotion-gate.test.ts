@@ -5,6 +5,7 @@ import { join, relative } from "node:path";
 import { evaluateReleaseCertification as evaluateReleaseCertificationInner } from "../../src/promotion/run-promotion";
 import { verifyReleaseCertificationInput } from "../../src/promotion/candidate";
 import { canonicalJson, parseReleaseCertificationManifest, RELEASE_CLAIM_INVENTORY } from "../../src/promotion/schema";
+import type { CertificationObservationInput } from "../../src/certification/contracts";
 import { writeCertificationObservation } from "../../src/certification/evidence";
 import { createPinnedReleaseCertificationTrustRoot, type ReleaseCertificationTrustRoot } from "../../src/certification/trust";
 
@@ -94,13 +95,13 @@ const releaseManifest = () => ({
   },
   requirements: RELEASE_CLAIM_INVENTORY.map((item) => ({ ...item, freshnessMs: 60_000 })),
   waivers: [],
-});
+} satisfies ReturnType<typeof parseReleaseCertificationManifest>);
 const observation = (manifest: ReturnType<typeof releaseManifest>, candidateId: string, claim: string, live: boolean, status: "passed" | "blocked" = "passed") => ({
   version: 1 as const, evidenceClass: live ? "protected_live" as const : "deterministic" as const, status, candidate: { id: candidateId, provider: "modal" as const, image: `example/worker@sha256:${digest("3")}`, sourceSha256: manifest.sourceSha256 },
   input: { datasetSha256: digest("9"), profileSha256: digest("f"), topologySha256: digest("0"), command: ["certify"] },
   startedAtMs: 1_000, completedAtMs: 1_001, expiresAtMs: 61_001, claims: status === "passed" ? [claim] : [], limitations: status === "passed" ? [] : ["topology-unavailable"], reasonCode: status === "passed" ? "OBSERVATION_COMPLETE" : "TOPOLOGY_UNAVAILABLE",
   releaseBinding: { releaseId: manifest.releaseId, sourceRevision: manifest.sourceRevision, sourceSha256: manifest.sourceSha256, supplyChainPolicy: manifest.supplyChainPolicy, inputs: manifest.inputs },
-});
+} satisfies CertificationObservationInput);
 
 async function protectedVerificationRecords(manifest: ReturnType<typeof releaseManifest>, candidateId: string, atMs = 1_000) {
   const releaseBindingSha256 = await sha256({ releaseId: manifest.releaseId, sourceRevision: manifest.sourceRevision, sourceSha256: manifest.sourceSha256, supplyChainPolicy: manifest.supplyChainPolicy, inputs: manifest.inputs });
@@ -122,8 +123,8 @@ async function protectedVerificationRecords(manifest: ReturnType<typeof releaseM
   };
 }
 
-function bindSupplyChainObservation<T extends ReturnType<typeof observation>>(value: T, records: Awaited<ReturnType<typeof protectedVerificationRecords>>): T {
-  return value.claims.includes("release.supply_chain") ? { ...value, verificationDigests: { reproducibilityEvidenceSha256: records.reproducibility.evidenceSha256, supplyChainEvidenceSha256: records.supplyChain.evidenceSha256 } } as T : value;
+function bindSupplyChainObservation(value: CertificationObservationInput, records: Awaited<ReturnType<typeof protectedVerificationRecords>>): CertificationObservationInput {
+  return value.claims.includes("release.supply_chain") ? { ...value, verificationDigests: { reproducibilityEvidenceSha256: records.reproducibility.evidenceSha256, supplyChainEvidenceSha256: records.supplyChain.evidenceSha256 } } : value;
 }
 
 test("manifest rejects missing exact release inputs and non-waivable safety waivers", () => {

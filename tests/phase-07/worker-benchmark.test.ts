@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   CertificationObservationSchema,
+  type CertificationObservationInput,
   WorkerCandidateSchema,
 } from "../../src/certification/contracts";
 import {
@@ -14,9 +15,9 @@ import { detectWorkerAuthorityDelta, evaluateAdmissionSlo, runWorkerCandidateBen
 import { blockedFlyProbeEvidence } from "../../src/worker-adapters/fly-worker";
 
 const digest = (char: string) => char.repeat(64);
-const candidate = { id: digest("a"), provider: "modal", image: `registry.example/worker@sha256:${digest("b")}`, sourceSha256: digest("c") };
-const observation = {
-  version: 1, status: "passed", candidate, input: { datasetSha256: digest("d"), profileSha256: digest("e"), topologySha256: digest("f"), command: ["/usr/local/bin/benchmark", "--exact-ready"] },
+const candidate: CertificationObservationInput["candidate"] = { id: digest("a"), provider: "modal", image: `registry.example/worker@sha256:${digest("b")}`, sourceSha256: digest("c") };
+const observation: CertificationObservationInput = {
+  version: 1, evidenceClass: "deterministic", status: "passed", candidate, input: { datasetSha256: digest("d"), profileSha256: digest("e"), topologySha256: digest("f"), command: ["/usr/local/bin/benchmark", "--exact-ready"] },
   startedAtMs: 1_000, completedAtMs: 1_100, expiresAtMs: 2_000,
   claims: ["worker.admission_slo"], limitations: [], reasonCode: "OBSERVATION_COMPLETE",
 };

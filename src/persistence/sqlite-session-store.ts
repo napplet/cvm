@@ -117,7 +117,7 @@ export class SqliteSessionStore implements SessionStore {
   async claimWorkerLease(action: SessionAction, nowMs: number, expiresAtMs: number): Promise<WorkerLeaseClaim> {
     const lease = freeze({ token: crypto.randomUUID(), expiresAtMs });
     try {
-      return this.#database.transaction(() => {
+      return this.#database.transaction((): WorkerLeaseClaim => {
         this.#database.query("DELETE FROM worker_leases WHERE expires_at_ms <= ?").run(nowMs);
         const row = this.#database.query("SELECT principal_id, version FROM sessions WHERE session_id = ?").get(action.sessionId) as Pick<SessionRow, "principal_id" | "version"> | null;
         if (!row) return freeze({ authorized: false, result: denial("SESSION_NOT_FOUND") });
@@ -144,7 +144,7 @@ export class SqliteSessionStore implements SessionStore {
   async claimEffectIntent(action: SessionAction, lease: WorkerLease, callId: string, requestFingerprint: string, nowMs: number): Promise<EffectIntentClaim> {
     const operationId = crypto.randomUUID();
     try {
-      return this.#database.transaction(() => {
+      return this.#database.transaction((): EffectIntentClaim => {
         const row = this.#database.query("SELECT idempotency_key, lease_token, expires_at_ms FROM worker_leases WHERE session_id = ? AND expected_version = ?").get(action.sessionId, action.expectedVersion) as { idempotency_key: string; lease_token: string | null; expires_at_ms: number } | null;
         if (row?.idempotency_key !== action.idempotencyKey || row.lease_token !== lease.token || row.expires_at_ms <= nowMs) return freeze({ status: "blocked" });
         const existing = this.#database.query("SELECT action_id, request_fingerprint, attempt_token, operation_id, status FROM effect_intents WHERE session_id = ? AND expected_version = ? AND call_id = ?").get(action.sessionId, action.expectedVersion, callId) as { action_id: string; request_fingerprint: string; attempt_token: string | null; operation_id: string; status: "claimed" | "completed" | "uncertain" } | null;

@@ -6,13 +6,13 @@ import { evaluateDesignVerification, validateDesignVerificationEvidence, writeDe
 const digest = (value: string) => value.repeat(64).slice(0, 64);
 const candidateId = "a19fc7d283a4482c53728f4a931743576564fb3826d7f8fa1383d02578b69024";
 
-function fixture(fixture: "minimal" | "capability-harness", mode: "primary" | "degraded-no-intent", status: "passed" | "blocked" = "passed") {
+function fixture(fixture: "minimal" | "capability-harness", mode: "primary" | "degraded-no-intent", status: "passed" | "blocked" = "passed"): DesignVerificationInput["fixtures"][number] {
   return {
     fixture, mode, status, candidateId, imageDigest: digest("a"), stages: status === "passed" ? [{ id: "conformance", argv: ["pnpm", "test:conformance"], exitCode: 0, stdoutSha256: digest("b"), stderrSha256: digest("c"), nativeOutputSha256: digest(fixture === "minimal" ? "d" : mode === "primary" ? "e" : "f") }] : [],
     installedSkillsSha256: digest("1"), distSha256: digest(fixture === "minimal" ? "2" : mode === "primary" ? "3" : "4"), aggregateHash: digest(fixture === "minimal" ? "5" : mode === "primary" ? "6" : "7"), sealedEvidenceSha256: digest(fixture === "minimal" ? "8" : mode === "primary" ? "9" : "a"),
     observedDomains: fixture === "minimal" ? [] : mode === "primary" ? ["storage", "intent"] : ["storage"], optionalIntentPresenceRead: fixture === "capability-harness", intentUsedThroughSdk: fixture === "capability-harness" && mode === "primary", gracefulDegradation: fixture === "capability-harness" && mode === "degraded-no-intent",
     ...(status === "blocked" ? { reason: "offline template unavailable" } : {}),
-  } as const;
+  };
 }
 
 const input: DesignVerificationInput = {
@@ -37,7 +37,7 @@ describe("design verification evidence", () => {
     expect(decision.evidence?.fixtures.every((entry) => entry.status === "blocked")).toBe(true);
   });
 
-  test.each([
+  test.each<[string, DesignVerificationInput]>([
     ["missing positive", { ...input, fixtures: input.fixtures.slice(1) }],
     ["unknown policy", { ...input, policyResults: [{ name: "unknown", verdict: "manual_review", expectedVerdict: "block", evidenceSha256: digest("c") }] }],
     ["waiver", { ...input, waiver: { candidateId, checkId: "cvm:gap:service-worker", reportSha256: digest("d"), owner: "operator", rationale: "no", compensatingEvidenceSha256: digest("e"), expiresAt: "2026-08-04T00:00:00Z", rollbackTrigger: "any regression" } }],

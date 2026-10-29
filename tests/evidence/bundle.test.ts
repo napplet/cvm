@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { validateEvidenceBundle, writeEvidenceBundle } from "../../src/evidence/bundle";
+import { type EvidenceBundleInput, validateEvidenceBundle, writeEvidenceBundle } from "../../src/evidence/bundle";
 
 function evidence(overrides: Record<string, unknown> = {}) {
   return {
@@ -14,7 +14,7 @@ function evidence(overrides: Record<string, unknown> = {}) {
     reproducibility: { status: "matched", diffSha256: "f".repeat(64) },
     provenance: { status: "verified", links: ["https://example.invalid/source"] },
     ...overrides,
-  };
+  } satisfies EvidenceBundleInput;
 }
 
 describe("writeEvidenceBundle", () => {
@@ -30,7 +30,7 @@ describe("writeEvidenceBundle", () => {
         nativeReports: [{ sha256: "c".repeat(64), id: "native" }],
         manifest: { sha256: "b".repeat(64), candidateId: "a".repeat(64) },
         verdict: { responsibleStage: "none", status: "review-ready" },
-      };
+      } satisfies EvidenceBundleInput;
       const second = await writeEvidenceBundle(directory, reordered);
       expect(second.evidenceSha256).toBe(first.evidenceSha256);
       expect(await Bun.file(join(directory, `${first.evidenceSha256}.json`)).exists()).toBeTrue();

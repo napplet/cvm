@@ -1,5 +1,5 @@
 import type { ArtifactVerifier } from "../phase-02/trusted-core";
-import type { WorkerPort, WorkerRunRequest, WorkerRunResult } from "../phase-02/contracts";
+import { WorkerRunRequestSchema, type WorkerPort, type WorkerRunRequest, type WorkerRunResult } from "../phase-02/contracts";
 import type { ArtifactContractInput } from "../policy/artifact-contract";
 import { LocalArtifactVerifier, type VerifiedArtifactFacts } from "./local-artifact-verifier";
 import { LocalArtifactRepository, type SealedArtifact } from "./local-artifact-repository";
@@ -18,9 +18,11 @@ export class LocalProposalWorkerPort implements WorkerPort {
   readonly #materialized = new Map<string, Materialized>();
   constructor(private readonly worker: LocalNappletWorker, private readonly options: Readonly<{ results?: DurableWorkerResultStore }> = {}) {}
 
-  async run(request: WorkerRunRequest, signal: AbortSignal): Promise<WorkerRunResult> {
+  async run(input: WorkerRunRequest, signal: AbortSignal): Promise<WorkerRunResult> {
     if (signal.aborted) return { status: "unavailable", code: "WORKER_UNAVAILABLE" };
-    if (!request.sourceProposalReference || !request.sourceProposalSha256 || !request.sourceProposalFiles) {
+    const request = WorkerRunRequestSchema.parse(input);
+    const { sourceProposalReference, sourceProposalSha256, sourceProposalFiles } = request;
+    if (!sourceProposalReference || !sourceProposalSha256 || !sourceProposalFiles) {
       return { status: "unavailable", code: "WORKER_UNAVAILABLE" };
     }
     const key = this.key(request);
@@ -31,8 +33,8 @@ export class LocalProposalWorkerPort implements WorkerPort {
     }
     try {
       const materialize = () => this.worker.materialize({
-        proposalSha256: request.sourceProposalSha256,
-        proposal: { reference: request.sourceProposalReference, sha256: request.sourceProposalSha256, files: request.sourceProposalFiles },
+        proposalSha256: sourceProposalSha256,
+        proposal: { reference: sourceProposalReference, sha256: sourceProposalSha256, files: sourceProposalFiles },
       }, signal);
       const output = this.options.results ? await this.options.results.materialize(request, materialize, signal) : await materialize();
       this.#materialized.set(key, Object.freeze({ output, request }));
@@ -87,7 +89,7 @@ export class LocalGenerationArtifactVerifier implements ArtifactVerifier {
         ownerId, accountId: facts.action.principal.id, sessionId: facts.action.sessionId, actionId: facts.action.actionId,
         expectedVersion: facts.action.expectedVersion, proposalSha256: materialized.request.sourceProposalSha256!,
         toolchainSha256: materialized.output.toolchainSha256, distRoot: materialized.output.distRoot,
-        commandEvidence: materialized.output.commandEvidence,
+        commandEvidence: materialized.output.commandEvidence.map(stage => ({ ...stage })),
       });
       const sealed = await this.input.repository.commit(verified);
       return Object.freeze({

@@ -13,6 +13,7 @@ import {
   ContinuationLeaseBindingSchema,
   ToolRequestSchema,
   WorkerEventSchema,
+  WorkerArtifactSchema,
   WorkerRunRequestSchema,
   WorkerRunResultSchema,
   type CheckpointExportRequest,
@@ -58,7 +59,7 @@ export class FakeWorkspaceHarness {
       if (!normalized) throw new Error("fake workspace seed path escaped its workspace");
       this.#files.set(normalized, content);
     }
-    this.dispatcher = Object.freeze({ dispatch: async (request, context) => this.dispatch(request, context.workspacePath) });
+    this.dispatcher = Object.freeze<ToolDispatcher>({ dispatch: async (request, context) => this.dispatch(request, context.workspacePath) });
   }
 
   get workspaceId(): string { return this.options.workspaceId; }
@@ -86,8 +87,15 @@ export class FakeWorkspaceHarness {
   }
 }
 
+type CompletedWorkerEvent = Extract<WorkerEvent, { kind: string }>;
+function executionEvent(input: unknown): CompletedWorkerEvent {
+  const event = WorkerEventSchema.parse(input);
+  if (!("kind" in event)) throw new Error("FAKE_WORKER_EXECUTION_EVENT_REQUIRED");
+  return event;
+}
+
 async function sha256(bytes: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const digest = await crypto.subtle.digest("SHA-256", new Uint8Array(bytes));
   return Array.from(new Uint8Array(digest), (item) => item.toString(16).padStart(2, "0")).join("");
 }
 
@@ -183,7 +191,7 @@ export class DeterministicFakeWorker implements ContinuationWorkerPort {
       await this.#barrier?.();
       if (signal.aborted) return this.finish(identity, { status: "interrupted", code: "WORKER_INTERRUPTED" });
       const script = this.options.script ?? [];
-      const events: WorkerEvent[] = [];
+      const events: CompletedWorkerEvent[] = [];
       let validatedBoundary = false;
       let checkpoint: CheckpointProposal | undefined;
       let turn = 0;
@@ -198,7 +206,7 @@ export class DeterministicFakeWorker implements ContinuationWorkerPort {
         turn += 1;
         const proposal = this.toolFor(step, request, turn);
         const parsedProposal = ToolRequestSchema.parse(proposal);
-        events.push(WorkerEventSchema.parse({ kind: "tool_proposal", turn, request: parsedProposal }));
+        events.push(executionEvent({ kind: "tool_proposal", turn, request: parsedProposal }));
         // Recheck at the effect boundary: a deadline fence can race a held
         // proposal, but no gateway dispatch may occur after acknowledgement.
         if (this.isFenced(request)) return this.finish(identity, { status: "interrupted", code: "WORKER_INTERRUPTED" });
@@ -207,7 +215,7 @@ export class DeterministicFakeWorker implements ContinuationWorkerPort {
         if (step.kind === "checkpoint") {
           checkpoint = await this.checkpoint(request, step, events);
           turn += 1;
-          events.push(WorkerEventSchema.parse({ kind: "checkpoint_proposal", turn, proposal: { checkpointId: proposal.checkpointId, archiveSha256: checkpoint.archiveSha256, evidenceSha256: checkpoint.evidenceSha256, inventorySha256: checkpoint.inventorySha256 } }));
+          events.push(executionEvent({ kind: "checkpoint_proposal", turn, proposal: { checkpointId: checkpoint.checkpointId, archiveSha256: checkpoint.archiveSha256, evidenceSha256: checkpoint.evidenceSha256, inventorySha256: checkpoint.inventorySha256 } }));
         } else {
           validatedBoundary = true;
         }
@@ -242,14 +250,14 @@ export class DeterministicFakeWorker implements ContinuationWorkerPort {
 
   /** Explicit synthetic artifact fixture for the deterministic test worker only. */
   private artifact(request: WorkerRunRequest) {
-    return {
+    return WorkerArtifactSchema.parse({
       sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion, capabilityGrant: request.capabilityGrant, workspaceId: request.workspaceId, artifactId: `${request.actionId}:fake-artifact`,
       purpose: { kind: "focused" as const, statements: ["one focused napplet"] },
       surface: { hasBackend: false as const, hasSecondPurpose: false as const, serviceWorker: false as const, dynamicAuthority: false as const },
       dependencies: { appOwnedSignerOrRelay: false as const, privateNappletImport: false as const },
       capabilities: { declaredHard: ["storage"] as const, observedDomains: ["storage"] as const, optionalIntentPresenceRead: false, intentUsedThroughSdk: false },
       upstream: { scanner: { verdict: "pass" as const, checkId: "upstream:fake-scanner" }, conformance: { verdict: "pass" as const, checkId: "upstream:fake-conformance" } },
-    };
+    });
   }
 
   private finish(identity: string, result: WorkerRunResult): WorkerRunResult {

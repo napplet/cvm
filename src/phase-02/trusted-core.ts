@@ -73,7 +73,7 @@ type InternalDependencies = Readonly<{
   now: () => number;
 }>;
 
-const DEFAULT_COUNTER: TokenCounter = Object.freeze({
+const DEFAULT_COUNTER: TokenCounter = Object.freeze<TokenCounter>({
   version: "phase-02-whitespace-token-counter-v1",
   count: (idea) => idea.trim().split(/\s+/u).filter(Boolean).length,
 });
@@ -251,7 +251,7 @@ export class TrustedCore {
       return asFailure("WORKER_UNCERTAIN", { request: { sessionId: request.sessionId, actionId: request.actionId } });
     }
     if (workerResult.status !== "completed" || workerResult.code !== "WORKER_PROPOSALS_VALIDATED") {
-      return asFailure("WORKER_UNCERTAIN", { status: workerResult.status, code: workerResult.code });
+      return asFailure("WORKER_UNCERTAIN", { status: workerResult.status, code: "code" in workerResult ? workerResult.code : undefined });
     }
     if (!artifactMatchesRequest(workerResult.artifact, request)) {
       return asFailure("WORKER_UNCERTAIN", { reason: "worker artifact binding invalid" });

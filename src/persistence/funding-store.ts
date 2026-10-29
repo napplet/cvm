@@ -346,6 +346,7 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
     return freeze({ accountId, sessionId, version: action.sessionVersion ?? action.expectedVersion, status });
   }
 
+  async transact<T>(accountId: string, operation: (transaction: MeteredFundingTransaction & ContinuationFundingTransaction) => Promise<T> | T): Promise<T>;
   async transact<T>(accountId: string, operation: (transaction: MeteredFundingTransaction) => Promise<T> | T): Promise<T>;
   async transact<T>(accountId: string, operation: (transaction: ContinuationFundingTransaction) => Promise<T> | T): Promise<T>;
   async transact<T>(accountId: string, operation: (transaction: MeteredFundingTransaction & ContinuationFundingTransaction) => Promise<T> | T): Promise<T> {

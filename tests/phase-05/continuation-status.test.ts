@@ -24,7 +24,7 @@ async function pausedFixture() {
   const command = { principal: owner, idempotencyKey: "status-admission", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "3250", unit: "sat" as const } };
   const admission = await admissions.admit(command, await trustedAdmissionReceipt(command));
   if (admission.status !== "accepted") throw new Error("expected funded admission");
-  const gateway: ModelGateway = { async dispatch() { throw new Error("must not dispatch"); }, async lookup() { return { status: "not_found" }; } };
+  const gateway: ModelGateway = { async dispatch() { throw new Error("must not dispatch"); }, async lookup() { throw new Error("UNEXPECTED_PROVIDER_LOOKUP"); } };
   const service = new MeteredGenerationService({ fundedAdmission: admissions, store, gateway, worker, artifactVerifier: verifier, clock: { nowMs: () => 1_700_000_000_000 } });
   const paused = await service.startSession({ principal: owner, admissionReference: admission.reference, idempotencyKey: "status-pause", expectedVersion: 0, maximum: "3250", policyVersion: "phase-02-policy-2026-08-04", idea: "Prompt canary: do not expose this text." });
   if (paused.status !== "needs_top_up") throw new Error("expected paused fixture");

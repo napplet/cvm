@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
+import type { ContextVmTransportPort } from "../../src/contextvm/sdk-bridge";
 import { ContextVmFundingAdapter } from "../../src/contextvm/adapter";
 import { FundedAdmissionService } from "../../src/funding/funded-admission";
 import { FundingService } from "../../src/funding/funding-service";
@@ -31,7 +32,8 @@ test("07-W0-01 corpus preserves admission coverage and explicit protected-live n
 
 test("07-W0-01 rejects duplicate IDs and fabricated protected-live pass claims", async () => {
   const registry = await loadRegistry();
-  const duplicate = structuredClone(registry); duplicate.cases.push(structuredClone(duplicate.cases[0]));
+  const first = registry.cases[0]; if (!first) throw new Error("ADMISSION_REGISTRY_EMPTY");
+  const duplicate = { ...structuredClone(registry), cases: [...registry.cases, structuredClone(first)] };
   expect(() => assertStrictRegistry(duplicate)).toThrow();
   const passClaim = structuredClone(registry); passClaim.liveObservations[0].status = "passed";
   expect(() => assertStrictRegistry(passClaim)).toThrow();
@@ -54,9 +56,9 @@ describe("07-01 trusted immediate-or-refused admission", () => {
     let clock = 10;
     let captured: unknown;
     let capturedReceipt: unknown;
-    const transport = {
+    const transport: ContextVmTransportPort = {
       onInbound: () => undefined,
-      canonicalInvocation: () => ({ invocationHash: "b".repeat(64) }),
+      canonicalInvocation: (clientPubkey) => ({ clientPubkey, invocationHash: "b".repeat(64) }),
       sendNotification: async () => undefined,
       sendResponse: async () => undefined,
       configureAnnouncement: () => undefined,
@@ -206,9 +208,9 @@ describe("07-14 canonical funded-admission boundary", () => {
   test("canonical invocation is computed once before receipt issuance and binds lifecycle correlation to invocation, event, principal, and RPC request", async () => {
     const calls: string[] = [];
     const issued: unknown[] = [];
-    const transport = {
+    const transport: ContextVmTransportPort = {
       onInbound: () => undefined,
-      canonicalInvocation: () => { calls.push("canonical"); return { invocationHash: "b".repeat(64) }; },
+      canonicalInvocation: (clientPubkey) => { calls.push("canonical"); return { clientPubkey, invocationHash: "b".repeat(64) }; },
       sendNotification: async () => undefined,
       sendResponse: async () => undefined,
       configureAnnouncement: () => undefined,
@@ -250,9 +252,9 @@ describe("07-14 canonical funded-admission boundary", () => {
   test("both funded-admission wire channels omit malicious port fields", async () => {
     const notifications: unknown[] = [];
     const responses: unknown[] = [];
-    const transport = {
+    const transport: ContextVmTransportPort = {
       onInbound: () => undefined,
-      canonicalInvocation: () => ({ invocationHash: "b".repeat(64) }),
+      canonicalInvocation: (clientPubkey) => ({ clientPubkey, invocationHash: "b".repeat(64) }),
       sendNotification: async (_pubkey: string, value: unknown) => { notifications.push(value); },
       sendResponse: async (_pubkey: string, value: unknown) => { responses.push(value); },
       configureAnnouncement: () => undefined,
@@ -276,9 +278,9 @@ describe("07-14 canonical funded-admission boundary", () => {
     for (const portResult of portResults) {
       const notifications: unknown[] = [];
       const responses: unknown[] = [];
-      const transport = {
+      const transport: ContextVmTransportPort = {
         onInbound: () => undefined,
-        canonicalInvocation: () => ({ invocationHash: "b".repeat(64) }),
+        canonicalInvocation: (clientPubkey) => ({ clientPubkey, invocationHash: "b".repeat(64) }),
         sendNotification: async (_pubkey: string, value: unknown) => { notifications.push(value); },
         sendResponse: async (_pubkey: string, value: unknown) => { responses.push(value); },
         configureAnnouncement: () => undefined,

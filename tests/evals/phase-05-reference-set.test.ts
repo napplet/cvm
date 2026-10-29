@@ -51,7 +51,7 @@ export function validatePhase05ReferenceSet(value: unknown) {
   const mapped = (key: keyof Pick<ReferenceCase, "requirements" | "decisions" | "threats" | "edges" | "prohibitions">, required: readonly string[]) => required.every((value) => parsed.cases.some((item) => item[key].includes(value)));
   const complete = mapped("requirements", REQUIREMENTS) && mapped("decisions", DECISIONS) && mapped("threats", THREATS) && mapped("edges", EDGES) && mapped("prohibitions", PROHIBITIONS) && EDGES.every((edge) => parsed.edgeObligations.includes(edge)) && PROHIBITIONS.every((item) => parsed.prohibitions.includes(item)) && SUITES.every((suite) => parsed.cases.some((item) => item.execution.file === suite));
   if (!complete) throw new Error("Phase 05 reference coverage is incomplete");
-  return Object.freeze({ ...parsed, cases: Object.freeze(parsed.cases.map(Object.freeze)), coverage: Object.freeze({ complete }) });
+  return Object.freeze({ ...parsed, cases: Object.freeze(parsed.cases.map((item) => Object.freeze(item))), coverage: Object.freeze({ complete }) });
 }
 
 export async function executePhase05ReferenceGate(value: unknown) {

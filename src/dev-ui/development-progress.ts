@@ -46,7 +46,12 @@ export class DevelopmentProgressTransport implements ContextVmTransportPort {
       await this.bounded(Promise.resolve().then(() => this.transport.sendNotification(scope.input.verifiedClientPubkey, { jsonrpc: "2.0", method: progressMethod, params: parsed.data }, scope.input.requestEventId)));
     }).finally(() => { scope.queued--; });
   }
-  gateway(gateway: ModelGateway, details: Details): ModelGateway {
+  gateway(gateway: ModelGateway, metadata: Omit<Details, "provider"> & { provider?: unknown }): ModelGateway {
+    // Display labels never expand the public notification contract or affect
+    // the provider operation. Omit unsupported labels, retain bounded facts.
+    const { provider, ...rest } = metadata;
+    const parsedProvider = DevelopmentProgressSchema.shape.provider.safeParse(provider);
+    const details: Details = { ...rest, ...(parsedProvider.success && parsedProvider.data !== undefined ? { provider: parsedProvider.data } : {}) };
     return {
       dispatch: async (...args) => {
         this.emit("model", "running", details);

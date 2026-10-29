@@ -26,7 +26,7 @@ export type ModalLiveWorkerProvider = ReleaseProviderPort & Readonly<{
   executeSample(sample: Readonly<Pick<WorkerBenchmarkSample, "id" | "cohort">>): Promise<unknown>;
 }>;
 
-type Operation = { sandbox?: ModalSandboxPort; readiness?: z.infer<typeof ReadyObservationSchema>; cleanup: "pending" | "cleaned"; sample?: Readonly<Record<string, unknown>> };
+type Operation = { requestSha256: string; sandbox?: ModalSandboxPort; readiness?: z.infer<typeof ReadyObservationSchema>; cleanup: "pending" | "cleaned"; sample?: Readonly<Record<string, unknown>> };
 
 function createOptions(config: ModalWorkerConfig, operationId: string): ModalSandboxCreateOptions {
   const [cpu, cpuLimit] = PHASE_02_POLICY_INITIAL.sandbox.cpu.split("/").map(Number);
@@ -67,8 +67,10 @@ class ModalLiveWorkerProviderImpl implements ModalLiveWorkerProvider {
     OperationIdSchema.parse(input.operationId); DigestSchema.parse(input.desiredDigest);
     const operationId = OperationIdSchema.parse(input.operationId);
     const record = await this.#journal.claim({ operationId, requestSha256: DigestSchema.parse(input.desiredDigest), resourceName: `napplet-cvm-${operationId}` });
-    if (record.record.requestSha256 !== input.desiredDigest) return { status: "unknown" as const, estimatedCostMicros: 0 };
-    this.#operations.set(operationId, this.#operations.get(operationId) ?? { cleanup: "pending" });
+    if (record.record.operationId !== operationId || record.record.requestSha256 !== input.desiredDigest || record.record.resourceName !== `napplet-cvm-${operationId}`) throw new Error("MODAL_OPERATION_IDENTITY_CONFLICT");
+    const existing = this.#operations.get(operationId);
+    if (existing && existing.requestSha256 !== input.desiredDigest) throw new Error("MODAL_OPERATION_IDENTITY_CONFLICT");
+    this.#operations.set(operationId, existing ?? { cleanup: "pending", requestSha256: input.desiredDigest });
     return { status: "planned" as const, estimatedCostMicros: 0 };
   }
 
@@ -84,11 +86,12 @@ class ModalLiveWorkerProviderImpl implements ModalLiveWorkerProvider {
   async #ensureReady(operationId: string, cohort?: z.infer<typeof CohortSchema>): Promise<z.infer<typeof ReadyObservationSchema>> {
     const operation = this.#operations.get(operationId);
     if (!operation) throw new Error("MODAL_OPERATION_NOT_PLANNED");
+    const record = await this.#journal.read(operationId);
+    if (!record) throw new Error("MODAL_OPERATION_NOT_DURABLE");
+    if (record.operationId !== operationId || record.requestSha256 !== operation.requestSha256 || record.resourceName !== `napplet-cvm-${operationId}` || (operation.sandbox && record.resourceId && record.resourceId !== operation.sandbox.id)) throw new Error("MODAL_OPERATION_IDENTITY_CONFLICT");
     if (operation.readiness) return operation.readiness;
     if (operation.sandbox) return (await this.#reconcile(operationId, cohort))!;
     const app = await this.#sdk.apps.fromName(this.#config.appName, { createIfMissing: false });
-    const record = await this.#journal.read(operationId);
-    if (!record) throw new Error("MODAL_OPERATION_NOT_DURABLE");
     if (record.resourceId) {
       if (!this.#sdk.sandboxes.fromId) throw new Error("MODAL_REATTACH_UNSUPPORTED");
       operation.sandbox = await this.#sdk.sandboxes.fromId(record.resourceId);
@@ -116,7 +119,11 @@ class ModalLiveWorkerProviderImpl implements ModalLiveWorkerProvider {
   }
 
   async apply(input: Readonly<{ operationId: string; effectId: string; region: string; desiredDigest: string }>) {
-    try { await this.#ensureReady(OperationIdSchema.parse(input.operationId)); return { status: "applied" as const, actualCostMicros: 0 }; }
+    try {
+      const operationId = OperationIdSchema.parse(input.operationId);
+      if (this.#operations.get(operationId)?.requestSha256 !== DigestSchema.parse(input.desiredDigest)) throw new Error("MODAL_OPERATION_IDENTITY_CONFLICT");
+      await this.#ensureReady(operationId); return { status: "applied" as const, actualCostMicros: 0 };
+    }
     catch { return { status: "unknown" as const, actualCostMicros: 0 }; }
   }
   async observe(input: Readonly<{ operationId: string }>) {
@@ -129,7 +136,7 @@ class ModalLiveWorkerProviderImpl implements ModalLiveWorkerProvider {
     const operationId = OperationIdSchema.parse(input.operationId); const operation = this.#operations.get(operationId);
     if (!operation?.sandbox || operation.cleanup === "cleaned") return { status: "blocked" as const, actualCostMicros: 0 };
     try {
-      const record = await this.#journal.read(operationId); if (!record?.resourceId) return { status: "blocked" as const, actualCostMicros: 0 };
+      const record = await this.#journal.read(operationId); if (!record?.resourceId || record.operationId !== operationId || record.requestSha256 !== operation.requestSha256 || record.resourceName !== `napplet-cvm-${operationId}` || record.resourceId !== operation.sandbox.id) return { status: "blocked" as const, actualCostMicros: 0 };
       await this.#journal.update({ operationId, requestSha256: record.requestSha256, state: "terminating", resourceId: record.resourceId });
       await operation.sandbox.terminate();
       const observed = this.#sdk.sandboxes.findByName ? await this.#sdk.sandboxes.findByName(this.#config.appName, record.resourceName) : Object.freeze({ kind: "unknown" as const });

@@ -88,3 +88,49 @@ test("identical protected cohorts select only fresh passed measured evidence", a
   expect(result).toMatchObject({ status: "selected", provider: "modal", topologySha256: digest("e") });
   expect(result.selectionEvidenceSha256).toHaveLength(64);
 });
+
+
+test("Modal rejects a changed plan digest while preserving its original durable intent", async()=>{
+  const calls:string[]=[],journal=createMemoryWorkerOperationJournal();
+  const provider=createModalLiveWorkerProvider({config:{appName:"napplet-cvm",image,workspaceRoot:"/workspace",policyVersion:"phase-02-policy-2026-08-04",tags:{run:"identity-fixture"}},sdk:modalSdk(calls),command:{observeReady:async({operationId})=>({operationId,status:"ready",isolation:"passed",durableBacklogCount:0,readyLeaseCount:1})},journal});
+  const original={operationId:"op-modal-binding",effectId:"modal-benchmark",region:"global",desiredDigest:digest("b")};
+  await expect(provider.plan(original)).resolves.toMatchObject({status:"planned"});
+  const retained=await journal.read(original.operationId);
+  await expect(provider.plan({...original,desiredDigest:digest("c")})).rejects.toThrow("MODAL_OPERATION_IDENTITY_CONFLICT");
+  expect(await journal.read(original.operationId)).toEqual(retained);
+  expect(calls).toEqual([]);
+});
+
+test("Modal cannot apply another digest through an earlier planned operation", async()=>{
+  const calls:string[]=[],journal=createMemoryWorkerOperationJournal();
+  const provider=createModalLiveWorkerProvider({config:{appName:"napplet-cvm",image,workspaceRoot:"/workspace",policyVersion:"phase-02-policy-2026-08-04",tags:{run:"apply-fixture"}},sdk:modalSdk(calls),command:{observeReady:async({operationId})=>({operationId,status:"ready",isolation:"passed",durableBacklogCount:0,readyLeaseCount:1})},journal});
+  const original={operationId:"op-modal-apply",effectId:"modal-benchmark",region:"global",desiredDigest:digest("b")};
+  await provider.plan(original);
+  expect(await provider.apply({...original,desiredDigest:digest("c")})).toMatchObject({status:"unknown"});
+  expect(calls).toEqual([]);
+  expect(await provider.apply(original)).toMatchObject({status:"applied"});
+  expect(calls.filter(value=>value.startsWith("create:"))).toHaveLength(1);
+});
+
+test("Modal refuses a journal claim with a different original resource locator",async()=>{
+  const calls:string[]=[],journal=createMemoryWorkerOperationJournal();
+  const original={operationId:"op-modal-locator",requestSha256:digest("b"),resourceName:"napplet-cvm-foreign"};await journal.claim(original);
+  const retained=await journal.read(original.operationId);
+  const provider=createModalLiveWorkerProvider({config:{appName:"napplet-cvm",image,workspaceRoot:"/workspace",policyVersion:"phase-02-policy-2026-08-04",tags:{run:"locator-fixture"}},sdk:modalSdk(calls),command:{observeReady:async()=>{throw new Error("READINESS_MUST_NOT_RUN");}},journal});
+  await expect(provider.plan({operationId:original.operationId,effectId:"modal-benchmark",region:"global",desiredDigest:original.requestSha256})).rejects.toThrow("MODAL_OPERATION_IDENTITY_CONFLICT");
+  expect(await journal.read(original.operationId)).toEqual(retained);
+  expect(calls).toEqual([]);
+});
+
+
+test("Modal rechecks durable identity before SDK access, cached readiness and cleanup",async()=>{
+  const calls:string[]=[],backing=createMemoryWorkerOperationJournal();let corrupt:"digest"|"resource"|undefined;
+  const journal={...backing,async read(operationId:string){const record=await backing.read(operationId);if(!record)return record;return corrupt==="digest"?{...record,requestSha256:digest("c")}:corrupt==="resource"?{...record,resourceId:"foreign-sandbox"}:record;}};
+  const provider=createModalLiveWorkerProvider({config:{appName:"napplet-cvm",image,workspaceRoot:"/workspace",policyVersion:"phase-02-policy-2026-08-04",tags:{run:"read-binding-fixture"}},sdk:modalSdk(calls),command:{observeReady:async({operationId})=>({operationId,status:"ready",isolation:"passed",durableBacklogCount:0,readyLeaseCount:1})},journal});
+  const original={operationId:"op-modal-read-binding",effectId:"modal-benchmark",region:"global",desiredDigest:digest("b")};await provider.plan(original);
+  const planned=await backing.read(original.operationId);
+  corrupt="digest";expect(await provider.apply(original)).toMatchObject({status:"unknown"});expect(calls).toEqual([]);expect(await backing.read(original.operationId)).toEqual(planned);
+  corrupt=undefined;expect(await provider.apply(original)).toMatchObject({status:"applied"});const before=[...calls];
+  corrupt="resource";expect(await provider.observe(original)).toMatchObject({status:"unknown"});expect(await provider.cleanup(original)).toMatchObject({status:"blocked"});expect(calls).toEqual(before);
+  corrupt=undefined;expect(await provider.cleanup(original)).toMatchObject({status:"cleaned"});expect(calls.filter(value=>value.startsWith("create:"))).toHaveLength(1);expect(calls.filter(value=>value.startsWith("terminate:"))).toEqual(["terminate:modal-sandbox-1"]);
+});

@@ -1,3 +1,4 @@
+import { assertProductionFundedReplayAuthority, type ProductionFundedReplayAuthority } from "./funded-replay-authority";
 import { bindAccountingRealmPool, createAccountingRealm } from "../funding/accounting-realm";
 import { RetainedGenerationCommandSchema, type GenerationCommandProtector } from "../model/retained-generation-command";
 import type { MeteredGenerationService } from "../phase-04/metered-generation-service";
@@ -9,7 +10,8 @@ export class ProductionGenerationRecovery {
   readonly #pool: PostgresSqlPool;
   #active: Promise<Readonly<{ attempted: number; erased: number }>> | undefined;
   #stopped = false;
-  constructor(private readonly input: Readonly<{ pool: PostgresSqlPool; commands: GenerationCommandProtector; acceptedToolchains: readonly string[]; generation: Pick<MeteredGenerationService,"recoverRecordedAction"> }>) {
+  constructor(private readonly input: Readonly<{ pool: PostgresSqlPool; commands: GenerationCommandProtector; replayAuthority: ProductionFundedReplayAuthority; acceptedToolchains: readonly string[]; generation: Pick<MeteredGenerationService,"recoverRecordedAction"> }>) {
+    assertProductionFundedReplayAuthority(input.replayAuthority);
     this.#pool = bindAccountingRealmPool(input.pool, createAccountingRealm("production-real"));
   }
   scan(): Promise<Readonly<{ attempted: number; erased: number }>> {
@@ -53,6 +55,7 @@ export class ProductionGenerationRecovery {
           const record = RetainedGenerationCommandSchema.parse({ binding: row.binding_json, envelope: row.envelope_json });
           if (record.binding.operationId !== operationId || !this.input.acceptedToolchains.includes(record.binding.toolchainId)) throw new Error("GENERATION_RECOVERY_OPERATION_MISMATCH");
           const command = await this.input.commands.open(record);
+          if (!await this.input.replayAuthority.allow(command)) throw new Error("GENERATION_RECOVERY_WORKER_LEASE_REQUIRED");
           await this.input.generation.recoverRecordedAction({ command, operationId });
         } catch {
           // Unknown/malformed/missing retained evidence does not release a

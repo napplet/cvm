@@ -106,7 +106,8 @@ describe("TransactionalMemoryFundingStore continuation authority", () => {
       continuationStore.transact(accountId, (tx) => tx.claimResume(claim())),
       continuationStore.transact(accountId, (tx) => tx.claimResume(claim())),
     ]);
-    expect(left).toEqual(right);
+    expect(left.replayed).toBeUndefined();
+    expect(right).toEqual({ ...left, replayed: true });
     expect(left.claimed).toBeTrue();
     expect(left.leaseToken).toBe("lease:restored");
   });

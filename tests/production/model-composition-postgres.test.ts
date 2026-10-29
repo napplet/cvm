@@ -1,3 +1,9 @@
+import { fundedReplayAuthorityFixture } from "../fixtures/funded-replay-authority";
+import { computeCanonicalInvocationIdentity } from "@contextvm/sdk/payments/canonical-identity";
+import { createDurableContextVmTransport, openContextVmRelayTransport } from "../../src/release/deployment/contextvm-client";
+import { ProductionContextVmGenerationIntakes } from "../../src/production/contextvm-generation-intake";
+import { ContextVmFundingAdapter } from "../../src/contextvm/adapter";
+import type { ContextVmTransportPort, ContextVmInboundEnvelope, ContextVmWireResponse } from "../../src/contextvm/sdk-bridge";
 import { ProductionWorkerOwnershipResolver } from "../../src/production/worker-bridge";
 import { ProtectedGenerationCommands, RetainedGenerationCommandSchema } from "../../src/model/retained-generation-command";
 import { ProductionGenerationRecovery } from "../../src/production/generation-recovery";
@@ -32,15 +38,16 @@ async function docker(args: string[]) {
   if (code !== 0) throw new Error(`DOCKER_FAILED:${args[0]}:${err.slice(0, 300)}`);
   return out.trim();
 }
-type PrepareFault = { commit?: "before" | "after" };
+type PrepareFault = { commit?: "before" | "after"; intakeAckLost?: boolean };
 function restrictedPool(native: Pool, fault: PrepareFault = {}): PostgresSqlPool {
   return { async connect() {
     const connectingAt = performance.now();
     const client = await native.connect();
-    let archiveInserted = false;
+    let archiveInserted = false, intakeInserted = false;
     if (performance.now() - connectingAt >= 200) console.error("MODEL_COMPOSITION_SLOW_POOL_CONNECT", Math.round(performance.now() - connectingAt));
     return { async query<Row extends Record<string, unknown>>(sql: string, values?: readonly unknown[]) {
       if (sql.startsWith("INSERT INTO production_real.generation_recovery_commands")) archiveInserted = true;
+      if (sql.startsWith("INSERT INTO production_real.release_operation_journal") && String(values?.[2]).startsWith("contextvm-intake:")) intakeInserted = true;
       const commitFault = sql === "COMMIT" && archiveInserted ? fault.commit : undefined;
       if (commitFault) delete fault.commit;
       if (commitFault === "before") throw new Error("FIXTURE_PREPARE_ROLLBACK");
@@ -48,6 +55,7 @@ function restrictedPool(native: Pool, fault: PrepareFault = {}): PostgresSqlPool
       try {
         const result = await client.query<Row>(sql, values ? [...values] : undefined);
         if (commitFault === "after") throw new Error("FIXTURE_PREPARE_COMMIT_ACK_LOST");
+        if (sql === "COMMIT" && intakeInserted && fault.intakeAckLost) { delete fault.intakeAckLost; throw new Error("FIXTURE_INTAKE_COMMIT_ACK_LOST"); }
         return { rows: result.rows };
       } finally {
         // Static SQL only: never print account, prompt, credential or parameter values.
@@ -58,7 +66,7 @@ function restrictedPool(native: Pool, fault: PrepareFault = {}): PostgresSqlPool
   } };
 }
 
-integration.each(["legacy-completed", "current-missing-counter", "delayed-current", "retained-restart", "retained-rollback", "retained-commit-ack", "retained-concurrent", "retained-restored", "retained-expired", "retained-lease-reclaim"])("normal paid graph preserves real operation IDs, source and exact cached settlement (%s)", async (wireCase) => {
+integration.each(["legacy-completed", "current-missing-counter", "delayed-current", "retained-restart", "retained-rollback", "retained-commit-ack", "retained-concurrent", "retained-restored", "retained-expired", "retained-lease-reclaim", "retained-intake-before-handler", "retained-intake-lost-commit-ack", "retained-intake-expired-worker"])("normal paid graph preserves real operation IDs, source and exact cached settlement (%s)", async (wireCase) => {
   const name = `cvm-model-composition-${crypto.randomUUID().replaceAll("-", "")}`;
   let admin: Pool | undefined, native: Pool | undefined;
   try {
@@ -69,7 +77,7 @@ integration.each(["legacy-completed", "current-missing-counter", "delayed-curren
     for (let attempt = 0; attempt < 90; attempt++) {
       try { await admin.query("SELECT 1"); break; } catch (error) { if (attempt === 89) throw error; await Bun.sleep(250); }
     }
-    for (const file of ["phase-03/001_funding.sql", "phase-04/001_metered_generation.sql", "phase-04/002_action_budget_lifecycle.sql", "phase-05/001_continuation.sql", "phase-06/001_publication.sql", "phase-03/002_production_accounting.sql", "phase-07/001_production_operation_journal.sql", "phase-07/002_production_pricing_catalog.sql", "phase-07/003_production_checkpoints.sql"]) await admin.query(await Bun.file(`migrations/${file}`).text());
+    for (const file of ["phase-03/001_funding.sql", "phase-04/001_metered_generation.sql", "phase-04/002_action_budget_lifecycle.sql", "phase-05/001_continuation.sql", "phase-06/001_publication.sql", "phase-03/002_production_accounting.sql", "phase-07/001_production_operation_journal.sql", "phase-07/002_production_pricing_catalog.sql", "phase-07/003_production_checkpoints.sql", "phase-07/008_production_account_owners.sql"]) await admin.query(await Bun.file(`migrations/${file}`).text());
     await admin.query("CREATE ROLE funded_generation_test LOGIN");
     await admin.query("GRANT napplet_production_real TO funded_generation_test");
     native = new Pool({ connectionString: `postgresql://funded_generation_test@127.0.0.1:${port}/postgres`, connectionTimeoutMillis: 2000 });
@@ -126,11 +134,70 @@ integration.each(["legacy-completed", "current-missing-counter", "delayed-curren
     const admissionCommand = { principal, idempotencyKey: "admit", policyVersion: "funding-policy-v1", protocolVersion: "funding-contract-v1", payload: { requestedCap: "3250", unit: "sat" } };
     const admission = await admissions.admit(admissionCommand, await trustedAdmissionReceipt(admissionCommand));
     if (admission.status !== "accepted") throw new Error("FIXTURE_ADMISSION_REQUIRED");
+    let replayNow=Date.now();
+    const replay = await fundedReplayAuthorityFixture({pool,principal,admissionReference:admission.reference,now:()=>replayNow});
     const worker: WorkerPort = { async run(request) { expect(await new ProductionWorkerOwnershipResolver({pool,policyVersion:request.policyVersion}).resolve(request)).toEqual({accountId:admission.accountId,ownerId:principal.pubkey}); builds++; return { status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events: [{ kind: "progress", turn: 1, detail: "explicit protocol fixture completed" }], artifact: { sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion, capabilityGrant: request.capabilityGrant, workspaceId: request.workspaceId, artifactId: "fixture:artifact", purpose: { kind: "focused", statements: ["one counter"] }, surface: { hasBackend: false, hasSecondPurpose: false, serviceWorker: false, dynamicAuthority: false }, dependencies: { appOwnedSignerOrRelay: false, privateNappletImport: false }, capabilities: { declaredHard: [], observedDomains: [], optionalIntentPresenceRead: false, intentUsedThroughSdk: false }, upstream: { scanner: { verdict: "pass", checkId: "upstream:fixture-scanner" }, conformance: { verdict: "pass", checkId: "upstream:fixture-browser" } } } }; } };
     const verifier: ArtifactVerifier = { async verify(facts) { if (facts.result.status !== "completed") return undefined; return { artifact: { artifactId: facts.result.artifact.artifactId, artifactSha256: "a".repeat(64), scannerReportSha256: "b".repeat(64), conformanceReportSha256: "c".repeat(64) }, contractInput: facts.result.artifact }; } };
     const open = () => new MeteredGenerationService({ ...(retained ? { recoveryCommands: commands } : {}), fundedAdmission: admissions, store: database.meteredFunding, gateway, worker, artifactVerifier: verifier, proposalStore: sources, pricing, settlement, continuation: new ContinuationService({ store: database.funding, includeAdmissionHold: true }), toolchainIdentity: "b".repeat(64), clock: { nowMs: () => now } });
     const command = StartSessionCommandSchema.parse({ principal, admissionReference: admission.reference, idempotencyKey: "start", expectedVersion: 0, maximum: "3250", policyVersion: "funding-policy-v1", idea: "One focused timer." });
     let recoveredInitial: SessionActionResult | undefined;
+    if(wireCase.startsWith("retained-intake-")){
+      let intakeNow=Date.now();
+      const intakeJournal=new PostgresOperationJournal(pool,{namespace:"composed-contextvm",scopeSha256:"a".repeat(64)});
+      const responses:ContextVmWireResponse[]=[];
+      const envelope:ContextVmInboundEnvelope={verifiedClientPubkey:principal.pubkey,requestEventId:"f".repeat(64),rawEvent:{id:"f".repeat(64),tags:[]},request:{id:1,method:"tools/call",params:{name:"start_session",arguments:{admissionReference:command.admissionReference,idempotencyKey:command.idempotencyKey,maximum:command.maximum,idea:command.idea}}}};
+      function controller(context="c".repeat(64),crash=false){
+        let inbound:((v:ContextVmInboundEnvelope)=>Promise<void>)|undefined;
+        const source:ContextVmTransportPort={onInbound(h){inbound=h;},configureAnnouncement(){},async sendResponse(_owner,response){responses.push(response);},async sendNotification(){},canonicalInvocation(clientPubkey,method,params){return computeCanonicalInvocationIdentity(clientPubkey,method,params);}};
+        const intakes=new ProductionContextVmGenerationIntakes({journal:intakeJournal,executionContextSha256:context,replayAuthority:replay.authority,key:{reference:"test:checkpoint-kek",load:()=>loadMountedCheckpointKek({kekPath:"/test/kek",readFile:async()=>Buffer.alloc(32,9).toString("base64")})},now:()=>intakeNow});
+        const transport=createDurableContextVmTransport({source,journal:intakeJournal,relaySetSha256:"a".repeat(64),generationIntakes:intakes});
+        const core=open();
+        new ContextVmFundingAdapter({service:funding,transport,generation:{async startSession(input){recoveredInitial=await core.startSession(input);return recoveredInitial;},reviseSession:input=>core.reviseSession(input)}});
+        if(crash)transport.onInbound(async()=>{throw new Error("FIXTURE_CONTROLLER_LOSS_BEFORE_ADAPTER");});
+        return {transport,intakes,async deliver(value=envelope){if(!inbound)throw new Error("INBOUND_REQUIRED");await inbound(value);}};
+      }
+      const lostAck = wireCase === "retained-intake-lost-commit-ack";
+      if (lostAck) prepareFault.intakeAckLost = true;
+      await expect(controller(undefined,!lostAck).deliver()).rejects.toThrow(lostAck ? "FIXTURE_INTAKE_COMMIT_ACK_LOST" : "FIXTURE_CONTROLLER_LOSS_BEFORE_ADAPTER");
+      expect({posts,builds}).toEqual({posts:0,builds:0});
+      expect((await admin.query("SELECT count(*)::int AS n FROM production_real.metered_actions")).rows[0].n).toBe(0);
+      const original=await intakeJournal.read(envelope.requestEventId);
+      expect(original?.value).toEqual({state:"pending"});
+      const protectedRecord=await intakeJournal.read(`contextvm-intake:${envelope.requestEventId}`);
+      expect(JSON.stringify(protectedRecord)).not.toContain(command.idea);
+      expect(protectedRecord?.value).toMatchObject({schemaVersion:"protected-contextvm-generation-intake-v1",state:"pending"});
+      if(wireCase==="retained-intake-expired-worker"){
+        intakeNow+=1_200_001;replayNow=intakeNow;
+        expect(await controller().transport.recoverPendingGenerations()).toBe(1);
+        expect({posts,builds}).toEqual({posts:0,builds:0});
+        expect((await admin.query("SELECT count(*)::int AS n FROM production_real.metered_actions")).rows[0].n).toBe(0);
+        expect((await intakeJournal.read(envelope.requestEventId))?.value).toEqual({state:"pending"});
+        return;
+      }
+      intakeNow+=61_000;replayNow=intakeNow;
+      expect(await controller("d".repeat(64)).transport.recoverPendingGenerations()).toBe(1);
+      expect({posts,builds}).toEqual({posts:0,builds:0});
+      intakeNow+=31_000;replayNow=intakeNow;
+      replay.setMissing(true);
+      expect(await controller().transport.recoverPendingGenerations()).toBe(1);
+      expect({posts,builds}).toEqual({posts:0,builds:0});
+      replay.setMissing(false);intakeNow+=31_000;replayNow=intakeNow;
+      const resumed=controller();
+      // Official SDK, never started: a fresh server has no in-memory client
+      // session. Notification delivery must not replace the recovered result.
+      const nativeRelay=await openContextVmRelayTransport({serviceKeyReference:"test:service",relaySetSha256:"a".repeat(64),relays:["wss://relay.invalid"],journal:intakeJournal,generationIntakes:resumed.intakes,signerBroker:{async resolveContextVmSigner(){return {async getPublicKey(){return "a".repeat(64);},async signEvent(){throw new Error("FIXTURE_MUST_NOT_SIGN_OR_CONNECT");}};}}});
+      const nativeCore=open();
+      new ContextVmFundingAdapter({service:funding,transport:nativeRelay.transport,generation:{async startSession(input){recoveredInitial=await nativeCore.startSession(input);return recoveredInitial;},reviseSession:input=>nativeCore.reviseSession(input)}});
+      try{expect(await nativeRelay.transport.recoverPendingGenerations()).toBe(1);}finally{await nativeRelay.close();}
+      expect((await intakeJournal.read(envelope.requestEventId))?.value).toMatchObject({state:"completed",response:{result:{status:"usage_unknown"}}});
+      expect(recoveredInitial?.status).toBe("usage_unknown");
+      expect({posts,builds}).toEqual({posts:1,builds:0});
+      expect((await intakeJournal.read(`contextvm-intake:${envelope.requestEventId}`))?.value).toMatchObject({state:"erased"});
+      expect(JSON.stringify((await intakeJournal.read(`contextvm-intake:${envelope.requestEventId}`))?.value)).not.toContain("wrappedDekBase64");
+      const cached=z.object({response:z.object({jsonrpc:z.literal("2.0"),id:z.union([z.string(),z.number(),z.null()]),result:z.unknown().optional(),error:z.object({code:z.number(),message:z.string()}).optional()})}).passthrough().parse((await intakeJournal.read(envelope.requestEventId))?.value).response;
+      await controller().deliver();expect(responses.at(-1)).toEqual(cached);
+      expect({posts,builds}).toEqual({posts:1,builds:0});
+    }
     if (wireCase === "retained-rollback" || wireCase === "retained-commit-ack") {
       prepareFault.commit = wireCase === "retained-rollback" ? "before" : "after";
       await expect(open().startSession(command)).rejects.toThrow(wireCase === "retained-rollback" ? "FIXTURE_PREPARE_ROLLBACK" : "FIXTURE_PREPARE_COMMIT_ACK_LOST");
@@ -140,8 +207,13 @@ integration.each(["legacy-completed", "current-missing-counter", "delayed-curren
       expect((await admin.query("SELECT count(*)::int AS n FROM production_real.action_budget_reservations")).rows[0].n).toBe(count);
       expect({ posts, builds }).toEqual({ posts: 0, builds: 0 });
       if (count === 1) {
+        replay.setMissing(true);
         await admin.query("UPDATE production_real.generation_recovery_commands SET next_attempt_at=clock_timestamp()-interval '1 second'");
-        expect(await new ProductionGenerationRecovery({ pool, commands, acceptedToolchains: ["b".repeat(64)], generation: { async recoverRecordedAction(input) { recoveredInitial = await open().recoverRecordedAction(input); return recoveredInitial; } } }).scan()).toEqual({ attempted: 1, erased: 0 });
+        expect(await new ProductionGenerationRecovery({pool,commands,replayAuthority:replay.authority,acceptedToolchains:["b".repeat(64)],generation:open()}).scan()).toEqual({attempted:1,erased:0});
+        expect({posts,builds}).toEqual({posts:0,builds:0});
+        replay.setMissing(false);
+        await admin.query("UPDATE production_real.generation_recovery_commands SET next_attempt_at=clock_timestamp()-interval '1 second'");
+        expect(await new ProductionGenerationRecovery({ pool, commands, replayAuthority: replay.authority, acceptedToolchains: ["b".repeat(64)], generation: { async recoverRecordedAction(input) { recoveredInitial = await open().recoverRecordedAction(input); return recoveredInitial; } } }).scan()).toEqual({ attempted: 1, erased: 0 });
         expect({ posts, builds }).toEqual({ posts: 1, builds: 0 });
       }
     }
@@ -153,7 +225,7 @@ integration.each(["legacy-completed", "current-missing-counter", "delayed-curren
       expect((await admin.query("SELECT count(*)::int AS count FROM production_real.ledger_entries WHERE account_id=$1 AND direction='debit'", [result.accountId])).rows[0].count).toBe(0);
       if (wireCase === "retained-expired") {
         await Bun.sleep(1600);
-        expect(await new ProductionGenerationRecovery({ pool,commands,acceptedToolchains:["b".repeat(64)],generation:open() }).scan()).toEqual({attempted:0,erased:1});
+        expect(await new ProductionGenerationRecovery({ pool,commands,replayAuthority:replay.authority,acceptedToolchains:["b".repeat(64)],generation:open() }).scan()).toEqual({attempted:0,erased:1});
         expect((await admin.query("SELECT state,envelope_json FROM production_real.generation_recovery_commands")).rows[0]).toEqual({state:"erased",envelope_json:null});
         expect({posts,builds}).toEqual({posts:1,builds:0});
         expect((await admin.query("SELECT count(*)::int AS n FROM production_real.ledger_entries WHERE direction='debit' AND account_id=$1",[result.accountId])).rows[0].n).toBe(0);
@@ -185,7 +257,7 @@ integration.each(["legacy-completed", "current-missing-counter", "delayed-curren
         await expect(native.query("UPDATE production_real.generation_recovery_commands SET command_sha256=$1",["f".repeat(64)])).rejects.toThrow("GENERATION_RECOVERY_COMMAND_IMMUTABLE");
         await expect(native.query("UPDATE production_real.generation_recovery_commands SET envelope_json=NULL,state='erased',erased_at=clock_timestamp()")).rejects.toThrow("GENERATION_RECOVERY_ERASURE_NOT_DUE");
         await admin.query("UPDATE production_real.generation_recovery_commands SET next_attempt_at=clock_timestamp()-interval '1 second'");
-        const one = new ProductionGenerationRecovery({ pool, commands, acceptedToolchains: ["b".repeat(64)], generation: open() });
+        const one = new ProductionGenerationRecovery({ pool, commands, replayAuthority: replay.authority, acceptedToolchains: ["b".repeat(64)], generation: open() });
         if (wireCase === "retained-lease-reclaim") {
           await admin.query("UPDATE production_real.generation_recovery_commands SET claim_token='fixture-lost-controller',claim_until=clock_timestamp()+interval '60 seconds'");
           expect(await one.scan()).toEqual({attempted:0,erased:0});
@@ -195,7 +267,7 @@ integration.each(["legacy-completed", "current-missing-counter", "delayed-curren
         await one.assertReady();
         let previouslyErased = 0;
         if (wireCase === "retained-concurrent") {
-          const two = new ProductionGenerationRecovery({ pool, commands, acceptedToolchains: ["b".repeat(64)], generation: open() });
+          const two = new ProductionGenerationRecovery({ pool, commands, replayAuthority: replay.authority, acceptedToolchains: ["b".repeat(64)], generation: open() });
           const outcomes = await Promise.all([one.scan(),two.scan()]);
           expect(outcomes.reduce((sum,item)=>sum+item.attempted,0)).toBe(1);
           previouslyErased = outcomes.reduce((sum,item)=>sum+item.erased,0);

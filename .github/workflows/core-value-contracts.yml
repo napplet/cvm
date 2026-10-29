@@ -34,6 +34,7 @@ jobs:
     timeout-minutes: 5
     env:
       NAPPLET_CVM_TEST_EXTERNAL_EFFECTS: deny
+      NAPPLET_CVM_WORKER_PLATFORM: linux/amd64
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -43,5 +44,7 @@ jobs:
           bun-version: "1.3.14"
       - run: bun install --frozen-lockfile
       - run: bun install --cwd tests/dev-ui --frozen-lockfile
+      - name: Install pinned Chromium and Linux browser libraries
+        run: bun tests/dev-ui/node_modules/playwright/cli.js install --with-deps chromium
       - name: Byte ownership, transaction results and preserved evidence contracts
         run: bun test tests/capabilities tests/phase-02 tests/phase-04 tests/phase-07/supply-chain.test.ts tests/phase-07/certification-runner.test.ts tests/persistence/sqlite-session-store.test.ts tests/verification/design-evidence.test.ts tests/verification/phase-02-design-slice.test.ts tests/runner/hermetic-command.test.ts tests/dev-ui/preview-server.boundaries.test.ts tests/dev-ui/homelab-preview.test.ts tests/worker-port --timeout 10000

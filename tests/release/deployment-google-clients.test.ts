@@ -65,6 +65,21 @@ test("metadata ADC verifies documented bearer type, scope, identity, and expiry"
   expect(calls).toContain("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token");
 });
 
+test("ADC rejects missing, null, invalid and marginal SDK credential expiries without releasing a token", async () => {
+  for (const expiry of [undefined, null, NaN, Infinity, 61_000]) {
+    let metadataCalls=0;
+    const source=createGoogleAdcTokenSource({projectId,quotaProjectId:projectId,principal,now:()=>1_000,
+      auth:{getProjectId:async()=>projectId,getCredentials:async()=>({client_email:principal,quota_project_id:projectId}),getClient:async()=>({credentials:{expiry_date:expiry},getAccessToken:async()=>({token}),getTokenInfo:async()=>({scopes:["https://www.googleapis.com/auth/cloud-platform"],expiry_date:301_000,email:principal})})},
+      fetch:async()=>{metadataCalls++;return new Response("fixture metadata unavailable",{status:404});}});
+    await expect(source.getAccessToken()).rejects.toThrow("ADC_APPLICATION_DEFAULT_LOGIN_REQUIRED");
+    expect(metadataCalls).toBe(3);
+  }
+  const source=createGoogleAdcTokenSource({projectId,quotaProjectId:projectId,principal,now:()=>1_000,
+    auth:{getProjectId:async()=>projectId,getCredentials:async()=>({client_email:principal}),getClient:async()=>({credentials:{expiry_date:301_000},getAccessToken:async()=>({token:null})})},
+    fetch:async()=>new Response("fixture metadata unavailable",{status:404})});
+  await expect(source.getAccessToken()).rejects.toThrow("ADC_APPLICATION_DEFAULT_LOGIN_REQUIRED");
+});
+
 test("ADC metadata hangs are bounded and never release a token", async () => {
   const source = createGoogleAdcTokenSource({ projectId, quotaProjectId: projectId, principal, timeoutMs: 1, fetch: async () => new Promise<Response>(() => {}) });
   await expect(source.getAccessToken()).rejects.toThrow("ADC_APPLICATION_DEFAULT_LOGIN_REQUIRED");

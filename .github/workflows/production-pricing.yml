@@ -11,6 +11,8 @@ on:
       - "migrations/phase-07/008_production_account_owners.sql"
       - "tests/production/account-owner-postgres.test.ts"
       - "tests/production/model-composition-postgres.test.ts"
+      - "src/release/deployment/google-auth.ts"
+      - "tests/release/deployment-google-clients.test.ts"
       - "src/model/retained-generation-command.ts"
       - "src/production/generation-recovery.ts"
       - "src/production/generation-runtime.ts"
@@ -55,4 +57,4 @@ jobs:
           bun-version: "1.3.14"
       - run: bun install --frozen-lockfile
       - name: Source prices, exact usage, FX and ambiguous operation contracts
-        run: bun test tests/release/vertex-creation-budget.test.ts tests/release/vertex-current-wire.test.ts tests/model tests/release/official-adc-process.test.ts tests/release/production-pricing-model.test.ts tests/release/production-catalog.test.ts tests/release/production-preapproval.test.ts tests/release/deployment-contextvm-payment-model-clients.test.ts tests/release/deployment-host-signer-clients.test.ts tests/release/deployment-publication-clients.test.ts --timeout 10000
+        run: bun test tests/release/deployment-google-clients.test.ts tests/release/vertex-creation-budget.test.ts tests/release/vertex-current-wire.test.ts tests/model tests/release/official-adc-process.test.ts tests/release/production-pricing-model.test.ts tests/release/production-catalog.test.ts tests/release/production-preapproval.test.ts tests/release/deployment-contextvm-payment-model-clients.test.ts tests/release/deployment-host-signer-clients.test.ts tests/release/deployment-publication-clients.test.ts --timeout 10000

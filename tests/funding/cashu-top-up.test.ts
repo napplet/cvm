@@ -1,17 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import fixture from "../fixtures/cashu-phase-03.json";
 import { FundingService } from "../../src/funding/funding-service";
-import { CashuMintPolicyRegistry } from "../../src/funding/cashu-mint-policy";
+import { CashuMintPolicyRegistry, CashuMintPolicySchema } from "../../src/funding/cashu-mint-policy";
 import { FakeCashuSettlementPort } from "../../src/funding/cashu-provider";
 import { CashuTsSettlementAdapter } from "../../src/funding/cashu-provider";
 import { CashuTopUpCoordinator, InMemoryCashuTopUpRepository, type CashuTopUpRecord } from "../../src/funding/cashu-top-up";
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
-import { getEncodedToken, type RequestFn } from "@cashu/cashu-ts";
+import { Amount, getEncodedToken, type RequestFn } from "@cashu/cashu-ts";
 
 const principal = { pubkey: "a".repeat(64) };
 const token = new TextEncoder().encode("cashuB-safe-fixture-token");
-const firstPolicy = fixture.policies[0]!;
-const secondPolicy = fixture.policies[1]!;
+const firstPolicy = CashuMintPolicySchema.parse(fixture.policies[0]);
+const secondPolicy = CashuMintPolicySchema.parse(fixture.policies[1]);
 
 class FakeCashuVault {
   sealed: readonly { id: string; payloadDigest: string }[] = [];
@@ -43,19 +43,19 @@ function validSubmit(topUpId = "cashu-top-up-1") {
 
 const adapterToken = new TextEncoder().encode(getEncodedToken({
   mint: "https://mint-a.example", unit: "sat",
-  proofs: [{ amount: 21n, id: "009a1b2c3d4e5f60", secret: "adapter-secret", C: `02${"11".repeat(32)}`, dleq: { e: "11".repeat(32), s: "22".repeat(32), r: "33".repeat(32) } }],
+  proofs: [{ amount: Amount.from(21n), id: "009a1b2c3d4e5f60", secret: "adapter-secret", C: `02${"11".repeat(32)}`, dleq: { e: "11".repeat(32), s: "22".repeat(32), r: "33".repeat(32) } }],
 }));
 const defaultAdapterKeysetId = "01b318594eee08c75392d79ea6d2429df1e882991128bc12c55966ac34407b5044";
 const adapterTokenWithoutDleq = new TextEncoder().encode(getEncodedToken({
   mint: "https://mint-b.example", unit: "sat",
-  proofs: [{ amount: 21n, id: defaultAdapterKeysetId, secret: "default-adapter-secret", C: `02${"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"}` }],
+  proofs: [{ amount: Amount.from(21n), id: defaultAdapterKeysetId, secret: "default-adapter-secret", C: `02${"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"}` }],
 }));
 
 test("Cashu lifecycle result updates cannot regress a concurrent verified custody record", async () => {
   const repository = new InMemoryCashuTopUpRepository();
   const record: CashuTopUpRecord = { result: { topUpId: "monotonic", state: "verifying", policyVersion: "v1", commitment: "1".repeat(64) }, accountId: "account:one", policy: firstPolicy, protectedId: "protected:input", semanticProofIdentities: ["2".repeat(64)], idempotencyKey: "monotonic", principal, amount: "21", maxFee: "0", createdAt: "2026-10-27T00:00:00.000Z" };
   await repository.claim(record);
-  await repository.prepareCustody(record.result.topUpId, { operationId: "cashu-swap:monotonic", mintUrl: "https://mint-a.example", keysetId: "009a1b2c3d4e5f60", unit: "sat", amount: "21", maxFee: "0", inputFeePpk: 0, feeAmount: "0", expectedOutputAmount: "21", inputProtectedId: record.protectedId, outputDataProtectedId: "protected:output" });
+  await repository.prepareCustody(record.result.topUpId, { operationId: "cashu-swap:monotonic", mintUrl: "https://mint-a.example", keysetId: "009a1b2c3d4e5f60", unit: "sat", amount: "21", maxFee: "0", inputFeePpk: 0, feeAmount: "0", expectedOutputAmount: "21", inputProtectedId: record.protectedId, outputDataProtectedId: "protected:output", outputDataDigest: "4".repeat(64) });
   await repository.claimCustodyDispatch(record.result.topUpId);
   await repository.recordOwnedCustodyOutputs(record.result.topUpId, "protected:owned", "3".repeat(64));
   await Promise.all([
@@ -195,7 +195,7 @@ describe("Cashu credit and treasury", () => {
     let settles = 0; let observations = 0; const signals: AbortSignal[] = [];
     const never = () => new Promise<never>(() => undefined);
     const provider = {
-      identify: async (input: { token: Uint8Array }) => ({ status: "accepted" as const, semanticProofIdentities: [[...new Uint8Array(await crypto.subtle.digest("SHA-256", input.token))].map((byte) => byte.toString(16).padStart(2, "0")).join("")] }),
+      identify: async (input: { token: Uint8Array }) => ({ status: "accepted" as const, semanticProofIdentities: [[...new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(input.token).buffer))].map((byte) => byte.toString(16).padStart(2, "0")).join("")] }),
       settle: async (input: { signal: AbortSignal }) => { settles += 1; signals.push(input.signal); return never(); },
       observe: async (input: { signal: AbortSignal }) => { observations += 1; signals.push(input.signal); return never(); },
       reconcileTreasury: async () => never(),
@@ -234,7 +234,7 @@ describe("Cashu credit and treasury", () => {
     });
     const command = { ...validSubmit("adapter-timeout"), token: adapterToken };
     const nativeFetch = globalThis.fetch;
-    globalThis.fetch = (async () => new Promise<never>(() => undefined)) as typeof fetch;
+    globalThis.fetch = Object.assign(async () => new Promise<never>(() => undefined), { preconnect: () => undefined });
     try {
       expect(await coordinator.submit(command)).toMatchObject({ state: "reconciliation_pending" });
       expect(await coordinator.reconcile(command.topUpId)).toMatchObject({ state: "reconciliation_pending" });
@@ -252,7 +252,7 @@ describe("Cashu credit and treasury", () => {
     const adapterPolicy = { ...firstPolicy, mints: firstPolicy.mints.map((mint) => mint.url === "https://mint-b.example" ? { ...mint, keysetIds: [defaultAdapterKeysetId] } : mint) };
     const seen: { endpoint: string; signal?: AbortSignal }[] = [];
     const request: RequestFn = async (input) => {
-      seen.push({ endpoint: input.endpoint, signal: input.signal });
+      seen.push({ endpoint: input.endpoint, signal: input.signal ?? undefined });
       if (input.endpoint.endsWith("/v1/info")) return { name: "test", version: "Nutshell/0.0", nuts: {} } as never;
       if (input.endpoint.endsWith("/v1/keysets")) return { keysets: [{ id: defaultAdapterKeysetId, unit: "sat", active: true, input_fee_ppk: 0 }] } as never;
       if (input.endpoint.endsWith("/v1/keys") || input.endpoint.includes("/v1/keys/")) return { keysets: [{ id: defaultAdapterKeysetId, unit: "sat", keys: Object.fromEntries([1, 2, 4, 8, 16, 32].map((amount) => [String(amount), generator])) }] } as never;

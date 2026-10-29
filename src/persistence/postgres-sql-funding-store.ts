@@ -1,7 +1,8 @@
+import { accountIdForPrincipal } from "../domain/account-command";
 import { RetainedGenerationCommandSchema } from "../model/retained-generation-command";
 import { SessionCapApprovalResultSchema, type SessionCapApprovalInput, type SessionCapApprovalResult, type SessionCapTransaction, type SessionCapFundingStore } from "../funding/session-cap";
 import type { AccountStatus, FundedAdmission, FundingResult } from "../phase-03/contracts";
-import { AccountStatusSchema, FundingResultSchema } from "../phase-03/contracts";
+import { AccountStatusSchema, FundingResultSchema, PrincipalSchema, type Principal } from "../phase-03/contracts";
 import { canonicalMeteredTerminalResult, type ActionBudget, type ActionBudgetInput, type AdmissionInput, type BeginDeadlineCheckpointInput, type BillingLineItem, type BillingLineItemPage, type BillingLineItemPageRequest, type CapacityDispatchClaim, type CapacityIntent, type CapacityIntentInput, type CapacityObservationInput, type CompleteResumedActionInput, type ContinuationCheckpoint, type ContinuationCheckpointInput, type ContinuationFundingStore, type ContinuationFundingTransaction, type ContinuationPause, type ContinuationPauseInput, type ContinuationRecord, type ContinuationResumeClaim, type ContinuationResumeClaimInput, type ContinuationWakeDispatch, type CreditInput, type DeletionOutcomeInput, type MeteredAction, type MeteredFinalizeInput, type MeteredFundingStore, type MeteredFundingTransaction, type MeteredOperationClaim, type MeteredSessionRecord, type PendingActionCreateInput, type PendingActionResumeClaim, type PendingActionResumeClaimInput, type PendingActionTerminalInput, type PreAdmissionFundingStore, type PrepareMeteredActionInput, type PublicationFundingStore, type ReconciliationClaim, type RestoreObservationInput, type StoredFundingCommand, type UsageUnknownInput, type WakeDispatchClaim, type WakeDispatchOutcomeInput } from "./funding-store";
 import type { ClaimPublicationEffectInput, ClaimPublicationEffectResult, CreatePublicationIntentInput, CreatePublicationIntentResult, DurablePublicationEffect, DurablePublicationStore, PublicationEffectKind, PublicationRecord, PublicationStoreTransaction, RecordPublicationObservationInput } from "./publication-store";
 import { PublicationObservationSchema } from "../publication/contracts";
@@ -86,6 +87,14 @@ export class PostgresSqlFundingStore implements MeteredFundingStore, Continuatio
     this.#deadlineMs = options.deadlineMs ?? 250;
     this.#now = options.now ?? Date.now;
     if (this.#maxAttempts < 1 || this.#deadlineMs < 1) throw new Error("INVALID_SERIALIZATION_RETRY_POLICY");
+  }
+
+  async bindPrincipal(input: Principal): Promise<void> {
+    const principal = PrincipalSchema.parse(input), accountId = await accountIdForPrincipal(principal);
+    await this.transact(accountId, async transaction => {
+      if (!transaction.bindPrincipal) throw new Error("SQL_ACCOUNT_OWNER_BINDER_REQUIRED");
+      await transaction.bindPrincipal(principal);
+    });
   }
 
   async findRecordedResult(accountId: string, idempotencyKey: string): Promise<StoredFundingCommand | undefined> {
@@ -428,6 +437,18 @@ export class PostgresSqlPublicationStore implements DurablePublicationStore {
 
 class PgFundingTransaction implements MeteredFundingTransaction, ContinuationFundingTransaction, SessionCapTransaction {
   constructor(private readonly client: PostgresSqlClient, private readonly accountId: string) {}
+  async bindPrincipal(input: Principal): Promise<void> {
+    const principal = PrincipalSchema.parse(input);
+    if (await accountIdForPrincipal(principal) !== this.accountId) throw new Error("ACCOUNT_OWNER_SCOPE_MISMATCH");
+    const existing = (await this.client.query("SELECT trim(nostr_pubkey) AS pubkey FROM funding_accounts WHERE account_id=$1",[this.accountId])).rows[0];
+    if (existing?.pubkey === principal.pubkey) return;
+    if (existing && existing.pubkey !== null) throw new Error("ACCOUNT_OWNER_CONFLICT");
+    const bound = existing
+      ? await this.client.query("UPDATE funding_accounts SET nostr_pubkey=$2 WHERE account_id=$1 AND nostr_pubkey IS NULL RETURNING trim(nostr_pubkey) AS pubkey",[this.accountId,principal.pubkey])
+      : await this.client.query("INSERT INTO funding_accounts(account_id,nostr_pubkey,unit) VALUES($1,$2,'sat') ON CONFLICT(account_id) DO NOTHING RETURNING trim(nostr_pubkey) AS pubkey",[this.accountId,principal.pubkey]);
+    if (bound.rows[0]?.pubkey !== principal.pubkey) throw new Error("ACCOUNT_OWNER_CONFLICT");
+  }
+
   async findRecordedResult(idempotencyKey: string): Promise<StoredFundingCommand | undefined> {
     const result = await this.client.query<{ fingerprint_sha256: string; result_json: FundingResult }>("SELECT fingerprint_sha256, result_json FROM funding_commands WHERE account_id = $1 AND idempotency_key = $2 ORDER BY created_at DESC LIMIT 1", [this.accountId, idempotencyKey]);
     const row = result.rows[0]; return row && frozen({ fingerprint: row.fingerprint_sha256, result: FundingResultSchema.parse(row.result_json) });
@@ -724,7 +745,7 @@ class PgFundingTransaction implements MeteredFundingTransaction, ContinuationFun
     return action;
   }
   async recordUsageReceipt(input: Readonly<{ operationId: string; protectedEvidenceReference: string }>): Promise<MeteredAction> {
-    const action = first(await this.client.query("SELECT a.account_id,a.idempotency_key,a.fingerprint,a.session_id,a.id,a.expected_session_version,a.admission_reference,a.budget_reference,a.reservation_sat,a.operation_id,a.profile_id,a.price_card_id,a.state,a.terminal_result,a.session_version,a.artifact_version,a.remaining_cap_sat,a.remaining_balance_sat FROM provider_operations o JOIN metered_actions a ON a.id=o.action_id WHERE o.id=$1 AND a.account_id=$2 FOR UPDATE", [input.operationId, this.accountId]), "METERED_OPERATION_NOT_FOUND"); const parsed = actionFromOperationRow(action, input.operationId); if (parsed.status !== "dispatching" && parsed.status !== "usage_unknown") throw new Error("METERED_RECEIPT_STATE_INVALID"); await this.client.query("UPDATE metered_actions SET provider_receipt_reference=$2 WHERE id=$1", [parsed.actionId, input.protectedEvidenceReference]); return frozen({ ...parsed, providerReceiptReference: input.protectedEvidenceReference });
+    const action = first(await this.client.query("SELECT a.account_id,a.idempotency_key,a.fingerprint,a.session_id,a.id,a.expected_session_version,a.admission_reference,a.budget_reference,a.reservation_sat,a.operation_id,a.profile_id,a.price_card_id,a.state,a.terminal_result,a.session_version,a.artifact_version,a.remaining_cap_sat,a.remaining_balance_sat FROM provider_operations o JOIN metered_actions a ON a.id=o.action_id WHERE o.id=$1 AND a.account_id=$2 FOR UPDATE", [input.operationId, this.accountId]), "METERED_OPERATION_NOT_FOUND"); const parsed = actionFromOperationRow(action, input.operationId); if (parsed.status !== "dispatching" && parsed.status !== "usage_unknown") throw new Error("METERED_RECEIPT_STATE_INVALID"); await this.client.query("UPDATE metered_actions SET provider_receipt_reference=$2,state='active' WHERE id=$1", [parsed.actionId, input.protectedEvidenceReference]); return frozen({ ...parsed, status: "dispatching" as const, providerReceiptReference: input.protectedEvidenceReference });
   }
   async finalizeMeteredAction(input: MeteredFinalizeInput): Promise<MeteredAction> {
     const row = first(await this.client.query("SELECT account_id,idempotency_key,fingerprint,session_id,id,expected_session_version,admission_reference,budget_reference,reservation_sat,operation_id,profile_id,price_card_id,state,receipt_charge,provider_receipt_reference,terminal_result,session_version,artifact_version,remaining_cap_sat,remaining_balance_sat FROM metered_actions WHERE account_id=$1 AND idempotency_key=$2 FOR UPDATE", [this.accountId, input.idempotencyKey]), "METERED_FINALIZATION_STATE_INVALID"); const action = actionFromRow(row);

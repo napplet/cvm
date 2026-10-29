@@ -163,7 +163,7 @@ export class PostgresFundingStore implements MeteredFundingStore {
   }
   private recordUsageReceipt(state: State, accountId: string, input: Readonly<{ operationId: string; protectedEvidenceReference: string }>): MeteredAction {
     const action = [...state.meteredActions.values()].find((item) => item.accountId === accountId && item.operationId === input.operationId); if (!action || (action.status !== "dispatching" && action.status !== "usage_unknown")) throw new Error("METERED_RECEIPT_STATE_INVALID");
-    const next = frozen({ ...action, providerReceiptReference: input.protectedEvidenceReference }); state.meteredActions.set(key(accountId, action.idempotencyKey), next); return next;
+    const next = frozen({ ...action, status: "dispatching" as const, providerReceiptReference: input.protectedEvidenceReference }); state.meteredActions.set(key(accountId, action.idempotencyKey), next); return next;
   }
   private finalizeMeteredAction(state: State, accountId: string, input: MeteredFinalizeInput): MeteredAction {
     const action = state.meteredActions.get(key(accountId, input.idempotencyKey)); if (!action || action.operationId !== input.operationId) throw new Error("METERED_FINALIZATION_STATE_INVALID");

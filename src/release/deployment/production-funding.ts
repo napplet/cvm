@@ -1,3 +1,4 @@
+import { assertProductionAccountOwnerSchema } from "../../production/account-owner";
 import { CashuTsSettlementAdapter } from "../../funding/cashu-provider";
 import { CashuMintPolicyRegistry } from "../../funding/cashu-mint-policy";
 import { NwcLightningReceiptPort } from "../../funding/nwc-receipt-port";
@@ -183,6 +184,7 @@ export async function openProductionFunding(input: Readonly<
     nwcJournal: PostgresOperationJournal;
   }
 >): Promise<Readonly<{ database: PostgresFundingDatabase; core: FundedCore; close(): Promise<void> }>> {
+  await assertProductionAccountOwnerSchema(input.postgresPool);
   const nwcTransport = await openSignedNwcTransport({
     connectionReference: input.nwcConnectionReference,
     broker: createNwcCredentialSigningBroker({ credentials: input.nwcCredentialBroker }),

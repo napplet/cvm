@@ -1,5 +1,5 @@
 import type { RetainedGenerationCommand } from "../model/retained-generation-command";
-import type { AccountStatus, FundedAdmission, FundingResult, VerifiedSettlement } from "../phase-03/contracts";
+import type { AccountStatus, FundedAdmission, FundingResult, VerifiedSettlement, Principal } from "../phase-03/contracts";
 import type { NeedsTopUpResult, PendingActionIntent, PendingActionRecord } from "../continuity/contracts";
 import type { ClaimPublicationEffectInput, ClaimPublicationEffectResult, CreatePublicationIntentInput, CreatePublicationIntentResult, DurablePublicationEffect, PublicationRecord, RecordPublicationObservationInput } from "./publication-store";
 import { TransactionalMemoryPublicationStore } from "./publication-store";
@@ -84,6 +84,8 @@ export function canonicalMeteredTerminalResult(result: unknown, financials: Read
 }
 
 export interface FundingTransaction {
+  /** Associate only a verified principal with its deterministic account. SQL implements this atomically. */
+  bindPrincipal?(principal: Principal): Promise<void>;
   findRecordedResult(idempotencyKey: string): Promise<StoredFundingCommand | undefined>;
   creditVerifiedSettlement(input: CreditInput): Promise<FundingResult>;
   acceptFundedAdmission(input: AdmissionInput): Promise<FundedAdmission>;
@@ -140,6 +142,8 @@ export interface MeteredFundingTransaction extends FundingTransaction {
 
 /** Serializable financial authority port. Rail adapters never receive a posting or balance mutation API. */
 export interface FundingStore {
+  /** Idempotent enrollment for a verified replay of a retained command. */
+  bindPrincipal?(principal: Principal): Promise<void>;
   findRecordedResult(accountId: string, idempotencyKey: string): Promise<StoredFundingCommand | undefined>;
   transact<T>(accountId: string, operation: (transaction: FundingTransaction) => Promise<T> | T): Promise<T>;
   status(accountId: string): Promise<AccountStatus | undefined>;

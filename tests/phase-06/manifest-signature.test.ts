@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 
+import { SignedOwnerManifestEventSchema } from "../../src/publication/contracts.js";
 import { buildCvmAttestation } from "../../src/publication/attestation-event.js";
 import { NostrToolsOwnerEventVerifier, verifyOwnerManifestEvent } from "../../src/publication/manifest-event.js";
 import { canonicalCapabilityReview } from "../../src/publication/capability-review.js";
@@ -32,7 +33,7 @@ async function intent() {
 }
 
 function signed(template: ReturnType<typeof canonicalOwnerManifestTemplate>) {
-  return finalizeEvent({ kind: template.kind, pubkey: template.pubkey, created_at: template.created_at, tags: template.tags.map((tag) => [...tag]), content: template.content }, secret);
+  return SignedOwnerManifestEventSchema.parse(finalizeEvent({ kind: template.kind, created_at: template.created_at, tags: template.tags.map((tag) => [...tag]), content: template.content }, secret));
 }
 
 async function validEvent() {
@@ -109,8 +110,8 @@ test("denies a mismatched signed ContextVM command before any deployment effect"
     store,
     clock: { nowMs: () => nowMs },
     verifier: new NostrToolsOwnerEventVerifier({ nowMs: () => nowMs }),
-    deployment: { deployExact: async () => { effects += 1; return { state: "completed" as const, observationId: "deploy" }; }, publishOwnerManifest: async () => { effects += 1; return { state: "completed" as const, observationId: "owner" }; } },
-    attestation: { publish: async () => { effects += 1; return { state: "completed" as const, observationId: "attestation" }; } },
+    deployment: { deployExact: async (input) => { effects += 1; return { operationId: input.operationId, state: "completed" as const, observationId: "deploy" }; }, publishOwnerManifest: async (input) => { effects += 1; return { operationId: input.operationId, state: "completed" as const, observationId: "owner" }; } },
+    attestation: { publish: async (input) => { effects += 1; return { operationId: input.operationId, state: "completed" as const, observationId: "attestation" }; } },
   });
   await store.transact((tx) => tx.putIntent(publicationIntent));
   await expect(service.submitSignedManifest({

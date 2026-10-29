@@ -23,9 +23,11 @@ const createdAtMs = 1_700_000_000_000;
 const expiresAtMs = createdAtMs + 300_000;
 
 async function input(runtimeVariant = "napplet-host/v1") {
+  const manifestCapabilities = verifiedPhase06Artifact.manifestCapabilities;
+  if (!manifestCapabilities) throw new Error("PHASE06_MANIFEST_CAPABILITIES_MISSING");
   const artifact = {
     ...verifiedPhase06Artifact,
-    manifestCapabilities: verifiedPhase06Artifact.manifestCapabilities.map((capability) => ({ ...capability, compatibleRuntimes: capability.requirement === "required" ? ["napplet-host/v1", "napplet-host/v2"] : [] })),
+    manifestCapabilities: manifestCapabilities.map((capability) => ({ ...capability, compatibleRuntimes: capability.requirement === "required" ? ["napplet-host/v1", "napplet-host/v2"] : [] })),
   };
   const review = await canonicalCapabilityReview(artifact, runtimeVariant);
   return {
@@ -123,8 +125,8 @@ test("persists exact idempotent replay and closes changed-fence key reuse", asyn
     store,
     clock: { nowMs: () => createdAtMs },
     verifier: { verify: async () => ({ accepted: true, eventId: "e".repeat(64) }) },
-    deployment: { deployExact: async () => ({ state: "completed", observationId: "deploy" }), publishOwnerManifest: async () => ({ state: "completed", observationId: "owner" }) },
-    attestation: { publish: async () => ({ state: "completed", observationId: "attestation" }) },
+    deployment: { deployExact: async (input) => ({ operationId: input.operationId, state: "completed", observationId: "deploy" }), publishOwnerManifest: async (input) => ({ operationId: input.operationId, state: "completed", observationId: "owner" }) },
+    attestation: { publish: async (input) => ({ operationId: input.operationId, state: "completed", observationId: "attestation" }) },
   });
   const request = await input();
   const first = await service.createIntent(request);
@@ -144,8 +146,8 @@ test("replays the same idempotency command after the coordinator clock advances 
         store,
         clock: { nowMs: () => now },
         verifier: { verify: async () => ({ valid: true, eventId: "e".repeat(64) }) },
-        deployment: { deployExact: async () => ({ state: "completed" as const, observationId: "deploy" }), publishOwnerManifest: async () => ({ state: "completed" as const, observationId: "owner" }) },
-        attestation: { publish: async () => ({ state: "completed" as const, observationId: "attestation" }) },
+        deployment: { deployExact: async (input) => ({ operationId: input.operationId, state: "completed" as const, observationId: "deploy" }), publishOwnerManifest: async (input) => ({ operationId: input.operationId, state: "completed" as const, observationId: "owner" }) },
+        attestation: { publish: async (input) => ({ operationId: input.operationId, state: "completed" as const, observationId: "attestation" }) },
       });
       const request = await input();
       const first = await service.createIntent(request);

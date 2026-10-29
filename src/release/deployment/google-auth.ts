@@ -23,7 +23,7 @@ export type GoogleAccessToken = Readonly<{
 }>;
 export type GoogleTokenSource = Readonly<{ getAccessToken(): Promise<GoogleAccessToken> }>;
 export type GoogleAuthFetch = (url: string, init: RequestInit) => Promise<Response>;
-type GoogleAuthPort = Readonly<{ getProjectId(): Promise<string>; getCredentials(): Promise<unknown>; getClient(): Promise<Readonly<{ credentials: Readonly<{ expiry_date?: number }>; getAccessToken(): Promise<Readonly<{ token?: string }>>; getTokenInfo?(token: string): Promise<Readonly<{ scopes: readonly string[]; expiry_date: number; email?: string }>> }>> }>;
+type GoogleAuthPort = Readonly<{ getProjectId(): Promise<string>; getCredentials(): Promise<unknown>; getClient(): Promise<Readonly<{ credentials: Readonly<{ expiry_date?: number | null }>; getAccessToken(): Promise<Readonly<{ token?: string | null }>>; getTokenInfo?(token: string): Promise<Readonly<{ scopes: readonly string[]; expiry_date: number; email?: string }>> }>> }>;
 
 async function sha256(value: string): Promise<string> {
   const bytes = new TextEncoder().encode(value);
@@ -87,7 +87,7 @@ export function createGoogleAdcTokenSource(input: Readonly<{
   if (!Number.isSafeInteger(margin) || margin < 10_000 || margin > 10 * 60_000) throw new Error("GOOGLE_ADC_EXPIRY_MARGIN_INVALID");
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) throw new Error("GOOGLE_ADC_TIMEOUT_INVALID");
   const fetcher = input.fetch ?? fetch;
-  const libraryAuth: GoogleAuthPort | undefined = input.auth ?? (!input.fetch ? new GoogleAuth({ projectId, scopes: GOOGLE_CONTROL_PLANE_SCOPES, clientOptions: { quotaProjectId } }) : undefined);
+  const libraryAuth: GoogleAuthPort | undefined = input.auth ?? (!input.fetch ? new GoogleAuth({ projectId, scopes: [...GOOGLE_CONTROL_PLANE_SCOPES], clientOptions: { quotaProjectId } }) : undefined);
   let cached: GoogleAccessToken | undefined;
 
   return Object.freeze({
@@ -107,7 +107,7 @@ export function createGoogleAdcTokenSource(input: Readonly<{
           if (discoveredPrincipal !== principal) throw new Error("GOOGLE_ADC_IDENTITY_INVALID");
           const scopeMatches = tokenInfo !== undefined && await googleAccountScopeSha256({ projectId, quotaProjectId, principal, scopes: tokenInfo.scopes }).then(() => true).catch(() => false);
           const tokenExpiry = tokenInfo?.expiry_date;
-          if (typeof access.token === "string" && TokenSchema.safeParse(access.token).success && scopeMatches && Number.isSafeInteger(expiry) && expiry > now() + margin && Number.isSafeInteger(tokenExpiry) && tokenExpiry > now() + margin) { token = access.token; expiresAtMs = Math.min(expiry, tokenExpiry); actualScopes = tokenInfo!.scopes; }
+          if (typeof access.token === "string" && TokenSchema.safeParse(access.token).success && scopeMatches && tokenInfo !== undefined && typeof expiry === "number" && Number.isSafeInteger(expiry) && expiry > now() + margin && typeof tokenExpiry === "number" && Number.isSafeInteger(tokenExpiry) && tokenExpiry > now() + margin) { token = access.token; expiresAtMs = Math.min(expiry, tokenExpiry); actualScopes = tokenInfo.scopes; }
         } catch (error) { if (error instanceof Error && error.message === "GOOGLE_ADC_IDENTITY_INVALID") throw error; }
       }
       /* Metadata is accepted only after the attached Cloud Run project and

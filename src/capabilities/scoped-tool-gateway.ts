@@ -95,7 +95,7 @@ export class ScopedToolGateway {
     if (!parsed.success) {
       const code = typeof raw?.tool === "string" && !["workspace_read", "workspace_write", "approved_command", "capture_evidence", "export_checkpoint"].includes(raw.tool)
         ? "TOOL_UNKNOWN" : typeof raw?.path === "string" && pathFor("/scope", raw.path) === undefined ? "TOOL_PATH_ESCAPE" : "TOOL_REQUEST_INVALID";
-      return this.deny(code, raw);
+      return this.deny(code, raw ?? {});
     }
     const request = parsed.data;
     const requestFingerprint = await fingerprint(request);

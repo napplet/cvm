@@ -321,6 +321,7 @@ export class MeteredGenerationService {
     const recoveryCommand = await this.options.recoveryCommands?.seal({ command, binding: { accountId, sessionId, actionId, operationId, idempotencyKey: command.idempotencyKey, fingerprint, admissionReference: command.admissionReference, expectedVersion: command.expectedVersion, maximum: profileCeiling, profileId: profile.id, priceCardId: priceCard.id, toolchainId } });
     const { budget, prepared } = await this.options.store.transact(accountId, async (transaction) => {
       const budget = await this.options.fundedAdmission.authorizeActionBudget({ principal: command.principal, admissionReference: command.admissionReference, idempotencyKey: `phase-04:${command.idempotencyKey}`, maximum: profileCeiling, unit: "sat" }, transaction);
+      await transaction.bindPrincipal?.(command.principal);
       const prepared = await transaction.prepareMeteredAction({ accountId, idempotencyKey: command.idempotencyKey, fingerprint, sessionId, actionId, expectedVersion: command.expectedVersion, admissionReference: command.admissionReference, actionBudgetReference: budget.reference, maximum: BigInt(profileCeiling), operationId, profileId: profile.id, priceCardId: priceCard.id, ...(recoveryCommand ? { recoveryCommand } : {}) });
       return { budget, prepared };
     });
@@ -345,6 +346,7 @@ export class MeteredGenerationService {
    * A durable paid claim retains its own budget, operation and immutable prices. */
   async #executeRecorded(command: GenerationCommand, accountId: string, fingerprint: string, prepared: MeteredAction): Promise<SessionActionResult> {
     if (prepared.accountId !== accountId || prepared.idempotencyKey !== command.idempotencyKey || prepared.fingerprint !== fingerprint || prepared.admissionReference !== command.admissionReference || prepared.expectedVersion !== command.expectedVersion || ("sessionId" in command && prepared.sessionId !== command.sessionId) || prepared.maximum > BigInt(command.maximum)) throw new Error("RECORDED_ACTION_BINDING_DENIED");
+    await this.options.store.bindPrincipal?.(command.principal);
     if (prepared.result) return SessionActionResultSchema.parse(prepared.result);
     const current = this.options.pricing ?? { profile: PHASE_04_MODEL_PROFILES["code-proposal"], card: PHASE_04_DETERMINISTIC_PRICE_CARD };
     const prices = this.options.retainedPricing ? await this.options.retainedPricing.readOriginal(prepared) : current.profile.id === prepared.profileId && current.card.id === prepared.priceCardId ? current : undefined;

@@ -4,6 +4,13 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - "src/funding/funding-service.ts"
+      - "src/persistence/postgres-funding-store.ts"
+      - "src/release/deployment/production-funding.ts"
+      - "src/production/account-owner.ts"
+      - "migrations/phase-07/008_production_account_owners.sql"
+      - "tests/production/account-owner-postgres.test.ts"
+      - "tests/production/model-composition-postgres.test.ts"
       - "src/release/deployment/google-auth.ts"
       - "tests/release/deployment-google-clients.test.ts"
       - "src/model/retained-generation-command.ts"

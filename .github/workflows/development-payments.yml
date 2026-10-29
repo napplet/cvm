@@ -52,7 +52,7 @@ jobs:
       - name: Verify the pinned native AMD64 development relay
         run: bun scripts/probe-development-relay.ts
       - name: Prove PostgreSQL production accounting isolation
-        run: NAPPLET_RUN_POSTGRES_ISOLATION=1 bun test tests/funding/production-accounting-realm.test.ts tests/funding/lightning-lost-create-postgres.test.ts tests/funding/cashu-treasury-recovery.test.ts tests/release/postgres-operation-journal.test.ts --timeout 120000
+        run: NAPPLET_RUN_POSTGRES_ISOLATION=1 bun test tests/production/account-owner-postgres.test.ts tests/funding/production-accounting-realm.test.ts tests/funding/lightning-lost-create-postgres.test.ts tests/funding/cashu-treasury-recovery.test.ts tests/release/postgres-operation-journal.test.ts --timeout 120000
       - name: Verify original payment recovery contracts
         run: bun test tests/funding/protected-rail-material.test.ts tests/funding/lightning-lost-create.test.ts tests/funding/lightning-top-up.test.ts tests/funding/cashu-treasury-recovery.test.ts tests/funding/cashu-top-up.test.ts --timeout 10000
       - run: bun scripts/dev-payments.ts test

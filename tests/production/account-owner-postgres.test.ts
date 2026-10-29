@@ -1,0 +1,108 @@
+import { expect,test } from "bun:test";
+import { Pool } from "pg";
+import { FundingService } from "../../src/funding/funding-service";
+import { FundedAdmissionService } from "../../src/funding/funded-admission";
+import { accountIdForPrincipal,fingerprintAccountCommand } from "../../src/domain/account-command";
+import { AuthenticatedFundingCommandSchema } from "../../src/phase-03/contracts";
+import { PostgresFundingDatabase } from "../../src/persistence/postgres-funding-database";
+import type { PostgresSqlPool } from "../../src/persistence/postgres-sql-funding-store";
+import { ProductionWorkerOwnershipResolver } from "../../src/production/worker-bridge";
+import { assertProductionAccountOwnerSchema } from "../../src/production/account-owner";
+import { createVertexGeminiProductionPricing } from "../../src/model/price-card";
+import { registerProductionPricing } from "../../src/production/pricing-catalog";
+import { exactReadyReservation,trustedAdmissionReceipt,trustedAdmissionReceiptAuthority } from "../fixtures/admission-ready";
+const integration=process.env.NAPPLET_RUN_POSTGRES_ISOLATION==="1"?test:test.skip;
+async function docker(args:string[],stdin?:string){const p=Bun.spawn(["docker",...args],{stdin:"pipe",stdout:"pipe",stderr:"pipe"});if(stdin)p.stdin.write(stdin);p.stdin.end();const[out,err,code]=await Promise.all([new Response(p.stdout).text(),new Response(p.stderr).text(),p.exited]);if(code)throw new Error(`DOCKER_FAILED:${err.slice(0,300)}`);return out.trim();}
+const migrations=["phase-03/001_funding.sql","phase-04/001_metered_generation.sql","phase-04/002_action_budget_lifecycle.sql","phase-05/001_continuation.sql","phase-06/001_publication.sql","phase-03/002_production_accounting.sql","phase-07/002_production_pricing_catalog.sql"];
+const credit=(pubkey:string,key:string,amount="1000")=>AuthenticatedFundingCommandSchema.parse({principal:{pubkey},kind:"credit_settlement",idempotencyKey:key,policyVersion:"funding-policy-v1",protocolVersion:"funding-contract-v1",payload:{settlement:{topUpId:key,rail:"lightning",unit:"sat",amount,externalReference:key,settlementReference:key,verifiedAt:new Date().toISOString()}}});
+integration("verified SQL owner binding is atomic, immutable, legacy-safe and restored with the original money history",async()=>{
+ const name=`cvm-owner-${crypto.randomUUID().replaceAll("-","")}`;let admin:Pool|undefined,native:Pool|undefined,restoredAdmin:Pool|undefined,restored:Pool|undefined,corruptAdmin:Pool|undefined,corruptNative:Pool|undefined;
+ try{
+  await docker(["run","-d","--rm","--name",name,"-p","127.0.0.1::5432","-e","POSTGRES_HOST_AUTH_METHOD=trust","postgres:17-alpine"]);
+  const port=(await docker(["port",name,"5432/tcp"])).match(/127\.0\.0\.1:(\d+)/u)?.[1];if(!port)throw new Error("PORT_REQUIRED");
+  admin=new Pool({connectionString:`postgresql://postgres@127.0.0.1:${port}/postgres`});
+  for(let i=0;i<90;i++){try{await admin.query("SELECT 1");break;}catch(e){if(i===89)throw e;await Bun.sleep(250);}}
+  for(const file of migrations)await admin.query(await Bun.file(`migrations/${file}`).text());
+  await admin.query("CREATE ROLE owner_runtime LOGIN");await admin.query("GRANT napplet_production_real TO owner_runtime");
+  native=new Pool({connectionString:`postgresql://owner_runtime@127.0.0.1:${port}/postgres`});
+  const nativePool=native;let fault:"before"|"after"|undefined;
+  const pool:PostgresSqlPool={async connect(){const c=await nativePool.connect();let enrolled=false;return {async query<Row extends Record<string,unknown>>(sql:string,values?:readonly unknown[]){
+   if(sql.startsWith("INSERT INTO funding_accounts(account_id,nostr_pubkey"))enrolled=true;
+   const f=sql==="COMMIT"&&enrolled?fault:undefined;if(f)fault=undefined;if(f==="before")throw new Error("FIXTURE_OWNER_ROLLBACK");
+   const r=await c.query<Row>(sql,values?[...values]:undefined);if(f==="after")throw new Error("FIXTURE_OWNER_COMMIT_ACK_LOST");return {rows:r.rows};},release(){c.release();}};}};
+  const database=new PostgresFundingDatabase(pool,{realm:"production-real"}),service=new FundingService(database.funding);
+  const legacy=credit("b".repeat(64),"legacy-owner-credit");if(legacy.kind!=="credit_settlement")throw new Error("CREDIT_REQUIRED");
+  const legacyAccount=await accountIdForPrincipal(legacy.principal),fingerprint=await fingerprintAccountCommand(legacy,legacyAccount);
+  const oldResult=await database.funding.transact(legacyAccount,tx=>tx.creditVerifiedSettlement({accountId:legacyAccount,fingerprint,idempotencyKey:legacy.idempotencyKey,settlement:legacy.payload.settlement}));
+  expect((await admin.query("SELECT nostr_pubkey FROM production_real.funding_accounts WHERE account_id=$1",[legacyAccount])).rows[0].nostr_pubkey).toBeNull();
+  const before=JSON.stringify((await admin.query("SELECT entry_id,transaction_id,account_id,direction,amount,unit,entry_reference FROM production_real.ledger_entries ORDER BY entry_id")).rows);
+  await expect(assertProductionAccountOwnerSchema(pool)).rejects.toThrow("PRODUCTION_ACCOUNT_OWNER_SCHEMA_REQUIRED");
+  const migration=await Bun.file("migrations/phase-07/008_production_account_owners.sql").text();await admin.query(migration);await admin.query(migration);
+  await assertProductionAccountOwnerSchema(pool);
+  expect((await admin.query("SELECT nostr_pubkey FROM production_real.funding_accounts WHERE account_id=$1",[legacyAccount])).rows[0].nostr_pubkey).toBeNull();
+  expect(await service.execute(legacy)).toEqual(oldResult);
+  expect((await admin.query("SELECT trim(nostr_pubkey) AS pubkey FROM production_real.funding_accounts WHERE account_id=$1",[legacyAccount])).rows[0].pubkey).toBe(legacy.principal.pubkey);
+  expect(JSON.stringify((await admin.query("SELECT entry_id,transaction_id,account_id,direction,amount,unit,entry_reference FROM production_real.ledger_entries ORDER BY entry_id")).rows)).toBe(before);
+  expect(await service.execute(legacy)).toEqual(oldResult);
+  expect((await admin.query("SELECT count(*)::int AS n FROM production_real.account_owner_bindings WHERE account_id=$1",[legacyAccount])).rows[0].n).toBe(1);
+  const principal={pubkey:"9".repeat(64)},accountId=await accountIdForPrincipal(principal),command=credit(principal.pubkey,"fresh-owner-credit");
+  await service.execute(command);
+  expect((await admin.query("SELECT trim(nostr_pubkey) AS pubkey FROM production_real.funding_accounts WHERE account_id=$1",[accountId])).rows[0].pubkey).toBe(principal.pubkey);
+  await Promise.all(Array.from({length:4},()=>database.funding.bindPrincipal(principal)));
+  expect((await admin.query("SELECT count(*)::int AS n FROM production_real.account_owner_bindings WHERE account_id=$1",[accountId])).rows[0].n).toBe(1);
+  await expect(admin.query("UPDATE production_real.funding_accounts SET nostr_pubkey=$2 WHERE account_id=$1",[accountId,"e".repeat(64)])).rejects.toThrow("ACCOUNT_OWNER_IMMUTABLE");
+  await expect(admin.query("UPDATE production_real.account_owner_bindings SET bound_at=clock_timestamp() WHERE account_id=$1",[accountId])).rejects.toThrow("ACCOUNT_OWNER_AUDIT_IMMUTABLE");
+  await expect(native.query("UPDATE production_real.account_owner_bindings SET bound_at=clock_timestamp() WHERE account_id=$1",[accountId])).rejects.toThrow();
+  await expect(admin.query("INSERT INTO production_real.funding_accounts(account_id,nostr_pubkey,unit) VALUES($1,$2,'sat')",[`account:${"f".repeat(64)}`,"e".repeat(64)])).rejects.toThrow("ACCOUNT_OWNER_HASH_MISMATCH");
+  await expect(database.funding.transact(accountId,async tx=>{if(!tx.bindPrincipal)throw new Error("BINDER_REQUIRED");await tx.bindPrincipal({pubkey:"e".repeat(64)});})).rejects.toThrow("ACCOUNT_OWNER_SCOPE_MISMATCH");
+  const rollback=credit("c".repeat(64),"rolled-back-owner"),rollbackAccount=await accountIdForPrincipal(rollback.principal);
+  fault="before";await expect(service.execute(rollback)).rejects.toThrow("FIXTURE_OWNER_ROLLBACK");
+  expect((await admin.query("SELECT count(*)::int AS n FROM production_real.funding_accounts WHERE account_id=$1",[rollbackAccount])).rows[0].n).toBe(0);
+  expect((await admin.query("SELECT count(*)::int AS n FROM production_real.account_owner_bindings WHERE account_id=$1",[rollbackAccount])).rows[0].n).toBe(0);
+  expect((await admin.query("SELECT count(*)::int AS n FROM production_real.ledger_entries WHERE account_id=$1",[rollbackAccount])).rows[0].n).toBe(0);
+  const lost=credit("d".repeat(64),"owner-lost-ack"),lostAccount=await accountIdForPrincipal(lost.principal);
+  fault="after";await expect(service.execute(lost)).rejects.toThrow("FIXTURE_OWNER_COMMIT_ACK_LOST");await service.execute(lost);
+  expect((await admin.query("SELECT count(*)::int AS n FROM production_real.account_owner_bindings WHERE account_id=$1",[lostAccount])).rows[0].n).toBe(1);
+  expect((await admin.query("SELECT count(*)::int AS n FROM production_real.ledger_entries WHERE account_id=$1",[lostAccount])).rows[0].n).toBe(1);
+  const ready={async reserveNow(v:{intentReference:string}){return exactReadyReservation(v.intentReference,`capacity:${v.intentReference.split(":")[1]}`,new Date(Date.now()+1_200_000).toISOString());},async observe(v:{intentReference:string}){return this.reserveNow(v);},async release(){}};
+  const admissions=new FundedAdmissionService({funding:service,store:database.funding,capacity:ready,receiptAuthority:trustedAdmissionReceiptAuthority});
+  const admissionCommand={principal,idempotencyKey:"owner-admit",policyVersion:"owner-policy",protocolVersion:"funding-contract-v1",payload:{requestedCap:"1000",unit:"sat"}};
+  const admitted=await admissions.admit(admissionCommand,await trustedAdmissionReceipt(admissionCommand));if(admitted.status!=="accepted")throw new Error("ADMISSION_REQUIRED");
+  const pricedAt=Date.now();
+  const pricing=await createVertexGeminiProductionPricing({observation:{sourceUrl:"https://cloud.google.com/vertex-ai/generative-ai/pricing",bytes:new TextEncoder().encode("explicit owner-wiring pricing fixture"),observedAtMs:pricedAt,freshUntilMs:pricedAt+60000,currency:"USD",location:"global",model:"gemini-4-argon",inputMicrosPerMillion:4000000,cachedInputMicrosPerMillion:200000,outputAndThoughtMicrosPerMillion:20000000},conversion:{source:{url:"https://blockchain.info/ticker",capturedBytesSha256:"e".repeat(64),observedAt:new Date(pricedAt).toISOString(),effectiveAt:new Date(pricedAt).toISOString(),freshUntil:new Date(pricedAt+60000).toISOString()},satsPerUsd:{numerator:"1000",denominator:"1"}},profileId:"owner-wiring-fixture",maximumInputTokens:"2000",maximumOutputTokens:"100",deadlineMs:30000});
+  await registerProductionPricing({pool,...pricing});
+  await database.funding.transact(accountId,async tx=>{const budget=await admissions.authorizeActionBudget({principal,admissionReference:admitted.reference,idempotencyKey:"owner-action",maximum:"10",unit:"sat"},tx);await tx.prepareMeteredAction({accountId,idempotencyKey:"owner-action",fingerprint:"a".repeat(64),sessionId:"session:owner",actionId:"action:owner",expectedVersion:0,admissionReference:admitted.reference,actionBudgetReference:budget.reference,maximum:10n,operationId:"operation:owner",profileId:pricing.profile.id,priceCardId:pricing.card.id});});
+  const request={sessionId:"session:owner",actionId:"action:owner",expectedVersion:0,policyVersion:"owner-policy",capabilityGrant:"phase-04-coordinator-grant",workspaceId:"workspace:session:owner",idea:"One owner wiring probe"};
+  expect(await new ProductionWorkerOwnershipResolver({pool,policyVersion:"owner-policy"}).resolve(request)).toEqual({accountId,ownerId:principal.pubkey});
+  // The same public key's retained test balance cannot fund the real realm.
+  const devPool:PostgresSqlPool={async connect(){if(!admin)throw new Error("ADMIN_REQUIRED");const c=await admin.connect();return {async query<Row extends Record<string,unknown>>(sql:string,values?:readonly unknown[]){const r=await c.query<Row>(sql,values?[...values]:undefined);return {rows:r.rows};},release(){c.release();}};}};
+  await new FundingService(new PostgresFundingDatabase(devPool,{realm:"development-test"}).funding).execute(credit(principal.pubkey,"test-history-credit","5000"));
+  expect((await admin.query("SELECT settled_available::text AS n FROM public.account_balance_projection WHERE account_id=$1",[accountId])).rows[0].n).toBe("5000");
+  expect((await admin.query("SELECT settled_available::text AS n FROM production_real.account_balance_projection WHERE account_id=$1",[accountId])).rows[0].n).toBe("1000");
+  expect(await service.status(principal)).toMatchObject({available:"0",held:"1000"});
+  await expect(native.query("SELECT * FROM public.funding_accounts")).rejects.toThrow();
+  const audit=JSON.stringify((await admin.query("SELECT * FROM production_real.account_owner_bindings ORDER BY account_id")).rows);
+  const globals=(await docker(["exec",name,"pg_dumpall","-U","postgres","--roles-only"])).replace(/^CREATE ROLE postgres;$/mu,"");
+  const dump=await docker(["exec",name,"pg_dump","-U","postgres","--schema=production_real","--schema=public","--no-owner","postgres"]);
+  await docker(["run","-d","--rm","--name",`${name}-restore`,"-p","127.0.0.1::5432","-e","POSTGRES_HOST_AUTH_METHOD=trust","postgres:17-alpine"]);
+  const restoredPort=(await docker(["port",`${name}-restore`,"5432/tcp"])).match(/127\.0\.0\.1:(\d+)/u)?.[1];if(!restoredPort)throw new Error("RESTORE_PORT_REQUIRED");
+  restoredAdmin=new Pool({connectionString:`postgresql://postgres@127.0.0.1:${restoredPort}/postgres`});for(let i=0;i<90;i++){try{await restoredAdmin.query("SELECT 1");break;}catch(e){if(i===89)throw e;await Bun.sleep(250);}}
+  await docker(["exec","-i",`${name}-restore`,"psql","-U","postgres","--set","ON_ERROR_STOP=1","postgres"],`${globals}\nDROP SCHEMA public;\n${dump}\n`);
+  restored=new Pool({connectionString:`postgresql://owner_runtime@127.0.0.1:${restoredPort}/postgres`});const restoredNative=restored;
+  const restoredPool:PostgresSqlPool={async connect(){const c=await restoredNative.connect();return {async query<Row extends Record<string,unknown>>(sql:string,values?:readonly unknown[]){const r=await c.query<Row>(sql,values?[...values]:undefined);return {rows:r.rows};},release(){c.release();}};}};
+  await assertProductionAccountOwnerSchema(restoredPool);
+  expect(JSON.stringify((await restoredAdmin.query("SELECT * FROM production_real.account_owner_bindings ORDER BY account_id")).rows)).toBe(audit);
+  expect(await new FundingService(new PostgresFundingDatabase(restoredPool,{realm:"production-real"}).funding).execute(legacy)).toEqual(oldResult);
+  expect(await new ProductionWorkerOwnershipResolver({pool:restoredPool,policyVersion:"owner-policy"}).resolve(request)).toEqual({accountId,ownerId:principal.pubkey});
+  expect((await restoredAdmin.query("SELECT settled_available::text AS n FROM public.account_balance_projection WHERE account_id=$1",[accountId])).rows[0].n).toBe("5000");
+  // Keep corrupt historical metadata intact and refuse it; no blind repair.
+  await admin.query("CREATE DATABASE corrupt_legacy");corruptAdmin=new Pool({connectionString:`postgresql://postgres@127.0.0.1:${port}/corrupt_legacy`});for(const file of migrations)await corruptAdmin.query(await Bun.file(`migrations/${file}`).text());
+  const badPrincipal={pubkey:"f".repeat(64)},badAccount=await accountIdForPrincipal(badPrincipal);
+  await corruptAdmin.query("INSERT INTO production_real.funding_accounts(account_id,nostr_pubkey,unit) VALUES($1,$2,'sat')",[badAccount,"e".repeat(64)]);await corruptAdmin.query(migration);
+  corruptNative=new Pool({connectionString:`postgresql://owner_runtime@127.0.0.1:${port}/corrupt_legacy`});const badNative=corruptNative;
+  const badPool:PostgresSqlPool={async connect(){const c=await badNative.connect();return {async query<Row extends Record<string,unknown>>(sql:string,values?:readonly unknown[]){const r=await c.query<Row>(sql,values?[...values]:undefined);return {rows:r.rows};},release(){c.release();}};}};
+  await expect(assertProductionAccountOwnerSchema(badPool)).rejects.toThrow("PRODUCTION_ACCOUNT_OWNER_CONFLICT");
+  await expect(new PostgresFundingDatabase(badPool,{realm:"production-real"}).funding.bindPrincipal(badPrincipal)).rejects.toThrow("ACCOUNT_OWNER_CONFLICT");
+  expect((await corruptAdmin.query("SELECT trim(nostr_pubkey) AS pubkey FROM production_real.funding_accounts WHERE account_id=$1",[badAccount])).rows[0].pubkey).toBe("e".repeat(64));
+ }finally{await corruptNative?.end();await corruptAdmin?.end();await restored?.end();await restoredAdmin?.end();await native?.end();await admin?.end();await docker(["rm","-f",name]).catch(()=>undefined);await docker(["rm","-f",`${name}-restore`]).catch(()=>undefined);}
+},120_000);

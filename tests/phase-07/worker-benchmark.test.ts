@@ -85,3 +85,22 @@ test("admission upper p95 includes resampling uncertainty near the five-second b
   expect(evaluateAdmissionSlo({ ...benchmark, samples: [...benchmark.samples].reverse() })).toEqual(result);
   expect(evaluateAdmissionSlo({ ...benchmark, samples: benchmark.samples.map((sample) => ({ ...sample, readyMonotonicMs: 4_000 })) })).toMatchObject({ upperP95Ms: 4_000, status: "passed" });
 });
+
+
+test("benchmark rejects non-object provider observations before recording default accepted samples",async()=>{
+  for(const result of [undefined,null,false,42,"ready",[]]){
+    let calls=0;
+    await expect(runWorkerCandidateBenchmark({candidate,profile:{acceptedFloor:3,forcedPoolHitFloor:1,forcedPoolMissColdContentionFloor:1,bootstrapReplicates:20},execute:async()=>{calls++;return result;}})).rejects.toThrow();
+    expect(calls).toBe(1);
+  }
+});
+
+
+test("benchmark requires each actual provider measurement instead of inheriting planned defaults",async()=>{
+  const complete={outcome:"accepted",receiptMonotonicMs:100,readyMonotonicMs:200,readyLeaseCount:1,durableBacklogCount:0,isolation:"passed",cleanup:"passed"};
+  for(const field of Object.keys(complete)){
+    const missing=Object.fromEntries(Object.entries(complete).filter(([key])=>key!==field));let calls=0;
+    await expect(runWorkerCandidateBenchmark({candidate,profile:{acceptedFloor:3,forcedPoolHitFloor:1,forcedPoolMissColdContentionFloor:1,bootstrapReplicates:20},execute:async()=>{calls++;return missing;}})).rejects.toThrow();
+    expect(calls).toBe(1);
+  }
+});

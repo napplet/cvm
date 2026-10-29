@@ -125,7 +125,8 @@ export async function runWorkerCandidateBenchmark(input: Readonly<{ candidate: u
   const candidate = WorkerCandidateSchema.parse(input.candidate); const profile = WorkerBenchmarkProfileSchema.parse(input.profile ?? {});
   const samples: WorkerBenchmarkSample[] = [];
   for (const planned of createWorkerBenchmarkSchedule(profile)) {
-    const result = WorkerBenchmarkSampleSchema.parse({ ...planned, ...(await input.execute({ id: planned.id, cohort: planned.cohort })) });
+    const observed = z.record(z.string(), z.unknown()).parse(await input.execute({ id: planned.id, cohort: planned.cohort }));
+    const result = WorkerBenchmarkSampleSchema.parse({ id: planned.id, cohort: planned.cohort, ...observed });
     if (result.id !== planned.id || result.cohort !== planned.cohort) throw new Error("WORKER_BENCHMARK_SCHEDULE_MUTATED");
     samples.push(result);
   }

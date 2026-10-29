@@ -46,6 +46,15 @@ describe("project napplet harness artifact truth", () => {
     expect(observations).toEqual([expect.objectContaining({ stage: "validation", outcome: "succeeded", correlationDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u) })]);
   });
 
+  test("a proposal-only worker result preserves the prior artifact without throwing or claiming verification", async () => {
+    let workerCalls=0,verifications=0;
+    const worker:WorkerPort={async run(){workerCalls++;return {status:"proposed",toolRequests:[],evidence:[]};}};
+    const harness=new ProjectNappletHarness({worker,artifactVerifier:{async verify(){verifications++;return undefined;}}});
+    await expect(harness.run(await request())).resolves.toMatchObject({status:"incomplete",code:"WORKER_INCOMPLETE",priorArtifactId:"artifact:verified:1",diagnostic:{code:"WORKER_INCOMPLETE"}});
+    expect(workerCalls).toBe(1);
+    expect(verifications).toBe(0);
+  });
+
   test("retains the prior artifact with redacted diagnostics for incomplete or validation failures", async () => {
     const probe = await runFailedArtifactProbe();
     expect(probe).toMatchObject({ workerCalls: 1, result: { status: "validation_failed", priorArtifactId: "artifact:verified:1", diagnostic: { code: "ARTIFACT_CONTRACT_BLOCKED" } } });

@@ -83,7 +83,7 @@ export class ProjectNappletHarness implements NappletHarness {
     catch { return NappletHarnessResultSchema.parse({ status: "failed", code: "HARNESS_BOUNDARY_FAILED", priorArtifactId: request.priorArtifactId, diagnostic: safeDiagnostic("WORKER_BOUNDARY_FAILURE", "worker result could not be safely processed", [request.toolchain.evidence.verify]) }); }
     if (workerResult.status !== "completed") {
       const status = workerResult.status === "blocked" ? "blocked" : "incomplete";
-      return NappletHarnessResultSchema.parse({ status, code: status === "blocked" ? "HARNESS_BLOCKED" : "WORKER_INCOMPLETE", priorArtifactId: request.priorArtifactId, diagnostic: safeDiagnostic(workerResult.code, "worker did not produce a complete verified candidate", [request.toolchain.evidence.build, request.toolchain.evidence.verify]) });
+      return NappletHarnessResultSchema.parse({ status, code: status === "blocked" ? "HARNESS_BLOCKED" : "WORKER_INCOMPLETE", priorArtifactId: request.priorArtifactId, diagnostic: safeDiagnostic("code" in workerResult ? workerResult.code : "WORKER_INCOMPLETE", "worker did not produce a complete verified candidate", [request.toolchain.evidence.build, request.toolchain.evidence.verify]) });
     }
     const artifact = workerResult.artifact;
     if (artifact.sessionId !== request.sessionId || artifact.actionId !== request.actionId || artifact.expectedVersion !== request.expectedVersion || artifact.policyVersion !== request.policyVersion || artifact.capabilityGrant !== request.capabilityGrant || artifact.workspaceId !== request.workspaceId || !eventsStayOnApprovedSurfaces(workerResult.events, request.approvedApplicationSurfaces)) {

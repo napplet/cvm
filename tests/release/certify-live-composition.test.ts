@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import type { OperatorFundingReadiness } from "../../src/release/deployment/operator-funding";
 
 import { createLocalOperatorFundingSetup } from "../../src/release/deployment/local-setup";
 import { ReleaseCertificationController } from "../../src/release/controller";
@@ -82,7 +83,7 @@ test("a current request binds both opaque rail records and supersedes when fundi
     currency: "USD" as const, unit: "operation", priceMicros: index + 1, observedAtMs: 1_000, freshUntilMs: 60_000, status: "available" as const,
   })) };
   const funding = await (async () => {
-    const values: unknown[] = [];
+    const values: OperatorFundingReadiness[] = [];
     let submit: ((input: unknown) => Promise<void>) | undefined;
     let state = "";
     let csrf = "";
@@ -96,13 +97,15 @@ test("a current request binds both opaque rail records and supersedes when fundi
     await setup.launch();
     await submit!({ state, csrf, rail: "nwc_lightning", material: new Uint8Array([5]) });
     await submit!({ state, csrf, rail: "cashu", material: new Uint8Array([6]) });
-    return values.at(-1)!;
+    const readiness = values.at(-1);
+    if (!readiness) throw new Error("FUNDING_READINESS_FIXTURE_MISSING");
+    return readiness;
   })();
   try {
     const result = await new ReleaseCertificationController({ candidatePath, workspace, now: () => 1_000, costCatalog: catalog, requireCurrentPriceCatalog: true, operatorFundingReadiness: funding }).dryRun();
     expect(result.authorizationRequest.priceLines).toHaveLength(16);
     expect(result.authorizationRequest.operatorFundingReadiness).toMatchObject({ status: "ready", rails: [{ rail: "nwc_lightning" }, { rail: "cashu" }] });
-    const changed = structuredClone(funding) as { rails: Array<{ capabilitySha256: string }>; readinessSha256: string };
+    const changed = { ...funding, rails: funding.rails.map((rail) => ({ ...rail })) };
     changed.rails[1]!.capabilitySha256 = digest("9");
     await expect(new ReleaseCertificationController({ candidatePath, workspace, now: () => 1_001, costCatalog: catalog, requireCurrentPriceCatalog: true, operatorFundingReadiness: changed }).dryRun()).rejects.toThrow("OPERATOR_FUNDING_READINESS_INVALID");
   } finally { await rm(workspace, { recursive: true, force: true }); }

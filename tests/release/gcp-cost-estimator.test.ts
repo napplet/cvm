@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createGcpCostEstimator, type GcpCatalogPort } from "../../src/release/costs/gcp-estimator";
+import { createGcpCostEstimator, type GcpCostEstimateInput, type GcpCatalogPort } from "../../src/release/costs/gcp-estimator";
 
 const digest = (letter: string) => letter.repeat(64);
 const now = 1_000;
@@ -9,7 +9,7 @@ function port(records: readonly Record<string, unknown>[]): GcpCatalogPort {
   return { listSkus: async (input) => records.filter((record) => input.skuIds.includes(record.skuId as string)) };
 }
 
-function input(overrides: Record<string, unknown> = {}) {
+function input(overrides: Record<string, unknown> = {}): GcpCostEstimateInput {
   return {
     topologySha256: digest("a"),
     catalogId: "gcp-cloud-billing-v1",

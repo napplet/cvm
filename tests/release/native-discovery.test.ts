@@ -111,7 +111,7 @@ test("every implemented family has candidate-bound finite discovery metadata wit
   const discoveries = await Promise.all(RELEASE_PROVIDER_IDS.map(async (provider) => [provider, await registry[provider]!.discover()] as const));
   expect(commands.sort()).toEqual(["cloud_run", "cloud_sql_postgres", "collector", "fly", "gcs", "modal"]);
   for (const [provider, discovery] of discoveries) {
-    expect(discovery.provider).toBeUndefined();
+    expect(discovery).not.toHaveProperty("provider");
     expect(discovery.capability).not.toBe("unsupported");
     expect(discovery.reasonCode).not.toBe("UNSUPPORTED_CAPABILITY");
     expect(discovery.accountScopeSha256).toMatch(/^[a-f0-9]{64}$/);

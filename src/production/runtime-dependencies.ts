@@ -1,6 +1,7 @@
 import { createProductionRetainedPricing, registerProductionPricing } from "./pricing-catalog";
 import { createMountedProductionWorkerJobRouter } from "./mounted-worker-profiles";
 import { ProductionOwnedDirectArtifacts } from "./owned-direct-artifacts";
+import { createProductionDirectPreviewAssets } from "./direct-preview-assets";
 import { openProductionServiceJournals } from "./service-journals";
 import { GcsObjectStoreAdapter } from "../continuity/object-store";
 import { createGoogleAdcTokenSource } from "../release/deployment/google-auth";
@@ -77,5 +78,6 @@ export async function materializeProductionRuntimeDependencies(input: Readonly<{
   const ownedDirectArtifacts = new ProductionOwnedDirectArtifacts({ pool: input.pool, requestJournal, objects: artifactStore,
     profiles: [input.config.worker, ...(input.config.worker.retainedProfiles ?? [])].map(profile => ({ toolchainSha256: profile.toolchainSha256, artifactContract: profile.artifactContract })),
     publication: { server: input.config.publication.uploadServer } });
-  return Object.freeze({ pool: input.pool, journal, serviceJournals, googleControlJournal, googleIntentJournal, workerJournal, jobJournal, requestJournal, vertexJournal, checkpointJournal, checkpointCoordinator, tokenSource, gcs, artifactStore, workers: worker.clients, jobRouter, ownedDirectArtifacts, workerCertification: worker.certification, flyRegion: worker.flyRegion, capacity, certificationCapacities, vertexMaterial, vertex, proposals, gateway, settlement, retainedPricing, resolver, workerBridge });
+  const directPreviewAssets = await createProductionDirectPreviewAssets();
+  return Object.freeze({ pool: input.pool, journal, serviceJournals, googleControlJournal, googleIntentJournal, workerJournal, jobJournal, requestJournal, vertexJournal, checkpointJournal, checkpointCoordinator, tokenSource, gcs, artifactStore, workers: worker.clients, jobRouter, ownedDirectArtifacts, directPreviewAssets, workerCertification: worker.certification, flyRegion: worker.flyRegion, capacity, certificationCapacities, vertexMaterial, vertex, proposals, gateway, settlement, retainedPricing, resolver, workerBridge });
 }

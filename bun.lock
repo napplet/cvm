@@ -7,6 +7,10 @@
       "dependencies": {
         "@cashu/cashu-ts": "4.7.2",
         "@contextvm/sdk": "0.13.10",
+        "@kehto/runtime": "0.24.1",
+        "@kehto/shell": "0.22.0",
+        "@napplet/core": "0.32.0",
+        "@napplet/nap": "0.32.0",
         "@opentelemetry/api": "1.9.1",
         "@opentelemetry/exporter-metrics-otlp-proto": "0.221.0",
         "@opentelemetry/exporter-trace-otlp-proto": "0.221.0",
@@ -62,6 +66,18 @@
     "@grpc/proto-loader": ["@grpc/proto-loader@0.8.1", "", { "dependencies": { "lodash.camelcase": "^4.3.0", "long": "^5.0.0", "protobufjs": "^7.5.5", "yargs": "^17.7.2" }, "bin": { "proto-loader-gen-types": "build/bin/proto-loader-gen-types.js" } }, "sha512-wtF6h+DY6M3YaDBPAmvuuA6jV8Sif9MjtOI5euKFWRgCDl5PeDpPsHR9u2l6St5ceY8AZgoNDww5+HvEsXFsGg=="],
 
     "@js-sdsl/ordered-map": ["@js-sdsl/ordered-map@4.4.2", "", {}, "sha512-iUKgm52T8HOE/makSxjqoWhe95ZJA1/G1sYsGev2JDKUSS14KAgg1LHb+Ba+IPow0xflbnSkOsZcO08C7w1gYw=="],
+
+    "@kehto/acl": ["@kehto/acl@0.19.1", "", { "peerDependencies": { "@napplet/core": ">=0.32.0 <0.35.0", "@napplet/nap": ">=0.32.0 <0.35.0" } }, "sha512-4Ib3Gql2AtR1mmjyaLm0VATLIQkbZvCXV31NcaD6jAWZoeQy0dHg+6iSDu8XPGroIJdBMbPUDfGFGwVMi17Gmw=="],
+
+    "@kehto/firewall": ["@kehto/firewall@0.6.1", "", { "peerDependencies": { "@napplet/core": ">=0.32.0 <0.35.0" } }, "sha512-TlrwRjVlmEWdx8CpUeaMjlVoVQ7N2cGLxYKyK/b03eoUNzUjK8xvwMuWrbRH2gJJLP0c8k51YipWF1tedpsNfA=="],
+
+    "@kehto/runtime": ["@kehto/runtime@0.24.1", "", { "dependencies": { "@kehto/acl": "^0.19.1", "@kehto/firewall": "^0.6.1", "@noble/curves": "^2.0.0", "@noble/hashes": "^2.0.0" }, "peerDependencies": { "@napplet/core": ">=0.32.0 <0.35.0", "@napplet/nap": ">=0.32.0 <0.35.0" } }, "sha512-cEaGbhVlVss6xZJAiGFQAssFaG5PXtPS/kZL/EjsgtT7KX6chybXialLwAj9HUGrIADUO2S2SMY36zvIzmH5Ew=="],
+
+    "@kehto/shell": ["@kehto/shell@0.22.0", "", { "dependencies": { "@kehto/acl": "^0.19.0", "@kehto/runtime": "^0.24.0" }, "peerDependencies": { "@napplet/core": ">=0.32.0 <0.33.0", "@napplet/nap": ">=0.32.0 <0.33.0", "nostr-tools": ">=2.23.3 <=2.x" } }, "sha512-YFPxZdFiZ73u40TKU5EOjnsH2P2pRfni4NWppyGwcBYUSkzsiNZs5G63ay3D/Ugr5hLznnNcu5HB88K6QbJ0HQ=="],
+
+    "@napplet/core": ["@napplet/core@0.32.0", "", {}, "sha512-gP+U7xd32gD7uFYINK+NWDJfW2TMvhLcIPr+Boafta7tZWTRIlyzozvqsooyFg7XUapCOnGKqnjIUa0DFo6Brw=="],
+
+    "@napplet/nap": ["@napplet/nap@0.32.0", "", { "dependencies": { "@napplet/core": "^0.32.0" }, "peerDependencies": { "json-schema-to-ts": "^3.1.1" }, "optionalPeers": ["json-schema-to-ts"] }, "sha512-DvlneleMpcUtOZmLGRGj9QSCor67veL4gWOYGTWaXPDkBEaEuiU4Ijtreb3+kVky/4ghjL3qmScOFMW6WorWQw=="],
 
     "@noble/ciphers": ["@noble/ciphers@2.1.1", "", {}, "sha512-bysYuiVfhxNJuldNXlFEitTVdNnYUc+XNJZd7Qm2a5j1vZHgY+fazadNFWFaMK/2vye0JVlxV3gHmC0WDfAOQw=="],
 

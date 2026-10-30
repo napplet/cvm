@@ -178,6 +178,7 @@ export function createMountedProductionHttpRuntime(input: Readonly<{
     authority,
     previewHandler: delivery.preview,
     artifactHandler: delivery.artifact,
+    staticHandler: input.assembly.generation.dependencies.directPreviewAssets.handle,
     operatorIdentity: createGooglePrivateOperatorIdentity({
       serviceAccount: input.assembly.generation.config.operator.serviceAccount,
     }),

@@ -271,10 +271,68 @@ owner lookup. Foreign/missing artifacts share a 404 result; malformed signatures
 return 401 before ownership lookup. Read replays within the validity window do
 not dispatch generation, signing, publication or new storage mutations.
 
-This is preview **source**, not a compatible-host descriptor, capability grant,
-runtime acceptance result or publication intent. A compatible shell must load
-the verified bytes through its own sandbox/consent contract. Actual direct Paja
-preview presentation, explicitly versioned publication/attestation contracts,
-owner signing and live certification remain required. Existing legacy strict
-schemas and records remain unchanged. These handlers are prepared source; they
-have not been deployed or enabled on the private Beta service.
+This is preview **source**, not a capability grant or publication intent. The
+mounted static handler now supplies a concrete browser consumer:
+
+- `/static/nip5d-direct-v1/preview-host.js` exports `reviewDirectPreview` and
+  `mountDirectPreview`.
+- `/static/nip5d-direct-v1/preview-host.json` reports its actual bundle SHA256,
+  exact package set and live domains. The bundle is built only from the fixed
+  project entrypoint, with environment-variable inlining disabled.
+
+The consumer uses pinned `@kehto/runtime@0.24.1` and the official
+`@kehto/shell@0.22.0` CSP/bootstrap, with `@napplet/core` and `@napplet/nap`
+`0.32.0`. These are the implementation underlying pinned Paja. Paja's development
+signer and local-file aggregate constructor are absent. The shell wrapper's
+shared localStorage persistence is also absent: each preview gets a private
+ephemeral kernel adapter, bounded to 256 KiB and 512 keys. It creates no owner,
+service, provider or development signing key, and installs no relay backend.
+
+```ts
+const host = await import(staticOrigin + '/static/nip5d-direct-v1/preview-host.js');
+const expected = { sessionId, artifactId };
+const review = await host.reviewDirectPreview(delivery, expected);
+// Present review and obtain the user's approvedDomains in the trusted host UI.
+const preview = await host.mountDirectPreview({
+  iframe: freshConnectedIframe,
+  source: delivery,
+  expected,
+  approval: { reviewSha256: review.reviewSha256, domains: approvedDomains },
+  signal: lifecycleAbortSignal,
+});
+// On close, replacement or navigation:
+preview.close();
+```
+
+Reviewing source grants nothing. Consent binds the exact artifact, archive,
+policy, toolchain and declaration. Missing/declined required domains or unknown
+grants deny before authored code runs. Current live preview domains are
+truthfully limited to `storage`: required `intent` is incompatible; unavailable
+optional domains remain absent. This does not broaden or replace authoring
+policy. Presentation and consent controls belong to the compatible client.
+
+The host verifies original bytes before official `prepareNappletSrcdoc` injects
+CSP/bootstrap into a separate execution copy. It binds trusted manifest identity
+to one iframe before execution; source identity never comes from iframe data.
+The upstream kernel's historically named `aggregateHash` identity member carries
+the current verified content identity, as in its direct pointer API. The CVM
+does not compute or advertise a legacy aggregate for this artifact.
+
+Every message requires that exact source window, opaque origin, unchanged
+sandbox/source and live frame. Only a source-bound `shell.ready` enables its
+immutable granted environment. The upstream kernel handles domain RPCs and ACL;
+the host handles only source binding and NAP-SHELL ready/init transport. The
+returned promise means the host accepted that handshake, not that arbitrary app
+work has finished. Close, abort, iframe replacement/navigation or sandbox
+mutation removes authority, listeners, timers, private state and the iframe.
+
+Local proof runs the actually served browser bundle and actual delivered counter
+inside the existing bounded, non-root, network-denied worker with real Chromium.
+It checks kernel storage, truthful capability presence, opaque-origin network and
+direct-storage denial, sibling/wrong-origin/stale-source rejection, declined or
+changed consent, quota, fresh-preview state isolation and teardown. This is local
+mechanism evidence, not live provider/HTTPS/user-signer certification. Broader
+domain support, production client presentation/ContextVM negotiation, explicitly
+versioned publication/attestation, owner signing and all live gates remain open.
+These handlers/assets have not been deployed or enabled on the private Beta
+service; existing legacy strict schemas and records remain unchanged.

@@ -56,6 +56,7 @@ import { ProductionOwnedDirectArtifacts } from "../../src/production/owned-direc
 import { ProductionDirectArtifactDelivery } from "../../src/production/direct-artifact-delivery";
 import { createDirectArtifactReadRequest, verifyDirectArtifactDelivery } from "../../src/publication/direct-delivery";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
+import { proveDirectPreviewBrowser } from "../fixtures/direct-preview-browser";
 
 const integration = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
 const hash = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex");
@@ -1134,6 +1135,10 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         const response = await get(previewPath, signed.headers);
         expect(response.status).toBe(200);
         const verified = await verifyDirectArtifactDelivery(await response.json(), { sessionId: workspaceClaim.sessionId, artifactId: coreTerminal.artifactId });
+        if (!localWorker) throw new Error("DIRECT_PREVIEW_LOCAL_WORKER_REQUIRED");
+        const browserProof = await proveDirectPreviewBrowser({ worker: localWorker, delivery: verified.delivery });
+        expect(browserProof).toMatchObject({ storage: true, sourceBinding: true, privateEphemeralState: true, quota: true, networkCanaries: 0, teardown: true, releaseEvidence: false });
+        console.log(JSON.stringify({ localDirectPreview: browserProof }));
         expect(bytesSha(verified.bytes)).toBe(afterCleanup?.archive.artifactHash);
         expect(verified.delivery.ownerManifestTemplate).toEqual(afterCleanup?.archive.manifest);
         expect(verified.delivery).not.toHaveProperty("aggregateSha256");

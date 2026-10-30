@@ -247,8 +247,43 @@ real WSS relay messages with lost acknowledgements and hidden readbacks,
 concurrent owner publication, lost SQL acknowledgement, exactly two relay
 publishes and one distinct service signature.
 
+### Mounted direct certification factory
+
+For an explicitly selected `nip5d-direct-v1` worker profile, the actual mounted
+session constructor installs `ProductionDirectPublicationFactory` as the
+optional concrete `clients.directPublication` capability. It uses the existing
+mounted bunker, disposable client-key broker and service signer, concrete owned
+intent/artifact services, and the stable service request journal for signing,
+upload and relay history. The current-topology certification journal must not
+replace that original history during restart or receipt renewal. Aggregate
+clients retain their existing execution path.
+
+Opening requires the configured certification owner, exact retained intent and
+review approval, matching candidate/topology authorization, and pinned
+server/relay/policy/toolchain facts. It creates no intent, consent, signature or
+provider operation. A factory permits at most 32 open or opening actors. Closing
+an actor erases its disposable signer copy; closing the factory also rejects an
+opening actor whose key resolution finishes late. Private material stays in
+private class fields and capability closures, outside serialized factory data.
+
+Actors separate signature requests, public-event acceptance, observation and
+publication. `observeOwnerSignature` and `observeUploadSignature` use explicit
+query-only NIP-46 operations. Missing originals cannot fall through to discovery,
+request construction or signing; persisted originals can query their exact
+encrypted response. Current-state and receipt checks precede new requests.
+Public acceptance retains the existing intent/expiry checks, so observing an old
+signature cannot authorize its first acceptance after expiry. Composed
+publication and recovery use the concrete upload and relay classes above.
+
+This is operational construction, not direct release promotion or protected-suite
+selection. The aggregate publication certifier must not receive direct hashes
+in aggregate fields. The direct protected observation contract, source-promotion
+checks and runner wiring remain required before satisfying the live publication
+gate. Ordinary post-cutover owner actors and negotiated public presentation
+remain separate work.
+
 The historical promoted `0.5.2` aggregate facade is not a direct-format adapter.
-The composed direct publication remains unselected by the runtime. Ordinary
+The current deployment has not selected or promoted the direct profile. Ordinary
 post-cutover owner publication must use its own
 approved actor composition, rather than inherit an expired certification receipt.
 Production actor/provider-suite wiring and fresh live certification remain open. No

@@ -49,6 +49,7 @@ import { productionReleaseScope } from "./release-verification-authority";
 import { canonicalJson } from "../promotion/schema";
 import { createMountedProductionSourceBuildVerifier } from "./source-build-verifier";
 import { assertMountedSourceBuildPlan } from "./source-build-plan";
+import { ProductionDirectPublicationFactory } from "./direct-publication-factory";
 
 /** Immutable JSON-only controller facts. Runtime ports are constructed below
  * from these facts and the already-opened production authorities. */
@@ -508,6 +509,18 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
   void cep8; void cashu; void compatibleHost; void signer; void promotedCli;
 
   const publicationContext = createProductionPublicationOperations({ materializer: publicationMaterializer, context: edgeContexts.publicationWithSigner(signerPort), source: promotedCli, upload });
+  const directPublication = input.config.worker.artifactContract === "nip5d-direct-v1" ? new ProductionDirectPublicationFactory({
+    settings: { artifactContract: "nip5d-direct-v1", candidateSha256: input.config.candidateSha256, topologySha256: input.config.topologySha256,
+      ownerPubkey: input.config.publication.ownerPubkey, toolchainSha256: input.config.worker.toolchainSha256, policyVersion: input.config.worker.policyVersion,
+      server: input.config.publication.uploadServer, relays: input.config.publication.relays, targetReference: input.config.publication.uploadTargetReference,
+      sessionKeyReference: input.config.publication.signerSessionKeyReference },
+    intents: dependencies.directPublicationIntents, artifacts: dependencies.ownedDirectArtifacts,
+    // Ordinary original publication records must survive topology/receipt
+    // changes. Never substitute the current-topology certification journal.
+    journals: { signer: dependencies.requestJournal, upload: dependencies.requestJournal, relay: dependencies.requestJournal },
+    material: edgeMaterial, authorization, now,
+  }) : undefined;
+  if (directPublication) input.generation.registerClose(() => directPublication.close());
   const clients: ProductionConcreteClients = Object.freeze({
     google,
     workers: dependencies.workers,
@@ -523,6 +536,7 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
     }),
     edge: Object.freeze({ compatibleHost, signer, cep8, cashu, promotedCli, relays }),
     publicationContext,
+    ...(directPublication ? { directPublication } : {}),
     paymentScenarioContext: edgeContexts.payments,
     sourceBuild,
   });

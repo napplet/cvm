@@ -26,6 +26,7 @@ import type { NativePromotedCliSource } from "../native/promoted-cli";
 import type { NostrRelayPublicationAdapter } from "../native/nostr-relay";
 import type { PublicationIntent, SealedArtifactIdentity } from "../../publication/contracts";
 import type { PreSignedNamedDeployFile, StructuredSourceEffect } from "../../publication/napplet-cli-adapter";
+import { ProductionDirectPublicationFactory } from "../../production/direct-publication-factory";
 import {
   composeProductionProtectedPorts,
   type ProductionSessionRuntime,
@@ -121,6 +122,8 @@ export type ProductionConcreteClients = Readonly<{
     relays: NostrRelayPublicationAdapter;
   }>;
   publicationContext: ProductionPublicationOperations;
+  /** Additive concrete direct graph; selection/promotion gates remain separate. */
+  directPublication?: ProductionDirectPublicationFactory;
   paymentScenarioContext: ProductionPaymentScenarioContext;
   sourceBuild: ProductionSourceBuildVerifier;
 }>;
@@ -171,6 +174,7 @@ function assertProviderDescriptor(value: unknown): asserts value is ProviderDesc
 function assertConcreteClients(value: unknown): asserts value is ProductionConcreteClients {
   if (!value || typeof value !== "object") throw new Error("PRODUCTION_SESSION_BROKER_CLIENTS_REQUIRED");
   const clients = value as Partial<ProductionConcreteClients>;
+  if (clients.directPublication !== undefined && !(clients.directPublication instanceof ProductionDirectPublicationFactory)) throw new Error("PRODUCTION_SESSION_DIRECT_PUBLICATION_FACTORY_REQUIRED");
   for (const key of ["google", "workers", "contextvm", "vertex", "descriptors", "edge"] as const) {
     if (!clients[key] || typeof clients[key] !== "object") throw new Error("PRODUCTION_SESSION_BROKER_CLIENTS_REQUIRED");
   }

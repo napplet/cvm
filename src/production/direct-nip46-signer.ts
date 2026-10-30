@@ -49,5 +49,7 @@ export async function openProductionDirectCertificationNip46Signer(input: Readon
   return Object.freeze({ close: signer.close, discover: signer.discover,
     async signOwnerManifest() { return signer.signExactIntent({ intentDigest: (await ownerContext()).intentDigest }); },
     async signUploadAuthorization() { return signer.signExactOperation({ operationId: (await uploadContext()).operationId, purpose: "upload_authorization" }); },
+    async observeOwnerSignature() { return signer.observeExactIntent({ intentDigest: (await ownerContext()).intentDigest }); },
+    async observeUploadSignature() { return signer.observeExactOperation({ operationId: (await uploadContext()).operationId, purpose: "upload_authorization" }); },
   });
 }

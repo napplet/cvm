@@ -54,7 +54,9 @@ export async function openProductionNip46Signer(input: Readonly<{
   authorization: Readonly<{ request: unknown; receipt: unknown; authorizationRequestSha256: string; authorizationReceiptSha256: string }>;
   authorizeFreshSigning?: (input: Readonly<{ operationId: string; intentDigest: string }>) => Promise<void>;
   now?: () => number;
-}>): Promise<ExternalSignerPort & Readonly<{ close(): Promise<void>; signExactOperation(input: Readonly<{ operationId: string; purpose: "upload_authorization" }>): Promise<unknown> }>> {
+}>): Promise<ExternalSignerPort & Readonly<{ close(): Promise<void>; signExactOperation(input: Readonly<{ operationId: string; purpose: "upload_authorization" }>): Promise<unknown>;
+  observeExactIntent(input: Readonly<{ intentDigest: string }>): Promise<unknown>;
+  observeExactOperation(input: Readonly<{ operationId: string; purpose: "upload_authorization" }>): Promise<unknown> }>> {
   const bunker = parseBunker(input.bunkerUri);
   if (!input.sessionKeyReference.startsWith("nostr:") || /(?:nsec|owner|private|secret|password)/iu.test(input.sessionKeyReference)) throw new Error("NIP46_REFERENCE_INVALID");
   assertPostgresOperationJournal(input.journal);
@@ -160,7 +162,7 @@ export async function openProductionNip46Signer(input: Readonly<{
     const signed = exactSignedEvent(final.event, context);
     return Object.freeze({ pubkey: signed.pubkey, intentDigest, authorizationReceipt: `nip46:${context.operationId}`, event: signed });
   };
-  const signContext = async (rawContext: SigningContext, rawIntentDigest: string) => {
+  const signContext = async (rawContext: SigningContext, rawIntentDigest: string, readOnly = false) => {
       if (closed) throw new Error("NIP46_CLOSED");
       await authorize(true);
       const intentDigest = Digest.parse(rawIntentDigest);
@@ -178,7 +180,9 @@ export async function openProductionNip46Signer(input: Readonly<{
           return Object.freeze({ pubkey: event.pubkey, intentDigest, authorizationReceipt: `nip46:${operationId}`, event });
         }
         if (original.state === "dispatching") return sign(original, existing.revision, context, intentDigest);
+        if (readOnly) return sign(original, existing.revision, context, intentDigest);
       }
+      if (readOnly) throw new Error("NIP46_ORIGINAL_SIGNING_NOT_FOUND");
       const fresh = async () => { await input.authorizeFreshSigning?.({ operationId, intentDigest }); await authorize(false, context.expiresAtMs); };
       await fresh();
       const observedSigner = await observeDiscovery();
@@ -231,6 +235,13 @@ export async function openProductionNip46Signer(input: Readonly<{
       const context = await input.originalOperationContext.resolveOriginal({ operationId: Operation.parse(operationId), purpose });
       if (context.template.kind !== 24242) throw new Error("NIP46_OPERATION_CONTEXT_INVALID");
       return signContext({ operationId, ownerPubkey: context.ownerPubkey, capabilities: context.capabilities, template: context.template, expiresAtMs: context.expiresAtMs }, context.intentDigest);
+    },
+    async observeExactIntent({ intentDigest }: Readonly<{ intentDigest: string }>) { return signContext(await input.context.resolve({ intentDigest: Digest.parse(intentDigest) }), intentDigest, true); },
+    async observeExactOperation({ operationId, purpose }: Readonly<{ operationId: string; purpose: "upload_authorization" }>) {
+      if (!input.originalOperationContext || purpose !== "upload_authorization") throw new Error("NIP46_OPERATION_CONTEXT_REQUIRED");
+      const context = await input.originalOperationContext.resolveOriginal({ operationId: Operation.parse(operationId), purpose });
+      if (context.template.kind !== 24242) throw new Error("NIP46_OPERATION_CONTEXT_INVALID");
+      return signContext({ operationId, ownerPubkey: context.ownerPubkey, capabilities: context.capabilities, template: context.template, expiresAtMs: context.expiresAtMs }, context.intentDigest, true);
     },
     async close() { closed = true; key.fill(0); conversationKey.fill(0); },
   });

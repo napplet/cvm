@@ -59,6 +59,7 @@ import { finalizeEvent, getPublicKey, verifyEvent, type Event } from "nostr-tool
 import { proveDirectPreviewBrowser } from "../fixtures/direct-preview-browser";
 import { matchFilters } from "nostr-tools/filter";
 import { DirectCvmBuildAttestationSchema } from "../../src/publication/direct-attestation";
+import { ProductionDirectPublicationFactory } from "../../src/production/direct-publication-factory";
 import { ProductionDirectCertificationRelays } from "../../src/production/direct-publication-relays";
 import { ProductionBuildAttestationSigner } from "../../src/production/attestation-signer";
 import { ProductionDirectCertificationUpload } from "../../src/production/direct-publication-upload";
@@ -127,7 +128,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
   const name = `cvm-resume-preparer-${crypto.randomUUID().replaceAll("-", "")}`;
   let admin: Pool | undefined, runtime: Pool | undefined;
   let localWorker: Awaited<ReturnType<typeof openLocalProductionWorker>> | undefined;
-  let closeDirectSigner = async () => {}, closeDirectBunker = () => {}, closeUploadServer = () => {}, closeAttestationSigner = () => {};
+  let closeDirectSigner = async () => {}, closeDirectBunker = () => {}, closeUploadServer = () => {}, closeAttestationSigner = () => {}, closeDirectFactory = async () => {};
   let publicationServer = "https://publication.example", publicationRelay = "wss://relay.example", uploadPuts = 0, uploadGets = 0;
   const publishedRelayEvents = new Map<string, Event>(), relayPublishes: string[] = [];
   let hideOwnerObservation = false, hideAttestationObservation = false;
@@ -1288,6 +1289,9 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         try { await expect(staleSigner.signOwnerManifest()).rejects.toThrow("INTENT_STALE"); } finally { await staleSigner.close(); }
         expect(bunker.requests).toHaveLength(0);
         let remoteSigner = await openDirectSigner(); closeDirectSigner = () => remoteSigner.close();
+        await expect(remoteSigner.observeOwnerSignature()).rejects.toThrow("ORIGINAL_SIGNING_NOT_FOUND");
+        await expect(remoteSigner.observeUploadSignature()).rejects.toThrow("NOT_FOUND_OR_DENIED");
+        expect(bunker.requests).toHaveLength(0);
         bunker.hideSigningResponses(true);
         await expect(remoteSigner.signOwnerManifest()).rejects.toThrow("SIGNING_OUTCOME_UNKNOWN");
         expect(bunker.requests.map(value => value.method)).toEqual(["connect", "get_public_key", "sign_event"]);
@@ -1297,7 +1301,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         const ownerEvent = await signDirectPublicationIntent({ intent: publicationIntent,
           expected: { intentId: publicationIntent.intentId, reviewSha256: review.reviewSha256, ownerPubkey: principal.pubkey },
           async sign(template) { manifestSigns++; expect(template).toEqual(publicationIntent.review.ownerManifestTemplate);
-            return z.object({ event: SignedOwnerManifestEventSchema }).passthrough().parse(await remoteSigner.signOwnerManifest()).event; } });
+            return z.object({ event: SignedOwnerManifestEventSchema }).passthrough().parse(await remoteSigner.observeOwnerSignature()).event; } });
         expect(manifestSigns).toBe(1); expect(ownerEvent.pubkey).toBe(principal.pubkey);
         await expect(changedTargets.acceptOwnerEvent({ ...owner, event: ownerEvent })).rejects.toThrow("INTENT_STALE");
         losePublicationCommit = true;
@@ -1395,6 +1399,53 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
             ownerAccountScopeSha256: "f".repeat(64), ownerProjectScopeSha256: "0".repeat(64), attestationAccountScopeSha256: "f".repeat(64), attestationProjectScopeSha256: "0".repeat(64) },
           signer: directServiceSigner, authorization: { request: signingRequest, receipt: signingReceipt },
           journal: new PostgresOperationJournal(relayPool, { namespace: relayNamespace, scopeSha256: "2".repeat(64) }), now: () => publicationNow, timeoutMs: 1000 };
+        const factoryInput = { settings: { artifactContract: "nip5d-direct-v1" as const, candidateSha256: signingRequest.candidateSha256, topologySha256: signingRequest.topologySha256,
+            ownerPubkey: principal.pubkey, toolchainSha256: review.artifact.toolchainSha256, policyVersion: review.artifact.policyVersion,
+            server: publicationServer, relays: [publicationRelay], targetReference: uploadInput.targetReference, sessionKeyReference: bunker.sessionKeyReference },
+          intents: publications(), artifacts: new ProductionOwnedDirectArtifacts(readerInput),
+          journals: { signer: new PostgresOperationJournal(pool, { namespace: "direct-nip46-fixture", scopeSha256: "6".repeat(64) }), upload: uploadInput.journal, relay: relayInput.journal },
+          material: { bunkerUri: bunker.bunkerUri, nip46SessionKeyBroker: bunker.sessionKeyBroker, attestationSigner: directServiceSigner },
+          authorization: { request: signingRequest, receipt: signingReceipt, authorizationRequestSha256: signingRequest.authorizationRequestSha256, authorizationReceiptSha256: signingReceipt.authorizationReceiptSha256 },
+          now: () => publicationNow, timeoutMs: 1000 };
+        const directFactory = new ProductionDirectPublicationFactory(factoryInput); closeDirectFactory = () => directFactory.close();
+        const openCommand = { ...owner, intentId: publicationIntent.intentId, reviewSha256: review.reviewSha256 };
+        const requestsBeforeFactory = bunker.requests.length;
+        await expect(directFactory.open({ ...openCommand, principal: foreignOwner.principal })).rejects.toThrow("CONFIGURED_OWNER_REQUIRED");
+        await expect(directFactory.open({ ...openCommand, reviewSha256: "0".repeat(64) })).rejects.toThrow("APPROVED_ORIGINAL_REQUIRED");
+        const wrongProfileFactory = new ProductionDirectPublicationFactory({ ...factoryInput, settings: { ...factoryInput.settings, toolchainSha256: "0".repeat(64) } });
+        try { await expect(wrongProfileFactory.open(openCommand)).rejects.toThrow("CONFIGURED_ARTIFACT_REQUIRED"); } finally { await wrongProfileFactory.close(); }
+        const factoryActor = await directFactory.open(openCommand);
+        expect(bunker.requests).toHaveLength(requestsBeforeFactory);
+        let releaseOpenings = () => {}, allKeysRequested = () => {};
+        const openingGate = new Promise<void>(resolve => { releaseOpenings = resolve; });
+        const openingReady = new Promise<void>(resolve => { allKeysRequested = resolve; });
+        let keyRequests = 0;
+        const cappedFactory = new ProductionDirectPublicationFactory({ ...factoryInput, material: { ...factoryInput.material, nip46SessionKeyBroker: {
+          async resolve() { keyRequests++; if (keyRequests === 32) allKeysRequested(); await openingGate; return bunker.sessionKeyBroker.resolve(); },
+        } } });
+        const cappedResults = Promise.allSettled(Array.from({ length: 33 }, () => cappedFactory.open(openCommand)));
+        await openingReady; releaseOpenings();
+        const opened = await cappedResults;
+        try {
+          expect(opened.filter(result => result.status === "fulfilled")).toHaveLength(32);
+          expect(opened.filter(result => result.status === "rejected")).toHaveLength(1);
+          expect(keyRequests).toBe(32);
+        } finally { await cappedFactory.close(); }
+        let releaseLateKey = () => {}, lateKeyRequested = () => {};
+        const lateGate = new Promise<void>(resolve => { releaseLateKey = resolve; });
+        const lateReady = new Promise<void>(resolve => { lateKeyRequested = resolve; });
+        const closingFactory = new ProductionDirectPublicationFactory({ ...factoryInput, material: { ...factoryInput.material, nip46SessionKeyBroker: {
+          async resolve() { lateKeyRequested(); await lateGate; return bunker.sessionKeyBroker.resolve(); },
+        } } });
+        const lateOpen = closingFactory.open(openCommand);
+        await lateReady; await closingFactory.close(); releaseLateKey();
+        await expect(lateOpen).rejects.toThrow("FACTORY_CLOSED");
+        expect(bunker.requests).toHaveLength(requestsBeforeFactory);
+        expect(JSON.stringify(directFactory)).not.toContain("fixture-direct-consent");
+        expect(JSON.stringify(directFactory)).not.toContain("bunker:");
+        expect(z.object({ event: SignedOwnerManifestEventSchema }).passthrough().parse(await factoryActor.observeOwnerSignature()).event.id).toBe(ownerEvent.id);
+        expect(z.object({ event: DirectUploadAuthorizationEventSchema }).passthrough().parse(await factoryActor.observeUploadSignature()).event.id).toBe(uploadEvent.id);
+        expect(bunker.requests).toHaveLength(requestsBeforeFactory);
         expect(await new ProductionDirectCertificationRelays(relayInput).reconcileOwner()).toMatchObject({ state: "unknown" });
         await expect(new ProductionDirectCertificationRelays(relayInput).publishAttestation()).rejects.toThrow("OWNER_OBSERVATION_REQUIRED");
         expect(directServiceSigns).toBe(0); expect(relayPublishes).toHaveLength(0);
@@ -1402,7 +1453,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         await expect(new ProductionDirectCertificationRelays({ ...relayInput, owner: foreignOwner }).publishOwner()).rejects.toThrow();
         expect(await new ProductionDirectCertificationRelays(relayInput).reconcile()).toMatchObject({ state: "partial", stage: "owner" });
         hideOwnerObservation = true;
-        await Promise.allSettled([new ProductionDirectCertificationRelays(relayInput).publishOwner(), new ProductionDirectCertificationRelays(relayInput).publishOwner()]);
+        await Promise.allSettled([factoryActor.publishOwner(), new ProductionDirectCertificationRelays(relayInput).publishOwner()]);
         expect(loseRelayCommit).toBeFalse(); expect(relayPublishes).toEqual([ownerEvent.id]);
         expect(await new ProductionDirectCertificationRelays(relayInput).publishOwner()).toMatchObject({ state: "unknown", eventId: ownerEvent.id });
         await expect(new ProductionDirectCertificationRelays(relayInput).publishAttestation()).rejects.toThrow("OWNER_OBSERVATION_REQUIRED");
@@ -1410,7 +1461,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         hideOwnerObservation = false;
         expect(await new ProductionDirectCertificationRelays(relayInput).reconcileOwner()).toMatchObject({ state: "complete", eventId: ownerEvent.id });
         hideAttestationObservation = true;
-        const attestationPublished = await new ProductionDirectCertificationRelays(relayInput).publishAttestation();
+        const attestationPublished = await factoryActor.publishAttestation();
         expect(attestationPublished).toMatchObject({ state: "unknown" }); expect(directServiceSigns).toBe(1);
         expect(relayPublishes).toHaveLength(2);
         expect(await new ProductionDirectCertificationRelays(relayInput).publishAttestation()).toMatchObject({ state: "unknown", eventId: attestationPublished.eventId });
@@ -1429,7 +1480,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         expect(await new ProductionDirectCertificationRelays(relayInput).reconcileAttestation()).toMatchObject({ state: "complete", eventId: attestationEvent.id });
         await expect(new ProductionDirectCertificationRelays({ ...relayInput, authorization: { request: renewedRequest, receipt: renewedReceipt } }).publishOwner()).rejects.toThrow("BINDING_REQUIRED");
         expect(relayPublishes).toHaveLength(2);
-        expect(await new ProductionDirectCertificationRelays(relayInput).publish()).toMatchObject({ state: "complete", artifactHash: review.artifact.artifactHash,
+        expect(await factoryActor.publish()).toMatchObject({ state: "complete", artifactHash: review.artifact.artifactHash,
           archiveSha256: review.artifact.archiveSha256, ownerEventId: ownerEvent.id, attestationEventId: attestationEvent.id, locationReference: `${publicationServer}/${review.artifact.artifactHash}` });
         expect(directServiceSigns).toBe(1); expect(relayPublishes).toHaveLength(2); expect(uploadPuts).toBe(1);
         hideOwnerObservation = true;
@@ -1485,9 +1536,21 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         expect(await historicalRelays.reconcileAttestation()).toMatchObject({ state: "complete", eventId: attestationEvent.id });
         expect(await historicalRelays.publishAttestation()).toMatchObject({ state: "complete", eventId: attestationEvent.id });
         expect(directServiceSigns).toBe(1); expect(relayPublishes).toHaveLength(2);
+        expect(await factoryActor.reconcile()).toMatchObject({ state: "complete", ownerEventId: ownerEvent.id, attestationEventId: attestationEvent.id });
+        const historicalFactory = new ProductionDirectPublicationFactory({ ...factoryInput, intents: changedTargets });
+        try {
+          const historicalActor = await historicalFactory.open(openCommand);
+          expect(await historicalActor.reconcile()).toMatchObject({ state: "complete", ownerEventId: ownerEvent.id, attestationEventId: attestationEvent.id });
+          expect(z.object({ event: SignedOwnerManifestEventSchema }).passthrough().parse(await historicalActor.observeOwnerSignature()).event.id).toBe(ownerEvent.id);
+          await historicalActor.close();
+          await expect(historicalActor.reconcile()).rejects.toThrow("ACTOR_CLOSED");
+        } finally { await historicalFactory.close(); }
+        await directFactory.close();
+        await expect(directFactory.open(openCommand)).rejects.toThrow("FACTORY_CLOSED");
+        await expect(factoryActor.reconcile()).rejects.toThrow("ACTOR_CLOSED");
         const signingRequestsBeforeHistory = bunker.requests.length;
         pendingRemote = await openDirectSigner(changedTargets, pendingUploadOwner);
-        const pendingUploadEvent = z.object({ event: DirectUploadAuthorizationEventSchema }).passthrough().parse(await pendingRemote.signUploadAuthorization()).event;
+        const pendingUploadEvent = z.object({ event: DirectUploadAuthorizationEventSchema }).passthrough().parse(await pendingRemote.observeUploadSignature()).event;
         expect(pendingUploadEvent.tags).toEqual(pendingUpload.template.tags);
         expect(bunker.requests).toHaveLength(signingRequestsBeforeHistory);
         await pendingRemote.close();
@@ -1510,5 +1573,5 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         expect(cleanupGets).toBe(getsAfterCleanupProof); expect(allocations).toBe(allocationsBeforeReads); expect(deletions).toBe(deletionsBeforeReads);
       } finally { await http.stop(true); }
     }
-  } finally { try { await closeDirectSigner(); closeDirectBunker(); closeUploadServer(); closeAttestationSigner(); await localWorker?.close(); } finally { await runtime?.end(); await admin?.end(); await docker(["rm", "--force", name]).catch(() => undefined); } }
+  } finally { try { await closeDirectSigner(); closeDirectBunker(); closeUploadServer(); closeAttestationSigner(); await closeDirectFactory(); await localWorker?.close(); } finally { await runtime?.end(); await admin?.end(); await docker(["rm", "--force", name]).catch(() => undefined); } }
 }, 120_000);

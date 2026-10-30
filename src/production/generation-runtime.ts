@@ -1,4 +1,5 @@
 import { ProductionFundedReplayAuthority } from "./funded-replay-authority";
+import { ProductionAdmissionCapacityRecovery } from "./admission-capacity-recovery";
 import { ProductionContextVmGenerationIntakes } from "./contextvm-generation-intake";
 import { ProtectedGenerationCommands } from "../model/retained-generation-command";
 import { loadMountedCheckpointKek } from "./checkpoint-crypto";
@@ -73,6 +74,9 @@ export async function openProductionGenerationRuntime(input: Readonly<{ config: 
     const generation = new MeteredGenerationService({ fundedAdmission: funding.core.admissions, store: funding.database.meteredFunding, gateway: dependencies.gateway, worker: dependencies.workerBridge, artifactVerifier: dependencies.workerBridge, proposalStore: dependencies.proposals, pricing: { card: dependencies.vertexMaterial.pricing.card, profile: dependencies.vertexMaterial.pricing.profile }, settlement: dependencies.settlement, retainedPricing: dependencies.retainedPricing, recoveryCommands, continuation: continuation.service, toolchainIdentity: config.worker.toolchainSha256, clock: { nowMs: input.now ?? Date.now } });
     const generationRecovery = new ProductionGenerationRecovery({ pool: postgres.pool, commands: recoveryCommands, replayAuthority, acceptedToolchains: dependencies.jobRouter.toolchainSha256s, generation });
     await generationRecovery.assertReady();
+    const admissionCapacityRecovery = new ProductionAdmissionCapacityRecovery({ pool: postgres.pool, capacity: dependencies.capacity,
+      router: dependencies.jobRouter, workerJournal: dependencies.workerJournal, journal: dependencies.serviceJournals.capacity, now: input.now });
+    await admissionCapacityRecovery.assertReady();
     facade.bind(generation); await relay.start();
     // This is a bounded reconciliation poll over already-paused SQL rows, not
     // an admission queue. Every candidate remains fenced by the transaction.
@@ -82,6 +86,8 @@ export async function openProductionGenerationRuntime(input: Readonly<{ config: 
     recoveryTimer.unref?.();
     const intakeTimer = setInterval(() => { void relay!.transport.recoverPendingGenerations().catch(() => undefined); },30_000);
     intakeTimer.unref?.();
+    const capacityRecoveryTimer = setInterval(() => { void admissionCapacityRecovery.scan().catch(() => undefined); },30_000);
+    capacityRecoveryTimer.unref?.();
     const mountedClosers = new Set<() => Promise<void>>();
     return Object.freeze({
       config, certificationClientPubkey, authorization, generation, continuation, facade, funding, dependencies, admissionObserver,
@@ -93,8 +99,10 @@ export async function openProductionGenerationRuntime(input: Readonly<{ config: 
         clearInterval(continuationTimer);
         clearInterval(recoveryTimer);
         clearInterval(intakeTimer);
+        clearInterval(capacityRecoveryTimer);
         await generationIntakes.close().catch(() => undefined);
         await generationRecovery.close().catch(() => undefined);
+        await admissionCapacityRecovery.close().catch(() => undefined);
         for (const close of mountedClosers) await close().catch(() => undefined);
         mountedClosers.clear();
         await relay!.close().catch(() => undefined);

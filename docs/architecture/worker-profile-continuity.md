@@ -211,6 +211,14 @@ an executable. An absent approved profile fails closed. Normal builds, fences,
 exports, restore operations and restore observations use this router in both the
 normal graph and the fresh recovered graph. New capacity still uses the default.
 
+Query-only `observeTermination` selects that same original approved executable
+without requiring an already bound native ID. This permits exact native lookup
+after a lost CREATE response. The underlying transport still validates original
+metadata, and absence without a bound native identity stays pending. Executable
+job resolution continues to require a bound ID. The ordinary admission-capacity
+observer uses this path; it cannot choose the current default for an older
+operation or dispatch a replacement or termination.
+
 The artifact index reader accepts original toolchains only from the approved
 set; request/result/owner evidence and immutable object hashes remain checked.
 Finishing an older job writes evidence with that job's actual toolchain, rather

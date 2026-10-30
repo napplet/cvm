@@ -86,8 +86,55 @@ No migration, new state variant, public schema or saved identity is introduced.
 Deploy matching acceptance writers, compensation readers and native observers
 together; drain older writers before relying on the fence. Rollback must retain
 the fence-aware code and both original journal histories. This is not authority
-to refund or abandon an accepted or unknown paid action. Broader bounded cleanup
-discovery and full funded native CREATE certification remain open.
+to refund or abandon an accepted or unknown paid action. Full funded native
+CREATE certification remains open.
+
+## Bounded unused-capacity observation
+
+The normal mounted runtime polls ordinary unaccepted admission intents every
+30 seconds. Each scan examines at most 32 rows and checks a 30-second budget
+between observations. Native requests retain their transport deadlines. One
+instance coalesces overlapping scans; close stops new work and awaits an active
+observation before closing SQL. A versioned journal cursor preserves keyset
+progress across restarts and wraps after a short final page. Competing replicas
+may repeat queries; cursor compare-and-set prevents overwriting newer progress.
+
+Discovery selects production-real owners without an original funding command,
+admission, cap hold, action budget or metered action. It only recognizes the
+original account/key admission namespace, excluding continuation and priced-resume
+capacity. The scanner resolves the exact capacity and native operation, then
+uses the retained approved executable to observe termination. Missing approval,
+substituted metadata, unknown native state and an absent resource without a
+previously bound native ID remain pending. It cannot CREATE, execute a job,
+request termination, credit, refund or release a cap hold.
+
+A confirmed native termination creates immutable
+`admission-capacity-termination-v1` evidence in the existing operation journal.
+It binds the account, intent fingerprint, original capacity/session binding,
+deadline and exact native identity. Finalization locks the same SQL intent as
+acceptance, rechecks every financial ownership predicate, and only then records
+the existing `released` state and one `admission_capacity_observed_terminated`
+outbox event in the same transaction. If acceptance wins during observation, its
+hold and intent remain intact. The event is operational audit evidence; it
+authorizes no payment or redispatch. Existing event-specific readers ignore this
+additive kind. A lost proof/finalization acknowledgment is recovered from the
+original durable records without another native effect.
+
+No migration, public field or new capacity state is required. Startup checks the
+required existing tables and each runtime privilege before starting the relay.
+Deploy with the matching acceptance/compensation fence and retained-profile
+readers. Rollback must preserve the new versioned cursor/proof entries and outbox
+history; an older binary can leave this observer disabled while retaining the
+fence. This observer does not recover the initial native claim/CREATE dispatch
+gap, abandon paid actions or discover continuation-specific cleanup.
+
+Restricted PostgreSQL tests exercise cursor continuation beyond 32 candidates,
+retained-profile refusal/selection, metadata substitution, unknown/missing-ID
+observations, acceptance during lookup, concurrent scanners, lost proof and
+finalization COMMIT acknowledgments, time bounds and awaited shutdown. Local
+provider and rail fixtures prove the mechanism, not live isolation or release
+certification. Full funded native CREATE, live lifetime cleanup and protected
+release suites still require their own evidence.
 
 ## Immutable pricing catalog
 

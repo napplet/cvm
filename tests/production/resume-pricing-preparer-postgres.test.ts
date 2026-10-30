@@ -52,6 +52,7 @@ import { ProductionWorkerJobRouter } from "../../src/production/worker-job-route
 import { verifyProductionConformanceReceipt } from "../../src/worker-adapters/conformance-receipt";
 import { ProductionDirectManifestReceiptSchema } from "../../src/worker-adapters/direct-manifest-receipt";
 import { readVerifiedDirectWorkerArchive } from "../../src/production/direct-artifact-reader";
+import { ProductionOwnedDirectArtifacts } from "../../src/production/owned-direct-artifacts";
 
 const integration = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
 const hash = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex");
@@ -804,6 +805,8 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       sourceProposalSha256: newProposalSha, sourceProposalFiles: newProposalFiles, ...(directWorker ? { idea: workspaceCommand.revision.trim() } : {}) });
     await new ProductionWorkerRequestStore(nativeRequestJournal).persist(resumedWorkerRequest);
     expect(await new ProductionWorkerRequestStore(nativeRequestJournal).read(resumedWorkerRequest)).toEqual(resumedWorkerRequest);
+    expect(await new ProductionWorkerRequestStore(nativeRequestJournal).readArtifactRequest({ sessionId: resumedWorkerRequest.sessionId, actionId: resumedWorkerRequest.actionId, expectedVersion: resumedWorkerRequest.expectedVersion })).toEqual(resumedWorkerRequest);
+    expect(await new ProductionWorkerRequestStore(nativeRequestJournal).readArtifactRequest({ sessionId: resumedWorkerRequest.sessionId, actionId: resumedWorkerRequest.actionId, expectedVersion: 2 })).toBeUndefined();
     expect(await new ProductionWorkerRequestStore(nativeRequestJournal).read(sourceRequest)).toEqual(sourceRequest);
     await expect(new ProductionWorkerRequestStore(nativeRequestJournal).persist({ ...resumedWorkerRequest, sourceProposalFiles: workspaceSource.files })).rejects.toThrow("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
     expect(await nativeBridge().observePricedRestoreCheckpoint(restoredWorkspace.restore.metadata)).toMatchObject({ status: "restored" });
@@ -1069,5 +1072,53 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     expect(await nativeWorkerRecords.read(workerOperationId)).toMatchObject({ resourceId: "fixture-workspace-machine", requestSha256: "c".repeat(64), state: "reconciled" });
     expect(await new ProductionPricedContinuationRunner(runnerInput).run(workspaceResume)).toEqual(coreTerminal);
     expect(modelPosts).toBe(3); expect(nativeRestores).toBe(1); expect(reserves).toBe(2);
+    if (directWorker) {
+      if (coreTerminal.status !== "completed" || !coreTerminal.artifactId) throw new Error("OWNED_DIRECT_ARTIFACT_REQUIRED");
+      const readerInput = { pool, requestJournal: nativeRequestJournal,
+        objects: new GcsObjectStoreAdapter({ config: { bucket: "workspace-fixture", projectId: "fixture" }, client: objectClient }),
+        profiles: [{ toolchainSha256: "e".repeat(64), artifactContract: "legacy-aggregate-v1" as const }, { toolchainSha256: workspaceToolchain, artifactContract: "nip5d-direct-v1" as const }],
+        publication: { server: "https://publication.example" } };
+      const ownedCommand = { principal, sessionId: workspaceClaim.sessionId, artifactId: coreTerminal.artifactId };
+      const owned = () => new ProductionOwnedDirectArtifacts(readerInput).readVerified(ownedCommand);
+      const allocationsBeforeReads = allocations, deletionsBeforeReads = deletions;
+      const afterCleanup = await owned();
+      expect(afterCleanup).toMatchObject({ accountId, ownerId: principal.pubkey, artifactId: coreTerminal.artifactId, artifactVersion: 2,
+        archive: { artifactContract: "nip5d-direct-v1", build: { toolchainSha256: workspaceToolchain }, declaration: { required: ["storage"], optional: [] } } });
+      expect(afterCleanup?.archive).not.toHaveProperty("aggregateSha256");
+      for (const changed of [{ principal: { pubkey: "8".repeat(64) } }, { sessionId: "session:foreign" }, { artifactId: `artifact:${"0".repeat(64)}` }, { accountId }]) {
+        expect(await new ProductionOwnedDirectArtifacts(readerInput).readVerified({ ...ownedCommand, ...changed })).toBeUndefined();
+      }
+      for (const profiles of [[readerInput.profiles[0]!], [{ toolchainSha256: workspaceToolchain }],
+        [...readerInput.profiles, { toolchainSha256: workspaceToolchain, artifactContract: "legacy-aggregate-v1" as const }]]) {
+        expect(await new ProductionOwnedDirectArtifacts({ ...readerInput, profiles }).readVerified(ownedCommand)).toBeUndefined();
+      }
+      expect(await new ProductionOwnedDirectArtifacts({ ...readerInput, publication: { server: "https://other.example" } }).readVerified(ownedCommand)).toBeUndefined();
+      await admin.query("UPDATE production_real.funding_accounts SET nostr_pubkey=$2 WHERE account_id=$1", [accountId, "8".repeat(64)]);
+      try { expect(await owned()).toBeUndefined(); } finally { await admin.query("UPDATE production_real.funding_accounts SET nostr_pubkey=$2 WHERE account_id=$1", [accountId, principal.pubkey]); }
+      await admin.query("UPDATE production_real.session_artifacts SET verified=false WHERE id=$1", [coreTerminal.artifactId]);
+      try { expect(await owned()).toBeUndefined(); } finally { await admin.query("UPDATE production_real.session_artifacts SET verified=true WHERE id=$1", [coreTerminal.artifactId]); }
+      await admin.query("UPDATE production_real.metered_actions SET artifact_version=3 WHERE id=$1", [workspaceClaim.actionId]);
+      try { expect(await owned()).toBeUndefined(); } finally { await admin.query("UPDATE production_real.metered_actions SET artifact_version=2 WHERE id=$1", [workspaceClaim.actionId]); }
+      const archived = [...values.values()].find(value => value.checksum === coreTerminal.artifactId?.slice("artifact:".length));
+      if (!archived) throw new Error("OWNED_DIRECT_ARCHIVE_OBJECT_REQUIRED");
+      const originalBytes = archived.bytes;
+      archived.bytes = new TextEncoder().encode("{}");
+      try { expect(await owned()).toBeUndefined(); } finally { archived.bytes = originalBytes; }
+      const originalRequest = await nativeRequestJournal.read(`worker-request:${hash(resumedWorkerRequest)}`);
+      if (!originalRequest) throw new Error("OWNED_DIRECT_ORIGINAL_REQUEST_REQUIRED");
+      const substituted = await nativeRequestJournal.compareAndSet(originalRequest.operationId, originalRequest.identitySha256, originalRequest.revision,
+        { request: { ...resumedWorkerRequest, idea: "Substituted persisted purpose" } });
+      if (!substituted) throw new Error("OWNED_DIRECT_REQUEST_NEGATIVE_SETUP_REQUIRED");
+      try { expect(await owned()).toBeUndefined(); } finally {
+        if (!await nativeRequestJournal.compareAndSet(originalRequest.operationId, originalRequest.identitySha256, substituted.revision, originalRequest.value)) throw new Error("OWNED_DIRECT_REQUEST_RESTORE_REQUIRED");
+      }
+      expect((await owned())?.archive.checksum).toBe(coreTerminal.artifactId.slice("artifact:".length));
+      // Reads survive actual checkpoint/command-key erasure and native cleanup
+      // without another provider POST, restore, allocation or termination.
+      expect(await checkpoint.observeDestroyed(eraseWorkspace)).toBeTrue();
+      expect(modelPosts).toBe(3); expect(nativeRestores).toBe(1); expect(reserves).toBe(2); expect(nativeDeletes).toBe(1);
+      expect(cleanupGets).toBe(getsAfterCleanupProof);
+      expect(allocations).toBe(allocationsBeforeReads); expect(deletions).toBe(deletionsBeforeReads);
+    }
   } finally { try { await localWorker?.close(); } finally { await runtime?.end(); await admin?.end(); await docker(["rm", "--force", name]).catch(() => undefined); } }
 }, 120_000);

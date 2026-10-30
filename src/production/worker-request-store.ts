@@ -9,7 +9,7 @@ const sha = (value: unknown) => createHash("sha256").update(canonicalJson(value)
 const Stored = z.object({ request: WorkerRunRequestSchema }).strict();
 const Index = z.object({ originalOperationId: z.string().regex(/^worker-request:[a-f0-9]{64}$/u), requestSha256: z.string().regex(/^[a-f0-9]{64}$/u) }).strict();
 const binding = (request: Binding): Binding => ({ sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion, capabilityGrant: request.capabilityGrant, workspaceId: request.workspaceId });
-const indexKey = (request: Binding) => `worker-request-index:${sha({ sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion })}`;
+const indexKey = (request: Pick<Binding, "sessionId" | "actionId" | "expectedVersion">) => `worker-request-index:${sha({ sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion })}`;
 const restoreKey = (request: Binding) => `worker-restore-request:${sha({ sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion })}`;
 const Restore = z.object({ schemaVersion: z.literal("worker-restore-request-v1"), sourceActionId: z.string().min(1),
   sourceRequestSha256: z.string().regex(/^[a-f0-9]{64}$/u), restoreRequest: WorkerRunRequestSchema }).strict();
@@ -39,6 +39,25 @@ export class ProductionWorkerRequestStore {
     const digest = sha(request);
     if (original.operationId !== `worker-request:${digest}` || original.identitySha256 !== digest || canonicalJson(binding(request)) !== canonicalJson(expected)) throw new Error("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
     return request;
+  }
+
+  /** Finalized artifact readers know the SQL action identity, rather than an
+   * active worker binding. Recover the original, then apply the same exact
+   * index/key/digest checks as ordinary request recovery. No records are added. */
+  async readArtifactRequest(value: Pick<Binding, "sessionId" | "actionId" | "expectedVersion">): Promise<WorkerRunRequest | undefined> {
+    const expected = z.object({ sessionId: WorkerRunRequestSchema.shape.sessionId, actionId: WorkerRunRequestSchema.shape.actionId, expectedVersion: WorkerRunRequestSchema.shape.expectedVersion }).strict().parse(value);
+    const indexed = await this.journal.read(indexKey(expected));
+    let original;
+    if (indexed) {
+      const index = Index.parse(indexed.value);
+      if (indexed.identitySha256 !== index.requestSha256 || index.originalOperationId !== `worker-request:${index.requestSha256}`) throw new Error("PRODUCTION_ARTIFACT_REQUEST_MISMATCH");
+      original = await this.journal.read(index.originalOperationId);
+    } else original = await this.journal.readUniqueByObjectFields("request", expected);
+    if (!original) return undefined;
+    const request = Stored.parse(original.value).request;
+    if (request.sessionId !== expected.sessionId || request.actionId !== expected.actionId || request.expectedVersion !== expected.expectedVersion
+      || original.operationId !== `worker-request:${sha(request)}` || original.identitySha256 !== sha(request)) throw new Error("PRODUCTION_ARTIFACT_REQUEST_MISMATCH");
+    return this.read(request);
   }
 
   /** Correlate a checkpoint restore without claiming the resumed action's

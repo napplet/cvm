@@ -203,3 +203,28 @@ coordinator records, rather than caller fields or the archive itself. Current
 preview/publication contracts still require legacy aggregate identities; they
 cannot consume this direct identity until an explicit versioned contract is
 implemented. Existing version-1/2 bytes and public strict validators are unchanged.
+
+Ordinary production dependencies now construct `ownedDirectArtifacts`, a private
+reader for authenticated principal call sites. Its only request fields are the
+principal public key, session ID and artifact ID. It derives the account and
+requires matching real-account ownership, finalized verified action and artifact
+rows, exact versions, workspace lineage and validation reference. The immutable
+original request index supplies the proposal and original bounded purpose; the
+durable artifact index supplies the exact object checksum and original toolchain.
+Only an explicitly approved direct toolchain can be read, even when the current
+default is a different legacy profile. Conflicting contracts for the same
+toolchain refuse access. The approved publication server remains independently
+supplied by production configuration.
+
+The reader revalidates the archive and stored scanner/conformance evidence,
+and returns explicit direct identity, object and receipt facts. Missing or
+inconsistent evidence returns the same unavailable result as a foreign identity.
+It needs neither an active worker nor checkpoint decryption keys. Local real-build
+integration proves access after actual terminal cleanup and checkpoint/key
+deletion, refusal of altered ownership/version/request/object/profile/server
+bindings, and zero additional model, worker or object-storage mutations.
+
+This is an internal composition entry point; no public artifact route or
+preview/publication contract consumes it yet. Principal authentication must occur
+before calling it. Existing public contracts continue to require the explicitly
+versioned direct-format work described above.

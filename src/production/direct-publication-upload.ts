@@ -73,6 +73,9 @@ export class ProductionDirectCertificationUpload {
     if (!context) return { operationId: original.expected.scope.operationId, state: "unknown" as const };
     return (await this.#adapter(context)).reconcileOriginalUpload({ operationId: context.scope.operationId });
   }
+  /** Read-only original binding for composed relay/attestation operations.
+   * Missing context stays missing; never creates an upload or reads file bytes. */
+  async readOriginalBinding() { return (await this.#original()).read(); }
   async upload() {
     await this.#authority(false);
     const original = await this.#original();

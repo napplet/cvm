@@ -207,12 +207,51 @@ uploads verified archive bytes using the actual pinned CLI. One PUT with a lost
 response, concurrent/lost-commit recovery, original-only renewal refusal and
 expired observation are tested. These fixtures remain local mechanism proof.
 
+### Direct owner relay and service attestation
+
+`ProductionDirectCertificationRelays` reads the concrete original upload
+binding and owned intent. It accepts no caller event, template or transport.
+Candidate/topology/effect, provider scopes, original request/receipt, relay set,
+review, owner event, HTML hash and archive checksum bind immutable
+`direct-certification-relay-v1` records. Relay operation IDs derive from the
+original intent independently of a renewed receipt. A stable journal scope
+must be retained across restarts and receipt renewal.
+
+Owner publication requires exact uploaded-byte observation. Attestation
+preparation requires that upload and the exact owner event's relay observation.
+The new `direct-cvm-build-attestation-v1` payload carries the original intent,
+review, owner event/pubkey, direct artifact metadata, capability digest,
+candidate/topology/effect and upload location. Its `createdAtMs` is the original
+publication intent's timestamp, preserving a deterministic original event;
+it does not claim the time a relay observed the event. No aggregate field is
+reused. `ProductionBuildAttestationSigner.signDirectBuild` accepts only the
+validated versioned body, rejects the owner key, and closes the service key
+without breaking public-event recovery. Its event uses the HTML hash in `x`
+and identifies the direct attestation version explicitly.
+
+Fresh creation and dispatch revalidate current ownership/intent and the matching
+controller receipt. A permanent SQL dispatch fence precedes the actual pinned
+direct CLI relay helper. The helper's bounded publish lifecycle is awaited;
+an outer timeout must not leave a publish running behind a reported timeout.
+Every acknowledgement, rejection or ambiguous result is resolved by a fresh
+query for the exact signed event ID. Dispatched originals are never published
+or signed again. Historical reads use the original relay set and work after
+expiry, configuration change and service-key closure.
+
+`publish()` sequences upload, owner and attestation. `reconcile()` only observes
+their originals and creates no record or signature. Combined completion requires
+all three exact observations; missing artifact bytes or hidden relay events
+produce a partial stage result. This means publication-operation completion,
+not production release certification. The combined local fixture now includes
+real WSS relay messages with lost acknowledgements and hidden readbacks,
+concurrent owner publication, lost SQL acknowledgement, exactly two relay
+publishes and one distinct service signature.
+
 The historical promoted `0.5.2` aggregate facade is not a direct-format adapter.
-The composed direct upload remains unselected by the runtime. Ordinary
+The composed direct publication remains unselected by the runtime. Ordinary
 post-cutover owner publication must use its own
 approved actor composition, rather than inherit an expired certification receipt.
-Direct owner relay/service attestation operation composition, relay observation
-and production certification remain open. No
+Production actor/provider-suite wiring and fresh live certification remain open. No
 handwritten NIP-5D manifests, hash reinterpretation, signer bypass or fabricated
 completion evidence are permitted. Production client presentation and negotiated
 ContextVM/MCP/SDK/catalog wiring also remain open. Live effects require the exact

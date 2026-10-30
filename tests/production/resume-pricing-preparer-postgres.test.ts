@@ -55,8 +55,12 @@ import { readVerifiedDirectWorkerArchive } from "../../src/production/direct-art
 import { ProductionOwnedDirectArtifacts } from "../../src/production/owned-direct-artifacts";
 import { ProductionDirectArtifactDelivery } from "../../src/production/direct-artifact-delivery";
 import { createDirectArtifactReadRequest, verifyDirectArtifactDelivery } from "../../src/publication/direct-delivery";
-import { finalizeEvent, getPublicKey, verifyEvent } from "nostr-tools/pure";
+import { finalizeEvent, getPublicKey, verifyEvent, type Event } from "nostr-tools/pure";
 import { proveDirectPreviewBrowser } from "../fixtures/direct-preview-browser";
+import { matchFilters } from "nostr-tools/filter";
+import { DirectCvmBuildAttestationSchema } from "../../src/publication/direct-attestation";
+import { ProductionDirectCertificationRelays } from "../../src/production/direct-publication-relays";
+import { ProductionBuildAttestationSigner } from "../../src/production/attestation-signer";
 import { ProductionDirectCertificationUpload } from "../../src/production/direct-publication-upload";
 import { ProductionDirectPublicationIntents } from "../../src/production/direct-publication-intents";
 import { openDirectNip46Fixture } from "../fixtures/direct-nip46-bunker";
@@ -123,14 +127,17 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
   const name = `cvm-resume-preparer-${crypto.randomUUID().replaceAll("-", "")}`;
   let admin: Pool | undefined, runtime: Pool | undefined;
   let localWorker: Awaited<ReturnType<typeof openLocalProductionWorker>> | undefined;
-  let closeDirectSigner = async () => {}, closeDirectBunker = () => {}, closeUploadServer = () => {};
-  let publicationServer = "https://publication.example", uploadPuts = 0, uploadGets = 0;
+  let closeDirectSigner = async () => {}, closeDirectBunker = () => {}, closeUploadServer = () => {}, closeAttestationSigner = () => {};
+  let publicationServer = "https://publication.example", publicationRelay = "wss://relay.example", uploadPuts = 0, uploadGets = 0;
+  const publishedRelayEvents = new Map<string, Event>(), relayPublishes: string[] = [];
+  let hideOwnerObservation = false, hideAttestationObservation = false;
   const uploadedBlobs = new Map<string, Uint8Array>();
   try {
     if (directWorker) {
       const cert = process.env.NAPPLET_PUBLICATION_TEST_TLS_CERT, key = process.env.NAPPLET_PUBLICATION_TEST_TLS_KEY;
       if (!cert || !key) throw new Error("RUN_BUN_SCRIPTS_TEST_DIRECT_PUBLICATION_FOR_LOCAL_TLS");
-      const uploadServer = Bun.serve({ hostname: "127.0.0.1", port: 0, tls: { cert: Bun.file(cert), key: Bun.file(key) }, async fetch(request) {
+      const uploadServer = Bun.serve({ hostname: "127.0.0.1", port: 0, tls: { cert: Bun.file(cert), key: Bun.file(key) }, async fetch(request, server) {
+        if (server.upgrade(request)) return undefined;
         const path = new URL(request.url).pathname;
         if (request.method === "PUT" && path === "/upload") {
           uploadPuts++;
@@ -148,8 +155,21 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         uploadGets++;
         const bytes = uploadedBlobs.get(path.slice(1));
         return bytes ? new Response(new Uint8Array(bytes)) : new Response(null, { status: 404 });
-      } });
-      publicationServer = uploadServer.url.origin; closeUploadServer = () => { uploadServer.stop(true); };
+      }, websocket: { message(socket, bytes) {
+        const wire: unknown = JSON.parse(String(bytes));
+        if (!Array.isArray(wire)) throw new Error("FIXTURE_RELAY_WIRE_INVALID");
+        if (wire[0] === "EVENT") {
+          const event = SignedOwnerManifestEventSchema.extend({ kind: z.union([z.literal(35129), z.literal(1)]) }).parse(wire[1]);
+          expect(verifyEvent(event)).toBeTrue(); publishedRelayEvents.set(event.id, event); relayPublishes.push(event.id);
+          socket.close(1011, "fixture lost relay acknowledgement");
+        } else if (wire[0] === "REQ") {
+          const filters = z.array(z.object({ ids: z.array(z.string()).optional(), authors: z.array(z.string()).optional(), limit: z.number().optional() }).strict()).parse(wire.slice(2));
+          for (const event of publishedRelayEvents.values()) if (!(hideOwnerObservation && event.kind === 35129) && !(hideAttestationObservation && event.kind === 1)
+            && matchFilters(filters, event)) socket.send(JSON.stringify(["EVENT", wire[1], event]));
+          socket.send(JSON.stringify(["EOSE", wire[1]]));
+        }
+      } } });
+      publicationServer = uploadServer.url.origin; publicationRelay = publicationServer.replace(/^https:/u, "wss:"); closeUploadServer = () => { uploadServer.stop(true); };
     }
     await docker(["run", "--detach", "--rm", "--name", name, "--publish", "127.0.0.1::5432", "-e", "POSTGRES_HOST_AUTH_METHOD=trust", "postgres:17-alpine"]);
     const port = (await docker(["port", name, "5432/tcp"])).match(/127\.0\.0\.1:(\d+)/u)?.[1];
@@ -1225,7 +1245,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         } };
         const publicationInput = { artifacts: new ProductionOwnedDirectArtifacts(readerInput),
           journal: new PostgresOperationJournal(publicationPool, { namespace: publicationNamespace, scopeSha256: "5".repeat(64) }),
-          publication: { server: publicationServer }, relays: ["wss://relay.example"], now: () => publicationNow };
+          publication: { server: publicationServer }, relays: [publicationRelay], now: () => publicationNow };
         const publications = () => new ProductionDirectPublicationIntents(publicationInput);
         const publicArtifact = { principal, sessionId: workspaceClaim.sessionId, artifactId: coreTerminal.artifactId };
         const review = await publications().review(publicArtifact);
@@ -1253,9 +1273,9 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         closeDirectBunker = bunker.close;
         const signingRequest = await createAuthorizationRequest({ candidateSha256: "a".repeat(64), topologySha256: "b".repeat(64), effectPlanSha256: "c".repeat(64),
           controllerStateSha256: "d".repeat(64), providerCapabilitiesSha256: "e".repeat(64),
-          orderedEffects: [{ id: "direct-owner-signing", provider: "signer", operation: "verify_integration", estimatedCostMicros: 1 }, { id: "sealed-upload", provider: "upload", operation: "verify_integration", estimatedCostMicros: 1 }],
-          providerScopes: [{ provider: "signer", accountScopeSha256: "f".repeat(64), projectScopeSha256: "0".repeat(64) }, { provider: "upload", accountScopeSha256: "f".repeat(64), projectScopeSha256: "0".repeat(64) }],
-          estimate: { currency: "USD", maximumMicros: 2, sourceId: "local-signing-fixture", observedAtMs: publicationNow - 1, freshUntilMs: publicationNow + 20_000 },
+          orderedEffects: [{ id: "direct-owner-signing", provider: "signer", operation: "verify_integration", estimatedCostMicros: 1 }, { id: "sealed-upload", provider: "upload", operation: "verify_integration", estimatedCostMicros: 1 }, { id: "owner-relay", provider: "owner_relay", operation: "verify_integration", estimatedCostMicros: 1 }, { id: "attestation-relay", provider: "attestation_relay", operation: "verify_integration", estimatedCostMicros: 1 }],
+          providerScopes: [{ provider: "signer", accountScopeSha256: "f".repeat(64), projectScopeSha256: "0".repeat(64) }, { provider: "upload", accountScopeSha256: "f".repeat(64), projectScopeSha256: "0".repeat(64) }, { provider: "owner_relay", accountScopeSha256: "f".repeat(64), projectScopeSha256: "0".repeat(64) }, { provider: "attestation_relay", accountScopeSha256: "f".repeat(64), projectScopeSha256: "0".repeat(64) }],
+          estimate: { currency: "USD", maximumMicros: 4, sourceId: "local-signing-fixture", observedAtMs: publicationNow - 1, freshUntilMs: publicationNow + 20_000 },
           maximumRunDurationMs: 1000, cleanupByMs: publicationNow + 9000, evidenceRetentionDays: 30, artifactRetentionDays: 30,
           gcpEffects: { projectBootstrap: false, billing: false, apiEnablement: ["storage.googleapis.com"] }, expiresAtMs: publicationNow + 10_000 });
         const signingReceipt = await createAuthorizationReceipt(signingRequest);
@@ -1355,6 +1375,71 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         const renewedReceipt = await createAuthorizationReceipt(renewedRequest);
         await expect(new ProductionDirectCertificationUpload({ ...uploadInput, authorization: { request: renewedRequest, receipt: renewedReceipt } }).upload()).rejects.toThrow("ORIGINAL_MISMATCH");
         expect(uploadPuts).toBe(1);
+        let directServiceSigns = 0;
+        class MeasuredDirectSigner extends ProductionBuildAttestationSigner {
+          override async signDirectBuild(value: unknown) { directServiceSigns++; return super.signDirectBuild(value); }
+        }
+        const directServiceSigner = new MeasuredDirectSigner(new Uint8Array(32).fill(23)); closeAttestationSigner = () => directServiceSigner.close();
+        let loseRelayCommit = true;
+        const relayNamespace = "direct-relay-composition";
+        const relayPool: PostgresSqlPool = { async connect() { const client = await pool.connect(); let inserted = false;
+          return { async query<Row extends Record<string, unknown>>(sql: string, parameters?: readonly unknown[]) {
+            const result = await client.query<Row>(sql, parameters);
+            if (sql.startsWith("INSERT INTO production_real.release_operation_journal") && parameters?.[0] === relayNamespace) inserted = true;
+            if (sql === "COMMIT" && inserted && loseRelayCommit) { loseRelayCommit = false; throw new Error("DIRECT_RELAY_COMMIT_ACK_LOST"); }
+            return result;
+          }, release() { client.release(); } };
+        } };
+        const relayInput = { intents: publications(), upload: new ProductionDirectCertificationUpload(uploadInput), owner,
+          binding: { candidateSha256: signingRequest.candidateSha256, topologySha256: signingRequest.topologySha256, effectPlanSha256: signingRequest.effectPlanSha256,
+            ownerAccountScopeSha256: "f".repeat(64), ownerProjectScopeSha256: "0".repeat(64), attestationAccountScopeSha256: "f".repeat(64), attestationProjectScopeSha256: "0".repeat(64) },
+          signer: directServiceSigner, authorization: { request: signingRequest, receipt: signingReceipt },
+          journal: new PostgresOperationJournal(relayPool, { namespace: relayNamespace, scopeSha256: "2".repeat(64) }), now: () => publicationNow, timeoutMs: 1000 };
+        expect(await new ProductionDirectCertificationRelays(relayInput).reconcileOwner()).toMatchObject({ state: "unknown" });
+        await expect(new ProductionDirectCertificationRelays(relayInput).publishAttestation()).rejects.toThrow("OWNER_OBSERVATION_REQUIRED");
+        expect(directServiceSigns).toBe(0); expect(relayPublishes).toHaveLength(0);
+        await expect(new ProductionDirectCertificationRelays({ ...relayInput, intents: changedTargets }).publishOwner()).rejects.toThrow("INTENT_STALE");
+        await expect(new ProductionDirectCertificationRelays({ ...relayInput, owner: foreignOwner }).publishOwner()).rejects.toThrow();
+        expect(await new ProductionDirectCertificationRelays(relayInput).reconcile()).toMatchObject({ state: "partial", stage: "owner" });
+        hideOwnerObservation = true;
+        await Promise.allSettled([new ProductionDirectCertificationRelays(relayInput).publishOwner(), new ProductionDirectCertificationRelays(relayInput).publishOwner()]);
+        expect(loseRelayCommit).toBeFalse(); expect(relayPublishes).toEqual([ownerEvent.id]);
+        expect(await new ProductionDirectCertificationRelays(relayInput).publishOwner()).toMatchObject({ state: "unknown", eventId: ownerEvent.id });
+        await expect(new ProductionDirectCertificationRelays(relayInput).publishAttestation()).rejects.toThrow("OWNER_OBSERVATION_REQUIRED");
+        expect(directServiceSigns).toBe(0); expect(relayPublishes).toHaveLength(1);
+        hideOwnerObservation = false;
+        expect(await new ProductionDirectCertificationRelays(relayInput).reconcileOwner()).toMatchObject({ state: "complete", eventId: ownerEvent.id });
+        hideAttestationObservation = true;
+        const attestationPublished = await new ProductionDirectCertificationRelays(relayInput).publishAttestation();
+        expect(attestationPublished).toMatchObject({ state: "unknown" }); expect(directServiceSigns).toBe(1);
+        expect(relayPublishes).toHaveLength(2);
+        expect(await new ProductionDirectCertificationRelays(relayInput).publishAttestation()).toMatchObject({ state: "unknown", eventId: attestationPublished.eventId });
+        expect(directServiceSigns).toBe(1); expect(relayPublishes).toHaveLength(2);
+        expect(await new ProductionDirectCertificationRelays(relayInput).reconcile()).toMatchObject({ state: "partial", stage: "attestation" });
+        const attestationEvent = publishedRelayEvents.get(attestationPublished.eventId!);
+        if (!attestationEvent) throw new Error("DIRECT_ATTESTATION_NOT_RETAINED");
+        expect(verifyEvent(attestationEvent)).toBeTrue(); expect(attestationEvent.pubkey).toBe(directServiceSigner.publicKey);
+        expect(attestationEvent.pubkey).not.toBe(ownerEvent.pubkey);
+        const directAttestation = DirectCvmBuildAttestationSchema.parse(JSON.parse(attestationEvent.content));
+        expect(directAttestation.ownerEventId).toBe(ownerEvent.id); expect(directAttestation.artifact.archiveSha256).toBe(review.artifact.archiveSha256);
+        expect(directAttestation.artifact.artifactHash).toBe(review.artifact.artifactHash);
+        expect(attestationEvent.content).not.toContain("aggregate");
+        expect(attestationEvent.tags).toContainEqual(["x", review.artifact.artifactHash]);
+        hideAttestationObservation = false;
+        expect(await new ProductionDirectCertificationRelays(relayInput).reconcileAttestation()).toMatchObject({ state: "complete", eventId: attestationEvent.id });
+        await expect(new ProductionDirectCertificationRelays({ ...relayInput, authorization: { request: renewedRequest, receipt: renewedReceipt } }).publishOwner()).rejects.toThrow("BINDING_REQUIRED");
+        expect(relayPublishes).toHaveLength(2);
+        expect(await new ProductionDirectCertificationRelays(relayInput).publish()).toMatchObject({ state: "complete", artifactHash: review.artifact.artifactHash,
+          archiveSha256: review.artifact.archiveSha256, ownerEventId: ownerEvent.id, attestationEventId: attestationEvent.id, locationReference: `${publicationServer}/${review.artifact.artifactHash}` });
+        expect(directServiceSigns).toBe(1); expect(relayPublishes).toHaveLength(2); expect(uploadPuts).toBe(1);
+        hideOwnerObservation = true;
+        expect(await new ProductionDirectCertificationRelays(relayInput).reconcile()).toMatchObject({ state: "partial", stage: "owner" });
+        hideOwnerObservation = false;
+        const retainedBlob = uploadedBlobs.get(review.artifact.artifactHash);
+        if (!retainedBlob) throw new Error("DIRECT_UPLOAD_BLOB_NOT_RETAINED");
+        uploadedBlobs.delete(review.artifact.artifactHash);
+        expect(await new ProductionDirectCertificationRelays(relayInput).reconcile()).toMatchObject({ state: "partial", stage: "upload" });
+        uploadedBlobs.set(review.artifact.artifactHash, retainedBlob);
         // Expiry/stale authority after durable dispatch fencing must block
         // the actual relay publish and leave permanent query-only recovery.
         let guardChecks = 0;
@@ -1392,6 +1477,14 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         expect(await new ProductionDirectCertificationUpload({ ...uploadInput, intents: changedTargets }).reconcile()).toMatchObject({ state: "complete" });
         await expect(new ProductionDirectCertificationUpload(uploadInput).upload()).rejects.toThrow();
         expect(uploadPuts).toBe(1);
+        directServiceSigner.close();
+        const historicalRelays = new ProductionDirectCertificationRelays({ ...relayInput, intents: changedTargets });
+        expect(await historicalRelays.reconcile()).toMatchObject({ state: "complete", ownerEventId: ownerEvent.id, attestationEventId: attestationEvent.id });
+        await expect(historicalRelays.publish()).rejects.toThrow();
+        expect(await historicalRelays.reconcileOwner()).toMatchObject({ state: "complete", eventId: ownerEvent.id });
+        expect(await historicalRelays.reconcileAttestation()).toMatchObject({ state: "complete", eventId: attestationEvent.id });
+        expect(await historicalRelays.publishAttestation()).toMatchObject({ state: "complete", eventId: attestationEvent.id });
+        expect(directServiceSigns).toBe(1); expect(relayPublishes).toHaveLength(2);
         const signingRequestsBeforeHistory = bunker.requests.length;
         pendingRemote = await openDirectSigner(changedTargets, pendingUploadOwner);
         const pendingUploadEvent = z.object({ event: DirectUploadAuthorizationEventSchema }).passthrough().parse(await pendingRemote.signUploadAuthorization()).event;
@@ -1412,10 +1505,10 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         expect((await publications().readAcceptedUploadAuthorization(owner))?.event.id).toBe(uploadEvent.id);
         await expect(publications().prepareUploadAuthorization({ principal, idempotencyKey: "direct-publication:unsigned" })).rejects.toThrow("INTENT_EXPIRED");
         expect((await admin.query("SELECT count(*)::int AS count FROM production_real.release_operation_journal WHERE namespace=$1", [publicationNamespace])).rows[0].count).toBe(8);
-        console.log(JSON.stringify({ localDirectPublication: true, intentId: publicationIntent.intentId, ownerEventId: ownerEvent.id, uploadPuts, uploadContextCommitRecovered: !loseUploadContextCommit, uploadedExactArtifact: true, lostCommitRecovered: !losePublicationCommit, releaseEvidence: false }));
+        console.log(JSON.stringify({ localDirectPublication: true, intentId: publicationIntent.intentId, ownerEventId: ownerEvent.id, uploadPuts, uploadContextCommitRecovered: !loseUploadContextCommit, uploadedExactArtifact: true, ownerRelayEventId: ownerEvent.id, attestationRelayEventId: attestationEvent.id, relayPublishes: relayPublishes.length, directServiceSigns, lostCommitRecovered: !losePublicationCommit, releaseEvidence: false }));
         expect(modelPosts).toBe(3); expect(nativeRestores).toBe(1); expect(reserves).toBe(2); expect(nativeDeletes).toBe(1);
         expect(cleanupGets).toBe(getsAfterCleanupProof); expect(allocations).toBe(allocationsBeforeReads); expect(deletions).toBe(deletionsBeforeReads);
       } finally { await http.stop(true); }
     }
-  } finally { try { await closeDirectSigner(); closeDirectBunker(); closeUploadServer(); await localWorker?.close(); } finally { await runtime?.end(); await admin?.end(); await docker(["rm", "--force", name]).catch(() => undefined); } }
+  } finally { try { await closeDirectSigner(); closeDirectBunker(); closeUploadServer(); closeAttestationSigner(); await localWorker?.close(); } finally { await runtime?.end(); await admin?.end(); await docker(["rm", "--force", name]).catch(() => undefined); } }
 }, 120_000);

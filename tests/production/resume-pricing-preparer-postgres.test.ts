@@ -51,6 +51,7 @@ import { openLocalProductionWorker } from "../fixtures/local-production-worker";
 import { ProductionWorkerJobRouter } from "../../src/production/worker-job-router";
 import { verifyProductionConformanceReceipt } from "../../src/worker-adapters/conformance-receipt";
 import { ProductionDirectManifestReceiptSchema } from "../../src/worker-adapters/direct-manifest-receipt";
+import { readVerifiedDirectWorkerArchive } from "../../src/production/direct-artifact-reader";
 
 const integration = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
 const hash = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex");
@@ -973,6 +974,11 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       if (directWorker) {
         const sealed = [...values.entries()].find(([key, value]) => key.startsWith("artifacts/") && value.checksum === coreTerminal.artifactId?.slice("artifact:".length))?.[1];
         if (!sealed) throw new Error("DIRECT_SEALED_ARTIFACT_REQUIRED");
+        const reread = await readVerifiedDirectWorkerArchive(sealed.bytes, { checksum: coreTerminal.artifactId.slice("artifact:".length),
+          build: { accountId, ownerId: principal.pubkey, sessionId: workspaceClaim.sessionId, actionId: workspaceClaim.actionId, expectedVersion: 1,
+            proposalSha256: newProposalSha, toolchainSha256: workspaceToolchain, publication: { server: "https://publication.example" } }, purpose: workspaceCommand.revision });
+        expect(reread.declaration).toEqual({ required: ["storage"], optional: [] });
+        expect(reread).not.toHaveProperty("aggregateSha256");
         const archive = z.object({ version: z.literal(3), artifactContract: z.literal("nip5d-direct-v1"), artifactHash: z.string().regex(/^[a-f0-9]{64}$/u),
           build: z.object({ accountId: z.literal(accountId), ownerId: z.literal(principal.pubkey), actionId: z.literal(workspaceClaim.actionId), expectedVersion: z.literal(1), toolchainSha256: z.literal(workspaceToolchain) }).passthrough(),
           files: z.array(z.object({ path: z.literal("index.html"), sha256: z.string(), bytesBase64: z.string() }).strict()).length(1),

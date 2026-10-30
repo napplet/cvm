@@ -186,3 +186,20 @@ For the corresponding direct-profile local integration, also set
 direct-profile image ID. This requires the structured wire check to pass and
 verifies the actual HTML hash, capability tags and bounded manifest purpose.
 Unsigned manifest and unmeasured lifecycle checks remain separate live gates.
+
+The private `readVerifiedDirectWorkerArchive` validator accepts existing sealed
+version-3 bytes only with an independently obtained object checksum, full
+original build binding, and original bounded purpose. It checks account, owner,
+session, action, version, proposal, toolchain and publication server, then reruns
+the direct verifier against the stored HTML and original receipt bytes in a
+fresh temporary directory. Only the literal `index.html` is materialized; no
+stored code executes, and the directory is removed on success or refusal.
+The CLI and plugin purposes must both match the original purpose. The real
+direct integration also rereads the persisted archive through this validator.
+
+This validator supplies no ownership lookup or publication authority. A future
+owner-scoped data-plane reader must derive its binding from authenticated
+coordinator records, rather than caller fields or the archive itself. Current
+preview/publication contracts still require legacy aggregate identities; they
+cannot consume this direct identity until an explicit versioned contract is
+implemented. Existing version-1/2 bytes and public strict validators are unchanged.

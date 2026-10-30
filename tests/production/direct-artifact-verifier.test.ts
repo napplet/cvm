@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { ProductionDirectArtifactVerifier } from "../../src/production/direct-artifact-verifier";
 import { verifyProductionConformanceReceipt } from "../../src/worker-adapters/conformance-receipt";
 import { sealDirectProductionWorkerArtifact } from "../../src/production/sealed-worker-artifact";
+import { readVerifiedDirectWorkerArchive } from "../../src/production/direct-artifact-reader";
 import cli from "../fixtures/direct-artifact/cli-current.json";
 import sidecar from "../fixtures/direct-artifact/manifest-current.json";
 import conformance from "../fixtures/direct-artifact/conformance-current.json";
@@ -36,6 +37,48 @@ async function facts() {
 }
 
 describe("direct artifact contract", () => {
+  test("revalidates sealed bytes against independently supplied original build and purpose", async () => {
+    const input = await facts();
+    const verified = await new ProductionDirectArtifactVerifier().verify(input);
+    const bytes = await sealDirectProductionWorkerArtifact(verified);
+    const { distRoot: _root, artifactContract: _contract, capabilityReceipt: _capability, conformanceReceipt: _conformance, manifestReceipt: _manifest, commandEvidence: _commands, ...build } = input;
+    const expected = { checksum: hash(new TextDecoder().decode(bytes)), build, purpose: verified.manifest.content };
+    const read = await readVerifiedDirectWorkerArchive(bytes, expected);
+    expect(read.artifactHash).toBe(verified.artifactHash);
+    expect(read.verificationEvidenceSha256).toBe(verified.verificationEvidenceSha256);
+    expect(read.declaration).toEqual(verified.declaration);
+    expect(read).not.toHaveProperty("aggregateSha256");
+    expect(read).not.toHaveProperty("distRoot");
+    for (const changed of [{ checksum: "0".repeat(64) }, { purpose: "different purpose" }]) await expect(readVerifiedDirectWorkerArchive(bytes, { ...expected, ...changed })).rejects.toThrow();
+    for (const field of ["accountId", "ownerId", "sessionId", "actionId", "expectedVersion", "proposalSha256", "toolchainSha256", "publication"] as const) {
+      const changed = { ...build, [field]: field === "expectedVersion" ? 3 : field === "publication" ? { server: "https://other.example" } : field.endsWith("Sha256") || field === "ownerId" ? "c".repeat(64) : "different" };
+      await expect(readVerifiedDirectWorkerArchive(bytes, { ...expected, build: changed })).rejects.toThrow();
+    }
+    const original = JSON.parse(new TextDecoder().decode(bytes));
+    const mutations: Array<(archive: typeof original) => void> = [
+      value => { value.version = 2; },
+      value => { value.aggregateSha256 = value.artifactHash; },
+      value => { value.artifactHash = "0".repeat(64); },
+      value => { value.sealedObjectSha256 = "0".repeat(64); },
+      value => { value.verificationEvidenceSha256 = "0".repeat(64); },
+      value => { value.files[0].path = "../index.html"; },
+      value => { value.files[0].bytesBase64 += "\n"; },
+      value => { value.files[0].bytesBase64 = Buffer.from("<main>changed</main>").toString("base64"); },
+      value => { value.receipts.commands[0].exitCode = 1; },
+      value => { value.receipts.conformance.sha256 = "0".repeat(64); },
+    ];
+    for (const mutate of mutations) {
+      const value = structuredClone(original); mutate(value);
+      const changed = JSON.stringify(value);
+      await expect(readVerifiedDirectWorkerArchive(new TextEncoder().encode(changed), { ...expected, checksum: hash(changed) })).rejects.toThrow();
+    }
+    // A freshly sealed, internally hashed archive still cannot substitute the
+    // plugin's purpose while retaining the expected CLI purpose.
+    const changedSidecar = { ...JSON.parse(Buffer.from(input.manifestReceipt.bytesBase64, "base64").toString("utf8")), content: "substituted plugin purpose" };
+    const changedVerified = await new ProductionDirectArtifactVerifier().verify({ ...input, manifestReceipt: receipt(".nip5a-manifest.json", changedSidecar) });
+    const changedBytes = await sealDirectProductionWorkerArtifact(changedVerified);
+    await expect(readVerifiedDirectWorkerArchive(changedBytes, { ...expected, checksum: hash(new TextDecoder().decode(changedBytes)) })).rejects.toThrow("MANIFEST_RECEIPT_MISMATCH");
+  });
   test("verifies raw HTML hash and R/O declarations without inventing a legacy aggregate", async () => {
     const input = await facts(), verifier = new ProductionDirectArtifactVerifier();
     const verified = await verifier.verify(input);

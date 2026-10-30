@@ -22,7 +22,7 @@ export async function sealDirectProductionWorkerArtifact(verified: VerifiedDirec
   return new TextEncoder().encode(canonicalJson({
     version: 3, artifactContract: verified.artifactContract, artifactHash: verified.artifactHash,
     build: { accountId: verified.accountId, ownerId: verified.ownerId, sessionId: verified.sessionId, actionId: verified.actionId, expectedVersion: verified.expectedVersion, proposalSha256: verified.proposalSha256, toolchainSha256: verified.toolchainSha256, publication: verified.publication },
-    receipts: { capability: verified.capabilityReceipt, conformance: verified.conformanceReceipt, manifest: verified.manifestReceipt, commands: verified.commandEvidence },
+    receipts: { capability: verified.capabilityReceipt, conformance: verified.conformanceReceipt, manifest: verified.manifestReceipt, commands: verified.commandEvidence, ...(verified.toolchainReceipt ? { toolchain: verified.toolchainReceipt } : {}) },
     sealedObjectSha256: verified.sealedObjectSha256, verificationEvidenceSha256: verified.verificationEvidenceSha256, files,
   }));
 }

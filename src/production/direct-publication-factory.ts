@@ -10,6 +10,8 @@ import { ProductionDirectCertificationUpload } from "./direct-publication-upload
 import { ProductionDirectCertificationRelays } from "./direct-publication-relays";
 import { openProductionDirectCertificationNip46Signer } from "./direct-nip46-signer";
 import type { createMountedProductionEdgeMaterial } from "./mounted-edge-material";
+import { requireDirectToolchainReceipt } from "../worker-adapters/direct-toolchain-receipt";
+import { loadPinnedDirectCliNetworkHelpers } from "./pinned-direct-cli-network";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const Settings = z.object({ artifactContract: z.literal("nip5d-direct-v1"), candidateSha256: Digest, topologySha256: Digest,
@@ -74,6 +76,17 @@ export class ProductionDirectPublicationFactory {
       let closed = false;
       const check = () => { if (closed || this.#closed) throw new Error("DIRECT_PUBLICATION_ACTOR_CLOSED"); };
       const actor = Object.freeze({
+        source: async () => {
+          check();
+          const owned = await this.#input.artifacts.readVerified({ principal: owner.principal, sessionId: intent.review.artifact.sessionId, artifactId: intent.review.artifact.artifactId });
+          if (!owned || owned.archive.checksum !== intent.review.artifact.archiveSha256 || owned.archive.artifactHash !== intent.review.artifact.artifactHash
+            || owned.archive.build.toolchainSha256 !== intent.review.artifact.toolchainSha256 || owned.archive.verificationEvidenceSha256 !== intent.review.artifact.verificationEvidenceSha256) throw new Error("DIRECT_PUBLICATION_SOURCE_ARTIFACT_REQUIRED");
+          const toolchain = requireDirectToolchainReceipt(owned.archive.receipts.toolchain), helper = await loadPinnedDirectCliNetworkHelpers();
+          return Object.freeze({ status: "verified-source-bytes" as const, artifactContract: "nip5d-direct-v1" as const,
+            candidateSha256: request.candidateSha256, topologySha256: request.topologySha256, artifactHash: owned.archive.artifactHash,
+            archiveSha256: owned.archive.checksum, toolchainSha256: owned.archive.build.toolchainSha256,
+            toolchain, helper: helper.identity, productionPromotion: "not_asserted" as const });
+        },
         async requestOwnerSignature() { check(); return signer.signOwnerManifest(); },
         async requestUploadSignature() { check(); return signer.signUploadAuthorization(); },
         async observeOwnerSignature() { check(); return signer.observeOwnerSignature(); },

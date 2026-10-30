@@ -1,3 +1,4 @@
+import { DIRECT_CLI_BINARY_SHA256, requireDirectToolchainReceipt } from "../../src/worker-adapters/direct-toolchain-receipt";
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { Pool } from "pg";
@@ -1043,6 +1044,12 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         const reread = await readVerifiedDirectWorkerArchive(sealed.bytes, { checksum: coreTerminal.artifactId.slice("artifact:".length),
           build: { accountId, ownerId: principal.pubkey, sessionId: workspaceClaim.sessionId, actionId: workspaceClaim.actionId, expectedVersion: 1,
             proposalSha256: newProposalSha, toolchainSha256: workspaceToolchain, publication: { server: publicationServer } }, purpose: workspaceCommand.revision });
+        const measuredToolchain = requireDirectToolchainReceipt(reread.receipts.toolchain);
+        expect(measuredToolchain.cliBinarySha256).toBe(DIRECT_CLI_BINARY_SHA256[measuredToolchain.platform]);
+        expect(bytesSha(await Bun.file("toolchains/locks/capabilities-worker/package.json").bytes())).toBe(measuredToolchain.workerPackageSha256);
+        expect(bytesSha(await Bun.file("toolchains/locks/capabilities-worker/pnpm-lock.yaml").bytes())).toBe(measuredToolchain.workerLockSha256);
+        expect(bytesSha(await Bun.file("toolchains/overlays/capabilities-template/package.json").bytes())).toBe(measuredToolchain.templatePackageSha256);
+        expect(bytesSha(await Bun.file("toolchains/overlays/capabilities-template/pnpm-lock.yaml").bytes())).toBe(measuredToolchain.templateLockSha256);
         expect(reread.declaration).toEqual({ required: ["storage"], optional: [] });
         expect(reread).not.toHaveProperty("aggregateSha256");
         const archive = z.object({ version: z.literal(3), artifactContract: z.literal("nip5d-direct-v1"), artifactHash: z.string().regex(/^[a-f0-9]{64}$/u),
@@ -1058,7 +1065,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         expect(manifest.tags.filter(tag => tag[0] === "x")).toEqual([["x", archive.artifactHash]]);
         const actualConformance = verifyProductionConformanceReceipt(archive.receipts.conformance);
         expect(actualConformance.report.checks.find(check => check.id === "wire/envelope-well-formed")?.status).toBe("pass");
-        console.log(JSON.stringify({ localDirectReceipt: true, releaseEvidence: false, conformance: actualConformance.report.summary, artifactHash: archive.artifactHash }));
+        console.log(JSON.stringify({ localDirectReceipt: true, releaseEvidence: false, conformance: actualConformance.report.summary, artifactHash: archive.artifactHash, measuredToolchain }));
       }
       console.log(JSON.stringify({ localActualArtifact: true, releaseEvidence: false, image: localWorker.image,
         artifactContract: actualWorkerContract, nativeLog: localWorker.logPath, nativeStarts: 1, successfulCommands: realCommands.length, artifactId: coreTerminal.artifactId }));
@@ -1415,6 +1422,10 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         const wrongProfileFactory = new ProductionDirectPublicationFactory({ ...factoryInput, settings: { ...factoryInput.settings, toolchainSha256: "0".repeat(64) } });
         try { await expect(wrongProfileFactory.open(openCommand)).rejects.toThrow("CONFIGURED_ARTIFACT_REQUIRED"); } finally { await wrongProfileFactory.close(); }
         const factoryActor = await directFactory.open(openCommand);
+        const measuredSource = await factoryActor.source();
+        expect(measuredSource).toMatchObject({ status: "verified-source-bytes", artifactContract: "nip5d-direct-v1", candidateSha256: signingRequest.candidateSha256,
+          artifactHash: review.artifact.artifactHash, archiveSha256: review.artifact.archiveSha256, productionPromotion: "not_asserted" });
+        expect(measuredSource.toolchain.cliBinarySha256).toBe(DIRECT_CLI_BINARY_SHA256[measuredSource.toolchain.platform]);
         expect(bunker.requests).toHaveLength(requestsBeforeFactory);
         let releaseOpenings = () => {}, allKeysRequested = () => {};
         const openingGate = new Promise<void>(resolve => { releaseOpenings = resolve; });

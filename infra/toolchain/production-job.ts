@@ -16,6 +16,50 @@ const env = { PATH: "/usr/local/bin:/usr/bin:/bin", NAPPLET_CVM_POLICY_VERSION: 
 const sha = (value: string | Uint8Array) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
 const fail = (code: string): never => { throw new Error(code); };
 const canonical = (value: unknown): string => value === null || typeof value !== "object" ? JSON.stringify(value) : Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : `{${Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`).join(",")}}`;
+// Fixed immutable image paths, measured by this privileged supervisor before
+// generated commands and checked again afterward. No project-supplied receipt.
+const DIRECT_CLI_PINS: Record<string, string> = {
+  "linux-x64": "5fbc61d2a4be189094726c7b7d7f073a00c122d93cedfa3bd37b7571fb430d08",
+  "linux-arm64": "2a78a97ae95f493a0c568366ede5a53ce99808fa2fe487572952b7f4f9770a26",
+};
+const DIRECT_FILE_PINS = {
+  workerPackageSha256: "ca0d5a088c7650407306899eaaaa535b2bd872d746d7aee10be471894944abbf",
+  workerLockSha256: "f0ac025b6f79609a159702adedfbfebd8966b1c65f78cf1e0f75912ae54a567d",
+  templatePackageSha256: "81f03e8b76b15cbc025b11a67117389b579ee1ca374ddb680971f91e7293a99f",
+  templateLockSha256: "ec1eb261c06641decda0c8fbd3a96e5f121cddfcc6abdc8888f78556390e28e4",
+};
+function validateToolchainReceipt(value: unknown): void {
+  if (!value || typeof value !== "object" || Array.isArray(value)) fail("JOB_TOOLCHAIN_RECEIPT_INVALID");
+  const record: Record<string, unknown> = Object.fromEntries(Object.entries(value));
+  if (Object.keys(record).sort().join(",") !== "artifactContract,cliBinarySha256,platform,templateLockSha256,templatePackageSha256,version,workerLockSha256,workerPackageSha256"
+    || record.version !== 1 || record.artifactContract !== "nip5d-direct-v1" || typeof record.platform !== "string"
+    || !Object.hasOwn(DIRECT_CLI_PINS, record.platform) || record.cliBinarySha256 !== DIRECT_CLI_PINS[record.platform]
+    || Object.entries(DIRECT_FILE_PINS).some(([key, expected]) => record[key] !== expected)) fail("JOB_TOOLCHAIN_RECEIPT_INVALID");
+}
+async function immutableImageFileHash(path: string) {
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const before = await handle.stat();
+    if (!before.isFile() || before.size < 1 || before.size > 268_435_456) fail("JOB_TOOLCHAIN_FILE_INVALID");
+    const hasher = new Bun.CryptoHasher("sha256"), buffer = Buffer.alloc(262_144); let total = 0;
+    for (;;) {
+      const part = await handle.read(buffer, 0, buffer.length, total); if (!part.bytesRead) break;
+      total += part.bytesRead; if (total > before.size) fail("JOB_TOOLCHAIN_FILE_CHANGED");
+      hasher.update(buffer.subarray(0, part.bytesRead));
+    }
+    const after = await handle.stat();
+    if (total !== before.size || after.size !== before.size || after.ino !== before.ino || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) fail("JOB_TOOLCHAIN_FILE_CHANGED");
+    return hasher.digest("hex");
+  } finally { await handle.close(); }
+}
+async function measureDirectToolchain() {
+  const [cliBinarySha256, workerPackageSha256, workerLockSha256, templatePackageSha256, templateLockSha256] = await Promise.all([
+    "/toolchain/bin/napplet", "/toolchain/package.json", "/toolchain/pnpm-lock.yaml", "/toolchain/boilerplate-template/package.json", "/toolchain/boilerplate-template/pnpm-lock.yaml",
+  ].map(immutableImageFileHash));
+  const receipt = { version: 1, artifactContract: "nip5d-direct-v1", platform: `${process.platform}-${process.arch}`, cliBinarySha256,
+    workerPackageSha256, workerLockSha256, templatePackageSha256, templateLockSha256 };
+  validateToolchainReceipt(receipt); return receipt;
+}
 type LegacyRequest = { version: 1; actionId: string; sessionId: string; expectedVersion: number; proposalSha256: string; toolchainSha256: string; deadlineEpochMs: number; files: Array<{ path: string; content: string }>; publication?: { server: string } };
 type DirectRequest = Omit<LegacyRequest, "version" | "publication"> & { version: 2; artifactContract: "nip5d-direct-v1"; purpose: string; publication: { server: string } };
 type Request = LegacyRequest | DirectRequest;
@@ -90,12 +134,13 @@ function parseRestore(bytes: Uint8Array) {
   if (!value || Object.keys(value).sort().join(",") !== "artifact,source,toolchainSha256,version" || value.version !== 1 || !/^[a-f0-9]{64}$/u.test(value.toolchainSha256)) fail("RESTORE_INVALID");
   const source = parseRequest(value.source);
   const artifact = value.artifact;
-  const expectedArtifactKeys = artifact?.version === 3 ? "artifactContract,capabilityReceipt,commandEvidence,conformanceReceipt,files,jobId,manifestReceipt,proposalSha256,toolchainSha256,version" : artifact?.version === 2 ? "capabilityReceipt,commandEvidence,files,jobId,proposalSha256,toolchainSha256,version" : "commandEvidence,files,jobId,proposalSha256,toolchainSha256,version";
+  const expectedArtifactKeys = artifact?.version === 3 ? (artifact.toolchainReceipt === undefined ? "artifactContract,capabilityReceipt,commandEvidence,conformanceReceipt,files,jobId,manifestReceipt,proposalSha256,toolchainSha256,version" : "artifactContract,capabilityReceipt,commandEvidence,conformanceReceipt,files,jobId,manifestReceipt,proposalSha256,toolchainReceipt,toolchainSha256,version") : artifact?.version === 2 ? "capabilityReceipt,commandEvidence,files,jobId,proposalSha256,toolchainSha256,version" : "commandEvidence,files,jobId,proposalSha256,toolchainSha256,version";
   if (source.toolchainSha256 !== value.toolchainSha256 || !artifact || Object.keys(artifact).sort().join(",") !== expectedArtifactKeys || ![1, 2, 3].includes(artifact.version) || artifact.jobId !== sha(canonical(source)) || artifact.toolchainSha256 !== value.toolchainSha256 || artifact.proposalSha256 !== source.proposalSha256 || !Array.isArray(artifact.files) || artifact.files.length < 1 || artifact.files.length > 256 || !Array.isArray(artifact.commandEvidence) || artifact.commandEvidence.length !== 8) fail("RESTORE_BINDING_INVALID");
   if ((source.version === 2) !== (artifact.version === 3)) fail("RESTORE_CONTRACT_MISMATCH");
   if (artifact.version !== 1) validateCapabilityReceipt(artifact.capabilityReceipt, source);
   if (artifact.version === 3) {
     if (artifact.artifactContract !== "nip5d-direct-v1" || artifact.files.length !== 1 || artifact.files[0]?.path !== "index.html" || artifact.capabilityReceipt.state !== "present") fail("RESTORE_CONTRACT_MISMATCH");
+    if (artifact.toolchainReceipt !== undefined) validateToolchainReceipt(artifact.toolchainReceipt);
     validateDataReceipt(artifact.manifestReceipt, ".nip5a-manifest.json", 65_536);
     validateDataReceipt(artifact.conformanceReceipt, "test-results/conformance.json", 262_144);
   }
@@ -178,6 +223,7 @@ async function run(id: string, dir: string) {
   try {
     await mkdir(join(ROOT, "active")); locked = true;
     if (request.deadlineEpochMs <= Date.now() || request.deadlineEpochMs > Date.now() + 600_000) fail("JOB_DEADLINE_INVALID");
+    const toolchainReceipt = request.version === 2 ? await measureDirectToolchain() : undefined;
     await mkdir(`/workspace/jobs/${id}`, { recursive: true }); await chown(`/workspace/jobs/${id}`, 65532, 65532);
     await execute(["/toolchain/bin/napplet", "create", project, "--template", "/toolchain/boilerplate-template"], "/workspace");
     await execute(["/toolchain/bin/napplet", "init", "--force", "--root", "--source-dir", "dist", "--title", "Generated napplet", ...(request.publication ? ["--server", request.publication.server] : [])], project);
@@ -198,9 +244,10 @@ async function run(id: string, dir: string) {
       for (const name of await readdir(project)) if (!originalRoot.has(name) && /(^\.env|^\.npmrc$|^pnpm-workspace\.|\.config\.|^tsconfig\.|^napplet\.)/u.test(name)) fail("JOB_MANAGED_CONFIGURATION_CHANGED");
       await execute(argv, project);
     }
+    if (toolchainReceipt && canonical(toolchainReceipt) !== canonical(await measureDirectToolchain())) fail("JOB_TOOLCHAIN_FILE_CHANGED");
     const collected = await collect(join(project, "dist"));
     const direct = request.version === 2 ? {
-      version: 3, artifactContract: request.artifactContract,
+      version: 3, artifactContract: request.artifactContract, toolchainReceipt,
       manifestReceipt: { path: ".nip5a-manifest.json", ...await dataReceipt(project, "dist/.nip5a-manifest.json", 65_536) },
       conformanceReceipt: { path: "test-results/conformance.json", ...await dataReceipt(project, "test-results/conformance.json", 262_144) },
     } : { version: 2 };

@@ -9,6 +9,7 @@ import { verifyDirectArtifactDelivery } from "../../src/publication/direct-deliv
 import cli from "../fixtures/direct-artifact/cli-current.json";
 import sidecar from "../fixtures/direct-artifact/manifest-current.json";
 import conformance from "../fixtures/direct-artifact/conformance-current.json";
+import { DIRECT_CLI_BINARY_SHA256, ProductionDirectToolchainReceiptSchema, requireDirectToolchainReceipt } from "../../src/worker-adapters/direct-toolchain-receipt";
 
 const directories: string[] = [];
 const hash = (value: string) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
@@ -38,6 +39,31 @@ async function facts() {
 }
 
 describe("direct artifact contract", () => {
+  test("measured toolchain receipt binds exact binary/platform and locks while retaining old archives", async () => {
+    const input = await facts(), verifier = new ProductionDirectArtifactVerifier();
+    const old = await verifier.verify(input), oldBytes = await sealDirectProductionWorkerArtifact(old);
+    const toolchainReceipt = ProductionDirectToolchainReceiptSchema.parse({ version: 1, artifactContract: "nip5d-direct-v1", platform: "linux-arm64", cliBinarySha256: DIRECT_CLI_BINARY_SHA256["linux-arm64"],
+      workerPackageSha256: "ca0d5a088c7650407306899eaaaa535b2bd872d746d7aee10be471894944abbf", workerLockSha256: "f0ac025b6f79609a159702adedfbfebd8966b1c65f78cf1e0f75912ae54a567d",
+      templatePackageSha256: "81f03e8b76b15cbc025b11a67117389b579ee1ca374ddb680971f91e7293a99f", templateLockSha256: "ec1eb261c06641decda0c8fbd3a96e5f121cddfcc6abdc8888f78556390e28e4" });
+    const verified = await verifier.verify({ ...input, toolchainReceipt });
+    expect(verified.artifactHash).toBe(old.artifactHash);
+    expect(verified.verificationEvidenceSha256).not.toBe(old.verificationEvidenceSha256);
+    const { distRoot: _root, artifactContract: _contract, capabilityReceipt: _capability, conformanceReceipt: _conformance, manifestReceipt: _manifest, commandEvidence: _commands, ...build } = input;
+    const bytes = await sealDirectProductionWorkerArtifact(verified), checksum = hash(new TextDecoder().decode(bytes));
+    const restored = await readVerifiedDirectWorkerArchive(bytes, { checksum, build, purpose: verified.manifest.content });
+    expect(requireDirectToolchainReceipt(restored.receipts.toolchain)).toEqual(toolchainReceipt);
+    const historic = await readVerifiedDirectWorkerArchive(oldBytes, { checksum: hash(new TextDecoder().decode(oldBytes)), build, purpose: old.manifest.content });
+    expect(historic.receipts.toolchain).toBeUndefined();
+    expect(() => requireDirectToolchainReceipt(historic.receipts.toolchain)).toThrow("MEASURED_RECEIPT_REQUIRED");
+    for (const changed of [{ ...toolchainReceipt, platform: "linux-x64" }, { ...toolchainReceipt, cliBinarySha256: "0".repeat(64) },
+      { ...toolchainReceipt, workerLockSha256: "0".repeat(64) }, { ...toolchainReceipt, selected: true }]) {
+      await expect(verifier.verify({ ...input, toolchainReceipt: changed })).rejects.toThrow();
+    }
+    const tampered = JSON.parse(new TextDecoder().decode(bytes));
+    delete tampered.receipts.toolchain;
+    const changed = JSON.stringify(tampered);
+    await expect(readVerifiedDirectWorkerArchive(new TextEncoder().encode(changed), { checksum: hash(changed), build, purpose: verified.manifest.content })).rejects.toThrow("EVIDENCE_MISMATCH");
+  });
   test("delivery clients check exact expected identity, HTML bytes and manifest capability semantics", async () => {
     const input = await facts(), verified = await new ProductionDirectArtifactVerifier().verify(input);
     const sealed = await sealDirectProductionWorkerArtifact(verified), checksum = hash(new TextDecoder().decode(sealed));

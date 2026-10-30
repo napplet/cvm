@@ -249,6 +249,24 @@ publishes and one distinct service signature.
 
 ### Mounted direct certification factory
 
+New direct worker jobs retain a measured toolchain receipt. The privileged
+supervisor hashes fixed immutable CLI, worker package/lock and template
+package/lock paths before generated commands, checks them against the pinned
+profile, then measures them again to reject drift. The platform-specific CLI
+hash identifies the separately reproduced executable; a version string or
+recipe declaration cannot substitute for these bytes. File reads are bounded,
+refuse symlinks and detect size/inode/time changes during hashing.
+
+The optional receipt propagates through the strict direct transport bundle,
+sealed archive and verification-evidence digest. Historical direct v3 artifacts
+without it remain readable and restorable; a present but invalid receipt is
+rejected. Removing it from a newly sealed archive invalidates the retained
+verification digest. `requireDirectToolchainReceipt` explicitly refuses absence
+for source eligibility. The factory actor's `source()` rereads the owned verified
+archive, requires this measured receipt and validates the actual helper bytes.
+It returns `verified-source-bytes` with `productionPromotion: not_asserted`;
+this observation does not satisfy live certification or select a release.
+
 For an explicitly selected `nip5d-direct-v1` worker profile, the actual mounted
 session constructor installs `ProductionDirectPublicationFactory` as the
 optional concrete `clients.directPublication` capability. It uses the existing

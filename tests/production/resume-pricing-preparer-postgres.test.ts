@@ -58,6 +58,12 @@ import { createDirectArtifactReadRequest, verifyDirectArtifactDelivery } from ".
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { proveDirectPreviewBrowser } from "../fixtures/direct-preview-browser";
 import { ProductionDirectPublicationIntents } from "../../src/production/direct-publication-intents";
+import { openDirectNip46Fixture } from "../fixtures/direct-nip46-bunker";
+import { openProductionNip46Signer } from "../../src/production/nip46-signer";
+import { openProductionDirectCertificationNip46Signer } from "../../src/production/direct-nip46-signer";
+import { createAuthorizationRequest, createAuthorizationReceipt } from "../../src/release/authorization";
+import { SignedOwnerManifestEventSchema } from "../../src/publication/contracts";
+import { DirectUploadAuthorizationEventSchema } from "../../src/publication/direct-upload-authorization";
 import { signDirectUploadAuthorization } from "../../src/publication/direct-upload-authorization";
 import { signDirectPublicationIntent } from "../../src/publication/direct-publication";
 
@@ -116,6 +122,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
   const name = `cvm-resume-preparer-${crypto.randomUUID().replaceAll("-", "")}`;
   let admin: Pool | undefined, runtime: Pool | undefined;
   let localWorker: Awaited<ReturnType<typeof openLocalProductionWorker>> | undefined;
+  let closeDirectSigner = async () => {}, closeDirectBunker = () => {};
   try {
     await docker(["run", "--detach", "--rm", "--name", name, "--publish", "127.0.0.1::5432", "-e", "POSTGRES_HOST_AUTH_METHOD=trust", "postgres:17-alpine"]);
     const port = (await docker(["port", name, "5432/tcp"])).match(/127\.0\.0\.1:(\d+)/u)?.[1];
@@ -1215,10 +1222,35 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         const foreignOwner = { principal: { pubkey: getPublicKey(new Uint8Array(32).fill(12)) }, idempotencyKey: publishCommand.idempotencyKey };
         expect(await publications().readOriginal(foreignOwner)).toBeUndefined();
         await expect(publications().review({ ...publicArtifact, principal: foreignOwner.principal })).rejects.toThrow("NOT_FOUND_OR_DENIED");
+        const bunker = openDirectNip46Fixture(directReadKey, () => publicationNow);
+        closeDirectBunker = bunker.close;
+        const signingRequest = await createAuthorizationRequest({ candidateSha256: "a".repeat(64), topologySha256: "b".repeat(64), effectPlanSha256: "c".repeat(64),
+          controllerStateSha256: "d".repeat(64), providerCapabilitiesSha256: "e".repeat(64),
+          orderedEffects: [{ id: "direct-owner-signing", provider: "signer", operation: "verify_integration", estimatedCostMicros: 1 }],
+          providerScopes: [{ provider: "signer", accountScopeSha256: "f".repeat(64), projectScopeSha256: "0".repeat(64) }],
+          estimate: { currency: "USD", maximumMicros: 1, sourceId: "local-signing-fixture", observedAtMs: publicationNow - 1, freshUntilMs: publicationNow + 20_000 },
+          maximumRunDurationMs: 1000, cleanupByMs: publicationNow + 9000, evidenceRetentionDays: 30, artifactRetentionDays: 30,
+          gcpEffects: { projectBootstrap: false, billing: false, apiEnablement: ["storage.googleapis.com"] }, expiresAtMs: publicationNow + 10_000 });
+        const signingReceipt = await createAuthorizationReceipt(signingRequest);
+        const openDirectSigner = (intents = publications(), signingOwner = owner) => openProductionDirectCertificationNip46Signer({ intents, owner: signingOwner,
+          bunkerUri: bunker.bunkerUri, sessionKeyReference: bunker.sessionKeyReference, sessionKeyBroker: bunker.sessionKeyBroker,
+          journal: new PostgresOperationJournal(pool, { namespace: "direct-nip46-fixture", scopeSha256: "6".repeat(64) }),
+          authorization: { request: signingRequest, receipt: signingReceipt, authorizationRequestSha256: signingRequest.authorizationRequestSha256, authorizationReceiptSha256: signingReceipt.authorizationReceiptSha256 },
+          timeoutMs: 1000, now: () => publicationNow });
+        const staleSigner = await openDirectSigner(changedTargets);
+        try { await expect(staleSigner.signOwnerManifest()).rejects.toThrow("INTENT_STALE"); } finally { await staleSigner.close(); }
+        expect(bunker.requests).toHaveLength(0);
+        let remoteSigner = await openDirectSigner(); closeDirectSigner = () => remoteSigner.close();
+        bunker.hideSigningResponses(true);
+        await expect(remoteSigner.signOwnerManifest()).rejects.toThrow("SIGNING_OUTCOME_UNKNOWN");
+        expect(bunker.requests.map(value => value.method)).toEqual(["connect", "get_public_key", "sign_event"]);
+        await remoteSigner.close(); remoteSigner = await openDirectSigner();
+        bunker.hideSigningResponses(false);
         let manifestSigns = 0;
         const ownerEvent = await signDirectPublicationIntent({ intent: publicationIntent,
           expected: { intentId: publicationIntent.intentId, reviewSha256: review.reviewSha256, ownerPubkey: principal.pubkey },
-          sign(template) { manifestSigns++; return finalizeEvent(template, directReadKey); } });
+          async sign(template) { manifestSigns++; expect(template).toEqual(publicationIntent.review.ownerManifestTemplate);
+            return z.object({ event: SignedOwnerManifestEventSchema }).passthrough().parse(await remoteSigner.signOwnerManifest()).event; } });
         expect(manifestSigns).toBe(1); expect(ownerEvent.pubkey).toBe(principal.pubkey);
         await expect(changedTargets.acceptOwnerEvent({ ...owner, event: ownerEvent })).rejects.toThrow("INTENT_STALE");
         losePublicationCommit = true;
@@ -1246,8 +1278,10 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
           sign(template) { uploadSigns++; return finalizeEvent(template, directReadKey); } })).rejects.toThrow("APPROVED_AUTHORIZATION_REQUIRED");
         expect(uploadSigns).toBe(0);
         const uploadEvent = await signDirectUploadAuthorization({ intent: publicationIntent, authorization: uploadAuthorization, expected: expectedUpload,
-          sign(template) { uploadSigns++; return finalizeEvent(template, directReadKey); } });
+          async sign(template) { uploadSigns++; expect(template).toEqual(uploadAuthorization.template);
+            return z.object({ event: DirectUploadAuthorizationEventSchema }).passthrough().parse(await remoteSigner.signUploadAuthorization()).event; } });
         expect(uploadSigns).toBe(1);
+        expect(bunker.requests.map(value => value.method)).toEqual(["connect", "get_public_key", "sign_event", "sign_event"]);
         await expect(changedTargets.acceptUploadAuthorization({ ...owner, event: uploadEvent })).rejects.toThrow("INTENT_STALE");
         await expect(publications().acceptUploadAuthorization({ ...foreignOwner, event: uploadEvent })).rejects.toThrow("NOT_FOUND_OR_DENIED");
         await expect(publications().acceptUploadAuthorization({ ...owner, event: finalizeEvent({ ...uploadAuthorization.template, tags: uploadAuthorization.template.tags.filter(tag => tag[0] !== "x") }, directReadKey) })).rejects.toThrow("EVENT_REQUIRED");
@@ -1257,13 +1291,33 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         const repeatedUpload = finalizeEvent(structuredClone(uploadAuthorization.template), directReadKey);
         expect((await publications().acceptUploadAuthorization({ ...owner, event: repeatedUpload })).event.sig).toBe(uploadEvent.sig);
         expect((await publications().readAcceptedUploadAuthorization(owner))?.event.id).toBe(uploadEvent.id);
+        // Expiry/stale authority after durable dispatch fencing must block
+        // the actual relay publish and leave permanent query-only recovery.
+        let guardChecks = 0;
+        const guardInput = { bunkerUri: bunker.bunkerUri, sessionKeyReference: bunker.sessionKeyReference, sessionKeyBroker: bunker.sessionKeyBroker,
+          journal: new PostgresOperationJournal(pool, { namespace: "direct-nip46-fixture", scopeSha256: "6".repeat(64) }),
+          authorization: { request: signingRequest, receipt: signingReceipt, authorizationRequestSha256: signingRequest.authorizationRequestSha256, authorizationReceiptSha256: signingReceipt.authorizationReceiptSha256 },
+          context: { async resolve() { return { operationId: "direct-guard:fenced", ownerPubkey: principal.pubkey, capabilities: ["sign_event"], template: publicationIntent.review.ownerManifestTemplate, expiresAtMs: publicationIntent.expiresAtMs }; } },
+          timeoutMs: 1000, now: () => publicationNow };
+        const guardDigest = "9".repeat(64), requestsBeforeGuard = bunker.requests.length;
+        const guarded = await openProductionNip46Signer({ ...guardInput, async authorizeFreshSigning() { guardChecks++; if (guardChecks === 4) throw new Error("FIXTURE_STALE_AFTER_CAS"); } });
+        try { await expect(guarded.signExactIntent({ intentDigest: guardDigest })).rejects.toThrow("FIXTURE_STALE_AFTER_CAS"); } finally { await guarded.close(); }
+        expect(guardChecks).toBe(4); expect(bunker.requests).toHaveLength(requestsBeforeGuard);
+        const guardRecovery = await openProductionNip46Signer(guardInput);
+        try { await expect(guardRecovery.signExactIntent({ intentDigest: guardDigest })).rejects.toThrow("SIGNING_OUTCOME_UNKNOWN"); } finally { await guardRecovery.close(); }
+        expect(bunker.requests).toHaveLength(requestsBeforeGuard);
         const unsigned = await publications().prepare({ ...publishCommand, idempotencyKey: "direct-publication:unsigned" });
         const pendingUploadOwner = { principal, idempotencyKey: "direct-publication:pending-upload" };
         const pendingIntent = await publications().prepare({ ...publishCommand, idempotencyKey: pendingUploadOwner.idempotencyKey });
         await expect(publications().prepareUploadAuthorization(pendingUploadOwner)).rejects.toThrow("ACCEPTED_OWNER_REQUIRED");
         await publications().acceptOwnerEvent({ ...pendingUploadOwner, event: ownerEvent });
         const pendingUpload = await publications().prepareUploadAuthorization(pendingUploadOwner);
-        const pendingUploadEvent = finalizeEvent(structuredClone(pendingUpload.template), directReadKey);
+        let pendingRemote = await openDirectSigner(publications(), pendingUploadOwner);
+        closeDirectSigner = async () => { await remoteSigner.close(); await pendingRemote.close(); };
+        bunker.hideSigningResponses(true);
+        await expect(pendingRemote.signUploadAuthorization()).rejects.toThrow("SIGNING_OUTCOME_UNKNOWN");
+        await pendingRemote.close();
+        bunker.hideSigningResponses(false);
         publicationNow = Math.max(publicationIntent.expiresAtMs, unsigned.expiresAtMs, pendingIntent.expiresAtMs);
         await expect(publications().acceptOwnerEvent({ principal, idempotencyKey: "direct-publication:unsigned", event: ownerEvent })).rejects.toThrow("INTENT_EXPIRED");
         expect(await publications().readAcceptedOwner({ principal, idempotencyKey: "direct-publication:unsigned" })).toBeUndefined();
@@ -1271,6 +1325,16 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         expect(await publications().prepare(publishCommand)).toEqual(publicationIntent); // Historical observation, no new authority.
         expect((await publications().readAcceptedOwner(owner))?.event.id).toBe(ownerEvent.id);
         expect((await publications().acceptOwnerEvent({ ...owner, event: ownerEvent })).event.id).toBe(ownerEvent.id);
+        const signingRequestsBeforeHistory = bunker.requests.length;
+        pendingRemote = await openDirectSigner(changedTargets, pendingUploadOwner);
+        const pendingUploadEvent = z.object({ event: DirectUploadAuthorizationEventSchema }).passthrough().parse(await pendingRemote.signUploadAuthorization()).event;
+        expect(pendingUploadEvent.tags).toEqual(pendingUpload.template.tags);
+        expect(bunker.requests).toHaveLength(signingRequestsBeforeHistory);
+        await pendingRemote.close();
+        await remoteSigner.close(); remoteSigner = await openDirectSigner(changedTargets);
+        expect(z.object({ event: SignedOwnerManifestEventSchema }).passthrough().parse(await remoteSigner.signOwnerManifest()).event.id).toBe(ownerEvent.id);
+        expect(z.object({ event: DirectUploadAuthorizationEventSchema }).passthrough().parse(await remoteSigner.signUploadAuthorization()).event.id).toBe(uploadEvent.id);
+        expect(bunker.requests).toHaveLength(signingRequestsBeforeHistory);
         await expect(publications().acceptUploadAuthorization({ ...pendingUploadOwner, event: pendingUploadEvent })).rejects.toThrow("INTENT_EXPIRED");
         expect(await publications().readAcceptedUploadAuthorization(pendingUploadOwner)).toBeUndefined();
         expect(await publications().readUploadAuthorization(pendingUploadOwner)).toEqual(pendingUpload);
@@ -1286,5 +1350,5 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         expect(cleanupGets).toBe(getsAfterCleanupProof); expect(allocations).toBe(allocationsBeforeReads); expect(deletions).toBe(deletionsBeforeReads);
       } finally { await http.stop(true); }
     }
-  } finally { try { await localWorker?.close(); } finally { await runtime?.end(); await admin?.end(); await docker(["rm", "--force", name]).catch(() => undefined); } }
+  } finally { try { await closeDirectSigner(); closeDirectBunker(); await localWorker?.close(); } finally { await runtime?.end(); await admin?.end(); await docker(["rm", "--force", name]).catch(() => undefined); } }
 }, 120_000);

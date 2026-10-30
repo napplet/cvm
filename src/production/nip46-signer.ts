@@ -52,6 +52,7 @@ export async function openProductionNip46Signer(input: Readonly<{
   bunkerUri: string; sessionKeyReference: string; sessionKeyBroker: Nip46SessionKeyBroker;
   context: Nip46PublicationContext; originalOperationContext?: Nip46OriginalOperationContext; journal: PostgresOperationJournal; timeoutMs?: number;
   authorization: Readonly<{ request: unknown; receipt: unknown; authorizationRequestSha256: string; authorizationReceiptSha256: string }>;
+  authorizeFreshSigning?: (input: Readonly<{ operationId: string; intentDigest: string }>) => Promise<void>;
   now?: () => number;
 }>): Promise<ExternalSignerPort & Readonly<{ close(): Promise<void>; signExactOperation(input: Readonly<{ operationId: string; purpose: "upload_authorization" }>): Promise<unknown> }>> {
   const bunker = parseBunker(input.bunkerUri);
@@ -166,18 +167,29 @@ export async function openProductionNip46Signer(input: Readonly<{
       const context: SigningContext = { operationId: Operation.parse(rawContext.operationId), ownerPubkey: Digest.parse(rawContext.ownerPubkey), capabilities: rawContext.capabilities, template: ExactTemplate.parse(rawContext.template), expiresAtMs: z.number().int().positive().parse(rawContext.expiresAtMs) };
       const operationId = Operation.parse(context.operationId);
       const ownerPubkey = Digest.parse(context.ownerPubkey);
-      const observedSigner = await observeDiscovery();
-      if (observedSigner.consentState !== "granted" || ownerPubkey !== observedSigner.pubkey || !observedSigner.capabilities.includes("sign_event") || !context.capabilities.includes("sign_event")) throw new Error("NIP46_OWNER_MISMATCH");
       const identity = sha256(`${intentDigest}:${operationId}:${JSON.stringify(context.template)}`);
       const requestId = `nip46:${operationId}:${intentDigest}`;
       const existing = await input.journal.read<z.infer<typeof SignRecord>>(`nip46:${operationId}`);
+      if (existing) {
+        const original = SignRecord.parse(existing.value);
+        if (existing.identitySha256 !== identity || original.intentDigest !== intentDigest || original.ownerPubkey !== ownerPubkey || original.requestId !== requestId) throw new Error("NIP46_ORIGINAL_SIGNING_REQUIRES_RECONCILIATION");
+        if (original.state === "signed") {
+          const event = exactSignedEvent(original.event, context);
+          return Object.freeze({ pubkey: event.pubkey, intentDigest, authorizationReceipt: `nip46:${operationId}`, event });
+        }
+        if (original.state === "dispatching") return sign(original, existing.revision, context, intentDigest);
+      }
+      const fresh = async () => { await input.authorizeFreshSigning?.({ operationId, intentDigest }); await authorize(false, context.expiresAtMs); };
+      await fresh();
+      const observedSigner = await observeDiscovery();
+      if (observedSigner.consentState !== "granted" || ownerPubkey !== observedSigner.pubkey || !observedSigner.capabilities.includes("sign_event") || !context.capabilities.includes("sign_event")) throw new Error("NIP46_OWNER_MISMATCH");
       let record: z.infer<typeof SignRecord>;
       let revision: number;
       if (existing) {
         if (existing.identitySha256 !== identity) throw new Error("NIP46_ORIGINAL_SIGNING_REQUIRES_RECONCILIATION");
         record = SignRecord.parse(existing.value); revision = existing.revision;
       } else {
-        await authorize(false, context.expiresAtMs);
+        await fresh();
         const requestEvent = BunkerEvent.parse(finalizeEvent({ kind: 24133, created_at: Math.floor(now() / 1000), tags: [["p", bunker.pubkey]], content: nip44.v2.encrypt(JSON.stringify({ id: requestId, method: "sign_event", params: [JSON.stringify(context.template)] }), conversationKey) }, key));
         const claimed = await input.journal.claim(`nip46:${operationId}`, identity, { state: "request_persisted", intentDigest, requestId, ownerPubkey, requestEvent });
         record = SignRecord.parse(claimed.record.value); revision = claimed.record.revision;
@@ -188,7 +200,7 @@ export async function openProductionNip46Signer(input: Readonly<{
         return Object.freeze({ pubkey: event.pubkey, intentDigest, authorizationReceipt: `nip46:${operationId}`, event });
       }
       if (record.state === "dispatching") return sign(record, revision, context, intentDigest);
-      await authorize(false, context.expiresAtMs);
+      await fresh();
       const dispatching = SignRecord.parse({ ...record, state: "dispatching" });
       const transitioned = await input.journal.compareAndSet(`nip46:${operationId}`, identity, revision, dispatching);
       if (!transitioned) {
@@ -201,7 +213,7 @@ export async function openProductionNip46Signer(input: Readonly<{
         }
         return sign(latestRecord, latest.revision, context, intentDigest);
       }
-      await authorize(false, context.expiresAtMs);
+      await fresh();
       const pool = new SimplePool();
       try { await bounded(Promise.any(pool.publish([...bunker.relays], record.requestEvent)), "NIP46_REQUEST_TIMEOUT"); }
       catch { /* The persisted request may have reached the bunker; query only. */ }

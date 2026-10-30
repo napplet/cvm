@@ -104,6 +104,28 @@ They are ordinary owner preparation, with no certification receipt requirement
 and no provider-effect authority. They remain private and unselected pending
 the negotiated public surface and actor composition.
 
+`openProductionDirectCertificationNip46Signer` composes those actual retained
+records with the receipt-gated production NIP-46 transport. Its fixed principal
+and idempotency identity resolve the original CLI owner and BUD-11 templates;
+callers cannot supply another template or context resolver. New signing checks
+the current owned artifact, configuration and intent before discovery, request
+construction, dispatch fencing and immediately before relay publication.
+
+The transport checks signed and dispatching originals before discovery. A
+completed signature returns its verified original public event. An uncertain
+request queries only its retained encrypted NIP-46 response, including after
+receipt/intent expiry or configuration change. It does not initiate discovery
+or sign again. If the final fresh check fails after the dispatch fence commits,
+that original remains query-only even when no relay publish occurred.
+
+Local proof uses the actual funded direct artifact, CLI/Chromium output,
+NIP-44 encrypted NIP-46 relay messages, a disposable owner bunker and restricted
+PostgreSQL. Owner keys stay in the fixture bunker, distinct from the disposable
+client key supplied to production code. This is mechanism proof, not protected
+release evidence or production signer consent. The factory remains unselected
+and certification-only. Ordinary post-cutover signing still needs its approved
+actor composition and must not inherit release receipt expiry.
+
 ## Remaining publication work
 
 The pinned direct CLI source is `napplet/web` commit
@@ -164,8 +186,9 @@ The historical promoted `0.5.2` aggregate facade is not a direct-format adapter.
 These new upload modules are not selected by the runtime or wired to a direct
 publication producer. Ordinary post-cutover owner publication must use its own
 approved actor composition, rather than inherit an expired certification receipt.
-Root artifact/intent-derived configuration, supported user-owned NIP-46 signing,
-relay observation, service attestation, complete composition and certification
+Root artifact/intent-derived upload configuration, end-to-end supported signer
+and upload/relay operation composition, relay observation, service attestation
+and certification
 remain open. No
 handwritten NIP-5D manifests, hash reinterpretation, signer bypass or fabricated
 completion evidence are permitted. Production client presentation and negotiated

@@ -104,10 +104,40 @@ adapter must independently fetch and verify exact bytes before treating that as
 successful storage. Source-level tests demonstrate both behaviors and the exact
 signer's refusal before a second PUT or an unscoped signature.
 
+### Prepared receipt-gated direct upload transport
+
+`createExactDirectSealedUploadAdapter` and
+`createProductionDirectCliUploadPort` provide a separate certification transport.
+Its strict `direct-sealed-upload-v1` scope binds the raw HTML hash, distinct
+archive checksum, signed owner event, original intent and operation, server,
+candidate/topology/effect plan, retention intent and exact authorization pair.
+The transport accepts a completed public BUD-11 event. It never accepts a user
+private key or invokes a remote signer. The actual pinned CLI must reproduce
+that event's exact authorization template; an unscoped fallback is refused.
+
+The restricted PostgreSQL journal transitions once from prepared to dispatching
+before any network request. A lost commit acknowledgement, auth failure,
+redirect or ambiguous provider response cannot authorize redispatch. Recovery
+uses only the original operation and a bounded GET that verifies exact length
+and raw hash. A positive upstream HEAD is replaced with this same byte check.
+Original observation remains available after receipt, token and intent expiry;
+each new PUT revalidates current receipt/intent/token immediately before sending.
+The retained retention period describes approved intent, not measured Blossom
+retention or a server SLA.
+
+Run `bun scripts/test-direct-upload.ts` for disposable local TLS and restricted
+PostgreSQL proof. The test covers ambiguous responses, expiry during preflight,
+lost dispatch commit acknowledgement, concurrent calls, incorrect stored bytes,
+scope/signature rejection, and query-only recovery. Fixture keys and receipts
+provide mechanism evidence only; no protected upload or release proof is produced.
+
 The historical promoted `0.5.2` aggregate facade is not a direct-format adapter.
-The current direct helper is prepared and verified, but exact upload
-authorization, retained effect identities, upload/relay observation, service attestation and supported
-user-owned NIP-46 flow still need complete composition and certification. No
+These new upload modules are not selected by the runtime or wired to a direct
+publication producer. Ordinary post-cutover owner publication must use its own
+approved actor composition, rather than inherit an expired certification receipt.
+Root artifact/intent-derived configuration, supported user-owned NIP-46 signing,
+relay observation, service attestation, complete composition and certification
+remain open. No
 handwritten NIP-5D manifests, hash reinterpretation, signer bypass or fabricated
 completion evidence are permitted. Production client presentation and negotiated
 ContextVM/MCP/SDK/catalog wiring also remain open. Live effects require the exact

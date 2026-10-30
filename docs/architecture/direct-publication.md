@@ -182,14 +182,37 @@ lost dispatch commit acknowledgement, concurrent calls, incorrect stored bytes,
 scope/signature rejection, and query-only recovery. Fixture keys and receipts
 provide mechanism evidence only; no protected upload or release proof is produced.
 
+`ProductionDirectCertificationUpload` now derives that transport's complete
+input from concrete owned artifact and intent services. The caller supplies no
+file, manifest, event or replacement port. It requires the retained exact CLI
+owner event and completed BUD-11 signature, rereads the verified archive, and
+checks the current intent before a new upload. Its immutable
+`direct-certification-upload-v1` journal record binds the review, original
+operation, candidate/topology/effect/scopes, request and receipt digests, server,
+raw HTML and archive identities, retention intent and public signatures.
+
+The operation derives from the original intent independently of the receipt.
+A renewed receipt therefore cannot create another operation for that intent.
+Concurrent context creation and a lost commit acknowledgement recover the
+original record. Reconciliation creates no context and reads no current file;
+it uses only retained original bindings and exact native byte observation,
+including after expiry or a change to the intent service's current config.
+
+For the combined local proof, set `NAPPLET_CVM_TEST_REAL_WORKER_IMAGE` to an
+exact, source-checked cached image and run
+`bun scripts/test-direct-publication.ts`. The runner creates a disposable CA
+with TLS verification enabled. The fixture builds the actual CLI manifest for
+that exact local TLS origin, signs through the disposable NIP-46 bunker and
+uploads verified archive bytes using the actual pinned CLI. One PUT with a lost
+response, concurrent/lost-commit recovery, original-only renewal refusal and
+expired observation are tested. These fixtures remain local mechanism proof.
+
 The historical promoted `0.5.2` aggregate facade is not a direct-format adapter.
-These new upload modules are not selected by the runtime or wired to a direct
-publication producer. Ordinary post-cutover owner publication must use its own
+The composed direct upload remains unselected by the runtime. Ordinary
+post-cutover owner publication must use its own
 approved actor composition, rather than inherit an expired certification receipt.
-Root artifact/intent-derived upload configuration, end-to-end supported signer
-and upload/relay operation composition, relay observation, service attestation
-and certification
-remain open. No
+Direct owner relay/service attestation operation composition, relay observation
+and production certification remain open. No
 handwritten NIP-5D manifests, hash reinterpretation, signer bypass or fabricated
 completion evidence are permitted. Production client presentation and negotiated
 ContextVM/MCP/SDK/catalog wiring also remain open. Live effects require the exact

@@ -55,8 +55,9 @@ import { readVerifiedDirectWorkerArchive } from "../../src/production/direct-art
 import { ProductionOwnedDirectArtifacts } from "../../src/production/owned-direct-artifacts";
 import { ProductionDirectArtifactDelivery } from "../../src/production/direct-artifact-delivery";
 import { createDirectArtifactReadRequest, verifyDirectArtifactDelivery } from "../../src/publication/direct-delivery";
-import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
+import { finalizeEvent, getPublicKey, verifyEvent } from "nostr-tools/pure";
 import { proveDirectPreviewBrowser } from "../fixtures/direct-preview-browser";
+import { ProductionDirectCertificationUpload } from "../../src/production/direct-publication-upload";
 import { ProductionDirectPublicationIntents } from "../../src/production/direct-publication-intents";
 import { openDirectNip46Fixture } from "../fixtures/direct-nip46-bunker";
 import { openProductionNip46Signer } from "../../src/production/nip46-signer";
@@ -122,8 +123,34 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
   const name = `cvm-resume-preparer-${crypto.randomUUID().replaceAll("-", "")}`;
   let admin: Pool | undefined, runtime: Pool | undefined;
   let localWorker: Awaited<ReturnType<typeof openLocalProductionWorker>> | undefined;
-  let closeDirectSigner = async () => {}, closeDirectBunker = () => {};
+  let closeDirectSigner = async () => {}, closeDirectBunker = () => {}, closeUploadServer = () => {};
+  let publicationServer = "https://publication.example", uploadPuts = 0, uploadGets = 0;
+  const uploadedBlobs = new Map<string, Uint8Array>();
   try {
+    if (directWorker) {
+      const cert = process.env.NAPPLET_PUBLICATION_TEST_TLS_CERT, key = process.env.NAPPLET_PUBLICATION_TEST_TLS_KEY;
+      if (!cert || !key) throw new Error("RUN_BUN_SCRIPTS_TEST_DIRECT_PUBLICATION_FOR_LOCAL_TLS");
+      const uploadServer = Bun.serve({ hostname: "127.0.0.1", port: 0, tls: { cert: Bun.file(cert), key: Bun.file(key) }, async fetch(request) {
+        const path = new URL(request.url).pathname;
+        if (request.method === "PUT" && path === "/upload") {
+          uploadPuts++;
+          const header = request.headers.get("authorization");
+          if (!header?.startsWith("Nostr ")) throw new Error("FIXTURE_AUTHORIZATION_REQUIRED");
+          const event = DirectUploadAuthorizationEventSchema.parse(JSON.parse(Buffer.from(header.slice(6), "base64url").toString("utf8")));
+          expect(verifyEvent(event)).toBeTrue();
+          const bytes = new Uint8Array(await request.arrayBuffer()), digest = createHash("sha256").update(bytes).digest("hex");
+          expect(event.tags).toContainEqual(["x", digest]);
+          expect(event.tags).toContainEqual(["server", "127.0.0.1"]);
+          uploadedBlobs.set(digest, bytes);
+          return new Response("fixture lost upload acknowledgement", { status: 503 });
+        }
+        if (request.method !== "GET") throw new Error("FIXTURE_ONLY_EXACT_GET_ALLOWED");
+        uploadGets++;
+        const bytes = uploadedBlobs.get(path.slice(1));
+        return bytes ? new Response(new Uint8Array(bytes)) : new Response(null, { status: 404 });
+      } });
+      publicationServer = uploadServer.url.origin; closeUploadServer = () => { uploadServer.stop(true); };
+    }
     await docker(["run", "--detach", "--rm", "--name", name, "--publish", "127.0.0.1::5432", "-e", "POSTGRES_HOST_AUTH_METHOD=trust", "postgres:17-alpine"]);
     const port = (await docker(["port", name, "5432/tcp"])).match(/127\.0\.0\.1:(\d+)/u)?.[1];
     if (!port) throw new Error("POSTGRES_PORT_MISSING");
@@ -773,7 +800,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       modalSdk: { apps: { fromName: noNativeEffect }, images: { fromRegistry: noNativeEffect }, sandboxes: { create: noNativeEffect, findByName: noNativeEffect, fromId: noNativeEffect } },
       fly: { create: noNativeEffect, observe: noNativeEffect, terminate: noNativeEffect, observeTermination: noNativeEffect, exec: noNativeEffect } }) : undefined;
     const directRouter = directWorker && changedDefaultClients ? new ProductionWorkerJobRouter({ workerJournal: nativeWorkerJournal, jobJournal: nativeJobJournal,
-      publication: { server: "https://publication.example" }, executables: [{ image: `registry.example/new-default@sha256:${"e".repeat(64)}`,
+      publication: { server: publicationServer }, executables: [{ image: `registry.example/new-default@sha256:${"e".repeat(64)}`,
         toolchainSha256: "e".repeat(64), artifactContract: "legacy-aggregate-v1", clients: changedDefaultClients,
         modalAppName: "resume-workspace-fixture", flyAppName: "resume-workspace-fixture" }, { image: `registry.example/worker@sha256:${"a".repeat(64)}`,
         toolchainSha256: workspaceToolchain, artifactContract: "nip5d-direct-v1", clients: workerClients,
@@ -781,7 +808,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     const nativeBridge = () => new ProductionWorkerBridge({ resolver: new ProductionWorkerOwnershipResolver({ pool, policyVersion: workspaceCommand.policyVersion,
       capacityJournal, pricedContinuations: workerAuthority }), workers: workerClients, workerJournal: nativeWorkerJournal, jobJournal: nativeJobJournal,
       requestJournal: nativeRequestJournal, artifactStore: new GcsObjectStoreAdapter({ config: { bucket: "workspace-fixture", projectId: "fixture" }, client: objectClient }), toolchainSha256: directWorker ? "e".repeat(64) : workspaceToolchain,
-      ...(directRouter ? { jobRouter: directRouter, publication: { server: "https://publication.example" } } : {}) });
+      ...(directRouter ? { jobRouter: directRouter, publication: { server: publicationServer } } : {}) });
     const cleanupCapacity = createProductionReadyCapacity({ provider: "fly", workers: workerClients, journal: capacityJournal, workerJournal: nativeWorkerJournal,
       image: `registry.example/worker@sha256:${"a".repeat(64)}`, toolchainSha256: workspaceToolchain, flyRegion: "ams" });
     const cleanupJournal = new PostgresOperationJournal(pool, { namespace: "fixture-priced-cleanup", scopeSha256: "8".repeat(64) });
@@ -994,7 +1021,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         if (!sealed) throw new Error("DIRECT_SEALED_ARTIFACT_REQUIRED");
         const reread = await readVerifiedDirectWorkerArchive(sealed.bytes, { checksum: coreTerminal.artifactId.slice("artifact:".length),
           build: { accountId, ownerId: principal.pubkey, sessionId: workspaceClaim.sessionId, actionId: workspaceClaim.actionId, expectedVersion: 1,
-            proposalSha256: newProposalSha, toolchainSha256: workspaceToolchain, publication: { server: "https://publication.example" } }, purpose: workspaceCommand.revision });
+            proposalSha256: newProposalSha, toolchainSha256: workspaceToolchain, publication: { server: publicationServer } }, purpose: workspaceCommand.revision });
         expect(reread.declaration).toEqual({ required: ["storage"], optional: [] });
         expect(reread).not.toHaveProperty("aggregateSha256");
         const archive = z.object({ version: z.literal(3), artifactContract: z.literal("nip5d-direct-v1"), artifactHash: z.string().regex(/^[a-f0-9]{64}$/u),
@@ -1092,7 +1119,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       const readerInput = { pool, requestJournal: nativeRequestJournal,
         objects: new GcsObjectStoreAdapter({ config: { bucket: "workspace-fixture", projectId: "fixture" }, client: objectClient }),
         profiles: [{ toolchainSha256: "e".repeat(64), artifactContract: "legacy-aggregate-v1" as const }, { toolchainSha256: workspaceToolchain, artifactContract: "nip5d-direct-v1" as const }],
-        publication: { server: "https://publication.example" } };
+        publication: { server: publicationServer } };
       const ownedCommand = { principal, sessionId: workspaceClaim.sessionId, artifactId: coreTerminal.artifactId };
       const owned = () => new ProductionOwnedDirectArtifacts(readerInput).readVerified(ownedCommand);
       const allocationsBeforeReads = allocations, deletionsBeforeReads = deletions;
@@ -1198,7 +1225,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         } };
         const publicationInput = { artifacts: new ProductionOwnedDirectArtifacts(readerInput),
           journal: new PostgresOperationJournal(publicationPool, { namespace: publicationNamespace, scopeSha256: "5".repeat(64) }),
-          publication: { server: "https://publication.example" }, relays: ["wss://relay.example"], now: () => publicationNow };
+          publication: { server: publicationServer }, relays: ["wss://relay.example"], now: () => publicationNow };
         const publications = () => new ProductionDirectPublicationIntents(publicationInput);
         const publicArtifact = { principal, sessionId: workspaceClaim.sessionId, artifactId: coreTerminal.artifactId };
         const review = await publications().review(publicArtifact);
@@ -1226,9 +1253,9 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         closeDirectBunker = bunker.close;
         const signingRequest = await createAuthorizationRequest({ candidateSha256: "a".repeat(64), topologySha256: "b".repeat(64), effectPlanSha256: "c".repeat(64),
           controllerStateSha256: "d".repeat(64), providerCapabilitiesSha256: "e".repeat(64),
-          orderedEffects: [{ id: "direct-owner-signing", provider: "signer", operation: "verify_integration", estimatedCostMicros: 1 }],
-          providerScopes: [{ provider: "signer", accountScopeSha256: "f".repeat(64), projectScopeSha256: "0".repeat(64) }],
-          estimate: { currency: "USD", maximumMicros: 1, sourceId: "local-signing-fixture", observedAtMs: publicationNow - 1, freshUntilMs: publicationNow + 20_000 },
+          orderedEffects: [{ id: "direct-owner-signing", provider: "signer", operation: "verify_integration", estimatedCostMicros: 1 }, { id: "sealed-upload", provider: "upload", operation: "verify_integration", estimatedCostMicros: 1 }],
+          providerScopes: [{ provider: "signer", accountScopeSha256: "f".repeat(64), projectScopeSha256: "0".repeat(64) }, { provider: "upload", accountScopeSha256: "f".repeat(64), projectScopeSha256: "0".repeat(64) }],
+          estimate: { currency: "USD", maximumMicros: 2, sourceId: "local-signing-fixture", observedAtMs: publicationNow - 1, freshUntilMs: publicationNow + 20_000 },
           maximumRunDurationMs: 1000, cleanupByMs: publicationNow + 9000, evidenceRetentionDays: 30, artifactRetentionDays: 30,
           gcpEffects: { projectBootstrap: false, billing: false, apiEnablement: ["storage.googleapis.com"] }, expiresAtMs: publicationNow + 10_000 });
         const signingReceipt = await createAuthorizationReceipt(signingRequest);
@@ -1291,6 +1318,43 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         const repeatedUpload = finalizeEvent(structuredClone(uploadAuthorization.template), directReadKey);
         expect((await publications().acceptUploadAuthorization({ ...owner, event: repeatedUpload })).event.sig).toBe(uploadEvent.sig);
         expect((await publications().readAcceptedUploadAuthorization(owner))?.event.id).toBe(uploadEvent.id);
+        let loseUploadContextCommit = true;
+        const uploadNamespace = "direct-upload-composition";
+        const uploadPool: PostgresSqlPool = { async connect() { const client = await pool.connect(); let contextClaim = false;
+          return { async query<Row extends Record<string, unknown>>(sql: string, parameters?: readonly unknown[]) {
+            const result = await client.query<Row>(sql, parameters);
+            if (sql.startsWith("INSERT INTO production_real.release_operation_journal") && parameters?.[0] === uploadNamespace && String(parameters?.[2]).startsWith("direct-certification-upload:v1:")) contextClaim = true;
+            if (sql === "COMMIT" && contextClaim && loseUploadContextCommit) { loseUploadContextCommit = false; throw new Error("UPLOAD_CONTEXT_COMMIT_ACK_LOST"); }
+            return result;
+          }, release() { client.release(); } };
+        } };
+        const uploadInput = { intents: publications(), artifacts: new ProductionOwnedDirectArtifacts(readerInput), owner,
+          binding: { candidateSha256: signingRequest.candidateSha256, topologySha256: signingRequest.topologySha256, effectPlanSha256: signingRequest.effectPlanSha256,
+            accountScopeSha256: "f".repeat(64), projectScopeSha256: "0".repeat(64) },
+          targetReference: "fixture:direct-tls-server", authorization: { request: signingRequest, receipt: signingReceipt },
+          journal: new PostgresOperationJournal(uploadPool, { namespace: uploadNamespace, scopeSha256: "8".repeat(64) }), now: () => publicationNow, timeoutMs: 1000 };
+        expect(await new ProductionDirectCertificationUpload(uploadInput).reconcile()).toMatchObject({ state: "unknown" });
+        expect((await admin.query("SELECT count(*)::int AS count FROM production_real.release_operation_journal WHERE namespace=$1", [uploadNamespace])).rows[0].count).toBe(0);
+        await expect(new ProductionDirectCertificationUpload({ ...uploadInput, intents: changedTargets }).upload()).rejects.toThrow("INTENT_STALE");
+        await expect(new ProductionDirectCertificationUpload({ ...uploadInput, owner: foreignOwner }).upload()).rejects.toThrow("NOT_FOUND_OR_DENIED");
+        expect(uploadPuts).toBe(0); expect(uploadGets).toBe(0);
+        const uploadOutcomes = await Promise.allSettled([new ProductionDirectCertificationUpload(uploadInput).upload(), new ProductionDirectCertificationUpload(uploadInput).upload()]);
+        expect(uploadOutcomes.some(outcome => outcome.status === "fulfilled" && outcome.value.state === "complete")).toBeTrue();
+        expect(loseUploadContextCommit).toBeFalse(); expect(uploadPuts).toBe(1);
+        expect(await new ProductionDirectCertificationUpload(uploadInput).reconcile()).toMatchObject({ state: "complete", fullServerUploadId: `${publicationServer}/${review.artifact.artifactHash}` });
+        expect(uploadedBlobs.get(review.artifact.artifactHash)).toEqual(verified.bytes);
+        expect(await new ProductionDirectCertificationUpload(uploadInput).upload()).toMatchObject({ state: "complete" });
+        expect(uploadPuts).toBe(1);
+        await expect(new ProductionDirectCertificationUpload({ ...uploadInput, targetReference: "substituted" }).reconcile()).rejects.toThrow("ORIGINAL_MISMATCH");
+        const renewedRequest = await createAuthorizationRequest({ candidateSha256: signingRequest.candidateSha256, topologySha256: signingRequest.topologySha256,
+          effectPlanSha256: signingRequest.effectPlanSha256, controllerStateSha256: "1".repeat(64), providerCapabilitiesSha256: signingRequest.providerCapabilitiesSha256,
+          orderedEffects: signingRequest.orderedEffects, providerScopes: signingRequest.providerScopes,
+          estimate: { currency: "USD", maximumMicros: signingRequest.maximumAuthorizedCostMicros, sourceId: signingRequest.estimateSourceId, observedAtMs: signingRequest.estimateObservedAtMs, freshUntilMs: signingRequest.estimateFreshUntilMs },
+          maximumRunDurationMs: signingRequest.maximumRunDurationMs, cleanupByMs: signingRequest.cleanupByMs, evidenceRetentionDays: signingRequest.evidenceRetentionDays,
+          artifactRetentionDays: signingRequest.artifactRetentionDays, gcpEffects: signingRequest.gcpEffects, expiresAtMs: signingRequest.expiresAtMs });
+        const renewedReceipt = await createAuthorizationReceipt(renewedRequest);
+        await expect(new ProductionDirectCertificationUpload({ ...uploadInput, authorization: { request: renewedRequest, receipt: renewedReceipt } }).upload()).rejects.toThrow("ORIGINAL_MISMATCH");
+        expect(uploadPuts).toBe(1);
         // Expiry/stale authority after durable dispatch fencing must block
         // the actual relay publish and leave permanent query-only recovery.
         let guardChecks = 0;
@@ -1325,6 +1389,9 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         expect(await publications().prepare(publishCommand)).toEqual(publicationIntent); // Historical observation, no new authority.
         expect((await publications().readAcceptedOwner(owner))?.event.id).toBe(ownerEvent.id);
         expect((await publications().acceptOwnerEvent({ ...owner, event: ownerEvent })).event.id).toBe(ownerEvent.id);
+        expect(await new ProductionDirectCertificationUpload({ ...uploadInput, intents: changedTargets }).reconcile()).toMatchObject({ state: "complete" });
+        await expect(new ProductionDirectCertificationUpload(uploadInput).upload()).rejects.toThrow();
+        expect(uploadPuts).toBe(1);
         const signingRequestsBeforeHistory = bunker.requests.length;
         pendingRemote = await openDirectSigner(changedTargets, pendingUploadOwner);
         const pendingUploadEvent = z.object({ event: DirectUploadAuthorizationEventSchema }).passthrough().parse(await pendingRemote.signUploadAuthorization()).event;
@@ -1345,10 +1412,10 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         expect((await publications().readAcceptedUploadAuthorization(owner))?.event.id).toBe(uploadEvent.id);
         await expect(publications().prepareUploadAuthorization({ principal, idempotencyKey: "direct-publication:unsigned" })).rejects.toThrow("INTENT_EXPIRED");
         expect((await admin.query("SELECT count(*)::int AS count FROM production_real.release_operation_journal WHERE namespace=$1", [publicationNamespace])).rows[0].count).toBe(8);
-        console.log(JSON.stringify({ localDirectPublication: true, intentId: publicationIntent.intentId, ownerEventId: ownerEvent.id, lostCommitRecovered: !losePublicationCommit, releaseEvidence: false }));
+        console.log(JSON.stringify({ localDirectPublication: true, intentId: publicationIntent.intentId, ownerEventId: ownerEvent.id, uploadPuts, uploadContextCommitRecovered: !loseUploadContextCommit, uploadedExactArtifact: true, lostCommitRecovered: !losePublicationCommit, releaseEvidence: false }));
         expect(modelPosts).toBe(3); expect(nativeRestores).toBe(1); expect(reserves).toBe(2); expect(nativeDeletes).toBe(1);
         expect(cleanupGets).toBe(getsAfterCleanupProof); expect(allocations).toBe(allocationsBeforeReads); expect(deletions).toBe(deletionsBeforeReads);
       } finally { await http.stop(true); }
     }
-  } finally { try { await closeDirectSigner(); closeDirectBunker(); await localWorker?.close(); } finally { await runtime?.end(); await admin?.end(); await docker(["rm", "--force", name]).catch(() => undefined); } }
+  } finally { try { await closeDirectSigner(); closeDirectBunker(); closeUploadServer(); await localWorker?.close(); } finally { await runtime?.end(); await admin?.end(); await docker(["rm", "--force", name]).catch(() => undefined); } }
 }, 120_000);

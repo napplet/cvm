@@ -122,6 +122,10 @@ postgresIsolation("worker lifecycle retains originals across allocation ambiguit
     for (const provider of ["modal", "fly"] as const) {
       await proveMissingIdReadiness(provider, { journal: () => createPostgresWorkerOperationJournal(workerJournal),
         capacity: { journal, workerJournal } });
+      await proveMissingIdReadiness(provider, { journal: () => createPostgresWorkerOperationJournal(workerJournal),
+        capacity: { journal, workerJournal } }, "native-retirement");
+      await proveMissingIdReadiness(provider, { journal: () => createPostgresWorkerOperationJournal(workerJournal),
+        capacity: { journal, workerJournal } }, "legacy-retirement");
     }
   } finally {
     await application?.end();

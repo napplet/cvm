@@ -11,4 +11,12 @@ for (const provider of ["modal", "fly"] as const) {
     const journal = createMemoryWorkerOperationJournal();
     await proveMissingIdReadiness(provider, { journal: () => journal }, "deadline");
   });
+  test(`${provider} actual native termination fences original readiness while deletion is in flight`, async () => {
+    const journal = createMemoryWorkerOperationJournal();
+    await proveMissingIdReadiness(provider, { journal: () => journal }, "native-retirement");
+  });
+  test(`${provider} readiness recognizes a retained pre-upgrade termination companion`, async () => {
+    const journal = createMemoryWorkerOperationJournal();
+    await proveMissingIdReadiness(provider, { journal: () => journal }, "legacy-retirement");
+  });
 }

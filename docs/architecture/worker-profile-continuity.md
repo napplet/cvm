@@ -87,6 +87,37 @@ provider call, and refusal of later expired observations before provider I/O.
 This closes the local recovery mechanism, not live provider readiness, the
 five-second admission SLO or the full funded generation certification path.
 
+## Native termination retires the original readiness authority
+
+Termination has its own durable `t-*` operation, but the original CREATE row is
+also a readiness authority. Both transports now mark that original `terminating`
+after claiming the exact termination identity and before provider lookup or
+termination dispatch. They retain the existing independent dispatch fence;
+ambiguous deletion never permits another DELETE or terminate call. Confirmed
+disappearance of the already bound native ID records the original `terminated`.
+Missing-ID or ambiguous identity lookup cannot supply that proof.
+
+Before granting readiness, transports also query the exact existing termination
+companion. This covers older controllers that wrote a termination record while
+leaving their CREATE row reconciled. A matching companion monotonically retires
+the original through the existing SQL journal states; an inconsistent companion
+refuses readiness. Reading it creates no new termination or provider effect.
+Original operation IDs, termination IDs and request digests remain byte-compatible.
+
+Native and capacity checks reject an already-running probe if the original
+retires while it waits. Local regression tests hold an actual native DELETE or
+Modal terminate in flight, attempt concurrent readiness while the resource is
+still visible, then lose the termination response and query the original.
+Restricted PostgreSQL tests compose the real native clients and capacity layer.
+Each original has one CREATE and one termination. Historical companion tests
+perform no new provider mutation. These tests are local mechanism proof.
+
+Retain original and termination rows during rollout and rollback. Earlier
+readers must keep the original retirement fence; never clear it to restore
+availability. This change authorizes neither refund nor abandonment of a paid
+action. Broader abandoned-capacity discovery, action/hold ownership, terminal
+reconciliation and any financial release require their own exact SQL proofs.
+
 ## Remaining promotion requirements
 
 This change is a safety prerequisite, not complete upgrade recovery. Before

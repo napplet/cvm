@@ -12,12 +12,20 @@ const appName = "lost-worker-readiness";
 export async function proveMissingIdReadiness(provider: "modal" | "fly", persistence: Readonly<{
   journal(): WorkerOperationJournal;
   capacity?: Readonly<{ journal(): PostgresOperationJournal; workerJournal: PostgresOperationJournal }>;
-}>, finish: "retirement" | "deadline" = "retirement") {
+}>, finish: "retirement" | "deadline" | "native-retirement" | "legacy-retirement" = "retirement") {
   let nativeId = "", operationId = `lost-${provider}-readiness`, visible = false, creates = 0, probes = 0, queries = 0;
   let tags: Record<string, string> = {}, originalMachine: Record<string, unknown> | undefined;
   let lookup: "exact" | "missing" | "unknown" | "wrong" = "exact", validProbe = true;
   let capacityNow = Date.now(), duringProbe: (() => Promise<void>) | undefined;
-  const binding = { intentReference: `capacity-intent:${digest(provider === "modal" ? "7" : "8")}`, expectedSessionBindingDigest: `sha256:${digest("b")}` };
+  const binding = { intentReference: `capacity-intent:${digest(finish === "legacy-retirement" ? (provider === "modal" ? "b" : "c") : finish === "native-retirement" ? (provider === "modal" ? "9" : "a") : (provider === "modal" ? "7" : "8"))}`, expectedSessionBindingDigest: `sha256:${digest("b")}` };
+  let releaseTermination = () => {}, enterTermination = () => {}, terminations = 0;
+  const terminationGate = new Promise<void>(resolve => { releaseTermination = resolve; });
+  const terminationEntered = new Promise<void>(resolve => { enterTermination = resolve; });
+  const terminate = async () => {
+    if (finish !== "native-retirement") throw new Error("READINESS_CANNOT_TERMINATE");
+    terminations++; enterTermination(); await terminationGate;
+    visible = false; throw new Error("TERMINATION_ACK_LOST");
+  };
   const probe = async (command: readonly string[]) => {
     probes++;
     expect(command.slice(0, 3)).toEqual(["/usr/local/bin/napplet-cvm-bootstrap", "/usr/local/bin/napplet-cvm-probe", "observe-isolation"]);
@@ -30,7 +38,7 @@ export async function proveMissingIdReadiness(provider: "modal" | "fly", persist
   };
   const sandbox = { id: `original-${provider}-sandbox`, getTags: async () => lookup === "wrong" ? { ...tags, "napplet-cvm-lease-sha256": digest("f") } : tags,
     exec: async (command: readonly string[]) => ({ stdout: await probe(command), stderr: "", exitCode: 0 }), poll: async () => ({}),
-    terminate: async () => { throw new Error("READINESS_CANNOT_TERMINATE"); },
+    terminate,
     filesystem: { copyFromLocal: async () => {}, copyToLocal: async () => {}, listFiles: async () => [] } };
   const openClients = () => createWorkerDeploymentClients({ image, workspaceRoot: "/workspace", policyVersion: PRODUCTION_WORKER_POLICY.version,
     modalAppName: appName, modalTags: {}, journal: persistence.journal(),
@@ -49,6 +57,7 @@ export async function proveMissingIdReadiness(provider: "modal" | "fly", persist
           creates++; const body = JSON.parse(String(init.body)); operationId = body.config.metadata["napplet-cvm-operation"]; nativeId = "original-fly-machine";
           originalMachine = { ...body, id: nativeId, state: "started", created_at: new Date().toISOString() }; visible = true; throw new Error("CREATE_ACK_LOST");
         }
+        if (init.method === "DELETE") { await terminate(); throw new Error("UNREACHABLE_TERMINATION_ACK"); }
         if (init.method !== "GET") throw new Error("READINESS_CANNOT_MUTATE_PROVIDER");
         queries++;
         if (parsed.searchParams.has("metadata.napplet-cvm-operation")) {
@@ -102,6 +111,49 @@ export async function proveMissingIdReadiness(provider: "modal" | "fly", persist
     expect((await observe()).status).toBe("unknown");
     expect({ queries, probes }).toEqual(beforeExpired);
     capacityNow = record.deadlineEpochMs - 1;
+  }
+  if (finish === "legacy-retirement") {
+    const record = await persistence.journal().read(operationId);
+    if (!record) throw new Error("ORIGINAL_REQUIRED");
+    const sha = (value: unknown) => new Bun.CryptoHasher("sha256").update(JSON.stringify(value)).digest("hex");
+    // Exact pre-change companion identities; its CREATE row was still active.
+    const created = provider === "fly" ? { providerCreatedAtMs: record.providerCreatedAtMs } : {};
+    const terminationId = `t-${sha({ operationId, resourceId: record.resourceId, image: record.image, requestSha256: record.requestSha256, ...created }).slice(0, 46)}`;
+    const terminationRequest = sha({ original: operationId, resourceId: record.resourceId, image: record.image, requestSha256: record.requestSha256, ...created, action: "terminate" });
+    const { state: _state, resourceId: _resourceId, ...facts } = record;
+    await persistence.journal().claim({ ...facts, operationId: terminationId, requestSha256: terminationRequest });
+    const beforeLegacyRead = { queries, probes };
+    expect((await observe()).status).toBe("unknown");
+    expect({ queries, probes }).toEqual(beforeLegacyRead);
+    expect((await persistence.journal().read(operationId))?.state).toBe("terminating");
+    expect(await persistence.journal().read(terminationId)).toMatchObject({ requestSha256: terminationRequest, state: "claimed" });
+    expect({ creates, terminations }).toEqual({ creates: 1, terminations: 0 });
+    return;
+  }
+  if (finish === "native-retirement") {
+    let stateDuring: string | undefined, nestedStatus: string | undefined, visibleAtFence = false;
+    duringProbe = async () => {
+      const stopping = openClients()[provider].terminate({ operationId }).catch(() => ({ status: "unknown" as const }));
+      try {
+        await terminationEntered;
+        stateDuring = (await persistence.journal().read(operationId))?.state;
+        visibleAtFence = visible;
+        // Assert outside the provider callback: transports deliberately catch
+        // probe failures, so assertions here alone could produce a false pass.
+        if (stateDuring === "terminating") nestedStatus = (await observe()).status;
+      } finally { releaseTermination(); await stopping; }
+    };
+    expect((await observe()).status).toBe("unknown");
+    expect(stateDuring).toBe("terminating");
+    expect(nestedStatus).toBe("unknown");
+    expect(visibleAtFence).toBe(true);
+    const beforeRetired = { queries, probes };
+    expect((await observe()).status).toBe("unknown");
+    expect({ queries, probes }).toEqual(beforeRetired);
+    expect(await openClients()[provider].observeTermination({ operationId })).toEqual({ status: "terminated" });
+    expect((await persistence.journal().read(operationId))?.state).toBe("terminated");
+    expect({ creates, terminations }).toEqual({ creates: 1, terminations: 1 });
+    return;
   }
   if (finish === "deadline") {
     duringProbe = async () => { await Bun.sleep(Math.max(0, intent.providerDeadlineEpochMs - Date.now() + 2)); };

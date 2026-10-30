@@ -5,6 +5,7 @@ import { ProductionDirectArtifactVerifier } from "../../src/production/direct-ar
 import { verifyProductionConformanceReceipt } from "../../src/worker-adapters/conformance-receipt";
 import { sealDirectProductionWorkerArtifact } from "../../src/production/sealed-worker-artifact";
 import { readVerifiedDirectWorkerArchive } from "../../src/production/direct-artifact-reader";
+import { verifyDirectArtifactDelivery } from "../../src/publication/direct-delivery";
 import cli from "../fixtures/direct-artifact/cli-current.json";
 import sidecar from "../fixtures/direct-artifact/manifest-current.json";
 import conformance from "../fixtures/direct-artifact/conformance-current.json";
@@ -37,6 +38,32 @@ async function facts() {
 }
 
 describe("direct artifact contract", () => {
+  test("delivery clients check exact expected identity, HTML bytes and manifest capability semantics", async () => {
+    const input = await facts(), verified = await new ProductionDirectArtifactVerifier().verify(input);
+    const sealed = await sealDirectProductionWorkerArtifact(verified), checksum = hash(new TextDecoder().decode(sealed));
+    const html = await Bun.file(join(input.distRoot, "index.html")).bytes();
+    const delivery = { version: "direct-artifact-delivery-v1", artifactContract: "nip5d-direct-v1",
+      artifact: { sessionId: input.sessionId, artifactId: `artifact:${checksum}`, artifactVersion: 1, artifactHash: verified.artifactHash, archiveSha256: checksum,
+        verificationEvidenceSha256: verified.verificationEvidenceSha256, conformanceReceiptSha256: verified.conformanceReceipt.sha256, manifestReceiptSha256: verified.manifestReceipt.sha256,
+        policyVersion: "unit-policy", toolchainSha256: input.toolchainSha256 },
+      entrypoint: { path: "/index.html", mimeType: "text/html", sha256: verified.artifactHash, size: html.length, bytesBase64: Buffer.from(html).toString("base64") },
+      capabilities: verified.declaration, ownerManifestTemplate: verified.manifest };
+    const expected = { sessionId: input.sessionId, artifactId: delivery.artifact.artifactId };
+    expect((await verifyDirectArtifactDelivery(delivery, expected)).bytes).toEqual(html);
+    for (const identity of [{ ...expected, sessionId: "foreign" }, { ...expected, artifactId: `artifact:${"0".repeat(64)}` }]) await expect(verifyDirectArtifactDelivery(delivery, identity)).rejects.toThrow();
+    const mutations: Array<(value: typeof delivery) => void> = [
+      value => { value.artifact.archiveSha256 = "0".repeat(64); },
+      value => { value.entrypoint.size++; },
+      value => { value.entrypoint.sha256 = "0".repeat(64); },
+      value => { value.entrypoint.bytesBase64 = Buffer.from("changed").toString("base64"); },
+      value => { value.entrypoint.bytesBase64 += "\n"; },
+      value => { value.capabilities.required = []; },
+      value => { value.ownerManifestTemplate.tags.push(["path", "/index.html", verified.artifactHash]); },
+      value => { value.ownerManifestTemplate.tags.find(tag => tag[0] === "x")!.push("aggregate"); },
+      value => { Object.assign(value, { aggregateSha256: verified.artifactHash }); },
+    ];
+    for (const mutate of mutations) { const changed = structuredClone(delivery); mutate(changed); await expect(verifyDirectArtifactDelivery(changed, expected)).rejects.toThrow(); }
+  });
   test("revalidates sealed bytes against independently supplied original build and purpose", async () => {
     const input = await facts();
     const verified = await new ProductionDirectArtifactVerifier().verify(input);

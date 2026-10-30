@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ProductionDirectManifestReceiptSchema } from "../worker-adapters/direct-manifest-receipt";
+import { ProductionDirectManifestReceiptSchema, ProductionDirectManifestTemplateSchema as Template } from "../worker-adapters/direct-manifest-receipt";
 export { ProductionCapabilityDeclarationSchema } from "../worker-adapters/capability-receipt";
 export { ProductionDirectManifestReceiptSchema } from "../worker-adapters/direct-manifest-receipt";
 import { canonicalJson } from "../promotion/schema";
@@ -17,7 +17,6 @@ const Facts = ProductionArtifactFactsSchema.extend({
   manifestReceipt: ProductionDirectManifestReceiptSchema,
 }).strict();
 const Target = z.object({ target: z.literal("named"), kind: z.literal(35129), dTag: z.string().regex(/^[a-z0-9][a-z0-9-]{0,127}$/u) }).passthrough();
-const Template = z.object({ kind: z.literal(35129), created_at: z.number().int().nonnegative(), tags: z.array(z.array(z.string().max(4096)).min(1).max(16)).max(128), content: z.string().min(1).max(4096) }).strict();
 const Sidecar = Template.extend({ artifactHash: Digest }).strict();
 const DryRun = z.object({ dryRun: z.literal(true), signing: z.object({ type: z.literal("none") }).passthrough(), plan: z.object({ items: z.array(Target).length(1) }).passthrough(), manifests: z.array(z.object({ item: Target, format: z.literal("current"), artifactHash: Digest, files: z.array(z.object({ path: z.literal("/index.html"), sha256: Digest }).strict()).length(1), template: Template }).passthrough()).length(1), blossomServers: z.array(z.string().url()).length(1), relays: z.array(z.string().url()).max(32) }).passthrough();
 const sha = (value: string | Uint8Array) => new Bun.CryptoHasher("sha256").update(value).digest("hex");

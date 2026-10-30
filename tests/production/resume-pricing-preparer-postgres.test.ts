@@ -53,6 +53,9 @@ import { verifyProductionConformanceReceipt } from "../../src/worker-adapters/co
 import { ProductionDirectManifestReceiptSchema } from "../../src/worker-adapters/direct-manifest-receipt";
 import { readVerifiedDirectWorkerArchive } from "../../src/production/direct-artifact-reader";
 import { ProductionOwnedDirectArtifacts } from "../../src/production/owned-direct-artifacts";
+import { ProductionDirectArtifactDelivery } from "../../src/production/direct-artifact-delivery";
+import { createDirectArtifactReadRequest, verifyDirectArtifactDelivery } from "../../src/publication/direct-delivery";
+import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 
 const integration = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
 const hash = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex");
@@ -126,7 +129,8 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     const startedAt = Date.now() - 600_100; let now = startedAt;
     const originalPricing = await resumePricingMaterial(startedAt, "profile:original");
     await registerProductionPricing({ pool, ...originalPricing });
-    const principal = { pubkey: "7".repeat(64) }, accountId = await accountIdForPrincipal(principal);
+    const directReadKey = new Uint8Array(32).fill(11);
+    const principal = { pubkey: directWorker ? getPublicKey(directReadKey) : "7".repeat(64) }, accountId = await accountIdForPrincipal(principal);
     const command = StartSessionCommandSchema.parse({ principal, admissionReference: "admission:one", idempotencyKey: "start:one", expectedVersion: 0,
       maximum: "50", policyVersion: "policy:one", idea: "Build one focused private counter." });
     const sessionId = `session:${hash({ accountId, key: command.idempotencyKey }).slice(0, 24)}`;
@@ -1082,6 +1086,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       const owned = () => new ProductionOwnedDirectArtifacts(readerInput).readVerified(ownedCommand);
       const allocationsBeforeReads = allocations, deletionsBeforeReads = deletions;
       const afterCleanup = await owned();
+      if (!afterCleanup) throw new Error("OWNED_DIRECT_ARTIFACT_READ_REQUIRED");
       expect(afterCleanup).toMatchObject({ accountId, ownerId: principal.pubkey, artifactId: coreTerminal.artifactId, artifactVersion: 2,
         archive: { artifactContract: "nip5d-direct-v1", build: { toolchainSha256: workspaceToolchain }, declaration: { required: ["storage"], optional: [] } } });
       expect(afterCleanup?.archive).not.toHaveProperty("aggregateSha256");
@@ -1119,6 +1124,55 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       expect(modelPosts).toBe(3); expect(nativeRestores).toBe(1); expect(reserves).toBe(2); expect(nativeDeletes).toBe(1);
       expect(cleanupGets).toBe(getsAfterCleanupProof);
       expect(allocations).toBe(allocationsBeforeReads); expect(deletions).toBe(deletionsBeforeReads);
+      const delivery = new ProductionDirectArtifactDelivery({ artifacts: new ProductionOwnedDirectArtifacts(readerInput), previewOrigin: "https://preview.example", artifactOrigin: "https://artifact.example" });
+      const http = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) { return new URL(request.url).pathname.startsWith("/preview/") ? delivery.preview(request) : delivery.artifact(request); } });
+      try {
+        const previewPath = `/preview/nip5d-direct-v1/${encodeURIComponent(workspaceClaim.sessionId)}/${coreTerminal.artifactId}`;
+        const artifactPath = `/artifacts/nip5d-direct-v1/${encodeURIComponent(workspaceClaim.sessionId)}/${coreTerminal.artifactId}/index.html`;
+        const signed = await createDirectArtifactReadRequest({ url: `https://preview.example${previewPath}`, sign: event => finalizeEvent(event, directReadKey) });
+        const get = (path: string, headers?: HeadersInit, method = "GET") => fetch(new URL(path, http.url), { headers, method, redirect: "error" });
+        const response = await get(previewPath, signed.headers);
+        expect(response.status).toBe(200);
+        const verified = await verifyDirectArtifactDelivery(await response.json(), { sessionId: workspaceClaim.sessionId, artifactId: coreTerminal.artifactId });
+        expect(bytesSha(verified.bytes)).toBe(afterCleanup?.archive.artifactHash);
+        expect(verified.delivery.ownerManifestTemplate).toEqual(afterCleanup?.archive.manifest);
+        expect(verified.delivery).not.toHaveProperty("aggregateSha256");
+        const rawSigned = await createDirectArtifactReadRequest({ url: `https://artifact.example${artifactPath}`, sign: event => finalizeEvent(event, directReadKey) });
+        const raw = await get(artifactPath, rawSigned.headers);
+        expect(raw.status).toBe(200); expect(bytesSha(new Uint8Array(await raw.arrayBuffer()))).toBe(verified.delivery.artifact.artifactHash);
+        expect(raw.headers.get("content-security-policy")).toContain("sandbox allow-scripts;");
+        expect(raw.headers.get("content-security-policy")).toContain("connect-src 'none'");
+        expect(raw.headers.get("content-security-policy")).not.toContain("allow-same-origin");
+        expect(raw.headers.get("cache-control")).toBe("no-store"); expect(raw.headers.get("referrer-policy")).toBe("no-referrer");
+        expect(raw.headers.get("x-napplet-artifact-sha256")).toBe(verified.delivery.artifact.artifactHash);
+        expect((await get(previewPath, signed.headers)).status).toBe(200); // Read-only replay.
+        expect((await get(previewPath)).status).toBe(401);
+        expect(await (await get("/preview/legacy")).json()).toEqual({ code: "PREVIEW_NOT_CONFIGURED" });
+        expect(await (await get("/artifacts/legacy")).json()).toEqual({ code: "ARTIFACT_NOT_CONFIGURED" });
+        const at = Math.floor(Date.now() / 1000), template = { kind: 27235, created_at: at, content: "", tags: [["u", `https://preview.example${previewPath}`], ["method", "GET"]] };
+        for (const changed of [ { kind: 1 }, { content: "extra" }, { created_at: at - 61 }, { created_at: at + 60 },
+          { tags: [["u", `https://other.example${previewPath}`], ["method", "GET"]] },
+          { tags: [["u", `https://preview.example${artifactPath}`], ["method", "GET"]] },
+          { tags: [["u", `https://preview.example${previewPath}`], ["method", "POST"]] },
+          { tags: [...template.tags, ["u", `https://preview.example${previewPath}`]] } ]) {
+          const event = finalizeEvent({ ...template, ...changed }, directReadKey);
+          expect((await get(previewPath, { authorization: `Nostr ${Buffer.from(JSON.stringify(event)).toString("base64")}` })).status).toBe(401);
+        }
+        const invalidSignature = { ...finalizeEvent(template, directReadKey), sig: "0".repeat(128) };
+        expect((await get(previewPath, { authorization: `Nostr ${Buffer.from(JSON.stringify(invalidSignature)).toString("base64")}` })).status).toBe(401);
+        const foreign = await createDirectArtifactReadRequest({ url: `https://preview.example${previewPath}`, sign: event => finalizeEvent(event, new Uint8Array(32).fill(12)) });
+        expect((await get(previewPath, foreign.headers)).status).toBe(404);
+        expect((await get(`${previewPath}?token=refused`, signed.headers)).status).toBe(404);
+        expect((await get(previewPath, signed.headers, "POST")).status).toBe(404);
+        const preflight = await get(previewPath, { origin: "https://client.example", "access-control-request-method": "GET", "access-control-request-headers": "Authorization" }, "OPTIONS");
+        expect(preflight.status).toBe(204); expect(preflight.headers.get("access-control-allow-headers")).toBe("Authorization");
+        const bodyHeaders = new Headers(signed.headers); bodyHeaders.set("content-length", "1");
+        expect((await delivery.preview(new Request(signed.url, { headers: bodyHeaders }))).status).toBe(404);
+        const substitutedBytes = { ...verified.delivery, entrypoint: { ...verified.delivery.entrypoint, bytesBase64: Buffer.from("changed").toString("base64") } };
+        await expect(verifyDirectArtifactDelivery(substitutedBytes, { sessionId: workspaceClaim.sessionId, artifactId: coreTerminal.artifactId })).rejects.toThrow("DELIVERY_MISMATCH");
+        expect(modelPosts).toBe(3); expect(nativeRestores).toBe(1); expect(reserves).toBe(2); expect(nativeDeletes).toBe(1);
+        expect(cleanupGets).toBe(getsAfterCleanupProof); expect(allocations).toBe(allocationsBeforeReads); expect(deletions).toBe(deletionsBeforeReads);
+      } finally { await http.stop(true); }
     }
   } finally { try { await localWorker?.close(); } finally { await runtime?.end(); await admin?.end(); await docker(["rm", "--force", name]).catch(() => undefined); } }
 }, 120_000);

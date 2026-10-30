@@ -197,10 +197,10 @@ stored code executes, and the directory is removed on success or refusal.
 The CLI and plugin purposes must both match the original purpose. The real
 direct integration also rereads the persisted archive through this validator.
 
-This validator supplies no ownership lookup or publication authority. A future
-owner-scoped data-plane reader must derive its binding from authenticated
-coordinator records, rather than caller fields or the archive itself. Current
-preview/publication contracts still require legacy aggregate identities; they
+This validator supplies no ownership lookup or publication authority. The
+owner-scoped reader below derives its binding from authenticated coordinator
+records, rather than caller fields or the archive itself. Existing host
+descriptor/publication contracts still require legacy aggregate identities; they
 cannot consume this direct identity until an explicit versioned contract is
 implemented. Existing version-1/2 bytes and public strict validators are unchanged.
 
@@ -224,7 +224,57 @@ integration proves access after actual terminal cleanup and checkpoint/key
 deletion, refusal of altered ownership/version/request/object/profile/server
 bindings, and zero additional model, worker or object-storage mutations.
 
-This is an internal composition entry point; no public artifact route or
-preview/publication contract consumes it yet. Principal authentication must occur
-before calling it. Existing public contracts continue to require the explicitly
-versioned direct-format work described above.
+The mounted HTTP runtime now uses this reader for explicitly versioned delivery:
+
+- `GET /preview/nip5d-direct-v1/{encoded-session}/{artifact}` returns
+  `direct-artifact-delivery-v1`: exact HTML bytes, direct identity, capability
+  declarations and the original CLI-generated owner manifest template.
+- `GET /artifacts/nip5d-direct-v1/{encoded-session}/{artifact}/index.html`
+  returns the exact HTML with a sandbox/no-network CSP. Direct navigation does
+  not acquire shell capabilities or signer access.
+
+Encode the entire session ID with `encodeURIComponent`; the artifact component
+is the literal `artifact:` followed by its sealed archive checksum. Both routes
+require a NIP-98 `Authorization` header for the exact configured HTTPS origin,
+canonical path and `GET`. There are no query credentials or cookie credentials.
+The event must have empty content, exactly one `u` and one `method` tag, a valid
+signature, age below 60 seconds and future skew at most five seconds. The signed
+audience is derived from `publicOrigins.preview` or `publicOrigins.artifact`,
+never inbound Host/forwarded headers. These origins must be HTTPS origins with
+no path prefix, query, fragment or credentials. Proxy-internal HTTP transport
+does not change the signed public HTTPS audience.
+
+Browser clients can use the exported signing and verification helpers:
+
+```ts
+const request = await createDirectArtifactReadRequest({
+  url: previewUrl,
+  sign: event => ownerSigner.signEvent(event),
+});
+const response = await fetch(request);
+if (!response.ok) throw new Error('ARTIFACT_NOT_AVAILABLE');
+const { delivery, bytes } = await verifyDirectArtifactDelivery(
+  await response.json(), { sessionId, artifactId },
+);
+```
+
+The callback is the owner's existing supported signer. The helper receives no
+private key and creates no owner publication event. It omits ambient credentials,
+rejects redirects, and checks returned identity, HTML hash/size and manifest
+capability semantics. HTTPS and the service's root verification remain the source
+of archive/evidence authenticity; the delivery client does not possess or
+independently rehash the complete sealed archive.
+
+All responses use no-store/no-referrer headers. OPTIONS only supports browser
+preflight on these same routes, with GET/Authorization and no credential mode or
+owner lookup. Foreign/missing artifacts share a 404 result; malformed signatures
+return 401 before ownership lookup. Read replays within the validity window do
+not dispatch generation, signing, publication or new storage mutations.
+
+This is preview **source**, not a compatible-host descriptor, capability grant,
+runtime acceptance result or publication intent. A compatible shell must load
+the verified bytes through its own sandbox/consent contract. Actual direct Paja
+preview presentation, explicitly versioned publication/attestation contracts,
+owner signing and live certification remain required. Existing legacy strict
+schemas and records remain unchanged. These handlers are prepared source; they
+have not been deployed or enabled on the private Beta service.

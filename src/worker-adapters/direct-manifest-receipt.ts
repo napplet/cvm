@@ -12,7 +12,8 @@ export const ProductionDirectManifestReceiptSchema = z.object({
 });
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
-const Manifest = z.object({ kind: z.literal(35129), created_at: z.number().int().nonnegative(), tags: z.array(z.array(z.string().max(4096)).min(1).max(16)).max(128), content: z.string().min(1).max(4096), artifactHash: Digest }).strict();
+export const ProductionDirectManifestTemplateSchema = z.object({ kind: z.literal(35129), created_at: z.number().int().nonnegative(), tags: z.array(z.array(z.string().max(4096)).min(1).max(16)).max(128), content: z.string().min(1).max(4096) }).strict();
+const Manifest = ProductionDirectManifestTemplateSchema.extend({ artifactHash: Digest }).strict();
 
 /** Validate the plugin receipt independently of its filesystem location. This
  * does not construct an owner manifest or authorize any capability. */

@@ -40,6 +40,6 @@ export async function readVerifiedDirectWorkerArchive(bytes: Uint8Array, expecte
     if (verified.artifactHash !== archive.artifactHash || verified.sealedObjectSha256 !== archive.sealedObjectSha256 || verified.verificationEvidenceSha256 !== archive.verificationEvidenceSha256
       || verified.manifest.content !== binding.purpose) throw new Error("PRODUCTION_DIRECT_ARCHIVE_EVIDENCE_MISMATCH");
     verifyProductionDirectManifestReceipt(archive.receipts.manifest, { artifactHash: verified.artifactHash, purpose: binding.purpose, declaration: verified.declaration });
-    return Object.freeze({ ...archive, checksum: binding.checksum, files: Object.freeze(verified.files.map(file => Object.freeze({ ...file }))), declaration: verified.declaration, manifest: verified.manifest });
+    return Object.freeze({ ...archive, checksum: binding.checksum, files: Object.freeze(verified.files.map(file => Object.freeze({ ...file, bytesBase64: archive.files[0]!.bytesBase64 }))), declaration: verified.declaration, manifest: verified.manifest });
   } finally { await rm(directory, { recursive: true, force: true }); }
 }

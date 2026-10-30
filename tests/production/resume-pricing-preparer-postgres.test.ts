@@ -25,7 +25,7 @@ import { createPostgresVertexOperationJournal } from "../../src/release/deployme
 import { createVertexDeploymentClient, createVertexInteractionsHttpPort } from "../../src/release/deployment/vertex-client";
 import { ProductionVertexModelGateway } from "../../src/production/vertex-model-gateway";
 import { ProductionSourceProposalStore } from "../../src/production/source-proposal-store";
-import { ProviderOperationIntentSchema } from "../../src/model/model-gateway";
+import { ProviderOperationIntentSchema, NormalizedUsageReceiptSchema } from "../../src/model/model-gateway";
 import { z } from "zod";
 
 const integration = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
@@ -334,6 +334,17 @@ integration("production quote preparation authenticates an encrypted original ch
     const firstSettlement = await resumedSettlement.finalize({ accountId, intent, receipt: observed.receipt, pricedAmount: "3" });
     expect(firstSettlement.amount).toBe("1");
     expect(await resumedSettlement.finalize({ accountId, intent, receipt: observed.receipt, pricedAmount: "3" })).toEqual(firstSettlement);
+    for (const changedIntent of [
+      { ...intent, accountId: "account:foreign" }, { ...intent, sessionId: "session:foreign" }, { ...intent, actionId: "action:foreign" },
+      { ...intent, providerRequestId: "operation:foreign" }, { ...intent, actionBudgetReference: "budget:foreign" },
+      { ...intent, requestFingerprint: "a".repeat(64) }, { ...intent, expectedVersion: 1 }, { ...intent, profileId: "profile:foreign" },
+      { ...intent, priceCardId: "card:foreign" }, { ...intent, maximumUnits: [{ dimension: "input_tokens", units: "1" }] },
+    ]) await expect(resumedSettlement.finalize({ accountId, intent: ProviderOperationIntentSchema.parse(changedIntent), receipt: observed.receipt, pricedAmount: "3" })).rejects.toThrow("PRODUCTION_PRICED_SETTLEMENT_BINDING_DENIED");
+    for (const changedReceipt of [
+      { ...observed.receipt, operationId: "operation:foreign" }, { ...observed.receipt, providerRequestId: "request:foreign" },
+      { ...observed.receipt, profileId: "profile:foreign" }, { ...observed.receipt, priceCardId: "card:foreign" },
+      { ...observed.receipt, model: "model:foreign" }, { ...observed.receipt, provider: "deterministic_fixture" },
+    ]) await expect(resumedSettlement.finalize({ accountId, intent, receipt: NormalizedUsageReceiptSchema.parse(changedReceipt), pricedAmount: "3" })).rejects.toThrow("PRODUCTION_PRICED_SETTLEMENT_BINDING_DENIED");
     expect(modelPosts).toBe(1);
     const lateIntent = ProviderOperationIntentSchema.parse({ ...intent, sessionId: lateApi.sessionId, actionId: lateClaim.actionId, operationId: lateClaim.operationId,
       providerRequestId: lateClaim.operationId, actionBudgetReference: lateClaim.actionBudgetReference, requestFingerprint: lateClaim.fingerprint });

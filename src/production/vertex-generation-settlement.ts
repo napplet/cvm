@@ -51,7 +51,17 @@ export function createProductionVertexGenerationSettlement(input: Readonly<{ gat
       if (!parsed.success || (record && (record.revision !== 1 || record.identitySha256 !== await digest({ accountId, operationId: intent.operationId })))
         || parsed.data.accountId !== accountId || parsed.data.operationId !== intent.operationId) throw new Error("PRODUCTION_VERTEX_SETTLEMENT_BINDING_REQUIRED");
       const binding = parsed.data;
-      if (resumed && (resumed.apiClaimedAtMs === null || resumed.apiRequestSha256 !== receipt.provenance.protectedEvidenceDigest)) throw new Error("PRODUCTION_PRICED_SETTLEMENT_BINDING_DENIED");
+      if (resumed && (resumed.apiClaimedAtMs === null || resumed.apiRequestSha256 !== receipt.provenance.protectedEvidenceDigest
+        || intent.accountId !== accountId || intent.sessionId !== resumed.sessionId || intent.actionId !== resumed.actionId
+        || intent.operationId !== resumed.operationId || intent.providerRequestId !== resumed.operationId
+        || intent.actionBudgetReference !== resumed.actionBudgetReference || intent.requestFingerprint !== resumed.fingerprint
+        || intent.expectedVersion !== resumed.quote.context.expectedSessionVersion
+        || intent.profileId !== resumed.quote.pricing.profile.id || intent.priceCardId !== resumed.quote.pricing.card.id
+        || canonicalJson(intent.maximumUnits) !== canonicalJson(resumed.quote.pricing.profile.maximumUnits)
+        || receipt.operationId !== resumed.operationId || receipt.providerRequestId !== resumed.operationId
+        || receipt.profileId !== intent.profileId || receipt.priceCardId !== intent.priceCardId
+        || receipt.model !== resumed.quote.pricing.profile.model || receipt.provider !== resumed.quote.pricing.profile.provider))
+        throw new Error("PRODUCTION_PRICED_SETTLEMENT_BINDING_DENIED");
       const provider = await input.gateway.providerReceipt(intent);
       if (!provider || provider.requestSha256 !== receipt.provenance.protectedEvidenceDigest || provider.usage.inputTokens !== Number(receipt.usage.find(line => line.dimension === "input_tokens")?.units) || provider.usage.cachedInputTokens !== Number(receipt.usage.find(line => line.dimension === "cached_tokens")?.units) || provider.usage.outputTokens !== Number(receipt.usage.find(line => line.dimension === "output_tokens")?.units) || provider.usage.thoughtTokens !== Number(receipt.usage.find(line => line.dimension === "reasoning_tokens")?.units)) throw new Error("PRODUCTION_VERTEX_SETTLEMENT_RECEIPT_MISMATCH");
       if (resumed) {

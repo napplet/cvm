@@ -57,6 +57,8 @@ import { ProductionDirectArtifactDelivery } from "../../src/production/direct-ar
 import { createDirectArtifactReadRequest, verifyDirectArtifactDelivery } from "../../src/publication/direct-delivery";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { proveDirectPreviewBrowser } from "../fixtures/direct-preview-browser";
+import { ProductionDirectPublicationIntents } from "../../src/production/direct-publication-intents";
+import { signDirectPublicationIntent } from "../../src/publication/direct-publication";
 
 const integration = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
 const hash = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex");
@@ -1175,6 +1177,67 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         expect((await delivery.preview(new Request(signed.url, { headers: bodyHeaders }))).status).toBe(404);
         const substitutedBytes = { ...verified.delivery, entrypoint: { ...verified.delivery.entrypoint, bytesBase64: Buffer.from("changed").toString("base64") } };
         await expect(verifyDirectArtifactDelivery(substitutedBytes, { sessionId: workspaceClaim.sessionId, artifactId: coreTerminal.artifactId })).rejects.toThrow("DELIVERY_MISMATCH");
+        let publicationNow = Date.now(), losePublicationCommit = true;
+        const publicationNamespace = "fixture-direct-publication";
+        const publicationPool: PostgresSqlPool = { async connect() {
+          const client = await pool.connect(); let inserted = false;
+          return { async query<Row extends Record<string, unknown>>(sql: string, parameters?: readonly unknown[]) {
+            const result = await client.query<Row>(sql, parameters);
+            if (sql.startsWith("INSERT INTO production_real.release_operation_journal") && parameters?.[0] === publicationNamespace) inserted = true;
+            if (sql === "COMMIT" && inserted && losePublicationCommit) { losePublicationCommit = false; throw new Error("PUBLICATION_COMMIT_ACK_LOST"); }
+            return result;
+          }, release() { client.release(); } };
+        } };
+        const publicationInput = { artifacts: new ProductionOwnedDirectArtifacts(readerInput),
+          journal: new PostgresOperationJournal(publicationPool, { namespace: publicationNamespace, scopeSha256: "5".repeat(64) }),
+          publication: { server: "https://publication.example" }, relays: ["wss://relay.example"], now: () => publicationNow };
+        const publications = () => new ProductionDirectPublicationIntents(publicationInput);
+        const publicArtifact = { principal, sessionId: workspaceClaim.sessionId, artifactId: coreTerminal.artifactId };
+        const review = await publications().review(publicArtifact);
+        expect(review.ownerManifestTemplate).toEqual(verified.delivery.ownerManifestTemplate);
+        expect(review.file).toEqual({ path: "/index.html", mimeType: "text/html", sha256: verified.delivery.artifact.artifactHash, size: verified.bytes.length });
+        const publishCommand = { ...publicArtifact, idempotencyKey: "direct-publication:first", approval: { consent: "approved", reviewSha256: review.reviewSha256 } };
+        const prepared = await Promise.all([publications().prepare(publishCommand), publications().prepare(publishCommand)]);
+        expect(prepared[0]).toEqual(prepared[1]); expect(losePublicationCommit).toBeFalse();
+        const publicationIntent = prepared[0]!;
+        expect(await publications().readOriginal({ principal, idempotencyKey: publishCommand.idempotencyKey })).toEqual(publicationIntent);
+        expect(await publications().loadCurrentForSigning({ principal, idempotencyKey: publishCommand.idempotencyKey })).toEqual(publicationIntent);
+        expect(publicationIntent.review).not.toHaveProperty("aggregateSha256");
+        await expect(publications().prepare({ ...publishCommand, approval: { ...publishCommand.approval, reviewSha256: "0".repeat(64) } })).rejects.toThrow("IDEMPOTENCY_CONFLICT");
+        await expect(publications().prepare({ ...publishCommand, idempotencyKey: "direct-publication:stale", approval: { ...publishCommand.approval, reviewSha256: "0".repeat(64) } })).rejects.toThrow("APPROVAL_REQUIRED");
+        await expect(publications().prepare({ ...publishCommand, idempotencyKey: "direct-publication:declined", approval: { ...publishCommand.approval, consent: "declined" } })).rejects.toThrow();
+        await expect(publications().prepare({ ...publishCommand, servers: ["https://caller.example"] })).rejects.toThrow();
+        const owner = { principal, idempotencyKey: publishCommand.idempotencyKey };
+        const changedTargets = new ProductionDirectPublicationIntents({ ...publicationInput, relays: ["wss://other.example"] });
+        expect(await changedTargets.readOriginal(owner)).toEqual(publicationIntent);
+        await expect(changedTargets.loadCurrentForSigning(owner)).rejects.toThrow("INTENT_STALE");
+        const foreignOwner = { principal: { pubkey: getPublicKey(new Uint8Array(32).fill(12)) }, idempotencyKey: publishCommand.idempotencyKey };
+        expect(await publications().readOriginal(foreignOwner)).toBeUndefined();
+        await expect(publications().review({ ...publicArtifact, principal: foreignOwner.principal })).rejects.toThrow("NOT_FOUND_OR_DENIED");
+        let manifestSigns = 0;
+        const ownerEvent = await signDirectPublicationIntent({ intent: publicationIntent,
+          expected: { intentId: publicationIntent.intentId, reviewSha256: review.reviewSha256, ownerPubkey: principal.pubkey },
+          sign(template) { manifestSigns++; return finalizeEvent(template, directReadKey); } });
+        expect(manifestSigns).toBe(1); expect(ownerEvent.pubkey).toBe(principal.pubkey);
+        await expect(changedTargets.acceptOwnerEvent({ ...owner, event: ownerEvent })).rejects.toThrow("INTENT_STALE");
+        losePublicationCommit = true;
+        const acceptedOwners = await Promise.all([publications().acceptOwnerEvent({ ...owner, event: ownerEvent }), publications().acceptOwnerEvent({ ...owner, event: ownerEvent })]);
+        expect(acceptedOwners[0]).toEqual(acceptedOwners[1]); expect(losePublicationCommit).toBeFalse();
+        const repeatedSignature = finalizeEvent(structuredClone(publicationIntent.review.ownerManifestTemplate), directReadKey);
+        expect((await publications().acceptOwnerEvent({ ...owner, event: repeatedSignature })).event.sig).toBe(ownerEvent.sig);
+        expect((await publications().readAcceptedOwner(owner))?.event.id).toBe(ownerEvent.id);
+        await expect(publications().acceptOwnerEvent({ ...foreignOwner, event: ownerEvent })).rejects.toThrow("NOT_FOUND_OR_DENIED");
+        await expect(publications().acceptOwnerEvent({ ...owner, event: finalizeEvent({ ...structuredClone(publicationIntent.review.ownerManifestTemplate), content: "substituted" }, directReadKey) })).rejects.toThrow("OWNER_EVENT_REQUIRED");
+        const unsigned = await publications().prepare({ ...publishCommand, idempotencyKey: "direct-publication:unsigned" });
+        publicationNow = Math.max(publicationIntent.expiresAtMs, unsigned.expiresAtMs);
+        await expect(publications().acceptOwnerEvent({ principal, idempotencyKey: "direct-publication:unsigned", event: ownerEvent })).rejects.toThrow("INTENT_EXPIRED");
+        expect(await publications().readAcceptedOwner({ principal, idempotencyKey: "direct-publication:unsigned" })).toBeUndefined();
+        await expect(publications().loadCurrentForSigning(owner)).rejects.toThrow("INTENT_EXPIRED");
+        expect(await publications().prepare(publishCommand)).toEqual(publicationIntent); // Historical observation, no new authority.
+        expect((await publications().readAcceptedOwner(owner))?.event.id).toBe(ownerEvent.id);
+        expect((await publications().acceptOwnerEvent({ ...owner, event: ownerEvent })).event.id).toBe(ownerEvent.id);
+        expect((await admin.query("SELECT count(*)::int AS count FROM production_real.release_operation_journal WHERE namespace=$1", [publicationNamespace])).rows[0].count).toBe(3);
+        console.log(JSON.stringify({ localDirectPublication: true, intentId: publicationIntent.intentId, ownerEventId: ownerEvent.id, lostCommitRecovered: !losePublicationCommit, releaseEvidence: false }));
         expect(modelPosts).toBe(3); expect(nativeRestores).toBe(1); expect(reserves).toBe(2); expect(nativeDeletes).toBe(1);
         expect(cleanupGets).toBe(getsAfterCleanupProof); expect(allocations).toBe(allocationsBeforeReads); expect(deletions).toBe(deletionsBeforeReads);
       } finally { await http.stop(true); }

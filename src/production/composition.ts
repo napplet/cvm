@@ -13,6 +13,8 @@ export const PRODUCTION_HTTP_ROUTES = Object.freeze([
   "GET /static/*",
   "GET /preview/*",
   "GET /artifacts/*",
+  "OPTIONS /preview/nip5d-direct-v1/*",
+  "OPTIONS /artifacts/nip5d-direct-v1/*",
   "GET /internal/admission/operations/:operationId",
   "POST /internal/certification/operations",
   "GET /internal/certification/operations/:operationId",

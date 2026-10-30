@@ -25,6 +25,12 @@ const Claim = z.object({
   workerClaimedAtMs: z.coerce.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
 }).strict();
 export type AcceptedPricedContinuation = z.infer<typeof Claim>;
+export const PricedContinuationWorkerIntentSchema = z.object({
+  claimReference: Identity, accountId: Identity, sessionId: Identity, actionId: Identity, allocationIntentReference: Identity,
+  capacityIntentReference: z.string().regex(/^capacity-intent:[a-f0-9]{64}$/u), fingerprint: Digest,
+  sessionBindingDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
+}).strict();
+export type PricedContinuationWorkerIntent = z.infer<typeof PricedContinuationWorkerIntentSchema>;
 type Command = z.infer<typeof ResumeSessionV2CommandSchema>;
 const hash = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex");
 const columns = `c.claim_reference AS "claimReference",c.account_id AS "accountId",c.session_id AS "sessionId",c.checkpoint_id AS "checkpointId",
@@ -92,18 +98,35 @@ export class ProductionResumeAcceptance {
     return (await this.readOperation(accountId, operationId))?.settlement;
   }
 
-  /** Must commit before allocation/restore I/O. A replay means observe the
-   * original allocation intent; it never grants permission to reallocate. */
-  async claimWorker(accountId: string, idempotencyKey: string): Promise<Readonly<{ claim: AcceptedPricedContinuation; claimed: boolean }>> {
-    return this.#funding.transactWithSql(accountId, async (_tx, client) => {
+  /** Must commit before allocation/restore I/O. A replay identifies the same
+   * capacity intent; only its own dispatch fence may permit the first reserve. */
+  async claimWorker(accountId: string, idempotencyKey: string): Promise<Readonly<{ claim: AcceptedPricedContinuation; claimed: boolean; workerIntent: PricedContinuationWorkerIntent }>> {
+    return this.#funding.transactWithSql(accountId, async (tx, client) => {
       await client.query("SELECT claim_reference FROM production_real.priced_continuation_claims WHERE account_id=$1 AND idempotency_key=$2 FOR UPDATE", [accountId, idempotencyKey]);
       const claim = await this.#read(client, accountId, idempotencyKey);
       if (!claim || (claim.state !== "accepted" && claim.state !== "dispatching")) throw new Error("PRICED_CONTINUATION_WORKER_CLAIM_DENIED");
-      if (claim.workerClaimedAtMs !== null) return { claim, claimed: false };
+      const workerIntent = PricedContinuationWorkerIntentSchema.parse({ claimReference: claim.claimReference, accountId, sessionId: claim.sessionId,
+        actionId: claim.actionId, allocationIntentReference: claim.allocationIntentReference,
+        capacityIntentReference: `capacity-intent:${hash({ claimReference: claim.claimReference, allocation: claim.allocationIntentReference })}`,
+        fingerprint: hash({ claimReference: claim.claimReference, checkpointSha256: claim.quote.context.checkpointSha256, leaseToken: claim.leaseToken }),
+        sessionBindingDigest: `sha256:${hash({ accountId, sessionId: claim.sessionId, actionId: claim.actionId, expectedVersion: claim.quote.context.expectedSessionVersion, leaseToken: claim.leaseToken })}` });
+      const readIntent = async () => {
+        const row = (await client.query(`SELECT claim_reference AS "claimReference",account_id AS "accountId",session_id AS "sessionId",action_id AS "actionId",
+          allocation_intent_reference AS "allocationIntentReference",capacity_intent_reference AS "capacityIntentReference",fingerprint_sha256 AS fingerprint,
+          session_binding_digest AS "sessionBindingDigest" FROM production_real.priced_continuation_worker_intents WHERE claim_reference=$1 AND account_id=$2`, [claim.claimReference, accountId])).rows[0];
+        if (!row || canonicalJson(PricedContinuationWorkerIntentSchema.parse(row)) !== canonicalJson(workerIntent)) throw new Error("PRICED_WORKER_INTENT_BINDING_DENIED");
+      };
+      if (claim.workerClaimedAtMs !== null) { await readIntent(); return { claim, claimed: false, workerIntent }; }
+      const capacity = await tx.createCapacityIntent({ accountId, idempotencyKey: claim.allocationIntentReference, fingerprint: workerIntent.fingerprint, intentReference: workerIntent.capacityIntentReference });
+      if (capacity.state !== "created") throw new Error("PRICED_WORKER_INTENT_BINDING_DENIED");
       await client.query("UPDATE production_real.priced_continuation_claims SET worker_claimed_at_ms=floor(extract(epoch FROM clock_timestamp())*1000)::bigint WHERE claim_reference=$1", [claim.claimReference]);
+      await client.query(`INSERT INTO production_real.priced_continuation_worker_intents(claim_reference,account_id,session_id,action_id,allocation_intent_reference,capacity_intent_reference,fingerprint_sha256,session_binding_digest)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, [workerIntent.claimReference, accountId, workerIntent.sessionId, workerIntent.actionId,
+        workerIntent.allocationIntentReference, workerIntent.capacityIntentReference, workerIntent.fingerprint, workerIntent.sessionBindingDigest]);
+      await readIntent();
       const saved = await this.#read(client, accountId, idempotencyKey);
       if (!saved || saved.workerClaimedAtMs === null) throw new Error("PRICED_CONTINUATION_READBACK_REQUIRED");
-      return { claim: saved, claimed: true };
+      return { claim: saved, claimed: true, workerIntent };
     });
   }
 

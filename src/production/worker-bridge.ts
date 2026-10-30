@@ -15,6 +15,7 @@ import { sealProductionWorkerArtifact } from "./sealed-worker-artifact";
 import { ProductionWorkerRequestStore } from "./worker-request-store";
 import { ProductionWorkerArtifactStore } from "./worker-artifact-store";
 import { ProductionArtifactVerifier, readVerifiedProductionArtifactFile, type VerifiedProductionArtifact } from "./artifact-verifier";
+import { assertProductionPricedContinuationWorkers, type ProductionPricedContinuationWorkers } from "./priced-continuation-workers";
 
 const Owner = z.object({ accountId: z.string().regex(/^account:[a-f0-9]{64}$/u), ownerId: z.string().regex(/^[a-f0-9]{64}$/u) }).strict();
 const Capacity = z.object({ intentReference: z.string().regex(/^capacity-intent:[a-f0-9]{64}$/u), reference: z.string().regex(/^capacity:[a-f0-9]{64}$/u), workerOperationId: z.string().regex(/^capacity-[a-f0-9]{40}$/u), provider: z.enum(["modal", "fly"]), deadlineEpochMs: z.number().int().positive() }).passthrough();
@@ -25,9 +26,10 @@ type ResolvedWorker = ProductionWorkerOwner & Readonly<{ intentReference: string
 
 /** Binds every build to its authoritative funded action and ready capacity row. */
 export class ProductionWorkerOwnershipResolver {
-  constructor(private readonly input: Readonly<{ pool: PostgresSqlPool; policyVersion: string; capacityJournal?: PostgresOperationJournal }>) {
+  constructor(private readonly input: Readonly<{ pool: PostgresSqlPool; policyVersion: string; capacityJournal?: PostgresOperationJournal; pricedContinuations?: ProductionPricedContinuationWorkers }>) {
     if (!input.pool || typeof input.pool.connect !== "function" || !z.string().min(1).safeParse(input.policyVersion).success) throw new Error("PRODUCTION_WORKER_OWNER_RESOLVER_REQUIRED");
     if (input.capacityJournal) assertPostgresOperationJournal(input.capacityJournal);
+    if (input.pricedContinuations) assertProductionPricedContinuationWorkers(input.pricedContinuations);
   }
   async resolve(requestValue: WorkerRunRequest): Promise<ProductionWorkerOwner> {
     const request = WorkerRunRequestSchema.parse(requestValue);
@@ -47,9 +49,16 @@ export class ProductionWorkerOwnershipResolver {
   async #ledger(value: WorkerRunRequest): Promise<Readonly<{ owner: ProductionWorkerOwner; intentReference: string; capacityReference: string }>> {
     const request = WorkerRunRequestSchema.parse(value);
     if (request.policyVersion !== this.input.policyVersion || request.capabilityGrant !== "phase-04-coordinator-grant" || request.workspaceId !== `workspace:${request.sessionId}`) throw new Error("PRODUCTION_WORKER_REQUEST_BINDING_INVALID");
+    if (request.actionId.startsWith("priced-resume-action:") && !this.input.pricedContinuations) throw new Error("PRODUCTION_PRICED_CONTINUATION_WORKERS_REQUIRED");
+    const pricedJoins = this.input.pricedContinuations ? `LEFT JOIN production_real.priced_continuation_claims pc ON pc.account_id=a.account_id AND pc.action_id=a.id
+      LEFT JOIN production_real.priced_continuation_worker_allocations pw ON pw.claim_reference=pc.claim_reference AND pw.account_id=a.account_id` : "";
+    const capacityReference = this.input.pricedContinuations ? "CASE WHEN pc.claim_reference IS NOT NULL THEN pw.capacity_reference ELSE COALESCE(r.capacity_reference,a.admission_reference) END" : "COALESCE(r.capacity_reference,a.admission_reference)";
+    const pricedGuard = this.input.pricedContinuations ? "AND (pc.claim_reference IS NULL OR (pc.state IN ('accepted','dispatching') AND pc.worker_claimed_at_ms IS NOT NULL AND pw.expires_at>clock_timestamp()))" : "";
     const client = await this.input.pool.connect();
     try {
-      const rows = await client.query("SELECT a.account_id,trim(f.nostr_pubkey) AS owner_id,c.intent_reference,c.capacity_reference FROM production_real.metered_actions a JOIN production_real.metered_sessions s ON s.id=a.session_id AND s.account_id=a.account_id JOIN production_real.funding_accounts f ON f.account_id=a.account_id LEFT JOIN production_real.continuation_worker_allocations r ON r.account_id=a.account_id AND r.session_id=a.session_id AND r.action_id=a.id AND r.state='available' JOIN production_real.capacity_intents c ON c.account_id=a.account_id AND c.capacity_reference=COALESCE(r.capacity_reference,a.admission_reference) WHERE a.session_id=$1 AND a.id=$2 AND a.expected_session_version=$3 AND a.state IN ('prepared','active') AND c.state='available' AND f.accounting_realm='production-real' LIMIT 2", [request.sessionId, request.actionId, request.expectedVersion]);
+      const rows = await client.query(`SELECT a.account_id,trim(f.nostr_pubkey) AS owner_id,c.intent_reference,c.capacity_reference FROM production_real.metered_actions a JOIN production_real.metered_sessions s ON s.id=a.session_id AND s.account_id=a.account_id JOIN production_real.funding_accounts f ON f.account_id=a.account_id LEFT JOIN production_real.continuation_worker_allocations r ON r.account_id=a.account_id AND r.session_id=a.session_id AND r.action_id=a.id AND r.state='available'
+        ${pricedJoins} JOIN production_real.capacity_intents c ON c.account_id=a.account_id AND c.capacity_reference=(${capacityReference})
+        WHERE a.session_id=$1 AND a.id=$2 AND a.expected_session_version=$3 AND a.state IN ('prepared','active') AND c.state='available' AND f.accounting_realm='production-real' ${pricedGuard} LIMIT 2`, [request.sessionId, request.actionId, request.expectedVersion]);
       if (rows.rows.length !== 1) throw new Error("PRODUCTION_WORKER_ACTION_OWNER_NOT_FOUND"); const row = rows.rows[0] as Record<string, unknown>;
       return Object.freeze({ owner: Owner.parse({ accountId: row.account_id, ownerId: row.owner_id }), intentReference: z.string().regex(/^capacity-intent:[a-f0-9]{64}$/u).parse(row.intent_reference), capacityReference: z.string().regex(/^capacity:[a-f0-9]{64}$/u).parse(row.capacity_reference) });
     } finally { client.release(); }

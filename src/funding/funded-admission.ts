@@ -16,7 +16,7 @@ const ActionCommandSchema = z.object({
 }).strict();
 
 const ProtectedDigestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/u);
-const ExactReadyProofSchema = z.object({
+export const ExactReadyProofSchema = z.object({
   intentReference: z.string().min(1),
   leaseReference: z.string().min(1),
   sessionBindingDigest: ProtectedDigestSchema,

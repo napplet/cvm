@@ -43,7 +43,10 @@ describe("production worker ownership resolver", () => {
             if (sql === "SET ROLE napplet_production_real") return { rows: [] };
             if (sql === "SELECT current_user::text AS current_user") return { rows: [{ current_user: "napplet_production_real" }] };
             if (sql.includes("SET search_path TO production_real")) return { rows: [] };
-            if (sql.includes("FROM production_real.metered_actions")) return { rows: [{ account_id: accountId, owner_id: ownerId, intent_reference: intentReference, capacity_reference: capacityReference }] };
+            if (sql.includes("FROM production_real.metered_actions")) {
+              expect(sql).not.toContain("priced_continuation");
+              return { rows: [{ account_id: accountId, owner_id: ownerId, intent_reference: intentReference, capacity_reference: capacityReference }] };
+            }
             if (sql.includes("FROM production_real.release_operation_journal")) return { rows: [{ operation_id: `capacity-intent:${"f".repeat(64)}`, identity_sha256: "f".repeat(64), revision: 1, value_json: { intentReference, reference: capacityReference, workerOperationId, provider: "modal", deadlineEpochMs: Date.now() + 60_000 } }] };
             return { rows: [] };
           },

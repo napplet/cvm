@@ -27,6 +27,9 @@ import { ProductionVertexModelGateway } from "../../src/production/vertex-model-
 import { ProductionSourceProposalStore } from "../../src/production/source-proposal-store";
 import { ProviderOperationIntentSchema, NormalizedUsageReceiptSchema } from "../../src/model/model-gateway";
 import { z } from "zod";
+import { ProductionPricedContinuationWorkers } from "../../src/production/priced-continuation-workers";
+import { ProductionWorkerOwnershipResolver } from "../../src/production/worker-bridge";
+import type { CapacityReservation, ReadyCapacityPort } from "../../src/funding/funded-admission";
 
 const integration = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
 const hash = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex");
@@ -208,6 +211,8 @@ integration("production quote preparation authenticates an encrypted original ch
     // remain local protocol fixtures; no model request or worker is executed.
     const acceptMigration = await Bun.file("migrations/phase-07/010_production_priced_continuations.sql").text();
     await admin.query(acceptMigration); await admin.query(acceptMigration);
+    const workersMigration = await Bun.file("migrations/phase-07/011_production_priced_continuation_workers.sql").text();
+    await admin.query(workersMigration); await admin.query(workersMigration);
     const acceptancePricing = await resumePricingMaterial(Date.now(), "profile:acceptance", "2000", 8000);
     await registerProductionPricing({ pool, ...acceptancePricing });
     const acceptancePreparer = new ProductionResumePricingPreparer({ pool, store, quotes, checkpoint, vertexJournal, currentPricing: acceptancePricing,
@@ -416,6 +421,93 @@ integration("production quote preparation authenticates an encrypted original ch
       requestFingerprint: renewed.claim.fingerprint, profileId: refreshedPricing.profile.id, priceCardId: refreshedPricing.card.id });
     expect(await gateway.dispatch(supersededIntent, new AbortController().signal)).toMatchObject({ status: "definitive_not_accepted", reason: "pre_dispatch_rejected" });
     expect(await vertexJournal.read(renewed.claim.operationId)).toBeUndefined();
+    expect(modelPosts).toBe(1);
+    // Protocol-only worker fixture. Durable SQL intents and the real resolver
+    // are exercised; no external Modal/Fly worker is allocated by this test.
+    let reserves = 0, observes = 0;
+    const readyWorkers = new Map<string, CapacityReservation>();
+    const capacityJournal = new PostgresOperationJournal(pool, { namespace: "fixture-resume-capacity", scopeSha256: "9".repeat(64) });
+    const capacity: ReadyCapacityPort = {
+      async reserveNow(value) {
+        reserves++;
+        const reference = `capacity:${hash(value)}`, expiresAt = new Date(Date.now() + 60_000).toISOString();
+        const ready: CapacityReservation = { status: "available", reference, expiresAt, usable: true,
+          ready: { intentReference: value.intentReference, leaseReference: reference, sessionBindingDigest: value.expectedSessionBindingDigest,
+            imageDigest: `sha256:${"a".repeat(64)}`, readinessProbeDigest: `sha256:${"b".repeat(64)}`, readyMonotonicMs: 100 } };
+        readyWorkers.set(value.intentReference, ready);
+        await capacityJournal.claim(`capacity-intent:${createHash("sha256").update(value.intentReference).digest("hex")}`, hash(value),
+          { ...value, reference, workerOperationId: `capacity-${hash(value).slice(0, 40)}`, provider: "modal", deadlineEpochMs: Date.parse(expiresAt) });
+        throw new Error("WORKER_RESERVE_ACK_LOST");
+      },
+      async observe(value) {
+        observes++;
+        const original = readyWorkers.get(value.intentReference);
+        if (!original || observes === 1) return { status: "unknown" };
+        if (observes === 2) return { ...original, ready: { ...original.ready, sessionBindingDigest: `sha256:${"0".repeat(64)}` } };
+        return original;
+      },
+      async release() { throw new Error("UNEXPECTED_WORKER_RELEASE"); },
+    };
+    const workerAuthority = new ProductionPricedContinuationWorkers({ pool, acceptance: refreshedAcceptance, capacity });
+    await workerAuthority.assertReady();
+    await admin.query("REVOKE INSERT ON production_real.priced_continuation_worker_allocations FROM napplet_production_real");
+    await expect(workerAuthority.assertReady()).rejects.toThrow("PRODUCTION_PRICED_WORKER_SCHEMA_REQUIRED");
+    await admin.query("GRANT INSERT ON production_real.priced_continuation_worker_allocations TO napplet_production_real");
+    await workerAuthority.assertReady();
+    for (const [table, trigger] of [["priced_continuation_worker_intents", "priced_worker_intent_guard"],
+      ["priced_continuation_worker_allocations", "priced_worker_allocation_guard"], ["capacity_intents", "priced_capacity_dispatch_fence"]]) {
+      await admin.query(`ALTER TABLE production_real.${table} DISABLE TRIGGER ${trigger}`);
+      await expect(workerAuthority.assertReady()).rejects.toThrow("PRODUCTION_PRICED_WORKER_SCHEMA_REQUIRED");
+      await admin.query(`ALTER TABLE production_real.${table} ENABLE TRIGGER ${trigger}`);
+    }
+    await workerAuthority.assertReady();
+    await expect(workerAuthority.allocate(accountId, workerPending.idempotencyKey)).rejects.toThrow("PRICED_CAPACITY_DISPATCH_DENIED");
+    expect(reserves).toBe(0);
+    const workerQuote = await refreshedPreparer.prepare({ principal: short.principal, sessionId: short.sessionId, checkpointId: short.checkpointId,
+      expectedSessionVersion: 0, expectedCheckpointVersion: 1, idempotencyKey: "prepare:worker-allocation" });
+    if (workerQuote.status !== "quoted") throw new Error(`EXPECTED_WORKER_QUOTE:${workerQuote.code}`);
+    const workerCommand = { ...short, idempotencyKey: "resume:worker-allocation", pricingApproval: {
+      quoteReference: workerQuote.quoteReference, quoteSha256: workerQuote.quoteSha256, maximumSat: workerQuote.pricing.maximumSat } };
+    const allocating = (await refreshedAcceptance.claim(workerCommand)).claim;
+    await expect(workerAuthority.allocate("account:foreign", workerCommand.idempotencyKey)).rejects.toThrow("PRICED_CONTINUATION_WORKER_CLAIM_DENIED");
+    expect(await workerAuthority.allocate(accountId, workerCommand.idempotencyKey)).toEqual({ status: "reconciliation_pending" });
+    expect(reserves).toBe(1);
+    expect(await workerAuthority.read(accountId, allocating.claimReference)).toBeUndefined();
+    expect(await workerAuthority.allocate(accountId, workerCommand.idempotencyKey)).toEqual({ status: "reconciliation_pending" });
+    expect(reserves).toBe(1);
+    expect(await workerAuthority.read(accountId, allocating.claimReference)).toBeUndefined();
+    let allocationCommits = 0;
+    const uncertainWorkers = new ProductionPricedContinuationWorkers({ pool: sqlPool(runtime, () => ++allocationCommits === 2), acceptance: refreshedAcceptance, capacity });
+    await expect(uncertainWorkers.allocate(accountId, workerCommand.idempotencyKey)).rejects.toThrow("COMMIT_ACK_LOST");
+    expect(await workerAuthority.read(accountId, allocating.claimReference)).toBeDefined();
+    const allocated = await workerAuthority.allocate(accountId, workerCommand.idempotencyKey);
+    expect(allocated.status).toBe("available");
+    if (allocated.status !== "available") throw new Error("EXPECTED_ORIGINAL_WORKER_ALLOCATION");
+    const allocationRaces = await Promise.all(Array.from({ length: 3 }, () => workerAuthority.allocate(accountId, workerCommand.idempotencyKey)));
+    expect(allocationRaces.every(item => item.status === "available")).toBeTrue();
+    expect(reserves).toBe(1);
+    expect(await workerAuthority.read("account:foreign", allocating.claimReference)).toBeUndefined();
+    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.priced_continuation_worker_allocations")).rows[0].count).toBe(1);
+    await expect(runtime.query("UPDATE production_real.priced_continuation_worker_allocations SET expires_at=expires_at+interval '1 second'")).rejects.toThrow();
+    await expect(runtime.query("DELETE FROM production_real.priced_continuation_worker_intents")).rejects.toThrow();
+    const capacityIntent = (await refreshedAcceptance.claimWorker(accountId, workerCommand.idempotencyKey)).workerIntent;
+    await expect(runtime.query("UPDATE production_real.capacity_intents SET capacity_reference=$3 WHERE account_id=$1 AND intent_reference=$2", [accountId, capacityIntent.capacityIntentReference, `capacity:${"f".repeat(64)}`])).rejects.toThrow("PRICED_CAPACITY_TRANSITION_DENIED");
+    await admin.query("UPDATE production_real.funding_accounts SET nostr_pubkey=$2 WHERE account_id=$1", [accountId, principal.pubkey]);
+    const workerRequest = { sessionId: allocating.sessionId, actionId: allocating.actionId, expectedVersion: 0, policyVersion: pending.policyVersion,
+      capabilityGrant: "phase-04-coordinator-grant", workspaceId: `workspace:${allocating.sessionId}`, idea: "One counter" };
+    const oldResolver = new ProductionWorkerOwnershipResolver({ pool, policyVersion: pending.policyVersion, capacityJournal });
+    await expect(oldResolver.resolveWorker(workerRequest)).rejects.toThrow("PRODUCTION_PRICED_CONTINUATION_WORKERS_REQUIRED");
+    const resolver = new ProductionWorkerOwnershipResolver({ pool, policyVersion: pending.policyVersion, capacityJournal, pricedContinuations: workerAuthority });
+    expect(await resolver.resolveWorker(workerRequest)).toMatchObject({ accountId, ownerId: principal.pubkey, intentReference: capacityIntent.capacityIntentReference,
+      capacityReference: allocated.allocation.capacityReference, provider: "modal" });
+    const unallocatedRequest = { ...workerRequest, sessionId: workerPending.sessionId, actionId: workerClaim.actionId, workspaceId: `workspace:${workerPending.sessionId}` };
+    await expect(resolver.resolveWorker(unallocatedRequest)).rejects.toThrow("PRODUCTION_WORKER_ACTION_OWNER_NOT_FOUND");
+    await expect(refreshedAcceptance.supersedeUnclaimed(accountId, workerCommand.idempotencyKey)).rejects.toThrow("PRICED_CONTINUATION_SUPERSESSION_DENIED");
+    await metered.transact(accountId, tx => tx.releaseCapacityIntent(capacityIntent.capacityIntentReference));
+    await expect(workerAuthority.allocate(accountId, workerCommand.idempotencyKey)).resolves.toEqual({ status: "refused" });
+    await expect(metered.transact(accountId, tx => tx.recordCapacityObservation({ intentReference: capacityIntent.capacityIntentReference, state: "available" }))).rejects.toThrow("PRICED_CAPACITY_TRANSITION_DENIED");
+    await expect(resolver.resolveWorker(workerRequest)).rejects.toThrow("PRODUCTION_WORKER_ACTION_OWNER_NOT_FOUND");
+    expect(reserves).toBe(1);
     expect(modelPosts).toBe(1);
   } finally { await runtime?.end(); await admin?.end(); await docker(["rm", "--force", name]).catch(() => undefined); }
 }, 120_000);

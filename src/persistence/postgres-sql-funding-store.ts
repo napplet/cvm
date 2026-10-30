@@ -1,4 +1,5 @@
 import { accountIdForPrincipal } from "../domain/account-command";
+import { FundingCommitOutcomeUnknownError } from "../funding/transaction-outcome";
 import { RetainedGenerationCommandSchema } from "../model/retained-generation-command";
 import { SessionCapApprovalResultSchema, type SessionCapApprovalInput, type SessionCapApprovalResult, type SessionCapTransaction, type SessionCapFundingStore } from "../funding/session-cap";
 import type { AccountStatus, FundedAdmission, FundingResult } from "../phase-03/contracts";
@@ -262,14 +263,18 @@ export class PostgresSqlFundingStore implements MeteredFundingStore, Continuatio
     for (let attempt = 0; attempt < this.#maxAttempts && this.#now() < deadline; attempt += 1) {
       const raw = await beforeDeadline(this.pool.connect(), deadline, this.#now);
       const client = new DeadlineSqlClient(raw, deadline, this.#now);
+      let commitAttempted = false;
       try {
         await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
         const result = await operation(new PgFundingTransaction(client, accountId), client);
+        commitAttempted = true;
         await client.query("COMMIT");
         return frozen(result);
       } catch (error) {
         await beforeDeadline(raw.query("ROLLBACK"), this.#now() + Math.min(50, this.#deadlineMs), this.#now).catch(() => undefined);
         last = error;
+        const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+        if (commitAttempted && code !== "40001" && code !== "40P01") throw new FundingCommitOutcomeUnknownError(error);
         if ((error as { code?: unknown }).code !== "40001" || attempt + 1 === this.#maxAttempts || this.#now() >= deadline) {
           if ((error as { code?: unknown }).code === "40001") throw new SerializationFailure();
           throw error;

@@ -15,6 +15,39 @@ without a model dispatch. Actual receipt settlement reduces both settled balance
 and the selected hold; terminal replay reads the original result. Shortfalls in
 the approved cap still require explicit approval and cannot consume another hold.
 
+## Admission COMMIT uncertainty
+
+The PostgreSQL money transaction distinguishes a failed COMMIT acknowledgment
+from a known pre-commit failure. `FundingCommitOutcomeUnknownError` preserves
+the original message/cause and carries no new public or persisted fields. Once
+COMMIT was attempted, an error remains uncertain unless PostgreSQL explicitly
+reported a serialization or deadlock abort. An uncertain COMMIT is not retried
+inside that transaction loop, and a later ROLLBACK attempt is not proof that
+the earlier COMMIT failed.
+
+Before compensating a reservation, admission reads the original account and
+idempotency command. An accepted result must match its owner, capacity and
+complete command fingerprint. A matching committed result is recovered without
+another cap hold or native release. Substituted evidence refuses without granting
+release authority. If readback is unavailable, or COMMIT is uncertain and no
+result is visible, the caller receives `reconciliation_pending`; the original
+capacity and funds are preserved. A later authenticated retry queries the same
+durable original. Known pre-commit failures with no recorded acceptance retain
+the existing compensation path.
+
+The actual restricted PostgreSQL proof faults before and after real hold COMMIT,
+fails readback, recreates admission services and checks one hold/result/reservation
+with no native release for uncertain or committed work. Known rollback still
+releases unused capacity. Unit tests reject owner/capacity/fingerprint substitution.
+Rails and worker observations in these tests are explicit local fixtures; this is
+not live funding or release certification evidence.
+
+No migration or saved identity changes. Deploy the SQL outcome classifier and
+admission consumer together; rollback must retain uncertainty handling. Broader
+cross-process compensation fencing, abandoned-capacity discovery and proof of
+unused admission/action ownership remain required. A pending result or absent
+readback alone never authorizes refund or abandonment of a paid action.
+
 ## Immutable pricing catalog
 
 Runtime construction validates the mounted captured Vertex quote, its source

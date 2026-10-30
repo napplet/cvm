@@ -17,6 +17,7 @@ import type { ModelGateway } from "../../src/model/model-gateway";
 import type { ArtifactVerifier } from "../../src/phase-02/trusted-core";
 import type { WorkerPort } from "../../src/phase-02/contracts";
 import { exactReadyReservation, trustedAdmissionReceipt, trustedAdmissionReceiptAuthority } from "../fixtures/admission-ready";
+import { proveAdmissionCommitOutcomes } from "../fixtures/admission-commit-outcome";
 
 const integration = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
 const now = Date.parse("2026-10-28T12:00:00Z");
@@ -125,5 +126,6 @@ integration("production funded start spends its own accepted cap without requiri
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.price_card_versions")).rows[0].count).toBe(3);
     expect((await admin.query("SELECT id,card_hash,profile_id,normalized_card FROM production_real.price_card_versions WHERE id=$1", [pricing.card.id])).rows).toEqual(snapshot.rows);
 
+    await proveAdmissionCommitOutcomes(pool);
   } finally { await native?.end(); await admin?.end(); await docker(["rm", "--force", name]).catch(() => undefined); }
 }, 120_000);

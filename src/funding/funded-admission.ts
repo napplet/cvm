@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { accountIdForPrincipal, fingerprintAccountCommand } from "../domain/account-command";
 import { PrincipalSchema, type FundedAdmission } from "../phase-03/contracts";
-import type { FundingStore, FundingTransaction } from "../persistence/funding-store";
+import type { FundingStore, FundingTransaction, StoredFundingCommand } from "../persistence/funding-store";
+import { FundingCommitOutcomeUnknownError } from "./transaction-outcome";
 import { FundingService } from "./funding-service";
 import type { AdmissionReceiptAuthority, VerifiedAdmissionReceipt } from "./admission-receipt";
 import { AdmissionLifecycleContextSchema, emitLifecycleObservationWithCorrelation, type AdmissionLifecycleContext, type LifecycleTelemetryPort } from "../telemetry/contracts";
@@ -103,13 +104,7 @@ export class FundedAdmissionService {
 
   private async admitParsed(command: z.infer<typeof AdmissionCommandSchema>, accountId: string, receipt: VerifiedAdmissionReceipt, lifecycle: AdmissionLifecycleContext | undefined, intentFingerprint: string): Promise<FundedAdmissionOutcome> {
     const recorded = await this.options.store.findRecordedResult(accountId, command.idempotencyKey);
-    if (recorded) {
-      if (recorded.result.status !== "accepted") throw new Error("FUNDED_ADMISSION_REPLAY_INVALID");
-      const replayCommand = this.fundingCommand(command, recorded.result.reference);
-      const fingerprint = await fingerprintAccountCommand(replayCommand, accountId);
-      if (recorded.fingerprint !== fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
-      return freeze(structuredClone(recorded.result));
-    }
+    if (recorded) return this.matchRecordedAdmission(command, accountId, recorded);
 
     const intentReference = `capacity-intent:${await hash(`${accountId}:${command.idempotencyKey}`)}`;
     this.observeLifecycle(lifecycle, "capacity_intent_created", lifecycle?.receiptMonotonicMs);
@@ -153,7 +148,7 @@ export class FundedAdmissionService {
     }
 
     if (!this.isUsableLease(observation.expiresAt) || !this.hasExactReadyProof(observation, intentReference, receipt)) {
-      return this.compensateReservation(accountId, intentReference, observation.reference);
+      return this.reconcileBeforeCompensation(command, accountId, intentReference, observation);
     }
     try {
       intent = await this.options.store.transact(accountId, (transaction) => transaction.recordCapacityObservation({ intentReference, state: "available", capacityReference: observation.reference, expiresAt: observation.expiresAt }));
@@ -161,9 +156,31 @@ export class FundedAdmissionService {
       if (accepted.status !== "accepted") throw new Error("FUNDED_ADMISSION_NOT_ACCEPTED");
       this.observeLifecycle(lifecycle, "exact_session_ready", observation.ready?.readyMonotonicMs, "accepted");
       return freeze(structuredClone(accepted));
-    } catch {
-      return this.compensateReservation(accountId, intentReference, observation.reference);
+    } catch (error) {
+      const recovered = await this.reconcileBeforeCompensation(command, accountId, intentReference, observation, error instanceof FundingCommitOutcomeUnknownError);
+      if (recovered.status === "accepted") this.observeLifecycle(lifecycle, "exact_session_ready", observation.ready?.readyMonotonicMs, "accepted");
+      return recovered;
     }
+  }
+
+  private async reconcileBeforeCompensation(command: z.infer<typeof AdmissionCommandSchema>, accountId: string, intentReference: string, observation: CapacityReservation, commitUnknown = false): Promise<FundedAdmissionOutcome> {
+    // The hold may have committed before its acknowledgement was lost. Read
+    // that original before any compensation, never terminate accepted work.
+    let committed: StoredFundingCommand | undefined;
+    try { committed = await this.options.store.findRecordedResult(accountId, command.idempotencyKey); }
+    catch { return freeze({ status: "reconciliation_pending" as const, accountId, intentReference, retryable: true, unit: "sat" as const }); }
+    if (committed) {
+      return this.matchRecordedAdmission(command, accountId, committed, observation.reference);
+    }
+    if (commitUnknown) return freeze({ status: "reconciliation_pending" as const, accountId, intentReference, retryable: true, unit: "sat" as const });
+    return this.compensateReservation(accountId, intentReference, observation.reference);
+  }
+
+  private async matchRecordedAdmission(command: z.infer<typeof AdmissionCommandSchema>, accountId: string, recorded: StoredFundingCommand, expectedReference?: string): Promise<FundedAdmission> {
+    if (recorded.result.status !== "accepted" || recorded.result.accountId !== accountId || (expectedReference !== undefined && recorded.result.reference !== expectedReference)) throw new Error("FUNDED_ADMISSION_REPLAY_INVALID");
+    const fingerprint = await fingerprintAccountCommand(this.fundingCommand(command, recorded.result.reference), accountId);
+    if (recorded.fingerprint !== fingerprint) throw new Error("IDEMPOTENCY_KEY_CONFLICT");
+    return freeze(structuredClone(recorded.result));
   }
 
   async authorizeActionBudget(input: unknown, transaction?: FundingTransaction): Promise<ActionBudgetAuthorization> {

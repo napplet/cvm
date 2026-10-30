@@ -4,7 +4,7 @@ import fixture from "../tests/fixtures/phase-06-cli-source-contract.json" with {
 import { NAPPLET_CLI_LINUX_SHA256, NAPPLET_CLI_SOURCE_COMMIT, PROMOTED_CLI_SOURCE_FILE_HASHES, probePromotedCliPreSignedRoute } from "../src/publication/napplet-cli-source-contract.js";
 
 type Output = Readonly<{ status: "available" | "publication_unavailable"; liveExecution: "not_observed"; reasonCode?: string; surface?: unknown }>;
-const digest = async (bytes: Uint8Array) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), (byte) => byte.toString(16).padStart(2, "0")).join("");
+const digest = async (bytes: Uint8Array) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes).buffer)), (byte) => byte.toString(16).padStart(2, "0")).join("");
 
 async function findNamedFiles(root: string, names: readonly string[]): Promise<Map<string, string>> {
   const found = new Map<string, string>();

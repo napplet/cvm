@@ -55,7 +55,7 @@ async function stopServer(record: LaunchRecord | undefined): Promise<void> {
   for (let attempts = 0; attempts < 60 && await ownedProcessAlive(pid); attempts += 1) await Bun.sleep(250);
   if (await ownedProcessAlive(pid)) process.kill(pid, "SIGKILL");
 }
-async function freePort(): Promise<number> { const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("reserved") }); try { return listener.port; } finally { listener.stop(true); } }
+async function freePort(): Promise<number> { const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("reserved") }); try { const port = listener.port; if (port === undefined) throw new Error("DEVELOPMENT_PORT_UNAVAILABLE"); return port; } finally { listener.stop(true); } }
 function paymentStack(value: Scope) { return developmentStack(value.isolated, value.isolated ? { instance: value.instance } : {}); }
 
 async function ensurePrerequisites(value: Scope): Promise<void> {

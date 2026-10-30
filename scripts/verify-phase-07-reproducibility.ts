@@ -6,7 +6,7 @@ async function main(): Promise<void> {
   if (Bun.argv.length !== 2) { console.error(JSON.stringify({ phase: "07", command: "verify-reproducibility", status: "blocked", reason: "invalid_arguments" })); process.exitCode = 64; return; }
   let config;
   try { config = await loadCertifierConfig(); } catch { config = null; }
-  if (!config || config.mode !== "protected" || !config.reproducibility) {
+  if (!config || config.mode !== "protected" || !config.trustRoot || !config.reproducibility) {
     console.error(JSON.stringify({ phase: "07", command: "verify-reproducibility", status: "blocked", reason: "protected_configuration_unavailable" })); process.exitCode = 1; return;
   }
   try {

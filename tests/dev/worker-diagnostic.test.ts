@@ -15,7 +15,7 @@ test("diagnostic parser rejects paths, malformed locations and arbitrary message
   for (const line of ["/private/main.ts(1,2): error TS2554: secret", "src/../main.ts(1,2): error TS2554: secret", "src/main.ts(0,2): error TS2554: secret", "src/main.ts(99999,2): error TS2554: secret", "src/main.ts(1,2): error INJECTED: secret"]) expect(parseWorkerDiagnostic(line)).toBeUndefined();
   const diagnostic = parseWorkerDiagnostic("src/main.ts(1,2): error TS2554: <script>PRIVATE</script>");
   expect(diagnostic).toEqual({ file: "src/main.ts", line: 1, column: 2, code: "TS2554" });
-  const event = { version: 1, requestId: "one", tool: "start_session", sequence: 2, at: 1, elapsedMs: 0, kind: "stage", stage: "verify", state: "failed", diagnostic };
+  const event: NonNullable<ReturnType<typeof acceptDevelopmentProgress>> = { version: 1, requestId: "one", tool: "start_session", sequence: 2, at: 1, elapsedMs: 0, kind: "stage", stage: "verify", state: "failed", diagnostic };
   const pending = { id: "one", tool: "start_session", sequence: 1 };
   expect(acceptDevelopmentProgress(event, pending)).toEqual(event);
   for (const change of [{ message: "PRIVATE" }, { file: "../../private" }, { line: Infinity }, { code: "<script>" }]) expect(acceptDevelopmentProgress({ ...event, diagnostic: { ...diagnostic, ...change } }, pending)).toBeUndefined();

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { type Phase04DesignInput, type Phase04Check, evaluatePhase04Design, validatePhase04DesignEvidence, writePhase04DesignEvidence } from "../../src/verification/phase-04-design-evidence";
+import { Phase04CaseComparisonSchema, type Phase04DesignInput, type Phase04Check, evaluatePhase04Design, validatePhase04DesignEvidence, writePhase04DesignEvidence } from "../../src/verification/phase-04-design-evidence";
 import { comparePhase04Case, executePhase04ReferenceGate, observePhase04Case } from "./phase-04-runtime-observation";
 import { runPhase04DesignGate } from "../../scripts/verify-phase-04-design-slice";
 
@@ -241,7 +241,7 @@ describe("Phase 04 immutable design evidence", () => {
   test("loaded design evidence re-derives results and aggregates from observations", async () => {
     const gate = await executePhase04ReferenceGate(JSON.parse(await readFile(fixturePath, "utf8")));
     const input = await evidenceInput();
-    const decision = await evaluatePhase04Design({ ...input, caseComparisons: gate.comparisons.map(({ id, expected, observed }) => ({ id: id as never, expected, observed })) });
+    const decision = await evaluatePhase04Design({ ...input, caseComparisons: gate.comparisons.map(({ id, expected, observed }) => Phase04CaseComparisonSchema.parse({ id, expected, observed })) });
     expect(gate.comparisons.map(({ id, status }) => ({ id, status }))).toEqual([...decision.evidence.caseResults]);
     expect(decision.evidence.aggregateEffects).toEqual(gate.aggregateEffects);
     await expect(validatePhase04DesignEvidence({ ...decision.evidence, aggregateEffects: { ...decision.evidence.aggregateEffects!, providerDispatches: 999 } })).rejects.toThrow();

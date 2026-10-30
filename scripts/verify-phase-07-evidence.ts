@@ -36,7 +36,7 @@ async function main(): Promise<void> {
       return;
     }
     const fixture = validatePhase07ReferenceSet(await Bun.file("tests/fixtures/phase-07-reference-set.json").json());
-    const comparisons = await Promise.all(fixture.cases.map(executePhase07ReferenceCase));
+    const comparisons = await Promise.all(fixture.cases.map((item) => executePhase07ReferenceCase(item)));
     const evidence = await writePhase07DesignEvidence(directory, { fixture, comparisons, sourceRevision: await cleanHeadRevision() });
     const reread = await validatePhase07DesignEvidence(JSON.parse(await readFile(evidence.contentAddressedPath, "utf8")));
     if (reread.evidenceSha256 !== evidence.evidenceSha256) throw new Error("record_reread_invalid");

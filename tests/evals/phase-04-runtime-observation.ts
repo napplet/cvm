@@ -9,9 +9,10 @@ export const Phase04RuntimeObservationSchema = z.object({
 }).strict();
 export type Phase04RuntimeObservation = z.infer<typeof Phase04RuntimeObservationSchema>;
 export type Phase04RuntimeCaseInput = Readonly<{ id: string; boundedInput: Record<string, unknown>; initialState: Record<string, unknown>; schedule: readonly string[] }>;
-export type Phase04CaseComparison = Readonly<{ id: string; status: "passed" | "failed"; mismatches: readonly (keyof Phase04RuntimeObservation)[]; expected: Phase04RuntimeObservation; observed: Phase04RuntimeObservation }>;
+export type Phase04RuntimeExpectation = Omit<Phase04RuntimeObservation, "providerSelection"> & Readonly<{ providerSelection: string }>;
+export type Phase04CaseComparison = Readonly<{ id: string; status: "passed" | "failed"; mismatches: readonly (keyof Phase04RuntimeObservation)[]; expected: Phase04RuntimeExpectation; observed: Phase04RuntimeObservation }>;
 
-function expectedObservation(value: unknown): Phase04RuntimeObservation {
+function expectedObservation(value: unknown): Phase04RuntimeExpectation {
   const parsed = z.object({
     providerDispatches: z.number().int().nonnegative(), providerLookups: z.number().int().nonnegative(), workerCalls: z.number().int().nonnegative(), receiptWrites: z.number().int().nonnegative(), debitPostings: z.number().int().nonnegative(), creditPostings: z.number().int().nonnegative(), releases: z.number().int().nonnegative(),
     actionState: z.string().min(1), sessionState: z.string().min(1), artifactVersion: z.number().int().nonnegative(), evidence: z.string().min(1), providerSelection: z.string().min(1), status: z.string().min(1), nextAction: z.string().min(1), oracle: z.string(),

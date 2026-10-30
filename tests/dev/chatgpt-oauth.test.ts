@@ -50,7 +50,7 @@ for (const claims of [{ iss: "https://attacker.test" }, { aud: "another-client" 
 
 test("refresh is serialized, rotating replacement survives restart, terminal errors preserve registration", async () => {
   const { auth, fixture, login, advance, root } = await setup(); const id = await login(); advance(3_550_000);
-  expect(await Promise.all([auth.accessToken(id), auth.accessToken(id), auth.accessToken(id)])).toEqual(Array(3).fill("fixture-access-1"));
+  expect(await Promise.all([auth.accessToken(id), auth.accessToken(id), auth.accessToken(id)])).toEqual(["fixture-access-1", "fixture-access-1", "fixture-access-1"]);
   expect(fixture.counts().refreshes).toBe(1);
   expect(JSON.parse(await readFile(join(root, "accounts.json"), "utf8")).accounts[0].tokens.refresh).toBe("fixture-refresh-1");
   advance(3_550_000); fixture.setRefreshError("invalid_grant"); await expect(auth.accessToken(id)).rejects.toThrow("REAUTHORIZE_REQUIRED");

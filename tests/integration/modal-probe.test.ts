@@ -52,7 +52,7 @@ function fakeSdk(options: { output?: string; exitCode?: number; execError?: Erro
       if (options.terminateError) throw options.terminateError;
     },
     filesystem: {
-      async copyFromLocal(localPath, remotePath) { calls.copyFromLocal.push([JSON.parse(readFileSync(localPath, "utf8")), remotePath]); },
+      async copyFromLocal(localPath: string, remotePath: string) { calls.copyFromLocal.push([JSON.parse(readFileSync(localPath, "utf8")), remotePath]); },
       async copyToLocal() {},
       async listFiles() { return []; },
     },

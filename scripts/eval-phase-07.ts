@@ -12,8 +12,9 @@ async function main(): Promise<void> {
   const suite = argument.slice(8) as keyof typeof suites;
   try {
     const fixture = validatePhase07ReferenceSet(await Bun.file("tests/fixtures/phase-07-reference-set.json").json());
-    const selected = fixture.cases.filter((item) => suites[suite].includes(item.category));
-    const results = await Promise.all(selected.map(executePhase07ReferenceCase));
+    const categories: readonly (typeof fixture.cases[number])["category"][] = suites[suite];
+    const selected = fixture.cases.filter((item) => categories.includes(item.category));
+    const results = await Promise.all(selected.map((item) => executePhase07ReferenceCase(item)));
     const failed = results.filter((item) => item.status !== "passed");
     if (failed.length) throw new Error(`comparison_failed:${failed.map((item) => item.id).join(",")}`);
     console.log(JSON.stringify({ phase: "07", command: "eval", suite, status: "passed", evidenceClass: "deterministic", cases: selected.length, promotionVerdict: "blocked" }));

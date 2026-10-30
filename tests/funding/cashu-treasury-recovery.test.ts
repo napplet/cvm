@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createRequire } from "node:module";
-import { OutputData, blindMessage, createBlindSignature, createDLEQProof, deriveKeysetId, getEncodedToken, getPubKeyFromPrivKey, pointFromHex, type RequestFn } from "@cashu/cashu-ts";
+import { Amount, OutputData, blindMessage, createBlindSignature, createDLEQProof, deriveKeysetId, getEncodedToken, getPubKeyFromPrivKey, pointFromHex, type RequestFn } from "@cashu/cashu-ts";
 import { InMemoryCashuTreasuryCustody, canonicalCashuProofIdentities, canonicalCashuTokenIdentity } from "../../src/funding/treasury-custody";
 import { CashuTsSettlementAdapter } from "../../src/funding/cashu-provider";
 import { CashuTopUpCoordinator, InMemoryCashuTopUpRepository } from "../../src/funding/cashu-top-up";
@@ -13,7 +13,7 @@ import fixture from "../fixtures/cashu-phase-03.json";
 
 const mintUrl = "https://mint-a.example";
 const keysetId = "009a1b2c3d4e5f60";
-const token = (proofs: readonly { amount: bigint; secret: string; C: string }[]) => new TextEncoder().encode(getEncodedToken({ mint: mintUrl, unit: "sat", proofs: proofs.map((proof) => ({ ...proof, id: keysetId })) }));
+const token = (proofs: readonly { amount: bigint; secret: string; C: string }[]) => new TextEncoder().encode(getEncodedToken({ mint: mintUrl, unit: "sat", proofs: proofs.map((proof) => ({ ...proof, amount: Amount.from(proof.amount), id: keysetId })) }));
 const first = { amount: 8n, secret: "first-secret", C: `02${"11".repeat(32)}` };
 const second = { amount: 13n, secret: "second-secret", C: `02${"22".repeat(32)}` };
 const hex = (value: Uint8Array) => Buffer.from(value).toString("hex");
@@ -27,12 +27,12 @@ const signedOutput = (output: { B_: string; amount: string; id: string }) => {
   const privateKey = privateKeys.get(output.amount); if (!privateKey) throw new Error(`unsupported amount:${output.amount}`);
   const signature = createBlindSignature(B_, privateKey, output.id);
   const dleq = createDLEQProof(B_, privateKey);
-  return { id: output.id, amount: output.amount, C_: signature.C_.toHex(true), dleq: { e: hex(dleq.e), s: hex(dleq.s) } };
+  return { id: output.id, amount: Amount.from(output.amount), C_: signature.C_.toHex(true), dleq: { e: hex(dleq.e), s: hex(dleq.s) } };
 };
 const validProof = (secret: string, amount: string, id = keysetId) => {
   const blinded = blindMessage(new TextEncoder().encode(secret), 3n);
-  const output = new OutputData({ B_: blinded.B_.toHex(true), amount, id }, blinded.r, blinded.secret);
-  return output.toProof(signedOutput({ B_: blinded.B_.toHex(true), amount, id }), { id, unit: "sat", keys: { [amount]: generators[amount]! } });
+  const output = new OutputData({ B_: blinded.B_.toHex(true), amount: Amount.from(amount), id }, blinded.r, blinded.secret);
+  return output.toProof(signedOutput({ B_: blinded.B_.toHex(true), amount, id }), { id, keys: { [amount]: generators[amount]! } });
 };
 class RecoveryVault {
   #values = new Map<string, Uint8Array>(); #next = 0;
@@ -210,7 +210,7 @@ describe("Cashu treasury custody", () => {
             const wrongKey = privateKeys.get("32")!;
             return { outputs, signatures: outputs.map((output) => {
               const proof = createDLEQProof(pointFromHex(output.B_), wrongKey);
-              return { id: output.id, amount: output.amount, C_: createBlindSignature(pointFromHex(output.B_), wrongKey, output.id).C_.toHex(true), dleq: { e: hex(proof.e), s: hex(proof.s) } };
+              return { id: output.id, amount: Amount.from(output.amount), C_: createBlindSignature(pointFromHex(output.B_), wrongKey, output.id).C_.toHex(true), dleq: { e: hex(proof.e), s: hex(proof.s) } };
             }) } as never;
           }
           return { outputs, signatures: signatures.map(({ dleq: _dleq, ...signature }) => signature) } as never;

@@ -64,7 +64,7 @@ describe("runHermeticCommand", () => {
     expect(first.stdout).toContain(first.cwd);
   });
 
-  test.each([
+  test.each<[string, string[], Record<string, unknown>, Awaited<ReturnType<typeof runHermeticCommand>>["disposition"]]>([
     ["timeout", ["-e", "await Bun.sleep(1000)"], { timeoutMs: 5 }, "timeout"],
     ["output overflow", ["-e", "process.stdout.write('x'.repeat(2000))"], { outputLimitBytes: 32 }, "output-overflow"],
     ["egress signal", ["-e", "console.error('CVM_EGRESS_ATTEMPT')"], {}, "egress-attempt"],

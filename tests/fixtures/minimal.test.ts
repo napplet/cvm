@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { FIXTURES, runFixture } from "../../src/fixtures/registry";
+import { FIXTURES, runFixture, type FixtureRunResult, type FixtureStage } from "../../src/fixtures/registry";
 
 const digest = (value: string) => value.repeat(64).slice(0, 64);
 
-function runnerOutput(stages: readonly string[], status: "passed" | "blocked" = "passed") {
+function runnerOutput(stages: readonly FixtureStage[], status: "passed" | "blocked" = "passed"): Omit<FixtureRunResult, "sealedEvidenceSha256"> {
   return {
     fixture: "minimal",
     mode: "primary",
@@ -67,7 +67,7 @@ describe("minimal fixture", () => {
 
     expect(calls).toEqual(["/toolchain/bin/fixture-runner"]);
     expect(result.status).toBe("passed");
-    expect(result.stages.map((stage) => stage.id)).toEqual(fixture.stages);
+    expect(result.stages.map((stage) => stage.id)).toEqual([...fixture.stages]);
   });
 
   test("rejects a runner report without the native init evidence", async () => {
@@ -121,9 +121,8 @@ describe("minimal fixture", () => {
   });
 
   test("retains the final failed native stage as structured blocked evidence", async () => {
-    const output = runnerOutput(["create"], "blocked");
-    output.stages[0]!.exitCode = 1;
-    output.reason = "create exited 1";
+    const base = runnerOutput(["create"], "blocked");
+    const output = { ...base, stages: base.stages.map((stage) => ({ ...stage, exitCode: 1 })), reason: "create exited 1" };
     const result = await runFixture("minimal", {
       imageDigest: "a".repeat(64),
       runSealed: async (request) => ({
@@ -139,7 +138,7 @@ describe("minimal fixture", () => {
     expect(result.reason).toBe("create exited 1");
   });
 
-  test.each([
+  test.each<[string, FixtureStage[]]>([
     ["missing", ["create", "init", "skills", "overlay", "install", "build", "verify", "conformance"]],
     ["empty", []],
     ["duplicated", ["create", "init", "skills", "overlay", "install", "build", "verify", "conformance", "dry-run", "dry-run"]],

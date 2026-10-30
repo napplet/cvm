@@ -7,7 +7,7 @@ type ProtectedConfiguration = Readonly<{ root: string; modulePath: string; sha25
 async function protectedConfiguration(): Promise<ProtectedConfiguration | null> {
   try {
     const config = await loadCertifierConfig();
-    return config.mode === "protected" ? config.trustRoot : null;
+    return config.mode === "protected" ? config.trustRoot ?? null : null;
   } catch { return null; }
 }
 

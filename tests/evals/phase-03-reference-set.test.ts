@@ -7,7 +7,7 @@ import { AccountStatusService } from "../../src/funding/account-status";
 import { CashuMintPolicyRegistry } from "../../src/funding/cashu-mint-policy";
 import { FakeCashuSettlementPort } from "../../src/funding/cashu-provider";
 import { CashuTopUpCoordinator, InMemoryCashuTopUpRepository } from "../../src/funding/cashu-top-up";
-import { FundedAdmissionService } from "../../src/funding/funded-admission";
+import { type ReadyCapacityPort, FundedAdmissionService } from "../../src/funding/funded-admission";
 import { FundingService } from "../../src/funding/funding-service";
 import { FakeLightningReceiptPort } from "../../src/funding/lightning-provider";
 import { InMemoryLightningTopUpRepository, LightningTopUpCoordinator } from "../../src/funding/lightning-top-up";
@@ -39,7 +39,7 @@ async function seedCredit(harness: ReturnType<typeof fundingHarness>, suffix: st
   return harness.funding.execute({ principal, kind: "credit_settlement", idempotencyKey: `credit:${suffix}`, policyVersion: "p1", protocolVersion: "v1", payload: { settlement: { topUpId: `topup:${suffix}`, rail: "lightning", unit: "sat", amount, externalReference: `external:${suffix}`, settlementReference: `settlement:${suffix}`, verifiedAt: now } } });
 }
 
-function capacity(reference: string) {
+function capacity(reference: string): Readonly<{ port: ReadyCapacityPort; reserves(): number }> {
   let reserves = 0;
   return {
     port: { reserveNow: async ({ intentReference }) => { reserves += 1; return exactReadyReservation(intentReference, reference, "2026-08-05T00:00:00.000Z"); }, observe: async () => ({ status: "unknown" as const }), release: async () => undefined },

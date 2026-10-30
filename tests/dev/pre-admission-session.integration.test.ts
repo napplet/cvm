@@ -35,7 +35,7 @@ test("save restart fund resume original operation", async () => {
     for (const file of ["phase-03/001_funding.sql", "phase-04/001_metered_generation.sql", "phase-04/002_action_budget_lifecycle.sql", "phase-05/001_continuation.sql", "development/005_pending_actions.sql"]) await pool.query(await Bun.file(`${import.meta.dir}/../../migrations/${file}`).text());
     const accountId = await accountIdForPrincipal({ pubkey: ownerId });
     const generation = { async startSessionAfterAdmission(input: any) { calls += 1; expect(input.remixReference).toBe(`remix:${"b".repeat(64)}`); return { status: "completed", code: "ACTION_COMMITTED", accountId, sessionId: "session:original", sessionVersion: 1, artifactVersion: 1, artifactId: "artifact:original", confirmedSpend: "11", remainingCap: "3989", remainingBalance: "3989", nextAction: "revise_session", operationId: `operation:${input.idempotencyKey}` } as const; } };
-    const create = (currentPins = pins) => new PreAdmissionSessionService({ store: new PostgresSqlFundingStore(pool, { deadlineMs: 5_000 }), envelope: new PendingActionEnvelopeService(new LocalCheckpointStore({ root: keyRoot })), generation, pricing: { card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile: PHASE_04_MODEL_PROFILES["code-proposal"] }, pins: currentPins });
+    const create = (currentPins: ConstructorParameters<typeof PreAdmissionSessionService>[0]["pins"] = pins) => new PreAdmissionSessionService({ store: new PostgresSqlFundingStore(pool, { deadlineMs: 5_000 }), envelope: new PendingActionEnvelopeService(new LocalCheckpointStore({ root: keyRoot })), generation, pricing: { card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile: PHASE_04_MODEL_PROFILES["code-proposal"] }, pins: currentPins });
     const command = { idempotencyKey: "one-original-command", remixReference: `remix:${"b".repeat(64)}`, maximum: "4000", idea: "A bounded private idea that never appears in SQL", policyVersion: pins.policyVersion } as const;
     const saved = await create().saveStart({ owner: { ownerId, accountId }, command });
     expect(saved.status).toBe("saved"); if (saved.status !== "saved") throw new Error("PENDING_ACTION_NOT_SAVED");
@@ -53,7 +53,9 @@ test("save restart fund resume original operation", async () => {
     const resumeCommand = { kind: "pending_action" as const, checkpointId: saved.checkpointId, expectedCheckpointVersion: 1 as const, expectedSessionVersion: 0 as const, idempotencyKey: "resume-one", approvePendingAction: true as const, admissionReference: "admission:one", pendingAction: { reference: saved.reference, fingerprint: saved.fingerprint, kind: "start_session" as const, maximum: "4000" } };
     await expect(create({ ...pins, toolchainId: "changed-toolchain" }).resume({ owner: { ownerId, accountId }, command: resumeCommand })).rejects.toThrow("PENDING_ACTION_RESTORE_DENIED");
     expect((await pool.query("SELECT state FROM development_pending_actions")).rows[0]).toEqual({ state: "saved" });
-    const tampered = JSON.parse(serialized.rows[0]!.envelope); tampered.ciphertextBase64 = "AA==";
+    const originalEnvelope = serialized.rows[0]?.envelope;
+    if (typeof originalEnvelope !== "string") throw new Error("PENDING_ENVELOPE_FIXTURE_MISSING");
+    const tampered = JSON.parse(originalEnvelope); tampered.ciphertextBase64 = "AA==";
     await pool.query("UPDATE development_pending_actions SET envelope_json=$2 WHERE checkpoint_id=$1", [saved.checkpointId, JSON.stringify(tampered)]);
     await expect(create().resume({ owner: { ownerId, accountId }, command: resumeCommand })).rejects.toThrow("PENDING_ACTION_RESTORE_DENIED");
     expect((await pool.query("SELECT state FROM development_pending_actions")).rows[0]).toEqual({ state: "saved" });
@@ -86,7 +88,7 @@ test("pre-admission resume drives the original command through the real worker o
     const fundedAdmission = new FundedAdmissionService({ funding: composition.funding.funding, store: composition.funding.database.funding, capacity: {} as never, receiptAuthority: {} as never });
     const generation = new MeteredGenerationService({ fundedAdmission, store: composition.funding.database.meteredFunding, gateway: composition.gateway, worker, artifactVerifier, proposalStore: composition.proposals, ...(composition.pricing ? { pricing: composition.pricing } : {}) });
     const pricing = composition.pricing ?? { card: PHASE_04_DETERMINISTIC_PRICE_CARD, profile: PHASE_04_MODEL_PROFILES["code-proposal"] };
-    const service = new PreAdmissionSessionService({ store: composition.funding.database.meteredFunding, envelope: new PendingActionEnvelopeService(new LocalCheckpointStore({ root: keyRoot })), generation, pricing, pins });
+    const service = new PreAdmissionSessionService({ store: composition.funding.database.funding, envelope: new PendingActionEnvelopeService(new LocalCheckpointStore({ root: keyRoot })), generation, pricing, pins });
     const command = { idempotencyKey: `real-worker-${crypto.randomUUID()}`, maximum: "4000", idea: "A focused counter for this verified pending action", policyVersion: pins.policyVersion };
     const saved = await service.saveStart({ owner: { ownerId, accountId }, command });
     expect(saved.status).toBe("saved"); if (saved.status !== "saved") throw new Error("PENDING_ACTION_NOT_SAVED");

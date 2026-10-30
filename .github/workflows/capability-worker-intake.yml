@@ -9,9 +9,21 @@ on:
       - "toolchains/overlays/capabilities-template/**"
       - "toolchains/recipes/capabilities-worker-profile.json"
       - "src/worker-adapters/**"
-      - "src/production/direct-artifact-verifier.ts"
+      - "src/production/**"
+      - "src/funding/**"
+      - "src/persistence/**"
+      - "src/phase-04/**"
+      - "src/model/**"
+      - "src/publication/**"
+      - "src/release/deployment/**"
       - "scripts/test-production-worker.ts"
+      - "scripts/test-direct-publication.ts"
       - "tests/fixtures/direct-worker-notes/**"
+      - "tests/fixtures/local-production-worker.ts"
+      - "tests/fixtures/direct-*.ts"
+      - "tests/fixtures/resume-pricing.ts"
+      - "tests/production/fresh-generation-postgres.test.ts"
+      - "tests/production/resume-pricing-preparer-postgres.test.ts"
       - "tests/release/direct-worker-protocol.test.ts"
       - "tests/release/postgres-operation-journal.test.ts"
       - ".github/workflows/capability-worker-intake.yml"
@@ -44,11 +56,19 @@ jobs:
         env:
           NAPPLET_CVM_WORKER_REPORT: intake/capabilities-worker-report.json
         run: bun scripts/test-production-worker.ts napplet-cvm-capabilities-worker:ci --direct-artifact
+      - name: Fresh funded generation acknowledgment recovery and owned publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          CVM_DIRECT_WORKER_IMAGE_ID=$(docker image inspect napplet-cvm-capabilities-worker:ci --format '{{.Id}}')
+          NAPPLET_CVM_TEST_REAL_WORKER_IMAGE="$CVM_DIRECT_WORKER_IMAGE_ID" bun scripts/test-direct-publication.ts 2>&1 | tee intake/capabilities-worker-funded-publication.log
       - name: Retain bounded local-mechanism evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: direct-worker-native-amd64
-          path: intake/capabilities-worker-*
+          path: |
+            intake/capabilities-worker-*
+            /tmp/cvm-priced-artifact-*.ndjson
           retention-days: 7
           if-no-files-found: ignore

@@ -124,7 +124,10 @@ export class ProductionWorkerBridge implements ContinuationWorkerPort, ArtifactV
       await this.#persist(request);
       const original = await this.#artifacts.read(request); if (original) return original.result;
       const worker = await this.input.resolver.resolveWorker(request); const job = await this.#job(worker); const started = await job.start(request);
-      if (started.state === "unknown" || started.state === "missing") return { status: "unavailable", code: "WORKER_UNAVAILABLE" };
+      if (started.state === "missing") return { status: "unavailable", code: "WORKER_UNAVAILABLE" };
+      // START may have succeeded before its acknowledgment was lost. The job
+      // claim owns that ambiguity: wait only observes the same immutable job,
+      // under its original deadline, without another upload or START.
       const observed = await job.wait(request, signal);
       if (observed.state === "pending" || observed.state === "unknown") return { status: "interrupted", code: "WORKER_INTERRUPTED" };
       if (observed.state !== "completed") return { status: "unavailable", code: "WORKER_UNAVAILABLE" };

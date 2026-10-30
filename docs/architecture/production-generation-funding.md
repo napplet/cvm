@@ -89,6 +89,29 @@ the fence-aware code and both original journal histories. This is not authority
 to refund or abandon an accepted or unknown paid action. Full funded native
 CREATE certification remains open.
 
+## First generation and uncertain job START
+
+The normal worker bridge now sends an unknown START acknowledgment through the
+existing original-job status reader. A durable job claim can mean the worker
+accepted START before its response was lost. Reporting terminal build failure at
+that point would discard the running first build while charging its known model
+usage. Observation uses the exact retained request/job identity and original
+deadline; it sends no replacement upload or START. Proven missing or failed jobs
+still fail, and abort remains interruption. No public result variant, schema,
+pricing, cap or provider authority changes.
+
+The local direct-publication runner also exercises a complete fresh 0-to-1
+generation against restricted PostgreSQL and the actual source-checked image.
+There are no seeded session, action, native worker or artifact rows. Cases cover
+normal CREATE, lost CREATE acknowledgment and lost START acknowledgment, with
+one original CREATE, model POST and build START each. They require the real ready
+probe, eight successful pinned commands, Chromium wire conformance, immutable
+toolchain receipt, exact USD/FX settlement, version 1 owner-authorized artifact,
+foreign-owner denial and fresh-service replay after native termination. Local
+rail/model/provider/object fixtures remain explicit; this is not real-money,
+approved sandbox or release evidence. Process loss/abort through encrypted
+recovery and initial native dispatch-claim ambiguity remain separate work.
+
 ## Bounded unused-capacity observation
 
 The normal mounted runtime polls ordinary unaccepted admission intents every

@@ -207,6 +207,16 @@ uploads verified archive bytes using the actual pinned CLI. One PUT with a lost
 response, concurrent/lost-commit recovery, original-only renewal refusal and
 expired observation are tested. These fixtures remain local mechanism proof.
 
+The same runner first checks a fresh funded 0-to-1 generation with no seeded
+session/action/artifact or native worker. Normal, lost-CREATE and lost-START
+acknowledgment cases each require one native CREATE, model POST and job START,
+the actual ready probe, eight successful build commands, Chromium conformance,
+measured toolchain receipt, exact settlement and owned artifact/replay after
+worker termination. It runs only with an explicitly selected local direct image.
+The runner's overall watchdog covers the combined cases; each test retains its
+120-second limit. Neither that limit nor local success measures the live
+five-second admission SLO or relaxes any release gate.
+
 ### Direct owner relay and service attestation
 
 `ProductionDirectCertificationRelays` reads the concrete original upload

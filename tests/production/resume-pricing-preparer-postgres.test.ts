@@ -746,7 +746,11 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     await expect(refreshedAcceptance.supersedeUnclaimed(accountId, workerCommand.idempotencyKey)).rejects.toThrow("PRICED_CONTINUATION_SUPERSESSION_DENIED");
     await metered.transact(accountId, tx => tx.releaseCapacityIntent(capacityIntent.capacityIntentReference));
     await expect(workerAuthority.allocate(accountId, workerCommand.idempotencyKey)).resolves.toEqual({ status: "refused" });
-    await expect(metered.transact(accountId, tx => tx.recordCapacityObservation({ intentReference: capacityIntent.capacityIntentReference, state: "available" }))).rejects.toThrow("PRICED_CAPACITY_TRANSITION_DENIED");
+    const terminalCapacity = (await admin.query("SELECT state,capacity_reference,expires_at FROM production_real.capacity_intents WHERE account_id=$1 AND intent_reference=$2", [accountId, capacityIntent.capacityIntentReference])).rows[0];
+    expect(terminalCapacity?.state).toBe("released");
+    await expect(metered.transact(accountId, tx => tx.recordCapacityObservation({ intentReference: capacityIntent.capacityIntentReference, state: "available" }))).resolves.toMatchObject({ state: "released" });
+    expect((await admin.query("SELECT state,capacity_reference,expires_at FROM production_real.capacity_intents WHERE account_id=$1 AND intent_reference=$2", [accountId, capacityIntent.capacityIntentReference])).rows[0]).toEqual(terminalCapacity);
+    await expect(runtime.query("UPDATE production_real.capacity_intents SET state='available' WHERE account_id=$1 AND intent_reference=$2", [accountId, capacityIntent.capacityIntentReference])).rejects.toThrow("PRICED_CAPACITY_TRANSITION_DENIED");
     await expect(resolver.resolveWorker(workerRequest)).rejects.toThrow("PRODUCTION_WORKER_ACTION_OWNER_NOT_FOUND");
     expect(reserves).toBe(1);
     expect(modelPosts).toBe(2);

@@ -8,6 +8,7 @@ import { createAuthorizationRequest, createAuthorizationReceipt } from "../../sr
 import { createProductionReadyCapacity } from "../../src/production/worker-capacity";
 import { createProductionWorkerLifecycle } from "../../src/production/worker-lifecycle";
 import { createMountedReleaseCleanup } from "../../src/production/release-cleanup";
+import { proveFlyMissingIdCleanup, proveModalMissingIdCleanup } from "../fixtures/worker-missing-id-cleanup";
 const postgresIsolation = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
 async function docker(args: string[]): Promise<string> {
   const child = Bun.spawn(["docker", ...args], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
@@ -115,6 +116,8 @@ postgresIsolation("worker lifecycle retains originals across allocation ambiguit
       await expect(open().apply({ ...plan, operationId: "new-after-expiry" })).rejects.toThrow("WORKER_LIFECYCLE_ORIGINAL_REQUIRED");
     }
     expect({ creates, deletes }).toEqual({ creates: 2, deletes: 2 });
+    await proveModalMissingIdCleanup(() => createPostgresWorkerOperationJournal(journal()));
+    await proveFlyMissingIdCleanup(() => createPostgresWorkerOperationJournal(journal()));
   } finally {
     await application?.end();
     await admin?.end();

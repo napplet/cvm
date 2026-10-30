@@ -27,6 +27,39 @@ Rollback keeps all records and existing identities. An older reader tolerates
 the additional execution field. Retain the matching old image and toolchain;
 rolling a default back does not migrate an active job.
 
+## Cleanup after a lost worker creation response
+
+Cleanup can recover a missing native ID without invoking CREATE, including
+after the original creation deadline. Both transports first read the durable
+original request. Only records that reached dispatching, dispatched, unknown or
+reconciled are eligible; a merely claimed record cannot trigger provider lookup.
+Missing or ambiguous lookup cannot prove that an in-flight creation never ran.
+
+Modal requires the exact provider application, image, policy, lease, toolchain,
+deadline and full server-held request tag set. Fly uses the existing exact
+operation/request metadata, image and isolation configuration checks, additionally
+requires the original region and a provider creation time no later than the
+original deadline, then retains that creation time with the recovered native ID.
+Fly exposes these provider fields in its
+[Machines API](https://machines-api-spec.fly.dev/models).
+Neither transport accepts a replacement ID or rewrites the original request.
+
+`observeTermination` may bind these verified facts to the existing SQL original;
+it dispatches no creation, worker command or termination. `terminate` performs
+the same resolution before the existing independently journaled termination
+fence. An uncertain termination is still observed, never issued again. A missing,
+duplicate, foreign, unavailable or mismatched observation leaves cleanup unknown.
+Retain the original provider app, executable profile and journal access for this
+recovery; current defaults cannot supply missing authority.
+
+Local native-boundary fixtures and restricted PostgreSQL checks exercise lost
+CREATE responses, expired creation deadlines, fresh controller instances, native
+ID persistence, wrong identities and lost termination acknowledgements with one
+CREATE and one termination. They are mechanism proof, not live provider evidence.
+Admission readiness after missing-ID creation, truly absent native resources,
+abandoned capacity claims and fresh CREATE certification still need their own
+end-to-end proof. No production profile or isolation gate is selected by cleanup.
+
 ## Remaining promotion requirements
 
 This change is a safety prerequisite, not complete upgrade recovery. Before

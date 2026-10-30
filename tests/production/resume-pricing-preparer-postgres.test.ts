@@ -43,6 +43,8 @@ import { WorkerRunRequestSchema } from "../../src/phase-02/contracts";
 import { projectResumePricingQuote } from "../../src/continuity/resume-v2-contracts";
 import { ProductionPricedContinuationFinalizer } from "../../src/production/priced-continuation-finalizer";
 import { ProductionPricedContinuationRunner } from "../../src/production/priced-continuation-runner";
+import { listProductionRetentionCandidates } from "../../src/production/checkpoint-retention";
+import { ContinuationDeadlineReconciler } from "../../src/continuity/deadline-reconciler";
 
 const integration = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
 const hash = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex");
@@ -889,9 +891,28 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.billing_line_items WHERE source_identity=$1 AND kind='reconciliation' AND amount_sat=0", [`reconciliation:${workspaceClaim.operationId}`])).rows[0].count).toBe(1);
     // Terminal consent/result replay must survive actual command/key/object
     // erasure. The runner must not decrypt or revisit a provider after expiry.
-    now = Date.parse(workspaceSealed.manifest.retentionUntil) + 1;
+    const completedRetentionDeadline = Date.parse(workspaceSealed.manifest.retentionUntil);
+    expect((await listProductionRetentionCandidates(pool, completedRetentionDeadline - 1)).some(value => value.checkpointId === workspaceClaim.checkpointId)).toBeFalse();
+    await expect(store.transact(accountId, tx => tx.tombstoneExpiredCheckpoint({ checkpointId: workspaceClaim.checkpointId,
+      nowMs: completedRetentionDeadline - 1 }))).rejects.toThrow("CHECKPOINT_RETENTION_ACTIVE");
+    now = completedRetentionDeadline;
     const eraseWorkspace = { checkpointId: workspaceClaim.checkpointId, accountId, sessionId: workspaceClaim.sessionId };
-    await checkpoint.destroyExpired(eraseWorkspace);
+    const due = await listProductionRetentionCandidates(pool, now);
+    expect(due.some(value => value.checkpointId === workspaceClaim.checkpointId)).toBeTrue();
+    expect(due.some(value => value.checkpointId === accepted.claim.checkpointId)).toBeFalse();
+    expect((await store.transact(accountId, tx => tx.tombstoneExpiredCheckpoint({ checkpointId: accepted.claim.checkpointId, nowMs: now }))).state).toBe("claimed");
+    let loseCompletedDeletionAck = true;
+    const retention = () => new ContinuationDeadlineReconciler({ store, worker: nativeBridge(), envelope: checkpoint,
+      clock: { nowMs: () => now }, candidates: { async listDue() { return []; },
+        async listRetentionDue(at) { return (await listProductionRetentionCandidates(pool, at)).filter(value => value.checkpointId === workspaceClaim.checkpointId); } },
+      retention: { async destroyExpired(value) { await checkpoint.destroyExpired(value);
+        if (loseCompletedDeletionAck) { loseCompletedDeletionAck = false; throw new Error("COMPLETED_DELETE_ACK_LOST"); } } } });
+    expect(await retention().scanRetention()).toMatchObject([{ status: "deletion_pending", checkpointId: workspaceClaim.checkpointId }]);
+    expect((await store.findContinuationCheckpoint(accountId, workspaceClaim.checkpointId))?.state).toBe("expired");
+    expect(await retention().scanRetention()).toMatchObject([{ status: "expired", checkpointId: workspaceClaim.checkpointId }]);
+    expect(await retention().scanRetention()).toEqual([]);
+    expect((await store.findContinuationPause(accountId, workspaceClaim.sessionId, 1))?.state).toBe("completed");
+    expect((await acceptance.find(accountId, workspaceResume.idempotencyKey))?.state).toBe("completed");
     expect(await checkpoint.observeDestroyed(eraseWorkspace)).toBeTrue();
     await expect(refreshedPreparer.loadAcceptedAuthority({ principal: { id: accountId }, idempotencyKey: workspaceResume.idempotencyKey })).rejects.toThrow();
     const readsBeforeTerminalReplay = objectReads;

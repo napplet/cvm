@@ -609,7 +609,11 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
         tombstoneExpiredCheckpoint: async (input) => {
           const checkpoint = state.checkpoints.get(input.checkpointId);
           if (!checkpoint) throw new Error("CHECKPOINT_NOT_FOUND");
-          if (checkpoint.state === "claimed") return checkpoint;
+          if (checkpoint.state === "claimed") {
+            const pause = [...state.continuationPauses.values()].find(value => value.accountId === accountId
+              && value.sessionId === checkpoint.sessionId && value.pauseGeneration === checkpoint.pauseGeneration);
+            if (!pause || pause.state !== "completed" || pause.liveLeaseToken !== undefined) return checkpoint;
+          }
           if (checkpoint.state === "expired") return checkpoint;
           if (input.nowMs < checkpoint.retentionDeadlineMs) throw new Error("CHECKPOINT_RETENTION_ACTIVE");
           const expired = freeze({ ...checkpoint, state: "expired" as const });

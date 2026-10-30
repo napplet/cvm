@@ -624,9 +624,15 @@ class PgFundingTransaction implements MeteredFundingTransaction, ContinuationFun
   async tombstoneExpiredCheckpoint(input: Readonly<{ checkpointId: string; nowMs: number }>): Promise<ContinuationCheckpoint> {
     const row = first(await this.client.query("SELECT account_id,session_id,pause_generation,checkpoint_id,expected_session_version,expected_artifact_version,manifest_reference,object_key,object_generation,object_checksum,key_reference,compatibility_identity,checkpoint_committed_at_ms,retention_deadline_ms,state FROM continuation_checkpoints WHERE checkpoint_id=$1 AND account_id=$2 FOR UPDATE", [input.checkpointId, this.accountId]), "CHECKPOINT_NOT_FOUND");
     const checkpoint = checkpointFromRow(row);
-    if (checkpoint.state === "claimed" || checkpoint.state === "expired") return checkpoint;
+    if (checkpoint.state === "expired") return checkpoint;
+    if (checkpoint.state === "claimed") {
+      const pause = (await this.client.query("SELECT state,live_lease_token FROM continuation_pauses WHERE account_id=$1 AND session_id=$2 AND pause_generation=$3 FOR UPDATE", [this.accountId, checkpoint.sessionId, checkpoint.pauseGeneration])).rows[0];
+      // Completion retires the original claim election. An unfinished or
+      // still-leased pause keeps that election even after the retention date.
+      if (!pause || asText(pause.state) !== "completed" || pause.live_lease_token !== null) return checkpoint;
+    }
     if (input.nowMs < checkpoint.retentionDeadlineMs) throw new Error("CHECKPOINT_RETENTION_ACTIVE");
-    await this.client.query("UPDATE continuation_checkpoints SET state='expired' WHERE checkpoint_id=$1 AND state='resume_required'", [input.checkpointId]);
+    await this.client.query("UPDATE continuation_checkpoints SET state='expired' WHERE checkpoint_id=$1 AND account_id=$2 AND state IN ('resume_required','claimed')", [input.checkpointId, this.accountId]);
     await this.client.query("INSERT INTO continuation_tombstones(checkpoint_id,account_id,expired_at_ms) VALUES ($1,$2,$3) ON CONFLICT (checkpoint_id) DO NOTHING", [input.checkpointId, this.accountId, input.nowMs]);
     return frozen({ ...checkpoint, state: "expired" as const });
   }

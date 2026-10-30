@@ -36,7 +36,7 @@ import type { CapacityReservation, ReadyCapacityPort } from "../../src/funding/f
 import { pricedRestoreBinding } from "../../src/production/priced-restore-binding";
 import { ProductionPricedContinuationRestores } from "../../src/production/priced-continuation-restores";
 import { ProductionWorkerRequestStore } from "../../src/production/worker-request-store";
-import { createWorkerDeploymentClients } from "../../src/release/deployment/worker-clients";
+import { createWorkerDeploymentClients, createFlyMachinesHttpTransport } from "../../src/release/deployment/worker-clients";
 import { createPostgresWorkerOperationJournal } from "../../src/release/deployment/postgres-provider-journals";
 import { PRODUCTION_WORKER_POLICY } from "../../src/worker-adapters/production-worker-policy";
 import { WorkerRunRequestSchema } from "../../src/phase-02/contracts";
@@ -45,6 +45,8 @@ import { ProductionPricedContinuationFinalizer } from "../../src/production/pric
 import { ProductionPricedContinuationRunner } from "../../src/production/priced-continuation-runner";
 import { listProductionRetentionCandidates } from "../../src/production/checkpoint-retention";
 import { ContinuationDeadlineReconciler } from "../../src/continuity/deadline-reconciler";
+import { ProductionPricedContinuationCleanup } from "../../src/production/priced-continuation-cleanup";
+import { createProductionReadyCapacity } from "../../src/production/worker-capacity";
 
 const integration = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
 const hash = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex");
@@ -664,17 +666,36 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     const nativeJobJournal = new PostgresOperationJournal(pool, { namespace: "fixture-workspace-jobs", scopeSha256: "4".repeat(64) });
     const nativeRequestJournal = new PostgresOperationJournal(pool, { namespace: "fixture-workspace-requests", scopeSha256: "4".repeat(64) });
     const nativeWorkerRecords = createPostgresWorkerOperationJournal(nativeWorkerJournal);
+    const nativeCreatedAtMs = Date.now();
     await nativeWorkerRecords.claim({ operationId: workerOperationId, requestSha256: "c".repeat(64), resourceName: workerOperationId, provider: "fly", appName: "resume-workspace-fixture",
       policyVersion: PRODUCTION_WORKER_POLICY.version, image: `registry.example/worker@sha256:${"a".repeat(64)}`,
       sessionLeaseSha256: workspaceCapacityIntent.sessionBindingDigest.slice(7), toolchainSha256: workspaceToolchain,
-      providerDeadlineEpochMs: Date.parse(workspaceAllocation.allocation.expiresAt), createdAtMs: Date.now() });
-    await nativeWorkerRecords.update({ operationId: workerOperationId, requestSha256: "c".repeat(64), resourceId: "fixture-workspace-machine", state: "reconciled" });
+      providerDeadlineEpochMs: Date.parse(workspaceAllocation.allocation.expiresAt), createdAtMs: nativeCreatedAtMs });
+    await nativeWorkerRecords.update({ operationId: workerOperationId, requestSha256: "c".repeat(64), resourceId: "fixture-workspace-machine", state: "reconciled", providerCreatedAtMs: nativeCreatedAtMs });
     let nativeRestores = 0, nativeQueries = 0, nativeUploads = 0, wrongNativeReceipt = true;
     const noNativeEffect = async () => { throw new Error("UNEXPECTED_NATIVE_WORKER_OPERATION"); };
+    let nativeExists = true, wrongCleanupIdentity = true, nativeDeletes = 0, cleanupGets = 0;
+    const nativeFly = createFlyMachinesHttpTransport({ appName: "resume-workspace-fixture", journal: nativeWorkerRecords,
+      getAccessToken: async () => "local-test-fly-token-aaaaaaaaaaaa", async fetch(url, init) {
+        const parsed = new URL(url);
+        if (parsed.origin !== "https://api.machines.dev" || parsed.pathname !== "/v1/apps/resume-workspace-fixture/machines/fixture-workspace-machine")
+          throw new Error("UNEXPECTED_CLEANUP_RESOURCE_OR_CREATE");
+        if (init.method === "GET") {
+          cleanupGets++;
+          return nativeExists ? Response.json({ id: "fixture-workspace-machine", name: workerOperationId, created_at: new Date(nativeCreatedAtMs).toISOString(),
+            config: { image: `registry.example/worker@sha256:${"a".repeat(64)}`, services: [],
+              guest: { cpus: PRODUCTION_WORKER_POLICY.cpu, memory_mb: PRODUCTION_WORKER_POLICY.memoryMiB },
+              env: { NAPPLET_CVM_POLICY_VERSION: PRODUCTION_WORKER_POLICY.version }, metadata: { "napplet-cvm-operation": workerOperationId,
+                "napplet-cvm-policy": PRODUCTION_WORKER_POLICY.version, "napplet-cvm-role": "isolated-worker",
+                "napplet-cvm-request": wrongCleanupIdentity ? "0".repeat(64) : "c".repeat(64) } } }) : new Response(null, { status: 404 });
+        }
+        if (init.method === "DELETE" && parsed.search === "?force=true") { nativeDeletes++; nativeExists = false; throw new Error("NATIVE_DELETE_ACK_LOST"); }
+        throw new Error("UNEXPECTED_CLEANUP_METHOD");
+      } });
     const workerClients = createWorkerDeploymentClients({ image: `registry.example/worker@sha256:${"a".repeat(64)}`, workspaceRoot: PRODUCTION_WORKER_POLICY.workspaceRoot,
       policyVersion: PRODUCTION_WORKER_POLICY.version, modalAppName: "resume-workspace-fixture", modalTags: {}, journal: nativeWorkerRecords,
       modalSdk: { apps: { fromName: noNativeEffect }, images: { fromRegistry: noNativeEffect }, sandboxes: { create: noNativeEffect, findByName: noNativeEffect, fromId: noNativeEffect } },
-      fly: { create: noNativeEffect, observe: noNativeEffect, terminate: noNativeEffect, observeTermination: noNativeEffect,
+      fly: { create: noNativeEffect, observe: noNativeEffect, terminate: nativeFly.terminate, observeTermination: nativeFly.observeTermination,
         async exec(value): Promise<{ status: "completed"; exitCode: number; stdout: string }> {
           const [, action, archiveSha256, index, data] = value.command;
           if (action === "restore-put") { nativeUploads++; return { status: "completed", exitCode: 0,
@@ -693,6 +714,11 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     const nativeBridge = () => new ProductionWorkerBridge({ resolver: new ProductionWorkerOwnershipResolver({ pool, policyVersion: workspaceCommand.policyVersion,
       capacityJournal, pricedContinuations: workerAuthority }), workers: workerClients, workerJournal: nativeWorkerJournal, jobJournal: nativeJobJournal,
       requestJournal: nativeRequestJournal, artifactStore: new GcsObjectStoreAdapter({ config: { bucket: "workspace-fixture", projectId: "fixture" }, client: objectClient }), toolchainSha256: workspaceToolchain });
+    const cleanupCapacity = createProductionReadyCapacity({ provider: "fly", workers: workerClients, journal: capacityJournal, workerJournal: nativeWorkerJournal,
+      image: `registry.example/worker@sha256:${"a".repeat(64)}`, toolchainSha256: workspaceToolchain, flyRegion: "ams" });
+    const cleanupJournal = new PostgresOperationJournal(pool, { namespace: "fixture-priced-cleanup", scopeSha256: "8".repeat(64) });
+    const cleanupInput = { pool, acceptance: refreshedAcceptance, capacity: cleanupCapacity, workerJournal: nativeWorkerJournal, journal: cleanupJournal };
+    const cleanup = () => new ProductionPricedContinuationCleanup(cleanupInput);
     const workspaceRestores = () => new ProductionPricedContinuationRestores({ pool, acceptance: refreshedAcceptance, preparer: refreshedPreparer,
       workers: workerAuthority, checkpoint, jobJournal: nativeJobJournal, worker: nativeBridge() });
     await workspaceRestores().assertReady();
@@ -796,7 +822,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         capacity: { reserveNow: noAdmission, observe: noAdmission, release: noAdmission } }) };
     const core = new MeteredGenerationService(coreOptions);
     const runnerInput = { pool, acceptance: refreshedAcceptance, preparer: refreshedPreparer, workers: workerAuthority,
-      restores: workspaceRestores(), generation: core, finalizer };
+      restores: workspaceRestores(), generation: core, finalizer, cleanup: cleanup() };
     let failFirstRunnerTerminalWrite = true;
     const interruptedRunner = new ProductionPricedContinuationRunner({ ...runnerInput,
       finalizer: new ProductionPricedContinuationFinalizer({ ...terminalInput, pool: sqlPool(runtime, undefined, undefined,
@@ -874,13 +900,14 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       pool: sqlPool(runtime, () => { const value = loseRunnerTerminalCommit; loseRunnerTerminalCommit = false; return value; }) }) });
     const concurrentRuns = await Promise.all([runner.run(workspaceResume), runner.run(workspaceResume)]);
     expect(concurrentRuns[0]).toEqual(concurrentRuns[1]);
-    const coreTerminal = SessionActionResultSchema.parse(concurrentRuns[0]);
+    expect(concurrentRuns[0]).toEqual({ status: "reconciliation_pending", stage: "cleanup" });
+    const coreTerminal = SessionActionResultSchema.parse(await executable.readTerminal());
     expect(loseRunnerTerminalCommit).toBeFalse();
     expect(coreTerminal).toMatchObject({ status: "failed", confirmedSpend: "1", remainingCap: "198", remainingBalance: "198", sessionVersion: 1, artifactVersion: 1 });
     expect(await executable.readTerminal()).toEqual(coreTerminal);
     expect(await executable.execute(async () => { throw new Error("TERMINAL_MUST_NOT_EXECUTE_AGAIN"); })).toEqual(coreTerminal);
     await expect(runner.run({ ...workspaceResume, pricingApproval: { ...workspaceResume.pricingApproval, maximumSat: "40" } })).rejects.toThrow("IDEMPOTENCY_KEY_CONFLICT");
-    expect(await new ProductionPricedContinuationRunner(runnerInput).run(workspaceResume)).toEqual(coreTerminal);
+    expect(await new ProductionPricedContinuationRunner(runnerInput).run(workspaceResume)).toEqual({ status: "reconciliation_pending", stage: "cleanup" });
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.usage_receipts")).rows[0].count).toBe(2);
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.ledger_entries WHERE account_id=$1 AND direction='debit'", [accountId])).rows[0].count).toBe(2);
     expect((await admin.query("SELECT confirmed_spend_sat,current_verified_artifact_version,version,state FROM production_real.metered_sessions WHERE id=$1", [workspaceClaim.sessionId])).rows[0]).toEqual({ confirmed_spend_sat: "1", current_verified_artifact_version: 1, version: 1, state: "failed" });
@@ -916,8 +943,38 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     expect(await checkpoint.observeDestroyed(eraseWorkspace)).toBeTrue();
     await expect(refreshedPreparer.loadAcceptedAuthority({ principal: { id: accountId }, idempotencyKey: workspaceResume.idempotencyKey })).rejects.toThrow();
     const readsBeforeTerminalReplay = objectReads;
-    expect(await new ProductionPricedContinuationRunner(runnerInput).run(workspaceResume)).toEqual(coreTerminal);
+    expect(await new ProductionPricedContinuationRunner(runnerInput).run(workspaceResume)).toEqual({ status: "reconciliation_pending", stage: "cleanup" });
     expect(objectReads).toBe(readsBeforeTerminalReplay);
+    expect(modelPosts).toBe(3); expect(nativeRestores).toBe(1); expect(reserves).toBe(2);
+    const claimBeforeCleanup = await refreshedAcceptance.find(accountId, workspaceResume.idempotencyKey);
+    const getsBeforeDeniedCleanup = cleanupGets;
+    await expect(cleanup().cleanup("account:foreign", workspaceResume.idempotencyKey)).rejects.toThrow("PRICED_CLEANUP_NOT_FOUND_OR_DENIED");
+    await expect(cleanup().cleanup(accountId, accepting.idempotencyKey)).rejects.toThrow("PRICED_CLEANUP_NOT_FOUND_OR_DENIED");
+    const missingNativeCleanup = new ProductionPricedContinuationCleanup({ ...cleanupInput,
+      workerJournal: new PostgresOperationJournal(pool, { namespace: "fixture-no-native-record", scopeSha256: "8".repeat(64) }) });
+    expect(await missingNativeCleanup.cleanup(accountId, workspaceResume.idempotencyKey)).toEqual({ status: "blocked" });
+    expect(cleanupGets).toBe(getsBeforeDeniedCleanup);
+    expect(await cleanup().cleanup(accountId, workspaceResume.idempotencyKey)).toEqual({ status: "pending" });
+    expect(nativeDeletes).toBe(0);
+    expect((await metered.transact(accountId, tx => tx.findCapacityIntent(workspaceClaim.allocationIntentReference)))?.state).toBe("available");
+    wrongCleanupIdentity = false;
+    let loseCleanupCommit = true;
+    const uncertainCleanup = new ProductionPricedContinuationCleanup({ ...cleanupInput,
+      pool: sqlPool(runtime, () => { const value = loseCleanupCommit; loseCleanupCommit = false; return value; }) });
+    await expect(uncertainCleanup.cleanup(accountId, workspaceResume.idempotencyKey)).rejects.toThrow("COMMIT_ACK_LOST");
+    expect(loseCleanupCommit).toBeFalse();
+    expect(nativeDeletes).toBe(1);
+    expect((await metered.transact(accountId, tx => tx.findCapacityIntent(workspaceClaim.allocationIntentReference)))?.state).toBe("released");
+    const getsAfterCleanupProof = cleanupGets;
+    const cleanupReplays = await Promise.all([cleanup().cleanup(accountId, workspaceResume.idempotencyKey), cleanup().cleanup(accountId, workspaceResume.idempotencyKey)]);
+    expect(cleanupReplays).toEqual([{ status: "cleaned" }, { status: "cleaned" }]);
+    expect(nativeDeletes).toBe(1);
+    expect(cleanupGets).toBe(getsAfterCleanupProof);
+    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.funding_outbox WHERE event_kind='priced_continuation_worker_cleaned'")).rows[0].count).toBe(1);
+    expect(await refreshedAcceptance.find(accountId, workspaceResume.idempotencyKey)).toEqual(claimBeforeCleanup);
+    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.ledger_entries WHERE account_id=$1 AND direction='debit'", [accountId])).rows[0].count).toBe(2);
+    expect(await nativeWorkerRecords.read(workerOperationId)).toMatchObject({ resourceId: "fixture-workspace-machine", requestSha256: "c".repeat(64), state: "reconciled" });
+    expect(await new ProductionPricedContinuationRunner(runnerInput).run(workspaceResume)).toEqual(coreTerminal);
     expect(modelPosts).toBe(3); expect(nativeRestores).toBe(1); expect(reserves).toBe(2);
   } finally { await runtime?.end(); await admin?.end(); await docker(["rm", "--force", name]).catch(() => undefined); }
 }, 120_000);

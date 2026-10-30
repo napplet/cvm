@@ -7,8 +7,9 @@ import { ProductionPricedContinuationRestores } from "./priced-continuation-rest
 import { ProductionPricedContinuationWorkers } from "./priced-continuation-workers";
 import { ProductionResumeAcceptance, type AcceptedPricedContinuation } from "./resume-acceptance";
 import { ProductionResumePricingPreparer } from "./resume-pricing-preparer";
+import { ProductionPricedContinuationCleanup } from "./priced-continuation-cleanup";
 
-type Pending = Readonly<{ status: "reconciliation_pending"; stage: "capacity" | "restore" | "accounting" }>;
+type Pending = Readonly<{ status: "reconciliation_pending"; stage: "capacity" | "restore" | "accounting" | "cleanup" }>;
 class AccountingPending extends Error {}
 
 /** Private synchronous coordinator, not a public transport or durable queue.
@@ -19,7 +20,7 @@ export class ProductionPricedContinuationRunner {
   readonly #inFlight = new Map<string, Promise<SessionActionResult | Pending>>();
   constructor(private readonly input: Readonly<{ pool: PostgresSqlPool; acceptance: ProductionResumeAcceptance;
     preparer: ProductionResumePricingPreparer; workers: ProductionPricedContinuationWorkers; restores: ProductionPricedContinuationRestores;
-    generation: MeteredGenerationService; finalizer: ProductionPricedContinuationFinalizer }>) {
+    generation: MeteredGenerationService; finalizer: ProductionPricedContinuationFinalizer; cleanup: ProductionPricedContinuationCleanup }>) {
     this.#store = new PostgresSqlFundingStore(bindAccountingRealmPool(input.pool, createAccountingRealm("production-real")), { deadlineMs: 5000, maxAttempts: 4 });
   }
 
@@ -31,12 +32,21 @@ export class ProductionPricedContinuationRunner {
     const command = ResumeSessionV2CommandSchema.parse(raw);
     const { claim } = await this.input.acceptance.claim(command);
     const recorded = await this.#result(claim);
-    if (recorded) return recorded;
+    if (recorded) return this.#finish(claim, recorded);
     const active = this.#inFlight.get(claim.claimReference);
     if (active) return active;
-    const work = this.#execute(claim).finally(() => this.#inFlight.delete(claim.claimReference));
+    const work = this.#execute(claim).then(result => this.#finish(claim, result)).finally(() => this.#inFlight.delete(claim.claimReference));
     this.#inFlight.set(claim.claimReference, work);
     return work;
+  }
+
+  async #finish(claim: AcceptedPricedContinuation, result: SessionActionResult | Pending): Promise<SessionActionResult | Pending> {
+    if (result.status !== "completed" && result.status !== "failed") return result;
+    // Unclaimed supersession has no external worker marker. Paid terminal work
+    // must confirm original worker cleanup before returning its final result.
+    if (claim.state === "superseded") return result;
+    const cleanup = await this.input.cleanup.cleanup(claim.accountId, claim.idempotencyKey);
+    return cleanup.status === "cleaned" ? result : { status: "reconciliation_pending", stage: "cleanup" };
   }
 
   async #execute(claim: AcceptedPricedContinuation): Promise<SessionActionResult | Pending> {

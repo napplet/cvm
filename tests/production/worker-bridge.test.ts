@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { PostgresOperationJournal } from "../../src/release/deployment/postgres-operation-journal";
 import { ProductionWorkerOwnershipResolver } from "../../src/production/worker-bridge";
+import { artifactCapabilityText } from "../../src/production/artifact-capability-text";
+
+test("capability observations retain executable authority while excluding inert scaffold labels", async () => {
+  expect(await artifactCapabilityText("index.html", '<span class="meta-key">storage intent</span><button title="storage">Count</button>')).not.toMatch(/storage|intent/u);
+  expect(await artifactCapabilityText("index.html", '<script>window.napplet.storage.get("key")</script>')).toContain("storage.get");
+  expect(await artifactCapabilityText("index.html", '<button onclick="window.napplet.intent.invoke()">Run</button>')).toContain("intent.invoke");
+  expect(await artifactCapabilityText("assets/app.js", "window.napplet.storage.get('key')")).toContain("storage.get");
+});
 
 const accountId = `account:${"a".repeat(64)}`;
 const ownerId = "b".repeat(64);

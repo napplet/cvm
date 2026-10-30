@@ -141,3 +141,26 @@ without retained-profile readers must not serve a mixed-profile database until
 those readers are backported; restoring an older backup to discard newer
 customer work is not a rollback strategy. Live quiesce/checkpoint, backup and
 fresh restore remain mandatory cutover evidence.
+
+For local legacy-profile paid-resume verification, set
+`NAPPLET_CVM_TEST_REAL_WORKER_IMAGE` to the immutable Docker image ID of a
+locally built production worker. The integration helper checks the installed
+worker, job and bootstrap hashes against this checkout before starting it.
+It mounts no host workspace or credentials, uses the offline toolchain, and
+removes and observes absence of its bounded local container afterward:
+
+```sh
+NAPPLET_CVM_TEST_EXTERNAL_EFFECTS=deny \
+NAPPLET_RUN_POSTGRES_ISOLATION=1 \
+NAPPLET_CVM_TEST_REAL_WORKER_IMAGE="$CVM_LOCAL_WORKER_IMAGE_ID" \
+bun test tests/production/resume-pricing-preparer-postgres.test.ts --timeout 120000
+```
+
+This mode requires a real successful eight-command build, independent root
+artifact verification, version advancement, exact receipt settlement and
+original-worker cleanup. Its retained native command log verifies one build
+start across accounting recovery. Without the image variable, the same test
+keeps its deliberately conflicting proposal and verifies failed-build billing.
+Neither mode supplies live provider evidence. The legacy Chromium report may
+skip manifest, wire and teardown checks; those skips remain explicit and do not
+satisfy current direct-profile, publication or release certification.

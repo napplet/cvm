@@ -47,9 +47,22 @@ import { listProductionRetentionCandidates } from "../../src/production/checkpoi
 import { ContinuationDeadlineReconciler } from "../../src/continuity/deadline-reconciler";
 import { ProductionPricedContinuationCleanup } from "../../src/production/priced-continuation-cleanup";
 import { createProductionReadyCapacity } from "../../src/production/worker-capacity";
+import { openLocalProductionWorker } from "../fixtures/local-production-worker";
 
 const integration = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
 const hash = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex");
+const actualWorkerImage = process.env.NAPPLET_CVM_TEST_REAL_WORKER_IMAGE;
+const realCounterSource = `import { runtimeHasDomain } from './domain-availability.js';
+import './styles.css';
+const root = document.querySelector<HTMLElement>('#app');
+if (!root) throw new Error('APP_ROOT_MISSING');
+const button = document.createElement('button');
+let count = 0;
+button.textContent = 'Count: 0';
+button.addEventListener('click', () => { count++; button.textContent = 'Count: ' + count; });
+button.title = runtimeHasDomain('outbox') ? 'Counter ready' : 'Local counter ready';
+root.replaceChildren(button);
+`;
 async function docker(args: string[]): Promise<string> {
   const child = Bun.spawn(["docker", ...args], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
@@ -72,6 +85,7 @@ function sqlPool(native: Pool, loseCommit?: () => boolean, failRestorePauseWrite
 integration("owned encrypted resume authenticates pricing, fences spending and restores command/workspace originals without redispatch", async () => {
   const name = `cvm-resume-preparer-${crypto.randomUUID().replaceAll("-", "")}`;
   let admin: Pool | undefined, runtime: Pool | undefined;
+  let localWorker: Awaited<ReturnType<typeof openLocalProductionWorker>> | undefined;
   try {
     await docker(["run", "--detach", "--rm", "--name", name, "--publish", "127.0.0.1::5432", "-e", "POSTGRES_HOST_AUTH_METHOD=trust", "postgres:17-alpine"]);
     const port = (await docker(["port", name, "5432/tcp"])).match(/127\.0\.0\.1:(\d+)/u)?.[1];
@@ -345,7 +359,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       modelPosts++;
       const wire = z.object({ input: z.array(z.unknown()), generation_config: z.object({ max_output_tokens: z.literal(20) }).passthrough() }).passthrough().parse(JSON.parse(String(init.body)));
       return Response.json({ id: "resume-owned-operation", model: "gemini-4-argon", status: "completed", created: new Date().toISOString(),
-        steps: [{ type: "user_input", content: wire.input }, { type: "model_output", content: [{ type: "text", text: JSON.stringify({ files: [{ path: "src/main.ts", content: "document.body.textContent = 'One counter';" }] }) }] }],
+        steps: [{ type: "user_input", content: wire.input }, { type: "model_output", content: [{ type: "text", text: JSON.stringify({ files: [{ path: "src/main.ts", content: actualWorkerImage && modelPosts === 3 ? realCounterSource : "document.body.textContent = 'One counter';" }] }) }] }],
         usage: { total_input_tokens: 2, total_cached_tokens: 0, total_output_tokens: 1, total_thought_tokens: 0, total_tool_use_tokens: 0, total_tokens: 3 } });
     }, { preconnect() {} }) });
     const vertexInput = { candidateSha256: "f".repeat(64), projectId: "napplet-cvm-fixture", location: "global", model: "gemini-4-argon", credentialReference: "gcp:adc:fixture",
@@ -509,7 +523,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     const capacity: ReadyCapacityPort = {
       async reserveNow(value) {
         reserves++;
-        const reference = `capacity:${hash(value)}`, expiresAt = new Date(Date.now() + 60_000).toISOString();
+        const reference = `capacity:${hash(value)}`, expiresAt = new Date(Date.now() + (actualWorkerImage ? 1_200_000 : 60_000)).toISOString();
         const ready: CapacityReservation = { status: "available", reference, expiresAt, usable: true,
           ready: { intentReference: value.intentReference, leaseReference: reference, sessionBindingDigest: value.expectedSessionBindingDigest,
             imageDigest: `sha256:${"a".repeat(64)}`, readinessProbeDigest: `sha256:${"b".repeat(64)}`, readyMonotonicMs: 100 } };
@@ -705,6 +719,10 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
             stdout: JSON.stringify({ state: "restored", archiveSha256: bytesSha(workspaceBytes), toolchainSha256: workspaceToolchain,
               sourceSha256: wrongNativeReceipt ? "0".repeat(64) : bytesSha(canonicalJson(workspaceSource.files)),
               artifactFilesSha256: bytesSha(canonicalJson(workspaceFiles)), workspacePath: "/workspace/restored" }) }; }
+          if (actualWorkerImage && ["put", "start", "status", "artifact"].includes(action ?? "")) {
+            localWorker ??= await openLocalProductionWorker(actualWorkerImage);
+            return localWorker.exec(value.command, value.stdin);
+          }
           throw new Error("UNEXPECTED_NATIVE_RESTORE_COMMAND");
         } } });
     const sourceRequest = WorkerRunRequestSchema.parse({ sessionId: workspaceCommand.sessionId, actionId: workspaceSource.actionId, expectedVersion: 1,
@@ -746,8 +764,8 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       expect(await nativeBridge().observePricedRestoreCheckpoint({ ...restoredWorkspace.restore.metadata, ...changed })).toEqual({ status: "unknown" });
     }
     expect(nativeQueries).toBe(2); expect(nativeRestores).toBe(1); expect(nativeUploads).toBe(uploadsAfterOriginal);
-    const newProposalFiles = [{ path: "src/main.ts", content: "document.body.textContent = 'A fresh resumed counter';" }];
-    const newProposalSha = hash(newProposalFiles);
+    const newProposalFiles = [{ path: "src/main.ts", content: actualWorkerImage ? realCounterSource : "document.body.textContent = 'A fresh resumed counter';" }];
+    const newProposalSha = hash(actualWorkerImage ? { files: newProposalFiles } : newProposalFiles);
     const resumedWorkerRequest = WorkerRunRequestSchema.parse({ ...sourceRequest, actionId: workspaceClaim.actionId, sourceProposalReference: `proposal:sha256:${newProposalSha}`,
       sourceProposalSha256: newProposalSha, sourceProposalFiles: newProposalFiles });
     await new ProductionWorkerRequestStore(nativeRequestJournal).persist(resumedWorkerRequest);
@@ -850,10 +868,10 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       result: { status: "completed", code: "ACTION_COMMITTED", accountId, sessionId: workspaceClaim.sessionId, operationId: workspaceClaim.operationId,
         sessionVersion: 2, artifactVersion: 2, artifactId: forgedArtifact.artifactId, confirmedSpend: workspaceSettlement.amount, remainingCap: "0", remainingBalance: "0", nextAction: "revise_session" } } })).rejects.toThrow("PRICED_FINALIZATION_ARTIFACT_DENIED");
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.priced_continuation_finalizations")).rows[0].count).toBe(1);
-    // Consume the authenticated accepted command through the actual core loop.
-    // Its already dispatched model can only be observed. The deliberately
-    // different persisted run proposal above makes the real bridge fail closed;
-    // no synthetic successful build or artifact authority is supplied here.
+    // Consume the authenticated command through receipt-only core recovery.
+    // Default mode pins a conflicting proposal and verifies failed billing.
+    // Exact-image mode pins the actual proposal and requires real CLI/Chromium
+    // artifact verification; it supplies no synthetic successful build reports.
     const acceptedWorkspace = await refreshedPreparer.loadAcceptedAuthority({ principal: { id: accountId }, idempotencyKey: workspaceResume.idempotencyKey });
     const coreInput = { intent: acceptedWorkspace.intent, restoredCommand: acceptedWorkspace.command, pricing: acceptedWorkspace.quote.pricing,
       maximumSat: acceptedWorkspace.quote.maximumSat, binding: { accountId, actionKey: workspaceClaim.actionKey, commandFingerprint: workspaceClaim.fingerprint,
@@ -878,7 +896,8 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     })).rejects.toThrow("INVARIANT_REQUIRES_COORDINATOR_QUARANTINE");
     expect(invariantCallbacks).toBe(1);
     await expect(executable.execute(async ({ finalization }) => {
-      expect(finalization.status).toBe("failed");
+      if (actualWorkerImage && finalization.status !== "completed") throw new Error(`ACTUAL_BUILD_FAILED:${localWorker?.logPath ?? "before-native-command"}`);
+      expect(finalization.status).toBe(actualWorkerImage ? "completed" : "failed");
       throw new Error("COORDINATOR_CALLBACK_REFUSED");
     })).rejects.toThrow("COORDINATOR_CALLBACK_REFUSED");
     expect(await executable.readTerminal()).toBeUndefined();
@@ -903,14 +922,31 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     expect(concurrentRuns[0]).toEqual({ status: "reconciliation_pending", stage: "cleanup" });
     const coreTerminal = SessionActionResultSchema.parse(await executable.readTerminal());
     expect(loseRunnerTerminalCommit).toBeFalse();
-    expect(coreTerminal).toMatchObject({ status: "failed", confirmedSpend: "1", remainingCap: "198", remainingBalance: "198", sessionVersion: 1, artifactVersion: 1 });
+    expect(coreTerminal).toMatchObject({ status: actualWorkerImage ? "completed" : "failed", confirmedSpend: "1", remainingCap: "198", remainingBalance: "198", sessionVersion: actualWorkerImage ? 2 : 1, artifactVersion: actualWorkerImage ? 2 : 1 });
+    if (actualWorkerImage) {
+      if (coreTerminal.status !== "completed" || !coreTerminal.artifactId || !localWorker) throw new Error("ACTUAL_VERIFIED_ARTIFACT_REQUIRED");
+      expect(await nativeBridge().readVerifiedContinuationArtifact({ accountId, sessionId: workspaceClaim.sessionId, actionId: workspaceClaim.actionId,
+        expectedVersion: 1, policyVersion: workspaceClaim.quote.context.policyVersion, workspaceId: `workspace:${workspaceClaim.sessionId}` })).toBeUndefined();
+      // Terminal bridge ownership is deliberately retired. Its verified artifact
+      // was read by the finalizer BEFORE that same atomic version advancement.
+      expect((await admin.query("SELECT version,verified FROM production_real.session_artifacts WHERE id=$1 AND account_id=$2", [coreTerminal.artifactId, accountId])).rows[0]).toEqual({ version: 2, verified: true });
+      const nativeRecords = z.array(z.object({ command: z.array(z.string()), exitCode: z.number().int(), stdout: z.string(), stderr: z.string() }).strict())
+        .parse((await Bun.file(localWorker.logPath).text()).trim().split("\n").map(line => JSON.parse(line)));
+      expect(nativeRecords.filter(value => value.command[1] === "start")).toHaveLength(1);
+      const completedNative = nativeRecords.filter(value => value.command[1] === "status").map(value => JSON.parse(value.stdout))
+        .find(value => value.state === "completed");
+      const realCommands = z.object({ commands: z.array(z.object({ exitCode: z.literal(0), argv: z.array(z.string()) }).passthrough()).length(8) }).passthrough().parse(completedNative).commands;
+      expect(realCommands.some(value => value.argv.includes("test:conformance"))).toBeTrue();
+      console.log(JSON.stringify({ localActualArtifact: true, releaseEvidence: false, image: localWorker.image,
+        nativeLog: localWorker.logPath, nativeStarts: 1, successfulCommands: realCommands.length, artifactId: coreTerminal.artifactId }));
+    }
     expect(await executable.readTerminal()).toEqual(coreTerminal);
     expect(await executable.execute(async () => { throw new Error("TERMINAL_MUST_NOT_EXECUTE_AGAIN"); })).toEqual(coreTerminal);
     await expect(runner.run({ ...workspaceResume, pricingApproval: { ...workspaceResume.pricingApproval, maximumSat: "40" } })).rejects.toThrow("IDEMPOTENCY_KEY_CONFLICT");
     expect(await new ProductionPricedContinuationRunner(runnerInput).run(workspaceResume)).toEqual({ status: "reconciliation_pending", stage: "cleanup" });
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.usage_receipts")).rows[0].count).toBe(2);
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.ledger_entries WHERE account_id=$1 AND direction='debit'", [accountId])).rows[0].count).toBe(2);
-    expect((await admin.query("SELECT confirmed_spend_sat,current_verified_artifact_version,version,state FROM production_real.metered_sessions WHERE id=$1", [workspaceClaim.sessionId])).rows[0]).toEqual({ confirmed_spend_sat: "1", current_verified_artifact_version: 1, version: 1, state: "failed" });
+    expect((await admin.query("SELECT confirmed_spend_sat,current_verified_artifact_version,version,state FROM production_real.metered_sessions WHERE id=$1", [workspaceClaim.sessionId])).rows[0]).toEqual({ confirmed_spend_sat: "1", current_verified_artifact_version: actualWorkerImage ? 2 : 1, version: actualWorkerImage ? 2 : 1, state: actualWorkerImage ? "verified" : "failed" });
     expect((await store.findContinuationPause(accountId, workspaceClaim.sessionId, 1))?.state).toBe("completed");
     expect((await acceptance.find(accountId, workspaceResume.idempotencyKey))?.state).toBe("completed");
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.funding_outbox WHERE event_kind='priced_continuation_terminal'")).rows[0].count).toBe(2);
@@ -976,5 +1012,5 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     expect(await nativeWorkerRecords.read(workerOperationId)).toMatchObject({ resourceId: "fixture-workspace-machine", requestSha256: "c".repeat(64), state: "reconciled" });
     expect(await new ProductionPricedContinuationRunner(runnerInput).run(workspaceResume)).toEqual(coreTerminal);
     expect(modelPosts).toBe(3); expect(nativeRestores).toBe(1); expect(reserves).toBe(2);
-  } finally { await runtime?.end(); await admin?.end(); await docker(["rm", "--force", name]).catch(() => undefined); }
+  } finally { try { await localWorker?.close(); } finally { await runtime?.end(); await admin?.end(); await docker(["rm", "--force", name]).catch(() => undefined); } }
 }, 120_000);

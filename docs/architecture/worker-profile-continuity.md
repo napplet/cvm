@@ -56,9 +56,36 @@ Local native-boundary fixtures and restricted PostgreSQL checks exercise lost
 CREATE responses, expired creation deadlines, fresh controller instances, native
 ID persistence, wrong identities and lost termination acknowledgements with one
 CREATE and one termination. They are mechanism proof, not live provider evidence.
-Admission readiness after missing-ID creation, truly absent native resources,
-abandoned capacity claims and fresh CREATE certification still need their own
-end-to-end proof. No production profile or isolation gate is selected by cleanup.
+Truly absent native resources, abandoned capacity claims and fresh funded CREATE
+certification still need their own end-to-end proof. No production profile or
+isolation gate is selected by cleanup.
+
+## Readiness after a lost worker creation response
+
+Native readiness observation now uses that same exact original resolver instead
+of requiring the caller to retry CREATE. It performs only provider identity
+queries and the existing fixed trusted isolation probe against the recovered
+ID. Missing originals cause no provider I/O. Merely claimed, expired, terminating
+or terminated originals cannot gain readiness. After an asynchronous probe, the
+native transport rereads its original and rejects concurrent retirement or expiry.
+Cleanup remains available after the creation deadline under its separate fence.
+
+The capacity layer first verifies its persisted execution, lease and deadline.
+It permits native observation to resolve a missing ID, rereads that same provider
+original afterwards, and checks again after readiness persistence. A changed ID,
+execution binding, expired deadline or retirement yields unknown. Repeated reads
+retain the original admission readiness rather than substituting a later probe
+timestamp. Existing image selection, cap holds, admission counts and thresholds
+are unchanged; no replacement worker or queue is introduced.
+
+Local native-port tests exercise incorrect identity, unavailable lookup, invalid
+isolation probe, retirement during a probe and completion after the original
+deadline with one CREATE per original. Restricted PostgreSQL tests construct
+the actual native clients and capacity layer with fresh journal instances;
+they prove recovered ID persistence, exact original readiness, expiry during a
+provider call, and refusal of later expired observations before provider I/O.
+This closes the local recovery mechanism, not live provider readiness, the
+five-second admission SLO or the full funded generation certification path.
 
 ## Remaining promotion requirements
 

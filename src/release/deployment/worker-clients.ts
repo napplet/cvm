@@ -96,6 +96,10 @@ const ImageDigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value)
 
 function imageDigest(image: string): string { return ImageDigestSchema.parse(ImageSchema.parse(image).split("@sha256:")[1]); }
 function createdAtMs(machine: z.infer<typeof MachineSchema>): number | undefined { const value = Date.parse(machine.created_at); return Number.isSafeInteger(value) && value > 0 ? value : undefined; }
+function activeWorker(record: WorkerOperationRecord): boolean {
+  return typeof record.providerDeadlineEpochMs === "number" && Number.isSafeInteger(record.providerDeadlineEpochMs)
+    && record.providerDeadlineEpochMs > Date.now() && ["dispatching", "dispatched", "unknown", "reconciled"].includes(record.state);
+}
 function isolatedExec(command: readonly string[]): readonly string[] {
   if (command[0] === BOOTSTRAP) throw new Error("WORKER_EXEC_WRAPPER_FORBIDDEN");
   return Object.freeze([BOOTSTRAP, ...command]);
@@ -186,11 +190,11 @@ export function createModalProductionTransport(input: Readonly<{ appName: string
       return Object.entries(expected).every(([key, value]) => tags[key] === value) && Object.keys(tags).length === Object.keys(expected).length;
     } catch { return false; } finally { clearTimeout(timer); }
   };
-  // Cleanup must not call create() to recover a lost native ID: its original
-  // deadline may have expired. Only exact provider-held request tags can bind
+  // Observation must not call create() to recover a lost native ID. Cleanup
+  // also remains available after expiry. Only exact provider-held tags can bind
   // the missing ID, and a missing lookup never proves absence of an in-flight
   // original creation.
-  const cleanupOriginal = async (operationId: string) => {
+  const resolveOriginal = async (operationId: string) => {
     const record = await input.journal.read(OperationIdSchema.parse(operationId));
     if (!record || record.resourceId || record.provider !== "modal" || record.appName !== appName || record.image !== image
       || record.policyVersion !== PRODUCTION_WORKER_POLICY.version || !record.sessionLeaseSha256 || !record.toolchainSha256
@@ -246,8 +250,10 @@ export function createModalProductionTransport(input: Readonly<{ appName: string
       } catch { await input.journal.update({ operationId, requestSha256, state: "unknown" }); return Object.freeze({ status: "unknown" as const, operationId }); }
     },
     async observe(value) {
-      const record = await input.journal.read(OperationIdSchema.parse(value.operationId));
-      if (!record?.resourceId || record.image !== image || record.policyVersion !== PRODUCTION_WORKER_POLICY.version || !record.sessionLeaseSha256 || !record.toolchainSha256 || !record.providerDeadlineEpochMs) return Object.freeze({ status: "unknown" as const });
+      const initial = await input.journal.read(OperationIdSchema.parse(value.operationId));
+      if (!initial || !activeWorker(initial)) return Object.freeze({ status: "unknown" as const });
+      const record = initial.resourceId ? initial : await resolveOriginal(initial.operationId);
+      if (!record?.resourceId || !activeWorker(record) || record.provider !== "modal" || record.appName !== appName || record.image !== image || record.policyVersion !== PRODUCTION_WORKER_POLICY.version || !record.sessionLeaseSha256 || !record.toolchainSha256 || !record.providerDeadlineEpochMs) return Object.freeze({ status: "unknown" as const });
       const observed = await find(appName, record.resourceName);
       if (observed.kind !== "found" || observed.sandbox.id !== record.resourceId) return Object.freeze({ status: "unknown" as const, resourceId: record.resourceId });
       try {
@@ -255,15 +261,18 @@ export function createModalProductionTransport(input: Readonly<{ appName: string
         if (output.status !== "completed" || output.exitCode !== 0 || output.stdout === undefined) return Object.freeze({ status: "pending" as const, resourceId: record.resourceId });
         const report = z.object({ checks: z.object({ toolchain_readonly: z.literal(true), workspace_bounded: z.literal(true), non_root: z.literal(true), no_ambient_credentials: z.literal(true), network_denied: z.literal(true), no_inbound_ports: z.literal(true), minimal_capabilities: z.literal(true) }).strict(), exactReady: z.object({ image: ImageSchema, sessionLeaseSha256: ImageDigestSchema, toolchainSha256: ImageDigestSchema, remainingLifetimeMs: z.number().int().positive().max(PRODUCTION_WORKER_POLICY.totalLifetimeMs) }).strict() }).strict().safeParse(JSON.parse(output.stdout));
         if (!report.success || report.data.exactReady.image !== image || report.data.exactReady.sessionLeaseSha256 !== record.sessionLeaseSha256 || report.data.exactReady.toolchainSha256 !== record.toolchainSha256) return Object.freeze({ status: "unknown" as const, resourceId: record.resourceId });
+        const readinessProbeDigest = `sha256:${await sha256(output.stdout)}`;
+        const current = await input.journal.read(record.operationId);
+        if (!current || !activeWorker(current) || current.requestSha256 !== record.requestSha256 || current.resourceId !== record.resourceId) return Object.freeze({ status: "unknown" as const, resourceId: record.resourceId });
         // Use the coordinator's monotonic clock, shared with ContextVM receipt
         // telemetry, rather than comparing clocks from separate worker hosts.
         const readyMonotonicMs = Math.floor(performance.now());
-        return Object.freeze({ status: "completed" as const, resourceId: record.resourceId, readiness: Object.freeze({ readyMonotonicMs, readinessProbeDigest: `sha256:${await sha256(output.stdout)}` }) });
+        return Object.freeze({ status: "completed" as const, resourceId: record.resourceId, readiness: Object.freeze({ readyMonotonicMs, readinessProbeDigest }) });
       } catch { return Object.freeze({ status: "pending" as const, resourceId: record.resourceId }); }
     },
     exec,
     async terminate(value) {
-      const record = await cleanupOriginal(value.operationId);
+      const record = await resolveOriginal(value.operationId);
       if (!record || record.provider !== "modal" || record.appName !== appName || record.image !== image || record.policyVersion !== PRODUCTION_WORKER_POLICY.version) return Object.freeze({ status: "blocked" as const });
       if (!record.resourceId) return Object.freeze({ status: "unknown" as const });
       const terminationId = `t-${(await sha256(JSON.stringify({ operationId: record.operationId, resourceId: record.resourceId, image: record.image, requestSha256: record.requestSha256 }))).slice(0, 46)}`;
@@ -284,7 +293,7 @@ export function createModalProductionTransport(input: Readonly<{ appName: string
       return Object.freeze({ status: "terminated" as const });
     },
     async observeTermination(value) {
-      const record = await cleanupOriginal(value.operationId);
+      const record = await resolveOriginal(value.operationId);
       if (!record || record.provider !== "modal" || record.appName !== appName || record.image !== image) return Object.freeze({ status: "blocked" as const });
       if (!record.resourceId) return Object.freeze({ status: "unknown" as const });
       const observed = await find(appName, record.resourceName);
@@ -407,7 +416,7 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: WorkerOper
     const providerCreatedAtMs = matched.length === 1 ? createdAtMs(matched[0]!) : undefined;
     return matched.length === 1 && providerCreatedAtMs ? Object.freeze({ kind: "found" as const, id: matched[0]!.id, providerCreatedAtMs, region: matched[0]!.region }) : matched.length === 0 ? Object.freeze({ kind: "missing" as const }) : Object.freeze({ kind: "unknown" as const });
   };
-  const cleanupOriginal = async (operationId: string) => {
+  const resolveOriginal = async (operationId: string) => {
     const record = await input.journal.read(OperationIdSchema.parse(operationId));
     if (!record || record.resourceId || record.provider !== "fly" || record.appName !== appName || !record.image
       || record.policyVersion !== PRODUCTION_WORKER_POLICY.version || !record.sessionLeaseSha256 || !record.toolchainSha256
@@ -473,8 +482,10 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: WorkerOper
       }
     },
     async observe(value) {
-      const record = await input.journal.read(OperationIdSchema.parse(value.operationId));
-      if (!record?.resourceId || record.provider !== "fly" || record.appName !== appName) return Object.freeze({ status: record ? "unknown" as const : "missing" as const });
+      const initial = await input.journal.read(OperationIdSchema.parse(value.operationId));
+      if (!initial || !activeWorker(initial)) return Object.freeze({ status: initial ? "unknown" as const : "missing" as const });
+      const record = initial.resourceId ? initial : await resolveOriginal(initial.operationId);
+      if (!record?.resourceId || !activeWorker(record) || record.provider !== "fly" || record.appName !== appName) return Object.freeze({ status: "unknown" as const });
       const response = await request(`/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(record.resourceId)}`, { method: "GET" });
       if (response.status === 404) { await dispose(response); return Object.freeze({ status: "missing" as const }); }
       if (!response.ok) { await dispose(response); return Object.freeze({ status: "unknown" as const }); }
@@ -487,15 +498,18 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: WorkerOper
       if (probe.status !== "completed" || probe.exitCode !== 0 || !probe.stdout) return Object.freeze({ status: "pending" as const, resourceId: record.resourceId });
       const report = z.object({ checks: z.object({ toolchain_readonly: z.literal(true), workspace_bounded: z.literal(true), non_root: z.literal(true), no_ambient_credentials: z.literal(true), network_denied: z.literal(true), no_inbound_ports: z.literal(true), minimal_capabilities: z.literal(true) }).strict(), exactReady: z.object({ image: ImageSchema, sessionLeaseSha256: ImageDigestSchema, remainingLifetimeMs: z.number().int().positive().max(PRODUCTION_WORKER_POLICY.totalLifetimeMs), toolchainSha256: ImageDigestSchema }).strict() }).strict().safeParse(JSON.parse(probe.stdout));
       if (!report.success || report.data.exactReady.image !== record.image || report.data.exactReady.sessionLeaseSha256 !== record.sessionLeaseSha256 || report.data.exactReady.toolchainSha256 !== record.toolchainSha256 || report.data.exactReady.remainingLifetimeMs > PRODUCTION_WORKER_POLICY.totalLifetimeMs) return Object.freeze({ status: "unknown" as const, resourceId: record.resourceId });
+      const readinessProbeDigest = `sha256:${await sha256(probe.stdout)}`;
+      const current = await input.journal.read(record.operationId);
+      if (!current || !activeWorker(current) || current.requestSha256 !== record.requestSha256 || current.resourceId !== record.resourceId) return Object.freeze({ status: "unknown" as const, resourceId: record.resourceId });
       // The immutable trusted bootstrap enforces a fresh network namespace,
       // quota mounts and privilege drop before this probe. Provider identity
       // plus the complete probe establishes operational readiness; selecting
       // Fly still requires the separate protected capability/admission gates.
       const readyMonotonicMs = Math.floor(performance.now());
-      return Object.freeze({ status: "completed" as const, resourceId: record.resourceId, readiness: Object.freeze({ readyMonotonicMs, readinessProbeDigest: `sha256:${await sha256(probe.stdout)}` }) });
+      return Object.freeze({ status: "completed" as const, resourceId: record.resourceId, readiness: Object.freeze({ readyMonotonicMs, readinessProbeDigest }) });
     },
     async terminate(value) {
-      const operationId = OperationIdSchema.parse(value.operationId); const record = await cleanupOriginal(operationId);
+      const operationId = OperationIdSchema.parse(value.operationId); const record = await resolveOriginal(operationId);
       if (!record || record.provider !== "fly" || record.appName !== appName) return Object.freeze({ status: "blocked" as const });
       if (!record.resourceId) return Object.freeze({ status: "unknown" as const });
       const terminationId = `t-${(await sha256(JSON.stringify({ operationId: record.operationId, resourceId: record.resourceId, image: record.image, requestSha256: record.requestSha256, providerCreatedAtMs: record.providerCreatedAtMs }))).slice(0, 46)}`;
@@ -525,7 +539,7 @@ function ownedMachine(machine: z.infer<typeof MachineSchema>, record: WorkerOper
       return Object.freeze({ status: "terminated" as const });
     },
     async observeTermination(value) {
-      const operationId = OperationIdSchema.parse(value.operationId); const record = await cleanupOriginal(operationId);
+      const operationId = OperationIdSchema.parse(value.operationId); const record = await resolveOriginal(operationId);
       if (!record || record.provider !== "fly" || record.appName !== appName || !record.image) return Object.freeze({ status: "blocked" as const });
       if (!record.resourceId) return Object.freeze({ status: "unknown" as const });
       const current = await request(`/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(record.resourceId)}`, { method: "GET" });

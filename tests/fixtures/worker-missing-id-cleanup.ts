@@ -33,6 +33,9 @@ export async function proveModalMissingIdCleanup(journal: () => WorkerOperationJ
   expect(queries).toBe(beforeUnstarted);
   await Bun.sleep(Math.max(0, intent.providerDeadlineEpochMs - Date.now() + 2));
   await expect(open().create(intent)).rejects.toThrow("WORKER_DEADLINE_INVALID");
+  const beforeExpiredReadiness = queries;
+  expect((await open().observe(intent)).status).toBe("unknown");
+  expect(queries).toBe(beforeExpiredReadiness);
   for (const mode of ["missing", "unknown", "wrong"] as const) {
     lookup = mode;
     expect((await open().observeTermination(intent)).status).toBe("unknown");
@@ -91,6 +94,9 @@ export async function proveFlyMissingIdCleanup(journal: () => WorkerOperationJou
   expect(queries).toBe(beforeUnstarted);
   await Bun.sleep(Math.max(0, intent.providerDeadlineEpochMs - Date.now() + 2));
   await expect(open().create(intent)).rejects.toThrow("WORKER_DEADLINE_INVALID");
+  const beforeExpiredReadiness = queries;
+  expect((await open().observe(intent)).status).toBe("unknown");
+  expect(queries).toBe(beforeExpiredReadiness);
   for (const mode of ["missing", "unknown", "wrong", "duplicate", "region", "late"] as const) {
     lookup = mode;
     expect((await open().observeTermination(intent)).status).toBe("unknown");

@@ -6,7 +6,7 @@ import { bindAccountingRealmPool, createAccountingRealm } from "../../src/fundin
 import { ContinuationService } from "../../src/continuity/continuation-service";
 import type { PendingActionIntent } from "../../src/continuity/contracts";
 import type { ContinuationFundingStore } from "../../src/persistence/funding-store";
-import { StartSessionCommandSchema, ReviseSessionCommandSchema } from "../../src/phase-04/metered-generation-service";
+import { StartSessionCommandSchema, ReviseSessionCommandSchema, SessionActionResultSchema } from "../../src/phase-04/metered-generation-service";
 import { GcsObjectStoreAdapter, type VersionedObjectClientPort } from "../../src/continuity/object-store";
 import { PostgresSqlFundingStore, type PostgresSqlPool } from "../../src/persistence/postgres-sql-funding-store";
 import { canonicalJson } from "../../src/promotion/schema";
@@ -251,6 +251,7 @@ integration("production quote preparation authenticates an encrypted original ch
     const accepting = await acceptanceCheckpoint("acceptance:one");
     const short = await acceptanceCheckpoint("acceptance:short", 8000);
     const lateApi = await acceptanceCheckpoint("acceptance:late-api", 8000);
+    const workerPending = await acceptanceCheckpoint("acceptance:worker", 8000);
     await expect(acceptance.claim({ ...accepting, principal: { id: "account:foreign" } })).rejects.toThrow("RESUME_QUOTE_NOT_FOUND_OR_DENIED");
     await expect(acceptance.claim({ ...accepting, pricingApproval: { ...accepting.pricingApproval, maximumSat: "4" } })).rejects.toThrow("RESUME_QUOTE_APPROVAL_MISMATCH");
     await expect(acceptance.claim(accepting)).rejects.toThrow("RESUME_BALANCE_INSUFFICIENT");
@@ -259,8 +260,8 @@ integration("production quote preparation authenticates an encrypted original ch
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.priced_continuation_claims")).rows[0].count).toBe(0);
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.action_budget_reservations")).rows[0].count).toBe(0);
     // Explicit funded metadata fixture; this is not a real rail credit.
-    await admin.query("UPDATE production_real.account_balance_projection SET settled_available=150,held=150 WHERE account_id=$1", [accountId]);
-    await admin.query("UPDATE production_real.session_cap_holds SET requested_cap=150,held_amount=150 WHERE account_id=$1", [accountId]);
+    await admin.query("UPDATE production_real.account_balance_projection SET settled_available=200,held=200 WHERE account_id=$1", [accountId]);
+    await admin.query("UPDATE production_real.session_cap_holds SET requested_cap=200,held_amount=200 WHERE account_id=$1", [accountId]);
     let loseCommit = true;
     const uncertain = new ProductionResumeAcceptance({ pool: sqlPool(runtime, () => { const value = loseCommit; loseCommit = false; return value; }), quotes, preparer: acceptancePreparer, now: Date.now });
     await expect(uncertain.claim(accepting)).rejects.toThrow("COMMIT_ACK_LOST");
@@ -319,6 +320,15 @@ integration("production quote preparation authenticates an encrypted original ch
     const shortClaim = race[0]!.claim;
     const lateClaim = (await acceptance.claim(lateApi)).claim;
     expect((await metered.transact(accountId, tx => tx.claimProviderOperation(lateClaim.operationId))).claimed).toBeTrue();
+    const workerClaim = (await acceptance.claim(workerPending)).claim;
+    let loseWorkerCommit = true;
+    const workerUncertain = new ProductionResumeAcceptance({ pool: sqlPool(runtime, () => { const value = loseWorkerCommit; loseWorkerCommit = false; return value; }), quotes, preparer: acceptancePreparer });
+    await expect(workerUncertain.claimWorker(accountId, workerPending.idempotencyKey)).rejects.toThrow("COMMIT_ACK_LOST");
+    const workerReplay = await acceptance.claimWorker(accountId, workerPending.idempotencyKey);
+    expect(workerReplay.claimed).toBeFalse();
+    expect(workerReplay.claim.workerClaimedAtMs).not.toBeNull();
+    await expect(runtime.query("UPDATE production_real.priced_continuation_claims SET worker_claimed_at_ms=NULL WHERE claim_reference=$1", [workerClaim.claimReference])).rejects.toThrow("PRICED_CONTINUATION_WORKER_BINDING_IMMUTABLE");
+    await expect(acceptance.supersedeUnclaimed(accountId, workerPending.idempotencyKey)).rejects.toThrow("PRICED_CONTINUATION_SUPERSESSION_DENIED");
     await Bun.sleep(Math.max(1, shortClaim.quote.expiresAtMs - Date.now() + 10));
     expect(Date.now()).toBeGreaterThanOrEqual(Date.parse(accepted.claim.settlement.conversion.source.freshUntil));
     const firstSettlement = await resumedSettlement.finalize({ accountId, intent, receipt: observed.receipt, pricedAmount: "3" });
@@ -334,8 +344,67 @@ integration("production quote preparation authenticates an encrypted original ch
     expect((await acceptance.claim(short)).replayed).toBeTrue(); // Expiry cannot change an accepted operation's identity/FX.
     await expect(metered.transact(accountId, tx => tx.claimProviderOperation(shortClaim.operationId))).rejects.toThrow("PRICED_CONTINUATION_DISPATCH_DENIED");
     expect((await acceptance.find(accountId, short.idempotencyKey))?.state).toBe("accepted");
-    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.priced_continuation_claims")).rows[0].count).toBe(3);
-    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.action_budget_reservations")).rows[0].count).toBe(3);
+    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.priced_continuation_claims")).rows[0].count).toBe(4);
+    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.action_budget_reservations")).rows[0].count).toBe(4);
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.ledger_entries")).rows[0].count).toBe(0);
+    await expect(acceptance.supersedeUnclaimed("account:foreign", lateApi.idempotencyKey)).rejects.toThrow("PRICED_CONTINUATION_NOT_FOUND_OR_DENIED");
+    await expect(acceptance.supersedeUnclaimed(accountId, accepting.idempotencyKey)).rejects.toThrow("PRICED_CONTINUATION_SUPERSESSION_DENIED");
+    await expect(acceptance.claimWorker(accountId, short.idempotencyKey)).rejects.toThrow("PRICED_CONTINUATION_WORKER_CLAIM_DENIED");
+    // A late validation failure rolls back the release and every state change.
+    await admin.query("UPDATE production_real.metered_sessions SET version=1 WHERE id=$1", [lateApi.sessionId]);
+    await expect(acceptance.supersedeUnclaimed(accountId, lateApi.idempotencyKey)).rejects.toThrow("METERED_SESSION_VERSION_CONFLICT");
+    expect((await admin.query("SELECT state FROM production_real.action_budget_reservations WHERE reservation_reference=$1", [lateClaim.actionBudgetReference])).rows[0].state).toBe("authorized");
+    expect((await acceptance.find(accountId, lateApi.idempotencyKey))?.state).toBe("dispatching");
+    await admin.query("UPDATE production_real.metered_sessions SET version=0 WHERE id=$1", [lateApi.sessionId]);
+    let loseSupersessionCommit = true;
+    const supersessionUncertain = new ProductionResumeAcceptance({ pool: sqlPool(runtime, () => { const value = loseSupersessionCommit; loseSupersessionCommit = false; return value; }), quotes, preparer: acceptancePreparer });
+    await expect(supersessionUncertain.supersedeUnclaimed(accountId, lateApi.idempotencyKey)).rejects.toThrow("COMMIT_ACK_LOST");
+    expect((await acceptance.supersedeUnclaimed(accountId, lateApi.idempotencyKey)).state).toBe("superseded");
+    const superseded = await Promise.all([acceptance.supersedeUnclaimed(accountId, short.idempotencyKey), acceptance.supersedeUnclaimed(accountId, short.idempotencyKey)]);
+    expect(superseded.every(item => item.state === "superseded")).toBeTrue();
+    expect((await acceptance.claim(short)).claim.state).toBe("superseded");
+    await expect(acceptance.claimWorker(accountId, short.idempotencyKey)).rejects.toThrow("PRICED_CONTINUATION_WORKER_CLAIM_DENIED");
+    expect(await gateway.dispatch(lateIntent, new AbortController().signal)).toMatchObject({ status: "definitive_not_accepted" });
+    expect(modelPosts).toBe(1);
+    expect((await metered.transact(accountId, tx => tx.claimProviderOperation(shortClaim.operationId))).claimed).toBeFalse();
+    for (const releasedClaim of [lateClaim, shortClaim]) {
+      expect((await admin.query("SELECT state FROM production_real.action_budget_reservations WHERE reservation_reference=$1", [releasedClaim.actionBudgetReference])).rows[0].state).toBe("released");
+      expect((await admin.query("SELECT state FROM production_real.continuation_checkpoints WHERE checkpoint_id=$1", [releasedClaim.checkpointId])).rows[0].state).toBe("resume_required");
+      expect((await admin.query("SELECT state FROM production_real.continuation_pauses WHERE session_id=$1", [releasedClaim.sessionId])).rows[0].state).toBe("resume_required");
+      expect((await admin.query("SELECT state,version,current_verified_artifact_version,confirmed_spend_sat FROM production_real.metered_sessions WHERE id=$1", [releasedClaim.sessionId])).rows[0]).toEqual({ state: "needs_top_up", version: 0, current_verified_artifact_version: 0, confirmed_spend_sat: "0" });
+      expect((await admin.query("SELECT state,receipt_charge,provider_receipt_reference,session_version,artifact_version FROM production_real.metered_actions WHERE id=$1", [releasedClaim.actionId])).rows[0]).toEqual({ state: "failed", receipt_charge: "0", provider_receipt_reference: null, session_version: 0, artifact_version: 0 });
+      const terminal = await metered.findMeteredAction(accountId, releasedClaim.actionKey);
+      expect(SessionActionResultSchema.parse(terminal?.result)).toMatchObject({ status: "failed", code: "PROVIDER_NOT_ACCEPTED", operationId: releasedClaim.operationId, confirmedSpend: "0" });
+      expect((await admin.query("SELECT kind,amount_sat FROM production_real.billing_line_items WHERE operation_id=$1", [releasedClaim.operationId])).rows).toEqual([{ kind: "release", amount_sat: "41" }]);
+      expect((await admin.query("SELECT state FROM production_real.priced_continuation_audit WHERE claim_reference=$1 ORDER BY sequence DESC LIMIT 1", [releasedClaim.claimReference])).rows[0].state).toBe("superseded");
+    }
+    expect((await admin.query("SELECT settled_available,held FROM production_real.account_balance_projection WHERE account_id=$1", [accountId])).rows[0]).toEqual({ settled_available: "200", held: "200" });
+    expect((await admin.query("SELECT held_amount FROM production_real.session_cap_holds WHERE account_id=$1", [accountId])).rows[0].held_amount).toBe("200");
+    for (const table of ["usage_receipts", "ledger_entries"]) expect((await admin.query(`SELECT count(*)::int AS count FROM production_real.${table}`)).rows[0].count).toBe(0);
+    // Explicit new approval can reuse the preserved checkpoint, but neither
+    // old signed delivery nor a quote refresh resurrects the old operation.
+    const refreshedPricing = await resumePricingMaterial(Date.now(), "profile:refreshed", "2000");
+    await registerProductionPricing({ pool, ...refreshedPricing });
+    const refreshedPreparer = new ProductionResumePricingPreparer({ pool, store, quotes, checkpoint, vertexJournal, currentPricing: refreshedPricing,
+      compatibility: { policyVersion: pending.policyVersion, acceptedToolchains: [pending.toolchainId] }, now: Date.now });
+    const refreshedAcceptance = new ProductionResumeAcceptance({ pool, quotes, preparer: refreshedPreparer });
+    const renewedQuote = await refreshedPreparer.prepare({ principal: short.principal, sessionId: short.sessionId, checkpointId: short.checkpointId,
+      expectedSessionVersion: 0, expectedCheckpointVersion: 1, idempotencyKey: "prepare:explicit-renewal" });
+    if (renewedQuote.status !== "quoted") throw new Error(`EXPECTED_RENEWED_QUOTE:${renewedQuote.code}`);
+    const renewed = await refreshedAcceptance.claim({ ...short, idempotencyKey: "resume:explicit-renewal", pricingApproval: {
+      quoteReference: renewedQuote.quoteReference, quoteSha256: renewedQuote.quoteSha256, maximumSat: renewedQuote.pricing.maximumSat } });
+    expect(renewed.replayed).toBeFalse();
+    expect(renewed.claim.quote.context.commandSha256).toBe(shortClaim.quote.context.commandSha256);
+    expect(renewed.claim.operationId).not.toBe(shortClaim.operationId);
+    expect((await refreshedAcceptance.claim(short)).claim.state).toBe("superseded");
+    expect((await metered.transact(accountId, tx => tx.claimProviderOperation(renewed.claim.operationId))).claimed).toBeTrue();
+    expect((await refreshedAcceptance.supersedeUnclaimed(accountId, "resume:explicit-renewal")).state).toBe("superseded");
+    expect(Date.now()).toBeLessThan(renewed.claim.quote.expiresAtMs);
+    const supersededIntent = ProviderOperationIntentSchema.parse({ ...intent, sessionId: short.sessionId, actionId: renewed.claim.actionId,
+      operationId: renewed.claim.operationId, providerRequestId: renewed.claim.operationId, actionBudgetReference: renewed.claim.actionBudgetReference,
+      requestFingerprint: renewed.claim.fingerprint, profileId: refreshedPricing.profile.id, priceCardId: refreshedPricing.card.id });
+    expect(await gateway.dispatch(supersededIntent, new AbortController().signal)).toMatchObject({ status: "definitive_not_accepted", reason: "pre_dispatch_rejected" });
+    expect(await vertexJournal.read(renewed.claim.operationId)).toBeUndefined();
+    expect(modelPosts).toBe(1);
   } finally { await runtime?.end(); await admin?.end(); await docker(["rm", "--force", name]).catch(() => undefined); }
 }, 120_000);

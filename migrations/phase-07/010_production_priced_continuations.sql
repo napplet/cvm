@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS production_real.priced_continuation_claims (
   accepted_at_ms bigint NOT NULL CHECK(accepted_at_ms BETWEEN 0 AND 9007199254740991),
   settlement_json jsonb NOT NULL CHECK(jsonb_typeof(settlement_json)='object' AND octet_length(settlement_json::text)<=16384),
   api_claimed_at_ms bigint, api_namespace text, api_scope_sha256 text, api_request_sha256 text,
+  worker_claimed_at_ms bigint CHECK(worker_claimed_at_ms BETWEEN 0 AND 9007199254740991),
   state text NOT NULL CHECK(state IN ('accepted','dispatching','superseded','completed')),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(), updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   UNIQUE(account_id,idempotency_key),
@@ -34,12 +35,27 @@ LANGUAGE plpgsql SET search_path=pg_catalog AS $$
 BEGIN
   IF TG_OP='DELETE' THEN RAISE EXCEPTION 'PRICED_CONTINUATION_IMMUTABLE'; END IF;
   IF TG_OP='UPDATE' THEN
-    IF (to_jsonb(NEW)-ARRAY['state','updated_at','api_claimed_at_ms','api_namespace','api_scope_sha256','api_request_sha256']) IS DISTINCT FROM (to_jsonb(OLD)-ARRAY['state','updated_at','api_claimed_at_ms','api_namespace','api_scope_sha256','api_request_sha256'])
+    IF (to_jsonb(NEW)-ARRAY['state','updated_at','api_claimed_at_ms','api_namespace','api_scope_sha256','api_request_sha256','worker_claimed_at_ms']) IS DISTINCT FROM (to_jsonb(OLD)-ARRAY['state','updated_at','api_claimed_at_ms','api_namespace','api_scope_sha256','api_request_sha256','worker_claimed_at_ms'])
       OR NOT(NEW.state=OLD.state OR (OLD.state='accepted' AND NEW.state IN ('dispatching','superseded')) OR (OLD.state='dispatching' AND NEW.state IN ('completed','superseded')))
     THEN RAISE EXCEPTION 'PRICED_CONTINUATION_IMMUTABLE'; END IF;
     IF OLD.api_claimed_at_ms IS NOT NULL AND ROW(NEW.api_claimed_at_ms,NEW.api_namespace,NEW.api_scope_sha256,NEW.api_request_sha256)
       IS DISTINCT FROM ROW(OLD.api_claimed_at_ms,OLD.api_namespace,OLD.api_scope_sha256,OLD.api_request_sha256)
     THEN RAISE EXCEPTION 'PRICED_CONTINUATION_API_BINDING_IMMUTABLE'; END IF;
+    IF OLD.worker_claimed_at_ms IS NOT NULL AND NEW.worker_claimed_at_ms IS DISTINCT FROM OLD.worker_claimed_at_ms
+    THEN RAISE EXCEPTION 'PRICED_CONTINUATION_WORKER_BINDING_IMMUTABLE'; END IF;
+    IF OLD.worker_claimed_at_ms IS NULL AND NEW.worker_claimed_at_ms IS NOT NULL AND
+      (NEW.state NOT IN ('accepted','dispatching') OR NOT EXISTS(
+        SELECT 1 FROM production_real.resume_pricing_quotes q
+        JOIN production_real.continuation_checkpoints c ON c.checkpoint_id=NEW.checkpoint_id AND c.account_id=NEW.account_id
+        JOIN production_real.continuation_pauses p ON p.account_id=c.account_id AND p.session_id=c.session_id AND p.pause_generation=c.pause_generation
+        JOIN production_real.metered_actions a ON a.id=NEW.action_id AND a.account_id=NEW.account_id AND a.operation_id=NEW.operation_id
+        JOIN production_real.action_budget_reservations b ON b.reservation_reference=NEW.action_budget_reference AND b.account_id=NEW.account_id
+        JOIN production_real.session_cap_holds h ON h.account_id=NEW.account_id AND h.reference=a.admission_reference AND h.state='active'
+        WHERE q.quote_reference=NEW.quote_reference AND q.prepared_at_ms<=extract(epoch FROM clock_timestamp())*1000
+          AND q.expires_at_ms>extract(epoch FROM clock_timestamp())*1000 AND c.state='claimed' AND p.state='claimed'
+          AND c.retention_deadline_ms>extract(epoch FROM clock_timestamp())*1000
+          AND a.state IN ('prepared','active') AND a.terminal_result IS NULL AND b.state='authorized' AND b.amount<=h.held_amount
+      )) THEN RAISE EXCEPTION 'PRICED_CONTINUATION_WORKER_CLAIM_DENIED'; END IF;
     IF OLD.api_claimed_at_ms IS NULL AND NEW.api_claimed_at_ms IS NOT NULL AND (NEW.state<>'dispatching' OR NOT EXISTS(
       SELECT 1 FROM production_real.release_operation_journal r WHERE r.operation_id=NEW.operation_id AND r.namespace=NEW.api_namespace
         AND r.scope_sha256=NEW.api_scope_sha256 AND r.value_json->>'requestSha256'=NEW.api_request_sha256 AND r.revision=1
@@ -47,7 +63,9 @@ BEGIN
     IF NEW.state='superseded' AND OLD.state<>NEW.state AND NOT EXISTS(
       SELECT 1 FROM production_real.provider_operations o JOIN production_real.metered_actions a ON a.id=o.action_id
       JOIN production_real.action_budget_reservations b ON b.reservation_reference=a.budget_reference
-      WHERE o.id=NEW.operation_id AND o.state IN ('prepared','active') AND NEW.api_claimed_at_ms IS NULL AND a.state='failed' AND a.terminal_result IS NOT NULL AND b.state='released'
+      WHERE o.id=NEW.operation_id AND o.state IN ('prepared','active') AND NEW.api_claimed_at_ms IS NULL AND NEW.worker_claimed_at_ms IS NULL
+        AND a.state='failed' AND a.terminal_result IS NOT NULL AND a.receipt_charge=0 AND a.provider_receipt_reference IS NULL AND b.state='released'
+        AND NOT EXISTS(SELECT 1 FROM production_real.usage_receipts r WHERE r.operation_id=NEW.operation_id)
     ) THEN RAISE EXCEPTION 'PRICED_CONTINUATION_SUPERSESSION_DENIED'; END IF;
     IF NEW.state='completed' AND OLD.state<>NEW.state AND NOT EXISTS(
       SELECT 1 FROM production_real.metered_actions a JOIN production_real.action_budget_reservations b ON b.reservation_reference=a.budget_reference
@@ -56,7 +74,7 @@ BEGIN
     NEW.updated_at=clock_timestamp();
     RETURN NEW;
   END IF;
-  IF NEW.state<>'accepted' OR NEW.api_claimed_at_ms IS NOT NULL OR NOT EXISTS(
+  IF NEW.state<>'accepted' OR NEW.api_claimed_at_ms IS NOT NULL OR NEW.worker_claimed_at_ms IS NOT NULL OR NOT EXISTS(
     SELECT 1 FROM production_real.resume_pricing_quotes q
     JOIN production_real.continuation_checkpoints c ON c.checkpoint_id=q.checkpoint_id AND c.account_id=q.account_id
     JOIN production_real.continuation_pauses p ON p.account_id=c.account_id AND p.session_id=c.session_id AND p.pause_generation=c.pause_generation
@@ -94,6 +112,9 @@ BEGIN
   END IF;
   IF TG_OP='UPDATE' AND OLD.api_claimed_at_ms IS NULL AND NEW.api_claimed_at_ms IS NOT NULL THEN
     INSERT INTO production_real.priced_continuation_audit(claim_reference,state) VALUES(NEW.claim_reference,'api_claimed');
+  END IF;
+  IF TG_OP='UPDATE' AND OLD.worker_claimed_at_ms IS NULL AND NEW.worker_claimed_at_ms IS NOT NULL THEN
+    INSERT INTO production_real.priced_continuation_audit(claim_reference,state) VALUES(NEW.claim_reference,'worker_claimed');
   END IF;
   RETURN NEW;
 END $$;
@@ -164,6 +185,6 @@ DROP TRIGGER IF EXISTS priced_vertex_api_claim_fence ON production_real.release_
 CREATE TRIGGER priced_vertex_api_claim_fence AFTER INSERT ON production_real.release_operation_journal FOR EACH ROW EXECUTE FUNCTION production_real.fence_priced_vertex_api_claim();
 REVOKE ALL ON production_real.priced_continuation_claims,production_real.priced_continuation_audit FROM PUBLIC,napplet_production_real;
 GRANT SELECT,INSERT ON production_real.priced_continuation_claims TO napplet_production_real;
-GRANT UPDATE(state,updated_at,api_claimed_at_ms,api_namespace,api_scope_sha256,api_request_sha256) ON production_real.priced_continuation_claims TO napplet_production_real;
+GRANT UPDATE(state,updated_at,api_claimed_at_ms,api_namespace,api_scope_sha256,api_request_sha256,worker_claimed_at_ms) ON production_real.priced_continuation_claims TO napplet_production_real;
 GRANT SELECT ON production_real.priced_continuation_audit TO napplet_production_real;
 COMMIT;

@@ -9,6 +9,7 @@ import { PendingActionIntentSchema } from "../continuity/contracts";
 import { ProductionVertexSettlementBindingSchema } from "./vertex-generation-settlement";
 import { ProductionResumePricingPreparer } from "./resume-pricing-preparer";
 import { ProductionResumePricingQuotes } from "./resume-pricing-quotes";
+import { SessionActionResultSchema } from "../phase-04/metered-generation-service";
 
 const Identity = z.string().min(1).max(256), Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const Claim = z.object({
@@ -21,6 +22,7 @@ const Claim = z.object({
   state: z.enum(["accepted", "dispatching", "superseded", "completed"]), quote: ResumePricingQuoteSchema,
   apiClaimedAtMs: z.coerce.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
   apiNamespace: Identity.nullable(), apiScopeSha256: Digest.nullable(), apiRequestSha256: Digest.nullable(),
+  workerClaimedAtMs: z.coerce.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
 }).strict();
 export type AcceptedPricedContinuation = z.infer<typeof Claim>;
 type Command = z.infer<typeof ResumeSessionV2CommandSchema>;
@@ -29,7 +31,7 @@ const columns = `c.claim_reference AS "claimReference",c.account_id AS "accountI
   c.idempotency_key AS "idempotencyKey",c.fingerprint_sha256 AS fingerprint,c.quote_reference AS "quoteReference",c.quote_sha256 AS "quoteSha256",
   c.action_key AS "actionKey",c.action_id AS "actionId",c.operation_id AS "operationId",c.action_budget_reference AS "actionBudgetReference",
   c.lease_token AS "leaseToken",c.allocation_intent_reference AS "allocationIntentReference",c.accepted_at_ms AS "acceptedAtMs",c.settlement_json AS settlement,c.state,q.quote_json AS quote,
-  c.api_claimed_at_ms AS "apiClaimedAtMs",c.api_namespace AS "apiNamespace",c.api_scope_sha256 AS "apiScopeSha256",c.api_request_sha256 AS "apiRequestSha256"`;
+  c.api_claimed_at_ms AS "apiClaimedAtMs",c.api_namespace AS "apiNamespace",c.api_scope_sha256 AS "apiScopeSha256",c.api_request_sha256 AS "apiRequestSha256",c.worker_claimed_at_ms AS "workerClaimedAtMs"`;
 
 /** Internal financial preparation for an explicit resume, not public admission
  * or a work queue. The synchronous runner must own capacity/execution/cleanup
@@ -51,7 +53,7 @@ export class ProductionResumeAcceptance {
         has_table_privilege(current_user,'production_real.priced_continuation_claims','INSERT') AS insertable,
         (has_table_privilege(current_user,'production_real.priced_continuation_claims','DELETE,TRUNCATE') OR
           EXISTS(SELECT 1 FROM pg_catalog.pg_attribute a WHERE a.attrelid='production_real.priced_continuation_claims'::regclass
-            AND a.attnum>0 AND NOT a.attisdropped AND a.attname NOT IN ('state','updated_at','api_claimed_at_ms','api_namespace','api_scope_sha256','api_request_sha256')
+            AND a.attnum>0 AND NOT a.attisdropped AND a.attname NOT IN ('state','updated_at','api_claimed_at_ms','api_namespace','api_scope_sha256','api_request_sha256','worker_claimed_at_ms')
             AND has_column_privilege(current_user,'production_real.priced_continuation_claims',a.attname,'UPDATE')) OR
           has_table_privilege(current_user,'production_real.priced_continuation_audit','INSERT,UPDATE,DELETE,TRUNCATE')) AS mutable,
         (SELECT count(*)::int FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class c ON c.oid=t.tgrelid
@@ -88,6 +90,77 @@ export class ProductionResumeAcceptance {
 
   async readSettlement(accountId: string, operationId: string) {
     return (await this.readOperation(accountId, operationId))?.settlement;
+  }
+
+  /** Must commit before allocation/restore I/O. A replay means observe the
+   * original allocation intent; it never grants permission to reallocate. */
+  async claimWorker(accountId: string, idempotencyKey: string): Promise<Readonly<{ claim: AcceptedPricedContinuation; claimed: boolean }>> {
+    return this.#funding.transactWithSql(accountId, async (_tx, client) => {
+      await client.query("SELECT claim_reference FROM production_real.priced_continuation_claims WHERE account_id=$1 AND idempotency_key=$2 FOR UPDATE", [accountId, idempotencyKey]);
+      const claim = await this.#read(client, accountId, idempotencyKey);
+      if (!claim || (claim.state !== "accepted" && claim.state !== "dispatching")) throw new Error("PRICED_CONTINUATION_WORKER_CLAIM_DENIED");
+      if (claim.workerClaimedAtMs !== null) return { claim, claimed: false };
+      await client.query("UPDATE production_real.priced_continuation_claims SET worker_claimed_at_ms=floor(extract(epoch FROM clock_timestamp())*1000)::bigint WHERE claim_reference=$1", [claim.claimReference]);
+      const saved = await this.#read(client, accountId, idempotencyKey);
+      if (!saved || saved.workerClaimedAtMs === null) throw new Error("PRICED_CONTINUATION_READBACK_REQUIRED");
+      return { claim: saved, claimed: true };
+    });
+  }
+
+  /** Zero-cost abandonment before any external worker/API claim. This does
+   * not run cleanup, synthesize usage, advance a version or authorize retry.
+   * An allocation/API marker instead requires original-operation recovery. */
+  async supersedeUnclaimed(accountId: string, idempotencyKey: string): Promise<AcceptedPricedContinuation> {
+    return this.#funding.transactWithSql(accountId, async (_tx, client) => {
+      // Same provider/action -> claim order as the provider-dispatch trigger.
+      const action = (await client.query<{ state: string; provider_state: string; budget_reference: string; admission_reference: string }>(`SELECT a.state,o.state AS provider_state,a.budget_reference,a.admission_reference
+        FROM production_real.metered_actions a JOIN production_real.provider_operations o ON o.action_id=a.id
+        JOIN production_real.priced_continuation_claims c ON c.operation_id=o.id AND c.action_id=a.id
+        WHERE c.account_id=$1 AND c.idempotency_key=$2 FOR UPDATE OF a,o`, [accountId, idempotencyKey])).rows[0];
+      await client.query("SELECT claim_reference FROM production_real.priced_continuation_claims WHERE account_id=$1 AND idempotency_key=$2 FOR UPDATE", [accountId, idempotencyKey]);
+      const claim = await this.#read(client, accountId, idempotencyKey);
+      if (!claim || !action) throw new Error("PRICED_CONTINUATION_NOT_FOUND_OR_DENIED");
+      if (claim.state === "superseded") return claim;
+      if ((claim.state !== "accepted" && claim.state !== "dispatching") || claim.apiClaimedAtMs !== null || claim.workerClaimedAtMs !== null
+        || !["prepared", "active"].includes(action.state) || !["prepared", "active"].includes(action.provider_state)
+        || action.budget_reference !== claim.actionBudgetReference) throw new Error("PRICED_CONTINUATION_SUPERSESSION_DENIED");
+      const checkpoint = (await client.query<{ pause_generation: number }>(`SELECT c.pause_generation FROM production_real.continuation_checkpoints c
+        JOIN production_real.continuation_pauses p ON p.account_id=c.account_id AND p.session_id=c.session_id AND p.pause_generation=c.pause_generation
+        WHERE c.checkpoint_id=$1 AND c.account_id=$2 AND c.state='claimed' AND p.state='claimed'
+          AND NOT EXISTS(SELECT 1 FROM production_real.continuation_worker_allocations w WHERE w.checkpoint_id=c.checkpoint_id)
+          AND NOT EXISTS(SELECT 1 FROM production_real.continuation_restore_observations r WHERE r.checkpoint_id=c.checkpoint_id)
+          AND NOT EXISTS(SELECT 1 FROM production_real.release_operation_journal j WHERE j.operation_id=$3)
+          AND NOT EXISTS(SELECT 1 FROM production_real.usage_receipts r WHERE r.operation_id=$3)
+        FOR UPDATE OF c,p`, [claim.checkpointId, accountId, claim.operationId])).rows[0];
+      if (!checkpoint) throw new Error("PRICED_CONTINUATION_SUPERSESSION_DENIED");
+      const balance = (await client.query<{ settled_available: string; held_amount: string }>(`SELECT b.settled_available,h.held_amount
+        FROM production_real.account_balance_projection b JOIN production_real.session_cap_holds h ON h.account_id=b.account_id
+        WHERE b.account_id=$1 AND h.reference=$2 AND h.state='active' FOR UPDATE OF b,h`, [accountId, action.admission_reference])).rows[0];
+      if (!balance) throw new Error("ACTIVE_ADMISSION_REQUIRED");
+      const result = SessionActionResultSchema.parse({ status: "failed", code: "PROVIDER_NOT_ACCEPTED", accountId, sessionId: claim.sessionId,
+        sessionVersion: claim.quote.context.expectedSessionVersion, artifactVersion: claim.quote.context.expectedArtifactVersion,
+        confirmedSpend: "0", remainingCap: balance.held_amount, remainingBalance: balance.settled_available, nextAction: "revise_session", operationId: claim.operationId });
+      const released = await client.query(`UPDATE production_real.action_budget_reservations SET state='released'
+        WHERE account_id=$1 AND reservation_reference=$2 AND state='authorized' AND amount=$3 RETURNING reservation_id`, [accountId, claim.actionBudgetReference, claim.quote.maximumSat]);
+      if (!released.rows[0]) throw new Error("METERED_ACTION_BUDGET_STATE_INVALID");
+      const session = await client.query(`UPDATE production_real.metered_sessions SET state='needs_top_up'
+        WHERE account_id=$1 AND id=$2 AND version=$3 AND state='active' AND current_verified_artifact_version=$4 RETURNING id`,
+      [accountId, claim.sessionId, claim.quote.context.expectedSessionVersion, claim.quote.context.expectedArtifactVersion]);
+      if (!session.rows[0]) throw new Error("METERED_SESSION_VERSION_CONFLICT");
+      await client.query(`UPDATE production_real.metered_actions SET state='failed',receipt_charge=0,terminal_result=$2::jsonb,
+        session_version=$3,artifact_version=$4,remaining_cap_sat=$5,remaining_balance_sat=$6,settled_at=clock_timestamp()
+        WHERE id=$1 AND provider_receipt_reference IS NULL AND terminal_result IS NULL`,
+      [claim.actionId, canonicalJson(result), claim.quote.context.expectedSessionVersion, claim.quote.context.expectedArtifactVersion, balance.held_amount, balance.settled_available]);
+      await client.query("UPDATE production_real.priced_continuation_claims SET state='superseded' WHERE claim_reference=$1", [claim.claimReference]);
+      await client.query("UPDATE production_real.continuation_checkpoints SET state='resume_required' WHERE checkpoint_id=$1", [claim.checkpointId]);
+      await client.query("UPDATE production_real.continuation_pauses SET state='resume_required' WHERE account_id=$1 AND session_id=$2 AND pause_generation=$3", [accountId, claim.sessionId, checkpoint.pause_generation]);
+      await client.query(`INSERT INTO production_real.billing_line_items(id,account_id,session_id,action_id,operation_id,source_identity,kind,unit,amount_sat,settled_available_sat,held_sat,session_spend_sat)
+        SELECT $1,$2,$3,$4,$5,$6,'release','sat',$7,settled_available,held,0 FROM production_real.account_balance_projection WHERE account_id=$2`,
+      [`line:release:${claim.operationId}`, accountId, claim.sessionId, claim.actionId, claim.operationId, `release:${claim.operationId}`, claim.quote.maximumSat]);
+      const saved = await this.#read(client, accountId, idempotencyKey);
+      if (!saved || saved.state !== "superseded") throw new Error("PRICED_CONTINUATION_READBACK_REQUIRED");
+      return saved;
+    });
   }
 
   async claim(raw: unknown): Promise<Readonly<{ claim: AcceptedPricedContinuation; replayed: boolean }>> {

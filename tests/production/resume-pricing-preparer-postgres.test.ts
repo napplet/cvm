@@ -31,6 +31,7 @@ import { ProductionPricedContinuationWorkers } from "../../src/production/priced
 import { ProductionWorkerOwnershipResolver } from "../../src/production/worker-bridge";
 import type { CapacityReservation, ReadyCapacityPort } from "../../src/funding/funded-admission";
 import { pricedRestoreBinding } from "../../src/production/priced-restore-binding";
+import { ProductionPricedContinuationRestores } from "../../src/production/priced-continuation-restores";
 
 const integration = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
 const hash = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex");
@@ -40,9 +41,10 @@ async function docker(args: string[]): Promise<string> {
   if (code !== 0) throw new Error(`DOCKER_FAILED:${args[0]}:${err.slice(0, 300)}`);
   return out.trim();
 }
-function sqlPool(native: Pool, loseCommit?: () => boolean): PostgresSqlPool {
+function sqlPool(native: Pool, loseCommit?: () => boolean, failRestorePauseWrite?: () => boolean): PostgresSqlPool {
   return { async connect() { const client = await native.connect(); return {
     async query<Row extends Record<string, unknown>>(sql: string, values?: readonly unknown[]) {
+      if (sql.startsWith("UPDATE production_real.continuation_pauses SET state='restored'") && failRestorePauseWrite?.()) throw new Error("RESTORE_PAUSE_WRITE_FAILED");
       const result = await client.query<Row>(sql, values ? [...values] : undefined);
       if (sql === "COMMIT" && loseCommit?.()) throw new Error("COMMIT_ACK_LOST");
       return { rows: result.rows };
@@ -531,6 +533,53 @@ integration("production quote preparation authenticates an encrypted original ch
       actionVersion: pendingAuthority.material.manifest.actionVersion, workspaceLineage: pendingAuthority.material.manifest.workspaceLineage,
       leaseToken: allocating.leaseToken, resumeClaim: allocating.allocationIntentReference, archiveSha256: pendingAuthority.material.manifest.archiveSha256 });
     await expect(resolver.resolvePricedRestore(commandOnlyRestore.metadata, workerRequest)).rejects.toThrow("PRODUCTION_PRICED_RESTORE_BINDING_DENIED");
+    const restoreMigration = await Bun.file("migrations/phase-07/012_production_priced_continuation_restores.sql").text();
+    await admin.query(restoreMigration); await admin.query(restoreMigration);
+    let workspaceCalls = 0;
+    const unexpectedWorkspace = async () => { workspaceCalls++; throw new Error("COMMAND_ONLY_CANNOT_RESTORE_WORKSPACE"); };
+    const restoreInput = { pool, acceptance: refreshedAcceptance, preparer: refreshedPreparer, workers: workerAuthority, checkpoint, jobJournal: vertexJournal,
+      worker: { registerContinuationRequest: unexpectedWorkspace, restorePricedCheckpoint: unexpectedWorkspace, observePricedRestoreCheckpoint: unexpectedWorkspace } };
+    const restores = new ProductionPricedContinuationRestores(restoreInput);
+    await restores.assertReady();
+    for (const [table, trigger] of [["priced_continuation_restores", "priced_restore_guard"], ["priced_continuation_restores", "priced_restore_audit"],
+      ["priced_continuation_restore_audit", "priced_restore_audit_immutable"], ["release_operation_journal", "priced_restored_api_claim_fence"]]) {
+      await admin.query(`ALTER TABLE production_real.${table} DISABLE TRIGGER ${trigger}`);
+      await expect(restores.assertReady()).rejects.toThrow("PRODUCTION_PRICED_RESTORE_SCHEMA_REQUIRED");
+      await admin.query(`ALTER TABLE production_real.${table} ENABLE TRIGGER ${trigger}`);
+    }
+    await restores.assertReady();
+    expect((await metered.transact(accountId, tx => tx.claimProviderOperation(allocating.operationId))).claimed).toBeTrue();
+    const allocatingIntent = ProviderOperationIntentSchema.parse({ ...intent, sessionId: allocating.sessionId, actionId: allocating.actionId,
+      operationId: allocating.operationId, providerRequestId: allocating.operationId, actionBudgetReference: allocating.actionBudgetReference,
+      requestFingerprint: allocating.fingerprint, profileId: refreshedPricing.profile.id, priceCardId: refreshedPricing.card.id });
+    expect(await gateway.dispatch(allocatingIntent, new AbortController().signal)).toMatchObject({ status: "definitive_not_accepted", reason: "pre_dispatch_rejected" });
+    expect(modelPosts).toBe(1);
+    expect(await vertexJournal.read(allocating.operationId)).toBeUndefined();
+    let failPauseWrite = true;
+    const rollbackRestores = new ProductionPricedContinuationRestores({ ...restoreInput,
+      pool: sqlPool(runtime, undefined, () => { const value = failPauseWrite; failPauseWrite = false; return value; }) });
+    await expect(rollbackRestores.restore(accountId, workerCommand.idempotencyKey)).rejects.toThrow("RESTORE_PAUSE_WRITE_FAILED");
+    expect((await restores.read(accountId, allocating.claimReference))?.state).toBe("claimed");
+    expect((await store.findContinuationPause(accountId, allocating.sessionId, 1))?.state).toBe("claimed");
+    await expect(runtime.query("UPDATE production_real.priced_continuation_restores SET state='restored',proof_json=$2::jsonb WHERE claim_reference=$1", [allocating.claimReference,
+      JSON.stringify({ kind: "workspace", nativeEvidenceSha256: "a".repeat(64) })])).rejects.toThrow("PRICED_RESTORE_COMMAND_PROOF_DENIED");
+    let restoreCommits = 0;
+    const uncertainRestores = new ProductionPricedContinuationRestores({ ...restoreInput, pool: sqlPool(runtime, () => ++restoreCommits === 2) });
+    await expect(uncertainRestores.restore(accountId, workerCommand.idempotencyKey)).rejects.toThrow("COMMIT_ACK_LOST");
+    expect((await store.findContinuationPause(accountId, allocating.sessionId, 1))?.state).toBe("restored");
+    const restoredCommand = await restores.restore(accountId, workerCommand.idempotencyKey);
+    expect(restoredCommand.status).toBe("restored");
+    if (restoredCommand.status !== "restored") throw new Error("EXPECTED_COMMAND_CUSTODY_PROOF");
+    expect(restoredCommand.restore.proof).toEqual({ kind: "command", commandSha256: allocating.quote.context.commandSha256 });
+    expect((await restores.restore(accountId, workerCommand.idempotencyKey))).toEqual(restoredCommand);
+    expect(workspaceCalls).toBe(0);
+    expect(await restores.read("account:foreign", allocating.claimReference)).toBeUndefined();
+    await expect(restores.restore("account:foreign", workerCommand.idempotencyKey)).rejects.toThrow("PRICED_RESTORE_NOT_FOUND_OR_DENIED");
+    await expect(runtime.query("UPDATE production_real.priced_continuation_restores SET state='unknown',proof_json=NULL")).rejects.toThrow("PRICED_RESTORE_IMMUTABLE");
+    await expect(runtime.query("DELETE FROM production_real.priced_continuation_restores")).rejects.toThrow();
+    expect((await admin.query("SELECT state FROM production_real.priced_continuation_restore_audit WHERE claim_reference=$1 ORDER BY sequence", [allocating.claimReference])).rows).toEqual([{ state: "claimed" }, { state: "restored" }]);
+    expect((await gateway.dispatch(allocatingIntent, new AbortController().signal)).status).toBe("completed");
+    expect(modelPosts).toBe(2);
     const unallocatedRequest = { ...workerRequest, sessionId: workerPending.sessionId, actionId: workerClaim.actionId, workspaceId: `workspace:${workerPending.sessionId}` };
     await expect(resolver.resolveWorker(unallocatedRequest)).rejects.toThrow("PRODUCTION_WORKER_ACTION_OWNER_NOT_FOUND");
     await expect(refreshedAcceptance.supersedeUnclaimed(accountId, workerCommand.idempotencyKey)).rejects.toThrow("PRICED_CONTINUATION_SUPERSESSION_DENIED");
@@ -539,6 +588,6 @@ integration("production quote preparation authenticates an encrypted original ch
     await expect(metered.transact(accountId, tx => tx.recordCapacityObservation({ intentReference: capacityIntent.capacityIntentReference, state: "available" }))).rejects.toThrow("PRICED_CAPACITY_TRANSITION_DENIED");
     await expect(resolver.resolveWorker(workerRequest)).rejects.toThrow("PRODUCTION_WORKER_ACTION_OWNER_NOT_FOUND");
     expect(reserves).toBe(1);
-    expect(modelPosts).toBe(1);
+    expect(modelPosts).toBe(2);
   } finally { await runtime?.end(); await admin?.end(); await docker(["rm", "--force", name]).catch(() => undefined); }
 }, 120_000);

@@ -54,6 +54,8 @@ const RestoreObservation = z.discriminatedUnion("state", [
   z.object({ state: z.literal("restored"), archiveSha256: Digest, toolchainSha256: Digest, sourceSha256: Digest, artifactFilesSha256: Digest, workspacePath: z.literal("/workspace/restored") }).strict(),
 ]);
 type StoredRestore = Readonly<{ workerOperationId: string; workerResourceId: string; leaseSha256: string; archiveSha256: string; bindingSha256: string }>;
+const RestoreEvidence = z.object({ schemaVersion: z.literal("worker-restore-evidence-v1"), originalOperationId: z.string().min(1).max(256),
+  originalIdentitySha256: Digest, expected: z.object({ archiveSha256: Digest, toolchainSha256: Digest, sourceSha256: Digest, artifactFilesSha256: Digest }).strict() }).strict();
 
 /** Production image protocol only. Provider exec runs a fixed root-owned
  * supervisor for <=15s; generated build work runs asynchronously exactly once. */
@@ -216,7 +218,11 @@ export class ProductionWorkerJobClient {
     for (const file of workspace.artifact.files) { const content = Buffer.from(file.bytesBase64, "base64"); total += content.length; if (content.length !== file.size || sha(content) !== file.sha256 || content.toString("base64") !== file.bytesBase64 || total > 16_777_216) throw new Error("PRODUCTION_WORKSPACE_FILES_INVALID"); }
     const worker = await this.#worker();
     const initial: StoredRestore = { workerOperationId: this.input.workerOperationId, workerResourceId: worker.resourceId!, leaseSha256: worker.sessionLeaseSha256!, archiveSha256, bindingSha256: input.bindingSha256 };
-    const claim = await this.input.jobJournal.claim<StoredRestore>(`worker-restore:${input.operationId}`, sha(canonicalJson(initial)), initial);
+    const originalOperationId = `worker-restore:${input.operationId}`, originalIdentitySha256 = sha(canonicalJson(initial));
+    const evidence = RestoreEvidence.parse({ schemaVersion: "worker-restore-evidence-v1", originalOperationId, originalIdentitySha256,
+      expected: { archiveSha256, toolchainSha256: workspace.toolchainSha256, sourceSha256: sha(canonicalJson(workspace.source.files)), artifactFilesSha256: sha(canonicalJson(workspace.artifact.files)) } });
+    const claim = await this.input.jobJournal.claimWithCompanion({ operationId: originalOperationId, identitySha256: originalIdentitySha256, value: initial,
+      companion: { operationId: `worker-restore-evidence:${input.operationId}`, identitySha256: sha(canonicalJson(evidence)), value: evidence } });
     const job = claim.record.value;
     const validate = (value: unknown) => {
       const observed = RestoreObservation.parse(value);
@@ -239,9 +245,17 @@ export class ProductionWorkerJobClient {
     const archiveSha256 = Digest.parse(input.archiveSha256); Digest.parse(input.bindingSha256);
     const record = await this.input.jobJournal.read<StoredRestore>(`worker-restore:${input.operationId}`);
     if (!record || record.identitySha256 !== sha(canonicalJson({ workerOperationId: record.value.workerOperationId, workerResourceId: record.value.workerResourceId, leaseSha256: record.value.leaseSha256, archiveSha256, bindingSha256: input.bindingSha256 })) || record.value.workerOperationId !== this.input.workerOperationId || record.value.archiveSha256 !== archiveSha256 || record.value.bindingSha256 !== input.bindingSha256) return { state: "unknown" as const, archiveSha256 };
+    const companion = await this.input.jobJournal.read(`worker-restore-evidence:${input.operationId}`);
+    const evidence = RestoreEvidence.safeParse(companion?.value);
+    if (!companion || companion.revision !== 1 || !evidence.success || companion.identitySha256 !== sha(canonicalJson(evidence.data))
+      || evidence.data.originalOperationId !== record.operationId || evidence.data.originalIdentitySha256 !== record.identitySha256
+      || evidence.data.expected.archiveSha256 !== archiveSha256) return { state: "unknown" as const, archiveSha256 };
     try {
       const observed = RestoreObservation.parse(await this.#exec(record.value, ["restore-status", archiveSha256]));
-      return observed.archiveSha256 === archiveSha256 ? observed : { state: "unknown" as const, archiveSha256 };
+      if (observed.archiveSha256 !== archiveSha256 || (observed.state === "restored" && (observed.toolchainSha256 !== evidence.data.expected.toolchainSha256
+        || observed.sourceSha256 !== evidence.data.expected.sourceSha256 || observed.artifactFilesSha256 !== evidence.data.expected.artifactFilesSha256)))
+        return { state: "unknown" as const, archiveSha256 };
+      return observed;
     } catch { return { state: "unknown" as const, archiveSha256 }; }
   }
   /** Called only after the coordinator commits encrypted checkpoint ownership.

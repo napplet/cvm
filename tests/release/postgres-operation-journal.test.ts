@@ -328,7 +328,7 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
     const workerOperationId = "original-build-worker";
     await workerRecords.claim({ operationId: workerOperationId, requestSha256: identity, resourceName: workerOperationId, provider: "fly", appName: "original-app", policyVersion: PRODUCTION_WORKER_POLICY.version, image: `registry/worker@sha256:${scopeSha256}`, sessionLeaseSha256: identity, toolchainSha256: scopeSha256, providerDeadlineEpochMs: Date.now() + 1_200_000 });
     await workerRecords.update({ operationId: workerOperationId, requestSha256: identity, resourceId: "original-machine", state: "reconciled" });
-    let starts = 0, queries = 0, originalJobId = "", fences = 0, fenceQueries = 0, restores = 0, restoreQueries = 0;
+    let starts = 0, queries = 0, originalJobId = "", fences = 0, fenceQueries = 0, restores = 0, restoreQueries = 0, restorePuts = 0;
     let restoreReceipt: unknown;
     let completedJobBytes: Buffer | undefined;
     let completedCommands: Array<{ argv: string[]; exitCode: number; stdout: string; stderr: string; elapsedMs: number }> = [];
@@ -348,7 +348,7 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
       }
       if (action === "fence") { fences++; throw new Error("fenced original lease; response lost"); }
       if (action === "fence-status") { fenceQueries++; return { status: "completed", exitCode: 0, stdout: JSON.stringify({ state: "fenced", jobId: id, fenceSha256: index }) }; }
-      if (action === "restore-put") return { status: "completed", exitCode: 0, stdout: JSON.stringify({ state: "stored", archiveSha256: id, chunk: Number(index), sha256: new Bun.CryptoHasher("sha256").update(Buffer.from(data!, "base64")).digest("hex") }) };
+      if (action === "restore-put") { restorePuts++; return { status: "completed", exitCode: 0, stdout: JSON.stringify({ state: "stored", archiveSha256: id, chunk: Number(index), sha256: new Bun.CryptoHasher("sha256").update(Buffer.from(data!, "base64")).digest("hex") }) }; }
       if (action === "restore") { restores++; throw new Error("restored bytes; response lost"); }
       if (action === "restore-status") { restoreQueries++; return { status: "completed", exitCode: 0, stdout: JSON.stringify(restoreReceipt) }; }
       throw new Error("UNEXPECTED_REDISPATCH");
@@ -413,6 +413,39 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
      * it does not upload archive chunks or send another restore command. */
     expect((await jobClient().observeRestoreWorkspace({ operationId: restoreInput.operationId, archiveSha256: hash(workspace), bindingSha256: identity })).state).toBe("restored");
     expect(restores).toBe(1); expect(restoreQueries).toBe(2);
+    const correctRestoreReceipt = restoreReceipt;
+    for (const changed of [
+      { toolchainSha256: identity }, { sourceSha256: identity }, { artifactFilesSha256: identity },
+    ]) {
+      restoreReceipt = { state: "restored", archiveSha256: hash(workspace), toolchainSha256: scopeSha256,
+        sourceSha256: hash(canonicalJson(source.files)), artifactFilesSha256: hash(canonicalJson(files)), workspacePath: "/workspace/restored", ...changed };
+      expect((await jobClient().observeRestoreWorkspace({ operationId: restoreInput.operationId, archiveSha256: hash(workspace), bindingSha256: identity })).state).toBe("unknown");
+    }
+    restoreReceipt = correctRestoreReceipt;
+    const originalRestore = await jobJournal.read("worker-restore:original-restore");
+    const restoreEvidence = await jobJournal.read("worker-restore-evidence:original-restore");
+    if (!originalRestore || !restoreEvidence) throw new Error("EXPECTED_RESTORE_EVIDENCE");
+    expect(restoreEvidence.revision).toBe(1);
+    expect(restoreEvidence.value).toMatchObject({ schemaVersion: "worker-restore-evidence-v1", originalOperationId: originalRestore.operationId,
+      originalIdentitySha256: originalRestore.identitySha256, expected: { archiveSha256: hash(workspace), toolchainSha256: scopeSha256,
+        sourceSha256: hash(canonicalJson(source.files)), artifactFilesSha256: hash(canonicalJson(files)) } });
+    // Retained pre-companion originals cannot invent metadata-only proof. An
+    // explicit full-archive retry remains query-only and preserves history.
+    await jobJournal.claim("worker-restore:legacy-without-evidence", originalRestore.identitySha256, originalRestore.value);
+    const beforeLegacy = { queries: restoreQueries, uploads: restorePuts, restores };
+    expect((await jobClient().observeRestoreWorkspace({ operationId: "legacy-without-evidence", archiveSha256: hash(workspace), bindingSha256: identity })).state).toBe("unknown");
+    expect(restoreQueries).toBe(beforeLegacy.queries);
+    expect((await jobClient().restoreWorkspace({ ...restoreInput, operationId: "legacy-without-evidence" })).state).toBe("restored");
+    expect(restoreQueries).toBe(beforeLegacy.queries + 1);
+    expect(restorePuts).toBe(beforeLegacy.uploads); expect(restores).toBe(beforeLegacy.restores);
+    expect(await jobJournal.read("worker-restore-evidence:legacy-without-evidence")).toBeUndefined();
+    expect((await jobJournal.read("worker-restore:legacy-without-evidence"))?.value).toEqual(originalRestore.value);
+    // Even a rewrite with identical content invalidates immutable revision1
+    // evidence and must refuse before a native query or upload.
+    await jobJournal.compareAndSet(restoreEvidence.operationId, restoreEvidence.identitySha256, restoreEvidence.revision, restoreEvidence.value);
+    const queriesBeforeChangedEvidence = restoreQueries;
+    expect((await jobClient().observeRestoreWorkspace({ operationId: restoreInput.operationId, archiveSha256: hash(workspace), bindingSha256: identity })).state).toBe("unknown");
+    expect(restoreQueries).toBe(queriesBeforeChangedEvidence);
     await expect(jobClient().restoreWorkspace({ ...restoreInput, bindingSha256: scopeSha256 })).rejects.toThrow("OPERATION_IDENTITY_CONFLICT");
     expect(restores).toBe(1);
 

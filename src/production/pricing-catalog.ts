@@ -4,6 +4,7 @@ import { ModelProfileSchema, PriceCardSchema } from "../model/price-card";
 import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
 import type { RetainedGenerationPricing } from "../phase-04/metered-generation-service";
 import { canonicalJson } from "../promotion/schema";
+import { PendingActionIntentSchema, type PendingActionIntent } from "../continuity/contracts";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 /** Install only already captured production pricing before serving admissions.
@@ -57,4 +58,28 @@ export function createProductionRetainedPricing(input: PostgresSqlPool): Retaine
       return Object.freeze({ profile, card });
     } finally { client.release(); }
   } });
+}
+
+/** A paused command can precede its first metered action. Its own immutable
+ * pause tuple, rather than a fabricated action, selects the original catalog. */
+export async function readProductionPendingPricing(input: Readonly<{ pool: PostgresSqlPool; intent: PendingActionIntent; pauseGeneration: number }>) {
+  const intent = PendingActionIntentSchema.parse(input.intent);
+  const client = await bindAccountingRealmPool(input.pool, createAccountingRealm("production-real")).connect();
+  try {
+    const row = (await client.query<{ profile_hash: string; card_hash: string; normalized_profile: unknown; normalized_card: unknown; intent_json: unknown }>(`SELECT
+      m.profile_hash,m.normalized_profile,c.card_hash,c.normalized_card,p.intent_json
+      FROM production_real.continuation_pauses p
+      JOIN production_real.model_profile_versions m ON m.id=p.intent_json->>'profileId'
+      JOIN production_real.price_card_versions c ON c.id=p.intent_json->>'priceCardId' AND c.profile_id=m.id
+      WHERE p.account_id=$1 AND p.session_id=$2 AND p.pause_generation=$3
+        AND p.pending_fingerprint_sha256=$4 AND p.state='resume_required'`,
+    [intent.accountId, intent.sessionId, input.pauseGeneration, intent.fingerprint])).rows[0];
+    if (!row || canonicalJson(PendingActionIntentSchema.parse(row.intent_json)) !== canonicalJson(intent)) throw new Error("PRODUCTION_PENDING_PRICING_REQUIRED");
+    const profile = ModelProfileSchema.parse(row.normalized_profile), card = PriceCardSchema.parse(row.normalized_card);
+    if (profile.id !== intent.profileId || card.id !== intent.priceCardId || profile.priceCardId !== card.id
+      || row.profile_hash !== hash(canonicalJson(profile)) || row.card_hash !== hash(canonicalJson(card))
+      || profile.model !== "gemini-4-argon" || profile.provider !== card.provider || card.provider !== "vertex_ai_gemini"
+      || card.kind !== "source_attributed_provider" || card.currency !== "usd_micros") throw new Error("PRODUCTION_PENDING_PRICING_BINDING_INVALID");
+    return Object.freeze({ profile, card });
+  } finally { client.release(); }
 }

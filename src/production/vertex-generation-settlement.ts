@@ -3,9 +3,27 @@ import type { GenerationUsageSettlement } from "../phase-04/metered-generation-s
 import type { PostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
 import { assertPostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
 import { ProductionVertexModelGateway } from "./vertex-model-gateway";
+import { z } from "zod";
+import { canonicalJson } from "../promotion/schema";
 
-type Binding = Readonly<{ accountId: string; operationId: string; conversion: UsdSatConversion; acceptedAt: string; maximumUsdMicros: string }>;
+export const ProductionVertexSettlementBindingSchema = z.object({
+  accountId: z.string().min(1), operationId: z.string().min(1), conversion: UsdSatConversionSchema,
+  acceptedAt: z.iso.datetime(), maximumUsdMicros: z.string().regex(/^(0|[1-9][0-9]*)$/u),
+}).strict();
+type Binding = z.infer<typeof ProductionVertexSettlementBindingSchema>;
 const digest = async (value: unknown) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value)))), byte => byte.toString(16).padStart(2, "0")).join("");
+
+/** A pre-dispatch pause may have a settlement binding but no metered action.
+ * Read its original record only; never create or repair it from current FX. */
+export async function readOriginalPendingVertexSettlement(input: Readonly<{ journal: PostgresOperationJournal; accountId: string; operationId: string }>): Promise<Readonly<{ binding: Binding; bindingSha256: string }>> {
+  assertPostgresOperationJournal(input.journal);
+  const record = await input.journal.read<unknown>(`vertex-generation-settlement:${input.operationId}`);
+  if (!record || record.revision !== 1 || record.identitySha256 !== await digest({ accountId: input.accountId, operationId: input.operationId })) throw new Error("PRODUCTION_PENDING_SETTLEMENT_REQUIRED");
+  const binding = ProductionVertexSettlementBindingSchema.parse(record.value);
+  if (binding.accountId !== input.accountId || binding.operationId !== input.operationId) throw new Error("PRODUCTION_PENDING_SETTLEMENT_BINDING_INVALID");
+  const bindingSha256 = Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalJson(binding)))).toString("hex");
+  return Object.freeze({ binding, bindingSha256 });
+}
 
 /** Exact USD receipt to sat settlement. The FX conversion is claimed before
  * the action budget, then the original Vertex receipt is re-read at terminal

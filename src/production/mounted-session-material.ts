@@ -536,7 +536,7 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
     }),
     edge: Object.freeze({ compatibleHost, signer, cep8, cashu, promotedCli, relays }),
     publicationContext,
-    ...(directPublication ? { directPublication } : {}),
+    ...(directPublication ? { directPublication, ...(input.resolved.edge.directPublicationReference ? { directPublicationReference: input.resolved.edge.directPublicationReference } : {}) } : {}),
     paymentScenarioContext: edgeContexts.payments,
     sourceBuild,
   });

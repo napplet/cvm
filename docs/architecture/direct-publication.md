@@ -298,18 +298,53 @@ Public acceptance retains the existing intent/expiry checks, so observing an old
 signature cannot authorize its first acceptance after expiry. Composed
 publication and recovery use the concrete upload and relay classes above.
 
-This is operational construction, not direct release promotion or protected-suite
-selection. The aggregate publication certifier must not receive direct hashes
-in aggregate fields. The direct protected observation contract, source-promotion
-checks and runner wiring remain required before satisfying the live publication
-gate. Ordinary post-cutover owner actors and negotiated public presentation
-remain separate work.
+### Private protected publication observations
+
+The mounted record can additionally carry `edge.directPublicationReference`:
+only the certification owner's public key and stable intent idempotency key.
+It carries no future artifact hash, review digest, signed event or signing key.
+Materialization rejects a reference for another owner or a legacy worker profile.
+The retained owner-approved intent must actually exist before execution; the
+factory resolves its immutable intent ID and review digest from owned storage.
+
+`ProductionDirectPublicationCertification` constructs source, submission and
+reconciliation observations over that concrete factory. Source observation
+requires the retained measured CLI/package/lock receipt and actual pinned
+helper bytes. Submission requests and accepts the original external NIP-46
+owner and BUD-11 signatures, then runs the sealed upload and two relay operations.
+Recovery observes only existing signatures and the three original operations;
+missing signatures cannot initiate signing. Actors close after each call.
+
+Three distinct private controller kinds (`edge.publication.direct.source`,
+`.submit`, `.reconcile`) retain strict versioned direct payloads and durable
+controller operation identities. Unknown submission recovery calls the query-only
+observation path. The mounted adapter selects the direct path only when the
+concrete direct factory exists, and requires its measured reference. Legacy
+aggregate payloads and operation identities remain on their existing path.
+
+The existing publication suite runner validates direct candidate/topology,
+HTML hash, archive checksum, original intent/review, derived operation IDs,
+owner/attestation event IDs and exact upload origin/path across every stage.
+It retains the existing three publication claims and sole release evaluator.
+Local deterministic observations are rejected before source lookup. Unit runner
+fixtures test the contract; they produce no release evidence. Source-byte
+eligibility is not selection or promotion of the production worker profile:
+`productionPromotion` remains `not_asserted`, and all eight fresh real suites
+and final evaluator are still required.
+
+The local funded container proof exercises the concrete coordinator, including
+missing-original refusal, binding substitution refusal and query-only recovery
+after expiry and service-key closure. Its single upload, two relay publications
+and one service signature are mechanism proof. Actual mounted preparation of
+the certification artifact/owner review, candidate-bound live execution and
+source/profile promotion remain open. Ordinary post-cutover owner actors and
+negotiated public presentation remain separate work.
 
 The historical promoted `0.5.2` aggregate facade is not a direct-format adapter.
 The current deployment has not selected or promoted the direct profile. Ordinary
 post-cutover owner publication must use its own
 approved actor composition, rather than inherit an expired certification receipt.
-Production actor/provider-suite wiring and fresh live certification remain open. No
+Ordinary production actor wiring and fresh live certification remain open. No
 handwritten NIP-5D manifests, hash reinterpretation, signer bypass or fabricated
 completion evidence are permitted. Production client presentation and negotiated
 ContextVM/MCP/SDK/catalog wiring also remain open. Live effects require the exact

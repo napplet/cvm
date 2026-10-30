@@ -1,3 +1,5 @@
+import { DirectPublicationReferenceSchema, DirectPublicationSourceObservationSchema, DirectPublicationSubmissionSchema, type LiveDirectPublicationObservationPort } from "../../certification/live/direct-publication-contract";
+import type { z } from "zod";
 import type { LiveContextVmPaymentModelObservationPort } from "../../certification/live/contextvm-payment-model";
 import type { LivePublicationObservationPort } from "../../certification/live/publication";
 import type { LiveSecurityHostObservationPort } from "../../certification/live/security-host";
@@ -17,7 +19,7 @@ export type ProductionEdgeSuiteAdapters = Readonly<{
   "security-host": Real<LiveSecurityHostObservationPort>;
   "supply-chain": Real<LiveSupplyChainObservationPort>;
   "ContextVM-payment-model": Real<LiveContextVmPaymentModelObservationPort>;
-  publication: Real<LivePublicationObservationPort>;
+  publication: Real<LivePublicationObservationPort> | Real<LiveDirectPublicationObservationPort>;
 }>;
 
 function candidate(value: unknown): string {
@@ -46,7 +48,7 @@ async function execute(control: ProductionCoreControlClient, kind: CoreControlKi
  * CLI/NIP-46/upload/relay operations. Construction is no-effect; every call
  * is receipt/candidate/topology bound by ProductionCoreControlClient.
  */
-export function createProductionEdgeSuiteAdapters(input: Readonly<{ candidateId: unknown; control: unknown }>): ProductionEdgeSuiteAdapters {
+export function createProductionEdgeSuiteAdapters(input: Readonly<{ candidateId: unknown; control: unknown; artifactContract?: "nip5d-direct-v1"; directPublicationReference?: z.infer<typeof DirectPublicationReferenceSchema> }>): ProductionEdgeSuiteAdapters {
   const candidateId = candidate(input.candidateId);
   if (!(input.control instanceof ProductionCoreControlClient)) throw new Error("PRODUCTION_EDGE_CONTROL_CLIENT_REQUIRED");
   const control = input.control;
@@ -93,5 +95,17 @@ export function createProductionEdgeSuiteAdapters(input: Readonly<{ candidateId:
     submitOriginalPublication(value: PublicationSource) { return execute(control, "edge.publication.submit", "publication_submit", { candidateId, ...value, require: ["cli_upload", "external_nip46_owner_signature", "separate_attestation_key", "owner_relay", "attestation_relay"] }); },
     reconcileOriginalPublication(value: PublicationOperation) { return execute(control, "edge.publication.reconcile", "publication_reconcile", { candidateId, ...value, require: ["original_operation_ids_only", "partial_upload", "partial_relay", "bounded_owned_cleanup"] }); },
   });
+  if (input.artifactContract === "nip5d-direct-v1") {
+    const reference = DirectPublicationReferenceSchema.parse(input.directPublicationReference);
+    const direct: Real<LiveDirectPublicationObservationPort> = Object.freeze({ artifactContract: "nip5d-direct-v1", origin: "project-owned", evidenceClass: "real",
+      verifyPromotedSource(value: Candidate) {
+        if (value.candidateId !== candidateId) throw new Error("PRODUCTION_EDGE_CANDIDATE_MISMATCH");
+        return execute(control, "edge.publication.direct.source", "direct_publication_source", { candidateId, reference });
+      },
+      submitOriginalPublication(value) { const source = DirectPublicationSourceObservationSchema.parse(value); return execute(control, "edge.publication.direct.submit", "direct_publication_submit", { candidateId, source }); },
+      reconcileOriginalPublication(value) { const submitted = DirectPublicationSubmissionSchema.parse(value); return execute(control, "edge.publication.direct.reconcile", "direct_publication_reconcile", { candidateId, submitted }); },
+    });
+    return Object.freeze({ "security-host": securityHost, "supply-chain": supplyChain, "ContextVM-payment-model": paymentModel, publication: direct });
+  }
   return Object.freeze({ "security-host": securityHost, "supply-chain": supplyChain, "ContextVM-payment-model": paymentModel, publication });
 }

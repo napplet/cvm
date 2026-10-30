@@ -1,3 +1,4 @@
+import { DirectPublicationReferenceSchema } from "../certification/live/direct-publication-contract";
 import { z } from "zod";
 
 import { CertificationInputSchema, ReleaseObservationBindingSchema, WorkerCandidateSchema } from "../certification/contracts";
@@ -125,6 +126,7 @@ const RecordSchema = z.object({
   googleControls: z.object({ cloudRun: Json, cloudSql: Json, collector: Json }).strict(),
   edge: z.object({
     compatibleHost: z.object({ hostUrl: Url, hostSha256: Digest, chromiumExecutable: z.string().startsWith("/").max(4_096) }).strict(),
+    directPublicationReference: DirectPublicationReferenceSchema.optional(),
     uploadServer: Url,
     ownerPubkey: Digest,
     relays: z.array(z.string().url().refine(value => new URL(value).protocol === "wss:")).min(1).max(16),
@@ -166,6 +168,7 @@ export function materializeMountedProductionSessionRecord(input: Readonly<{
     })() } } }
     : input.measured;
   const record = RecordSchema.parse(measured);
+  if (record.edge.directPublicationReference && (input.config.worker.artifactContract !== "nip5d-direct-v1" || record.edge.directPublicationReference.principal.pubkey !== input.config.publication.ownerPubkey)) throw new Error("PRODUCTION_MOUNTED_DIRECT_PUBLICATION_BINDING_REQUIRED");
   const sourcePlan = assertMountedSourceBuildPlan(record.execution.protected.sourceBuild.plan, { candidateSha256: input.config.candidateSha256, topologySha256: input.config.topologySha256, provider: record.workerCandidate.provider, publication: { server: input.config.publication.uploadServer } });
   if (record.candidateSha256 !== input.config.candidateSha256
     || record.topologySha256 !== input.config.topologySha256

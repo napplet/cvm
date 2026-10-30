@@ -1,5 +1,8 @@
 import { z } from "zod";
 import { ProtectedSuiteResultSchema, WorkerCandidateSchema, type ProtectedSuiteResult } from "../contracts";
+import { DirectPublicationSourceObservationSchema, DirectPublicationSubmissionSchema, DirectPublicationReconciliationSchema,
+  directPublicationOperationIds, type LiveDirectPublicationObservationPort } from "./direct-publication-contract";
+import { canonicalJson } from "../../promotion/schema";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu);
 const SourceObservationSchema = z.object({
@@ -32,6 +35,7 @@ const ReconciliationObservationSchema = z.object({
  * interface deliberately has no credential, raw signed event, upload bytes,
  * or protected-evidence writer. */
 export type LivePublicationObservationPort = Readonly<{
+  artifactContract?: "legacy-aggregate-v1";
   evidenceClass: "protected_live" | "deterministic";
   verifyPromotedSource(candidate: Readonly<{ candidateId: string }>): Promise<unknown>;
   submitOriginalPublication(source: Readonly<{ sealedArtifactSha256: string; aggregateSha256: string }>): Promise<unknown>;
@@ -40,7 +44,7 @@ export type LivePublicationObservationPort = Readonly<{
 
 export type LivePublicationCertificationInput = Readonly<{
   candidate: unknown;
-  observationPort?: LivePublicationObservationPort;
+  observationPort?: LivePublicationObservationPort | LiveDirectPublicationObservationPort;
 }>;
 
 function nonPass(status: "blocked" | "failed", reasonCode: ProtectedSuiteResult["reasonCode"], limitation: string): ProtectedSuiteResult {
@@ -64,6 +68,23 @@ export async function runLivePublicationCertification(input: LivePublicationCert
   const port = input.observationPort;
   if (!candidate.success || !port || port.evidenceClass !== "protected_live") {
     return nonPass("blocked", "INPUT_UNAVAILABLE", "protected-live-publication-required");
+  }
+  if (port.artifactContract === "nip5d-direct-v1") {
+    try {
+      const source = DirectPublicationSourceObservationSchema.parse(await port.verifyPromotedSource({ candidateId: candidate.data.id }));
+      if (source.candidateSha256 !== candidate.data.id || canonicalJson(source.operationIds) !== canonicalJson(await directPublicationOperationIds(source.original.intentId))) return nonPass("failed", "EVIDENCE_INVALID", "direct-source-candidate-or-operation-mismatch");
+      const submitted = DirectPublicationSubmissionSchema.parse(await port.submitOriginalPublication(source));
+      if (submitted.candidateSha256 !== source.candidateSha256 || submitted.topologySha256 !== source.topologySha256 || submitted.artifactHash !== source.artifactHash || submitted.archiveSha256 !== source.archiveSha256
+        || canonicalJson(submitted.original) !== canonicalJson(source.original) || canonicalJson(submitted.operationIds) !== canonicalJson(source.operationIds)) return nonPass("failed", "EVIDENCE_INVALID", "direct-publication-binding-mismatch");
+      const reconciled = DirectPublicationReconciliationSchema.parse(await port.reconcileOriginalPublication(submitted));
+      const { status: _reconciledStatus, locationReference, originalOperationsOnly: _original, ...reconciledBody } = reconciled;
+      const { status: _submittedStatus, ...submittedBody } = submitted;
+      const location = new URL(locationReference);
+      if (canonicalJson(reconciledBody) !== canonicalJson(submittedBody) || location.origin !== source.server || location.protocol !== "https:" || location.username || location.password || location.search || location.hash || location.pathname !== `/${source.artifactHash}`) return nonPass("failed", "EVIDENCE_INVALID", "direct-original-reconciliation-mismatch");
+      // Reviewed source-byte eligibility is not production profile promotion.
+      // The sole release evaluator still requires all eight real suites.
+      return ProtectedSuiteResultSchema.parse({ status: "passed", claims: ["release.promoted_cli", "release.sealed_publication", "release.external_owner_signing"], limitations: ["selection-external"], reasonCode: "OBSERVATION_COMPLETE" });
+    } catch { return nonPass("blocked", "PROVIDER_UNAVAILABLE", "direct-publication-observation-unavailable"); }
   }
 
   try {

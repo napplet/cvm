@@ -1,3 +1,4 @@
+import type { LiveDirectPublicationObservationPort } from "./direct-publication-contract";
 import type { ProtectedCertificationAdapterRegistry } from "../adapters";
 import type { CertificationInputSchema, ReleaseObservationBindingSchema, WorkerCandidateSchema } from "../contracts";
 import { PROTECTED_SUITES } from "../runner";
@@ -24,7 +25,7 @@ export type LiveProtectedCertificationPorts = Readonly<{
   "security-host"?: LiveSecurityHostObservationPort;
   "supply-chain"?: LiveSupplyChainObservationPort;
   "contextvm-payment-model"?: LiveContextVmPaymentModelObservationPort;
-  publication?: LivePublicationObservationPort;
+  publication?: LivePublicationObservationPort | LiveDirectPublicationObservationPort;
 }>;
 
 export type LiveProtectedRegistryInput = Readonly<{

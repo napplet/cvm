@@ -40,6 +40,14 @@ export class ProductionDirectPublicationFactory {
     for (const journal of Object.values(input.journals)) assertPostgresOperationJournal(journal);
     this.#settings = Settings.parse(input.settings); this.#input = input;
   }
+  async originalApproval(value: unknown) {
+    if (this.#closed) throw new Error("DIRECT_PUBLICATION_FACTORY_CLOSED");
+    const reference = Open.pick({ principal: true, idempotencyKey: true }).strict().parse(value);
+    if (reference.principal.pubkey !== this.#settings.ownerPubkey) throw new Error("DIRECT_PUBLICATION_CONFIGURED_OWNER_REQUIRED");
+    const intent = await this.#input.intents.readOriginal(reference);
+    if (!intent) throw new Error("DIRECT_PUBLICATION_APPROVED_ORIGINAL_REQUIRED");
+    return Open.parse({ ...reference, intentId: intent.intentId, reviewSha256: intent.review.reviewSha256 });
+  }
   async open(value: unknown) {
     if (this.#closed) throw new Error("DIRECT_PUBLICATION_FACTORY_CLOSED");
     if (this.#actors.size + this.#opening >= 32) throw new Error("DIRECT_PUBLICATION_ACTOR_LIMIT");
@@ -84,7 +92,7 @@ export class ProductionDirectPublicationFactory {
           const toolchain = requireDirectToolchainReceipt(owned.archive.receipts.toolchain), helper = await loadPinnedDirectCliNetworkHelpers();
           return Object.freeze({ status: "verified-source-bytes" as const, artifactContract: "nip5d-direct-v1" as const,
             candidateSha256: request.candidateSha256, topologySha256: request.topologySha256, artifactHash: owned.archive.artifactHash,
-            archiveSha256: owned.archive.checksum, toolchainSha256: owned.archive.build.toolchainSha256,
+            archiveSha256: owned.archive.checksum, server: intent.review.servers[0]!, toolchainSha256: owned.archive.build.toolchainSha256,
             toolchain, helper: helper.identity, productionPromotion: "not_asserted" as const });
         },
         async requestOwnerSignature() { check(); return signer.signOwnerManifest(); },

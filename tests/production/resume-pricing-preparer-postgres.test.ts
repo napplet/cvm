@@ -1,3 +1,5 @@
+import { ProductionDirectPublicationCertification } from "../../src/production/direct-publication-certification";
+import { runLivePublicationCertification } from "../../src/certification/live/publication";
 import { DIRECT_CLI_BINARY_SHA256, requireDirectToolchainReceipt } from "../../src/worker-adapters/direct-toolchain-receipt";
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
@@ -1426,6 +1428,15 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         expect(measuredSource).toMatchObject({ status: "verified-source-bytes", artifactContract: "nip5d-direct-v1", candidateSha256: signingRequest.candidateSha256,
           artifactHash: review.artifact.artifactHash, archiveSha256: review.artifact.archiveSha256, productionPromotion: "not_asserted" });
         expect(measuredSource.toolchain.cliBinarySha256).toBe(DIRECT_CLI_BINARY_SHA256[measuredSource.toolchain.platform]);
+        const directCertification = new ProductionDirectPublicationCertification(directFactory, owner, signingRequest.candidateSha256, signingRequest.topologySha256);
+        const directSource = await directCertification.source();
+        expect(directSource.original).toEqual(openCommand);
+        await expect(directCertification.observeSubmit(directSource)).rejects.toThrow("ORIGINAL_UNRESOLVED");
+        await expect(directCertification.submit({ ...directSource, archiveSha256: "0".repeat(64) })).rejects.toThrow("SOURCE_BINDING_REQUIRED");
+        const fixtureOnly = await runLivePublicationCertification({ candidate: { id: signingRequest.candidateSha256, provider: "modal", image: `registry.example/worker@sha256:${"0".repeat(64)}`, sourceSha256: "1".repeat(64) },
+          observationPort: { artifactContract: "nip5d-direct-v1", evidenceClass: "deterministic", async verifyPromotedSource() { throw new Error("FIXTURE_CANNOT_BE_LIVE_EVIDENCE"); },
+            async submitOriginalPublication() { throw new Error("FIXTURE_CANNOT_BE_LIVE_EVIDENCE"); }, async reconcileOriginalPublication() { throw new Error("FIXTURE_CANNOT_BE_LIVE_EVIDENCE"); } } });
+        expect(fixtureOnly.status).toBe("blocked"); expect(fixtureOnly.claims).toEqual([]);
         expect(bunker.requests).toHaveLength(requestsBeforeFactory);
         let releaseOpenings = () => {}, allKeysRequested = () => {};
         const openingGate = new Promise<void>(resolve => { releaseOpenings = resolve; });
@@ -1493,6 +1504,11 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         expect(relayPublishes).toHaveLength(2);
         expect(await factoryActor.publish()).toMatchObject({ state: "complete", artifactHash: review.artifact.artifactHash,
           archiveSha256: review.artifact.archiveSha256, ownerEventId: ownerEvent.id, attestationEventId: attestationEvent.id, locationReference: `${publicationServer}/${review.artifact.artifactHash}` });
+        const directSubmitted = await directCertification.submit(directSource);
+        expect(directSubmitted).toMatchObject({ artifactHash: review.artifact.artifactHash, archiveSha256: review.artifact.archiveSha256, ownerEventId: ownerEvent.id, attestationEventId: attestationEvent.id });
+        expect(await directCertification.reconcile(directSubmitted)).toMatchObject({ status: "complete", originalOperationsOnly: true });
+        expect(await directCertification.observeSubmit(directSource)).toEqual(directSubmitted);
+        await expect(directCertification.reconcile({ ...directSubmitted, ownerEventId: "0".repeat(64) })).rejects.toThrow("ORIGINAL_UNRESOLVED");
         expect(directServiceSigns).toBe(1); expect(relayPublishes).toHaveLength(2); expect(uploadPuts).toBe(1);
         hideOwnerObservation = true;
         expect(await new ProductionDirectCertificationRelays(relayInput).reconcile()).toMatchObject({ state: "partial", stage: "owner" });
@@ -1548,6 +1564,10 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         expect(await historicalRelays.publishAttestation()).toMatchObject({ state: "complete", eventId: attestationEvent.id });
         expect(directServiceSigns).toBe(1); expect(relayPublishes).toHaveLength(2);
         expect(await factoryActor.reconcile()).toMatchObject({ state: "complete", ownerEventId: ownerEvent.id, attestationEventId: attestationEvent.id });
+        expect(await directCertification.observeSubmit(directSource)).toEqual(directSubmitted);
+        expect(await directCertification.reconcile(directSubmitted)).toMatchObject({ status: "complete", originalOperationsOnly: true });
+        await expect(directCertification.submit(directSource)).rejects.toThrow();
+        expect(uploadPuts).toBe(1); expect(relayPublishes).toHaveLength(2); expect(directServiceSigns).toBe(1);
         const historicalFactory = new ProductionDirectPublicationFactory({ ...factoryInput, intents: changedTargets });
         try {
           const historicalActor = await historicalFactory.open(openCommand);

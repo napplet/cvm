@@ -1,3 +1,5 @@
+import { DirectPublicationSourceObservationSchema, DirectPublicationSubmissionSchema, directPublicationOperationIds } from "../../src/certification/live/direct-publication-contract";
+import { DIRECT_CLI_NETWORK_IDENTITY } from "../../src/production/pinned-direct-cli-network";
 import { expect, spyOn, test } from "bun:test";
 
 import { createProductionEdgeSuiteAdapters } from "../../src/release/deployment/production-edge-suite-adapters";
@@ -78,8 +80,25 @@ test("every real edge adapter payload matches its server contract and rejects ch
     await adapters["ContextVM-payment-model"].exerciseCep8Settlement({ candidateId: digest("a") });
     await adapters["ContextVM-payment-model"].reconcileOriginalModelOperation({ candidateId: digest("a") });
     await adapters.publication.verifyPromotedSource({ candidateId: digest("a") });
+    if (adapters.publication.artifactContract === "nip5d-direct-v1") throw new Error("LEGACY_DEFAULT_REQUIRED");
     await adapters.publication.submitOriginalPublication(source);
     await adapters.publication.reconcileOriginalPublication({ intentId: "intent-1", operationIds: { deploy: "deploy:intent-1", ownerManifest: "owner_manifest:intent-1", attestation: "attestation:intent-1" } });
+    const reference = { principal: { pubkey: digest("a") }, idempotencyKey: "direct:certification" };
+    const direct = createProductionEdgeSuiteAdapters({ candidateId: digest("a"), control: client, artifactContract: "nip5d-direct-v1", directPublicationReference: reference }).publication;
+    if (direct.artifactContract !== "nip5d-direct-v1") throw new Error("DIRECT_VARIANT_REQUIRED");
+    const original = { ...reference, intentId: `direct-publication:${digest("b")}`, reviewSha256: digest("c") };
+    const directSource = DirectPublicationSourceObservationSchema.parse({ version: "direct-publication-observation-v1", status: "verified-source-bytes", artifactContract: "nip5d-direct-v1",
+      candidateSha256: digest("a"), topologySha256: digest("b"), artifactHash: digest("c"), archiveSha256: digest("d"), toolchainSha256: digest("e"),
+      toolchain: { version: 1, artifactContract: "nip5d-direct-v1", platform: "linux-arm64", cliBinarySha256: "2a78a97ae95f493a0c568366ede5a53ce99808fa2fe487572952b7f4f9770a26",
+        workerPackageSha256: "ca0d5a088c7650407306899eaaaa535b2bd872d746d7aee10be471894944abbf", workerLockSha256: "f0ac025b6f79609a159702adedfbfebd8966b1c65f78cf1e0f75912ae54a567d",
+        templatePackageSha256: "81f03e8b76b15cbc025b11a67117389b579ee1ca374ddb680971f91e7293a99f", templateLockSha256: "ec1eb261c06641decda0c8fbd3a96e5f121cddfcc6abdc8888f78556390e28e4" },
+      server: "https://publication.example", helper: DIRECT_CLI_NETWORK_IDENTITY, productionPromotion: "not_asserted", original, operationIds: await directPublicationOperationIds(original.intentId) });
+    const submitted = DirectPublicationSubmissionSchema.parse({ version: directSource.version, status: "submitted", artifactContract: directSource.artifactContract,
+      candidateSha256: directSource.candidateSha256, topologySha256: directSource.topologySha256, artifactHash: directSource.artifactHash, archiveSha256: directSource.archiveSha256,
+      original, operationIds: directSource.operationIds, ownerEventId: digest("f"), attestationEventId: digest("0"), userSigningExternal: true });
+    await direct.verifyPromotedSource({ candidateId: digest("a") });
+    await direct.submitOriginalPublication(directSource);
+    await direct.reconcileOriginalPublication(submitted);
     expect([...seen].sort()).toEqual(Object.keys(CertificationEdgePayloadSchemas).sort());
   } finally { execute.mockRestore(); }
 });

@@ -1,3 +1,5 @@
+import { DirectPublicationReferenceSchema } from "../../certification/live/direct-publication-contract";
+import type { z } from "zod";
 import type { ReleaseProviderId } from "../contracts";
 import type { ReleaseProviderPort } from "../providers";
 import { RELEASE_PRODUCTION_PROVIDER_IDS } from "../native-registry";
@@ -124,6 +126,7 @@ export type ProductionConcreteClients = Readonly<{
   publicationContext: ProductionPublicationOperations;
   /** Additive concrete direct graph; selection/promotion gates remain separate. */
   directPublication?: ProductionDirectPublicationFactory;
+  directPublicationReference?: z.infer<typeof DirectPublicationReferenceSchema>;
   paymentScenarioContext: ProductionPaymentScenarioContext;
   sourceBuild: ProductionSourceBuildVerifier;
 }>;
@@ -175,6 +178,7 @@ function assertConcreteClients(value: unknown): asserts value is ProductionConcr
   if (!value || typeof value !== "object") throw new Error("PRODUCTION_SESSION_BROKER_CLIENTS_REQUIRED");
   const clients = value as Partial<ProductionConcreteClients>;
   if (clients.directPublication !== undefined && !(clients.directPublication instanceof ProductionDirectPublicationFactory)) throw new Error("PRODUCTION_SESSION_DIRECT_PUBLICATION_FACTORY_REQUIRED");
+  if (clients.directPublicationReference !== undefined) { DirectPublicationReferenceSchema.parse(clients.directPublicationReference); if (!clients.directPublication) throw new Error("PRODUCTION_SESSION_DIRECT_PUBLICATION_FACTORY_REQUIRED"); }
   for (const key of ["google", "workers", "contextvm", "vertex", "descriptors", "edge"] as const) {
     if (!clients[key] || typeof clients[key] !== "object") throw new Error("PRODUCTION_SESSION_BROKER_CLIENTS_REQUIRED");
   }
@@ -301,7 +305,7 @@ export function assembleProductionSessionRuntime(input: Readonly<{
     discoverCapabilities: 0, discoverAuthentication: 0, plan: 0, apply: 0, observe: 0, cleanup: 0, suites: 0,
   };
   const core = createProductionCoreSuiteAdapters({ candidate: broker.workerCandidate, control: broker.control, contextvm: broker.clients.contextvmCertification });
-  const edge = createProductionEdgeSuiteAdapters({ candidateId: broker.candidateSha256, control: broker.control });
+  const edge = createProductionEdgeSuiteAdapters({ candidateId: broker.candidateSha256, control: broker.control, ...(broker.clients.directPublication ? { artifactContract: "nip5d-direct-v1", directPublicationReference: broker.clients.directPublicationReference } : {}) });
   const rawProtectedPorts = composeProductionProtectedPorts({ core, edge });
   if (!hasExactKeys(rawProtectedPorts, PRODUCTION_LIVE_PROTECTED_PORT_KEYS)) throw new Error("PRODUCTION_SESSION_PROTECTED_PORT_SET_REQUIRED");
   const protectedPorts = Object.freeze(Object.fromEntries(PRODUCTION_LIVE_PROTECTED_PORT_KEYS.map(key => [

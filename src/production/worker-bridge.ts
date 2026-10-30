@@ -6,6 +6,7 @@ import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store"
 import { CheckpointExportRequestSchema, CheckpointFenceRequestSchema, CheckpointRestoreRequestSchema, CheckpointTerminationRequestSchema, WorkerRunRequestSchema, WorkerRunResultSchema, type CheckpointExportRequest, type CheckpointExportResult, type CheckpointFenceRequest, type CheckpointFenceResult, type CheckpointRestoreRequest, type CheckpointRestoreResult, type CheckpointTerminationRequest, type CheckpointTerminationResult, type ContinuationWorkerPort, type WorkerRunRequest, type WorkerRunResult } from "../phase-02/contracts";
 import type { ArtifactVerifier } from "../phase-02/trusted-core";
 import type { ArtifactContractInput } from "../policy/artifact-contract";
+import { evaluateArtifactContract } from "../policy/artifact-contract";
 import { canonicalJson } from "../promotion/schema";
 import { PostgresOperationJournal, assertPostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
 import type { createWorkerDeploymentClients } from "../release/deployment/worker-clients";
@@ -133,6 +134,18 @@ export class ProductionWorkerBridge implements ContinuationWorkerPort, ArtifactV
       if (!stored || facts.result.status !== "completed" || canonicalJson(facts.result.artifact) !== canonicalJson(stored.result.artifact)) return undefined;
       const { sessionId: _session, actionId: _action, expectedVersion: _version, policyVersion: _policy, capabilityGrant: _grant, workspaceId: _workspace, artifactId, ...contractInput } = stored.result.artifact;
       return Object.freeze({ artifact: { artifactId, artifactSha256: stored.checksum, scannerReportSha256: stored.scannerReportSha256, conformanceReportSha256: stored.conformanceReportSha256 }, contractInput });
+    } catch { return undefined; }
+  }
+  /** Coordinator-only terminal evidence. Reads the exact real run request and
+   * root-verified durable artifact, never an artifact ID supplied by a caller. */
+  async readVerifiedContinuationArtifact(input: Readonly<{ accountId: string; sessionId: string; actionId: string; expectedVersion: number; policyVersion: string; workspaceId: string }>) {
+    try {
+      const request = await this.#request({ ...input, capabilityGrant: "phase-04-coordinator-grant" });
+      const owner = await this.input.resolver.resolve(request), stored = await this.#artifacts.read(request);
+      if (!stored || owner.accountId !== input.accountId || stored.accountId !== owner.accountId || stored.ownerId !== owner.ownerId) return undefined;
+      const { sessionId: _session, actionId: _action, expectedVersion: _version, policyVersion: _policy, capabilityGrant: _grant, workspaceId: _workspace, artifactId, ...contractInput } = stored.result.artifact;
+      if ((await evaluateArtifactContract(contractInput)).verdict !== "pass") return undefined;
+      return Object.freeze({ artifactId, workspaceLineage: request.workspaceId, validationEvidenceReference: `verification:${artifactId}` });
     } catch { return undefined; }
   }
 

@@ -47,7 +47,7 @@ export class ProductionVertexModelGateway implements ModelGateway {
     catch (error) {
       // These checks run before a fresh provider journal claim/POST. Transport
       // failures occur inside the client and remain original-only unknowns.
-      if (error instanceof Error && ["VERTEX_INPUT_CAP_EXCEEDED", "VERTEX_PRICE_SNAPSHOT_STALE", "PRODUCTION_VERTEX_INPUT_BOUND_REQUIRED"].includes(error.message)) return { status: "definitive_not_accepted", operationId: intent.operationId, providerRequestId: intent.providerRequestId, reason: "pre_dispatch_rejected", provenance: { protectedEvidenceReference: `vertex-pre-dispatch:${intent.operationId}` } };
+      if (error instanceof Error && ["VERTEX_INPUT_CAP_EXCEEDED", "VERTEX_PRICE_SNAPSHOT_STALE", "PRODUCTION_VERTEX_INPUT_BOUND_REQUIRED", "PRICED_CONTINUATION_API_CLAIM_DENIED"].includes(error.message)) return { status: "definitive_not_accepted", operationId: intent.operationId, providerRequestId: intent.providerRequestId, reason: "pre_dispatch_rejected", provenance: { protectedEvidenceReference: `vertex-pre-dispatch:${intent.operationId}` } };
       return { status: "usage_unknown", operationId: intent.operationId, providerRequestId: intent.providerRequestId, reason: "lost_response", provenance: { protectedEvidenceReference: `vertex-operation:${intent.operationId}` } };
     }
   }

@@ -18,6 +18,15 @@ import { ProductionResumePricingQuotes } from "../../src/production/resume-prici
 import { ProductionResumePricingPreparer } from "../../src/production/resume-pricing-preparer";
 import { readOriginalPendingVertexSettlement } from "../../src/production/vertex-generation-settlement";
 import { resumePricingMaterial } from "../fixtures/resume-pricing";
+import { ProductionResumeAcceptance } from "../../src/production/resume-acceptance";
+import { prepareResumePricingQuote } from "../../src/continuity/resume-pricing";
+import { createProductionVertexGenerationSettlement } from "../../src/production/vertex-generation-settlement";
+import { createPostgresVertexOperationJournal } from "../../src/release/deployment/postgres-provider-journals";
+import { createVertexDeploymentClient, createVertexInteractionsHttpPort } from "../../src/release/deployment/vertex-client";
+import { ProductionVertexModelGateway } from "../../src/production/vertex-model-gateway";
+import { ProductionSourceProposalStore } from "../../src/production/source-proposal-store";
+import { ProviderOperationIntentSchema } from "../../src/model/model-gateway";
+import { z } from "zod";
 
 const integration = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
 const hash = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex");
@@ -27,9 +36,13 @@ async function docker(args: string[]): Promise<string> {
   if (code !== 0) throw new Error(`DOCKER_FAILED:${args[0]}:${err.slice(0, 300)}`);
   return out.trim();
 }
-function sqlPool(native: Pool): PostgresSqlPool {
+function sqlPool(native: Pool, loseCommit?: () => boolean): PostgresSqlPool {
   return { async connect() { const client = await native.connect(); return {
-    async query<Row extends Record<string, unknown>>(sql: string, values?: readonly unknown[]) { return { rows: (await client.query<Row>(sql, values ? [...values] : undefined)).rows }; },
+    async query<Row extends Record<string, unknown>>(sql: string, values?: readonly unknown[]) {
+      const result = await client.query<Row>(sql, values ? [...values] : undefined);
+      if (sql === "COMMIT" && loseCommit?.()) throw new Error("COMMIT_ACK_LOST");
+      return { rows: result.rows };
+    },
     release() { client.release(); },
   }; } };
 }
@@ -44,14 +57,14 @@ integration("production quote preparation authenticates an encrypted original ch
     admin = new Pool({ connectionString: `postgresql://postgres@127.0.0.1:${port}/postgres`, connectionTimeoutMillis: 2000 });
     for (let attempt = 0; attempt < 90; attempt++) { try { await admin.query("SELECT 1"); break; } catch (error) { if (attempt === 89) throw error; await Bun.sleep(250); } }
     for (const file of ["phase-03/001_funding.sql", "phase-04/001_metered_generation.sql", "phase-04/002_action_budget_lifecycle.sql", "phase-05/001_continuation.sql", "phase-06/001_publication.sql", "phase-03/002_production_accounting.sql",
-      "phase-07/001_production_operation_journal.sql", "phase-07/002_production_pricing_catalog.sql", "phase-07/003_production_checkpoints.sql", "phase-07/006_production_pending_checkpoints.sql", "phase-07/009_production_resume_pricing_quotes.sql"])
+      "phase-07/001_production_operation_journal.sql", "phase-07/002_production_pricing_catalog.sql", "phase-07/003_production_checkpoints.sql", "phase-07/004_production_source_proposals.sql", "phase-07/006_production_pending_checkpoints.sql", "phase-07/009_production_resume_pricing_quotes.sql"])
       await admin.query(await Bun.file(`migrations/${file}`).text());
     await admin.query("CREATE ROLE resume_preparer_runtime LOGIN"); await admin.query("GRANT napplet_production_real TO resume_preparer_runtime");
     runtime = new Pool({ connectionString: `postgresql://resume_preparer_runtime@127.0.0.1:${port}/postgres` });
     const pool = sqlPool(runtime), bound = bindAccountingRealmPool(pool, createAccountingRealm("production-real"));
     const store: ContinuationFundingStore = new PostgresSqlFundingStore(bound), quotes = new ProductionResumePricingQuotes(pool);
     await quotes.assertReady();
-    const startedAt = Date.now(); let now = startedAt;
+    const startedAt = Date.now() - 600_100; let now = startedAt;
     const originalPricing = await resumePricingMaterial(startedAt, "profile:original");
     await registerProductionPricing({ pool, ...originalPricing });
     const principal = { pubkey: "7".repeat(64) }, accountId = await accountIdForPrincipal(principal);
@@ -191,5 +204,138 @@ integration("production quote preparation authenticates an encrypted original ch
     expect((await admin.query("SELECT state,wrapped_dek,octet_length(ciphertext)::int AS bytes FROM production_real.checkpoint_crypto_records WHERE checkpoint_id LIKE 'checkpoint-command:%'")).rows).toEqual([{ state: "destroyed", wrapped_dek: null, bytes: 0 }]);
     expect(deletions).toBe(1);
     for (const table of ["action_budget_reservations", "provider_operations", "ledger_entries"]) expect((await admin.query(`SELECT count(*)::int AS count FROM production_real.${table}`)).rows[0].count).toBe(0);
+    // Exercise the actual shared money transaction and provider fence. These
+    // remain local protocol fixtures; no model request or worker is executed.
+    const acceptMigration = await Bun.file("migrations/phase-07/010_production_priced_continuations.sql").text();
+    await admin.query(acceptMigration); await admin.query(acceptMigration);
+    const acceptancePricing = await resumePricingMaterial(Date.now(), "profile:acceptance", "2000", 8000);
+    await registerProductionPricing({ pool, ...acceptancePricing });
+    const acceptancePreparer = new ProductionResumePricingPreparer({ pool, store, quotes, checkpoint, vertexJournal, currentPricing: acceptancePricing,
+      compatibility: { policyVersion: pending.policyVersion, acceptedToolchains: [pending.toolchainId] }, now: () => now });
+    const acceptance = new ProductionResumeAcceptance({ pool, quotes, preparer: acceptancePreparer, now: Date.now });
+    await acceptance.assertReady();
+    await admin.query("ALTER TABLE production_real.provider_operations DISABLE TRIGGER priced_provider_dispatch_fence");
+    await expect(acceptance.assertReady()).rejects.toThrow("PRODUCTION_PRICED_CONTINUATION_SCHEMA_REQUIRED");
+    await admin.query("ALTER TABLE production_real.provider_operations ENABLE TRIGGER priced_provider_dispatch_fence");
+    await acceptance.assertReady();
+    await admin.query("ALTER TABLE production_real.release_operation_journal DISABLE TRIGGER priced_vertex_api_claim_fence");
+    await expect(acceptance.assertReady()).rejects.toThrow("PRODUCTION_PRICED_CONTINUATION_SCHEMA_REQUIRED");
+    await admin.query("ALTER TABLE production_real.release_operation_journal ENABLE TRIGGER priced_vertex_api_claim_fence");
+    await acceptance.assertReady();
+    async function acceptanceCheckpoint(key: string, lifetimeMs = 60_000) {
+      now = startedAt;
+      const savedCommand = StartSessionCommandSchema.parse({ ...command, idempotencyKey: key });
+      const savedSession = `session:${hash({ accountId, key }).slice(0, 24)}`;
+      const savedIntent: PendingActionIntent = { ...pending, sessionId: savedSession, idempotencyKey: key, fingerprint: hash({ fixture: key }), reference: `pending:${key}` };
+      const savedOperation = `operation:${hash({ accountId, key, profile: savedIntent.profileId }).slice(0, 24)}`;
+      await vertexJournal.claim(`vertex-generation-settlement:${savedOperation}`, createHash("sha256").update(JSON.stringify({ accountId, operationId: savedOperation })).digest("hex"), { ...settlement, operationId: savedOperation });
+      await continuation.pauseForFunding({ intent: savedIntent, command: savedCommand });
+      const savedPause = await store.findContinuationPause(accountId, savedSession, 1);
+      if (!savedPause?.liveLeaseToken) throw new Error("EXPECTED_ACCEPTANCE_PAUSE");
+      const token = savedPause.liveLeaseToken;
+      now = savedPause.graceDeadlineMs + 1;
+      const pausing = await store.transact(accountId, tx => tx.beginDeadlineCheckpoint({ sessionId: savedSession, pauseGeneration: 1, liveLeaseToken: token }));
+      const saved = await initial.seal(pausing);
+      await store.transact(accountId, tx => tx.commitDeadlineCheckpoint({ accountId, sessionId: savedSession, pauseGeneration: 1, checkpointId: saved.manifest.checkpointId,
+        expectedSessionVersion: 0, expectedArtifactVersion: 0, manifestReference: `checkpoint-manifest:${saved.manifest.checkpointId}:${saved.envelope.manifestSha256}`,
+        objectKey: saved.envelope.object.key, objectGeneration: String(saved.envelope.object.generation), objectChecksum: saved.envelope.object.checksum,
+        keyReference: saved.envelope.crypto.keyReference, compatibilityIdentity: hash(saved.manifest.compatibility), checkpointCommittedAtMs: Date.parse(saved.manifest.committedAt) }));
+      const snapshot = await acceptancePreparer.loadAuthority({ principal: { id: accountId }, sessionId: savedSession, checkpointId: saved.manifest.checkpointId,
+        expectedSessionVersion: 0, expectedCheckpointVersion: 1, idempotencyKey: `prepare:${key}` });
+      const savedQuote = await prepareResumePricingQuote({ context: snapshot.context, pricing: acceptancePricing, preparationKey: `prepare:${key}`, nowMs: Date.now(), lifetimeMs });
+      await quotes.save(savedQuote);
+      return { principal: { id: accountId }, sessionId: savedSession, checkpointId: saved.manifest.checkpointId, expectedSessionVersion: 0, expectedCheckpointVersion: 1,
+        idempotencyKey: `resume:${key}`, approvePendingAction: true, capApprovalReference: command.admissionReference, pendingAction: savedQuote.context.pendingAction,
+        pricingApproval: { quoteReference: savedQuote.quoteReference, quoteSha256: savedQuote.quoteSha256, maximumSat: savedQuote.maximumSat } };
+    }
+    const accepting = await acceptanceCheckpoint("acceptance:one");
+    const short = await acceptanceCheckpoint("acceptance:short", 8000);
+    const lateApi = await acceptanceCheckpoint("acceptance:late-api", 8000);
+    await expect(acceptance.claim({ ...accepting, principal: { id: "account:foreign" } })).rejects.toThrow("RESUME_QUOTE_NOT_FOUND_OR_DENIED");
+    await expect(acceptance.claim({ ...accepting, pricingApproval: { ...accepting.pricingApproval, maximumSat: "4" } })).rejects.toThrow("RESUME_QUOTE_APPROVAL_MISMATCH");
+    await expect(acceptance.claim(accepting)).rejects.toThrow("RESUME_BALANCE_INSUFFICIENT");
+    await admin.query("UPDATE production_real.account_balance_projection SET settled_available=50,held=0 WHERE account_id=$1", [accountId]);
+    await expect(acceptance.claim(accepting)).rejects.toThrow("RESUME_CAP_INSUFFICIENT");
+    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.priced_continuation_claims")).rows[0].count).toBe(0);
+    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.action_budget_reservations")).rows[0].count).toBe(0);
+    // Explicit funded metadata fixture; this is not a real rail credit.
+    await admin.query("UPDATE production_real.account_balance_projection SET settled_available=150,held=150 WHERE account_id=$1", [accountId]);
+    await admin.query("UPDATE production_real.session_cap_holds SET requested_cap=150,held_amount=150 WHERE account_id=$1", [accountId]);
+    let loseCommit = true;
+    const uncertain = new ProductionResumeAcceptance({ pool: sqlPool(runtime, () => { const value = loseCommit; loseCommit = false; return value; }), quotes, preparer: acceptancePreparer, now: Date.now });
+    await expect(uncertain.claim(accepting)).rejects.toThrow("COMMIT_ACK_LOST");
+    const accepted = await acceptance.claim(accepting);
+    expect(accepted.replayed).toBeTrue();
+    expect(accepted.claim.state).toBe("accepted");
+    expect(accepted.claim.settlement.operationId).toBe(accepted.claim.operationId);
+    expect(accepted.claim.quote.maximumSat).toBe("41");
+    expect(accepted.claim.quote.context.pendingAction.maximum).toBe("3");
+    expect(accepted.claim.settlement.conversion).toEqual(acceptancePricing.conversion);
+    await expect(acceptance.claim({ ...accepting, pricingApproval: { ...accepting.pricingApproval, maximumSat: "4" } })).rejects.toThrow("IDEMPOTENCY_KEY_CONFLICT");
+    const metered = new PostgresSqlFundingStore(bound, { deadlineMs: 5000 });
+    expect((await metered.transact(accountId, tx => tx.claimProviderOperation(accepted.claim.operationId))).claimed).toBeTrue();
+    expect((await metered.transact(accountId, tx => tx.claimProviderOperation(accepted.claim.operationId))).claimed).toBeFalse();
+    expect((await acceptance.find(accountId, accepting.idempotencyKey))?.state).toBe("dispatching");
+    let modelPosts = 0;
+    const source = acceptancePricing.card.sources;
+    if (!source) throw new Error("EXPECTED_ACCEPTANCE_PRICE_SOURCE");
+    const interactions = createVertexInteractionsHttpPort({ accessToken: async () => "test-only-token-aaaaaaaaaaaaaaaaaaaa", fetch: Object.assign(async (_url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      if (init?.method !== "POST") throw new Error("UNEXPECTED_MODEL_REDISPATCH_OR_GET");
+      modelPosts++;
+      const wire = z.object({ input: z.array(z.unknown()), generation_config: z.object({ max_output_tokens: z.literal(20) }).passthrough() }).passthrough().parse(JSON.parse(String(init.body)));
+      return Response.json({ id: "resume-owned-operation", model: "gemini-4-argon", status: "completed", created: new Date().toISOString(),
+        steps: [{ type: "user_input", content: wire.input }, { type: "model_output", content: [{ type: "text", text: JSON.stringify({ files: [{ path: "src/main.ts", content: "document.body.textContent = 'One counter';" }] }) }] }],
+        usage: { total_input_tokens: 2, total_cached_tokens: 0, total_output_tokens: 1, total_thought_tokens: 0, total_tool_use_tokens: 0, total_tokens: 3 } });
+    }, { preconnect() {} }) });
+    const vertexInput = { candidateSha256: "f".repeat(64), projectId: "napplet-cvm-fixture", location: "global", model: "gemini-4-argon", credentialReference: "gcp:adc:fixture",
+      price: { sourceUrl: source.provider.url, sourceDocumentSha256: source.provider.capturedBytesSha256, quoteSha256: "c".repeat(64),
+        observedAtMs: Date.parse(source.provider.observedAt), freshUntilMs: Date.parse(source.provider.freshUntil), effectiveFromMs: Date.parse(source.provider.effectiveAt), effectiveUntilMs: Date.parse(source.provider.freshUntil),
+        currency: "USD", inputMicrosPerMillion: 1_000_000, cachedInputMicrosPerMillion: 1_000_000, outputAndThoughtMicrosPerMillion: 1_000_000 },
+      journal: createPostgresVertexOperationJournal(vertexJournal), interactions, now: Date.now };
+    const vertex = createVertexDeploymentClient(vertexInput);
+    const gateway = new ProductionVertexModelGateway({ vertex, proposals: new ProductionSourceProposalStore(pool) });
+    const intent = ProviderOperationIntentSchema.parse({ accountId, sessionId: accepting.sessionId, actionId: accepted.claim.actionId, operationId: accepted.claim.operationId, providerRequestId: accepted.claim.operationId,
+      expectedVersion: 0, actionBudgetReference: accepted.claim.actionBudgetReference, profileId: acceptancePricing.profile.id, priceCardId: acceptancePricing.card.id,
+      requestFingerprint: accepted.claim.fingerprint, prompt: "A focused counter", maximumUnits: acceptancePricing.profile.maximumUnits, selection: "unselected" });
+    const wrongPrice = new ProductionVertexModelGateway({ vertex: createVertexDeploymentClient({ ...vertexInput, price: { ...vertexInput.price, inputMicrosPerMillion: 2_000_000 } }), proposals: new ProductionSourceProposalStore(pool) });
+    expect(await wrongPrice.dispatch(intent, new AbortController().signal)).toMatchObject({ status: "definitive_not_accepted", reason: "pre_dispatch_rejected" });
+    expect(modelPosts).toBe(0);
+    expect(await vertexJournal.read(accepted.claim.operationId)).toBeUndefined();
+    expect((await acceptance.find(accountId, accepting.idempotencyKey))?.apiClaimedAtMs).toBeNull();
+    await expect(runtime.query("UPDATE production_real.priced_continuation_claims SET api_claimed_at_ms=0,api_namespace='forged',api_scope_sha256=$2,api_request_sha256=$3 WHERE claim_reference=$1", [accepted.claim.claimReference, "a".repeat(64), "b".repeat(64)])).rejects.toThrow("PRICED_CONTINUATION_API_BINDING_DENIED");
+    const observed = await gateway.dispatch(intent, new AbortController().signal);
+    expect(observed.status).toBe("completed");
+    if (observed.status !== "completed") throw new Error("EXPECTED_MODEL_PROTOCOL_RECEIPT");
+    const resumedSettlement = createProductionVertexGenerationSettlement({ gateway, journal: vertexJournal, resumeSettlements: acceptance,
+      conversion: { ...acceptancePricing.conversion, satsPerUsd: { numerator: "999999", denominator: "1" } } });
+    expect((await admin.query("SELECT state FROM production_real.priced_continuation_audit WHERE claim_reference=$1 ORDER BY sequence", [accepted.claim.claimReference])).rows).toEqual([{ state: "accepted" }, { state: "dispatching" }, { state: "api_claimed" }]);
+    await expect(runtime.query("UPDATE production_real.priced_continuation_claims SET api_claimed_at_ms=NULL,api_namespace=NULL,api_scope_sha256=NULL,api_request_sha256=NULL WHERE claim_reference=$1", [accepted.claim.claimReference])).rejects.toThrow("PRICED_CONTINUATION_API_BINDING_IMMUTABLE");
+    await expect(runtime.query("UPDATE production_real.priced_continuation_claims SET settlement_json='{}'")).rejects.toThrow();
+    await expect(runtime.query("DELETE FROM production_real.priced_continuation_claims")).rejects.toThrow();
+    await expect(runtime.query("INSERT INTO production_real.priced_continuation_audit(claim_reference,state) VALUES($1,'completed')", [accepted.claim.claimReference])).rejects.toThrow();
+    const race = await Promise.all([acceptance.claim(short), acceptance.claim(short), acceptance.claim(short)]);
+    expect(race.filter(item => !item.replayed)).toHaveLength(1);
+    expect(new Set(race.map(item => item.claim.operationId)).size).toBe(1);
+    const shortClaim = race[0]!.claim;
+    const lateClaim = (await acceptance.claim(lateApi)).claim;
+    expect((await metered.transact(accountId, tx => tx.claimProviderOperation(lateClaim.operationId))).claimed).toBeTrue();
+    await Bun.sleep(Math.max(1, shortClaim.quote.expiresAtMs - Date.now() + 10));
+    expect(Date.now()).toBeGreaterThanOrEqual(Date.parse(accepted.claim.settlement.conversion.source.freshUntil));
+    const firstSettlement = await resumedSettlement.finalize({ accountId, intent, receipt: observed.receipt, pricedAmount: "3" });
+    expect(firstSettlement.amount).toBe("1");
+    expect(await resumedSettlement.finalize({ accountId, intent, receipt: observed.receipt, pricedAmount: "3" })).toEqual(firstSettlement);
+    expect(modelPosts).toBe(1);
+    const lateIntent = ProviderOperationIntentSchema.parse({ ...intent, sessionId: lateApi.sessionId, actionId: lateClaim.actionId, operationId: lateClaim.operationId,
+      providerRequestId: lateClaim.operationId, actionBudgetReference: lateClaim.actionBudgetReference, requestFingerprint: lateClaim.fingerprint });
+    expect(await gateway.dispatch(lateIntent, new AbortController().signal)).toMatchObject({ status: "definitive_not_accepted", reason: "pre_dispatch_rejected" });
+    expect(await vertexJournal.read(lateClaim.operationId)).toBeUndefined();
+    expect((await acceptance.find(accountId, lateApi.idempotencyKey))?.apiClaimedAtMs).toBeNull();
+    expect(modelPosts).toBe(1);
+    expect((await acceptance.claim(short)).replayed).toBeTrue(); // Expiry cannot change an accepted operation's identity/FX.
+    await expect(metered.transact(accountId, tx => tx.claimProviderOperation(shortClaim.operationId))).rejects.toThrow("PRICED_CONTINUATION_DISPATCH_DENIED");
+    expect((await acceptance.find(accountId, short.idempotencyKey))?.state).toBe("accepted");
+    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.priced_continuation_claims")).rows[0].count).toBe(3);
+    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.action_budget_reservations")).rows[0].count).toBe(3);
+    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.ledger_entries")).rows[0].count).toBe(0);
   } finally { await runtime?.end(); await admin?.end(); await docker(["rm", "--force", name]).catch(() => undefined); }
 }, 120_000);

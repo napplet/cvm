@@ -251,6 +251,12 @@ export class PostgresSqlFundingStore implements MeteredFundingStore, Continuatio
   async transact<T>(accountId: string, operation: (transaction: ContinuationFundingTransaction) => Promise<T> | T): Promise<T>;
   async transact<T>(accountId: string, operation: (transaction: SessionCapTransaction) => Promise<T> | T): Promise<T>;
   async transact<T>(accountId: string, operation: (transaction: MeteredFundingTransaction & ContinuationFundingTransaction & SessionCapTransaction) => Promise<T> | T): Promise<T> {
+    return this.transactWithSql(accountId, transaction => operation(transaction));
+  }
+
+  /** Trusted SQL coordinators may append their durable identities to the SAME
+   * money transaction. Never expose this client to a request or generated code. */
+  async transactWithSql<T>(accountId: string, operation: (transaction: MeteredFundingTransaction & ContinuationFundingTransaction & SessionCapTransaction, client: PostgresSqlClient) => Promise<T> | T): Promise<T> {
     const deadline = this.#now() + this.#deadlineMs;
     let last: unknown;
     for (let attempt = 0; attempt < this.#maxAttempts && this.#now() < deadline; attempt += 1) {
@@ -258,7 +264,7 @@ export class PostgresSqlFundingStore implements MeteredFundingStore, Continuatio
       const client = new DeadlineSqlClient(raw, deadline, this.#now);
       try {
         await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
-        const result = await operation(new PgFundingTransaction(client, accountId));
+        const result = await operation(new PgFundingTransaction(client, accountId), client);
         await client.query("COMMIT");
         return frozen(result);
       } catch (error) {

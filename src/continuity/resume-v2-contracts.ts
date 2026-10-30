@@ -14,7 +14,7 @@ export const PrepareResumeCommandSchema = z.object({
   idempotencyKey: z.string().min(1).max(160),
 }).strict();
 export const PrepareResumeArgumentsSchema = PrepareResumeCommandSchema.omit({ principal: true });
-export const ResumeSessionV2CommandSchema = ResumeSessionCommandSchema.extend({ pricingApproval: ResumePricingApprovalSchema }).strict();
+export const ResumeSessionV2CommandSchema = ResumeSessionCommandSchema.extend({ idempotencyKey: z.string().min(1).max(160), pricingApproval: ResumePricingApprovalSchema }).strict();
 export const ResumeSessionV2ArgumentsSchema = ResumeSessionV2CommandSchema.omit({ principal: true });
 
 export const QuotedResumeResultSchema = z.object({

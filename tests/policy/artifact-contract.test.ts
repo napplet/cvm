@@ -23,7 +23,7 @@ describe("artifact contract policy", () => {
     expect(capability.verdict).toBe("pass");
   });
 
-  test.each([
+  test.each<[string, ArtifactContractInput, string]>([
     ["full-stack backend", { ...focused, purpose: { kind: "full-stack", statements: ["Build a dashboard and API."] }, surface: { ...focused.surface, hasBackend: true } }, "cvm:scope:focused-only"],
     ["upstream direct authority", { ...focused, upstream: { ...cleanUpstream, scanner: { verdict: "block", checkId: "upstream:scan:window-napplet-invocation" } } }, "upstream:scan:window-napplet-invocation"],
     ["upstream external asset", { ...focused, upstream: { ...cleanUpstream, scanner: { verdict: "block", checkId: "upstream:scan:external-asset" } } }, "upstream:scan:external-asset"],
@@ -39,12 +39,15 @@ describe("artifact contract policy", () => {
   });
 
   test("fails closed on malformed upstream evidence, unknown domains, global intent invocation, and manual review", async () => {
-    for (const input of [
-      { ...focused, upstream: { scanner: { verdict: "unknown" }, conformance: { verdict: "pass" } } },
+    const unknownVerdict = structuredClone(focused);
+    Reflect.set(unknownVerdict.upstream.scanner, "verdict", "unknown");
+    const malformed: readonly ArtifactContractInput[] = [
+      unknownVerdict,
       { ...focused, capabilities: { declaredHard: [], observedDomains: ["unknown"], optionalIntentPresenceRead: false, intentUsedThroughSdk: false } },
       { ...focused, capabilities: { declaredHard: ["storage"], observedDomains: ["storage", "intent"], optionalIntentPresenceRead: true, intentUsedThroughSdk: false } },
       { ...focused, upstream: { scanner: { verdict: "manual_review" }, conformance: { verdict: "pass" } } },
-    ]) {
+    ];
+    for (const input of malformed) {
       expect((await evaluateArtifactContract(input)).verdict).toBe("block");
     }
   });

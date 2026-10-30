@@ -1,4 +1,4 @@
-import { ReleaseCertificationController, RELEASE_WORKSPACE_ENV, releaseCandidateSha256, runReleaseCertification } from "../src/release/controller";
+import { ReleaseCertificationController, RELEASE_WORKSPACE_ENV, releaseCandidateSha256, runReleaseCertification, type ReleaseCertificationResult } from "../src/release/controller";
 import { createNativeReleaseDiscoveryRegistry } from "../src/release/native-discovery";
 import { createReleaseControllerProviderRegistry } from "../src/release/native-registry";
 import { loadFinalizedReleaseVerificationAuthority } from "../src/release/production-execution";
@@ -369,7 +369,7 @@ async function main(): Promise<number> {
     const funding = !status ? await operatorFundingReadinessProjection(workspace) : undefined;
     const certificationFunding = funding ? await releaseCertificationFundingReadiness(funding) : undefined;
     const fundingPrerequisites = certificationFunding?.status === "pending" ? undefined : certificationFunding;
-    let result: Awaited<ReturnType<typeof runReleaseCertification>> | undefined;
+    let result: ReleaseCertificationResult | undefined;
     try {
       result = status
         ? await new ReleaseCertificationController({ candidatePath: candidatePath ?? canonicalCandidatePath, workspace }).status()
@@ -407,7 +407,7 @@ async function main(): Promise<number> {
       return 1;
     }
     if (requiredState !== undefined && requiredState !== result.state.status) throw new Error("RELEASE_CERTIFICATION_STATE_MISMATCH");
-    if (resume && resume.toLowerCase() !== result.state.stateSha256 && resume.toLowerCase() !== result.authorizationRequest.resumeStateSha256) throw new Error("RELEASE_CERTIFICATION_RESUME_MISMATCH");
+    if (resume && resume.toLowerCase() !== result.state.stateSha256 && resume.toLowerCase() !== result.authorizationRequest.controllerStateSha256) throw new Error("RELEASE_CERTIFICATION_RESUME_MISMATCH");
     let resolvedReceipt: unknown;
     if (receipt) {
       resolvedReceipt = controllerReceipt;

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { ProviderOperationIntentSchema } from "../../src/model/model-gateway";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,7 +25,7 @@ test("SQL worker claim reuses a real Docker result across duplicates, process re
     expect(inspected.exitCode).toBe(0);
     const image = inspected.stdout.trim(); const toolchainSha256 = image.replace(/^sha256:/u, "");
     const proposals = new SourceProposalStore(pool);
-    const intent = { operationId, providerRequestId: operationId, accountId, sessionId: `session:${nonce}`, actionId: `start:${nonce}`, expectedVersion: 0, actionBudgetReference: `budget:${nonce}`, profileId: "code-proposal", priceCardId: "phase-04-deterministic-card-2026-08-04", requestFingerprint: "a".repeat(64), prompt: "A focused counter", maximumUnits: [{ dimension: "input_tokens", units: "1000" }, { dimension: "output_tokens", units: "1000" }], selection: "unselected" as const };
+    const intent = ProviderOperationIntentSchema.parse({ operationId, providerRequestId: operationId, accountId, sessionId: `session:${nonce}`, actionId: `start:${nonce}`, expectedVersion: 0, actionBudgetReference: `budget:${nonce}`, profileId: "code-proposal", priceCardId: "phase-04-deterministic-card-2026-08-04", requestFingerprint: "a".repeat(64), prompt: "A focused counter", maximumUnits: [{ dimension: "input_tokens", units: "1000" }, { dimension: "output_tokens", units: "1000" }], selection: "unselected" });
     await new DevelopmentModelGateway({ store: proposals }).dispatch(intent, new AbortController().signal);
     const proposal = (await proposals.lookup({ intent }))!.proposal;
     const request = { sessionId: intent.sessionId, actionId: intent.actionId, expectedVersion: 0, policyVersion: "development-local-v1", capabilityGrant: "development-test", workspaceId: `workspace:${nonce}`, sourceProposalReference: proposal.reference, sourceProposalSha256: proposal.sha256, sourceProposalFiles: proposal.files };
@@ -37,7 +38,7 @@ test("SQL worker claim reuses a real Docker result across duplicates, process re
     const [first, duplicate] = await Promise.all([port.run(request, new AbortController().signal), concurrentPort.run(request, new AbortController().signal)]);
     expect(first.status).toBe("completed"); expect(duplicate).toEqual(first); expect(builds).toBe(1);
     const output = port.take(request)!.output;
-    const facts = { ownerId, accountId, sessionId: request.sessionId, actionId: request.actionId, expectedVersion: 0, proposalSha256: proposal.sha256, toolchainSha256, distRoot: output.distRoot, commandEvidence: output.commandEvidence };
+    const facts = { ownerId, accountId, sessionId: request.sessionId, actionId: request.actionId, expectedVersion: 0, proposalSha256: proposal.sha256, toolchainSha256, distRoot: output.distRoot, commandEvidence: output.commandEvidence.map((entry) => ({ ...entry })) };
     const verified = await new LocalArtifactVerifier().verify(facts);
     expect(verified.files.some((file) => file.path === "index.html")).toBe(true);
     await port.discard(request);

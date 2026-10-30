@@ -24,6 +24,17 @@ test("07-W0-05 corpus binds promotion coverage and keeps protected live work non
   expect(registry.liveObservations.every((entry: { status: string }) => entry.status === "blocked" || entry.status === "not_observed")).toBe(true);
 });
 
+test("category-specific deterministic CLI suites select and execute their cases", async () => {
+  const fixture = JSON.parse(await readFile(fixturePath, "utf8"));
+  for (const [suite, categories] of [["telemetry", ["launch"]], ["security-host", ["security", "publication"]]] as const) {
+    const result = await run("scripts/eval-phase-07.ts", [`--suite=${suite}`]);
+    expect(result.exitCode).toBe(0);
+    const expected = fixture.cases.filter((item: { category: string }) => new Set<string>(categories).has(item.category)).length;
+    expect(expected).toBeGreaterThan(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ suite, status: "passed", evidenceClass: "deterministic", cases: expected, promotionVerdict: "blocked" });
+  }
+});
+
 test("blocked protected preflight emits not_observed-safe records without a release pass or secret echo", async () => {
   const deterministic = await run("scripts/eval-phase-07.ts", ["--suite=all"]);
   const existingEvidence = await run("scripts/verify-phase-07-evidence.ts", ["--verify-existing"]);

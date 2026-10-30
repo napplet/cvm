@@ -3,7 +3,7 @@ import {
   DeterministicModelGateway,
   DeterministicGatewayScenarioSchema,
 } from "../../src/model/deterministic-model-gateway";
-import type { ModelGateway, ProviderOperationIntent } from "../../src/model/model-gateway";
+import { ProviderOperationIntentSchema, type ModelGateway, type ProviderOperationIntent } from "../../src/model/model-gateway";
 import { ModelReconciliationService } from "../../src/model/reconciliation";
 import { MeteredGenerationService } from "../../src/phase-04/metered-generation-service";
 import { FundingService } from "../../src/funding/funding-service";
@@ -12,7 +12,7 @@ import { exactReadyReservation, trustedAdmissionReceipt, trustedAdmissionReceipt
 import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-store";
 import type { LifecycleObservation } from "../../src/telemetry/contracts";
 
-const intent = (operationId = "operation:gateway"): ProviderOperationIntent => ({
+const intent = (operationId = "operation:gateway"): ProviderOperationIntent => ProviderOperationIntentSchema.parse({
   operationId, providerRequestId: `deterministic:${operationId}`,
   accountId: "account:gateway",
   sessionId: "session:gateway",

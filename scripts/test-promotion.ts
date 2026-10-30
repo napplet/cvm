@@ -1,3 +1,5 @@
+export {};
+
 const argumentsAfterBun = process.argv.slice(2);
 const fixtureIndex = argumentsAfterBun.indexOf("--fixture");
 const fixture = fixtureIndex === -1 ? undefined : argumentsAfterBun[fixtureIndex + 1];

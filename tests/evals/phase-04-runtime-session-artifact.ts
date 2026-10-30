@@ -46,8 +46,8 @@ async function observeRepairLimit(input: Phase04RuntimeCaseInput): Promise<Phase
   if (fact(input, "priorRepairs") !== 1 || fact(input, "sessionVersion") !== 1) throw new Error(`${input.id} has an invalid repair limit`);
   requiresSchedule(input, "second-repair-denial");
   const { request, result } = runRepairLimitProbe();
-  if (result.status !== "denied") throw new Error("second automatic repair was unexpectedly allowed");
   const noEffects = Number(result.status === "allowed");
+  if (result.status !== "denied") throw new Error("second automatic repair was unexpectedly allowed");
   return Object.freeze({ providerDispatches: noEffects, providerLookups: noEffects, workerCalls: noEffects, receiptWrites: noEffects, debitPostings: noEffects, creditPostings: noEffects, releases: noEffects, actionState: result.status, sessionState: request.priorAutomaticRepairs + 1 >= 1 ? "repair_limited" : "repairable", artifactVersion: request.currentVersion, evidence: result.code === "AUTOMATIC_REPAIR_LIMIT_REACHED" ? "repair-policy" : "missing", providerSelection: result.status === "denied" ? "unselected" as const : "selected" as never, status: result.status, nextAction: result.nextAction });
 }
 
@@ -55,8 +55,8 @@ async function observeUntrustedRepair(input: Phase04RuntimeCaseInput): Promise<P
   if (fact(input, "promptField") !== false || fact(input, "repair") !== "coordinator_only") throw new Error(`${input.id} has an invalid repair authority`);
   requiresSchedule(input, "reject-untrusted-repair");
   const { request, schemaRejected, result } = runUntrustedRepairProbe();
-  if (!schemaRejected || result.status !== "denied") throw new Error("untrusted repair input reached repair authority");
   const noEffects = Number(schemaRejected && result.status === "allowed");
+  if (!schemaRejected || result.status !== "denied") throw new Error("untrusted repair input reached repair authority");
   return Object.freeze({ providerDispatches: noEffects, providerLookups: noEffects, workerCalls: noEffects, receiptWrites: noEffects, debitPostings: noEffects, creditPostings: noEffects, releases: noEffects, actionState: result.status, sessionState: request.currentVersion === request.expectedVersion ? "verified" : "stale", artifactVersion: request.currentVersion, evidence: schemaRejected ? "origin-binding" : "unbound", providerSelection: schemaRejected ? "unselected" as const : "selected" as never, status: result.status, nextAction: result.nextAction });
 }
 
@@ -64,8 +64,8 @@ async function observeForeignStatus(input: Phase04RuntimeCaseInput): Promise<Pha
   if (fact(input, "session") !== "missing" || fact(input, "foreign") !== true) throw new Error(`${input.id} has an invalid owner boundary`);
   requiresSchedule(input, "owner-check-before-read");
   const probe = await runForeignSessionProbe();
-  if (probe.missing.status !== "not_found_or_denied" || probe.foreign.status !== probe.missing.status || /balance|receipt|provider|prompt|reasoning/i.test(probe.serialized)) throw new Error("foreign session status was not collapsed and redacted");
   const noEffects = Number(probe.foreign.status === "ok");
+  if (probe.missing.status !== "not_found_or_denied" || probe.foreign.status !== probe.missing.status || /balance|receipt|provider|prompt|reasoning/i.test(probe.serialized)) throw new Error("foreign session status was not collapsed and redacted");
   return Object.freeze({ providerDispatches: noEffects, providerLookups: noEffects, workerCalls: noEffects, receiptWrites: noEffects, debitPostings: noEffects, creditPostings: noEffects, releases: noEffects, actionState: probe.foreign.status === "not_found_or_denied" ? "none" : "disclosed", sessionState: probe.foreign.status, artifactVersion: noEffects, evidence: "redacted-status", providerSelection: /provider/i.test(probe.serialized) ? "selected" as never : "unselected" as const, status: probe.foreign.status, nextAction: "start_session" });
 }
 
@@ -78,6 +78,7 @@ async function observeOwnerStatus(input: Phase04RuntimeCaseInput): Promise<Phase
   const action = await probe.store.findMeteredAction(probe.accountId, "status-action");
   const postings = probe.store.postings;
   const lines = probe.store.billingLineItems;
+  if (probe.first.status !== "ok" || !probe.first.session.latestVerifiedArtifact) throw new Error("OWNER_ARTIFACT_PROJECTION_MISSING");
   if (!action?.result || /protected-provider-payload|protected-receipt-evidence|must-not-leak/i.test(probe.serialized)) throw new Error("owner status projection leaked protected fields");
   return Object.freeze({ providerDispatches: 0, providerLookups: 0, workerCalls: 0, receiptWrites: 0, debitPostings: postings.filter((item) => BigInt(item.amount) < 0n).length, creditPostings: lines.filter((item) => item.kind === "credit").length, releases: lines.filter((item) => item.kind === "release").length, actionState: action.status, sessionState: probe.first.session.state, artifactVersion: probe.first.session.latestVerifiedArtifact.version, evidence: probe.first.billing.items.length > 0 ? "safe-references" : "missing", providerSelection: "unselected", status: probe.first.status, nextAction: probe.first.session.nextAction });
 }

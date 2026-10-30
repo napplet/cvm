@@ -85,6 +85,18 @@ test("documented no-env command materializes a bounded authorization request wit
     const result = JSON.parse(stdout);
     expect(result).toMatchObject({ status: "authorization_required", candidateSha256: expect.stringMatching(/^[a-f0-9]{64}$/), authorizationRequestSha256: expect.stringMatching(/^[a-f0-9]{64}$/) });
     expect(JSON.stringify(result)).not.toContain("fixture-catalog");
+    for (const resume of [result.stateSha256, result.resumeStateSha256, "0".repeat(64)]) {
+      const status = Bun.spawn([Bun.which("bun")!, "scripts/certify-release.ts", "--status", "--require-state=authorization_required", "--resume", resume], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
+      const [statusCode, statusOutput, statusError] = await Promise.all([status.exited, new Response(status.stdout).text(), new Response(status.stderr).text()]);
+      if (resume === "0".repeat(64)) {
+        expect(statusCode).toBe(1);
+        expect(statusError).toContain("RELEASE_CERTIFICATION_RESUME_MISMATCH");
+      } else {
+        expect(statusCode).toBe(0);
+        expect(JSON.parse(statusOutput).resumeStateSha256).toBe(result.resumeStateSha256);
+        expect(statusError).toBe("");
+      }
+    }
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -227,6 +239,7 @@ test("product request blocks missing execution without asking for credentials or
     expect(result).not.toHaveProperty("review");
     expect(result).not.toHaveProperty("consentLaunches");
     expect(JSON.stringify(result)).not.toContain("fixture-catalog");
+
     expect(JSON.stringify(result)).not.toContain("secret");
   } finally {
     await rm(workspace, { recursive: true, force: true });

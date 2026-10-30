@@ -95,7 +95,7 @@ describe("promotion tracer", () => {
     ["missing pin", async () => ({ ...(await manifest()), lockfileSha256: "missing" }), "manifest"],
     ["executable mismatch", async () => ({ ...(await manifest()), executables: [{ path: process.execPath, sha256: "0".repeat(64) }] }), "native"],
     ["non-zero exit", async () => manifest("non-zero"), "native"],
-    ["timeout", async () => ({ ...(await manifest("timeout")), stages: [{ ...(await manifest("timeout")).stages[0] as Record<string, unknown>, timeoutMs: 5, argv: [join(import.meta.dir, "fixtures", "fake-toolchain.ts"), "--mode=timeout", "--delay", "100"] } ] }), "native"],
+    ["timeout", async () => { const value = parsePromotionManifest(await manifest("timeout")); const stage = value.stages[0]; if (!stage) throw new Error("TIMEOUT_STAGE_FIXTURE_MISSING"); return { ...value, stages: [{ ...stage, timeoutMs: 5, argv: [join(import.meta.dir, "fixtures", "fake-toolchain.ts"), "--mode=timeout", "--delay", "100"] }] }; }, "native"],
     ["malformed output", async () => manifest("malformed"), "native"],
   ])("blocks %s", async (_name, candidate, responsibleStage) => {
     const result = await runPromotionCandidate(await candidate(), { evidenceDirectory: await evidenceDirectory(), now: () => 1_000, runSealed: sealedTestRunner, runDenialProbes: sealedDenialTestRunner });

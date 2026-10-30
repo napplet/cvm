@@ -1,3 +1,4 @@
+export {};
 const args = new Set(process.argv.slice(2));
 const value = (flag: string) => {
   const index = process.argv.indexOf(flag);

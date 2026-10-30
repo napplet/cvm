@@ -35,7 +35,7 @@ function request(name: "preview" | "publication", argumentsInput: unknown, reque
   };
 }
 
-function adapter(input: Readonly<{ source?: unknown; preview?: Record<string, (value: unknown) => Promise<unknown>>; publication?: Record<string, (value: unknown) => Promise<unknown>> }> = {}) {
+function adapter(input: Readonly<{ source?: unknown; preview?: ConstructorParameters<typeof ContextVmFundingAdapter>[0]["preview"]; publication?: ConstructorParameters<typeof ContextVmFundingAdapter>[0]["publication"] }> = {}) {
   const transport = new Transport();
   const sut = new ContextVmFundingAdapter({
     service: new FundingService(new TransactionalMemoryFundingStore()),
@@ -132,6 +132,7 @@ describe("signed ContextVM preview and publication", () => {
 
   test("rejects a forged or mutated available contract at the ContextVM dispatch boundary before facade effects", async () => {
     const verified = probePromotedCliPreSignedRoute(sourceFixture);
+    if (verified.status !== "available") throw new Error("PROMOTED_CLI_FIXTURE_UNAVAILABLE");
     const candidates = [
       { status: "available", liveExecution: "not_observed" },
       { ...verified, identity: { ...verified.identity, linuxSha256: "0".repeat(64) } },

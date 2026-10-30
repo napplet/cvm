@@ -172,7 +172,7 @@ async function observeInputDenial(input: Phase04RuntimeCaseInput): Promise<Phase
   const service = new MeteredGenerationService({ fundedAdmission: admissions, store, gateway, worker: completedWorker(workers), artifactVerifier: verifier });
   const result = await service.startSession({ principal, admissionReference: admission.reference, idempotencyKey: "input-denial", expectedVersion: 0, maximum: String(cap), policyVersion, idea });
   if (result.status !== "denied") throw new Error("empty input was accepted");
-  return runtimeFacts({ providerDispatches: 0, providerLookups: 0, workerCalls: workers.calls, ...effectCounts(store, baseline), actionState: result.status, sessionState: "unstarted", artifactVersion: 0, evidence: result.code.startsWith("INPUT_") ? "input-gate" : "missing", status: result.status, nextAction: result.nextAction ?? (result.status === "denied" ? "start_session" : "reconcile") });
+  return runtimeFacts({ providerDispatches: 0, providerLookups: 0, workerCalls: workers.calls, ...effectCounts(store, baseline), actionState: result.status, sessionState: "unstarted", artifactVersion: 0, evidence: result.code.startsWith("INPUT_") ? "input-gate" : "missing", status: result.status, nextAction: "start_session" });
 }
 
 async function observeFinalization(input: Phase04RuntimeCaseInput): Promise<Phase04RuntimeObservation> {
@@ -192,7 +192,7 @@ async function observeFinalization(input: Phase04RuntimeCaseInput): Promise<Phas
   const first = await store.transact(accountId, (tx) => tx.finalizeMeteredAction(final));
   await store.transact(accountId, (tx) => tx.finalizeMeteredAction(final));
   const action = await store.findMeteredActionByOperation(accountId, "operation:one");
-  if (!action || first.status !== "completed") throw new Error("terminal finalization was not persisted");
+  if (!action || action.artifactVersion === undefined || first.status !== "completed") throw new Error("terminal finalization was not persisted");
   const effects = effectCounts(store, baseline);
   return runtimeFacts({ providerDispatches: 0, providerLookups: 0, workerCalls: 0, ...effects, actionState: action.status, sessionState: action.sessionVersion === 1 ? "verified" : "missing", artifactVersion: action.artifactVersion, evidence: action.providerReceiptReference === "receipt:one" ? "receipt-reference" : "missing", status: first.status, nextAction: "revise_session" });
 }
@@ -230,7 +230,7 @@ async function observeRevision(input: Phase04RuntimeCaseInput, versionFence: boo
   const session = await run.store.sessionStatus(run.result.accountId, run.result.sessionId);
   if (!action || !session) throw new Error("revision state was not durable");
   const effects = effectCounts(run.store, run.baseline);
-  return runtimeFacts({ providerDispatches: run.gateway.dispatchCount(run.action.operationId) + run.gateway.dispatchCount(action.operationId), providerLookups: 0, workerCalls: run.worker.calls, ...effects, actionState: terminal.status, sessionState: session.status, artifactVersion: terminal.status === "completed" ? terminal.artifactVersion ?? 0 : first.artifactVersion ?? 0, evidence: terminal.status === "denied" ? "version-fence" : "same-lineage", status: terminal.status, nextAction: terminal.nextAction ?? (terminal.status === "denied" ? "revise_session" : "reconcile") });
+  return runtimeFacts({ providerDispatches: run.gateway.dispatchCount(run.action.operationId) + run.gateway.dispatchCount(action.operationId), providerLookups: 0, workerCalls: run.worker.calls, ...effects, actionState: terminal.status, sessionState: session.status, artifactVersion: terminal.status === "completed" ? terminal.artifactVersion ?? 0 : first.artifactVersion ?? 0, evidence: terminal.status === "denied" ? "version-fence" : "same-lineage", status: terminal.status, nextAction: "nextAction" in terminal ? terminal.nextAction : terminal.status === "denied" ? "revise_session" : "reconcile" });
 }
 
 async function ambiguousRun(lookup: "receipt_found" | "definitive_not_accepted" | "pending" | "unresolved", dispatch: "accepted_timeout" | "malformed_receipt" = "accepted_timeout", maximum = 3250) {
@@ -248,7 +248,7 @@ async function ambiguousRun(lookup: "receipt_found" | "definitive_not_accepted" 
 async function observeAmbiguousCorrelation(input: Phase04RuntimeCaseInput): Promise<Phase04RuntimeObservation> {
   requiresSchedule(input, input.id === "P04-AMB-01" ? "dispatch-timeout" : "concurrent-lookup");
   const run = await ambiguousRun("receipt_found", "accepted_timeout", 3250);
-  const lookup = await run.gateway.lookup({ operationId: run.action.operationId, providerRequestId: run.action.providerRequestId!, accountId: run.action.accountId, sessionId: run.action.sessionId, actionId: run.action.actionId, expectedVersion: run.action.expectedVersion, actionBudgetReference: run.action.actionBudgetReference, profileId: run.action.profileId, priceCardId: run.action.priceCardId, requestFingerprint: run.action.fingerprint, maximumUnits: PHASE_04_MODEL_PROFILES["code-proposal"].maximumUnits, selection: "unselected" }, new AbortController().signal);
+  const lookup = await run.gateway.lookup({ operationId: run.action.operationId, providerRequestId: run.action.providerRequestId!, accountId: run.action.accountId, sessionId: run.action.sessionId, actionId: run.action.actionId, expectedVersion: run.action.expectedVersion, actionBudgetReference: run.action.actionBudgetReference, profileId: run.action.profileId, priceCardId: run.action.priceCardId, requestFingerprint: run.action.fingerprint, prompt: "Build one focused napplet.", maximumUnits: PHASE_04_MODEL_PROFILES["code-proposal"].maximumUnits, selection: "unselected" }, new AbortController().signal);
   const effects = effectCounts(run.store, run.baseline);
   return runtimeFacts({ providerDispatches: run.gateway.dispatchCount(run.action.operationId), providerLookups: run.gateway.lookupCount(run.action.operationId), workerCalls: 0, ...effects, actionState: run.action.status, sessionState: run.result.status === "usage_unknown" ? "blocked" : "missing", artifactVersion: 0, evidence: lookup.status === "receipt_found" && lookup.receipt.operationId === run.action.operationId ? "operation-correlation" : "missing", status: run.result.status, nextAction: run.result.status === "usage_unknown" ? "reconcile" : run.result.nextAction });
 }

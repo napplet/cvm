@@ -54,7 +54,7 @@ describe("Phase 04 funded start tracer", () => {
     const effects = { dispatches: 0, workers: 0 };
     const gateway: ModelGateway = {
       async dispatch(intent) { effects.dispatches += 1; return { status: "completed", receipt: { operationId: intent.operationId, providerRequestId: intent.providerRequestId, provider: "deterministic_fixture", model: "phase-04-fixture-model", profileId: intent.profileId, priceCardId: intent.priceCardId, selection: "unselected", completedAt: "2026-08-04T00:00:01.000Z", provenance: { protectedEvidenceReference: "provider-evidence-1" }, usage: [{ dimension: "input_tokens", units: "10" }, { dimension: "output_tokens", units: "5" }] } }; },
-      async lookup() { return { status: "not_found" }; },
+      async lookup() { throw new Error("UNEXPECTED_PROVIDER_LOOKUP"); },
     };
     const service = new MeteredGenerationService({ fundedAdmission: admissions, store, gateway, worker: completedWorker(effects), artifactVerifier: verifier, telemetry });
     const command = { principal, admissionReference: admission.reference, idempotencyKey: "start-1", expectedVersion: 0, maximum: "3250", policyVersion: "phase-02-policy-2026-08-04", idea: "Build one focused counter napplet." };
@@ -66,6 +66,7 @@ describe("Phase 04 funded start tracer", () => {
     expect(effects).toEqual({ dispatches: 1, workers: 1 });
     expect(store.meteredActions).toHaveLength(1);
     expect(store.meteredActions[0]).toMatchObject({ status: "completed", receiptCharge: "15" });
+    if (first.status !== "completed") throw new Error("EXPECTED_COMPLETED_ACTION");
     expect(store.projection(first.accountId)).toEqual({ settledAvailable: "9985", held: "6485", unit: "sat" });
     expect(observations.map(({ stage, outcome }) => ({ stage, outcome }))).toEqual([
       { stage: "ledger_settlement", outcome: "succeeded" },
@@ -78,7 +79,7 @@ describe("Phase 04 funded start tracer", () => {
   test("denies invalid text before budget, provider, worker, ledger, or artifact effects", async () => {
     const { store, admissions, admission } = await fundedDependencies();
     const effects = { dispatches: 0, workers: 0 };
-    const gateway: ModelGateway = { async dispatch() { effects.dispatches += 1; throw new Error("must not dispatch"); }, async lookup() { return { status: "not_found" }; } };
+    const gateway: ModelGateway = { async dispatch() { effects.dispatches += 1; throw new Error("must not dispatch"); }, async lookup() { throw new Error("UNEXPECTED_PROVIDER_LOOKUP"); } };
     const service = new MeteredGenerationService({ fundedAdmission: admissions, store, gateway, worker: completedWorker(effects), artifactVerifier: verifier });
 
     const result = await service.startSession({ principal, admissionReference: admission.reference, idempotencyKey: "invalid-1", expectedVersion: 0, maximum: "100", policyVersion: "phase-02-policy-2026-08-04", idea: "" });
@@ -92,7 +93,7 @@ describe("Phase 04 funded start tracer", () => {
   test("rejects a one-sat approval before creating or dispatching provider work", async () => {
     const { store, admissions, admission } = await fundedDependencies();
     const effects = { dispatches: 0, workers: 0 };
-    const gateway: ModelGateway = { async dispatch() { effects.dispatches += 1; throw new Error("must not dispatch"); }, async lookup() { return { status: "not_found" }; } };
+    const gateway: ModelGateway = { async dispatch() { effects.dispatches += 1; throw new Error("must not dispatch"); }, async lookup() { throw new Error("UNEXPECTED_PROVIDER_LOOKUP"); } };
     const service = new MeteredGenerationService({ fundedAdmission: admissions, store, gateway, worker: completedWorker(effects), artifactVerifier: verifier });
 
     const result = await service.startSession({ principal, admissionReference: admission.reference, idempotencyKey: "one-sat", expectedVersion: 0, maximum: "1", policyVersion: "phase-02-policy-2026-08-04", idea: "Build one focused napplet." });

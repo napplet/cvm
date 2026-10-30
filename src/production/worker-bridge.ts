@@ -113,13 +113,13 @@ export class ProductionWorkerBridge implements ContinuationWorkerPort, ArtifactV
     } catch { return Object.freeze({ status: "unknown" as const }); }
   }
   async terminateCheckpoint(value: CheckpointTerminationRequest): Promise<CheckpointTerminationResult> { try { const request = await this.#request(CheckpointTerminationRequestSchema.parse(value)), result = await (await this.#job(await this.input.resolver.resolveWorker(request))).terminate(); return result.status === "terminated" ? { status: "terminated", code: "WORKER_LEASE_TERMINATED" } : { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } catch { return { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } }
-  /** Copies the original durable source request into the newly claimed resume
-   * action. It exposes no proposal bytes to callers and never creates a
-   * worker; capacity must already be recorded by the continuation coordinator. */
+  /** Correlates restore with the original durable source request. The new
+   * action's run request remains available for its own model proposal. This
+   * never creates a worker; capacity must already be durably recorded. */
   async registerContinuationRequest(input: Readonly<{ accountId: string; sessionId: string; sourceActionId: string; actionId: string; expectedVersion: number; policyVersion: string; workspaceId: string }>): Promise<void> {
     const source = await this.#request({ sessionId: input.sessionId, actionId: input.sourceActionId, expectedVersion: input.expectedVersion, policyVersion: input.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId: input.workspaceId });
     if (source.sessionId !== input.sessionId || source.expectedVersion !== input.expectedVersion || source.policyVersion !== input.policyVersion) throw new Error("PRODUCTION_CONTINUATION_SOURCE_BINDING_INVALID");
-    await this.#persist(WorkerRunRequestSchema.parse({ ...source, actionId: input.actionId, workspaceId: input.workspaceId }));
+    await this.#requests.persistRestore(source, { ...source, actionId: input.actionId, workspaceId: input.workspaceId });
   }
   async #job(worker: ResolvedWorker) {
     if (this.input.jobRouter) return this.input.jobRouter.resolve(worker);
@@ -127,7 +127,7 @@ export class ProductionWorkerBridge implements ContinuationWorkerPort, ArtifactV
   async #persist(request: WorkerRunRequest): Promise<void> { await this.#requests.persist(request); }
   async #request(binding: Pick<CheckpointFenceRequest, "sessionId" | "actionId" | "expectedVersion" | "policyVersion" | "capabilityGrant" | "workspaceId">): Promise<WorkerRunRequest> {
     const lookup = { ...binding, capabilityGrant: binding.capabilityGrant === "phase-05-continuation-grant" ? "phase-04-coordinator-grant" : binding.capabilityGrant };
-    const stored = await this.#requests.read(lookup);
+    const stored = await this.#requests.read(lookup) ?? await this.#requests.readRestore(lookup);
     if (!stored) throw new Error("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
     for (const property of ["sessionId", "actionId", "expectedVersion", "policyVersion", "workspaceId"] as const) if (stored[property] !== binding[property]) throw new Error("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
     if (stored.capabilityGrant !== lookup.capabilityGrant) throw new Error("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");

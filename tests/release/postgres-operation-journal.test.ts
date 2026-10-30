@@ -99,6 +99,31 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
       await expect(requests().persist({ ...request, idea: "replacement source" })).rejects.toThrow("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
       await requests().persist(request); expect(await requests().read(lookup)).toEqual(request);
       await expect(requests().read({ ...lookup, workspaceId: "workspace:other" })).rejects.toThrow("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
+      // Restore correlation must not pin the old proposal as the new action's
+      // run request. Fresh instances then persist the actual resumed proposal.
+      const restoreTarget = { ...lookup, actionId: "action:resumed-restore" };
+      await Promise.all(Array.from({ length: 3 }, () => requests().persistRestore(request, restoreTarget)));
+      expect(await requests().readRestore(restoreTarget)).toEqual({ ...request, actionId: restoreTarget.actionId });
+      expect(await requests().read(restoreTarget)).toBeUndefined();
+      await expect(requests().persistRestore({ ...request, idea: "forged source" }, restoreTarget)).rejects.toThrow("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
+      await expect(requests().persistRestore(request, { ...restoreTarget, workspaceId: "workspace:other" })).rejects.toThrow("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
+      await expect(requests().persistRestore(request, { ...restoreTarget, sessionId: "session:other" })).rejects.toThrow("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
+      await expect(requests().readRestore({ ...restoreTarget, workspaceId: "workspace:other" })).rejects.toThrow("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
+      expect(await requests().readRestore({ ...restoreTarget, actionId: "action:other" })).toBeUndefined();
+      const resumedRequest = { ...request, ...restoreTarget, idea: "New focused proposal after explicit resume" };
+      await requests().persist(resumedRequest);
+      expect(await requests().read(restoreTarget)).toEqual(resumedRequest);
+      expect(await requests().readRestore(restoreTarget)).toEqual({ ...request, actionId: restoreTarget.actionId });
+      await expect(requests().persist({ ...resumedRequest, idea: "changed after dispatch" })).rejects.toThrow("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
+      expect(await requests().read(lookup)).toEqual(request);
+      const forgedRestore = { ...restoreTarget, actionId: "action:forged-restore" };
+      const forgedRecord = { schemaVersion: "worker-restore-request-v1", sourceActionId: request.actionId, sourceRequestSha256: "c".repeat(64), restoreRequest: { ...request, actionId: forgedRestore.actionId } };
+      await create("worker-requests").claim(`worker-restore-request:${requestDigest({ sessionId: forgedRestore.sessionId, actionId: forgedRestore.actionId, expectedVersion: forgedRestore.expectedVersion })}`, requestDigest(forgedRecord), forgedRecord);
+      await expect(requests().readRestore(forgedRestore)).rejects.toThrow("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
+      // Previously persisted legacy copies remain protected against changes.
+      const legacyRestore = { ...request, actionId: "action:legacy-restore-copy" };
+      await requests().persist(legacyRestore);
+      await expect(requests().persist({ ...legacyRestore, idea: "replacement proposal" })).rejects.toThrow("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
       const newRequest = { ...request, actionId: "action:new-index" };
       await Promise.all(Array.from({ length: 3 }, () => requests().persist(newRequest)));
       expect(await requests().read({ ...lookup, actionId: newRequest.actionId })).toEqual(newRequest);

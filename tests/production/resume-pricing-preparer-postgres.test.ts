@@ -338,6 +338,24 @@ integration("production quote preparation authenticates an encrypted original ch
     expect(Date.now()).toBeGreaterThanOrEqual(Date.parse(accepted.claim.settlement.conversion.source.freshUntil));
     const firstSettlement = await resumedSettlement.finalize({ accountId, intent, receipt: observed.receipt, pricedAmount: "3" });
     expect(firstSettlement.amount).toBe("1");
+    const historical = await acceptancePreparer.loadAcceptedAuthority({ principal: accepting.principal, idempotencyKey: accepting.idempotencyKey });
+    expect(Date.now()).toBeGreaterThanOrEqual(historical.quote.expiresAtMs);
+    expect(historical.quote).toEqual(accepted.claim.quote);
+    expect(historical.command).toEqual({ ...command, idempotencyKey: "acceptance:one" });
+    expect(historical.context.commandSha256).toBe(accepted.claim.quote.context.commandSha256);
+    expect(historical.originalSettlement.bindingSha256).toBe(accepted.claim.quote.context.originalSettlementSha256);
+    expect(historical.claimReference).toBe(accepted.claim.claimReference);
+    const readsAfterHistorical = objectReads;
+    await expect(acceptancePreparer.loadAcceptedAuthority({ principal: { id: "account:foreign" }, idempotencyKey: accepting.idempotencyKey })).rejects.toThrow("RESUME_ACCEPTED_COMMAND_NOT_FOUND_OR_DENIED");
+    await expect(acceptancePreparer.loadAcceptedAuthority({ principal: accepting.principal, idempotencyKey: "resume:missing" })).rejects.toThrow("RESUME_ACCEPTED_COMMAND_NOT_FOUND_OR_DENIED");
+    await expect(acceptancePreparer.loadAcceptedAuthority({ principal: accepting.principal, idempotencyKey: accepting.idempotencyKey, replay: true })).rejects.toThrow();
+    expect(objectReads).toBe(readsAfterHistorical);
+    expect(await acceptancePreparer.prepare({ principal: accepting.principal, sessionId: accepting.sessionId, checkpointId: accepting.checkpointId,
+      expectedSessionVersion: 0, expectedCheckpointVersion: 1, idempotencyKey: "prepare:claimed-refresh" })).toEqual({ status: "denied", code: "RESUME_STALE_OR_CONFLICTING" });
+    const expiredCustody = new ProductionResumePricingPreparer({ pool, store, quotes, checkpoint, vertexJournal, currentPricing: acceptancePricing,
+      compatibility: { policyVersion: pending.policyVersion, acceptedToolchains: [pending.toolchainId] }, now: () => historical.context.retentionUntilMs });
+    await expect(expiredCustody.loadAcceptedAuthority({ principal: accepting.principal, idempotencyKey: accepting.idempotencyKey })).rejects.toThrow("RESUME_STALE_OR_CONFLICTING");
+    expect(modelPosts).toBe(1);
     expect(await resumedSettlement.finalize({ accountId, intent, receipt: observed.receipt, pricedAmount: "3" })).toEqual(firstSettlement);
     for (const changedIntent of [
       { ...intent, accountId: "account:foreign" }, { ...intent, sessionId: "session:foreign" }, { ...intent, actionId: "action:foreign" },
@@ -379,6 +397,7 @@ integration("production quote preparation authenticates an encrypted original ch
     const superseded = await Promise.all([acceptance.supersedeUnclaimed(accountId, short.idempotencyKey), acceptance.supersedeUnclaimed(accountId, short.idempotencyKey)]);
     expect(superseded.every(item => item.state === "superseded")).toBeTrue();
     expect((await acceptance.claim(short)).claim.state).toBe("superseded");
+    await expect(acceptancePreparer.loadAcceptedAuthority({ principal: short.principal, idempotencyKey: short.idempotencyKey })).rejects.toThrow("RESUME_ACCEPTED_COMMAND_NOT_FOUND_OR_DENIED");
     await expect(acceptance.claimWorker(accountId, short.idempotencyKey)).rejects.toThrow("PRICED_CONTINUATION_WORKER_CLAIM_DENIED");
     expect(await gateway.dispatch(lateIntent, new AbortController().signal)).toMatchObject({ status: "definitive_not_accepted" });
     expect(modelPosts).toBe(1);
@@ -403,6 +422,10 @@ integration("production quote preparation authenticates an encrypted original ch
     await registerProductionPricing({ pool, ...refreshedPricing });
     const refreshedPreparer = new ProductionResumePricingPreparer({ pool, store, quotes, checkpoint, vertexJournal, currentPricing: refreshedPricing,
       compatibility: { policyVersion: pending.policyVersion, acceptedToolchains: [pending.toolchainId] }, now: Date.now });
+    const retainedAfterRepricing = await refreshedPreparer.loadAcceptedAuthority({ principal: accepting.principal, idempotencyKey: accepting.idempotencyKey });
+    expect(retainedAfterRepricing.quote.pricing.profile.id).toBe(acceptancePricing.profile.id);
+    expect(retainedAfterRepricing.quote.pricing.profile.id).not.toBe(refreshedPricing.profile.id);
+    expect(retainedAfterRepricing.originalPricing.profile.id).toBe(originalPricing.profile.id);
     const refreshedAcceptance = new ProductionResumeAcceptance({ pool, quotes, preparer: refreshedPreparer });
     const renewedQuote = await refreshedPreparer.prepare({ principal: short.principal, sessionId: short.sessionId, checkpointId: short.checkpointId,
       expectedSessionVersion: 0, expectedCheckpointVersion: 1, idempotencyKey: "prepare:explicit-renewal" });

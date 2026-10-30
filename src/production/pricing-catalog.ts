@@ -63,7 +63,22 @@ export function createProductionRetainedPricing(input: PostgresSqlPool): Retaine
 /** A paused command can precede its first metered action. Its own immutable
  * pause tuple, rather than a fabricated action, selects the original catalog. */
 export async function readProductionPendingPricing(input: Readonly<{ pool: PostgresSqlPool; intent: PendingActionIntent; pauseGeneration: number }>) {
+  return readPendingPricing(input);
+}
+
+/** Historical read of the original pause catalog under an exact owned current
+ * accepted claim. It grants no fresh-price or dispatch authority. */
+export async function readProductionAcceptedPendingPricing(input: Readonly<{ pool: PostgresSqlPool; intent: PendingActionIntent; pauseGeneration: number; claimReference: string }>) {
+  if (!input.claimReference || input.claimReference.length > 256) throw new Error("PRODUCTION_PENDING_PRICING_REQUIRED");
+  return readPendingPricing(input, input.claimReference);
+}
+
+async function readPendingPricing(input: Readonly<{ pool: PostgresSqlPool; intent: PendingActionIntent; pauseGeneration: number }>, claimReference?: string) {
   const intent = PendingActionIntentSchema.parse(input.intent);
+  const lifecycle = claimReference === undefined ? "p.state='resume_required'" : `p.state IN ('claimed','restored') AND EXISTS(
+    SELECT 1 FROM production_real.priced_continuation_claims c JOIN production_real.continuation_checkpoints cp ON cp.checkpoint_id=c.checkpoint_id AND cp.account_id=c.account_id
+    WHERE c.claim_reference=$5 AND c.account_id=p.account_id AND c.session_id=p.session_id AND cp.pause_generation=p.pause_generation
+      AND cp.state='claimed' AND c.state IN ('accepted','dispatching'))`;
   const client = await bindAccountingRealmPool(input.pool, createAccountingRealm("production-real")).connect();
   try {
     const row = (await client.query<{ profile_hash: string; card_hash: string; normalized_profile: unknown; normalized_card: unknown; intent_json: unknown }>(`SELECT
@@ -72,8 +87,8 @@ export async function readProductionPendingPricing(input: Readonly<{ pool: Postg
       JOIN production_real.model_profile_versions m ON m.id=p.intent_json->>'profileId'
       JOIN production_real.price_card_versions c ON c.id=p.intent_json->>'priceCardId' AND c.profile_id=m.id
       WHERE p.account_id=$1 AND p.session_id=$2 AND p.pause_generation=$3
-        AND p.pending_fingerprint_sha256=$4 AND p.state='resume_required'`,
-    [intent.accountId, intent.sessionId, input.pauseGeneration, intent.fingerprint])).rows[0];
+        AND p.pending_fingerprint_sha256=$4 AND ${lifecycle}`,
+    [intent.accountId, intent.sessionId, input.pauseGeneration, intent.fingerprint, ...(claimReference === undefined ? [] : [claimReference])])).rows[0];
     if (!row || canonicalJson(PendingActionIntentSchema.parse(row.intent_json)) !== canonicalJson(intent)) throw new Error("PRODUCTION_PENDING_PRICING_REQUIRED");
     const profile = ModelProfileSchema.parse(row.normalized_profile), card = PriceCardSchema.parse(row.normalized_card);
     if (profile.id !== intent.profileId || card.id !== intent.priceCardId || profile.priceCardId !== card.id

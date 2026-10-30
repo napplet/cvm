@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { PendingActionIntentSchema } from "../continuity/contracts";
 import { validatePendingCommandCheckpointArchive } from "../continuity/checkpoint-envelope";
-import { prepareResumePricingQuote, ResumePricingContextSchema } from "../continuity/resume-pricing";
+import { prepareResumePricingQuote, ResumePricingContextSchema, ResumePricingQuoteSchema, verifyStoredResumePricingQuote } from "../continuity/resume-pricing";
 import { PrepareResumeCommandSchema, PrepareResumeResultSchema, projectResumePricingQuote } from "../continuity/resume-v2-contracts";
 import { convertUsdMicrosToSats, maximumOperationCharge, type createVertexGeminiProductionPricing } from "../model/price-card";
 import type { ContinuationFundingStore } from "../persistence/funding-store";
@@ -11,9 +11,10 @@ import type { PostgresOperationJournal } from "../release/deployment/postgres-op
 import { canonicalJson } from "../promotion/schema";
 import type { GenerationCommand } from "../phase-04/metered-generation-service";
 import { ProductionCheckpointCoordinator, assertProductionCheckpointCoordinator } from "./checkpoint-coordinator";
-import { readProductionPendingPricing } from "./pricing-catalog";
+import { readProductionAcceptedPendingPricing, readProductionPendingPricing } from "./pricing-catalog";
 import { ProductionResumePricingQuotes } from "./resume-pricing-quotes";
 import { readOriginalPendingVertexSettlement } from "./vertex-generation-settlement";
+import { bindAccountingRealmPool, createAccountingRealm } from "../funding/accounting-realm";
 
 type PrepareCommand = z.infer<typeof PrepareResumeCommandSchema>;
 type PrepareResult = z.infer<typeof PrepareResumeResultSchema>;
@@ -23,6 +24,7 @@ const hash = (value: unknown) => createHash("sha256").update(canonicalJson(value
  * original pricing and FX data comes from server-owned durable authorities.
  * No worker allocation, funds reservation, provider dispatch or signing occurs. */
 export class ProductionResumePricingPreparer {
+  readonly #pool: PostgresSqlPool;
   constructor(private readonly input: Readonly<{
     pool: PostgresSqlPool;
     store: Pick<ContinuationFundingStore, "findContinuationCheckpoint" | "findContinuationPause">;
@@ -32,7 +34,10 @@ export class ProductionResumePricingPreparer {
     currentPricing: Awaited<ReturnType<typeof createVertexGeminiProductionPricing>>;
     compatibility: Readonly<{ policyVersion: string; acceptedToolchains: readonly string[] }>;
     now?: () => number;
-  }>) { assertProductionCheckpointCoordinator(input.checkpoint); }
+  }>) {
+    assertProductionCheckpointCoordinator(input.checkpoint);
+    this.#pool = bindAccountingRealmPool(input.pool, createAccountingRealm("production-real"));
+  }
 
   async prepare(raw: unknown): Promise<PrepareResult> {
     const parsed = PrepareResumeCommandSchema.safeParse(raw);
@@ -62,14 +67,46 @@ export class ProductionResumePricingPreparer {
   /** Coordinator-only read for preparation and later acceptance revalidation.
    * Returned private material must never be projected as a tool response. */
   async loadAuthority(raw: unknown) {
-    const request = PrepareResumeCommandSchema.parse(raw), accountId = request.principal.id;
+    return this.#loadAuthority(PrepareResumeCommandSchema.parse(raw));
+  }
+
+  /** Historical private command custody for an existing accepted operation.
+   * Only an owned SQL claim selects its quote; callers cannot supply replay,
+   * quote/context, current pricing, retention or expiry overrides. */
+  async loadAcceptedAuthority(raw: unknown) {
+    const request = z.object({ principal: z.object({ id: z.string().min(1).max(256) }).strict(), idempotencyKey: z.string().min(1).max(160) }).strict().parse(raw);
+    const saved = await (async () => {
+      const client = await this.#pool.connect();
+      try {
+        return (await client.query(`SELECT c.claim_reference AS "claimReference",c.account_id AS "accountId",c.session_id AS "sessionId",
+        c.checkpoint_id AS "checkpointId",c.accepted_at_ms AS "acceptedAtMs",c.quote_reference AS "quoteReference",c.quote_sha256 AS "quoteSha256",q.quote_json AS quote
+        FROM production_real.priced_continuation_claims c JOIN production_real.resume_pricing_quotes q ON q.quote_reference=c.quote_reference
+        WHERE c.account_id=$1 AND c.idempotency_key=$2 AND c.state IN ('accepted','dispatching')`, [request.principal.id, request.idempotencyKey])).rows[0];
+      } finally { client.release(); }
+    })();
+    if (!saved) throw new Error("RESUME_ACCEPTED_COMMAND_NOT_FOUND_OR_DENIED");
+    const accepted = z.object({ claimReference: z.string().min(1).max(256), accountId: z.string().min(1).max(256), sessionId: z.string().min(1).max(256),
+      checkpointId: z.string().min(1).max(256), acceptedAtMs: z.coerce.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+      quoteReference: z.string().min(1).max(256), quoteSha256: z.string().regex(/^[a-f0-9]{64}$/u), quote: ResumePricingQuoteSchema }).strict().parse(saved);
+    const quote = await verifyStoredResumePricingQuote({ stored: accepted.quote, expectedContext: accepted.quote.context, nowMs: accepted.acceptedAtMs,
+      approval: { quoteReference: accepted.quoteReference, quoteSha256: accepted.quoteSha256, maximumSat: accepted.quote.maximumSat } });
+    if (accepted.accountId !== request.principal.id || quote.context.accountId !== request.principal.id || quote.context.sessionId !== accepted.sessionId
+      || quote.context.checkpointId !== accepted.checkpointId) throw new Error("RESUME_ACCEPTED_COMMAND_BINDING_DENIED");
+    const authority = await this.#loadAuthority({ principal: request.principal, sessionId: accepted.sessionId, checkpointId: accepted.checkpointId,
+      expectedSessionVersion: quote.context.expectedSessionVersion, expectedCheckpointVersion: 1, idempotencyKey: quote.preparationKey }, accepted.claimReference);
+    if (canonicalJson(authority.context) !== canonicalJson(quote.context)) throw new Error("RESUME_ACCEPTED_COMMAND_BINDING_DENIED");
+    return Object.freeze({ ...authority, quote, claimReference: accepted.claimReference });
+  }
+
+  async #loadAuthority(request: PrepareCommand, acceptedClaimReference?: string) {
+    const accountId = request.principal.id;
     const checkpoint = await this.input.store.findContinuationCheckpoint(accountId, request.checkpointId);
     if (!checkpoint || checkpoint.accountId !== accountId || checkpoint.sessionId !== request.sessionId) throw new Error("RESUME_CHECKPOINT_NOT_FOUND_OR_DENIED");
     const nowMs = (this.input.now ?? Date.now)();
-    if (checkpoint.state !== "resume_required" || checkpoint.expectedSessionVersion !== request.expectedSessionVersion || checkpoint.retentionDeadlineMs <= nowMs)
+    if (checkpoint.state !== (acceptedClaimReference === undefined ? "resume_required" : "claimed") || checkpoint.expectedSessionVersion !== request.expectedSessionVersion || checkpoint.retentionDeadlineMs <= nowMs)
       throw new Error("RESUME_STALE_OR_CONFLICTING");
     const pause = await this.input.store.findContinuationPause(accountId, request.sessionId, checkpoint.pauseGeneration);
-    if (!pause || pause.state !== "resume_required") throw new Error("RESUME_STALE_OR_CONFLICTING");
+    if (!pause || (acceptedClaimReference === undefined ? pause.state !== "resume_required" : pause.state !== "claimed" && pause.state !== "restored")) throw new Error("RESUME_STALE_OR_CONFLICTING");
     const intent = PendingActionIntentSchema.parse(pause.intent);
     if (intent.accountId !== accountId || intent.sessionId !== request.sessionId || intent.fingerprint !== pause.pendingFingerprint
       || intent.expectedSessionVersion !== checkpoint.expectedSessionVersion || intent.expectedArtifactVersion !== checkpoint.expectedArtifactVersion
@@ -96,7 +133,9 @@ export class ProductionResumePricingPreparer {
         ? await this.input.checkpoint.pendingCommands.validateRetained(validatePendingCommandCheckpointArchive(archive, intent), intent)
         : await this.input.checkpoint.readRetainedPendingCommand({ checkpointId: request.checkpointId, accountId, sessionId: request.sessionId, intent });
     } finally { archive.fill(0); }
-    const originalPricing = await readProductionPendingPricing({ pool: this.input.pool, intent, pauseGeneration: checkpoint.pauseGeneration });
+    const originalPricing = acceptedClaimReference === undefined
+      ? await readProductionPendingPricing({ pool: this.input.pool, intent, pauseGeneration: checkpoint.pauseGeneration })
+      : await readProductionAcceptedPendingPricing({ pool: this.input.pool, intent, pauseGeneration: checkpoint.pauseGeneration, claimReference: acceptedClaimReference });
     const originalOperationId = `operation:${hash({ accountId, key: intent.idempotencyKey, profile: intent.profileId }).slice(0, 24)}`;
     const originalSettlement = await readOriginalPendingVertexSettlement({ journal: this.input.vertexJournal, accountId, operationId: originalOperationId });
     const { binding } = originalSettlement;

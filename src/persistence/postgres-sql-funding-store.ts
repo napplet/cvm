@@ -733,7 +733,14 @@ class PgFundingTransaction implements MeteredFundingTransaction, ContinuationFun
     await this.client.query("UPDATE provider_operations SET state='usage_unknown',provider_request_id=$2 WHERE id=$1", [input.operationId, input.providerRequestId]);
     await this.client.query("UPDATE metered_actions SET state='usage_unknown',provider_receipt_reference=$2 WHERE id=$1", [parsed.actionId, input.protectedEvidenceReference]);
     await this.client.query("UPDATE metered_sessions SET state='usage_unknown' WHERE id=$1", [parsed.sessionId]);
-    await this.lineItem(`reconciliation:${input.operationId}`, "reconciliation", "0");
+    // Receipt recovery can make an unknown action active again before a later
+    // settlement failure. Keep one immutable reconciliation line for that
+    // original operation rather than failing its second uncertainty transition.
+    const sourceIdentity = `reconciliation:${input.operationId}`;
+    const priorLine = (await this.client.query("SELECT source_identity,kind,unit,amount_sat FROM billing_line_items WHERE id=$1 AND account_id=$2", [id("line", sourceIdentity), this.accountId])).rows[0];
+    if (priorLine && (asText(priorLine.source_identity) !== sourceIdentity || asText(priorLine.kind) !== "reconciliation"
+      || asText(priorLine.unit) !== "sat" || asBigInt(priorLine.amount_sat) !== 0n)) throw new Error("METERED_RECONCILIATION_LINE_BINDING_DENIED");
+    if (!priorLine) await this.lineItem(sourceIdentity, "reconciliation", "0");
     return frozen({ ...parsed, status: "usage_unknown", providerRequestId: input.providerRequestId, providerReceiptReference: input.protectedEvidenceReference, reconciliationReason: input.reason });
   }
   async claimReconciliation(operationId: string): Promise<ReconciliationClaim> {

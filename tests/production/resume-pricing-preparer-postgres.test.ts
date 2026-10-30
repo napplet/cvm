@@ -42,6 +42,7 @@ import { PRODUCTION_WORKER_POLICY } from "../../src/worker-adapters/production-w
 import { WorkerRunRequestSchema } from "../../src/phase-02/contracts";
 import { projectResumePricingQuote } from "../../src/continuity/resume-v2-contracts";
 import { ProductionPricedContinuationFinalizer } from "../../src/production/priced-continuation-finalizer";
+import { ProductionPricedContinuationRunner } from "../../src/production/priced-continuation-runner";
 
 const integration = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
 const hash = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex");
@@ -780,12 +781,32 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     await expect(runtime.query("UPDATE production_real.priced_continuation_finalizations SET request_sha256=$1", ["f".repeat(64)])).rejects.toThrow();
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.funding_outbox WHERE event_kind='priced_continuation_terminal'")).rows[0].count).toBe(1);
     expect(modelPosts).toBe(2); expect(nativeRestores).toBe(1);
-    expect((await metered.transact(accountId, tx => tx.claimProviderOperation(workspaceClaim.operationId))).claimed).toBeTrue();
     const workspaceApiIntent = ProviderOperationIntentSchema.parse({ ...allocatingIntent, sessionId: workspaceClaim.sessionId, actionId: workspaceClaim.actionId,
       operationId: workspaceClaim.operationId, providerRequestId: workspaceClaim.operationId, actionBudgetReference: workspaceClaim.actionBudgetReference,
       requestFingerprint: workspaceClaim.fingerprint, expectedVersion: 1, prompt: workspaceCommand.revision });
-    const workspaceObserved = await gateway.dispatch(workspaceApiIntent, new AbortController().signal);
-    if (workspaceObserved.status !== "completed") throw new Error("EXPECTED_WORKSPACE_MODEL_USAGE");
+    const noAdmission = async () => { throw new Error("UNEXPECTED_CORE_READMISSION"); };
+    const workspaceCoreSettlement = createProductionVertexGenerationSettlement({ gateway, conversion: workspaceClaim.settlement.conversion,
+      journal: vertexJournal, resumeSettlements: refreshedAcceptance });
+    const coreOptions = { store: metered, gateway, worker: nativeBridge(), artifactVerifier: nativeBridge(),
+      proposalStore: new ProductionSourceProposalStore(pool), continuationCommands: checkpoint.pendingCommands, toolchainIdentity: workspaceClaim.quote.context.toolchainId,
+      settlement: { ...workspaceCoreSettlement, prepare: noAdmission },
+      fundedAdmission: new FundedAdmissionService({ funding: new FundingService(store), store, receiptAuthority: trustedAdmissionReceiptAuthority,
+        capacity: { reserveNow: noAdmission, observe: noAdmission, release: noAdmission } }) };
+    const core = new MeteredGenerationService(coreOptions);
+    const runnerInput = { pool, acceptance: refreshedAcceptance, preparer: refreshedPreparer, workers: workerAuthority,
+      restores: workspaceRestores(), generation: core, finalizer };
+    let failFirstRunnerTerminalWrite = true;
+    const interruptedRunner = new ProductionPricedContinuationRunner({ ...runnerInput,
+      finalizer: new ProductionPricedContinuationFinalizer({ ...terminalInput, pool: sqlPool(runtime, undefined, undefined,
+        () => { const value = failFirstRunnerTerminalWrite; failFirstRunnerTerminalWrite = false; return value; }) }) });
+    // First API dispatch belongs to the real accepted coordinator/core loop.
+    // A late SQL failure rolls back its money, then durably retains ambiguity.
+    expect(await interruptedRunner.run(workspaceResume)).toEqual({ status: "reconciliation_pending", stage: "accounting" });
+    expect(failFirstRunnerTerminalWrite).toBeFalse();
+    expect(modelPosts).toBe(3);
+    expect((await metered.findMeteredAction(accountId, workspaceClaim.actionKey))?.status).toBe("usage_unknown");
+    const workspaceObserved = await gateway.lookup(workspaceApiIntent, new AbortController().signal);
+    if (workspaceObserved.status !== "receipt_found") throw new Error("EXPECTED_WORKSPACE_MODEL_USAGE");
     const workspaceSettlement = await createProductionVertexGenerationSettlement({ gateway, conversion: workspaceClaim.settlement.conversion, journal: vertexJournal,
       resumeSettlements: refreshedAcceptance }).finalize({ accountId, intent: workspaceApiIntent, receipt: workspaceObserved.receipt, pricedAmount: "3" });
     const workspaceTerminal = { ...pendingTerminal, idempotencyKey: workspaceResume.idempotencyKey, leaseToken: workspaceClaim.leaseToken,
@@ -806,15 +827,6 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     // different persisted run proposal above makes the real bridge fail closed;
     // no synthetic successful build or artifact authority is supplied here.
     const acceptedWorkspace = await refreshedPreparer.loadAcceptedAuthority({ principal: { id: accountId }, idempotencyKey: workspaceResume.idempotencyKey });
-    const noAdmission = async () => { throw new Error("UNEXPECTED_CORE_READMISSION"); };
-    const workspaceCoreSettlement = createProductionVertexGenerationSettlement({ gateway, conversion: workspaceClaim.settlement.conversion,
-      journal: vertexJournal, resumeSettlements: refreshedAcceptance });
-    const coreOptions = { store: metered, gateway, worker: nativeBridge(), artifactVerifier: nativeBridge(),
-      proposalStore: new ProductionSourceProposalStore(pool), continuationCommands: checkpoint.pendingCommands, toolchainIdentity: workspaceClaim.quote.context.toolchainId,
-      settlement: { ...workspaceCoreSettlement, prepare: noAdmission },
-      fundedAdmission: new FundedAdmissionService({ funding: new FundingService(store), store, receiptAuthority: trustedAdmissionReceiptAuthority,
-        capacity: { reserveNow: noAdmission, observe: noAdmission, release: noAdmission } }) };
-    const core = new MeteredGenerationService(coreOptions);
     const coreInput = { intent: acceptedWorkspace.intent, restoredCommand: acceptedWorkspace.command, pricing: acceptedWorkspace.quote.pricing,
       maximumSat: acceptedWorkspace.quote.maximumSat, binding: { accountId, actionKey: workspaceClaim.actionKey, commandFingerprint: workspaceClaim.fingerprint,
         actionId: workspaceClaim.actionId, operationId: workspaceClaim.operationId, actionBudgetReference: workspaceClaim.actionBudgetReference } };
@@ -848,25 +860,43 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     // Caller mutation after preparation must not redirect the captured action.
     coreInput.binding.operationId = "operation:mutated-after-preparation";
     coreInput.intent.sessionId = "session:mutated-after-preparation";
-    let terminalCallbacks = 0;
-    const coreTerminal = await executable.execute(async ({ intent, receipt, finalization }) => {
-      terminalCallbacks++;
-      expect(intent).toEqual(workspaceApiIntent);
-      expect(receipt).toEqual(workspaceObserved.receipt);
-      const terminalRequest = { ...workspaceTerminal, intent, receipt, finalization };
-      const concurrent = await Promise.all([finalizer.complete(terminalRequest), finalizer.complete(terminalRequest)]);
-      expect(concurrent[0]).toEqual(concurrent[1]);
-    });
+    const invariantRunner = new ProductionPricedContinuationRunner({ ...runnerInput, generation: invariantCore });
+    await invariantRunner.assertReady();
+    expect(await invariantRunner.run(workspaceResume)).toEqual({ status: "reconciliation_pending", stage: "accounting" });
+    expect((await metered.findMeteredAction(accountId, workspaceClaim.actionKey))?.status).toBe("usage_unknown");
+    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.usage_receipts")).rows[0].count).toBe(1);
+    expect((await refreshedAcceptance.find(accountId, workspaceResume.idempotencyKey))?.state).toBe("dispatching");
+    expect((await admin.query("SELECT state FROM production_real.action_budget_reservations WHERE reservation_reference=$1", [workspaceClaim.actionBudgetReference])).rows[0].state).toBe("authorized");
+    let loseRunnerTerminalCommit = true;
+    const runner = new ProductionPricedContinuationRunner({ ...runnerInput, finalizer: new ProductionPricedContinuationFinalizer({ ...terminalInput,
+      pool: sqlPool(runtime, () => { const value = loseRunnerTerminalCommit; loseRunnerTerminalCommit = false; return value; }) }) });
+    const concurrentRuns = await Promise.all([runner.run(workspaceResume), runner.run(workspaceResume)]);
+    expect(concurrentRuns[0]).toEqual(concurrentRuns[1]);
+    const coreTerminal = SessionActionResultSchema.parse(concurrentRuns[0]);
+    expect(loseRunnerTerminalCommit).toBeFalse();
     expect(coreTerminal).toMatchObject({ status: "failed", confirmedSpend: "1", remainingCap: "198", remainingBalance: "198", sessionVersion: 1, artifactVersion: 1 });
-    expect(terminalCallbacks).toBe(1);
     expect(await executable.readTerminal()).toEqual(coreTerminal);
     expect(await executable.execute(async () => { throw new Error("TERMINAL_MUST_NOT_EXECUTE_AGAIN"); })).toEqual(coreTerminal);
+    await expect(runner.run({ ...workspaceResume, pricingApproval: { ...workspaceResume.pricingApproval, maximumSat: "40" } })).rejects.toThrow("IDEMPOTENCY_KEY_CONFLICT");
+    expect(await new ProductionPricedContinuationRunner(runnerInput).run(workspaceResume)).toEqual(coreTerminal);
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.usage_receipts")).rows[0].count).toBe(2);
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.ledger_entries WHERE account_id=$1 AND direction='debit'", [accountId])).rows[0].count).toBe(2);
     expect((await admin.query("SELECT confirmed_spend_sat,current_verified_artifact_version,version,state FROM production_real.metered_sessions WHERE id=$1", [workspaceClaim.sessionId])).rows[0]).toEqual({ confirmed_spend_sat: "1", current_verified_artifact_version: 1, version: 1, state: "failed" });
     expect((await store.findContinuationPause(accountId, workspaceClaim.sessionId, 1))?.state).toBe("completed");
     expect((await acceptance.find(accountId, workspaceResume.idempotencyKey))?.state).toBe("completed");
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.funding_outbox WHERE event_kind='priced_continuation_terminal'")).rows[0].count).toBe(2);
+    expect(modelPosts).toBe(3); expect(nativeRestores).toBe(1); expect(reserves).toBe(2);
+    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.billing_line_items WHERE source_identity=$1 AND kind='reconciliation' AND amount_sat=0", [`reconciliation:${workspaceClaim.operationId}`])).rows[0].count).toBe(1);
+    // Terminal consent/result replay must survive actual command/key/object
+    // erasure. The runner must not decrypt or revisit a provider after expiry.
+    now = Date.parse(workspaceSealed.manifest.retentionUntil) + 1;
+    const eraseWorkspace = { checkpointId: workspaceClaim.checkpointId, accountId, sessionId: workspaceClaim.sessionId };
+    await checkpoint.destroyExpired(eraseWorkspace);
+    expect(await checkpoint.observeDestroyed(eraseWorkspace)).toBeTrue();
+    await expect(refreshedPreparer.loadAcceptedAuthority({ principal: { id: accountId }, idempotencyKey: workspaceResume.idempotencyKey })).rejects.toThrow();
+    const readsBeforeTerminalReplay = objectReads;
+    expect(await new ProductionPricedContinuationRunner(runnerInput).run(workspaceResume)).toEqual(coreTerminal);
+    expect(objectReads).toBe(readsBeforeTerminalReplay);
     expect(modelPosts).toBe(3); expect(nativeRestores).toBe(1); expect(reserves).toBe(2);
   } finally { await runtime?.end(); await admin?.end(); await docker(["rm", "--force", name]).catch(() => undefined); }
 }, 120_000);

@@ -29,7 +29,7 @@ const DIRECT_FILE_PINS = {
   templateLockSha256: "ec1eb261c06641decda0c8fbd3a96e5f121cddfcc6abdc8888f78556390e28e4",
 };
 function validateToolchainReceipt(value: unknown): void {
-  if (!value || typeof value !== "object" || Array.isArray(value)) fail("JOB_TOOLCHAIN_RECEIPT_INVALID");
+  if (!value || typeof value !== "object" || Array.isArray(value)) return fail("JOB_TOOLCHAIN_RECEIPT_INVALID");
   const record: Record<string, unknown> = Object.fromEntries(Object.entries(value));
   if (Object.keys(record).sort().join(",") !== "artifactContract,cliBinarySha256,platform,templateLockSha256,templatePackageSha256,version,workerLockSha256,workerPackageSha256"
     || record.version !== 1 || record.artifactContract !== "nip5d-direct-v1" || typeof record.platform !== "string"

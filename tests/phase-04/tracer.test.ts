@@ -5,7 +5,7 @@ import { TransactionalMemoryFundingStore } from "../../src/persistence/funding-s
 import { MeteredGenerationService } from "../../src/phase-04/metered-generation-service";
 import type { ModelGateway } from "../../src/model/model-gateway";
 import type { ArtifactVerifier } from "../../src/phase-02/trusted-core";
-import type { WorkerPort } from "../../src/phase-02/contracts";
+import type { WorkerPort, WorkerRunRequest } from "../../src/phase-02/contracts";
 import { exactReadyReservation, trustedAdmissionReceipt, trustedAdmissionReceiptAuthority } from "../fixtures/admission-ready";
 import type { LifecycleObservation, LifecycleTelemetryPort } from "../../src/telemetry/contracts";
 
@@ -47,6 +47,25 @@ const verifier: ArtifactVerifier = { async verify(facts) {
 } };
 
 describe("Phase 04 funded start tracer", () => {
+  test("worker request preparation cannot replace charged ownership, version or purpose", async () => {
+    const changes: ReadonlyArray<Partial<WorkerRunRequest>> = [{ actionId: "action:foreign" }, { sessionId: "session:foreign" },
+      { policyVersion: "policy:foreign" }, { expectedVersion: 7 }, { idea: "Replace the original purpose" }];
+    for (const change of changes) {
+      const { store, admissions, admission } = await fundedDependencies();
+      const effects = { dispatches: 0, workers: 0 };
+      const gateway: ModelGateway = { async dispatch(intent) { effects.dispatches++; return { status: "completed", receipt: {
+        operationId: intent.operationId, providerRequestId: intent.providerRequestId, provider: "deterministic_fixture", model: "phase-04-fixture-model",
+        profileId: intent.profileId, priceCardId: intent.priceCardId, selection: "unselected", completedAt: "2026-08-04T00:00:01.000Z",
+        provenance: { protectedEvidenceReference: "preparation:receipt" }, usage: [{ dimension: "input_tokens", units: "10" }, { dimension: "output_tokens", units: "5" }] } }; },
+        async lookup() { throw new Error("UNEXPECTED_LOOKUP"); } };
+      const service = new MeteredGenerationService({ fundedAdmission: admissions, store, gateway, artifactVerifier: verifier,
+        worker: { ...completedWorker(effects), async prepareRunRequest(request) { return { ...request, ...change }; } } });
+      const result = await service.startSession({ principal, admissionReference: admission.reference, idempotencyKey: "prepare-boundary", expectedVersion: 0,
+        maximum: "3250", policyVersion: "phase-02-policy-2026-08-04", idea: "Build one focused counter napplet." });
+      expect(result).toMatchObject({ status: "failed", confirmedSpend: "15", sessionVersion: 0, artifactVersion: 0 });
+      expect(effects).toEqual({ dispatches: 1, workers: 0 });
+    }
+  });
   test("settles one persisted provider intent, then replays concurrent duplicates without new effects", async () => {
     const observations: LifecycleObservation[] = [];
     const telemetry = { observe: (observation: LifecycleObservation) => { observations.push(observation); } };

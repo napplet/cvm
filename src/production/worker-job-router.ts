@@ -13,6 +13,7 @@ export type ProductionWorkerExecutable = Readonly<{
   image: string; toolchainSha256: string;
   modalAppName: string; flyAppName: string;
   clients: ReturnType<typeof createWorkerDeploymentClients>;
+  artifactContract?: "legacy-aggregate-v1" | "nip5d-direct-v1";
 }>;
 const routers = new WeakSet<object>();
 export function assertProductionWorkerJobRouter(value: unknown): asserts value is ProductionWorkerJobRouter {
@@ -38,7 +39,9 @@ export class ProductionWorkerJobRouter {
       if (images.has(image) || value.clients.modal.config.image !== image || value.clients.fly.config.image !== image
         || value.clients.modal.config.policyVersion !== PRODUCTION_WORKER_POLICY.version || value.clients.fly.config.policyVersion !== PRODUCTION_WORKER_POLICY.version) throw new Error("PRODUCTION_WORKER_EXECUTABLES_INVALID");
       images.add(image);
-      return Object.freeze({ ...value, image, toolchainSha256, modalAppName: App.parse(value.modalAppName), flyAppName: App.parse(value.flyAppName) });
+      const artifactContract = value.artifactContract === undefined ? undefined : z.enum(["legacy-aggregate-v1", "nip5d-direct-v1"]).parse(value.artifactContract);
+      if (artifactContract === "nip5d-direct-v1" && !input.publication) throw new Error("PRODUCTION_DIRECT_PUBLICATION_REQUIRED");
+      return Object.freeze({ ...value, ...(artifactContract === undefined ? {} : { artifactContract }), image, toolchainSha256, modalAppName: App.parse(value.modalAppName), flyAppName: App.parse(value.flyAppName) });
     }));
     this.toolchainSha256s = Object.freeze([...new Set(this.#executables.map(value => value.toolchainSha256))]);
     routers.add(this); Object.freeze(this);
@@ -50,6 +53,7 @@ export class ProductionWorkerJobRouter {
       || !Digest.safeParse(original.sessionLeaseSha256).success || !Number.isSafeInteger(original.providerDeadlineEpochMs) || !original.providerDeadlineEpochMs || original.providerDeadlineEpochMs < 1) throw new Error("PRODUCTION_WORKER_ORIGINAL_EXECUTABLE_REQUIRED");
     const executable = this.#executables.find(value => value.image === original.image && value.toolchainSha256 === original.toolchainSha256);
     if (!executable || original.appName !== (input.provider === "modal" ? executable.modalAppName : executable.flyAppName)) throw new Error("PRODUCTION_WORKER_ORIGINAL_EXECUTABLE_REQUIRED");
-    return new ProductionWorkerJobClient({ provider: input.provider, workerOperationId: input.workerOperationId, clients: executable.clients, workerJournal: this.input.workerJournal, jobJournal: this.input.jobJournal, toolchainSha256: executable.toolchainSha256, publication: this.input.publication });
+    return new ProductionWorkerJobClient({ provider: input.provider, workerOperationId: input.workerOperationId, clients: executable.clients, workerJournal: this.input.workerJournal, jobJournal: this.input.jobJournal, toolchainSha256: executable.toolchainSha256, publication: this.input.publication,
+      ...(executable.artifactContract === "nip5d-direct-v1" ? { artifactContract: executable.artifactContract } : {}) });
   }
 }

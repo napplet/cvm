@@ -524,7 +524,12 @@ export class MeteredGenerationService {
           validationReportReference = outcome.diagnostic.evidenceIds.at(-1);
         }
       } else {
-        const request = WorkerRunRequestSchema.parse({ sessionId, actionId: durableActionId, expectedVersion: command.expectedVersion, policyVersion: command.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId, ...(proposal ? { sourceProposalReference: proposal.proposal.reference, sourceProposalSha256: proposal.proposal.sha256, sourceProposalFiles: proposal.proposal.files } : { idea: riskSafeIdea(idea) }) });
+        const baseRequest = WorkerRunRequestSchema.parse({ sessionId, actionId: durableActionId, expectedVersion: command.expectedVersion, policyVersion: command.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId, ...(proposal ? { sourceProposalReference: proposal.proposal.reference, sourceProposalSha256: proposal.proposal.sha256, sourceProposalFiles: proposal.proposal.files } : { idea: riskSafeIdea(idea) }) });
+        const request = this.options.worker.prepareRunRequest ? WorkerRunRequestSchema.parse(await this.options.worker.prepareRunRequest(baseRequest, idea)) : baseRequest;
+        const { idea: preparedPurpose, ...preparedAuthority } = request;
+        const { idea: basePurpose, ...baseAuthority } = baseRequest;
+        if (canonicalJson(preparedAuthority) !== canonicalJson(baseAuthority) || (basePurpose !== undefined && preparedPurpose !== basePurpose)
+          || (preparedPurpose !== undefined && preparedPurpose !== idea && preparedPurpose !== idea.trim())) throw new Error("WORKER_PREPARED_REQUEST_BINDING_DENIED");
         const workerResult = WorkerRunResultSchema.parse(await this.options.worker.run(request, new AbortController().signal));
         if (workerResult.status !== "completed") completed = false;
         else {

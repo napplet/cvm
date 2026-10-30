@@ -48,10 +48,16 @@ import { ContinuationDeadlineReconciler } from "../../src/continuity/deadline-re
 import { ProductionPricedContinuationCleanup } from "../../src/production/priced-continuation-cleanup";
 import { createProductionReadyCapacity } from "../../src/production/worker-capacity";
 import { openLocalProductionWorker } from "../fixtures/local-production-worker";
+import { ProductionWorkerJobRouter } from "../../src/production/worker-job-router";
+import { verifyProductionConformanceReceipt } from "../../src/worker-adapters/conformance-receipt";
+import { ProductionDirectManifestReceiptSchema } from "../../src/worker-adapters/direct-manifest-receipt";
 
 const integration = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
 const hash = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex");
 const actualWorkerImage = process.env.NAPPLET_CVM_TEST_REAL_WORKER_IMAGE;
+const actualWorkerContract = z.enum(["legacy-aggregate-v1", "nip5d-direct-v1"]).optional().parse(process.env.NAPPLET_CVM_TEST_REAL_WORKER_CONTRACT) ?? "legacy-aggregate-v1";
+const directWorker = actualWorkerContract === "nip5d-direct-v1";
+if (directWorker && !actualWorkerImage) throw new Error("DIRECT_TEST_EXACT_WORKER_IMAGE_REQUIRED");
 const realCounterSource = `import { runtimeHasDomain } from './domain-availability.js';
 import './styles.css';
 const root = document.querySelector<HTMLElement>('#app');
@@ -63,6 +69,21 @@ button.addEventListener('click', () => { count++; button.textContent = 'Count: '
 button.title = runtimeHasDomain('outbox') ? 'Counter ready' : 'Local counter ready';
 root.replaceChildren(button);
 `;
+const directCounterSource = `import { storage } from '@napplet/sdk';
+import { runtimeHasDomain } from './domain-availability.js';
+import './styles.css';
+const root = document.querySelector<HTMLElement>('#app');
+if (!root) throw new Error('APP_ROOT_MISSING');
+const button = document.createElement('button');
+let count = 0;
+const render = () => { button.textContent = 'Count: ' + count; };
+render(); root.replaceChildren(button);
+if (runtimeHasDomain('storage')) storage.getItem('counter').then(value => { const saved = Number(value); if (Number.isSafeInteger(saved) && saved >= 0) count = saved; render(); }).catch(() => undefined);
+button.addEventListener('click', () => { count++; render(); if (runtimeHasDomain('storage')) storage.setItem('counter', String(count)).catch(() => undefined); });
+`;
+const realCounterFiles = directWorker
+  ? [{ path: "src/main.ts", content: directCounterSource }, { path: "src/capabilities.json", content: '{"required":["storage"],"optional":[]}' }]
+  : [{ path: "src/main.ts", content: realCounterSource }];
 async function docker(args: string[]): Promise<string> {
   const child = Bun.spawn(["docker", ...args], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
@@ -359,7 +380,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       modelPosts++;
       const wire = z.object({ input: z.array(z.unknown()), generation_config: z.object({ max_output_tokens: z.literal(20) }).passthrough() }).passthrough().parse(JSON.parse(String(init.body)));
       return Response.json({ id: "resume-owned-operation", model: "gemini-4-argon", status: "completed", created: new Date().toISOString(),
-        steps: [{ type: "user_input", content: wire.input }, { type: "model_output", content: [{ type: "text", text: JSON.stringify({ files: [{ path: "src/main.ts", content: actualWorkerImage && modelPosts === 3 ? realCounterSource : "document.body.textContent = 'One counter';" }] }) }] }],
+        steps: [{ type: "user_input", content: wire.input }, { type: "model_output", content: [{ type: "text", text: JSON.stringify({ files: actualWorkerImage && modelPosts === 3 ? realCounterFiles : [{ path: "src/main.ts", content: "document.body.textContent = 'One counter';" }] }) }] }],
         usage: { total_input_tokens: 2, total_cached_tokens: 0, total_output_tokens: 1, total_thought_tokens: 0, total_tool_use_tokens: 0, total_tokens: 3 } });
     }, { preconnect() {} }) });
     const vertexInput = { candidateSha256: "f".repeat(64), projectId: "napplet-cvm-fixture", location: "global", model: "gemini-4-argon", credentialReference: "gcp:adc:fixture",
@@ -729,9 +750,21 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       policyVersion: workspaceCommand.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId: `workspace:${workspaceCommand.sessionId}`,
       sourceProposalReference: `proposal:sha256:${workspaceSource.proposalSha256}`, sourceProposalSha256: workspaceSource.proposalSha256, sourceProposalFiles: workspaceSource.files });
     await new ProductionWorkerRequestStore(nativeRequestJournal).persist(sourceRequest);
+    const changedDefaultClients = directWorker ? createWorkerDeploymentClients({ image: `registry.example/new-default@sha256:${"e".repeat(64)}`,
+      workspaceRoot: PRODUCTION_WORKER_POLICY.workspaceRoot, policyVersion: PRODUCTION_WORKER_POLICY.version,
+      modalAppName: "resume-workspace-fixture", modalTags: {}, journal: nativeWorkerRecords,
+      modalSdk: { apps: { fromName: noNativeEffect }, images: { fromRegistry: noNativeEffect }, sandboxes: { create: noNativeEffect, findByName: noNativeEffect, fromId: noNativeEffect } },
+      fly: { create: noNativeEffect, observe: noNativeEffect, terminate: noNativeEffect, observeTermination: noNativeEffect, exec: noNativeEffect } }) : undefined;
+    const directRouter = directWorker && changedDefaultClients ? new ProductionWorkerJobRouter({ workerJournal: nativeWorkerJournal, jobJournal: nativeJobJournal,
+      publication: { server: "https://publication.example" }, executables: [{ image: `registry.example/new-default@sha256:${"e".repeat(64)}`,
+        toolchainSha256: "e".repeat(64), artifactContract: "legacy-aggregate-v1", clients: changedDefaultClients,
+        modalAppName: "resume-workspace-fixture", flyAppName: "resume-workspace-fixture" }, { image: `registry.example/worker@sha256:${"a".repeat(64)}`,
+        toolchainSha256: workspaceToolchain, artifactContract: "nip5d-direct-v1", clients: workerClients,
+        modalAppName: "resume-workspace-fixture", flyAppName: "resume-workspace-fixture" }] }) : undefined;
     const nativeBridge = () => new ProductionWorkerBridge({ resolver: new ProductionWorkerOwnershipResolver({ pool, policyVersion: workspaceCommand.policyVersion,
       capacityJournal, pricedContinuations: workerAuthority }), workers: workerClients, workerJournal: nativeWorkerJournal, jobJournal: nativeJobJournal,
-      requestJournal: nativeRequestJournal, artifactStore: new GcsObjectStoreAdapter({ config: { bucket: "workspace-fixture", projectId: "fixture" }, client: objectClient }), toolchainSha256: workspaceToolchain });
+      requestJournal: nativeRequestJournal, artifactStore: new GcsObjectStoreAdapter({ config: { bucket: "workspace-fixture", projectId: "fixture" }, client: objectClient }), toolchainSha256: directWorker ? "e".repeat(64) : workspaceToolchain,
+      ...(directRouter ? { jobRouter: directRouter, publication: { server: "https://publication.example" } } : {}) });
     const cleanupCapacity = createProductionReadyCapacity({ provider: "fly", workers: workerClients, journal: capacityJournal, workerJournal: nativeWorkerJournal,
       image: `registry.example/worker@sha256:${"a".repeat(64)}`, toolchainSha256: workspaceToolchain, flyRegion: "ams" });
     const cleanupJournal = new PostgresOperationJournal(pool, { namespace: "fixture-priced-cleanup", scopeSha256: "8".repeat(64) });
@@ -764,10 +797,10 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       expect(await nativeBridge().observePricedRestoreCheckpoint({ ...restoredWorkspace.restore.metadata, ...changed })).toEqual({ status: "unknown" });
     }
     expect(nativeQueries).toBe(2); expect(nativeRestores).toBe(1); expect(nativeUploads).toBe(uploadsAfterOriginal);
-    const newProposalFiles = [{ path: "src/main.ts", content: actualWorkerImage ? realCounterSource : "document.body.textContent = 'A fresh resumed counter';" }];
+    const newProposalFiles = actualWorkerImage ? realCounterFiles : [{ path: "src/main.ts", content: "document.body.textContent = 'A fresh resumed counter';" }];
     const newProposalSha = hash(actualWorkerImage ? { files: newProposalFiles } : newProposalFiles);
     const resumedWorkerRequest = WorkerRunRequestSchema.parse({ ...sourceRequest, actionId: workspaceClaim.actionId, sourceProposalReference: `proposal:sha256:${newProposalSha}`,
-      sourceProposalSha256: newProposalSha, sourceProposalFiles: newProposalFiles });
+      sourceProposalSha256: newProposalSha, sourceProposalFiles: newProposalFiles, ...(directWorker ? { idea: workspaceCommand.revision.trim() } : {}) });
     await new ProductionWorkerRequestStore(nativeRequestJournal).persist(resumedWorkerRequest);
     expect(await new ProductionWorkerRequestStore(nativeRequestJournal).read(resumedWorkerRequest)).toEqual(resumedWorkerRequest);
     expect(await new ProductionWorkerRequestStore(nativeRequestJournal).read(sourceRequest)).toEqual(sourceRequest);
@@ -937,8 +970,26 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         .find(value => value.state === "completed");
       const realCommands = z.object({ commands: z.array(z.object({ exitCode: z.literal(0), argv: z.array(z.string()) }).passthrough()).length(8) }).passthrough().parse(completedNative).commands;
       expect(realCommands.some(value => value.argv.includes("test:conformance"))).toBeTrue();
+      if (directWorker) {
+        const sealed = [...values.entries()].find(([key, value]) => key.startsWith("artifacts/") && value.checksum === coreTerminal.artifactId?.slice("artifact:".length))?.[1];
+        if (!sealed) throw new Error("DIRECT_SEALED_ARTIFACT_REQUIRED");
+        const archive = z.object({ version: z.literal(3), artifactContract: z.literal("nip5d-direct-v1"), artifactHash: z.string().regex(/^[a-f0-9]{64}$/u),
+          build: z.object({ accountId: z.literal(accountId), ownerId: z.literal(principal.pubkey), actionId: z.literal(workspaceClaim.actionId), expectedVersion: z.literal(1), toolchainSha256: z.literal(workspaceToolchain) }).passthrough(),
+          files: z.array(z.object({ path: z.literal("index.html"), sha256: z.string(), bytesBase64: z.string() }).strict()).length(1),
+          receipts: z.object({ conformance: z.unknown(), manifest: ProductionDirectManifestReceiptSchema }).passthrough() }).passthrough()
+          .parse(JSON.parse(new TextDecoder().decode(sealed.bytes)));
+        expect(bytesSha(Buffer.from(archive.files[0]!.bytesBase64, "base64"))).toBe(archive.artifactHash);
+        expect(archive.files[0]!.sha256).toBe(archive.artifactHash);
+        const manifest = z.object({ content: z.literal(workspaceCommand.revision.trim()), artifactHash: z.literal(archive.artifactHash), tags: z.array(z.array(z.string())) }).passthrough()
+          .parse(JSON.parse(Buffer.from(archive.receipts.manifest.bytesBase64, "base64").toString("utf8")));
+        expect(manifest.tags.filter(tag => tag[0] === "R")).toEqual([["R", "storage"]]);
+        expect(manifest.tags.filter(tag => tag[0] === "x")).toEqual([["x", archive.artifactHash]]);
+        const actualConformance = verifyProductionConformanceReceipt(archive.receipts.conformance);
+        expect(actualConformance.report.checks.find(check => check.id === "wire/envelope-well-formed")?.status).toBe("pass");
+        console.log(JSON.stringify({ localDirectReceipt: true, releaseEvidence: false, conformance: actualConformance.report.summary, artifactHash: archive.artifactHash }));
+      }
       console.log(JSON.stringify({ localActualArtifact: true, releaseEvidence: false, image: localWorker.image,
-        nativeLog: localWorker.logPath, nativeStarts: 1, successfulCommands: realCommands.length, artifactId: coreTerminal.artifactId }));
+        artifactContract: actualWorkerContract, nativeLog: localWorker.logPath, nativeStarts: 1, successfulCommands: realCommands.length, artifactId: coreTerminal.artifactId }));
     }
     expect(await executable.readTerminal()).toEqual(coreTerminal);
     expect(await executable.execute(async () => { throw new Error("TERMINAL_MUST_NOT_EXECUTE_AGAIN"); })).toEqual(coreTerminal);

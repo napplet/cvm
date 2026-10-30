@@ -12,7 +12,8 @@ import { PostgresOperationJournal, assertPostgresOperationJournal } from "../rel
 import type { createWorkerDeploymentClients } from "../release/deployment/worker-clients";
 import { ProductionWorkerJobClient } from "../worker-adapters/production-job-client";
 import type { ProductionWorkerPublication } from "../worker-adapters/publication-metadata";
-import { sealProductionWorkerArtifact } from "./sealed-worker-artifact";
+import { sealProductionWorkerArtifact, sealDirectProductionWorkerArtifact } from "./sealed-worker-artifact";
+import { ProductionDirectArtifactVerifier } from "./direct-artifact-verifier";
 import { ProductionWorkerRequestStore } from "./worker-request-store";
 import { ProductionWorkerArtifactStore } from "./worker-artifact-store";
 import { ProductionArtifactVerifier, readVerifiedProductionArtifactFile, type VerifiedProductionArtifact } from "./artifact-verifier";
@@ -107,6 +108,15 @@ export class ProductionWorkerBridge implements ContinuationWorkerPort, ArtifactV
     this.#requests = new ProductionWorkerRequestStore(input.requestJournal);
     this.#artifacts = new ProductionWorkerArtifactStore({ journal: input.requestJournal, objects: input.artifactStore, toolchainSha256: input.toolchainSha256, retainedToolchainSha256s: input.jobRouter?.toolchainSha256s });
   }
+  async prepareRunRequest(value: WorkerRunRequest, purpose: string): Promise<WorkerRunRequest> {
+    const request = WorkerRunRequestSchema.parse(value);
+    const job = await this.#job(await this.input.resolver.resolveWorker(request));
+    if (job.artifactContract === "legacy-aggregate-v1") return request;
+    const prepared = WorkerRunRequestSchema.parse({ ...request, idea: z.string().trim().min(1).max(4096).parse(purpose) });
+    const original = await this.#requests.read(prepared);
+    if (original && canonicalJson(original) !== canonicalJson(prepared)) throw new Error("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
+    return prepared;
+  }
   async run(value: WorkerRunRequest, signal: AbortSignal): Promise<WorkerRunResult> {
     let request: WorkerRunRequest; try { request = WorkerRunRequestSchema.parse(value); } catch { return { status: "unavailable", code: "WORKER_UNAVAILABLE" }; }
     if (signal.aborted) return { status: "interrupted", code: "WORKER_INTERRUPTED" };
@@ -121,11 +131,25 @@ export class ProductionWorkerBridge implements ContinuationWorkerPort, ArtifactV
       const materialized = await job.materializeArtifact(request, worker);
       try {
         if (materialized.commandEvidence.some(command => Buffer.byteLength(command.stdout) > 40_000 || Buffer.byteLength(command.stderr) > 20_000)) throw new Error("PRODUCTION_ARTIFACT_EVIDENCE_LIMIT");
-        const { cleanup: _cleanup, ...facts } = materialized; const verified = await this.#verifier.verify(facts); const contractInput = await this.#contract(request, verified);
-        const bytes = await sealProductionWorkerArtifact(verified); const artifactId = `artifact:${sha(bytes)}`;
-        const result = WorkerRunResultSchema.parse({ status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events: [{ kind: "progress", turn: 1, detail: `root-owned worker job verified:${verified.verificationEvidenceSha256}` }], artifact: { sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion, capabilityGrant: request.capabilityGrant, workspaceId: request.workspaceId, artifactId, ...contractInput } });
+        const { cleanup: _cleanup, ...facts } = materialized;
+        let bytes: Uint8Array, contractInput: ArtifactContractInput, scannerReportSha256: string, conformanceReportSha256: string;
+        if (job.artifactContract === "nip5d-direct-v1") {
+          const verified = await new ProductionDirectArtifactVerifier().verify(facts);
+          if (verified.manifest.content !== request.idea?.trim()) throw new Error("PRODUCTION_DIRECT_PURPOSE_MISMATCH");
+          contractInput = await this.#contract(request, verified, verified.declaration);
+          bytes = await sealDirectProductionWorkerArtifact(verified); scannerReportSha256 = verified.verificationEvidenceSha256;
+          conformanceReportSha256 = verified.conformanceReceipt.sha256;
+        } else {
+          const verified = await this.#verifier.verify(facts);
+          contractInput = await this.#contract(request, verified);
+          bytes = await sealProductionWorkerArtifact(verified); scannerReportSha256 = verified.verificationEvidenceSha256;
+          conformanceReportSha256 = sha(verified.aggregateSha256);
+        }
+        if ((await evaluateArtifactContract(contractInput)).verdict !== "pass") throw new Error("PRODUCTION_ARTIFACT_CONTRACT_DENIED");
+        const artifactId = `artifact:${sha(bytes)}`;
+        const result = WorkerRunResultSchema.parse({ status: "completed", code: "WORKER_PROPOSALS_VALIDATED", events: [{ kind: "progress", turn: 1, detail: `root-owned worker job verified:${scannerReportSha256}` }], artifact: { sessionId: request.sessionId, actionId: request.actionId, expectedVersion: request.expectedVersion, policyVersion: request.policyVersion, capabilityGrant: request.capabilityGrant, workspaceId: request.workspaceId, artifactId, ...contractInput } });
         if (result.status !== "completed") throw new Error("PRODUCTION_ARTIFACT_RESULT_INVALID");
-        await new ProductionWorkerArtifactStore({ journal: this.input.requestJournal, objects: this.input.artifactStore, toolchainSha256: job.toolchainSha256 }).persist({ request, accountId: worker.accountId, ownerId: worker.ownerId, bytes, scannerReportSha256: verified.verificationEvidenceSha256, conformanceReportSha256: sha(verified.aggregateSha256), result }); return result;
+        await new ProductionWorkerArtifactStore({ journal: this.input.requestJournal, objects: this.input.artifactStore, toolchainSha256: job.toolchainSha256 }).persist({ request, accountId: worker.accountId, ownerId: worker.ownerId, bytes, scannerReportSha256, conformanceReportSha256, result }); return result;
       } finally { await materialized.cleanup(); }
     } catch (error) { return signal.aborted || error instanceof DOMException && error.name === "AbortError" ? { status: "interrupted", code: "WORKER_INTERRUPTED" } : { status: "unavailable", code: "WORKER_UNAVAILABLE" }; }
   }
@@ -206,14 +230,19 @@ export class ProductionWorkerBridge implements ContinuationWorkerPort, ArtifactV
     return stored;
   }
 
-  async #contract(request: WorkerRunRequest, verified: VerifiedProductionArtifact): Promise<ArtifactContractInput> {
+  async #contract(request: WorkerRunRequest, verified: Pick<VerifiedProductionArtifact, "files" | "distRoot">, declaration?: Readonly<{ required: readonly string[]; optional: readonly string[] }>): Promise<ArtifactContractInput> {
     const purpose = request.idea?.trim() ?? request.sourceProposalReference;
     if (!purpose) throw new Error("PRODUCTION_ARTIFACT_PURPOSE_REQUIRED"); const source = request.sourceProposalFiles?.map(file => file.content).join("\n") ?? purpose;
     const outputs = await Promise.all(verified.files.map(async file => ({ path: file.path, text: new TextDecoder("utf-8", { fatal: true }).decode(await readVerifiedProductionArtifactFile(verified.distRoot, file)) })));
     const actual = `${source}\n${outputs.map(file => file.text).join("\n")}`;
-    const capabilityAuthority = `${source}\n${(await Promise.all(outputs.map(file => artifactCapabilityText(file.path, file.text)))).join("\n")}`;
+    // A direct declaration is independently verified metadata. It cannot
+    // supply its own evidence that the app actually observes that domain.
+    const capabilitySource = declaration ? request.sourceProposalFiles?.filter(file => file.path !== "src/capabilities.json").map(file => file.content).join("\n") ?? purpose : source;
+    const capabilityAuthority = `${capabilitySource}\n${(await Promise.all(outputs.map(file => artifactCapabilityText(file.path, file.text)))).join("\n")}`;
     const deny = (pattern: RegExp, code: string) => { if (pattern.test(actual)) throw new Error(code); }; deny(/\b(?:fetch|XMLHttpRequest|WebSocket|EventSource|navigator\.serviceWorker|new\s+(?:Worker|SharedWorker))\b/u, "PRODUCTION_ARTIFACT_NETWORK_OR_WORKER_DENIED"); deny(/\b(?:window\.nostr|nsec[0-9a-z]+|SimplePool|relay\.publish|pool\.publish|nostr-tools)\b/iu, "PRODUCTION_ARTIFACT_SIGNER_RELAY_DENIED"); deny(/\b(?:eval|Function|import)\s*\(/u, "PRODUCTION_ARTIFACT_DYNAMIC_AUTHORITY_DENIED");
-    const declaredHard = [...new Set((request.sourceProposalFiles?.find(file => file.path === "src/capabilities.json")?.content.match(/\b(?:storage|intent)\b/gu) ?? []))] as ("storage" | "intent")[]; const observedDomains = ([/\bstorage\b/iu.test(capabilityAuthority) ? "storage" : undefined, /\bintent\b/iu.test(capabilityAuthority) ? "intent" : undefined].filter((value): value is "storage" | "intent" => value !== undefined)); if (observedDomains.some(domain => !declaredHard.includes(domain)) || declaredHard.some(domain => !observedDomains.includes(domain))) throw new Error("PRODUCTION_ARTIFACT_CAPABILITY_MISMATCH"); const intentPresent = observedDomains.includes("intent"); if (intentPresent && (!/\bif\s*\([^)]*intent/iu.test(capabilityAuthority) || !/@napplet\/sdk/u.test(capabilityAuthority))) throw new Error("PRODUCTION_ARTIFACT_INTENT_BOUNDARY_DENIED");
-    return Object.freeze({ purpose: { kind: "focused", statements: [purpose] }, surface: { hasBackend: false, hasSecondPurpose: false, serviceWorker: false, dynamicAuthority: false }, dependencies: { appOwnedSignerOrRelay: false, privateNappletImport: false }, capabilities: { declaredHard, observedDomains, optionalIntentPresenceRead: intentPresent, intentUsedThroughSdk: intentPresent }, upstream: { scanner: { verdict: "pass", checkId: "upstream:cli-verify" }, conformance: { verdict: "pass", checkId: "upstream:chromium-conformance" } } });
+    const declaredHard: readonly string[] = declaration?.required ?? [...new Set(request.sourceProposalFiles?.find(file => file.path === "src/capabilities.json")?.content.match(/\b(?:storage|intent)\b/gu) ?? [])];
+    const observedDomains: readonly string[] = ["storage", "intent", ...(declaration ? ["gamepad"] : [])].filter(domain => new RegExp(`\\b${domain}\\b`, "iu").test(capabilityAuthority));
+    if (observedDomains.some(domain => !declaredHard.includes(domain) && !declaration?.optional.includes(domain)) || declaredHard.some(domain => !observedDomains.includes(domain))) throw new Error("PRODUCTION_ARTIFACT_CAPABILITY_MISMATCH"); const intentPresent = observedDomains.includes("intent"); if (intentPresent && (!/\bif\s*\([^)]*intent/iu.test(capabilityAuthority) || !/@napplet\/sdk/u.test(capabilityAuthority))) throw new Error("PRODUCTION_ARTIFACT_INTENT_BOUNDARY_DENIED");
+    return Object.freeze({ purpose: { kind: "focused", statements: [purpose] }, surface: { hasBackend: false, hasSecondPurpose: false, serviceWorker: false, dynamicAuthority: false }, dependencies: { appOwnedSignerOrRelay: false, privateNappletImport: false }, capabilities: { declaredHard, ...(declaration ? { declaredOptional: declaration.optional } : {}), observedDomains, optionalIntentPresenceRead: intentPresent, intentUsedThroughSdk: intentPresent }, upstream: { scanner: { verdict: "pass", checkId: "upstream:cli-verify" }, conformance: { verdict: "pass", checkId: "upstream:chromium-conformance" } } });
   }
 }

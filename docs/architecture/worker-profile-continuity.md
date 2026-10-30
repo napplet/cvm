@@ -103,9 +103,9 @@ original records reachable; it does not approve a different executable profile.
 
 ## Retained job executables
 
-Mounted `worker.retainedProfiles` holds at most eight pinned legacy aggregate
+Mounted `worker.retainedProfiles` holds at most eight pinned approved
 image/toolchain pairs alongside the current default. Each retained entry has
-`artifactContract: "legacy-aggregate-v1"`. Omitting the field preserves existing
+`artifactContract: "legacy-aggregate-v1"` or `"nip5d-direct-v1"`. Omitting the retained-profiles field preserves existing
 configuration. Duplicate images, floating tags, unknown fields and contracts are
 refused. The controller/operator preparation must carry the approved original
 profiles into the next candidate configuration before its authorization; customers
@@ -128,11 +128,27 @@ artifact evidence is rewritten. Uncertain job and restore operations keep the
 existing query-only recovery path. These changes do not make the internal index
 a customer publication/preview authorization endpoint.
 
-The prepared direct-artifact image remains unselected. Its policy/publication
-composition is not enabled through a legacy retained entry. Explicit post-grace
-resume still needs to select original approved compatibility and capacity before
-funding or allocation. A successful local protocol regression is not a live
-provider, 30-day resume, host or release-certification result.
+The default worker may explicitly declare `artifactContract` as
+`legacy-aggregate-v1` or `nip5d-direct-v1`. Omission preserves legacy behavior.
+Retained profiles carry their explicit contract with the original image and
+toolchain. The router uses the durable original provider record to select that
+approved executable; requests and checkpoints cannot nominate a contract.
+An explicit direct configuration changes candidate material and requires fresh
+matching preparation, evidence and authorization before selection.
+
+For direct jobs, private request preparation carries the authenticated original
+bounded purpose in the existing `idea` field. The core checks that preparation
+cannot change charged ownership, source, version, policy or purpose. Legacy
+requests keep their original omission and hashes. Direct jobs use the direct
+verifier, structured receipts and sealed archive version 3; legacy jobs keep
+their existing verifier and encoding. Unsupported capabilities fail the CVM
+policy instead of disappearing from the declaration. No contract fallback
+reinterprets a direct artifact hash as a legacy aggregate.
+
+The prepared direct image remains unselected in real configuration. Its owner
+artifact reader, preview/publication composition and protected host/signing/Paja
+evidence still need completion. A successful local build regression is not a
+live provider, 30-day resume, host or release-certification result.
 
 For a worker-default rollback, keep this control-plane reader installed, select
 the previous approved default and retain the other approved image/toolchain in
@@ -164,3 +180,9 @@ keeps its deliberately conflicting proposal and verifies failed-build billing.
 Neither mode supplies live provider evidence. The legacy Chromium report may
 skip manifest, wire and teardown checks; those skips remain explicit and do not
 satisfy current direct-profile, publication or release certification.
+
+For the corresponding direct-profile local integration, also set
+`NAPPLET_CVM_TEST_REAL_WORKER_CONTRACT=nip5d-direct-v1` and use an exact current
+direct-profile image ID. This requires the structured wire check to pass and
+verifies the actual HTML hash, capability tags and bounded manifest purpose.
+Unsigned manifest and unmeasured lifecycle checks remain separate live gates.

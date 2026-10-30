@@ -6,7 +6,7 @@ import { bindAccountingRealmPool, createAccountingRealm } from "../../src/fundin
 import { ContinuationService } from "../../src/continuity/continuation-service";
 import type { PendingActionIntent } from "../../src/continuity/contracts";
 import type { ContinuationFundingStore } from "../../src/persistence/funding-store";
-import { StartSessionCommandSchema } from "../../src/phase-04/metered-generation-service";
+import { StartSessionCommandSchema, ReviseSessionCommandSchema } from "../../src/phase-04/metered-generation-service";
 import { GcsObjectStoreAdapter, type VersionedObjectClientPort } from "../../src/continuity/object-store";
 import { PostgresSqlFundingStore, type PostgresSqlPool } from "../../src/persistence/postgres-sql-funding-store";
 import { canonicalJson } from "../../src/promotion/schema";
@@ -63,12 +63,16 @@ integration("production quote preparation authenticates an encrypted original ch
     await admin.query("INSERT INTO production_real.session_cap_holds(hold_id,account_id,reference,requested_cap,held_amount,state) VALUES('hold:one',$1,'admission:one',50,0,'active')", [accountId]);
     await admin.query("INSERT INTO production_real.admissions(admission_id,account_id,reference,capacity_reference,state) VALUES('admission:one',$1,'admission:one','capacity:fixture','accepted')", [accountId]);
 
-    const values = new Map<string, { bytes: Uint8Array; checksum: string }>(); let objectReads = 0, allocations = 0;
+    const values = new Map<string, { bytes: Uint8Array; checksum: string }>(); let objectReads = 0, allocations = 0, deletions = 0;
     const objectClient: VersionedObjectClientPort = {
       async createIfAbsent(value) { if (values.has(value.key)) throw new Error("OBJECT_ALREADY_EXISTS"); values.set(value.key, { bytes: new Uint8Array(value.bytes), checksum: value.checksum }); return { generation: 1, checksum: value.checksum }; },
       async findExactByKey(value) { const item = values.get(value.key); return item?.checksum === value.checksum ? { generation: 1, checksum: item.checksum } : undefined; },
       async readGeneration(value) { objectReads++; const item = values.get(value.key); return item && value.generation === 1 && item.checksum === value.expectedChecksum ? { generation: 1, checksum: item.checksum, bytes: new Uint8Array(item.bytes) } : undefined; },
-      async scheduleGenerationDeletion() { throw new Error("UNEXPECTED_QUOTE_DELETION"); },
+      async scheduleGenerationDeletion(value) {
+        const item = values.get(value.key);
+        if (!item || value.generation !== 1 || item.checksum !== value.expectedChecksum || Date.parse(value.deleteAfter) > now) throw new Error("FIXTURE_DELETION_BINDING_DENIED");
+        values.delete(value.key); deletions++; return { generation: 1, checksum: item.checksum };
+      },
     };
     const vertexJournal = new PostgresOperationJournal(pool, { namespace: "resume-preparer-vertex", scopeSha256: "a".repeat(64) });
     const checkpoint = new ProductionCheckpointCoordinator({ pool, objectStore: new GcsObjectStoreAdapter({ config: { bucket: "resume-preparer-fixture", projectId: "fixture" }, client: objectClient }),
@@ -131,5 +135,61 @@ integration("production quote preparation authenticates an encrypted original ch
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.resume_pricing_quotes")).rows[0].count).toBe(1);
     for (const table of ["action_budget_reservations", "provider_operations", "ledger_entries"]) expect((await admin.query(`SELECT count(*)::int AS count FROM production_real.${table}`)).rows[0].count).toBe(0);
     expect(allocations).toBe(0);
+    expect(deletions).toBe(0);
+
+    // A revision's delayed checkpoint expires later than the original SQL
+    // command envelope. Retain its authenticated command for that final window.
+    now = startedAt;
+    const revisionCommand = ReviseSessionCommandSchema.parse({ principal, sessionId: "session:revision", admissionReference: command.admissionReference,
+      idempotencyKey: "revision:one", expectedVersion: 1, maximum: "50", policyVersion: command.policyVersion, revision: "Make the existing counter compact." });
+    await admin.query("INSERT INTO production_real.metered_sessions(id,account_id,admission_reference,profile_id,price_card_id,version,current_verified_artifact_version,state) VALUES($1,$2,$3,$4,$5,1,1,'verified')",
+      [revisionCommand.sessionId, accountId, command.admissionReference, originalPricing.profile.id, originalPricing.card.id]);
+    const revisionIntent: PendingActionIntent = { ...pending, sessionId: revisionCommand.sessionId, idempotencyKey: revisionCommand.idempotencyKey,
+      fingerprint: "d".repeat(64), reference: "pending:revision", actionKind: "revise_session", boundedPayloadHash: hash({ revision: revisionCommand.revision }), expectedSessionVersion: 1, expectedArtifactVersion: 1 };
+    expect(await continuation.pauseForFunding({ intent: revisionIntent, command: revisionCommand })).toMatchObject({ status: "needs_top_up" });
+    const revisionPause = await store.findContinuationPause(accountId, revisionCommand.sessionId, 1);
+    if (!revisionPause?.liveLeaseToken || !revisionPause.intent.protectedCommand) throw new Error("EXPECTED_PROTECTED_REVISION");
+    const revisionLease = revisionPause.liveLeaseToken;
+    const revisionOperationId = `operation:${hash({ accountId, key: revisionCommand.idempotencyKey, profile: revisionIntent.profileId }).slice(0, 24)}`;
+    await vertexJournal.claim(`vertex-generation-settlement:${revisionOperationId}`, createHash("sha256").update(JSON.stringify({ accountId, operationId: revisionOperationId })).digest("hex"),
+      { ...settlement, operationId: revisionOperationId });
+    now = revisionPause.graceDeadlineMs + 5000;
+    const revisionCheckpointing = await store.transact(accountId, tx => tx.beginDeadlineCheckpoint({ sessionId: revisionCommand.sessionId, pauseGeneration: 1, liveLeaseToken: revisionLease }));
+    const revisionSealed = await checkpoint.seal({ checkpointId: "checkpoint:revision", accountId, sessionId: revisionCommand.sessionId, pauseGeneration: 1,
+      sessionVersion: 1, actionVersion: 1, artifactVersion: 1, workspaceVersion: 1, workspaceLineage: "workspace:revision",
+      action: { actionId: "action:prior", operationId: "operation:prior", ledgerReference: command.admissionReference, pendingActionReference: revisionIntent.reference, idempotencyKey: revisionCommand.idempotencyKey },
+      archive: new TextEncoder().encode("bounded worker workspace fixture"), inventory: ["harness_state", "workspace", "artifact_lineage", "validation_evidence", "financial_action", "pending_action", "compatibility_metadata"],
+      evidenceSha256: "e".repeat(64), compatibility: { policyVersion: revisionIntent.policyVersion, modelIdentity: originalPricing.profile.id, nappletSdkIdentity: originalPricing.card.id, toolchainIdentity: revisionIntent.toolchainId },
+      retentionUntil: new Date(now + 2_592_000_000).toISOString() });
+    const custodyInput = { checkpointId: revisionSealed.manifest.checkpointId, accountId, sessionId: revisionCommand.sessionId, intent: revisionCheckpointing.intent };
+    await Promise.all([checkpoint.retainPendingCommand(custodyInput), checkpoint.retainPendingCommand(custodyInput), checkpoint.retainPendingCommand(custodyInput)]);
+    await store.transact(accountId, tx => tx.commitDeadlineCheckpoint({ accountId, sessionId: revisionCommand.sessionId, pauseGeneration: 1, checkpointId: revisionSealed.manifest.checkpointId,
+      expectedSessionVersion: 1, expectedArtifactVersion: 1, manifestReference: `checkpoint-manifest:${revisionSealed.manifest.checkpointId}:${revisionSealed.envelope.manifestSha256}`,
+      objectKey: revisionSealed.envelope.object.key, objectGeneration: String(revisionSealed.envelope.object.generation), objectChecksum: revisionSealed.envelope.object.checksum,
+      keyReference: revisionSealed.envelope.crypto.keyReference, compatibilityIdentity: hash(revisionSealed.manifest.compatibility), checkpointCommittedAtMs: Date.parse(revisionSealed.manifest.committedAt) }));
+    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.checkpoint_crypto_records WHERE checkpoint_id LIKE 'checkpoint-command:%'")).rows[0].count).toBe(1);
+    const freshCheckpoint = new ProductionCheckpointCoordinator({ pool, objectStore: new GcsObjectStoreAdapter({ config: { bucket: "resume-preparer-fixture", projectId: "fixture" }, client: objectClient }),
+      journal: new PostgresOperationJournal(pool, { namespace: "resume-preparer-checkpoint", scopeSha256: "b".repeat(64) }), kekPath: "/mounted/fixture-kek", readKekFile: async () => Buffer.alloc(32, 9).toString("base64"), now: () => now });
+    now = revisionPause.intent.protectedCommand.retentionUntilMs + 1;
+    await expect(freshCheckpoint.pendingCommands.open(revisionCheckpointing.intent)).rejects.toThrow();
+    expect(await freshCheckpoint.readRetainedPendingCommand(custodyInput)).toEqual(revisionCommand);
+    await expect(freshCheckpoint.readRetainedPendingCommand({ ...custodyInput, accountId: "account:foreign" })).rejects.toThrow("CHECKPOINT_COMMAND_CUSTODY_BINDING_DENIED");
+    await expect(freshCheckpoint.readRetainedPendingCommand({ ...custodyInput, intent: { ...custodyInput.intent, commandSha256: "f".repeat(64) } })).rejects.toThrow("CHECKPOINT_COMMAND_CUSTODY_BINDING_DENIED");
+    const finalPricing = await resumePricingMaterial(now, "profile:final-window"); await registerProductionPricing({ pool, ...finalPricing });
+    const finalPreparer = new ProductionResumePricingPreparer({ pool, store, quotes, checkpoint: freshCheckpoint, vertexJournal, currentPricing: finalPricing,
+      compatibility: { policyVersion: pending.policyVersion, acceptedToolchains: [pending.toolchainId] }, now: () => now });
+    const finalQuote = await finalPreparer.prepare({ principal: { id: accountId }, sessionId: revisionCommand.sessionId, checkpointId: revisionSealed.manifest.checkpointId,
+      expectedSessionVersion: 1, expectedCheckpointVersion: 1, idempotencyKey: "quote:final-window" });
+    expect(finalQuote).toMatchObject({ status: "quoted", expiresAtMs: Date.parse(revisionSealed.manifest.retentionUntil) });
+    const expirationInput = { checkpointId: revisionSealed.manifest.checkpointId, accountId, sessionId: revisionCommand.sessionId };
+    await expect(freshCheckpoint.destroyExpired(expirationInput)).rejects.toThrow("CHECKPOINT_DELETE_BINDING_REQUIRED");
+    now = Date.parse(revisionSealed.manifest.retentionUntil);
+    await expect(freshCheckpoint.readRetainedPendingCommand(custodyInput)).rejects.toThrow("CHECKPOINT_COMMAND_CUSTODY_BINDING_DENIED");
+    await freshCheckpoint.destroyExpired(expirationInput); await freshCheckpoint.destroyExpired(expirationInput);
+    expect(await freshCheckpoint.observeDestroyed(expirationInput)).toBeTrue();
+    expect((await store.findContinuationPause(accountId, revisionCommand.sessionId, 1))?.intent.protectedCommand).toBeUndefined();
+    expect((await admin.query("SELECT state,wrapped_dek,octet_length(ciphertext)::int AS bytes FROM production_real.checkpoint_crypto_records WHERE checkpoint_id LIKE 'checkpoint-command:%'")).rows).toEqual([{ state: "destroyed", wrapped_dek: null, bytes: 0 }]);
+    expect(deletions).toBe(1);
+    for (const table of ["action_budget_reservations", "provider_operations", "ledger_entries"]) expect((await admin.query(`SELECT count(*)::int AS count FROM production_real.${table}`)).rows[0].count).toBe(0);
   } finally { await runtime?.end(); await admin?.end(); await docker(["rm", "--force", name]).catch(() => undefined); }
 }, 120_000);

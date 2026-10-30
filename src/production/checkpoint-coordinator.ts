@@ -8,6 +8,8 @@ import { canonicalJson } from "../promotion/schema";
 import { assertPostgresOperationJournal, type PostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
 import { ProtectedContinuationCommands } from "../continuity/protected-command";
 import { MountedKekCheckpointCrypto, loadMountedCheckpointKek } from "./checkpoint-crypto";
+import { PendingActionIntentSchema, type PendingActionIntent } from "../continuity/contracts";
+import type { GenerationCommand } from "../phase-04/metered-generation-service";
 
 const Identity = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]*$/u);
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -114,10 +116,78 @@ export class ProductionCheckpointCoordinator {
     return service.restore(material.envelope, material.manifest);
   }
 
+  /** Preserve a revision's command through the workspace checkpoint's actual
+   * retention deadline. Original envelopes/archives remain byte-for-byte intact.
+   * Only the coordinator owns this companion; it never enters a worker archive. */
+  async retainPendingCommand(input: Readonly<{ checkpointId: string; accountId: string; sessionId: string; intent: PendingActionIntent }>): Promise<void> {
+    const stored = await this.#find(Identity.parse(input.checkpointId));
+    if (!stored || stored.state !== "retained" || stored.manifest.accountId !== input.accountId || stored.manifest.sessionId !== input.sessionId
+      || Date.parse(stored.manifest.retentionUntil) <= (this.input.now ?? Date.now)())
+      throw new Error("CHECKPOINT_COMMAND_CUSTODY_BINDING_DENIED");
+    const custody = this.#commandCustody(stored.manifest, input.intent);
+    const existing = await this.#crypto.readSealed(custody.checkpointId);
+    if (!existing) {
+      const command = await this.pendingCommands.open(input.intent);
+      const plaintext = canonicalBytes(command);
+      try {
+        if (plaintext.byteLength > 65_536) throw new Error("CHECKPOINT_COMMAND_CUSTODY_TOO_LARGE");
+        await this.#crypto.seal({ checkpointId: custody.checkpointId, plaintext, additionalData: custody.additionalData,
+          binding: { accountId: input.accountId, sessionId: input.sessionId, actionId: stored.manifest.action.actionId,
+            operationId: stored.manifest.action.operationId, retentionUntil: stored.manifest.retentionUntil } });
+      } finally { plaintext.fill(0); }
+    }
+    if (!await this.#crypto.readSealed(custody.checkpointId)) throw new Error("CHECKPOINT_COMMAND_CUSTODY_READBACK_REQUIRED");
+    await this.readRetainedPendingCommand(input);
+  }
+
+  async readRetainedPendingCommand(input: Readonly<{ checkpointId: string; accountId: string; sessionId: string; intent: PendingActionIntent }>): Promise<GenerationCommand> {
+    const stored = await this.#find(Identity.parse(input.checkpointId));
+    if (!stored || stored.state !== "retained" || stored.manifest.accountId !== input.accountId || stored.manifest.sessionId !== input.sessionId
+      || Date.parse(stored.manifest.retentionUntil) <= (this.input.now ?? Date.now)())
+      throw new Error("CHECKPOINT_COMMAND_CUSTODY_BINDING_DENIED");
+    const custody = this.#commandCustody(stored.manifest, input.intent);
+    const sealed = await this.#crypto.readSealed(custody.checkpointId);
+    // Legacy snapshots may still have their original valid envelope. Missing
+    // historical authority is never reconstructed after its expiry.
+    if (!sealed) return this.pendingCommands.open(input.intent);
+    if (sealed.aadSha256 !== sha256(custody.additionalData) || sealed.retentionUntil !== stored.manifest.retentionUntil)
+      throw new Error("CHECKPOINT_COMMAND_CUSTODY_BINDING_DENIED");
+    const plaintext = await this.#crypto.open({ keyReference: sealed.keyReference, nonce: sealed.nonce, ciphertext: sealed.ciphertext, additionalData: custody.additionalData });
+    try {
+      if (plaintext.byteLength > 65_536) throw new Error("CHECKPOINT_COMMAND_CUSTODY_TOO_LARGE");
+      return await this.pendingCommands.validateRetained(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(plaintext)), input.intent);
+    } finally { plaintext.fill(0); }
+  }
+
+  #commandCheckpointId(manifest: CheckpointManifest): string {
+    return `checkpoint-command:${sha256(canonicalBytes({ checkpointId: manifest.checkpointId, manifestSha256: sha256(canonicalBytes(manifest)) }))}`;
+  }
+
+  #commandCustody(manifest: CheckpointManifest, rawIntent: PendingActionIntent) {
+    const intent = PendingActionIntentSchema.parse(rawIntent);
+    if (manifest.schemaVersion !== "checkpoint-manifest-v1" || manifest.payloadKind !== undefined || !intent.commandSha256
+      || manifest.accountId !== intent.accountId || manifest.sessionId !== intent.sessionId
+      || manifest.sessionVersion !== intent.expectedSessionVersion || manifest.artifactVersion !== intent.expectedArtifactVersion
+      || manifest.action.pendingActionReference !== intent.reference || manifest.action.idempotencyKey !== intent.idempotencyKey
+      || manifest.action.ledgerReference !== intent.admissionReference || manifest.compatibility.policyVersion !== intent.policyVersion
+      || manifest.compatibility.modelIdentity !== intent.profileId || manifest.compatibility.nappletSdkIdentity !== intent.priceCardId
+      || manifest.compatibility.toolchainIdentity !== intent.toolchainId) throw new Error("CHECKPOINT_COMMAND_CUSTODY_BINDING_DENIED");
+    return { checkpointId: this.#commandCheckpointId(manifest), additionalData: canonicalBytes({ schemaVersion: "checkpoint-pending-command-custody-v1",
+      checkpointId: manifest.checkpointId, manifestSha256: sha256(canonicalBytes(manifest)), accountId: intent.accountId, sessionId: intent.sessionId,
+      pendingFingerprint: intent.fingerprint, commandSha256: intent.commandSha256, retentionUntil: manifest.retentionUntil }) };
+  }
+
   /** Retention reaper; it only destroys the original key and exact GCS generation. */
   async destroyExpired(input: Readonly<{ checkpointId: string; accountId: string; sessionId: string }>): Promise<void> {
     const stored = await this.#find(Identity.parse(input.checkpointId));
     if (!stored || stored.manifest.accountId !== input.accountId || stored.manifest.sessionId !== input.sessionId || Date.parse(stored.manifest.retentionUntil) > (this.input.now ?? Date.now)()) throw new Error("CHECKPOINT_DELETE_BINDING_REQUIRED");
+    const companion = await this.#crypto.readSealed(this.#commandCheckpointId(stored.manifest));
+    if (companion) await this.#crypto.destroy(companion.keyReference);
+    const erasure = await this.#pool.connect();
+    try {
+      await erasure.query("UPDATE production_real.continuation_pauses SET intent_json=intent_json-'protectedCommand' WHERE account_id=$1 AND session_id=$2 AND pause_generation=$3 AND intent_json ? 'protectedCommand'",
+      [input.accountId, input.sessionId, stored.manifest.pauseGeneration]);
+    } finally { erasure.release(); }
     if (stored.state === "destroyed") {
       if (!await this.observeDestroyed(input)) throw new Error("CHECKPOINT_DELETE_RECONCILIATION_REQUIRED");
       return;
@@ -150,11 +220,19 @@ export class ProductionCheckpointCoordinator {
   async observeDestroyed(input: Readonly<{ checkpointId: string; accountId: string; sessionId: string }>): Promise<boolean> {
     const stored = await this.#find(Identity.parse(input.checkpointId));
     if (!stored || stored.manifest.accountId !== input.accountId || stored.manifest.sessionId !== input.sessionId || stored.state !== "destroyed") return false;
-    const [object, keyDestroyed] = await Promise.all([
+    const companion = await this.#crypto.readSealed(this.#commandCheckpointId(stored.manifest));
+    const erasure = await this.#pool.connect();
+    let wrappedCommandRetained: boolean;
+    try {
+      wrappedCommandRetained = (await erasure.query<{ retained: boolean }>("SELECT EXISTS(SELECT 1 FROM production_real.continuation_pauses WHERE account_id=$1 AND session_id=$2 AND pause_generation=$3 AND intent_json ? 'protectedCommand') AS retained",
+      [input.accountId, input.sessionId, stored.manifest.pauseGeneration])).rows[0]?.retained !== false;
+    } finally { erasure.release(); }
+    const [object, keyDestroyed, companionDestroyed] = await Promise.all([
       this.input.objectStore.readExact(stored.object),
       this.#crypto.isDestroyed(stored.keyReference),
+      companion ? this.#crypto.isDestroyed(companion.keyReference) : Promise.resolve(true),
     ]);
-    return object === undefined && keyDestroyed;
+    return object === undefined && keyDestroyed && companionDestroyed && !wrappedCommandRetained;
   }
 
   /** The first durable object-write CAS owns upload. Every later process

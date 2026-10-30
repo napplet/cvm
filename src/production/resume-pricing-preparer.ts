@@ -94,7 +94,7 @@ export class ProductionResumePricingPreparer {
     try {
       command = manifest.payloadKind === "pending_command"
         ? await this.input.checkpoint.pendingCommands.validateRetained(validatePendingCommandCheckpointArchive(archive, intent), intent)
-        : await this.input.checkpoint.pendingCommands.open(intent);
+        : await this.input.checkpoint.readRetainedPendingCommand({ checkpointId: request.checkpointId, accountId, sessionId: request.sessionId, intent });
     } finally { archive.fill(0); }
     const originalPricing = await readProductionPendingPricing({ pool: this.input.pool, intent, pauseGeneration: checkpoint.pauseGeneration });
     const originalOperationId = `operation:${hash({ accountId, key: intent.idempotencyKey, profile: intent.profileId }).slice(0, 24)}`;

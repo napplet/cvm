@@ -28,10 +28,15 @@ import { ProductionSourceProposalStore } from "../../src/production/source-propo
 import { ProviderOperationIntentSchema, NormalizedUsageReceiptSchema } from "../../src/model/model-gateway";
 import { z } from "zod";
 import { ProductionPricedContinuationWorkers } from "../../src/production/priced-continuation-workers";
-import { ProductionWorkerOwnershipResolver } from "../../src/production/worker-bridge";
+import { ProductionWorkerBridge, ProductionWorkerOwnershipResolver } from "../../src/production/worker-bridge";
 import type { CapacityReservation, ReadyCapacityPort } from "../../src/funding/funded-admission";
 import { pricedRestoreBinding } from "../../src/production/priced-restore-binding";
 import { ProductionPricedContinuationRestores } from "../../src/production/priced-continuation-restores";
+import { ProductionWorkerRequestStore } from "../../src/production/worker-request-store";
+import { createWorkerDeploymentClients } from "../../src/release/deployment/worker-clients";
+import { createPostgresWorkerOperationJournal } from "../../src/release/deployment/postgres-provider-journals";
+import { PRODUCTION_WORKER_POLICY } from "../../src/worker-adapters/production-worker-policy";
+import { WorkerRunRequestSchema } from "../../src/phase-02/contracts";
 
 const integration = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
 const hash = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex");
@@ -53,7 +58,7 @@ function sqlPool(native: Pool, loseCommit?: () => boolean, failRestorePauseWrite
   }; } };
 }
 
-integration("production quote preparation authenticates an encrypted original checkpoint and expired original pricing without spending", async () => {
+integration("owned encrypted resume authenticates pricing, fences spending and restores command/workspace originals without redispatch", async () => {
   const name = `cvm-resume-preparer-${crypto.randomUUID().replaceAll("-", "")}`;
   let admin: Pool | undefined, runtime: Pool | undefined;
   try {
@@ -212,6 +217,42 @@ integration("production quote preparation authenticates an encrypted original ch
     for (const table of ["action_budget_reservations", "provider_operations", "ledger_entries"]) expect((await admin.query(`SELECT count(*)::int AS count FROM production_real.${table}`)).rows[0].count).toBe(0);
     // Exercise the actual shared money transaction and provider fence. These
     // remain local protocol fixtures; no model request or worker is executed.
+    // Independent in-progress revision workspace, not the expired/deleted
+    // retention scenario above. Its archive is valid for the real job parser.
+    now = startedAt;
+    const workspaceToolchain = "d".repeat(64);
+    const bytesSha = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
+    const workspaceCommand = ReviseSessionCommandSchema.parse({ ...revisionCommand, sessionId: "session:workspace-resume", idempotencyKey: "revision:workspace-resume" });
+    await admin.query("INSERT INTO production_real.metered_sessions(id,account_id,admission_reference,profile_id,price_card_id,version,current_verified_artifact_version,state) VALUES($1,$2,$3,$4,$5,1,1,'verified')",
+      [workspaceCommand.sessionId, accountId, command.admissionReference, originalPricing.profile.id, originalPricing.card.id]);
+    const workspaceIntent: PendingActionIntent = { ...revisionIntent, sessionId: workspaceCommand.sessionId, idempotencyKey: workspaceCommand.idempotencyKey,
+      fingerprint: hash({ workspace: workspaceCommand.idempotencyKey }), reference: "pending:workspace-resume" };
+    await continuation.pauseForFunding({ intent: workspaceIntent, command: workspaceCommand });
+    const workspacePause = await store.findContinuationPause(accountId, workspaceCommand.sessionId, 1);
+    if (!workspacePause?.liveLeaseToken) throw new Error("EXPECTED_WORKSPACE_PAUSE");
+    const workspaceLease = workspacePause.liveLeaseToken;
+    const workspaceOperation = `operation:${hash({ accountId, key: workspaceCommand.idempotencyKey, profile: workspaceIntent.profileId }).slice(0, 24)}`;
+    await vertexJournal.claim(`vertex-generation-settlement:${workspaceOperation}`, createHash("sha256").update(JSON.stringify({ accountId, operationId: workspaceOperation })).digest("hex"), { ...settlement, operationId: workspaceOperation });
+    now = workspacePause.graceDeadlineMs + 1;
+    const workspacePausing = await store.transact(accountId, tx => tx.beginDeadlineCheckpoint({ sessionId: workspaceCommand.sessionId, pauseGeneration: 1, liveLeaseToken: workspaceLease }));
+    const workspaceSource = { version: 1, actionId: "action:in-progress-workspace", sessionId: workspaceCommand.sessionId, expectedVersion: 1,
+      proposalSha256: "c".repeat(64), toolchainSha256: workspaceToolchain, deadlineEpochMs: 1, files: [{ path: "src/main.ts", content: "document.body.textContent = 'One counter';" }] };
+    const workspaceFiles = [{ path: "index.html", bytesBase64: Buffer.from("<html></html>").toString("base64"), sha256: bytesSha("<html></html>"), size: 13 }];
+    const workspaceBytes = Buffer.from(canonicalJson({ version: 1, source: workspaceSource, toolchainSha256: workspaceToolchain,
+      artifact: { version: 1, jobId: bytesSha(canonicalJson(workspaceSource)), proposalSha256: workspaceSource.proposalSha256, toolchainSha256: workspaceToolchain,
+        files: workspaceFiles, commandEvidence: Array.from({ length: 8 }, () => ({ argv: ["contract-fixture"], exitCode: 0, stdout: "", stderr: "", elapsedMs: 1 })) } }));
+    const workspaceSealed = await checkpoint.seal({ checkpointId: "checkpoint:workspace-resume", accountId, sessionId: workspaceCommand.sessionId, pauseGeneration: 1,
+      sessionVersion: 1, actionVersion: 1, artifactVersion: 1, workspaceVersion: 1, workspaceLineage: `workspace:${workspaceCommand.sessionId}`,
+      action: { actionId: workspaceSource.actionId, operationId: "operation:in-progress-workspace", ledgerReference: command.admissionReference,
+        pendingActionReference: workspaceIntent.reference, idempotencyKey: workspaceCommand.idempotencyKey }, archive: new Uint8Array(workspaceBytes),
+      inventory: ["harness_state", "workspace", "artifact_lineage", "validation_evidence", "financial_action", "pending_action", "compatibility_metadata"],
+      evidenceSha256: "e".repeat(64), compatibility: { policyVersion: workspaceIntent.policyVersion, modelIdentity: originalPricing.profile.id,
+        nappletSdkIdentity: originalPricing.card.id, toolchainIdentity: workspaceIntent.toolchainId }, retentionUntil: new Date(now + 2_592_000_000).toISOString() });
+    await checkpoint.retainPendingCommand({ checkpointId: workspaceSealed.manifest.checkpointId, accountId, sessionId: workspaceCommand.sessionId, intent: workspacePausing.intent });
+    await store.transact(accountId, tx => tx.commitDeadlineCheckpoint({ accountId, sessionId: workspaceCommand.sessionId, pauseGeneration: 1, checkpointId: workspaceSealed.manifest.checkpointId,
+      expectedSessionVersion: 1, expectedArtifactVersion: 1, manifestReference: `checkpoint-manifest:${workspaceSealed.manifest.checkpointId}:${workspaceSealed.envelope.manifestSha256}`,
+      objectKey: workspaceSealed.envelope.object.key, objectGeneration: String(workspaceSealed.envelope.object.generation), objectChecksum: workspaceSealed.envelope.object.checksum,
+      keyReference: workspaceSealed.envelope.crypto.keyReference, compatibilityIdentity: hash(workspaceSealed.manifest.compatibility), checkpointCommittedAtMs: Date.parse(workspaceSealed.manifest.committedAt) }));
     const acceptMigration = await Bun.file("migrations/phase-07/010_production_priced_continuations.sql").text();
     await admin.query(acceptMigration); await admin.query(acceptMigration);
     const workersMigration = await Bun.file("migrations/phase-07/011_production_priced_continuation_workers.sql").text();
@@ -451,6 +492,7 @@ integration("production quote preparation authenticates an encrypted original ch
     // Protocol-only worker fixture. Durable SQL intents and the real resolver
     // are exercised; no external Modal/Fly worker is allocated by this test.
     let reserves = 0, observes = 0;
+    let fixtureProvider: "modal" | "fly" = "modal";
     const readyWorkers = new Map<string, CapacityReservation>();
     const capacityJournal = new PostgresOperationJournal(pool, { namespace: "fixture-resume-capacity", scopeSha256: "9".repeat(64) });
     const capacity: ReadyCapacityPort = {
@@ -462,7 +504,7 @@ integration("production quote preparation authenticates an encrypted original ch
             imageDigest: `sha256:${"a".repeat(64)}`, readinessProbeDigest: `sha256:${"b".repeat(64)}`, readyMonotonicMs: 100 } };
         readyWorkers.set(value.intentReference, ready);
         await capacityJournal.claim(`capacity-intent:${createHash("sha256").update(value.intentReference).digest("hex")}`, hash(value),
-          { ...value, reference, workerOperationId: `capacity-${hash(value).slice(0, 40)}`, provider: "modal", deadlineEpochMs: Date.parse(expiresAt) });
+          { ...value, reference, workerOperationId: `capacity-${hash(value).slice(0, 40)}`, provider: fixtureProvider, deadlineEpochMs: Date.parse(expiresAt) });
         throw new Error("WORKER_RESERVE_ACK_LOST");
       },
       async observe(value) {
@@ -589,5 +631,91 @@ integration("production quote preparation authenticates an encrypted original ch
     await expect(resolver.resolveWorker(workerRequest)).rejects.toThrow("PRODUCTION_WORKER_ACTION_OWNER_NOT_FOUND");
     expect(reserves).toBe(1);
     expect(modelPosts).toBe(2);
+    // Full encrypted workspace -> real bridge -> native restore claim and
+    // evidence -> durable SQL proof. Only the external provider RPC is local.
+    const workspaceQuote = await refreshedPreparer.prepare({ principal: { id: accountId }, sessionId: workspaceCommand.sessionId,
+      checkpointId: workspaceSealed.manifest.checkpointId, expectedSessionVersion: 1, expectedCheckpointVersion: 1, idempotencyKey: "prepare:workspace-native" });
+    if (workspaceQuote.status !== "quoted") throw new Error(`EXPECTED_NATIVE_WORKSPACE_QUOTE:${workspaceQuote.code}`);
+    const workspaceResume = { principal: { id: accountId }, sessionId: workspaceCommand.sessionId, checkpointId: workspaceSealed.manifest.checkpointId,
+      expectedSessionVersion: 1, expectedCheckpointVersion: 1, idempotencyKey: "resume:workspace-native", approvePendingAction: true,
+      capApprovalReference: workspaceCommand.admissionReference, pendingAction: workspaceQuote.pendingAction,
+      pricingApproval: { quoteReference: workspaceQuote.quoteReference, quoteSha256: workspaceQuote.quoteSha256, maximumSat: workspaceQuote.pricing.maximumSat } };
+    const workspaceClaim = (await refreshedAcceptance.claim(workspaceResume)).claim;
+    fixtureProvider = "fly";
+    const workspaceAllocation = await workerAuthority.allocate(accountId, workspaceResume.idempotencyKey);
+    if (workspaceAllocation.status !== "available") throw new Error("EXPECTED_WORKSPACE_CAPACITY");
+    const workspaceCapacityIntent = (await refreshedAcceptance.claimWorker(accountId, workspaceResume.idempotencyKey)).workerIntent;
+    const workerOperationId = `capacity-${hash({ intentReference: workspaceCapacityIntent.capacityIntentReference, expectedSessionBindingDigest: workspaceCapacityIntent.sessionBindingDigest }).slice(0, 40)}`;
+    const nativeWorkerJournal = new PostgresOperationJournal(pool, { namespace: "fixture-workspace-workers", scopeSha256: "4".repeat(64) });
+    const nativeJobJournal = new PostgresOperationJournal(pool, { namespace: "fixture-workspace-jobs", scopeSha256: "4".repeat(64) });
+    const nativeRequestJournal = new PostgresOperationJournal(pool, { namespace: "fixture-workspace-requests", scopeSha256: "4".repeat(64) });
+    const nativeWorkerRecords = createPostgresWorkerOperationJournal(nativeWorkerJournal);
+    await nativeWorkerRecords.claim({ operationId: workerOperationId, requestSha256: "c".repeat(64), resourceName: workerOperationId, provider: "fly", appName: "resume-workspace-fixture",
+      policyVersion: PRODUCTION_WORKER_POLICY.version, image: `registry.example/worker@sha256:${"a".repeat(64)}`,
+      sessionLeaseSha256: workspaceCapacityIntent.sessionBindingDigest.slice(7), toolchainSha256: workspaceToolchain,
+      providerDeadlineEpochMs: Date.parse(workspaceAllocation.allocation.expiresAt), createdAtMs: Date.now() });
+    await nativeWorkerRecords.update({ operationId: workerOperationId, requestSha256: "c".repeat(64), resourceId: "fixture-workspace-machine", state: "reconciled" });
+    let nativeRestores = 0, nativeQueries = 0, nativeUploads = 0, wrongNativeReceipt = true;
+    const noNativeEffect = async () => { throw new Error("UNEXPECTED_NATIVE_WORKER_OPERATION"); };
+    const workerClients = createWorkerDeploymentClients({ image: `registry.example/worker@sha256:${"a".repeat(64)}`, workspaceRoot: PRODUCTION_WORKER_POLICY.workspaceRoot,
+      policyVersion: PRODUCTION_WORKER_POLICY.version, modalAppName: "resume-workspace-fixture", modalTags: {}, journal: nativeWorkerRecords,
+      modalSdk: { apps: { fromName: noNativeEffect }, images: { fromRegistry: noNativeEffect }, sandboxes: { create: noNativeEffect, findByName: noNativeEffect, fromId: noNativeEffect } },
+      fly: { create: noNativeEffect, observe: noNativeEffect, terminate: noNativeEffect, observeTermination: noNativeEffect,
+        async exec(value): Promise<{ status: "completed"; exitCode: number; stdout: string }> {
+          const [, action, archiveSha256, index, data] = value.command;
+          if (action === "restore-put") { nativeUploads++; return { status: "completed", exitCode: 0,
+            stdout: JSON.stringify({ state: "stored", archiveSha256, chunk: Number(index), sha256: bytesSha(Buffer.from(data ?? "", "base64")) }) }; }
+          if (action === "restore") { nativeRestores++; throw new Error("NATIVE_WORKSPACE_RESTORE_ACK_LOST"); }
+          if (action === "restore-status") { nativeQueries++; return { status: "completed", exitCode: 0,
+            stdout: JSON.stringify({ state: "restored", archiveSha256: bytesSha(workspaceBytes), toolchainSha256: workspaceToolchain,
+              sourceSha256: wrongNativeReceipt ? "0".repeat(64) : bytesSha(canonicalJson(workspaceSource.files)),
+              artifactFilesSha256: bytesSha(canonicalJson(workspaceFiles)), workspacePath: "/workspace/restored" }) }; }
+          throw new Error("UNEXPECTED_NATIVE_RESTORE_COMMAND");
+        } } });
+    const sourceRequest = WorkerRunRequestSchema.parse({ sessionId: workspaceCommand.sessionId, actionId: workspaceSource.actionId, expectedVersion: 1,
+      policyVersion: workspaceCommand.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId: `workspace:${workspaceCommand.sessionId}`,
+      sourceProposalReference: `proposal:sha256:${workspaceSource.proposalSha256}`, sourceProposalSha256: workspaceSource.proposalSha256, sourceProposalFiles: workspaceSource.files });
+    await new ProductionWorkerRequestStore(nativeRequestJournal).persist(sourceRequest);
+    const nativeBridge = () => new ProductionWorkerBridge({ resolver: new ProductionWorkerOwnershipResolver({ pool, policyVersion: workspaceCommand.policyVersion,
+      capacityJournal, pricedContinuations: workerAuthority }), workers: workerClients, workerJournal: nativeWorkerJournal, jobJournal: nativeJobJournal,
+      requestJournal: nativeRequestJournal, artifactStore: new GcsObjectStoreAdapter({ config: { bucket: "workspace-fixture", projectId: "fixture" }, client: objectClient }), toolchainSha256: workspaceToolchain });
+    const workspaceRestores = () => new ProductionPricedContinuationRestores({ pool, acceptance: refreshedAcceptance, preparer: refreshedPreparer,
+      workers: workerAuthority, checkpoint, jobJournal: nativeJobJournal, worker: nativeBridge() });
+    await workspaceRestores().assertReady();
+    expect(await workspaceRestores().restore(accountId, workspaceResume.idempotencyKey)).toEqual({ status: "reconciliation_pending" });
+    expect(nativeRestores).toBe(1); expect(nativeUploads).toBeGreaterThan(0); expect(nativeQueries).toBe(0);
+    expect((await workspaceRestores().read(accountId, workspaceClaim.claimReference))?.state).toBe("unknown");
+    const uploadsAfterOriginal = nativeUploads;
+    expect(await workspaceRestores().restore(accountId, workspaceResume.idempotencyKey)).toEqual({ status: "reconciliation_pending" });
+    expect(nativeQueries).toBe(1); expect(nativeRestores).toBe(1); expect(nativeUploads).toBe(uploadsAfterOriginal);
+    expect((await store.findContinuationPause(accountId, workspaceClaim.sessionId, 1))?.state).toBe("claimed");
+    await expect(runtime.query("UPDATE production_real.priced_continuation_restores SET state='restored',proof_json=$2::jsonb WHERE claim_reference=$1",
+      [workspaceClaim.claimReference, JSON.stringify({ kind: "command", commandSha256: workspaceClaim.quote.context.commandSha256 })])).rejects.toThrow("PRICED_RESTORE_NATIVE_PROOF_DENIED");
+    wrongNativeReceipt = false;
+    const restoredWorkspace = await workspaceRestores().restore(accountId, workspaceResume.idempotencyKey);
+    expect(restoredWorkspace.status).toBe("restored");
+    if (restoredWorkspace.status !== "restored") throw new Error("EXPECTED_NATIVE_RESTORE_PROOF");
+    expect(restoredWorkspace.restore.payloadKind).toBe("workspace");
+    expect(restoredWorkspace.restore.proof?.kind).toBe("workspace");
+    expect(nativeQueries).toBe(2); expect(nativeRestores).toBe(1); expect(nativeUploads).toBe(uploadsAfterOriginal);
+    expect(await workspaceRestores().restore(accountId, workspaceResume.idempotencyKey)).toEqual(restoredWorkspace);
+    expect(nativeQueries).toBe(2);
+    expect((await store.findContinuationPause(accountId, workspaceClaim.sessionId, 1))?.state).toBe("restored");
+    expect((await admin.query("SELECT state FROM production_real.priced_continuation_restore_audit WHERE claim_reference=$1 ORDER BY sequence", [workspaceClaim.claimReference])).rows).toEqual([{ state: "claimed" }, { state: "unknown" }, { state: "restored" }]);
+    for (const changed of [{ accountId: "account:foreign" }, { leaseToken: "lease:foreign" }, { resumeClaim: "allocation:foreign" }, { archiveSha256: "f".repeat(64) }]) {
+      expect(await nativeBridge().observePricedRestoreCheckpoint({ ...restoredWorkspace.restore.metadata, ...changed })).toEqual({ status: "unknown" });
+    }
+    expect(nativeQueries).toBe(2); expect(nativeRestores).toBe(1); expect(nativeUploads).toBe(uploadsAfterOriginal);
+    const newProposalFiles = [{ path: "src/main.ts", content: "document.body.textContent = 'A fresh resumed counter';" }];
+    const newProposalSha = hash(newProposalFiles);
+    const resumedWorkerRequest = WorkerRunRequestSchema.parse({ ...sourceRequest, actionId: workspaceClaim.actionId, sourceProposalReference: `proposal:sha256:${newProposalSha}`,
+      sourceProposalSha256: newProposalSha, sourceProposalFiles: newProposalFiles });
+    await new ProductionWorkerRequestStore(nativeRequestJournal).persist(resumedWorkerRequest);
+    expect(await new ProductionWorkerRequestStore(nativeRequestJournal).read(resumedWorkerRequest)).toEqual(resumedWorkerRequest);
+    expect(await new ProductionWorkerRequestStore(nativeRequestJournal).read(sourceRequest)).toEqual(sourceRequest);
+    await expect(new ProductionWorkerRequestStore(nativeRequestJournal).persist({ ...resumedWorkerRequest, sourceProposalFiles: workspaceSource.files })).rejects.toThrow("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
+    expect(await nativeBridge().observePricedRestoreCheckpoint(restoredWorkspace.restore.metadata)).toMatchObject({ status: "restored" });
+    expect(nativeQueries).toBe(3); expect(nativeRestores).toBe(1); expect(nativeUploads).toBe(uploadsAfterOriginal);
+    expect(reserves).toBe(2); expect(modelPosts).toBe(2);
   } finally { await runtime?.end(); await admin?.end(); await docker(["rm", "--force", name]).catch(() => undefined); }
 }, 120_000);

@@ -6,7 +6,10 @@ import { bindAccountingRealmPool, createAccountingRealm } from "../../src/fundin
 import { ContinuationService } from "../../src/continuity/continuation-service";
 import type { PendingActionIntent } from "../../src/continuity/contracts";
 import type { ContinuationFundingStore } from "../../src/persistence/funding-store";
-import { StartSessionCommandSchema, ReviseSessionCommandSchema, SessionActionResultSchema } from "../../src/phase-04/metered-generation-service";
+import { MeteredGenerationService, StartSessionCommandSchema, ReviseSessionCommandSchema, SessionActionResultSchema } from "../../src/phase-04/metered-generation-service";
+import { FundedAdmissionService } from "../../src/funding/funded-admission";
+import { FundingService } from "../../src/funding/funding-service";
+import { trustedAdmissionReceiptAuthority } from "../fixtures/admission-ready";
 import { GcsObjectStoreAdapter, type VersionedObjectClientPort } from "../../src/continuity/object-store";
 import { PostgresSqlFundingStore, type PostgresSqlPool } from "../../src/persistence/postgres-sql-funding-store";
 import { canonicalJson } from "../../src/promotion/schema";
@@ -798,9 +801,66 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       result: { status: "completed", code: "ACTION_COMMITTED", accountId, sessionId: workspaceClaim.sessionId, operationId: workspaceClaim.operationId,
         sessionVersion: 2, artifactVersion: 2, artifactId: forgedArtifact.artifactId, confirmedSpend: workspaceSettlement.amount, remainingCap: "0", remainingBalance: "0", nextAction: "revise_session" } } })).rejects.toThrow("PRICED_FINALIZATION_ARTIFACT_DENIED");
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.priced_continuation_finalizations")).rows[0].count).toBe(1);
-    const concurrentWorkspaceTerminals = await Promise.all([finalizer.complete(workspaceTerminal), finalizer.complete(workspaceTerminal)]);
-    expect(concurrentWorkspaceTerminals[0]).toEqual(concurrentWorkspaceTerminals[1]);
-    expect(concurrentWorkspaceTerminals[0]).toMatchObject({ status: "failed", confirmedSpend: "1", remainingCap: "198", remainingBalance: "198", sessionVersion: 1, artifactVersion: 1 });
+    // Consume the authenticated accepted command through the actual core loop.
+    // Its already dispatched model can only be observed. The deliberately
+    // different persisted run proposal above makes the real bridge fail closed;
+    // no synthetic successful build or artifact authority is supplied here.
+    const acceptedWorkspace = await refreshedPreparer.loadAcceptedAuthority({ principal: { id: accountId }, idempotencyKey: workspaceResume.idempotencyKey });
+    const noAdmission = async () => { throw new Error("UNEXPECTED_CORE_READMISSION"); };
+    const workspaceCoreSettlement = createProductionVertexGenerationSettlement({ gateway, conversion: workspaceClaim.settlement.conversion,
+      journal: vertexJournal, resumeSettlements: refreshedAcceptance });
+    const coreOptions = { store: metered, gateway, worker: nativeBridge(), artifactVerifier: nativeBridge(),
+      proposalStore: new ProductionSourceProposalStore(pool), continuationCommands: checkpoint.pendingCommands, toolchainIdentity: workspaceClaim.quote.context.toolchainId,
+      settlement: { ...workspaceCoreSettlement, prepare: noAdmission },
+      fundedAdmission: new FundedAdmissionService({ funding: new FundingService(store), store, receiptAuthority: trustedAdmissionReceiptAuthority,
+        capacity: { reserveNow: noAdmission, observe: noAdmission, release: noAdmission } }) };
+    const core = new MeteredGenerationService(coreOptions);
+    const coreInput = { intent: acceptedWorkspace.intent, restoredCommand: acceptedWorkspace.command, pricing: acceptedWorkspace.quote.pricing,
+      maximumSat: acceptedWorkspace.quote.maximumSat, binding: { accountId, actionKey: workspaceClaim.actionKey, commandFingerprint: workspaceClaim.fingerprint,
+        actionId: workspaceClaim.actionId, operationId: workspaceClaim.operationId, actionBudgetReference: workspaceClaim.actionBudgetReference } };
+    await expect(core.preparePricedContinuation({ ...coreInput, maximumSat: "40" })).rejects.toThrow("PRICED_CONTINUATION_PREPARED_ACTION_BINDING_DENIED");
+    await expect(core.preparePricedContinuation({ ...coreInput, restoredCommand: { ...acceptedWorkspace.command, maximum: "500" } })).rejects.toThrow("CONTINUATION_RETAINED_COMMAND_BINDING_INVALID");
+    for (const changed of [{ accountId: "account:foreign" }, { actionKey: acceptedWorkspace.intent.idempotencyKey },
+      { actionId: "action:foreign" }, { operationId: "operation:foreign" }, { actionBudgetReference: "budget:foreign" }, { commandFingerprint: "f".repeat(64) }])
+      await expect(core.preparePricedContinuation({ ...coreInput, binding: { ...coreInput.binding, ...changed } })).rejects.toThrow();
+    const executable = await core.preparePricedContinuation(coreInput);
+    expect(await executable.readTerminal()).toBeUndefined();
+    const invalidReceipt = { ...workspaceObserved.receipt, model: "mismatched-negative-fixture" };
+    const invariantCore = new MeteredGenerationService({ ...coreOptions, gateway: { dispatch: noAdmission,
+      async lookup() { return { status: "receipt_found", receipt: invalidReceipt }; } } });
+    const invariantExecution = await invariantCore.preparePricedContinuation(coreInput);
+    let invariantCallbacks = 0;
+    await expect(invariantExecution.execute(async ({ finalization, receipt }) => {
+      invariantCallbacks++;
+      expect(finalization.status).toBe("billing_invariant_failed");
+      expect(receipt).toEqual(invalidReceipt);
+      throw new Error("INVARIANT_REQUIRES_COORDINATOR_QUARANTINE");
+    })).rejects.toThrow("INVARIANT_REQUIRES_COORDINATOR_QUARANTINE");
+    expect(invariantCallbacks).toBe(1);
+    await expect(executable.execute(async ({ finalization }) => {
+      expect(finalization.status).toBe("failed");
+      throw new Error("COORDINATOR_CALLBACK_REFUSED");
+    })).rejects.toThrow("COORDINATOR_CALLBACK_REFUSED");
+    expect(await executable.readTerminal()).toBeUndefined();
+    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.usage_receipts")).rows[0].count).toBe(1);
+    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.ledger_entries WHERE account_id=$1 AND direction='debit'", [accountId])).rows[0].count).toBe(1);
+    expect((await refreshedAcceptance.find(accountId, workspaceResume.idempotencyKey))?.state).toBe("dispatching");
+    // Caller mutation after preparation must not redirect the captured action.
+    coreInput.binding.operationId = "operation:mutated-after-preparation";
+    coreInput.intent.sessionId = "session:mutated-after-preparation";
+    let terminalCallbacks = 0;
+    const coreTerminal = await executable.execute(async ({ intent, receipt, finalization }) => {
+      terminalCallbacks++;
+      expect(intent).toEqual(workspaceApiIntent);
+      expect(receipt).toEqual(workspaceObserved.receipt);
+      const terminalRequest = { ...workspaceTerminal, intent, receipt, finalization };
+      const concurrent = await Promise.all([finalizer.complete(terminalRequest), finalizer.complete(terminalRequest)]);
+      expect(concurrent[0]).toEqual(concurrent[1]);
+    });
+    expect(coreTerminal).toMatchObject({ status: "failed", confirmedSpend: "1", remainingCap: "198", remainingBalance: "198", sessionVersion: 1, artifactVersion: 1 });
+    expect(terminalCallbacks).toBe(1);
+    expect(await executable.readTerminal()).toEqual(coreTerminal);
+    expect(await executable.execute(async () => { throw new Error("TERMINAL_MUST_NOT_EXECUTE_AGAIN"); })).toEqual(coreTerminal);
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.usage_receipts")).rows[0].count).toBe(2);
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.ledger_entries WHERE account_id=$1 AND direction='debit'", [accountId])).rows[0].count).toBe(2);
     expect((await admin.query("SELECT confirmed_spend_sat,current_verified_artifact_version,version,state FROM production_real.metered_sessions WHERE id=$1", [workspaceClaim.sessionId])).rows[0]).toEqual({ confirmed_spend_sat: "1", current_verified_artifact_version: 1, version: 1, state: "failed" });

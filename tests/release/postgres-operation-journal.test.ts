@@ -18,6 +18,7 @@ import { ProductionWorkerArtifactStore } from "../../src/production/worker-artif
 import { DeterministicObjectStore } from "../../src/continuity/object-store";
 import { WorkerRunResultSchema } from "../../src/phase-02/contracts";
 import { ProductionWorkerRequestStore } from "../../src/production/worker-request-store";
+import { pricedRestoreBinding } from "../../src/production/priced-restore-binding";
 
 const scopeSha256 = "a".repeat(64), identity = "b".repeat(64);
 test("journal construction has no effects and rejects structural/prototype impersonation", async () => {
@@ -524,6 +525,33 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
     completedJobBytes = Buffer.from(canonicalJson(downgraded));
     await expect(jobClient().readArtifact(directRequest)).rejects.toThrow("PRODUCTION_JOB_ARTIFACT_CONTRACT_MISMATCH");
     expect(starts).toBe(3);
+
+    // Real native journal/RPC recovery with the exact metadata identity used
+    // by the new bridge; archive bytes are absent from observer inputs.
+    const restoreMetadata = { accountId: "account:restore", sessionId: "session:restore", actionId: "priced-resume-action:restore", expectedVersion: 0,
+      policyVersion: "policy:restore", capabilityGrant: "phase-05-continuation-grant", workspaceId: "workspace:session:restore",
+      checkpointId: "checkpoint:restore", pauseGeneration: 1, actionVersion: 0, workspaceLineage: "workspace:session:restore",
+      leaseToken: "lease:restore", resumeClaim: "allocation:restore", archiveSha256: hash(workspace) };
+    const pricedRestore = pricedRestoreBinding(restoreMetadata);
+    expect(pricedRestoreBinding(JSON.parse(JSON.stringify(restoreMetadata)))).toEqual(pricedRestore);
+    expect(() => pricedRestoreBinding({ ...restoreMetadata, archive: workspace })).toThrow();
+    expect(() => pricedRestoreBinding({ ...restoreMetadata, bindingSha256: identity })).toThrow();
+    restoreReceipt = correctRestoreReceipt;
+    const restoresBeforePriced = restores;
+    expect((await jobClient().restoreWorkspace({ operationId: pricedRestore.operationId, bindingSha256: pricedRestore.bindingSha256, bytes: workspace })).state).toBe("unknown");
+    const uploadsAfterPriced = restorePuts;
+    const restartedPriced = pricedRestoreBinding(restoreMetadata);
+    expect((await jobClient().observeRestoreWorkspace({ operationId: restartedPriced.operationId, bindingSha256: restartedPriced.bindingSha256, archiveSha256: restartedPriced.metadata.archiveSha256 })).state).toBe("restored");
+    expect(restores).toBe(restoresBeforePriced + 1); expect(restorePuts).toBe(uploadsAfterPriced);
+    const queriesBeforeForeign = restoreQueries;
+    for (const changed of [{ accountId: "account:other" }, { sessionId: "session:other" }, { actionId: "action:other" }, { expectedVersion: 1 },
+      { policyVersion: "policy:other" }, { workspaceId: "workspace:other" }, { checkpointId: "checkpoint:other" }, { pauseGeneration: 2 },
+      { actionVersion: 1 }, { workspaceLineage: "workspace:other" }, { leaseToken: "lease:other" }, { resumeClaim: "allocation:other" }, { archiveSha256: identity }]) {
+      const foreign = pricedRestoreBinding({ ...restoreMetadata, ...changed });
+      expect(foreign.operationId).not.toBe(pricedRestore.operationId);
+      expect((await jobClient().observeRestoreWorkspace({ operationId: foreign.operationId, bindingSha256: foreign.bindingSha256, archiveSha256: foreign.metadata.archiveSha256 })).state).toBe("unknown");
+    }
+    expect(restoreQueries).toBe(queriesBeforeForeign); expect(restores).toBe(restoresBeforePriced + 1);
 
   } finally {
     if (previousEffects === undefined) delete process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS; else process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS = previousEffects;

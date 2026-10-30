@@ -30,6 +30,7 @@ import { z } from "zod";
 import { ProductionPricedContinuationWorkers } from "../../src/production/priced-continuation-workers";
 import { ProductionWorkerOwnershipResolver } from "../../src/production/worker-bridge";
 import type { CapacityReservation, ReadyCapacityPort } from "../../src/funding/funded-admission";
+import { pricedRestoreBinding } from "../../src/production/priced-restore-binding";
 
 const integration = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
 const hash = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex");
@@ -523,6 +524,13 @@ integration("production quote preparation authenticates an encrypted original ch
     const resolver = new ProductionWorkerOwnershipResolver({ pool, policyVersion: pending.policyVersion, capacityJournal, pricedContinuations: workerAuthority });
     expect(await resolver.resolveWorker(workerRequest)).toMatchObject({ accountId, ownerId: principal.pubkey, intentReference: capacityIntent.capacityIntentReference,
       capacityReference: allocated.allocation.capacityReference, provider: "modal" });
+    const pendingAuthority = await refreshedPreparer.loadAcceptedAuthority({ principal: workerCommand.principal, idempotencyKey: workerCommand.idempotencyKey });
+    const { idea: _restoreIdea, ...restoreWorkerBinding } = workerRequest;
+    const commandOnlyRestore = pricedRestoreBinding({ ...restoreWorkerBinding, accountId, capabilityGrant: "phase-05-continuation-grant",
+      checkpointId: allocating.checkpointId, pauseGeneration: pendingAuthority.material.manifest.pauseGeneration,
+      actionVersion: pendingAuthority.material.manifest.actionVersion, workspaceLineage: pendingAuthority.material.manifest.workspaceLineage,
+      leaseToken: allocating.leaseToken, resumeClaim: allocating.allocationIntentReference, archiveSha256: pendingAuthority.material.manifest.archiveSha256 });
+    await expect(resolver.resolvePricedRestore(commandOnlyRestore.metadata, workerRequest)).rejects.toThrow("PRODUCTION_PRICED_RESTORE_BINDING_DENIED");
     const unallocatedRequest = { ...workerRequest, sessionId: workerPending.sessionId, actionId: workerClaim.actionId, workspaceId: `workspace:${workerPending.sessionId}` };
     await expect(resolver.resolveWorker(unallocatedRequest)).rejects.toThrow("PRODUCTION_WORKER_ACTION_OWNER_NOT_FOUND");
     await expect(refreshedAcceptance.supersedeUnclaimed(accountId, workerCommand.idempotencyKey)).rejects.toThrow("PRICED_CONTINUATION_SUPERSESSION_DENIED");

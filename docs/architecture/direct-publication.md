@@ -266,6 +266,11 @@ for source eligibility. The factory actor's `source()` rereads the owned verifie
 archive, requires this measured receipt and validates the actual helper bytes.
 It returns `verified-source-bytes` with `productionPromotion: not_asserted`;
 this observation does not satisfy live certification or select a release.
+The new worker image requires the matching updated coordinator: older strict
+readers reject the additional receipt. Roll out the compatible coordinator
+before selecting the new image. A rollback may restore the old worker profile,
+but must retain a reader that understands new receipts for their retention
+window. Existing images and archived operation identities are preserved.
 
 For an explicitly selected `nip5d-direct-v1` worker profile, the actual mounted
 session constructor installs `ProductionDirectPublicationFactory` as the

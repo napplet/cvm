@@ -43,10 +43,51 @@ Rails and worker observations in these tests are explicit local fixtures; this i
 not live funding or release certification evidence.
 
 No migration or saved identity changes. Deploy the SQL outcome classifier and
-admission consumer together; rollback must retain uncertainty handling. Broader
-cross-process compensation fencing, abandoned-capacity discovery and proof of
-unused admission/action ownership remain required. A pending result or absent
+admission consumer together; rollback must retain uncertainty handling.
+Abandoned-capacity discovery and proof of unused admission/action ownership
+remain required. A pending result or absent
 readback alone never authorizes refund or abandonment of a paid action.
+
+## Admission versus compensation
+
+Acceptance and compensation serialize on the same owned capacity intent. Before
+creating a hold, SQL acceptance locks an existing matching intent with a no-op
+write and requires its original reference and `available` state. The write also
+invalidates an older SERIALIZABLE snapshot that waited on this row. Trusted
+legacy FundingService callers with no intent retain their existing path; the
+production ContextVM admission path always creates its intent first.
+
+`claimCapacityCompensation` locks the intent and reads any original accepted
+command in the same transaction. If acceptance won, it returns that exact result
+and grants no cleanup. Otherwise it records the existing `refused` state and
+original capacity reference. Only the successful first claim authorizes native
+release. Terminal refused/released states cannot be revived by a delayed readiness
+response, and the original capacity reference cannot be replaced. The memory,
+reference and SQL authorities enforce these same rules.
+
+Compensation cannot proceed without an acknowledged durable fence. A SQL outage
+or lost claim COMMIT leaves the worker pending. Fresh retries never dispatch a
+release from a previous claim; they use `ReadyCapacityPort.observeRelease` to
+observe original termination. The production capacity router forwards this to
+the original provider, even after the selected default changes. Confirmed native
+termination alone permits `released`. Older ports without this optional observer
+remain pending; ordinary readiness refusal is not termination proof. A lost claim
+acknowledgment may therefore require observation through the worker's bounded
+provider lifetime rather than another cleanup dispatch.
+
+Restricted PostgreSQL tests hold acceptance in flight while another controller
+attempts compensation, and return stale readiness after compensation wins. They
+prove one original hold with no release in the first case and no hold with one
+release in the second. Lost claim, native-release and finalization acknowledgments,
+fresh service instances, immutable terminal state/reference and query-only retry
+are also tested. These are local mechanism tests, not live release evidence.
+
+No migration, new state variant, public schema or saved identity is introduced.
+Deploy matching acceptance writers, compensation readers and native observers
+together; drain older writers before relying on the fence. Rollback must retain
+the fence-aware code and both original journal histories. This is not authority
+to refund or abandon an accepted or unknown paid action. Broader bounded cleanup
+discovery and full funded native CREATE certification remain open.
 
 ## Immutable pricing catalog
 

@@ -113,6 +113,7 @@ postgresIsolation("worker lifecycle retains originals across allocation ambiguit
       const finalizer = createMountedReleaseCleanup({ effects: [{ provider, providerOperationId: plan.operationId, resourceIdentitySha256: created.resourceIdentitySha256! }], providers: { [provider]: { port: { async observe() { throw new Error("GENERIC_OBSERVATION_MUST_NOT_BE_USED"); } } } } as never, workers: { modal: open(), fly: open() } });
       expect(await finalizer.observe!({ operationId: "finalize-original", providerOperationId: plan.operationId, resourceIdentitySha256: created.resourceIdentitySha256! })).toBe("cleaned");
       expect(await open().cleanup({ operationId: plan.operationId, resourceIdentitySha256: created.resourceIdentitySha256 })).toEqual({ status: "cleaned" });
+      expect(await router.observeRelease?.(retained)).toEqual({ status: "terminated" });
       expect(creates).toBe(before.creates + 1); expect(deletes).toBe(before.deletes + 1);
       await expect(open().apply({ ...plan, operationId: "new-after-expiry" })).rejects.toThrow("WORKER_LIFECYCLE_ORIGINAL_REQUIRED");
     }

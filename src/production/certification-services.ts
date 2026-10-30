@@ -193,6 +193,7 @@ export class ProductionCertificationCoreServices implements Pick<ProductionCerti
         return observed;
       },
       release: async value => (await route(value)).capacity.release(value),
+      observeRelease: async value => (await route(value)).capacity.observeRelease(value),
     });
     return router;
   }

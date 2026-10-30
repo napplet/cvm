@@ -1,5 +1,6 @@
 import type { Kysely } from "kysely";
 import type { Pool } from "pg";
+import type { CapacityCompensationInput, CapacityCompensationClaim } from "./funding-store";
 import type { AccountStatus, FundedAdmission, FundingResult } from "../phase-03/contracts";
 import type { ActionBudget, ActionBudgetInput, AdmissionInput, BillingLineItem, BillingLineItemPage, BillingLineItemPageRequest, CapacityIntent, CapacityIntentInput, CapacityObservationInput, CreditInput, MeteredAction, MeteredFinalizeInput, MeteredFundingStore, MeteredFundingTransaction, MeteredOperationClaim, MeteredSessionRecord, PrepareMeteredActionInput, ReconciliationClaim, StoredFundingCommand, UsageUnknownInput } from "./funding-store";
 
@@ -63,6 +64,7 @@ export class PostgresFundingStore implements MeteredFundingStore {
             findCapacityIntent: async (idempotencyKey) => state.capacityIntents.get(key(accountId, idempotencyKey)),
             createCapacityIntent: async (input) => this.createCapacityIntent(state, accountId, input),
             claimCapacityDispatch: async (intentReference) => this.claimCapacityDispatch(state, accountId, intentReference),
+            claimCapacityCompensation: async input => this.claimCapacityCompensation(state, accountId, input),
             recordCapacityObservation: async (input) => this.recordCapacityObservation(state, accountId, input),
             releaseCapacityIntent: async (intentReference) => this.releaseCapacityIntent(state, accountId, intentReference),
             findActionBudget: async (idempotencyKey) => state.actionBudgets.get(key(accountId, idempotencyKey)),
@@ -102,7 +104,10 @@ export class PostgresFundingStore implements MeteredFundingStore {
     const result = frozen({ status: "credited" as const, accountId, topUpId: input.settlement.topUpId, creditedAmount: amount.toString(), unit: "sat" as const, settlementReference: input.settlement.settlementReference }); state.commands.set(key(accountId, input.idempotencyKey), frozen({ fingerprint: input.fingerprint, result })); return result;
   }
   private admit(state: State, accountId: string, input: AdmissionInput): FundedAdmission {
-    if (input.accountId !== accountId) throw new Error("ACCOUNT_SCOPE_MISMATCH"); const current = account(state, accountId); const available = current.settled - current.held; const held = input.requestedCap < available ? input.requestedCap : available;
+    if (input.accountId !== accountId) throw new Error("ACCOUNT_SCOPE_MISMATCH");
+    const intent = state.capacityIntents.get(key(accountId, input.idempotencyKey));
+    if (intent && (intent.state !== "available" || intent.capacityReference !== input.capacityReference)) throw new Error("CAPACITY_INTENT_NOT_AVAILABLE");
+    const current = account(state, accountId); const available = current.settled - current.held; const held = input.requestedCap < available ? input.requestedCap : available;
     if (held <= 0n) throw new Error("INSUFFICIENT_SETTLED_BALANCE"); current.held += held; current.holds.push({ reference: input.capacityReference, approvedCap: held, heldAmount: held }); state.accounts.set(accountId, current);
     line(state, { accountId, sourceIdentity: `cap_hold:${input.capacityReference}`, kind: "cap_hold", unit: "sat", amount: held.toString(), settledAvailable: current.settled.toString(), held: current.held.toString(), sessionSpend: "0" });
     state.outbox = [...state.outbox, frozen({ id: `outbox:${input.capacityReference}`, reference: input.capacityReference, kind: "funded_admission_accepted" })];
@@ -122,9 +127,21 @@ export class PostgresFundingStore implements MeteredFundingStore {
   }
   private recordCapacityObservation(state: State, accountId: string, input: CapacityObservationInput): CapacityIntent {
     const current = [...state.capacityIntents.values()].find((intent) => intent.accountId === accountId && intent.intentReference === input.intentReference); if (!current) throw new Error("CAPACITY_INTENT_NOT_FOUND");
+    if (current.capacityReference !== undefined && input.capacityReference !== undefined && current.capacityReference !== input.capacityReference) throw new Error("CAPACITY_REFERENCE_CONFLICT");
     if (current.state === "released" || current.state === "refused") return current;
+    if (input.state !== "available" && state.commands.has(key(accountId, current.idempotencyKey))) return current;
     if (input.state === "available" && (!input.capacityReference || !input.expiresAt)) throw new Error("CAPACITY_OBSERVATION_INVALID");
     const next = frozen({ ...current, state: input.state, ...(input.capacityReference ? { capacityReference: input.capacityReference } : {}), ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}) }); state.capacityIntents.set(key(accountId, current.idempotencyKey), next); return next;
+  }
+  private claimCapacityCompensation(state: State, accountId: string, input: CapacityCompensationInput): CapacityCompensationClaim {
+    const current = state.capacityIntents.get(key(accountId, input.idempotencyKey));
+    if (!current || current.intentReference !== input.intentReference || (current.capacityReference !== undefined && current.capacityReference !== input.capacityReference)) throw new Error("CAPACITY_COMPENSATION_BINDING_REQUIRED");
+    const accepted = state.commands.get(key(accountId, input.idempotencyKey));
+    if (accepted) return frozen({ status: "accepted", command: accepted });
+    if (current.state === "refused" || current.state === "released") return frozen({ status: "observing", intent: current });
+    const next = frozen({ ...current, state: "refused" as const, capacityReference: input.capacityReference });
+    state.capacityIntents.set(key(accountId, input.idempotencyKey), next);
+    return frozen({ status: "claimed", intent: next });
   }
   private releaseCapacityIntent(state: State, accountId: string, intentReference: string): CapacityIntent {
     const current = [...state.capacityIntents.values()].find((intent) => intent.accountId === accountId && intent.intentReference === intentReference); if (!current) throw new Error("CAPACITY_INTENT_NOT_FOUND"); const next = frozen({ ...current, state: "released" as const }); state.capacityIntents.set(key(accountId, current.idempotencyKey), next); return next;

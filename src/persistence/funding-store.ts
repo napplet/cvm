@@ -15,6 +15,8 @@ export type CapacityIntent = Readonly<{ accountId: string; idempotencyKey: strin
 export type CapacityIntentInput = Readonly<{ accountId: string; idempotencyKey: string; fingerprint: string; intentReference: string }>;
 export type CapacityDispatchClaim = Readonly<{ intent: CapacityIntent; claimed: boolean }>;
 export type CapacityObservationInput = Readonly<{ intentReference: string; state: "available" | "refused" | "reconciliation_pending"; capacityReference?: string; expiresAt?: string }>;
+export type CapacityCompensationInput = Readonly<{ idempotencyKey: string; intentReference: string; capacityReference: string }>;
+export type CapacityCompensationClaim = Readonly<{ status: "accepted"; command: StoredFundingCommand }> | Readonly<{ status: "claimed" | "observing"; intent: CapacityIntent }>;
 export type ActionBudget = Readonly<{ accountId: string; admissionReference: string; idempotencyKey: string; fingerprint: string; reference: string; amount: bigint; state: "authorized" | "released" }>;
 export type ActionBudgetInput = Readonly<{ accountId: string; admissionReference: string; idempotencyKey: string; fingerprint: string; reference: string; amount: bigint }>;
 export type MeteredActionStatus = "prepared" | "dispatching" | "usage_unknown" | "completed" | "failed" | "billing_invariant_failed";
@@ -93,6 +95,8 @@ export interface FundingTransaction {
   createCapacityIntent(input: CapacityIntentInput): Promise<CapacityIntent>;
   /** Atomically fences the sole external capacity-reservation attempt. */
   claimCapacityDispatch(intentReference: string): Promise<CapacityDispatchClaim>;
+  /** Serializes unaccepted compensation against the same intent as acceptance. */
+  claimCapacityCompensation?(input: CapacityCompensationInput): Promise<CapacityCompensationClaim>;
   recordCapacityObservation(input: CapacityObservationInput): Promise<CapacityIntent>;
   releaseCapacityIntent(intentReference: string): Promise<CapacityIntent>;
   findActionBudget(idempotencyKey: string): Promise<ActionBudget | undefined>;
@@ -376,6 +380,8 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
         },
         acceptFundedAdmission: async (input) => {
           if (input.accountId !== accountId) throw new Error("ACCOUNT_SCOPE_MISMATCH");
+          const intent = state.capacityIntents.get(commandKey(accountId, input.idempotencyKey));
+          if (intent && (intent.state !== "available" || intent.capacityReference !== input.capacityReference)) throw new Error("CAPACITY_INTENT_NOT_AVAILABLE");
           const account = accountFor(state, accountId);
           const available = account.settledAvailable - account.held;
           if (available <= 0n) throw new Error("INSUFFICIENT_SETTLED_BALANCE");
@@ -405,10 +411,22 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
         recordCapacityObservation: async (input) => {
           const current = [...state.capacityIntents.values()].find((intent) => intent.accountId === accountId && intent.intentReference === input.intentReference);
           if (!current) throw new Error("CAPACITY_INTENT_NOT_FOUND");
+          if (current.capacityReference !== undefined && input.capacityReference !== undefined && current.capacityReference !== input.capacityReference) throw new Error("CAPACITY_REFERENCE_CONFLICT");
           if (current.state === "released" || current.state === "refused") return current;
+          if (input.state !== "available" && state.commands.has(commandKey(accountId, current.idempotencyKey))) return current;
           if (input.state === "available" && (!input.capacityReference || !input.expiresAt)) throw new Error("CAPACITY_OBSERVATION_INVALID");
           const next = freeze({ ...current, state: input.state, ...(input.capacityReference ? { capacityReference: input.capacityReference } : {}), ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}) });
           state.capacityIntents.set(commandKey(accountId, current.idempotencyKey), next); return next;
+        },
+        claimCapacityCompensation: async input => {
+          const current = state.capacityIntents.get(commandKey(accountId, input.idempotencyKey));
+          if (!current || current.intentReference !== input.intentReference || (current.capacityReference !== undefined && current.capacityReference !== input.capacityReference)) throw new Error("CAPACITY_COMPENSATION_BINDING_REQUIRED");
+          const accepted = state.commands.get(commandKey(accountId, input.idempotencyKey));
+          if (accepted) return freeze({ status: "accepted" as const, command: accepted });
+          if (current.state === "refused" || current.state === "released") return freeze({ status: "observing" as const, intent: current });
+          const next = freeze({ ...current, state: "refused" as const, capacityReference: input.capacityReference });
+          state.capacityIntents.set(commandKey(accountId, input.idempotencyKey), next);
+          return freeze({ status: "claimed" as const, intent: next });
         },
         releaseCapacityIntent: async (intentReference) => {
           const current = [...state.capacityIntents.values()].find((intent) => intent.accountId === accountId && intent.intentReference === intentReference);

@@ -79,14 +79,34 @@ public signature only; it does not mean uploaded or published.
 
 The pinned direct CLI source is `napplet/web` commit
 `3c6e3ae33fea425b2f151740c0bd8c02f509ef7b` (`0.13.0`), described by the prepared,
-unpromoted source recipe. Its typed upload function can fall back from a scoped
+unpromoted source recipe. Its separately reproduced three-function network
+helper is retained under `vendor/napplet-cli-3c6e3ae3`, with actual bundle SHA256
+`2e50a73810bf8017b9569dd771842326b8ecc254dd912e92aaf9a43ab3a1a756`.
+`loadPinnedDirectCliNetworkHelpers` validates exact source/runtime/lock provenance,
+hashes the same bytes it imports, rejects extra exports and validates returned
+records. It exposes only the actual upstream authorization, upload and relay
+functions, with no module-path or implementation replacement input. No network
+effect occurs at import. The historical two-export helper remains unchanged;
+its bytes also reproduced from the newer source with that same two-export surface.
+
+Two clean direct-source checkouts each produced two matching fixed-path builds,
+with networking disabled on each second build. The updated builder's default
+legacy profile also reproduced its original exact bundle hash. Local tests use
+the actual new helper over real loopback HTTP and Nostr WebSocket fixtures;
+they are transport mechanism evidence, not production certification.
+
+Its typed upload function can fall back from a scoped
 server authorization to unscoped authorization after an auth-shaped error.
 Future exact signing must refuse an unapproved downgrade. An ambiguous result
 must reconcile the original operation; it cannot blindly sign or dispatch again.
+The primitive also trusts a positive HEAD response to skip upload. The production
+adapter must independently fetch and verify exact bytes before treating that as
+successful storage. Source-level tests demonstrate both behaviors and the exact
+signer's refusal before a second PUT or an unscoped signature.
 
 The historical promoted `0.5.2` aggregate facade is not a direct-format adapter.
-The current direct CLI source/exports, exact upload authorization, retained
-effect identities, upload/relay observation, service attestation and supported
+The current direct helper is prepared and verified, but exact upload
+authorization, retained effect identities, upload/relay observation, service attestation and supported
 user-owned NIP-46 flow still need complete composition and certification. No
 handwritten NIP-5D manifests, hash reinterpretation, signer bypass or fabricated
 completion evidence are permitted. Production client presentation and negotiated

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "status": "prepared-source-helper-not-promoted",
+  "artifactContract": "nip5d-direct-v1",
+  "version": "0.13.0",
+  "sourceCommit": "3c6e3ae33fea425b2f151740c0bd8c02f509ef7b",
+  "sourceLockSha256": "7b08677e37bbfedfde17343a3612d223a547b8bf058df7e6c9c73881f9e7c0eb",
+  "buildLockSha256": "363cebbc9a8ca0cf5ef7cc7c81ccf2f598bb49ef0dfb6ae696b4a529cdc6f06d",
+  "sourceFiles": {
+    "blossom-upload.ts": "05200f167d295900c7e5d12e6e5c2791f352c379290feeb095f0e6da1eb9ac50",
+    "path.ts": "0672896e4ca1004047e7e41a94e9947ec1a0fbe33daa0247eb0e3e42a0594eb9",
+    "types.ts": "ba999952df90a35649caf3fe7b989b17595116c9884adb72111a676c645a2675",
+    "signing.ts": "be5bbc8205227ae09447e87fb0e7d6f0da5f12da6b94601e8609f98b991ef858",
+    "deploy-network.ts": "5e40bd4674554cedfc67c2b922d04ff930dde0aa7ec0556c83ca28c1a42392ba"
+  },
+  "runtimeVersion": "2.9.6",
+  "runtimeBinarySha256": "bceb5b6a6239b0b010418406d8c77a508f67cf4337d94288f1c19fe71304aab0",
+  "bundleSha256": "2e50a73810bf8017b9569dd771842326b8ecc254dd912e92aaf9a43ab3a1a756",
+  "exports": [
+    "createUploadAuthorization",
+    "publishEventWithSimplePool",
+    "uploadFilesToServers"
+  ],
+  "build": "scripts/rebuild-napplet-upload-helper.ts --profile capabilities",
+  "productionEvidence": false,
+  "selected": false
+}

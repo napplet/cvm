@@ -6,6 +6,9 @@ import { SignedOwnerManifestEventSchema } from "../publication/contracts";
 import { assertPostgresOperationJournal, type PostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
 import { ProductionWorkerPublicationSchema } from "../worker-adapters/publication-metadata";
 import { ProductionOwnedDirectArtifacts } from "./owned-direct-artifacts";
+import { DirectUploadAuthorizationSchema, DirectUploadAuthorizationTemplateSchema, DirectUploadAuthorizationEventSchema,
+  validateDirectUploadAuthorization, verifyDirectUploadAuthorizationEvent } from "../publication/direct-upload-authorization";
+import { DIRECT_CLI_NETWORK_IDENTITY, loadPinnedDirectCliNetworkHelpers } from "./pinned-direct-cli-network";
 
 const Identifier = z.string().min(1).max(256);
 const Principal = z.object({ pubkey: z.string().regex(/^[a-f0-9]{64}$/u) }).strict();
@@ -15,6 +18,8 @@ const Prepare = Artifact.extend({ idempotencyKey: Identifier, approval: z.object
 const IntentRecord = z.object({ accountId: z.string().regex(/^account:[a-f0-9]{64}$/u), requestSha256: z.string().regex(/^[a-f0-9]{64}$/u), intent: DirectPublicationIntentSchema }).strict();
 const OwnerRecord = z.object({ version: z.literal("direct-publication-owner-v1"), intentId: DirectPublicationIntentSchema.shape.intentId,
   reviewSha256: DirectPublicationReviewSchema.shape.reviewSha256, event: SignedOwnerManifestEventSchema }).strict();
+const UploadEventRecord = z.object({ version: z.literal("direct-upload-authorization-event-v1"), authorizationSha256: DirectUploadAuthorizationSchema.shape.authorizationSha256,
+  event: DirectUploadAuthorizationEventSchema }).strict();
 
 /** Ordinary owner publication preparation only. Durable original intents and
  * completed public signatures grant no upload, relay or service-signing effect. */
@@ -97,6 +102,83 @@ export class ProductionDirectPublicationIntents {
   async readAcceptedOwner(value: unknown) {
     const original = await this.#original(Owned.parse(value));
     return original ? this.#owner(original.intent) : undefined;
+  }
+  async #uploadAuthorization(intent: z.infer<typeof DirectPublicationIntentSchema>) {
+    const row = await this.input.journal.read(`direct-upload-authorization:v1:${await directPublicationDigest(intent.intentId)}`);
+    if (!row) return undefined;
+    const authorization = await validateDirectUploadAuthorization({ intent, authorization: row.value }), owner = await this.#owner(intent);
+    if (row.revision !== 1 || row.identitySha256 !== authorization.authorizationSha256 || authorization.helperSha256 !== DIRECT_CLI_NETWORK_IDENTITY.bundleSha256
+      || !owner || owner.event.id !== authorization.ownerEventId) throw new Error("DIRECT_UPLOAD_AUTHORIZATION_ORIGINAL_MISMATCH");
+    return authorization;
+  }
+  async readUploadAuthorization(value: unknown) {
+    const original = await this.#original(Owned.parse(value));
+    return original ? this.#uploadAuthorization(original.intent) : undefined;
+  }
+  async loadUploadAuthorizationForSigning(value: unknown) {
+    const command = Owned.parse(value), intent = await this.loadCurrentForSigning(command), authorization = await this.#uploadAuthorization(intent);
+    if (!authorization) throw new Error("DIRECT_UPLOAD_AUTHORIZATION_NOT_FOUND_OR_DENIED");
+    if ((this.input.now ?? Date.now)() >= authorization.expiresAtMs) throw new Error("DIRECT_UPLOAD_AUTHORIZATION_EXPIRED");
+    return authorization;
+  }
+  async prepareUploadAuthorization(value: unknown) {
+    const command = Owned.parse(value), original = await this.#original(command);
+    if (!original) throw new Error("DIRECT_PUBLICATION_INTENT_NOT_FOUND_OR_DENIED");
+    const prior = await this.#uploadAuthorization(original.intent);
+    if (prior) return prior; // Historical observation never rotates timestamps.
+    const intent = await this.loadCurrentForSigning(command), owner = await this.#owner(intent);
+    if (!owner) throw new Error("DIRECT_PUBLICATION_ACCEPTED_OWNER_REQUIRED");
+    const helper = await loadPinnedDirectCliNetworkHelpers(), captured = new Error("DIRECT_UPLOAD_TEMPLATE_CAPTURED");
+    let template: z.infer<typeof DirectUploadAuthorizationTemplateSchema> | undefined;
+    const seconds = Math.floor((this.input.now ?? Date.now)() / 1000);
+    try {
+      await helper.createUploadAuthorization({ async sign(value) { template = DirectUploadAuthorizationTemplateSchema.parse(value); throw captured; } },
+        [intent.review.artifact.artifactHash], seconds, new URL(intent.review.servers[0]!).hostname);
+    } catch (error) { if (error !== captured) throw error; }
+    if (!template) throw new Error("DIRECT_UPLOAD_CLI_TEMPLATE_REQUIRED");
+    const body = DirectUploadAuthorizationSchema.omit({ authorizationSha256: true, operationId: true }).parse({ version: "direct-upload-authorization-v1", intentId: intent.intentId,
+      reviewSha256: intent.review.reviewSha256, ownerPubkey: intent.review.ownerPubkey, ownerEventId: owner.event.id,
+      artifactHash: intent.review.artifact.artifactHash, archiveSha256: intent.review.artifact.archiveSha256,
+      server: intent.review.servers[0], helperSha256: helper.identity.bundleSha256, template, expiresAtMs: Math.min(intent.expiresAtMs, (seconds + 3600) * 1000) });
+    const authorizationSha256 = await directPublicationDigest(body);
+    const authorization = await validateDirectUploadAuthorization({ intent, authorization: { ...body, authorizationSha256, operationId: `direct-upload-authorization:${authorizationSha256}` } });
+    const key = `direct-upload-authorization:v1:${await directPublicationDigest(intent.intentId)}`;
+    await this.loadCurrentForSigning(command);
+    try { await this.input.journal.claim(key, authorizationSha256, authorization); }
+    catch (error) { const winner = await this.#uploadAuthorization(intent); if (!winner) throw error; return winner; }
+    const winner = await this.#uploadAuthorization(intent);
+    if (!winner) throw new Error("DIRECT_UPLOAD_AUTHORIZATION_ORIGINAL_MISMATCH");
+    return winner;
+  }
+  async #uploadEvent(intent: z.infer<typeof DirectPublicationIntentSchema>, authorization: z.infer<typeof DirectUploadAuthorizationSchema>) {
+    const row = await this.input.journal.read(`direct-upload-authorization-event:v1:${authorization.authorizationSha256}`);
+    if (!row) return undefined;
+    const record = UploadEventRecord.parse(row.value);
+    if (row.revision !== 1 || row.identitySha256 !== await directPublicationDigest(record) || record.authorizationSha256 !== authorization.authorizationSha256) throw new Error("DIRECT_UPLOAD_AUTHORIZATION_EVENT_ORIGINAL_MISMATCH");
+    await verifyDirectUploadAuthorizationEvent({ intent, authorization, event: record.event });
+    return record;
+  }
+  async readAcceptedUploadAuthorization(value: unknown) {
+    const original = await this.#original(Owned.parse(value));
+    if (!original) return undefined;
+    const authorization = await this.#uploadAuthorization(original.intent);
+    return authorization ? this.#uploadEvent(original.intent, authorization) : undefined;
+  }
+  async acceptUploadAuthorization(value: unknown) {
+    const command = Owned.extend({ event: DirectUploadAuthorizationEventSchema }).strict().parse(value), original = await this.#original(command);
+    if (!original) throw new Error("DIRECT_PUBLICATION_INTENT_NOT_FOUND_OR_DENIED");
+    const authorization = await this.#uploadAuthorization(original.intent);
+    if (!authorization) throw new Error("DIRECT_UPLOAD_AUTHORIZATION_NOT_FOUND_OR_DENIED");
+    const event = await verifyDirectUploadAuthorizationEvent({ intent: original.intent, authorization, event: command.event }), prior = await this.#uploadEvent(original.intent, authorization);
+    if (prior) return prior;
+    await this.loadCurrentForSigning({ principal: command.principal, idempotencyKey: command.idempotencyKey });
+    if ((this.input.now ?? Date.now)() >= authorization.expiresAtMs) throw new Error("DIRECT_UPLOAD_AUTHORIZATION_EXPIRED");
+    const record = UploadEventRecord.parse({ version: "direct-upload-authorization-event-v1", authorizationSha256: authorization.authorizationSha256, event });
+    try { await this.input.journal.claim(`direct-upload-authorization-event:v1:${authorization.authorizationSha256}`, await directPublicationDigest(record), record); }
+    catch (error) { const winner = await this.#uploadEvent(original.intent, authorization); if (!winner) throw error; return winner; }
+    const winner = await this.#uploadEvent(original.intent, authorization);
+    if (!winner) throw new Error("DIRECT_UPLOAD_AUTHORIZATION_EVENT_ORIGINAL_MISMATCH");
+    return winner;
   }
   async acceptOwnerEvent(value: unknown) {
     const command = Owned.extend({ event: SignedOwnerManifestEventSchema }).strict().parse(value), owned = { principal: command.principal, idempotencyKey: command.idempotencyKey };

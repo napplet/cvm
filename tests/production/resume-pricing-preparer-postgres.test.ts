@@ -58,6 +58,7 @@ import { createDirectArtifactReadRequest, verifyDirectArtifactDelivery } from ".
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { proveDirectPreviewBrowser } from "../fixtures/direct-preview-browser";
 import { ProductionDirectPublicationIntents } from "../../src/production/direct-publication-intents";
+import { signDirectUploadAuthorization } from "../../src/publication/direct-upload-authorization";
 import { signDirectPublicationIntent } from "../../src/publication/direct-publication";
 
 const integration = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
@@ -1228,15 +1229,58 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         expect((await publications().readAcceptedOwner(owner))?.event.id).toBe(ownerEvent.id);
         await expect(publications().acceptOwnerEvent({ ...foreignOwner, event: ownerEvent })).rejects.toThrow("NOT_FOUND_OR_DENIED");
         await expect(publications().acceptOwnerEvent({ ...owner, event: finalizeEvent({ ...structuredClone(publicationIntent.review.ownerManifestTemplate), content: "substituted" }, directReadKey) })).rejects.toThrow("OWNER_EVENT_REQUIRED");
+        losePublicationCommit = true;
+        const uploadPreparations = await Promise.all([publications().prepareUploadAuthorization(owner), publications().prepareUploadAuthorization(owner)]);
+        const uploadAuthorization = uploadPreparations[0]!;
+        expect(uploadPreparations[1]).toEqual(uploadAuthorization); expect(losePublicationCommit).toBeFalse();
+        expect(uploadAuthorization.artifactHash).toBe(review.artifact.artifactHash);
+        expect(uploadAuthorization.archiveSha256).toBe(review.artifact.archiveSha256);
+        expect(uploadAuthorization.ownerEventId).toBe(ownerEvent.id);
+        expect(await publications().loadUploadAuthorizationForSigning(owner)).toEqual(uploadAuthorization);
+        await expect(changedTargets.loadUploadAuthorizationForSigning(owner)).rejects.toThrow("INTENT_STALE");
+        expect(uploadAuthorization.template.tags).toContainEqual(["x", review.artifact.artifactHash]);
+        expect(await publications().readUploadAuthorization(foreignOwner)).toBeUndefined();
+        let uploadSigns = 0;
+        const expectedUpload = { authorizationSha256: uploadAuthorization.authorizationSha256, intentId: publicationIntent.intentId, reviewSha256: review.reviewSha256, ownerPubkey: principal.pubkey };
+        await expect(signDirectUploadAuthorization({ intent: publicationIntent, authorization: uploadAuthorization, expected: { ...expectedUpload, authorizationSha256: "0".repeat(64) },
+          sign(template) { uploadSigns++; return finalizeEvent(template, directReadKey); } })).rejects.toThrow("APPROVED_AUTHORIZATION_REQUIRED");
+        expect(uploadSigns).toBe(0);
+        const uploadEvent = await signDirectUploadAuthorization({ intent: publicationIntent, authorization: uploadAuthorization, expected: expectedUpload,
+          sign(template) { uploadSigns++; return finalizeEvent(template, directReadKey); } });
+        expect(uploadSigns).toBe(1);
+        await expect(changedTargets.acceptUploadAuthorization({ ...owner, event: uploadEvent })).rejects.toThrow("INTENT_STALE");
+        await expect(publications().acceptUploadAuthorization({ ...foreignOwner, event: uploadEvent })).rejects.toThrow("NOT_FOUND_OR_DENIED");
+        await expect(publications().acceptUploadAuthorization({ ...owner, event: finalizeEvent({ ...uploadAuthorization.template, tags: uploadAuthorization.template.tags.filter(tag => tag[0] !== "x") }, directReadKey) })).rejects.toThrow("EVENT_REQUIRED");
+        losePublicationCommit = true;
+        const uploadAccepted = await Promise.all([publications().acceptUploadAuthorization({ ...owner, event: uploadEvent }), publications().acceptUploadAuthorization({ ...owner, event: uploadEvent })]);
+        expect(uploadAccepted[0]).toEqual(uploadAccepted[1]); expect(losePublicationCommit).toBeFalse();
+        const repeatedUpload = finalizeEvent(structuredClone(uploadAuthorization.template), directReadKey);
+        expect((await publications().acceptUploadAuthorization({ ...owner, event: repeatedUpload })).event.sig).toBe(uploadEvent.sig);
+        expect((await publications().readAcceptedUploadAuthorization(owner))?.event.id).toBe(uploadEvent.id);
         const unsigned = await publications().prepare({ ...publishCommand, idempotencyKey: "direct-publication:unsigned" });
-        publicationNow = Math.max(publicationIntent.expiresAtMs, unsigned.expiresAtMs);
+        const pendingUploadOwner = { principal, idempotencyKey: "direct-publication:pending-upload" };
+        const pendingIntent = await publications().prepare({ ...publishCommand, idempotencyKey: pendingUploadOwner.idempotencyKey });
+        await expect(publications().prepareUploadAuthorization(pendingUploadOwner)).rejects.toThrow("ACCEPTED_OWNER_REQUIRED");
+        await publications().acceptOwnerEvent({ ...pendingUploadOwner, event: ownerEvent });
+        const pendingUpload = await publications().prepareUploadAuthorization(pendingUploadOwner);
+        const pendingUploadEvent = finalizeEvent(structuredClone(pendingUpload.template), directReadKey);
+        publicationNow = Math.max(publicationIntent.expiresAtMs, unsigned.expiresAtMs, pendingIntent.expiresAtMs);
         await expect(publications().acceptOwnerEvent({ principal, idempotencyKey: "direct-publication:unsigned", event: ownerEvent })).rejects.toThrow("INTENT_EXPIRED");
         expect(await publications().readAcceptedOwner({ principal, idempotencyKey: "direct-publication:unsigned" })).toBeUndefined();
         await expect(publications().loadCurrentForSigning(owner)).rejects.toThrow("INTENT_EXPIRED");
         expect(await publications().prepare(publishCommand)).toEqual(publicationIntent); // Historical observation, no new authority.
         expect((await publications().readAcceptedOwner(owner))?.event.id).toBe(ownerEvent.id);
         expect((await publications().acceptOwnerEvent({ ...owner, event: ownerEvent })).event.id).toBe(ownerEvent.id);
-        expect((await admin.query("SELECT count(*)::int AS count FROM production_real.release_operation_journal WHERE namespace=$1", [publicationNamespace])).rows[0].count).toBe(3);
+        await expect(publications().acceptUploadAuthorization({ ...pendingUploadOwner, event: pendingUploadEvent })).rejects.toThrow("INTENT_EXPIRED");
+        expect(await publications().readAcceptedUploadAuthorization(pendingUploadOwner)).toBeUndefined();
+        expect(await publications().readUploadAuthorization(pendingUploadOwner)).toEqual(pendingUpload);
+        await expect(publications().loadUploadAuthorizationForSigning(owner)).rejects.toThrow("INTENT_EXPIRED");
+        expect(await publications().prepareUploadAuthorization(owner)).toEqual(uploadAuthorization);
+        expect(await publications().readUploadAuthorization(owner)).toEqual(uploadAuthorization);
+        expect((await publications().acceptUploadAuthorization({ ...owner, event: uploadEvent })).event.id).toBe(uploadEvent.id);
+        expect((await publications().readAcceptedUploadAuthorization(owner))?.event.id).toBe(uploadEvent.id);
+        await expect(publications().prepareUploadAuthorization({ principal, idempotencyKey: "direct-publication:unsigned" })).rejects.toThrow("INTENT_EXPIRED");
+        expect((await admin.query("SELECT count(*)::int AS count FROM production_real.release_operation_journal WHERE namespace=$1", [publicationNamespace])).rows[0].count).toBe(8);
         console.log(JSON.stringify({ localDirectPublication: true, intentId: publicationIntent.intentId, ownerEventId: ownerEvent.id, lostCommitRecovered: !losePublicationCommit, releaseEvidence: false }));
         expect(modelPosts).toBe(3); expect(nativeRestores).toBe(1); expect(reserves).toBe(2); expect(nativeDeletes).toBe(1);
         expect(cleanupGets).toBe(getsAfterCleanupProof); expect(allocations).toBe(allocationsBeforeReads); expect(deletions).toBe(deletionsBeforeReads);

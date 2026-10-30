@@ -75,6 +75,35 @@ fields refuse. `readAcceptedOwner` and an exact replay can observe that original
 after expiry, but a new expired acceptance is forbidden. Accepted means retained
 public signature only; it does not mean uploaded or published.
 
+`prepareUploadAuthorization({principal,idempotencyKey})` requires that accepted
+owner event and the currently owned verified artifact. It captures the exact
+BUD-11 template by invoking the pinned CLI's authorization function with a
+capture-only callback that stops before signing. The strict
+`direct-upload-authorization-v1` record binds the intent/review, owner event,
+raw HTML hash, separate archive checksum, fixed server, helper checksum,
+template and expiry. Its digest determines the original signing operation.
+Concurrent preparation and lost commit acknowledgement recover that one record;
+later calls cannot rotate its timestamp or replace it.
+
+`loadUploadAuthorizationForSigning` revalidates current ownership, intent,
+configuration and expiry. The client helper `signDirectUploadAuthorization`
+requires the expected authorization digest, intent, review and owner before
+calling the existing owner signer with a copy of the actual CLI template. It
+then checks the complete public event, signature and every template field.
+Authenticated client presentation still supplies provenance and actual consent.
+The CVM accepts no owner private key.
+
+`acceptUploadAuthorization` retains only a verified public signature and checks
+current state before its first acceptance. Concurrent acceptance, lost
+acknowledgement and another valid signature of the same event recover the
+original retained signature. Historical `readUploadAuthorization`,
+`readAcceptedUploadAuthorization`, preparation replay and accepted-event replay
+survive expiry; an expired first acceptance or new preparation is refused.
+These methods create no upload, signer request, relay event or service signature.
+They are ordinary owner preparation, with no certification receipt requirement
+and no provider-effect authority. They remain private and unselected pending
+the negotiated public surface and actor composition.
+
 ## Remaining publication work
 
 The pinned direct CLI source is `napplet/web` commit

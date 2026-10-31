@@ -5,9 +5,9 @@ import { dirname, join } from "node:path";
 import { z } from "zod";
 import { canonicalJson } from "../../promotion/schema";
 
-/** Public, reviewed Modal distribution identity. The worker image does not
- * install it until a separately authorized image-construction workflow can
- * verify these exact bytes without authenticating to Modal. */
+/** Public distribution identity for the dedicated report collector, never a
+ * generated-code worker. Its installed environment must additionally pin and
+ * verify the executable and transitive dependency closure without account use. */
 export const MODAL_1_6_3_VERSION = "1.6.3";
 export const MODAL_1_6_3_SDIST_SHA256 = "f6c1c59172274357e260a6f3d24254dddb472a6d4202cabce87452c127a1779c";
 export const MODAL_1_6_3_WHEEL_SHA256 = "31e8952c8908740f3fbc666191fec78ff5fadecb7a48a29d40aed90b39531ffe";
@@ -287,7 +287,7 @@ async function finish(journal: ModalBillingReportJournal, current: Readonly<{ re
   const saved = await journal.compareAndSet({ reportRequestSha256: current.record.reportRequestSha256, expectedRevision: current.revision, record: next });
   if (saved) return saved.record.result ?? result;
   const reloaded = await journal.read(current.record.reportRequestSha256);
-  if (reloaded?.record.result) return reloaded.record.result;
+  if (reloaded?.record.result && equal(reloaded.record.result, result)) return result;
   throw new Error("MODAL_BILLING_JOURNAL_CONFLICT");
 }
 
@@ -327,30 +327,52 @@ export function createModalBillingReportCollector(input: Readonly<{
       return { reason: "finality_unproven" as const, observedMicros: nonnegativeMicros(rows).toString(), envelopeSha256, rowIdentitiesSha256, coverage: "unknown" as const };
     } catch { return { reason: "report_invalid" as const }; }
   };
-  return Object.freeze({
-    async recover(raw: unknown): Promise<ModalBillingReportCapture> {
+  const recover = async (raw: unknown): Promise<ModalBillingReportCapture> => {
       const grant = verify(raw); const current = await input.journal.read(reportRequestSha256(grant));
-      if (!current || current.record.grantSha256 !== grant.grantSha256) return held(grant, "artifact_unavailable");
-      const pending = current.record.attempts.at(-1);
+      const parsed = ModalBillingReportJournalRecordSchema.safeParse(current?.record);
+      if (!parsed.success || parsed.data.grantSha256 !== grant.grantSha256 || parsed.data.reportRequestSha256 !== reportRequestSha256(grant)) return held(grant, "artifact_unavailable");
+      const record = parsed.data;
+      const pending = record.attempts.at(-1);
       if (pending?.state === "dispatch_intent") return held(grant, "dispatch_uncertain");
-      if (!current.record.result) return held(grant, "artifact_unavailable");
-      const completed = current.record.attempts.at(-1);
+      if (!record.result) return held(grant, "artifact_unavailable");
+      const completed = record.attempts.at(-1);
+      if (!completed || completed.state !== "completed" || completed.executableSha256 !== input.executableSha256.toLowerCase() || completed.argvSha256 !== sha256(canonicalJson(logicalArgv(grant)))) return held(grant, "artifact_unavailable");
       if (completed?.stdout) {
-        const key = `modal-billing/${current.record.reportRequestSha256}/${completed.attempt}/stdout`;
+        if (!active(grant)) return held(grant, "grant_expired");
+        const key = `modal-billing/${record.reportRequestSha256}/${completed.attempt}/stdout`;
         if (!completed.stdoutSha256) return held(grant, "artifact_unavailable");
         const bytes = await validArtifact(completed.stdout, key, completed.stdoutSha256);
         if (!bytes) return held(grant, "artifact_unavailable");
+        if (!active(grant)) return held(grant, "grant_expired");
+        if (completed.disposition === "non_zero_exit" || completed.disposition === "timeout" || completed.disposition === "output_overflow") {
+          const failed = held(grant, "child_failure");
+          return completed.reason === "child_failure" && completed.envelopeSha256 === undefined && completed.rowIdentitiesSha256 === undefined && completed.coverage === undefined && equal(record.result, failed) ? failed : held(grant, "artifact_unavailable");
+        }
         const derived = derive(bytes, grant), recomputed = held(grant, derived.reason, derived.reason === "finality_unproven" ? derived.observedMicros : undefined);
-        if (completed.disposition !== "passed" || completed.reason !== derived.reason || completed.coverage !== derived.coverage || completed.envelopeSha256 !== ("envelopeSha256" in derived ? derived.envelopeSha256 : undefined) || completed.rowIdentitiesSha256 !== ("rowIdentitiesSha256" in derived ? derived.rowIdentitiesSha256 : undefined) || !equal(current.record.result, recomputed)) return held(grant, "artifact_unavailable");
+        if (completed.disposition !== "passed" || completed.reason !== derived.reason || completed.coverage !== derived.coverage || completed.envelopeSha256 !== ("envelopeSha256" in derived ? derived.envelopeSha256 : undefined) || completed.rowIdentitiesSha256 !== ("rowIdentitiesSha256" in derived ? derived.rowIdentitiesSha256 : undefined) || !equal(record.result, recomputed)) return held(grant, "artifact_unavailable");
         return recomputed;
       }
+      let reason: HeldReason | undefined;
+      switch (completed.disposition) {
+        case "credential_unavailable": reason = "credential_unavailable"; break;
+        case "credential_echo": reason = "credential_echo"; break;
+        case "grant_expired": reason = "grant_expired"; break;
+        case "dispatch_unknown": reason = "child_failure"; break;
+        case "artifact_unavailable": reason = "artifact_unavailable"; break;
+      }
+      if (reason && completed.reason === reason && completed.envelopeSha256 === undefined && completed.rowIdentitiesSha256 === undefined && completed.coverage === undefined) {
+        const recomputed = held(grant, reason);
+        if (equal(record.result, recomputed)) return recomputed;
+      }
       return held(grant, "artifact_unavailable");
-    },
+  };
+  return Object.freeze({
+    recover,
     async capture(raw: unknown): Promise<ModalBillingReportCapture> {
       const grant = verify(raw); const requested = initial(grant); const claimed = await input.journal.claim(requested);
       let current = { revision: claimed.revision, record: claimed.record };
       if (current.record.grantSha256 !== grant.grantSha256 || current.record.reportRequestSha256 !== requested.reportRequestSha256) throw new Error("MODAL_BILLING_JOURNAL_CONFLICT");
-      if (current.record.result) return current.record.result;
+      if (current.record.result) return recover(grant);
       if (current.record.attempts.at(-1)?.state === "dispatch_intent") return held(grant, "dispatch_uncertain");
       if (current.record.attempts.length >= grant.maximumAttempts) return held(grant, "attempt_limit");
       const attempt = current.record.attempts.length + 1;
@@ -359,7 +381,7 @@ export function createModalBillingReportCollector(input: Readonly<{
       const intentSaved = await input.journal.compareAndSet({ reportRequestSha256: requested.reportRequestSha256, expectedRevision: current.revision, record: intentRecord });
       if (!intentSaved) {
         const reloaded = await input.journal.read(requested.reportRequestSha256);
-        return reloaded?.record.result ?? held(grant, "dispatch_uncertain");
+        return reloaded?.record.result ? recover(grant) : held(grant, "dispatch_uncertain");
       }
       current = intentSaved;
       if (!active(grant)) return complete(current, grant, { disposition: "grant_expired", reason: "grant_expired" }, held(grant, "grant_expired"));

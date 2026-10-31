@@ -312,7 +312,41 @@ process.stdout.write(${JSON.stringify(report)});
       expect(artifactCalls).toBe(0);
       expect(resolves).toBe(outcome === "grant_expired" ? 0 : 1);
       const saved = await journal.read(captured.reportRequestSha256);
-      expect(ModalBillingReportJournalRecordSchema.parse(saved?.record).attempts).toHaveLength(1);
+      const record = ModalBillingReportJournalRecordSchema.parse(saved?.record);
+      expect(record.attempts).toHaveLength(1);
+      if (!saved || !record.result) throw new Error("DURABLE_HELD_RESULT_MISSING");
+      await journal.compareAndSet({ reportRequestSha256: captured.reportRequestSha256, expectedRevision: saved.revision, record: { ...record, result: { ...record.result, observedMicros: "0" } } });
+      await expect(reopened.recover(approved)).resolves.toMatchObject({ reason: "artifact_unavailable" });
+    } finally { await rm(executable.directory, { recursive: true, force: true }); }
+  });
+
+  test("preserves a failed child's durable outcome after verifying its retained raw bytes", async () => {
+    const executable = await fixture(`#!/usr/bin/env bun\nprocess.stdout.write(${JSON.stringify(report)});\nprocess.exit(17);\n`);
+    const journal = createMemoryModalBillingReportJournal(), artifacts = immutableMemoryStore();
+    try {
+      const collector = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve() { return { tokenId: "fixture-id", tokenSecret: "fixture-secret" }; } }, journal, artifacts, artifactOrigin: "memory://origin/" });
+      const approved = grant(executable.sha256), captured = await collector.capture(approved);
+      expect(captured).toMatchObject({ reason: "child_failure" });
+      expect(captured.observedMicros).toBeUndefined();
+      await expect(collector.recover(approved)).resolves.toEqual(captured);
+      await expect(collector.capture(approved)).resolves.toEqual(captured);
+    } finally { await rm(executable.directory, { recursive: true, force: true }); }
+  });
+
+  test("expired report authority cannot read an artifact through recovery or cached capture", async () => {
+    const executable = await fixture(`#!/usr/bin/env bun\nprocess.stdout.write(${JSON.stringify(report)});\n`);
+    const journal = createMemoryModalBillingReportJournal(), artifacts = immutableMemoryStore();
+    let clock = Date.now();
+    try {
+      const collector = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve() { return { tokenId: "fixture-id", tokenSecret: "fixture-secret" }; } }, journal, artifacts, artifactOrigin: "memory://origin/", now: () => clock });
+      const approved = grant(executable.sha256);
+      expect((await collector.capture(approved)).reason).toBe("finality_unproven");
+      clock = approved.expiresAtMs;
+      let reads = 0;
+      const reopened = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve(): Promise<never> { throw new Error("EXPIRED_RECOVERY_CREDENTIAL"); } }, journal, artifacts: { ...artifacts, async readExact(): Promise<never> { reads++; throw new Error("EXPIRED_ARTIFACT_READ"); } }, artifactOrigin: "memory://origin/", now: () => clock });
+      await expect(reopened.recover(approved)).resolves.toMatchObject({ reason: "grant_expired" });
+      await expect(reopened.capture(approved)).resolves.toMatchObject({ reason: "grant_expired" });
+      expect(reads).toBe(0);
     } finally { await rm(executable.directory, { recursive: true, force: true }); }
   });
 });

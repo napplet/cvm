@@ -3,7 +3,7 @@ import { z } from "zod";
 import { canonicalJson } from "../promotion/schema";
 import { PostgresOperationJournal, assertPostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
 import { CertificationEdgeKindSchema, CertificationEdgePayloadSchemas, type CertificationEdgeKind } from "./certification-edge-protocol";
-import { ProductionCertificationEdgeService, assertProductionCertificationEdgeService } from "./certification-edge";
+import { NonGoogleCertificationEdgeService, assertNonGoogleCertificationEdgeService } from "./non-google-certification-edge";
 import { assertNonGoogleInvocationAuthority, type NonGoogleInvocationAuthority } from "./non-google-invocation-authority";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/iu).transform(value => value.toLowerCase());
@@ -26,8 +26,8 @@ async function digest(value: unknown): Promise<string> { return Array.from(new U
  * operation identity is claimed before a first dispatch; retry only observes
  * the same stored command. */
 export class NonGoogleSuccessorControl {
-  constructor(private readonly input: Readonly<{ authority: NonGoogleInvocationAuthority; journal: PostgresOperationJournal; edge: ProductionCertificationEdgeService; candidateSha256: string; topologySha256: string; roleCostBoundSha256: string; authorizationRequestSha256: string }>) {
-    assertNonGoogleInvocationAuthority(input.authority); assertPostgresOperationJournal(input.journal); assertProductionCertificationEdgeService(input.edge);
+  constructor(private readonly input: Readonly<{ authority: NonGoogleInvocationAuthority; journal: PostgresOperationJournal; edge: NonGoogleCertificationEdgeService; candidateSha256: string; topologySha256: string; roleCostBoundSha256: string; authorizationRequestSha256: string }>) {
+    assertNonGoogleInvocationAuthority(input.authority); assertPostgresOperationJournal(input.journal); assertNonGoogleCertificationEdgeService(input.edge);
     Digest.parse(input.candidateSha256); Digest.parse(input.topologySha256); Digest.parse(input.roleCostBoundSha256); Digest.parse(input.authorizationRequestSha256);
   }
   async execute(raw: unknown): Promise<NonGoogleSuccessorControlObservation> {

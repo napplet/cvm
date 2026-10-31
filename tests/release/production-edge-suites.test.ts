@@ -2,7 +2,7 @@ import { DirectPublicationSourceObservationSchema, DirectPublicationSubmissionSc
 import { DIRECT_CLI_NETWORK_IDENTITY } from "../../src/production/pinned-direct-cli-network";
 import { expect, spyOn, test } from "bun:test";
 
-import { createLegacyProductionEdgeSuiteAdapters } from "../../src/release/deployment/production-edge-suite-adapters";
+import { createLegacyProductionEdgeSuiteAdapters } from "../../src/release/deployment/legacy-production-edge-suite-adapters";
 import { PostgresOperationJournal } from "../../src/release/deployment/postgres-operation-journal";
 import { openContextVmCertificationClient } from "../../src/release/deployment/contextvm-client";
 import { ProductionCoreControlClient } from "../../src/release/deployment/production-core-control";

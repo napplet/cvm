@@ -1,5 +1,12 @@
 import { createRequire } from "node:module";
 import { expect, test } from "bun:test";
+import { assertMountedProductionSourceBuildVerifier } from "../../src/production/source-build-verifier";
+
+test("mounted source-build verifier rejects structural callbacks and proxies", () => {
+  const lookalike = Object.freeze({ authority: "production-real" as const, async verify() { return {}; } });
+  expect(() => assertMountedProductionSourceBuildVerifier(lookalike)).toThrow("PRODUCTION_SOURCE_BUILD_VERIFIER_REQUIRED");
+  expect(() => assertMountedProductionSourceBuildVerifier(new Proxy(lookalike, {}))).toThrow("PRODUCTION_SOURCE_BUILD_VERIFIER_REQUIRED");
+});
 
 import { PostgresOperationJournal } from "../../src/release/deployment/postgres-operation-journal";
 import {

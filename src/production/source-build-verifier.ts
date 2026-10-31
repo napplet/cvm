@@ -42,6 +42,14 @@ export const MountedSourceBuildEvidenceSchema = z.object({
 export type MountedSourceBuildEvidence = z.infer<typeof MountedSourceBuildEvidenceSchema>;
 const sha256 = (value: string | Uint8Array) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
 const MAX_EVIDENCE_BYTES = 24 * 1_024 * 1_024;
+const mountedSourceBuildVerifiers = new WeakSet<object>();
+
+/** Only the immutable-material factory below can register a source-build
+ * verifier. Successor composition must reject structural authority/verify
+ * lookalikes rather than turning caller callbacks into edge evidence. */
+export function assertMountedProductionSourceBuildVerifier(value: unknown): asserts value is ProductionSourceBuildVerifier {
+  if (!value || typeof value !== "object" || !mountedSourceBuildVerifiers.has(value)) throw new Error("PRODUCTION_SOURCE_BUILD_VERIFIER_REQUIRED");
+}
 
 function abortAfter(ms: number): Readonly<{ signal: AbortSignal; dispose(): void }> {
   const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), ms);
@@ -212,7 +220,7 @@ export function createMountedProductionSourceBuildVerifier(input: Readonly<{
     return record;
   };
 
-  return Object.freeze({ authority: "production-real", async verify(raw: unknown): Promise<unknown> {
+  const verifier = Object.freeze({ authority: "production-real" as const, async verify(raw: unknown): Promise<unknown> {
     const command = Request.parse(raw);
     if (command.candidateSha256 !== input.config.candidateSha256 || command.topologySha256 !== input.config.topologySha256) throw new Error("PRODUCTION_SOURCE_BUILD_SCOPE_REQUIRED");
     const nativeKind = command.kind === "edge.security.build" || command.kind === "edge.security.hostile"
@@ -292,4 +300,6 @@ export function createMountedProductionSourceBuildVerifier(input: Readonly<{
       return command.kind === "edge.security.build" ? passed : selectNativeEdgeObservation(command.kind, result, edgeCertification);
     } finally { await materialized.cleanup(); }
   } });
+  mountedSourceBuildVerifiers.add(verifier);
+  return verifier;
 }

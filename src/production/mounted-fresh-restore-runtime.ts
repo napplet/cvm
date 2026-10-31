@@ -22,7 +22,12 @@ import { openRetainedSubject } from "./retained-subject-archive";
 import { ProductionRetainedSubjectPreparer } from "./retained-subject-preparer";
 
 type Expected = z.infer<typeof RestoreDrillInputSchema>["expected"];
-type Google = ReturnType<typeof createGoogleDeploymentClients>;
+/** The recovered runtime only observes the already-journaled SQL endpoint.
+ * Keeping this transport surface narrow permits an isolated mechanism proof
+ * without changing the production Google client construction. */
+type Google = Readonly<{
+  cloudSqlPostgres: Pick<ReturnType<typeof createGoogleDeploymentClients>["cloudSqlPostgres"], "observePrivateAddress">;
+}>;
 const Identity = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]*$/u);
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const sha = (value: Uint8Array | string) => createHash("sha256").update(value).digest("hex");

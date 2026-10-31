@@ -111,17 +111,15 @@ export class MountedKekCheckpointCrypto implements CheckpointCryptoPort {
       const wrappedDek = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: wrapNonce as BufferSource, additionalData: canonicalBytes({ checkpointId, bindingSha256 }) as BufferSource }, kek, dekBytes as BufferSource));
       const ciphertextSha256 = sha256(ciphertext);
       const keyReference = `checkpoint-key:${checkpointId}:${sha256(wrappedDek).slice(0, 24)}`;
-      // Retained-subject callers can wait on the mounted KEK after the outer
-      // controller admitted their deadline. Do not insert new custody after
-      // that wait has crossed the same retention fence.
-      if (binding.operationId.startsWith("durability-archive:")) {
-        const retentionAtMs = Date.parse(binding.retentionUntil), now = this.#now();
-        if (!Number.isFinite(retentionAtMs) || !Number.isFinite(now) || retentionAtMs <= now) {
-          throw new Error("RETAINED_SUBJECT_RETENTION_EXPIRED");
-        }
+      this.#assertRetainedArchiveFuture(binding);
+      try {
+        const stored = await this.#insert({ checkpointId, keyReference, binding, bindingSha256, plaintextSha256, aadSha256, ciphertextSha256, nonce, wrapNonce, wrappedDek, ciphertext });
+        return this.#replay(stored, bindingSha256, plaintextSha256, aadSha256);
+      } finally {
+        // PostgreSQL received copies. Keep no locally generated retained DEK
+        // wrapping material after either a refusal or successful readback.
+        nonce.fill(0); wrapNonce.fill(0); wrappedDek.fill(0); ciphertext.fill(0);
       }
-      const stored = await this.#insert({ checkpointId, keyReference, binding, bindingSha256, plaintextSha256, aadSha256, ciphertextSha256, nonce, wrapNonce, wrappedDek, ciphertext });
-      return this.#replay(stored, bindingSha256, plaintextSha256, aadSha256);
     } finally { dekBytes.fill(0); }
   }
 
@@ -182,14 +180,30 @@ export class MountedKekCheckpointCrypto implements CheckpointCryptoPort {
     try { const row = (await client.query<Record<string, unknown>>(text, values)).rows[0]; return row ? parseRecord(row) : undefined; }
     finally { client.release(); }
   }
+  #isRetainedArchive(binding: CryptoBinding): boolean { return binding.operationId.startsWith("durability-archive:"); }
+  #assertRetainedArchiveFuture(binding: CryptoBinding): void {
+    if (!this.#isRetainedArchive(binding)) return;
+    const retentionAtMs = Date.parse(binding.retentionUntil), now = this.#now();
+    if (!Number.isFinite(retentionAtMs) || !Number.isFinite(now) || retentionAtMs <= now) {
+      throw new Error("RETAINED_SUBJECT_RETENTION_EXPIRED");
+    }
+  }
   async #insert(input: Readonly<{ checkpointId: string; keyReference: string; binding: CryptoBinding; bindingSha256: string; plaintextSha256: string; aadSha256: string; ciphertextSha256: string; nonce: Uint8Array; wrapNonce: Uint8Array; wrappedDek: Uint8Array; ciphertext: Uint8Array }>): Promise<StoredRecord> {
     for (let attempt = 0; attempt < 4; attempt++) {
       const client = await this.#pool.connect();
       try {
+        // The connection wait can cross the retained deadline. Check it again
+        // before beginning work, and once more after BEGIN immediately before
+        // the only new-custody statement below.
+        this.#assertRetainedArchiveFuture(input.binding);
         await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
-        const inserted = await client.query<Record<string, unknown>>("INSERT INTO production_real.checkpoint_crypto_records(checkpoint_id,key_reference,binding_sha256,account_id,session_id,action_id,operation_id,retention_until,plaintext_sha256,aad_sha256,ciphertext_sha256,nonce,wrap_nonce,wrapped_dek,ciphertext,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'active') ON CONFLICT(checkpoint_id) DO NOTHING RETURNING checkpoint_id,key_reference,binding_sha256,retention_until::text AS retention_until,plaintext_sha256,aad_sha256,ciphertext_sha256,nonce,wrap_nonce,wrapped_dek,ciphertext,state", [input.checkpointId, input.keyReference, input.bindingSha256, input.binding.accountId, input.binding.sessionId, input.binding.actionId, input.binding.operationId, input.binding.retentionUntil, input.plaintextSha256, input.aadSha256, input.ciphertextSha256, Buffer.from(input.nonce), Buffer.from(input.wrapNonce), Buffer.from(input.wrappedDek), Buffer.from(input.ciphertext)]);
+        this.#assertRetainedArchiveFuture(input.binding);
+        const values = [input.checkpointId, input.keyReference, input.bindingSha256, input.binding.accountId, input.binding.sessionId, input.binding.actionId, input.binding.operationId, input.binding.retentionUntil, input.plaintextSha256, input.aadSha256, input.ciphertextSha256, Buffer.from(input.nonce), Buffer.from(input.wrapNonce), Buffer.from(input.wrappedDek), Buffer.from(input.ciphertext)];
+        const inserted = await client.query<Record<string, unknown>>(this.#isRetainedArchive(input.binding)
+          ? "INSERT INTO production_real.checkpoint_crypto_records(checkpoint_id,key_reference,binding_sha256,account_id,session_id,action_id,operation_id,retention_until,plaintext_sha256,aad_sha256,ciphertext_sha256,nonce,wrap_nonce,wrapped_dek,ciphertext,state) SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'active' WHERE clock_timestamp() < $8::timestamptz ON CONFLICT(checkpoint_id) DO NOTHING RETURNING checkpoint_id,key_reference,binding_sha256,retention_until::text AS retention_until,plaintext_sha256,aad_sha256,ciphertext_sha256,nonce,wrap_nonce,wrapped_dek,ciphertext,state"
+          : "INSERT INTO production_real.checkpoint_crypto_records(checkpoint_id,key_reference,binding_sha256,account_id,session_id,action_id,operation_id,retention_until,plaintext_sha256,aad_sha256,ciphertext_sha256,nonce,wrap_nonce,wrapped_dek,ciphertext,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'active') ON CONFLICT(checkpoint_id) DO NOTHING RETURNING checkpoint_id,key_reference,binding_sha256,retention_until::text AS retention_until,plaintext_sha256,aad_sha256,ciphertext_sha256,nonce,wrap_nonce,wrapped_dek,ciphertext,state", values);
         const row = inserted.rows[0] ?? (await client.query<Record<string, unknown>>("SELECT checkpoint_id,key_reference,binding_sha256,retention_until::text AS retention_until,plaintext_sha256,aad_sha256,ciphertext_sha256,nonce,wrap_nonce,wrapped_dek,ciphertext,state FROM production_real.checkpoint_crypto_records WHERE checkpoint_id=$1 FOR UPDATE", [input.checkpointId])).rows[0];
-        if (!row) throw new Error("PRODUCTION_CHECKPOINT_CRYPTO_RECORD_MISSING");
+        if (!row) throw new Error(this.#isRetainedArchive(input.binding) ? "RETAINED_SUBJECT_RETENTION_EXPIRED" : "PRODUCTION_CHECKPOINT_CRYPTO_RECORD_MISSING");
         const record = parseRecord(row);
         if (inserted.rows.length) await this.#audit(record, "sealed", record.ciphertextSha256, client);
         await client.query("COMMIT");

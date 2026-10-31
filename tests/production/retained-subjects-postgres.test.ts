@@ -296,6 +296,48 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     await expect(pendingCrypto).rejects.toThrow("RETAINED_SUBJECT_RETENTION_EXPIRED");
     expect(await cryptoDeadline.readSealed(cryptoCustody)).toBeUndefined();
 
+    // Barrier 3: the final custody insert uses a second SQL connection after
+    // the read-only identity lookup. Crossing expiry after that connection is
+    // acquired must not commit a custody row, audit row, intent, or object.
+    const insertSource = { kind: "sealed_artifact" as const, sourceIdentity: "barrier:final-insert", bytes: new TextEncoder().encode("barrier final insert original") };
+    const insertCustody = retainedSubjectCustodyId({ checkpointId, kind: insertSource.kind, sourceIdentity: insertSource.sourceIdentity });
+    const insertOperation = `retained-object:${digest(canonicalJson({ checkpointId, kind: insertSource.kind, sourceIdentity: insertSource.sourceIdentity })).slice(0, 48)}`;
+    let insertConnections = 0, insertCreates = 0;
+    const finalInsertPool: PostgresSqlPool = {
+      async connect() {
+        const client = await pool.connect();
+        insertConnections++;
+        if (insertConnections === 2) now = retentionDeadline;
+        return client;
+      },
+    };
+    const finalInsertObjects: ObjectStorePort = {
+      async createImmutable(value) { insertCreates++; return objects.createImmutable(value); },
+      observeExactByKey: value => objects.observeExactByKey(value), readExact: value => objects.readExact(value),
+      scheduleExactDeletion: (value, deadline) => objects.scheduleExactDeletion(value, deadline),
+    };
+    const finalInsertCrypto = new MountedKekCheckpointCrypto({ pool: finalInsertPool, kekPath: "/fixture/kek", readFile: async () => kek, now: () => now });
+    now = retentionDeadline - 1;
+    await expect(sealRetainedSubject({ crypto: finalInsertCrypto, objectStore: finalInsertObjects, journal, checkpointId, accountId, ownerId: fixture.ownerId, sessionId, actionId, retentionUntil: barrierRetention, source: insertSource, now: () => now })).rejects.toThrow("RETAINED_SUBJECT_RETENTION_EXPIRED");
+    expect(insertConnections).toBe(2);
+    expect(insertCreates).toBe(0);
+    expect(await finalInsertCrypto.readSealed(insertCustody)).toBeUndefined();
+    expect(Number((await runtime.query("SELECT count(*)::int AS count FROM production_real.checkpoint_crypto_audit WHERE checkpoint_id=$1", [insertCustody])).rows[0]!.count)).toBe(0);
+    expect(await journal.read(insertOperation)).toBeUndefined();
+
+    // The database predicate is separately authoritative: an injected clock
+    // may be stale-future while PostgreSQL's actual clock has passed this
+    // retained deadline. The insert still yields no custody/audit/intent.
+    const serverRetention = "2020-01-01T00:00:00.000Z", serverClock = Date.parse("2019-12-31T23:59:59.999Z");
+    const serverSource = { kind: "attestation" as const, sourceIdentity: "barrier:server-clock", bytes: new TextEncoder().encode("barrier server clock original") };
+    const serverCustody = retainedSubjectCustodyId({ checkpointId, kind: serverSource.kind, sourceIdentity: serverSource.sourceIdentity });
+    const serverOperation = `retained-object:${digest(canonicalJson({ checkpointId, kind: serverSource.kind, sourceIdentity: serverSource.sourceIdentity })).slice(0, 48)}`;
+    const serverCrypto = new MountedKekCheckpointCrypto({ pool, kekPath: "/fixture/kek", readFile: async () => kek, now: () => serverClock });
+    await expect(sealRetainedSubject({ crypto: serverCrypto, objectStore: objects, journal, checkpointId, accountId, ownerId: fixture.ownerId, sessionId, actionId, retentionUntil: serverRetention, source: serverSource, now: () => serverClock })).rejects.toThrow("RETAINED_SUBJECT_RETENTION_EXPIRED");
+    expect(await serverCrypto.readSealed(serverCustody)).toBeUndefined();
+    expect(Number((await runtime.query("SELECT count(*)::int AS count FROM production_real.checkpoint_crypto_audit WHERE checkpoint_id=$1", [serverCustody])).rows[0]!.count)).toBe(0);
+    expect(await journal.read(serverOperation)).toBeUndefined();
+
     const readSource = { kind: "usage_receipt" as const, sourceIdentity: "barrier:crypto-read", bytes: new TextEncoder().encode("barrier crypto read original") };
     const readCustody = retainedSubjectCustodyId({ checkpointId, kind: readSource.kind, sourceIdentity: readSource.sourceIdentity });
     const readOperation = `retained-object:${digest(canonicalJson({ checkpointId, kind: readSource.kind, sourceIdentity: readSource.sourceIdentity })).slice(0, 48)}`;

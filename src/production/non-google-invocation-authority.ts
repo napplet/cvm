@@ -9,6 +9,7 @@ const Scope = z.string().regex(/^[a-z][a-z0-9._-]{2,127}$/u);
 const Effect = z.string().regex(/^[a-z][a-z0-9._-]{2,127}$/u);
 const Signature = z.string().regex(/^[A-Za-z0-9_-]{86}$/u);
 const BoundedMs = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
+const authorities = new WeakSet<object>();
 
 const UnsignedEnvelopeSchema = z.object({
   version: z.literal("non-google-invocation-envelope-v1"),
@@ -30,6 +31,10 @@ export type NonGoogleInvocationAuthority = Readonly<{
   assertDispatch(input: Readonly<{ scope: string; effect: string; candidateSha256: string; topologySha256: string; requestSha256: string; roleCostBoundSha256: string; nowMs?: number }>): void;
   assertOriginalObservation(input: Readonly<{ scope: string; effect: string; candidateSha256: string; topologySha256: string; requestSha256: string; roleCostBoundSha256: string; originalRecorded: boolean; nowMs?: number }>): void;
 }>;
+
+export function assertNonGoogleInvocationAuthority(value: unknown): asserts value is NonGoogleInvocationAuthority {
+  if (!value || typeof value !== "object" || !authorities.has(value)) throw new Error("NON_GOOGLE_INVOCATION_AUTHORITY_REQUIRED");
+}
 
 type TrustedIssuer = Readonly<{ issuerId: string; publicKeySpkiDer: Uint8Array }>;
 export type NonGoogleInvocationAuthorityPolicy = Readonly<{
@@ -97,6 +102,8 @@ export function createNonGoogleInvocationAuthorityVerifier(policyInput: NonGoogl
     const request = await verifyNonGoogleAuthorizationRequestV3(value.request);
     const receipt = await verifyNonGoogleAuthorizationReceiptV4({ request, receipt: value.receipt });
     if (request.binding.scopesSha256 !== await digest(canonicalJson(sorted(value.scopes))) || request.binding.effectsSha256 !== await digest(canonicalJson(sorted(value.effects))) || receipt.candidateSha256 !== request.identity.candidateSha256 || receipt.topologySha256 !== request.identity.topologySha256 || receipt.roleCostBoundSha256 !== request.binding.roleCostBoundSha256) throw new Error("NON_GOOGLE_INVOCATION_BINDING_DENIED");
-    return Object.freeze(new VerifiedAuthority({ candidateSha256: receipt.candidateSha256, topologySha256: receipt.topologySha256, requestSha256: request.requestSha256, roleCostBoundSha256: receipt.roleCostBoundSha256, scopes: Object.freeze(sorted(value.scopes)), effects: Object.freeze(sorted(value.effects)), issuedAtMs: value.issuedAtMs, expiresAtMs: value.expiresAtMs, now: policy.now }));
+    const authority = Object.freeze(new VerifiedAuthority({ candidateSha256: receipt.candidateSha256, topologySha256: receipt.topologySha256, requestSha256: request.requestSha256, roleCostBoundSha256: receipt.roleCostBoundSha256, scopes: Object.freeze(sorted(value.scopes)), effects: Object.freeze(sorted(value.effects)), issuedAtMs: value.issuedAtMs, expiresAtMs: value.expiresAtMs, now: policy.now }));
+    authorities.add(authority);
+    return authority;
   } });
 }

@@ -98,6 +98,7 @@ on:
       - "src/release/deployment/contextvm-client.ts"
       - "src/release/deployment/production-core-suite-*.ts"
       - "src/production/certification-services.ts"
+      - "src/production/non-google-*.ts"
       - "src/production/certification-edge.ts"
       - "src/release/deployment/production-edge-suite-adapters.ts"
       - "tests/release/production-edge-suites.test.ts"

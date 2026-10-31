@@ -49,10 +49,10 @@ export type CoreServiceControlKind = keyof typeof CoreControlPayloadSchemas;
  * This is an implementation identity, not caller-provided evidence and is
  * deliberately independent of the retired cloud control transport. */
 export const CORE_NATIVE_BACKEND_PROVENANCE = Object.freeze({
-  admission: Object.freeze({ module: "src/production/certification-services.ts", export: "ProductionCertificationCoreServices", purpose: "receipt_bound_admission_observation" }),
-  telemetry: Object.freeze({ module: "src/production/certification-services.ts", export: "ProductionNativeCoreCertificationServices", purpose: "authenticated_native_telemetry_hold" }),
-  chaos: Object.freeze({ module: "src/production/chaos-certification.ts", export: "ProductionChaosCertificationService", purpose: "original_operation_fault_observation" }),
-  restore: Object.freeze({ module: "src/production/restore-certification.ts", export: "ProductionRestoreCertification", purpose: "fresh_postgres_object_key_restore" }),
+  admission: Object.freeze({ module: "src/production/non-google-admission-certification.ts", export: "NonGoogleAdmissionCertification", purpose: "scheduled_sample_capacity_original" }),
+  telemetry: Object.freeze({ module: "src/production/non-google-telemetry-certification.ts", export: "NonGoogleTelemetryCertification", purpose: "authenticated_candidate_topology_window" }),
+  chaos: Object.freeze({ module: "src/production/non-google-chaos-certification.ts", export: "NonGoogleChaosCertification", purpose: "d122_original_operation_transport" }),
+  restore: Object.freeze({ module: "src/production/non-google-fresh-restore-provisioner.ts", export: "NonGoogleFreshRestoreProvisioner", purpose: "fresh_postgres_object_key_application_restore" }),
 });
 export type CoreNativeBackendSuite = keyof typeof CORE_NATIVE_BACKEND_PROVENANCE;
 /** Named bounded live operations, never a generic callback supplied by HTTP. */

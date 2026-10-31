@@ -1,43 +1,69 @@
 import { z } from "zod";
-import { CORE_NATIVE_BACKEND_PROVENANCE, type CoreServiceControlKind } from "../release/deployment/production-core-suite-protocol";
+import { CoreControlPayloadSchemas, type CoreServiceControlKind } from "../release/deployment/production-core-suite-protocol";
 import { NonGoogleAdmissionCertification } from "./non-google-admission-certification";
 import { NonGoogleChaosCertification } from "./non-google-chaos-certification";
 import { NonGoogleFreshRestoreProvisioner } from "./non-google-fresh-restore-provisioner";
-import { NonGoogleTelemetryCertification, type NonGoogleCoreBinding } from "./non-google-telemetry-certification";
+import { assertNonGoogleNativeCoreMaterial, type NonGoogleCoreBinding, NonGoogleNativeCoreMaterial } from "./non-google-native-runtime";
+import { NonGoogleTelemetryCertification } from "./non-google-telemetry-certification";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
-const Held = z.object({ state: z.literal("held") }).strict();
+const suites = new WeakSet<object>();
 
-/** Private Plan-68 constructor seam. It does not verify or mint v4 authority;
- * Plan 70 alone may replace this held authority with a verified sealed graph. */
-export function createNonGoogleNativeCoreServices(input: Readonly<{ candidateSha256: string; topologySha256: string; successorAuthority: unknown }>) {
-  const binding: NonGoogleCoreBinding = Object.freeze({ candidateSha256: Digest.parse(input.candidateSha256), topologySha256: Digest.parse(input.topologySha256) });
-  Held.parse(input.successorAuthority);
-  const admission = new NonGoogleAdmissionCertification({ binding });
-  const telemetry = new NonGoogleTelemetryCertification({ binding });
-  const chaos = new NonGoogleChaosCertification({ binding });
-  const restore = new NonGoogleFreshRestoreProvisioner({ binding });
-  const provenance = Object.freeze({
-    ...CORE_NATIVE_BACKEND_PROVENANCE,
-    admission: Object.freeze({ module: "src/production/non-google-admission-certification.ts", export: "NonGoogleAdmissionCertification", purpose: "candidate_bound_original_admission_journal" }),
-    telemetry: Object.freeze({ module: "src/production/non-google-telemetry-certification.ts", export: "NonGoogleTelemetryCertification", purpose: "candidate_bound_authenticated_collector_journal" }),
-    chaos: Object.freeze({ module: "src/production/non-google-chaos-certification.ts", export: "NonGoogleChaosCertification", purpose: "non_google_d122_original_journal" }),
-    restore: Object.freeze({ module: "src/production/non-google-fresh-restore-provisioner.ts", export: "NonGoogleFreshRestoreProvisioner", purpose: "fresh_instance_original_intent" }),
+/** Concrete Plan-68 component graph. Construction is I/O-free; it only seals
+ * controller-owned PostgreSQL/capacity/collector/fault/restore implementations.
+ * Plan 70 remains responsible for validating the successor authority before it
+ * exposes this graph to the normal exact-eight execution path. */
+export class NonGoogleNativeCoreServices {
+  readonly provenance = Object.freeze({
+    admission: Object.freeze({ module: "src/production/non-google-admission-certification.ts", export: "NonGoogleAdmissionCertification", purpose: "scheduled_sample_capacity_original" }),
+    telemetry: Object.freeze({ module: "src/production/non-google-telemetry-certification.ts", export: "NonGoogleTelemetryCertification", purpose: "authenticated_candidate_topology_window" }),
+    chaos: Object.freeze({ module: "src/production/non-google-chaos-certification.ts", export: "NonGoogleChaosCertification", purpose: "d122_original_operation_transport" }),
+    restore: Object.freeze({ module: "src/production/non-google-fresh-restore-provisioner.ts", export: "NonGoogleFreshRestoreProvisioner", purpose: "fresh_postgres_object_key_application_restore" }),
   });
-  async function dispatch(input: Readonly<{ operationId: string; kind: CoreServiceControlKind; payload: unknown }>): Promise<unknown> {
+  readonly admission: NonGoogleAdmissionCertification;
+  readonly telemetry: NonGoogleTelemetryCertification;
+  readonly chaos: NonGoogleChaosCertification;
+  readonly restore: NonGoogleFreshRestoreProvisioner;
+  constructor(readonly binding: NonGoogleCoreBinding, readonly material: NonGoogleNativeCoreMaterial) {
+    assertNonGoogleNativeCoreMaterial(material);
+    Digest.parse(binding.candidateSha256); Digest.parse(binding.topologySha256);
+    this.admission = new NonGoogleAdmissionCertification({ binding, journal: material.input.journal, capacity: material.input.capacity });
+    this.telemetry = new NonGoogleTelemetryCertification({ binding, journal: material.input.journal, collector: material.input.telemetry });
+    this.chaos = new NonGoogleChaosCertification({ binding, journal: material.input.journal, transport: material.input.chaos });
+    this.restore = new NonGoogleFreshRestoreProvisioner({ binding, journal: material.input.journal, transport: material.input.restore });
+    suites.add(this); Object.freeze(this);
+  }
+  async execute(input: Readonly<{ operationId: string; kind: CoreServiceControlKind; payload: unknown }>): Promise<unknown> {
     switch (input.kind) {
-      case "cohort.prepare": return admission.prepare({ operationId: input.operationId, ...z.object({ candidateId: z.string(), provider: z.enum(["modal", "fly"]), sample: z.unknown() }).strict().parse(input.payload) });
-      case "cohort.observe": return admission.observe({ operationId: input.operationId, ...z.object({ candidateId: z.string(), provider: z.enum(["modal", "fly"]), sample: z.unknown() }).strict().parse(input.payload) });
-      case "telemetry.emit": return telemetry.emit({ operationId: input.operationId, observation: z.object({ observation: z.unknown() }).strict().parse(input.payload).observation });
-      case "telemetry.window": return telemetry.query({ operationId: input.operationId, binding: z.object({ binding: z.unknown() }).strict().parse(input.payload).binding });
-      case "fault.inject": return chaos.inject({ operationId: input.operationId, schedule: z.object({ schedule: z.unknown() }).strict().parse(input.payload).schedule });
-      case "fault.observe": return chaos.observe(z.object({ operationId: z.string(), sessionId: z.string() }).strict().parse(input.payload));
-      // `restore.create` has no caller-supplied source or backup identity in
-      // the public control schema. Until a sealed successor supplies the
-      // journaled originals, it must not synthesize either one.
-      case "restore.create": return Object.freeze({ status: "held" as const, reason: "SUCCESSOR_AUTHORITY_HELD" as const });
-      default: return Object.freeze({ status: "held" as const, reason: "SUCCESSOR_AUTHORITY_HELD" as const });
+      case "cohort.prepare": return this.admission.prepare({ operationId: input.operationId, ...CoreControlPayloadSchemas[input.kind].parse(input.payload) });
+      case "cohort.observe": return this.admission.observe({ operationId: input.operationId, ...CoreControlPayloadSchemas[input.kind].parse(input.payload) });
+      case "telemetry.emit": return this.telemetry.emit({ operationId: input.operationId, ...CoreControlPayloadSchemas[input.kind].parse(input.payload) });
+      case "telemetry.window": return this.telemetry.query({ operationId: input.operationId, ...CoreControlPayloadSchemas[input.kind].parse(input.payload) });
+      case "fault.inject": return this.chaos.inject({ operationId: input.operationId, ...CoreControlPayloadSchemas[input.kind].parse(input.payload) });
+      case "fault.observe": return this.chaos.observe(CoreControlPayloadSchemas[input.kind].parse(input.payload));
+      default: return this.restore.restore({ operationId: input.operationId, action: input.kind, payload: CoreControlPayloadSchemas[input.kind].parse(input.payload) });
     }
   }
-  return Object.freeze({ binding, provenance, admission, telemetry, chaos, restore, dispatch });
+  async dispatch(input: Readonly<{ operationId: string; kind: CoreServiceControlKind; payload: unknown }>): Promise<unknown> { return this.execute(input); }
+  /** Reconciliation is only a read/observe route over the persisted domain
+   * identity. It never repeats capacity reservation, fault injection, or a
+   * fresh-instance create after an ambiguous acknowledgement. */
+  async reconcile(input: Readonly<{ operationId: string; kind: CoreServiceControlKind; payload: unknown }>): Promise<unknown> {
+    switch (input.kind) {
+      case "cohort.prepare":
+      case "cohort.observe": return this.admission.observe({ operationId: input.operationId, ...CoreControlPayloadSchemas["cohort.observe"].parse(input.payload) });
+      case "telemetry.emit":
+      case "telemetry.window": return this.telemetry.query({ operationId: input.operationId, ...CoreControlPayloadSchemas["telemetry.window"].parse(input.payload) });
+      case "fault.inject":
+      case "fault.observe": return this.chaos.observe(CoreControlPayloadSchemas["fault.observe"].parse(input.payload));
+      default: return this.restore.restore({ operationId: input.operationId, action: input.kind, payload: CoreControlPayloadSchemas[input.kind].parse(input.payload) });
+    }
+  }
+}
+export function assertNonGoogleNativeCoreServices(value: unknown): asserts value is NonGoogleNativeCoreServices {
+  if (!value || typeof value !== "object" || !suites.has(value)) throw new Error("NON_GOOGLE_NATIVE_CORE_SERVICES_REQUIRED");
+}
+
+export function createNonGoogleNativeCoreServices(input: Readonly<{ candidateSha256: string; topologySha256: string; material: NonGoogleNativeCoreMaterial }>): NonGoogleNativeCoreServices {
+  return new NonGoogleNativeCoreServices(Object.freeze({ candidateSha256: Digest.parse(input.candidateSha256), topologySha256: Digest.parse(input.topologySha256) }), input.material);
 }

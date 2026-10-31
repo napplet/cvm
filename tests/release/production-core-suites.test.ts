@@ -9,6 +9,7 @@ import { assertMountedFreshWorkspaceSubject } from "../../src/production/mounted
 import { openRetainedSubject, sealRetainedSubject } from "../../src/production/retained-subject-archive";
 import { DeterministicObjectStore } from "../../src/continuity/object-store";
 import { createNonGoogleNativeCoreServices } from "../../src/production/non-google-core-services";
+import { createNonGoogleCoreTestMaterial } from "../../src/production/non-google-native-runtime";
 
 const hash = "a".repeat(64);
 const candidate = { id: hash, provider: "modal" as const, image: `registry/worker@sha256:${hash}`, sourceSha256: hash };
@@ -29,12 +30,19 @@ test("tracer: native core construction refuses a wrapper-only control path befor
   expect(calls).toBe(0);
 });
 
-test("tracer: private non-Google core factory constructs and dispatches all four native backends without creating an authority", async () => {
+test("tracer: non-Google factory constructs sealed native dependencies and dispatches their original operations", async () => {
+  const calls: string[] = [];
+  const material = createNonGoogleCoreTestMaterial({
+    onCapacity: value => { calls.push(`capacity:${value.intentReference}`); return { status: "available" as const, reference: "capacity:one", expiresAt: "2030-01-01T00:00:00.000Z", usable: true as const, ready: { intentReference: value.intentReference, leaseReference: "capacity:one", sessionBindingDigest: value.expectedSessionBindingDigest, imageDigest: `sha256:${hash}`, readinessProbeDigest: `sha256:${"c".repeat(64)}`, readyMonotonicMs: 1 } }; },
+    onFault: value => { calls.push(`fault:${value.operationId}`); return { status: "applied" as const, operationId: value.operationId, sessionId: value.sessionId }; },
+    onRestore: value => { calls.push(`restore:${value.operationId}`); return value; },
+  });
   const core = createNonGoogleNativeCoreServices({
     candidateSha256: hash,
     topologySha256: "b".repeat(64),
-    successorAuthority: { state: "held" },
+    material,
   });
+  expect(calls).toEqual([]);
   expect(core.provenance).toEqual(expect.objectContaining({
     admission: expect.objectContaining({ module: "src/production/non-google-admission-certification.ts" }),
     telemetry: expect.objectContaining({ module: "src/production/non-google-telemetry-certification.ts" }),
@@ -43,11 +51,18 @@ test("tracer: private non-Google core factory constructs and dispatches all four
   }));
   const scheduled = createWorkerBenchmarkSchedule(IDENTICAL_WORKER_COHORT_PROFILE)[0]!;
   const sample = { id: scheduled.id, cohort: scheduled.cohort };
-  await expect(core.dispatch({ operationId: "core:held:admission", kind: "cohort.prepare", payload: { candidateId: hash, provider: "modal", sample } })).resolves.toMatchObject({ status: "held" });
-  await expect(core.dispatch({ operationId: "core:held:telemetry", kind: "telemetry.emit", payload: { observation: { version: "admission-lifecycle-v1", correlationDigest: `sha256:${hash}`, stage: "generation", monotonicMs: 1 } } })).resolves.toMatchObject({ status: "held" });
-  await expect(core.dispatch({ operationId: "core:held:chaos", kind: "fault.inject", payload: { schedule: D122_FAULT_MATRIX[0] } })).resolves.toMatchObject({ status: "held" });
-  await expect(core.dispatch({ operationId: "core:held:restore", kind: "restore.create", payload: {} })).resolves.toMatchObject({ status: "held" });
-  await expect(core.dispatch({ operationId: "core:held:chaos", kind: "fault.observe", payload: { operationId: "synthetic", sessionId: "synthetic" } })).rejects.toThrow("NON_GOOGLE_CHAOS_ORIGINAL_DENIED");
+  await expect(core.dispatch({ operationId: "control:admission:one", kind: "cohort.prepare", payload: { candidateId: hash, provider: "modal", sample } })).resolves.toMatchObject({ requestedCap: "1" });
+  await expect(core.dispatch({ operationId: "control:admission:observe", kind: "cohort.observe", payload: { candidateId: hash, provider: "modal", sample } })).resolves.toMatchObject({ candidateId: hash, sample });
+  await expect(core.dispatch({ operationId: "control:telemetry:emit", kind: "telemetry.emit", payload: { observation: { version: "admission-lifecycle-v1", correlationDigest: `sha256:${hash}`, stage: "generation", monotonicMs: 1 } } })).resolves.toMatchObject({ status: "emitted" });
+  await expect(core.dispatch({ operationId: "control:telemetry:window", kind: "telemetry.window", payload: { binding: { candidateId: hash, topologySha256: "b".repeat(64), datasetSha256: "d".repeat(64), profileSha256: "e".repeat(64), collectorDigest: `sha256:${"f".repeat(64)}`, configSha256: "1".repeat(64) } } })).resolves.toMatchObject({ status: "observed" });
+  await expect(core.dispatch({ operationId: "control:fault:one", kind: "fault.inject", payload: { schedule: D122_FAULT_MATRIX[0] } })).resolves.toMatchObject({ status: "recorded", operationId: D122_FAULT_MATRIX[0]!.input.operationId });
+  await expect(core.dispatch({ operationId: "control:fault:observe", kind: "fault.observe", payload: { operationId: D122_FAULT_MATRIX[0]!.input.operationId, sessionId: D122_FAULT_MATRIX[0]!.initialState.sessionId } })).resolves.toMatchObject({ status: "observed" });
+  await expect(core.dispatch({ operationId: "control:restore:create", kind: "restore.create", payload: {} })).resolves.toMatchObject({ freshInstanceId: expect.any(String) });
+  expect(calls).toEqual(expect.arrayContaining([
+    expect.stringContaining("capacity:"),
+    `fault:${D122_FAULT_MATRIX[0]!.input.operationId}`,
+    expect.stringContaining("restore:"),
+  ]));
 });
 
 test("private cohort and fault controls accept only the locked schedules", () => {

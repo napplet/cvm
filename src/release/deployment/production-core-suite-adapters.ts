@@ -10,6 +10,7 @@ import { assertContextVmCertificationClient, type ContextVmCertificationClient }
 import { assertProductionCoreControlClient, type CoreControlKind, type ProductionCoreControlClient } from "./production-core-control";
 import { CORE_RESTORE_CHUNK_BYTES, CORE_RESTORE_MAX_BYTES, CoreControlPayloadSchemas, CoreScheduledSampleSchema, CoreFreshInstanceSchema, CoreRestoreDescriptorSchema, CoreRestoreChunkSchema, type CoreServiceControlKind } from "./production-core-suite-protocol";
 import { assertProductionNativeCoreCertificationServices, type ProductionNativeCoreCertificationServices } from "../../production/certification-services";
+import { assertNonGoogleNativeCoreServices, type NonGoogleNativeCoreServices } from "../../production/non-google-core-services";
 
 export type ProductionCoreSuiteAdapters = Pick<ProductionLiveProtectedCertificationPorts, "admission" | "telemetry" | "chaos" | "durability">;
 const digest = (value: unknown) => new Bun.CryptoHasher("sha256").update(canonicalJson(value)).digest("hex");
@@ -19,7 +20,7 @@ const Identity = z.string().min(1).max(256);
 const AdmissionPrepared = z.object({ requestedCap: z.string().regex(/^[1-9][0-9]*$/u) }).strict();
 const AdmissionObserved = z.object({ candidateId: Digest, provider: z.enum(["modal", "fly"]), sample: WorkerBenchmarkSampleSchema, correlation: z.object({ clientOperationId: Identity, admissionReference: Identity, requestEventId: Digest }).strict() }).strict();
 type Input = Readonly<{ candidate: WorkerCandidate; control: ProductionCoreControlClient; contextvm: ContextVmCertificationClient }>;
-type NativeInput = Readonly<{ candidate: WorkerCandidate; services: ProductionNativeCoreCertificationServices; contextvm?: ContextVmCertificationClient }>;
+type NativeInput = Readonly<{ candidate: WorkerCandidate; services: ProductionNativeCoreCertificationServices | NonGoogleNativeCoreServices; contextvm?: ContextVmCertificationClient }>;
 type AdapterInput = Readonly<{ candidate: WorkerCandidate; contextvm: ContextVmCertificationClient; control: (kind: CoreServiceControlKind, payload: unknown) => Promise<unknown> }>;
 
 /** All effects are concrete receipt-gated private control or signed ContextVM
@@ -150,10 +151,18 @@ export function createProductionCoreSuiteAdapters(input: Input): ProductionCoreS
  */
 export function createNativeProductionCoreSuiteAdapters(input: NativeInput): ProductionCoreSuiteAdapters {
   const candidate = WorkerCandidateSchema.parse(input.candidate);
-  assertProductionNativeCoreCertificationServices(input.services);
+  try { assertProductionNativeCoreCertificationServices(input.services); }
+  catch {
+    try { assertNonGoogleNativeCoreServices(input.services); }
+    catch { throw new Error("PRODUCTION_CORE_NATIVE_SERVICES_REQUIRED"); }
+    if (input.services.binding.candidateSha256 !== candidate.id) throw new Error("PRODUCTION_CORE_NATIVE_CANDIDATE_BINDING_INVALID");
+  }
   if (!input.contextvm) throw new Error("PRODUCTION_CORE_NATIVE_CONTEXTVM_REQUIRED");
   return createCoreSuiteAdapters({ candidate, contextvm: input.contextvm, async control(kind, payload) {
     const operationId = `core:${candidate.provider}:${kind.replaceAll(".", "-")}:${digest(payload)}`;
+    /* A successor component graph is still admitted only by Plan 70's verified
+     * controller authority. This adapter merely binds its candidate to the
+     * fixed native service; no caller descriptor or legacy client is accepted. */
     return input.services.execute({ operationId, kind, payload });
   } });
 }

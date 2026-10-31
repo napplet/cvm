@@ -193,17 +193,18 @@ RETURNS TABLE(generation bigint, checksum char(64)) LANGUAGE sql SECURITY DEFINE
     AND 1=(SELECT count(*) FROM production_real.immutable_object_generations WHERE object_key=input_key AND checksum=input_checksum)
 $$;
 
-CREATE OR REPLACE FUNCTION production_real.claim_immutable_object_deletion(input_key text, input_generation bigint, input_checksum char(64), input_delete_after timestamptz)
+CREATE OR REPLACE FUNCTION production_real.claim_immutable_object_deletion(input_key text, input_generation bigint, input_checksum char(64), input_delete_after timestamptz, input_now timestamptz)
 RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, production_real AS $$
 DECLARE header production_real.immutable_object_generations%ROWTYPE;
 BEGIN
   SELECT * INTO header FROM production_real.immutable_object_generations WHERE object_key=input_key AND generation=input_generation FOR UPDATE;
-  IF NOT FOUND OR header.checksum<>input_checksum THEN RAISE EXCEPTION 'OBJECT_EXACT_GENERATION_REQUIRED'; END IF;
+  IF NOT FOUND OR header.checksum<>input_checksum OR NOT isfinite(input_delete_after) OR NOT isfinite(input_now) THEN RAISE EXCEPTION 'OBJECT_EXACT_GENERATION_REQUIRED'; END IF;
   IF header.state='tombstoned' THEN RETURN true; END IF;
   IF header.state<>'sealed' AND header.state<>'deleting' THEN RAISE EXCEPTION 'OBJECT_DELETE_HELD'; END IF;
-  IF input_delete_after > clock_timestamp() THEN
+  IF header.state='deleting' THEN RETURN false; END IF;
+  IF input_delete_after > input_now THEN
     UPDATE production_real.immutable_object_generations SET delete_after=input_delete_after WHERE object_key=input_key AND generation=input_generation AND state='sealed';
-    RETURN false;
+    RETURN true;
   END IF;
   UPDATE production_real.immutable_object_generations SET state='deleting',delete_after=input_delete_after WHERE object_key=input_key AND generation=input_generation AND state='sealed';
   RETURN false;
@@ -230,9 +231,9 @@ END $$;
 
 REVOKE ALL ON production_real.immutable_object_key_heads,production_real.immutable_object_generations,production_real.immutable_object_chunks FROM PUBLIC,napplet_production_real,napplet_production_object;
 REVOKE ALL ON production_real.checkpoint_object_key_custody FROM PUBLIC,napplet_production_real,napplet_production_object;
-REVOKE ALL ON FUNCTION production_real.claim_immutable_object(text,char(64),char(64),bigint,integer,timestamptz),production_real.write_immutable_object_chunk(text,bigint,integer,bytea),production_real.immutable_object_summary(text,bigint),production_real.read_immutable_object_chunk(text,bigint,integer),production_real.read_immutable_object_staged_chunk(text,bigint,integer),production_real.seal_immutable_object(text,bigint,char(64),bigint,integer),production_real.observe_immutable_object(text,char(64)),production_real.observe_immutable_object(text,char(64),char(64)),production_real.claim_immutable_object_deletion(text,bigint,char(64),timestamptz),production_real.delete_immutable_object_chunk_batch(text,bigint,integer),production_real.finish_immutable_object_deletion(text,bigint,char(64)) FROM PUBLIC;
+REVOKE ALL ON FUNCTION production_real.claim_immutable_object(text,char(64),char(64),bigint,integer,timestamptz),production_real.write_immutable_object_chunk(text,bigint,integer,bytea),production_real.immutable_object_summary(text,bigint),production_real.read_immutable_object_chunk(text,bigint,integer),production_real.read_immutable_object_staged_chunk(text,bigint,integer),production_real.seal_immutable_object(text,bigint,char(64),bigint,integer),production_real.observe_immutable_object(text,char(64)),production_real.observe_immutable_object(text,char(64),char(64)),production_real.claim_immutable_object_deletion(text,bigint,char(64),timestamptz,timestamptz),production_real.delete_immutable_object_chunk_batch(text,bigint,integer),production_real.finish_immutable_object_deletion(text,bigint,char(64)) FROM PUBLIC;
 GRANT USAGE ON SCHEMA production_real TO napplet_production_object;
-GRANT EXECUTE ON FUNCTION production_real.claim_immutable_object(text,char(64),char(64),bigint,integer,timestamptz),production_real.write_immutable_object_chunk(text,bigint,integer,bytea),production_real.immutable_object_summary(text,bigint),production_real.read_immutable_object_chunk(text,bigint,integer),production_real.read_immutable_object_staged_chunk(text,bigint,integer),production_real.seal_immutable_object(text,bigint,char(64),bigint,integer),production_real.observe_immutable_object(text,char(64)),production_real.observe_immutable_object(text,char(64),char(64)),production_real.claim_immutable_object_deletion(text,bigint,char(64),timestamptz),production_real.delete_immutable_object_chunk_batch(text,bigint,integer),production_real.finish_immutable_object_deletion(text,bigint,char(64)) TO napplet_production_object;
+GRANT EXECUTE ON FUNCTION production_real.claim_immutable_object(text,char(64),char(64),bigint,integer,timestamptz),production_real.write_immutable_object_chunk(text,bigint,integer,bytea),production_real.immutable_object_summary(text,bigint),production_real.read_immutable_object_chunk(text,bigint,integer),production_real.read_immutable_object_staged_chunk(text,bigint,integer),production_real.seal_immutable_object(text,bigint,char(64),bigint,integer),production_real.observe_immutable_object(text,char(64)),production_real.observe_immutable_object(text,char(64),char(64)),production_real.claim_immutable_object_deletion(text,bigint,char(64),timestamptz,timestamptz),production_real.delete_immutable_object_chunk_batch(text,bigint,integer),production_real.finish_immutable_object_deletion(text,bigint,char(64)) TO napplet_production_object;
 GRANT SELECT,INSERT ON production_real.checkpoint_object_key_custody TO napplet_production_real;
 GRANT UPDATE(state,activated_at,erase_requested_at,destroyed_at) ON production_real.checkpoint_object_key_custody TO napplet_production_real;
 COMMIT;

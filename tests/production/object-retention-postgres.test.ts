@@ -83,9 +83,12 @@ integration("declared per-object custody survives a fresh snapshot before expiry
     await admin.query(`CREATE DATABASE ${recoveredDb}`);
     const recoveredConnectionString = connectionString!.replace(/\/postgres(?:\?.*)?$/u, `/${recoveredDb}`);
     await run(postgres17Command("psql", recoveredConnectionString, "--set", "ON_ERROR_STOP=1"), dump);
-    // A no-privileges dump intentionally omits ACLs. Reapply only the checked
-    // migration-owned restricted grants, never a broad runtime/superuser grant.
+    // A no-privileges dump intentionally omits ACLs. Reapply only the original
+    // production-realm schema usage plus checked migration-owned narrow grants.
+    // The full accounting migration cannot be rerun in a schema-only restore:
+    // its public-history alterations are intentionally absent from this fixture.
     recoveredAdmin = new Pool({ connectionString: recoveredConnectionString });
+    await recoveredAdmin.query("GRANT USAGE ON SCHEMA production_real TO napplet_production_real");
     for (const file of ["phase-07/003_production_checkpoints.sql", "phase-07/019_postgres_bytea_objects.sql"]) await recoveredAdmin.query(await Bun.file(`migrations/${file}`).text());
     recoveredRuntime = new Pool({ connectionString: connectionString!.replace(/\/\/[^@]+@/u, `//${runtimeRole}@`).replace(/\/postgres(?:\?.*)?$/u, `/${recoveredDb}`) });
     recoveredObjectRuntime = new Pool({ connectionString: connectionString!.replace(/\/\/[^@]+@/u, `//${objectRole}@`).replace(/\/postgres(?:\?.*)?$/u, `/${recoveredDb}`) });
@@ -138,6 +141,15 @@ integration("declared per-object custody survives a fresh snapshot before expiry
     expect(await reconciled.open({ ...boundary, additionalData: new TextEncoder().encode("erase-aad") })).rejects.toThrow("CHECKPOINT_RESTORE_DENIED");
     await reconciled.destroy(boundary.keyReference);
     expect(await reconciled.isDestroyed(boundary.keyReference)).toBe(true);
+
+    const confirmationCheckpoint = `checkpoint:erase-confirmation:${suffix}`, confirmationBinding = { ...binding, actionId: `action:confirm:${suffix}`, operationId: `operation:confirm:${suffix}` };
+    const confirmation = await reconciled.seal({ checkpointId: confirmationCheckpoint, plaintext: new TextEncoder().encode("confirmation boundary"), additionalData: new TextEncoder().encode("confirmation-aad"), binding: confirmationBinding });
+    const uncertainConfirmation = new PerObjectFileCheckpointCrypto({ pool: raw, custody: new FileObjectKeyCustody({ roots, confirmAbsent: async () => { throw Object.assign(new Error("SIMULATED_CONFIRMATION_UNAVAILABLE"), { code: "EACCES" }); } }), now: () => now });
+    await expect(uncertainConfirmation.destroy(confirmation.keyReference)).rejects.toThrow("SIMULATED_CONFIRMATION_UNAVAILABLE");
+    expect((await admin.query("SELECT state FROM production_real.checkpoint_object_key_custody WHERE checkpoint_id=$1", [confirmationCheckpoint])).rows).toEqual([{ state: "erasing" }]);
+    expect(await uncertainConfirmation.isDestroyed(confirmation.keyReference)).toBe(false);
+    await reconciled.destroy(confirmation.keyReference);
+    expect(await reconciled.isDestroyed(confirmation.keyReference)).toBe(true);
   } finally {
     await recoveredObjectRuntime?.end(); await recoveredRuntime?.end(); await recoveredAdmin?.end(); await objectRuntime?.end(); await runtime?.end();
     await admin.query(`DROP DATABASE IF EXISTS ${recoveredDb}`).catch(() => undefined);

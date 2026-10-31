@@ -63,7 +63,8 @@ not authorize a new provider dispatch or implement terminal resumed generation.
 
 The hosted integration test uses real PostgreSQL 17/AES-GCM, a restricted login,
 the matching PostgreSQL 17 `pg_dump`/`psql` clients from the service image into a
-new database, reapplies only the migration-owned narrow ACL contract, and uses a
+new database, reapplies only original restricted schema usage and migration-owned
+narrow ACLs, and uses a
 disk-backed object protocol fixture. It checks concurrent sealing, upload/delete acknowledgement
 loss, unresolved and legacy operations, owner/key denial, guard preflight, audit
 rollback and exact expiry deletion. Its advanced test clock does not prove 30
@@ -122,7 +123,9 @@ a distinct per-object KEK kept outside PostgreSQL at every declared custody
 root. A durable SQL custody state machine records `provisioning → active →
 erasing → destroyed`; it commits the identity-bound erasure intent before file
 removal and reconciles an unknown commit acknowledgement without deleting a
-live key. Its declared-copy inventory has stable root/file identifiers and
+live key. Only an `ENOENT` confirmation proves a declared file absent; access,
+I/O and mount errors retain `erasing` and cannot produce a destruction claim.
+Its declared-copy inventory has stable root/file identifiers and
 checksums.
 The fresh PostgreSQL dump/restore test proves restoration before expiry and then
 denial when every declared key file is erased, even if the old ciphertext and

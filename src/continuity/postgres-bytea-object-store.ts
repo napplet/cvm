@@ -139,7 +139,7 @@ export class PostgresByteaObjectStoreAdapter implements ObjectStorePort {
     if (Number.isNaN(deadline.getTime())) throw new Error("OBJECT_DELETE_INVALID");
     const client = await this.#connect();
     try {
-      const claimed = (await client.query<Record<string, unknown>>("SELECT production_real.claim_immutable_object_deletion($1,$2,$3::char(64),$4::timestamptz) AS complete", [parsed.key, parsed.generation, parsed.checksum, deadline.toISOString()])).rows[0];
+      const claimed = (await client.query<Record<string, unknown>>("SELECT production_real.claim_immutable_object_deletion($1,$2,$3::char(64),$4::timestamptz,$5::timestamptz) AS complete", [parsed.key, parsed.generation, parsed.checksum, deadline.toISOString(), new Date(this.#now()).toISOString()])).rows[0];
       if (claimed?.complete === true || deadline.getTime() > this.#now()) return;
     } finally { client.release(); }
     for (;;) {

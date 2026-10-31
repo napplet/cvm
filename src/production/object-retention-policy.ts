@@ -67,10 +67,12 @@ function parseRecord(row: Record<string, unknown>): StoredRecord {
  */
 export class FileObjectKeyCustody {
   readonly #roots: readonly string[];
-  constructor(input: Readonly<{ roots: readonly string[] }>) {
+  readonly #confirmAbsent: (path: string) => Promise<void>;
+  constructor(input: Readonly<{ roots: readonly string[]; confirmAbsent?: (path: string) => Promise<void> }>) {
     const roots = [...new Set(input.roots)];
     if (roots.length === 0 || roots.some(root => !isAbsolute(root))) throw new Error("OBJECT_KEY_CUSTODY_ROOT_REQUIRED");
     this.#roots = Object.freeze(roots);
+    this.#confirmAbsent = input.confirmAbsent ?? access;
   }
   async provision(reference: string, key: Uint8Array): Promise<Readonly<{ keyReference: string; copies: readonly Readonly<{ rootId: string; keySha256: string }>[]}>> {
     const safeReference = Identifier.parse(reference), material = new Uint8Array(key);
@@ -110,7 +112,12 @@ export class FileObjectKeyCustody {
     for (const root of this.#roots) {
       const target = join(root, filename);
       await unlink(target).catch(error => { if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error; });
-      await access(target).then(() => { throw new Error("OBJECT_KEY_CUSTODY_ERASE_UNCONFIRMED"); }).catch(error => { if (error instanceof Error && error.message === "OBJECT_KEY_CUSTODY_ERASE_UNCONFIRMED") throw error; });
+      try { await this.#confirmAbsent(target); }
+      catch (error) {
+        if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") continue;
+        throw error;
+      }
+      throw new Error("OBJECT_KEY_CUSTODY_ERASE_UNCONFIRMED");
     }
   }
   inventory(reference: string): readonly Readonly<{ rootId: string; fileId: string }>[] {

@@ -35,11 +35,12 @@ keeps all key copies after an unknown commit acknowledgement, records erasure
 intent before any unlink, and permits a restart to finish an interrupted erase.
 The associated `FileObjectKeyCustody` produces root/file identifiers and key
 checksums for lifecycle receipts, verifies all declared copies agree on restore,
-and removes all declared copies only after the durable erasure intent. It exports
-no key material.
+and removes all declared copies only after the durable erasure intent. Only a
+post-unlink `ENOENT` confirms a copy absent: access, I/O and mount uncertainty
+leaves durable state `erasing` and `isDestroyed` false. It exports no key material.
 
 The hosted PG17 test retains a real SQL dump containing old ciphertext/wrapped-DEK,
-reapplies only migration-owned restricted ACLs after its `--no-privileges` restore,
+reapplies only original restricted schema usage and migration-owned ACLs after its `--no-privileges` restore,
 and declares both live and key-backup file roots: it restores successfully
 before expiry, then fails after every declared key file is absent. This proves
 only the declared test scope. Borg-packed, replica, WAL, broker, HSM, or other

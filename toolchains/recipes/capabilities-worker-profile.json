@@ -13,7 +13,7 @@
     },
     {
       "path": "infra/toolchain/production-job.ts",
-      "sha256": "a055c65a41d06fe09090e75002d5a865099fdd7236af088020a9e3c0cc9529f2"
+      "sha256": "fe5ba74bb5c534f17a7f79bb673e77e3eb6cb24004fc938125a98d99af743748"
     },
     {
       "path": "infra/toolchain/production-worker.ts",
@@ -21,7 +21,7 @@
     },
     {
       "path": "infra/toolchain/production-bootstrap.sh",
-      "sha256": "4972aa599d56982a745fb66486397cb1d649bf0ac4c2605b7f3314db7342acbd"
+      "sha256": "8a16e5da3910303f96f02f7a106d6478b0e143730aca7a9e4a40efb0594e58bc"
     },
     {
       "path": "infra/toolchain/production-probe.ts",

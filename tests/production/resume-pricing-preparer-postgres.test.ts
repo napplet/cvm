@@ -697,7 +697,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     let workspaceCalls = 0;
     const unexpectedWorkspace = async () => { workspaceCalls++; throw new Error("COMMAND_ONLY_CANNOT_RESTORE_WORKSPACE"); };
     const restoreInput = { pool, acceptance: refreshedAcceptance, preparer: refreshedPreparer, workers: workerAuthority, checkpoint, jobJournal: vertexJournal,
-      worker: { registerContinuationRequest: unexpectedWorkspace, restorePricedCheckpoint: unexpectedWorkspace, observePricedRestoreCheckpoint: unexpectedWorkspace } };
+      worker: { registerContinuationRequest: unexpectedWorkspace, restorePricedCheckpoint: unexpectedWorkspace, observePricedRestoreCheckpoint: unexpectedWorkspace, repairPricedRestoreCheckpoint: unexpectedWorkspace } };
     const restores = new ProductionPricedContinuationRestores(restoreInput);
     await restores.assertReady();
     for (const [table, trigger] of [["priced_continuation_restores", "priced_restore_guard"], ["priced_continuation_restores", "priced_restore_audit"],
@@ -779,7 +779,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       sessionLeaseSha256: workspaceCapacityIntent.sessionBindingDigest.slice(7), toolchainSha256: workspaceToolchain,
       providerDeadlineEpochMs: Date.parse(workspaceAllocation.allocation.expiresAt), createdAtMs: nativeCreatedAtMs });
     await nativeWorkerRecords.update({ operationId: workerOperationId, requestSha256: "c".repeat(64), resourceId: "fixture-workspace-machine", state: "reconciled", providerCreatedAtMs: nativeCreatedAtMs });
-    let nativeRestores = 0, nativeQueries = 0, nativeUploads = 0, wrongNativeReceipt = true;
+    let nativeRestores = 0, nativeQueries = 0, nativeUploads = 0, nativePlans = 0, wrongNativeReceipt = true;
     const noNativeEffect = async () => { throw new Error("UNEXPECTED_NATIVE_WORKER_OPERATION"); };
     let nativeExists = true, wrongCleanupIdentity = true, nativeDeletes = 0, cleanupGets = 0;
     const nativeFly = createFlyMachinesHttpTransport({ appName: "resume-workspace-fixture", journal: nativeWorkerRecords,
@@ -805,6 +805,8 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       fly: { create: noNativeEffect, observe: noNativeEffect, terminate: nativeFly.terminate, observeTermination: nativeFly.observeTermination,
         async exec(value): Promise<{ status: "completed"; exitCode: number; stdout: string }> {
           const [, action, archiveSha256, index, data] = value.command;
+          if (action === "restore-plan") { nativePlans++; const plan = JSON.parse(Buffer.from(index ?? "", "base64").toString("utf8")); return { status: "completed", exitCode: 0,
+            stdout: JSON.stringify({ state: "planned", archiveSha256, chunks: plan.chunks }) }; }
           if (action === "restore-put") { nativeUploads++; return { status: "completed", exitCode: 0,
             stdout: JSON.stringify({ state: "stored", archiveSha256, chunk: Number(index), sha256: bytesSha(Buffer.from(data ?? "", "base64")) }) }; }
           if (action === "restore") { nativeRestores++; throw new Error("NATIVE_WORKSPACE_RESTORE_ACK_LOST"); }
@@ -831,7 +833,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       publication: { server: publicationServer }, executables: [{ image: `registry.example/new-default@sha256:${"e".repeat(64)}`,
         toolchainSha256: "e".repeat(64), artifactContract: "legacy-aggregate-v1", clients: changedDefaultClients,
         modalAppName: "resume-workspace-fixture", flyAppName: "resume-workspace-fixture" }, { image: `registry.example/worker@sha256:${"a".repeat(64)}`,
-        toolchainSha256: workspaceToolchain, artifactContract: "nip5d-direct-v1", clients: workerClients,
+        toolchainSha256: workspaceToolchain, artifactContract: "nip5d-direct-v1", restoreRecoveryVersion: 1, clients: workerClients,
         modalAppName: "resume-workspace-fixture", flyAppName: "resume-workspace-fixture" }] }) : undefined;
     const nativeBridge = () => new ProductionWorkerBridge({ resolver: new ProductionWorkerOwnershipResolver({ pool, policyVersion: workspaceCommand.policyVersion,
       capacityJournal, pricedContinuations: workerAuthority }), workers: workerClients, workerJournal: nativeWorkerJournal, jobJournal: nativeJobJournal,
@@ -846,7 +848,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       workers: workerAuthority, checkpoint, jobJournal: nativeJobJournal, worker: nativeBridge() });
     await workspaceRestores().assertReady();
     expect(await workspaceRestores().restore(accountId, workspaceResume.idempotencyKey)).toEqual({ status: "reconciliation_pending" });
-    expect(nativeRestores).toBe(1); expect(nativeUploads).toBeGreaterThan(0); expect(nativeQueries).toBe(0);
+    expect(nativeRestores).toBe(1); expect(nativePlans).toBe(directWorker ? 1 : 0); expect(nativeUploads).toBeGreaterThan(0); expect(nativeQueries).toBe(0);
     expect((await workspaceRestores().read(accountId, workspaceClaim.claimReference))?.state).toBe("unknown");
     const uploadsAfterOriginal = nativeUploads;
     expect(await workspaceRestores().restore(accountId, workspaceResume.idempotencyKey)).toEqual({ status: "reconciliation_pending" });

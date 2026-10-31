@@ -117,11 +117,19 @@ async function immutable(path: string, bytes: Uint8Array | string) {
   try { await writeFile(path, bytes, { flag: "wx", mode: 0o600 }); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST" || sha(await readFile(path)) !== sha(bytes)) throw error; }
 }
-// A crash holding this lock makes this lease unavailable. It never permits a
-// second dispatcher or an acknowledged fence while a start is racing it.
+/** A root-only advisory lock is held by this process's open file description.
+ * The short-lived flock helper only acquires it; the parent descriptor keeps
+ * it across every trusted writer and SIGKILL releases it automatically. */
 async function controlled<T>(operation: () => Promise<T>): Promise<T> {
-  const lock = join(ROOT, "control-lock"); await mkdir(lock);
-  try { return await operation(); } finally { await rm(lock, { recursive: true }); }
+  const handle = await open(join(ROOT, "control.lock"), constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || info.uid !== 0 || info.nlink !== 1 || (info.mode & 0o077) !== 0) fail("JOB_CONTROL_LOCK_UNTRUSTED");
+    const locker = spawn("/usr/bin/flock", ["--exclusive", "--nonblock", "--conflict-exit-code=75", "3"], { stdio: ["ignore", "ignore", "ignore", handle.fd] });
+    const status = await new Promise<number | null>((resolve, reject) => { locker.once("error", reject); locker.once("exit", resolve); });
+    if (status !== 0) fail(status === 75 ? "JOB_CONTROL_BUSY" : "JOB_CONTROL_LOCK_FAILED");
+    return await operation();
+  } finally { await handle.close(); }
 }
 async function idle(): Promise<boolean> {
   if (await exists(join(ROOT, "active"))) return false;
@@ -152,6 +160,95 @@ function parseRestore(bytes: Uint8Array) {
   }
   if (!paths.has("index.html")) fail("RESTORE_ENTRY_MISSING");
   return { source, artifact, toolchainSha256: value.toolchainSha256 as string };
+}
+type RestorePlan = Readonly<{ version: 1; operationId: string; archiveSha256: string; chunks: number; bindingSha256: string; workerOperationId: string; workerResourceId: string; leaseSha256: string;
+  expected: Readonly<{ archiveSha256: string; toolchainSha256: string; sourceSha256: string; artifactFilesSha256: string }> }>;
+function record(value: unknown): value is Record<string, unknown> { return !!value && typeof value === "object" && !Array.isArray(value); }
+function digest(value: unknown): value is string { return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value); }
+function restoreDigest(value: unknown): string { if (typeof value !== "string" || !/^[a-f0-9]{64}$/u.test(value)) return fail("RESTORE_PLAN_INVALID"); return value; }
+function restoreString(value: unknown, expression: RegExp): string { if (typeof value !== "string" || !expression.test(value)) return fail("RESTORE_PLAN_INVALID"); return value; }
+function restoreChunks(value: unknown): number { if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > MAX_RESTORE / CHUNK) return fail("RESTORE_PLAN_INVALID"); return value; }
+function parseRestorePlan(value: Record<string, unknown>): RestorePlan {
+  if (Object.keys(value).sort().join(",") !== "archiveSha256,bindingSha256,chunks,expected,leaseSha256,operationId,version,workerOperationId,workerResourceId" || value.version !== 1) fail("RESTORE_PLAN_INVALID");
+  const rawExpected = value.expected;
+  if (!record(rawExpected)) return fail("RESTORE_PLAN_INVALID");
+  const expected = rawExpected;
+  if (Object.keys(expected).sort().join(",") !== "archiveSha256,artifactFilesSha256,sourceSha256,toolchainSha256") fail("RESTORE_PLAN_INVALID");
+  const operationId = restoreString(value.operationId, /^[a-z][a-z0-9:_-]{2,240}$/u), archiveSha256 = restoreDigest(value.archiveSha256), chunks = restoreChunks(value.chunks), bindingSha256 = restoreDigest(value.bindingSha256);
+  const workerOperationId = restoreString(value.workerOperationId, /^.{1,512}$/u), workerResourceId = restoreString(value.workerResourceId, /^.{1,512}$/u), leaseSha256 = restoreDigest(value.leaseSha256);
+  const expectedArchiveSha256 = restoreDigest(expected.archiveSha256), expectedToolchainSha256 = restoreDigest(expected.toolchainSha256), expectedSourceSha256 = restoreDigest(expected.sourceSha256), expectedArtifactFilesSha256 = restoreDigest(expected.artifactFilesSha256);
+  if (expectedArchiveSha256 !== archiveSha256) fail("RESTORE_PLAN_INVALID");
+  return Object.freeze({ version: 1, operationId, archiveSha256, chunks, bindingSha256, workerOperationId, workerResourceId, leaseSha256, expected: Object.freeze({ archiveSha256: expectedArchiveSha256, toolchainSha256: expectedToolchainSha256, sourceSha256: expectedSourceSha256, artifactFilesSha256: expectedArtifactFilesSha256 }) });
+}
+async function restorePlan(path: string): Promise<RestorePlan> {
+  const info = await lstat(path);
+  if (!info.isFile() || info.isSymbolicLink() || info.uid !== 0 || info.nlink !== 1 || (info.mode & 0o077) !== 0 || info.size < 1 || info.size > 8192) fail("RESTORE_PLAN_UNTRUSTED");
+  return parseRestorePlan(JSON.parse(await readFile(path, "utf8")));
+}
+function restoreValue(plan: RestorePlan, restored: ReturnType<typeof parseRestore>, actual: Awaited<ReturnType<typeof collect>>) {
+  const value = { state: "restored", archiveSha256: plan.archiveSha256, toolchainSha256: restored.toolchainSha256, sourceSha256: sha(canonical(restored.source.files)), artifactFilesSha256: sha(canonical(actual)), workspacePath: "/workspace/restored" };
+  if (value.toolchainSha256 !== plan.expected.toolchainSha256 || value.sourceSha256 !== plan.expected.sourceSha256 || value.artifactFilesSha256 !== plan.expected.artifactFilesSha256) fail("RESTORE_PLAN_BINDING_DENIED");
+  return value;
+}
+function parseRestoreValue(value: Record<string, unknown>, plan: RestorePlan) {
+  if (Object.keys(value).sort().join(",") !== "archiveSha256,artifactFilesSha256,sourceSha256,state,toolchainSha256,workspacePath" || value.state !== "restored" || value.archiveSha256 !== plan.archiveSha256
+    || value.toolchainSha256 !== plan.expected.toolchainSha256 || value.sourceSha256 !== plan.expected.sourceSha256 || value.artifactFilesSha256 !== plan.expected.artifactFilesSha256 || value.workspacePath !== "/workspace/restored") fail("RESTORE_RECEIPT_INVALID");
+  return value;
+}
+async function rootOwnedTree(path: string): Promise<void> {
+  const info = await lstat(path);
+  if (info.isSymbolicLink() || info.uid !== 0 || (info.mode & 0o022) !== 0 || (!info.isDirectory() && (!info.isFile() || info.nlink !== 1))) fail("RESTORE_STAGING_UNTRUSTED");
+  if (info.isDirectory()) for (const entry of await readdir(path)) await rootOwnedTree(join(path, entry));
+}
+async function exactFile(path: string, bytes: Uint8Array | string): Promise<boolean> {
+  try {
+    const info = await lstat(path);
+    return info.isFile() && !info.isSymbolicLink() && info.uid === 0 && info.nlink === 1 && (info.mode & 0o022) === 0 && sha(await readFile(path)) === sha(bytes);
+  } catch (error) { if (record(error) && error.code === "ENOENT") return false; throw error; }
+}
+async function restoredWorkspaceMatches(path: string, restored: ReturnType<typeof parseRestore>): Promise<boolean> {
+  try {
+    const info = await lstat(path);
+    if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== 0 || (info.mode & 0o022) !== 0) return false;
+    for (const file of restored.source.files) if (!await exactFile(join(path, file.path), file.content)) return false;
+    for (const file of restored.artifact.files) if (!await exactFile(join(path, "dist", file.path), Buffer.from(file.bytesBase64, "base64"))) return false;
+    if (restored.source.version === 2 && (!await exactFile(join(path, ".napplet-cvm-authoring.json"), canonical({ purpose: restored.source.purpose }))
+      || !await exactFile(join(path, ".napplet-cvm-receipts", "manifest.json"), Buffer.from(restored.artifact.manifestReceipt.bytesBase64, "base64"))
+      || !await exactFile(join(path, ".napplet-cvm-receipts", "conformance.json"), Buffer.from(restored.artifact.conformanceReceipt.bytesBase64, "base64")))) return false;
+    return canonical(await collect(join(path, "dist"))) === canonical(restored.artifact.files);
+  } catch { return false; }
+}
+async function materializeRestore(restoreDir: string, plan: RestorePlan, repair: boolean) {
+  const bytes = Buffer.concat(await Promise.all(Array.from({ length: plan.chunks }, (_, index) => readFile(join(restoreDir, `part-${index}`)))));
+  if (sha(bytes) !== plan.archiveSha256) fail("RESTORE_DIGEST_INVALID");
+  const restored = parseRestore(bytes); await assertImageContract(restored.source);
+  const target = "/workspace/restored", staging = `/workspace/restore-${plan.archiveSha256}`;
+  if (!await exists(target)) {
+    if (await exists(staging)) { if (!repair) fail("RESTORE_STAGING_EXISTS"); await rootOwnedTree(staging); await rm(staging, { recursive: true }); }
+    await mkdir(staging, { mode: 0o755 }); await mkdir(join(staging, "src")); await mkdir(join(staging, "dist"));
+    for (const file of restored.source.files) await writeFile(join(staging, file.path), file.content, { flag: "wx", mode: 0o444 });
+    for (const file of restored.artifact.files) { const path = join(staging, "dist", file.path); await mkdir(join(path, ".."), { recursive: true }); await writeFile(path, Buffer.from(file.bytesBase64, "base64"), { flag: "wx", mode: 0o444 }); }
+    if (restored.source.version === 2) {
+      await writeFile(join(staging, ".napplet-cvm-authoring.json"), canonical({ purpose: restored.source.purpose }), { flag: "wx", mode: 0o444 });
+      const receipts = join(staging, ".napplet-cvm-receipts"); await mkdir(receipts);
+      for (const [path, value] of [["manifest.json", restored.artifact.manifestReceipt], ["conformance.json", restored.artifact.conformanceReceipt]] as const) await writeFile(join(receipts, path), Buffer.from(value.bytesBase64, "base64"), { flag: "wx", mode: 0o444 });
+    }
+    const actual = await collect(join(staging, "dist")); if (canonical(actual) !== canonical(restored.artifact.files)) fail("RESTORE_READBACK_MISMATCH");
+    await protect(staging); await rename(staging, target);
+  }
+  if (!await restoredWorkspaceMatches(target, restored)) fail("RESTORE_READBACK_MISMATCH");
+  const value = restoreValue(plan, restored, await collect(join(target, "dist"))), resultPath = join(restoreDir, "result.json");
+  await immutable(resultPath, canonical(value));
+  const receipt = JSON.parse(await readFile(resultPath, "utf8"));
+  if (canonical(receipt) !== canonical(value)) fail("RESTORE_RECEIPT_READBACK_INVALID");
+  return parseRestoreValue(receipt, plan);
+}
+async function legacyRestorePlan(restoreDir: string, archiveSha256: string, chunks: number): Promise<RestorePlan> {
+  const bytes = Buffer.concat(await Promise.all(Array.from({ length: chunks }, (_, index) => readFile(join(restoreDir, `part-${index}`)))));
+  if (sha(bytes) !== archiveSha256) fail("RESTORE_DIGEST_INVALID");
+  const restored = parseRestore(bytes);
+  return Object.freeze({ version: 1, operationId: `legacy-restore:${archiveSha256}`, archiveSha256, chunks, bindingSha256: sha(bytes), workerOperationId: "legacy", workerResourceId: "legacy", leaseSha256: sha(bytes),
+    expected: Object.freeze({ archiveSha256, toolchainSha256: restored.toolchainSha256, sourceSha256: sha(canonical(restored.source.files)), artifactFilesSha256: sha(canonical(restored.artifact.files)) }) });
 }
 type CapabilityReceipt = { state: "absent"; path: "src/capabilities.json" } | { state: "present"; path: "src/capabilities.json"; sha256: string; bytesBase64: string };
 function validateCapabilityReceipt(value: CapabilityReceipt, source?: Request) {
@@ -286,8 +383,10 @@ try {
     await immutable(join(dir, `part-${argument}`), bytes); console.log(JSON.stringify({ state: "stored", jobId: id, chunk: Number(argument), sha256: sha(bytes) }));
   } else if (action === "start") {
     if (!argument || !/^[1-6]$/u.test(argument) || data) fail("JOB_START_INVALID");
-    await controlled(async () => {
-    if (!await exists(join(dir, "claimed"))) {
+    // Re-entry is an observation of an immutable claim, so it need not wait
+    // behind the original privileged build writer.
+    if (!await exists(join(dir, "claimed"))) await controlled(async () => {
+      if (!await exists(join(dir, "claimed"))) {
       if (await exists(join(ROOT, "fence.json"))) fail("JOB_LEASE_FENCED");
       if (await exists(join(ROOT, "restoring"))) {
         const restoreId = await readFile(join(ROOT, "restoring"), "utf8");
@@ -303,7 +402,7 @@ try {
         await writeFile(join(dir, "claimed"), id, { flag: "wx", mode: 0o600 });
         const child = spawn("/usr/local/bin/bun", [SCRIPT, "run", id], { detached: true, stdio: "ignore", env }); child.unref();
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
-    }
+      }
     });
     console.log(JSON.stringify({ state: "pending", jobId: id }));
   } else if (action === "status") {
@@ -327,14 +426,32 @@ try {
       return await idle() ? "fenced" : "pending";
     });
     console.log(JSON.stringify({ state: result, jobId: id, fenceSha256: argument }));
+  } else if (action === "restore-plan") {
+    if (!argument || data || argument.length > 8192 || !/^[A-Za-z0-9+/]+={0,2}$/u.test(argument)) fail("RESTORE_PLAN_INVALID");
+    const encoded = Buffer.from(argument, "base64"); if (!encoded.length || encoded.toString("base64") !== argument) fail("RESTORE_PLAN_INVALID");
+    const plan = parseRestorePlan(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(encoded)));
+    if (plan.archiveSha256 !== id) fail("RESTORE_PLAN_BINDING_DENIED");
+    await controlled(async () => {
+      if (!await idle() || await exists(join(ROOT, "fence.json"))) fail("RESTORE_FRESH_LEASE_REQUIRED");
+      for (const entry of await readdir(ROOT)) if (/^[a-f0-9]{64}$/u.test(entry) && await exists(join(ROOT, entry, "claimed"))) fail("RESTORE_FRESH_LEASE_REQUIRED");
+      await immutable(join(ROOT, "restoring"), id);
+      const restoreDir = join(ROOT, `restore-${id}`); await mkdir(restoreDir, { recursive: true, mode: 0o700 });
+      if (await exists(join(restoreDir, "result.json"))) fail("RESTORE_ALREADY_COMPLETED");
+      await immutable(join(restoreDir, "plan.json"), canonical(plan));
+    });
+    console.log(JSON.stringify({ state: "planned", archiveSha256: id, chunks: plan.chunks }));
   } else if (action === "restore-put") {
     if (!argument || !/^(0|[1-9][0-9]{0,3})$/u.test(argument) || Number(argument) >= MAX_RESTORE / CHUNK || !data || data.length > 32_768) fail("RESTORE_CHUNK_INVALID");
     const bytes = Buffer.from(data, "base64"); if (!bytes.length || bytes.length > CHUNK || bytes.toString("base64") !== data) fail("RESTORE_CHUNK_INVALID");
     await controlled(async () => {
       if (!await idle() || await exists(join(ROOT, "fence.json"))) fail("RESTORE_FRESH_LEASE_REQUIRED");
       for (const entry of await readdir(ROOT)) if (/^[a-f0-9]{64}$/u.test(entry) && await exists(join(ROOT, entry, "claimed"))) fail("RESTORE_FRESH_LEASE_REQUIRED");
-      await immutable(join(ROOT, "restoring"), id);
+      const restoring = join(ROOT, "restoring");
+      if (await exists(restoring) && await readFile(restoring, "utf8") !== id) fail("RESTORE_FRESH_LEASE_REQUIRED");
+      await immutable(restoring, id);
       const restoreDir = join(ROOT, `restore-${id}`); await mkdir(restoreDir, { recursive: true, mode: 0o700 });
+      const planPath = join(restoreDir, "plan.json");
+      if (await exists(planPath)) { const plan = await restorePlan(planPath); if (plan.archiveSha256 !== id || Number(argument) >= plan.chunks) fail("RESTORE_PLAN_BINDING_DENIED"); }
       if (await exists(join(restoreDir, "result.json"))) fail("RESTORE_ALREADY_COMPLETED");
       await immutable(join(restoreDir, `part-${argument}`), bytes);
     });
@@ -343,40 +460,31 @@ try {
     if (!argument || !/^[1-9][0-9]{0,3}$/u.test(argument) || Number(argument) > MAX_RESTORE / CHUNK || data) fail("RESTORE_INVALID");
     const result = await controlled(async () => {
       if (await readFile(join(ROOT, "restoring"), "utf8") !== id || !await idle()) fail("RESTORE_FRESH_LEASE_REQUIRED");
-      const restoreDir = join(ROOT, `restore-${id}`), resultPath = join(restoreDir, "result.json");
-      if (await exists(resultPath)) return JSON.parse(await readFile(resultPath, "utf8"));
+      const restoreDir = join(ROOT, `restore-${id}`), resultPath = join(restoreDir, "result.json"), planPath = join(restoreDir, "plan.json");
+      const plan = await (await exists(planPath) ? restorePlan(planPath) : legacyRestorePlan(restoreDir, id, Number(argument)));
+      if (plan.archiveSha256 !== id || plan.chunks !== Number(argument)) fail("RESTORE_PLAN_BINDING_DENIED");
+      if (await exists(resultPath)) return parseRestoreValue(JSON.parse(await readFile(resultPath, "utf8")), plan);
       // Exclusive dispatch fence also covers a crash while materializing files.
-      // Retry observes only; it never resumes or rebuilds a partial workspace.
-      await writeFile(join(restoreDir, "claimed"), id, { flag: "wx", mode: 0o600 });
-      const bytes = Buffer.concat(await Promise.all(Array.from({ length: Number(argument) }, (_, index) => readFile(join(restoreDir, `part-${index}`)))));
-      if (sha(bytes) !== id) fail("RESTORE_DIGEST_INVALID");
-      const restored = parseRestore(bytes); await assertImageContract(restored.source);
-      const staging = `/workspace/restore-${id}`; await mkdir(staging, { mode: 0o755 });
-      await mkdir(join(staging, "src")); await mkdir(join(staging, "dist"));
-      for (const file of restored.source.files) await writeFile(join(staging, file.path), file.content, { flag: "wx", mode: 0o444 });
-      for (const file of restored.artifact.files) {
-        const path = join(staging, "dist", file.path); await mkdir(join(path, ".."), { recursive: true });
-        await writeFile(path, Buffer.from(file.bytesBase64, "base64"), { flag: "wx", mode: 0o444 });
-      }
-      if (restored.source.version === 2) {
-        await writeFile(join(staging, ".napplet-cvm-authoring.json"), canonical({ purpose: restored.source.purpose }), { flag: "wx", mode: 0o444 });
-        const receipts = join(staging, ".napplet-cvm-receipts"); await mkdir(receipts);
-        for (const [path, value] of [["manifest.json", restored.artifact.manifestReceipt], ["conformance.json", restored.artifact.conformanceReceipt]]) await writeFile(join(receipts, path), Buffer.from(value.bytesBase64, "base64"), { flag: "wx", mode: 0o444 });
-      }
-      const actual = await collect(join(staging, "dist"));
-      if (canonical(actual) !== canonical(restored.artifact.files)) fail("RESTORE_READBACK_MISMATCH");
-      await protect(staging); await rename(staging, "/workspace/restored");
-      const value = { state: "restored", archiveSha256: id, toolchainSha256: restored.toolchainSha256, sourceSha256: sha(canonical(restored.source.files)), artifactFilesSha256: sha(canonical(actual)), workspacePath: "/workspace/restored" };
-      await immutable(resultPath, canonical(value));
-      // Root receipt and restored files remain. No job was dispatched.
-      for (let index = 0; index < Number(argument); index++) await rm(join(restoreDir, `part-${index}`));
-      return value;
+      // Ordinary retries observe only; repair is a separately bound operation.
+      await writeFile(join(restoreDir, "claimed"), canonical({ archiveSha256: id, supervisorPid: process.pid }), { flag: "wx", mode: 0o600 });
+      return materializeRestore(restoreDir, plan, false);
+    });
+    console.log(JSON.stringify(result));
+  } else if (action === "restore-repair") {
+    if (argument || data) fail("RESTORE_REPAIR_INVALID");
+    const result = await controlled(async () => {
+      if (await readFile(join(ROOT, "restoring"), "utf8") !== id || !await idle()) fail("RESTORE_FRESH_LEASE_REQUIRED");
+      const restoreDir = join(ROOT, `restore-${id}`), resultPath = join(restoreDir, "result.json"), plan = await restorePlan(join(restoreDir, "plan.json"));
+      if (plan.archiveSha256 !== id) fail("RESTORE_PLAN_BINDING_DENIED");
+      if (await exists(resultPath)) return parseRestoreValue(JSON.parse(await readFile(resultPath, "utf8")), plan);
+      if (!await exists(join(restoreDir, "claimed"))) fail("RESTORE_REPAIR_NOT_CLAIMED");
+      return materializeRestore(restoreDir, plan, true);
     });
     console.log(JSON.stringify(result));
   } else if (action === "restore-status") {
     if (argument || data) fail("RESTORE_STATUS_INVALID");
     const restoreDir = join(ROOT, `restore-${id}`), resultPath = join(restoreDir, "result.json");
     console.log(await exists(resultPath) ? await readFile(resultPath, "utf8") : JSON.stringify({ state: await exists(join(restoreDir, "claimed")) ? "pending" : "missing", archiveSha256: id }));
-  } else if (action === "run") { if (argument || data) fail("JOB_RUN_INVALID"); await run(id, dir); }
+  } else if (action === "run") { if (argument || data) fail("JOB_RUN_INVALID"); await controlled(() => run(id, dir)); }
   else fail("JOB_COMMAND_INVALID");
 } catch (error) { console.error(error instanceof Error ? error.message : "JOB_FAILED"); process.exitCode = 1; }

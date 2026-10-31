@@ -211,6 +211,16 @@ export class ProductionWorkerBridge implements ContinuationWorkerPort, ArtifactV
       return result.state === "restored" ? { status: "restored", workerId: request.workspaceId } : result.state === "pending" ? { status: "pending" } : { status: "unknown" };
     } catch { return { status: "unknown" }; }
   }
+  /** Explicit same-worker recovery of a native restore that is already
+   * journaled and claimed. It has no archive upload or dispatch authority. */
+  async repairPricedRestoreCheckpoint(value: PricedRestoreMetadata): Promise<Readonly<{ status: "restored" | "pending" | "unknown"; workerId?: string }>> {
+    try {
+      const binding = pricedRestoreBinding(value), request = await this.#request(binding.metadata);
+      const worker = await this.input.resolver.resolvePricedRestore(binding.metadata, request);
+      const result = await (await this.#job(worker)).repairRestoreWorkspace({ operationId: binding.operationId, bindingSha256: binding.bindingSha256, archiveSha256: binding.metadata.archiveSha256 });
+      return result.state === "restored" ? { status: "restored", workerId: request.workspaceId } : result.state === "pending" ? { status: "pending" } : { status: "unknown" };
+    } catch { return { status: "unknown" }; }
+  }
   async terminateCheckpoint(value: CheckpointTerminationRequest): Promise<CheckpointTerminationResult> { try { const request = await this.#request(CheckpointTerminationRequestSchema.parse(value)), result = await (await this.#job(await this.input.resolver.resolveWorker(request))).terminate(); return result.status === "terminated" ? { status: "terminated", code: "WORKER_LEASE_TERMINATED" } : { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } catch { return { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } }
   /** Correlates restore with the original durable source request. The new
    * action's run request remains available for its own model proposal. This

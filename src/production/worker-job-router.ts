@@ -14,6 +14,7 @@ export type ProductionWorkerExecutable = Readonly<{
   modalAppName: string; flyAppName: string;
   clients: ReturnType<typeof createWorkerDeploymentClients>;
   artifactContract?: "legacy-aggregate-v1" | "nip5d-direct-v1";
+  restoreRecoveryVersion?: 1;
 }>;
 const routers = new WeakSet<object>();
 export function assertProductionWorkerJobRouter(value: unknown): asserts value is ProductionWorkerJobRouter {
@@ -40,8 +41,9 @@ export class ProductionWorkerJobRouter {
         || value.clients.modal.config.policyVersion !== PRODUCTION_WORKER_POLICY.version || value.clients.fly.config.policyVersion !== PRODUCTION_WORKER_POLICY.version) throw new Error("PRODUCTION_WORKER_EXECUTABLES_INVALID");
       images.add(image);
       const artifactContract = value.artifactContract === undefined ? undefined : z.enum(["legacy-aggregate-v1", "nip5d-direct-v1"]).parse(value.artifactContract);
+      const restoreRecoveryVersion = value.restoreRecoveryVersion === undefined ? undefined : z.literal(1).parse(value.restoreRecoveryVersion);
       if (artifactContract === "nip5d-direct-v1" && !input.publication) throw new Error("PRODUCTION_DIRECT_PUBLICATION_REQUIRED");
-      return Object.freeze({ ...value, ...(artifactContract === undefined ? {} : { artifactContract }), image, toolchainSha256, modalAppName: App.parse(value.modalAppName), flyAppName: App.parse(value.flyAppName) });
+      return Object.freeze({ ...value, ...(artifactContract === undefined ? {} : { artifactContract }), ...(restoreRecoveryVersion === undefined ? {} : { restoreRecoveryVersion }), image, toolchainSha256, modalAppName: App.parse(value.modalAppName), flyAppName: App.parse(value.flyAppName) });
     }));
     this.toolchainSha256s = Object.freeze([...new Set(this.#executables.map(value => value.toolchainSha256))]);
     routers.add(this); Object.freeze(this);
@@ -64,6 +66,6 @@ export class ProductionWorkerJobRouter {
   async resolve(input: Readonly<{ provider: "modal" | "fly"; workerOperationId: string }>): Promise<ProductionWorkerJobClient> {
     const executable = await this.#select(input, true);
     return new ProductionWorkerJobClient({ provider: input.provider, workerOperationId: input.workerOperationId, clients: executable.clients, workerJournal: this.input.workerJournal, jobJournal: this.input.jobJournal, toolchainSha256: executable.toolchainSha256, publication: this.input.publication,
-      ...(executable.artifactContract === "nip5d-direct-v1" ? { artifactContract: executable.artifactContract } : {}) });
+      ...(executable.artifactContract === "nip5d-direct-v1" ? { artifactContract: executable.artifactContract } : {}), ...(executable.restoreRecoveryVersion === undefined ? {} : { restoreRecoveryVersion: executable.restoreRecoveryVersion }) });
   }
 }

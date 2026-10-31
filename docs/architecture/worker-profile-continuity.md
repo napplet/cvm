@@ -249,6 +249,34 @@ artifact reader, preview/publication composition and protected host/signing/Paja
 evidence still need completion. A successful local build regression is not a
 live provider, 30-day resume, host or release-certification result.
 
+## Native restore-claim recovery rollout
+
+The prepared recovery image uses `restoreRecoveryVersion: 1` only when the
+mounted current or retained executable profile explicitly declares that version.
+The router selects that flag from the original worker image/toolchain record;
+neither a checkpoint, caller, nor the current default can enable it. A v1 client
+first stores an immutable root-owned plan that binds the original operation,
+worker/resource/lease, exact retained archive/chunk count and expected source /
+artifact hashes, then sends the native restore claim. Ordinary status observation
+remains query-only. If that specific native supervisor dies after its claim, a
+dedicated repair can acquire the supervisor's kernel-held control lock and
+materialize only the retained, verified chunks into the same root-owned target.
+It cannot upload data, allocate or replace a worker, invoke a model, charge,
+sign, publish, or alter the SQL restore identity.
+
+Profiles without `restoreRecoveryVersion: 1`, including all historical pending
+claims, retain their existing observer-only behavior: an absent native v1 plan
+is not backfilled and repair fails closed. Their ordinary fresh restore remains
+the original planless protocol, routed to the retained approved executable.
+Rollout therefore requires the rebuilt image, the matching client/router, and
+the explicit profile flag together; rollback removes the flag for new work but
+retains the v1 image/profile for the resume window. The local Docker proof kills
+the recorded privileged supervisor after its claim using a FIFO-held original
+part, observes release of the kernel lock, races two repairs, and validates the
+exact final receipt. It is local mechanism evidence only; full worker loss,
+expired allocation, initial-dispatch gaps and live release certification remain
+separate blockers.
+
 For a worker-default rollback, keep this control-plane reader installed, select
 the previous approved default and retain the other approved image/toolchain in
 the catalog. Preserve both sets of operation and artifact records. A binary

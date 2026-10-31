@@ -31,7 +31,7 @@ const LegacyBundle = z.object({ version: z.literal(1), jobId: Digest, proposalSh
 }).strict();
 const Bundle = z.discriminatedUnion("version", [LegacyBundle, LegacyBundle.extend({ version: z.literal(2), capabilityReceipt: ProductionCapabilityReceiptSchema }).strict(), LegacyBundle.extend({ version: z.literal(3), artifactContract: z.literal("nip5d-direct-v1"), capabilityReceipt: ProductionCapabilityReceiptSchema, conformanceReceipt: ProductionConformanceReceiptSchema, manifestReceipt: ProductionDirectManifestReceiptSchema, toolchainReceipt: ProductionDirectToolchainReceiptSchema.optional() }).strict()]);
 type StoredJob = Readonly<{ workerOperationId: string; workerResourceId: string; leaseSha256: string; jobId: string; requestBody: string; deadlineEpochMs: number }>;
-type Input = Readonly<{ provider: "modal" | "fly"; workerOperationId: string; clients: ReturnType<typeof createWorkerDeploymentClients>; workerJournal: PostgresOperationJournal; jobJournal: PostgresOperationJournal; toolchainSha256: string; artifactContract?: "nip5d-direct-v1"; publication?: ProductionWorkerPublication; now?: () => number }>;
+type Input = Readonly<{ provider: "modal" | "fly"; workerOperationId: string; clients: ReturnType<typeof createWorkerDeploymentClients>; workerJournal: PostgresOperationJournal; jobJournal: PostgresOperationJournal; toolchainSha256: string; artifactContract?: "nip5d-direct-v1"; restoreRecoveryVersion?: 1; publication?: ProductionWorkerPublication; now?: () => number }>;
 const WorkspaceSource = z.object({ version: z.literal(1), actionId: z.string().min(1).max(256), sessionId: z.string().min(1).max(256), expectedVersion: z.number().int().nonnegative(), proposalSha256: Digest, toolchainSha256: Digest, deadlineEpochMs: z.number().int().positive(), files: z.array(z.object({ path: z.enum(["src/main.ts", "src/styles.css", "src/capabilities.json"]), content: z.string().refine(value => Buffer.byteLength(value) <= 30_000) }).strict()).min(1).max(3) }).strict();
 const LegacySource = WorkspaceSource.extend({ publication: ProductionWorkerPublicationSchema.optional() }).strict();
 const DirectSource = WorkspaceSource.extend({ version: z.literal(2), artifactContract: z.literal("nip5d-direct-v1"), purpose: z.string().trim().min(1).max(4096), publication: ProductionWorkerPublicationSchema }).strict().superRefine((source, context) => {
@@ -54,9 +54,13 @@ const RestoreObservation = z.discriminatedUnion("state", [
   z.object({ state: z.enum(["pending", "missing"]), archiveSha256: Digest }).strict(),
   z.object({ state: z.literal("restored"), archiveSha256: Digest, toolchainSha256: Digest, sourceSha256: Digest, artifactFilesSha256: Digest, workspacePath: z.literal("/workspace/restored") }).strict(),
 ]);
-type StoredRestore = Readonly<{ workerOperationId: string; workerResourceId: string; leaseSha256: string; archiveSha256: string; bindingSha256: string }>;
+type StoredRestore = Readonly<{ workerOperationId: string; workerResourceId: string; leaseSha256: string; archiveSha256: string; bindingSha256: string; chunks: number }>;
 export const ProductionRestoreEvidenceSchema = z.object({ schemaVersion: z.literal("worker-restore-evidence-v1"), originalOperationId: z.string().min(1).max(256),
   originalIdentitySha256: Digest, expected: z.object({ archiveSha256: Digest, toolchainSha256: Digest, sourceSha256: Digest, artifactFilesSha256: Digest }).strict() }).strict();
+const RestoreRepairPlanSchema = z.object({ version: z.literal(1), operationId: z.string().regex(/^[a-z][a-z0-9:_-]{2,240}$/u), archiveSha256: Digest,
+  chunks: z.number().int().min(1).max(Math.floor(MAX_ARTIFACT_BUNDLE / CHUNK)), bindingSha256: Digest, workerOperationId: z.string().min(1).max(512), workerResourceId: z.string().min(1).max(512), leaseSha256: Digest,
+  expected: z.object({ archiveSha256: Digest, toolchainSha256: Digest, sourceSha256: Digest, artifactFilesSha256: Digest }).strict() }).strict();
+type RestoreRepairPlan = z.infer<typeof RestoreRepairPlanSchema>;
 
 /** Production image protocol only. Provider exec runs a fixed root-owned
  * supervisor for <=15s; generated build work runs asynchronously exactly once. */
@@ -65,6 +69,7 @@ export class ProductionWorkerJobClient {
     this.input = Object.freeze({ ...input, ...(input.publication === undefined ? {} : { publication: ProductionWorkerPublicationSchema.parse(input.publication) }) });
     assertPostgresOperationJournal(input.workerJournal); assertPostgresOperationJournal(input.jobJournal);
     Digest.parse(input.toolchainSha256);
+    if (input.restoreRecoveryVersion !== undefined) z.literal(1).parse(input.restoreRecoveryVersion);
     if (input.artifactContract !== undefined) { z.literal("nip5d-direct-v1").parse(input.artifactContract); if (!input.publication) throw new Error("PRODUCTION_DIRECT_PUBLICATION_REQUIRED"); }
     if (!["modal", "fly"].includes(input.provider) || !/^[a-z][a-z0-9_-]{2,48}$/u.test(input.workerOperationId)) throw new Error("PRODUCTION_JOB_WORKER_INVALID");
   }
@@ -219,13 +224,14 @@ export class ProductionWorkerJobClient {
     let total = 0;
     for (const file of workspace.artifact.files) { const content = Buffer.from(file.bytesBase64, "base64"); total += content.length; if (content.length !== file.size || sha(content) !== file.sha256 || content.toString("base64") !== file.bytesBase64 || total > 16_777_216) throw new Error("PRODUCTION_WORKSPACE_FILES_INVALID"); }
     const worker = await this.#worker();
-    const initial: StoredRestore = { workerOperationId: this.input.workerOperationId, workerResourceId: worker.resourceId!, leaseSha256: worker.sessionLeaseSha256!, archiveSha256, bindingSha256: input.bindingSha256 };
+    const initial: StoredRestore = { workerOperationId: this.input.workerOperationId, workerResourceId: worker.resourceId!, leaseSha256: worker.sessionLeaseSha256!, archiveSha256, bindingSha256: input.bindingSha256, chunks: Math.ceil(input.bytes.length / CHUNK) };
     const originalOperationId = `worker-restore:${input.operationId}`, originalIdentitySha256 = sha(canonicalJson(initial));
     const evidence = ProductionRestoreEvidenceSchema.parse({ schemaVersion: "worker-restore-evidence-v1", originalOperationId, originalIdentitySha256,
       expected: { archiveSha256, toolchainSha256: workspace.toolchainSha256, sourceSha256: sha(canonicalJson(workspace.source.files)), artifactFilesSha256: sha(canonicalJson(workspace.artifact.files)) } });
     const claim = await this.input.jobJournal.claimWithCompanion({ operationId: originalOperationId, identitySha256: originalIdentitySha256, value: initial,
       companion: { operationId: `worker-restore-evidence:${input.operationId}`, identitySha256: sha(canonicalJson(evidence)), value: evidence } });
     const job = claim.record.value;
+    const plan = this.#restoreRepairPlan(input.operationId, job, evidence);
     const validate = (value: unknown) => {
       const observed = RestoreObservation.parse(value);
       if (observed.archiveSha256 !== archiveSha256 || (observed.state === "restored" && (observed.toolchainSha256 !== workspace.toolchainSha256 || observed.sourceSha256 !== sha(canonicalJson(workspace.source.files)) || observed.artifactFilesSha256 !== sha(canonicalJson(workspace.artifact.files))))) throw new Error("PRODUCTION_RESTORE_RESPONSE_INVALID");
@@ -233,11 +239,30 @@ export class ProductionWorkerJobClient {
     };
     try {
       if (!claim.claimed) return validate(await this.#exec(job, ["restore-status", archiveSha256]));
+      if (this.input.restoreRecoveryVersion === 1) z.object({ state: z.literal("planned"), archiveSha256: z.literal(archiveSha256), chunks: z.literal(plan.chunks) }).strict().parse(await this.#exec(job, ["restore-plan", archiveSha256, Buffer.from(canonicalJson(plan)).toString("base64")]));
       for (let offset = 0, index = 0; offset < input.bytes.length; offset += CHUNK, index++) {
         const part = Buffer.from(input.bytes.subarray(offset, offset + CHUNK));
         z.object({ state: z.literal("stored"), archiveSha256: z.literal(archiveSha256), chunk: z.literal(index), sha256: z.literal(sha(part)) }).strict().parse(await this.#exec(job, ["restore-put", archiveSha256, String(index), part.toString("base64")]));
       }
       return validate(await this.#exec(job, ["restore", archiveSha256, String(Math.ceil(input.bytes.length / CHUNK))]));
+    } catch { return { state: "unknown" as const, archiveSha256 }; }
+  }
+  /** A distinct recovery effect for a v1 root-owned plan. It never uploads
+   * archive bytes, writes a journal claim, creates a worker, or runs a build. */
+  async repairRestoreWorkspace(input: Readonly<{ operationId: string; archiveSha256: string; bindingSha256: string }>) {
+    if (this.input.restoreRecoveryVersion !== 1) return { state: "unknown" as const, archiveSha256: input.archiveSha256 };
+    if (!/^[a-z][a-z0-9:_-]{2,240}$/u.test(input.operationId)) throw new Error("PRODUCTION_RESTORE_OPERATION_INVALID");
+    const archiveSha256 = Digest.parse(input.archiveSha256); Digest.parse(input.bindingSha256);
+    const original = await this.input.jobJournal.read<StoredRestore>(`worker-restore:${input.operationId}`);
+    if (!original || original.identitySha256 !== sha(canonicalJson({ workerOperationId: original.value.workerOperationId, workerResourceId: original.value.workerResourceId, leaseSha256: original.value.leaseSha256, archiveSha256, bindingSha256: input.bindingSha256, chunks: original.value.chunks })) || original.value.workerOperationId !== this.input.workerOperationId || original.value.archiveSha256 !== archiveSha256 || original.value.bindingSha256 !== input.bindingSha256) return { state: "unknown" as const, archiveSha256 };
+    const companion = await this.input.jobJournal.read(`worker-restore-evidence:${input.operationId}`);
+    const evidence = ProductionRestoreEvidenceSchema.safeParse(companion?.value);
+    if (!companion || companion.revision !== 1 || !evidence.success || companion.identitySha256 !== sha(canonicalJson(evidence.data)) || evidence.data.originalOperationId !== original.operationId || evidence.data.originalIdentitySha256 !== original.identitySha256 || evidence.data.expected.archiveSha256 !== archiveSha256) return { state: "unknown" as const, archiveSha256 };
+    const plan = this.#restoreRepairPlan(input.operationId, original.value, evidence.data);
+    try {
+      const observed = RestoreObservation.parse(await this.#exec(original.value, ["restore-repair", archiveSha256]));
+      if (observed.archiveSha256 !== archiveSha256 || (observed.state === "restored" && (observed.toolchainSha256 !== plan.expected.toolchainSha256 || observed.sourceSha256 !== plan.expected.sourceSha256 || observed.artifactFilesSha256 !== plan.expected.artifactFilesSha256))) return { state: "unknown" as const, archiveSha256 };
+      return observed;
     } catch { return { state: "unknown" as const, archiveSha256 }; }
   }
   /** Strictly query the original restore claim.  In particular, this never
@@ -246,7 +271,7 @@ export class ProductionWorkerJobClient {
     if (!/^[a-z][a-z0-9:_-]{2,240}$/u.test(input.operationId)) throw new Error("PRODUCTION_RESTORE_OPERATION_INVALID");
     const archiveSha256 = Digest.parse(input.archiveSha256); Digest.parse(input.bindingSha256);
     const record = await this.input.jobJournal.read<StoredRestore>(`worker-restore:${input.operationId}`);
-    if (!record || record.identitySha256 !== sha(canonicalJson({ workerOperationId: record.value.workerOperationId, workerResourceId: record.value.workerResourceId, leaseSha256: record.value.leaseSha256, archiveSha256, bindingSha256: input.bindingSha256 })) || record.value.workerOperationId !== this.input.workerOperationId || record.value.archiveSha256 !== archiveSha256 || record.value.bindingSha256 !== input.bindingSha256) return { state: "unknown" as const, archiveSha256 };
+    if (!record || record.identitySha256 !== sha(canonicalJson({ workerOperationId: record.value.workerOperationId, workerResourceId: record.value.workerResourceId, leaseSha256: record.value.leaseSha256, archiveSha256, bindingSha256: input.bindingSha256, chunks: record.value.chunks })) || record.value.workerOperationId !== this.input.workerOperationId || record.value.archiveSha256 !== archiveSha256 || record.value.bindingSha256 !== input.bindingSha256) return { state: "unknown" as const, archiveSha256 };
     const companion = await this.input.jobJournal.read(`worker-restore-evidence:${input.operationId}`);
     const evidence = ProductionRestoreEvidenceSchema.safeParse(companion?.value);
     if (!companion || companion.revision !== 1 || !evidence.success || companion.identitySha256 !== sha(canonicalJson(evidence.data))
@@ -259,6 +284,10 @@ export class ProductionWorkerJobClient {
         return { state: "unknown" as const, archiveSha256 };
       return observed;
     } catch { return { state: "unknown" as const, archiveSha256 }; }
+  }
+  #restoreRepairPlan(operationId: string, job: StoredRestore, evidence: z.infer<typeof ProductionRestoreEvidenceSchema>): RestoreRepairPlan {
+    return RestoreRepairPlanSchema.parse({ version: 1, operationId, archiveSha256: job.archiveSha256, chunks: job.chunks, bindingSha256: job.bindingSha256,
+      workerOperationId: job.workerOperationId, workerResourceId: job.workerResourceId, leaseSha256: job.leaseSha256, expected: evidence.expected });
   }
   /** Called only after the coordinator commits encrypted checkpoint ownership.
    * Provider transports reconcile deletion of their exact original resource. */

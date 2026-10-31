@@ -29,7 +29,7 @@ export class ProductionPricedContinuationRestores {
   readonly #funding: PostgresSqlFundingStore;
   constructor(private readonly input: Readonly<{ pool: PostgresSqlPool; acceptance: ProductionResumeAcceptance; preparer: ProductionResumePricingPreparer;
     workers: ProductionPricedContinuationWorkers; checkpoint: ProductionCheckpointCoordinator; jobJournal: PostgresOperationJournal;
-    worker: Pick<ProductionWorkerBridge, "registerContinuationRequest" | "restorePricedCheckpoint" | "observePricedRestoreCheckpoint"> }>) {
+    worker: Pick<ProductionWorkerBridge, "registerContinuationRequest" | "restorePricedCheckpoint" | "observePricedRestoreCheckpoint" | "repairPricedRestoreCheckpoint"> }>) {
     assertPostgresOperationJournal(input.jobJournal);
     this.#pool = bindAccountingRealmPool(input.pool, createAccountingRealm("production-real"));
     this.#funding = new PostgresSqlFundingStore(this.#pool, { deadlineMs: 5000, maxAttempts: 4 });
@@ -98,7 +98,10 @@ export class ProductionPricedContinuationRestores {
           const transferArchive = new Uint8Array(archive);
           try { restored = (await this.input.worker.restorePricedCheckpoint({ ...binding.metadata, archive: transferArchive })).status === "restored"; }
           finally { transferArchive.fill(0); archive.fill(0); }
-        } else restored = (await this.input.worker.observePricedRestoreCheckpoint(binding.metadata)).status === "restored";
+        } else {
+          const observed = await this.input.worker.observePricedRestoreCheckpoint(binding.metadata);
+          restored = observed.status === "restored" || observed.status === "pending" && (await this.input.worker.repairPricedRestoreCheckpoint(binding.metadata)).status === "restored";
+        }
         if (restored) {
           const native = await this.input.jobJournal.read(`worker-restore-evidence:${binding.operationId}`);
           const evidence = ProductionRestoreEvidenceSchema.parse(native?.value);

@@ -52,7 +52,7 @@ export class ProductionWorkerOwnershipResolver {
    * receipt-finalized action when its exact checkpoint/resume claim remains
    * retained and capacity-bound; ordinary run() resolution still rejects that
    * terminal state. */
-  async resolveCheckpointWorker(value: CheckpointFenceRequest | CheckpointRestoreRequest | (Omit<CheckpointRestoreRequest, "archive"> & Readonly<{ archiveSha256: string }>)): Promise<ResolvedWorker> {
+  async resolveCheckpointWorker(value: CheckpointFenceRequest | CheckpointRestoreRequest | (Omit<CheckpointRestoreRequest, "archive"> & Readonly<{ archiveSha256: string }>), requestValue: WorkerRunRequest): Promise<ResolvedWorker> {
     if (!this.input.capacityJournal) throw new Error("PRODUCTION_WORKER_CAPACITY_JOURNAL_REQUIRED");
     const restored = CheckpointRestoreRequestSchema.safeParse(value);
     const observed = CheckpointRestoreRequestSchema.omit({ archive: true }).extend({ archiveSha256: z.string().regex(/^[a-f0-9]{64}$/u) }).safeParse(value);
@@ -68,12 +68,11 @@ export class ProductionWorkerOwnershipResolver {
       })
       : CheckpointFenceRequestSchema.parse(value);
     const resumeClaim = restoration?.resumeClaim;
-    const request = WorkerRunRequestSchema.parse({
-      sessionId: checkpoint.sessionId, actionId: checkpoint.actionId,
-      expectedVersion: checkpoint.expectedVersion, policyVersion: checkpoint.policyVersion,
-      capabilityGrant: "phase-04-coordinator-grant", workspaceId: checkpoint.workspaceId,
-    });
-    if (request.policyVersion !== this.input.policyVersion || request.workspaceId !== `workspace:${request.sessionId}`) throw new Error("PRODUCTION_CHECKPOINT_WORKER_BINDING_INVALID");
+    const request = WorkerRunRequestSchema.parse(requestValue);
+    if (request.sessionId !== checkpoint.sessionId || request.actionId !== checkpoint.actionId || request.expectedVersion !== checkpoint.expectedVersion
+      || request.policyVersion !== checkpoint.policyVersion || request.capabilityGrant !== "phase-04-coordinator-grant"
+      || request.workspaceId !== checkpoint.workspaceId || request.workspaceId !== `workspace:${request.sessionId}` || request.policyVersion !== this.input.policyVersion)
+      throw new Error("PRODUCTION_CHECKPOINT_WORKER_BINDING_INVALID");
     const client = await this.input.pool.connect();
     try {
       const rows = await client.query(`SELECT a.account_id,trim(f.nostr_pubkey) AS owner_id,c.intent_reference,c.capacity_reference
@@ -228,9 +227,9 @@ export class ProductionWorkerBridge implements ContinuationWorkerPort, ArtifactV
     } catch { return undefined; }
   }
 
-  async fenceCheckpoint(value: CheckpointFenceRequest): Promise<CheckpointFenceResult> { try { const checkpoint = CheckpointFenceRequestSchema.parse(value), request = await this.#request(checkpoint), result = await (await this.#job(await this.input.resolver.resolveCheckpointWorker(checkpoint))).fence(request, sha(canonicalJson(checkpoint))); return result.state === "fenced" ? { status: "fenced", code: "WORKER_EFFECTS_FENCED" } : { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } catch { return { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } }
+  async fenceCheckpoint(value: CheckpointFenceRequest): Promise<CheckpointFenceResult> { try { const checkpoint = CheckpointFenceRequestSchema.parse(value), request = await this.#request(checkpoint), result = await (await this.#job(await this.input.resolver.resolveCheckpointWorker(checkpoint, request))).fence(request, sha(canonicalJson(checkpoint))); return result.state === "fenced" ? { status: "fenced", code: "WORKER_EFFECTS_FENCED" } : { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } catch { return { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } }
   async exportCheckpoint(value: CheckpointExportRequest): Promise<CheckpointExportResult> { try { const checkpoint = CheckpointExportRequestSchema.parse(value), request = await this.#request(checkpoint), bytes = await (await this.#job(await this.input.resolver.resolveWorker(request))).exportWorkspace(request, sha(canonicalJson(checkpoint))); const workspace = z.object({ source: z.object({ files: z.array(z.object({ path: z.string() })) }), artifact: z.object({ files: z.array(z.object({ path: z.string() })) }) }).passthrough().parse(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))); const inventory = [...workspace.source.files, ...workspace.artifact.files].map(file => file.path).sort(); return { status: "exported", code: "WORKER_CHECKPOINT_EXPORTED", proposal: { ...checkpoint, formatVersion: "portable-checkpoint-v1", inventory, archiveBase64: Buffer.from(bytes).toString("base64"), archiveSha256: sha(bytes), evidenceSha256: sha(canonicalJson(checkpoint)), inventorySha256: sha(canonicalJson(inventory)) } }; } catch { return { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } }
-  async restoreCheckpoint(value: CheckpointRestoreRequest): Promise<CheckpointRestoreResult> { try { const checkpoint = CheckpointRestoreRequestSchema.parse(value), request = await this.#request(checkpoint), result = await (await this.#job(await this.input.resolver.resolveCheckpointWorker(checkpoint))).restoreWorkspace({ operationId: `restore:${checkpoint.checkpointId}`, bindingSha256: sha(canonicalJson(checkpoint)), bytes: checkpoint.archive }); return result.state === "restored" ? { status: "restored", code: "WORKER_CHECKPOINT_RESTORED", workspaceId: request.workspaceId, workspaceLineage: checkpoint.workspaceLineage } : { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } catch { return { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } }
+  async restoreCheckpoint(value: CheckpointRestoreRequest): Promise<CheckpointRestoreResult> { try { const checkpoint = CheckpointRestoreRequestSchema.parse(value), request = await this.#request(checkpoint), result = await (await this.#job(await this.input.resolver.resolveCheckpointWorker(checkpoint, request))).restoreWorkspace({ operationId: `restore:${checkpoint.checkpointId}`, bindingSha256: sha(canonicalJson(checkpoint)), bytes: checkpoint.archive }); return result.state === "restored" ? { status: "restored", code: "WORKER_CHECKPOINT_RESTORED", workspaceId: request.workspaceId, workspaceLineage: checkpoint.workspaceLineage } : { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } catch { return { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } }
   /** Query-only recovery for an acknowledgement lost after the original
    * restore.  It is deliberately separate from restoreCheckpoint so recovery
    * cannot upload or dispatch another workspace restore. */
@@ -238,7 +237,7 @@ export class ProductionWorkerBridge implements ContinuationWorkerPort, ArtifactV
     try {
       const checkpoint = CheckpointRestoreRequestSchema.omit({ archive: true }).extend({ archiveSha256: z.string().regex(/^[a-f0-9]{64}$/u) }).parse(value);
       const request = await this.#request(checkpoint);
-      const result = await (await this.#job(await this.input.resolver.resolveCheckpointWorker(checkpoint))).observeRestoreWorkspace({ operationId: `restore:${checkpoint.checkpointId}`, archiveSha256: checkpoint.archiveSha256, bindingSha256: sha(canonicalJson(checkpoint)) });
+      const result = await (await this.#job(await this.input.resolver.resolveCheckpointWorker(checkpoint, request))).observeRestoreWorkspace({ operationId: `restore:${checkpoint.checkpointId}`, archiveSha256: checkpoint.archiveSha256, bindingSha256: sha(canonicalJson(checkpoint)) });
       return result.state === "restored" ? Object.freeze({ status: "restored" as const, workerId: request.workspaceId }) : result.state === "pending" ? Object.freeze({ status: "pending" as const }) : Object.freeze({ status: "unknown" as const });
     } catch { return Object.freeze({ status: "unknown" as const }); }
   }

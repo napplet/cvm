@@ -134,6 +134,32 @@ test("dry-run resume reuses the exact authorization request and state", async ()
   expect(canonicalJson(second)).toBe(canonicalJson(first));
 });
 
+test("a future report-only window is persisted in the original request, not minted on resume", async () => {
+  const root = await workspace();
+  try {
+    const billingObservation = {
+      version: 1 as const,
+      allowedReportOrigin: "https://bigquery.googleapis.com" as const,
+      detailedExportTable: "project-12345.billing_export.gcp_billing_export_resource_v1",
+      location: "US",
+      maximumBytesBilled: "1000000",
+      reportQueryMaximumCostMicros: 10,
+      reportQueryPriceSourceSha256: "a".repeat(64),
+      reportQueryMicrosPerByteNumerator: "1",
+      reportQueryMicrosPerByteDenominator: "1000000",
+      collectorSha256: "b".repeat(64),
+      maximumIntervalMs: 60_000,
+      expiresAtMs: 3_000_000,
+    };
+    const first = await new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000, billingObservation }).dryRun();
+    expect(first.authorizationRequest.billingObservation).toEqual(billingObservation);
+    const second = await new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 2_000, billingObservation }).dryRun();
+    expect(second.authorizationRequest.authorizationRequestSha256).toBe(first.authorizationRequest.authorizationRequestSha256);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("controller persists one structured loopback consent receipt without provider effects", async () => {
   const root = await workspace();
   let consentLaunches = 0;

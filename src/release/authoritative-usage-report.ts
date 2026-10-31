@@ -15,6 +15,9 @@ export const OriginalUsageScopeSchema = z.object({
   authorizationRequestSha256: DigestSchema,
   authorizationReceiptSha256: DigestSchema,
   candidateSha256: DigestSchema,
+  /** The exact label written by the Google deployment client. It is derived
+   * from the native journal, never a caller-selected report filter. */
+  googleOperationLabel: z.string().regex(/^g-[a-f0-9]{52}$/u),
   /** Raw provider selector is derived only by the mounted authenticated
    * collector from its durable original-operation journal; it is never a CLI
    * or provider-port billing input. */
@@ -157,5 +160,5 @@ export function decimalUsdToMicros(value: string): number {
 
 export function reportOnlyGrantAllows(grant: BillingObservationGrant, action: "observe_usage_report" | "plan" | "apply" | "cleanup", nowMs: number): void {
   BillingObservationGrantSchema.parse(grant);
-  if (!Number.isSafeInteger(nowMs) || nowMs > grant.expiresAtMs || action !== "observe_usage_report") throw new Error("BILLING_OBSERVATION_GRANT_DENIED");
+  if (!Number.isSafeInteger(nowMs) || nowMs >= grant.expiresAtMs || action !== "observe_usage_report") throw new Error("BILLING_OBSERVATION_GRANT_DENIED");
 }

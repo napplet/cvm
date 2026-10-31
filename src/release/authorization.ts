@@ -45,6 +45,24 @@ const GcpEffectsSchema = z.object({
   billing: z.boolean(),
   apiEnablement: z.array(z.string().regex(/^[a-z0-9.-]{3,128}$/u)).min(1).max(16),
 }).strict();
+/** This is a separately approved, report-only future observation window. It
+ * is intentionally part of the original authorization record rather than a
+ * capability minted from an expired resource-mutation receipt. */
+export const BillingObservationApprovalSchema = z.object({
+  version: z.literal(1),
+  allowedReportOrigin: z.literal("https://bigquery.googleapis.com"),
+  detailedExportTable: z.string().regex(/^[a-z][a-z0-9-]{4,28}[a-z0-9]\.[A-Za-z_][A-Za-z0-9_]{0,1023}\.[A-Za-z_][A-Za-z0-9_]{0,1023}$/u),
+  location: z.string().regex(/^[A-Za-z0-9_-]{2,32}$/u),
+  maximumBytesBilled: z.string().regex(/^[1-9][0-9]{0,18}$/u),
+  reportQueryMaximumCostMicros: MicrosSchema,
+  reportQueryPriceSourceSha256: DigestSchema,
+  reportQueryMicrosPerByteNumerator: z.string().regex(/^[1-9][0-9]{0,18}$/u),
+  reportQueryMicrosPerByteDenominator: z.string().regex(/^[1-9][0-9]{0,18}$/u),
+  collectorSha256: DigestSchema,
+  maximumIntervalMs: z.number().int().min(1).max(90 * 24 * 60 * 60 * 1000),
+  expiresAtMs: z.number().int().positive(),
+}).strict();
+export type BillingObservationApproval = z.infer<typeof BillingObservationApprovalSchema>;
 const OperatorFundingReadinessSchema = z.object({
   version: z.literal(1),
   status: z.enum(["pending", "ready", "invalid"]),
@@ -83,6 +101,10 @@ export const ReleaseAuthorizationRequestSchema = z.object({
   evidenceRetentionDays: z.number().int().positive().max(3_650),
   artifactRetentionDays: z.number().int().positive().max(3_650),
   gcpEffects: GcpEffectsSchema,
+  /** Optional until an official provider report contract is configured. When
+   * absent, billing stays held; when present it is the entire authority for
+   * query-only observation after the ordinary receipt expires. */
+  billingObservation: BillingObservationApprovalSchema.optional(),
   expiresAtMs: z.number().int().positive(),
   supersedesAuthorizationRequestSha256: DigestSchema.nullable(),
   expectedReceiptSha256: DigestSchema,
@@ -130,6 +152,13 @@ function assertBounds(input: RequestInput): void {
     if (!Number.isSafeInteger(next)) throw new Error("RELEASE_AUTHORIZATION_COST_OVERFLOW");
     return next;
   }, 0)) throw new Error("RELEASE_AUTHORIZATION_COST_MISMATCH");
+  // The mounted reporter additionally checks the table project against its
+  // authenticated Google project. Here the signed request establishes only a
+  // later, finite observation window; it can never shorten into a mutation
+  // receipt or become an unbounded background permission.
+  if (input.billingObservation && input.billingObservation.expiresAtMs <= input.expiresAtMs) {
+    throw new Error("RELEASE_AUTHORIZATION_BILLING_OBSERVATION_INVALID");
+  }
   const providers = input.providerScopes.map((scope) => scope.provider);
   if (new Set(providers).size !== providers.length) throw new Error("RELEASE_AUTHORIZATION_SCOPE_INVALID");
   if (input.orderedEffects.some((effect) => !providers.includes(effect.provider))) throw new Error("RELEASE_AUTHORIZATION_SCOPE_INVALID");
@@ -254,8 +283,16 @@ export async function validateAuthorizationRequest(requestInput: unknown): Promi
 }
 
 export async function validateAuthorizationReceipt(input: Readonly<{ request: unknown; receipt: unknown; nowMs: number }>): Promise<ReleaseAuthorizationReceipt> {
-  const request = await validateAuthorizationRequest(input.request);
+  const { request, receipt } = await validateAuthorizationReceiptIntegrity(input);
   if (!Number.isSafeInteger(input.nowMs) || input.nowMs >= request.expiresAtMs) throw new Error("RELEASE_AUTHORIZATION_RECEIPT_EXPIRED");
+  return receipt;
+}
+
+/** Verifies the signed/original receipt binding without treating it as a
+ * current mutation permit. Report-only reconciliation uses this only with the
+ * separately bounded billingObservation record above. */
+export async function validateAuthorizationReceiptIntegrity(input: Readonly<{ request: unknown; receipt: unknown }>): Promise<Readonly<{ request: ReleaseAuthorizationRequest; receipt: ReleaseAuthorizationReceipt }>> {
+  const request = await validateAuthorizationRequest(input.request);
   const receipt = ReleaseAuthorizationReceiptSchema.parse(input.receipt);
   if (receipt.authorizationRequestSha256 !== request.authorizationRequestSha256
     || receipt.candidateSha256 !== request.candidateSha256
@@ -266,7 +303,6 @@ export async function validateAuthorizationReceipt(input: Readonly<{ request: un
     || receipt.maximumAuthorizedCostMicros !== request.maximumAuthorizedCostMicros
     || receipt.operatorFundingReadinessSha256 !== request.operatorFundingReadiness.readinessSha256
     || receipt.expiresAtMs !== request.expiresAtMs
-    || receipt.approvedAtMs > input.nowMs
     || receipt.approvedAtMs > receipt.expiresAtMs) throw new Error("RELEASE_AUTHORIZATION_RECEIPT_INVALID");
   const approval = {
     approvalChannel: receipt.approvalChannel,
@@ -279,5 +315,5 @@ export async function validateAuthorizationReceipt(input: Readonly<{ request: un
     ? ReleaseAuthorizationReceiptSchema.parse({ ...receiptPayload(request, approval), authorizationReceiptSha256: await digest(receiptPayload(request, approval)) })
     : await createOfficialConsentReceipt({ request, approval });
   if (canonicalJson(receipt) !== canonicalJson(expected)) throw new Error("RELEASE_AUTHORIZATION_RECEIPT_INVALID");
-  return receipt;
+  return Object.freeze({ request, receipt });
 }

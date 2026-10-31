@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { canonicalJson } from "../promotion/schema";
-import { createBillingObservationGrant } from "../release/authoritative-usage-report";
+import { BillingObservationGrantSchema, createBillingObservationGrant, type BillingObservationGrant } from "../release/authoritative-usage-report";
+import { BillingObservationApprovalSchema } from "../release/authorization";
 import { createBigQueryUsageReportCollector, type BigQueryFetch, type BigQueryUsageReportArtifactStore } from "../release/deployment/bigquery-usage-report";
+import { googleOperationLabel } from "../release/deployment/google-operation-id";
 import type { GoogleOperationJournal } from "../release/deployment/google-clients";
 import { createPostgresBigQueryUsageReportJournal } from "../release/deployment/postgres-provider-journals";
 import type { PostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
@@ -28,7 +30,6 @@ export const MountedBigQueryUsageReportConfigurationSchema = z.object({
   reportQueryMicrosPerByteDenominator: z.string().regex(/^[1-9][0-9]{0,18}$/u),
   collectorSha256: Digest,
   maximumIntervalMs: z.number().int().min(1).max(90 * 24 * 60 * 60 * 1000),
-  grantTtlMs: z.number().int().min(1_000).max(60 * 60 * 1000),
 }).strict();
 export type MountedBigQueryUsageReportConfiguration = z.infer<typeof MountedBigQueryUsageReportConfigurationSchema>;
 
@@ -41,10 +42,43 @@ type CaptureInput = Readonly<{
   authorizationReceiptSha256: string;
   accountScopeSha256: string;
   projectScopeSha256: string;
+  /** Signed original-request material, supplied only by the controller after
+   * cryptographic receipt binding has been checked. */
+  billingObservation?: unknown;
 }>;
 
 function digest(value: unknown): string { return createHash("sha256").update(canonicalJson(value)).digest("hex"); }
-function googleOperationId(operationId: string): string { return `g-${digest(operationId).slice(0, 52)}`; }
+const DurableGrantSchema = z.object({ version: z.literal(1), grant: BillingObservationGrantSchema }).strict();
+type DurableGrant = z.infer<typeof DurableGrantSchema>;
+function durableGrantOperation(operationRecordSha256: string): string { return `authoritative-usage-grant:${operationRecordSha256}`; }
+export type BillingObservationGrantJournal = Readonly<{
+  claim<T>(operationId: string, identitySha256: string, value: T): Promise<Readonly<{ claimed: boolean; record: Readonly<{ value: T }> }>>;
+}>;
+
+/** The original report grant is a one-time durable claim. A restart or racing
+ * controller receives this same immutable record; it cannot mint a new job
+ * identity by observing a later clock value. */
+export async function claimDurableBillingObservationGrant(input: Readonly<{ journal: BillingObservationGrantJournal; expectedGrant: BillingObservationGrant }>): Promise<BillingObservationGrant> {
+  const claimed = await input.journal.claim<DurableGrant>(durableGrantOperation(input.expectedGrant.originalScope.operationRecordSha256), digest({ version: 1, grant: input.expectedGrant }), { version: 1, grant: input.expectedGrant });
+  const persisted = DurableGrantSchema.parse(claimed.record.value);
+  if (canonicalJson(persisted.grant) !== canonicalJson(input.expectedGrant)) throw new Error("MOUNTED_BIGQUERY_GRANT_CONFLICT");
+  return persisted.grant;
+}
+
+/** Current mounted configuration only selects the project-owned collector. It
+ * cannot create or renew report authority: every cost/scope field must match
+ * the separately approved immutable original-request material. */
+function matchesMountedConfiguration(approval: z.infer<typeof BillingObservationApprovalSchema>, configuration: MountedBigQueryUsageReportConfiguration): boolean {
+  return approval.detailedExportTable === configuration.detailedExportTable
+    && approval.location === configuration.location
+    && approval.maximumBytesBilled === configuration.maximumBytesBilled
+    && approval.reportQueryMaximumCostMicros === configuration.reportQueryMaximumCostMicros
+    && approval.reportQueryPriceSourceSha256 === configuration.reportQueryPriceSourceSha256
+    && approval.reportQueryMicrosPerByteNumerator === configuration.reportQueryMicrosPerByteNumerator
+    && approval.reportQueryMicrosPerByteDenominator === configuration.reportQueryMicrosPerByteDenominator
+    && approval.collectorSha256 === configuration.collectorSha256
+    && approval.maximumIntervalMs === configuration.maximumIntervalMs;
+}
 function parseCreatedAt(value: string | undefined): number | undefined {
   if (!value) return undefined;
   const parsed = Date.parse(value);
@@ -127,34 +161,40 @@ export function createMountedBigQueryUsageReporter(input: Readonly<{
   return Object.freeze({
     async capture(value: CaptureInput) {
       if (value.operation.provider !== "cloud_run" && value.operation.provider !== "cloud_sql_postgres") return Object.freeze({ status: "held" as const });
-      const original = await input.googleJournal.read(googleOperationId(value.operation.operationId));
+      const approval = BillingObservationApprovalSchema.safeParse(value.billingObservation);
+      if (!approval.success || !matchesMountedConfiguration(approval.data, configuration) || now() >= approval.data.expiresAtMs) return Object.freeze({ status: "held" as const });
+      const original = await input.googleJournal.read(googleOperationLabel(value.operation.operationId));
       const intervalStartMs = parseCreatedAt(original?.createTime);
-      const intervalEndMs = now();
+      // This is committed from immutable original material, never recomputed
+      // from retry time. Waiting until the complete approved window closes
+      // prevents an early partial query from being mistaken for final usage.
+      const intervalEndMs = intervalStartMs === undefined ? undefined : intervalStartMs + approval.data.maximumIntervalMs;
       if (!original || original.state !== "completed" || !original.owned || !intervalStartMs
-        || intervalEndMs <= intervalStartMs || intervalEndMs - intervalStartMs > configuration.maximumIntervalMs) {
+        || intervalEndMs === undefined || intervalEndMs <= intervalStartMs || intervalEndMs > approval.data.expiresAtMs || now() < intervalEndMs) {
         return Object.freeze({ status: "held" as const });
       }
       const resourceName = ResourceName.safeParse(original.resource);
       if (!resourceName.success || !resourceName.data.startsWith(`projects/${projectId}/`)) return Object.freeze({ status: "held" as const });
-      const grant = await createBillingObservationGrant({
+      const expectedGrant = await createBillingObservationGrant({
         version: 1,
         originalScope: {
           version: 1, provider: value.operation.provider, operationId: value.operation.operationId,
           operationRecordSha256: Digest.parse(value.operationRecordSha256),
           authorizationRequestSha256: Digest.parse(value.authorizationRequestSha256),
           authorizationReceiptSha256: Digest.parse(value.authorizationReceiptSha256),
-          candidateSha256: Digest.parse(value.candidateSha256), resourceName: resourceName.data,
+          candidateSha256: Digest.parse(value.candidateSha256), googleOperationLabel: googleOperationLabel(value.operation.operationId), resourceName: resourceName.data,
           resourceIdentitySha256: Digest.parse(value.resourceIdentitySha256),
           accountScopeSha256: Digest.parse(value.accountScopeSha256), projectScopeSha256: Digest.parse(value.projectScopeSha256),
           selectorSha256: digest({ provider: value.operation.provider, operationId: value.operation.operationId, resourceName: resourceName.data }),
           intervalStartMs, intervalEndMs,
         },
-        allowedReportOrigin: "https://bigquery.googleapis.com", projectId, detailedExportTable: configuration.detailedExportTable, location: configuration.location,
-        maximumBytesBilled: configuration.maximumBytesBilled, reportQueryMaximumCostMicros: configuration.reportQueryMaximumCostMicros,
-        reportQueryPriceSourceSha256: configuration.reportQueryPriceSourceSha256,
-        reportQueryMicrosPerByteNumerator: configuration.reportQueryMicrosPerByteNumerator, reportQueryMicrosPerByteDenominator: configuration.reportQueryMicrosPerByteDenominator,
-        collectorSha256: configuration.collectorSha256, expiresAtMs: intervalEndMs + configuration.grantTtlMs,
+        allowedReportOrigin: approval.data.allowedReportOrigin, projectId, detailedExportTable: approval.data.detailedExportTable, location: approval.data.location,
+        maximumBytesBilled: approval.data.maximumBytesBilled, reportQueryMaximumCostMicros: approval.data.reportQueryMaximumCostMicros,
+        reportQueryPriceSourceSha256: approval.data.reportQueryPriceSourceSha256,
+        reportQueryMicrosPerByteNumerator: approval.data.reportQueryMicrosPerByteNumerator, reportQueryMicrosPerByteDenominator: approval.data.reportQueryMicrosPerByteDenominator,
+        collectorSha256: approval.data.collectorSha256, expiresAtMs: approval.data.expiresAtMs,
       });
+      const grant = await claimDurableBillingObservationGrant({ journal: input.billingJournal, expectedGrant });
       const captured = await collector.capture(grant);
       if (!captured.envelope) return Object.freeze({ status: "held" as const });
       await persistCapture({ pool: input.pool, grant, envelope: captured.envelope });

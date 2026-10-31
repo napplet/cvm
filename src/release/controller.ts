@@ -17,7 +17,7 @@ import {
 } from "./contracts";
 import { deriveReleaseTopology, RELEASE_PROVIDER_IDS, RELEASE_TOPOLOGY_QUANTITY_CONTRACT } from "./topology";
 import { isObservedCollectorRegistryImage, type ObservedCollectorRegistryImage, type PreparedCollectorImage } from "./collector-image";
-import { createAuthorizationRequest, createOfficialConsentReceipt, validateAuthorizationReceipt, validateAuthorizationRequest, type ReleaseAuthorizationReceipt } from "./authorization";
+import { createAuthorizationRequest, createOfficialConsentReceipt, validateAuthorizationReceipt, validateAuthorizationReceiptIntegrity, validateAuthorizationRequest, type BillingObservationApproval, type ReleaseAuthorizationReceipt } from "./authorization";
 import type { OfficialConsentPort } from "./deployment/consent";
 import { ReleaseProviderCostObservationSchema, ReleaseProviderOperationSchema, type ReleaseProviderCostObservation, type ReleaseProviderOperation, type ReleaseProviderRegistry as AuthorizedProviderRegistry } from "./providers";
 import { createReleaseControllerProviderRegistry } from "./native-registry";
@@ -60,6 +60,9 @@ type ControllerOptions = Readonly<{
    * same product request. Values are revalidated before they enter the
    * immutable authorization request; no wallet material is accepted here. */
   operatorFundingReadiness?: OperatorFundingReadiness;
+  /** Optional, separately signed/approved report-only future window. This is
+   * request material, never derived from the mounted collector configuration. */
+  billingObservation?: BillingObservationApproval;
   /** Local preapproval may supply only a prepared OCI layout. Provider work is
    * refused until the same layout has a post-upload registry observation. */
   collectorImage?: PreparedCollectorImage | ObservedCollectorRegistryImage;
@@ -132,6 +135,8 @@ export type AuthoritativeUsageReportPort = Readonly<{
     authorizationReceiptSha256: string;
     accountScopeSha256: string;
     projectScopeSha256: string;
+    /** Immutable original-request approval for the report-only route. */
+    billingObservation?: unknown;
   }>): Promise<Readonly<{ status: "held" } | { status: "captured"; grant: unknown; envelope: unknown }>>;
   readArtifact(input: Readonly<{ uri: string; generation: string; sha256: string }>): Promise<Uint8Array | undefined>;
 }>;
@@ -518,6 +523,7 @@ export class ReleaseCertificationController {
   readonly #costCatalog: LiveCostCatalogPort | undefined;
   readonly #requireCurrentPriceCatalog: boolean;
   readonly #operatorFundingReadiness: OperatorFundingReadiness | undefined;
+  readonly #billingObservation: BillingObservationApproval | undefined;
   readonly #collectorImage: PreparedCollectorImage | ObservedCollectorRegistryImage | undefined;
   readonly #syncDirectory: (path: string) => Promise<void>;
   readonly #workspaceCapability: ReleaseWorkspaceCapability | undefined;
@@ -532,6 +538,7 @@ export class ReleaseCertificationController {
     this.#costCatalog = options.costCatalog;
     this.#requireCurrentPriceCatalog = options.requireCurrentPriceCatalog ?? false;
     this.#operatorFundingReadiness = options.operatorFundingReadiness;
+    this.#billingObservation = options.billingObservation;
     this.#collectorImage = options.collectorImage;
     this.#syncDirectory = options.syncDirectory ?? syncDirectory;
     this.#workspaceCapability = options.workspaceCapability;
@@ -723,6 +730,7 @@ export class ReleaseCertificationController {
       estimate: { currency: "USD", maximumMicros: plan.maximumAuthorizedCostMicros, sourceId: "live-price-catalog-v1", sourceSha256: estimate.sourceSha256, observedAtMs: estimate.observedAtMs, freshUntilMs: estimate.freshUntilMs },
       priceLines: estimate.lines.map(({ components: _components, ...line }) => ({ ...line, quantityNanos: Number(line.quantityNanos) })),
       ...(operatorFundingReadiness ? { operatorFundingReadiness } : {}),
+      ...(this.#billingObservation === undefined ? {} : { billingObservation: this.#billingObservation }),
       maximumRunDurationMs: 15 * 60 * 1000,
       cleanupByMs: Math.min(discovering.createdAtMs + 15 * 60 * 1000, estimate.freshUntilMs - 1),
       evidenceRetentionDays: 30,
@@ -953,7 +961,11 @@ export class ReleaseCertificationController {
     if (!current.state.authorizationRequestSha256 || !current.state.authorizationReceiptSha256) throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID");
     const request = await this.#readRequest(current.state.authorizationRequestSha256);
     let receipt: ReleaseAuthorizationReceipt;
-    try { receipt = await validateAuthorizationReceipt({ request, receipt: input.receipt, nowMs: this.#now() }); }
+    try {
+      const bound = await validateAuthorizationReceiptIntegrity({ request, receipt: input.receipt });
+      receipt = bound.receipt;
+      if (!request.billingObservation || this.#now() >= request.billingObservation.expiresAtMs) throw new Error("expired report approval");
+    }
     catch { throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID"); }
     if (receipt.authorizationReceiptSha256 !== current.state.authorizationReceiptSha256 || !current.state.providerOperationRecordSha256s || current.state.providerOperationRecordSha256s.length !== current.state.providerOperationIds.length) throw new Error("RELEASE_CONTROLLER_OPERATION_LEGACY_UNTRUSTED");
     let captures = 0;
@@ -970,6 +982,7 @@ export class ReleaseCertificationController {
         authorizationReceiptSha256: receipt.authorizationReceiptSha256,
         accountScopeSha256: record.accountScopeSha256,
         projectScopeSha256: record.projectScopeSha256,
+        billingObservation: request.billingObservation,
       });
       if (captured.status === "held") continue;
       let grant;
@@ -1365,7 +1378,7 @@ export class ReleaseCertificationController {
     }
     if (state.data.version === 2) {
       if (!state.data.priorStateSha256 || !state.data.authorizationRequestSha256 || !state.data.authorizationReceiptSha256
-        || !["receipt_valid", "bootstrap", "provisioning", "observing", "topology_ready", "materializing", "protected_suite_running", "finalizing", "cleaning", "completed", "blocked"].includes(state.data.status)) {
+        || !["receipt_valid", "bootstrap", "provisioning", "observing", "topology_ready", "billing_observing", "materializing", "protected_suite_running", "finalizing", "cleaning", "completed", "blocked"].includes(state.data.status)) {
         throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
       }
       const prior = await this.#readState(state.data.priorStateSha256, seen);

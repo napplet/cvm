@@ -16,7 +16,6 @@ const configuration = {
   reportQueryMicrosPerByteDenominator: "1000000",
   collectorSha256: digest("b"),
   maximumIntervalMs: 60_000,
-  grantTtlMs: 10_000,
 };
 
 test("mounted billing configuration rejects arbitrary report transport facts", () => {

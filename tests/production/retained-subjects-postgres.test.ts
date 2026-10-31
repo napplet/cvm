@@ -29,6 +29,7 @@ import { MountedProductionSecretMaterial } from "../../src/production/secret-mat
 import { openProductionServiceJournals } from "../../src/production/service-journals";
 import { createPostgresBigQueryUsageReportJournal, createPostgresWorkerOperationJournal } from "../../src/release/deployment/postgres-provider-journals";
 import { createMemoryGoogleOperationJournal } from "../../src/release/deployment/google-clients";
+import { googleOperationLabel } from "../../src/release/deployment/google-operation-id";
 import { GOOGLE_CONTROL_PLANE_SCOPES, googleAccountScopeSha256 } from "../../src/release/deployment/google-auth";
 import { createMountedBigQueryUsageReporter } from "../../src/production/mounted-authoritative-billing";
 import { createWorkerDeploymentClients, PRODUCTION_WORKER_POLICY } from "../../src/release/deployment/worker-clients";
@@ -166,7 +167,10 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     await source.query(await Bun.file(`migrations/${retainedSubjectMigrations[2]}`).text());
     const reportRequest = "a".repeat(64), reportGrant = "b".repeat(64), reportOperation = "c".repeat(64), reportRaw = "d".repeat(64);
     await runtime.query("INSERT INTO production_real.authoritative_usage_report_capture(report_request_sha256,grant_sha256,operation_record_sha256,provider_job_id,artifact_uri,artifact_generation,raw_report_sha256,envelope_json) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb)", [reportRequest, reportGrant, reportOperation, "usage_original", "gs://fixture-bucket/authoritative-usage/original.json", 1, reportRaw, JSON.stringify({ grantSha256: reportGrant, rawReportSha256: reportRaw })]);
-    await expect(runtime.query("UPDATE production_real.authoritative_usage_report_capture SET envelope_json=envelope_json WHERE report_request_sha256=$1", [reportRequest])).rejects.toThrow("AUTHORITATIVE_USAGE_REPORT_CAPTURE_IMMUTABLE");
+    // Runtime cannot update the immutable capture table at all; prove that
+    // least privilege separately from the owner-context immutability trigger.
+    await expect(runtime.query("UPDATE production_real.authoritative_usage_report_capture SET envelope_json=envelope_json WHERE report_request_sha256=$1", [reportRequest])).rejects.toThrow(/permission denied/u);
+    await expect(source.query("UPDATE production_real.authoritative_usage_report_capture SET envelope_json=envelope_json WHERE report_request_sha256=$1", [reportRequest])).rejects.toThrow("AUTHORITATIVE_USAGE_REPORT_CAPTURE_IMMUTABLE");
     const usageReports = createPostgresBigQueryUsageReportJournal(new PostgresOperationJournal(pool, { namespace: "authoritative-usage-fixture", scopeSha256: hex("authoritative-usage-scope") }));
     const reportJob = { reportRequestSha256: "e".repeat(64), dryRunJobId: `usage_dry_${"e".repeat(48)}`, queryJobId: `usage_${"e".repeat(48)}`, state: "claimed" as const };
     expect((await usageReports.claim(reportJob)).claimed).toBe(true);
@@ -179,10 +183,10 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
       projectId: "project-12345", quotaProjectId: "project-12345", principal: "release@example.com", scopes: GOOGLE_CONTROL_PLANE_SCOPES,
     });
     const billingGoogleJournal = createMemoryGoogleOperationJournal([{
-      operationId: `g-${digest(billingOperationId).slice(0, 52)}`,
+      operationId: googleOperationLabel(billingOperationId),
       resource: "projects/project-12345/locations/us-central1/services/release",
       requestSha256: hex("billing-google-request"), contentSha256: hex("billing-google-content"), state: "completed",
-      resourceUid: "billing-resource-uid", createTime: new Date(now - 1_000).toISOString(), owned: true,
+      resourceUid: "billing-resource-uid", createTime: new Date(now - 60_000).toISOString(), owned: true,
     }]);
     const billingObjects = generationAwareObjects(() => now);
     let reportPosts = 0;
@@ -191,7 +195,7 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
         version: 1, detailedExportTable: "project-12345.billing_export.gcp_billing_export_resource_v1", location: "US",
         maximumBytesBilled: "1000000", reportQueryMaximumCostMicros: 10, reportQueryPriceSourceSha256: hex("billing-price-source"),
         reportQueryMicrosPerByteNumerator: "1", reportQueryMicrosPerByteDenominator: "1000000", collectorSha256: hex("billing-collector"),
-        maximumIntervalMs: 60_000, grantTtlMs: 10_000,
+        maximumIntervalMs: 60_000,
       },
       projectId: "project-12345", quotaProjectId: "project-12345", principal: "release@example.com", accountScopeSha256: billingAccountScope,
       tokenSource: { async getAccessToken() { return { token: "fixture-bearer-token-which-is-never-logged", projectId: "project-12345", quotaProjectId: "project-12345", principal: "release@example.com", scopes: GOOGLE_CONTROL_PLANE_SCOPES, accountScopeSha256: billingAccountScope, expiresAtMs: now + 70_000 }; } },
@@ -212,13 +216,22 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
       operation: { provider: "cloud_run", operationId: billingOperationId }, operationRecordSha256: hex("billing-operation-record"),
       resourceIdentitySha256: hex("billing-resource-identity"), candidateSha256: hex("billing-candidate"), authorizationRequestSha256: hex("billing-request"),
       authorizationReceiptSha256: hex("billing-receipt"), accountScopeSha256: billingAccountScope, projectScopeSha256: hex("billing-project-scope"),
+      billingObservation: {
+        version: 1, allowedReportOrigin: "https://bigquery.googleapis.com",
+        detailedExportTable: "project-12345.billing_export.gcp_billing_export_resource_v1", location: "US",
+        maximumBytesBilled: "1000000", reportQueryMaximumCostMicros: 10, reportQueryPriceSourceSha256: hex("billing-price-source"),
+        reportQueryMicrosPerByteNumerator: "1", reportQueryMicrosPerByteDenominator: "1000000", collectorSha256: hex("billing-collector"),
+        maximumIntervalMs: 60_000, expiresAtMs: now + 10_000,
+      },
     };
-    const capturedBilling = await mountedReporter.capture(billingCapture);
+    const concurrentBilling = await Promise.all([mountedReporter.capture(billingCapture), mountedReporter.capture(billingCapture)]);
+    const capturedBilling = concurrentBilling.find(value => value.status === "captured") ?? await mountedReporter.capture(billingCapture);
     expect(capturedBilling.status).toBe("captured");
     if (capturedBilling.status !== "captured") throw new Error("MOUNTED_BILLING_CAPTURE_REQUIRED");
     expect(capturedBilling.grant.originalScope.resourceName).toBe("projects/project-12345/locations/us-central1/services/release");
     expect(capturedBilling.envelope.rawArtifact.generation).toBe("1");
     expect(reportPosts).toBe(2);
+    now += 1_000;
     const resumedBilling = await mountedReporter.capture(billingCapture);
     expect(resumedBilling).toEqual(capturedBilling);
     expect(reportPosts).toBe(2);

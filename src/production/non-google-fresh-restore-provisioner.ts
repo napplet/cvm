@@ -5,6 +5,10 @@ import type { NonGoogleCoreBinding } from "./non-google-native-runtime";
 import { NonGoogleCoreJournal } from "./non-google-native-runtime";
 import { NonGoogleFreshRestoreDriver } from "./non-google-fresh-restore-driver";
 import { NonGooglePostgresDriver } from "./non-google-postgres";
+import { PostgresByteaObjectStoreAdapter } from "../continuity/postgres-bytea-object-store";
+import { FileObjectKeyCustody, PerObjectFileCheckpointCrypto } from "./object-retention-policy";
+import { ProductionRetainedSubjectPreparer } from "./retained-subject-preparer";
+import type { PostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 type Prepared = Readonly<{ version: 2; sourceInstanceId: string; binding: NonGoogleCoreBinding; state: "prepared" }>;
@@ -14,7 +18,7 @@ type Fresh = Readonly<{ version: 2; databaseUuid: string; applicationUuid: strin
  * subject, reattach, cleanup, or resource callback. Seven-subject recovery is
  * permitted only when the restricted original-record query below is complete. */
 export class NonGoogleFreshRestoreProvisioner {
-  constructor(private readonly input: Readonly<{ binding: NonGoogleCoreBinding; journal: NonGoogleCoreJournal; driver: NonGoogleFreshRestoreDriver; postgres: NonGooglePostgresDriver }>) { Object.freeze(this); }
+  constructor(private readonly input: Readonly<{ binding: NonGoogleCoreBinding; journal: NonGoogleCoreJournal; postgresJournal: PostgresOperationJournal; driver: NonGoogleFreshRestoreDriver; postgres: NonGooglePostgresDriver; scope: Readonly<{ checkpointId: string; sessionId: string; ownerId: string }>; custodyRoots: readonly string[] }>) { Object.freeze(this); }
   #base() { return `restore:${this.input.binding.candidateSha256}:${this.input.binding.topologySha256}`; }
   #prepare() { return `${this.#base()}:prepare`; }
   #fresh() { return `${this.#base()}:fresh`; }
@@ -23,7 +27,11 @@ export class NonGoogleFreshRestoreProvisioner {
     try {
       const client = await pool.connect();
       try {
-        const original = await client.query<Record<string, unknown>>("SELECT source_instance_id FROM production_real.restore_originals WHERE candidate_sha256=$1 AND topology_sha256=$2 LIMIT 2", [this.input.binding.candidateSha256, this.input.binding.topologySha256]);
+        const objectStore = new PostgresByteaObjectStoreAdapter({ pool, producerBudget: { version: 1, producer: "retained_subject", plaintextBytes: 16 * 1024 * 1024, aesGcmTagBytes: 16, base64Expansion: "4/3-rounded", chunkBytes: 384 * 1024 } });
+        const crypto = new PerObjectFileCheckpointCrypto({ pool, custody: new FileObjectKeyCustody({ roots: this.input.custodyRoots }) });
+        const preparer = new ProductionRetainedSubjectPreparer({ pool, objectStore, journal: this.input.postgresJournal, kekPath: "/non-google-unused-legacy-kek", crypto });
+        await preparer.prepare(this.input.scope);
+        const original = await client.query<Record<string, unknown>>("SELECT system_identifier::text AS source_instance_id FROM pg_control_system()", []);
         if (original.rows.length !== 1) throw new Error("NON_GOOGLE_RESTORE_SOURCE_ORIGINAL_REQUIRED");
         const sourceInstanceId = z.string().min(1).max(256).parse(original.rows[0]!.source_instance_id);
         const value: Prepared = Object.freeze({ version: 2, sourceInstanceId, binding: this.input.binding, state: "prepared" });

@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import type { CertifierConfig, PinnedDeploymentExecution } from "../certification/config";
 import { PRODUCTION_LIVE_PROTECTED_PORT_KEYS } from "../certification/live/production-ports";
 import { PROTECTED_SUITES } from "../certification/runner";
-import type { AuthorizedLiveExecutionInput, ReleaseExecutionSession } from "./controller";
+import type { AuthorizedLiveExecutionInput, AuthoritativeUsageRecoverySession, ReleaseExecutionSession } from "./controller";
 import { validateAuthorizationReceipt, validateAuthorizationRequest } from "./authorization";
 import { createDeploymentExecutionConfig, type DeploymentExecutionConfig } from "./deployment/config";
 import { RELEASE_PRODUCTION_PROVIDER_IDS } from "./native-registry";
@@ -52,6 +52,21 @@ type ProductionRuntimeMaterialFactoryModule = Readonly<{
     authorization: Readonly<{ request: unknown; receipt: unknown }>;
     secrets: MountedProductionSecretMaterial;
   }>) => Promise<ProductionCertificationSessionMaterial> | ProductionCertificationSessionMaterial;
+}>;
+
+type ProductionRuntimeRecoveryFactoryResult = Readonly<{
+  receipt: unknown;
+  reporter: import("./controller").AuthoritativeUsageRecoveryPort;
+  close?: () => Promise<void>;
+}>;
+
+type ProductionRuntimeRecoveryFactoryModule = Readonly<{
+  createProductionAuthoritativeUsageRecovery?: (input: Readonly<{
+    config: ProductionConfig;
+    deploymentConfig: DeploymentExecutionConfig;
+    authorizationRequest: unknown;
+    secrets: MountedProductionSecretMaterial;
+  }>) => Promise<ProductionRuntimeRecoveryFactoryResult> | ProductionRuntimeRecoveryFactoryResult;
 }>;
 
 function parseFundingFeePolicyProjection(value: unknown): SealedFundingFeePolicyProjection {
@@ -181,6 +196,13 @@ async function importPinnedProductionRuntimeFactory(module: PinnedDeploymentExec
   if (!module.runtime) throw new Error("RELEASE_PRODUCTION_RUNTIME_CLOSURE_REQUIRED");
   const file = await readPinnedFile(module.runtime.root, module.runtime.modulePath, module.runtime.sha256);
   try { return await import(`${pathToFileURL(file.path).href}?sha256=${module.runtime.sha256.toLowerCase()}`) as ProductionRuntimeMaterialFactoryModule; }
+  catch { throw new Error("RELEASE_PRODUCTION_RUNTIME_FACTORY_INVALID"); }
+}
+
+async function importPinnedProductionRuntimeRecoveryFactory(module: PinnedDeploymentExecution): Promise<ProductionRuntimeRecoveryFactoryModule> {
+  if (!module.runtime) throw new Error("RELEASE_PRODUCTION_RUNTIME_CLOSURE_REQUIRED");
+  const file = await readPinnedFile(module.runtime.root, module.runtime.modulePath, module.runtime.sha256);
+  try { return await import(`${pathToFileURL(file.path).href}?sha256=${module.runtime.sha256.toLowerCase()}`) as ProductionRuntimeRecoveryFactoryModule; }
   catch { throw new Error("RELEASE_PRODUCTION_RUNTIME_FACTORY_INVALID"); }
 }
 
@@ -396,6 +418,57 @@ export async function loadReleaseExecutionSession(input: Readonly<{
         throw new Error("RELEASE_PRODUCTION_EXECUTION_PREPARATION_INVALID");
       }
       return prepared;
+    },
+  });
+}
+
+/** Load only the mounted read-only usage reporter for an existing
+ * `billing_observing` state. This path never opens the generation runtime or
+ * evaluates normal receipt freshness, so an expired execution receipt cannot
+ * be used to reconstruct plan/apply/cleanup authority. */
+export async function loadReleaseAuthoritativeUsageRecoverySession(input: Readonly<{
+  config: CertifierConfig;
+  candidateSha256: string;
+  workspace: string;
+}>): Promise<AuthoritativeUsageRecoverySession> {
+  const modulePin = executionModule(input.config);
+  if (input.config.mode !== "protected" || input.config.controller!.candidateId !== input.candidateSha256.toLowerCase()) {
+    throw new Error("RELEASE_PRODUCTION_EXECUTION_CONFIG_INVALID");
+  }
+  const deploymentConfig = await loadDeploymentConfig(modulePin, {
+    candidateSha256: input.candidateSha256,
+    workspace: input.workspace,
+    sourceRevision: input.config.controller!.sourceRevision,
+  });
+  const [config, factory] = await Promise.all([
+    loadPinnedProductionRuntimeConfig(modulePin, {
+      candidateSha256: input.candidateSha256,
+      topologySha256: input.config.controller!.topologySha256,
+      deploymentConfig,
+    }),
+    importPinnedProductionRuntimeRecoveryFactory(modulePin),
+  ]);
+  if (typeof factory.createProductionAuthoritativeUsageRecovery !== "function") {
+    throw new Error("RELEASE_AUTHORITATIVE_USAGE_RECOVERY_UNAVAILABLE");
+  }
+  return Object.freeze({
+    async prepareAuthoritativeUsageRecovery(value) {
+      let request;
+      try { request = await validateAuthorizationRequest(value.authorizationRequest); }
+      catch { throw new Error("RELEASE_PRODUCTION_EXECUTION_AUTHORIZATION_INVALID"); }
+      if (request.candidateSha256 !== input.candidateSha256.toLowerCase() || request.topologySha256 !== config.topologySha256) {
+        throw new Error("RELEASE_PRODUCTION_EXECUTION_AUTHORIZATION_INVALID");
+      }
+      try {
+        return await factory.createProductionAuthoritativeUsageRecovery!({
+          config,
+          deploymentConfig,
+          authorizationRequest: request,
+          secrets: new MountedProductionSecretMaterial(config),
+        });
+      } catch {
+        throw new Error("RELEASE_AUTHORITATIVE_USAGE_RECOVERY_UNAVAILABLE");
+      }
     },
   });
 }

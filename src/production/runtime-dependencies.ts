@@ -45,6 +45,9 @@ export async function materializeProductionRuntimeDependencies(input: Readonly<{
    * journal would turn that safety fence into an identity collision. */
   const googleControlJournal = new PostgresOperationJournal(input.pool, { namespace: "production-google-control", scopeSha256 });
   const googleIntentJournal = new PostgresOperationJournal(input.pool, { namespace: "production-google-intent", scopeSha256 });
+  // Report jobs are query-only but still need their own original-request CAS
+  // fence; sharing the native mutation journal would couple recovery domains.
+  const authoritativeUsageJournal = new PostgresOperationJournal(input.pool, { namespace: "production-authoritative-usage", scopeSha256 });
   const workerJournal = serviceJournals.worker;
   const jobJournal = serviceJournals.job;
   const requestJournal = serviceJournals.request;
@@ -88,5 +91,5 @@ export async function materializeProductionRuntimeDependencies(input: Readonly<{
   const directPreviewAssets = await createProductionDirectPreviewAssets();
   const directPublicationIntents = new ProductionDirectPublicationIntents({ artifacts: ownedDirectArtifacts, journal: requestJournal,
     publication: { server: input.config.publication.uploadServer }, relays: input.config.publication.relays, now: input.now });
-  return Object.freeze({ pool: input.pool, journal, serviceJournals, googleControlJournal, googleIntentJournal, workerJournal, jobJournal, requestJournal, vertexJournal, checkpointJournal, checkpointCoordinator, retainedSubjects, tokenSource, gcs, artifactStore, workers: worker.clients, jobRouter, ownedDirectArtifacts, directPreviewAssets, directPublicationIntents, workerCertification: worker.certification, flyRegion: worker.flyRegion, capacity, certificationCapacities, vertexMaterial, vertex, proposals, gateway, settlement, retainedPricing, resolver, workerBridge });
+  return Object.freeze({ pool: input.pool, journal, serviceJournals, googleControlJournal, googleIntentJournal, authoritativeUsageJournal, workerJournal, jobJournal, requestJournal, vertexJournal, checkpointJournal, checkpointCoordinator, retainedSubjects, tokenSource, gcs, artifactStore, workers: worker.clients, jobRouter, ownedDirectArtifacts, directPreviewAssets, directPublicationIntents, workerCertification: worker.certification, flyRegion: worker.flyRegion, capacity, certificationCapacities, vertexMaterial, vertex, proposals, gateway, settlement, retainedPricing, resolver, workerBridge });
 }

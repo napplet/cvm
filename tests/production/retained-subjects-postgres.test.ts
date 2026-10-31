@@ -29,7 +29,11 @@ import { createMountedFreshRestoreRuntime } from "../../src/production/mounted-f
 import { loadProductionConfig } from "../../src/production/config";
 import { MountedProductionSecretMaterial } from "../../src/production/secret-material";
 import { openProductionServiceJournals } from "../../src/production/service-journals";
-import { createPostgresWorkerOperationJournal } from "../../src/release/deployment/postgres-provider-journals";
+import { createPostgresBigQueryUsageReportJournal, createPostgresWorkerOperationJournal } from "../../src/release/deployment/postgres-provider-journals";
+import { createMemoryGoogleOperationJournal } from "../../src/release/deployment/google-clients";
+import { googleOperationLabel } from "../../src/release/deployment/google-operation-id";
+import { GOOGLE_CONTROL_PLANE_SCOPES, googleAccountScopeSha256 } from "../../src/release/deployment/google-auth";
+import { createMountedBigQueryUsageReporter } from "../../src/production/mounted-authoritative-billing";
 import { createWorkerDeploymentClients, PRODUCTION_WORKER_POLICY } from "../../src/release/deployment/worker-clients";
 import { ProductionWorkerJobRouter } from "../../src/production/worker-job-router";
 import { ProductionWorkerRequestStore } from "../../src/production/worker-request-store";
@@ -76,7 +80,7 @@ const migrations = [
   "development/013_publication_tracking.sql", "development/014_request_cost_history.sql", "development/015_revision_restore.sql",
   "development/016_usage_evidence.sql",
 ] as const;
-const retainedSubjectMigrations = ["phase-07/014_production_durability_subjects.sql", "phase-07/015_production_publication_signed_events.sql"] as const;
+const retainedSubjectMigrations = ["phase-07/014_production_durability_subjects.sql", "phase-07/015_production_publication_signed_events.sql", "phase-07/016_production_authoritative_usage_reports.sql"] as const;
 
 function sqlPool(native: Pool): PostgresSqlPool {
   return { async connect() { const client = await native.connect(); return {
@@ -112,7 +116,11 @@ function generationAwareObjects(now: () => number, loseDeletionAck: () => boolea
   const entries = new Map<string, Stored>();
   const client: VersionedObjectClientPort = {
     async createIfAbsent(value) {
-      if (entries.has(value.key)) throw new Error("FIXTURE_OBJECT_ALREADY_EXISTS");
+      const existing = entries.get(value.key);
+      if (existing) {
+        if (existing.checksum !== value.checksum || !Buffer.from(existing.bytes).equals(Buffer.from(value.bytes))) throw new Error("GCS_OBJECT_IMMUTABLE_CONFLICT");
+        return { generation: existing.generation, checksum: existing.checksum };
+      }
       entries.set(value.key, Object.freeze({ generation: 1, checksum: value.checksum, bytes: new Uint8Array(value.bytes) }));
       return { generation: 1, checksum: value.checksum };
     },
@@ -136,6 +144,15 @@ function generationAwareObjects(now: () => number, loseDeletionAck: () => boolea
   };
   return new GcsObjectStoreAdapter({ config: { bucket: "retained-subject-fixture", projectId: "retained-subject-fixture" }, client });
 }
+
+test("generation-aware storage preserves an identical immutable create and rejects different bytes", async () => {
+  const objects = generationAwareObjects(Date.now);
+  const input = { key: "authoritative-usage/original/report.json", bytes: new TextEncoder().encode("original provider report") };
+  const first = await objects.createImmutable(input);
+  expect(await objects.createImmutable(input)).toEqual(first);
+  await expect(objects.createImmutable({ ...input, bytes: new TextEncoder().encode("different provider report") })).rejects.toThrow("GCS_OBJECT_IMMUTABLE_CONFLICT");
+  expect(await objects.readExact(first)).toEqual(input.bytes);
+});
 
 function mountedConfig(topologySha256: string) {
   const digest = "a".repeat(64), image = `registry.example/retained@sha256:${digest}`;
@@ -176,9 +193,82 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
     await expect(assertProductionRetainedSubjectSchema(pool)).rejects.toThrow("PRODUCTION_RETAINED_SUBJECT_SCHEMA_REQUIRED");
     await source.query(await Bun.file(`migrations/${retainedSubjectMigrations[1]}`).text());
     await assertProductionRetainedSubjectSchema(pool);
+    await source.query(await Bun.file(`migrations/${retainedSubjectMigrations[2]}`).text());
+    const reportRequest = "a".repeat(64), reportGrant = "b".repeat(64), reportOperation = "c".repeat(64), reportRaw = "d".repeat(64);
+    await runtime.query("INSERT INTO production_real.authoritative_usage_report_capture(report_request_sha256,grant_sha256,operation_record_sha256,provider_job_id,artifact_uri,artifact_generation,raw_report_sha256,envelope_json) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb)", [reportRequest, reportGrant, reportOperation, "usage_original", "gs://fixture-bucket/authoritative-usage/original.json", 1, reportRaw, JSON.stringify({ grantSha256: reportGrant, rawReportSha256: reportRaw })]);
+    // Runtime cannot update the immutable capture table at all; prove that
+    // least privilege separately from the owner-context immutability trigger.
+    await expect(runtime.query("UPDATE production_real.authoritative_usage_report_capture SET envelope_json=envelope_json WHERE report_request_sha256=$1", [reportRequest])).rejects.toThrow(/permission denied/u);
+    await expect(source.query("UPDATE production_real.authoritative_usage_report_capture SET envelope_json=envelope_json WHERE report_request_sha256=$1", [reportRequest])).rejects.toThrow("AUTHORITATIVE_USAGE_REPORT_CAPTURE_IMMUTABLE");
+    const usageReports = createPostgresBigQueryUsageReportJournal(new PostgresOperationJournal(pool, { namespace: "authoritative-usage-fixture", scopeSha256: hex("authoritative-usage-scope") }));
+    const reportJob = { reportRequestSha256: "e".repeat(64), dryRunJobId: `usage_dry_${"e".repeat(48)}`, queryJobId: `usage_${"e".repeat(48)}`, state: "claimed" as const };
+    expect((await usageReports.claim(reportJob)).claimed).toBe(true);
+    expect((await usageReports.claim(reportJob)).claimed).toBe(false);
+    await expect(usageReports.mark({ reportRequestSha256: reportJob.reportRequestSha256, expected: "dry_run_complete", state: "query_dispatch_intent" })).rejects.toThrow("BIGQUERY_USAGE_REPORT_JOURNAL_CONFLICT");
+    expect(await usageReports.mark({ reportRequestSha256: reportJob.reportRequestSha256, expected: "claimed", state: "dry_run_dispatch_intent" })).toMatchObject({ state: "dry_run_dispatch_intent", queryJobId: reportJob.queryJobId });
+    let billingNow = Date.parse("2029-01-01T00:00:00.000Z");
+    const billingOperationId = "cloud-run-billing";
+    const billingAccountScope = await googleAccountScopeSha256({
+      projectId: "project-12345", quotaProjectId: "project-12345", principal: "release@example.com", scopes: GOOGLE_CONTROL_PLANE_SCOPES,
+    });
+    const billingGoogleJournal = createMemoryGoogleOperationJournal([{
+      operationId: googleOperationLabel(billingOperationId),
+      resource: "projects/project-12345/locations/us-central1/services/release",
+      requestSha256: hex("billing-google-request"), contentSha256: hex("billing-google-content"), state: "completed",
+      resourceUid: "billing-resource-uid", createTime: new Date(billingNow - 60_000).toISOString(), owned: true,
+    }]);
+    const billingObjects = generationAwareObjects(() => billingNow);
+    let reportPosts = 0;
+    const mountedReporter = createMountedBigQueryUsageReporter({
+      configuration: {
+        version: 1, detailedExportTable: "project-12345.billing_export.gcp_billing_export_resource_v1", location: "US",
+        maximumBytesBilled: "1000000", reportQueryMaximumCostMicros: 10, reportQueryPriceSourceSha256: hex("billing-price-source"),
+        reportQueryMicrosPerByteNumerator: "1", reportQueryMicrosPerByteDenominator: "1000000", collectorSha256: hex("billing-collector"),
+        maximumIntervalMs: 60_000,
+      },
+      projectId: "project-12345", quotaProjectId: "project-12345", principal: "release@example.com", accountScopeSha256: billingAccountScope,
+      tokenSource: { async getAccessToken() { return { token: "fixture-bearer-token-which-is-never-logged", projectId: "project-12345", quotaProjectId: "project-12345", principal: "release@example.com", scopes: GOOGLE_CONTROL_PLANE_SCOPES, accountScopeSha256: billingAccountScope, expiresAtMs: billingNow + 70_000 }; } },
+      googleJournal: billingGoogleJournal,
+      billingJournal: new PostgresOperationJournal(pool, { namespace: "mounted-authoritative-usage-fixture", scopeSha256: hex("mounted-authoritative-usage-scope") }),
+      pool, objects: billingObjects, bucket: "retained-subject-fixture", now: () => billingNow,
+      fetch: async (url, init) => {
+        if (init.method === "POST") {
+          reportPosts++;
+          const payload = JSON.parse(String(init.body));
+          return new Response(JSON.stringify({ jobReference: payload.jobReference, statistics: { totalBytesProcessed: "10" } }), { headers: { "content-type": "application/json" } });
+        }
+        const jobId = new URL(url).pathname.split("/").at(-1);
+        return new Response(JSON.stringify({ jobComplete: true, jobReference: { jobId, location: "US" }, totalBytesProcessed: "10", rows: [{ f: [{ v: "1.000000" }, { v: "-0.100000" }] }] }), { headers: { "content-type": "application/json" } });
+      },
+    });
+    const billingCapture = {
+      operation: { provider: "cloud_run", operationId: billingOperationId }, operationRecordSha256: hex("billing-operation-record"),
+      resourceIdentitySha256: hex("billing-resource-identity"), candidateSha256: hex("billing-candidate"), authorizationRequestSha256: hex("billing-request"),
+      authorizationReceiptSha256: hex("billing-receipt"), accountScopeSha256: billingAccountScope, projectScopeSha256: hex("billing-project-scope"),
+      billingObservation: {
+        version: 1, allowedReportOrigin: "https://bigquery.googleapis.com",
+        detailedExportTable: "project-12345.billing_export.gcp_billing_export_resource_v1", location: "US",
+        maximumBytesBilled: "1000000", reportQueryMaximumCostMicros: 10, reportQueryPriceSourceSha256: hex("billing-price-source"),
+        reportQueryMicrosPerByteNumerator: "1", reportQueryMicrosPerByteDenominator: "1000000", collectorSha256: hex("billing-collector"),
+        maximumIntervalMs: 60_000, expiresAtMs: billingNow + 10_000,
+      },
+    };
+    const concurrentBilling = await Promise.all([mountedReporter.capture(billingCapture), mountedReporter.capture(billingCapture)]);
+    const capturedBilling = concurrentBilling.find(value => value.status === "captured") ?? await mountedReporter.capture(billingCapture);
+    expect(capturedBilling.status).toBe("captured");
+    if (capturedBilling.status !== "captured") throw new Error("MOUNTED_BILLING_CAPTURE_REQUIRED");
+    expect(capturedBilling.grant.originalScope.resourceName).toBe("projects/project-12345/locations/us-central1/services/release");
+    expect(capturedBilling.envelope.rawArtifact.generation).toBe("1");
+    expect(reportPosts).toBe(2);
+    billingNow += 1_000;
+    const resumedBilling = await mountedReporter.capture(billingCapture);
+    expect(resumedBilling).toEqual(capturedBilling);
+    expect(reportPosts).toBe(2);
+    expect(await mountedReporter.readArtifact(capturedBilling.envelope.rawArtifact)).toEqual(new TextEncoder().encode(JSON.stringify({ jobComplete: true, jobReference: { jobId: capturedBilling.envelope.providerJobId, location: "US" }, totalBytesProcessed: "10", rows: [{ f: [{ v: "1.000000" }, { v: "-0.100000" }] }] })));
+    expect((await runtime.query("SELECT report_request_sha256 FROM production_real.authoritative_usage_report_capture WHERE report_request_sha256=$1", [capturedBilling.grant.reportRequestSha256])).rowCount).toBe(1);
     // The V2 SQL claim guard uses PostgreSQL's real clock, so its price
     // authority must be minted on that same timeline. Later expiry checks
-    // explicitly advance this fixture clock past their retained deadline.
+    // explicitly advance this retained-subject fixture clock independently.
     let now = Date.now();
     const retentionMs = 30 * 86_400_000, fixture = originalFixture(now), kek = Buffer.alloc(32, 17).toString("base64");
     expect(verifyEvent(wire(fixture.ownerEvent))).toBe(true);

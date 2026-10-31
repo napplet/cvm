@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { expect } from "bun:test";
 import { getPublicKey } from "nostr-tools/pure";
 import { loadProductionConfig } from "../../../src/production/config";
@@ -26,12 +26,25 @@ async function writeMountedSecret(secrets: MountedProductionSecretMaterial, bind
 }
 
 async function main(): Promise<void> {
-  const root = await mkdtemp(join(tmpdir(), "cvm-normal-composition-"));
+  // The actual controller refuses an unanchored working directory; use its
+  // normal durable project root even in this non-real hosted fixture.
+  const fixtureRoot = resolve(import.meta.dir, "../../../.runtime/release-certification/native-discovery-v1");
+  await mkdir(fixtureRoot, { recursive: true, mode: 0o700 });
+  const root = await mkdtemp(join(fixtureRoot, "normal-composition-"));
   const workspace = join(root, "workspace");
   const mount = join(root, "mount");
   await Promise.all([mkdir(workspace, { recursive: true, mode: 0o700 }), mkdir(join(workspace, "states"), { recursive: true, mode: 0o700 }), mkdir(mount, { recursive: true, mode: 0o700 })]);
   try {
     const fixture = await mountedBillingRecoveryFixture(workspace, nowMs);
+    // mountedBillingRecoveryFixture has already driven the real
+    // ReleaseCertificationController.dryRun() over explicit read-only fixture
+    // discovery transports and validates the returned receipt. Keep this
+    // explicit in the trace output: it is the controller request construction
+    // that the normal mounted factory later reads from its fixed secret mount.
+    const stages = ["controller-request"];
+    expect(fixture.request.candidateSha256).toBe(fixture.config.candidateSha256);
+    expect(fixture.request.topologySha256).toBe(fixture.config.topologySha256);
+    expect(fixture.receipt.authorizationRequestSha256).toBe(fixture.request.authorizationRequestSha256);
     const serviceKey = "2".repeat(64);
     const clientKey = "1".repeat(64);
     const sourceDocument = new TextEncoder().encode("deny-effects Vertex price source");
@@ -122,13 +135,29 @@ async function main(): Promise<void> {
         async close() { constructionEvents.push("close"); },
       }),
     });
+    stages.push("mounted-producer", "provenance-sealer", "contextvm-handshake");
+    // A structural material stand-in cannot reach this point: the sealer's
+    // private mounted-producer WeakSet assertion runs before broker assembly.
+    expect(session.sealed.authorization.request).toMatchObject({
+      candidateSha256: config.candidateSha256,
+      topologySha256: config.topologySha256,
+      authorizationRequestSha256: fixture.request.authorizationRequestSha256,
+    });
+    expect(session.sealed.authorization.receipt).toMatchObject({
+      candidateSha256: config.candidateSha256,
+      topologySha256: config.topologySha256,
+      authorizationReceiptSha256: fixture.receipt.authorizationReceiptSha256,
+    });
+    expect(Object.isFrozen(session.sealed)).toBe(true);
     expect(Object.keys(session.session.providers)).toEqual([...RELEASE_PRODUCTION_PROVIDER_IDS]);
     expect(Object.keys(session.session.protectedPorts)).toEqual([...PRODUCTION_LIVE_PROTECTED_PORT_KEYS]);
     expect(constructionEvents).toEqual(["handler", "start", "initialize", "notifications/initialized"]);
+    stages.push("sixteen-providers-eight-suites");
     await expect(session.session.prepare({ authorizationRequest: fixture.request, receipt: { ...fixture.receipt, authorizationReceiptSha256: "0".repeat(64) } })).rejects.toThrow();
     expect(session.effects).toEqual({ discoverCapabilities: 0, discoverAuthentication: 0, plan: 0, apply: 0, observe: 0, cleanup: 0, suites: 0 });
+    stages.push("unapproved-zero-dispatch");
     await session.generation.close();
-    console.log(JSON.stringify({ passed: true, providers: Object.keys(session.session.providers).length, suites: Object.keys(session.session.protectedPorts).length, effects: session.effects }));
+    console.log(JSON.stringify({ passed: true, stages, providers: Object.keys(session.session.providers).length, suites: Object.keys(session.session.protectedPorts).length, effects: session.effects }));
   } finally { await rm(root, { recursive: true, force: true }); }
 }
 

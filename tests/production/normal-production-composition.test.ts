@@ -2,9 +2,36 @@ import { expect, test } from "bun:test";
 import { createRequire } from "node:module";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { mkdir } from "node:fs/promises";
+import { mountedBillingRecoveryFixture } from "../release/helpers/mounted-billing-recovery-fixture";
+import { MountedProductionSecretMaterial } from "../../src/production/secret-material";
+import { openProductionPostgresPool } from "../../src/production/postgres";
 
 const postgres = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
+
+test("denied-effects postgres construction transport is rejected before mounted credential or network access", async () => {
+  const fixtureRoot = resolve(import.meta.dir, "../../.runtime/release-certification/native-discovery-v1");
+  await mkdir(fixtureRoot, { recursive: true, mode: 0o700 });
+  const root = await mkdtemp(join(fixtureRoot, "postgres-construction-guard-"));
+  const workspace = join(root, "workspace");
+  await mkdir(join(workspace, "states"), { recursive: true, mode: 0o700 });
+  const prior = process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS;
+  try {
+    const fixture = await mountedBillingRecoveryFixture(workspace, Date.now());
+    const secrets = new MountedProductionSecretMaterial(fixture.config, { root: join(workspace, "fixture-mount") });
+    let opened = 0;
+    delete process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS;
+    await expect(openProductionPostgresPool(fixture.config, secrets, Object.freeze({
+      async open() { opened++; throw new Error("POSTGRES_CONSTRUCTION_TRANSPORT_MUST_NOT_OPEN"); },
+    }))).rejects.toThrow("PRODUCTION_POSTGRES_CONSTRUCTION_TRANSPORT_DENIED");
+    expect(opened).toBe(0);
+  } finally {
+    if (prior === undefined) delete process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS;
+    else process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS = prior;
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 postgres("normal mounted composition constructs the real sixteen-provider/eight-suite graph before an unapproved attempt dispatches nothing", async () => {
   const directory = await mkdtemp(join(tmpdir(), "cvm-normal-composition-cert-"));
@@ -35,6 +62,6 @@ postgres("normal mounted composition constructs the real sixteen-provider/eight-
     await admin.query("GRANT napplet_production_real TO napplet_cvm_runtime");
     const output = await run([process.execPath, "tests/production/helpers/normal-production-composition-fixture.ts"], 120_000, { ...process.env, NAPPLET_CVM_TEST_EXTERNAL_EFFECTS: "deny", NAPPLET_NORMAL_COMPOSITION_DATABASE: `postgresql://napplet_cvm_runtime@127.0.0.1:${port}/postgres` });
     const result = JSON.parse(output.split("\n").find(line => line.startsWith('{"passed":'))!);
-    expect(result).toEqual({ passed: true, providers: 16, suites: 8, effects: { discoverCapabilities: 0, discoverAuthentication: 0, plan: 0, apply: 0, observe: 0, cleanup: 0, suites: 0 } });
+    expect(result).toEqual({ passed: true, stages: ["controller-request", "mounted-producer", "provenance-sealer", "contextvm-handshake", "sixteen-providers-eight-suites", "unapproved-zero-dispatch"], providers: 16, suites: 8, effects: { discoverCapabilities: 0, discoverAuthentication: 0, plan: 0, apply: 0, observe: 0, cleanup: 0, suites: 0 } });
   } finally { await admin?.end(); await run(["docker", "rm", "--force", name]).catch(() => undefined); await rm(directory, { recursive: true, force: true }); }
 }, 150_000);

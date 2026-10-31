@@ -52,9 +52,22 @@ export class ProductionWorkerOwnershipResolver {
    * receipt-finalized action when its exact checkpoint/resume claim remains
    * retained and capacity-bound; ordinary run() resolution still rejects that
    * terminal state. */
-  async resolveCheckpointWorker(value: CheckpointFenceRequest): Promise<ResolvedWorker> {
+  async resolveCheckpointWorker(value: CheckpointFenceRequest | CheckpointRestoreRequest | (Omit<CheckpointRestoreRequest, "archive"> & Readonly<{ archiveSha256: string }>)): Promise<ResolvedWorker> {
     if (!this.input.capacityJournal) throw new Error("PRODUCTION_WORKER_CAPACITY_JOURNAL_REQUIRED");
-    const checkpoint = CheckpointFenceRequestSchema.parse(value);
+    const restored = CheckpointRestoreRequestSchema.safeParse(value);
+    const observed = CheckpointRestoreRequestSchema.omit({ archive: true }).extend({ archiveSha256: z.string().regex(/^[a-f0-9]{64}$/u) }).safeParse(value);
+    const restoration = restored.success ? restored.data : observed.success ? observed.data : undefined;
+    const checkpoint = restoration
+      ? CheckpointFenceRequestSchema.parse({
+        accountId: restoration.accountId, sessionId: restoration.sessionId, actionId: restoration.actionId,
+        expectedVersion: restoration.expectedVersion, policyVersion: restoration.policyVersion,
+        capabilityGrant: restoration.capabilityGrant, workspaceId: restoration.workspaceId,
+        checkpointId: restoration.checkpointId, pauseGeneration: restoration.pauseGeneration,
+        actionVersion: restoration.actionVersion, workspaceLineage: restoration.workspaceLineage,
+        leaseToken: restoration.leaseToken,
+      })
+      : CheckpointFenceRequestSchema.parse(value);
+    const resumeClaim = restoration?.resumeClaim;
     const request = WorkerRunRequestSchema.parse({ ...checkpoint, capabilityGrant: "phase-04-coordinator-grant" });
     if (request.policyVersion !== this.input.policyVersion || request.workspaceId !== `workspace:${request.sessionId}`) throw new Error("PRODUCTION_CHECKPOINT_WORKER_BINDING_INVALID");
     const client = await this.input.pool.connect();
@@ -70,8 +83,9 @@ export class ProductionWorkerOwnershipResolver {
         JOIN production_real.capacity_intents c ON c.account_id=a.account_id AND c.intent_reference=w.capacity_intent_reference AND c.capacity_reference=w.capacity_reference
         WHERE a.session_id=$1 AND a.id=$2 AND a.expected_session_version=$3 AND a.state='verified'
           AND cp.checkpoint_id=$4 AND cp.pause_generation=$5 AND r.lease_token=$6
-          AND e.state='retained' AND c.state='available' AND f.accounting_realm='production-real' LIMIT 2`,
-      [request.sessionId, request.actionId, request.expectedVersion, checkpoint.checkpointId, checkpoint.pauseGeneration, checkpoint.leaseToken]);
+          AND e.state='retained' AND c.state='available' AND f.accounting_realm='production-real'
+          AND ($7::text IS NULL OR r.allocation_intent_reference=$7) LIMIT 2`,
+      [request.sessionId, request.actionId, request.expectedVersion, checkpoint.checkpointId, checkpoint.pauseGeneration, checkpoint.leaseToken, resumeClaim ?? null]);
       if (rows.rows.length !== 1) throw new Error("PRODUCTION_CHECKPOINT_WORKER_BINDING_INVALID");
       const row = rows.rows[0] as Record<string, unknown>;
       return this.#resolved({ owner: Owner.parse({ accountId: row.account_id, ownerId: row.owner_id }), intentReference: z.string().regex(/^capacity-intent:[a-f0-9]{64}$/u).parse(row.intent_reference), capacityReference: z.string().regex(/^capacity:[a-f0-9]{64}$/u).parse(row.capacity_reference) });

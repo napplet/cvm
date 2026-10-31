@@ -179,7 +179,8 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
           /* Fence the original source worker before the cloned authority can
            * attach it. The fence is durable and idempotent in the cloned job
            * journal, so concurrent restores cannot race an active writer. */
-          if ((await worker.fenceCheckpoint(restore)).status !== "fenced") throw new Error("MOUNTED_FRESH_RESTORE_SOURCE_FENCE_REQUIRED");
+          const { resumeClaim: _resumeClaim, archive: _archive, archiveSha256: _archiveSha256, ...fence } = restore;
+          if ((await worker.fenceCheckpoint(fence)).status !== "fenced") throw new Error("MOUNTED_FRESH_RESTORE_SOURCE_FENCE_REQUIRED");
           const result = await worker.restoreCheckpoint(restore);
           return result.status === "restored" ? Object.freeze({ status: "reattached" as const, workerId: result.workspaceId }) : Object.freeze({ status: "reconciliation_pending" as const });
         },

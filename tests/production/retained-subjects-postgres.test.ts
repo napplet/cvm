@@ -11,7 +11,7 @@ import { PostgresOperationJournal } from "../../src/release/deployment/postgres-
 import { ProductionCheckpointCoordinator } from "../../src/production/checkpoint-coordinator";
 import { ProductionRetainedSubjectPreparer } from "../../src/production/retained-subject-preparer";
 import { createProductionDurabilitySubjectRegistry } from "../../src/production/durability-registry";
-import { openRetainedSubject, retainedSubjectCustodyId } from "../../src/production/retained-subject-archive";
+import { retainedSubjectCustodyId } from "../../src/production/retained-subject-archive";
 import { MountedKekCheckpointCrypto } from "../../src/production/checkpoint-crypto";
 import { GcsObjectStoreAdapter, type ObjectStorePort, type VersionedObjectClientPort } from "../../src/continuity/object-store";
 import type { CheckpointSealRequest } from "../../src/continuity/checkpoint-envelope";
@@ -31,6 +31,7 @@ import { createPostgresWorkerOperationJournal } from "../../src/release/deployme
 import { createWorkerDeploymentClients, PRODUCTION_WORKER_POLICY } from "../../src/release/deployment/worker-clients";
 import { ProductionWorkerJobRouter } from "../../src/production/worker-job-router";
 import { ProductionWorkerRequestStore } from "../../src/production/worker-request-store";
+import { ProductionWorkerBridge, ProductionWorkerOwnershipResolver } from "../../src/production/worker-bridge";
 import { WorkerRunRequestSchema } from "../../src/phase-02/contracts";
 
 /* This is deliberately an opt-in local integration test.  The source records,
@@ -263,7 +264,6 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     recovered = new Pool({ connectionString: connection(role, cloneDatabase), connectionTimeoutMillis: 2_000 });
     migration = new Pool({ connectionString: connection("postgres", migrationDatabase), connectionTimeoutMillis: 2_000 });
     const recoveredPool = bindAccountingRealmPool(sqlPool(recovered), createAccountingRealm("production-real"));
-    const freshPreparer = new ProductionRetainedSubjectPreparer({ pool: recoveredPool, objectStore: effects, journal: new PostgresOperationJournal(recoveredPool, { namespace: "retained-subjects-postgres", scopeSha256: hex("scope") }), kekPath: "/fixture/kek", readKekFile: async () => kek, now: () => now });
     const recoveredInventory = await createProductionDurabilitySubjectRegistry(recoveredPool).inventory(scope);
     expect(recoveredInventory).toEqual(inventory);
     const recoveredJournal = new PostgresOperationJournal(recoveredPool, { namespace: "retained-subjects-postgres", scopeSha256: hex("scope") });
@@ -284,43 +284,6 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
       if (!stored) throw new Error("RETAINED_SUBJECT_KEY_REQUIRED");
       retainedKeys.set(subject.kind, stored.keyReference);
     }
-    let checkpointFences = 0, checkpointRestores = 0, checkpointObservations = 0;
-    const freshInstance = {
-      freshInstanceId: "fresh-retained", sourceInstanceId: "source-retained", databaseInstanceId: cloneDatabase, migrationDatabaseInstanceId: migrationDatabase, applicationInstanceId: "application-retained", providerOperationId: "provider-retained-restore",
-      pool: recoveredPool, migrationTargetPool: migrationPool, objectStore: effects,
-      async startAfterRestore() { await recovered!.query("SELECT 1"); },
-      async openRetainedArchive(value: { subject: (typeof recoveredInventory)[number]; expected: Awaited<ReturnType<typeof CoreRestoreDescriptorSchema.parse>>["expected"] }) {
-        const archive = value.subject.kind === "checkpoint"
-          ? await recoveredCheckpoint.restore({ checkpointId, accountId, sessionId })
-          : await openRetainedSubject({ crypto: recoveredCrypto, objectStore: effects, checkpointId, accountId, sessionId, actionId, subject: value.subject });
-        return { ...value.expected, archive };
-      },
-      async reattachOriginal(value: { subject: (typeof recoveredInventory)[number]; sourceIdentity: string; archive: Uint8Array; expected: Awaited<ReturnType<typeof CoreRestoreDescriptorSchema.parse>>["expected"] }) {
-        if (value.subject.kind === "checkpoint") { checkpointFences++; checkpointRestores++; expect(value.archive).toEqual(archive); return { status: "reattached" as const, workerId: "workspace:retained" }; }
-        await freshPreparer.validateOpened(scope, value.subject, value.archive);
-        return { status: "reattached" as const };
-      },
-      async observeReattach(value: { subject: (typeof recoveredInventory)[number]; sourceIdentity: string; archiveSha256: string; expected: Awaited<ReturnType<typeof CoreRestoreDescriptorSchema.parse>>["expected"] }) {
-        if (value.subject.kind === "checkpoint") { checkpointObservations++; return { status: "reattached" as const, workerId: "workspace:retained" }; }
-        const opened = await openRetainedSubject({ crypto: recoveredCrypto, objectStore: effects, checkpointId, accountId, sessionId, actionId, subject: value.subject });
-        await freshPreparer.validateOpened(scope, value.subject, opened);
-        return { status: "reattached" as const };
-      },
-      async exerciseExpiryDeletion(value: typeof scope) {
-        await freshPreparer.destroyExpired(value);
-        if (!await freshPreparer.observeExpired(value)) throw new Error("RETAINED_SUBJECT_ERASURE_PENDING");
-        await recoveredCheckpoint.destroyExpired({ checkpointId, accountId, sessionId });
-        if (!await recoveredCheckpoint.observeDestroyed({ checkpointId, accountId, sessionId })) throw new Error("CHECKPOINT_ERASURE_PENDING");
-        return { expired: true as const, deleted: true as const };
-      },
-      async observeExpiryDeletion(value: typeof scope) {
-        if (!await freshPreparer.observeExpired(value) || !await recoveredCheckpoint.observeDestroyed({ checkpointId, accountId, sessionId })) throw new Error("RETAINED_SUBJECT_ERASURE_PENDING");
-        return { expired: true as const, deleted: true as const };
-      },
-      async observeTopology() { return { releaseEvidence: false }; },
-      async cleanup() { return { state: "absent" as const }; },
-      async observeCleanup() { return { state: "absent" as const }; },
-    };
     let mountedFences = 0, mountedRestores = 0, mountedObservations = 0, uploadedArchive: Uint8Array | undefined, lostRestoreAck = true;
     const noModal = async () => { throw new Error("FIXTURE_MODAL_UNUSED"); };
     const mountedWorkers = createWorkerDeploymentClients({ image: config.worker.image, workspaceRoot: PRODUCTION_WORKER_POLICY.workspaceRoot, policyVersion: PRODUCTION_WORKER_POLICY.version, modalAppName: "retained-workers", modalTags: {}, journal: createPostgresWorkerOperationJournal(recoveredJournal),
@@ -339,7 +302,31 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
         async createWorkerClients() { return { clients: mountedWorkers, flyRegion: "fixture", certification: { modalSdk: { apps: { fromName: noModal }, images: { fromRegistry: noModal }, sandboxes: { create: noModal, findByName: noModal, fromId: noModal } }, modalConfig: { appName: "retained-workers", image: config.worker.image, workspaceRoot: PRODUCTION_WORKER_POLICY.workspaceRoot, tags: { "napplet-cvm-realm": "production-real" as const }, regions: config.regions, policyVersion: PRODUCTION_WORKER_POLICY.version }, flyClient: { create: noModal, observe: noModal, terminate: noModal, observeTermination: noModal, exec: noModal }, flyConfig: { appName: "retained-workers", image: config.worker.image, region: "fixture" } } }; },
         async createWorkerRouter(input) { return new ProductionWorkerJobRouter({ workerJournal: input.workerJournal, jobJournal: input.jobJournal, executables: [{ image: config.worker.image, toolchainSha256: config.worker.toolchainSha256, clients: mountedWorkers, modalAppName: "retained-workers", flyAppName: "retained-workers" }] }); } } });
     const mounted = await mountedRuntime.open({ freshInstanceId: "fresh-retained", databaseInstanceId: cloneDatabase, migrationDatabaseInstanceId: migrationDatabase, applicationInstanceId: "application-retained", providerOperationId: "provider-retained-restore" });
-    const mountedInstance = { ...freshInstance, pool: mounted.pool, migrationTargetPool: mounted.migrationTargetPool, objectStore: mounted.objectStore, startAfterRestore: mounted.startAfterRestore, openRetainedArchive: mounted.openRetainedArchive, reattachOriginal: mounted.reattachOriginal, observeReattach: mounted.observeReattach, exerciseExpiryDeletion: mounted.exerciseExpiryDeletion, observeExpiryDeletion: mounted.observeExpiryDeletion, observeTopology: mounted.observeTopology, cleanup: async () => ({ state: "absent" as const }) };
+    const recoveredServiceJournals = await openProductionServiceJournals({ pool: recoveredPool, servicePubkey: config.certification.serverPubkey, initialTopologySha256: config.topologySha256, requireExisting: true });
+    const ordinaryBridge = new ProductionWorkerBridge({
+      resolver: new ProductionWorkerOwnershipResolver({ pool: recoveredPool, policyVersion: config.worker.policyVersion, capacityJournal: recoveredServiceJournals.capacity }),
+      workers: mountedWorkers,
+      workerJournal: recoveredServiceJournals.worker,
+      jobJournal: recoveredServiceJournals.job,
+      requestJournal: recoveredServiceJournals.request,
+      artifactStore: objects,
+      toolchainSha256: config.worker.toolchainSha256,
+      jobRouter: new ProductionWorkerJobRouter({ workerJournal: recoveredServiceJournals.worker, jobJournal: recoveredServiceJournals.job, executables: [{ image: config.worker.image, toolchainSha256: config.worker.toolchainSha256, clients: mountedWorkers, modalAppName: "retained-workers", flyAppName: "retained-workers" }] }),
+    });
+    // A receipt-finalized retained action gains only the exact checkpoint
+    // reattach capability. It cannot restart ordinary model/tool generation.
+    expect(await ordinaryBridge.run(workerRequest, new AbortController().signal)).toEqual({ status: "unavailable", code: "WORKER_UNAVAILABLE" });
+    expect(mountedFences).toBe(0); expect(mountedRestores).toBe(0); expect(mountedObservations).toBe(0);
+    const mountedInstance = {
+      freshInstanceId: "fresh-retained", sourceInstanceId: "source-retained", databaseInstanceId: cloneDatabase, migrationDatabaseInstanceId: migrationDatabase, applicationInstanceId: "application-retained", providerOperationId: "provider-retained-restore",
+      pool: mounted.pool, migrationTargetPool: mounted.migrationTargetPool, objectStore: mounted.objectStore,
+      startAfterRestore: mounted.startAfterRestore, openRetainedArchive: mounted.openRetainedArchive,
+      reattachOriginal: mounted.reattachOriginal, observeReattach: mounted.observeReattach,
+      exerciseExpiryDeletion: mounted.exerciseExpiryDeletion, observeExpiryDeletion: mounted.observeExpiryDeletion,
+      observeTopology: mounted.observeTopology,
+      async cleanup() { await mounted.cleanupLocal(); return { state: "absent" as const }; },
+      async observeCleanup() { return { state: "absent" as const }; },
+    };
     const restore = new ProductionRestoreCertification({ sourceInstanceId: "source-retained", scope, sourcePool: sourceAuthorityPool, migrationSource: new ProductionMigrationSource({ pool: sourcePool, source: { sourceIdentity: "source-retained", serviceIdentity: hex("service"), sourceRevision: hex("revision"), schemaVersions: migrations, migrationDigests: Object.fromEntries(migrations.map(path => [path, hex(path)])), writers: [], records: [], objects: [], externalOperations: [] } }), migrationCipher: new MigrationArchiveCipher(new Uint8Array(32).fill(23)), backupStore: objects, journal: restoreJournal, provisioner: { async create() { return mountedInstance; }, async attach() { return mountedInstance; }, async observeCleanup() { return { state: "absent" as const }; } }, candidateSha256: hex("candidate"), topologySha256: hex("topology") });
     const fresh = CoreFreshInstanceSchema.parse(await restore.restore({ operationId: "restore:retained", action: "restore.create", payload: {} }));
     for (const subject of recoveredInventory) {
@@ -354,8 +341,7 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
       const descriptor = CoreRestoreDescriptorSchema.parse(await restore.restore({ operationId: "restore:retained", action: "restore.subject", payload: { freshInstanceId: fresh.freshInstanceId, subject, action: "describe" } }));
       await expect(restore.reconcile({ operationId: "restore:retained", kind: "restore.subject", payload: { freshInstanceId: fresh.freshInstanceId, subject, action: "reattach", archiveSha256: subject.payloadSha256, expected: descriptor.expected } })).resolves.toMatchObject({ status: "reattached" });
     }
-    expect(checkpointFences).toBe(0); expect(checkpointRestores).toBe(0); expect(checkpointObservations).toBe(0);
-    // The mounted runtime—not the legacy callback fixture—fences before the
+    // The mounted runtime fences before the
     // single restore dispatch. Its lost ACK reconciles by restore-status only.
     expect(mountedFences).toBe(1); expect(mountedRestores).toBe(1); expect(mountedObservations).toBe(1);
     // Lost delete ACK is reconciled only by the fresh controller observing the

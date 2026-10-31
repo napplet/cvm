@@ -18,9 +18,17 @@ async function workspace(): Promise<string> {
 
 const contentDigest = (value: unknown) => new Bun.CryptoHasher("sha256").update(canonicalJson(value)).digest("hex");
 
+async function currentStateSha(root: string): Promise<string> {
+  const pointer = JSON.parse(await readFile(join(root, "current.json"), "utf8")) as { stateSha256: string };
+  let stateSha256 = pointer.stateSha256;
+  while (true) {
+    try { stateSha256 = (JSON.parse(await readFile(join(root, "state-transitions", `${stateSha256}.json`), "utf8")) as { nextStateSha256: string }).nextStateSha256; }
+    catch { return stateSha256; }
+  }
+}
+
 async function replaceBoundOperationRecord(input: Readonly<{ root: string; operationId: string; mutate: (record: Record<string, unknown>) => Record<string, unknown> }>): Promise<string> {
-  const pointer = JSON.parse(await readFile(join(input.root, "current.json"), "utf8")) as Record<string, string>;
-  const state = JSON.parse(await readFile(join(input.root, "states", `${pointer.stateSha256}.json`), "utf8")) as Record<string, unknown>;
+  const state = JSON.parse(await readFile(join(input.root, "states", `${await currentStateSha(input.root)}.json`), "utf8")) as Record<string, unknown>;
   const operationIds = state.providerOperationIds as string[];
   const recordDigests = [...(state.providerOperationRecordSha256s as string[])];
   const index = operationIds.indexOf(input.operationId);
@@ -397,8 +405,8 @@ test("resume rederives each reservation and scope from the immutable authorizati
     const receipt = await createAuthorizationReceipt(dryRun.authorizationRequest);
     await expect(new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000, collectorImage }).provision({ receipt, registry })).rejects.toThrow("RELEASE_CONTROLLER_PROVIDER_AMBIGUOUS");
     resumedCalls = 0;
-    const current = JSON.parse(await readFile(join(root, "current.json"), "utf8")) as { stateSha256: string };
-    const state = JSON.parse(await readFile(join(root, "states", `${current.stateSha256}.json`), "utf8")) as { providerOperationIds: string[]; providerOperationRecordSha256s: string[] };
+    const resolved = await new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 2_000, collectorImage }).status();
+    const state = JSON.parse(await readFile(join(root, "states", `${resolved!.state.stateSha256}.json`), "utf8")) as { providerOperationIds: string[]; providerOperationRecordSha256s: string[] };
     const records = await Promise.all(state.providerOperationRecordSha256s.map(async (recordSha256) => JSON.parse(await readFile(join(root, "provider-operation-records", `${recordSha256}.json`), "utf8")) as Record<string, unknown>));
     const modalIndex = records.findIndex((record) => (record.operation as { provider: string }).provider === "modal");
     await replaceBoundOperationRecord({ root, operationId: state.providerOperationIds[modalIndex]!, mutate });
@@ -422,8 +430,8 @@ test("a forged persisted report is cleared on generic reconciliation and cannot 
   });
   const receipt = await createAuthorizationReceipt(dryRun.authorizationRequest);
   await expect(new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000, collectorImage }).provision({ receipt, registry })).rejects.toThrow("RELEASE_CONTROLLER_PROVIDER_AMBIGUOUS");
-  const current = JSON.parse(await readFile(join(root, "current.json"), "utf8")) as { stateSha256: string };
-  const state = JSON.parse(await readFile(join(root, "states", `${current.stateSha256}.json`), "utf8")) as { providerOperationIds: string[]; providerOperationRecordSha256s: string[] };
+  const resolved = await new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 2_000, collectorImage }).status();
+  const state = JSON.parse(await readFile(join(root, "states", `${resolved!.state.stateSha256}.json`), "utf8")) as { providerOperationIds: string[]; providerOperationRecordSha256s: string[] };
   const records = await Promise.all(state.providerOperationRecordSha256s.map(async (recordSha256) => JSON.parse(await readFile(join(root, "provider-operation-records", `${recordSha256}.json`), "utf8")) as Record<string, unknown>));
   const index = records.findIndex((record) => (record.operation as { provider: string }).provider === "modal");
   await replaceBoundOperationRecord({
@@ -437,4 +445,80 @@ test("a forged persisted report is cleared on generic reconciliation and cannot 
   const resumed = await new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 2_000, collectorImage }).provision({ receipt, registry });
   const modalRecord = JSON.parse(await readFile(join(root, "provider-operation-records", `${resumed.state.providerOperationRecordSha256s![index]}.json`), "utf8"));
   expect(modalRecord).toEqual(expect.objectContaining({ billingStatus: "unknown", actualCostMicros: null, costObservation: null, costObservationSha256: null }));
+});
+
+test("a lost apply acknowledgement resumes by observing the original durable dispatch claim", async () => {
+  const root = await workspace();
+  const collectorImage = await observedCollector();
+  const dryRun = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000, collectorImage });
+  let modalApplies = 0;
+  let modalDispatched = false;
+  const registry = createReleaseProviderRegistry({
+    now: () => 1_000,
+    ports: Object.fromEntries(RELEASE_PROVIDER_IDS.map((provider) => [provider, {
+      discoverCapabilities: async () => ({ capability: "available" as const }), discoverAuthentication: async () => ({ authentication: "authorized" as const }),
+      plan: async () => ({ status: "planned" as const, estimatedCostMicros: 1 }),
+      apply: async (input: { operationId: string }) => {
+        if (provider === "modal") { modalApplies += 1; modalDispatched = true; throw new Error("ACK_LOST_AFTER_EFFECT"); }
+        return { status: "applied" as const, resourceIdentity: `${provider}:${input.operationId}` };
+      },
+      observe: async (input: { operationId: string }) => provider === "modal" && modalDispatched
+        ? { status: "completed" as const, resourceIdentity: `${provider}:${input.operationId}` }
+        : { status: "completed" as const, resourceIdentity: `${provider}:${input.operationId}` },
+      cleanup: async () => ({ status: "cleaned" as const }),
+    }])) as never,
+  });
+  const receipt = await createAuthorizationReceipt(dryRun.authorizationRequest);
+  await expect(new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000, collectorImage }).provision({ receipt, registry })).rejects.toThrow("ACK_LOST_AFTER_EFFECT");
+  const resumed = await new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 2_000, collectorImage }).provision({ receipt, registry });
+  expect(resumed.state.status).toBe("topology_ready");
+  expect(modalApplies).toBe(1);
+});
+
+test("two controllers claim one pending operation and the loser only observes it", async () => {
+  const root = await workspace();
+  const collectorImage = await observedCollector();
+  const dryRun = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000, collectorImage });
+  let modalApplies = 0;
+  let releaseApply: (() => void) | undefined;
+  const applyReleased = new Promise<void>((resolve) => { releaseApply = resolve; });
+  let signalApply: (() => void) | undefined;
+  const applyStarted = new Promise<void>((resolve) => { signalApply = resolve; });
+  const registry = createReleaseProviderRegistry({
+    now: () => 1_000,
+    ports: Object.fromEntries(RELEASE_PROVIDER_IDS.map((provider) => [provider, {
+      discoverCapabilities: async () => ({ capability: "available" as const }), discoverAuthentication: async () => ({ authentication: "authorized" as const }),
+      plan: async () => ({ status: "planned" as const, estimatedCostMicros: 1 }),
+      apply: async (input: { operationId: string }) => {
+        if (provider === "modal") { modalApplies += 1; signalApply!(); await applyReleased; }
+        return { status: "applied" as const, resourceIdentity: `${provider}:${input.operationId}` };
+      },
+      observe: async (input: { operationId: string }) => {
+        if (provider === "modal") { releaseApply!(); return { status: "pending" as const }; }
+        return { status: "completed" as const, resourceIdentity: `${provider}:${input.operationId}` };
+      },
+      cleanup: async () => ({ status: "cleaned" as const }),
+    }])) as never,
+  });
+  const receipt = await createAuthorizationReceipt(dryRun.authorizationRequest);
+  const first = new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000, collectorImage }).provision({ receipt, registry });
+  await applyStarted;
+  const second = new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000, collectorImage }).provision({ receipt, registry });
+  await Promise.allSettled([first, second]);
+  expect(modalApplies).toBe(1);
+  const settledRegistry = createReleaseProviderRegistry({
+    now: () => 2_000,
+    ports: Object.fromEntries(RELEASE_PROVIDER_IDS.map((provider) => [provider, {
+      discoverCapabilities: async () => ({ capability: "available" as const }), discoverAuthentication: async () => ({ authentication: "authorized" as const }),
+      plan: async () => ({ status: "planned" as const, estimatedCostMicros: 1 }),
+      apply: async (input: { operationId: string }) => {
+        if (provider === "modal") throw new Error("REISSUE_FORBIDDEN");
+        return { status: "applied" as const, resourceIdentity: `${provider}:${input.operationId}` };
+      },
+      observe: async (input: { operationId: string }) => ({ status: "completed" as const, resourceIdentity: `${provider}:${input.operationId}` }), cleanup: async () => ({ status: "cleaned" as const }),
+    }])) as never,
+  });
+  const resumed = await new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 2_000, collectorImage }).provision({ receipt, registry: settledRegistry });
+  expect(resumed.state.status).toBe("topology_ready");
+  expect(modalApplies).toBe(1);
 });

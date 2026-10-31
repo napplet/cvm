@@ -1,4 +1,4 @@
-import { link, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { canonicalJson } from "../promotion/schema";
@@ -140,6 +140,22 @@ type CurrentProviderOperationRecord = Readonly<{
   recordSha256: string;
 }>;
 type ProviderOperationRecord = LegacyProviderOperationRecord | LegacyCurrentProviderOperationRecord | CurrentProviderOperationRecord;
+type DispatchClaim = Readonly<{
+  version: 1;
+  stateSha256: string;
+  recordSha256: string;
+  operation: ReleaseProviderOperation;
+  reservedCostMicros: number;
+  accountScopeSha256: string;
+  projectScopeSha256: string;
+  dispatchClaimSha256: string;
+}>;
+type StateTransition = Readonly<{
+  version: 1;
+  priorStateSha256: string;
+  nextStateSha256: string;
+  transitionSha256: string;
+}>;
 
 async function digest(value: unknown): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalJson(value)));
@@ -292,6 +308,25 @@ async function createOrVerify(path: string, content: string, collision: string):
   }
 }
 
+/** A durable create-only record is the CAS primitive for an effect claim or
+ * state edge. `wx` admits one winner; the explicit sync places the claim
+ * before any provider call. An interrupted/partial record is fail-closed. */
+async function createSynced(path: string, content: string): Promise<"created" | "exists"> {
+  await mkdir(dirname(path), { recursive: true });
+  let handle;
+  try {
+    handle = await open(path, "wx");
+    await handle.writeFile(content, "utf8");
+    await handle.sync();
+    return "created";
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "EEXIST") return "exists";
+    throw error;
+  } finally {
+    await handle?.close();
+  }
+}
+
 async function readProtectedRecord(input: Readonly<{
   workspace: string;
   suite: string;
@@ -355,7 +390,7 @@ export class ReleaseCertificationController {
     }
     const pointer = ReleaseControllerCurrentPointerSchema.safeParse(pointerRaw);
     if (!pointer.success || pointer.data.pointerSha256 !== await digest(withoutDigest(pointer.data, "pointerSha256"))) throw new Error("RELEASE_CONTROLLER_POINTER_INVALID");
-    const state = await this.#readState(pointer.data.stateSha256);
+    const state = (await this.#loadCurrent()).state;
     if (state.candidate.candidateSha256 !== pointer.data.candidateSha256 || !state.authorizationRequestSha256) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
     if ((await candidateIdentity(this.#candidatePath)).candidateSha256 !== state.candidate.candidateSha256) throw new Error("RELEASE_CONTROLLER_CANDIDATE_MISMATCH");
     const request = await this.#readRequest(state.authorizationRequestSha256);
@@ -572,19 +607,24 @@ export class ReleaseCertificationController {
       reservedCost += reservation;
       if (reservedCost > receipt.maximumAuthorizedCostMicros) throw new Error("RELEASE_CONTROLLER_COST_RESERVATION_EXCEEDED");
       if (record.status === "completed") { totalCost += record.actualCostMicros ?? 0; continue; }
-      // The immutable operation record is written above before even the
-      // planning call.  After a process loss, the same operation ID is
-      // observed instead of creating a replacement provider action.
+      // Claim dispatch durably before planning or applying. A restart or
+      // concurrent loser observes this original operation only; absence or a
+      // timeout is not native proof that a paid effect was never dispatched.
+      let result;
       if (record.status === "pending") {
-        try { await input.registry.plan({ receipt, operation }); }
-        catch {
-          await this.#advance(state, "blocked", receipt.authorizationReceiptSha256, operations.map((item) => item.operationId), null, "PROVIDER_UNAVAILABLE");
-          throw new Error("RELEASE_CONTROLLER_PROVIDER_BLOCKED");
+        if (await this.#claimDispatch(state, record)) {
+          try { await input.registry.plan({ receipt, operation }); }
+          catch {
+            await this.#advance(state, "blocked", receipt.authorizationReceiptSha256, operations.map((item) => item.operationId), null, "PROVIDER_UNAVAILABLE");
+            throw new Error("RELEASE_CONTROLLER_PROVIDER_BLOCKED");
+          }
+          result = await input.registry.apply({ receipt, operation, approvedMaximumCostMicros: receipt.maximumAuthorizedCostMicros });
+        } else {
+          result = await input.registry.observe({ receipt, operation, approvedMaximumCostMicros: receipt.maximumAuthorizedCostMicros });
         }
+      } else {
+        result = await input.registry.observe({ receipt, operation, approvedMaximumCostMicros: receipt.maximumAuthorizedCostMicros });
       }
-      const result = record.status === "unknown"
-        ? await input.registry.observe({ receipt, operation, approvedMaximumCostMicros: receipt.maximumAuthorizedCostMicros })
-        : await input.registry.apply({ receipt, operation, approvedMaximumCostMicros: receipt.maximumAuthorizedCostMicros });
       if (record.status === "unknown" && record.resourceIdentitySha256 && result.resourceIdentitySha256
         && record.resourceIdentitySha256 !== result.resourceIdentitySha256) {
         throw new Error("RELEASE_CONTROLLER_PROVIDER_DRIFT");
@@ -760,8 +800,7 @@ export class ReleaseCertificationController {
       providerOperationIds, ...(providerOperationRecordSha256s ? { providerOperationRecordSha256s } : {}), deployedTopologySha256, blockReasonCode, createdAtMs: this.#now(),
     });
     await createOrVerify(join(this.#workspace, "states", `${next.stateSha256}.json`), `${canonicalJson(next)}\n`, "RELEASE_CONTROLLER_STATE_COLLISION");
-    await this.#writeCurrent(next);
-    return next;
+    return this.#commitStateTransition(prior.stateSha256, next);
   }
 
   async #advanceLive(prior: ReleaseControllerState, status: Extract<ReleaseControllerState["status"], "receipt_valid" | "bootstrap" | "materializing" | "protected_suite_running" | "finalizing" | "cleaning" | "completed" | "blocked">, authorizationReceiptSha256: string, providerOperationIds: string[], deployedTopologySha256: string | null, blockReasonCode: ReleaseControllerState["blockReasonCode"]): Promise<ReleaseControllerState> {
@@ -771,8 +810,7 @@ export class ReleaseCertificationController {
       providerOperationIds, deployedTopologySha256, blockReasonCode, createdAtMs: this.#now(),
     });
     await createOrVerify(join(this.#workspace, "states", `${next.stateSha256}.json`), `${canonicalJson(next)}\n`, "RELEASE_CONTROLLER_STATE_COLLISION");
-    await this.#writeCurrent(next);
-    return next;
+    return this.#commitStateTransition(prior.stateSha256, next);
   }
 
   async #writeCurrent(state: ReleaseControllerState): Promise<void> {
@@ -786,9 +824,64 @@ export class ReleaseCertificationController {
     catch { throw new Error("RELEASE_CONTROLLER_POINTER_INVALID"); }
     const pointer = ReleaseControllerCurrentPointerSchema.safeParse(raw);
     if (!pointer.success || pointer.data.pointerSha256 !== await digest(withoutDigest(pointer.data, "pointerSha256"))) throw new Error("RELEASE_CONTROLLER_POINTER_INVALID");
-    const state = await this.#readState(pointer.data.stateSha256);
+    let state = await this.#readState(pointer.data.stateSha256);
+    const seen = new Set<string>();
+    while (true) {
+      if (seen.has(state.stateSha256)) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+      seen.add(state.stateSha256);
+      const transition = await this.#readStateTransition(state.stateSha256);
+      if (!transition) break;
+      state = await this.#readState(transition.nextStateSha256);
+    }
     if (state.candidate.candidateSha256 !== pointer.data.candidateSha256) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
     return { state, pointer: pointer.data };
+  }
+
+  async #commitStateTransition(priorStateSha256: string, next: ReleaseControllerState): Promise<ReleaseControllerState> {
+    const base = { version: 1 as const, priorStateSha256, nextStateSha256: next.stateSha256 };
+    const transition: StateTransition = { ...base, transitionSha256: await digest(base) };
+    const path = join(this.#workspace, "state-transitions", `${priorStateSha256}.json`);
+    const outcome = await createSynced(path, `${canonicalJson(transition)}\n`);
+    if (outcome === "created") return next;
+    const existing = await this.#readStateTransition(priorStateSha256);
+    if (!existing || existing.nextStateSha256 !== next.stateSha256) throw new Error("RELEASE_CONTROLLER_STATE_RACE");
+    return this.#readState(existing.nextStateSha256);
+  }
+
+  async #readStateTransition(priorStateSha256: string): Promise<StateTransition | undefined> {
+    let raw: unknown;
+    try { raw = JSON.parse(await readFile(join(this.#workspace, "state-transitions", `${priorStateSha256}.json`), "utf8")); }
+    catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+      throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+    }
+    const parsed = z.object({ version: z.literal(1), priorStateSha256: DigestSchema, nextStateSha256: DigestSchema, transitionSha256: DigestSchema }).strict().safeParse(raw);
+    if (!parsed.success || parsed.data.priorStateSha256 !== priorStateSha256 || parsed.data.transitionSha256 !== await digest(withoutDigest(parsed.data, "transitionSha256"))) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
+    return parsed.data;
+  }
+
+  async #claimDispatch(state: ReleaseControllerState, record: CurrentProviderOperationRecord): Promise<boolean> {
+    const base = {
+      version: 1 as const, stateSha256: state.stateSha256, recordSha256: record.recordSha256,
+      operation: record.operation, reservedCostMicros: record.reservedCostMicros,
+      accountScopeSha256: record.accountScopeSha256, projectScopeSha256: record.projectScopeSha256,
+    };
+    const claim: DispatchClaim = { ...base, dispatchClaimSha256: await digest(base) };
+    const path = join(this.#workspace, "provider-dispatch-claims", `${record.operation.operationId}.json`);
+    const outcome = await createSynced(path, `${canonicalJson(claim)}\n`);
+    if (outcome === "created") return true;
+    let raw: unknown;
+    try { raw = JSON.parse(await readFile(path, "utf8")); }
+    catch { throw new Error("RELEASE_CONTROLLER_DISPATCH_CLAIM_INVALID"); }
+    const parsed = z.object({ version: z.literal(1), stateSha256: DigestSchema, recordSha256: DigestSchema, operation: ReleaseProviderOperationSchema, reservedCostMicros: z.number().int().nonnegative(), accountScopeSha256: DigestSchema, projectScopeSha256: DigestSchema, dispatchClaimSha256: DigestSchema }).strict().safeParse(raw);
+    if (!parsed.success || parsed.data.dispatchClaimSha256 !== await digest(withoutDigest(parsed.data, "dispatchClaimSha256"))
+      || canonicalJson(parsed.data.operation) !== canonicalJson(record.operation)
+      || parsed.data.reservedCostMicros !== record.reservedCostMicros
+      || parsed.data.accountScopeSha256 !== record.accountScopeSha256
+      || parsed.data.projectScopeSha256 !== record.projectScopeSha256) {
+      throw new Error("RELEASE_CONTROLLER_DISPATCH_CLAIM_INVALID");
+    }
+    return false;
   }
 
   async #readLegacyOperation(operationId: string): Promise<ProviderOperationRecord> {

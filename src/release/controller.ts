@@ -1,3 +1,4 @@
+import { CERTIFICATION_RUN_DURATION_MS } from "./deployment/cloud-run-resource-profile";
 import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { z } from "zod";
@@ -758,8 +759,8 @@ export class ReleaseCertificationController {
       priceLines: estimate.lines.map(({ components: _components, ...line }) => ({ ...line, quantityNanos: Number(line.quantityNanos) })),
       ...(operatorFundingReadiness ? { operatorFundingReadiness } : {}),
       ...(this.#billingObservation === undefined ? {} : { billingObservation: this.#billingObservation }),
-      maximumRunDurationMs: 15 * 60 * 1000,
-      cleanupByMs: Math.min(discovering.createdAtMs + 15 * 60 * 1000, estimate.freshUntilMs - 1),
+      maximumRunDurationMs: CERTIFICATION_RUN_DURATION_MS,
+      cleanupByMs: Math.min(discovering.createdAtMs + CERTIFICATION_RUN_DURATION_MS, estimate.freshUntilMs - 1),
       evidenceRetentionDays: 30,
       artifactRetentionDays: 30,
       gcpEffects: { projectBootstrap: true, billing: true, apiEnablement: ["run.googleapis.com", "sqladmin.googleapis.com", "storage.googleapis.com"] },

@@ -40,15 +40,20 @@ export type GoogleCatalogSelector = Readonly<{
   descriptionIncludes?: string;
   resourceFamily?: string;
   resourceGroup?: string;
+  usageType?: "OnDemand";
 }>;
 /** Controller-owned topology selectors. They are deliberately semantic rather
  * than a user-supplied SKU list: Cloud Billing returns and pins the selected
  * IDs in each fresh capture. A changed/ambiguous catalog is a refusal. */
 export const PRODUCTION_CATALOG_SELECTORS: readonly GoogleCatalogSelector[] = Object.freeze([
-  { componentId: "cloud_run.europe-west1.cpu", provider: "cloud_run", serviceDisplayName: "Cloud Run", skuId: "4C19-DF1E-81AB", region: "europe-west1", usageUnit: "seconds", unit: "worker-second" },
-  { componentId: "cloud_run.us-central1.cpu", provider: "cloud_run", serviceDisplayName: "Cloud Run", skuId: "011E-3072-CBDB", region: "us-central1", usageUnit: "seconds", unit: "worker-second" },
-  { componentId: "collector.europe-west1.cpu", provider: "collector", serviceDisplayName: "Cloud Run", skuId: "4C19-DF1E-81AB", region: "europe-west1", usageUnit: "seconds", unit: "worker-second" },
-  { componentId: "collector.us-central1.cpu", provider: "collector", serviceDisplayName: "Cloud Run", skuId: "011E-3072-CBDB", region: "us-central1", usageUnit: "seconds", unit: "worker-second" },
+  { componentId: "cloud_run.europe-west1.cpu", provider: "cloud_run", serviceDisplayName: "Cloud Run", skuId: "4C19-DF1E-81AB", region: "europe-west1", usageUnit: "s", unit: "worker-second" },
+  { componentId: "cloud_run.europe-west1.memory", provider: "cloud_run", serviceDisplayName: "Cloud Run", descriptionIncludes: "Memory Allocation Time (Always-on CPU)", usageType: "OnDemand", region: "europe-west1", usageUnit: "GiBy.s", unit: "gibibyte-second" },
+  { componentId: "cloud_run.us-central1.cpu", provider: "cloud_run", serviceDisplayName: "Cloud Run", skuId: "011E-3072-CBDB", region: "us-central1", usageUnit: "s", unit: "worker-second" },
+  { componentId: "cloud_run.us-central1.memory", provider: "cloud_run", serviceDisplayName: "Cloud Run", descriptionIncludes: "Memory Allocation Time (Always-on CPU)", usageType: "OnDemand", region: "us-central1", usageUnit: "GiBy.s", unit: "gibibyte-second" },
+  { componentId: "collector.europe-west1.cpu", provider: "collector", serviceDisplayName: "Cloud Run", skuId: "4C19-DF1E-81AB", region: "europe-west1", usageUnit: "s", unit: "worker-second" },
+  { componentId: "collector.europe-west1.memory", provider: "collector", serviceDisplayName: "Cloud Run", descriptionIncludes: "Memory Allocation Time (Always-on CPU)", usageType: "OnDemand", region: "europe-west1", usageUnit: "GiBy.s", unit: "gibibyte-second" },
+  { componentId: "collector.us-central1.cpu", provider: "collector", serviceDisplayName: "Cloud Run", skuId: "011E-3072-CBDB", region: "us-central1", usageUnit: "s", unit: "worker-second" },
+  { componentId: "collector.us-central1.memory", provider: "collector", serviceDisplayName: "Cloud Run", descriptionIncludes: "Memory Allocation Time (Always-on CPU)", usageType: "OnDemand", region: "us-central1", usageUnit: "GiBy.s", unit: "gibibyte-second" },
   { componentId: "gcs.nam4.storage", provider: "gcs", serviceDisplayName: "Cloud Storage", descriptionIncludes: "dual-region standard storage", region: "nam4", usageUnit: "gibibyte day", unit: "gibibyte-day" },
   { componentId: "gcs.nam4.operations", provider: "gcs", serviceDisplayName: "Cloud Storage", descriptionIncludes: "dual-region class a operations", region: "nam4", usageUnit: "operations", unit: "operation" },
   { componentId: "cloud_sql_postgres.europe-west1.regional-ha", provider: "cloud_sql_postgres", serviceDisplayName: "Cloud SQL", descriptionIncludes: "postgresql regional", region: "europe-west1", usageUnit: "seconds", unit: "database-second" },
@@ -161,9 +166,13 @@ function googlePriceNanos(rawSku: Record<string, unknown>, selector: GoogleCatal
   return result;
 }
 function matchesSelector(sku: Record<string, unknown>, selector: GoogleCatalogSelector): boolean {
+  // A semantic SKU description can recur in every region. Narrow the real
+  // offered regions before deciding that one semantic selector is unique.
+  if (selector.skuId === undefined && (!Array.isArray(sku.serviceRegions) || !sku.serviceRegions.includes(selector.region))) return false;
   if (selector.skuId !== undefined && text(sku.skuId) !== selector.skuId) return false;
   if (selector.descriptionIncludes !== undefined && !text(sku.description)?.toLowerCase().includes(selector.descriptionIncludes.toLowerCase())) return false;
   const category = sku.category;
+  if (selector.usageType !== undefined && (!category || typeof category !== "object" || Array.isArray(category) || !("usageType" in category) || text(category.usageType) !== selector.usageType)) return false;
   if ((selector.resourceFamily !== undefined || selector.resourceGroup !== undefined) && (!category || typeof category !== "object" || Array.isArray(category))) return false;
   if (selector.resourceFamily !== undefined && text((category as Record<string, unknown>).resourceFamily) !== selector.resourceFamily) return false;
   if (selector.resourceGroup !== undefined && text((category as Record<string, unknown>).resourceGroup) !== selector.resourceGroup) return false;
@@ -292,7 +301,7 @@ export function createOfficialPricingSources(options: OfficialPricingSourcesOpti
   const freshForMs = options.freshnessMs ?? 60 * 60 * 1000;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const selectors = options.google.selectors;
-  if (!Number.isSafeInteger(freshForMs) || freshForMs <= 0 || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000 || selectors.length === 0 || selectors.some((selector) => !validIdentifier(selector.componentId) || (selector.skuId !== undefined && !validSkuId(selector.skuId)) || (selector.skuId === undefined && selector.descriptionIncludes === undefined && selector.resourceFamily === undefined && selector.resourceGroup === undefined) || !/^[a-z][a-z0-9-]{2,63}$/u.test(selector.region)) || new Set(selectors.map((selector) => selector.componentId)).size !== selectors.length) throw new Error("OFFICIAL_SOURCE_CONFIGURATION_REJECTED");
+  if (!Number.isSafeInteger(freshForMs) || freshForMs <= 0 || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000 || selectors.length === 0 || selectors.some((selector) => !validIdentifier(selector.componentId) || (selector.usageType !== undefined && selector.usageType !== "OnDemand") || (selector.skuId !== undefined && !validSkuId(selector.skuId)) || (selector.skuId === undefined && selector.descriptionIncludes === undefined && selector.resourceFamily === undefined && selector.resourceGroup === undefined) || !/^[a-z][a-z0-9-]{2,63}$/u.test(selector.region)) || new Set(selectors.map((selector) => selector.componentId)).size !== selectors.length) throw new Error("OFFICIAL_SOURCE_CONFIGURATION_REJECTED");
   const snapshot = (sourceId: string, bytes: Uint8Array, quotes: readonly SourceQuote[]): SourceSnapshot => { const observedAtMs = now(); if (!Number.isSafeInteger(observedAtMs) || observedAtMs <= 0) throw new Error("OFFICIAL_SOURCE_TIME_REJECTED"); return Object.freeze({ sourceId, bytes, observedAtMs, freshUntilMs: observedAtMs + freshForMs, quotes: Object.freeze([...quotes]) }); };
   return Object.freeze({
     google: Object.freeze({

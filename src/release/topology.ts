@@ -1,3 +1,4 @@
+import { CLOUD_RUN_CERTIFICATION_CPU_SECONDS_NANOS, CLOUD_RUN_CERTIFICATION_MEMORY_GIB_SECONDS_NANOS } from "./deployment/cloud-run-resource-profile";
 import { canonicalJson } from "../promotion/schema";
 import { ReleaseTopologyObservationSchema, type ReleaseTopologyObservation } from "./contracts";
 import type { ObservedCollectorRegistryImage, PreparedCollectorImage } from "./collector-image";
@@ -36,12 +37,16 @@ const WORKER_100_SECOND_UNITS = BigInt((PRODUCTION_CERTIFICATION_OPERATION_INVEN
 /** Every paid allocation is explicit. The 16 public authorization families are
  * derived only after checked aggregation of this ordered contract. */
 export const RELEASE_TOPOLOGY_QUANTITY_CONTRACT: readonly ReleaseTopologyQuantity[] = Object.freeze([
-  component("cloud_run", "cloud_run.europe-west1.cpu", "europe-west1", "worker-second", 2_700_000_000_000n, 1_000),
-  component("cloud_run", "cloud_run.us-central1.cpu", "us-central1", "worker-second", 2_700_000_000_000n, 1_000),
+  component("cloud_run", "cloud_run.europe-west1.cpu", "europe-west1", "worker-second", CLOUD_RUN_CERTIFICATION_CPU_SECONDS_NANOS, 1_000),
+  component("cloud_run", "cloud_run.europe-west1.memory", "europe-west1", "gibibyte-second", CLOUD_RUN_CERTIFICATION_MEMORY_GIB_SECONDS_NANOS, 1_000),
+  component("cloud_run", "cloud_run.us-central1.cpu", "us-central1", "worker-second", CLOUD_RUN_CERTIFICATION_CPU_SECONDS_NANOS, 1_000),
+  component("cloud_run", "cloud_run.us-central1.memory", "us-central1", "gibibyte-second", CLOUD_RUN_CERTIFICATION_MEMORY_GIB_SECONDS_NANOS, 1_000),
   component("gcs", "gcs.nam4.storage", "nam4", "gibibyte-day", 900_000_000_000n, 1_000),
   component("gcs", "gcs.nam4.operations", "nam4", "operation", 60_000_000_000n, 1_000),
-  component("collector", "collector.europe-west1.cpu", "europe-west1", "worker-second", 900_000_000_000n, 1_000),
-  component("collector", "collector.us-central1.cpu", "us-central1", "worker-second", 900_000_000_000n, 1_000),
+  component("collector", "collector.europe-west1.cpu", "europe-west1", "worker-second", CLOUD_RUN_CERTIFICATION_CPU_SECONDS_NANOS, 1_000),
+  component("collector", "collector.europe-west1.memory", "europe-west1", "gibibyte-second", CLOUD_RUN_CERTIFICATION_MEMORY_GIB_SECONDS_NANOS, 1_000),
+  component("collector", "collector.us-central1.cpu", "us-central1", "worker-second", CLOUD_RUN_CERTIFICATION_CPU_SECONDS_NANOS, 1_000),
+  component("collector", "collector.us-central1.memory", "us-central1", "gibibyte-second", CLOUD_RUN_CERTIFICATION_MEMORY_GIB_SECONDS_NANOS, 1_000),
   // Cloud SQL REGIONAL provides its own zonal HA. It is a single authority,
   // not one database per Cloud Run control-plane region.
   component("cloud_sql_postgres", "cloud_sql_postgres.europe-west1.regional-ha", "europe-west1", "database-second", 450_000_000_000n, 1_000),

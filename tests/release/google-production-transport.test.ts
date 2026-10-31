@@ -14,3 +14,17 @@ test("GCS policy declares nam4 versioning, KMS requirement, and distinct lifecyc
   const topology = await deriveReleaseTopology("b".repeat(64));
   expect(topology.objectStore).toEqual({ dualRegion: "nam4", versioning: true, retentionDays: 30, encryption: "customer-managed-key-required", lifecycle: "delete-after-30-days" });
 });
+
+
+test("both regional control and Collector quantities include their actual three-instance CPU and memory profiles", async () => {
+  const topology = await deriveReleaseTopology("c".repeat(64));
+  for (const provider of ["cloud_run", "collector"]) {
+    const components = topology.quantityContract.filter(line => line.provider === provider);
+    expect(components).toHaveLength(4);
+    for (const region of ["europe-west1", "us-central1"]) {
+      expect(components.find(line => line.componentId === provider + "." + region + ".cpu")).toMatchObject({ region, unit: "worker-second", quantityNanos: "2700000000000" });
+      expect(components.find(line => line.componentId === provider + "." + region + ".memory")).toMatchObject({ region, unit: "gibibyte-second", quantityNanos: "1350000000000" });
+    }
+  }
+  expect(new Set(topology.quantityContract.map(line => line.provider)).size).toBe(16);
+});

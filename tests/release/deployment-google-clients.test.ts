@@ -192,6 +192,7 @@ test("Cloud Run never adopts a same-owner lookalike with missing or changed reso
     ...[
       undefined,
       { ...container.resources, limits: { cpu: "2", memory: "512Mi" } },
+      { ...container.resources, limits: { cpu: "1", memory: "512Mi", "nvidia.com/gpu": "1" } },
       { ...container.resources, limits: { cpu: "1", memory: "1Gi" } },
       { ...container.resources, cpuIdle: true },
       { ...container.resources, startupCpuBoost: true },
@@ -211,6 +212,24 @@ test("Cloud Run never adopts a same-owner lookalike with missing or changed reso
     expect((await journal.read(request.operationId))?.owned).not.toBe(true);
     expect(calls.filter(call => call.method === "POST")).toHaveLength(1);
   }
+});
+
+test("Cloud Run accepts protobuf-omitted false resource flags only with the explicit bounded limits", async () => {
+  const service = cloudRunService("default-false");
+  const observed = { ...service, template: { ...service.template, containers: [{ ...service.template.containers[0], resources: { limits: { cpu: "1", memory: "512Mi" } } }] } };
+  const { client } = await fixture(() => json(observed));
+  await expect(client.cloudRun.deploy(cloudRunRequest("default-false"))).resolves.toEqual({ status: "completed" });
+});
+
+test("a legacy immutable Cloud Run intent cannot be reminted with the new resource profile", async () => {
+  const journal = createMemoryGoogleOperationJournal();
+  const resource = `projects/${projectId}/locations/europe-west1/services/napplet-cvm-api`;
+  await journal.claim({ operationId: "legacy-profile", requestSha256: digest("c"), contentSha256: digest("c"), owned: false, resource });
+  const original = await journal.read("legacy-profile");
+  const { client, calls } = await fixture(() => { throw new Error("LEGACY_INTENT_MUST_NOT_DISPATCH"); }, {}, journal);
+  await expect(client.cloudRun.deploy(cloudRunRequest("legacy-profile"))).resolves.toEqual({ status: "blocked" });
+  expect(calls).toHaveLength(0);
+  expect(await journal.read("legacy-profile")).toEqual(original);
 });
 
 test("Cloud Run pins an explicitly mounted collector port in create and observation", async () => {

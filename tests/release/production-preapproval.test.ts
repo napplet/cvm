@@ -83,7 +83,7 @@ test("binds each regional Google component to one authenticated catalog SKU with
   const topology = await deriveReleaseTopology(digest("a"));
   // One Cloud SQL REGIONAL HA authority serves both ingress regions; billing
   // must not fabricate a second database from the second Cloud Run region.
-  expect(topology.quantityContract.map((line) => line.provider)).toHaveLength(20);
+  expect(topology.quantityContract.map((line) => line.provider)).toHaveLength(24);
   expect(new Set(topology.quantityContract.map((line) => line.quantityNanos)).size).toBeGreaterThan(1);
   expect(topology.quantityContract.find((line) => line.componentId === "cloud_run.europe-west1.cpu")?.quantityNanos).toBe("2700000000000");
   expect(topology.topologySha256).toMatch(/^[a-f0-9]{64}$/);
@@ -124,7 +124,9 @@ test("aggregates component receipts into one family line with complete provenanc
   const cloudRun = facts.find((fact) => fact.provider === "cloud_run");
   expect(cloudRun).toMatchObject({ components: [
     { componentId: "cloud_run.europe-west1.cpu", region: "europe-west1" },
+    { componentId: "cloud_run.europe-west1.memory", region: "europe-west1" },
     { componentId: "cloud_run.us-central1.cpu", region: "us-central1" },
+    { componentId: "cloud_run.us-central1.memory", region: "us-central1" },
   ] });
   const estimate = await createLiveCostEstimator({ catalog, now }).estimate({ topologySha256: topology.topologySha256,
     quantities: RELEASE_COST_FAMILIES.map((provider) => ({ provider, quantityNanos: 1_000_000_000n, headroomBasisPoints: 1_000 })),
@@ -133,8 +135,11 @@ test("aggregates component receipts into one family line with complete provenanc
   expect(estimate.lines).toHaveLength(16);
   expect(estimate.lines.find((line) => line.provider === "cloud_run")).toMatchObject({ components: [
     { componentId: "cloud_run.europe-west1.cpu", skuId: "sku-0" },
-    { componentId: "cloud_run.us-central1.cpu", skuId: "sku-1" },
+    { componentId: "cloud_run.europe-west1.memory", skuId: "sku-1" },
+    { componentId: "cloud_run.us-central1.cpu", skuId: "sku-2" },
+    { componentId: "cloud_run.us-central1.memory", skuId: "sku-3" },
   ] });
+  expect(estimate.lines.find(line => line.provider === "cloud_run")).toMatchObject({ baseMicros: 18_900, headroomMicros: 1_890, maximumMicros: 20_790 });
   await expect(createLiveCostEstimator({ catalog: { listPriceFacts: async () => facts.map((fact) => fact.provider === "cloud_run" && fact.components ? { ...fact, components: [...fact.components, fact.components[0]] } : fact) }, now }).estimate({ topologySha256: topology.topologySha256,
     quantities: RELEASE_COST_FAMILIES.map((provider) => ({ provider, quantityNanos: 1_000_000_000n, headroomBasisPoints: 1_000 })), components: topology.quantityContract.map((component) => ({ ...component, quantityNanos: BigInt(component.quantityNanos) })),
   })).rejects.toThrow("LIVE_COST_COMPONENT_COVERAGE_REQUIRED");

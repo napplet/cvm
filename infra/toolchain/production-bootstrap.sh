@@ -82,6 +82,33 @@ mount_bounded SHM /dev/shm 67108864 exec
 # UID-based access, is the authority: an unwritable mount root can still have
 # a writable descendant.
 seal_base_mounts() {
+  mount_label() {
+    # Report only a fixed Linux/Docker pseudo-mount class. Never echo an
+    # arbitrary provider mount target, source, option string, or environment.
+    case "$1" in
+      /proc/bus) printf '%s' PROC_BUS ;;
+      /proc/fs) printf '%s' PROC_FS ;;
+      /proc/irq) printf '%s' PROC_IRQ ;;
+      /proc/sys) printf '%s' PROC_SYS ;;
+      /proc/sysrq-trigger) printf '%s' PROC_SYSRQ ;;
+      /proc/acpi) printf '%s' PROC_ACPI ;;
+      /proc/asound) printf '%s' PROC_ASOUND ;;
+      /proc/interrupts) printf '%s' PROC_INTERRUPTS ;;
+      /proc/kcore) printf '%s' PROC_KCORE ;;
+      /proc/keys) printf '%s' PROC_KEYS ;;
+      /proc/latency_stats) printf '%s' PROC_LATENCY_STATS ;;
+      /proc/sched_debug) printf '%s' PROC_SCHED_DEBUG ;;
+      /proc/scsi) printf '%s' PROC_SCSI ;;
+      /proc/timer_list) printf '%s' PROC_TIMER_LIST ;;
+      /proc/timer_stats) printf '%s' PROC_TIMER_STATS ;;
+      /sys/firmware) printf '%s' SYS_FIRMWARE ;;
+      /sys/devices/virtual/powercap) printf '%s' SYS_POWERCAP ;;
+      /sys/devices/system/cpu/cpu*/thermal_throttle) printf '%s' SYS_CPU_THERMAL ;;
+      /run) printf '%s' RUN ;;
+      /run/secrets) printf '%s' RUN_SECRETS ;;
+      *) printf '%s' OTHER ;;
+    esac
+  }
   list=/run/napplet-cvm-jobs/.mounts-before-seal
   findmnt -rn -o TARGET,OPTIONS > "$list" || refuse SEAL_MOUNTINFO
   while IFS=' ' read -r target options; do
@@ -92,7 +119,7 @@ seal_base_mounts() {
       # are sealed. Any other read-write mount is an injected surface and is
       # refused rather than normalized into an implicit allowlist.
       /|/proc|/dev|/dev/pts|/dev/mqueue|/sys|/sys/fs/cgroup|/etc/resolv.conf|/etc/hostname|/etc/hosts) ;;
-      *) case ",$options," in *,rw,*) refuse SEAL_UNKNOWN_RW_MOUNT ;; esac; continue ;;
+      *) case ",$options," in *,rw,*) refuse "SEAL_UNKNOWN_RW_MOUNT_$(mount_label "$target")" ;; esac; continue ;;
     esac
     case ",$options," in
       *,rw,*) mount -o remount,ro "$target" || refuse SEAL_BASE_REMOUNT ;;

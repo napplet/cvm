@@ -129,7 +129,7 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
         toolchainSha256: input.config.worker.toolchainSha256,
         publication: { server: input.config.publication.uploadServer },
       });
-      const checkpointFacts = async (expected: Expected, subject?: z.infer<typeof DurabilitySubjectSchema>) => {
+      const checkpointFacts = async (expected: Expected, subject?: z.infer<typeof DurabilitySubjectSchema>, requireContinuation = true) => {
         /* The checkpoint coordinator is the sole authority that can open a
          * workspace envelope. A durability registry row cannot convert an
          * artifact, evidence, receipt, or publication record into one. */
@@ -137,14 +137,23 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
         const client = await recovered.pool.connect();
         try {
           const rows = await client.query<Record<string, unknown>>(
-            "SELECT e.checkpoint_id,e.account_id,e.session_id,e.manifest_json,r.lease_token,r.action_id,r.expected_session_version,r.allocation_intent_reference FROM production_real.checkpoint_envelopes e JOIN production_real.funding_accounts f ON f.account_id=e.account_id LEFT JOIN production_real.continuation_resume_commands r ON r.checkpoint_id=e.checkpoint_id WHERE e.session_id=$1 AND trim(f.nostr_pubkey)=$2 AND e.state='retained' AND ($3::text IS NULL OR e.object_key=$3) ORDER BY e.checkpoint_id LIMIT 2",
+            "SELECT e.checkpoint_id,e.account_id,e.session_id,e.manifest_json,cp.expected_session_version,r.lease_token AS legacy_lease_token,r.action_id AS legacy_action_id,r.allocation_intent_reference AS legacy_allocation_intent_reference,pc.claim_reference AS priced_claim_reference,pc.lease_token AS priced_lease_token,pc.action_id AS priced_action_id,pc.allocation_intent_reference AS priced_allocation_intent_reference FROM production_real.checkpoint_envelopes e JOIN production_real.funding_accounts f ON f.account_id=e.account_id JOIN production_real.continuation_checkpoints cp ON cp.checkpoint_id=e.checkpoint_id AND cp.account_id=e.account_id AND cp.session_id=e.session_id LEFT JOIN production_real.continuation_resume_commands r ON r.checkpoint_id=e.checkpoint_id LEFT JOIN production_real.priced_continuation_claims pc ON pc.checkpoint_id=e.checkpoint_id AND pc.account_id=e.account_id AND pc.session_id=e.session_id AND pc.state IN ('accepted','dispatching') WHERE e.session_id=$1 AND trim(f.nostr_pubkey)=$2 AND e.state='retained' AND ($3::text IS NULL OR e.object_key=$3) AND (pc.claim_reference IS NOT NULL OR NOT EXISTS(SELECT 1 FROM production_real.priced_continuation_claims blocked WHERE blocked.checkpoint_id=e.checkpoint_id AND blocked.account_id=e.account_id AND blocked.session_id=e.session_id)) ORDER BY e.checkpoint_id LIMIT 2",
             [expected.sessionId, expected.ownerId, subject?.object.key ?? null],
           );
           if (rows.rows.length !== 1) throw new Error("MOUNTED_FRESH_RESTORE_CHECKPOINT_BINDING_REQUIRED");
           const row = rows.rows[0]!;
           const manifest = z.object({ checkpointId: Identity, accountId: z.string().min(1), sessionId: Identity, pauseGeneration: z.number().int().nonnegative(), sessionVersion: z.number().int().nonnegative(), actionVersion: z.number().int().nonnegative(), workspaceLineage: z.string().min(1), archiveSha256: Digest, action: z.object({ actionId: Identity }).passthrough(), compatibility: z.object({ policyVersion: z.string().min(1) }).passthrough() }).passthrough().parse(typeof row.manifest_json === "string" ? JSON.parse(row.manifest_json) : row.manifest_json);
           if (manifest.checkpointId !== row.checkpoint_id || manifest.accountId !== row.account_id || manifest.sessionId !== expected.sessionId || manifest.archiveSha256 !== (subject?.payloadSha256 ?? manifest.archiveSha256)) throw new Error("MOUNTED_FRESH_RESTORE_CHECKPOINT_BINDING_REQUIRED");
-          return Object.freeze({ manifest, accountId: String(row.account_id), leaseToken: typeof row.lease_token === "string" ? row.lease_token : undefined, actionId: typeof row.action_id === "string" ? row.action_id : undefined, expectedSessionVersion: Number(row.expected_session_version), allocationIntentReference: typeof row.allocation_intent_reference === "string" ? row.allocation_intent_reference : undefined });
+          const legacy = typeof row.legacy_lease_token === "string" && typeof row.legacy_action_id === "string" && typeof row.legacy_allocation_intent_reference === "string";
+          const priced = typeof row.priced_claim_reference === "string" && typeof row.priced_lease_token === "string" && typeof row.priced_action_id === "string" && typeof row.priced_allocation_intent_reference === "string";
+          if (legacy && priced) throw new Error("MOUNTED_FRESH_RESTORE_CONTINUATION_AMBIGUOUS");
+          if (requireContinuation && !legacy && !priced) throw new Error("MOUNTED_FRESH_RESTORE_RESUME_BINDING_REQUIRED");
+          const continuation = priced
+            ? Object.freeze({ kind: "priced" as const, leaseToken: Identity.parse(row.priced_lease_token), actionId: Identity.parse(row.priced_action_id), allocationIntentReference: Identity.parse(row.priced_allocation_intent_reference) })
+            : legacy
+              ? Object.freeze({ kind: "legacy" as const, leaseToken: Identity.parse(row.legacy_lease_token), actionId: Identity.parse(row.legacy_action_id), allocationIntentReference: Identity.parse(row.legacy_allocation_intent_reference) })
+              : undefined;
+          return Object.freeze({ manifest, accountId: String(row.account_id), expectedSessionVersion: Number(row.expected_session_version), continuation });
         } finally { client.release(); }
       };
       return Object.freeze({
@@ -158,7 +167,7 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
             const archive = await openRetainedSubject({ crypto: retainedSubjectCrypto, objectStore: input.artifactStore, checkpointId: binding.checkpointId, accountId: binding.accountId, sessionId: value.expected.sessionId, actionId: binding.actionId, subject: value.subject });
             return Object.freeze({ ...value.expected, archive });
           }
-          const facts = await checkpointFacts(value.expected, value.subject);
+          const facts = await checkpointFacts(value.expected, value.subject, false);
           const archive = await checkpoint.restore({ checkpointId: facts.manifest.checkpointId, accountId: facts.accountId, sessionId: facts.manifest.sessionId });
           return Object.freeze({ ...value.expected, archive });
         },
@@ -173,14 +182,20 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
             return Object.freeze({ status: "reattached" as const });
           }
           const facts = await checkpointFacts(value.expected);
-          if (!facts.leaseToken || !facts.actionId || !facts.allocationIntentReference || !Number.isInteger(facts.expectedSessionVersion) || facts.expectedSessionVersion < 0) throw new Error("MOUNTED_FRESH_RESTORE_RESUME_BINDING_REQUIRED");
+          if (!facts.continuation || !Number.isInteger(facts.expectedSessionVersion) || facts.expectedSessionVersion < 0) throw new Error("MOUNTED_FRESH_RESTORE_RESUME_BINDING_REQUIRED");
           const archive = new Uint8Array(new ArrayBuffer(value.archive.byteLength)); archive.set(value.archive);
-          const restore = { accountId: facts.accountId, sessionId: facts.manifest.sessionId, actionId: facts.actionId, expectedVersion: facts.expectedSessionVersion, policyVersion: facts.manifest.compatibility.policyVersion, capabilityGrant: "phase-05-continuation-grant" as const, workspaceId: facts.manifest.workspaceLineage, checkpointId: facts.manifest.checkpointId, pauseGeneration: facts.manifest.pauseGeneration, actionVersion: facts.manifest.actionVersion, workspaceLineage: facts.manifest.workspaceLineage, leaseToken: facts.leaseToken, resumeClaim: facts.allocationIntentReference, archive, archiveSha256: facts.manifest.archiveSha256 };
+          const restore = { accountId: facts.accountId, sessionId: facts.manifest.sessionId, actionId: facts.continuation.actionId, expectedVersion: facts.expectedSessionVersion, policyVersion: facts.manifest.compatibility.policyVersion, capabilityGrant: "phase-05-continuation-grant" as const, workspaceId: facts.manifest.workspaceLineage, checkpointId: facts.manifest.checkpointId, pauseGeneration: facts.manifest.pauseGeneration, actionVersion: facts.manifest.actionVersion, workspaceLineage: facts.manifest.workspaceLineage, leaseToken: facts.continuation.leaseToken, resumeClaim: facts.continuation.allocationIntentReference, archive, archiveSha256: facts.manifest.archiveSha256 };
           /* Fence the original source worker before the cloned authority can
            * attach it. The fence is durable and idempotent in the cloned job
            * journal, so concurrent restores cannot race an active writer. */
-          const { resumeClaim: _resumeClaim, archive: _archive, archiveSha256: _archiveSha256, ...fence } = restore;
-          if ((await worker.fenceCheckpoint(fence)).status !== "fenced") throw new Error("MOUNTED_FRESH_RESTORE_SOURCE_FENCE_REQUIRED");
+          const { archive: _archive, ...fence } = restore;
+          if (facts.continuation.kind === "priced") {
+            if ((await worker.fencePricedCheckpoint(fence)).status !== "fenced") throw new Error("MOUNTED_FRESH_RESTORE_SOURCE_FENCE_REQUIRED");
+            const result = await worker.restorePricedCheckpoint(restore);
+            return result.status === "restored" ? Object.freeze({ status: "reattached" as const, workerId: result.workspaceId }) : Object.freeze({ status: "reconciliation_pending" as const });
+          }
+          const { resumeClaim: _resumeClaim, archiveSha256: _archiveSha256, ...legacyFence } = fence;
+          if ((await worker.fenceCheckpoint(legacyFence)).status !== "fenced") throw new Error("MOUNTED_FRESH_RESTORE_SOURCE_FENCE_REQUIRED");
           const result = await worker.restoreCheckpoint(restore);
           return result.status === "restored" ? Object.freeze({ status: "reattached" as const, workerId: result.workspaceId }) : Object.freeze({ status: "reconciliation_pending" as const });
         },
@@ -196,12 +211,13 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
           }
           const facts = await checkpointFacts(value.expected);
           if (facts.manifest.archiveSha256 !== value.archiveSha256 || !value.sourceIdentity) throw new Error("MOUNTED_FRESH_RESTORE_REATTACH_BINDING_REQUIRED");
-          if (!facts.leaseToken || !facts.actionId || !facts.allocationIntentReference || !Number.isInteger(facts.expectedSessionVersion) || facts.expectedSessionVersion < 0) throw new Error("MOUNTED_FRESH_RESTORE_RESUME_BINDING_REQUIRED");
-          const observed = await worker.observeRestoreCheckpoint({ accountId: facts.accountId, sessionId: facts.manifest.sessionId, actionId: facts.actionId, expectedVersion: facts.expectedSessionVersion, policyVersion: facts.manifest.compatibility.policyVersion, capabilityGrant: "phase-05-continuation-grant", workspaceId: facts.manifest.workspaceLineage, checkpointId: facts.manifest.checkpointId, pauseGeneration: facts.manifest.pauseGeneration, actionVersion: facts.manifest.actionVersion, workspaceLineage: facts.manifest.workspaceLineage, leaseToken: facts.leaseToken, resumeClaim: facts.allocationIntentReference, archiveSha256: value.archiveSha256 });
+          if (!facts.continuation || !Number.isInteger(facts.expectedSessionVersion) || facts.expectedSessionVersion < 0) throw new Error("MOUNTED_FRESH_RESTORE_RESUME_BINDING_REQUIRED");
+          const observedInput = { accountId: facts.accountId, sessionId: facts.manifest.sessionId, actionId: facts.continuation.actionId, expectedVersion: facts.expectedSessionVersion, policyVersion: facts.manifest.compatibility.policyVersion, capabilityGrant: "phase-05-continuation-grant" as const, workspaceId: facts.manifest.workspaceLineage, checkpointId: facts.manifest.checkpointId, pauseGeneration: facts.manifest.pauseGeneration, actionVersion: facts.manifest.actionVersion, workspaceLineage: facts.manifest.workspaceLineage, leaseToken: facts.continuation.leaseToken, resumeClaim: facts.continuation.allocationIntentReference, archiveSha256: value.archiveSha256 };
+          const observed = facts.continuation.kind === "priced" ? await worker.observePricedRestoreCheckpoint(observedInput) : await worker.observeRestoreCheckpoint(observedInput);
           return observed.status === "restored" ? Object.freeze({ status: "reattached" as const, workerId: observed.workerId }) : observed.status === "pending" ? Object.freeze({ status: "reconciliation_pending" as const }) : Object.freeze({ status: "reconciliation_pending" as const });
         },
         async exerciseExpiryDeletion(scope) {
-          const facts = await checkpointFacts({ ownerId: scope.ownerId, sessionId: scope.sessionId, pendingActionReference: "expiry", sessionVersion: 0, artifactVersion: 0, leaseToken: "expiry", compatibility: { policyVersion: "expiry", modelIdentity: "expiry", nappletSdkIdentity: "expiry", toolchainIdentity: "expiry" } });
+          const facts = await checkpointFacts({ ownerId: scope.ownerId, sessionId: scope.sessionId, pendingActionReference: "expiry", sessionVersion: 0, artifactVersion: 0, leaseToken: "expiry", compatibility: { policyVersion: "expiry", modelIdentity: "expiry", nappletSdkIdentity: "expiry", toolchainIdentity: "expiry" } }, undefined, false);
           if (Date.parse((await checkpointManifestRetention(recovered.pool, facts.manifest.checkpointId))) > now()) throw new Error("MOUNTED_FRESH_RESTORE_EXPIRY_NOT_DUE");
           // Erase the six independently-custodied originals before destroying
           // the workspace key. Each deletion is exact-generation/key-bound;

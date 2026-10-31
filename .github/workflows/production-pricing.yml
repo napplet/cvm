@@ -35,6 +35,9 @@ on:
       - "tests/model/retained-generation-command.test.ts"
       - "src/release/costs/**"
       - "src/release/deployment/vertex-client.ts"
+      - "src/release/deployment/openai-responses-client.ts"
+      - "src/release/deployment/postgres-openai-responses-journal.ts"
+      - "src/production/openai-responses-model-gateway.ts"
       - "tests/release/vertex-creation-budget.test.ts"
       - "tests/fixtures/model/delayed-response.ts"
       - "src/release/deployment/vertex-recovery-scan.ts"
@@ -46,6 +49,7 @@ on:
       - "src/release/topology.ts"
       - "src/model/price-card.ts"
       - "tests/release/production-pricing-model.test.ts"
+      - "tests/release/non-google-model-costs.test.ts"
       - "tests/release/official-adc-process.test.ts"
       - "tests/release/production-catalog.test.ts"
       - "tests/release/authorization.test.ts"
@@ -70,4 +74,4 @@ jobs:
           bun-version: "1.3.14"
       - run: bun install --frozen-lockfile
       - name: Source prices, exact usage, FX and ambiguous operation contracts
-        run: bun test tests/release/authorization.test.ts tests/release/deployment-google-clients.test.ts tests/release/cloud-run-memory-pricing.test.ts tests/release/google-production-transport.test.ts tests/contextvm/adapter.test.ts tests/release/vertex-creation-budget.test.ts tests/release/vertex-current-wire.test.ts tests/model tests/release/official-adc-process.test.ts tests/release/production-pricing-model.test.ts tests/release/production-catalog.test.ts tests/release/production-preapproval.test.ts tests/release/deployment-contextvm-payment-model-clients.test.ts tests/release/deployment-host-signer-clients.test.ts tests/release/deployment-publication-clients.test.ts --timeout 10000
+        run: bun test tests/release/authorization.test.ts tests/release/deployment-google-clients.test.ts tests/release/cloud-run-memory-pricing.test.ts tests/release/google-production-transport.test.ts tests/contextvm/adapter.test.ts tests/release/vertex-creation-budget.test.ts tests/release/vertex-current-wire.test.ts tests/model tests/release/official-adc-process.test.ts tests/release/production-pricing-model.test.ts tests/release/production-catalog.test.ts tests/release/production-preapproval.test.ts tests/release/deployment-contextvm-payment-model-clients.test.ts tests/release/deployment-host-signer-clients.test.ts tests/release/deployment-publication-clients.test.ts tests/release/non-google-model-costs.test.ts --timeout 10000

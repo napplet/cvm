@@ -16,7 +16,8 @@ type SqlRow = Record<string, unknown>;
 type SqlResult<Row extends SqlRow = SqlRow> = Readonly<{ rows: readonly Row[] }>;
 export interface PostgresSqlClient {
   query<Row extends SqlRow = SqlRow>(text: string, values?: readonly unknown[]): Promise<SqlResult<Row>>;
-  release(): void;
+  /** Passing an error evicts a poisoned checked-out connection from its pool. */
+  release(error?: Error): void;
 }
 export interface PostgresSqlPool { connect(): Promise<PostgresSqlClient>; }
 export type PostgresSqlStoreOptions = Readonly<{ maxAttempts?: number; deadlineMs?: number; now?: () => number }>;
@@ -71,7 +72,7 @@ async function beforeDeadline<T>(promise: Promise<T>, deadline: number, now: () 
 class DeadlineSqlClient implements PostgresSqlClient {
   constructor(private readonly client: PostgresSqlClient, private readonly deadline: number, private readonly now: () => number) {}
   query<Row extends SqlRow = SqlRow>(text: string, values?: readonly unknown[]): Promise<SqlResult<Row>> { return beforeDeadline(this.client.query<Row>(text, values), this.deadline, this.now); }
-  release(): void { this.client.release(); }
+  release(error?: Error): void { this.client.release(error); }
 }
 
 /**

@@ -8,8 +8,10 @@ import { ProductionPricedContinuationWorkers } from "./priced-continuation-worke
 import { ProductionResumeAcceptance, type AcceptedPricedContinuation } from "./resume-acceptance";
 import { ProductionResumePricingPreparer } from "./resume-pricing-preparer";
 import { ProductionPricedContinuationCleanup } from "./priced-continuation-cleanup";
+import { FundingCommitOutcomeUnknownError } from "../funding/transaction-outcome";
 
 type Pending = Readonly<{ status: "reconciliation_pending"; stage: "capacity" | "restore" | "accounting" | "cleanup" }>;
+type CapApprovalRequired = Readonly<{ status: "denied"; code: "RESUME_CAP_APPROVAL_REQUIRED" }>;
 class AccountingPending extends Error {}
 
 /** Private synchronous coordinator, not a public transport or durable queue.
@@ -26,11 +28,21 @@ export class ProductionPricedContinuationRunner {
 
   async assertReady(): Promise<void> { await this.input.finalizer.assertReady(); }
 
-  async run(raw: unknown): Promise<SessionActionResult | Pending> {
+  async run(raw: unknown): Promise<SessionActionResult | Pending | CapApprovalRequired> {
     // Original signed consent is checked on EVERY call, including terminal
     // replay, before looking up local in-flight work or a stored result.
     const command = ResumeSessionV2CommandSchema.parse(raw);
-    const { claim } = await this.input.acceptance.claim(command);
+    let claim: AcceptedPricedContinuation;
+    try {
+      ({ claim } = await this.input.acceptance.claim(command));
+    } catch (error) {
+      // The serializable claim remains authoritative after quote preparation:
+      // a concurrent original reservation/spend can make a once-valid quote
+      // unaffordable.  Report that before any worker or provider effect.
+      if (error instanceof Error && ["RESUME_CAP_INSUFFICIENT", "RESUME_BALANCE_INSUFFICIENT", "ACTION_BUDGET_EXCEEDS_APPROVED_CAP"].includes(error.message))
+        return { status: "denied", code: "RESUME_CAP_APPROVAL_REQUIRED" };
+      throw error;
+    }
     const recorded = await this.#result(claim);
     if (recorded) return this.#finish(claim, recorded);
     const active = this.#inFlight.get(claim.claimReference);
@@ -63,18 +75,23 @@ export class ProductionPricedContinuationRunner {
         operationId: claim.operationId, actionBudgetReference: claim.actionBudgetReference } });
     try {
       return await executable.execute(async ({ intent, receipt, finalization }) => {
-        if (!receipt || (finalization.status !== "completed" && finalization.status !== "failed")) {
-          await this.#retainUnknown(claim, receipt?.provenance.protectedEvidenceReference ?? finalization.providerReceiptReference);
+        if (!receipt) {
+          await this.#retainUnknown(claim, finalization.providerReceiptReference);
           throw new AccountingPending("PRICED_RUNNER_ACCOUNTING_PENDING");
         }
+        if (finalization.status !== "completed" && finalization.status !== "failed")
+          throw new Error("PRICED_RUNNER_FINALIZATION_STATUS_DENIED");
         try {
           await this.input.finalizer.complete({ accountId: claim.accountId, idempotencyKey: claim.idempotencyKey,
             leaseToken: claim.leaseToken, allocationIntentReference: claim.allocationIntentReference, intent, receipt, finalization });
-        } catch {
+        } catch (error) {
           // COMMIT acknowledgement loss is resolved by the original owned
-          // terminal state before writing ambiguity. Never settle a second key.
+          // terminal state before writing ambiguity. Deterministic finalizer
+          // validation/assembly failures must remain visible to the private
+          // caller and must never manufacture a usage-unknown receipt.
           const current = await this.input.acceptance.find(claim.accountId, claim.idempotencyKey);
           if (current && await this.#result(current)) return;
+          if (!(error instanceof FundingCommitOutcomeUnknownError)) throw error;
           await this.#retainUnknown(claim, receipt.provenance.protectedEvidenceReference);
           throw new AccountingPending("PRICED_RUNNER_ACCOUNTING_PENDING");
         }

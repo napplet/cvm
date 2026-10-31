@@ -1032,12 +1032,13 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     const runnerInput = { pool, acceptance: workspaceAcceptance, preparer: workspacePreparer, workers: workspaceWorkers,
       restores: workspaceRestores(), generation: core, finalizer, cleanup: cleanup() };
     // First dispatch traverses the mounted public facade into its runner,
-    // bridge, verified artifact path, and finalizer. A late SQL failure rolls
-    // back money, then durably retains ambiguity without a replacement call.
-    expect(await mountedService.resume(workspaceResume)).toEqual({ status: "reconciliation_pending", stage: "accounting" });
+    // bridge, verified artifact path, and finalizer. A deterministic late SQL
+    // failure rolls the transaction back and stays a private failure; it must
+    // not be relabelled as an unknown provider receipt.
+    await expect(mountedService.resume(workspaceResume)).rejects.toThrow("TERMINAL_PAUSE_WRITE_FAILED");
     expect(failFirstMountedTerminalWrite).toBeFalse();
     expect(modelPosts).toBe(3);
-    expect((await metered.findMeteredAction(accountId, workspaceClaim.actionKey))?.status).toBe("usage_unknown");
+    expect((await metered.findMeteredAction(accountId, workspaceClaim.actionKey))?.status).toBe("dispatching");
     const workspaceObserved = await gateway.lookup(workspaceApiIntent, new AbortController().signal);
     if (workspaceObserved.status !== "receipt_found") throw new Error("EXPECTED_WORKSPACE_MODEL_USAGE");
     const workspaceSettlement = await createProductionVertexGenerationSettlement({ gateway, conversion: workspaceClaim.settlement.conversion, journal: vertexJournal,
@@ -1096,19 +1097,26 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     coreInput.intent.sessionId = "session:mutated-after-preparation";
     const invariantRunner = new ProductionPricedContinuationRunner({ ...runnerInput, generation: invariantCore });
     await invariantRunner.assertReady();
-    expect(await invariantRunner.run(workspaceResume)).toEqual({ status: "reconciliation_pending", stage: "accounting" });
-    expect((await metered.findMeteredAction(accountId, workspaceClaim.actionKey))?.status).toBe("usage_unknown");
+    await expect(invariantRunner.run(workspaceResume)).rejects.toThrow("PRICED_RUNNER_FINALIZATION_STATUS_DENIED");
+    expect((await metered.findMeteredAction(accountId, workspaceClaim.actionKey))?.status).toBe("dispatching");
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.usage_receipts")).rows[0].count).toBe(1);
     expect((await workspaceAcceptance.find(accountId, workspaceResume.idempotencyKey))?.state).toBe("dispatching");
     expect((await admin.query("SELECT state FROM production_real.action_budget_reservations WHERE reservation_reference=$1", [workspaceClaim.actionBudgetReference])).rows[0].state).toBe("authorized");
-    let loseRunnerTerminalCommit = true;
-    const runner = new ProductionPricedContinuationRunner({ ...runnerInput, finalizer: new ProductionPricedContinuationFinalizer({ ...terminalInput,
-      pool: sqlPool(runtime, () => { const value = loseRunnerTerminalCommit; loseRunnerTerminalCommit = false; return value; }) }) });
+    // A fresh mounted facade receives no replacement authority. It observes
+    // the original provider operation/allocation/restore and finalizes only
+    // that exact tuple after the rolled-back terminal write.
+    const freshMountedService = await ProductionPricedContinuationService.create({ pool, config: mountedPricedConfig(mountedToolchain, workspaceCommand.policyVersion), generation: core,
+      capacity: mountedCapacity, checkpoint, vertexJournal, workerJournal: nativeWorkerJournal, jobJournal: nativeJobJournal,
+      requestJournal: nativeRequestJournal, capacityJournal, artifactStore: nativeObjects, workers: workerClients, jobRouter: mountedRouter,
+      gateway, pricing: workspacePricing });
+    const freshMountedResult = await freshMountedService.resume(workspaceResume);
+    expect(["completed", "failed", "reconciliation_pending"]).toContain(freshMountedResult.status);
+    expect(modelPosts).toBe(3); expect(nativeRestores).toBe(1); expect(reserves).toBe(2);
+    const runner = new ProductionPricedContinuationRunner(runnerInput);
     const concurrentRuns = await Promise.all([runner.run(workspaceResume), runner.run(workspaceResume)]);
     expect(concurrentRuns[0]).toEqual(concurrentRuns[1]);
     expect(concurrentRuns[0]).toEqual({ status: "reconciliation_pending", stage: "cleanup" });
     const coreTerminal = SessionActionResultSchema.parse(await executable.readTerminal());
-    expect(loseRunnerTerminalCommit).toBeFalse();
     expect(coreTerminal).toMatchObject({ status: actualWorkerImage ? "completed" : "failed", confirmedSpend: "1", remainingCap: "198", remainingBalance: "198", sessionVersion: actualWorkerImage ? 2 : 1, artifactVersion: actualWorkerImage ? 2 : 1 });
     if (actualWorkerImage) {
       if (coreTerminal.status !== "completed" || !coreTerminal.artifactId || !localWorker) throw new Error("ACTUAL_VERIFIED_ARTIFACT_REQUIRED");

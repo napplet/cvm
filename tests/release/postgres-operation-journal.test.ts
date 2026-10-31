@@ -11,7 +11,7 @@ import { createPostgresGoogleOperationJournal, createPostgresWorkerOperationJour
 import { ProductionCoreControlClient } from "../../src/release/deployment/production-core-control";
 import { ProductionCertificationControl, type ProductionCertificationServices } from "../../src/production/certification-control";
 import { createAuthorizationReceipt, createAuthorizationRequest } from "../../src/release/authorization";
-import { ProductionWorkerJobClient } from "../../src/worker-adapters/production-job-client";
+import { ProductionRestoreEvidenceSchema, ProductionWorkerJobClient } from "../../src/worker-adapters/production-job-client";
 import { canonicalJson } from "../../src/promotion/schema";
 import { PostgresReleasePromotion } from "../../src/production/release-promotion";
 import { ProductionWorkerArtifactStore } from "../../src/production/worker-artifact-store";
@@ -329,7 +329,7 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
     const workerOperationId = "original-build-worker";
     await workerRecords.claim({ operationId: workerOperationId, requestSha256: identity, resourceName: workerOperationId, provider: "fly", appName: "original-app", policyVersion: PRODUCTION_WORKER_POLICY.version, image: `registry/worker@sha256:${scopeSha256}`, sessionLeaseSha256: identity, toolchainSha256: scopeSha256, providerDeadlineEpochMs: Date.now() + 1_200_000 });
     await workerRecords.update({ operationId: workerOperationId, requestSha256: identity, resourceId: "original-machine", state: "reconciled" });
-    let starts = 0, queries = 0, originalJobId = "", fences = 0, fenceQueries = 0, restores = 0, restoreQueries = 0, restorePuts = 0;
+    let starts = 0, queries = 0, originalJobId = "", fences = 0, fenceQueries = 0, restores = 0, restoreQueries = 0, restorePuts = 0, restoreRepairs = 0;
     let restoreReceipt: unknown;
     let completedJobBytes: Buffer | undefined;
     let completedCommands: Array<{ argv: string[]; exitCode: number; stdout: string; stderr: string; elapsedMs: number }> = [];
@@ -352,6 +352,7 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
       if (action === "restore-put") { restorePuts++; return { status: "completed", exitCode: 0, stdout: JSON.stringify({ state: "stored", archiveSha256: id, chunk: Number(index), sha256: new Bun.CryptoHasher("sha256").update(Buffer.from(data!, "base64")).digest("hex") }) }; }
       if (action === "restore") { restores++; throw new Error("restored bytes; response lost"); }
       if (action === "restore-status") { restoreQueries++; return { status: "completed", exitCode: 0, stdout: JSON.stringify(restoreReceipt) }; }
+      if (action === "restore-repair") { restoreRepairs++; throw new Error("UNEXPECTED_LEGACY_RESTORE_REPAIR"); }
       throw new Error("UNEXPECTED_REDISPATCH");
     } } };
     const jobClient = (publication?: { server: string }, artifactContract?: "nip5d-direct-v1") => new ProductionWorkerJobClient({ publication, artifactContract, provider: "fly", workerOperationId, clients: clients as never, workerJournal, jobJournal, toolchainSha256: scopeSha256 });
@@ -359,9 +360,10 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
     const routerClients = { modal: { config: { image: originalImage, policyVersion: PRODUCTION_WORKER_POLICY.version } }, fly: { ...clients.fly, config: { image: originalImage, policyVersion: PRODUCTION_WORKER_POLICY.version } } };
     let wrongProfileCalls = 0;
     const currentClients = { modal: { config: { image: changedImage, policyVersion: PRODUCTION_WORKER_POLICY.version } }, fly: { config: { image: changedImage, policyVersion: PRODUCTION_WORKER_POLICY.version }, async exec() { wrongProfileCalls++; throw new Error("WRONG_PROFILE_EXECUTED"); } } };
-    const router = (retain = true, flyAppName = "original-app") => new ProductionWorkerJobRouter({ workerJournal, jobJournal, executables: [
+    const router = (retain = true, flyAppName = "original-app", restoreRecoveryVersion: 1 | undefined = 1) => new ProductionWorkerJobRouter({ workerJournal, jobJournal, executables: [
       { image: changedImage, toolchainSha256: identity, modalAppName: "original-app", flyAppName, clients: currentClients as never },
-      ...(retain ? [{ image: originalImage, toolchainSha256: scopeSha256, modalAppName: "original-app", flyAppName, clients: routerClients as never }] : []),
+      ...(retain ? [{ image: originalImage, toolchainSha256: scopeSha256, modalAppName: "original-app", flyAppName, clients: routerClients as never,
+        ...(restoreRecoveryVersion === undefined ? {} : { restoreRecoveryVersion }) }] : []),
     ] });
     const buildRequest = { sessionId: "session", actionId: "action", expectedVersion: 0, policyVersion: "test-policy", capabilityGrant: "grant", workspaceId: "workspace", sourceProposalSha256: identity, sourceProposalReference: `proposal:sha256:${identity}`, sourceProposalFiles: [{ path: "src/main.ts", content: "console.log('bounded test');" }] };
     expect((await jobClient().start(buildRequest)).state).toBe("unknown");
@@ -430,6 +432,33 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
     expect(restoreEvidence.value).toMatchObject({ schemaVersion: "worker-restore-evidence-v1", originalOperationId: originalRestore.operationId,
       originalIdentitySha256: originalRestore.identitySha256, expected: { archiveSha256: hash(workspace), toolchainSha256: scopeSha256,
         sourceSha256: hash(canonicalJson(source.files)), artifactFilesSha256: hash(canonicalJson(files)) } });
+    // A row written before v1 recovery has precisely these five fields. Its
+    // canonical identity deliberately has no `chunks`, so retained-profile
+    // observation must preserve that historical shape and remain query-only.
+    const legacyRestoreOperation = "legacy-five-field-restore";
+    const legacyRestoreValue = { workerOperationId, workerResourceId: "original-machine", leaseSha256: identity,
+      archiveSha256: hash(workspace), bindingSha256: identity };
+    const legacyRestoreIdentity = hash(canonicalJson(legacyRestoreValue));
+    const legacyEvidenceValue = { ...ProductionRestoreEvidenceSchema.parse(restoreEvidence.value),
+      originalOperationId: `worker-restore:${legacyRestoreOperation}`, originalIdentitySha256: legacyRestoreIdentity };
+    await jobJournal.claim(`worker-restore:${legacyRestoreOperation}`, legacyRestoreIdentity, legacyRestoreValue);
+    await jobJournal.claim(`worker-restore-evidence:${legacyRestoreOperation}`, hash(canonicalJson(legacyEvidenceValue)), legacyEvidenceValue);
+    const legacyRetained = await router().resolve({ provider: "fly", workerOperationId });
+    const queriesBeforeLegacyRestore = restoreQueries;
+    expect((await legacyRetained.observeRestoreWorkspace({ operationId: legacyRestoreOperation, archiveSha256: hash(workspace), bindingSha256: identity })).state).toBe("restored");
+    expect(restoreQueries).toBe(queriesBeforeLegacyRestore + 1);
+    expect((await legacyRetained.repairRestoreWorkspace({ operationId: legacyRestoreOperation, archiveSha256: hash(workspace), bindingSha256: identity })).state).toBe("unknown");
+    expect(restoreRepairs).toBe(0);
+    // A malformed claimed v1 shape is neither queried nor promoted to repair.
+    const malformedRestoreOperation = "malformed-v1-restore";
+    const malformedRestoreValue = { ...legacyRestoreValue, chunks: 0 };
+    await jobJournal.claim(`worker-restore:${malformedRestoreOperation}`, hash(canonicalJson(malformedRestoreValue)), malformedRestoreValue);
+    const queriesBeforeMalformedRestore = restoreQueries;
+    expect((await legacyRetained.observeRestoreWorkspace({ operationId: malformedRestoreOperation, archiveSha256: hash(workspace), bindingSha256: identity })).state).toBe("unknown");
+    expect(restoreQueries).toBe(queriesBeforeMalformedRestore); expect(restoreRepairs).toBe(0);
+    const observerOnlyRetained = await router(true, "original-app", undefined).resolve({ provider: "fly", workerOperationId });
+    expect((await observerOnlyRetained.repairRestoreWorkspace({ operationId: legacyRestoreOperation, archiveSha256: hash(workspace), bindingSha256: identity })).state).toBe("unknown");
+    expect(restoreRepairs).toBe(0);
     // Retained pre-companion originals cannot invent metadata-only proof. An
     // explicit full-archive retry remains query-only and preserves history.
     await jobJournal.claim("worker-restore:legacy-without-evidence", originalRestore.identitySha256, originalRestore.value);

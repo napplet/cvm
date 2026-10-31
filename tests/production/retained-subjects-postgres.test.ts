@@ -281,8 +281,13 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
       const storedV2Quote = await resumeQuotes.findReference(accountId, preparedV2.quoteReference);
       if (!storedV2Quote) throw new Error("RETAINED_V2_STORED_QUOTE_REQUIRED");
       expect(storedV2Quote.sourceProfile).toEqual(originalPricing.profile);
+      expect(storedV2Quote.sourceCard).toEqual(originalPricing.card);
       expect(storedV2Quote.pricing.profile.id).toMatch(/^resume-derived:[a-f0-9]{64}$/u);
+      expect(storedV2Quote.pricing.card.id).toMatch(/^resume-derived-card:[a-f0-9]{64}$/u);
+      expect(storedV2Quote.pricing.profile.priceCardId).toBe(storedV2Quote.pricing.card.id);
       expect(storedV2Quote.pricing.profile.maximumUnits.every((unit, index) => BigInt(unit.units) <= BigInt(originalPricing.profile.maximumUnits[index]!.units))).toBeTrue();
+      expect((await admin.query("SELECT count(*)::int AS count FROM production_real.model_profile_versions WHERE id=$1", [storedV2Quote.pricing.profile.id])).rows[0].count).toBe(1);
+      expect((await admin.query("SELECT count(*)::int AS count FROM production_real.price_card_versions WHERE id=$1 AND profile_id=$2", [storedV2Quote.pricing.card.id, storedV2Quote.pricing.profile.id])).rows[0].count).toBe(1);
       const v2Resume = { principal: { id: accountId }, sessionId, checkpointId, expectedSessionVersion: 0, expectedCheckpointVersion: 1, idempotencyKey: "resume:retained-mounted", approvePendingAction: true,
         capApprovalReference: pauseIntent.admissionReference, pendingAction: preparedV2.pendingAction,
         pricingApproval: { quoteReference: preparedV2.quoteReference, quoteSha256: preparedV2.quoteSha256, maximumSat: preparedV2.pricing.maximumSat } };

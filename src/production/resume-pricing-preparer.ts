@@ -11,7 +11,7 @@ import type { PostgresOperationJournal } from "../release/deployment/postgres-op
 import { canonicalJson } from "../promotion/schema";
 import type { GenerationCommand } from "../phase-04/metered-generation-service";
 import { ProductionCheckpointCoordinator, assertProductionCheckpointCoordinator } from "./checkpoint-coordinator";
-import { readProductionAcceptedPendingPricing, readProductionPendingPricing } from "./pricing-catalog";
+import { readProductionAcceptedPendingPricing, readProductionPendingPricing, registerProductionPricing } from "./pricing-catalog";
 import { ProductionResumePricingQuotes } from "./resume-pricing-quotes";
 import { readOriginalPendingVertexSettlement } from "./vertex-generation-settlement";
 import { bindAccountingRealmPool, createAccountingRealm } from "../funding/accounting-realm";
@@ -28,7 +28,7 @@ function pricingWithinAuthorizedCap(input: Readonly<{
   if (input.maximumSat < 1n) throw new Error("RESUME_CAP_APPROVAL_REQUIRED");
   const full = maximumOperationCharge(input.pricing);
   if (BigInt(convertUsdMicrosToSats({ usdMicros: Number(full), conversion: input.pricing.conversion, at: input.at }).amount) <= input.maximumSat)
-    return Object.freeze({ pricing: input.pricing, sourceProfile: input.pricing.profile });
+    return Object.freeze({ pricing: input.pricing, sourcePricing: input.pricing });
   const scale = 1_000_000n;
   const profileAt = (factor: bigint) => ModelProfileSchema.parse({ ...input.pricing.profile,
     maximumUnits: input.pricing.profile.maximumUnits.map((item) => ({ ...item, units: ((BigInt(item.units) * factor) / scale || 1n).toString() })) });
@@ -41,10 +41,20 @@ function pricingWithinAuthorizedCap(input: Readonly<{
     else high = middle - 1n;
   }
   const sourceProfileSha256 = createHash("sha256").update(canonicalJson(input.pricing.profile)).digest("hex");
-  const profile = ModelProfileSchema.parse({ ...profileAt(low), id: `resume-derived:${createHash("sha256").update(canonicalJson({ sourceProfileSha256, maximumUnits: profileAt(low).maximumUnits })).digest("hex")}` });
-  const quotedSat = BigInt(convertUsdMicrosToSats({ usdMicros: Number(maximumOperationCharge({ card: input.pricing.card, profile })), conversion: input.pricing.conversion, at: input.at }).amount);
+  const sourceCardSha256 = createHash("sha256").update(canonicalJson(input.pricing.card)).digest("hex");
+  const maximumUnits = profileAt(low).maximumUnits;
+  // The catalog requires a profile/card pair.  Give the narrowed execution
+  // its own immutable pair rather than changing either source record; all rate,
+  // source and FX evidence is copied byte-for-byte from the accepted source.
+  const derivation = { sourceProfileSha256, sourceCardSha256, maximumUnits };
+  const derived = createHash("sha256").update(canonicalJson(derivation)).digest("hex");
+  const cardId = `resume-derived-card:${derived}`;
+  const profile = ModelProfileSchema.parse({ ...input.pricing.profile, id: `resume-derived:${derived}`, priceCardId: cardId,
+    maximumUnits });
+  const derivedCard = { ...input.pricing.card, id: cardId, version: cardId };
+  const quotedSat = BigInt(convertUsdMicrosToSats({ usdMicros: Number(maximumOperationCharge({ card: derivedCard, profile })), conversion: input.pricing.conversion, at: input.at }).amount);
   if (quotedSat > input.maximumSat) throw new Error("RESUME_CAP_APPROVAL_REQUIRED");
-  return Object.freeze({ pricing: Object.freeze({ ...input.pricing, profile: Object.freeze(profile) }), sourceProfile: input.pricing.profile });
+  return Object.freeze({ pricing: Object.freeze({ ...input.pricing, card: Object.freeze(derivedCard), profile: Object.freeze(profile) }), sourcePricing: input.pricing });
 }
 
 /** The quote owner is the verified request principal. All command, checkpoint,
@@ -87,7 +97,9 @@ export class ProductionResumePricingPreparer {
         ? funding.availableBalance + funding.remainingCap : funding.remainingCap;
       const nowMs = (this.input.now ?? Date.now)();
       const bounded = pricingWithinAuthorizedCap({ pricing: this.input.currentPricing, maximumSat, at: new Date(nowMs).toISOString() });
-      const quote = await prepareResumePricingQuote({ context: authority.context, pricing: bounded.pricing, sourceProfile: bounded.sourceProfile,
+      if (bounded.pricing.profile.id !== bounded.sourcePricing.profile.id)
+        await registerProductionPricing({ pool: this.#pool, profile: bounded.pricing.profile, card: bounded.pricing.card });
+      const quote = await prepareResumePricingQuote({ context: authority.context, pricing: bounded.pricing, sourcePricing: bounded.sourcePricing,
         preparationKey: command.idempotencyKey, nowMs, lifetimeMs: 300_000 });
       return await projectResumePricingQuote(await this.input.quotes.save(quote));
     } catch (error) {

@@ -2,7 +2,7 @@ import { lstat, readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 
-import { loadProductionConfig, type ProductionConfig } from "./config";
+import { assertProductionArchitectureCurrent, loadProductionConfig, type ProductionConfig } from "./config";
 import { loadMountedProductionSessionRecord, type MountedProductionSessionRecord } from "./mounted-session-record";
 import { createMountedProductionHttpRuntime, openMountedProductionSession, type MountedProductionSessionAssembly } from "./runtime";
 import { MountedProductionSecretMaterial } from "./secret-material";
@@ -40,7 +40,9 @@ async function readFixedJson(path = PRODUCTION_CONFIG_MOUNT): Promise<unknown> {
  * startup always invokes this without an argument and therefore uses the
  * fixed image mount above. */
 export async function loadMountedProductionBootstrapConfig(path?: string): Promise<ProductionConfig> {
-  return loadProductionConfig(await readFixedJson(path));
+  const config = loadProductionConfig(await readFixedJson(path));
+  assertProductionArchitectureCurrent(config);
+  return config;
 }
 
 /** Parses both pinned documents before opening PostgreSQL, a relay, wallet, or

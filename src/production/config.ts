@@ -42,6 +42,15 @@ export const ProductionConfigSchema = z.object({
 
 export type ProductionConfig = Readonly<z.infer<typeof ProductionConfigSchema>>;
 
+/** D-141 supersedes every configuration accepted by this current, Google-only
+ * schema. A successor must add its own typed schema and no-effect proof before
+ * it is admitted at an activation boundary. */
+export const PRODUCTION_ARCHITECTURE_REVISION_REQUIRED = "PRODUCTION_ARCHITECTURE_REVISION_REQUIRED";
+
+export function assertProductionArchitectureCurrent(_config: ProductionConfig): void {
+  throw new Error(PRODUCTION_ARCHITECTURE_REVISION_REQUIRED);
+}
+
 function immutable<T>(value: T): T {
   if (value && typeof value === "object") {
     for (const child of Object.values(value as Record<string, unknown>)) immutable(child);

@@ -6,7 +6,7 @@ import { NonGoogleFreshRestoreProvisioner } from "./non-google-fresh-restore-pro
 import { NonGoogleCoreJournal, NonGoogleNativeCapacity, type NonGoogleCoreBinding } from "./non-google-native-runtime";
 import { NonGoogleTelemetryCertification } from "./non-google-telemetry-certification";
 import { assertNonGoogleNativeCoreDriverSet, NonGoogleNativeCoreDriverSet } from "./non-google-native-core-drivers";
-import type { NonGoogleInvocationAuthority } from "./non-google-invocation-authority";
+import { assertNonGoogleInvocationAuthority, type NonGoogleInvocationAuthority } from "./non-google-invocation-authority";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 
@@ -37,6 +37,7 @@ export class NonGoogleNativeCoreServices {
   }
   readonly binding: NonGoogleCoreBinding;
   async execute(input: Readonly<{ authority: NonGoogleInvocationAuthority; requestSha256: string; operationId: string; kind: CoreServiceControlKind; payload: unknown }>): Promise<unknown> {
+    assertNonGoogleInvocationAuthority(input.authority);
     this.#assertDispatch(input);
     switch (input.kind) {
       case "cohort.prepare": return this.#admission.prepare({ operationId: input.operationId, ...CoreControlPayloadSchemas[input.kind].parse(input.payload) });
@@ -52,6 +53,7 @@ export class NonGoogleNativeCoreServices {
    * identity. It never repeats capacity reservation, fault injection, or a
    * fresh-instance create after an ambiguous acknowledgement. */
   async reconcile(input: Readonly<{ authority: NonGoogleInvocationAuthority; requestSha256: string; operationId: string; kind: CoreServiceControlKind; payload: unknown }>): Promise<unknown> {
+    assertNonGoogleInvocationAuthority(input.authority);
     input.authority.assertOriginalObservation({ scope: "production.core", effect: input.kind, candidateSha256: this.binding.candidateSha256, topologySha256: this.binding.topologySha256, requestSha256: Digest.parse(input.requestSha256), roleCostBoundSha256: this.drivers.roleCostBoundSha256, originalRecorded: await this.#originalRecorded(input.kind, input.payload) });
     switch (input.kind) {
       case "cohort.prepare":

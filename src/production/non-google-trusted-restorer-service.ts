@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
-import type { NonGoogleInvocationAuthority } from "./non-google-invocation-authority";
+import { assertNonGoogleInvocationAuthority, type NonGoogleInvocationAuthority } from "./non-google-invocation-authority";
 import type { NativeCommandRunner, NonGoogleFreshRestoreReference } from "./non-google-fresh-restore-driver";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -19,6 +19,7 @@ export class NonGoogleTrustedRestorerService {
     private readonly readSecret: (path: string) => Promise<string> = path => readFile(path, "utf8"),
   ) { Object.freeze(this); }
   async importOriginal(input: Readonly<{ authority: NonGoogleInvocationAuthority; candidateSha256: string; topologySha256: string; requestSha256: string; roleCostBoundSha256: string }>): Promise<Readonly<{ backupSha256: string; sourceSystemIdentifier: string; freshSystemIdentifier: string }>> {
+    assertNonGoogleInvocationAuthority(input.authority);
     input.authority.assertDispatch({ scope: "production.core", effect: "restore.create", candidateSha256: input.candidateSha256, topologySha256: input.topologySha256, requestSha256: Digest.parse(input.requestSha256), roleCostBoundSha256: Digest.parse(input.roleCostBoundSha256) });
     if (process.env.NAPPLET_TRUSTED_RESTORER_IMAGE === undefined) throw new Error("NON_GOOGLE_TRUSTED_RESTORER_IMAGE_REQUIRED");
     const [sourceUrl, freshUrl] = await Promise.all([this.#secret(this.reference.sourceDatabaseUrlPath), this.#secret(this.reference.freshDatabaseUrlPath)]);

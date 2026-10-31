@@ -13,6 +13,7 @@ command -v mount >/dev/null 2>&1 || refuse TOOL_MOUNT
 command -v findmnt >/dev/null 2>&1 || refuse TOOL_FINDMNT
 command -v setpriv >/dev/null 2>&1 || refuse TOOL_SETPRIV
 command -v mountpoint >/dev/null 2>&1 || refuse TOOL_MOUNTPOINT
+command -v stat >/dev/null 2>&1 || refuse TOOL_STAT
 # Provider exec calls start as the image user.  Enter a fresh network namespace
 # before any untrusted command, bring back loopback for Chromium's local test
 # server, and fail closed if the provider/kernel disallows namespace creation.
@@ -82,6 +83,28 @@ mount_bounded SHM /dev/shm 67108864 exec
 # UID-based access, is the authority: an unwritable mount root can still have
 # a writable descendant.
 seal_base_mounts() {
+  masked_file_label() {
+    # This is the fixed Moby masked-file subset. Directory masks are never
+    # accepted here, and an unlisted path must remain an unknown-RW refusal.
+    case "$1" in
+      /proc/interrupts) printf '%s' PROC_INTERRUPTS ;;
+      /proc/kcore) printf '%s' PROC_KCORE ;;
+      /proc/keys) printf '%s' PROC_KEYS ;;
+      /proc/latency_stats) printf '%s' PROC_LATENCY_STATS ;;
+      /proc/sched_debug) printf '%s' PROC_SCHED_DEBUG ;;
+      /proc/timer_list) printf '%s' PROC_TIMER_LIST ;;
+      /proc/timer_stats) printf '%s' PROC_TIMER_STATS ;;
+      *) return 1 ;;
+    esac
+  }
+  seal_masked_file() {
+    target=$1 label=$2
+    [ ! -L "$target" ] || refuse "SEAL_MASK_${label}_SYMLINK"
+    [ "$(stat -c '%F:%t:%T' "$target")" = "character special file:1:3" ] || refuse "SEAL_MASK_${label}_TYPE"
+    mount -o remount,bind,ro "$target" || refuse "SEAL_MASK_${label}_REMOUNT"
+    mask_options=$(findmnt -n -o OPTIONS --target "$target") || refuse "SEAL_MASK_${label}_OPTIONS"
+    case ",$mask_options," in *,ro,*) ;; *) refuse "SEAL_MASK_${label}_NOT_READONLY" ;; esac
+  }
   mount_label() {
     # Report only a fixed Linux/Docker pseudo-mount class. Never echo an
     # arbitrary provider mount target, source, option string, or environment.
@@ -119,7 +142,10 @@ seal_base_mounts() {
       # are sealed. Any other read-write mount is an injected surface and is
       # refused rather than normalized into an implicit allowlist.
       /|/proc|/dev|/dev/pts|/dev/mqueue|/sys|/sys/fs/cgroup|/etc/resolv.conf|/etc/hostname|/etc/hosts) ;;
-      *) case ",$options," in *,rw,*) refuse "SEAL_UNKNOWN_RW_MOUNT_$(mount_label "$target")" ;; esac; continue ;;
+      *) case ",$options," in
+           *,rw,*) if label=$(masked_file_label "$target"); then seal_masked_file "$target" "$label"; else refuse "SEAL_UNKNOWN_RW_MOUNT_$(mount_label "$target")"; fi ;;
+         esac
+         continue ;;
     esac
     case ",$options," in
       *,rw,*) mount -o remount,ro "$target" || refuse SEAL_BASE_REMOUNT ;;

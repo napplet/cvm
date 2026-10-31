@@ -159,8 +159,9 @@ try {
   const edgeAuditArgs = ["/usr/local/bin/napplet-cvm-bootstrap", "/usr/local/bin/napplet-cvm-worker", "edge-audit", "--candidate-sha256", "d".repeat(64), "--topology-sha256", "e".repeat(64)];
   const unboundedPids = await docker(["run", "--rm", "--read-only", "--cpus", "1", "--memory", "1024m", "--memory-swap", "1024m", "--security-opt", "apparmor=unconfined", "--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "-e", `NAPPLET_CVM_POLICY_VERSION=${POLICY}`, image, ...edgeAuditArgs]);
   const writableEscape = await docker(["run", "--rm", ...resourceArgs, "--tmpfs", "/escape:size=65536,mode=0555", "--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "-e", `NAPPLET_CVM_POLICY_VERSION=${POLICY}`, "--entrypoint", "/bin/sh", image, "-ec", `mkdir /escape/writable-child; chmod 0777 /escape/writable-child; exec /usr/local/bin/napplet-cvm-bootstrap /usr/local/bin/napplet-cvm-worker ${edgeAuditArgs.slice(2).map(arg => `'${arg}'`).join(" ")}`]);
-  if (unboundedPids.status === 0 || writableEscape.status === 0) throw new Error("WORKER_EDGE_AUDIT_FALSE_POSITIVE");
-  report.edgeAuditNegativeProbes = { unboundedPids: unboundedPids.status, writableDescendant: writableEscape.status };
+  const maskedFileSubstitution = await docker(["run", "--rm", ...resourceArgs, "--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "-e", `NAPPLET_CVM_POLICY_VERSION=${POLICY}`, "--entrypoint", "/bin/sh", image, "-ec", `mount -t tmpfs -o size=65536,nosuid,nodev tmpfs /workspace; : > /workspace/not-null; mount --bind /workspace/not-null /proc/interrupts; exec /usr/local/bin/napplet-cvm-bootstrap /usr/local/bin/napplet-cvm-worker ${edgeAuditArgs.slice(2).map(arg => `'${arg}'`).join(" ")}`]);
+  if (unboundedPids.status === 0 || writableEscape.status === 0 || maskedFileSubstitution.status === 0 || !maskedFileSubstitution.stderr.includes("CVM_BOOTSTRAP_REFUSED:SEAL_MASK_PROC_INTERRUPTS_TYPE")) throw new Error("WORKER_EDGE_AUDIT_FALSE_POSITIVE");
+  report.edgeAuditNegativeProbes = { unboundedPids: unboundedPids.status, writableDescendant: writableEscape.status, maskedFileSubstitution: maskedFileSubstitution.status };
 
   if (legacy) {
   const buildName = containers[0]!; const buildDeadline = Date.now() + 600_000;

@@ -777,6 +777,8 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
       const nativeManifest = { ...manifest, checkpointId: nativeCheckpointId, retentionUntil: new Date(nativeNow + retentionMs).toISOString() };
       const nativeCheckpoint = new ProductionCheckpointCoordinator({ pool: sourceAuthorityPool, objectStore: objects, journal: new PostgresOperationJournal(sourceAuthorityPool, { namespace: "native-restore-source", scopeSha256: hex("native-restore-source") }), kekPath: "/fixture/kek", readKekFile: async () => kek, now: () => nativeNow });
       const nativeSealed = await nativeCheckpoint.seal({ ...nativeManifest, archive });
+      const nativeCheckpointCiphertext = await objects.readExact(nativeSealed.envelope.object);
+      if (!nativeCheckpointCiphertext) throw new Error("NATIVE_RESTORE_CHECKPOINT_CIPHERTEXT_REQUIRED");
       const nativeDatabase = `retained_native_${suffix}`, nativeServiceRole = role, nativeObjectRole = `retained_object_${suffix}`, nativeBackupRole = `retained_backup_${suffix}`;
       await closePool(runtime); runtime = undefined; await closePool(sourceRuntime); sourceRuntime = undefined; await closePool(source); source = undefined;
       await admin.query(`CREATE DATABASE ${nativeDatabase} TEMPLATE ${sourceDatabase}`);
@@ -795,7 +797,7 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
         const nativeObjectPool = sqlPool(nativeObjectRuntime);
         const candidateSha256 = hex("native-restore-candidate"), topologySha256 = hex("native-restore-topology"), roleCostBoundSha256 = hex("native-restore-cost"), toolchainSha256 = hex("native-restore-toolchain");
         const bytea = new PostgresByteaObjectStoreAdapter({ pool: nativeObjectPool, now: () => nativeNow, retentionUntil: () => new Date(nativeNow + retentionMs).toISOString(), producerBudget: ObjectProducerBudgets.retained_subject });
-        expect(await bytea.createImmutable({ key: nativeSealed.envelope.object.key, bytes: archive, originalOperationIdentity: hex("native-restore-checkpoint") })).toEqual(nativeSealed.envelope.object);
+        expect(await bytea.createImmutable({ key: nativeSealed.envelope.object.key, bytes: nativeCheckpointCiphertext, originalOperationIdentity: hex("native-restore-checkpoint") })).toEqual(nativeSealed.envelope.object);
         expect(await bytea.createImmutable({ key: artifactReference.key, bytes: fixture.artifact, originalOperationIdentity: hex("native-restore-artifact") })).toEqual(artifactReference);
         const custody = new FileObjectKeyCustody({ roots });
         let dumps = 0, losePrepareAck = true, prepareInserted = false;
@@ -872,7 +874,7 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
         } finally { await contextvm.close(); }
       } finally {
         if (previousImage === undefined) delete process.env.NAPPLET_TRUSTED_RESTORER_IMAGE; else process.env.NAPPLET_TRUSTED_RESTORER_IMAGE = previousImage;
-        await nativeObjectRuntime?.end(); await nativeRuntime?.end(); await nativeAdmin?.end(); await admin.query(`DROP DATABASE IF EXISTS ${nativeDatabase}`).catch(() => undefined); await Promise.all(roots.map(root => rm(root, { recursive: true, force: true })));
+        nativeCheckpointCiphertext.fill(0); await nativeObjectRuntime?.end(); await nativeRuntime?.end(); await nativeAdmin?.end(); await admin.query(`DROP DATABASE IF EXISTS ${nativeDatabase}`).catch(() => undefined); await Promise.all(roots.map(root => rm(root, { recursive: true, force: true })));
       }
     }
     console.log(JSON.stringify({ retainedSubjectsPostgres: true, subjects: 7, freshClone: true, releaseEvidence: false }));

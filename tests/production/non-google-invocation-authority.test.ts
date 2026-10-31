@@ -4,7 +4,12 @@ import { createNonGoogleInvocationAuthorityVerifier } from "../../src/production
 import { canonicalJson } from "../../src/promotion/schema";
 import { createNonGoogleAuthorizationRequestV3 } from "../../src/release/contracts";
 
-const digest = async (value: string | Uint8Array) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", typeof value === "string" ? new TextEncoder().encode(value) : value)), byte => byte.toString(16).padStart(2, "0")).join("");
+function ownedArrayBuffer(value: Uint8Array): ArrayBuffer {
+  const copy = new ArrayBuffer(value.byteLength);
+  new Uint8Array(copy).set(value);
+  return copy;
+}
+const digest = async (value: string | Uint8Array) => { const source = typeof value === "string" ? new TextEncoder().encode(value) : value; return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", ownedArrayBuffer(source))), byte => byte.toString(16).padStart(2, "0")).join(""); };
 const hex = (value: string) => value.repeat(64);
 
 async function fixture(now = 1_000_000) {

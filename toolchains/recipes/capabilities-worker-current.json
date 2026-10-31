@@ -2,7 +2,7 @@
   "version": 1,
   "status": "unpromoted",
   "profile": "toolchains/recipes/capabilities-worker-profile-v3-unpromoted.json",
-  "profileSha256": "b9b2045117e5db6a7710219bbad874738a3bc0af09eb22cdaf9ce36ed33f7344",
+  "profileSha256": "d611557799f884ab011d90ce81bb40dadde39f98b7046f6e2e4b99ad04738511",
   "sourceVersion": 3,
   "promotion": {
     "selected": false,

@@ -19,7 +19,7 @@ import { ExternalSignerBoundaryAdapter } from "../release/native/external-signer
 import { createProductionPublicationUpload } from "./publication-upload";
 import { createProductionPublicationRelays } from "./publication-relays";
 import { createNativePromotedNappletCliSource } from "../release/native/promoted-cli";
-import { createContextVmDeploymentClient, openContextVmCertificationClient } from "../release/deployment/contextvm-client";
+import { createContextVmDeploymentClient, openContextVmCertificationClient, type ContextVmCertificationConstructionTransport } from "../release/deployment/contextvm-client";
 import { createPaymentDeploymentClients } from "../release/deployment/payment-clients";
 import { createVertexDeploymentClient } from "../release/deployment/vertex-client";
 import { createCompatibleHostDeploymentClient } from "../release/deployment/compatible-host-client";
@@ -67,6 +67,17 @@ import { openProductionPostgresPool } from "./postgres";
 export type MountedProductionSessionReferences = MountedProductionSessionRecord & Readonly<{
   gcsProvisionObject: Uint8Array;
 }>;
+
+/* Only the normal mounted producer may mint this in-process provenance. The
+ * token is reference identity, not JSON/config material, so a caller cannot
+ * reconstruct it with matching fields or a prototype chain. */
+const mountedSessionMaterials = new WeakSet<object>();
+
+export function assertMountedProductionSessionMaterial(value: unknown): asserts value is ProductionCertificationSessionMaterial {
+  if (!value || typeof value !== "object" || !mountedSessionMaterials.has(value)) {
+    throw new Error("PRODUCTION_MOUNTED_SESSION_PROVENANCE_REQUIRED");
+  }
+}
 
 type ReceiptBoundNative = Readonly<{
   plan(input: Readonly<{ request: unknown; receipt: unknown; operationId: string; region?: string }>): Promise<unknown>;
@@ -424,6 +435,8 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
    * accepted from the session record. */
   secrets: MountedProductionSecretMaterial;
   now?: () => number;
+  /** Explicit deny-effects construction transport; never mounted/configured. */
+  constructionTransport?: ContextVmCertificationConstructionTransport;
 }>): Promise<ProductionCertificationSessionMaterial> {
   if (input.config.realm !== "production-real"
     || input.generation.config.realm !== "production-real"
@@ -460,6 +473,7 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
     authorizationRequest: authorization.request,
     authorizationReceipt: authorization.receipt,
     now,
+    ...(input.constructionTransport ? { constructionTransport: input.constructionTransport } : {}),
   });
   input.generation.registerClose(() => contextvmCertification.close());
   const control = new ProductionCoreControlClient({ serviceUrl: input.config.operator.privateControlAudience, candidateSha256: input.config.candidateSha256, topologySha256: input.config.topologySha256, request: authorization.request, receipt: authorization.receipt, journal: dependencies.journal, identity: createGooglePrivateControlIdentity(input.config.operator.serviceAccount) });
@@ -596,7 +610,7 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
   const providers = Object.freeze(Object.fromEntries(RELEASE_PRODUCTION_PROVIDER_IDS.map(id => [id, descriptor(providerPorts[id]!, `native:${id}:${input.config.topologySha256}`)])) as ProductionCertificationSessionMaterial["providers"]);
   if (!input.deploymentConfig || input.deploymentConfig.candidateSha256 !== input.config.candidateSha256) throw new Error("PRODUCTION_MOUNTED_SESSION_DEPLOYMENT_CONFIG_REQUIRED");
   const deploymentConfig = input.deploymentConfig;
-  return Object.freeze({
+  const material: ProductionCertificationSessionMaterial = Object.freeze({
     realm: "production-real", deploymentConfig, journal: dependencies.journal, clients, providers,
     workerCandidate: input.resolved.workerCandidate, control, checkpointCoordinator: dependencies.checkpointCoordinator,
     prepare: async ({ authorizationRequest, receipt }) => {
@@ -615,6 +629,8 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
       return prepareMountedOperationalExecution({ config: input.config, deploymentConfig, resolved: input.resolved, authorization, dependencies, providers, workerLifecycles: { modal, fly }, ...(mountedGoogle.billingReports ? { billingReports: mountedGoogle.billingReports } : {}), now });
     },
   });
+  mountedSessionMaterials.add(material);
+  return material;
 }
 
 /** Named export consumed by the hash-pinned production-execution loader. It
@@ -630,6 +646,7 @@ export async function createProductionCertificationSessionMaterial(input: Readon
    * mutable state. It contains branded project clients and original-operation
    * ports; a JSON deployment file cannot manufacture this graph. */
   resolved?: MountedProductionSessionReferences;
+  constructionTransport?: ContextVmCertificationConstructionTransport;
 }>): Promise<ProductionCertificationSessionMaterial> {
   const resolved = input.resolved ?? await loadMountedProductionSessionRecord({ config: input.config, secrets: input.secrets });
   let mountedRequest: Awaited<ReturnType<typeof validateAuthorizationRequest>>;
@@ -653,7 +670,7 @@ export async function createProductionCertificationSessionMaterial(input: Readon
     || input.deploymentConfig.candidateSha256 !== input.config.candidateSha256) {
     throw new Error("PRODUCTION_MOUNTED_SESSION_AUTHORIZATION_BINDING_REQUIRED");
   }
-  return createMountedProductionSessionMaterial({ config: input.config, deploymentConfig: input.deploymentConfig, generation: input.generation, resolved, secrets: input.secrets });
+  return createMountedProductionSessionMaterial({ config: input.config, deploymentConfig: input.deploymentConfig, generation: input.generation, resolved, secrets: input.secrets, ...(input.constructionTransport ? { constructionTransport: input.constructionTransport } : {}) });
 }
 
 /**

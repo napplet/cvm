@@ -68,6 +68,16 @@ export type ContextVmCertificationClient = Readonly<{
   close(): Promise<void>;
 }>;
 
+/** Construction-only protocol boundary. The real client still performs the
+ * receipt checks, SDK handshake parsing, durable-operation logic, and private
+ * branding; only transport I/O may be replaced while effects are denied. */
+export type ContextVmCertificationConstructionTransport = Readonly<{
+  start(): Promise<void>;
+  send(message: unknown): Promise<void>;
+  close(): Promise<void>;
+  onMessage(handler: (message: unknown) => void): void;
+}>;
+
 const certificationClients = new WeakSet<object>();
 
 /** Rejects lookalike callback clients outside tests.  Only the official SDK
@@ -255,6 +265,8 @@ export async function openContextVmCertificationClient(input: Readonly<{
   authorizationReceipt: unknown;
   now?: () => number;
   timeoutMs?: number;
+  /** Never supplied by mounted JSON/config; deny-effects tests only. */
+  constructionTransport?: ContextVmCertificationConstructionTransport;
 }>): Promise<ContextVmCertificationClient> {
   const certificationKeyReference = reference(input.certificationKeyReference);
   const configuredCandidate = CertificationCandidateSchema.parse(input.candidateSha256);
@@ -263,6 +275,9 @@ export async function openContextVmCertificationClient(input: Readonly<{
   const relays = z.array(RelaySchema).min(1).max(16).parse(input.relays);
   if (new Set(relays).size !== relays.length || !input.signerBroker || typeof input.signerBroker.resolveContextVmCertificationSigner !== "function") throw new Error("CONTEXTVM_CERTIFICATION_CLIENT_INVALID");
   try { assertPostgresOperationJournal(input.journal); } catch { throw new Error("CONTEXTVM_DURABLE_JOURNAL_REQUIRED"); }
+  if (input.constructionTransport && process.env.NAPPLET_CVM_TEST_EXTERNAL_EFFECTS !== "deny") {
+    throw new Error("CONTEXTVM_CONSTRUCTION_TRANSPORT_DENIED");
+  }
   const timeoutMs = input.timeoutMs ?? 540_000;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 600_000) throw new Error("CONTEXTVM_CERTIFICATION_TIMEOUT_INVALID");
   async function authorize(): Promise<void> {
@@ -273,11 +288,17 @@ export async function openContextVmCertificationClient(input: Readonly<{
   await authorize();
   const signer = await input.signerBroker.resolveContextVmCertificationSigner({ reference: certificationKeyReference, purpose: "contextvm_certification_client" });
   if (!signer || typeof signer.getPublicKey !== "function" || typeof signer.signEvent !== "function") throw new Error("CONTEXTVM_CERTIFICATION_SIGNER_INVALID");
-  const relayPool = new ApplesauceRelayPool(relays, { reconnectBaseDelayMs: 1_000, reconnectMaxDelayMs: 30_000, publishOptions: { retries: 1, timeout: 10_000 } });
-  const relayHandler = new CapturingRelayHandler(relayPool);
-  const client = new NostrClientTransport({ signer, relayHandler, serverPubkey, encryptionMode: EncryptionMode.REQUIRED, logLevel: "warn" });
+  const relayPool = input.constructionTransport ? undefined : new ApplesauceRelayPool(relays, { reconnectBaseDelayMs: 1_000, reconnectMaxDelayMs: 30_000, publishOptions: { retries: 1, timeout: 10_000 } });
+  const relayHandler = relayPool ? new CapturingRelayHandler(relayPool) : undefined;
+  const sdkClient = relayHandler ? new NostrClientTransport({ signer, relayHandler, serverPubkey, encryptionMode: EncryptionMode.REQUIRED, logLevel: "warn" }) : undefined;
+  const transport: ContextVmCertificationConstructionTransport = input.constructionTransport ?? Object.freeze({
+    start: () => sdkClient!.start(),
+    send: message => sdkClient!.send(message as never),
+    close: () => sdkClient!.close(),
+    onMessage: handler => { sdkClient!.onmessage = handler; },
+  });
   const pending = new Map<string, Readonly<{ resolve(value: unknown): void; reject(reason: Error): void; timer: ReturnType<typeof setTimeout> }>>();
-  client.onmessage = (message: unknown) => {
+  transport.onMessage((message: unknown) => {
     if (!message || typeof message !== "object" || !("id" in message)) return;
     const id = (message as { id?: unknown }).id;
     if (typeof id !== "string") return;
@@ -286,16 +307,16 @@ export async function openContextVmCertificationClient(input: Readonly<{
     const result = message as { result?: unknown; error?: { message?: unknown } };
     if (result.error) active.reject(new Error(typeof result.error.message === "string" ? result.error.message : "CONTEXTVM_CERTIFICATION_REQUEST_FAILED"));
     else active.resolve(result.result);
-  };
+  });
   await authorize();
-  await client.start();
+  await transport.start();
   let sequence = 0;
   async function call(operationId: string, method: string, params: Readonly<Record<string, unknown>>): Promise<unknown> {
     const id = `cert:${operationId}:${++sequence}`;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { pending.delete(id); reject(new Error("CONTEXTVM_CERTIFICATION_TIMEOUT")); }, timeoutMs);
       pending.set(id, { resolve, reject, timer });
-      void authorize().then(() => client.send({ jsonrpc: "2.0", id, method, params } as never)).catch(error => {
+      void authorize().then(() => transport.send({ jsonrpc: "2.0", id, method, params })).catch(error => {
         const active = pending.get(id); if (active) { pending.delete(id); clearTimeout(active.timer); active.reject(error instanceof Error ? error : new Error("CONTEXTVM_CERTIFICATION_SEND_FAILED")); }
       });
     });
@@ -341,7 +362,7 @@ export async function openContextVmCertificationClient(input: Readonly<{
     clientInfo: { name: "napplet-cvm-certification", version: "1" },
   });
   await authorize();
-  await client.send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} } as never);
+  await transport.send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
   type AdmissionInput = Readonly<{ operationId: string; candidateId: string; requestedCap: string }>;
   const completeAdmission = (value: Awaited<ReturnType<ContextVmCertificationClient["admit"]>>): void => {
     if (value.state !== "responded" || !value.admissionReference || value.outcome !== "accepted") {
@@ -420,6 +441,7 @@ export async function openContextVmCertificationClient(input: Readonly<{
     },
     async exerciseRelayDeliveryFault(value) {
       await authorize();
+      if (!relayHandler) throw new Error("CONTEXTVM_RELAY_FAULT_TRANSPORT_UNAVAILABLE");
       const fault = z.enum(["duplicate", "out_of_order"]).parse(value.fault);
       const first: AdmissionInput = {
         operationId: CertificationOperationSchema.parse(value.first.operationId),
@@ -460,7 +482,7 @@ export async function openContextVmCertificationClient(input: Readonly<{
     },
     async close() {
       for (const active of pending.values()) { clearTimeout(active.timer); active.reject(new Error("CONTEXTVM_CERTIFICATION_CLOSED")); }
-      pending.clear(); await client.close();
+      pending.clear(); await transport.close();
     },
   });
   certificationClients.add(certificationClient);

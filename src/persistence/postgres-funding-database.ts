@@ -44,24 +44,19 @@ type ProductionTransactionOptions = Readonly<{
   attempts?: number;
 }>;
 
-async function acquireSessionAdvisoryLocks(client: PostgresSqlClient, keys: readonly string[], timeoutMs: number): Promise<readonly string[]> {
-  if (!keys.length) return [];
+async function acquireSessionAdvisoryLocks(client: PostgresSqlClient, keys: readonly string[], timeoutMs: number, heldLocks: string[]): Promise<void> {
+  if (!keys.length) return;
   // This is deliberately session-scoped and happens before BEGIN. A waiter
   // therefore creates its SERIALIZABLE snapshot only after the prior claimant
   // commits. Reset the setting before returning this pooled connection.
   await client.query("SELECT set_config('lock_timeout',$1,false)", [`${timeoutMs}ms`]);
-  const acquired: string[] = [];
   try {
     for (const key of keys) {
       await client.query("SELECT pg_advisory_lock(hashtextextended($1::text,$2::bigint))", [key, CASHU_PROOF_LOCK_SEED]);
-      acquired.push(key);
+      heldLocks.push(key);
     }
-    return acquired;
-  } catch (error) {
-    for (const key of acquired.reverse()) await client.query("SELECT pg_advisory_unlock(hashtextextended($1::text,$2::bigint))", [key, CASHU_PROOF_LOCK_SEED]).catch(() => undefined);
-    throw error;
   } finally {
-    await client.query("RESET lock_timeout").catch(() => undefined);
+    await client.query("RESET lock_timeout");
   }
 }
 
@@ -86,7 +81,7 @@ async function serializableProductionTransaction<T>(
       // contention key. Acquire it before BEGIN so a waiter starts its
       // SERIALIZABLE snapshot only after the winner has committed. The lock
       // never represents ownership; table uniqueness remains authoritative.
-      heldLocks.push(...await acquireSessionAdvisoryLocks(client, advisoryLockKeys, options.advisoryLockTimeoutMs ?? CASHU_PROOF_LOCK_TIMEOUT_MS));
+      await acquireSessionAdvisoryLocks(client, advisoryLockKeys, options.advisoryLockTimeoutMs ?? CASHU_PROOF_LOCK_TIMEOUT_MS, heldLocks);
       await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
       await client.query("SET LOCAL lock_timeout = '1000ms'");
       await client.query("SET LOCAL statement_timeout = '5000ms'");
@@ -100,8 +95,17 @@ async function serializableProductionTransaction<T>(
       const retryable = RETRYABLE_SERIALIZATION_CODES.has(code);
       if (!retryable || attempt + 1 === attempts) throw error;
     } finally {
+      let releaseError: Error | undefined;
       for (const key of heldLocks.reverse()) {
-        await client.query("SELECT pg_advisory_unlock(hashtextextended($1::text,$2::bigint))", [key, CASHU_PROOF_LOCK_SEED]).catch(() => undefined);
+        try {
+          await client.query("SELECT pg_advisory_unlock(hashtextextended($1::text,$2::bigint))", [key, CASHU_PROOF_LOCK_SEED]);
+        } catch (error) {
+          releaseError ??= error instanceof Error ? error : new Error("PRODUCTION_ADVISORY_LOCK_RELEASE_FAILED");
+        }
+      }
+      if (releaseError) {
+        client.release(releaseError);
+        throw releaseError;
       }
       client.release();
     }

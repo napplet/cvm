@@ -179,6 +179,26 @@ postgresIsolation("real PostgreSQL keeps development history read-only and produ
       await pool.query("SELECT pg_advisory_unlock(hashtextextended($1::text,$2::bigint))", [developmentRealmLock, "20261031"]);
     }
 
+    // An unlock acknowledgement failure must evict the checked-out session.
+    // The committed claim remains queryable, while its former advisory lock is
+    // released with the discarded connection rather than leaking into the pool.
+    let injectedUnlockFailure = true;
+    let poisonedReleaseError: Error | undefined;
+    const poisonedPool: PostgresSqlPool = { async connect() { const client = await nativeAppPool.connect(); return {
+      async query<Row extends Record<string, unknown>>(sql: string, values?: readonly unknown[]) {
+        if (injectedUnlockFailure && sql.includes("pg_advisory_unlock(")) {
+          injectedUnlockFailure = false;
+          throw new Error("FIXTURE_ADVISORY_UNLOCK_ACK_LOST");
+        }
+        return { rows: (await client.query<Row>(sql, values ? [...values] : undefined)).rows };
+      }, release(error?: Error) { poisonedReleaseError = error; client.release(error); },
+    }; } };
+    const poisonedDatabase = new PostgresFundingDatabase(poisonedPool, { realm: "production-real", deadlineMs: 1_000 });
+    const poisonedRecord = cashuRecord("cashu:poisoned-release", "b".repeat(64), "6".repeat(64));
+    await expect(poisonedDatabase.cashu.claim(poisonedRecord)).rejects.toThrow("FIXTURE_ADVISORY_UNLOCK_ACK_LOST");
+    expect(poisonedReleaseError?.message).toBe("FIXTURE_ADVISORY_UNLOCK_ACK_LOST");
+    expect(await database.cashu.claim(poisonedRecord)).toMatchObject({ claimed: false, record: { result: { topUpId: "cashu:poisoned-release" } } });
+
     await database.cashu.prepareCustody(cashuWinner.result.topUpId, { operationId: `cashu-swap:${cashuWinner.result.topUpId}`, mintUrl: "https://mint.example", keysetId: "keyset", unit: "sat", amount: "21", maxFee: "0", inputFeePpk: 0, feeAmount: "0", expectedOutputAmount: "21", inputProtectedId: cashuWinner.protectedId, outputDataProtectedId: "protected:output-data", outputDataDigest: "4".repeat(64) });
     const dispatches = await Promise.all([database.cashu.claimCustodyDispatch(cashuWinner.result.topUpId), database.cashu.claimCustodyDispatch(cashuWinner.result.topUpId)]);
     expect(dispatches.filter(Boolean)).toHaveLength(1);

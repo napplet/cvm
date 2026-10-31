@@ -26,6 +26,7 @@ import type { NativeCep8LightningProvider } from "../native/cep8-lightning";
 import type { NativeCashuProvider } from "../native/cashu";
 import type { NativePromotedCliSource } from "../native/promoted-cli";
 import type { NostrRelayPublicationAdapter } from "../native/nostr-relay";
+import type { createOpenAiResponsesClient } from "./openai-responses-client";
 import type { PublicationIntent, SealedArtifactIdentity } from "../../publication/contracts";
 import type { PreSignedNamedDeployFile, StructuredSourceEffect } from "../../publication/napplet-cli-adapter";
 import { ProductionDirectPublicationFactory } from "../../production/direct-publication-factory";
@@ -122,6 +123,12 @@ export type ProductionConcreteClients = Readonly<{
     cashu: NativeCashuProvider;
     promotedCli: NativePromotedCliSource;
     relays: NostrRelayPublicationAdapter;
+    /** Successor-only native path. It is absent while the v4 controller
+     * authority remains held; callers must never fall back to Vertex. */
+    openAiResponses?: Readonly<{
+      provenance: Readonly<{ module: "src/release/deployment/openai-responses-client.ts"; export: "createOpenAiResponsesClient"; purpose: "openai-responses"; journalNamespace: "openai:responses"; rateQuoteSha256: string }>;
+      client: ReturnType<typeof createOpenAiResponsesClient>;
+    }>;
   }>;
   publicationContext: ProductionPublicationOperations;
   /** Additive concrete direct graph; selection/promotion gates remain separate. */

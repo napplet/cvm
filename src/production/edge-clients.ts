@@ -56,18 +56,38 @@ export function createProductionEdgeClients(input: Readonly<{
     || input.sourceBuild?.authority !== "production-real" || typeof input.sourceBuild.verify !== "function") {
     throw new Error("PRODUCTION_EDGE_DURABLE_CONTEXT_REQUIRED");
   }
-  const compatibleHost = new CompatibleHostBrowserObservationPort({ packageHost: input.host.packageHost, browser: input.host.chromium });
-  const signer = new ExternalSignerBoundaryAdapter({ signer: input.ownerSigner.signer, ownerEventVerifier: input.ownerSigner.verifier });
-  const cep8 = createNativeCep8LightningProvider(input.lightning);
-  const cashu = createNativeCashuProvider(input.cashu);
-  const upload = createExactSealedUploadAdapter({
-    config: input.publication.upload.config, request: input.authorizationRequest, receipt: input.authorizationReceipt,
-    port: input.publication.upload.port, now: input.now,
+  // Constructors must be inert: provider configuration can reference secret
+  // material, but it may not resolve it, touch a client, or emit a report until
+  // an exact receipt-bound operation has been claimed.  These fixed getters are
+  // the only way the sealed broker reaches the native operational adapters.
+  let compatibleHost: CompatibleHostBrowserObservationPort | undefined;
+  let signer: ExternalSignerBoundaryAdapter | undefined;
+  let cep8: ReturnType<typeof createNativeCep8LightningProvider> | undefined;
+  let cashu: ReturnType<typeof createNativeCashuProvider> | undefined;
+  let upload: ReturnType<typeof createExactSealedUploadAdapter> | undefined;
+  let relays: ReturnType<typeof createNostrRelayPublicationAdapter> | undefined;
+  let promotedCli: ReturnType<typeof createNativePromotedNappletCliSource> | undefined;
+  return Object.freeze({
+    get compatibleHost() { return compatibleHost ??= new CompatibleHostBrowserObservationPort({ packageHost: input.host.packageHost, browser: input.host.chromium }); },
+    get signer() { return signer ??= new ExternalSignerBoundaryAdapter({ signer: input.ownerSigner.signer, ownerEventVerifier: input.ownerSigner.verifier }); },
+    get cep8() { return cep8 ??= createNativeCep8LightningProvider(input.lightning); },
+    get cashu() { return cashu ??= createNativeCashuProvider(input.cashu); },
+    get relays() {
+      return relays ??= createNostrRelayPublicationAdapter({
+        config: input.publication.relay.config, request: input.authorizationRequest, receipt: input.authorizationReceipt,
+        port: input.publication.relay.port, now: input.now,
+      });
+    },
+    get promotedCli() {
+      const relay = this.relays;
+      const exactUpload = upload ??= createExactSealedUploadAdapter({
+        config: input.publication.upload.config, request: input.authorizationRequest, receipt: input.authorizationReceipt,
+        port: input.publication.upload.port, now: input.now,
+      });
+      return promotedCli ??= createNativePromotedNappletCliSource({ snapshot: input.publication.promotedSnapshot, upload: exactUpload, relay: relay.asPromotedCliSource() });
+    },
+    publicationContext: input.publicationContext,
+    paymentScenarioContext: input.paymentScenarioContext,
+    sourceBuild: input.sourceBuild,
   });
-  const relays = createNostrRelayPublicationAdapter({
-    config: input.publication.relay.config, request: input.authorizationRequest, receipt: input.authorizationReceipt,
-    port: input.publication.relay.port, now: input.now,
-  });
-  const promotedCli = createNativePromotedNappletCliSource({ snapshot: input.publication.promotedSnapshot, upload, relay: relays.asPromotedCliSource() });
-  return Object.freeze({ compatibleHost, signer, cep8, cashu, promotedCli, relays, publicationContext: input.publicationContext, paymentScenarioContext: input.paymentScenarioContext, sourceBuild: input.sourceBuild });
 }

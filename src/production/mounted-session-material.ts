@@ -61,6 +61,7 @@ import { PostgresOperationJournal } from "../release/deployment/postgres-operati
 import { createPostgresGoogleOperationJournal } from "../release/deployment/postgres-provider-journals";
 import { createMountedBigQueryUsageReporter } from "./mounted-authoritative-billing";
 import { openProductionPostgresPool } from "./postgres";
+import { createMountedNonGoogleEdgeClient } from "./non-google-edge-material";
 
 /** Immutable JSON-only controller facts. Runtime ports are constructed below
  * from these facts and the already-opened production authorities. */
@@ -554,6 +555,15 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
     material: edgeMaterial, authorization, now,
   }) : undefined;
   if (directPublication) input.generation.registerClose(() => directPublication.close());
+  // This callsite deliberately fails held for every v1 successor record until
+  // Plan 70 installs a controller-authenticated v4 consumption authority. It
+  // nevertheless fixes normal mount ownership: no certification request can
+  // inject a Responses client, key, rate, or receipt into this graph.
+  const successorOpenAi = input.resolved.nonGoogleEdge === undefined ? undefined : await createMountedNonGoogleEdgeClient({
+    material: input.resolved.nonGoogleEdge,
+    pool: dependencies.pool,
+    now,
+  });
   const clients: ProductionConcreteClients = Object.freeze({
     google,
     workers: dependencies.workers,
@@ -567,7 +577,7 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
       publication: createCliUploadDeploymentClients({ promotedCliSourceReference: input.config.publication.cliSourceReference, promotedCliSourceSha256: input.config.worker.toolchainSha256, uploadTargetReference: input.config.publication.uploadTargetReference }),
       relays: createRelayDeploymentClients({ ownerKeyReference: input.resolved.descriptorReferences.ownerKeyReference, attestationKeyReference: input.resolved.descriptorReferences.attestationKeyReference, relaySetReference: input.resolved.descriptorReferences.contextvmRelaySetReference, relaySetSha256: input.resolved.descriptorReferences.contextvmRelaySetSha256 }),
     }),
-    edge: Object.freeze({ compatibleHost, signer, cep8, cashu, promotedCli, relays }),
+    edge: Object.freeze({ compatibleHost, signer, cep8, cashu, promotedCli, relays, ...(successorOpenAi === undefined ? {} : { openAiResponses: successorOpenAi }) }),
     publicationContext,
     ...(directPublication ? { directPublication, ...(input.resolved.edge.directPublicationReference ? { directPublicationReference: input.resolved.edge.directPublicationReference } : {}) } : {}),
     paymentScenarioContext: edgeContexts.payments,

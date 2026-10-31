@@ -9,6 +9,8 @@ import { ProductionCoreControlClient } from "../../src/release/deployment/produc
 import { CertificationEdgePayloadSchemas, ProductionCertificationEdgeService } from "../../src/production/certification-edge";
 import { createProductionEdgeClients } from "../../src/production/edge-clients";
 import { openProductionNip46Signer } from "../../src/production/nip46-signer";
+import { createMountedNonGoogleEdgeClient } from "../../src/production/non-google-edge-material";
+import { createNonGoogleAuthorizationRequestV3 } from "../../src/release/contracts";
 
 const digest = (letter: string) => letter.repeat(64);
 
@@ -106,10 +108,25 @@ test("every real edge adapter payload matches its server contract and rejects ch
 test("tracer: edge model operations require native OpenAI usage and never retain a Vertex receipt requirement", () => {
   const nativeModelPayload = {
     candidateId: digest("a"),
-    require: ["openai_responses_usage", "openai_price_digest", "cap", "exact_settlement", "cancellation", "known_id_get_only", "unknown_id_held", "one_dispatch", "one_debit"],
+    require: ["openai_responses_usage", "openai_price_digest", "cap", "exact_settlement", "cancellation", "known_id_get_only", "unknown_id_held", "one_dispatch", "one_debit"] as ["openai_responses_usage", "openai_price_digest", "cap", "exact_settlement", "cancellation", "known_id_get_only", "unknown_id_held", "one_dispatch", "one_debit"],
   };
   expect(CertificationEdgePayloadSchemas["edge.payment.model"].parse(nativeModelPayload)).toEqual(nativeModelPayload);
-  expect(CertificationEdgePayloadSchemas["edge.payment.model"].safeParse({ ...nativeModelPayload, require: ["vertex_receipt", ...nativeModelPayload.require.slice(1)] }).success).toBe(false);
+  expect(CertificationEdgePayloadSchemas["edge.payment.model"].safeParse({ candidateId: digest("a"), require: ["vertex_receipt", "cap", "exact_settlement", "cancellation", "original_query_only", "one_dispatch", "one_debit"] }).success).toBe(false);
+});
+
+test("tracer: successor edge material rejects legacy authority and holds before credential or database effects", async () => {
+  const request = await createNonGoogleAuthorizationRequestV3({
+    identity: { candidateSha256: digest("a"), sourceSha256: digest("b"), configSha256: digest("c"), toolchainSha256: digest("d"), topologySha256: digest("e"), failureDomainSha256: digest("f"), retentionSha256: digest("0"), cleanupSha256: digest("1"), controllerStateSha256: digest("2") },
+    binding: { providerGraphRevision: "non-google-v1", roleInventorySha256: digest("3"), roleCostBoundSha256: digest("4"), scopesSha256: digest("5"), effectsSha256: digest("6") },
+  });
+  const receipt = { kind: "release-authorization-receipt-v4", version: 4, requestSha256: request.requestSha256, candidateSha256: digest("a"), topologySha256: digest("e"), providerGraphRevision: "non-google-v1", roleInventorySha256: digest("3"), roleCostBoundSha256: digest("4"), receiptSha256: digest("7") } as const;
+  let effects = 0;
+  const material = { version: "non-google-edge-v1", candidateSha256: digest("a"), topologySha256: digest("e"), successorAuthorization: { request, receipt }, openAiResponses: {
+    credentialReference: "openai:api-key:production-reference", model: "gpt-4.1-2025-04-14", maximumChargeMicros: 1_000_000,
+    rate: { version: 2, sourceUrl: "https://developers.openai.com/api/docs/models/gpt-4.1", sourceDocumentSha256: digest("8"), sourceArtifactSha256: digest("8"), quoteSha256: digest("9"), observedAtMs: 1, freshUntilMs: 2, model: "gpt-4.1-2025-04-14", currency: "USD", inputMicrosPerMillion: 1, cachedInputMicrosPerMillion: 1, outputMicrosPerMillion: 1 },
+  }} as const;
+  await expect(createMountedNonGoogleEdgeClient({ material, pool: { async connect() { effects += 1; throw new Error("DATABASE_MUST_NOT_CONNECT"); } } as never })).rejects.toThrow("SUCCESSOR_GRAPH_ARCHITECTURE_GUARD_ACTIVE");
+  expect(effects).toBe(0);
 });
 
 test("tracer: construction has no credential, provider, client, network, payment, signing, publication, resource, or report effect", () => {

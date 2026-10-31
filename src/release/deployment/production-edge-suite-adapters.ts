@@ -44,7 +44,7 @@ async function execute(control: ProductionCoreControlClient, kind: CoreControlKi
  * Sole concrete Plan 69 factory. It accepts the branded private control
  * client, never caller-supplied observation callbacks or manual reports. Its
  * deployed control implementation owns the actual sealed-worker/Chromium,
- * source-build/SBOM/provenance, signed ContextVM/CEP-8/Vertex, and promoted
+ * source-build/SBOM/provenance, signed ContextVM/CEP-8/OpenAI Responses, and promoted
  * CLI/NIP-46/upload/relay operations. Construction is no-effect; every call
  * is receipt/candidate/topology bound by ProductionCoreControlClient.
  */
@@ -83,7 +83,7 @@ export function createProductionEdgeSuiteAdapters(input: Readonly<{ candidateId:
     },
     reconcileOriginalModelOperation(value: Candidate) {
       if (value.candidateId !== candidateId) throw new Error("PRODUCTION_EDGE_CANDIDATE_MISMATCH");
-      return execute(control, "edge.payment.model", "model_original_operation", { candidateId, require: ["vertex_receipt", "cap", "exact_settlement", "cancellation", "original_query_only", "one_dispatch", "one_debit"] });
+      return execute(control, "edge.payment.model", "model_original_operation", { candidateId, require: ["openai_responses_usage", "openai_price_digest", "cap", "exact_settlement", "cancellation", "known_id_get_only", "unknown_id_held", "one_dispatch", "one_debit"] });
     },
   });
   const publication = Object.freeze({

@@ -26,7 +26,7 @@ const SupplyBuildPayloadSchema = z.object({ candidateId: DigestSchema, build: z.
 const SupplyAttestationPayloadSchema = z.object({ candidateId: DigestSchema, require: z.tuple([z.literal("sbom"), z.literal("provenance"), z.literal("golden"), z.literal("waiver_drill"), z.literal("rollback_drill"), z.literal("cross_environment_bytes")]) }).strict();
 const ContextVmPayloadSchema = z.object({ candidateId: DigestSchema, protocol: z.literal("contextvm"), rail: z.literal("cep-8"), require: z.tuple([z.literal("signed_invocation"), z.literal("replay"), z.literal("redelivery"), z.literal("reconnect"), z.literal("original_session_observation")]) }).strict();
 const Cep8PayloadSchema = z.object({ candidateId: DigestSchema, rails: z.tuple([z.literal("lightning"), z.literal("cashu")]), require: z.tuple([z.literal("cashu_semantic_identity"), z.literal("cashu_reencoding_replay"), z.literal("cashu_ambiguous_ownership"), z.literal("nwc_lost_create"), z.literal("one_credit")]) }).strict();
-const ModelPayloadSchema = z.object({ candidateId: DigestSchema, require: z.tuple([z.literal("vertex_receipt"), z.literal("cap"), z.literal("exact_settlement"), z.literal("cancellation"), z.literal("original_query_only"), z.literal("one_dispatch"), z.literal("one_debit")]) }).strict();
+const ModelPayloadSchema = z.object({ candidateId: DigestSchema, require: z.tuple([z.literal("openai_responses_usage"), z.literal("openai_price_digest"), z.literal("cap"), z.literal("exact_settlement"), z.literal("cancellation"), z.literal("known_id_get_only"), z.literal("unknown_id_held"), z.literal("one_dispatch"), z.literal("one_debit")]) }).strict();
 const PublicationSourcePayloadSchema = z.object({ candidateId: DigestSchema, require: z.tuple([z.literal("promoted_cli_source"), z.literal("promoted_cli_asset"), z.literal("manifest_artifact_hash_binding")]) }).strict();
 const PublicationSubmitPayloadSchema = z.object({ candidateId: DigestSchema, sealedArtifactSha256: DigestSchema, aggregateSha256: DigestSchema, require: z.tuple([z.literal("cli_upload"), z.literal("external_nip46_owner_signature"), z.literal("separate_attestation_key"), z.literal("owner_relay"), z.literal("attestation_relay")]) }).strict();
 const PublicationReconcilePayloadSchema = z.object({ candidateId: DigestSchema, intentId: z.string().min(1).max(256), operationIds: z.object({ deploy: z.string().min(1).max(300), ownerManifest: z.string().min(1).max(300), attestation: z.string().min(1).max(300) }).strict(), require: z.tuple([z.literal("original_operation_ids_only"), z.literal("partial_upload"), z.literal("partial_relay"), z.literal("bounded_owned_cleanup")]) }).strict();
@@ -97,8 +97,11 @@ export class ProductionCertificationEdgeService {
         return this.#verify(command, payload, observed);
       }
       case "edge.payment.model": {
-        const observed = await this.#broker.clients.vertex.reconcileOriginal({ operationId: command.operationId });
-        return this.#verify(command, payload, observed);
+        const openAi = this.#broker.clients.edge.openAiResponses;
+        if (!openAi) throw new Error("CERTIFICATION_EDGE_OPENAI_SUCCESSOR_HELD");
+        // The Responses client only observes the durable original: unknown
+        // response IDs never POST again, while known IDs use its fixed GET.
+        return openAi.client.reconcileOriginal({ operationId: command.operationId });
       }
       case "edge.payment.cep8": {
         // The native providers own wallet/NWC material.  Counts are consulted

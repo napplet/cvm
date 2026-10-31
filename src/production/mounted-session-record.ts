@@ -8,6 +8,7 @@ import type { MountedProductionSecretMaterial } from "./secret-material";
 import { assertMountedSourceBuildPlan, materializeMountedSourceBuildPlan } from "./source-build-plan";
 import { MountedBigQueryUsageReportConfigurationSchema } from "./mounted-authoritative-billing";
 import { MountedModalBillingConfigurationSchema } from "./mounted-modal-billing";
+import { NonGoogleEdgeMaterialSchema } from "./non-google-edge-material";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/iu).transform(value => value.toLowerCase());
 const Reference = z.string().regex(/^[a-z][a-z0-9:._/-]{2,255}$/iu);
@@ -136,6 +137,9 @@ const RecordSchema = z.object({
     ownerPubkey: Digest,
     relays: z.array(z.string().url().refine(value => new URL(value).protocol === "wss:")).min(1).max(16),
   }).strict(),
+  /** Disjoint successor material. Its presence is not authority: consumption
+   * remains held until the non-Google controller validates the v3/v4 lineage. */
+  nonGoogleEdge: NonGoogleEdgeMaterialSchema.optional(),
   execution: Execution,
   serverControls: ServerControls,
   descriptorReferences: z.object({
@@ -174,6 +178,9 @@ export function materializeMountedProductionSessionRecord(input: Readonly<{
     : input.measured;
   const record = RecordSchema.parse(measured);
   if (record.edge.directPublicationReference && (input.config.worker.artifactContract !== "nip5d-direct-v1" || record.edge.directPublicationReference.principal.pubkey !== input.config.publication.ownerPubkey)) throw new Error("PRODUCTION_MOUNTED_DIRECT_PUBLICATION_BINDING_REQUIRED");
+  if (record.nonGoogleEdge && (record.nonGoogleEdge.candidateSha256 !== input.config.candidateSha256 || record.nonGoogleEdge.topologySha256 !== input.config.topologySha256)) {
+    throw new Error("NON_GOOGLE_EDGE_MOUNTED_BINDING_REQUIRED");
+  }
   const sourcePlan = assertMountedSourceBuildPlan(record.execution.protected.sourceBuild.plan, { candidateSha256: input.config.candidateSha256, topologySha256: input.config.topologySha256, provider: record.workerCandidate.provider, publication: { server: input.config.publication.uploadServer } });
   if (record.candidateSha256 !== input.config.candidateSha256
     || record.topologySha256 !== input.config.topologySha256

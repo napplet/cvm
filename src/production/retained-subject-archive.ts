@@ -52,10 +52,18 @@ export async function sealRetainedSubject(input: Readonly<{
   actionId: string;
   retentionUntil: string;
   source: RetainedSubjectSource;
+  /** The production controller clock is injected so a stale retained scope
+   * cannot turn a reconciliation delay into a new object/key write. */
+  now?: () => number;
 }>): Promise<z.infer<typeof DurabilitySubjectSchema>> {
   const source = Source.parse(input.source);
   const checkpointId = Identity.parse(input.checkpointId), accountId = z.string().min(1).parse(input.accountId), ownerId = Identity.parse(input.ownerId), sessionId = Identity.parse(input.sessionId), actionId = Identity.parse(input.actionId);
-  const retentionUntil = new Date(input.retentionUntil).toISOString();
+  const retentionAtMs = Date.parse(input.retentionUntil);
+  const now = (input.now ?? Date.now)();
+  if (!Number.isFinite(retentionAtMs) || !Number.isFinite(now) || retentionAtMs <= now) {
+    throw new Error("RETAINED_SUBJECT_RETENTION_EXPIRED");
+  }
+  const retentionUntil = new Date(retentionAtMs).toISOString();
   const payloadSha256 = sha(source.bytes), custodyId = retainedSubjectCustodyId({ checkpointId, kind: source.kind, sourceIdentity: source.sourceIdentity });
   const associatedData = aad({ custodyId, checkpointId, kind: source.kind, sourceIdentity: source.sourceIdentity, sourceVersion: payloadSha256, accountId, ownerId, sessionId, actionId, retentionUntil, payloadSha256 });
   const sealed = await input.crypto.seal({ checkpointId: custodyId, plaintext: new Uint8Array(source.bytes), additionalData: associatedData, binding: { accountId, sessionId, actionId, operationId: `durability-archive:${custodyId}`, retentionUntil } });

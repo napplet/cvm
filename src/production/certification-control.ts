@@ -24,11 +24,15 @@ export type ProductionControlObservation = z.infer<typeof StoredSchema>;
  * protocol's 512 MiB maximum and 128 KiB chunks; this is an upper bound from
  * the reviewed command graph, not an arbitrary request-rate threshold. */
 const RESTORE_CHUNKS_PER_STREAM = Math.ceil(CORE_RESTORE_MAX_BYTES / CORE_RESTORE_CHUNK_BYTES);
+/** This is the closed restore command graph, not a loose numeric budget. */
+export const PRODUCTION_RESTORE_PREAMBLE = Object.freeze(["restore.prepare", "restore.inventory", "restore.lose-local", "restore.create"] as const);
+export const PRODUCTION_RESTORE_SUBJECT_OPERATIONS = Object.freeze(["describe", "read-ciphertext", "read-plaintext", "decrypt", "reattach"] as const);
+export const PRODUCTION_RESTORE_EPILOGUE = Object.freeze(["restore.expiry", "restore.topology", "restore.cleanup"] as const);
 export const PRODUCTION_CERTIFICATION_OPERATION_LIMIT =
   (2 * createWorkerBenchmarkSchedule(IDENTICAL_WORKER_COHORT_PROFILE).length * 2)
   + (LifecycleStageSchema.options.length + 1)
   + (D122_FAULT_MATRIX.length * 2 + 1)
-  + (3 + DURABILITY_SUBJECT_KINDS.length * (RESTORE_CHUNKS_PER_STREAM * 2 + 3) + 3)
+  + (PRODUCTION_RESTORE_PREAMBLE.length + DURABILITY_SUBJECT_KINDS.length * (RESTORE_CHUNKS_PER_STREAM * 2 + (PRODUCTION_RESTORE_SUBJECT_OPERATIONS.length - 2)) + PRODUCTION_RESTORE_EPILOGUE.length)
   + Object.keys(CertificationEdgePayloadSchemas).length;
 
 export type { ProductionCertificationServices } from "../release/deployment/production-core-suite-protocol";

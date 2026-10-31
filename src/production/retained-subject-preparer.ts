@@ -10,6 +10,7 @@ import { MountedKekCheckpointCrypto } from "./checkpoint-crypto";
 import { assertProductionRetainedSubjectSchema } from "./checkpoint-schema";
 import { createProductionDurabilitySubjectRegistry, type ProductionDurabilitySubject } from "./durability-registry";
 import { retainedSubjectCustodyId, sealRetainedSubject, type RetainedSubjectJournal } from "./retained-subject-archive";
+import { CvmBuildAttestationSchema } from "../publication/contracts";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const Identity = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]*$/u);
@@ -43,14 +44,21 @@ export class ProductionRetainedSubjectPreparer {
   }
 
   async prepare(raw: RetainedSubjectScope): Promise<void> {
-    await assertProductionRetainedSubjectSchema(this.#pool);
     const scope = this.#scope(raw), binding = await this.#binding(scope);
+    // Check the authoritative deadline before touching the retained registry,
+    // crypto custody, or object store. Expiry paths are observation-only.
+    const retentionAtMs = Date.parse(binding.retentionUntil);
+    const now = (this.input.now ?? Date.now)();
+    if (!Number.isFinite(retentionAtMs) || !Number.isFinite(now) || retentionAtMs <= now) {
+      throw new Error("RETAINED_SUBJECT_RETENTION_EXPIRED");
+    }
+    await assertProductionRetainedSubjectSchema(this.#pool);
     const registry = createProductionDurabilitySubjectRegistry(this.#pool);
     await registry.register(binding.checkpoint);
     for (const original of await this.#originals(scope, binding)) {
       const sealed = await sealRetainedSubject({ crypto: this.#crypto, objectStore: this.input.objectStore, journal: this.input.journal,
         checkpointId: scope.checkpointId, accountId: binding.accountId, ownerId: scope.ownerId, sessionId: scope.sessionId,
-        actionId: binding.actionId, retentionUntil: binding.retentionUntil, source: original });
+        actionId: binding.actionId, retentionUntil: binding.retentionUntil, source: original, now: this.input.now });
       await registry.register({ ...sealed, checkpointId: scope.checkpointId, sessionId: scope.sessionId, actionId: binding.actionId });
     }
     // This is the first read-only point visible to restore. A partial archive
@@ -168,7 +176,7 @@ export class ProductionRetainedSubjectPreparer {
       );
       if (promotionRows.rows.length !== 1) throw new Error("RETAINED_SUBJECT_VALIDATION_PROMOTION_REQUIRED");
       const publicationRows = await client.query<Record<string, unknown>>(
-        "SELECT p.intent_id,p.owner_event_id,p.attestation_event_id,p.terminal_state,e.event_json AS owner_event,ae.observation_json AS attestation_observation FROM production_real.publication_records p JOIN production_real.publication_intents i ON i.intent_id=p.intent_id JOIN production_real.publication_signed_events e ON e.intent_id=p.intent_id JOIN production_real.publication_effect_intents ae ON ae.intent_id=p.intent_id AND ae.effect_kind='attestation' AND ae.state='observed_complete' WHERE p.artifact_id=$1 AND p.terminal_state='complete' AND i.session_id=$2 AND i.artifact_version=$3 LIMIT 2",
+        "SELECT p.intent_id,p.owner_event_id,p.attestation_event_id,p.terminal_state,p.attestation_operation_id,i.owner_principal_id,i.session_id,i.artifact_id,i.artifact_version,i.aggregate_sha256,i.policy_identity,i.toolchain_identity,e.event_json AS owner_event,ae.operation_id,ae.observation_json AS attestation_observation FROM production_real.publication_records p JOIN production_real.publication_intents i ON i.intent_id=p.intent_id AND i.artifact_id=p.artifact_id AND p.aggregate_sha256=i.aggregate_sha256 JOIN production_real.publication_signed_events e ON e.intent_id=p.intent_id AND e.event_id=p.owner_event_id JOIN production_real.publication_effect_intents ae ON ae.intent_id=p.intent_id AND ae.effect_kind='attestation' AND ae.operation_id=p.attestation_operation_id AND ae.state='observed_complete' WHERE p.artifact_id=$1 AND p.terminal_state='complete' AND i.session_id=$2 AND i.artifact_version=$3 LIMIT 2",
         [binding.artifactId, scope.sessionId, binding.artifactVersion],
       );
       if (publicationRows.rows.length !== 1) throw new Error("RETAINED_SUBJECT_COMPLETED_OWNER_PUBLICATION_REQUIRED");
@@ -179,26 +187,42 @@ export class ProductionRetainedSubjectPreparer {
       const ownerEvent = SignedNostrEvent.parse(typeof publication.owner_event === "string" ? JSON.parse(publication.owner_event) : publication.owner_event);
       const ownerEventId = Digest.parse(publication.owner_event_id);
       const attestationEventId = z.string().min(1).max(256).parse(publication.attestation_event_id);
-      if (ownerEvent.id !== ownerEventId || ownerEvent.pubkey !== scope.ownerId || !verifyEvent(ownerEvent) || attestationEventId === ownerEventId) throw new Error("RETAINED_SUBJECT_PUBLICATION_IDENTITY_REQUIRED");
-      /* These are original, immutable record bytes, not convenient digest
-       * projections.  The source identities bind the exact original rows to
-       * owner/session/action/artifact/version fences already selected above. */
-      const validation = Object.freeze({ artifact, promotion });
+      if (ownerEvent.id !== ownerEventId || ownerEvent.pubkey !== scope.ownerId || publication.owner_principal_id !== scope.ownerId || !verifyEvent(ownerEvent) || attestationEventId === ownerEventId) throw new Error("RETAINED_SUBJECT_PUBLICATION_IDENTITY_REQUIRED");
+      // The worker journal's evidence body is the canonical producer body.
+      // Do not manufacture a replacement from action/artifact metadata. A
+      // non-null report reference has no original body in this contract, so it
+      // fails closed until its producer persists one under the same fences.
+      if (promotion.validation_evidence_reference !== `verification:${binding.artifactId}`
+        || promotion.validation_report_reference !== null && promotion.validation_report_reference !== undefined) {
+        throw new Error("RETAINED_SUBJECT_VALIDATION_ORIGINAL_REQUIRED");
+      }
+      const validationEvidence = artifact.evidence;
       const attestationEvent = SignedNostrEvent.parse(
         typeof publication.attestation_observation === "string" ? JSON.parse(publication.attestation_observation) : publication.attestation_observation,
       );
-      const hasTag = (name: string, value: string) => attestationEvent.tags.some(tag => tag[0] === name && tag[1] === value);
-      if (attestationEvent.id !== attestationEventId || attestationEvent.pubkey === ownerEvent.pubkey || !verifyEvent(attestationEvent) || !hasTag("e", ownerEventId) || !hasTag("p", scope.ownerId)) throw new Error("RETAINED_SUBJECT_ATTESTATION_IDENTITY_REQUIRED");
-      const attestation = Object.freeze({ intentId: publication.intent_id, ownerEventId, attestationEventId, event: attestationEvent });
+      const attestation = CvmBuildAttestationSchema.parse(JSON.parse(attestationEvent.content));
+      const signerRows = await client.query<Record<string, unknown>>(
+        "SELECT value_json FROM production_real.release_operation_journal WHERE namespace='production-worker-request' AND operation_id='attestation-signer-authority' AND value_json->>'schemaVersion'='mounted-attestation-signer-v1' LIMIT 2",
+      );
+      if (signerRows.rows.length !== 1) throw new Error("RETAINED_SUBJECT_ATTESTATION_AUTHORITY_REQUIRED");
+      const signer = z.object({ schemaVersion: z.literal("mounted-attestation-signer-v1"), publicKey: Digest }).strict().parse(signerRows.rows[0]!.value_json);
+      const expectedTags = [["e", ownerEventId], ["p", scope.ownerId], ["x", String(publication.aggregate_sha256)], ["t", "cvm_build_attestation"]];
+      if (attestationEvent.id !== attestationEventId || attestationEvent.kind !== 1 || attestationEvent.pubkey !== signer.publicKey || attestationEvent.pubkey === ownerEvent.pubkey || !verifyEvent(attestationEvent)
+        || canonicalJson(attestationEvent.tags) !== canonicalJson(expectedTags)
+        || attestation.ownerEventId !== ownerEventId || attestation.ownerPubkey !== scope.ownerId || attestation.artifactId !== binding.artifactId
+        || attestation.artifactSha256 !== publication.aggregate_sha256 || attestation.aggregateSha256 !== publication.aggregate_sha256
+        || attestation.sessionId !== scope.sessionId || attestation.sessionVersion !== binding.expectedVersion || attestation.artifactVersion !== binding.artifactVersion
+        || attestation.policyVersion !== publication.policy_identity || attestation.toolchainIdentity !== publication.toolchain_identity
+        || attestation.verificationEvidenceReference !== promotion.validation_evidence_reference || attestation.verificationEvidenceSha256 !== artifact.evidence.scannerReportSha256) throw new Error("RETAINED_SUBJECT_ATTESTATION_IDENTITY_REQUIRED");
       return Object.freeze([
         { kind: "sealed_artifact", sourceIdentity: identity("artifact", artifact.reference), bytes: new Uint8Array(artifactBytes) },
-        { kind: "validation_evidence", sourceIdentity: identity("validation", validation), bytes: jsonBytes(validation) },
+        { kind: "validation_evidence", sourceIdentity: identity("validation-evidence", validationEvidence), bytes: jsonBytes(validationEvidence) },
         { kind: "usage_receipt", sourceIdentity: identity("receipt", receipt), bytes: jsonBytes(receipt) },
         // This is the finalized artifact validation/promotion record, never a
         // post-suite release promotion or final release evaluator result.
         { kind: "promotion_evidence", sourceIdentity: identity("artifact-promotion", promotion), bytes: jsonBytes(promotion) },
         { kind: "owner_event", sourceIdentity: identity("owner-event", ownerEvent), bytes: jsonBytes(ownerEvent) },
-        { kind: "attestation", sourceIdentity: identity("attestation", attestation), bytes: jsonBytes(attestation) },
+        { kind: "attestation", sourceIdentity: identity("attestation", attestationEvent), bytes: jsonBytes(attestationEvent) },
       ] as const);
     } finally { client.release(); }
   }

@@ -32,6 +32,7 @@ import type { ProductionGenerationRuntime } from "./generation-runtime";
 import type { ProductionConfig } from "./config";
 import { createMountedGoogleControls, type MountedGoogleControlConfiguration } from "./mounted-google-controls";
 import { createMountedProductionEdgeMaterial } from "./mounted-edge-material";
+import { createHash } from "node:crypto";
 import { createMountedWorkerReadinessCommands } from "./mounted-worker-clients";
 import { createPostgresWorkerOperationJournal } from "../release/deployment/postgres-provider-journals";
 import type { MountedProductionSecretMaterial } from "./secret-material";
@@ -411,6 +412,11 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
   const now = input.now;
   const authorization = input.generation.authorization;
   const edgeMaterial = await createMountedProductionEdgeMaterial({ config: input.config, secrets: input.secrets });
+  // Persist the mounted service attestation identity before any relay signing.
+  // Recovery trusts this controller-derived authority, never a pubkey claimed
+  // by an archived attestation observation.
+  const attestationAuthority = Object.freeze({ schemaVersion: "mounted-attestation-signer-v1" as const, publicKey: edgeMaterial.attestationSigner.publicKey });
+  await dependencies.requestJournal.claim("attestation-signer-authority", createHash("sha256").update(canonicalJson(attestationAuthority)).digest("hex"), attestationAuthority);
   input.generation.registerClose(async () => edgeMaterial.attestationSigner.close());
   /* The certification client is opened from the fixed relay, mounted
    * disposable signer, canonical authorization pair, and durable runtime

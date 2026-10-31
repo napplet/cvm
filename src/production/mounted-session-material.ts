@@ -33,6 +33,7 @@ import type { ProductionConcreteClients } from "../release/deployment/production
 import type { ProductionGenerationRuntime } from "./generation-runtime";
 import type { ProductionConfig } from "./config";
 import { createMountedGoogleControls, type MountedGoogleControlConfiguration } from "./mounted-google-controls";
+import { selectMountedModalBilling } from "./mounted-modal-billing";
 import { createMountedProductionEdgeMaterial } from "./mounted-edge-material";
 import { createHash } from "node:crypto";
 import { createMountedWorkerReadinessCommands } from "./mounted-worker-clients";
@@ -461,6 +462,11 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
   /* The mount-record parser guarantees JSON-only data; the Google factory
    * re-parses this exact controller shape before it creates ADC clients. */
   const mountedGoogle = createMountedGoogleControls({ config: input.config, generation: input.generation, configuration: input.resolved.googleControls as MountedGoogleControlConfiguration, telemetry: coreSuites.telemetry, now });
+  /* This performs only sealed-material parsing/refusal. It intentionally has
+   * no credential resolver or child-process handle, so no Modal report can
+   * run until a future authority-specific verifier upgrades the selection. */
+  const mountedModalBilling = await selectMountedModalBilling({ configuration: input.resolved.modalBilling });
+  if (mountedModalBilling.status !== "disabled") throw new Error("PRODUCTION_MODAL_BILLING_SELECTION_INVALID");
   const { google } = mountedGoogle;
   const cloudRun = createNativeCloudRunProvider({ config: input.resolved.providerConfigurations.cloud_run, port: mountedGoogle.cloudRun, now });
   const cloudSql = createNativeCloudSqlPostgresProvider({ config: input.resolved.providerConfigurations.cloud_sql_postgres, port: mountedGoogle.cloudSql, now });

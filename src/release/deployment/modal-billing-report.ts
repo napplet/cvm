@@ -211,9 +211,17 @@ type HeldReason = "attempt_limit" | "credential_unavailable" | "credential_echo"
 /** stderr may contain credentials or configuration supplied to the CLI. It is
  * never persisted as a raw artifact: only its bounded byte count and digest
  * are retained for correlation, neither of which can reconstruct its bytes. */
-type Attempt = Readonly<{ attempt: number; atMs: number; disposition: ReportDisposition | "credential_unavailable" | "credential_echo" | "artifact_unavailable"; stdout?: ModalBillingArtifactReference; stderrByteLength?: number; stderrSha256?: string; reason: HeldReason }>;
+const ArtifactReferenceSchema = z.object({ uri: z.string().min(1).max(4_096), generation: z.string().min(1).max(256), sha256: Digest }).strict();
+const HeldReasonSchema = z.enum(["attempt_limit", "credential_unavailable", "credential_echo", "child_failure", "report_invalid", "scope_mismatch", "finality_unproven", "artifact_unavailable"]);
+const AttemptSchema = z.object({ attempt: z.number().int().min(1).max(8), atMs: z.number().int().positive(), disposition: z.enum(["passed", "non_zero_exit", "timeout", "output_overflow", "credential_unavailable", "credential_echo", "artifact_unavailable"]), stdout: ArtifactReferenceSchema.optional(), stderrByteLength: z.number().int().nonnegative().optional(), stderrSha256: Digest.optional(), reason: HeldReasonSchema }).strict();
+export const ModalBillingReportCaptureSchema = z.object({ status: z.literal("held"), reason: HeldReasonSchema, grantSha256: Digest, reportRequestSha256: Digest, observedMicros: z.string().regex(/^[0-9]+$/u).optional() }).strict();
+export const ModalBillingReportJournalRecordSchema = z.object({ schemaVersion: z.literal("modal-billing-report-journal-v1"), grantSha256: Digest, reportRequestSha256: Digest, attempts: z.array(AttemptSchema).max(8), result: ModalBillingReportCaptureSchema.optional() }).strict().superRefine((value, context) => {
+  if (value.attempts.some((attempt, index) => attempt.attempt !== index + 1)) context.addIssue({ code: "custom", message: "MODAL_BILLING_JOURNAL_ATTEMPTS_INVALID" });
+  if (value.result && value.result.grantSha256 !== value.grantSha256 || value.result && value.result.reportRequestSha256 !== value.reportRequestSha256) context.addIssue({ code: "custom", message: "MODAL_BILLING_JOURNAL_RESULT_INVALID" });
+});
+type Attempt = Readonly<z.infer<typeof AttemptSchema>>;
 export type ModalBillingReportJournalRecord = Readonly<{ schemaVersion: "modal-billing-report-journal-v1"; grantSha256: string; reportRequestSha256: string; attempts: readonly Attempt[]; result?: ModalBillingReportCapture }>;
-export type ModalBillingReportCapture = Readonly<{ status: "held"; reason: HeldReason; grantSha256: string; reportRequestSha256: string; observedMicros?: string }>;
+export type ModalBillingReportCapture = Readonly<z.infer<typeof ModalBillingReportCaptureSchema>>;
 export type ModalBillingReportJournal = Readonly<{
   claim(input: ModalBillingReportJournalRecord): Promise<Readonly<{ claimed: boolean; revision: number; record: ModalBillingReportJournalRecord }>>;
   read(reportRequestSha256: string): Promise<Readonly<{ revision: number; record: ModalBillingReportJournalRecord }> | undefined>;

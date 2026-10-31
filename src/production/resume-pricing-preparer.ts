@@ -4,14 +4,14 @@ import { PendingActionIntentSchema } from "../continuity/contracts";
 import { validatePendingCommandCheckpointArchive } from "../continuity/checkpoint-envelope";
 import { prepareResumePricingQuote, ResumePricingContextSchema, ResumePricingQuoteSchema, verifyStoredResumePricingQuote } from "../continuity/resume-pricing";
 import { PrepareResumeCommandSchema, PrepareResumeResultSchema, projectResumePricingQuote } from "../continuity/resume-v2-contracts";
-import { convertUsdMicrosToSats, maximumOperationCharge, type createVertexGeminiProductionPricing } from "../model/price-card";
+import { convertUsdMicrosToSats, maximumOperationCharge, ModelProfileSchema, type createVertexGeminiProductionPricing } from "../model/price-card";
 import type { ContinuationFundingStore } from "../persistence/funding-store";
-import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
+import { PostgresSqlFundingStore, type PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
 import type { PostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
 import { canonicalJson } from "../promotion/schema";
 import type { GenerationCommand } from "../phase-04/metered-generation-service";
 import { ProductionCheckpointCoordinator, assertProductionCheckpointCoordinator } from "./checkpoint-coordinator";
-import { readProductionAcceptedPendingPricing, readProductionPendingPricing } from "./pricing-catalog";
+import { readProductionAcceptedPendingPricing, readProductionPendingPricing, registerProductionPricing } from "./pricing-catalog";
 import { ProductionResumePricingQuotes } from "./resume-pricing-quotes";
 import { readOriginalPendingVertexSettlement } from "./vertex-generation-settlement";
 import { bindAccountingRealmPool, createAccountingRealm } from "../funding/accounting-realm";
@@ -20,11 +20,49 @@ type PrepareCommand = z.infer<typeof PrepareResumeCommandSchema>;
 type PrepareResult = z.infer<typeof PrepareResumeResultSchema>;
 const hash = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex");
 
+function pricingWithinAuthorizedCap(input: Readonly<{
+  pricing: Awaited<ReturnType<typeof createVertexGeminiProductionPricing>>;
+  maximumSat: bigint;
+  at: string;
+}>) {
+  if (input.maximumSat < 1n) throw new Error("RESUME_CAP_APPROVAL_REQUIRED");
+  const full = maximumOperationCharge(input.pricing);
+  if (BigInt(convertUsdMicrosToSats({ usdMicros: Number(full), conversion: input.pricing.conversion, at: input.at }).amount) <= input.maximumSat)
+    return Object.freeze({ pricing: input.pricing, sourcePricing: input.pricing });
+  const scale = 1_000_000n;
+  const profileAt = (factor: bigint) => ModelProfileSchema.parse({ ...input.pricing.profile,
+    maximumUnits: input.pricing.profile.maximumUnits.map((item) => ({ ...item, units: ((BigInt(item.units) * factor) / scale || 1n).toString() })) });
+  let low = 0n, high = scale;
+  while (low < high) {
+    const middle = (low + high + 1n) / 2n;
+    const profile = profileAt(middle);
+    const quotedSat = BigInt(convertUsdMicrosToSats({ usdMicros: Number(maximumOperationCharge({ card: input.pricing.card, profile })), conversion: input.pricing.conversion, at: input.at }).amount);
+    if (quotedSat <= input.maximumSat) low = middle;
+    else high = middle - 1n;
+  }
+  const sourceProfileSha256 = createHash("sha256").update(canonicalJson(input.pricing.profile)).digest("hex");
+  const sourceCardSha256 = createHash("sha256").update(canonicalJson(input.pricing.card)).digest("hex");
+  const maximumUnits = profileAt(low).maximumUnits;
+  // The catalog requires a profile/card pair.  Give the narrowed execution
+  // its own immutable pair rather than changing either source record; all rate,
+  // source and FX evidence is copied byte-for-byte from the accepted source.
+  const derivation = { sourceProfileSha256, sourceCardSha256, maximumUnits };
+  const derived = createHash("sha256").update(canonicalJson(derivation)).digest("hex");
+  const cardId = `resume-derived-card:${derived}`;
+  const profile = ModelProfileSchema.parse({ ...input.pricing.profile, id: `resume-derived:${derived}`, priceCardId: cardId,
+    maximumUnits });
+  const derivedCard = { ...input.pricing.card, id: cardId, version: cardId };
+  const quotedSat = BigInt(convertUsdMicrosToSats({ usdMicros: Number(maximumOperationCharge({ card: derivedCard, profile })), conversion: input.pricing.conversion, at: input.at }).amount);
+  if (quotedSat > input.maximumSat) throw new Error("RESUME_CAP_APPROVAL_REQUIRED");
+  return Object.freeze({ pricing: Object.freeze({ ...input.pricing, card: Object.freeze(derivedCard), profile: Object.freeze(profile) }), sourcePricing: input.pricing });
+}
+
 /** The quote owner is the verified request principal. All command, checkpoint,
  * original pricing and FX data comes from server-owned durable authorities.
  * No worker allocation, funds reservation, provider dispatch or signing occurs. */
 export class ProductionResumePricingPreparer {
   readonly #pool: PostgresSqlPool;
+  readonly #funding: PostgresSqlFundingStore;
   constructor(private readonly input: Readonly<{
     pool: PostgresSqlPool;
     store: Pick<ContinuationFundingStore, "findContinuationCheckpoint" | "findContinuationPause">;
@@ -37,6 +75,7 @@ export class ProductionResumePricingPreparer {
   }>) {
     assertProductionCheckpointCoordinator(input.checkpoint);
     this.#pool = bindAccountingRealmPool(input.pool, createAccountingRealm("production-real"));
+    this.#funding = new PostgresSqlFundingStore(this.#pool, { deadlineMs: 5000, maxAttempts: 4 });
   }
 
   async prepare(raw: unknown): Promise<PrepareResult> {
@@ -52,13 +91,22 @@ export class ProductionResumePricingPreparer {
         return await projectResumePricingQuote(prior);
       }
       const authority = await this.loadAuthority(command);
-      const quote = await prepareResumePricingQuote({ context: authority.context, pricing: this.input.currentPricing,
-        preparationKey: command.idempotencyKey, nowMs: (this.input.now ?? Date.now)(), lifetimeMs: 300_000 });
+      const funding = await this.#funding.transactWithSql(command.principal.id,
+        transaction => transaction.continuationFundingSnapshot(authority.intent.admissionReference));
+      const maximumSat = funding.availableBalance + funding.remainingCap < funding.remainingCap
+        ? funding.availableBalance + funding.remainingCap : funding.remainingCap;
+      const nowMs = (this.input.now ?? Date.now)();
+      const bounded = pricingWithinAuthorizedCap({ pricing: this.input.currentPricing, maximumSat, at: new Date(nowMs).toISOString() });
+      if (bounded.pricing.profile.id !== bounded.sourcePricing.profile.id)
+        await registerProductionPricing({ pool: this.#pool, profile: bounded.pricing.profile, card: bounded.pricing.card });
+      const quote = await prepareResumePricingQuote({ context: authority.context, pricing: bounded.pricing, sourcePricing: bounded.sourcePricing,
+        preparationKey: command.idempotencyKey, nowMs, lifetimeMs: 300_000 });
       return await projectResumePricingQuote(await this.input.quotes.save(quote));
     } catch (error) {
       const code = error instanceof Error ? error.message : "";
       if (code === "RESUME_CHECKPOINT_NOT_FOUND_OR_DENIED") return { status: "denied", code };
       if (code === "RESUME_STALE_OR_CONFLICTING" || code === "RESUME_QUOTE_PREPARATION_CONFLICT") return { status: "denied", code: "RESUME_STALE_OR_CONFLICTING" };
+      if (code === "RESUME_CAP_APPROVAL_REQUIRED") return { status: "blocked", code };
       if (code === "RESUME_COMPATIBILITY_DENIED" || code === "RESUME_QUOTE_EXCEEDS_COMMAND_MAXIMUM") return { status: "blocked", code };
       return { status: "blocked", code: "RESUME_PRICE_AUTHORITY_UNAVAILABLE" };
     }

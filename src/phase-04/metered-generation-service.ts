@@ -18,6 +18,7 @@ import { canonicalJson } from "../promotion/schema";
 import { type NappletHarness, type NappletHarnessRequest } from "./napplet-harness";
 import { evaluateAutomaticRepair } from "./repair-policy";
 import { emitLifecycleObservation, type LifecycleTelemetryPort } from "../telemetry/contracts";
+import { FundingCommitOutcomeUnknownError } from "../funding/transaction-outcome";
 
 const DecimalSchema = z.string().regex(/^[1-9][0-9]*$/u);
 const GenerationProjectionSchema = z.object({
@@ -545,9 +546,20 @@ export class MeteredGenerationService {
     const status = completed ? "completed" as const : "failed" as const;
     let settlement: Readonly<{ amount: string; providerReceiptReference: string }>;
     try { settlement = this.options.settlement ? await this.options.settlement.finalize({ accountId, intent, receipt: observation.receipt, pricedAmount: priced.total }) : { amount: priced.total, providerReceiptReference: observation.receipt.provenance.protectedEvidenceReference }; }
-    catch {
-      await this.options.store.transact(accountId, transaction => transaction.recordUsageUnknown({ operationId, providerRequestId, protectedEvidenceReference: observation.receipt.provenance.protectedEvidenceReference, reason: "uncertain_acceptance" }));
-      return SessionActionResultSchema.parse({ status: "usage_unknown", code: "USAGE_UNKNOWN", accountId, sessionId, nextAction: "billing_reconciliation", operationId });
+    catch (error) {
+      // The receipt proves provider acceptance.  A typed failed COMMIT is the
+      // sole post-receipt ambiguity: all other settlement, catalog, ledger or
+      // bookkeeping errors are known local failures and must not be disguised
+      // as a provider-acceptance unknown merely because their message is new.
+      if (error instanceof FundingCommitOutcomeUnknownError) {
+        await this.options.store.transact(accountId, transaction => transaction.recordUsageUnknown({ operationId, providerRequestId, protectedEvidenceReference: observation.receipt.provenance.protectedEvidenceReference, reason: "uncertain_acceptance" }));
+        return SessionActionResultSchema.parse({ status: "usage_unknown", code: "USAGE_UNKNOWN", accountId, sessionId, nextAction: "billing_reconciliation", operationId });
+      }
+      const result = SessionActionResultSchema.parse({ status: "billing_invariant_failed", code: "ACCOUNTING_SETTLEMENT_FAILED", accountId, sessionId, nextAction: "billing_reconciliation", operationId });
+      await finalize({ idempotencyKey: prepared.idempotencyKey, operationId, receiptCharge: "0", providerReceiptReference: observation.receipt.provenance.protectedEvidenceReference,
+        status: "billing_invariant_failed", result, sessionVersion: command.expectedVersion, artifactVersion: command.expectedVersion });
+      await emitLifecycleObservation(this.options.telemetry, lifecycleCorrelation, "ledger_settlement", "blocked");
+      return result;
     }
     const result = SessionActionResultSchema.parse(completed
       ? { status, code: "ACTION_COMMITTED", accountId, sessionId, sessionVersion: command.expectedVersion + 1, artifactVersion: command.expectedVersion + 1, artifactId: artifactId!, confirmedSpend: settlement.amount, remainingCap: "0", remainingBalance: "0", nextAction: "revise_session", operationId, generation: { provider: observation.receipt.provider, model: observation.receipt.model, profileId: observation.receipt.profileId, priceCardId: observation.receipt.priceCardId, usage: observation.receipt.usage, source: "durably recorded" as const, worker: "verified" as const } }

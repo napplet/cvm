@@ -38,6 +38,12 @@ export function assertProductionReadyCapacity(value: unknown): asserts value is 
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 const canonical = (value: unknown) => JSON.stringify(value);
+/** Exact immutable journal identity for an admitted worker-capacity tuple.
+ * Recovery fixtures and consumers must derive it here rather than reproduce
+ * a serializer whose insertion order is part of the stored authority. */
+export function productionCapacityIdentity(input: Readonly<{ intentReference: string; expectedSessionBindingDigest: string; provider: "modal" | "fly" }>): string {
+  return digest(canonical({ intentReference: Intent.parse(input.intentReference), expectedSessionBindingDigest: Binding.parse(input.expectedSessionBindingDigest), provider: Provider.parse(input.provider) }));
+}
 /* `capacity-` is nine bytes; keep the provider operation under the worker
  * client's 49-character validation ceiling while retaining 160 bits. */
 const workerOperationId = (intentReference: string, binding: string) => `capacity-${digest(`${intentReference}:${binding}`).slice(0, 40)}`;
@@ -85,7 +91,7 @@ export function createProductionReadyCapacity(input: Readonly<{
   const ensure = async (intentReferenceRaw: string, expectedBindingRaw: string): Promise<CapacityRecord> => {
     const intentReference = Intent.parse(intentReferenceRaw); const expectedSessionBindingDigest = Binding.parse(expectedBindingRaw);
     const value = Object.freeze({ intentReference, expectedSessionBindingDigest, reference: `capacity:${digest(`${intentReference}:${expectedSessionBindingDigest}`)}`, workerOperationId: workerOperationId(intentReference, expectedSessionBindingDigest), provider, execution, deadlineEpochMs: now() + PRODUCTION_WORKER_POLICY.totalLifetimeMs });
-    const claimed = await input.journal.claim<CapacityRecord>(capacityKey(intentReference), digest(canonical({ intentReference, expectedSessionBindingDigest, provider })), value);
+    const claimed = await input.journal.claim<CapacityRecord>(capacityKey(intentReference), productionCapacityIdentity({ intentReference, expectedSessionBindingDigest, provider }), value);
     const record = claimed.record.value;
     if (record.intentReference !== intentReference || record.expectedSessionBindingDigest !== expectedSessionBindingDigest || record.provider !== provider || record.reference !== value.reference || record.workerOperationId !== value.workerOperationId || !Number.isSafeInteger(record.deadlineEpochMs) || record.deadlineEpochMs <= now()) throw new Error("PRODUCTION_CAPACITY_BINDING_CONFLICT");
     if (record.execution) {

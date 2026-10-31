@@ -106,6 +106,14 @@ export class ContinuationService {
       const spendable = this.#spendable(funding);
       const requiredAdditionalFunding = shortfall(actionMaximum, spendable);
       const requiredCapApproval = shortfall(actionMaximum, funding.remainingCap);
+      // A live authorization has already consumed this admission's cap.  An
+      // ordinary start/revision cannot turn that deterministic budget fence
+      // into a durable funding pause: no top-up can make the existing cap
+      // reservation available.  The priced V2 preparer continues to consume
+      // the residual `remainingCap` view directly.
+      if (funding.blockingActionBudget > 0n && requiredCapApproval > 0n) {
+        throw new Error("ACTION_BUDGET_EXCEEDS_APPROVED_CAP");
+      }
       if (requiredAdditionalFunding === 0n && requiredCapApproval === 0n) return undefined;
       const deadline = (this.options.clock ?? { nowMs: Date.now }).nowMs() + GRACE_WINDOW_MS;
       const protectedCommand = this.options.pendingCommands ? await this.options.pendingCommands.seal({ command: input.command, intent, retentionUntilMs: deadline + 2_592_000_000 }) : undefined;
@@ -161,19 +169,32 @@ export class ContinuationService {
 
       if (pause.state !== "needs_top_up" && pause.state !== "resuming") return frozen({ status: "no_effect" as const, code: "PAUSE_NOT_LIVE" });
 
-      const funding = await transaction.continuationFundingSnapshot(pause.admissionReference);
       const amount = BigInt(continuation.actionMaximum);
+      const idempotencyKey = `continuation-wake:${pause.idempotencyKey}:${pause.pauseGeneration}`;
+      const fingerprint = `wake:${pause.pendingFingerprint}:${pause.expectedSessionVersion}:${continuation.expectedArtifactVersion}`;
+      const reference = `action-budget:wake:${pause.sessionId}:${pause.pauseGeneration}`;
+      // A previous eligible hint may already have durably reserved this exact
+      // wake budget. Replay/claim that original before reading residual
+      // affordability: its own reservation must not make later hints look
+      // cap-insufficient or authorize a second provider/worker effect.
+      const existingBudget = await transaction.findActionBudget(idempotencyKey);
+      if (existingBudget) {
+        if (existingBudget.accountId !== input.accountId || existingBudget.admissionReference !== pause.admissionReference || existingBudget.fingerprint !== fingerprint || existingBudget.reference !== reference || existingBudget.amount !== amount || existingBudget.state !== "authorized") throw new Error("WAKE_BUDGET_BINDING_INVALID");
+        await transaction.wakePausedAction({ sessionId: input.sessionId, pauseGeneration: input.pauseGeneration, nowMs, liveLeaseToken: input.liveLeaseToken });
+        const claim = await transaction.claimWakeDispatch({ accountId: input.accountId, sessionId: input.sessionId, pauseGeneration: input.pauseGeneration, pendingFingerprint: pause.pendingFingerprint, expectedSessionVersion: pause.expectedSessionVersion, expectedArtifactVersion: continuation.expectedArtifactVersion, actionBudgetReference: existingBudget.reference, operationId: `wake-operation:${pause.sessionId}:${pause.pauseGeneration}:${existingBudget.reference}`, liveLeaseToken: input.liveLeaseToken });
+        if (!claim.claimed) return frozen({ status: "replayed" as const, code: claim.dispatch.state === "unknown" || claim.dispatch.state === "reconciliation_terminal" ? "WAKE_RECONCILIATION_REQUIRED" : "WAKE_ALREADY_CLAIMED" });
+        return frozen({ status: "continued" as const, code: "WAKE_DISPATCH_CLAIMED", leaseToken: input.liveLeaseToken, pendingActionReference: continuation.reference, actionBudgetReference: existingBudget.reference, operationId: claim.dispatch.operationId, dispatchClaimToken: claim.dispatch.claimToken });
+      }
+      const funding = await transaction.continuationFundingSnapshot(pause.admissionReference);
       if (funding.remainingCap < amount) return frozen({ status: "no_effect" as const, code: "APPROVED_CAP_INSUFFICIENT" });
       if (this.#spendable(funding) < amount) return frozen({ status: "no_effect" as const, code: "VERIFIED_CREDIT_REQUIRED" });
 
-      const idempotencyKey = `continuation-wake:${pause.idempotencyKey}:${pause.pauseGeneration}`;
       // Reassert the store fence only after every coordinator predicate above.
       // The pause transition, budget, and durable effect intent commit together.
       await transaction.wakePausedAction({ sessionId: input.sessionId, pauseGeneration: input.pauseGeneration, nowMs, liveLeaseToken: input.liveLeaseToken });
       const budget = await transaction.findActionBudget(idempotencyKey) ?? await transaction.reserveActionBudget({
         accountId: input.accountId, admissionReference: pause.admissionReference, idempotencyKey,
-        fingerprint: `wake:${pause.pendingFingerprint}:${pause.expectedSessionVersion}:${continuation.expectedArtifactVersion}`,
-        reference: `action-budget:wake:${pause.sessionId}:${pause.pauseGeneration}`, amount,
+        fingerprint, reference, amount,
       });
       const claim = await transaction.claimWakeDispatch({ accountId: input.accountId, sessionId: input.sessionId, pauseGeneration: input.pauseGeneration, pendingFingerprint: pause.pendingFingerprint, expectedSessionVersion: pause.expectedSessionVersion, expectedArtifactVersion: continuation.expectedArtifactVersion, actionBudgetReference: budget.reference, operationId: `wake-operation:${pause.sessionId}:${pause.pauseGeneration}:${budget.reference}`, liveLeaseToken: input.liveLeaseToken });
       if (!claim.claimed) return frozen({ status: "replayed" as const, code: claim.dispatch.state === "unknown" || claim.dispatch.state === "reconciliation_terminal" ? "WAKE_RECONCILIATION_REQUIRED" : "WAKE_ALREADY_CLAIMED" });

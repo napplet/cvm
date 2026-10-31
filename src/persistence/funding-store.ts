@@ -39,7 +39,13 @@ export type UsageReceiptRecord = Readonly<{ accountId: string; operationId: stri
 export type MeteredFinalizationInput = MeteredFinalizeInput;
 export type MeteredFinalizationResult = MeteredAction;
 export type ContinuationRecord = Readonly<{ intent: PendingActionIntent; result: NeedsTopUpResult; state: ContinuationPause["state"] }>;
-export type ContinuationFundingSnapshot = Readonly<{ settledBalance: bigint; availableBalance: bigint; remainingCap: bigint }>;
+/**
+ * `remainingCap` is deliberately the residual after every authorized action
+ * budget. `blockingActionBudget` is separately computed from unlinked or
+ * nonterminal actions, so settled historical reservations do not block a new
+ * affordability pause while still remaining in the V2 residual view.
+ */
+export type ContinuationFundingSnapshot = Readonly<{ settledBalance: bigint; availableBalance: bigint; remainingCap: bigint; authorizedActionBudget: bigint; blockingActionBudget: bigint }>;
 /**
  * Durable, owner-bound pause state.  The complete intent is stored with the
  * pause rather than in a parallel compatibility record: wake, checkpoint, and
@@ -445,7 +451,19 @@ export class TransactionalMemoryFundingStore implements MeteredFundingStore, Con
           const account = accountFor(state, accountId);
           const hold = account.holds.find((candidate) => candidate.reference === admissionReference);
           if (!hold) throw new Error("ACTIVE_ADMISSION_REQUIRED");
-          return freeze({ settledBalance: account.settledAvailable, availableBalance: account.settledAvailable - account.held, remainingCap: hold.heldAmount });
+          const authorizedActionBudget = [...state.actionBudgets.values()]
+            .filter((budget) => budget.accountId === accountId && budget.admissionReference === admissionReference && budget.state === "authorized")
+            .reduce((total, budget) => total + budget.amount, 0n);
+          const blockingActionBudget = [...state.actionBudgets.values()]
+            .filter((budget) => {
+              if (budget.accountId !== accountId || budget.admissionReference !== admissionReference || budget.state !== "authorized") return false;
+              const action = [...state.meteredActions.values()].find((candidate) => candidate.actionBudgetReference === budget.reference);
+              return !action || !["completed", "failed", "billing_invariant_failed"].includes(action.status);
+            })
+            .reduce((total, budget) => total + budget.amount, 0n);
+          const remainingCap = hold.heldAmount - authorizedActionBudget;
+          if (remainingCap < 0n) throw new Error("ACTION_BUDGET_CAP_INVARIANT_FAILED");
+          return freeze({ settledBalance: account.settledAvailable, availableBalance: account.settledAvailable - account.held, remainingCap, authorizedActionBudget, blockingActionBudget });
         },
         findContinuation: async (idempotencyKey) => {
           const pause = state.continuationPauses.get(commandKey(accountId, idempotencyKey));

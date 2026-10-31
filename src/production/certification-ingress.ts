@@ -21,6 +21,7 @@ export class ProductionCertificationIngress {
         await handler(envelope);
       }),
       configureAnnouncement: value => source.configureAnnouncement(value),
+      configurePricedContinuationAvailability: available => source.configurePricedContinuationAvailability?.(available),
       sendResponse: (pubkey, response, eventId) => source.sendResponse(pubkey, response, eventId),
       sendNotification: (pubkey, notification, eventId) => source.sendNotification(pubkey, notification, eventId),
       canonicalInvocation: (pubkey, method, params) => source.canonicalInvocation(pubkey, method, params),

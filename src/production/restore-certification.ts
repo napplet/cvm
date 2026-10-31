@@ -3,11 +3,13 @@ import { z } from "zod";
 import { bindAccountingRealmPool, createAccountingRealm } from "../funding/accounting-realm";
 import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
 import { CheckpointManifestSchema } from "../continuity/checkpoint-envelope";
+import { ResumePricingQuoteSchema } from "../continuity/resume-pricing";
 import type { ObjectStorePort } from "../continuity/object-store";
 import { DurabilitySubjectSchema, RestoreDrillInputSchema } from "../resilience/fault-harness";
 import { createProductionDurabilitySubjectRegistry } from "./durability-registry";
 import { createMigrationArchive, restoreMigrationArchiveToPostgres, type MigrationArchive } from "./migration";
 import { MigrationArchiveCipher, ProductionMigrationSource, writeEncryptedMigrationArchive } from "./migration-control";
+import { canonicalJson } from "../promotion/schema";
 import type { PostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
 import type { ProductionCertificationServices } from "../release/deployment/production-core-suite-protocol";
 import { CoreControlPayloadSchemas, CoreFreshInstanceSchema, CoreRestoreChunkSchema, CoreRestoreDescriptorSchema, CORE_RESTORE_CHUNK_BYTES } from "../release/deployment/production-core-suite-protocol";
@@ -229,11 +231,51 @@ export class ProductionRestoreCertification implements Pick<ProductionCertificat
   async #expected(pool: PostgresSqlPool, scope: ProductionRestoreScope) {
     const client = await pool.connect();
     try {
-      const row = (await client.query<Record<string, unknown>>("SELECT e.manifest_json,r.lease_token,trim(f.nostr_pubkey) AS owner_id FROM production_real.checkpoint_envelopes e JOIN production_real.continuation_resume_commands r ON r.checkpoint_id=e.checkpoint_id JOIN production_real.funding_accounts f ON f.account_id=e.account_id WHERE e.checkpoint_id=$1 AND e.session_id=$2 AND trim(f.nostr_pubkey)=$3 AND e.state='retained' LIMIT 2", [scope.checkpointId, scope.sessionId, scope.ownerId])).rows[0];
-      if (!row) throw new Error("PRODUCTION_RESTORE_FACTS_UNAVAILABLE");
+      /* A checkpoint is resumed by exactly one durable command family.  The
+       * legacy command and the priced claim intentionally have different
+       * identity tuples, so joining only the former makes a valid priced
+       * restore look absent after cloning.  Keep both arms in one bounded
+       * source query, then reject absence or ambiguity below. */
+      const rows = (await client.query<Record<string, unknown>>(
+        "SELECT e.manifest_json,e.object_key,e.object_generation,e.object_checksum,trim(f.nostr_pubkey) AS owner_id,cp.expected_session_version,cp.expected_artifact_version,cp.pause_generation,cp.retention_deadline_ms,r.command_id AS legacy_command_id,r.lease_token AS legacy_lease_token,r.action_id AS legacy_action_id,r.allocation_intent_reference AS legacy_allocation_intent_reference,pc.claim_reference AS priced_claim_reference,pc.lease_token AS priced_lease_token,pc.action_id AS priced_action_id,pc.allocation_intent_reference AS priced_allocation_intent_reference,pc.operation_id AS priced_operation_id,pc.action_budget_reference AS priced_action_budget_reference,pc.quote_reference AS priced_quote_reference,pc.quote_sha256 AS priced_quote_sha256,pc.state AS priced_state,q.quote_json AS priced_quote_json,pa.session_id AS priced_action_session_id,pa.expected_session_version AS priced_action_expected_session_version,pa.operation_id AS priced_action_operation_id,pa.budget_reference AS priced_action_row_budget_reference,pa.state AS priced_action_state FROM production_real.checkpoint_envelopes e JOIN production_real.funding_accounts f ON f.account_id=e.account_id JOIN production_real.continuation_checkpoints cp ON cp.checkpoint_id=e.checkpoint_id AND cp.account_id=e.account_id AND cp.session_id=e.session_id LEFT JOIN production_real.continuation_resume_commands r ON r.checkpoint_id=e.checkpoint_id AND r.account_id=e.account_id LEFT JOIN production_real.priced_continuation_claims pc ON pc.checkpoint_id=e.checkpoint_id AND pc.account_id=e.account_id AND pc.session_id=e.session_id AND pc.state IN ('accepted','dispatching') LEFT JOIN production_real.resume_pricing_quotes q ON q.quote_reference=pc.quote_reference AND q.account_id=pc.account_id AND q.checkpoint_id=pc.checkpoint_id AND q.quote_sha256=pc.quote_sha256 LEFT JOIN production_real.metered_actions pa ON pa.id=pc.action_id AND pa.account_id=pc.account_id WHERE e.checkpoint_id=$1 AND e.session_id=$2 AND trim(f.nostr_pubkey)=$3 AND e.state='retained' ORDER BY e.checkpoint_id LIMIT 2",
+        [scope.checkpointId, scope.sessionId, scope.ownerId],
+      )).rows;
+      if (rows.length !== 1) throw new Error("PRODUCTION_RESTORE_FACTS_UNAVAILABLE");
+      const row = rows[0]!;
       const manifest = CheckpointManifestSchema.parse(typeof row.manifest_json === "string" ? JSON.parse(row.manifest_json) : row.manifest_json);
       if (manifest.checkpointId !== scope.checkpointId || manifest.sessionId !== scope.sessionId || row.owner_id !== scope.ownerId) throw new Error("PRODUCTION_RESTORE_FACTS_DENIED");
-      return Expected.parse({ ownerId: scope.ownerId, sessionId: scope.sessionId, pendingActionReference: manifest.action.pendingActionReference, sessionVersion: manifest.sessionVersion, artifactVersion: manifest.artifactVersion, leaseToken: row.lease_token, compatibility: { policyVersion: manifest.compatibility.policyVersion, modelIdentity: manifest.compatibility.modelIdentity, nappletSdkIdentity: manifest.compatibility.nappletSdkIdentity, toolchainIdentity: manifest.compatibility.toolchainIdentity } });
+      const legacy = typeof row.legacy_command_id === "string" && typeof row.legacy_lease_token === "string"
+        && typeof row.legacy_action_id === "string" && typeof row.legacy_allocation_intent_reference === "string";
+      const priced = typeof row.priced_claim_reference === "string" && typeof row.priced_lease_token === "string"
+        && typeof row.priced_action_id === "string" && typeof row.priced_allocation_intent_reference === "string"
+        && typeof row.priced_operation_id === "string" && typeof row.priced_action_budget_reference === "string"
+        && typeof row.priced_quote_reference === "string" && typeof row.priced_quote_sha256 === "string"
+        && (row.priced_state === "accepted" || row.priced_state === "dispatching") && row.priced_quote_json !== null;
+      if (legacy === priced) throw new Error("PRODUCTION_RESTORE_CONTINUATION_AMBIGUOUS");
+      let leaseToken: string;
+      if (legacy) {
+        if (manifest.action.actionId !== row.legacy_action_id) throw new Error("PRODUCTION_RESTORE_FACTS_DENIED");
+        leaseToken = Identity.parse(row.legacy_lease_token);
+      } else {
+        const quote = ResumePricingQuoteSchema.parse(typeof row.priced_quote_json === "string" ? JSON.parse(row.priced_quote_json) : row.priced_quote_json);
+        const { quoteReference, quoteSha256, ...quoteBody } = quote;
+        if (quote.quoteReference !== row.priced_quote_reference || quote.quoteSha256 !== row.priced_quote_sha256
+          || quoteReference !== `resume-quote:${quoteSha256}` || sha(canonicalJson(quoteBody)) !== quoteSha256
+          || quote.context.accountId !== manifest.accountId || quote.context.sessionId !== scope.sessionId
+          || quote.context.checkpointId !== scope.checkpointId || quote.context.expectedSessionVersion !== manifest.sessionVersion
+          || quote.context.pendingAction.reference !== manifest.action.pendingActionReference
+          || row.priced_action_session_id !== scope.sessionId
+          || Number(row.priced_action_expected_session_version) !== manifest.sessionVersion
+          || row.priced_action_operation_id !== row.priced_operation_id
+          || row.priced_action_row_budget_reference !== row.priced_action_budget_reference
+          || !["prepared", "active"].includes(String(row.priced_action_state))
+          || Number(row.expected_session_version) !== manifest.sessionVersion
+          || Number(row.expected_artifact_version) !== manifest.artifactVersion
+          || Number(row.pause_generation) !== manifest.pauseGeneration
+          || quote.context.retentionUntilMs !== Number(row.retention_deadline_ms)) throw new Error("PRODUCTION_RESTORE_FACTS_DENIED");
+        leaseToken = Identity.parse(row.priced_lease_token);
+      }
+      return Expected.parse({ ownerId: scope.ownerId, sessionId: scope.sessionId, pendingActionReference: manifest.action.pendingActionReference, sessionVersion: manifest.sessionVersion, artifactVersion: manifest.artifactVersion, leaseToken, compatibility: { policyVersion: manifest.compatibility.policyVersion, modelIdentity: manifest.compatibility.modelIdentity, nappletSdkIdentity: manifest.compatibility.nappletSdkIdentity, toolchainIdentity: manifest.compatibility.toolchainIdentity } });
     } finally { client.release(); }
   }
 

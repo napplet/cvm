@@ -9,13 +9,14 @@ import type { FundedAdmissionService } from "../funding/funded-admission";
 import type { AdmissionReceiptAuthority } from "../funding/admission-receipt";
 import { accountIdForPrincipal } from "../domain/account-command";
 import { ResumeSessionCommandSchema, ResumeSessionResultSchema } from "../continuity/contracts";
+import { PrepareResumeArgumentsSchema, PrepareResumeResultSchema, ResumeSessionV2ArgumentsSchema } from "../continuity/resume-v2-contracts";
 import { PrincipalSchema } from "../phase-03/contracts";
 import { SessionActionResultSchema } from "../phase-04/metered-generation-service";
 import { SessionStatusQuerySchema, SessionStatusSchema } from "../phase-04/session-status";
 import { CapabilityReviewSchema, PreviewDescriptorSchema, SignedOwnerManifestEventSchema, SignedPublicationCommandSchema } from "../publication/contracts";
 import { validatedAvailablePromotedCliSourceContract, type AvailablePromotedCliSourceContract } from "../publication/napplet-cli-source-contract";
 import { AdmissionLifecycleContextSchema, protectedLifecycleCorrelation, type AdmissionLifecycleContext } from "../telemetry/contracts";
-import type { ContextVmInboundEnvelope, ContextVmTransportPort, ContextVmWireNotification, ContextVmWireResponse } from "./sdk-bridge";
+import { pricedContinuationNegotiation, type ContextVmInboundEnvelope, type ContextVmTransportPort, type ContextVmWireNotification, type ContextVmWireResponse } from "./sdk-bridge";
 
 const SupportedPmiSchema = z.enum(["bitcoin-lightning-bolt11", "bitcoin-cashu-v4-direct"]);
 const InteractionModeSchema = z.enum(["transparent", "explicit_gating"]);
@@ -27,7 +28,7 @@ const RequestSchema = z.object({
   id: z.union([z.string(), z.number(), z.null()]),
   method: z.literal("tools/call"),
   params: z.object({
-    name: z.enum(["account_status", "top_up", "funded_admission", "approve_session_cap", "start_session", "revise_session", "resume_session", "session_status", "preview", "publication", "service_info", "development_faucet", "development_publication", "cvm_admin", "operation_diagnostic", "projects", "remix_import"]),
+    name: z.enum(["account_status", "top_up", "funded_admission", "approve_session_cap", "start_session", "revise_session", "resume_session", "prepare_resume", "resume_session_v2", "session_status", "preview", "publication", "service_info", "development_faucet", "development_publication", "cvm_admin", "operation_diagnostic", "projects", "remix_import"]),
     arguments: z.unknown(),
     _meta: z.unknown().optional(),
   }).strict(),
@@ -79,6 +80,11 @@ const PendingActionResumeArgumentsSchema = z.object({
   pendingAction: z.object({ reference: z.string().min(1), fingerprint: z.string().regex(/^[a-f0-9]{64}$/u), kind: z.literal("start_session"), maximum: z.string().regex(/^[1-9][0-9]*$/u) }).strict(),
 }).strict();
 export const ResumeSessionArgumentsSchema = z.union([LegacyResumeSessionArgumentsSchema, PendingActionResumeArgumentsSchema]);
+const PricedResumeExecutionResultSchema = z.union([
+  SessionActionResultSchema,
+  z.object({ status: z.literal("reconciliation_pending"), stage: z.enum(["capacity", "restore", "accounting", "cleanup"]) }).strict(),
+  z.object({ status: z.literal("denied"), code: z.literal("RESUME_CAP_APPROVAL_REQUIRED") }).strict(),
+]);
 const MeteredSessionStatusArgumentsSchema = z.object({
   sessionId: z.string().min(1), billing: z.object({ limit: z.number().int().min(1).max(50).optional(), cursor: z.string().min(1).optional() }).strict().optional(),
 }).strict();
@@ -146,6 +152,14 @@ export interface ContextVmFundingAdapterOptions {
   }>;
   /** Explicit post-grace continuation only; rails and status cannot call this facade. */
   continuation?: Readonly<{ resumeSession(input: unknown): Promise<unknown> }>;
+  /** V2 continuation has a separately priced, signed acceptance lifecycle. */
+  pricedContinuation?: Readonly<{
+    prepare(input: unknown): Promise<unknown>;
+    resume(input: unknown): Promise<unknown>;
+    /** A production facade remains unavailable until its mounted authority binds. */
+    isReady(): boolean;
+    onReady?(listener: () => void): void;
+  }>;
   sessionStatus?: Readonly<{ read(input: unknown): Promise<unknown> }>;
   /** Optional composition-owned HTTPS origin for remote opaque-grant previews. */
   publicPreviewOrigin?: string;
@@ -206,6 +220,10 @@ export class ContextVmFundingAdapter {
     // It must have passed the full Plan 05 source-contract validator before
     // construction and still pass again immediately before dispatch.
     this.publicationSourceContract = validatedAvailablePromotedCliSourceContract(options.publicationSourceContract);
+    const pricedContinuation = options.pricedContinuation;
+    const enablePricedContinuation = () => this.options.transport.configurePricedContinuationAvailability?.(true);
+    if (pricedContinuation?.isReady() === true) enablePricedContinuation();
+    pricedContinuation?.onReady?.(enablePricedContinuation);
     options.transport.onInbound((input) => this.handle(input));
   }
 
@@ -231,6 +249,8 @@ export class ContextVmFundingAdapter {
 
   private async dispatch(verifiedPubkey: string, requestEventId: string, rawEvent: z.infer<typeof EventSchema>, request: z.infer<typeof RequestSchema>): Promise<ContextVmWireResponse> {
     const { name, arguments: argumentsInput } = request.params;
+    const pricedNegotiation = pricedContinuationNegotiation(request.params, rawEvent.tags);
+    if (pricedNegotiation === "invalid") throw new Error("PRICED_CONTINUATION_NEGOTIATION_INVALID");
     if (["service_info", "development_faucet", "development_publication", "cvm_admin", "operation_diagnostic", "projects", "remix_import"].includes(name)) {
       const handler = this.options.extensions?.[name as keyof NonNullable<ContextVmFundingAdapterOptions["extensions"]>];
       if (!handler) throw new Error("CONTEXTVM_TOOL_UNAVAILABLE");
@@ -266,6 +286,31 @@ export class ContextVmFundingAdapter {
       const accountId = await accountIdForPrincipal({ pubkey: verifiedPubkey });
       const result = ResumeSessionResultSchema.parse(await this.options.continuation.resumeSession({ ...args, principal: { id: accountId } }));
       return this.resumeResponse(verifiedPubkey, requestEventId, request.id, result);
+    }
+    if (name === "prepare_resume") {
+      if (pricedNegotiation !== "verified" || !this.options.pricedContinuation || !this.options.pricedContinuation.isReady()) throw new Error("PRICED_CONTINUATION_UNAVAILABLE");
+      const args = PrepareResumeArgumentsSchema.parse(argumentsInput);
+      const accountId = await accountIdForPrincipal({ pubkey: verifiedPubkey });
+      const result = PrepareResumeResultSchema.parse(await this.options.pricedContinuation.prepare({ ...args, principal: { id: accountId } }));
+      await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({ jsonrpc: "2.0", method: "notifications/prepare_resume", params: result }), requestEventId).catch(() => undefined);
+      return freeze({ jsonrpc: "2.0" as const, id: request.id, result });
+    }
+    if (name === "resume_session_v2") {
+      if (pricedNegotiation !== "verified" || !this.options.pricedContinuation || !this.options.pricedContinuation.isReady()) throw new Error("PRICED_CONTINUATION_UNAVAILABLE");
+      const args = ResumeSessionV2ArgumentsSchema.parse(argumentsInput);
+      const accountId = await accountIdForPrincipal({ pubkey: verifiedPubkey });
+      const result = PricedResumeExecutionResultSchema.parse(await this.options.pricedContinuation.resume({ ...args, principal: { id: accountId } }));
+      if (result.status === "reconciliation_pending") {
+        const wireResult = freeze({ status: result.status, stage: result.stage });
+        await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({ jsonrpc: "2.0", method: "notifications/resume_session_v2", params: wireResult }), requestEventId).catch(() => undefined);
+        return freeze({ jsonrpc: "2.0" as const, id: request.id, result: wireResult });
+      }
+      if (result.status === "denied") {
+        const wireResult = freeze({ status: result.status, code: result.code });
+        await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({ jsonrpc: "2.0", method: "notifications/resume_session_v2", params: wireResult }), requestEventId).catch(() => undefined);
+        return freeze({ jsonrpc: "2.0" as const, id: request.id, result: wireResult });
+      }
+      return this.generationResponse("resume_session_v2", verifiedPubkey, requestEventId, request.id, result);
     }
     if (name === "session_status") {
       const args = SessionStatusArgumentsSchema.parse(argumentsInput);
@@ -410,7 +455,7 @@ export class ContextVmFundingAdapter {
     return `sha256:${[...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
   }
 
-  private async generationResponse(name: "start_session" | "revise_session" | "resume_session", verifiedPubkey: string, requestEventId: string, id: string | number | null, result: z.infer<typeof SessionActionResultSchema>): Promise<ContextVmWireResponse> {
+  private async generationResponse(name: "start_session" | "revise_session" | "resume_session" | "resume_session_v2", verifiedPubkey: string, requestEventId: string, id: string | number | null, result: z.infer<typeof SessionActionResultSchema>): Promise<ContextVmWireResponse> {
     const wireResult = result.status === "completed" || result.status === "failed"
       ? freeze({ status: result.status, code: result.code, sessionId: result.sessionId, sessionVersion: result.sessionVersion, artifactVersion: result.artifactVersion, ...(result.status === "completed" && result.artifactId ? { artifactId: result.artifactId } : {}), ...(result.status === "completed" && result.generation ? { generation: result.generation } : {}), confirmedSpend: result.confirmedSpend, remainingCap: result.remainingCap, remainingBalance: result.remainingBalance, nextAction: result.nextAction, operationId: result.operationId })
       : result.status === "billing_invariant_failed" || result.status === "usage_unknown"

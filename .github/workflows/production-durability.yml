@@ -17,6 +17,7 @@ on:
       - "tests/production/durability-registry*.test.ts"
       - "tests/production/checkpoint-postgres.test.ts"
       - "tests/production/retained-subjects-postgres.test.ts"
+      - "tests/production/resume-pricing-preparer-postgres.test.ts"
       - "tests/dev-ui/package.json"
       - "tests/dev-ui/bun.lock"
       - ".github/workflows/production-durability.yml"
@@ -40,8 +41,8 @@ jobs:
       - run: bun install --cwd tests/dev-ui --frozen-lockfile
       - name: Whole project with the pinned compiler
         run: bunx --package typescript@5.9.3 tsc --noEmit --pretty false
-      - name: Canonical SQL, receipt-bound retained-subject preparation, fresh recovery and legacy preservation
-        run: bun test tests/production/durability-registry.test.ts tests/production/durability-registry-postgres.test.ts tests/production/retained-subjects-postgres.test.ts tests/production/checkpoint-postgres.test.ts --timeout 120000
+      - name: Canonical SQL, receipt-bound retained-subject preparation, fresh recovery and priced continuation preservation
+        run: bun test tests/production/durability-registry.test.ts tests/production/durability-registry-postgres.test.ts tests/production/retained-subjects-postgres.test.ts tests/production/resume-pricing-preparer-postgres.test.ts tests/production/checkpoint-postgres.test.ts --timeout 120000
       - name: Build the unselected control image
         run: docker build -f infra/production/Dockerfile -t cvm-control-proof:ci .
       - name: Exact image packaging and fail-closed boot without authority

@@ -1,11 +1,27 @@
 import { expect, test } from "bun:test";
 import { resumePricingContext, resumePricingMaterial } from "../fixtures/resume-pricing";
 import { prepareResumePricingQuote, verifyStoredResumePricingQuote, type ResumePricingContext } from "../../src/continuity/resume-pricing";
+import { canonicalJson } from "../../src/promotion/schema";
 
 const now = Date.parse("2026-08-04T00:00:00.000Z");
 const context = resumePricingContext(now);
 const pricing = () => resumePricingMaterial(now);
 async function quote() { return prepareResumePricingQuote({ context, pricing: await pricing(), preparationKey: "prepare:one", nowMs: now, lifetimeMs: 300_000 }); }
+async function sha(value: unknown) { return Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalJson(value)))).toString("hex"); }
+
+test("new lineage uses V2 while an immutable V1 quote retains its original canonical bytes", async () => {
+  const current = await quote();
+  expect(current.schemaVersion).toBe("resume-pricing-quote-v2");
+  const legacyBody = {
+    schemaVersion: "resume-pricing-quote-v1" as const, context: current.context, preparationKey: current.preparationKey,
+    preparedAtMs: current.preparedAtMs, expiresAtMs: current.expiresAtMs, pricing: current.pricing,
+    maximumUsdMicros: current.maximumUsdMicros, maximumSat: current.maximumSat, priceSourcesSha256: current.priceSourcesSha256,
+  };
+  const quoteSha256 = await sha(legacyBody);
+  const stored = { ...legacyBody, quoteSha256, quoteReference: `resume-quote:${quoteSha256}` };
+  await expect(verifyStoredResumePricingQuote({ stored, expectedContext: context,
+    approval: { quoteReference: stored.quoteReference, quoteSha256, maximumSat: stored.maximumSat }, nowMs: now + 1 })).resolves.toEqual(stored);
+});
 
 test("a changed estimate needs exact explicit approval and stays below the original action maximum", async () => {
   const stored = await quote();

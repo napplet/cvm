@@ -60,6 +60,8 @@ export type FundedCoreOptions = Readonly<{
   meteredService?: Pick<MeteredGenerationService, "startSession" | "reviseSession"> & Partial<Pick<MeteredGenerationService, "dispatchVerifiedCredit" | "reconcileOutstandingWakeDispatches" | "completeResumedAction">>;
   /** Phase 5 explicit-resume facade; no payment or ContextVM authority crosses this seam. */
   continuationService?: Pick<ContinuationService, "resumeSession">;
+  /** The separately priced V2 continuation path is opt-in and cannot alter V1 resume. */
+  pricedContinuation?: NonNullable<ConstructorParameters<typeof ContextVmFundingAdapter>[0]["pricedContinuation"]>;
   /** Owner-scoped Phase 6 facades. They remain transport-neutral and receive no ContextVM SDK types. */
   preview?: NonNullable<ConstructorParameters<typeof ContextVmFundingAdapter>[0]["preview"]>;
   publication?: NonNullable<ConstructorParameters<typeof ContextVmFundingAdapter>[0]["publication"]>;
@@ -174,6 +176,7 @@ export function createFundedCore(options: FundedCoreOptions = {}): FundedCore {
     ? new ContextVmFundingAdapter({ ...(sessionCaps ? { sessionCaps } : {}), service: funding, transport: options.transport, admissions, admissionReceipts, accountStatus, topUps: { lightning, cashu },
       ...(options.meteredService ? { generation: options.meteredService, sessionStatus: { read: (query: unknown) => readSessionStatus({ store: authority as MeteredFundingStore, query, cursorSecret: statusCursorSecret }) } } : {}),
       ...(options.continuationService ? { continuation: options.continuationService } : {}),
+      ...(options.pricedContinuation ? { pricedContinuation: options.pricedContinuation } : {}),
       ...(options.preview ? { preview: options.preview } : {}),
       ...(options.publication ? { publication: options.publication } : {}),
       ...(options.publicationSourceContract !== undefined ? { publicationSourceContract: options.publicationSourceContract } : {}),

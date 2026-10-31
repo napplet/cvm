@@ -117,6 +117,24 @@ describe("same-lineage revisions", () => {
     expect(effects.dispatches).toBe(2);
   });
 
+  test("holds a receipt-backed novel settlement failure instead of inventing provider ambiguity", async () => {
+    const { admission, admissions, effects, gateway, initial, store } = await setup();
+    const service = new MeteredGenerationService({
+      fundedAdmission: admissions, store, gateway, worker: completedWorker(effects), artifactVerifier: verifier,
+      settlement: {
+        async prepare() { return { maximum: "3250" }; },
+        async finalize() { throw new Error("NEW_DETERMINISTIC_LEDGER_VALIDATION_FAILURE"); },
+      },
+    });
+    const command = { principal, sessionId: initial.sessionId, admissionReference: admission.reference, idempotencyKey: "novel-settlement-failure", expectedVersion: 1, maximum: "3250", policyVersion: "phase-02-policy-2026-08-04", revision: "A bounded update." };
+    const result = await service.reviseSession(command);
+    expect(result).toMatchObject({ status: "billing_invariant_failed", code: "ACCOUNTING_SETTLEMENT_FAILED" });
+    expect((await store.findMeteredAction(initial.accountId, command.idempotencyKey))).toMatchObject({ status: "billing_invariant_failed" });
+    expect(effects.dispatches).toBe(2);
+    expect(await service.reviseSession(command)).toEqual(result);
+    expect(effects.dispatches).toBe(2);
+  });
+
   test("a failed revision retains the verified base for a new explicit action and exact replay", async () => {
     let fail = false;
     const { admission, effects, initial, service, store } = await setup({ verify: async (facts) => fail ? undefined : verifier.verify(facts) });

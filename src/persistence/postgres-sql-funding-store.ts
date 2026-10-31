@@ -276,7 +276,13 @@ export class PostgresSqlFundingStore implements MeteredFundingStore, Continuatio
         await beforeDeadline(raw.query("ROLLBACK"), this.#now() + Math.min(50, this.#deadlineMs), this.#now).catch(() => undefined);
         last = error;
         const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
-        if (commitAttempted && code !== "40001" && code !== "40P01") throw new FundingCommitOutcomeUnknownError(error);
+        // A COMMIT acknowledgement can be ambiguous only when the connection
+        // did not give PostgreSQL's outcome back to us.  A PostgreSQL SQLSTATE
+        // is a definitive database result (including deferred trigger and
+        // constraint failures) and must remain a private deterministic error;
+        // treating it as unknown would fabricate usage uncertainty after a
+        // rollback.
+        if (commitAttempted && (code === undefined || String(code).startsWith("08"))) throw new FundingCommitOutcomeUnknownError(error);
         if ((error as { code?: unknown }).code !== "40001" || attempt + 1 === this.#maxAttempts || this.#now() >= deadline) {
           if ((error as { code?: unknown }).code === "40001") throw new SerializationFailure();
           throw error;
@@ -469,7 +475,14 @@ class PgFundingTransaction implements MeteredFundingTransaction, ContinuationFun
   async continuationFundingSnapshot(admissionReference: string) {
     const balance = first(await this.client.query("SELECT settled_available,held FROM account_balance_projection WHERE account_id=$1 FOR UPDATE", [this.accountId]), "ACCOUNT_BALANCE_NOT_FOUND");
     const hold = first(await this.client.query("SELECT held_amount FROM session_cap_holds WHERE account_id=$1 AND reference=$2 AND state='active' FOR UPDATE", [this.accountId, admissionReference]), "ACTIVE_ADMISSION_REQUIRED");
-    return frozen({ settledBalance: asBigInt(balance.settled_available), availableBalance: asBigInt(balance.settled_available) - asBigInt(balance.held), remainingCap: asBigInt(hold.held_amount) });
+    const reservations = first(await this.client.query<{ total: string; blocking_total: string }>(`SELECT COALESCE(SUM(b.amount),0) AS total,
+      COALESCE(SUM(CASE WHEN NOT EXISTS (SELECT 1 FROM metered_actions a WHERE a.account_id=b.account_id AND a.budget_reference=b.reservation_reference)
+        OR EXISTS (SELECT 1 FROM metered_actions a WHERE a.account_id=b.account_id AND a.budget_reference=b.reservation_reference AND a.state NOT IN ('failed','billing_invariant_failed','verified'))
+        THEN b.amount ELSE 0 END),0) AS blocking_total
+      FROM action_budget_reservations b WHERE b.account_id=$1 AND b.admission_reference=$2 AND b.state='authorized'`, [this.accountId, admissionReference]), "ACTION_BUDGET_TOTAL_MISSING");
+    const remainingCap = asBigInt(hold.held_amount) - asBigInt(reservations.total);
+    if (remainingCap < 0n) throw new Error("ACTION_BUDGET_CAP_INVARIANT_FAILED");
+    return frozen({ settledBalance: asBigInt(balance.settled_available), availableBalance: asBigInt(balance.settled_available) - asBigInt(balance.held), remainingCap, authorizedActionBudget: asBigInt(reservations.total), blockingActionBudget: asBigInt(reservations.blocking_total) });
   }
   async findContinuation(idempotencyKey: string): Promise<ContinuationRecord | undefined> {
     const row = (await this.client.query("SELECT account_id,session_id,admission_reference,idempotency_key,fingerprint_sha256,pending_fingerprint_sha256,expected_session_version,pause_generation,grace_deadline_ms,live_lease_token,intent_json,result_json,state FROM continuation_pauses WHERE account_id=$1 AND idempotency_key=$2 FOR UPDATE", [this.accountId, idempotencyKey])).rows[0];

@@ -9,6 +9,8 @@ const ToolNameSchema = z.enum([
   "start_session",
   "revise_session",
   "resume_session",
+  "prepare_resume",
+  "resume_session_v2",
   "session_status",
   "preview",
   "publication",
@@ -51,8 +53,14 @@ export function configureContextVmToolAvailability(input: unknown, availability:
   const publication = Boolean(validatedAvailablePromotedCliSourceContract(availability.publicationSourceContract));
   return ContextVmAnnouncementInputSchema.parse({
     ...parsed,
-    tools: [...parsed.tools, ...(availability.sessionCaps && !parsed.tools.some(tool => tool.name === "approve_session_cap") ? [{ name: "approve_session_cap" as const, available: true, planned: false }] : [])].map((tool) => tool.name === "approve_session_cap"
+    tools: [...parsed.tools,
+      ...(availability.sessionCaps && !parsed.tools.some(tool => tool.name === "approve_session_cap") ? [{ name: "approve_session_cap" as const, available: true, planned: false }] : []),
+    ].map((tool) => tool.name === "approve_session_cap"
       ? { ...tool, available: Boolean(availability.sessionCaps), planned: !availability.sessionCaps }
+      : tool.name === "prepare_resume" || tool.name === "resume_session_v2"
+        // V2 is request-negotiated. It must never alter the v1 signed
+        // announcement, even when a mounted facade is ready.
+        ? { ...tool, available: false, planned: true }
       : tool.name === "preview"
       ? { ...tool, available: availability.preview, planned: !availability.preview }
       : tool.name === "publication"

@@ -274,10 +274,22 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
       expect(v2Authority).toMatchObject({ context: { accountId, sessionId, checkpointId, originalOperationId, originalCommandMaximum: retainedCommand.maximum } });
       const preparedV2 = await v2Preparer.prepare({ principal: { id: accountId }, sessionId, checkpointId, expectedSessionVersion: 0, expectedCheckpointVersion: 1, idempotencyKey: "prepare:retained-mounted" });
       if (preparedV2.status !== "quoted") throw new Error(`RETAINED_V2_QUOTE_REQUIRED:${preparedV2.code}`);
+      // The original 11-sat command remains immutable. The real active cap has
+      // one authorized original sat, so V2 derives a 10-sat profile envelope
+      // and binds that exact reduced provider ceiling to the new approval.
+      expect(preparedV2.pricing.maximumSat).toBe("10");
+      const storedV2Quote = await resumeQuotes.findReference(accountId, preparedV2.quoteReference);
+      if (!storedV2Quote) throw new Error("RETAINED_V2_STORED_QUOTE_REQUIRED");
+      expect(storedV2Quote.sourceProfile).toEqual(originalPricing.profile);
+      expect(storedV2Quote.pricing.profile.id).toMatch(/^resume-derived:[a-f0-9]{64}$/u);
+      expect(storedV2Quote.pricing.profile.maximumUnits.every((unit, index) => BigInt(unit.units) <= BigInt(originalPricing.profile.maximumUnits[index]!.units))).toBeTrue();
       const v2Resume = { principal: { id: accountId }, sessionId, checkpointId, expectedSessionVersion: 0, expectedCheckpointVersion: 1, idempotencyKey: "resume:retained-mounted", approvePendingAction: true,
         capApprovalReference: pauseIntent.admissionReference, pendingAction: preparedV2.pendingAction,
         pricingApproval: { quoteReference: preparedV2.quoteReference, quoteSha256: preparedV2.quoteSha256, maximumSat: preparedV2.pricing.maximumSat } };
       const v2Claim = (await v2Acceptance.claim(v2Resume)).claim;
+      expect(v2Claim.quote.maximumSat).toBe("10");
+      await expect(fundingStore.transact(accountId, transaction => transaction.reserveActionBudget({ accountId, admissionReference,
+        idempotencyKey: "retained-v2-unapproved-unit", fingerprint: hex("retained-v2-unapproved-unit"), reference: "budget:retained-v2-unapproved-unit", amount: 1n }))).rejects.toThrow("ACTION_BUDGET_EXCEEDS_APPROVED_CAP");
       const readyCapacity = new Map<string, CapacityReservation>();
       const v2Capacity: ReadyCapacityPort = { async reserveNow(value) { const reference = `capacity:${digest(canonicalJson(value))}`, expiresAt = new Date(now + 1_200_000).toISOString(); const ready: CapacityReservation = { status: "available", reference, expiresAt, usable: true, ready: { intentReference: value.intentReference, leaseReference: reference, sessionBindingDigest: value.expectedSessionBindingDigest, imageDigest: `sha256:${config.worker.image.split("@sha256:")[1]!}`, readinessProbeDigest: `sha256:${hex("retained-ready")}`, readyMonotonicMs: 1 } }; readyCapacity.set(value.intentReference, ready); return ready; }, async observe(value) { return readyCapacity.get(value.intentReference) ?? { status: "unknown" }; }, async release() { throw new Error("RETAINED_V2_RELEASE_NOT_EXPECTED"); } };
       const v2Workers = new ProductionPricedContinuationWorkers({ pool, acceptance: v2Acceptance, capacity: v2Capacity, now: () => now });

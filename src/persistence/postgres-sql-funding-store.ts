@@ -469,7 +469,10 @@ class PgFundingTransaction implements MeteredFundingTransaction, ContinuationFun
   async continuationFundingSnapshot(admissionReference: string) {
     const balance = first(await this.client.query("SELECT settled_available,held FROM account_balance_projection WHERE account_id=$1 FOR UPDATE", [this.accountId]), "ACCOUNT_BALANCE_NOT_FOUND");
     const hold = first(await this.client.query("SELECT held_amount FROM session_cap_holds WHERE account_id=$1 AND reference=$2 AND state='active' FOR UPDATE", [this.accountId, admissionReference]), "ACTIVE_ADMISSION_REQUIRED");
-    return frozen({ settledBalance: asBigInt(balance.settled_available), availableBalance: asBigInt(balance.settled_available) - asBigInt(balance.held), remainingCap: asBigInt(hold.held_amount) });
+    const reservations = first(await this.client.query<{ total: string }>("SELECT COALESCE(SUM(amount),0) AS total FROM action_budget_reservations WHERE account_id=$1 AND admission_reference=$2 AND state='authorized'", [this.accountId, admissionReference]), "ACTION_BUDGET_TOTAL_MISSING");
+    const remainingCap = asBigInt(hold.held_amount) - asBigInt(reservations.total);
+    if (remainingCap < 0n) throw new Error("ACTION_BUDGET_CAP_INVARIANT_FAILED");
+    return frozen({ settledBalance: asBigInt(balance.settled_available), availableBalance: asBigInt(balance.settled_available) - asBigInt(balance.held), remainingCap });
   }
   async findContinuation(idempotencyKey: string): Promise<ContinuationRecord | undefined> {
     const row = (await this.client.query("SELECT account_id,session_id,admission_reference,idempotency_key,fingerprint_sha256,pending_fingerprint_sha256,expected_session_version,pause_generation,grace_deadline_ms,live_lease_token,intent_json,result_json,state FROM continuation_pauses WHERE account_id=$1 AND idempotency_key=$2 FOR UPDATE", [this.accountId, idempotencyKey])).rows[0];

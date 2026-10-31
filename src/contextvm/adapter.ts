@@ -83,6 +83,7 @@ export const ResumeSessionArgumentsSchema = z.union([LegacyResumeSessionArgument
 const PricedResumeExecutionResultSchema = z.union([
   SessionActionResultSchema,
   z.object({ status: z.literal("reconciliation_pending"), stage: z.enum(["capacity", "restore", "accounting", "cleanup"]) }).strict(),
+  z.object({ status: z.literal("denied"), code: z.literal("RESUME_CAP_APPROVAL_REQUIRED") }).strict(),
 ]);
 const MeteredSessionStatusArgumentsSchema = z.object({
   sessionId: z.string().min(1), billing: z.object({ limit: z.number().int().min(1).max(50).optional(), cursor: z.string().min(1).optional() }).strict().optional(),
@@ -289,6 +290,11 @@ export class ContextVmFundingAdapter {
       const result = PricedResumeExecutionResultSchema.parse(await this.options.pricedContinuation.resume({ ...args, principal: { id: accountId } }));
       if (result.status === "reconciliation_pending") {
         const wireResult = freeze({ status: result.status, stage: result.stage });
+        await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({ jsonrpc: "2.0", method: "notifications/resume_session_v2", params: wireResult }), requestEventId).catch(() => undefined);
+        return freeze({ jsonrpc: "2.0" as const, id: request.id, result: wireResult });
+      }
+      if (result.status === "denied") {
+        const wireResult = freeze({ status: result.status, code: result.code });
         await this.options.transport.sendNotification(verifiedPubkey, freeze<ContextVmWireNotification>({ jsonrpc: "2.0", method: "notifications/resume_session_v2", params: wireResult }), requestEventId).catch(() => undefined);
         return freeze({ jsonrpc: "2.0" as const, id: request.id, result: wireResult });
       }

@@ -30,11 +30,11 @@ export const QuotedResumeResultSchema = z.object({
 export const PrepareResumeResultSchema = z.discriminatedUnion("status", [
   QuotedResumeResultSchema,
   z.object({ status: z.literal("denied"), code: z.enum(["RESUME_CHECKPOINT_NOT_FOUND_OR_DENIED", "RESUME_INVALID_COMMAND", "RESUME_STALE_OR_CONFLICTING"]) }).strict(),
-  z.object({ status: z.literal("blocked"), code: z.enum(["RESUME_PRICE_AUTHORITY_UNAVAILABLE", "RESUME_QUOTE_EXCEEDS_COMMAND_MAXIMUM", "RESUME_COMPATIBILITY_DENIED"]) }).strict(),
+  z.object({ status: z.literal("blocked"), code: z.enum(["RESUME_PRICE_AUTHORITY_UNAVAILABLE", "RESUME_QUOTE_EXCEEDS_COMMAND_MAXIMUM", "RESUME_COMPATIBILITY_DENIED", "RESUME_CAP_APPROVAL_REQUIRED"]) }).strict(),
 ]);
 export const ResumeSessionV2ResultSchema = z.union([
   ResumeSessionResultSchema,
-  z.object({ status: z.literal("denied"), code: z.enum(["RESUME_QUOTE_NOT_FOUND_OR_DENIED", "RESUME_QUOTE_EXPIRED", "RESUME_QUOTE_APPROVAL_MISMATCH", "RESUME_QUOTE_CONTEXT_MISMATCH", "RESUME_QUOTE_SUPERSESSION_REQUIRED"]) }).strict(),
+  z.object({ status: z.literal("denied"), code: z.enum(["RESUME_QUOTE_NOT_FOUND_OR_DENIED", "RESUME_QUOTE_EXPIRED", "RESUME_QUOTE_APPROVAL_MISMATCH", "RESUME_QUOTE_CONTEXT_MISMATCH", "RESUME_QUOTE_SUPERSESSION_REQUIRED", "RESUME_CAP_APPROVAL_REQUIRED"]) }).strict(),
 ]);
 
 /** Approval projection deliberately omits account, encrypted command, keys,

@@ -96,10 +96,12 @@ describe("verified ContextVM funding adapter", () => {
     const now = Date.now(), accountId = await accountIdForPrincipal({ pubkey: fixture.requests.verifiedPubkey });
     const context = { ...resumePricingContext(now), accountId };
     const quote = await prepareResumePricingQuote({ context, pricing: await resumePricingMaterial(now), preparationKey: "prepare:v2", nowMs: now, lifetimeMs: 30_000 });
-    const calls: unknown[] = [];
+    const calls: unknown[] = []; let requireCapApproval = false;
     const adapter = new ContextVmFundingAdapter({ service, transport, pricedContinuation: {
       prepare: async input => { calls.push(input); return projectResumePricingQuote(quote); },
-      resume: async input => { calls.push(input); return { status: "completed", code: "ACTION_COMMITTED", accountId: "account:internal", sessionId: context.sessionId, sessionVersion: 1, artifactVersion: 1, confirmedSpend: "3", remainingCap: "97", remainingBalance: "497", nextAction: "revise_session", operationId: "operation:priced" }; },
+      resume: async input => { calls.push(input); return requireCapApproval
+        ? { status: "denied", code: "RESUME_CAP_APPROVAL_REQUIRED" }
+        : { status: "completed", code: "ACTION_COMMITTED", accountId: "account:internal", sessionId: context.sessionId, sessionVersion: 1, artifactVersion: 1, confirmedSpend: "3", remainingCap: "97", remainingBalance: "497", nextAction: "revise_session", operationId: "operation:priced" }; },
     } });
 
     await adapter.handle(envelope({ request: { id: "prepare-v2", method: "tools/call", params: { name: "prepare_resume", arguments: { sessionId: context.sessionId, checkpointId: context.checkpointId, expectedSessionVersion: context.expectedSessionVersion, expectedCheckpointVersion: 1, idempotencyKey: "prepare:v2" } } } }));
@@ -110,6 +112,10 @@ describe("verified ContextVM funding adapter", () => {
     await adapter.handle(envelope({ request: { id: "resume-v2", method: "tools/call", params: { name: "resume_session_v2", arguments: { sessionId: context.sessionId, checkpointId: context.checkpointId, expectedSessionVersion: context.expectedSessionVersion, expectedCheckpointVersion: 1, idempotencyKey: "resume:v2", approvePendingAction: true, capApprovalReference: "cap:v2", pendingAction: context.pendingAction, pricingApproval: { quoteReference: quote.quoteReference, quoteSha256: quote.quoteSha256, maximumSat: quote.maximumSat } } } } }));
     expect(calls[1]).toEqual(expect.objectContaining({ principal: { id: accountId }, idempotencyKey: "resume:v2", pricingApproval: { quoteReference: quote.quoteReference, quoteSha256: quote.quoteSha256, maximumSat: quote.maximumSat } }));
     expect(transport.responses.at(-1)?.response).toMatchObject({ result: { status: "completed", sessionId: context.sessionId, operationId: "operation:priced" } });
+    expect(JSON.stringify(transport.responses.at(-1))).not.toMatch(/account:internal|provider|archive|credential|lease|action-budget/i);
+    requireCapApproval = true;
+    await adapter.handle(envelope({ request: { id: "resume-v2-cap", method: "tools/call", params: { name: "resume_session_v2", arguments: { sessionId: context.sessionId, checkpointId: context.checkpointId, expectedSessionVersion: context.expectedSessionVersion, expectedCheckpointVersion: 1, idempotencyKey: "resume:v2-cap", approvePendingAction: true, capApprovalReference: "cap:v2", pendingAction: context.pendingAction, pricingApproval: { quoteReference: quote.quoteReference, quoteSha256: quote.quoteSha256, maximumSat: quote.maximumSat } } } } }));
+    expect(transport.responses.at(-1)?.response).toEqual({ jsonrpc: "2.0", id: "resume-v2-cap", result: { status: "denied", code: "RESUME_CAP_APPROVAL_REQUIRED" } });
     expect(JSON.stringify(transport.responses.at(-1))).not.toMatch(/account:internal|provider|archive|credential|lease|action-budget/i);
     void adapter;
   });

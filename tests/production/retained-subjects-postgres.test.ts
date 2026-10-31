@@ -371,6 +371,10 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     now = retentionDeadline - 1;
     await expect(sealRetainedSubject({ crypto: uncertainCrypto, objectStore: uncertainObjects, journal, checkpointId, accountId, ownerId: fixture.ownerId, sessionId, actionId, retentionUntil: barrierRetention, source: uncertainSource, now: () => now })).rejects.toThrow("OBJECT_ACK_LOST");
     pauseObserved = true;
+    // Keep the all-seven expiry path's own lost-delete acknowledgement for
+    // its later assertion; this barrier only models its original create ACK.
+    const loseMountedDeleteAckForExpiry = loseMountedDeleteAck;
+    loseMountedDeleteAck = false;
     const pendingUncertain = sealRetainedSubject({ crypto: uncertainCrypto, objectStore: uncertainObjects, journal, checkpointId, accountId, ownerId: fixture.ownerId, sessionId, actionId, retentionUntil: barrierRetention, source: uncertainSource, now: () => now });
     await observedStarted.promise;
     now = retentionDeadline;
@@ -382,6 +386,7 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     expect(await uncertainCrypto.isDestroyed(uncertainStored.keyReference)).toBe(true);
     const uncertainKey = `durability-subjects/${uncertainCustody}/${uncertainStored.ciphertextSha256}`;
     expect(await objects.observeExactByKey({ key: uncertainKey, checksum: uncertainStored.ciphertextSha256 })).toBeUndefined();
+    loseMountedDeleteAck = loseMountedDeleteAckForExpiry;
     now = retentionDeadline - retentionMs;
     const createsBeforeExpiry = createCalls;
     now += retentionMs;

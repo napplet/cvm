@@ -114,23 +114,48 @@ function micros(value: string): number {
   return Number(parsed);
 }
 function decodeHtml(value: string): string { return value.replace(/&(amp|lt|gt|quot|#39);/giu, (_all, entity: string) => ({ amp: "&", lt: "<", gt: ">", quot: "\"", "#39": "'" })[entity.toLowerCase()] ?? ""); }
+function escapeRegex(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"); }
+/** Extract only an explicit model container.  The public model page renders one
+ * ModelView astro-island; retained fixtures use an article/section carrying a
+ * closed data-openai-model identity.  A navigation/comparison code cannot form
+ * a container and therefore cannot donate pricing cards to another model. */
+function enclosedModelContainers(html: string, model: string): readonly string[] {
+  const containers: string[] = [];
+  const exactCode = new RegExp(`<code[^>]*>\\s*${escapeRegex(model)}\\s*<\\/code>`, "u");
+  for (const tag of ["article", "section"] as const) {
+    const opening = new RegExp(`<${tag}\\b[^>]*\\bdata-openai-model=(?:"${escapeRegex(model)}"|'${escapeRegex(model)}')[^>]*>`, "giu");
+    for (const match of html.matchAll(opening)) {
+      const start = match.index! + match[0].length;
+      const end = html.indexOf(`</${tag}>`, start);
+      if (end < 0) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
+      const body = html.slice(start, end);
+      if (exactCode.test(body)) containers.push(body);
+    }
+  }
+  const island = /<astro-island\b([^>]*)>/giu;
+  for (const match of html.matchAll(island)) {
+    if (!/component-url=(?:"[^"]*ModelView[^"]*"|'[^']*ModelView[^']*')/iu.test(match[1]!)) continue;
+    const start = match.index! + match[0].length;
+    const end = html.indexOf("</astro-island>", start);
+    if (end < 0) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
+    const body = html.slice(start, end);
+    if (exactCode.test(body)) containers.push(body);
+  }
+  return containers;
+}
 /** Parse only the three adjacent token-price cards emitted by the fixed,
  * retained OpenAI model document.  The exact pinned snapshot must be present;
  * a page redesign, a different model page, or an ambiguous extra card holds. */
 function parseOfficialHtml(bytes: Uint8Array, model: string) {
   const html = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   if (!/^\s*<!doctype html|^\s*<html\b/iu.test(html) || /\u0000/u.test(html)) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
-  const code = /<code[^>]*>\s*([^<]+?)\s*<\/code>/gu;
-  const headings = [...html.matchAll(code)].map(match => ({ value: decodeHtml(match[1]!), index: match.index! }));
-  if (!headings.some(heading => heading.value === model)) throw new Error("OPENAI_PRICE_SOURCE_MODEL_HELD");
+  const containers = enclosedModelContainers(html, model);
+  if (containers.length === 0) throw new Error("OPENAI_PRICE_SOURCE_MODEL_HELD");
+  if (containers.length !== 1) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
   const card = /<div>Input<\/div>\s*<div[^>]*>\$([0-9]+(?:\.[0-9]{1,6})?)<\/div>\s*<\/div>\s*<div[^>]*>\s*<div>Cached input<\/div>\s*<div[^>]*>\$([0-9]+(?:\.[0-9]{1,6})?)<\/div>\s*<\/div>\s*<div[^>]*>\s*<div>Output<\/div>\s*<div[^>]*>\$([0-9]+(?:\.[0-9]{1,6})?)<\/div>/gu;
-  const matches = [...html.matchAll(card)];
-  const bound = matches.filter(match => {
-    const preceding = headings.filter(heading => heading.index < match.index!).at(-1);
-    return preceding?.value === model;
-  });
-  if (matches.length !== 1 || bound.length !== 1) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
-  const [input, cached, output] = bound[0]!.slice(1).map((value) => decodeHtml(value));
+  const matches = [...containers[0]!.matchAll(card)];
+  if (matches.length !== 1) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
+  const [input, cached, output] = matches[0]!.slice(1).map((value) => decodeHtml(value));
   return { currency: "USD" as const, inputMicrosPerMillion: micros(input!), cachedInputMicrosPerMillion: micros(cached!), outputMicrosPerMillion: micros(output!) };
 }
 function parseCapturedPrices(document: OpenAiResponsesPricingDocument, model: string) {

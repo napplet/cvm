@@ -21,6 +21,12 @@ if [ "${NAPPLET_CVM_NETWORK_NAMESPACE-}" != "1" ]; then
   command -v unshare >/dev/null 2>&1 || exit 126
   exec unshare --net -- env NAPPLET_CVM_NETWORK_NAMESPACE=1 "$0" "$@"
 fi
+# Docker gives this container a mount namespace.  Do not create a transient
+# nested mount namespace here: fixed-operation `put`/`status` calls must share
+# the same trusted job tmpfs.  Instead make the container namespace private
+# before changing it, so sealing the image base and adding scoped tmpfs mounts
+# cannot propagate outside this worker.
+mount --make-rprivate / || exit 126
 NET=/toolchain/bin/busybox
 [ -x "$NET" ] || exit 126
 "$NET" ip link set lo up || exit 126
@@ -65,6 +71,31 @@ mount_bounded /run/lock 16777216 noexec
 # Chromium may use POSIX shared memory; keep that writable surface separately
 # quota-bound instead of inheriting Docker's provider-sized /dev/shm default.
 mount_bounded /dev/shm 67108864 exec
+# The image overlay is never an allowed writable surface.  Seal every existing
+# non-policy mount read-only in the worker's private mount namespace, leaving
+# only the exact bounded tmpfs mounts above writable.  Mount metadata, not
+# UID-based access, is the authority: an unwritable mount root can still have
+# a writable descendant.
+seal_base_mounts() {
+  list=/run/napplet-cvm-jobs/.mounts-before-seal
+  findmnt -rn -o TARGET,OPTIONS > "$list" || exit 126
+  while IFS=' ' read -r target options; do
+    [ -n "$target" ] || continue
+    case "$target" in
+      /workspace|/run/napplet-cvm-jobs|/home/napplet|/tmp|/var/tmp|/work|/run/lock|/dev/shm) continue ;;
+      # These are the complete Docker/Linux base mounts permitted before they
+      # are sealed. Any other read-write mount is an injected surface and is
+      # refused rather than normalized into an implicit allowlist.
+      /|/proc|/dev|/dev/pts|/dev/mqueue|/sys|/sys/fs/cgroup|/etc/resolv.conf|/etc/hostname|/etc/hosts) ;;
+      *) case ",$options," in *,rw,*) exit 126 ;; esac; continue ;;
+    esac
+    case ",$options," in
+      *,rw,*) mount -o remount,ro "$target" || exit 126 ;;
+    esac
+  done < "$list"
+  rm -f "$list"
+}
+seal_base_mounts
 # Do not leak image/build-time or provider variables to generated code.  The
 # worker's ready check consumes this exact small environment as evidence.
 policy=${NAPPLET_CVM_POLICY_VERSION-}

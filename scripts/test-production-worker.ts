@@ -158,9 +158,9 @@ try {
   // mount must not be hidden by a same-device filesystem walk.
   const edgeAuditArgs = ["/usr/local/bin/napplet-cvm-bootstrap", "/usr/local/bin/napplet-cvm-worker", "edge-audit", "--candidate-sha256", "d".repeat(64), "--topology-sha256", "e".repeat(64)];
   const unboundedPids = await docker(["run", "--rm", "--cpus", "1", "--memory", "1024m", "--memory-swap", "1024m", "--security-opt", "apparmor=unconfined", "--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "-e", `NAPPLET_CVM_POLICY_VERSION=${POLICY}`, image, ...edgeAuditArgs]);
-  const writableEscape = await docker(["run", "--rm", ...resourceArgs, "--tmpfs", "/escape:size=65536", "--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "-e", `NAPPLET_CVM_POLICY_VERSION=${POLICY}`, image, ...edgeAuditArgs]);
+  const writableEscape = await docker(["run", "--rm", ...resourceArgs, "--tmpfs", "/escape:size=65536,mode=0555", "--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "-e", `NAPPLET_CVM_POLICY_VERSION=${POLICY}`, "--entrypoint", "/bin/sh", image, "-ec", `mkdir /escape/writable-child; chmod 0777 /escape/writable-child; exec /usr/local/bin/napplet-cvm-bootstrap /usr/local/bin/napplet-cvm-worker ${edgeAuditArgs.slice(2).map(arg => `'${arg}'`).join(" ")}`]);
   if (unboundedPids.status === 0 || writableEscape.status === 0) throw new Error("WORKER_EDGE_AUDIT_FALSE_POSITIVE");
-  report.edgeAuditNegativeProbes = { unboundedPids: unboundedPids.status, writableEscape: writableEscape.status };
+  report.edgeAuditNegativeProbes = { unboundedPids: unboundedPids.status, writableDescendant: writableEscape.status };
 
   if (legacy) {
   const buildName = containers[0]!; const buildDeadline = Date.now() + 600_000;
@@ -260,11 +260,16 @@ try {
       checkpointWorkspace = Buffer.from(canonicalJson({ version: 1, source: JSON.parse(body), artifact: JSON.parse(artifactBytes.toString("utf8")), toolchainSha256: toolchain })); lastJobId = id;
     }
   }
-  if (legacy || edgeNative) {
+  if (legacy || direct || edgeNative) {
     const edgeBody = canonicalJson({ version: 3, sessionId: "native-edge-proof", actionId: "hostile-supply", expectedVersion: 0, proposalSha256: lease, toolchainSha256: toolchain, deadlineEpochMs: Date.now() + 600_000,
       edgeCertification: { version: 1, candidateSha256: "d".repeat(64), topologySha256: "e".repeat(64), workerOperationId: `capacity-${"f".repeat(40)}`, sessionLeaseSha256: lease, providerImage: `registry.example/worker@sha256:${imageHash}`, workerProfileSha256: edgeNative ? edgeSelector!.profileSha256 : "f".repeat(64) }, files: JSON.parse(sourceJson).files });
     const edgeBytes = Buffer.from(edgeBody), edgeId = new Bun.CryptoHasher("sha256").update(edgeBytes).digest("hex");
     for (let offset = 0, index = 0; offset < edgeBytes.length; offset += 24_576, index++) await jobCommand("put", edgeId, String(index), edgeBytes.subarray(offset, offset + 24_576).toString("base64"));
+    if (!edgeNative) {
+      const refused = await docker(["exec", jobName, "/usr/local/bin/napplet-cvm-bootstrap", "/usr/local/bin/napplet-cvm-job", "start", edgeId, String(Math.ceil(edgeBytes.length / 24_576))]);
+      if (refused.status === 0 || !refused.stderr.includes("JOB_IMAGE_CONTRACT_MISMATCH") || (await jobCommand("status", edgeId)).state !== "missing") throw new Error("WORKER_LEGACY_V3_DISPATCHED");
+      report.v3RefusedBeforeClaim = true;
+    } else {
     await jobCommand("start", edgeId, String(Math.ceil(edgeBytes.length / 24_576)));
     let edgeResult: Record<string, unknown> | undefined;
     const edgeDeadline = Date.now() + 600_000;
@@ -281,13 +286,17 @@ try {
       || certification.supply.primary.installed?.sha256 !== certification.supply.secondary.installed?.sha256
       || certification.cgroup?.cpuQuotaMicros > certification.cgroup?.cpuPeriodMicros * 2
       || certification.cgroup?.memoryMaxBytes > 2_048 * 1024 * 1024 || certification.cgroup?.pidsMax > 256
+      || certification.workerProfileSha256 !== edgeSelector!.profileSha256
+      || !Array.isArray(certification.imageToolchain?.files) || certification.imageToolchain.files.length !== 8
+      || !["/toolchain/edge-worker-current.json", "/toolchain/edge-worker-profile-v3.json"].every(path => certification.imageToolchain.files.some((file: { path?: unknown }) => file.path === path))
       || !Object.values(certification.hostile ?? {}).every(value => value === true)) throw new Error("WORKER_NATIVE_EDGE_EVIDENCE_INVALID");
     // This hosted Linux job is a native image mechanism proof. It deliberately
     // does not possess a provider account or control-plane authority, so it
     // cannot certify expiry/image provider facts; production assembly requires
     // the separate authenticated readback port before accepting this result.
-    report.nativeEdgeEvidence = { jobId: edgeId, version: edgeArtifact.version, hostile: certification.hostile, cgroup: certification.cgroup, imageToolchain: certification.imageToolchain, supply: certification.supply, selectedProfileSha256: edgeNative ? edgeSelector!.profileSha256 : "not-applicable-legacy-image", providerReadback: "unavailable-in-native-image-harness" };
-    if (edgeNative) { checkpointWorkspace = Buffer.from(canonicalJson({ version: 1, source: JSON.parse(edgeBody), artifact: edgeArtifact, toolchainSha256: toolchain })); lastJobId = edgeId; jobs.push({ ...edgeResult, revision: "edge-v3", resultAccess: "denied-to-generated-uid" }); }
+    report.nativeEdgeEvidence = { jobId: edgeId, version: edgeArtifact.version, hostile: certification.hostile, cgroup: certification.cgroup, imageToolchain: certification.imageToolchain, supply: certification.supply, selectedProfileSha256: edgeSelector!.profileSha256, providerReadback: "unavailable-in-native-image-harness" };
+    checkpointWorkspace = Buffer.from(canonicalJson({ version: 1, source: JSON.parse(edgeBody), artifact: edgeArtifact, toolchainSha256: toolchain })); lastJobId = edgeId; jobs.push({ ...edgeResult, revision: "edge-v3", resultAccess: "denied-to-generated-uid" });
+    }
   }
   report.durableJobs = jobs; report.durableJobManifests = jobManifests;
   const fence = await jobCommand("fence", lastJobId, lease);

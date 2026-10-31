@@ -408,7 +408,10 @@ async function installedPackageInventory(project: string) {
   return Object.freeze({ format: "installed-package-inventory-v1" as const, packages: Object.freeze(packages), sha256: sha(canonical(packages)) });
 }
 async function measureEdgeToolchain() {
-  const paths = ["/toolchain/production-artifact-contract", "/toolchain/bin/napplet", "/toolchain/package.json", "/toolchain/pnpm-lock.yaml", "/toolchain/boilerplate-template/package.json", "/toolchain/boilerplate-template/pnpm-lock.yaml"] as const;
+  // The v3 dispatch selector and its selected profile are executable policy:
+  // changing either must change the measurement authenticated by provider
+  // readback. Archived v1/v2 profile readers remain intentionally untouched.
+  const paths = ["/toolchain/production-artifact-contract", "/toolchain/bin/napplet", "/toolchain/package.json", "/toolchain/pnpm-lock.yaml", "/toolchain/boilerplate-template/package.json", "/toolchain/boilerplate-template/pnpm-lock.yaml", "/toolchain/edge-worker-current.json", "/toolchain/edge-worker-profile-v3.json"] as const;
   const files = await Promise.all(paths.map(async path => Object.freeze({ path, sha256: await immutableImageFileHash(path) })));
   return Object.freeze({ format: "immutable-image-files-v1" as const, files: Object.freeze(files), sha256: sha(canonical(files)) });
 }
@@ -490,7 +493,7 @@ async function run(id: string, dir: string) {
       const primary = { aggregateSha256: sha(canonical(collected)), lockSha256: await measuredLockedFile(join(project, "pnpm-lock.yaml")), installed, commandEvidenceSha256: sha(canonical(commands.map(({ stdout, stderr, ...facts }) => ({ ...facts, stdoutSha256: sha(stdout), stderrSha256: sha(stderr) })))) };
       const secondary = await reproduce(id, request);
       if (primary.aggregateSha256 !== secondary.aggregateSha256 || primary.lockSha256 !== secondary.lockSha256 || primary.installed.sha256 !== secondary.installed.sha256) fail("JOB_REPRODUCTION_MISMATCH");
-      return { ...hostile, imageToolchain: edgeToolchain ?? fail("JOB_TOOLCHAIN_FILE_CHANGED"), supply: { format: "installed-package-inventory-v1" as const, primary: { ...primary, installed: primary.installed }, secondary: { ...secondary, installed: secondary.installed } } };
+      return { ...hostile, workerProfileSha256: request.edgeCertification.workerProfileSha256, imageToolchain: edgeToolchain ?? fail("JOB_TOOLCHAIN_FILE_CHANGED"), supply: { format: "installed-package-inventory-v1" as const, primary: { ...primary, installed: primary.installed }, secondary: { ...secondary, installed: secondary.installed } } };
     })() : undefined;
     const direct = request.version === 2 ? {
       version: 3, artifactContract: request.artifactContract, toolchainReceipt,

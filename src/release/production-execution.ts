@@ -186,7 +186,6 @@ async function loadPinnedProductionRuntimeConfig(module: PinnedDeploymentExecuti
   let config: ProductionConfig;
   try { config = loadProductionConfig(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(file.bytes))); }
   catch { throw new Error("RELEASE_PRODUCTION_RUNTIME_CONFIG_INVALID"); }
-  assertProductionArchitectureCurrent(config);
   if (config.candidateSha256 !== input.candidateSha256.toLowerCase() || config.topologySha256 !== input.topologySha256.toLowerCase()) {
     throw new Error("RELEASE_PRODUCTION_RUNTIME_BINDING_REQUIRED");
   }
@@ -219,6 +218,7 @@ async function openPinnedMountedSession(input: Readonly<{
     topologySha256: input.topologySha256,
     deploymentConfig: input.deploymentConfig,
   });
+  assertProductionArchitectureCurrent(config);
   const runtimeFactory = await importPinnedProductionRuntimeFactory(input.module);
   if (typeof runtimeFactory.createProductionCertificationSessionMaterial !== "function") throw new Error("RELEASE_PRODUCTION_RUNTIME_FACTORY_INVALID");
   /* The mounted pair is controller-owned material, but it is still a distinct

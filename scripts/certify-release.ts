@@ -150,6 +150,25 @@ async function readControllerReceipt(workspace: string, receiptSha256: string): 
   }
 }
 
+/** A receipt may pass the activation guard only when it identifies the exact
+ * durable original-operation recovery state. This is a local state lookup,
+ * not a receipt read, provider discovery, or authorization decision. */
+async function hasBoundHistoricalUsageRecovery(input: Readonly<{
+  candidatePath: string;
+  workspace: string;
+  receiptSha256?: string;
+}>): Promise<boolean> {
+  try {
+    const candidateSha256 = await releaseCandidateSha256(input.candidatePath);
+    const persisted = await new ReleaseCertificationController({ candidatePath: input.candidatePath, workspace: input.workspace }).status();
+    return persisted?.state.status === "billing_observing"
+      && persisted.state.candidate.candidateSha256 === candidateSha256
+      && (input.receiptSha256 === undefined || persisted.state.authorizationReceiptSha256 === input.receiptSha256.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 /** Read-only verification is deliberately kept on the product CLI so the
  * operator lifecycle has one stable root. The bundle remains unable to choose
  * its verifier: only the configured, pinned trust root is accepted. */
@@ -293,11 +312,25 @@ async function main(): Promise<number> {
       console.log(JSON.stringify({ progress: decision.status === "promoted" ? "bundle_verified" : "bundle_blocked", status: decision.status, bundleSha256: decision.bundleSha256, evidenceSha256: decision.evidenceSha256, cleanup: decision.cleanup }));
       return decision.status === "promoted" ? 0 : 1;
     }
+    let historicalRecoveryWorkspace: string | undefined;
     if (!status) {
+      try {
+        const workspace = controllerWorkspace();
+        if (await hasBoundHistoricalUsageRecovery({
+          candidatePath: candidatePath!,
+          workspace,
+          ...(receipt === undefined ? {} : { receiptSha256: receipt }),
+        })) historicalRecoveryWorkspace = workspace;
+      } catch {
+        // Ordinary activation remains closed without revealing workspace facts.
+      }
+    }
+    const historicalUsageRecovery = historicalRecoveryWorkspace !== undefined;
+    if (!status && !historicalUsageRecovery) {
       emitArchitectureRevisionRequired();
       return 1;
     }
-    const workspace = controllerWorkspace();
+    const workspace = historicalRecoveryWorkspace ?? controllerWorkspace();
     const workspaceCapability = await prepareReleaseWorkspace(workspace);
     /* Resolve an opaque receipt reference before any candidate discovery. A
      * nonexistent ID is not allowed to trigger pricing/provider reads just to

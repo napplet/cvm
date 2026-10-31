@@ -7,7 +7,7 @@ import { openProductionServiceJournals } from "./service-journals";
 import { GcsObjectStoreAdapter } from "../continuity/object-store";
 import { createGoogleAdcTokenSource } from "../release/deployment/google-auth";
 import { PostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
-import { createPostgresVertexOperationJournal, createPostgresWorkerOperationJournal } from "../release/deployment/postgres-provider-journals";
+import { createPostgresModalBillingReportJournal, createPostgresVertexOperationJournal, createPostgresWorkerOperationJournal } from "../release/deployment/postgres-provider-journals";
 import { createVertexDeploymentClient, createVertexInteractionsHttpPort } from "../release/deployment/vertex-client";
 import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
 import type { ProductionConfig } from "./config";
@@ -48,6 +48,9 @@ export async function materializeProductionRuntimeDependencies(input: Readonly<{
   // Report jobs are query-only but still need their own original-request CAS
   // fence; sharing the native mutation journal would couple recovery domains.
   const authoritativeUsageJournal = new PostgresOperationJournal(input.pool, { namespace: "production-authoritative-usage", scopeSha256 });
+  // Modal report attempts are observation-only but remain independently CAS
+  // journaled, so no retry can share an identity with worker control effects.
+  const modalBillingJournal = createPostgresModalBillingReportJournal(new PostgresOperationJournal(input.pool, { namespace: "production-modal-billing", scopeSha256 }));
   const workerJournal = serviceJournals.worker;
   const jobJournal = serviceJournals.job;
   const requestJournal = serviceJournals.request;
@@ -91,5 +94,5 @@ export async function materializeProductionRuntimeDependencies(input: Readonly<{
   const directPreviewAssets = await createProductionDirectPreviewAssets();
   const directPublicationIntents = new ProductionDirectPublicationIntents({ artifacts: ownedDirectArtifacts, journal: requestJournal,
     publication: { server: input.config.publication.uploadServer }, relays: input.config.publication.relays, now: input.now });
-  return Object.freeze({ pool: input.pool, journal, serviceJournals, googleControlJournal, googleIntentJournal, authoritativeUsageJournal, workerJournal, jobJournal, requestJournal, vertexJournal, checkpointJournal, checkpointCoordinator, retainedSubjects, tokenSource, gcs, artifactStore, workers: worker.clients, jobRouter, ownedDirectArtifacts, directPreviewAssets, directPublicationIntents, workerCertification: worker.certification, flyRegion: worker.flyRegion, capacity, certificationCapacities, vertexMaterial, vertex, proposals, gateway, settlement, retainedPricing, resolver, workerBridge });
+  return Object.freeze({ pool: input.pool, journal, serviceJournals, googleControlJournal, googleIntentJournal, authoritativeUsageJournal, modalBillingJournal, workerJournal, jobJournal, requestJournal, vertexJournal, checkpointJournal, checkpointCoordinator, retainedSubjects, tokenSource, gcs, artifactStore, workers: worker.clients, jobRouter, ownedDirectArtifacts, directPreviewAssets, directPublicationIntents, workerCertification: worker.certification, flyRegion: worker.flyRegion, capacity, certificationCapacities, vertexMaterial, vertex, proposals, gateway, settlement, retainedPricing, resolver, workerBridge });
 }

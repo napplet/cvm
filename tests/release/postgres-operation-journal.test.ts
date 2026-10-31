@@ -7,10 +7,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadPromotedVerificationAuthority } from "../../src/production/release-verification-authority";
 import { PostgresOperationJournal, assertPostgresOperationJournal } from "../../src/release/deployment/postgres-operation-journal";
-import { createPostgresGoogleOperationJournal, createPostgresWorkerOperationJournal, createPostgresVertexOperationJournal } from "../../src/release/deployment/postgres-provider-journals";
+import { createPostgresGoogleOperationJournal, createPostgresModalBillingReportJournal, createPostgresWorkerOperationJournal, createPostgresVertexOperationJournal } from "../../src/release/deployment/postgres-provider-journals";
 import { ProductionCoreControlClient } from "../../src/release/deployment/production-core-control";
 import { ProductionCertificationControl, type ProductionCertificationServices } from "../../src/production/certification-control";
 import { createAuthorizationReceipt, createAuthorizationRequest } from "../../src/release/authorization";
+import { createModalBillingObservationGrant, ModalBillingReportCaptureSchema, createModalBillingReportCollector, ModalBillingReportJournalRecordSchema } from "../../src/release/deployment/modal-billing-report";
 import { ProductionRestoreEvidenceSchema, ProductionWorkerJobClient } from "../../src/worker-adapters/production-job-client";
 import { canonicalJson } from "../../src/promotion/schema";
 import { PostgresReleasePromotion } from "../../src/production/release-promotion";
@@ -177,6 +178,55 @@ integration("real restricted PostgreSQL survives new instances, arbitrates concu
     const claims = await Promise.all(Array.from({ length: 4 }, () => create().claim("original", identity, { state: "claimed", eventId: "encrypted-event" })));
     expect(claims.filter(result => result.claimed)).toHaveLength(1);
     expect(claims.every(result => result.record.revision === 1)).toBe(true);
+    const modal = () => createPostgresModalBillingReportJournal(create("modal-billing:run-1"));
+    const modalRecord = { schemaVersion: "modal-billing-report-journal-v2" as const, grantSha256: identity, reportRequestSha256: scopeSha256, attempts: [] };
+    const modalClaims = await Promise.all(Array.from({ length: 4 }, () => modal().claim(modalRecord)));
+    expect(modalClaims.filter(result => result.claimed)).toHaveLength(1);
+    const modalWinner = await modal().read(scopeSha256);
+    if (!modalWinner) throw new Error("MODAL_JOURNAL_RECORD_MISSING");
+    const intent = { ...modalWinner.record, attempts: [{ attempt: 1, state: "dispatch_intent" as const, atMs: 1, argvSha256: identity, executableSha256: scopeSha256 }] };
+    expect(await modal().compareAndSet({ reportRequestSha256: scopeSha256, expectedRevision: modalWinner.revision, record: intent })).toMatchObject({ revision: 2 });
+    const modalRestart = await modal().read(scopeSha256);
+    expect(modalRestart?.record.attempts).toMatchObject([{ state: "dispatch_intent", attempt: 1 }]);
+    // Fresh adapters recover the original finite failure reason from actual
+    // restricted SQL, without resolving a secret, reading an object or retrying.
+    let modalRecoveryEffects = 0;
+    for (const disposition of ["dispatch_unknown", "credential_unavailable", "grant_expired"] as const) {
+      const nowMs = Date.now(), executable = join(tmpdir(), name, `missing-modal-${disposition}`);
+      const grant = createModalBillingObservationGrant({
+        version: 1, authorizationRequestSha256: identity, authorizationReceiptSha256: identity, candidateSha256: scopeSha256,
+        operationRecordSha256: identity, accountScopeSha256: scopeSha256, environmentScopeSha256: identity, resourceIdentitySha256: scopeSha256,
+        currencyPolicySha256: identity, credentialReferenceSha256: identity, cliExecutableSha256: scopeSha256,
+        environmentName: "cvm-prod", expectedObjectId: "sb-original", intervalStartMs: Date.parse("2026-10-30T10:00:00Z"), intervalEndMs: Date.parse("2026-10-30T11:00:00Z"),
+        requiredTags: { cvm_operation: "operation-1" }, maximumStdoutBytes: 1_024, maximumStderrBytes: 128, timeoutMs: 1_000, maximumAttempts: 1, expiresAtMs: disposition === "grant_expired" ? nowMs - 1 : nowMs + 60_000,
+      });
+      const journal = () => createPostgresModalBillingReportJournal(create(`modal-recovery:${disposition}`));
+      const result = ModalBillingReportCaptureSchema.parse({ status: "held", reason: disposition === "dispatch_unknown" ? "child_failure" : disposition, grantSha256: grant.grantSha256, reportRequestSha256: grant.grantSha256 });
+      const artifacts = { async createImmutable(): Promise<never> { modalRecoveryEffects++; throw new Error("UNEXPECTED_RECOVERY_WRITE"); }, async readExact(): Promise<never> { modalRecoveryEffects++; throw new Error("UNEXPECTED_RECOVERY_READ"); } };
+      const producer = createModalBillingReportCollector({
+        executable, executableSha256: scopeSha256, credentialReference: "secret/modal-report", credentialReferenceSha256: identity, journal: journal(), artifactOrigin: "gs://original-evidence/", artifacts,
+        credentialResolver: { async resolve() {
+          if (disposition === "credential_unavailable") throw new Error("OFFLINE_CREDENTIAL_UNAVAILABLE");
+          return { tokenId: "offline-id", tokenSecret: "offline-secret" };
+        } },
+      });
+      // These three real producer paths all stop before a process starts:
+      // expired authority, unavailable credential, or an absent executable.
+      await expect(producer.capture(grant)).resolves.toEqual(result);
+      const completed = await journal().read(grant.grantSha256);
+      expect(completed?.revision).toBe(3);
+      expect(ModalBillingReportJournalRecordSchema.parse(completed?.record).attempts).toMatchObject([{ state: "completed", disposition }]);
+      const recovered = createModalBillingReportCollector({
+        executable, executableSha256: scopeSha256, credentialReference: "secret/modal-report", credentialReferenceSha256: identity, journal: journal(), artifactOrigin: "gs://original-evidence/",
+        credentialResolver: { async resolve(): Promise<never> { modalRecoveryEffects++; throw new Error("UNEXPECTED_RECOVERY_CREDENTIAL"); } },
+        artifacts,
+      });
+      await expect(recovered.recover(grant)).resolves.toEqual(result);
+      await expect(recovered.capture(grant)).resolves.toEqual(result);
+      expect((await journal().read(grant.grantSha256))?.record.attempts).toHaveLength(1);
+      expect((await admin.query("SELECT count(*)::int AS count FROM production_real.release_operation_audit WHERE namespace=$1", [`modal-recovery:${disposition}`])).rows[0].count).toBe(3);
+    }
+    expect(modalRecoveryEffects).toBe(0);
     expect(await create().read("missing")).toBeUndefined();
     const race = await Promise.all([create().compareAndSet("original", identity, 1, { state: "completed" }), create().compareAndSet("original", identity, 1, { state: "unknown" })]);
     expect(race.filter(Boolean)).toHaveLength(1);

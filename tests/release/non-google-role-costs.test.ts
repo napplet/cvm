@@ -13,7 +13,7 @@ import { OPENAI_RESPONSES_PRICING_URL } from "../../src/release/costs/official-s
 import { createNonGoogleModelCostCatalog } from "../../src/release/costs/production-catalog";
 import { assertNonGooglePreapprovalHeld, createNonGooglePreapprovalMaterializer, prepareNonGoogleSuccessorPreapprovalHold, type MaterializePreapprovalInput } from "../../src/release/preapproval-materializer";
 import { prepareNonGoogleSuccessorInventory } from "../../src/release/providers";
-import { NonGoogleAuthorizationReceiptV4Schema } from "../../src/release/contracts";
+import { NonGoogleAuthorizationReceiptV4Schema, createNonGoogleAuthorizationRequestV3, verifyNonGoogleAuthorizationReceiptV4 } from "../../src/release/contracts";
 
 const hex = (character: string) => character.repeat(64);
 const candidateSha256 = hex("a");
@@ -89,6 +89,27 @@ const evidenceResolver = (facts: readonly SuccessorRoleCostFact[]) => ({
     if (!fact) throw new Error("FIXTURE_EVIDENCE_MISSING");
     return { sourceUrl: fact.evidence.sourceUrl, bytes: fact.roleId === "model.openai-responses" ? openAiSource : new TextEncoder().encode(reference) };
   },
+});
+
+const successorRequest = async (graph: Awaited<ReturnType<typeof inventory>>, bound: Awaited<ReturnType<typeof createSuccessorRoleCostBound>>) => createNonGoogleAuthorizationRequestV3({
+  identity: {
+    candidateSha256, sourceSha256: hex("d"), configSha256: hex("e"), toolchainSha256: hex("f"), topologySha256,
+    failureDomainSha256: hex("1"), retentionSha256: hex("2"), cleanupSha256: hex("3"), controllerStateSha256: hex("4"),
+  },
+  binding: { providerGraphRevision: "non-google-v1", roleInventorySha256: graph.inventorySha256, roleCostBoundSha256: bound.boundSha256, scopesSha256: hex("5"), effectsSha256: hex("6") },
+});
+
+const canonicalRecord = (label: string) => {
+  const bytes = new TextEncoder().encode(label);
+  return Object.freeze({ bytes, sha256: createHash("sha256").update(bytes).digest("hex") });
+};
+
+const canonicalRecords = () => Object.freeze({
+  candidate: canonicalRecord("candidate-record"),
+  source: canonicalRecord("source-record"),
+  topology: canonicalRecord("topology-record"),
+  config: canonicalRecord("config-record"),
+  controllerState: canonicalRecord("controller-state-record"),
 });
 
 test("successor graph rejects forged constructor provenance and accepts only the product-owned registry", async () => {
@@ -208,19 +229,13 @@ test("held costs and missing native suite backends are typed zero-effect preappr
   }));
   const bound = await createSuccessorRoleCostBound({ graph, facts, modelCatalog: modelCatalog(rate) });
   await expect(assertSuccessorGraphPreapprovalHeld({ graph, bound, nowMs, evidence: evidenceResolver(facts) })).rejects.toThrow("SUCCESSOR_GRAPH_BACKEND_UNCONSTRUCTED");
-  const request = {
-    kind: "release-authorization-request-v3",
-    version: 3,
-    identity: {
-      candidateSha256, sourceSha256: hex("d"), configSha256: hex("e"), toolchainSha256: hex("f"), topologySha256,
-      failureDomainSha256: hex("1"), retentionSha256: hex("2"), cleanupSha256: hex("3"), controllerStateSha256: hex("4"),
-    },
-    binding: { providerGraphRevision: "non-google-v1", roleInventorySha256: graph.inventorySha256, roleCostBoundSha256: bound.boundSha256, scopesSha256: hex("5"), effectsSha256: hex("6") },
-    requestSha256: hex("7"),
-  } as const;
+  const request = await successorRequest(graph, bound);
   const deployment = { version: 1, providerGraphRevision: "non-google-v1", ...request.identity } as const;
   const source = { async readCostFacts() { return facts; }, modelCatalog: modelCatalog(rate), evidence: evidenceResolver(facts) };
   await expect(assertNonGooglePreapprovalHeld({ request, deployment, graph, bound, nowMs, source })).rejects.toThrow("SUCCESSOR_GRAPH_BACKEND_UNCONSTRUCTED");
+  await expect(assertNonGooglePreapprovalHeld({ request: { ...request, requestSha256: hex("7") }, deployment, graph, bound, nowMs, source })).rejects.toThrow("SUCCESSOR_GRAPH_REQUEST_DIGEST_INVALID");
+  await expect(assertNonGooglePreapprovalHeld({ request: { ...request, identity: { ...request.identity, configSha256: hex("8") } }, deployment, graph, bound, nowMs, source })).rejects.toThrow("SUCCESSOR_GRAPH_REQUEST_DIGEST_INVALID");
+  await expect(assertNonGooglePreapprovalHeld({ request: { ...request, binding: { ...request.binding, effectsSha256: hex("9") } }, deployment, graph, bound, nowMs, source })).rejects.toThrow("SUCCESSOR_GRAPH_REQUEST_DIGEST_INVALID");
   await expect(assertNonGooglePreapprovalHeld({ request: { version: 2 }, deployment, graph, bound, nowMs, source })).rejects.toThrow("SUCCESSOR_GRAPH_REQUEST_INVALID");
 });
 
@@ -238,11 +253,7 @@ test("normal successor materialization recomputes controller facts before any fi
       : evidence(`evidence:${role.roleId.replace(/\./gu, "-")}`, "https://napplet-cvm.invalid/held"),
   }));
   const bound = await createSuccessorRoleCostBound({ graph, facts, modelCatalog: modelCatalog(rate) });
-  const request = {
-    kind: "release-authorization-request-v3", version: 3,
-    identity: { candidateSha256, sourceSha256: hex("d"), configSha256: hex("e"), toolchainSha256: hex("f"), topologySha256, failureDomainSha256: hex("1"), retentionSha256: hex("2"), cleanupSha256: hex("3"), controllerStateSha256: hex("4") },
-    binding: { providerGraphRevision: "non-google-v1", roleInventorySha256: graph.inventorySha256, roleCostBoundSha256: bound.boundSha256, scopesSha256: hex("5"), effectsSha256: hex("6") }, requestSha256: hex("7"),
-  } as const;
+  const request = await successorRequest(graph, bound);
   const deployment = { version: 1, providerGraphRevision: "non-google-v1", ...request.identity } as const;
   const controller = createNonGooglePreapprovalMaterializer({
     async readCostFacts() { return facts; }, modelCatalog: modelCatalog(rate), evidence: evidenceResolver(facts),
@@ -272,17 +283,29 @@ test("normal successor materialization recomputes controller facts before any fi
   await expect(controller.materialize({ ...normalInput, bound: { ...bound, heldRoleIds: [] } })).rejects.toThrow("SUCCESSOR_GRAPH_PREAPPROVAL_BINDING_INVALID");
   await expect(controller.materialize({ ...normalInput, bound: { ...bound, facts: bound.facts.map((fact) => fact.roleId === "worker.modal" ? { ...fact, holdReason: "tampered fact should never bind" } : fact) } })).rejects.toThrow("SUCCESSOR_GRAPH_PREAPPROVAL_BINDING_INVALID");
   const forgedBound = { ...bound, boundSha256: hex("8"), heldRoleIds: [] };
-  await expect(controller.materialize({ ...normalInput, request: { ...request, binding: { ...request.binding, roleCostBoundSha256: forgedBound.boundSha256 } }, bound: forgedBound })).rejects.toThrow("SUCCESSOR_GRAPH_PREAPPROVAL_BINDING_INVALID");
-  await expect(prepareNonGoogleSuccessorPreapprovalHold({
-    candidateSha256, topologySha256, sourceSha256: hex("a"), configSha256: hex("b"), controllerStateSha256: hex("c"),
-    sourceBytes: new TextEncoder().encode("controller-owned-config-bytes"), nowMs,
-  })).rejects.toThrow("SUCCESSOR_GRAPH_BACKEND_UNCONSTRUCTED");
+  const forgedRequest = await createNonGoogleAuthorizationRequestV3({ identity: request.identity, binding: { ...request.binding, roleCostBoundSha256: forgedBound.boundSha256 } });
+  await expect(controller.materialize({ ...normalInput, request: forgedRequest, bound: forgedBound })).rejects.toThrow("SUCCESSOR_GRAPH_PREAPPROVAL_BINDING_INVALID");
+  await expect(prepareNonGoogleSuccessorPreapprovalHold({ nowMs })).rejects.toThrow("SUCCESSOR_GRAPH_TOPOLOGY_OR_CONFIG_UNAVAILABLE");
+  const records = canonicalRecords();
+  await expect(prepareNonGoogleSuccessorPreapprovalHold({ nowMs, records: { ...records, candidate: { ...records.candidate, sha256: hex("a") } } })).rejects.toThrow("SUCCESSOR_GRAPH_CANONICAL_RECORD_DIGEST_INVALID");
+  await expect(prepareNonGoogleSuccessorPreapprovalHold({ nowMs, records: { ...records, source: { ...records.source, bytes: new TextEncoder().encode("unrelated-source-bytes") } } })).rejects.toThrow("SUCCESSOR_GRAPH_CANONICAL_RECORD_DIGEST_INVALID");
+  await expect(prepareNonGoogleSuccessorPreapprovalHold({ nowMs, records: { ...records, topology: { ...records.topology, sha256: hex("a") } } })).rejects.toThrow("SUCCESSOR_GRAPH_CANONICAL_RECORD_DIGEST_INVALID");
+  await expect(prepareNonGoogleSuccessorPreapprovalHold({ nowMs, records: { ...records, config: { ...records.config, sha256: hex("a") } } })).rejects.toThrow("SUCCESSOR_GRAPH_CANONICAL_RECORD_DIGEST_INVALID");
+  await expect(prepareNonGoogleSuccessorPreapprovalHold({ nowMs, records: { ...records, controllerState: { ...records.controllerState, sha256: hex("a") } } })).rejects.toThrow("SUCCESSOR_GRAPH_CANONICAL_RECORD_DIGEST_INVALID");
 });
 
-test("successor receipts use their disjoint v4 envelope and never decode as historical authority", () => {
-  expect(NonGoogleAuthorizationReceiptV4Schema.parse({
-    kind: "release-authorization-receipt-v4", version: 4, requestSha256: hex("a"), candidateSha256: hex("b"), topologySha256: hex("c"),
-    providerGraphRevision: "non-google-v1", roleInventorySha256: hex("d"), roleCostBoundSha256: hex("e"), receiptSha256: hex("f"),
-  })).toMatchObject({ version: 4, providerGraphRevision: "non-google-v1" });
+test("successor receipts use their disjoint v4 envelope and verify the v3 binding before consumption", async () => {
+  const graph = await inventory();
+  const facts: readonly SuccessorRoleCostFact[] = graph.roles.map((role) => ({
+    roleId: role.roleId, effectId: role.effectId, costComponentId: role.costComponentId, constructorSha256: role.constructorSha256,
+    disposition: "unknown_held", status: "held", provider: role.roleId, holdReason: "receipt remains closed", evidence: evidence(`evidence:${role.roleId}`, "https://napplet-cvm.invalid/held"),
+  }));
+  const bound = await createSuccessorRoleCostBound({ graph, facts });
+  const request = await successorRequest(graph, bound);
+  const receipt = { kind: "release-authorization-receipt-v4", version: 4, requestSha256: request.requestSha256, candidateSha256: request.identity.candidateSha256, topologySha256: request.identity.topologySha256,
+    providerGraphRevision: "non-google-v1", roleInventorySha256: request.binding.roleInventorySha256, roleCostBoundSha256: request.binding.roleCostBoundSha256, receiptSha256: hex("f") } as const;
+  expect(await verifyNonGoogleAuthorizationReceiptV4({ request, receipt })).toMatchObject({ version: 4, providerGraphRevision: "non-google-v1" });
+  await expect(verifyNonGoogleAuthorizationReceiptV4({ request: { ...request, requestSha256: hex("a") }, receipt })).rejects.toThrow("SUCCESSOR_GRAPH_REQUEST_DIGEST_INVALID");
+  await expect(verifyNonGoogleAuthorizationReceiptV4({ request, receipt: { ...receipt, requestSha256: hex("a") } })).rejects.toThrow("SUCCESSOR_GRAPH_RECEIPT_BINDING_INVALID");
   expect(() => NonGoogleAuthorizationReceiptV4Schema.parse({ kind: "release-authorization-receipt-v3", version: 3 })).toThrow();
 });

@@ -138,26 +138,16 @@ async function sha256Json(value: unknown): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-async function sha256Bytes(value: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new Uint8Array(value));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
 /** Executes the real successor preparation on the public normal-request path
- * while the architecture guard is active. All derived values are review-only,
- * remain in process, and the sole expected result is a typed hold. */
-async function prepareHeldSuccessorFromCandidate(candidatePath: string): Promise<void> {
-  const candidateSha256 = await releaseCandidateSha256(candidatePath);
-  const sourceBytes = new Uint8Array(await readFile(candidatePath));
-  if (await releaseCandidateSha256(candidatePath) !== candidateSha256) throw new Error("SUCCESSOR_GRAPH_CANDIDATE_BYTES_CHANGED");
-  const sourceSha256 = await sha256Bytes(sourceBytes);
-  const topologySha256 = await sha256Json({ graphRevision: "non-google-v1", candidateSha256 });
-  const configSha256 = await sha256Json({ sourceSha256, topologySha256, mode: "held-successor-preparation" });
-  const controllerStateSha256 = await sha256Json({ candidateSha256, topologySha256, state: "architecture-guard-active" });
+ * while the architecture guard is active. Plan 67 has no controller-owned
+ * successor topology/config/state records, so this is an explicit pre-v3
+ * hold: candidate or historical config bytes cannot be relabelled as those
+ * missing authorities. */
+async function prepareHeldSuccessorFromCandidate(): Promise<void> {
   try {
-    await prepareNonGoogleSuccessorPreapprovalHold({ candidateSha256, topologySha256, sourceSha256, configSha256, controllerStateSha256, sourceBytes, nowMs: Date.now() });
+    await prepareNonGoogleSuccessorPreapprovalHold({ nowMs: Date.now() });
   } catch (error) {
-    if (error instanceof Error && (error.message === "SUCCESSOR_GRAPH_BACKEND_UNCONSTRUCTED" || error.message === "SUCCESSOR_GRAPH_COST_HELD")) return;
+    if (error instanceof Error && error.message === "SUCCESSOR_GRAPH_TOPOLOGY_OR_CONFIG_UNAVAILABLE") return;
     throw error;
   }
 }
@@ -220,15 +210,7 @@ async function materializeRequestPreapproval(input: Readonly<{
   }
   const catalogSha256 = await sha256Json(input.facts);
   const providerScopesSha256 = await sha256Json(input.authorization.providerScopes);
-  await prepareNonGoogleSuccessorPreapprovalHold({
-    candidateSha256: input.candidateSha256,
-    topologySha256: input.topologySha256,
-    sourceSha256: certifier.controller.sourceSha256,
-    configSha256: execution.configSha256,
-    controllerStateSha256: input.authorization.controllerStateSha256,
-    sourceBytes: deploymentBytes,
-    nowMs: Date.now(),
-  });
+  await prepareNonGoogleSuccessorPreapprovalHold({ nowMs: Date.now() });
   return materializePreapproval({
     workspace: input.workspace,
     repositoryRoot: execution.root,
@@ -353,7 +335,7 @@ async function main(): Promise<number> {
     }
     const historicalUsageRecovery = historicalRecoveryWorkspace !== undefined;
     if (!status && !historicalUsageRecovery) {
-      if (request) await prepareHeldSuccessorFromCandidate(candidatePath!);
+      if (request) await prepareHeldSuccessorFromCandidate();
       emitArchitectureRevisionRequired();
       return 1;
     }

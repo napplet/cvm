@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { canonicalJson } from "../promotion/schema";
 import { ReleaseAuthorizationRequestSchema, type ReleaseAuthorizationRequest } from "./authorization";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
@@ -131,6 +132,42 @@ export const NonGoogleAuthorizationRequestV3Schema = z.object({
 }).strict();
 export type NonGoogleAuthorizationRequestV3 = z.infer<typeof NonGoogleAuthorizationRequestV3Schema>;
 
+async function successorRequestDigest(input: Readonly<{
+  identity: z.infer<typeof SuccessorIdentitySchema>;
+  binding: z.infer<typeof SuccessorEnvelopeBindingSchema>;
+}>): Promise<string> {
+  const bytes = new TextEncoder().encode(canonicalJson({ identity: input.identity, binding: input.binding }));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** The only v3 constructor.  Its digest binds exactly the canonical identity
+ * and binding, and it deliberately has no issuer or effect capability. */
+export async function createNonGoogleAuthorizationRequestV3(input: Readonly<{
+  identity: unknown;
+  binding: unknown;
+}>): Promise<NonGoogleAuthorizationRequestV3> {
+  const identity = SuccessorIdentitySchema.parse(input.identity);
+  const binding = SuccessorEnvelopeBindingSchema.parse(input.binding);
+  return NonGoogleAuthorizationRequestV3Schema.parse({
+    kind: "release-authorization-request-v3",
+    version: 3,
+    identity,
+    binding,
+    requestSha256: await successorRequestDigest({ identity, binding }),
+  });
+}
+
+/** Verify a successor review record immediately after parsing it. */
+export async function verifyNonGoogleAuthorizationRequestV3(input: unknown): Promise<NonGoogleAuthorizationRequestV3> {
+  const request = NonGoogleAuthorizationRequestV3Schema.safeParse(input);
+  if (!request.success) throw new Error("SUCCESSOR_GRAPH_REQUEST_INVALID");
+  if (request.data.requestSha256 !== await successorRequestDigest(request.data)) {
+    throw new Error("SUCCESSOR_GRAPH_REQUEST_DIGEST_INVALID");
+  }
+  return request.data;
+}
+
 export const NonGoogleAuthorizationReceiptV4Schema = z.object({
   kind: z.literal("release-authorization-receipt-v4"),
   version: z.literal(4),
@@ -143,6 +180,25 @@ export const NonGoogleAuthorizationReceiptV4Schema = z.object({
   receiptSha256: DigestSchema,
 }).strict();
 export type NonGoogleAuthorizationReceiptV4 = z.infer<typeof NonGoogleAuthorizationReceiptV4Schema>;
+
+/** A future receipt consumer must revalidate the reviewed v3 binding first.
+ * Plan 67 does not construct or issue receipts. */
+export async function verifyNonGoogleAuthorizationReceiptV4(input: Readonly<{
+  request: unknown;
+  receipt: unknown;
+}>): Promise<NonGoogleAuthorizationReceiptV4> {
+  const request = await verifyNonGoogleAuthorizationRequestV3(input.request);
+  const receipt = NonGoogleAuthorizationReceiptV4Schema.parse(input.receipt);
+  if (receipt.requestSha256 !== request.requestSha256
+    || receipt.candidateSha256 !== request.identity.candidateSha256
+    || receipt.topologySha256 !== request.identity.topologySha256
+    || receipt.providerGraphRevision !== request.binding.providerGraphRevision
+    || receipt.roleInventorySha256 !== request.binding.roleInventorySha256
+    || receipt.roleCostBoundSha256 !== request.binding.roleCostBoundSha256) {
+    throw new Error("SUCCESSOR_GRAPH_RECEIPT_BINDING_INVALID");
+  }
+  return receipt;
+}
 
 /** Plan 67 deliberately leaves successor issuance closed. Parsing validates
  * only immutable review bytes; the architecture guard stops before any

@@ -216,8 +216,12 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       maximum: "50", policyVersion: "policy:one", idea: "Build one focused private counter." });
     const sessionId = `session:${hash({ accountId, key: command.idempotencyKey }).slice(0, 24)}`;
     await admin.query("INSERT INTO production_real.funding_accounts(account_id,unit) VALUES($1,'sat')", [accountId]);
-    await admin.query("INSERT INTO production_real.account_balance_projection(account_id,unit,settled_available,held) VALUES($1,'sat',0,0)", [accountId]);
-    await admin.query("INSERT INTO production_real.session_cap_holds(hold_id,account_id,reference,requested_cap,held_amount,state) VALUES('hold:one',$1,'admission:one',50,0,'active')", [accountId]);
+    // This quote is made after a previously authorized operation has consumed
+    // all but three sats of the original approval.  The residual hold must be
+    // sufficient for the quoted work, but it must not make the later negative
+    // acceptance cases funded by accident.
+    await admin.query("INSERT INTO production_real.account_balance_projection(account_id,unit,settled_available,held) VALUES($1,'sat',3,3)", [accountId]);
+    await admin.query("INSERT INTO production_real.session_cap_holds(hold_id,account_id,reference,requested_cap,held_amount,state) VALUES('hold:one',$1,'admission:one',50,3,'active')", [accountId]);
     await admin.query("INSERT INTO production_real.admissions(admission_id,account_id,reference,capacity_reference,state) VALUES('admission:one',$1,'admission:one','capacity:fixture','accepted')", [accountId]);
 
     const values = new Map<string, { bytes: Uint8Array; checksum: string }>(); let objectReads = 0, allocations = 0, deletions = 0;
@@ -293,6 +297,12 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     for (const table of ["action_budget_reservations", "provider_operations", "ledger_entries"]) expect((await admin.query(`SELECT count(*)::int AS count FROM production_real.${table}`)).rows[0].count).toBe(0);
     expect(allocations).toBe(0);
     expect(deletions).toBe(0);
+
+    // Restore the intentionally unfunded state used by the acceptance denial
+    // assertions below. The quote above has already proven its pre-dispatch
+    // residual-cap check and created no action reservation.
+    await admin.query("UPDATE production_real.account_balance_projection SET settled_available=0,held=0 WHERE account_id=$1", [accountId]);
+    await admin.query("UPDATE production_real.session_cap_holds SET held_amount=0 WHERE account_id=$1 AND reference='admission:one'", [accountId]);
 
     // A revision's delayed checkpoint expires later than the original SQL
     // command envelope. Retain its authenticated command for that final window.

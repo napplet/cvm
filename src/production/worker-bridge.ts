@@ -24,6 +24,8 @@ import { artifactCapabilityText } from "./artifact-capability-text";
 const Owner = z.object({ accountId: z.string().regex(/^account:[a-f0-9]{64}$/u), ownerId: z.string().regex(/^[a-f0-9]{64}$/u) }).strict();
 const Capacity = z.object({ intentReference: z.string().regex(/^capacity-intent:[a-f0-9]{64}$/u), reference: z.string().regex(/^capacity:[a-f0-9]{64}$/u), workerOperationId: z.string().regex(/^capacity-[a-f0-9]{40}$/u), provider: z.enum(["modal", "fly"]), deadlineEpochMs: z.number().int().positive() }).passthrough();
 const sha = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
+type CheckpointRestoreMetadata = Omit<CheckpointRestoreRequest, "archive">;
+const checkpointRestoreBinding = (value: CheckpointRestoreMetadata) => sha(canonicalJson(value));
 
 export type ProductionWorkerOwner = z.infer<typeof Owner>;
 type ResolvedWorker = ProductionWorkerOwner & Readonly<{ intentReference: string; capacityReference: string; workerOperationId: string; provider: "modal" | "fly" }>;
@@ -46,7 +48,57 @@ export class ProductionWorkerOwnershipResolver {
   }
   async resolveWorker(requestValue: WorkerRunRequest): Promise<ResolvedWorker> {
     if (!this.input.capacityJournal) throw new Error("PRODUCTION_WORKER_CAPACITY_JOURNAL_REQUIRED");
-    const ledger = await this.#ledger(requestValue); const record = await this.input.capacityJournal.read<unknown>(`capacity-intent:${sha(ledger.intentReference)}`); const capacity = Capacity.parse(record?.value);
+    const ledger = await this.#ledger(requestValue); return this.#resolved(ledger);
+  }
+  /** A checkpoint reattachment is not new generation work. It may only use a
+   * receipt-finalized action when its exact checkpoint/resume claim remains
+   * retained and capacity-bound; ordinary run() resolution still rejects that
+   * terminal state. */
+  async resolveCheckpointWorker(value: CheckpointFenceRequest | CheckpointRestoreRequest | (Omit<CheckpointRestoreRequest, "archive"> & Readonly<{ archiveSha256: string }>), requestValue: WorkerRunRequest): Promise<ResolvedWorker> {
+    if (!this.input.capacityJournal) throw new Error("PRODUCTION_WORKER_CAPACITY_JOURNAL_REQUIRED");
+    const restored = CheckpointRestoreRequestSchema.safeParse(value);
+    const observed = CheckpointRestoreRequestSchema.omit({ archive: true }).extend({ archiveSha256: z.string().regex(/^[a-f0-9]{64}$/u) }).safeParse(value);
+    const restoration = restored.success ? restored.data : observed.success ? observed.data : undefined;
+    const checkpoint = restoration
+      ? CheckpointFenceRequestSchema.parse({
+        accountId: restoration.accountId, sessionId: restoration.sessionId, actionId: restoration.actionId,
+        expectedVersion: restoration.expectedVersion, policyVersion: restoration.policyVersion,
+        capabilityGrant: restoration.capabilityGrant, workspaceId: restoration.workspaceId,
+        checkpointId: restoration.checkpointId, pauseGeneration: restoration.pauseGeneration,
+        actionVersion: restoration.actionVersion, workspaceLineage: restoration.workspaceLineage,
+        leaseToken: restoration.leaseToken,
+      })
+      : CheckpointFenceRequestSchema.parse(value);
+    const resumeClaim = restoration?.resumeClaim;
+    const request = WorkerRunRequestSchema.parse(requestValue);
+    if (request.sessionId !== checkpoint.sessionId || request.actionId !== checkpoint.actionId || request.expectedVersion !== checkpoint.expectedVersion
+      || request.policyVersion !== checkpoint.policyVersion || request.capabilityGrant !== "phase-04-coordinator-grant"
+      || request.workspaceId !== checkpoint.workspaceId || request.workspaceId !== `workspace:${request.sessionId}` || request.policyVersion !== this.input.policyVersion)
+      throw new Error("PRODUCTION_CHECKPOINT_WORKER_BINDING_INVALID");
+    const client = await this.input.pool.connect();
+    try {
+      const rows = await client.query(`SELECT a.account_id,trim(f.nostr_pubkey) AS owner_id,c.intent_reference,c.capacity_reference
+        FROM production_real.metered_actions a
+        JOIN production_real.metered_sessions s ON s.id=a.session_id AND s.account_id=a.account_id
+        JOIN production_real.funding_accounts f ON f.account_id=a.account_id
+        JOIN production_real.continuation_resume_commands r ON r.account_id=a.account_id AND r.action_id=a.id
+        JOIN production_real.continuation_checkpoints cp ON cp.checkpoint_id=r.checkpoint_id AND cp.account_id=r.account_id AND cp.session_id=a.session_id
+        JOIN production_real.checkpoint_envelopes e ON e.checkpoint_id=cp.checkpoint_id AND e.account_id=cp.account_id AND e.session_id=cp.session_id
+        JOIN production_real.continuation_worker_allocations w ON w.checkpoint_id=cp.checkpoint_id AND w.account_id=cp.account_id AND w.session_id=cp.session_id AND w.action_id=a.id AND w.allocation_intent_reference=r.allocation_intent_reference
+        JOIN production_real.capacity_intents c ON c.account_id=a.account_id AND c.intent_reference=w.capacity_intent_reference AND c.capacity_reference=w.capacity_reference
+        WHERE a.session_id=$1 AND a.id=$2 AND a.expected_session_version=$3 AND a.state='verified'
+          AND cp.checkpoint_id=$4 AND cp.pause_generation=$5 AND r.lease_token=$6
+          AND e.state='retained' AND c.state='available' AND f.accounting_realm='production-real'
+          AND ($7::text IS NULL OR r.allocation_intent_reference=$7) LIMIT 2`,
+      [request.sessionId, request.actionId, request.expectedVersion, checkpoint.checkpointId, checkpoint.pauseGeneration, checkpoint.leaseToken, resumeClaim ?? null]);
+      if (rows.rows.length !== 1) throw new Error("PRODUCTION_CHECKPOINT_WORKER_BINDING_INVALID");
+      const row = rows.rows[0] as Record<string, unknown>;
+      return this.#resolved({ owner: Owner.parse({ accountId: row.account_id, ownerId: row.owner_id }), intentReference: z.string().regex(/^capacity-intent:[a-f0-9]{64}$/u).parse(row.intent_reference), capacityReference: z.string().regex(/^capacity:[a-f0-9]{64}$/u).parse(row.capacity_reference) });
+    } finally { client.release(); }
+  }
+  async #resolved(ledger: Readonly<{ owner: ProductionWorkerOwner; intentReference: string; capacityReference: string }>): Promise<ResolvedWorker> {
+    if (!this.input.capacityJournal) throw new Error("PRODUCTION_WORKER_CAPACITY_JOURNAL_REQUIRED");
+    const record = await this.input.capacityJournal.read<unknown>(`capacity-intent:${sha(ledger.intentReference)}`); const capacity = Capacity.parse(record?.value);
     if (capacity.intentReference !== ledger.intentReference || capacity.reference !== ledger.capacityReference || capacity.deadlineEpochMs <= Date.now()) throw new Error("PRODUCTION_WORKER_CAPACITY_BINDING_INVALID");
     return Object.freeze({ ...ledger.owner, intentReference: ledger.intentReference, capacityReference: ledger.capacityReference, workerOperationId: capacity.workerOperationId, provider: capacity.provider });
   }
@@ -177,9 +229,9 @@ export class ProductionWorkerBridge implements ContinuationWorkerPort, ArtifactV
     } catch { return undefined; }
   }
 
-  async fenceCheckpoint(value: CheckpointFenceRequest): Promise<CheckpointFenceResult> { try { const checkpoint = CheckpointFenceRequestSchema.parse(value), request = await this.#request(checkpoint), result = await (await this.#job(await this.input.resolver.resolveWorker(request))).fence(request, sha(canonicalJson(checkpoint))); return result.state === "fenced" ? { status: "fenced", code: "WORKER_EFFECTS_FENCED" } : { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } catch { return { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } }
+  async fenceCheckpoint(value: CheckpointFenceRequest): Promise<CheckpointFenceResult> { try { const checkpoint = CheckpointFenceRequestSchema.parse(value), request = await this.#request(checkpoint), result = await (await this.#job(await this.input.resolver.resolveCheckpointWorker(checkpoint, request))).fence(request, sha(canonicalJson(checkpoint))); return result.state === "fenced" ? { status: "fenced", code: "WORKER_EFFECTS_FENCED" } : { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } catch { return { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } }
   async exportCheckpoint(value: CheckpointExportRequest): Promise<CheckpointExportResult> { try { const checkpoint = CheckpointExportRequestSchema.parse(value), request = await this.#request(checkpoint), bytes = await (await this.#job(await this.input.resolver.resolveWorker(request))).exportWorkspace(request, sha(canonicalJson(checkpoint))); const workspace = z.object({ source: z.object({ files: z.array(z.object({ path: z.string() })) }), artifact: z.object({ files: z.array(z.object({ path: z.string() })) }) }).passthrough().parse(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))); const inventory = [...workspace.source.files, ...workspace.artifact.files].map(file => file.path).sort(); return { status: "exported", code: "WORKER_CHECKPOINT_EXPORTED", proposal: { ...checkpoint, formatVersion: "portable-checkpoint-v1", inventory, archiveBase64: Buffer.from(bytes).toString("base64"), archiveSha256: sha(bytes), evidenceSha256: sha(canonicalJson(checkpoint)), inventorySha256: sha(canonicalJson(inventory)) } }; } catch { return { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } }
-  async restoreCheckpoint(value: CheckpointRestoreRequest): Promise<CheckpointRestoreResult> { try { const checkpoint = CheckpointRestoreRequestSchema.parse(value), request = await this.#request(checkpoint), result = await (await this.#job(await this.input.resolver.resolveWorker(request))).restoreWorkspace({ operationId: `restore:${checkpoint.checkpointId}`, bindingSha256: sha(canonicalJson(checkpoint)), bytes: checkpoint.archive }); return result.state === "restored" ? { status: "restored", code: "WORKER_CHECKPOINT_RESTORED", workspaceId: request.workspaceId, workspaceLineage: checkpoint.workspaceLineage } : { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } catch { return { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } }
+  async restoreCheckpoint(value: CheckpointRestoreRequest): Promise<CheckpointRestoreResult> { try { const checkpoint = CheckpointRestoreRequestSchema.parse(value), { archive, ...metadata } = checkpoint; if (sha(archive) !== metadata.archiveSha256) throw new Error("PRODUCTION_CHECKPOINT_ARCHIVE_BINDING_INVALID"); const request = await this.#request(checkpoint), result = await (await this.#job(await this.input.resolver.resolveCheckpointWorker(checkpoint, request))).restoreWorkspace({ operationId: `restore:${checkpoint.checkpointId}`, bindingSha256: checkpointRestoreBinding(metadata), bytes: archive }); return result.state === "restored" ? { status: "restored", code: "WORKER_CHECKPOINT_RESTORED", workspaceId: request.workspaceId, workspaceLineage: checkpoint.workspaceLineage } : { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } catch { return { status: "denied", code: "WORKER_CONTINUATION_DENIED" }; } }
   /** Query-only recovery for an acknowledgement lost after the original
    * restore.  It is deliberately separate from restoreCheckpoint so recovery
    * cannot upload or dispatch another workspace restore. */
@@ -187,7 +239,7 @@ export class ProductionWorkerBridge implements ContinuationWorkerPort, ArtifactV
     try {
       const checkpoint = CheckpointRestoreRequestSchema.omit({ archive: true }).extend({ archiveSha256: z.string().regex(/^[a-f0-9]{64}$/u) }).parse(value);
       const request = await this.#request(checkpoint);
-      const result = await (await this.#job(await this.input.resolver.resolveWorker(request))).observeRestoreWorkspace({ operationId: `restore:${checkpoint.checkpointId}`, archiveSha256: checkpoint.archiveSha256, bindingSha256: sha(canonicalJson(checkpoint)) });
+      const result = await (await this.#job(await this.input.resolver.resolveCheckpointWorker(checkpoint, request))).observeRestoreWorkspace({ operationId: `restore:${checkpoint.checkpointId}`, archiveSha256: checkpoint.archiveSha256, bindingSha256: checkpointRestoreBinding(checkpoint) });
       return result.state === "restored" ? Object.freeze({ status: "restored" as const, workerId: request.workspaceId }) : result.state === "pending" ? Object.freeze({ status: "pending" as const }) : Object.freeze({ status: "unknown" as const });
     } catch { return Object.freeze({ status: "unknown" as const }); }
   }

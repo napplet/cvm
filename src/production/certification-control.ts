@@ -12,7 +12,7 @@ import { CORE_RESTORE_CHUNK_BYTES, CORE_RESTORE_MAX_BYTES } from "../release/dep
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const Id = z.string().regex(/^[a-z][a-z0-9:_-]{2,127}$/u);
-export const ProductionControlKindSchema = z.enum(["cohort.prepare", "cohort.observe", "telemetry.emit", "telemetry.window", "fault.inject", "fault.observe", "restore.inventory", "restore.lose-local", "restore.create", "restore.subject", "restore.expiry", "restore.topology", "restore.cleanup"]);
+export const ProductionControlKindSchema = z.enum(["cohort.prepare", "cohort.observe", "telemetry.emit", "telemetry.window", "fault.inject", "fault.observe", "restore.prepare", "restore.inventory", "restore.lose-local", "restore.create", "restore.subject", "restore.expiry", "restore.topology", "restore.cleanup"]);
 export type ProductionControlKind = z.infer<typeof ProductionControlKindSchema>;
 const EdgeKindSchema = z.enum(Object.keys(CertificationEdgePayloadSchemas) as [CertificationEdgeKind, ...CertificationEdgeKind[]]);
 const AnyKindSchema = z.union([ProductionControlKindSchema, EdgeKindSchema]);
@@ -24,11 +24,15 @@ export type ProductionControlObservation = z.infer<typeof StoredSchema>;
  * protocol's 512 MiB maximum and 128 KiB chunks; this is an upper bound from
  * the reviewed command graph, not an arbitrary request-rate threshold. */
 const RESTORE_CHUNKS_PER_STREAM = Math.ceil(CORE_RESTORE_MAX_BYTES / CORE_RESTORE_CHUNK_BYTES);
+/** This is the closed restore command graph, not a loose numeric budget. */
+export const PRODUCTION_RESTORE_PREAMBLE = Object.freeze(["restore.prepare", "restore.inventory", "restore.lose-local", "restore.create"] as const);
+export const PRODUCTION_RESTORE_SUBJECT_OPERATIONS = Object.freeze(["describe", "read-ciphertext", "read-plaintext", "decrypt", "reattach"] as const);
+export const PRODUCTION_RESTORE_EPILOGUE = Object.freeze(["restore.expiry", "restore.topology", "restore.cleanup"] as const);
 export const PRODUCTION_CERTIFICATION_OPERATION_LIMIT =
   (2 * createWorkerBenchmarkSchedule(IDENTICAL_WORKER_COHORT_PROFILE).length * 2)
   + (LifecycleStageSchema.options.length + 1)
   + (D122_FAULT_MATRIX.length * 2 + 1)
-  + (3 + DURABILITY_SUBJECT_KINDS.length * (RESTORE_CHUNKS_PER_STREAM * 2 + 3) + 3)
+  + (PRODUCTION_RESTORE_PREAMBLE.length + DURABILITY_SUBJECT_KINDS.length * (RESTORE_CHUNKS_PER_STREAM * 2 + (PRODUCTION_RESTORE_SUBJECT_OPERATIONS.length - 2)) + PRODUCTION_RESTORE_EPILOGUE.length)
   + Object.keys(CertificationEdgePayloadSchemas).length;
 
 export type { ProductionCertificationServices } from "../release/deployment/production-core-suite-protocol";
@@ -98,7 +102,7 @@ export class ProductionCertificationControl {
       case "telemetry.window": return this.input.services.telemetryWindow({ operationId: command.operationId, binding: payload?.binding });
       case "fault.inject": return this.input.services.injectFault({ operationId: command.operationId, schedule: payload?.schedule });
       case "fault.observe": return this.input.services.observeFault({ operationId: z.string().min(1).parse(payload?.operationId), sessionId: z.string().min(1).parse(payload?.sessionId) });
-      default: return this.input.services.restore({ operationId: command.operationId, action: z.enum(["restore.topology", "restore.inventory", "restore.lose-local", "restore.create", "restore.subject", "restore.cleanup", "restore.expiry"]).parse(command.kind), payload: command.payload });
+      default: return this.input.services.restore({ operationId: command.operationId, action: z.enum(["restore.prepare", "restore.topology", "restore.inventory", "restore.lose-local", "restore.create", "restore.subject", "restore.cleanup", "restore.expiry"]).parse(command.kind), payload: command.payload });
     }
   }
   async #authorize(readOnly = false): Promise<void> {

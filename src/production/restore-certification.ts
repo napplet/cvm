@@ -11,6 +11,7 @@ import { MigrationArchiveCipher, ProductionMigrationSource, writeEncryptedMigrat
 import type { PostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
 import type { ProductionCertificationServices } from "../release/deployment/production-core-suite-protocol";
 import { CoreControlPayloadSchemas, CoreFreshInstanceSchema, CoreRestoreChunkSchema, CoreRestoreDescriptorSchema, CORE_RESTORE_CHUNK_BYTES } from "../release/deployment/production-core-suite-protocol";
+import type { ProductionRetainedSubjectPreparer } from "./retained-subject-preparer";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const Identity = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]*$/u);
@@ -37,9 +38,12 @@ export type ProductionFreshRestoreInstance = Readonly<{
   objectStore: ObjectStorePort;
   startAfterRestore(): Promise<void>;
   openRetainedArchive(input: Readonly<{ subject: z.infer<typeof DurabilitySubjectSchema>; expected: z.infer<typeof Expected> }>): Promise<ProductionRetainedArchive>;
-  reattachOriginal(input: Readonly<{ sourceIdentity: string; archive: Uint8Array; expected: z.infer<typeof Expected> }>): Promise<Readonly<{ status: "reattached" | "replayed" | "reconciliation_pending"; workerId?: string }>>;
+  /** Reattachment is kind-bound.  Only the checkpoint implementation may
+   * contact a worker; retained originals are validated against their cloned
+   * SQL/journal authority and have no workspace side effect. */
+  reattachOriginal(input: Readonly<{ subject: z.infer<typeof DurabilitySubjectSchema>; sourceIdentity: string; archive: Uint8Array; expected: z.infer<typeof Expected> }>): Promise<Readonly<{ status: "reattached" | "replayed" | "reconciliation_pending"; workerId?: string }>>;
   /** Query-only recovery for a lost reattach acknowledgement. */
-  observeReattach(input: Readonly<{ sourceIdentity: string; archiveSha256: string; expected: z.infer<typeof Expected> }>): Promise<Readonly<{ status: "reattached" | "replayed" | "reconciliation_pending"; workerId?: string }>>;
+  observeReattach(input: Readonly<{ subject: z.infer<typeof DurabilitySubjectSchema>; sourceIdentity: string; archiveSha256: string; expected: z.infer<typeof Expected> }>): Promise<Readonly<{ status: "reattached" | "replayed" | "reconciliation_pending"; workerId?: string }>>;
   exerciseExpiryDeletion(scope: ProductionRestoreScope): Promise<Readonly<{ expired: true; deleted: true }>>;
   /** Query-only recovery for a lost retention-deletion acknowledgement. */
   observeExpiryDeletion(scope: ProductionRestoreScope): Promise<Readonly<{ expired: true; deleted: true }>>;
@@ -93,6 +97,9 @@ export class ProductionRestoreCertification implements Pick<ProductionCertificat
     provisioner: ProductionFreshRestoreProvisioner;
     candidateSha256: string;
     topologySha256: string;
+    /** Receipt-bound preparation is explicit and runs before the first
+     * inventory read. It is absent only in narrow unit fixtures. */
+    retainedSubjects?: Pick<ProductionRetainedSubjectPreparer, "prepare">;
     now?: () => number;
   }>) {
     Identity.parse(input.sourceInstanceId); Identity.parse(input.scope.checkpointId); Identity.parse(input.scope.sessionId); Identity.parse(input.scope.ownerId);
@@ -104,6 +111,7 @@ export class ProductionRestoreCertification implements Pick<ProductionCertificat
 
   async restore(input: Parameters<ProductionCertificationServices["restore"]>[0]): Promise<unknown> {
     switch (input.action) {
+      case "restore.prepare": CoreControlPayloadSchemas["restore.prepare"].parse(input.payload); return this.#prepare();
       case "restore.inventory": CoreControlPayloadSchemas["restore.inventory"].parse(input.payload); return this.#inventory(this.#sourcePool, this.input.scope);
       case "restore.lose-local": CoreControlPayloadSchemas["restore.lose-local"].parse(input.payload); this.#local.clear(); return Object.freeze({ status: "lost" as const });
       case "restore.create": CoreControlPayloadSchemas["restore.create"].parse(input.payload); return this.#create(input.operationId);
@@ -119,6 +127,9 @@ export class ProductionRestoreCertification implements Pick<ProductionCertificat
   async reconcile(input: Readonly<{ operationId: string; kind: string; payload: unknown }>): Promise<unknown> {
     if (!input.kind.startsWith("restore.")) throw new Error("PRODUCTION_RESTORE_RECONCILIATION_UNAVAILABLE");
     switch (input.kind) {
+      // An uncertain preparation result is observed only through its immutable
+      // registry. Reconciliation never seals a replacement archive.
+      case "restore.prepare": CoreControlPayloadSchemas["restore.prepare"].parse(input.payload); return this.#inventory(this.#sourcePool, this.input.scope);
       case "restore.create": {
         CoreControlPayloadSchemas["restore.create"].parse(input.payload);
         const run = this.#runs.get(input.operationId) ?? await this.#attach(input.operationId);
@@ -145,9 +156,18 @@ export class ProductionRestoreCertification implements Pick<ProductionCertificat
   }
 
   async #inventory(pool: PostgresSqlPool, scope: ProductionRestoreScope) {
+    /* The immutable seven-row registry is the cross-process preparation
+     * receipt.  A Set here used to turn an already-prepared scope into an
+     * apparent failure after a controller restart. */
     const subjects = await createProductionDurabilitySubjectRegistry(pool).inventory(scope);
     this.#local.set(scope.checkpointId, subjects);
     return subjects;
+  }
+
+  async #prepare() {
+    if (!this.input.retainedSubjects) throw new Error("PRODUCTION_RETAINED_SUBJECT_PREPARER_REQUIRED");
+    await this.input.retainedSubjects.prepare(this.input.scope);
+    return Object.freeze({ status: "prepared" as const });
   }
 
   async #create(operationId: string) {
@@ -236,7 +256,7 @@ export class ProductionRestoreCertification implements Pick<ProductionCertificat
     if (payload.archiveSha256 !== known.payloadSha256 || JSON.stringify(payload.expected) !== JSON.stringify(run.expected)) throw new Error("PRODUCTION_RESTORE_REATTACH_BINDING_DENIED");
     const material = await run.instance.openRetainedArchive({ subject: known, expected: run.expected });
     if (sha(material.archive) !== known.payloadSha256) throw new Error("PRODUCTION_RESTORE_ARCHIVE_FACTS_DENIED");
-    return run.instance.reattachOriginal({ sourceIdentity: known.sourceIdentity, archive: material.archive, expected: run.expected });
+    return run.instance.reattachOriginal({ subject: known, sourceIdentity: known.sourceIdentity, archive: material.archive, expected: run.expected });
   }
   async #reconcileSubject(payload: RestoreSubjectCommand) {
     if (payload.action !== "reattach") return this.#subject(payload);
@@ -245,7 +265,7 @@ export class ProductionRestoreCertification implements Pick<ProductionCertificat
     const known = run.subjects.find(item => item.kind === subject.kind && item.sourceIdentity === subject.sourceIdentity && JSON.stringify(item.object) === JSON.stringify(subject.object));
     if (!known || JSON.stringify(known) !== JSON.stringify(subject)) throw new Error("PRODUCTION_RESTORE_SUBJECT_BINDING_DENIED");
     if (payload.archiveSha256 !== known.payloadSha256 || JSON.stringify(payload.expected) !== JSON.stringify(run.expected)) throw new Error("PRODUCTION_RESTORE_REATTACH_BINDING_DENIED");
-    return run.instance.observeReattach({ sourceIdentity: known.sourceIdentity, archiveSha256: known.payloadSha256, expected: run.expected });
+    return run.instance.observeReattach({ subject: known, sourceIdentity: known.sourceIdentity, archiveSha256: known.payloadSha256, expected: run.expected });
   }
   async #ciphertext(run: FreshRun, subject: z.infer<typeof DurabilitySubjectSchema>) {
     const bytes = await run.instance.objectStore.readExact(subject.object);

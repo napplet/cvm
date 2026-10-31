@@ -158,6 +158,7 @@ export async function createMountedProductionControlServices(input: Readonly<{
     migrationSource,
     migrationCipher: cipher,
     backupStore: generation.dependencies.artifactStore,
+    retainedSubjects: generation.dependencies.retainedSubjects,
     journal: generation.dependencies.journal,
     provisioner,
     candidateSha256: config.candidateSha256,

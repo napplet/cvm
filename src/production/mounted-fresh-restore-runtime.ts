@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createMountedProductionWorkerJobRouter } from "./mounted-worker-profiles";
 import { z } from "zod";
 import type { GcsObjectStoreAdapter } from "../continuity/object-store";
@@ -9,21 +10,49 @@ import type { DurabilitySubjectSchema, RestoreDrillInputSchema } from "../resili
 import type { createGoogleDeploymentClients } from "../release/deployment/google-clients";
 import type { ProductionConfig } from "./config";
 import { ProductionCheckpointCoordinator } from "./checkpoint-coordinator";
-import { assertProductionCheckpointSchema } from "./checkpoint-schema";
+import { assertProductionCheckpointSchema, assertProductionRetainedSubjectSchema } from "./checkpoint-schema";
 import { type MountedFreshRestoreRuntime } from "./fresh-restore-provisioner";
 import { openFreshRestorePostgresPool } from "./postgres";
 import type { ProductionRetainedArchive, ProductionRestoreScope } from "./restore-certification";
 import type { MountedProductionSecretMaterial } from "./secret-material";
 import { ProductionWorkerBridge } from "./worker-bridge";
 import { ProductionWorkerOwnershipResolver } from "./worker-bridge";
+import { MountedKekCheckpointCrypto } from "./checkpoint-crypto";
+import { openRetainedSubject } from "./retained-subject-archive";
+import { ProductionRetainedSubjectPreparer } from "./retained-subject-preparer";
 
 type Expected = z.infer<typeof RestoreDrillInputSchema>["expected"];
-type Google = ReturnType<typeof createGoogleDeploymentClients>;
+/** The recovered runtime only observes the already-journaled SQL endpoint.
+ * Keeping this transport surface narrow permits an isolated mechanism proof
+ * without changing the production Google client construction. */
+type Google = Readonly<{
+  cloudSqlPostgres: Pick<ReturnType<typeof createGoogleDeploymentClients>["cloudSqlPostgres"], "observePrivateAddress">;
+}>;
 const Identity = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]*$/u);
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
+const sha = (value: Uint8Array | string) => createHash("sha256").update(value).digest("hex");
 
 type OpenedPool = Awaited<ReturnType<typeof openFreshRestorePostgresPool>>;
 type RuntimeBinding = Readonly<{ freshInstanceId: string; databaseInstanceId: string; migrationDatabaseInstanceId: string; applicationInstanceId: string; providerOperationId: string }>;
+type MountedWorkerClients = Awaited<ReturnType<typeof createMountedProductionWorkerClients>>;
+type MountedWorkerRouter = Awaited<ReturnType<typeof createMountedProductionWorkerJobRouter>>;
+/**
+ * Outer transport mounts are deliberately narrow: production uses the real
+ * mounted implementations, while isolated integration tests can provide
+ * strict provider ports without replacing the recovered runtime or bridge.
+ */
+type FreshRuntimeMounts = Readonly<{
+  openPool?: (input: Readonly<{ config: ProductionConfig; secrets: MountedProductionSecretMaterial; binding: "cloudSql.restoreRecoveredRoleCredentialReference" | "cloudSql.restoreMigrationRoleCredentialReference"; privateAddress: string }>) => Promise<OpenedPool>;
+  readKekFile?: (path: string) => Promise<Uint8Array | string>;
+  createWorkerClients?: (input: Readonly<{ config: ProductionConfig; secrets: MountedProductionSecretMaterial; journal: ReturnType<typeof createPostgresWorkerOperationJournal> }>) => Promise<MountedWorkerClients>;
+  createWorkerRouter?: (input: Readonly<{ config: ProductionConfig; secrets: MountedProductionSecretMaterial; workerJournal: Awaited<ReturnType<typeof openProductionServiceJournals>>["worker"]; jobJournal: Awaited<ReturnType<typeof openProductionServiceJournals>>["job"]; current: MountedWorkerClients }>) => Promise<MountedWorkerRouter>;
+}>;
+
+/** Only a checkpoint carries a recoverable worker workspace. Other retained
+ * kinds require their own recovered authority and archive reader. */
+export function assertMountedFreshWorkspaceSubject(subject: z.infer<typeof DurabilitySubjectSchema>): void {
+  if (subject.kind !== "checkpoint") throw new Error("MOUNTED_FRESH_RESTORE_SUBJECT_AUTHORITY_REQUIRED");
+}
 
 /**
  * Concrete restore runtime. The only values it accepts from the provisioner
@@ -38,21 +67,23 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
   artifactStore: GcsObjectStoreAdapter;
   observeTopology(): Promise<unknown>;
   now?: () => number;
+  mounts?: FreshRuntimeMounts;
 }>): MountedFreshRestoreRuntime {
   if (!input.google || !input.artifactStore || typeof input.observeTopology !== "function") throw new Error("MOUNTED_FRESH_RESTORE_RUNTIME_REQUIRED");
   const now = input.now ?? Date.now;
   const poolFor = async (instanceId: string, binding: "cloudSql.restoreRecoveredRoleCredentialReference" | "cloudSql.restoreMigrationRoleCredentialReference") => {
     const observed = await input.google.cloudSqlPostgres.observePrivateAddress({ instanceId });
     if (observed.status !== "completed" || !("privateAddress" in observed)) throw new Error("MOUNTED_FRESH_RESTORE_PRIVATE_ADDRESS_UNAVAILABLE");
-    return openFreshRestorePostgresPool({ config: input.config, secrets: input.secrets, binding, privateAddress: observed.privateAddress });
+    const open = input.mounts?.openPool ?? openFreshRestorePostgresPool;
+    return open({ config: input.config, secrets: input.secrets, binding, privateAddress: observed.privateAddress });
   };
   return Object.freeze({
     async open(raw): Promise<Readonly<{
       pool: PostgresSqlPool; migrationTargetPool: PostgresSqlPool; objectStore: GcsObjectStoreAdapter;
       startAfterRestore(): Promise<void>;
       openRetainedArchive(value: Readonly<{ subject: z.infer<typeof DurabilitySubjectSchema>; expected: Expected }>): Promise<ProductionRetainedArchive>;
-      reattachOriginal(value: Readonly<{ sourceIdentity: string; archive: Uint8Array; expected: Expected }>): Promise<Readonly<{ status: "reattached" | "replayed" | "reconciliation_pending"; workerId?: string }>>;
-      observeReattach(value: Readonly<{ sourceIdentity: string; archiveSha256: string; expected: Expected }>): Promise<Readonly<{ status: "reattached" | "replayed" | "reconciliation_pending"; workerId?: string }>>;
+      reattachOriginal(value: Readonly<{ subject: z.infer<typeof DurabilitySubjectSchema>; sourceIdentity: string; archive: Uint8Array; expected: Expected }>): Promise<Readonly<{ status: "reattached" | "replayed" | "reconciliation_pending"; workerId?: string }>>;
+      observeReattach(value: Readonly<{ subject: z.infer<typeof DurabilitySubjectSchema>; sourceIdentity: string; archiveSha256: string; expected: Expected }>): Promise<Readonly<{ status: "reattached" | "replayed" | "reconciliation_pending"; workerId?: string }>>;
       exerciseExpiryDeletion(scope: ProductionRestoreScope): Promise<Readonly<{ expired: true; deleted: true }>>;
       observeExpiryDeletion(scope: ProductionRestoreScope): Promise<Readonly<{ expired: true; deleted: true }>>;
       observeTopology(): Promise<unknown>;
@@ -64,20 +95,27 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
         poolFor(binding.databaseInstanceId, "cloudSql.restoreRecoveredRoleCredentialReference"),
         poolFor(binding.migrationDatabaseInstanceId, "cloudSql.restoreMigrationRoleCredentialReference"),
       ]);
-      try { await assertZeroFundedVerificationPool(migration.pool); await assertProductionCheckpointSchema(recovered.pool); }
+      try { await assertZeroFundedVerificationPool(migration.pool); await assertProductionCheckpointSchema(recovered.pool); await assertProductionRetainedSubjectSchema(recovered.pool); }
       catch (error) { await Promise.all([recovered.close(), migration.close()]); throw error; }
       /* Recreate every authority from the recovered database.  Retaining the
        * source-pool coordinator/bridge here would let a supposedly fresh drill
        * read or mutate the source authority after the clone completed. */
       const serviceJournals = await openProductionServiceJournals({ pool: recovered.pool, servicePubkey: input.config.certification.serverPubkey, initialTopologySha256: input.config.topologySha256, requireExisting: true }).catch(async error => { await Promise.all([recovered.close(), migration.close()]); throw error; });
-      const workerClients = await createMountedProductionWorkerClients({ config: input.config, secrets: input.secrets, journal: createPostgresWorkerOperationJournal(serviceJournals.worker) }).catch(async error => { await Promise.all([recovered.close(), migration.close()]); throw error; });
-      const jobRouter = await createMountedProductionWorkerJobRouter({ config: input.config, secrets: input.secrets, workerJournal: serviceJournals.worker, jobJournal: serviceJournals.job, current: workerClients }).catch(async error => { await Promise.all([recovered.close(), migration.close()]); throw error; });
+      const mountWorkers = input.mounts?.createWorkerClients ?? createMountedProductionWorkerClients;
+      const workerClients = await mountWorkers({ config: input.config, secrets: input.secrets, journal: createPostgresWorkerOperationJournal(serviceJournals.worker) }).catch(async error => { await Promise.all([recovered.close(), migration.close()]); throw error; });
+      const mountRouter = input.mounts?.createWorkerRouter ?? createMountedProductionWorkerJobRouter;
+      const jobRouter = await mountRouter({ config: input.config, secrets: input.secrets, workerJournal: serviceJournals.worker, jobJournal: serviceJournals.job, current: workerClients }).catch(async error => { await Promise.all([recovered.close(), migration.close()]); throw error; });
       const checkpoint = new ProductionCheckpointCoordinator({
         pool: recovered.pool,
         objectStore: input.artifactStore,
         journal: serviceJournals.checkpoint,
-        kekPath: input.secrets.path("checkpoint.kekReference"),
+        kekPath: input.secrets.path("checkpoint.kekReference"), readKekFile: input.mounts?.readKekFile,
         now,
+      });
+      const retainedSubjectCrypto = new MountedKekCheckpointCrypto({ pool: recovered.pool, kekPath: input.secrets.path("checkpoint.kekReference"), readFile: input.mounts?.readKekFile, now });
+      const retainedSubjects = new ProductionRetainedSubjectPreparer({
+        pool: recovered.pool, objectStore: input.artifactStore, journal: serviceJournals.checkpoint,
+        kekPath: input.secrets.path("checkpoint.kekReference"), readKekFile: input.mounts?.readKekFile, now,
       });
       const capacityJournal = serviceJournals.capacity;
       const worker = new ProductionWorkerBridge({
@@ -92,6 +130,10 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
         publication: { server: input.config.publication.uploadServer },
       });
       const checkpointFacts = async (expected: Expected, subject?: z.infer<typeof DurabilitySubjectSchema>) => {
+        /* The checkpoint coordinator is the sole authority that can open a
+         * workspace envelope. A durability registry row cannot convert an
+         * artifact, evidence, receipt, or publication record into one. */
+        if (subject) assertMountedFreshWorkspaceSubject(subject);
         const client = await recovered.pool.connect();
         try {
           const rows = await client.query<Record<string, unknown>>(
@@ -111,11 +153,25 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
         objectStore: input.artifactStore,
         async startAfterRestore() { const client = await recovered.pool.connect(); try { await client.query("SELECT 1"); } finally { client.release(); } },
         async openRetainedArchive(value) {
+          if (value.subject.kind !== "checkpoint") {
+            const binding = await retainedSubjectBinding(recovered.pool, value.subject, value.expected);
+            const archive = await openRetainedSubject({ crypto: retainedSubjectCrypto, objectStore: input.artifactStore, checkpointId: binding.checkpointId, accountId: binding.accountId, sessionId: value.expected.sessionId, actionId: binding.actionId, subject: value.subject });
+            return Object.freeze({ ...value.expected, archive });
+          }
           const facts = await checkpointFacts(value.expected, value.subject);
           const archive = await checkpoint.restore({ checkpointId: facts.manifest.checkpointId, accountId: facts.accountId, sessionId: facts.manifest.sessionId });
           return Object.freeze({ ...value.expected, archive });
         },
         async reattachOriginal(value) {
+          if (value.subject.kind !== "checkpoint") {
+            /* These six subjects never allocate, fence, or restore a worker.
+             * Opening has already cryptographically bound the archive; the
+             * exact recovered registry/original lookup is the reattachment. */
+            const binding = await retainedSubjectBinding(recovered.pool, value.subject, value.expected);
+            if (sha(value.archive) !== value.subject.payloadSha256) throw new Error("MOUNTED_FRESH_RESTORE_SUBJECT_PAYLOAD_REQUIRED");
+            await retainedSubjects.validateOpened({ checkpointId: binding.checkpointId, sessionId: value.expected.sessionId, ownerId: value.expected.ownerId }, value.subject, value.archive);
+            return Object.freeze({ status: "reattached" as const });
+          }
           const facts = await checkpointFacts(value.expected);
           if (!facts.leaseToken || !facts.actionId || !facts.allocationIntentReference || !Number.isInteger(facts.expectedSessionVersion) || facts.expectedSessionVersion < 0) throw new Error("MOUNTED_FRESH_RESTORE_RESUME_BINDING_REQUIRED");
           const archive = new Uint8Array(new ArrayBuffer(value.archive.byteLength)); archive.set(value.archive);
@@ -123,11 +179,21 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
           /* Fence the original source worker before the cloned authority can
            * attach it. The fence is durable and idempotent in the cloned job
            * journal, so concurrent restores cannot race an active writer. */
-          if ((await worker.fenceCheckpoint(restore)).status !== "fenced") throw new Error("MOUNTED_FRESH_RESTORE_SOURCE_FENCE_REQUIRED");
+          const { resumeClaim: _resumeClaim, archive: _archive, archiveSha256: _archiveSha256, ...fence } = restore;
+          if ((await worker.fenceCheckpoint(fence)).status !== "fenced") throw new Error("MOUNTED_FRESH_RESTORE_SOURCE_FENCE_REQUIRED");
           const result = await worker.restoreCheckpoint(restore);
           return result.status === "restored" ? Object.freeze({ status: "reattached" as const, workerId: result.workspaceId }) : Object.freeze({ status: "reconciliation_pending" as const });
         },
         async observeReattach(value) {
+          if (value.subject.kind !== "checkpoint") {
+            const binding = await retainedSubjectBinding(recovered.pool, value.subject, value.expected);
+            /* Reconciliation is also a proof operation: reopen exact bytes
+             * and compare them to cloned producer authority, never merely the
+             * registry projection. */
+            const archive = await openRetainedSubject({ crypto: retainedSubjectCrypto, objectStore: input.artifactStore, checkpointId: binding.checkpointId, accountId: binding.accountId, sessionId: value.expected.sessionId, actionId: binding.actionId, subject: value.subject });
+            await retainedSubjects.validateOpened({ checkpointId: binding.checkpointId, sessionId: value.expected.sessionId, ownerId: value.expected.ownerId }, value.subject, archive);
+            return Object.freeze({ status: "reattached" as const });
+          }
           const facts = await checkpointFacts(value.expected);
           if (facts.manifest.archiveSha256 !== value.archiveSha256 || !value.sourceIdentity) throw new Error("MOUNTED_FRESH_RESTORE_REATTACH_BINDING_REQUIRED");
           if (!facts.leaseToken || !facts.actionId || !facts.allocationIntentReference || !Number.isInteger(facts.expectedSessionVersion) || facts.expectedSessionVersion < 0) throw new Error("MOUNTED_FRESH_RESTORE_RESUME_BINDING_REQUIRED");
@@ -137,6 +203,11 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
         async exerciseExpiryDeletion(scope) {
           const facts = await checkpointFacts({ ownerId: scope.ownerId, sessionId: scope.sessionId, pendingActionReference: "expiry", sessionVersion: 0, artifactVersion: 0, leaseToken: "expiry", compatibility: { policyVersion: "expiry", modelIdentity: "expiry", nappletSdkIdentity: "expiry", toolchainIdentity: "expiry" } });
           if (Date.parse((await checkpointManifestRetention(recovered.pool, facts.manifest.checkpointId))) > now()) throw new Error("MOUNTED_FRESH_RESTORE_EXPIRY_NOT_DUE");
+          // Erase the six independently-custodied originals before destroying
+          // the workspace key. Each deletion is exact-generation/key-bound;
+          // a missing or uncertain original blocks rather than being replaced.
+          await retainedSubjects.destroyExpired(scope);
+          if (!await retainedSubjects.observeExpired(scope)) throw new Error("MOUNTED_FRESH_RESTORE_RETAINED_ERASURE_PENDING");
           await checkpoint.destroyExpired({ checkpointId: facts.manifest.checkpointId, accountId: facts.accountId, sessionId: facts.manifest.sessionId });
           if (!await checkpoint.observeDestroyed({ checkpointId: facts.manifest.checkpointId, accountId: facts.accountId, sessionId: facts.manifest.sessionId })) throw new Error("MOUNTED_FRESH_RESTORE_EXPIRY_UNCONFIRMED");
           return Object.freeze({ expired: true as const, deleted: true as const });
@@ -145,7 +216,7 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
           const client = await recovered.pool.connect();
           try {
             const row = (await client.query<Record<string, unknown>>("SELECT account_id,state FROM production_real.checkpoint_envelopes WHERE checkpoint_id=$1 AND session_id=$2", [scope.checkpointId, scope.sessionId])).rows[0];
-            if (!row || row.state !== "destroyed" || !await checkpoint.observeDestroyed({ checkpointId: scope.checkpointId, accountId: String(row.account_id), sessionId: scope.sessionId })) throw new Error("MOUNTED_FRESH_RESTORE_EXPIRY_UNCONFIRMED");
+            if (!row || row.state !== "destroyed" || !await retainedSubjects.observeExpired(scope) || !await checkpoint.observeDestroyed({ checkpointId: scope.checkpointId, accountId: String(row.account_id), sessionId: scope.sessionId })) throw new Error("MOUNTED_FRESH_RESTORE_EXPIRY_UNCONFIRMED");
             return Object.freeze({ expired: true as const, deleted: true as const });
           } finally { client.release(); }
         },
@@ -173,5 +244,20 @@ async function checkpointManifestRetention(pool: PostgresSqlPool, checkpointId: 
     const row = (await client.query<Record<string, unknown>>("SELECT retention_until::text AS retention_until FROM production_real.checkpoint_envelopes WHERE checkpoint_id=$1 AND state='retained'", [checkpointId])).rows[0];
     if (!row || typeof row.retention_until !== "string" || !Number.isFinite(Date.parse(row.retention_until))) throw new Error("MOUNTED_FRESH_RESTORE_RETENTION_UNAVAILABLE");
     return row.retention_until;
+  } finally { client.release(); }
+}
+
+/** Read-only binding lookup for an already-prepared non-workspace archive.
+ * The registry remains the sole inventory authority; no restore read writes
+ * a row or dispatches an original source operation. */
+async function retainedSubjectBinding(pool: PostgresSqlPool, subject: z.infer<typeof DurabilitySubjectSchema>, expected: Expected): Promise<Readonly<{ checkpointId: string; accountId: string; actionId: string }>> {
+  const client = await pool.connect();
+  try {
+    const row = (await client.query<Record<string, unknown>>(
+      "SELECT d.checkpoint_id,d.action_id,e.account_id FROM production_real.durability_subjects d JOIN production_real.checkpoint_envelopes e ON e.checkpoint_id=d.checkpoint_id JOIN production_real.funding_accounts f ON f.account_id=e.account_id WHERE d.kind=$1 AND d.source_identity=$2 AND d.object_key=$3 AND d.object_generation=$4 AND d.object_checksum=$5 AND d.payload_sha256=$6 AND d.owner_id=$7 AND d.session_id=$8 AND d.deletion_state='retained' AND e.session_id=$8 AND trim(f.nostr_pubkey)=$7 AND e.state='retained' LIMIT 2",
+      [subject.kind, subject.sourceIdentity, subject.object.key, subject.object.generation, subject.object.checksum, subject.payloadSha256, expected.ownerId, expected.sessionId],
+    )).rows;
+    if (row.length !== 1 || typeof row[0]!.checkpoint_id !== "string" || typeof row[0]!.account_id !== "string" || typeof row[0]!.action_id !== "string") throw new Error("MOUNTED_FRESH_RESTORE_SUBJECT_BINDING_REQUIRED");
+    return Object.freeze({ checkpointId: Identity.parse(row[0]!.checkpoint_id), accountId: String(row[0]!.account_id), actionId: Identity.parse(row[0]!.action_id) });
   } finally { client.release(); }
 }

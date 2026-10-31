@@ -43,6 +43,7 @@ import { ProductionResumeAcceptance } from "../../src/production/resume-acceptan
 import { ProductionPricedContinuationWorkers } from "../../src/production/priced-continuation-workers";
 import { resumePricingMaterial } from "../fixtures/resume-pricing";
 import type { CapacityReservation, ReadyCapacityPort } from "../../src/funding/funded-admission";
+import { convertUsdMicrosToSats, maximumOperationCharge } from "../../src/model/price-card";
 
 /* This is deliberately an opt-in local integration test.  The source records,
  * funding account, provider receipt, and signed events below are explicit
@@ -177,22 +178,26 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
     const retentionMs = 30 * 86_400_000, fixture = originalFixture(now), kek = Buffer.alloc(32, 17).toString("base64");
     expect(verifyEvent(wire(fixture.ownerEvent))).toBe(true);
     expect(verifyEvent(wire({ ...fixture.ownerEvent, content: "tampered" }))).toBe(false);
+    const originalPricing = await resumePricingMaterial(now, "retained-profile", "500");
+    const originalMaximumUsdMicros = maximumOperationCharge(originalPricing);
+    const originalMaximumSat = convertUsdMicrosToSats({ usdMicros: Number(originalMaximumUsdMicros), conversion: originalPricing.conversion, at: new Date(now).toISOString() }).amount;
+    const remainingAfterOriginalAction = Number(BigInt(originalMaximumSat) - 1n);
+    expect({ originalMaximumUsdMicros, originalMaximumSat, remainingAfterOriginalAction }).toEqual({ originalMaximumUsdMicros: "1020", originalMaximumSat: "11", remainingAfterOriginalAction: 10 });
     const fundingDatabase = new PostgresFundingDatabase(pool, { realm: "production-real" });
     const funding = new FundingService(fundingDatabase.funding);
-    const credited = await funding.execute({ principal: { pubkey: fixture.ownerId }, kind: "credit_settlement", idempotencyKey: "retained-fixture-credit", policyVersion: "fixture", protocolVersion: "fixture", payload: { settlement: { topUpId: "retained-fixture", rail: "lightning", unit: "sat", amount: "10", externalReference: "fixture:external", settlementReference: "fixture:settlement", verifiedAt: new Date(now).toISOString() } } });
+    const credited = await funding.execute({ principal: { pubkey: fixture.ownerId }, kind: "credit_settlement", idempotencyKey: "retained-fixture-credit", policyVersion: "fixture", protocolVersion: "fixture", payload: { settlement: { topUpId: "retained-fixture", rail: "lightning", unit: "sat", amount: originalMaximumSat, externalReference: "fixture:external", settlementReference: "fixture:settlement", verifiedAt: new Date(now).toISOString() } } });
     const accountId = credited.accountId, sessionId = `session:${digest(canonicalJson({ accountId, key: "retained-reattach" })).slice(0, 24)}`, actionId = "action:retained", artifactId = `artifact:${digest(fixture.artifact)}`, checkpointId = "checkpoint:retained";
     // Isolated pricing source records are registered through the same catalog
     // used by V2 preparation. They are not a quote, provider, or release claim.
-    const originalPricing = await resumePricingMaterial(now, "retained-profile", "450");
     await registerProductionPricing({ pool, ...originalPricing });
     await source.query("INSERT INTO production_real.metered_sessions(id,account_id,admission_reference,profile_id,price_card_id,version,state) VALUES($1,$2,'fixture:admission',$3,$4,0,'prepared')", [sessionId, accountId, originalPricing.profile.id, originalPricing.card.id]);
-    await source.query("INSERT INTO production_real.session_cap_holds(hold_id,account_id,reference,requested_cap,held_amount,state) VALUES('hold:retained',$1,'fixture:admission',10,10,'active')", [accountId]);
+    await source.query("INSERT INTO production_real.session_cap_holds(hold_id,account_id,reference,requested_cap,held_amount,state) VALUES('hold:retained',$1,'fixture:admission',$2,$2,'active')", [accountId, Number(originalMaximumSat)]);
     await source.query("INSERT INTO production_real.admissions(admission_id,account_id,reference,capacity_reference,state) VALUES('admission:retained',$1,'fixture:admission','capacity:fixture','accepted')", [accountId]);
     await source.query("INSERT INTO production_real.action_budget_reservations(reservation_id,account_id,admission_reference,idempotency_key,fingerprint_sha256,reservation_reference,amount,unit,state) VALUES('reservation:retained',$1,'fixture:admission','retained-action',$2,'budget:retained',1,'sat','authorized')", [accountId, hex("action-fingerprint")]);
     const actionSeed = await source.connect();
     try {
       await actionSeed.query("BEGIN; SET CONSTRAINTS ALL DEFERRED");
-      await actionSeed.query("INSERT INTO production_real.metered_actions(id,account_id,session_id,idempotency_key,fingerprint,expected_session_version,budget_reference,reservation_sat,operation_id,profile_id,price_card_id,state,terminal_result,evidence_reference,settled_at,admission_reference,receipt_charge,provider_receipt_reference,session_version,artifact_version,remaining_cap_sat,remaining_balance_sat,artifact_id,workspace_lineage,checkpoint_reference,snapshot_reference,validation_evidence_reference,validation_report_reference) VALUES($1,$2,$3,'retained-action',$4,0,'budget:retained',1,'provider:retained',$5,$6,'verified',$7,'evidence:action',clock_timestamp(),'fixture:admission',1,'receipt-original',0,1,9,9,$8,$9,'checkpoint:retained','snapshot:retained',('verification:' || $8),NULL)", [actionId, accountId, sessionId, hex("action-fingerprint"), originalPricing.profile.id, originalPricing.card.id, { status: "verified", releaseEvidence: false }, artifactId, `workspace:${sessionId}`]);
+      await actionSeed.query("INSERT INTO production_real.metered_actions(id,account_id,session_id,idempotency_key,fingerprint,expected_session_version,budget_reference,reservation_sat,operation_id,profile_id,price_card_id,state,terminal_result,evidence_reference,settled_at,admission_reference,receipt_charge,provider_receipt_reference,session_version,artifact_version,remaining_cap_sat,remaining_balance_sat,artifact_id,workspace_lineage,checkpoint_reference,snapshot_reference,validation_evidence_reference,validation_report_reference) VALUES($1,$2,$3,'retained-action',$4,0,'budget:retained',1,'provider:retained',$5,$6,'verified',$7,'evidence:action',clock_timestamp(),'fixture:admission',1,'receipt-original',0,1,$10,$10,$8,$9,'checkpoint:retained','snapshot:retained',('verification:' || $8),NULL)", [actionId, accountId, sessionId, hex("action-fingerprint"), originalPricing.profile.id, originalPricing.card.id, { status: "verified", releaseEvidence: false }, artifactId, `workspace:${sessionId}`, remainingAfterOriginalAction]);
       await actionSeed.query("INSERT INTO production_real.provider_operations(id,account_id,action_id,provider,model,provider_request_id,sub_reservation_sat,state) VALUES('provider:retained',$1,$2,'fixture-provider','fixture-model','request-original',1,'verified')", [accountId, actionId]);
       await actionSeed.query("COMMIT");
     } catch (error) { await actionSeed.query("ROLLBACK").catch(() => undefined); throw error; }
@@ -220,9 +225,9 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
     const persistedArtifact = await new ProductionWorkerArtifactStore({ journal, objects, toolchainSha256: hex("toolchain") }).persist({ request: artifactRequest, accountId, ownerId: fixture.ownerId, bytes: fixture.artifact, scannerReportSha256: hex("scanner"), conformanceReportSha256: hex("conformance"), result: artifactResult });
     const artifactReference = persistedArtifact.reference;
     const checkpoint = new ProductionCheckpointCoordinator({ pool, objectStore: objects, journal, kekPath: "/fixture/kek", readKekFile: async () => kek, now: () => now });
-    const pauseIntent = { accountId, sessionId, idempotencyKey: "retained-reattach", fingerprint: hex("retained-reattach"), reference: "pending:retained", actionKind: "start_session" as const, boundedPayloadHash: digest(canonicalJson({ idea: "Build one focused retained-subject fixture." })), expectedSessionVersion: 0, expectedArtifactVersion: 1, policyVersion: "fixture-policy", priceCardId: originalPricing.card.id, profileId: originalPricing.profile.id, toolchainId: config.worker.toolchainSha256, actionMaximum: "10", admissionReference: "fixture:admission" };
+    const pauseIntent = { accountId, sessionId, idempotencyKey: "retained-reattach", fingerprint: hex("retained-reattach"), reference: "pending:retained", actionKind: "start_session" as const, boundedPayloadHash: digest(canonicalJson({ idea: "Build one focused retained-subject fixture." })), expectedSessionVersion: 0, expectedArtifactVersion: 1, policyVersion: "fixture-policy", priceCardId: originalPricing.card.id, profileId: originalPricing.profile.id, toolchainId: config.worker.toolchainSha256, actionMaximum: originalMaximumSat, admissionReference: "fixture:admission" };
     const retainedCommand = StartSessionCommandSchema.parse({ principal: { pubkey: fixture.ownerId }, admissionReference: pauseIntent.admissionReference,
-      idempotencyKey: pauseIntent.idempotencyKey, expectedVersion: 0, maximum: "10", policyVersion: pauseIntent.policyVersion,
+      idempotencyKey: pauseIntent.idempotencyKey, expectedVersion: 0, maximum: originalMaximumSat, policyVersion: pauseIntent.policyVersion,
       idea: "Build one focused retained-subject fixture." });
     // The source worker is paused because its immediately spendable balance
     // is exhausted. The later V2 acceptance still revalidates the original
@@ -249,7 +254,7 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
       const resumeQuotes = new ProductionResumePricingQuotes(pool);
       const vertexJournal = new PostgresOperationJournal(pool, { namespace: "retained-subjects-vertex", scopeSha256: hex("vertex-scope") });
       const originalOperationId = `operation:${digest(canonicalJson({ accountId, key: pauseIntent.idempotencyKey, profile: pauseIntent.profileId })).slice(0, 24)}`;
-      await vertexJournal.claim(`vertex-generation-settlement:${originalOperationId}`, digest(canonicalJson({ accountId, operationId: originalOperationId })), { accountId, operationId: originalOperationId, conversion: originalPricing.conversion, acceptedAt: new Date(now).toISOString(), maximumUsdMicros: "920" });
+      await vertexJournal.claim(`vertex-generation-settlement:${originalOperationId}`, digest(canonicalJson({ accountId, operationId: originalOperationId })), { accountId, operationId: originalOperationId, conversion: originalPricing.conversion, acceptedAt: new Date(now).toISOString(), maximumUsdMicros: originalMaximumUsdMicros });
       const v2Preparer = new ProductionResumePricingPreparer({ pool, store: fundingStore, quotes: resumeQuotes, checkpoint, vertexJournal, currentPricing: originalPricing,
         compatibility: { policyVersion: pauseIntent.policyVersion, acceptedToolchains: [pauseIntent.toolchainId] }, now: () => now });
       const v2Acceptance = new ProductionResumeAcceptance({ pool, quotes: resumeQuotes, preparer: v2Preparer, now: () => now });

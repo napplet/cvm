@@ -778,7 +778,9 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     expect(modelPosts).toBe(2);
     // Full encrypted workspace -> real bridge -> native restore claim and
     // evidence -> durable SQL proof. Only the external provider RPC is local.
-    const workspacePreparer = new ProductionResumePricingPreparer({ pool, store, quotes, checkpoint, vertexJournal, currentPricing: refreshedPricing,
+    const workspacePricing = await resumePricingMaterial(now, "profile:workspace-mounted", "100");
+    await registerProductionPricing({ pool, ...workspacePricing });
+    const workspacePreparer = new ProductionResumePricingPreparer({ pool, store, quotes, checkpoint, vertexJournal, currentPricing: workspacePricing,
       compatibility: { policyVersion: workspaceIntent.policyVersion, acceptedToolchains: [workspaceToolchain] }, now: () => now });
     const workspaceAcceptance = new ProductionResumeAcceptance({ pool, quotes, preparer: workspacePreparer, now: () => now });
     const workspaceWorkers = new ProductionPricedContinuationWorkers({ pool, acceptance: workspaceAcceptance, capacity });
@@ -1020,7 +1022,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     const mountedService = await ProductionPricedContinuationService.create({ pool: mountedFailurePool, config: mountedPricedConfig(mountedToolchain, workspaceCommand.policyVersion), generation: core,
       capacity: mountedCapacity, checkpoint, vertexJournal, workerJournal: nativeWorkerJournal, jobJournal: nativeJobJournal,
       requestJournal: nativeRequestJournal, capacityJournal, artifactStore: nativeObjects, workers: workerClients, jobRouter: mountedRouter,
-      gateway, pricing: refreshedPricing });
+      gateway, pricing: workspacePricing });
     await mountedService.runner.assertReady();
     // The normal mounted facade reads the original quote from SQL; it never
     // accepts caller-supplied pricing or provider authority.

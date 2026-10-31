@@ -169,13 +169,106 @@ function matchesSelector(sku: Record<string, unknown>, selector: GoogleCatalogSe
   if (selector.resourceGroup !== undefined && text((category as Record<string, unknown>).resourceGroup) !== selector.resourceGroup) return false;
   return true;
 }
-function priceAfter(textSource: string, matcher: RegExp): bigint { const match = matcher.exec(textSource); if (!match?.[1]) throw new Error("OFFICIAL_SOURCE_PARSER_DRIFT"); return decimalToNanos(match[1]); }
 function officialText(document: string): string {
   /* Modal's animated price digits carry one authoritative screen-reader value.
    * Preserve that value before stripping markup; otherwise the visual animation
    * turns $0.00003942 into a sequence of unrelated digits. */
   const srOnly = [...document.matchAll(/<span[^>]*class=["'][^"']*\bsr-only\b[^"']*["'][^>]*>\s*([0-9]+(?:\.[0-9]+)?)\s*<\/span>/giu)].map((match) => match[1]);
   return `${srOnly.join(" ")} ${document.replace(/<[^>]*>/gu, " ")}`.replace(/&(nbsp|amp|lt|gt|quot);/giu, " ").replace(/\s+/gu, " ");
+}
+function renderedText(document: string): string { return document.replace(/<[^>]*>/gu, " ").replace(/&(nbsp|amp|lt|gt|quot);/giu, " ").replace(/\s+/gu, " ").trim(); }
+async function modalSandboxSection(document: string): Promise<string> {
+  let parsedSections = 0;
+  try {
+    /* HTMLRewriter is Bun's available HTML parser. CSS ID selection checks the
+     * actual id attribute, unlike a textual \bid matcher that also sees data-id. */
+    const parsed = new HTMLRewriter().on("section#sandboxes", { element() { parsedSections += 1; } }).transform(new Response(document));
+    await parsed.text();
+  } catch { throw new Error("MODAL_SANDBOX_PRICING_SECTION_REJECTED"); }
+  const starts = [...document.matchAll(/<section\b(?=[^>]*\sid\s*=\s*(?:["']sandboxes["']|sandboxes(?=[\s>])))[^>]*>/giu)];
+  const headings = [...document.matchAll(/<h2\b[^>]*>([\s\S]*?)<\/h2\s*>/giu)].filter((heading) => renderedText(heading[1] ?? "") === "Modal Sandbox pricing");
+  if (parsedSections !== 1 || starts.length !== 1 || headings.length !== 1 || starts[0]?.index === undefined || headings[0]?.index === undefined) throw new Error("MODAL_SANDBOX_PRICING_SECTION_REJECTED");
+  const start = starts[0]; const sectionTags = /<\/?section\b[^>]*>/giu; sectionTags.lastIndex = start.index + start[0].length; let depth = 1;
+  for (;;) {
+    const tag = sectionTags.exec(document);
+    if (!tag || tag.index === undefined) throw new Error("MODAL_SANDBOX_PRICING_SECTION_REJECTED");
+    depth += tag[0].startsWith("</") ? -1 : 1;
+    if (depth === 0) {
+      const end = tag.index + tag[0].length;
+      if (headings[0].index < start.index || headings[0].index >= end) throw new Error("MODAL_SANDBOX_PRICING_SECTION_REJECTED");
+      return document.slice(start.index, end);
+    }
+  }
+}
+const MAX_MODAL_SANDBOX_NODES = 512;
+const MAX_MODAL_SANDBOX_DEPTH = 32;
+const MAX_MODAL_SANDBOX_TEXT_BYTES = 32 * 1024;
+type ModalSandboxElement = { readonly parent?: ModalSandboxElement; readonly children: ModalSandboxElement[]; readonly directText: string[]; readonly inSandbox: boolean; readonly ariaHidden: boolean; readonly className: string; };
+function modalSandboxText(element: ModalSandboxElement): string {
+  if (element.ariaHidden) return "";
+  return renderedText(`${element.directText.join("")} ${element.children.map(modalSandboxText).join(" ")}`);
+}
+function modalSandboxLabel(resource: "CPU" | "Memory"): string { return `${resource} (non-preemptible)`; }
+function modalSandboxLabelElement(element: ModalSandboxElement, resource: "CPU" | "Memory"): boolean { return modalSandboxText(element) === modalSandboxLabel(resource); }
+function modalSandboxPriceElement(element: ModalSandboxElement, unit: "core" | "GiB"): bigint | undefined {
+  const match = new RegExp(`^\\$\\s*([0-9]+(?:\\.[0-9]+)?)\\s*\\/\\s*${unit}\\s*\\/\\s*sec$`, "iu").exec(modalSandboxText(element));
+  return match?.[1] ? decimalToNanos(match[1]) : undefined;
+}
+function isDescendant(element: ModalSandboxElement, ancestor: ModalSandboxElement): boolean {
+  for (let parent = element.parent; parent; parent = parent.parent) if (parent === ancestor) return true;
+  return false;
+}
+function innermost(elements: readonly ModalSandboxElement[]): readonly ModalSandboxElement[] { return elements.filter(element => !elements.some(other => other !== element && isDescendant(other, element))); }
+function commonAncestor(first: ModalSandboxElement, second: ModalSandboxElement): ModalSandboxElement | undefined {
+  const ancestors = new Set<ModalSandboxElement>();
+  for (let element: ModalSandboxElement | undefined = first; element; element = element.parent) ancestors.add(element);
+  for (let element: ModalSandboxElement | undefined = second; element; element = element.parent) if (ancestors.has(element)) return element;
+  return undefined;
+}
+function modalSandboxRowBranch(row: ModalSandboxElement, descendant: ModalSandboxElement): ModalSandboxElement | undefined {
+  let branch = descendant;
+  while (branch.parent && branch.parent !== row) branch = branch.parent;
+  return branch.parent === row ? branch : undefined;
+}
+function modalSandboxResourceRow(row: ModalSandboxElement): boolean {
+  return row.className.split(/\s+/u).includes("resource-row") && row.children.filter(child => !child.ariaHidden).length === 2;
+}
+async function modalSandboxRates(document: string): Promise<Readonly<{ cpu: bigint; memory: bigint }>> {
+  const stack: ModalSandboxElement[] = []; const elements: ModalSandboxElement[] = []; let sandboxRoot: ModalSandboxElement | undefined; let textBytes = 0;
+  try {
+    const parsed = new HTMLRewriter().on("*", {
+      element(element) {
+        const parent = stack.at(-1);
+        const inSandbox = parent?.inSandbox === true || (element.tagName.toLowerCase() === "section" && element.getAttribute("id") === "sandboxes");
+        const current: ModalSandboxElement = { ...(parent ? { parent } : {}), children: [], directText: [], inSandbox, ariaHidden: element.getAttribute("aria-hidden") === "true", className: element.getAttribute("class") ?? "" };
+        if (parent) parent.children.push(current);
+        if (inSandbox && !parent?.inSandbox) {
+          if (sandboxRoot) throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED");
+          sandboxRoot = current;
+        }
+        if (inSandbox) { elements.push(current); if (elements.length > MAX_MODAL_SANDBOX_NODES || stack.length >= MAX_MODAL_SANDBOX_DEPTH) throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED"); }
+        stack.push(current);
+        element.onEndTag(() => { if (stack.pop() !== current) throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED"); });
+      },
+      text(chunk) { const current = stack.at(-1); if (current?.inSandbox && !current.ariaHidden && chunk.text) { textBytes += new TextEncoder().encode(chunk.text).byteLength; if (textBytes > MAX_MODAL_SANDBOX_TEXT_BYTES) throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED"); current.directText.push(chunk.text); } },
+    }).transform(new Response(document));
+    await parsed.text();
+  } catch { throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED"); }
+  if (!sandboxRoot || stack.length !== 0) throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED");
+  const rate = (resource: "CPU" | "Memory", unit: "core" | "GiB") => {
+    const labels = innermost(elements.filter(element => element !== sandboxRoot && modalSandboxLabelElement(element, resource)));
+    const prices = innermost(elements.filter(element => element !== sandboxRoot && modalSandboxPriceElement(element, unit) !== undefined));
+    if (labels.length !== 1 || prices.length !== 1) throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED");
+    const row = commonAncestor(labels[0]!, prices[0]!);
+    const value = modalSandboxPriceElement(prices[0]!, unit);
+    const labelBranch = row ? modalSandboxRowBranch(row, labels[0]!) : undefined;
+    const priceBranch = row ? modalSandboxRowBranch(row, prices[0]!) : undefined;
+    const rowLabels = row ? innermost(elements.filter(element => element !== sandboxRoot && (modalSandboxLabelElement(element, "CPU") || modalSandboxLabelElement(element, "Memory")) && (element === row || isDescendant(element, row)))) : [];
+    if (!row || row === sandboxRoot || !modalSandboxResourceRow(row) || !labelBranch || !priceBranch || labelBranch === priceBranch || rowLabels.length !== 1 || rowLabels[0] !== labels[0]!) throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED");
+    if (value === undefined) throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED");
+    return value;
+  };
+  return Object.freeze({ cpu: rate("CPU", "core"), memory: rate("Memory", "GiB") });
 }
 function flyMonthlyMachinePrice(document: string, preset: string, memory: string): bigint {
   const escapedPreset = preset.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"); const escapedMemory = memory.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
@@ -259,7 +352,14 @@ export function createOfficialPricingSources(options: OfficialPricingSourcesOpti
       },
       async readOfficialPricing(input: Parameters<OfficialPricingSourcePort["readOfficialPricing"]>[0]) {
         const provider = WorkerProviderSchema.parse(input.provider); const url = provider === "modal" ? MODAL_PRICING_URL : FLY_PRICING_URL; const bytes = await readOfficial(options.fetch, url, undefined, timeoutMs); const document = new TextDecoder().decode(bytes); const normalized = officialText(document);
-        const priceNanos = provider === "modal" ? (() => { const cpu = priceAfter(normalized, /\$?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:[0-9.\s]{0,128})\/\s*core\s*\/\s*sec/iu); const memory = priceAfter(normalized, /\$?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:[0-9.\s]{0,128})\/\s*GiB\s*\/\s*sec/iu); return (cpu * BigInt(options.workers.modal.cpuCores) + memory * BigInt(options.workers.modal.memoryGiB)) * (options.workers.modal.unit === "worker-100-seconds" ? 100n : 1n); })() : (() => flyMonthlyMachinePrice(normalized, options.workers.fly.preset, options.workers.fly.memory) * (options.workers.fly.unit === "worker-100-seconds" ? 100n : 1n))();
+        let priceNanos: bigint;
+        if (provider === "modal") {
+          const sandbox = await modalSandboxSection(document);
+          const { cpu, memory } = await modalSandboxRates(sandbox);
+          priceNanos = (cpu * BigInt(options.workers.modal.cpuCores) + memory * BigInt(options.workers.modal.memoryGiB)) * (options.workers.modal.unit === "worker-100-seconds" ? 100n : 1n);
+        } else {
+          priceNanos = flyMonthlyMachinePrice(normalized, options.workers.fly.preset, options.workers.fly.memory) * (options.workers.fly.unit === "worker-100-seconds" ? 100n : 1n);
+        }
         const unit = provider === "modal" ? options.workers.modal.unit : options.workers.fly.unit;
         return snapshot(`${provider}-official-pricing`, bytes, [{ provider, componentId: `${provider}.global`, skuId: `${provider}-official`, region: "global", currency: "USD", unit, priceMicros: nanosToMicros(priceNanos), priceNanos: priceNanos.toString() }]);
       },

@@ -29,6 +29,23 @@ continuity-grace minutes): Modal must be quoted at its hard 2 CPU / 2 GiB
 ceiling, while Fly is 1 CPU / 1 GiB. Project-owned certification ceilings are
 maximum-spend policy only and must never appear as a vendor source or price line.
 
+### Modal Sandbox source selection
+
+The Modal reader binds a quote only to the uniquely rendered **Modal Sandbox
+pricing** section of [Modal's public pricing page](https://modal.com/pricing).
+It reads the exact non-preemptible CPU and memory per-second values in that
+section, retains the complete bounded response bytes and digest, and rounds the
+derived USD micros upward. It must reject a missing, duplicate, malformed, or
+ambiguous Sandbox section or rate; a general Function/compute rate is never a
+fallback. In particular, the page's descriptive 3x relationship is not a
+calculation input: authorization uses the explicitly rendered Sandbox numbers.
+
+This source is an authorization quote, not an invoice or actual-usage receipt.
+[Modal's Sandbox resource documentation](https://modal.com/docs/guide/sandbox-resources)
+defines CPU as physical cores (two vCPUs each) and billing as the greater of
+requested or actual resources. Provider receipts and the broader resource,
+region, and surcharge reconciliation remain required before finalization.
+
 ## Request identity and receipt recovery
 
 The adapter writes the immutable operation ID, request digest, model, global

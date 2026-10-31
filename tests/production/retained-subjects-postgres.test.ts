@@ -284,13 +284,14 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
       if (!stored) throw new Error("RETAINED_SUBJECT_KEY_REQUIRED");
       retainedKeys.set(subject.kind, stored.keyReference);
     }
-    let mountedFences = 0, mountedRestores = 0, mountedObservations = 0, uploadedArchive: Uint8Array | undefined, lostRestoreAck = true;
+    let mountedFences = 0, mountedRestores = 0, mountedObservations = 0, mountedCommand = "none", uploadedArchive: Uint8Array | undefined, lostRestoreAck = true;
     const noModal = async () => { throw new Error("FIXTURE_MODAL_UNUSED"); };
     const mountedWorkers = createWorkerDeploymentClients({ image: config.worker.image, workspaceRoot: PRODUCTION_WORKER_POLICY.workspaceRoot, policyVersion: PRODUCTION_WORKER_POLICY.version, modalAppName: "retained-workers", modalTags: {}, journal: createPostgresWorkerOperationJournal(recoveredJournal),
       modalSdk: { apps: { fromName: noModal }, images: { fromRegistry: noModal }, sandboxes: { create: noModal, findByName: noModal, fromId: noModal } },
       fly: { create: noModal, observe: noModal, terminate: noModal, observeTermination: noModal,
         async exec(value) {
           const [, action, archiveDigest, index, data] = value.command;
+          mountedCommand = action ?? "missing";
           if (action === "fence") { mountedFences++; return { status: "completed" as const, exitCode: 0, stdout: JSON.stringify({ state: "fenced", jobId: workspaceJobId, fenceSha256: index }) }; }
           if (action === "restore-put") { uploadedArchive = new Uint8Array(Buffer.from(data ?? "", "base64")); return { status: "completed" as const, exitCode: 0, stdout: JSON.stringify({ state: "stored", archiveSha256: archiveDigest, chunk: Number(index), sha256: digest(uploadedArchive) }) }; }
           if (action === "restore") { mountedRestores++; if (lostRestoreAck) { lostRestoreAck = false; throw new Error("FIXTURE_RESTORE_ACK_LOST"); } }
@@ -334,7 +335,7 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
       const expectedStatus = subject.kind === "checkpoint" ? "reconciliation_pending" : "reattached";
       try {
         expect(await restore.restore({ operationId: `restore:reattach:${subject.kind}`, action: "restore.subject", payload: { freshInstanceId: fresh.freshInstanceId, subject, action: "reattach", archiveSha256: subject.payloadSha256, expected: descriptor.expected } })).toMatchObject({ status: expectedStatus });
-      } catch (error) { throw new Error(`MOUNTED_REATTACH_${subject.kind}:${error instanceof Error ? error.message : "UNKNOWN"}`); }
+      } catch (error) { throw new Error(`MOUNTED_REATTACH_${subject.kind}:${error instanceof Error ? error.message : "UNKNOWN"}:command=${mountedCommand}:fences=${mountedFences}`); }
     }
     await restore.restore({ operationId: "restore:retained", action: "restore.lose-local", payload: {} });
     for (const subject of recoveredInventory) {

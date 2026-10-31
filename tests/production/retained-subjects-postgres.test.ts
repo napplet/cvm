@@ -86,7 +86,7 @@ function originalFixture(now: number) {
   } as const;
 }
 
-function generationAwareObjects(now: () => number): GcsObjectStoreAdapter {
+function generationAwareObjects(now: () => number, loseDeletionAck: () => boolean = () => false, onDeletion: () => void = () => undefined): GcsObjectStoreAdapter {
   type Stored = Readonly<{ generation: number; checksum: string; bytes: Uint8Array }>;
   const entries = new Map<string, Stored>();
   const client: VersionedObjectClientPort = {
@@ -108,6 +108,8 @@ function generationAwareObjects(now: () => number): GcsObjectStoreAdapter {
       const stored = entries.get(value.key);
       if (!stored || stored.generation !== value.generation || stored.checksum !== value.expectedChecksum || Date.parse(value.deleteAfter) > now()) throw new Error("FIXTURE_EXACT_GENERATION_DELETION_REQUIRED");
       entries.delete(value.key);
+      onDeletion();
+      if (loseDeletionAck()) throw new Error("DELETE_ACK_LOST");
       return { generation: stored.generation, checksum: stored.checksum };
     },
   };
@@ -177,7 +179,12 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
       await actionSeed.query("COMMIT");
     } catch (error) { await actionSeed.query("ROLLBACK").catch(() => undefined); throw error; }
     finally { actionSeed.release(); }
-    const objects = generationAwareObjects(() => now);
+    let deleteCalls = 0, loseMountedDeleteAck = true;
+    const objects = generationAwareObjects(() => now, () => {
+      if (!loseMountedDeleteAck) return false;
+      loseMountedDeleteAck = false;
+      return true;
+    }, () => { deleteCalls++; });
     const config = mountedConfig(hex("topology"));
     const workspaceFiles = [{ path: "src/main.ts", content: "document.body.textContent = 'retained workspace';" }, { path: "src/styles.css", content: "body{color:#111}" }, { path: "src/capabilities.json", content: "{}" }] as const;
     const sourceProposalSha256 = digest(canonicalJson(workspaceFiles));
@@ -236,11 +243,11 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     await expect(source.query("UPDATE production_real.publication_signed_events SET event_json=$1 WHERE intent_id='publication:retained'", [wire({ ...fixture.ownerEvent, content: "tampered" })])).rejects.toThrow("PRODUCTION_PUBLICATION_SIGNED_EVENT_IMMUTABLE");
     const originalRows = await source.query("SELECT normalized_receipt FROM production_real.usage_receipts WHERE id='receipt:retained'");
     const originalEvents = await source.query("SELECT e.event_json,ae.observation_json FROM production_real.publication_records p JOIN production_real.publication_signed_events e ON e.intent_id=p.intent_id JOIN production_real.publication_effect_intents ae ON ae.intent_id=p.intent_id AND ae.effect_kind='attestation' WHERE p.intent_id='publication:retained'");
-    let createCalls = 0, deleteCalls = 0, loseCreateAck = true, loseDeleteAck = true;
+    let createCalls = 0, loseCreateAck = true;
     const effects: ObjectStorePort = {
       createImmutable: async value => { createCalls++; const result = await objects.createImmutable(value); if (loseCreateAck) { loseCreateAck = false; throw new Error("OBJECT_ACK_LOST"); } return result; },
       observeExactByKey: value => objects.observeExactByKey(value), readExact: value => objects.readExact(value),
-      scheduleExactDeletion: async (value, deadline) => { deleteCalls++; await objects.scheduleExactDeletion(value, deadline); if (loseDeleteAck) { loseDeleteAck = false; throw new Error("DELETE_ACK_LOST"); } },
+      scheduleExactDeletion: (value, deadline) => objects.scheduleExactDeletion(value, deadline),
     };
     const preparer = new ProductionRetainedSubjectPreparer({ pool, objectStore: effects, journal, kekPath: "/fixture/kek", readKekFile: async () => kek, now: () => now });
     const scope = { checkpointId, sessionId, ownerId: fixture.ownerId };

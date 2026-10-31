@@ -218,7 +218,7 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
     const workspaceFiles = [{ path: "src/main.ts", content: "document.body.textContent = 'retained workspace';" }, { path: "src/styles.css", content: "body{color:#111}" }, { path: "src/capabilities.json", content: "{}" }] as const;
     const sourceProposalSha256 = digest(canonicalJson(workspaceFiles));
     const workspaceSource = { version: 1 as const, actionId, sessionId, expectedVersion: 0, proposalSha256: sourceProposalSha256, toolchainSha256: config.worker.toolchainSha256, deadlineEpochMs: Date.now() + 1_200_000, files: workspaceFiles };
-    const workspaceJobId = digest(canonicalJson(workspaceSource));
+    let workspaceJobId = digest(canonicalJson(workspaceSource));
     const workspaceFile = new TextEncoder().encode("<main>retained workspace</main>");
     const commandEvidence = Array.from({ length: 8 }, () => ({ argv: ["fixture"], exitCode: 0 as const, stdout: "", stderr: "", elapsedMs: 0 }));
     const workspaceArtifact = { version: 1 as const, jobId: workspaceJobId, proposalSha256: sourceProposalSha256, toolchainSha256: config.worker.toolchainSha256, files: [{ path: "index.html", bytesBase64: Buffer.from(workspaceFile).toString("base64"), sha256: digest(workspaceFile), size: workspaceFile.byteLength }], commandEvidence };
@@ -319,8 +319,14 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
     await serviceJournals.capacity.claim(`capacity-intent:${digest(capacityIntent)}`, digest(canonicalJson({ capacityIntent, capacityReference, workerOperationId })), { intentReference: capacityIntent, reference: capacityReference, workerOperationId, provider: "fly", deadlineEpochMs: workerDeadline });
     const workerRequest = WorkerRunRequestSchema.parse({ sessionId, actionId: continuation.actionId, expectedVersion: 0, policyVersion: config.worker.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId: `workspace:${sessionId}`, sourceProposalReference: `proposal:sha256:${sourceProposalSha256}`, sourceProposalSha256, sourceProposalFiles: workspaceFiles });
     await new ProductionWorkerRequestStore(serviceJournals.request).persist(workerRequest);
+    // The retained archive remains the original workspace bytes, while the
+    // cloned worker fence must address the exact accepted continuation action.
+    // Persist that V1/V2-specific original job tuple through the real journal;
+    // it is not a receipt or a replacement worker admission.
+    const resumedWorkspaceSource = { ...workspaceSource, actionId: continuation.actionId };
+    workspaceJobId = digest(canonicalJson(resumedWorkspaceSource));
     const jobKey = `worker-build:${digest(canonicalJson({ sessionId, actionId: continuation.actionId, expectedVersion: 0 }))}`;
-    await serviceJournals.job.claim(jobKey, digest(canonicalJson(workerRequest)), { workerOperationId, workerResourceId: "retained-worker-machine", leaseSha256: workerLeaseSha256, jobId: workspaceJobId, requestBody: canonicalJson(workspaceSource), deadlineEpochMs: workspaceSource.deadlineEpochMs });
+    await serviceJournals.job.claim(jobKey, digest(canonicalJson(workerRequest)), { workerOperationId, workerResourceId: "retained-worker-machine", leaseSha256: workerLeaseSha256, jobId: workspaceJobId, requestBody: canonicalJson(resumedWorkspaceSource), deadlineEpochMs: resumedWorkspaceSource.deadlineEpochMs });
     await source.query("INSERT INTO production_real.usage_receipts(id,account_id,action_id,operation_id,provider,model,provider_receipt_id,normalized_receipt,protected_evidence_reference) VALUES('receipt:retained',$1,$2,'provider:retained','fixture-provider','fixture-model','receipt-original',$3,'evidence:receipt')", [accountId, actionId, fixture.normalizedReceipt]);
     await source.query("INSERT INTO production_real.session_artifacts(id,account_id,session_id,action_id,version,lineage,validation_evidence_reference,verified) VALUES($1,$2,$3,$4,1,$5,('verification:' || $1),true)", [artifactId, accountId, sessionId, actionId, { lineage: "original", releaseEvidence: false }]);
     const artifact = { accountId, sessionId, artifactId, artifactVersion: 1, aggregateSha256: artifactReference.checksum, manifestSha256: hex("manifest"), verificationEvidenceSha256: hex("scanner"), sealedObjectGeneration: String(artifactReference.generation), sealedObjectSha256: artifactReference.checksum, sealedFiles: [{ path: "/index.html", mimeType: "text/html", sha256: artifactReference.checksum, size: fixture.artifact.byteLength }], entrypoint: "/index.html", normalizedDTag: "retained-fixture", requiredCapabilities: [], optionalCapabilities: [], policyIdentity: "fixture-policy", toolchainIdentity: "fixture-toolchain", runtimeCompatibilityIdentity: "fixture-runtime" };

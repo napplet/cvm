@@ -1,0 +1,5 @@
+ARG TRUSTED_RESTORER_IMAGE
+FROM ${TRUSTED_RESTORER_IMAGE}
+
+USER 65532
+ENTRYPOINT ["/usr/local/bin/napplet-trusted-restorer"]

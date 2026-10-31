@@ -9,7 +9,7 @@ import { DurabilitySubjectSchema } from "../resilience/fault-harness";
 import { MountedKekCheckpointCrypto } from "./checkpoint-crypto";
 import { assertProductionRetainedSubjectSchema } from "./checkpoint-schema";
 import { createProductionDurabilitySubjectRegistry, type ProductionDurabilitySubject } from "./durability-registry";
-import { retainedSubjectCustodyId, sealRetainedSubject, type RetainedSubjectJournal } from "./retained-subject-archive";
+import { retainedSubjectCustodyId, sealRetainedSubject, type RetainedSubjectCrypto, type RetainedSubjectJournal } from "./retained-subject-archive";
 import { CvmBuildAttestationSchema } from "../publication/contracts";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -30,17 +30,20 @@ type Original = Readonly<{ kind: Exclude<z.infer<typeof DurabilitySubjectSchema>
  */
 export class ProductionRetainedSubjectPreparer {
   readonly #pool: PostgresSqlPool;
-  readonly #crypto: MountedKekCheckpointCrypto;
+  readonly #crypto: RetainedSubjectCrypto;
   constructor(private readonly input: Readonly<{
     pool: PostgresSqlPool;
     objectStore: ObjectStorePort;
     journal: RetainedSubjectJournal;
     kekPath: string;
     readKekFile?: (path: string) => Promise<Uint8Array | string>;
+    /** New native restore composition injects per-object custody crypto. The
+     * mounted-KEK path remains the historical-reader default. */
+    crypto?: RetainedSubjectCrypto;
     now?: () => number;
   }>) {
     this.#pool = bindAccountingRealmPool(input.pool, createAccountingRealm("production-real"));
-    this.#crypto = new MountedKekCheckpointCrypto({ pool: input.pool, kekPath: input.kekPath, readFile: input.readKekFile, now: input.now });
+    this.#crypto = input.crypto ?? new MountedKekCheckpointCrypto({ pool: input.pool, kekPath: input.kekPath, readFile: input.readKekFile, now: input.now });
   }
 
   async prepare(raw: RetainedSubjectScope): Promise<void> {

@@ -1,43 +1,33 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { D122_FAULT_MATRIX } from "../resilience/fault-harness";
+import { D122_FAULT_MATRIX, EffectOracleSchema, FaultExecutionSchema } from "../resilience/fault-harness";
 import { canonicalJson } from "../promotion/schema";
 import type { NonGoogleCoreBinding } from "./non-google-native-runtime";
-import { NonGoogleChaosTransport, NonGoogleCoreJournal } from "./non-google-native-runtime";
+import { NonGoogleCoreJournal } from "./non-google-native-runtime";
+import { NonGoogleCoolifyDriver } from "./non-google-coolify-driver";
 
 const hash = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex");
-type Original = Readonly<{ version: 1; binding: NonGoogleCoreBinding; operationId: string; sessionId: string; controlOperationId: string; schedule: unknown; state: "claimed" | "applied" }>;
+type Original = Readonly<{ version: 2; binding: NonGoogleCoreBinding; operationId: string; sessionId: string; controlOperationId: string; schedule: unknown; oracle: z.infer<typeof EffectOracleSchema>; state: "claimed" }>;
 
-/** D-122 faults use schedule.input.operationId as the sole domain identity.
- * The supplied control ID is persisted separately and cannot make an unrelated
- * relay command look reconcilable. Only acknowledged transport ambiguity gets
- * an observe call; binding and validation failures propagate unchanged. */
+/** No structural transport exists in this path. Unsupported D122 boundaries
+ * stay honestly unavailable until a controller binds the corresponding native
+ * domain actuator; a Coolify driver is present only for its documented app
+ * lifecycle operations and never receives a fabricated UUID. */
 export class NonGoogleChaosCertification {
-  constructor(private readonly input: Readonly<{ binding: NonGoogleCoreBinding; journal: NonGoogleCoreJournal; transport: NonGoogleChaosTransport }>) { Object.freeze(this); }
+  constructor(private readonly input: Readonly<{ binding: NonGoogleCoreBinding; journal: NonGoogleCoreJournal; coolify: NonGoogleCoolifyDriver }>) { Object.freeze(this); }
   #key(operationId: string) { return `fault:${z.string().min(1).parse(operationId)}`; }
-  async inject(input: Readonly<{ operationId: string; schedule: unknown }>): Promise<Readonly<{ status: "recorded"; operationId: string; sessionId: string }>> {
+  async inject(input: Readonly<{ operationId: string; schedule: unknown }>): Promise<never> {
     const schedule = D122_FAULT_MATRIX.find(item => canonicalJson(item) === canonicalJson(input.schedule));
     if (!schedule) throw new Error("NON_GOOGLE_CHAOS_SCHEDULE_DENIED");
-    const original: Original = Object.freeze({ version: 1, binding: this.input.binding, operationId: schedule.input.operationId, sessionId: schedule.initialState.sessionId, controlOperationId: z.string().min(1).parse(input.operationId), schedule, state: "claimed" });
-    const claim = await this.input.journal.claim(this.#key(original.operationId), hash(original), original);
-    if (!claim.claimed) return Object.freeze({ status: "recorded" as const, operationId: claim.record.value.operationId, sessionId: claim.record.value.sessionId });
-    const dispatched = await this.input.transport.injectOriginal({ operationId: original.operationId, sessionId: original.sessionId, schedule, binding: this.input.binding });
-    if (dispatched.operationId !== original.operationId || dispatched.sessionId !== original.sessionId) throw new Error("NON_GOOGLE_CHAOS_TRANSPORT_BINDING_DENIED");
-    if (dispatched.status !== "applied") {
-      if (dispatched.status === "pending") throw new Error("NON_GOOGLE_CHAOS_TRANSPORT_AMBIGUOUS");
-      throw new Error("NON_GOOGLE_CHAOS_TRANSPORT_BLOCKED");
-    }
-    if (!await this.input.journal.replace(this.#key(original.operationId), claim.record.identitySha256, claim.record.revision, Object.freeze({ ...original, state: "applied" as const }))) throw new Error("NON_GOOGLE_CHAOS_RECORD_CONFLICT");
-    return Object.freeze({ status: "recorded" as const, operationId: original.operationId, sessionId: original.sessionId });
+    const original: Original = Object.freeze({ version: 2, binding: this.input.binding, operationId: schedule.input.operationId, sessionId: schedule.initialState.sessionId, controlOperationId: z.string().min(1).parse(input.operationId), schedule, oracle: EffectOracleSchema.parse({ credit: 0, debit: 0, worker: 0, session: 0, artifact: 0, checkpoint: 0, deploy: 0, ownerEvent: 0, attestation: 0 }), state: "claimed" });
+    await this.input.journal.claim(this.#key(original.operationId), hash(original), original);
+    throw new Error("NON_GOOGLE_CHAOS_NATIVE_ACTUATOR_UNAVAILABLE");
   }
-  async observe(input: Readonly<{ operationId: string; sessionId: string }>): Promise<Readonly<{ status: "observed"; operationId: string; sessionId: string }>> {
-    const operationId = z.string().min(1).parse(input.operationId); const sessionId = z.string().min(1).parse(input.sessionId);
+  async observe(input: Readonly<{ operationId: string; sessionId: string }>): Promise<never> {
+    const operationId = z.string().min(1).parse(input.operationId), sessionId = z.string().min(1).parse(input.sessionId);
     const original = await this.input.journal.read<Original>(this.#key(operationId));
-    if (!original || original.value.operationId !== operationId || original.value.sessionId !== sessionId || original.value.state !== "applied") throw new Error("NON_GOOGLE_CHAOS_ORIGINAL_REQUIRED");
-    const observed = await this.input.transport.observeOriginal({ operationId, sessionId, binding: this.input.binding });
-    if (observed.operationId !== operationId || observed.sessionId !== sessionId) throw new Error("NON_GOOGLE_CHAOS_OBSERVATION_BINDING_DENIED");
-    if (observed.status === "observed") return Object.freeze({ status: "observed" as const, operationId, sessionId });
-    if (observed.status === "pending") throw new Error("NON_GOOGLE_CHAOS_OBSERVATION_PENDING");
-    throw new Error("NON_GOOGLE_CHAOS_OBSERVATION_UNAVAILABLE");
+    if (!original || original.value.operationId !== operationId || original.value.sessionId !== sessionId) throw new Error("NON_GOOGLE_CHAOS_ORIGINAL_REQUIRED");
+    FaultExecutionSchema.parse({ operationId, sessionId, observed: "unavailable", activeWriters: 1, effects: original.value.oracle });
+    throw new Error("NON_GOOGLE_CHAOS_NATIVE_OBSERVATION_UNAVAILABLE");
   }
 }

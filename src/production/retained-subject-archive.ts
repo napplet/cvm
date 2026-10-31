@@ -76,7 +76,17 @@ export async function sealRetainedSubject(input: Readonly<{
     // exact identity and erase it. This path never constructs a replacement
     // intent/object or extends retention.
     const observed = await input.objectStore.observeExactByKey({ key, checksum: stored.ciphertextSha256 });
-    if (observed) await input.objectStore.scheduleExactDeletion({ key, generation: observed.generation, checksum: observed.checksum }, retentionUntil);
+    if (observed) {
+      try {
+        await input.objectStore.scheduleExactDeletion({ key, generation: observed.generation, checksum: observed.checksum }, retentionUntil);
+      } catch (error) {
+        // A lost delete acknowledgement is not proof that the exact original
+        // remains. Re-observe only that generation; when absent, finish key
+        // erasure without another delete dispatch. When still present, retain
+        // the attributable custody and surface the uncertain cleanup.
+        if (await input.objectStore.observeExactByKey({ key, checksum: stored.ciphertextSha256 })) throw error;
+      }
+    }
     await input.crypto.destroy(stored.keyReference);
     if (!await input.crypto.isDestroyed(stored.keyReference)) throw new Error("RETAINED_SUBJECT_ERASURE_KEY_REQUIRED");
   };

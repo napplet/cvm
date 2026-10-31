@@ -140,6 +140,15 @@ test("Modal worker pricing reads only one rendered Sandbox section and preserves
   await expect(modalPricingReader("<section id=\"sandboxes\"><h2>Modal Sandbox pricing</h2>CPU $0.00003942 / core / sec", "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow("MODAL_SANDBOX_PRICING_SECTION_REJECTED");
 });
 
+test("Modal worker pricing rejects preemptible, unlabelled, unrelated, and duplicate semantic rate rows", async () => {
+  const pricing = (rows: string) => `<section id=\"sandboxes\"><h2>Modal Sandbox pricing</h2>${rows}</section>`;
+  const expected = "MODAL_SANDBOX_PRICING_RATE_REJECTED";
+  await expect(modalPricingReader(pricing("Preemptible CPU $0.00000001 / core / sec Preemptible Memory $0.00000001 / GiB / sec"), "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow(expected);
+  await expect(modalPricingReader(pricing("$0.00003942 / core / sec $0.00000667 / GiB / sec"), "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow(expected);
+  await expect(modalPricingReader(pricing("Storage (non-preemptible) $0.00000001 / core / sec Network (non-preemptible) $0.00000001 / GiB / sec"), "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow(expected);
+  await expect(modalPricingReader(pricing("CPU (non-preemptible) $0.00003942 / core / sec Memory (non-preemptible) $0.00000667 / GiB / sec CPU (non-preemptible) $0.00000001 / core / sec Memory (non-preemptible) $0.00000001 / GiB / sec"), "worker-second").sources.readOfficialPricing({ provider: "modal" })).rejects.toThrow(expected);
+});
+
 test("USD receipt settlement captures a fresh executable USD/SAT source quote and always rounds against the service", async () => {
   const sources = createOfficialPricingSources({ now: () => Date.parse("2026-10-27T00:00:00.000Z"), fetch: async (url) => {
     if (String(url) !== BTC_USD_TICKER_URL) return new Response("no", { status: 404 });

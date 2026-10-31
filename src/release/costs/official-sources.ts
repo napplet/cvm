@@ -200,7 +200,9 @@ async function modalSandboxSection(document: string): Promise<string> {
     }
   }
 }
-function uniquePriceAfter(textSource: string, matcher: RegExp): bigint {
+function uniqueModalSandboxRate(textSource: string, resource: "CPU" | "Memory", unit: "core" | "GiB"): bigint {
+  const otherResource = resource === "CPU" ? "Memory" : "CPU";
+  const matcher = new RegExp(`\\b${resource}\\b(?:(?!\\b${otherResource}\\b)[\\s\\S]){0,128}?\\bnon(?:[-\\s]+)preemptible\\b(?:(?!\\b${otherResource}\\b)[\\s\\S]){0,128}?\\$?\\s*([0-9]+(?:\\.[0-9]+)?)\\s*(?:[0-9.\\s]{0,128})\\/\\s*${unit}\\s*\\/\\s*sec`, "giu");
   const matches = [...textSource.matchAll(new RegExp(matcher.source, `${matcher.flags.replace(/g/gu, "")}g`))];
   if (matches.length !== 1 || !matches[0]?.[1]) throw new Error("MODAL_SANDBOX_PRICING_RATE_REJECTED");
   return decimalToNanos(matches[0][1]);
@@ -290,8 +292,8 @@ export function createOfficialPricingSources(options: OfficialPricingSourcesOpti
         let priceNanos: bigint;
         if (provider === "modal") {
           const sandbox = officialText(await modalSandboxSection(document));
-          const cpu = uniquePriceAfter(sandbox, /\$?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:[0-9.\s]{0,128})\/\s*core\s*\/\s*sec/iu);
-          const memory = uniquePriceAfter(sandbox, /\$?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:[0-9.\s]{0,128})\/\s*GiB\s*\/\s*sec/iu);
+          const cpu = uniqueModalSandboxRate(sandbox, "CPU", "core");
+          const memory = uniqueModalSandboxRate(sandbox, "Memory", "GiB");
           priceNanos = (cpu * BigInt(options.workers.modal.cpuCores) + memory * BigInt(options.workers.modal.memoryGiB)) * (options.workers.modal.unit === "worker-100-seconds" ? 100n : 1n);
         } else {
           priceNanos = flyMonthlyMachinePrice(normalized, options.workers.fly.preset, options.workers.fly.memory) * (options.workers.fly.unit === "worker-100-seconds" ? 100n : 1n);

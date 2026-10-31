@@ -120,6 +120,9 @@ export type ReleaseExecutionSession = Readonly<{
     uploadAndObserve(input: Readonly<{ authorizationRequest: ReleaseAuthorizationRequest; collector: PreparedCollectorImage }>): Promise<ObservedCollectorRegistryImage>;
   }>;
   prepareAuthorizedExecution(input: Readonly<{ authorizationRequest: ReleaseAuthorizationRequest }>): Promise<Omit<AuthorizedLiveExecutionInput, "registry">>;
+  /** Narrow mounted resume seam. It may expose only the report observer and
+   * historically bound receipt, never native mutation or finalization ports. */
+  prepareAuthoritativeUsageRecovery?(input: Readonly<{ authorizationRequest: ReleaseAuthorizationRequest }>): Promise<Readonly<{ receipt: unknown; reporter: AuthoritativeUsageReportPort }>>;
 }>;
 
 export type AuthoritativeUsageReportPort = Readonly<{
@@ -137,6 +140,7 @@ export type AuthoritativeUsageReportPort = Readonly<{
     projectScopeSha256: string;
     /** Immutable original-request approval for the report-only route. */
     billingObservation?: unknown;
+    mode?: "dispatch" | "recovery";
   }>): Promise<Readonly<{ status: "held" } | { status: "captured"; grant: unknown; envelope: unknown }>>;
   readArtifact(input: Readonly<{ uri: string; generation: string; sha256: string }>): Promise<Uint8Array | undefined>;
 }>;
@@ -983,6 +987,7 @@ export class ReleaseCertificationController {
         accountScopeSha256: record.accountScopeSha256,
         projectScopeSha256: record.projectScopeSha256,
         billingObservation: request.billingObservation,
+        mode: this.#now() >= request.expiresAtMs ? "recovery" : "dispatch",
       });
       if (captured.status === "held") continue;
       let grant;
@@ -1405,8 +1410,8 @@ export class ReleaseCertificationController {
 }
 
 export async function runReleaseCertification(options: ControllerOptions & Readonly<{ dryRun: true }>): Promise<ReleaseCertificationResult>;
-export async function runReleaseCertification(options: ControllerOptions & Readonly<{ dryRun: false; session: ReleaseExecutionSession }>): Promise<AuthorizedLiveExecutionResult>;
-export async function runReleaseCertification(options: ControllerOptions & Readonly<{ dryRun: boolean; session?: ReleaseExecutionSession }>): Promise<ReleaseCertificationResult | AuthorizedLiveExecutionResult> {
+export async function runReleaseCertification(options: ControllerOptions & Readonly<{ dryRun: false; session: ReleaseExecutionSession }>): Promise<AuthorizedLiveExecutionResult | Awaited<ReturnType<ReleaseCertificationController["reconcileAuthoritativeUsage"]>>>;
+export async function runReleaseCertification(options: ControllerOptions & Readonly<{ dryRun: boolean; session?: ReleaseExecutionSession }>): Promise<ReleaseCertificationResult | AuthorizedLiveExecutionResult | Awaited<ReturnType<ReleaseCertificationController["reconcileAuthoritativeUsage"]>>> {
   if (!options.dryRun) {
     if (!options.session) throw new Error("RELEASE_PRODUCTION_EXECUTION_CONFIG_REQUIRED");
     const preapprovalCollector = options.collectorImage;
@@ -1418,6 +1423,12 @@ export async function runReleaseCertification(options: ControllerOptions & Reado
       ...(options.workspaceCapability ? { workspaceCapability: options.workspaceCapability } : {}),
       ...(options.now ? { now: options.now } : {}),
     });
+    const existing = await controller.status();
+    if (existing?.state.status === "billing_observing") {
+      if (!options.session.prepareAuthoritativeUsageRecovery) throw new Error("RELEASE_AUTHORITATIVE_USAGE_RECOVERY_UNAVAILABLE");
+      const recovery = await options.session.prepareAuthoritativeUsageRecovery({ authorizationRequest: existing.authorizationRequest });
+      return controller.reconcileAuthoritativeUsage({ receipt: recovery.receipt, reporter: recovery.reporter });
+    }
     const pending = await controller.dryRun();
     const collectorImage = preapprovalCollector && !isObservedCollectorRegistryImage(preapprovalCollector)
       ? await options.session.collectorImage?.uploadAndObserve({ authorizationRequest: pending.authorizationRequest, collector: preapprovalCollector })

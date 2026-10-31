@@ -70,3 +70,17 @@ test("a documented empty aggregate response stays unknown instead of becoming a 
   const result = await collector.capture(await grant());
   expect(result).toEqual(expect.objectContaining({ status: "unknown" }));
 });
+
+test("recovery without a durable report job performs no token request or POST", async () => {
+  let tokens = 0;
+  let requests = 0;
+  const collector = createBigQueryUsageReportCollector({
+    projectId: "project-12345", quotaProjectId: "quota-project-1", principal: "release@example.com", now: () => 10,
+    tokenSource: { async getAccessToken() { tokens += 1; throw new Error("TOKEN_MUST_NOT_BE_REQUESTED"); } },
+    journal: createMemoryBigQueryUsageReportJournal(),
+    fetch: async () => { requests += 1; throw new Error("HTTP_MUST_NOT_BE_REQUESTED"); },
+  });
+  await expect(collector.recover(await grant())).resolves.toEqual(expect.objectContaining({ status: "unknown" }));
+  expect(tokens).toBe(0);
+  expect(requests).toBe(0);
+});

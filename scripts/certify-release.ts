@@ -332,7 +332,8 @@ async function main(): Promise<number> {
       const config = await loadCertifierConfig();
       const session = await loadReleaseExecutionSession({ config, candidateSha256: await releaseCandidateSha256(candidatePath!), workspace });
       const result = await runReleaseCertification({ candidatePath: candidatePath!, workspace, workspaceCapability, dryRun: false, session });
-      console.log(JSON.stringify({ status: result.state.status, candidateSha256: result.state.candidate.candidateSha256, topologySha256: result.state.topologySha256, stateSha256: result.state.stateSha256, authorizationRequestSha256: result.authorizationRequest.authorizationRequestSha256 }));
+      const recovery = "held" in result;
+      console.log(JSON.stringify({ status: result.state.status, candidateSha256: result.state.candidate.candidateSha256, topologySha256: result.state.topologySha256, stateSha256: result.state.stateSha256, ...(recovery ? { captures: result.captures, reportOnlyRecovery: true } : { authorizationRequestSha256: result.authorizationRequest.authorizationRequestSha256 }) }));
       return result.state.status === "completed" ? 0 : 1;
     }
     const candidateSha256 = !status ? await releaseCandidateSha256(candidatePath!) : undefined;
@@ -443,6 +444,10 @@ async function main(): Promise<number> {
         authorization: { request: result.authorizationRequest, receipt: resolvedReceipt },
       });
       const live = await runReleaseCertification({ candidatePath: candidatePath!, workspace, workspaceCapability, dryRun: false, session, collectorImage: preparedCollector! });
+      if ("held" in live) {
+        console.log(JSON.stringify({ progress: live.state.status, candidateSha256: live.state.candidate.candidateSha256, topologySha256: live.state.topologySha256, stateSha256: live.state.stateSha256, authorizationReceiptSha256: receipt.toLowerCase(), reportOnlyRecovery: true, captures: live.captures }));
+        return 1;
+      }
       console.log(JSON.stringify({
         progress: live.state.status,
         candidateSha256: live.state.candidate.candidateSha256,

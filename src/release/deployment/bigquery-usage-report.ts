@@ -32,6 +32,7 @@ export type BigQueryUsageReportJournalRecord = Readonly<{
 }>;
 export type BigQueryUsageReportJournal = Readonly<{
   claim(input: BigQueryUsageReportJournalRecord): Promise<Readonly<{ claimed: boolean; record: BigQueryUsageReportJournalRecord }>>;
+  read(reportRequestSha256: string): Promise<BigQueryUsageReportJournalRecord | undefined>;
   mark(input: Readonly<{ reportRequestSha256: string; expected: BigQueryUsageReportJournalRecord["state"]; state: BigQueryUsageReportJournalRecord["state"]; dryRunBytes?: string; envelope?: AuthoritativeUsageReportEnvelope }>): Promise<BigQueryUsageReportJournalRecord>;
 }>;
 
@@ -54,6 +55,7 @@ export function createMemoryBigQueryUsageReportJournal(seed: readonly BigQueryUs
   const records = new Map(seed.map((record) => [record.reportRequestSha256, Object.freeze({ ...record })]));
   return Object.freeze({
     async claim(input) { const prior = records.get(input.reportRequestSha256); if (prior) return Object.freeze({ claimed: false, record: prior }); const record = Object.freeze({ ...input }); records.set(record.reportRequestSha256, record); return Object.freeze({ claimed: true, record }); },
+    async read(reportRequestSha256) { return records.get(reportRequestSha256); },
     async mark(input) { const current = records.get(input.reportRequestSha256); if (!current || current.state !== input.expected) throw new Error("BIGQUERY_USAGE_REPORT_JOURNAL_CONFLICT"); const next = Object.freeze({ ...current, state: input.state, ...(input.dryRunBytes === undefined ? {} : { dryRunBytes: input.dryRunBytes }), ...(input.envelope === undefined ? {} : { envelope: input.envelope }) }); records.set(next.reportRequestSha256, next); return next; },
   });
 }
@@ -100,6 +102,25 @@ export function createBigQueryUsageReportCollector(input: Readonly<{ projectId: 
     try { return Object.freeze({ payload: JSON.parse(new TextDecoder().decode(bytes)), raw: bytes }); } catch { throw new Error("BIGQUERY_USAGE_REPORT_RESPONSE_INVALID"); }
   }
   return Object.freeze({
+    async recover(grantInput: unknown): Promise<BigQueryUsageReportCapture> {
+      const grant = await verifyBillingObservationGrant(grantInput);
+      reportOnlyGrantAllows(grant, "observe_usage_report", now());
+      if (grant.projectId !== projectId || grant.allowedReportOrigin !== "https://bigquery.googleapis.com") throw new Error("BIGQUERY_USAGE_REPORT_SCOPE_INVALID");
+      const record = await input.journal.read(grant.reportRequestSha256);
+      const queryJobId = jobId("usage", grant.reportRequestSha256);
+      if (!record || record.queryJobId !== queryJobId || record.dryRunJobId !== jobId("usage_dry", grant.reportRequestSha256)) return Object.freeze({ status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256 });
+      if (record.state === "query_complete" && record.envelope && input.artifacts) {
+        const raw = await input.artifacts.readExact(record.envelope.rawArtifact);
+        if (raw) {
+          try { await verifyAuthoritativeUsageReportArtifact(record.envelope, raw); return Object.freeze({ status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256, envelope: record.envelope }); }
+          catch { return Object.freeze({ status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256 }); }
+        }
+      }
+      // Expired ordinary authorization may only inspect the deterministic job;
+      // it cannot claim, mark dispatch, or create either jobs.insert request.
+      await request(`/bigquery/v2/projects/${projectId}/queries/${queryJobId}?location=${encodeURIComponent(grant.location)}`, "GET", undefined, true);
+      return Object.freeze({ status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256 });
+    },
     async capture(grantInput: unknown): Promise<BigQueryUsageReportCapture> {
       const grant = await verifyBillingObservationGrant(grantInput);
       reportOnlyGrantAllows(grant, "observe_usage_report", now());

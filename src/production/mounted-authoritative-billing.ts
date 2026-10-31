@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { canonicalJson } from "../promotion/schema";
-import { BillingObservationGrantSchema, createBillingObservationGrant, type BillingObservationGrant } from "../release/authoritative-usage-report";
+import { BillingObservationGrantSchema, createBillingObservationGrant, verifyBillingObservationGrant, type BillingObservationGrant } from "../release/authoritative-usage-report";
 import { BillingObservationApprovalSchema } from "../release/authorization";
 import { createBigQueryUsageReportCollector, type BigQueryFetch, type BigQueryUsageReportArtifactStore } from "../release/deployment/bigquery-usage-report";
 import { googleOperationLabel } from "../release/deployment/google-operation-id";
@@ -45,6 +45,7 @@ type CaptureInput = Readonly<{
   /** Signed original-request material, supplied only by the controller after
    * cryptographic receipt binding has been checked. */
   billingObservation?: unknown;
+  mode?: "dispatch" | "recovery";
 }>;
 
 function digest(value: unknown): string { return createHash("sha256").update(canonicalJson(value)).digest("hex"); }
@@ -161,6 +162,9 @@ export function createMountedBigQueryUsageReporter(input: Readonly<{
   return Object.freeze({
     async capture(value: CaptureInput) {
       if (value.operation.provider !== "cloud_run" && value.operation.provider !== "cloud_sql_postgres") return Object.freeze({ status: "held" as const });
+      // The credential scope must be the account that was authorized for this
+      // immutable provider operation, before any journal/ADC/GCS/SQL effect.
+      if (Digest.parse(value.accountScopeSha256) !== accountScopeSha256) return Object.freeze({ status: "held" as const });
       const approval = BillingObservationApprovalSchema.safeParse(value.billingObservation);
       if (!approval.success || !matchesMountedConfiguration(approval.data, configuration) || now() >= approval.data.expiresAtMs) return Object.freeze({ status: "held" as const });
       const original = await input.googleJournal.read(googleOperationLabel(value.operation.operationId));
@@ -175,6 +179,25 @@ export function createMountedBigQueryUsageReporter(input: Readonly<{
       }
       const resourceName = ResourceName.safeParse(original.resource);
       if (!resourceName.success || !resourceName.data.startsWith(`projects/${projectId}/`)) return Object.freeze({ status: "held" as const });
+      if (value.mode === "recovery") {
+        const persisted = await input.billingJournal.read<DurableGrant>(durableGrantOperation(Digest.parse(value.operationRecordSha256)));
+        if (!persisted) return Object.freeze({ status: "held" as const });
+        let grant: BillingObservationGrant;
+        try { grant = await verifyBillingObservationGrant(DurableGrantSchema.parse(persisted.value).grant); }
+        catch { return Object.freeze({ status: "held" as const }); }
+        if (grant.originalScope.provider !== value.operation.provider || grant.originalScope.operationId !== value.operation.operationId
+          || grant.originalScope.operationRecordSha256 !== Digest.parse(value.operationRecordSha256)
+          || grant.originalScope.authorizationRequestSha256 !== Digest.parse(value.authorizationRequestSha256)
+          || grant.originalScope.authorizationReceiptSha256 !== Digest.parse(value.authorizationReceiptSha256)
+          || grant.originalScope.candidateSha256 !== Digest.parse(value.candidateSha256)
+          || grant.originalScope.resourceName !== resourceName.data
+          || grant.originalScope.accountScopeSha256 !== accountScopeSha256
+          || grant.expiresAtMs !== approval.data.expiresAtMs) return Object.freeze({ status: "held" as const });
+        const recovered = await collector.recover(grant);
+        if (!recovered.envelope) return Object.freeze({ status: "held" as const });
+        await persistCapture({ pool: input.pool, grant, envelope: recovered.envelope });
+        return Object.freeze({ status: "captured" as const, grant, envelope: recovered.envelope });
+      }
       const expectedGrant = await createBillingObservationGrant({
         version: 1,
         originalScope: {

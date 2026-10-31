@@ -78,6 +78,10 @@ export function createPostgresBigQueryUsageReportJournal(journal: PostgresOperat
       check(record, input);
       return Object.freeze({ claimed: claimed.claimed, record });
     },
+    async read(reportRequestSha256) {
+      const saved = await journal.read<BigQueryUsageReportJournalRecord>(operation(reportRequestSha256));
+      return saved ? clean(saved.value) as BigQueryUsageReportJournalRecord : undefined;
+    },
     async mark(input) {
       const key = operation(input.reportRequestSha256);
       return update<BigQueryUsageReportJournalRecord>(journal, key, current => {

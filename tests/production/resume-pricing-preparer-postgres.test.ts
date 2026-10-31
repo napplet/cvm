@@ -881,6 +881,14 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     expect(await new ProductionWorkerRequestStore(nativeRequestJournal).readArtifactRequest({ sessionId: resumedWorkerRequest.sessionId, actionId: resumedWorkerRequest.actionId, expectedVersion: 2 })).toBeUndefined();
     expect(await new ProductionWorkerRequestStore(nativeRequestJournal).read(sourceRequest)).toEqual(sourceRequest);
     await expect(new ProductionWorkerRequestStore(nativeRequestJournal).persist({ ...resumedWorkerRequest, sourceProposalFiles: workspaceSource.files })).rejects.toThrow("PRODUCTION_CHECKPOINT_REQUEST_BINDING_INVALID");
+    // A rebuilt authority has no live runner object to trust. It may still
+    // observe/fence this one fully durable priced tuple through the actual
+    // resolver, while ordinary priced generation remains separately gated.
+    const freshPricedResolver = new ProductionWorkerOwnershipResolver({ pool, policyVersion: workspaceCommand.policyVersion, capacityJournal });
+    await expect(freshPricedResolver.resolvePricedRestore(restoredWorkspace.restore.metadata, resumedWorkerRequest)).resolves.toMatchObject({
+      accountId, ownerId: principal.pubkey, intentReference: expect.stringMatching(/^capacity-intent:/u), provider: "modal",
+    });
+    await expect(freshPricedResolver.resolvePricedRestore({ ...restoredWorkspace.restore.metadata, leaseToken: "lease:foreign" }, resumedWorkerRequest)).rejects.toThrow("PRODUCTION_PRICED_RESTORE_BINDING_DENIED");
     expect(await nativeBridge().observePricedRestoreCheckpoint(restoredWorkspace.restore.metadata)).toMatchObject({ status: "restored" });
     expect(nativeQueries).toBe(3); expect(nativeRestores).toBe(1); expect(nativeUploads).toBe(uploadsAfterOriginal);
     expect(reserves).toBe(2); expect(modelPosts).toBe(2);

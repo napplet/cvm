@@ -107,7 +107,7 @@ function generationAwareObjects(now: () => number): GcsObjectStoreAdapter {
 integration("canonical SQL prepares, clones, reattaches, and erases all seven retained subjects without replaying ambiguous provider effects", async () => {
   const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 16);
   const container = `cvm-retained-${suffix}`, sourceDatabase = `retained_source_${suffix}`, cloneDatabase = `retained_clone_${suffix}`, migrationDatabase = `retained_migration_${suffix}`, role = `retained_${suffix}`;
-  let admin: Pool | undefined, source: Pool | undefined, runtime: Pool | undefined, recovered: Pool | undefined, migration: Pool | undefined;
+  let admin: Pool | undefined, source: Pool | undefined, sourceRuntime: Pool | undefined, runtime: Pool | undefined, recovered: Pool | undefined, migration: Pool | undefined;
   try {
     await docker(["run", "--rm", "--detach", "--name", container, "--publish", "127.0.0.1::5432", "-e", "POSTGRES_HOST_AUTH_METHOD=trust", "postgres:17-alpine"]);
     const port = (await docker(["port", container, "5432/tcp"])).match(/127\.0\.0\.1:(\d+)/u)?.[1];
@@ -203,6 +203,7 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     await admin.query(`CREATE DATABASE ${cloneDatabase} TEMPLATE ${sourceDatabase}`);
     await admin.query(`CREATE DATABASE ${migrationDatabase}`);
     source = new Pool({ connectionString: connection("postgres", sourceDatabase), connectionTimeoutMillis: 2_000 });
+    sourceRuntime = new Pool({ connectionString: connection(role, sourceDatabase), connectionTimeoutMillis: 2_000 });
     recovered = new Pool({ connectionString: connection(role, cloneDatabase), connectionTimeoutMillis: 2_000 });
     migration = new Pool({ connectionString: connection("postgres", migrationDatabase), connectionTimeoutMillis: 2_000 });
     const recoveredPool = bindAccountingRealmPool(sqlPool(recovered), createAccountingRealm("production-real"));
@@ -216,8 +217,11 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     expect(await recoveredCheckpoint.restore({ checkpointId, accountId, sessionId })).toEqual(archive);
     const recoveredCrypto = new MountedKekCheckpointCrypto({ pool: recoveredPool, kekPath: "/fixture/kek", readFile: async () => kek, now: () => now });
     if (!source || !migration) throw new Error("RETAINED_SUBJECT_FRESH_DATABASE_REQUIRED");
-    const sourcePool = sqlPool(source), migrationPool = sqlPool(migration);
-    const restoreJournal = new PostgresOperationJournal(sourcePool, { namespace: "retained-subjects-restore", scopeSha256: hex("restore-scope") });
+    const sourcePool = sqlPool(source), sourceAuthorityPool = bindAccountingRealmPool(sqlPool(sourceRuntime), createAccountingRealm("production-real")), migrationPool = sqlPool(migration);
+    // Migration capture deliberately reads the original public-history schema;
+    // controller journaling and retained inventory use the least-privilege
+    // production authority instead of the administrative capture connection.
+    const restoreJournal = new PostgresOperationJournal(sourceAuthorityPool, { namespace: "retained-subjects-restore", scopeSha256: hex("restore-scope") });
     const retainedKeys = new Map<string, string>();
     for (const subject of recoveredInventory) if (subject.kind !== "checkpoint") {
       const stored = await recoveredCrypto.readSealed(retainedSubjectCustodyId({ checkpointId, kind: subject.kind, sourceIdentity: subject.sourceIdentity }));
@@ -261,7 +265,7 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
       async cleanup() { return { state: "absent" as const }; },
       async observeCleanup() { return { state: "absent" as const }; },
     };
-    const restore = new ProductionRestoreCertification({ sourceInstanceId: "source-retained", scope, sourcePool, migrationSource: new ProductionMigrationSource({ pool: sourcePool, source: { sourceIdentity: "source-retained", serviceIdentity: hex("service"), sourceRevision: hex("revision"), schemaVersions: migrations, migrationDigests: Object.fromEntries(migrations.map(path => [path, hex(path)])), writers: [], records: [], objects: [], externalOperations: [] } }), migrationCipher: new MigrationArchiveCipher(new Uint8Array(32).fill(23)), backupStore: objects, journal: restoreJournal, provisioner: { async create() { return freshInstance; }, async attach() { return freshInstance; }, async observeCleanup() { return { state: "absent" as const }; } }, candidateSha256: hex("candidate"), topologySha256: hex("topology") });
+    const restore = new ProductionRestoreCertification({ sourceInstanceId: "source-retained", scope, sourcePool: sourceAuthorityPool, migrationSource: new ProductionMigrationSource({ pool: sourcePool, source: { sourceIdentity: "source-retained", serviceIdentity: hex("service"), sourceRevision: hex("revision"), schemaVersions: migrations, migrationDigests: Object.fromEntries(migrations.map(path => [path, hex(path)])), writers: [], records: [], objects: [], externalOperations: [] } }), migrationCipher: new MigrationArchiveCipher(new Uint8Array(32).fill(23)), backupStore: objects, journal: restoreJournal, provisioner: { async create() { return freshInstance; }, async attach() { return freshInstance; }, async observeCleanup() { return { state: "absent" as const }; } }, candidateSha256: hex("candidate"), topologySha256: hex("topology") });
     const fresh = CoreFreshInstanceSchema.parse(await restore.restore({ operationId: "restore:retained", action: "restore.create", payload: {} }));
     for (const subject of recoveredInventory) {
       const descriptor = CoreRestoreDescriptorSchema.parse(await restore.restore({ operationId: `restore:describe:${subject.kind}`, action: "restore.subject", payload: { freshInstanceId: fresh.freshInstanceId, subject, action: "describe" } }));
@@ -293,7 +297,7 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     expect((await recovered.query("SELECT e.event_json,ae.observation_json FROM production_real.publication_records p JOIN production_real.publication_signed_events e ON e.intent_id=p.intent_id JOIN production_real.publication_effect_intents ae ON ae.intent_id=p.intent_id AND ae.effect_kind='attestation' WHERE p.intent_id='publication:retained'")).rows).toEqual(originalEvents.rows);
     console.log(JSON.stringify({ retainedSubjectsPostgres: true, subjects: 7, freshClone: true, releaseEvidence: false }));
   } finally {
-    await migration?.end(); await recovered?.end(); await runtime?.end(); await source?.end(); await admin?.end();
+    await migration?.end(); await recovered?.end(); await runtime?.end(); await sourceRuntime?.end(); await source?.end(); await admin?.end();
     await docker(["rm", "--force", container]).catch(() => undefined);
   }
 }, 120_000);

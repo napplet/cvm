@@ -897,6 +897,8 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
           expect(prepared?.value).toMatchObject({ state: "prepared", scope: nativeScope }); expect(job?.value).toMatchObject({ originalId: prepareId });
           const backupCrypto = new PerObjectFileCheckpointCrypto({ pool: nativePool, custody, now: () => nativeNow }), stored = await backupCrypto.readSealed(`restore-backup:${candidateSha256.slice(0, 24)}`);
           if (!stored || !job) throw new Error("NATIVE_RESTORE_BACKUP_ORIGINAL_REQUIRED");
+          expect((await nativeAdmin.query("SELECT count(*)::int AS count FROM production_real.checkpoint_crypto_audit WHERE checkpoint_id=$1 AND event='sealed'", [`restore-backup:${candidateSha256.slice(0, 24)}`])).rows).toEqual([{ count: 1 }]);
+          expect((await nativeAdmin.query("SELECT count(*)::int AS count FROM production_real.release_operation_journal WHERE namespace=$1 AND scope_sha256=$2 AND operation_id=$3", [`native-restore-${suffix}`, topologySha256, `non-google-core:restorer-job:${prepareId}`])).rows).toEqual([{ count: 1 }]);
           const jobValue = job.value as { archive: { key: string; generation: number; checksum: string; byteCount: number } };
           // Exercise the private restorer's durable journal/object path instead
           // of treating the object adapter as a test-only side channel.

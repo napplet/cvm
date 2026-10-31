@@ -164,3 +164,35 @@ test("a report journal without original query dispatch intent cannot acquire ADC
     expect(effects).toBe(0);
   }
 });
+
+test("report authority expiring during ADC cannot submit a query", async () => {
+  const value = await grant();
+  let clock = 10;
+  let posts = 0;
+  const accountScopeSha256 = await googleAccountScopeSha256({ projectId: "project-12345", quotaProjectId: "quota-project-1", principal: "release@example.com" });
+  const collector = createBigQueryUsageReportCollector({ projectId: "project-12345", quotaProjectId: "quota-project-1", principal: "release@example.com", now: () => clock, journal: createMemoryBigQueryUsageReportJournal(),
+    tokenSource: { async getAccessToken() { clock = value.expiresAtMs; return { token: "token", expiresAtMs: 70_001, projectId: "project-12345", quotaProjectId: "quota-project-1", principal: "release@example.com", scopes: GOOGLE_CONTROL_PLANE_SCOPES, accountScopeSha256 }; } },
+    fetch: async () => { posts++; throw new Error("EXPIRED_AUTHORITY_REACHED_HTTP"); },
+  });
+  await expect(collector.capture(value)).rejects.toThrow("BILLING_OBSERVATION_GRANT_DENIED");
+  expect(posts).toBe(0);
+});
+
+test("a report response is stopped at its byte ceiling rather than buffered without bounds", async () => {
+  const value = await grant();
+  const queryJobId = `usage_${value.reportRequestSha256.slice(0, 48)}`;
+  let pulls = 0;
+  let canceled = false;
+  const accountScopeSha256 = await googleAccountScopeSha256({ projectId: "project-12345", quotaProjectId: "quota-project-1", principal: "release@example.com" });
+  const collector = createBigQueryUsageReportCollector({ projectId: "project-12345", quotaProjectId: "quota-project-1", principal: "release@example.com", now: () => 10,
+    journal: createMemoryBigQueryUsageReportJournal([{ reportRequestSha256: value.reportRequestSha256, dryRunJobId: `usage_dry_${value.reportRequestSha256.slice(0, 48)}`, queryJobId, state: "query_submitted" }]),
+    tokenSource: { async getAccessToken() { return { token: "token", expiresAtMs: 70_001, projectId: "project-12345", quotaProjectId: "quota-project-1", principal: "release@example.com", scopes: GOOGLE_CONTROL_PLANE_SCOPES, accountScopeSha256 }; } },
+    fetch: async () => new Response(new ReadableStream<Uint8Array>({
+      pull(controller) { pulls++; if (pulls > 3) controller.close(); else controller.enqueue(new Uint8Array(600_000)); },
+      cancel() { canceled = true; },
+    }, { highWaterMark: 0 }), { headers: { "content-type": "application/json" } }),
+  });
+  await expect(collector.recover(value)).rejects.toThrow("BIGQUERY_USAGE_REPORT_RESPONSE_INVALID");
+  expect(canceled).toBeTrue();
+  expect(pulls).toBe(2);
+});

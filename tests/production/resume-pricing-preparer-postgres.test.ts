@@ -343,12 +343,18 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     expect(await freshCheckpoint.readRetainedPendingCommand(custodyInput)).toEqual(revisionCommand);
     await expect(freshCheckpoint.readRetainedPendingCommand({ ...custodyInput, accountId: "account:foreign" })).rejects.toThrow("CHECKPOINT_COMMAND_CUSTODY_BINDING_DENIED");
     await expect(freshCheckpoint.readRetainedPendingCommand({ ...custodyInput, intent: { ...custodyInput.intent, commandSha256: "f".repeat(64) } })).rejects.toThrow("CHECKPOINT_COMMAND_CUSTODY_BINDING_DENIED");
+    // The revision itself was paused without funds. Its final retention-window
+    // quote is separately funded with the same three-sat residual used above.
+    await admin.query("UPDATE production_real.account_balance_projection SET settled_available=3,held=3 WHERE account_id=$1", [accountId]);
+    await admin.query("UPDATE production_real.session_cap_holds SET held_amount=3 WHERE account_id=$1 AND reference='admission:one'", [accountId]);
     const finalPricing = await resumePricingMaterial(now, "profile:final-window"); await registerProductionPricing({ pool, ...finalPricing });
     const finalPreparer = new ProductionResumePricingPreparer({ pool, store, quotes, checkpoint: freshCheckpoint, vertexJournal, currentPricing: finalPricing,
       compatibility: { policyVersion: pending.policyVersion, acceptedToolchains: [pending.toolchainId] }, now: () => now });
     const finalQuote = await finalPreparer.prepare({ principal: { id: accountId }, sessionId: revisionCommand.sessionId, checkpointId: revisionSealed.manifest.checkpointId,
       expectedSessionVersion: 1, expectedCheckpointVersion: 1, idempotencyKey: "quote:final-window" });
     expect(finalQuote).toMatchObject({ status: "quoted", expiresAtMs: Date.parse(revisionSealed.manifest.retentionUntil) });
+    await admin.query("UPDATE production_real.account_balance_projection SET settled_available=0,held=0 WHERE account_id=$1", [accountId]);
+    await admin.query("UPDATE production_real.session_cap_holds SET held_amount=0 WHERE account_id=$1 AND reference='admission:one'", [accountId]);
     const expirationInput = { checkpointId: revisionSealed.manifest.checkpointId, accountId, sessionId: revisionCommand.sessionId };
     await expect(freshCheckpoint.destroyExpired(expirationInput)).rejects.toThrow("CHECKPOINT_DELETE_BINDING_REQUIRED");
     now = Date.parse(revisionSealed.manifest.retentionUntil);

@@ -175,7 +175,10 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
     await expect(assertProductionRetainedSubjectSchema(pool)).rejects.toThrow("PRODUCTION_RETAINED_SUBJECT_SCHEMA_REQUIRED");
     await source.query(await Bun.file(`migrations/${retainedSubjectMigrations[1]}`).text());
     await assertProductionRetainedSubjectSchema(pool);
-    let now = Date.parse("2029-01-01T00:00:00.000Z");
+    // The V2 SQL claim guard uses PostgreSQL's real clock, so its price
+    // authority must be minted on that same timeline. Later expiry checks
+    // explicitly advance this fixture clock past their retained deadline.
+    let now = Date.now();
     const retentionMs = 30 * 86_400_000, fixture = originalFixture(now), kek = Buffer.alloc(32, 17).toString("base64");
     expect(verifyEvent(wire(fixture.ownerEvent))).toBe(true);
     expect(verifyEvent(wire({ ...fixture.ownerEvent, content: "tampered" }))).toBe(false);

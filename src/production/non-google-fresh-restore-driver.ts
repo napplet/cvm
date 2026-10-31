@@ -82,6 +82,11 @@ export class NonGoogleFreshRestoreDriver {
     try { await this.#mustRun(["pg_dump", "--format=custom", "--no-owner", "--no-privileges", "--file", archive, "--dbname", sourceUrl], {}); return new Uint8Array(await readFile(archive)); }
     finally { await rm(workspace, { recursive: true, force: true }); }
   }
+  /** Reads the source identity through the same dedicated read-only source
+   * credential as pg_dump; the live service role never reads pg_control. */
+  async sourceSystemIdentifier(): Promise<string> {
+    return this.#systemIdentifier(await this.#secret(this.reference.sourceDatabaseUrlPath));
+  }
 
   /** Cleanup is exact-resource only. Absence is confirmed by subsequent GETs;
    * a 404 is the sole terminal observation accepted by the native driver. */

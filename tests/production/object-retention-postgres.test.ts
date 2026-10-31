@@ -182,6 +182,10 @@ integration("trusted PostgreSQL 17 custom dumps are independently encrypted, gen
     fixture = new Pool({ connectionString: connectionString!.replace(/\/postgres(?:\?.*)?$/u, `/${database}`) });
     for (const file of ["phase-03/001_funding.sql", "phase-04/001_metered_generation.sql", "phase-04/002_action_budget_lifecycle.sql", "phase-05/001_continuation.sql", "phase-06/001_publication.sql", "phase-03/002_production_accounting.sql", "phase-07/001_production_operation_journal.sql", "phase-07/003_production_checkpoints.sql", "phase-07/019_postgres_bytea_objects.sql"]) await fixture.query(await Bun.file(`migrations/${file}`).text());
     await fixture.query(`CREATE ROLE ${role} LOGIN`); await fixture.query(`GRANT napplet_production_real TO ${role}`); await fixture.query(`GRANT napplet_production_object TO ${role}`);
+    await fixture.query("INSERT INTO production_real.funding_accounts(account_id,nostr_pubkey,unit) VALUES('restore',$1,'sat')", ["8".repeat(64)]);
+    await fixture.query("INSERT INTO production_real.model_profile_versions VALUES('restore-profile',$1,'fixture','fixture','{}')", ["9".repeat(64)]);
+    await fixture.query("INSERT INTO production_real.price_card_versions(id,card_hash,profile_id,unit,normalized_card) VALUES('restore-price',$1,'restore-profile','sat','{}')", ["a".repeat(64)]);
+    await fixture.query("INSERT INTO production_real.metered_sessions(id,account_id,admission_reference,profile_id,price_card_id,version,state) VALUES($1,'restore','fixture:restore','restore-profile','restore-price',0,'prepared')", [`session:${suffix}`]);
     const runtime = new Pool({ connectionString: connectionString!.replace(/\/\/[^@]+@/u, `//${role}@`).replace(/\/postgres(?:\?.*)?$/u, `/${database}`) });
     try {
       const pool = sqlPool(runtime);

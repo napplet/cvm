@@ -20,7 +20,7 @@ type Fresh = Readonly<{ version: 2; databaseUuid: string; applicationUuid: strin
  * subject, reattach, cleanup, or resource callback. Seven-subject recovery is
  * permitted only when the restricted original-record query below is complete. */
 export class NonGoogleFreshRestoreProvisioner {
-  constructor(private readonly input: Readonly<{ binding: NonGoogleCoreBinding; journal: NonGoogleCoreJournal; postgresJournal: PostgresOperationJournal; driver: NonGoogleFreshRestoreDriver; postgres: NonGooglePostgresDriver; scope: Readonly<{ checkpointId: string; sessionId: string; ownerId: string; sourceAuthorityReference: string }>; custodyRoots: readonly string[]; restorerCapabilitySha256: string; roleCostBoundSha256: string }>) { Object.freeze(this); }
+  constructor(private readonly input: Readonly<{ binding: NonGoogleCoreBinding; journal: NonGoogleCoreJournal; postgresJournal: PostgresOperationJournal; driver: NonGoogleFreshRestoreDriver; postgres: NonGooglePostgresDriver; objectStore: PostgresByteaObjectStoreAdapter; scope: Readonly<{ checkpointId: string; sessionId: string; ownerId: string; sourceAuthorityReference: string }>; custodyRoots: readonly string[]; restorerCapabilitySha256: string; roleCostBoundSha256: string }>) { Object.freeze(this); }
   #base() { return `restore:${this.input.binding.candidateSha256}:${this.input.binding.topologySha256}`; }
   #prepare() { return `${this.#base()}:prepare`; }
   #fresh() { return `${this.#base()}:fresh`; }
@@ -40,11 +40,8 @@ export class NonGoogleFreshRestoreProvisioner {
     }
     const pool = await this.input.postgres.open();
     try {
-      const client = await pool.connect();
-      try {
-        const objectStore = new PostgresByteaObjectStoreAdapter({ pool, producerBudget: { version: 1, producer: "retained_subject", plaintextBytes: 16 * 1024 * 1024, aesGcmTagBytes: 16, base64Expansion: "4/3-rounded", chunkBytes: 384 * 1024 } });
         const crypto = new PerObjectFileCheckpointCrypto({ pool, custody: new FileObjectKeyCustody({ roots: this.input.custodyRoots }) });
-        const preparer = new ProductionRetainedSubjectPreparer({ pool, objectStore, journal: this.input.postgresJournal, kekPath: "/non-google-unused-legacy-kek", crypto });
+        const preparer = new ProductionRetainedSubjectPreparer({ pool, objectStore: this.input.objectStore, journal: this.input.postgresJournal, kekPath: "/non-google-unused-legacy-kek", crypto });
         await preparer.prepare(this.input.scope);
         const subjects = await createProductionDurabilitySubjectRegistry(pool).inventory(this.input.scope);
         if (subjects.length !== 7) throw new Error("NON_GOOGLE_RESTORE_SUBJECT_INVENTORY_REQUIRED");
@@ -54,17 +51,14 @@ export class NonGoogleFreshRestoreProvisioner {
           const sealed = await crypto.seal({ checkpointId, plaintext: backup, additionalData: new TextEncoder().encode(JSON.stringify({ scope: this.input.scope, binding: this.input.binding })), binding: { accountId: "restore", sessionId: this.input.scope.sessionId, actionId: this.input.scope.checkpointId, operationId: this.#prepare(), retentionUntil: subjects[0]!.retentionUntil } });
           const stored = await crypto.readSealed(checkpointId);
           if (!stored || stored.keyReference !== sealed.keyReference) throw new Error("NON_GOOGLE_RESTORE_BACKUP_CUSTODY_REQUIRED");
-          const reference = await objectStore.createImmutable({ key: `restore-backups/${checkpointId}/${stored.ciphertextSha256}`, bytes: stored.ciphertext, originalOperationIdentity: createHash("sha256").update(this.#prepare()).digest("hex") });
-          await new PostgresRestorerPullStore(this.input.journal, objectStore).claimJob({ originalId: this.#prepare(), candidateSha256: this.input.binding.candidateSha256, topologySha256: this.input.binding.topologySha256, roleCostBoundSha256: z.string().regex(/^[a-f0-9]{64}$/u).parse(this.input.roleCostBoundSha256), capabilitySha256: z.string().regex(/^[a-f0-9]{64}$/u).parse(this.input.restorerCapabilitySha256), archive: { ...reference, byteCount: stored.ciphertext.byteLength }, expiresAtMs: Date.parse(subjects[0]!.retentionUntil) });
+          const reference = await this.input.objectStore.createImmutable({ key: `restore-backups/${checkpointId}/${stored.ciphertextSha256}`, bytes: stored.ciphertext, originalOperationIdentity: createHash("sha256").update(this.#prepare()).digest("hex") });
+          await new PostgresRestorerPullStore(this.input.journal, this.input.objectStore).claimJob({ originalId: this.#prepare(), candidateSha256: this.input.binding.candidateSha256, topologySha256: this.input.binding.topologySha256, roleCostBoundSha256: z.string().regex(/^[a-f0-9]{64}$/u).parse(this.input.roleCostBoundSha256), capabilitySha256: z.string().regex(/^[a-f0-9]{64}$/u).parse(this.input.restorerCapabilitySha256), archive: { ...reference, byteCount: stored.ciphertext.byteLength }, expiresAtMs: Date.parse(subjects[0]!.retentionUntil) });
         } finally { backup.fill(0); }
-        const original = await client.query<Record<string, unknown>>("SELECT system_identifier::text AS source_instance_id FROM pg_control_system()", []);
-        if (original.rows.length !== 1) throw new Error("NON_GOOGLE_RESTORE_SOURCE_ORIGINAL_REQUIRED");
-        const sourceInstanceId = z.string().min(1).max(256).parse(original.rows[0]!.source_instance_id);
+        const sourceInstanceId = await this.input.driver.sourceSystemIdentifier();
         const scope = Object.freeze({ checkpointId: this.input.scope.checkpointId, sessionId: this.input.scope.sessionId, ownerId: this.input.scope.ownerId, sourceAuthorityReference: z.string().min(1).max(256).parse(this.input.scope.sourceAuthorityReference) });
         const value: Prepared = Object.freeze({ version: 2, sourceInstanceId, binding: this.input.binding, scope, state: "prepared" });
         await this.input.journal.claim(this.#prepare(), hash(value), value);
         return Object.freeze({ status: "prepared" as const });
-      } finally { client.release(); }
     } finally { await pool.end(); }
   }
   async create(): Promise<z.infer<typeof CoreFreshInstanceSchema>> {

@@ -5,6 +5,7 @@ import { NonGoogleCoolifyDriver } from "./non-google-coolify-driver";
 import { NonGoogleFreshRestoreDriver } from "./non-google-fresh-restore-driver";
 import { NonGooglePostgresDriver } from "./non-google-postgres";
 import { NonGoogleSigNozDriver } from "./non-google-signoz-driver";
+import { PostgresByteaObjectStoreAdapter } from "../continuity/postgres-bytea-object-store";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 
@@ -22,6 +23,7 @@ export class NonGoogleNativeCoreDriverSet {
     journal: PostgresOperationJournal;
     capacity: ProductionReadyCapacityPort;
     postgres: NonGooglePostgresDriver;
+    objectStore: PostgresByteaObjectStoreAdapter;
     coolify: NonGoogleCoolifyDriver;
     signoz: NonGoogleSigNozDriver;
     restore: NonGoogleFreshRestoreDriver;
@@ -31,7 +33,7 @@ export class NonGoogleNativeCoreDriverSet {
   }>) {
     assertPostgresOperationJournal(input.journal);
     assertProductionReadyCapacity(input.capacity);
-    if (!(input.postgres instanceof NonGooglePostgresDriver) || !(input.coolify instanceof NonGoogleCoolifyDriver) || !(input.signoz instanceof NonGoogleSigNozDriver) || !(input.restore instanceof NonGoogleFreshRestoreDriver)) throw new Error("NON_GOOGLE_NATIVE_DRIVER_REQUIRED");
+    if (!(input.postgres instanceof NonGooglePostgresDriver) || !(input.objectStore instanceof PostgresByteaObjectStoreAdapter) || !(input.coolify instanceof NonGoogleCoolifyDriver) || !(input.signoz instanceof NonGoogleSigNozDriver) || !(input.restore instanceof NonGoogleFreshRestoreDriver)) throw new Error("NON_GOOGLE_NATIVE_DRIVER_REQUIRED");
     if (input.restore.coolify !== input.coolify) throw new Error("NON_GOOGLE_NATIVE_RESTORE_COOLIFY_REQUIRED");
     this.candidateSha256 = Digest.parse(input.candidateSha256);
     this.topologySha256 = Digest.parse(input.topologySha256);
@@ -40,12 +42,13 @@ export class NonGoogleNativeCoreDriverSet {
     this.custodyRoots = Object.freeze([...input.custodyRoots]);
     this.restorerCapabilitySha256 = Digest.parse(input.restorerCapabilitySha256);
     if (this.custodyRoots.length === 0) throw new Error("NON_GOOGLE_NATIVE_CUSTODY_ROOT_REQUIRED");
-    this.journal = input.journal; this.capacity = input.capacity; this.postgres = input.postgres; this.coolify = input.coolify; this.signoz = input.signoz; this.restore = input.restore;
+    this.journal = input.journal; this.capacity = input.capacity; this.postgres = input.postgres; this.objectStore = input.objectStore; this.coolify = input.coolify; this.signoz = input.signoz; this.restore = input.restore;
     Object.freeze(this);
   }
   readonly journal: PostgresOperationJournal;
   readonly capacity: ProductionReadyCapacityPort;
   readonly postgres: NonGooglePostgresDriver;
+  readonly objectStore: PostgresByteaObjectStoreAdapter;
   readonly coolify: NonGoogleCoolifyDriver;
   readonly signoz: NonGoogleSigNozDriver;
   readonly restore: NonGoogleFreshRestoreDriver;

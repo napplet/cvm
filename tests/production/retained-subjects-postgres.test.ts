@@ -775,22 +775,26 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
     if (continuationKind === "legacy") {
       const nativeNow = Date.now(), nativeCheckpointId = `checkpoint:native:${suffix}`;
       const nativeManifest = { ...manifest, checkpointId: nativeCheckpointId, retentionUntil: new Date(nativeNow + retentionMs).toISOString() };
-      const nativeCheckpoint = new ProductionCheckpointCoordinator({ pool, objectStore: objects, journal: new PostgresOperationJournal(pool, { namespace: "native-restore-source", scopeSha256: hex("native-restore-source") }), kekPath: "/fixture/kek", readKekFile: async () => kek, now: () => nativeNow });
+      const nativeCheckpoint = new ProductionCheckpointCoordinator({ pool: sourceAuthorityPool, objectStore: objects, journal: new PostgresOperationJournal(sourceAuthorityPool, { namespace: "native-restore-source", scopeSha256: hex("native-restore-source") }), kekPath: "/fixture/kek", readKekFile: async () => kek, now: () => nativeNow });
       const nativeSealed = await nativeCheckpoint.seal({ ...nativeManifest, archive });
-      const nativeDatabase = `retained_native_${suffix}`, nativeRole = role;
+      const nativeDatabase = `retained_native_${suffix}`, nativeServiceRole = role, nativeObjectRole = `retained_object_${suffix}`, nativeBackupRole = `retained_backup_${suffix}`;
       await closePool(runtime); runtime = undefined; await closePool(sourceRuntime); sourceRuntime = undefined; await closePool(source); source = undefined;
       await admin.query(`CREATE DATABASE ${nativeDatabase} TEMPLATE ${sourceDatabase}`);
-      let nativeAdmin: Pool | undefined, nativeRuntime: Pool | undefined;
+      let nativeAdmin: Pool | undefined, nativeRuntime: Pool | undefined, nativeObjectRuntime: Pool | undefined;
       const roots = [await mkdtemp(join(tmpdir(), "cvm-native-restore-live-")), await mkdtemp(join(tmpdir(), "cvm-native-restore-copy-"))];
       const previousImage = process.env.NAPPLET_TRUSTED_RESTORER_IMAGE;
       try {
         nativeAdmin = new Pool({ connectionString: connection("postgres", nativeDatabase), connectionTimeoutMillis: 2_000 });
         await nativeAdmin.query(await Bun.file("migrations/phase-07/019_postgres_bytea_objects.sql").text());
-        await nativeAdmin.query(`GRANT napplet_production_object TO ${nativeRole}`);
-        nativeRuntime = new Pool({ connectionString: connection(nativeRole, nativeDatabase), connectionTimeoutMillis: 2_000 });
+        await nativeAdmin.query(`CREATE ROLE ${nativeObjectRole} LOGIN`); await nativeAdmin.query(`CREATE ROLE ${nativeBackupRole} LOGIN`);
+        await nativeAdmin.query(`GRANT napplet_production_object TO ${nativeObjectRole}`);
+        await nativeAdmin.query(`GRANT pg_read_all_data TO ${nativeBackupRole}`); await nativeAdmin.query(`GRANT CONNECT ON DATABASE ${nativeDatabase} TO ${nativeBackupRole}`); await nativeAdmin.query(`GRANT USAGE ON SCHEMA production_real TO ${nativeBackupRole}`); await nativeAdmin.query(`GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO ${nativeBackupRole}`);
+        nativeRuntime = new Pool({ connectionString: connection(nativeServiceRole, nativeDatabase), connectionTimeoutMillis: 2_000 });
+        nativeObjectRuntime = new Pool({ connectionString: connection(nativeObjectRole, nativeDatabase), connectionTimeoutMillis: 2_000 });
         const nativePool = bindAccountingRealmPool(sqlPool(nativeRuntime), createAccountingRealm("production-real"));
+        const nativeObjectPool = sqlPool(nativeObjectRuntime);
         const candidateSha256 = hex("native-restore-candidate"), topologySha256 = hex("native-restore-topology"), roleCostBoundSha256 = hex("native-restore-cost"), toolchainSha256 = hex("native-restore-toolchain");
-        const bytea = new PostgresByteaObjectStoreAdapter({ pool: nativePool, now: () => nativeNow, retentionUntil: () => new Date(nativeNow + retentionMs).toISOString(), producerBudget: ObjectProducerBudgets.retained_subject });
+        const bytea = new PostgresByteaObjectStoreAdapter({ pool: nativeObjectPool, now: () => nativeNow, retentionUntil: () => new Date(nativeNow + retentionMs).toISOString(), producerBudget: ObjectProducerBudgets.retained_subject });
         expect(await bytea.createImmutable({ key: nativeSealed.envelope.object.key, bytes: archive, originalOperationIdentity: hex("native-restore-checkpoint") })).toEqual(nativeSealed.envelope.object);
         expect(await bytea.createImmutable({ key: artifactReference.key, bytes: fixture.artifact, originalOperationIdentity: hex("native-restore-artifact") })).toEqual(artifactReference);
         const custody = new FileObjectKeyCustody({ roots });
@@ -814,7 +818,13 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
         const coolify = new NonGoogleCoolifyDriver({ baseOrigin: "https://coolify.fixture.invalid", serverUuid: "00000000-0000-4000-8000-000000000101", projectUuid: "00000000-0000-4000-8000-000000000102", environmentUuid: "00000000-0000-4000-8000-000000000103", postgres17Image: coolifyImage, restorerImage: coolifyImage, namePrefix: "native-restore", tokenPath: "/fixture/coolify-token" });
         const runner: NativeCommandRunner = Object.freeze({ async run(command) {
           const argv = [...command];
+          if (argv[0] === "psql") {
+            if (!argv.some(value => value.includes(`//${nativeBackupRole}@`))) throw new Error("NATIVE_RESTORE_BACKUP_ROLE_REQUIRED");
+            const result = await docker(["exec", "-i", container, ...argv]);
+            return Object.freeze({ exitCode: 0, stdout: new TextEncoder().encode(result), stderr: new Uint8Array() });
+          }
           if (argv[0] !== "pg_dump") throw new Error("NATIVE_RESTORE_TRUSTED_DUMP_REQUIRED");
+          if (!argv.some(value => value.includes(`//${nativeBackupRole}@`))) throw new Error("NATIVE_RESTORE_BACKUP_ROLE_REQUIRED");
           dumps++;
           const file = argv.indexOf("--file"); if (file < 0 || !argv[file + 1]) throw new Error("NATIVE_RESTORE_DUMP_PATH_REQUIRED");
           const hostPath = argv[file + 1]!, containerPath = `/tmp/native-${suffix}.dump`;
@@ -824,14 +834,14 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
           await docker(["exec", "-i", container, "rm", "-f", containerPath]);
           return Object.freeze({ exitCode: 0, stdout: new TextEncoder().encode(result), stderr: new Uint8Array() });
         } });
-        const postgres = new NonGooglePostgresDriver({ host: "127.0.0.1", port: Number(port), database: nativeDatabase, user: nativeRole, passwordPath: "/fixture/native-postgres-password", ssl: false }, { async open() { return Object.freeze({ connect: nativePool.connect.bind(nativePool), end: async () => undefined }); } }, async () => "fixture-password");
+        const postgres = new NonGooglePostgresDriver({ host: "127.0.0.1", port: Number(port), database: nativeDatabase, user: nativeServiceRole, passwordPath: "/fixture/native-postgres-password", ssl: false }, { async open() { return Object.freeze({ connect: nativePool.connect.bind(nativePool), end: async () => undefined }); } }, async () => "fixture-password");
         const restore = new NonGoogleFreshRestoreDriver(coolify, { sourceDatabaseUrlPath: "/fixture/native-source-url", freshDatabaseUrlPath: "/fixture/native-fresh-url", archiveRoot: "/fixture/native-archive", trustedRestorerName: "native-restorer", expectedPostgresMajor: 17 }, runner, async path => {
           if (path !== "/fixture/native-source-url") throw new Error("NATIVE_RESTORE_UNEXPECTED_SECRET");
-          return `postgresql://postgres@127.0.0.1:5432/${nativeDatabase}`;
+          return `postgresql://${nativeBackupRole}@127.0.0.1:${port}/${nativeDatabase}`;
         });
         const signoz = new NonGoogleSigNozDriver({ baseOrigin: "https://signoz.fixture.invalid", ingestionKeyPath: "/fixture/signoz-ingest", queryKeyPath: "/fixture/signoz-query", collectorConfigSha256: hex("native-signoz"), serviceName: "native-restore", queryTemplateVersion: "v1" });
         const nativeScope = { checkpointId: nativeCheckpointId, sessionId, ownerId: fixture.ownerId, sourceAuthorityReference: `source:${nativeCheckpointId}` };
-        const drivers = new NonGoogleNativeCoreDriverSet({ candidateSha256, topologySha256, roleCostBoundSha256, journal: nativeJournal, capacity, postgres, coolify, signoz, restore, restoreScope: nativeScope, custodyRoots: roots, restorerCapabilitySha256: hex("native-restorer-capability") });
+        const drivers = new NonGoogleNativeCoreDriverSet({ candidateSha256, topologySha256, roleCostBoundSha256, journal: nativeJournal, capacity, postgres, objectStore: bytea, coolify, signoz, restore, restoreScope: nativeScope, custodyRoots: roots, restorerCapabilitySha256: hex("native-restorer-capability") });
         const services = createNonGoogleNativeCoreServices({ drivers });
         const scopes = ["production.core"], effects = ["restore.inventory", "restore.prepare"];
         const authorityRequest = await createNonGoogleAuthorizationRequestV3({ identity: { candidateSha256, sourceSha256: hex("native-source"), configSha256: hex("native-config"), toolchainSha256, topologySha256, failureDomainSha256: hex("native-domain"), retentionSha256: hex("native-retention"), cleanupSha256: hex("native-cleanup"), controllerStateSha256: hex("native-state") }, binding: { providerGraphRevision: "non-google-v1", roleInventorySha256: hex("native-roles"), roleCostBoundSha256, scopesSha256: hex(canonicalJson(scopes)), effectsSha256: hex(canonicalJson(effects)) } });
@@ -862,7 +872,7 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
         } finally { await contextvm.close(); }
       } finally {
         if (previousImage === undefined) delete process.env.NAPPLET_TRUSTED_RESTORER_IMAGE; else process.env.NAPPLET_TRUSTED_RESTORER_IMAGE = previousImage;
-        await nativeRuntime?.end(); await nativeAdmin?.end(); await admin.query(`DROP DATABASE IF EXISTS ${nativeDatabase}`).catch(() => undefined); await Promise.all(roots.map(root => rm(root, { recursive: true, force: true })));
+        await nativeObjectRuntime?.end(); await nativeRuntime?.end(); await nativeAdmin?.end(); await admin.query(`DROP DATABASE IF EXISTS ${nativeDatabase}`).catch(() => undefined); await Promise.all(roots.map(root => rm(root, { recursive: true, force: true })));
       }
     }
     console.log(JSON.stringify({ retainedSubjectsPostgres: true, subjects: 7, freshClone: true, releaseEvidence: false }));

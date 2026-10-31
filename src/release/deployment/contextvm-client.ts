@@ -10,6 +10,7 @@ import { PostgresOperationJournal, assertPostgresOperationJournal, type Operatio
 import { validateAuthorizationReceipt, validateAuthorizationRequest } from "../authorization";
 import { assertProductionAdmissionObserver, type ProductionCertificationCoreServices } from "../../production/certification-services";
 import { ProductionCertificationIngress } from "../../production/certification-ingress";
+import { assertNonGoogleInvocationAuthority, type NonGoogleInvocationAuthority } from "../../production/non-google-invocation-authority";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 const PubkeySchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
@@ -243,7 +244,7 @@ export async function openContextVmRelayTransport(input: Readonly<{
  * PostgreSQL journal is claimed before `send`; a lost response can only be
  * recovered with the signed `session_status` tool under that same operation.
  */
-export async function openContextVmCertificationClient(input: Readonly<{
+type CertificationClientInput = Readonly<{
   certificationKeyReference: unknown;
   serverPubkey: unknown;
   relays: unknown;
@@ -251,11 +252,17 @@ export async function openContextVmCertificationClient(input: Readonly<{
   journal: PostgresOperationJournal;
   candidateSha256: unknown;
   topologySha256: unknown;
-  authorizationRequest: unknown;
-  authorizationReceipt: unknown;
   now?: () => number;
   timeoutMs?: number;
-}>): Promise<ContextVmCertificationClient> {
+}>;
+
+type CertificationClientAuthorization = Readonly<{
+  assertDispatch(): Promise<void>;
+  assertOriginalObservation(input: Readonly<{ operationId: string; operationSha256: string }>): Promise<void>;
+  roleCostBoundSha256: string;
+}>;
+
+async function openAuthorizedContextVmCertificationClient(input: CertificationClientInput, authorization: CertificationClientAuthorization): Promise<ContextVmCertificationClient> {
   const certificationKeyReference = reference(input.certificationKeyReference);
   const configuredCandidate = CertificationCandidateSchema.parse(input.candidateSha256);
   const topologySha256 = CertificationCandidateSchema.parse(input.topologySha256);
@@ -265,12 +272,10 @@ export async function openContextVmCertificationClient(input: Readonly<{
   try { assertPostgresOperationJournal(input.journal); } catch { throw new Error("CONTEXTVM_DURABLE_JOURNAL_REQUIRED"); }
   const timeoutMs = input.timeoutMs ?? 540_000;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 600_000) throw new Error("CONTEXTVM_CERTIFICATION_TIMEOUT_INVALID");
-  async function authorize(): Promise<void> {
-    const request = await validateAuthorizationRequest(input.authorizationRequest);
-    const receipt = await validateAuthorizationReceipt({ request, receipt: input.authorizationReceipt, nowMs: (input.now ?? Date.now)() });
-    if (request.candidateSha256 !== configuredCandidate || request.topologySha256 !== topologySha256 || receipt.candidateSha256 !== configuredCandidate || receipt.topologySha256 !== topologySha256 || !request.orderedEffects.some(effect => effect.provider === "contextvm") || !request.providerScopes.some(scope => scope.provider === "contextvm")) throw new Error("CONTEXTVM_CERTIFICATION_AUTHORIZATION_INVALID");
+  async function originalOperationSha256(operationId: string): Promise<string> {
+    return digest({ operationId, kind: "edge.payment.contextvm", candidateSha256: configuredCandidate, topologySha256, roleCostBoundSha256: authorization.roleCostBoundSha256 });
   }
-  await authorize();
+  await authorization.assertDispatch();
   const signer = await input.signerBroker.resolveContextVmCertificationSigner({ reference: certificationKeyReference, purpose: "contextvm_certification_client" });
   if (!signer || typeof signer.getPublicKey !== "function" || typeof signer.signEvent !== "function") throw new Error("CONTEXTVM_CERTIFICATION_SIGNER_INVALID");
   const relayPool = new ApplesauceRelayPool(relays, { reconnectBaseDelayMs: 1_000, reconnectMaxDelayMs: 30_000, publishOptions: { retries: 1, timeout: 10_000 } });
@@ -287,15 +292,15 @@ export async function openContextVmCertificationClient(input: Readonly<{
     if (result.error) active.reject(new Error(typeof result.error.message === "string" ? result.error.message : "CONTEXTVM_CERTIFICATION_REQUEST_FAILED"));
     else active.resolve(result.result);
   };
-  await authorize();
+  await authorization.assertDispatch();
   await client.start();
   let sequence = 0;
-  async function call(operationId: string, method: string, params: Readonly<Record<string, unknown>>): Promise<unknown> {
+  async function call(operationId: string, method: string, params: Readonly<Record<string, unknown>>, originalObservation = false): Promise<unknown> {
     const id = `cert:${operationId}:${++sequence}`;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { pending.delete(id); reject(new Error("CONTEXTVM_CERTIFICATION_TIMEOUT")); }, timeoutMs);
       pending.set(id, { resolve, reject, timer });
-      void authorize().then(() => client.send({ jsonrpc: "2.0", id, method, params } as never)).catch(error => {
+      void (originalObservation ? originalOperationSha256(operationId).then(operationSha256 => authorization.assertOriginalObservation({ operationId, operationSha256 })) : authorization.assertDispatch()).then(() => client.send({ jsonrpc: "2.0", id, method, params } as never)).catch(error => {
         const active = pending.get(id); if (active) { pending.delete(id); clearTimeout(active.timer); active.reject(error instanceof Error ? error : new Error("CONTEXTVM_CERTIFICATION_SEND_FAILED")); }
       });
     });
@@ -305,7 +310,7 @@ export async function openContextVmCertificationClient(input: Readonly<{
     return DigestSchema.parse(computeCanonicalInvocationIdentity(principal, "tools/call", { name: "start_session", arguments: inputValue }).invocationHash);
   }
   async function queryRelayStatus(value: Readonly<{ operationId: string; candidateId: string }>): Promise<void> {
-    await authorize();
+    await authorization.assertDispatch();
     if (value.candidateId !== configuredCandidate) throw new Error("CONTEXTVM_CERTIFICATION_CANDIDATE_MISMATCH");
     const requestIdentitySha256 = await digest({ candidateId: value.candidateId, topologySha256, serverPubkey, method: "ping" });
     type StatusState = Readonly<{ operationId: string; candidateId: string; requestIdentitySha256: string; state: "pending" | "responded" | "method_unavailable" }>;
@@ -340,7 +345,7 @@ export async function openContextVmCertificationClient(input: Readonly<{
     capabilities: {},
     clientInfo: { name: "napplet-cvm-certification", version: "1" },
   });
-  await authorize();
+  await authorization.assertDispatch();
   await client.send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} } as never);
   type AdmissionInput = Readonly<{ operationId: string; candidateId: string; requestedCap: string }>;
   const completeAdmission = (value: Awaited<ReturnType<ContextVmCertificationClient["admit"]>>): void => {
@@ -350,7 +355,7 @@ export async function openContextVmCertificationClient(input: Readonly<{
   };
   const certificationClient: ContextVmCertificationClient = Object.freeze({
     async admit(value) {
-      await authorize();
+      await authorization.assertDispatch();
       const operationId = CertificationOperationSchema.parse(value.operationId);
       const candidateId = CertificationCandidateSchema.parse(value.candidateId);
       if (candidateId !== configuredCandidate) throw new Error("CONTEXTVM_CERTIFICATION_CANDIDATE_MISMATCH");
@@ -375,7 +380,7 @@ export async function openContextVmCertificationClient(input: Readonly<{
       }
     },
     async generate(value) {
-      await authorize();
+      await authorization.assertDispatch();
       const operationId = CertificationOperationSchema.parse(value.operationId);
       const candidateId = CertificationCandidateSchema.parse(value.candidateId);
       if (candidateId !== configuredCandidate) throw new Error("CONTEXTVM_CERTIFICATION_CANDIDATE_MISMATCH");
@@ -406,12 +411,13 @@ export async function openContextVmCertificationClient(input: Readonly<{
     },
     async observeOriginal(value) {
       const operationId = CertificationOperationSchema.parse(value.operationId);
+      await authorization.assertOriginalObservation({ operationId, operationSha256: await originalOperationSha256(operationId) });
       const record = await input.journal.read<CertificationCallState>(`contextvm-generate:${operationId}`);
       if (!record || record.value.operationId !== operationId) throw new Error("CONTEXTVM_CERTIFICATION_ORIGINAL_REQUIRED");
       // A lost response with no server session mapping remains unknown. It
       // cannot authorise a replacement start_session invocation.
       if (!record.value.sessionId) return Object.freeze({ operationId, state: "unknown" as const });
-      const result = await call(operationId, "tools/call", { name: "session_status", arguments: { sessionId: record.value.sessionId } });
+      const result = await call(operationId, "tools/call", { name: "session_status", arguments: { sessionId: record.value.sessionId } }, true);
       const status = z.object({ status: z.string().min(1) }).passthrough().safeParse(result);
       if (!status.success) return Object.freeze({ operationId, state: "unknown" as const });
       const saved = await input.journal.compareAndSet(`contextvm-generate:${operationId}`, record.identitySha256, record.revision, { ...record.value, state: "observed" });
@@ -419,7 +425,7 @@ export async function openContextVmCertificationClient(input: Readonly<{
       return Object.freeze({ operationId, state: "observed" as const, sessionId: record.value.sessionId, ...(record.value.serverOperationId ? { serverOperationId: record.value.serverOperationId } : {}) });
     },
     async exerciseRelayDeliveryFault(value) {
-      await authorize();
+      await authorization.assertDispatch();
       const fault = z.enum(["duplicate", "out_of_order"]).parse(value.fault);
       const first: AdmissionInput = {
         operationId: CertificationOperationSchema.parse(value.first.operationId),
@@ -465,6 +471,63 @@ export async function openContextVmCertificationClient(input: Readonly<{
   });
   certificationClients.add(certificationClient);
   return certificationClient;
+}
+
+async function assertLegacyContextVmCertificationAuthorization(input: CertificationClientInput & Readonly<{ authorizationRequest: unknown; authorizationReceipt: unknown }>): Promise<string> {
+  const request = await validateAuthorizationRequest(input.authorizationRequest);
+  const receipt = await validateAuthorizationReceipt({ request, receipt: input.authorizationReceipt, nowMs: (input.now ?? Date.now)() });
+  const candidate = CertificationCandidateSchema.parse(input.candidateSha256);
+  const topology = CertificationCandidateSchema.parse(input.topologySha256);
+  if (request.candidateSha256 !== candidate || request.topologySha256 !== topology || receipt.candidateSha256 !== candidate || receipt.topologySha256 !== topology || !request.orderedEffects.some(effect => effect.provider === "contextvm") || !request.providerScopes.some(scope => scope.provider === "contextvm")) throw new Error("CONTEXTVM_CERTIFICATION_AUTHORIZATION_INVALID");
+  // Legacy v1 receipts predate the successor role-cost tuple. This value is
+  // never consulted by their authorization path; it only keeps the shared
+  // client internals typed while preserving that historical reader unchanged.
+  return "0".repeat(64);
+}
+
+/** Historical reader retained for evidence and recovery. New successor wiring
+ * uses openNonGoogleContextVmCertificationClient and never supplies a legacy
+ * authorization receipt. */
+export async function openContextVmCertificationClient(input: CertificationClientInput & Readonly<{ authorizationRequest: unknown; authorizationReceipt: unknown }>): Promise<ContextVmCertificationClient> {
+  const roleCostBoundSha256 = await assertLegacyContextVmCertificationAuthorization(input);
+  const authorization: CertificationClientAuthorization = Object.freeze({
+    roleCostBoundSha256,
+    async assertDispatch() { await assertLegacyContextVmCertificationAuthorization(input); },
+    async assertOriginalObservation() { await assertLegacyContextVmCertificationAuthorization(input); },
+  });
+  return openAuthorizedContextVmCertificationClient(input, authorization);
+}
+
+/**
+ * Opens the actual SDK client for the successor-only non-Google path. Its
+ * controller-verified authority is consumed directly, never translated into
+ * an old request/receipt. Authority checks precede signer resolution, relay
+ * startup, journal mutation, and every signed dispatch.
+ */
+export async function openNonGoogleContextVmCertificationClient(input: CertificationClientInput & Readonly<{
+  authority: unknown;
+  authorizationRequestSha256: unknown;
+  roleCostBoundSha256: unknown;
+}>): Promise<ContextVmCertificationClient> {
+  assertNonGoogleInvocationAuthority(input.authority);
+  const authority: NonGoogleInvocationAuthority = input.authority;
+  const bindings = Object.freeze({
+    scope: "edge.payment",
+    effect: "edge.payment.contextvm",
+    candidateSha256: CertificationCandidateSchema.parse(input.candidateSha256),
+    topologySha256: CertificationCandidateSchema.parse(input.topologySha256),
+    requestSha256: DigestSchema.parse(input.authorizationRequestSha256),
+    roleCostBoundSha256: DigestSchema.parse(input.roleCostBoundSha256),
+  });
+  const now = input.now ?? Date.now;
+  const authorization: CertificationClientAuthorization = Object.freeze({
+    roleCostBoundSha256: bindings.roleCostBoundSha256,
+    async assertDispatch() { authority.assertDispatch({ ...bindings, nowMs: now() }); },
+    async assertOriginalObservation(original) {
+      authority.assertOriginalObservation({ ...bindings, originalRecorded: true, operationId: original.operationId, operationSha256: original.operationSha256, nowMs: now() });
+    },
+  });
+  return openAuthorizedContextVmCertificationClient(input, authorization);
 }
 
 /**

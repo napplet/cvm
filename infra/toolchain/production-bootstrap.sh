@@ -92,8 +92,17 @@ seal_base_mounts() {
       /proc/sys) printf '%s' PROC_SYS ;;
       /proc/sysrq-trigger) printf '%s' PROC_SYSRQ ;;
       /proc/acpi) printf '%s' PROC_ACPI ;;
+      /proc/asound) printf '%s' PROC_ASOUND ;;
+      /proc/interrupts) printf '%s' PROC_INTERRUPTS ;;
+      /proc/kcore) printf '%s' PROC_KCORE ;;
+      /proc/keys) printf '%s' PROC_KEYS ;;
+      /proc/latency_stats) printf '%s' PROC_LATENCY_STATS ;;
+      /proc/sched_debug) printf '%s' PROC_SCHED_DEBUG ;;
       /proc/scsi) printf '%s' PROC_SCSI ;;
+      /proc/timer_list) printf '%s' PROC_TIMER_LIST ;;
+      /proc/timer_stats) printf '%s' PROC_TIMER_STATS ;;
       /sys/firmware) printf '%s' SYS_FIRMWARE ;;
+      /sys/devices/virtual/powercap) printf '%s' SYS_POWERCAP ;;
       /sys/devices/system/cpu/cpu*/thermal_throttle) printf '%s' SYS_CPU_THERMAL ;;
       /run) printf '%s' RUN ;;
       /run/secrets) printf '%s' RUN_SECRETS ;;

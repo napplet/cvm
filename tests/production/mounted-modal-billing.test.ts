@@ -61,6 +61,7 @@ describe("mounted Modal billing selection", () => {
         get certificationClientPubkey() { return authority("certificationClientPubkey"); },
         get generation() { return authority("generation"); },
         get continuation() { return authority("continuation"); },
+        get pricedContinuation() { return authority("pricedContinuation"); },
         get facade() { return authority("facade"); },
         get funding() { return authority("funding"); },
         get dependencies() { return authority("dependencies"); },

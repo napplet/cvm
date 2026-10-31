@@ -31,6 +31,9 @@ const UnsignedEnvelopeSchema = z.object({
 const EnvelopeSchema = UnsignedEnvelopeSchema.extend({ signature: Signature }).strict();
 
 export type NonGoogleInvocationAuthority = Readonly<{
+  /** Verified, immutable binding facts for successor materialization. This is
+   * metadata only; callers must still assert each effect before I/O. */
+  binding(): Readonly<{ candidateSha256: string; topologySha256: string; requestSha256: string; roleCostBoundSha256: string; costArtifactSha256: string; issuedAtMs: number; expiresAtMs: number }>;
   assertDispatch(input: Readonly<{ scope: string; effect: string; candidateSha256: string; topologySha256: string; requestSha256: string; roleCostBoundSha256: string; nowMs?: number }>): void;
   assertOriginalObservation(input: Readonly<{ scope: string; effect: string; candidateSha256: string; topologySha256: string; requestSha256: string; roleCostBoundSha256: string; originalRecorded: boolean; operationId?: string; operationSha256?: string; nowMs?: number }>): void;
 }>;
@@ -61,7 +64,11 @@ function exact(left: readonly string[], right: readonly string[]): boolean { ret
 function sorted(input: readonly string[]): string[] { return [...input].sort((left, right) => left.localeCompare(right)); }
 
 class VerifiedAuthority implements NonGoogleInvocationAuthority {
-  constructor(private readonly input: Readonly<{ candidateSha256: string; topologySha256: string; requestSha256: string; roleCostBoundSha256: string; scopes: readonly string[]; effects: readonly string[]; issuedAtMs: number; expiresAtMs: number; expiredObservationScopes: readonly string[]; originalOperations: readonly z.infer<typeof OriginalOperation>[]; now: () => number }>) {}
+  readonly #binding: Readonly<{ candidateSha256: string; topologySha256: string; requestSha256: string; roleCostBoundSha256: string; costArtifactSha256: string; issuedAtMs: number; expiresAtMs: number }>;
+  constructor(private readonly input: Readonly<{ candidateSha256: string; topologySha256: string; requestSha256: string; roleCostBoundSha256: string; costArtifactSha256: string; scopes: readonly string[]; effects: readonly string[]; issuedAtMs: number; expiresAtMs: number; expiredObservationScopes: readonly string[]; originalOperations: readonly z.infer<typeof OriginalOperation>[]; now: () => number }>) {
+    this.#binding = Object.freeze({ candidateSha256: input.candidateSha256, topologySha256: input.topologySha256, requestSha256: input.requestSha256, roleCostBoundSha256: input.roleCostBoundSha256, costArtifactSha256: input.costArtifactSha256, issuedAtMs: input.issuedAtMs, expiresAtMs: input.expiresAtMs });
+  }
+  binding() { return this.#binding; }
   assertDispatch(input: Readonly<{ scope: string; effect: string; candidateSha256: string; topologySha256: string; requestSha256: string; roleCostBoundSha256: string; nowMs?: number }>): void {
     this.#assert(input, false);
   }
@@ -116,7 +123,7 @@ export function createNonGoogleInvocationAuthorityVerifier(policyInput: NonGoogl
     if (request.binding.scopesSha256 !== await digest(canonicalJson(sorted(value.scopes))) || request.binding.effectsSha256 !== await digest(canonicalJson(sorted(value.effects))) || receipt.candidateSha256 !== request.identity.candidateSha256 || receipt.topologySha256 !== request.identity.topologySha256 || receipt.roleCostBoundSha256 !== request.binding.roleCostBoundSha256) throw new Error("NON_GOOGLE_INVOCATION_BINDING_DENIED");
     const originalOperations = value.originalOperations ?? [];
     if (expired && (originalOperations.length === 0 || policy.expiredObservationScopes.some(scope => !value.scopes.includes(scope)) || originalOperations.some(operation => operation.candidateSha256 !== receipt.candidateSha256 || operation.topologySha256 !== receipt.topologySha256 || operation.roleCostBoundSha256 !== receipt.roleCostBoundSha256))) throw new Error("NON_GOOGLE_INVOCATION_ORIGINAL_DENIED");
-    const authority = Object.freeze(new VerifiedAuthority({ candidateSha256: receipt.candidateSha256, topologySha256: receipt.topologySha256, requestSha256: request.requestSha256, roleCostBoundSha256: receipt.roleCostBoundSha256, scopes: Object.freeze(sorted(value.scopes)), effects: Object.freeze(sorted(value.effects)), issuedAtMs: value.issuedAtMs, expiresAtMs: value.expiresAtMs, expiredObservationScopes: Object.freeze(policy.expiredObservationScopes), originalOperations: Object.freeze(originalOperations), now: policy.now }));
+    const authority = Object.freeze(new VerifiedAuthority({ candidateSha256: receipt.candidateSha256, topologySha256: receipt.topologySha256, requestSha256: request.requestSha256, roleCostBoundSha256: receipt.roleCostBoundSha256, costArtifactSha256: value.costArtifactSha256, scopes: Object.freeze(sorted(value.scopes)), effects: Object.freeze(sorted(value.effects)), issuedAtMs: value.issuedAtMs, expiresAtMs: value.expiresAtMs, expiredObservationScopes: Object.freeze(policy.expiredObservationScopes), originalOperations: Object.freeze(originalOperations), now: policy.now }));
     authorities.add(authority);
     return authority;
   } });

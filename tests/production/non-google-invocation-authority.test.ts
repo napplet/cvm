@@ -45,11 +45,22 @@ test("only a verified signed envelope authorizes its exact candidate, topology, 
   expect(() => authority.assertOriginalObservation({ scope: "edge.payment", effect: "edge.payment.model", candidateSha256: hex("a"), topologySha256: hex("e"), requestSha256: envelope.request.requestSha256, roleCostBoundSha256: hex("4"), originalRecorded: false, nowMs: now })).toThrow("NON_GOOGLE_INVOCATION_ORIGINAL_REQUIRED");
 });
 
+test("verified authority exposes frozen signed binding metadata without granting an effect", async () => {
+  const { verifier, envelope, now } = await fixture();
+  const authority = await verifier.verify(envelope);
+  const binding = authority.binding();
+  expect(binding).toEqual({ candidateSha256: hex("a"), topologySha256: hex("e"), requestSha256: envelope.request.requestSha256, roleCostBoundSha256: hex("4"), costArtifactSha256: envelope.costArtifactSha256, issuedAtMs: now - 1, expiresAtMs: now + 60_000 });
+  expect(Object.isFrozen(binding)).toBe(true);
+  expect(() => Object.defineProperty(binding, "expiresAtMs", { value: binding.expiresAtMs + 1 })).toThrow();
+  expect(() => authority.assertDispatch({ scope: "edge.payment", effect: "edge.payment.model", candidateSha256: binding.candidateSha256, topologySha256: binding.topologySha256, requestSha256: binding.requestSha256, roleCostBoundSha256: binding.roleCostBoundSha256, nowMs: binding.expiresAtMs })).toThrow("NON_GOOGLE_INVOCATION_EXPIRED");
+  await expect(verifier.verify({ ...envelope, expiresAtMs: envelope.expiresAtMs + 1 })).rejects.toThrow("NON_GOOGLE_INVOCATION_SIGNATURE_INVALID");
+});
+
 test("only verifier-created authority instances cross the internal authority boundary", async () => {
   const { verifier, envelope } = await fixture();
   const authority = await verifier.verify(envelope);
   expect(() => assertNonGoogleInvocationAuthority(authority)).not.toThrow();
-  expect(() => assertNonGoogleInvocationAuthority({ assertDispatch() {}, assertOriginalObservation() {} })).toThrow("NON_GOOGLE_INVOCATION_AUTHORITY_REQUIRED");
+  expect(() => assertNonGoogleInvocationAuthority({ binding() { return authority.binding(); }, assertDispatch() {}, assertOriginalObservation() {} })).toThrow("NON_GOOGLE_INVOCATION_AUTHORITY_REQUIRED");
   expect(() => assertNonGoogleInvocationAuthority(new Proxy(authority, {}))).toThrow("NON_GOOGLE_INVOCATION_AUTHORITY_REQUIRED");
 });
 

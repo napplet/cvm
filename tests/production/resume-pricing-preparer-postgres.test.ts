@@ -980,7 +980,13 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     const mountedRouter = new ProductionWorkerJobRouter({ workerJournal: nativeWorkerJournal, jobJournal: nativeJobJournal,
       executables: [{ image: `registry.example/worker@sha256:${"a".repeat(64)}`, toolchainSha256: mountedToolchain, clients: workerClients,
         modalAppName: "resume-workspace-fixture", flyAppName: "resume-workspace-fixture" }] });
-    const mountedService = await ProductionPricedContinuationService.create({ pool, config: mountedPricedConfig(mountedToolchain, workspaceCommand.policyVersion), generation: core,
+    let failFirstMountedTerminalWrite = true;
+    const mountedFailurePool = sqlPool(runtime, undefined, undefined, () => {
+      const value = failFirstMountedTerminalWrite;
+      failFirstMountedTerminalWrite = false;
+      return value;
+    });
+    const mountedService = await ProductionPricedContinuationService.create({ pool: mountedFailurePool, config: mountedPricedConfig(mountedToolchain, workspaceCommand.policyVersion), generation: core,
       capacity: cleanupCapacity, checkpoint, vertexJournal, workerJournal: nativeWorkerJournal, jobJournal: nativeJobJournal,
       requestJournal: nativeRequestJournal, capacityJournal, artifactStore: nativeObjects, workers: workerClients, jobRouter: mountedRouter,
       gateway, pricing: refreshedPricing });
@@ -992,14 +998,11 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       idempotencyKey: "prepare:workspace-native" })).toMatchObject({ status: "quoted", quoteReference: workspaceQuote.quoteReference });
     const runnerInput = { pool, acceptance: refreshedAcceptance, preparer: refreshedPreparer, workers: workerAuthority,
       restores: workspaceRestores(), generation: core, finalizer, cleanup: cleanup() };
-    let failFirstRunnerTerminalWrite = true;
-    const interruptedRunner = new ProductionPricedContinuationRunner({ ...runnerInput,
-      finalizer: new ProductionPricedContinuationFinalizer({ ...terminalInput, pool: sqlPool(runtime, undefined, undefined,
-        () => { const value = failFirstRunnerTerminalWrite; failFirstRunnerTerminalWrite = false; return value; }) }) });
-    // First API dispatch belongs to the real accepted coordinator/core loop.
-    // A late SQL failure rolls back its money, then durably retains ambiguity.
-    expect(await interruptedRunner.run(workspaceResume)).toEqual({ status: "reconciliation_pending", stage: "accounting" });
-    expect(failFirstRunnerTerminalWrite).toBeFalse();
+    // First dispatch traverses the mounted public facade into its runner,
+    // bridge, verified artifact path, and finalizer. A late SQL failure rolls
+    // back money, then durably retains ambiguity without a replacement call.
+    expect(await mountedService.resume(workspaceResume)).toEqual({ status: "reconciliation_pending", stage: "accounting" });
+    expect(failFirstMountedTerminalWrite).toBeFalse();
     expect(modelPosts).toBe(3);
     expect((await metered.findMeteredAction(accountId, workspaceClaim.actionKey))?.status).toBe("usage_unknown");
     const workspaceObserved = await gateway.lookup(workspaceApiIntent, new AbortController().signal);

@@ -150,7 +150,7 @@ function mountedConfig(topologySha256: string) {
   });
 }
 
-integration("canonical SQL prepares, clones, reattaches, and erases all seven retained subjects without replaying ambiguous provider effects", async () => {
+async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "priced") {
   const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 16);
   const container = `cvm-retained-${suffix}`, sourceDatabase = `retained_source_${suffix}`, cloneDatabase = `retained_clone_${suffix}`, migrationDatabase = `retained_migration_${suffix}`, role = `retained_${suffix}`;
   let admin: Pool | undefined, source: Pool | undefined, sourceRuntime: Pool | undefined, runtime: Pool | undefined, recovered: Pool | undefined, migration: Pool | undefined;
@@ -227,52 +227,50 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     await fundingDatabase.continuationFunding.transact(accountId, transaction => transaction.beginDeadlineCheckpoint({ sessionId, pauseGeneration: 1, liveLeaseToken: paused.liveLeaseToken! }));
     const sealedCheckpoint = await checkpoint.seal({ ...manifest, archive } satisfies CheckpointSealRequest);
     await fundingDatabase.continuationFunding.transact(accountId, transaction => transaction.commitDeadlineCheckpoint({ accountId, sessionId, pauseGeneration: 1, checkpointId, expectedSessionVersion: 0, expectedArtifactVersion: 1, manifestReference: `manifest:${sealedCheckpoint.envelope.manifestSha256}`, objectKey: sealedCheckpoint.envelope.object.key, objectGeneration: String(sealedCheckpoint.envelope.object.generation), objectChecksum: sealedCheckpoint.envelope.object.checksum, keyReference: sealedCheckpoint.envelope.crypto.keyReference, compatibilityIdentity: digest(canonicalJson(manifest.compatibility)), checkpointCommittedAtMs: now }));
-    const fundingStore = new PostgresSqlFundingStore(pool);
-    const resumeQuotes = new ProductionResumePricingQuotes(pool);
-    const vertexJournal = new PostgresOperationJournal(pool, { namespace: "retained-subjects-vertex", scopeSha256: hex("vertex-scope") });
-    const originalOperationId = `operation:${digest(canonicalJson({ accountId, key: pauseIntent.idempotencyKey, profile: pauseIntent.profileId })).slice(0, 24)}`;
-    await vertexJournal.claim(`vertex-generation-settlement:${originalOperationId}`, digest(canonicalJson({ accountId, operationId: originalOperationId })), {
-      accountId, operationId: originalOperationId, conversion: originalPricing.conversion, acceptedAt: new Date(now).toISOString(), maximumUsdMicros: "220",
-    });
-    const v2Preparer = new ProductionResumePricingPreparer({ pool, store: fundingStore, quotes: resumeQuotes, checkpoint, vertexJournal, currentPricing: originalPricing,
-      compatibility: { policyVersion: pauseIntent.policyVersion, acceptedToolchains: [pauseIntent.toolchainId] }, now: () => now });
-    const v2Acceptance = new ProductionResumeAcceptance({ pool, quotes: resumeQuotes, preparer: v2Preparer, now: () => now });
-    const preparedV2 = await v2Preparer.prepare({ principal: { id: accountId }, sessionId, checkpointId, expectedSessionVersion: 0, expectedCheckpointVersion: 1, idempotencyKey: "prepare:retained-mounted" });
-    if (preparedV2.status !== "quoted") throw new Error(`RETAINED_V2_QUOTE_REQUIRED:${preparedV2.code}`);
-    const v2Resume = { principal: { id: accountId }, sessionId, checkpointId, expectedSessionVersion: 0, expectedCheckpointVersion: 1, idempotencyKey: "resume:retained-mounted", approvePendingAction: true,
-      capApprovalReference: pauseIntent.admissionReference, pendingAction: preparedV2.pendingAction,
-      pricingApproval: { quoteReference: preparedV2.quoteReference, quoteSha256: preparedV2.quoteSha256, maximumSat: preparedV2.pricing.maximumSat } };
-    const v2Claim = (await v2Acceptance.claim(v2Resume)).claim;
-    // The V2 worker allocation is a normal producer transition. The fixture
-    // supplies only a zero-effect provider readiness observation.
-    const readyCapacity = new Map<string, CapacityReservation>();
-    const v2Capacity: ReadyCapacityPort = {
-      async reserveNow(value) {
-        const reference = `capacity:${digest(canonicalJson(value))}`, expiresAt = new Date(now + 1_200_000).toISOString();
-        const ready: CapacityReservation = { status: "available", reference, expiresAt, usable: true,
-          ready: { intentReference: value.intentReference, leaseReference: reference, sessionBindingDigest: value.expectedSessionBindingDigest,
-            imageDigest: `sha256:${config.worker.image.split("@sha256:")[1]!}`, readinessProbeDigest: `sha256:${hex("retained-ready")}`, readyMonotonicMs: 1 } };
-        readyCapacity.set(value.intentReference, ready); return ready;
-      },
-      async observe(value) { return readyCapacity.get(value.intentReference) ?? { status: "unknown" }; },
-      async release() { throw new Error("RETAINED_V2_RELEASE_NOT_EXPECTED"); },
-    };
-    const v2Workers = new ProductionPricedContinuationWorkers({ pool, acceptance: v2Acceptance, capacity: v2Capacity, now: () => now });
-    const allocation = await v2Workers.allocate(accountId, v2Resume.idempotencyKey);
-    if (allocation.status !== "available") throw new Error("RETAINED_V2_CAPACITY_REQUIRED");
-    const workerIntent = (await v2Acceptance.claimWorker(accountId, v2Resume.idempotencyKey)).workerIntent;
-    const capacityIntent = workerIntent.capacityIntentReference, capacityReference = allocation.allocation.capacityReference,
-      workerOperationId = `capacity-${digest(`${capacityIntent}:${workerIntent.sessionBindingDigest}`).slice(0, 40)}`, workerDeadline = Date.parse(allocation.allocation.expiresAt);
+    let continuation: Readonly<{ kind: "legacy" | "priced"; actionId: string; leaseToken: string; allocationIntentReference: string }>;
+    let capacityIntent: string, capacityReference: string, workerOperationId: string, workerDeadline: number, workerLeaseSha256: string;
+    if (continuationKind === "legacy") {
+      await fundingDatabase.continuationFunding.transact(accountId, transaction => transaction.claimResume({ accountId, sessionId, checkpointId, idempotencyKey: "retained-reattach", fingerprint: hex("retained-reattach-claim"), pendingFingerprint: pauseIntent.fingerprint, expectedCheckpointVersion: 1, expectedSessionVersion: 0, nowMs: now, newLeaseToken: "lease:retained:reattach", allocationIntentReference: "allocation:retained", actionId, operationId: "operation:retained-reattach", actionBudgetReference: "budget:retained" }));
+      capacityIntent = `capacity-intent:${hex("retained-capacity-intent")}`; capacityReference = `capacity:${hex("retained-capacity")}`;
+      workerOperationId = `capacity-${hex("retained-worker").slice(0, 40)}`; workerDeadline = now + 1_200_000; workerLeaseSha256 = hex("retained-worker-lease");
+      await source.query("INSERT INTO production_real.capacity_intents(intent_id,account_id,idempotency_key,fingerprint_sha256,intent_reference,capacity_reference,expires_at,state) VALUES('capacity:retained',$1,'retained-capacity',$2,$3,$4,to_timestamp($5 / 1000.0),'available')", [accountId, hex("retained-capacity-fingerprint"), capacityIntent, capacityReference, workerDeadline]);
+      await source.query("INSERT INTO production_real.continuation_worker_allocations(checkpoint_id,account_id,session_id,action_id,allocation_intent_reference,capacity_intent_reference,capacity_reference,state) VALUES($1,$2,$3,$4,'allocation:retained',$5,$6,'available')", [checkpointId, accountId, sessionId, actionId, capacityIntent, capacityReference]);
+      continuation = { kind: "legacy", actionId, leaseToken: "lease:retained:reattach", allocationIntentReference: "allocation:retained" };
+    } else {
+      const fundingStore = new PostgresSqlFundingStore(pool);
+      const resumeQuotes = new ProductionResumePricingQuotes(pool);
+      const vertexJournal = new PostgresOperationJournal(pool, { namespace: "retained-subjects-vertex", scopeSha256: hex("vertex-scope") });
+      const originalOperationId = `operation:${digest(canonicalJson({ accountId, key: pauseIntent.idempotencyKey, profile: pauseIntent.profileId })).slice(0, 24)}`;
+      await vertexJournal.claim(`vertex-generation-settlement:${originalOperationId}`, digest(canonicalJson({ accountId, operationId: originalOperationId })), { accountId, operationId: originalOperationId, conversion: originalPricing.conversion, acceptedAt: new Date(now).toISOString(), maximumUsdMicros: "220" });
+      const v2Preparer = new ProductionResumePricingPreparer({ pool, store: fundingStore, quotes: resumeQuotes, checkpoint, vertexJournal, currentPricing: originalPricing,
+        compatibility: { policyVersion: pauseIntent.policyVersion, acceptedToolchains: [pauseIntent.toolchainId] }, now: () => now });
+      const v2Acceptance = new ProductionResumeAcceptance({ pool, quotes: resumeQuotes, preparer: v2Preparer, now: () => now });
+      const preparedV2 = await v2Preparer.prepare({ principal: { id: accountId }, sessionId, checkpointId, expectedSessionVersion: 0, expectedCheckpointVersion: 1, idempotencyKey: "prepare:retained-mounted" });
+      if (preparedV2.status !== "quoted") throw new Error(`RETAINED_V2_QUOTE_REQUIRED:${preparedV2.code}`);
+      const v2Resume = { principal: { id: accountId }, sessionId, checkpointId, expectedSessionVersion: 0, expectedCheckpointVersion: 1, idempotencyKey: "resume:retained-mounted", approvePendingAction: true,
+        capApprovalReference: pauseIntent.admissionReference, pendingAction: preparedV2.pendingAction,
+        pricingApproval: { quoteReference: preparedV2.quoteReference, quoteSha256: preparedV2.quoteSha256, maximumSat: preparedV2.pricing.maximumSat } };
+      const v2Claim = (await v2Acceptance.claim(v2Resume)).claim;
+      const readyCapacity = new Map<string, CapacityReservation>();
+      const v2Capacity: ReadyCapacityPort = { async reserveNow(value) { const reference = `capacity:${digest(canonicalJson(value))}`, expiresAt = new Date(now + 1_200_000).toISOString(); const ready: CapacityReservation = { status: "available", reference, expiresAt, usable: true, ready: { intentReference: value.intentReference, leaseReference: reference, sessionBindingDigest: value.expectedSessionBindingDigest, imageDigest: `sha256:${config.worker.image.split("@sha256:")[1]!}`, readinessProbeDigest: `sha256:${hex("retained-ready")}`, readyMonotonicMs: 1 } }; readyCapacity.set(value.intentReference, ready); return ready; }, async observe(value) { return readyCapacity.get(value.intentReference) ?? { status: "unknown" }; }, async release() { throw new Error("RETAINED_V2_RELEASE_NOT_EXPECTED"); } };
+      const v2Workers = new ProductionPricedContinuationWorkers({ pool, acceptance: v2Acceptance, capacity: v2Capacity, now: () => now });
+      const allocation = await v2Workers.allocate(accountId, v2Resume.idempotencyKey);
+      if (allocation.status !== "available") throw new Error("RETAINED_V2_CAPACITY_REQUIRED");
+      const workerIntent = (await v2Acceptance.claimWorker(accountId, v2Resume.idempotencyKey)).workerIntent;
+      capacityIntent = workerIntent.capacityIntentReference; capacityReference = allocation.allocation.capacityReference;
+      workerOperationId = `capacity-${digest(`${capacityIntent}:${workerIntent.sessionBindingDigest}`).slice(0, 40)}`; workerDeadline = Date.parse(allocation.allocation.expiresAt); workerLeaseSha256 = workerIntent.sessionBindingDigest.slice("sha256:".length);
+      continuation = { kind: "priced", actionId: v2Claim.actionId, leaseToken: v2Claim.leaseToken, allocationIntentReference: v2Claim.allocationIntentReference };
+    }
     const serviceJournals = await openProductionServiceJournals({ pool, servicePubkey: config.certification.serverPubkey, initialTopologySha256: config.topologySha256 });
     const workerRecords = createPostgresWorkerOperationJournal(serviceJournals.worker);
     const workerRequestSha256 = hex("retained-worker-request");
-    await workerRecords.claim({ operationId: workerOperationId, requestSha256: workerRequestSha256, resourceName: workerOperationId, provider: "fly", appName: "retained-workers", policyVersion: PRODUCTION_WORKER_POLICY.version, image: config.worker.image, sessionLeaseSha256: workerIntent.sessionBindingDigest.slice("sha256:".length), toolchainSha256: config.worker.toolchainSha256, providerDeadlineEpochMs: workerDeadline, createdAtMs: Date.now() });
+    await workerRecords.claim({ operationId: workerOperationId, requestSha256: workerRequestSha256, resourceName: workerOperationId, provider: "fly", appName: "retained-workers", policyVersion: PRODUCTION_WORKER_POLICY.version, image: config.worker.image, sessionLeaseSha256: workerLeaseSha256, toolchainSha256: config.worker.toolchainSha256, providerDeadlineEpochMs: workerDeadline, createdAtMs: Date.now() });
     await workerRecords.update({ operationId: workerOperationId, requestSha256: workerRequestSha256, resourceId: "retained-worker-machine", state: "reconciled", providerCreatedAtMs: Date.now() });
     await serviceJournals.capacity.claim(`capacity-intent:${digest(capacityIntent)}`, digest(canonicalJson({ capacityIntent, capacityReference, workerOperationId })), { intentReference: capacityIntent, reference: capacityReference, workerOperationId, provider: "fly", deadlineEpochMs: workerDeadline });
-    const workerRequest = WorkerRunRequestSchema.parse({ sessionId, actionId: v2Claim.actionId, expectedVersion: 0, policyVersion: config.worker.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId: `workspace:${sessionId}`, sourceProposalReference: `proposal:sha256:${sourceProposalSha256}`, sourceProposalSha256, sourceProposalFiles: workspaceFiles });
+    const workerRequest = WorkerRunRequestSchema.parse({ sessionId, actionId: continuation.actionId, expectedVersion: 0, policyVersion: config.worker.policyVersion, capabilityGrant: "phase-04-coordinator-grant", workspaceId: `workspace:${sessionId}`, sourceProposalReference: `proposal:sha256:${sourceProposalSha256}`, sourceProposalSha256, sourceProposalFiles: workspaceFiles });
     await new ProductionWorkerRequestStore(serviceJournals.request).persist(workerRequest);
-    const jobKey = `worker-build:${digest(canonicalJson({ sessionId, actionId: v2Claim.actionId, expectedVersion: 0 }))}`;
-    await serviceJournals.job.claim(jobKey, digest(canonicalJson(workerRequest)), { workerOperationId, workerResourceId: "retained-worker-machine", leaseSha256: workerIntent.sessionBindingDigest.slice("sha256:".length), jobId: workspaceJobId, requestBody: canonicalJson(workspaceSource), deadlineEpochMs: workspaceSource.deadlineEpochMs });
+    const jobKey = `worker-build:${digest(canonicalJson({ sessionId, actionId: continuation.actionId, expectedVersion: 0 }))}`;
+    await serviceJournals.job.claim(jobKey, digest(canonicalJson(workerRequest)), { workerOperationId, workerResourceId: "retained-worker-machine", leaseSha256: workerLeaseSha256, jobId: workspaceJobId, requestBody: canonicalJson(workspaceSource), deadlineEpochMs: workspaceSource.deadlineEpochMs });
     await source.query("INSERT INTO production_real.usage_receipts(id,account_id,action_id,operation_id,provider,model,provider_receipt_id,normalized_receipt,protected_evidence_reference) VALUES('receipt:retained',$1,$2,'provider:retained','fixture-provider','fixture-model','receipt-original',$3,'evidence:receipt')", [accountId, actionId, fixture.normalizedReceipt]);
     await source.query("INSERT INTO production_real.session_artifacts(id,account_id,session_id,action_id,version,lineage,validation_evidence_reference,verified) VALUES($1,$2,$3,$4,1,$5,('verification:' || $1),true)", [artifactId, accountId, sessionId, actionId, { lineage: "original", releaseEvidence: false }]);
     const artifact = { accountId, sessionId, artifactId, artifactVersion: 1, aggregateSha256: artifactReference.checksum, manifestSha256: hex("manifest"), verificationEvidenceSha256: hex("scanner"), sealedObjectGeneration: String(artifactReference.generation), sealedObjectSha256: artifactReference.checksum, sealedFiles: [{ path: "/index.html", mimeType: "text/html", sha256: artifactReference.checksum, size: fixture.artifact.byteLength }], entrypoint: "/index.html", normalizedDTag: "retained-fixture", requiredCapabilities: [], optionalCapabilities: [], policyIdentity: "fixture-policy", toolchainIdentity: "fixture-toolchain", runtimeCompatibilityIdentity: "fixture-runtime" };
@@ -547,13 +545,17 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     // reattach capability. It cannot restart ordinary model/tool generation.
     expect(await ordinaryBridge.run(workerRequest, new AbortController().signal)).toEqual({ status: "unavailable", code: "WORKER_UNAVAILABLE" });
     expect(mountedFences).toBe(0); expect(mountedRestores).toBe(0); expect(mountedObservations).toBe(0);
-    const v2Restore = pricedRestoreBinding({ accountId, sessionId, actionId: v2Claim.actionId, expectedVersion: 0, policyVersion: config.worker.policyVersion,
-      capabilityGrant: "phase-05-continuation-grant", workspaceId: `workspace:${sessionId}`, checkpointId, pauseGeneration: 1, actionVersion: 0,
-      workspaceLineage: `workspace:${sessionId}`, leaseToken: v2Claim.leaseToken, resumeClaim: v2Claim.allocationIntentReference, archiveSha256 });
     try {
-      expect(await checkpointResolver.resolvePricedRestore(v2Restore.metadata, workerRequest)).toMatchObject({ accountId, ownerId: fixture.ownerId, intentReference: capacityIntent, capacityReference, workerOperationId });
-      await expect(checkpointResolver.resolvePricedRestore({ ...v2Restore.metadata, leaseToken: "priced-resume-lease:foreign" }, workerRequest)).rejects.toThrow("PRODUCTION_PRICED_RESTORE_BINDING_DENIED");
-    } catch (error) { throw new Error(`MOUNTED_PRICED_CHECKPOINT_RESOLUTION:${error instanceof Error ? error.message : "UNKNOWN"}`); }
+      if (continuation.kind === "priced") {
+        const v2Restore = pricedRestoreBinding({ accountId, sessionId, actionId: continuation.actionId, expectedVersion: 0, policyVersion: config.worker.policyVersion,
+          capabilityGrant: "phase-05-continuation-grant", workspaceId: `workspace:${sessionId}`, checkpointId, pauseGeneration: 1, actionVersion: 0,
+          workspaceLineage: `workspace:${sessionId}`, leaseToken: continuation.leaseToken, resumeClaim: continuation.allocationIntentReference, archiveSha256 });
+        expect(await checkpointResolver.resolvePricedRestore(v2Restore.metadata, workerRequest)).toMatchObject({ accountId, ownerId: fixture.ownerId, intentReference: capacityIntent, capacityReference, workerOperationId });
+        await expect(checkpointResolver.resolvePricedRestore({ ...v2Restore.metadata, leaseToken: "priced-resume-lease:foreign" }, workerRequest)).rejects.toThrow("PRODUCTION_PRICED_RESTORE_BINDING_DENIED");
+      } else {
+        expect(await checkpointResolver.resolveCheckpointWorker({ accountId, sessionId, actionId: continuation.actionId, expectedVersion: 0, policyVersion: config.worker.policyVersion, capabilityGrant: "phase-05-continuation-grant", workspaceId: `workspace:${sessionId}`, checkpointId, pauseGeneration: 1, actionVersion: 0, workspaceLineage: `workspace:${sessionId}`, leaseToken: continuation.leaseToken, resumeClaim: continuation.allocationIntentReference }, workerRequest)).toMatchObject({ accountId, ownerId: fixture.ownerId, intentReference: capacityIntent, capacityReference, workerOperationId });
+      }
+    } catch (error) { throw new Error(`MOUNTED_${continuation.kind.toUpperCase()}_CHECKPOINT_RESOLUTION:${error instanceof Error ? error.message : "UNKNOWN"}`); }
     const mountedInstance = {
       freshInstanceId: "fresh-retained", sourceInstanceId: "source-retained", databaseInstanceId: cloneDatabase, migrationDatabaseInstanceId: migrationDatabase, applicationInstanceId: "application-retained", providerOperationId: "provider-retained-restore",
       pool: mounted.pool, migrationTargetPool: mounted.migrationTargetPool, objectStore: mounted.objectStore,
@@ -605,4 +607,7 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     await migration?.end(); await recovered?.end(); await runtime?.end(); await sourceRuntime?.end(); await source?.end(); await admin?.end();
     await docker(["rm", "--force", container]).catch(() => undefined);
   }
-}, 120_000);
+}
+
+integration("canonical SQL legacy V1 prepares, clones, reattaches, and erases all seven retained subjects without replaying ambiguous provider effects", () => proveRetainedSubjectsPostgres("legacy"), 120_000);
+integration("canonical SQL priced V2 prepares, clones, fences, reattaches, and erases all seven retained subjects without replaying ambiguous provider effects", () => proveRetainedSubjectsPostgres("priced"), 120_000);

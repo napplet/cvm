@@ -4,7 +4,8 @@ import { bindAccountingRealmPool, createAccountingRealm } from "../funding/accou
 import type { PostgresSqlPool } from "../persistence/postgres-sql-funding-store";
 import { CheckpointManifestSchema } from "../continuity/checkpoint-envelope";
 import type { ObjectStorePort } from "../continuity/object-store";
-import { DurabilitySubjectSchema, RestoreDrillInputSchema, validateDurabilityInventory } from "../resilience/fault-harness";
+import { DurabilitySubjectSchema, RestoreDrillInputSchema } from "../resilience/fault-harness";
+import { createProductionDurabilitySubjectRegistry } from "./durability-registry";
 import { createMigrationArchive, restoreMigrationArchiveToPostgres, type MigrationArchive } from "./migration";
 import { MigrationArchiveCipher, ProductionMigrationSource, writeEncryptedMigrationArchive } from "./migration-control";
 import type { PostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
@@ -144,13 +145,9 @@ export class ProductionRestoreCertification implements Pick<ProductionCertificat
   }
 
   async #inventory(pool: PostgresSqlPool, scope: ProductionRestoreScope) {
-    const client = await pool.connect();
-    try {
-      const rows = await client.query<Record<string, unknown>>("SELECT kind,source_identity,object_key,object_generation,object_checksum,payload_sha256,owner_id,retention_until::text AS retention_until,deletion_state FROM production_real.durability_subjects WHERE checkpoint_id=$1 AND session_id=$2 AND owner_id=$3 ORDER BY kind", [scope.checkpointId, scope.sessionId, scope.ownerId]);
-      const subjects = validateDurabilityInventory(rows.rows.map(row => ({ kind: row.kind, sourceIdentity: row.source_identity, object: { key: row.object_key, generation: Number(row.object_generation), checksum: row.object_checksum }, payloadSha256: row.payload_sha256, ownerId: row.owner_id, retentionUntil: new Date(String(row.retention_until)).toISOString(), deletionState: row.deletion_state })));
-      this.#local.set(scope.checkpointId, subjects);
-      return subjects;
-    } finally { client.release(); }
+    const subjects = await createProductionDurabilitySubjectRegistry(pool).inventory(scope);
+    this.#local.set(scope.checkpointId, subjects);
+    return subjects;
   }
 
   async #create(operationId: string) {

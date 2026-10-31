@@ -108,21 +108,26 @@ async function persistCapture(input: Readonly<{ pool: PostgresSqlPool; grant: Aw
   const envelope = z.object({ providerJobId: z.string(), rawArtifact: z.object({ uri: z.string(), generation: z.string(), sha256: Digest }).strict(), rawReportSha256: Digest }).passthrough().parse(input.envelope);
   const generation = Number(envelope.rawArtifact.generation);
   if (!Number.isSafeInteger(generation) || generation < 1) throw new Error("MOUNTED_BIGQUERY_CAPTURE_INVALID");
-  const client = await input.pool.connect();
-  try {
-    await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
-    await client.query("SET LOCAL lock_timeout = '1s'");
-    await client.query("SET LOCAL statement_timeout = '5s'");
-    const inserted = await client.query("INSERT INTO production_real.authoritative_usage_report_capture(report_request_sha256,grant_sha256,operation_record_sha256,provider_job_id,artifact_uri,artifact_generation,raw_report_sha256,envelope_json) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb) ON CONFLICT DO NOTHING RETURNING report_request_sha256", [input.grant.reportRequestSha256, input.grant.grantSha256, input.grant.originalScope.operationRecordSha256, envelope.providerJobId, envelope.rawArtifact.uri, generation, envelope.rawReportSha256, canonicalJson(envelope)]);
-    if (!inserted.rows.length) {
-      const existing = (await client.query<Record<string, unknown>>("SELECT grant_sha256,operation_record_sha256,provider_job_id,artifact_uri,artifact_generation,raw_report_sha256,envelope_json FROM production_real.authoritative_usage_report_capture WHERE report_request_sha256=$1", [input.grant.reportRequestSha256])).rows[0];
-      if (!existing || existing.grant_sha256 !== input.grant.grantSha256 || existing.operation_record_sha256 !== input.grant.originalScope.operationRecordSha256 || existing.provider_job_id !== envelope.providerJobId || existing.artifact_uri !== envelope.rawArtifact.uri || Number(existing.artifact_generation) !== generation || existing.raw_report_sha256 !== envelope.rawReportSha256 || canonicalJson(existing.envelope_json) !== canonicalJson(envelope)) throw new Error("MOUNTED_BIGQUERY_CAPTURE_CONFLICT");
-    }
-    await client.query("COMMIT");
-  } catch (error) {
-    await client.query("ROLLBACK").catch(() => undefined);
-    throw error;
-  } finally { client.release(); }
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const client = await input.pool.connect();
+    let failure: Error | undefined;
+    try {
+      await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
+      await client.query("SET LOCAL lock_timeout = '1s'");
+      await client.query("SET LOCAL statement_timeout = '5s'");
+      const inserted = await client.query("INSERT INTO production_real.authoritative_usage_report_capture(report_request_sha256,grant_sha256,operation_record_sha256,provider_job_id,artifact_uri,artifact_generation,raw_report_sha256,envelope_json) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb) ON CONFLICT DO NOTHING RETURNING report_request_sha256", [input.grant.reportRequestSha256, input.grant.grantSha256, input.grant.originalScope.operationRecordSha256, envelope.providerJobId, envelope.rawArtifact.uri, generation, envelope.rawReportSha256, canonicalJson(envelope)]);
+      if (!inserted.rows.length) {
+        const existing = (await client.query<Record<string, unknown>>("SELECT grant_sha256,operation_record_sha256,provider_job_id,artifact_uri,artifact_generation,raw_report_sha256,envelope_json FROM production_real.authoritative_usage_report_capture WHERE report_request_sha256=$1", [input.grant.reportRequestSha256])).rows[0];
+        if (!existing || existing.grant_sha256 !== input.grant.grantSha256 || existing.operation_record_sha256 !== input.grant.originalScope.operationRecordSha256 || existing.provider_job_id !== envelope.providerJobId || existing.artifact_uri !== envelope.rawArtifact.uri || Number(existing.artifact_generation) !== generation || existing.raw_report_sha256 !== envelope.rawReportSha256 || canonicalJson(existing.envelope_json) !== canonicalJson(envelope)) throw new Error("MOUNTED_BIGQUERY_CAPTURE_CONFLICT");
+      }
+      await client.query("COMMIT");
+      return;
+    } catch (error) {
+      failure = error instanceof Error ? error : new Error("MOUNTED_BIGQUERY_CAPTURE_FAILED");
+      await client.query("ROLLBACK").catch(() => undefined);
+      if ((error as { code?: unknown }).code !== "40001" || attempt === 2) throw failure;
+    } finally { client.release(failure); }
+  }
 }
 
 /** Builds the only mounted BigQuery report route. The raw provider resource is

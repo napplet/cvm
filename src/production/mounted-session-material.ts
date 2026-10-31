@@ -661,7 +661,7 @@ export async function createProductionAuthoritativeUsageRecovery(input: Readonly
   deploymentConfig: ProductionCertificationSessionMaterial["deploymentConfig"];
   authorizationRequest: unknown;
   secrets: MountedProductionSecretMaterial;
-}>): Promise<Readonly<{ receipt: unknown; reporter: import("../release/controller").AuthoritativeUsageReportPort; close: () => Promise<void> }>> {
+}>): Promise<Readonly<{ receipt: unknown; reporter: import("../release/controller").AuthoritativeUsageRecoveryPort; close: () => Promise<void> }>> {
   const [resolved, suppliedRequest, mountedRequestRaw, mountedReceiptRaw] = await Promise.all([
     loadMountedProductionSessionRecord({ config: input.config, secrets: input.secrets }),
     validateAuthorizationRequest(input.authorizationRequest),
@@ -706,7 +706,7 @@ export async function createProductionAuthoritativeUsageRecovery(input: Readonly
       config: { bucket: input.config.gcs.bucket, projectId: input.config.projectId },
       client: createProductionGcsObjectClient({ bucket: input.config.gcs.bucket, tokenSource }),
     });
-    const reporter = createMountedBigQueryUsageReporter({
+    const dispatchReporter = createMountedBigQueryUsageReporter({
       configuration: google.authoritativeUsage,
       projectId: input.config.projectId,
       quotaProjectId: input.config.projectId,
@@ -718,6 +718,13 @@ export async function createProductionAuthoritativeUsageRecovery(input: Readonly
       pool: postgres.pool,
       objects,
       bucket: input.config.gcs.bucket,
+    });
+    /* Do not return the dispatch-capable reporter. This sealed wrapper omits
+     * `capture` entirely and fixes recovery mode internally, so no caller that
+     * receives this factory result can create a grant or issue jobs.insert. */
+    const reporter: import("../release/controller").AuthoritativeUsageRecoveryPort = Object.freeze({
+      recover: async value => dispatchReporter.capture({ ...value, mode: "recovery" }),
+      readArtifact: dispatchReporter.readArtifact,
     });
     return Object.freeze({ receipt: mountedReceipt, reporter, close: postgres.close });
   } catch (error) {

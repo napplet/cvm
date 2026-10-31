@@ -122,13 +122,13 @@ export type ReleaseExecutionSession = Readonly<{
   prepareAuthorizedExecution(input: Readonly<{ authorizationRequest: ReleaseAuthorizationRequest }>): Promise<Omit<AuthorizedLiveExecutionInput, "registry">>;
   /** Narrow mounted resume seam. It may expose only the report observer and
    * historically bound receipt, never native mutation or finalization ports. */
-  prepareAuthoritativeUsageRecovery?(input: Readonly<{ authorizationRequest: ReleaseAuthorizationRequest }>): Promise<Readonly<{ receipt: unknown; reporter: AuthoritativeUsageReportPort; close?: () => Promise<void> }>>;
+  prepareAuthoritativeUsageRecovery?(input: Readonly<{ authorizationRequest: ReleaseAuthorizationRequest }>): Promise<Readonly<{ receipt: unknown; reporter: AuthoritativeUsageRecoveryPort; close?: () => Promise<void> }>>;
 }>;
 
 /** Narrow, read-only recovery authority. It deliberately has no registry,
  * worker, signer, payment, or mutation capability. */
 export type AuthoritativeUsageRecoverySession = Readonly<{
-  prepareAuthoritativeUsageRecovery(input: Readonly<{ authorizationRequest: ReleaseAuthorizationRequest }>): Promise<Readonly<{ receipt: unknown; reporter: AuthoritativeUsageReportPort; close?: () => Promise<void> }>>;
+  prepareAuthoritativeUsageRecovery(input: Readonly<{ authorizationRequest: ReleaseAuthorizationRequest }>): Promise<Readonly<{ receipt: unknown; reporter: AuthoritativeUsageRecoveryPort; close?: () => Promise<void> }>>;
 }>;
 
 export type AuthoritativeUsageReportPort = Readonly<{
@@ -147,6 +147,23 @@ export type AuthoritativeUsageReportPort = Readonly<{
     /** Immutable original-request approval for the report-only route. */
     billingObservation?: unknown;
     mode?: "dispatch" | "recovery";
+  }>): Promise<Readonly<{ status: "held" } | { status: "captured"; grant: unknown; envelope: unknown }>>;
+  readArtifact(input: Readonly<{ uri: string; generation: string; sha256: string }>): Promise<Uint8Array | undefined>;
+}>;
+
+/** Expired ordinary authorization receives only a GET-only recovery operation.
+ * It intentionally cannot select dispatch mode or claim a new report grant. */
+export type AuthoritativeUsageRecoveryPort = Readonly<{
+  recover(input: Readonly<{
+    operation: ReleaseProviderOperation;
+    operationRecordSha256: string;
+    resourceIdentitySha256: string;
+    candidateSha256: string;
+    authorizationRequestSha256: string;
+    authorizationReceiptSha256: string;
+    accountScopeSha256: string;
+    projectScopeSha256: string;
+    billingObservation?: unknown;
   }>): Promise<Readonly<{ status: "held" } | { status: "captured"; grant: unknown; envelope: unknown }>>;
   readArtifact(input: Readonly<{ uri: string; generation: string; sha256: string }>): Promise<Uint8Array | undefined>;
 }>;
@@ -965,7 +982,7 @@ export class ReleaseCertificationController {
    * durably observed. This method cannot finalize, promote, clean up, mutate
    * a provider resource, or settle a cost; it only preserves verifiable raw
    * evidence for a later complete/finality policy. */
-  async reconcileAuthoritativeUsage(input: Readonly<{ receipt: unknown; reporter: AuthoritativeUsageReportPort }>): Promise<Readonly<{ state: ReleaseControllerState; captures: number; held: true }>> {
+  async reconcileAuthoritativeUsage(input: Readonly<{ receipt: unknown; reporter: AuthoritativeUsageReportPort | AuthoritativeUsageRecoveryPort }>): Promise<Readonly<{ state: ReleaseControllerState; captures: number; held: true }>> {
     await this.#ensureDurableWorkspace();
     const current = await this.#loadCurrent();
     if (!current.state.authorizationRequestSha256 || !current.state.authorizationReceiptSha256) throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID");
@@ -983,7 +1000,7 @@ export class ReleaseCertificationController {
       const recordSha256 = current.state.providerOperationRecordSha256s[index]!;
       const record = await this.#readOperationRecord(recordSha256);
       if (record.operation.operationId !== operationId || record.status !== "completed" || !record.resourceIdentitySha256) continue;
-      const captured = await input.reporter.capture({
+      const captureInput = {
         operation: record.operation,
         operationRecordSha256: recordSha256,
         resourceIdentitySha256: record.resourceIdentitySha256,
@@ -993,8 +1010,10 @@ export class ReleaseCertificationController {
         accountScopeSha256: record.accountScopeSha256,
         projectScopeSha256: record.projectScopeSha256,
         billingObservation: request.billingObservation,
-        mode: this.#now() >= request.expiresAtMs ? "recovery" : "dispatch",
-      });
+      };
+      const captured = "recover" in input.reporter
+        ? await input.reporter.recover(captureInput)
+        : await input.reporter.capture({ ...captureInput, mode: "dispatch" });
       if (captured.status === "held") continue;
       let grant;
       let envelope;

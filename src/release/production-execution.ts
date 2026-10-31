@@ -56,7 +56,7 @@ type ProductionRuntimeMaterialFactoryModule = Readonly<{
 
 type ProductionRuntimeRecoveryFactoryResult = Readonly<{
   receipt: unknown;
-  reporter: import("./controller").AuthoritativeUsageReportPort;
+  reporter: import("./controller").AuthoritativeUsageRecoveryPort;
   close?: () => Promise<void>;
 }>;
 

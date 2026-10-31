@@ -6,6 +6,8 @@ import { IDENTICAL_WORKER_COHORT_PROFILE } from "../../src/certification/live/wo
 import { D122_FAULT_MATRIX, DURABILITY_SUBJECT_KINDS } from "../../src/resilience/fault-harness";
 import { runLiveRestoreCertification, type LiveRestorePort } from "../../src/certification/live/restore";
 import { assertMountedFreshWorkspaceSubject } from "../../src/production/mounted-fresh-restore-runtime";
+import { openRetainedSubject, sealRetainedSubject } from "../../src/production/retained-subject-archive";
+import { DeterministicObjectStore } from "../../src/continuity/object-store";
 
 const hash = "a".repeat(64);
 const candidate = { id: hash, provider: "modal" as const, image: `registry/worker@sha256:${hash}`, sourceSha256: hash };
@@ -39,6 +41,34 @@ test("mounted fresh recovery never coerces non-workspace subjects into checkpoin
     if (kind === "checkpoint") expect(() => assertMountedFreshWorkspaceSubject(subject)).not.toThrow();
     else expect(() => assertMountedFreshWorkspaceSubject(subject)).toThrow("MOUNTED_FRESH_RESTORE_SUBJECT_AUTHORITY_REQUIRED");
   }
+});
+
+test("each non-workspace retained subject uses distinct server custody while preserving its source identity", async () => {
+  const entries = new Map<string, { keyReference: string; nonce: Uint8Array; ciphertext: Uint8Array; ciphertextSha256: string; aadSha256: string; retentionUntil: string; plaintext: Uint8Array; aad: Uint8Array }>();
+  const digest = (value: Uint8Array) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
+  const crypto = {
+    async seal(input: { checkpointId: string; plaintext: Uint8Array; additionalData: Uint8Array; binding?: { retentionUntil: string } }) {
+      const ciphertext = new Uint8Array(input.plaintext).reverse(), nonce = new Uint8Array(12).fill(7), keyReference = `key:${input.checkpointId}`;
+      entries.set(input.checkpointId, { keyReference, nonce, ciphertext, ciphertextSha256: digest(ciphertext), aadSha256: digest(input.additionalData), retentionUntil: input.binding!.retentionUntil, plaintext: new Uint8Array(input.plaintext), aad: new Uint8Array(input.additionalData) });
+      return { keyReference, nonce, ciphertext };
+    },
+    async open(input: { keyReference: string; nonce: Uint8Array; ciphertext: Uint8Array; additionalData: Uint8Array }) {
+      const entry = [...entries.values()].find(value => value.keyReference === input.keyReference);
+      if (!entry || digest(input.ciphertext) !== entry.ciphertextSha256 || digest(input.additionalData) !== entry.aadSha256) throw new Error("DENIED");
+      return new Uint8Array(entry.plaintext);
+    },
+    async destroy() {},
+    async readSealed(id: string) { const value = entries.get(id); return value && { keyReference: value.keyReference, nonce: new Uint8Array(value.nonce), ciphertext: new Uint8Array(value.ciphertext), ciphertextSha256: value.ciphertextSha256, aadSha256: value.aadSha256, retentionUntil: value.retentionUntil }; },
+  };
+  const objects = new DeterministicObjectStore();
+  for (const kind of DURABILITY_SUBJECT_KINDS.filter(kind => kind !== "checkpoint")) {
+    const plain = new TextEncoder().encode(`${kind}:original-record`);
+    const subject = await sealRetainedSubject({ crypto, objectStore: objects, checkpointId: "checkpoint:one", accountId: "account:one", ownerId: "owner", sessionId: "session:one", actionId: "action:one", retentionUntil: "2030-01-01T00:00:00.000Z", source: { kind, sourceIdentity: `${kind}:source`, bytes: plain } });
+    expect(subject.sourceIdentity).toBe(`${kind}:source`);
+    expect(subject.object.key).toContain("durability-subject:");
+    await expect(openRetainedSubject({ crypto, objectStore: objects, checkpointId: "checkpoint:one", accountId: "account:one", sessionId: "session:one", actionId: "action:one", subject })).resolves.toEqual(plain);
+  }
+  expect(entries.size).toBe(6);
 });
 
 test("restore cleans the fresh instance after a failed subject and blocks unconfirmed cleanup", async () => {

@@ -16,6 +16,8 @@ import type { ProductionRetainedArchive, ProductionRestoreScope } from "./restor
 import type { MountedProductionSecretMaterial } from "./secret-material";
 import { ProductionWorkerBridge } from "./worker-bridge";
 import { ProductionWorkerOwnershipResolver } from "./worker-bridge";
+import { MountedKekCheckpointCrypto } from "./checkpoint-crypto";
+import { openRetainedSubject } from "./retained-subject-archive";
 
 type Expected = z.infer<typeof RestoreDrillInputSchema>["expected"];
 type Google = ReturnType<typeof createGoogleDeploymentClients>;
@@ -85,6 +87,7 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
         kekPath: input.secrets.path("checkpoint.kekReference"),
         now,
       });
+      const retainedSubjectCrypto = new MountedKekCheckpointCrypto({ pool: recovered.pool, kekPath: input.secrets.path("checkpoint.kekReference"), now });
       const capacityJournal = serviceJournals.capacity;
       const worker = new ProductionWorkerBridge({
         resolver: new ProductionWorkerOwnershipResolver({ pool: recovered.pool, policyVersion: input.config.worker.policyVersion, capacityJournal }),
@@ -121,7 +124,11 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
         objectStore: input.artifactStore,
         async startAfterRestore() { const client = await recovered.pool.connect(); try { await client.query("SELECT 1"); } finally { client.release(); } },
         async openRetainedArchive(value) {
-          assertMountedFreshWorkspaceSubject(value.subject);
+          if (value.subject.kind !== "checkpoint") {
+            const binding = await retainedSubjectBinding(recovered.pool, value.subject, value.expected);
+            const archive = await openRetainedSubject({ crypto: retainedSubjectCrypto, objectStore: input.artifactStore, checkpointId: binding.checkpointId, accountId: binding.accountId, sessionId: value.expected.sessionId, actionId: binding.actionId, subject: value.subject });
+            return Object.freeze({ ...value.expected, archive });
+          }
           const facts = await checkpointFacts(value.expected, value.subject);
           const archive = await checkpoint.restore({ checkpointId: facts.manifest.checkpointId, accountId: facts.accountId, sessionId: facts.manifest.sessionId });
           return Object.freeze({ ...value.expected, archive });
@@ -184,5 +191,20 @@ async function checkpointManifestRetention(pool: PostgresSqlPool, checkpointId: 
     const row = (await client.query<Record<string, unknown>>("SELECT retention_until::text AS retention_until FROM production_real.checkpoint_envelopes WHERE checkpoint_id=$1 AND state='retained'", [checkpointId])).rows[0];
     if (!row || typeof row.retention_until !== "string" || !Number.isFinite(Date.parse(row.retention_until))) throw new Error("MOUNTED_FRESH_RESTORE_RETENTION_UNAVAILABLE");
     return row.retention_until;
+  } finally { client.release(); }
+}
+
+/** Read-only binding lookup for an already-prepared non-workspace archive.
+ * The registry remains the sole inventory authority; no restore read writes
+ * a row or dispatches an original source operation. */
+async function retainedSubjectBinding(pool: PostgresSqlPool, subject: z.infer<typeof DurabilitySubjectSchema>, expected: Expected): Promise<Readonly<{ checkpointId: string; accountId: string; actionId: string }>> {
+  const client = await pool.connect();
+  try {
+    const row = (await client.query<Record<string, unknown>>(
+      "SELECT d.checkpoint_id,d.action_id,e.account_id FROM production_real.durability_subjects d JOIN production_real.checkpoint_envelopes e ON e.checkpoint_id=d.checkpoint_id JOIN production_real.funding_accounts f ON f.account_id=e.account_id WHERE d.kind=$1 AND d.source_identity=$2 AND d.object_key=$3 AND d.object_generation=$4 AND d.object_checksum=$5 AND d.payload_sha256=$6 AND d.owner_id=$7 AND d.session_id=$8 AND d.deletion_state='retained' AND e.session_id=$8 AND trim(f.nostr_pubkey)=$7 AND e.state='retained' LIMIT 2",
+      [subject.kind, subject.sourceIdentity, subject.object.key, subject.object.generation, subject.object.checksum, subject.payloadSha256, expected.ownerId, expected.sessionId],
+    )).rows;
+    if (row.length !== 1 || typeof row[0]!.checkpoint_id !== "string" || typeof row[0]!.account_id !== "string" || typeof row[0]!.action_id !== "string") throw new Error("MOUNTED_FRESH_RESTORE_SUBJECT_BINDING_REQUIRED");
+    return Object.freeze({ checkpointId: Identity.parse(row[0]!.checkpoint_id), accountId: String(row[0]!.account_id), actionId: Identity.parse(row[0]!.action_id) });
   } finally { client.release(); }
 }

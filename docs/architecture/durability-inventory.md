@@ -89,13 +89,15 @@ owner-event and attestation preparation may only archive an already committed
 user-owned publication record and its original relay operations; recovery never
 asks a signer to create a replacement event.
 
-The canonical `checkpoint_crypto_records` primary key is one checkpoint
-identity and is sufficient only for the workspace envelope. The six other
-archives need a distinct retained-subject crypto/object record with its own
-original-operation identity before their source-specific readers can be safely
-implemented. Until that authority and its explicit preparation operation exist,
-mounted fresh recovery rejects non-checkpoint subjects rather than reporting a
-fabricated workspace reattachment.
+The canonical checkpoint crypto implementation already supports derived
+server-owned companion custody identities (as used by retained pending
+commands). Non-workspace subjects therefore use a distinct
+`durability-subject:<binding-hash>` crypto identity and immutable object key;
+that custody identity is never exposed as the source or workspace identity.
+The remaining authority is the explicit original-operation preparation record
+that obtains each source's actual bytes and registers the resulting exact
+object before read-only inventory. Until a source is prepared, recovery fails
+closed rather than reporting a fabricated workspace reattachment.
 
 ### Original-source map
 

@@ -90,7 +90,7 @@ try {
   if (Object.keys(actualPackages).length !== Object.keys(expectedPackages).length || Object.entries(expectedPackages).some(([name, version]) => actualPackages[name] !== version)) throw new Error("MODAL_IMAGE_PACKAGE_CLOSURE_MISMATCH");
   if (await runOffline([python, "-I", "-m", "pip", "check"]) !== "No broken requirements found.") throw new Error("MODAL_IMAGE_PACKAGE_REQUIREMENTS_INVALID");
   if ((await readdir(home)).some(name => name !== "modal-verified")) throw new Error("MODAL_IMAGE_UNEXPECTED_PROFILE_WRITE");
-  modalEvidence = { executableSha256, interpreterSha256: launch.interpreterSha256, actualRunner: "passed-local-fixture", version, python: packages.version, architecture: packages.machine, packageCount: Object.keys(actualPackages).length, lockSha256: ${JSON.stringify(modalLockSha256)}, network: "none", credentials: "absent" };
+  modalEvidence = { executableSha256, interpreterSha256: launch.interpreterSha256, actualRunner: "passed-local-fixture", version, python: packages.version, architecture: packages.machine, packageCount: Object.keys(actualPackages).length, lockSha256: ${JSON.stringify(modalLockSha256)}, network: "none", providerCredentials: "absent", fixtureMarkers: true };
 } finally { await rm(home, { recursive: true, force: true }); }
 ` : "";
 

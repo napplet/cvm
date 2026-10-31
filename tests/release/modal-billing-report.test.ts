@@ -11,6 +11,7 @@ import {
   createModalBillingObservationGrant,
   ModalBillingReportJournalRecordSchema,
   parseModalBillingReport,
+  preparePinnedModalBillingReport,
   runPinnedModalBillingReport,
 } from "../../src/release/deployment/modal-billing-report";
 
@@ -82,6 +83,22 @@ describe("pinned Modal billing report collector", () => {
       expect(await collector.capture(approved)).toEqual(captured);
       expect(resolves).toBe(0);
     } finally { metadata?.mockRestore(); await rm(executable.directory, { recursive: true, force: true }); }
+  });
+
+  test("a prepared private launch is single-use and closes its disposable workspace", async () => {
+    const executable = await fixture(`#!/usr/bin/env bun\nprocess.stdout.write(process.env.HOME ?? "");\n`);
+    const prepared = await preparePinnedModalBillingReport({ executable: executable.executable, executableSha256: executable.sha256, environmentName: "cvm-prod", intervalStartMs: Date.parse("2026-10-30T10:00:00Z"), intervalEndMs: Date.parse("2026-10-30T11:00:00Z"), tagNames: ["cvm_operation"], maximumStdoutBytes: 8192, maximumStderrBytes: 2048, timeoutMs: 1000 });
+    try {
+      const credential = { tokenId: "fixture-id", tokenSecret: "fixture-secret" };
+      const result = await prepared.run(credential);
+      expect(result.disposition).toBe("passed");
+      const workspace = new TextDecoder().decode(result.stdout);
+      expect(workspace).toContain("napplet-cvm-modal-billing-");
+      await expect(prepared.run(credential)).rejects.toThrow("MODAL_BILLING_PREPARED_LAUNCH_INVALID");
+      await prepared.close();
+      await expect(filesystem.access(workspace)).rejects.toThrow();
+      await expect(prepared.run(credential)).rejects.toThrow("MODAL_BILLING_PREPARED_LAUNCH_INVALID");
+    } finally { await prepared.close(); await rm(executable.directory, { recursive: true, force: true }); }
   });
 
   test("runs a bounded real child with fixed argv and a closed environment", async () => {
@@ -296,7 +313,7 @@ process.stdout.write(${JSON.stringify(report)});
     } finally { await rm(executable.directory, { recursive: true, force: true }); }
   });
 
-  test("records a schema-valid unknown dispatch when the runner cannot start after intent", async () => {
+  test("uses the retained verified copy when credential resolution removes the original launcher", async () => {
     const executable = await fixture(`#!/usr/bin/env bun
 process.stdout.write(${JSON.stringify(report)});
 `);
@@ -304,11 +321,12 @@ process.stdout.write(${JSON.stringify(report)});
     try {
       const collector = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve() { await rm(executable.executable, { force: true }); return { tokenId: "fixture-id", tokenSecret: "fixture-secret" }; } }, journal, artifacts, artifactOrigin: "memory://origin/" });
       const approved = grant(executable.sha256), result = await collector.capture(approved);
-      expect(result.reason).toBe("child_failure");
+      expect(result.reason).toBe("finality_unproven");
+      expect(result.observedMicros).toBe("125000");
       const saved = await journal.read(result.reportRequestSha256);
       expect(() => ModalBillingReportJournalRecordSchema.parse(saved?.record)).not.toThrow();
-      expect(saved?.record.attempts).toMatchObject([{ state: "completed", disposition: "dispatch_unknown" }]);
-      expect(artifacts.objects.size).toBe(0);
+      expect(saved?.record.attempts).toMatchObject([{ state: "completed", disposition: "passed" }]);
+      expect(artifacts.objects.size).toBe(1);
     } finally { await rm(executable.directory, { recursive: true, force: true }); }
   });
 
@@ -316,6 +334,7 @@ process.stdout.write(${JSON.stringify(report)});
     const executable = await fixture(`#!/usr/bin/env bun\nprocess.stdout.write(${JSON.stringify(report)});\n`);
     const journal = createMemoryModalBillingReportJournal();
     let clock = Date.now(), resolves = 0, artifactCalls = 0;
+    let restoreSpawn: (() => void) | undefined;
     const artifacts = {
       async createImmutable(): Promise<never> { artifactCalls++; throw new Error("UNEXPECTED_ARTIFACT_WRITE"); },
       async readExact(): Promise<never> { artifactCalls++; throw new Error("UNEXPECTED_ARTIFACT_READ"); },
@@ -327,7 +346,10 @@ process.stdout.write(${JSON.stringify(report)});
       const collector = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve() {
         resolves++;
         if (outcome === "credential_unavailable") throw new Error("OFFLINE_CREDENTIAL_UNAVAILABLE");
-        if (outcome === "dispatch_unknown") await rm(executable.executable);
+        if (outcome === "dispatch_unknown") {
+          const spawn = spyOn(Bun, "spawn").mockImplementationOnce(() => { throw new Error("OFFLINE_SPAWN_OUTCOME_UNKNOWN"); });
+          restoreSpawn = () => spawn.mockRestore();
+        }
         return { tokenId: "fixture-id", tokenSecret: "fixture-secret" };
       } }, journal, artifacts, artifactOrigin: "memory://origin/", now: () => clock });
       const captured = await collector.capture(approved);
@@ -343,7 +365,7 @@ process.stdout.write(${JSON.stringify(report)});
       if (!saved || !record.result) throw new Error("DURABLE_HELD_RESULT_MISSING");
       await journal.compareAndSet({ reportRequestSha256: captured.reportRequestSha256, expectedRevision: saved.revision, record: { ...record, result: { ...record.result, observedMicros: "0" } } });
       await expect(reopened.recover(approved)).resolves.toMatchObject({ reason: "artifact_unavailable" });
-    } finally { await rm(executable.directory, { recursive: true, force: true }); }
+    } finally { restoreSpawn?.(); await rm(executable.directory, { recursive: true, force: true }); }
   });
 
   test("preserves a failed child's durable outcome after verifying its retained raw bytes", async () => {

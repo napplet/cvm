@@ -18,17 +18,17 @@ import { OpenAiResponsesCandidateModelGateway } from "../../src/production/opena
 
 const hex = (character: string) => character.repeat(64);
 const now = 1_000_000;
-/** Verbatim card ownership shape from the fixed public OpenAI ModelView.
- * Production captures retain the full page; this bounded document preserves
- * the model-bound island and its exact three-card sibling group. */
+/** Bounded card ownership shape observed in the retained official ModelView.
+ * Production captures retain the full page; the fixture preserves its decoded
+ * model identity, semantic cards, and exact seven-div ancestry. */
 const cards = `<div class="flex flex-col gap-2 md:flex-row">
-<div class="flex flex-1 flex-col gap-1"><div>Input</div><div class="text-2xl font-semibold">$2.00</div></div>
-<div class="flex flex-1 flex-col gap-1"><div>Cached input</div><div class="text-2xl font-semibold">$0.50</div></div>
-<div class="flex flex-1 flex-col gap-1"><div>Output</div><div class="text-2xl font-semibold">$8.00</div></div>
+<div class="flex flex-1 flex-col gap-1 rounded-lg border border-solid border-default bg-surface-secondary px-3 py-4"><div>Input</div><div class="text-2xl font-semibold">$2.00</div></div>
+<div class="flex flex-1 flex-col gap-1 rounded-lg border border-solid border-default bg-surface-secondary px-3 py-4"><div>Cached input</div><div class="text-2xl font-semibold">$0.50</div></div>
+<div class="flex flex-1 flex-col gap-1 rounded-lg border border-solid border-default bg-surface-secondary px-3 py-4"><div>Output</div><div class="text-2xl font-semibold">$8.00</div></div>
 </div>`;
-const source = new TextEncoder().encode(`<!doctype html><html><body><astro-island component-url="/_astro/ModelView.react.abc.js">
-<code class="text-xs">gpt-4.1-2025-04-14</code>${cards}
-</astro-island></body></html>`);
+const modelView = (body: string) => `<astro-island component-export="ModelView" component-url="/_astro/ModelView.react.abc.js" props="{&quot;modelName&quot;:[0,&quot;gpt-4.1&quot;]}">${body}</astro-island>`;
+const primaryCards = `<div class="relative"><div class="relative mx-4 flex flex-col gap-4 overflow-hidden px-4 pt-8 pb-10 sm:mx-8 md:mx-auto md:w-full md:max-w-6xl md:px-12 xl:px-4"><div></div><div class="flex flex-col gap-8"><div></div><div class="flex flex-col gap-4 lg:flex-row"><div></div><div></div><div></div><div></div><div class="flex flex-1 flex-col gap-4"><div></div><div class="flex flex-col gap-4"><div></div>${cards}</div></div></div></div></div></div>`;
+const source = new TextEncoder().encode(`<!doctype html><html><body>${modelView(`<code class="text-xs">gpt-4.1-2025-04-14</code>${primaryCards}`)}</body></html>`);
 const document = Object.freeze({ sourceUrl: OPENAI_RESPONSES_PRICING_URL, bytes: source, observedAtMs: now - 1, freshUntilMs: now + 60_000 });
 
 const rate = async () => createOpenAiResponsesRateSnapshot({ document, model: "gpt-4.1-2025-04-14" });
@@ -122,9 +122,11 @@ test("non-Google catalog accepts only a fresh parsed source-bound model rate and
   const navigationSelectedOtherHeading = `<!doctype html><html><body><nav><code>gpt-4.1-2025-04-14</code></nav><article data-openai-model="other-2025-04-14"><h2>other-2025-04-14</h2><div>Input</div><div>$1.00</div></div><div><div>Cached input</div><div>$0.10</div></div><div><div>Output</div><div>$2.00</div></div></article></body></html>`;
   await expect(createOpenAiResponsesRateSnapshot({ document: { ...document, bytes: new TextEncoder().encode(navigationSelectedOtherHeading) }, model: "gpt-4.1-2025-04-14" })).rejects.toThrow("OPENAI_PRICE_SOURCE_MODEL_HELD");
   for (const nested of [
-    `<section data-openai-model="gpt-4.1-2025-04-14"><code>gpt-4.1-2025-04-14</code><section data-openai-model="other-2025-04-14">${cards}</section></section>`,
-    `<article data-openai-model="gpt-4.1-2025-04-14"><code>gpt-4.1-2025-04-14</code><article data-openai-model="other-2025-04-14">${cards}</article></article>`,
-    `<astro-island component-url="/_astro/ModelView.react.abc.js"><code>gpt-4.1-2025-04-14</code><astro-island component-url="/_astro/ModelView.react.abc.js"><code>other-2025-04-14</code>${cards}</astro-island></astro-island>`,
+    modelView(`<section data-openai-model="other-2025-04-14"><code>gpt-4.1-2025-04-14</code>${cards}</section>`),
+    modelView(`<article data-openai-model="other-2025-04-14"><code>gpt-4.1-2025-04-14</code>${cards}</article>`),
+    modelView(`<code>gpt-4.1-2025-04-14</code><div>${cards}</div>`),
+    modelView(`<code>gpt-4.1-2025-04-14</code><div><code>other-2025-04-14</code>${cards}</div>`),
+    modelView(`<code>gpt-4.1-2025-04-14</code>${modelView(`<code>other-2025-04-14</code>${cards}`)}`),
   ]) {
     await expect(createOpenAiResponsesRateSnapshot({ document: { ...document, bytes: new TextEncoder().encode(`<!doctype html><html><body>${nested}</body></html>`) }, model: "gpt-4.1-2025-04-14" })).rejects.toThrow("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
   }

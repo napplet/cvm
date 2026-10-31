@@ -52,6 +52,16 @@ export class NonGoogleCoolifyDriver {
       instant_deploy: true, autogenerate_domain: false, health_check_enabled: false,
     });
   }
+  /** Documented runtime-only environment update for the separate restorer app.
+   * The controller passes opaque job/capability references only; archive and
+   * database credentials are never baked into an image or API response. */
+  async setRuntimePullReference(applicationUuid: string, input: Readonly<{ jobReference: string; capabilityReference: string }>): Promise<void> {
+    const uuid = Uuid.parse(applicationUuid);
+    const jobReference = z.string().min(1).max(256).parse(input.jobReference);
+    const capabilityReference = z.string().min(1).max(256).parse(input.capabilityReference);
+    await this.#request("PATCH", `/applications/${uuid}/envs`, { key: "NAPPLET_RESTORER_JOB_REFERENCE", value: jobReference, is_build_time: false, is_literal: true, is_shown_once: true });
+    await this.#request("PATCH", `/applications/${uuid}/envs`, { key: "NAPPLET_RESTORER_CAPABILITY_REFERENCE", value: capabilityReference, is_build_time: false, is_literal: true, is_shown_once: true });
+  }
   getDatabase(uuid: string) { return this.#resource("GET", `/databases/${Uuid.parse(uuid)}`); }
   getApplication(uuid: string) { return this.#resource("GET", `/applications/${Uuid.parse(uuid)}`); }
   startApplication(uuid: string) { return this.#resource("POST", `/applications/${Uuid.parse(uuid)}/start`, {}); }

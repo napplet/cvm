@@ -1,8 +1,7 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { ReleaseCertificationController, runReleaseCertification } from "../../src/release/controller";
+import { prepareReleaseWorkspace, ReleaseCertificationController, runReleaseCertification } from "../../src/release/controller";
 import { createAuthorizationReceipt, createAuthorizationRequest, validateAuthorizationReceipt } from "../../src/release/authorization";
 import { canonicalJson } from "../../src/promotion/schema";
 import { createReleaseProviderRegistry, type ReleaseAuthorizationReceipt } from "../../src/release/providers";
@@ -13,7 +12,9 @@ const repositoryRoot = join(import.meta.dir, "..", "..");
 const candidatePath = join(repositoryRoot, "toolchains/candidates/initial.json");
 
 async function workspace(): Promise<string> {
-  return mkdtemp(join(tmpdir(), "napplet-cvm-release-controller-"));
+  const root = join(repositoryRoot, ".runtime", "release-certification", "native-discovery-v1", "controller-tests");
+  await mkdir(root, { recursive: true });
+  return mkdtemp(join(root, "napplet-cvm-release-controller-"));
 }
 
 const contentDigest = (value: unknown) => new Bun.CryptoHasher("sha256").update(canonicalJson(value)).digest("hex");
@@ -592,6 +593,50 @@ test("a multi-level workspace ancestor sync failure prevents provider apply", as
     },
   }).provision({ receipt, registry })).rejects.toThrow("MULTI_LEVEL_METADATA_SYNC_FAILED");
   expect(applies).toBe(0);
+});
+
+test("an in-workspace intermediate symlink cannot redirect authority creation", async () => {
+  const root = await workspace();
+  const outside = await mkdtemp("/tmp/napplet-cvm-workspace-escape-");
+  const escaped = join(root, "redirect", "workspace");
+  try {
+    await symlink(outside, join(root, "redirect"));
+    await expect(runReleaseCertification({ candidatePath, workspace: escaped, dryRun: true, now: () => 1_000 })).rejects.toThrow("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+    expect(await readdir(outside)).toEqual([]);
+  } finally { await rm(outside, { recursive: true, force: true }); }
+});
+
+test("a final workspace symlink and post-capability swap are rejected before authority writes", async () => {
+  const root = await workspace();
+  const outside = await mkdtemp("/tmp/napplet-cvm-workspace-escape-");
+  try {
+    const finalLink = join(root, "final-link");
+    await symlink(outside, finalLink);
+    await expect(runReleaseCertification({ candidatePath, workspace: finalLink, dryRun: true, now: () => 1_000 })).rejects.toThrow("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+    const stable = join(root, "stable");
+    const capability = await prepareReleaseWorkspace(stable);
+    await rename(stable, join(root, "stable-moved"));
+    await symlink(outside, stable);
+    await expect(new ReleaseCertificationController({ candidatePath, workspace: stable, workspaceCapability: capability, now: () => 1_000 }).dryRun()).rejects.toThrow("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+    expect(await readdir(outside)).toEqual([]);
+  } finally { await rm(outside, { recursive: true, force: true }); }
+});
+
+test("a replaced child authority directory is rejected before controller artifacts", async () => {
+  const root = await workspace();
+  const outside = await mkdtemp("/tmp/napplet-cvm-authority-escape-");
+  try {
+    await prepareReleaseWorkspace(root);
+    await symlink(outside, join(root, "states"));
+    await expect(runReleaseCertification({
+      candidatePath,
+      workspace: root,
+      dryRun: true,
+      providers: { cloud_run: { discover: async () => ({ capability: "available", authentication: "authorized", accountScopeSha256: "a".repeat(64), costEstimateSha256: "b".repeat(64), secretReferenceNames: [], reasonCode: "AVAILABLE" }) } },
+      now: () => 1_000,
+    })).rejects.toThrow("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+    expect(await readdir(outside)).toEqual([]);
+  } finally { await rm(outside, { recursive: true, force: true }); }
 });
 
 test("a damaged root with prior dispatch lineage fails closed instead of issuing a fresh request", async () => {

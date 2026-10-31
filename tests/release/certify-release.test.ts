@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createLiveProtectedCertificationRegistry } from "../../src/certification/live/registry";
 import { PROTECTED_SUITES } from "../../src/certification/runner";
@@ -54,7 +53,7 @@ test("candidate-only command rejects hand-authored authority inputs", async () =
 });
 
 test("resume digest chain fails closed before authorization, runner, trust, or cleanup effects", async () => {
-  const workspace = await mkdtemp(join(tmpdir(), "napplet-cvm-certify-"));
+  const workspace = await isolatedReleaseWorkspace("certify-resume-");
   const candidatePath = join(workspace, "candidate.json");
   try {
     await writeFile(candidatePath, JSON.stringify({ schemaVersion: 1, status: "review_ready", sourceRevision: "a".repeat(40) }));
@@ -176,6 +175,27 @@ test("workspace overrides are confined and status/resume remain candidate-bound"
   const [unsafeCode, unsafeStdout, unsafeStderr] = await Promise.all([unsafe.exited, new Response(unsafe.stdout).text(), new Response(unsafe.stderr).text()]);
   expect(unsafeCode).toBe(1);
   expect(`${unsafeStdout}${unsafeStderr}`).toContain("RELEASE_CERTIFICATION_WORKSPACE_REJECTED");
+});
+
+test("a lexically confined workspace symlink is rejected before the CLI writes outside", async () => {
+  const workspaceRoot = join(process.cwd(), ".runtime", "release-certification", "native-discovery-v1");
+  const outside = await mkdtemp("/tmp/napplet-cvm-cli-workspace-escape-");
+  const redirect = join(workspaceRoot, "redirect");
+  try {
+    await mkdir(workspaceRoot, { recursive: true });
+    await symlink(outside, redirect);
+    const child = Bun.spawn([Bun.which("bun")!, "run", "release:certify", "--", "--candidate", "toolchains/candidates/initial.json", "--request"], {
+      cwd: process.cwd(), env: { ...process.env, NAPPLET_CVM_RELEASE_WORKSPACE: join(redirect, "workspace"), NAPPLET_CVM_TEST_EXTERNAL_EFFECTS: "deny" }, stdout: "pipe", stderr: "pipe",
+    });
+    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(code).toBe(1);
+    expect(stdout).toBe("");
+    expect(stderr).toContain("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+    expect(await readdir(outside)).toEqual([]);
+  } finally {
+    await rm(redirect, { force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
 });
 
 test("an unavailable receipt reference cannot bypass exact controller record lookup", async () => {

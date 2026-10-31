@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import { ReleaseCertificationController } from "../../src/release/controller";
@@ -8,6 +7,12 @@ import { RELEASE_COST_FAMILIES } from "../../src/release/costs/live-estimator";
 
 const candidatePath = join(import.meta.dir, "..", "..", "toolchains/candidates/initial.json");
 const digest = (letter: string) => letter.repeat(64);
+
+async function createWorkspace(prefix: string): Promise<string> {
+  const root = join(import.meta.dir, "..", "..", ".runtime", "release-certification", "native-discovery-v1", "release-authorization-costs-tests");
+  await mkdir(root, { recursive: true });
+  return mkdtemp(join(root, prefix));
+}
 
 function catalog(priceOffset = 0) {
   return {
@@ -27,7 +32,7 @@ function catalog(priceOffset = 0) {
 }
 
 test("fresh sixteen-family price facts produce an exact immutable authorization request", async () => {
-  const workspace = await mkdtemp(join(tmpdir(), "napplet-cvm-release-cost-request-"));
+  const workspace = await createWorkspace("napplet-cvm-release-cost-request-");
   try {
     const controller = new ReleaseCertificationController({ candidatePath, workspace, now: () => 1_000, costCatalog: catalog() });
     const result = await controller.dryRun();
@@ -53,7 +58,7 @@ test("fresh sixteen-family price facts produce an exact immutable authorization 
 });
 
 test("a changed fresh quote supersedes the old request while preserving its immutable history", async () => {
-  const workspace = await mkdtemp(join(tmpdir(), "napplet-cvm-release-cost-supersede-"));
+  const workspace = await createWorkspace("napplet-cvm-release-cost-supersede-");
   try {
     const first = await new ReleaseCertificationController({ candidatePath, workspace, now: () => 1_000, costCatalog: catalog() }).dryRun();
     const second = await new ReleaseCertificationController({ candidatePath, workspace, now: () => 1_001, costCatalog: catalog(1) }).dryRun();

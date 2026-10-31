@@ -1,5 +1,5 @@
 import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { z } from "zod";
 import { canonicalJson } from "../promotion/schema";
 import {
@@ -34,12 +34,13 @@ import { validateOperatorFundingReadiness, type OperatorFundingReadiness } from 
 export const RELEASE_WORKSPACE_ENV = "NAPPLET_CVM_RELEASE_WORKSPACE";
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 const DURABLE_WORKSPACE_FILESYSTEM_ROOT = "/";
+const PROJECT_WORKSPACE_ROOT = resolve(process.cwd(), ".runtime", "release-certification", "native-discovery-v1");
 const preparedWorkspaces = new WeakSet<object>();
 
 /** An opaque, project-created witness that the workspace publication chain was
  * synced through the POSIX filesystem root. It is not user JSON or a manual
  * operator trust flag. */
-export type ReleaseWorkspaceCapability = Readonly<{ workspace: string }>;
+export type ReleaseWorkspaceCapability = Readonly<{ requestedWorkspace: string; workspace: string }>;
 
 type CandidateIdentity = ReleaseControllerState["candidate"];
 type ControllerOptions = Readonly<{
@@ -344,34 +345,48 @@ async function syncDirectory(path: string): Promise<void> {
   try { await handle.sync(); } finally { await handle.close(); }
 }
 
-async function validateDurableWorkspacePath(workspace: string, synchronizer: (path: string) => Promise<void>): Promise<void> {
+function containedBy(root: string, candidate: string): boolean {
+  const value = relative(root, candidate);
+  return value === "" || (!value.startsWith(`..${sep}`) && value !== ".." && !isAbsolute(value));
+}
+
+async function validateDurableWorkspacePath(workspace: string, synchronizer: (path: string) => Promise<void>): Promise<string> {
   if (process.platform !== "darwin" && process.platform !== "linux") throw new Error("RELEASE_CONTROLLER_WORKSPACE_DURABILITY_UNSUPPORTED");
-  let root: string;
-  let resolved: string;
+  const requested = resolve(workspace);
+  const projectRoot = resolve(process.cwd());
+  if (!containedBy(PROJECT_WORKSPACE_ROOT, requested)) throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+  let canonicalProjectRoot: string;
   try {
-    root = await realpath(DURABLE_WORKSPACE_FILESYSTEM_ROOT);
-    resolved = await realpath(workspace);
+    canonicalProjectRoot = await realpath(projectRoot);
   } catch { throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED"); }
-  let current = root;
-  for (const segment of resolved.slice(root.length).split("/").filter(Boolean)) {
+  let current = canonicalProjectRoot;
+  for (const segment of relative(projectRoot, requested).split(sep).filter(Boolean)) {
     current = join(current, segment);
     let metadata;
     try { metadata = await lstat(current); }
-    catch { throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED"); }
+    catch (error) {
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+      try { await mkdir(current, { mode: 0o700 }); }
+      catch (mkdirError) {
+        if (!(mkdirError instanceof Error) || !("code" in mkdirError) || mkdirError.code !== "EEXIST") throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+      }
+      try { metadata = await lstat(current); }
+      catch { throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED"); }
+    }
     if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
   }
-  await syncDirectoryChain(resolved, root, synchronizer);
+  await syncDirectoryChain(current, DURABLE_WORKSPACE_FILESYSTEM_ROOT, synchronizer);
+  return current;
 }
 
 /** Project-owned normal-entry preparation. It creates missing path components,
  * validates every ancestor is a real directory, then publishes each directory
  * entry all the way through the known POSIX filesystem root. */
 export async function prepareReleaseWorkspace(workspace: string, synchronizer: (path: string) => Promise<void> = syncDirectory): Promise<ReleaseWorkspaceCapability> {
-  const resolved = resolve(workspace);
   if (process.platform !== "darwin" && process.platform !== "linux") throw new Error("RELEASE_CONTROLLER_WORKSPACE_DURABILITY_UNSUPPORTED");
-  await mkdir(resolved, { recursive: true, mode: 0o700 });
-  await validateDurableWorkspacePath(resolved, synchronizer);
-  const capability = Object.freeze({ workspace: resolved });
+  const requestedWorkspace = resolve(workspace);
+  const canonicalWorkspace = await validateDurableWorkspacePath(requestedWorkspace, synchronizer);
+  const capability = Object.freeze({ requestedWorkspace, workspace: canonicalWorkspace });
   preparedWorkspaces.add(capability);
   return capability;
 }
@@ -445,7 +460,8 @@ async function readProtectedRecord(input: Readonly<{
 
 export class ReleaseCertificationController {
   readonly #candidatePath: string;
-  readonly #workspace: string;
+  readonly #workspaceRequest: string;
+  #workspace: string;
   readonly #providers: ReleaseProviderRegistry;
   readonly #consent: OfficialConsentPort | undefined;
   readonly #costCatalog: LiveCostCatalogPort | undefined;
@@ -458,7 +474,8 @@ export class ReleaseCertificationController {
 
   constructor(options: ControllerOptions) {
     this.#candidatePath = resolve(options.candidatePath);
-    this.#workspace = resolve(options.workspace);
+    this.#workspaceRequest = resolve(options.workspace);
+    this.#workspace = this.#workspaceRequest;
     this.#providers = options.providers ?? createNoCredentialReleaseProviderRegistry();
     this.#consent = options.consent;
     this.#costCatalog = options.costCatalog;
@@ -471,31 +488,65 @@ export class ReleaseCertificationController {
   }
 
   async #ensureDurableWorkspace(): Promise<void> {
-    const capability = this.#workspaceCapability ?? await prepareReleaseWorkspace(this.#workspace, this.#syncDirectory);
-    if (!preparedWorkspaces.has(capability) || capability.workspace !== this.#workspace) throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+    const capability = this.#workspaceCapability ?? await prepareReleaseWorkspace(this.#workspaceRequest, this.#syncDirectory);
+    if (!preparedWorkspaces.has(capability) || capability.requestedWorkspace !== this.#workspaceRequest) throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
     /* Revalidate and resync every component even for an earlier capability:
      * a caller-created bare workspace never skips the root publication chain. */
-    await validateDurableWorkspacePath(this.#workspace, this.#syncDirectory);
+    this.#workspace = await validateDurableWorkspacePath(this.#workspaceRequest, this.#syncDirectory);
+  }
+
+  /** Resolve controller authority files only after revalidating the workspace
+   * and every existing child component.  Recursive mkdir/read operations would
+   * otherwise follow a replaced authority-directory symlink after capability
+   * preparation. */
+  async #authorityPath(path: string, createParents = false): Promise<string> {
+    const child = relative(this.#workspace, resolve(path));
+    if (!containedBy(this.#workspace, resolve(path)) || child === "") throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+    await this.#ensureDurableWorkspace();
+    const segments = child.split(sep).filter(Boolean);
+    let current = this.#workspace;
+    for (const [index, segment] of segments.entries()) {
+      current = join(current, segment);
+      let metadata;
+      try { metadata = await lstat(current); }
+      catch (error) {
+        if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+        if (!createParents || index === segments.length - 1) return join(this.#workspace, ...segments);
+        try { await mkdir(current, { mode: 0o700 }); }
+        catch (mkdirError) {
+          if (!(mkdirError instanceof Error) || !("code" in mkdirError) || mkdirError.code !== "EEXIST") throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+        }
+        try { metadata = await lstat(current); }
+        catch { throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED"); }
+      }
+      if (metadata.isSymbolicLink() || (index < segments.length - 1 && !metadata.isDirectory())) throw new Error("RELEASE_CONTROLLER_WORKSPACE_ANCHOR_REQUIRED");
+    }
+    return current;
   }
 
   async #createOrVerify(path: string, content: string, collision: string): Promise<void> {
-    await createOrVerify(path, content, collision, this.#syncDirectory);
+    await createOrVerify(await this.#authorityPath(path, true), content, collision, this.#syncDirectory);
   }
 
   async #replaceSynced(path: string, content: string): Promise<void> {
-    await replaceSynced(path, content, this.#syncDirectory);
+    await replaceSynced(await this.#authorityPath(path, true), content, this.#syncDirectory);
+  }
+
+  async #readAuthorityFile(path: string): Promise<string> {
+    return readFile(await this.#authorityPath(path), "utf8");
   }
 
   async #hasEffectLineage(): Promise<boolean> {
     for (const directory of ["provider-dispatch-claims", "state-transitions", "provider-operations", "provider-operation-records"]) {
-      try { if ((await readdir(join(this.#workspace, directory)).catch(() => [])).length > 0) return true; }
+      try { if ((await readdir(await this.#authorityPath(join(this.#workspace, directory))).catch(() => [])).length > 0) return true; }
       catch { throw new Error("RELEASE_CONTROLLER_RECOVERY_REQUIRED"); }
     }
     return false;
   }
 
   async status(): Promise<ReleaseCertificationResult | undefined> {
-    const pointerPath = join(this.#workspace, "current.json");
+    await this.#ensureDurableWorkspace();
+    const pointerPath = await this.#authorityPath(join(this.#workspace, "current.json"));
     let pointerRaw: unknown;
     try { pointerRaw = JSON.parse(await readFile(pointerPath, "utf8")); }
     catch (error) {
@@ -625,7 +676,7 @@ export class ReleaseCertificationController {
     const approval = await this.#consent.launch({ authorizationRequest: request });
     const receipt = await createOfficialConsentReceipt({ request, approval });
     await this.#createOrVerify(
-      join(this.#workspace, "authorization-receipts", `${receipt.authorizationReceiptSha256}.json`),
+      await this.#authorityPath(join(this.#workspace, "authorization-receipts", `${receipt.authorizationReceiptSha256}.json`)),
       `${canonicalJson(receipt)}\n`,
       "RELEASE_CONTROLLER_AUTHORIZATION_RECEIPT_COLLISION",
     );
@@ -645,7 +696,7 @@ export class ReleaseCertificationController {
     try { receipt = await validateAuthorizationReceipt({ request, receipt: receiptInput, nowMs: this.#now() }); }
     catch { throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID"); }
     await this.#createOrVerify(
-      join(this.#workspace, "authorization-receipts", `${receipt.authorizationReceiptSha256}.json`),
+      await this.#authorityPath(join(this.#workspace, "authorization-receipts", `${receipt.authorizationReceiptSha256}.json`)),
       `${canonicalJson(receipt)}\n`,
       "RELEASE_CONTROLLER_AUTHORIZATION_RECEIPT_COLLISION",
     );
@@ -935,7 +986,7 @@ export class ReleaseCertificationController {
 
   async #loadCurrent(): Promise<Readonly<{ state: ReleaseControllerState; pointer: z.infer<typeof ReleaseControllerCurrentPointerSchema> }>> {
     let raw: unknown;
-    try { raw = JSON.parse(await readFile(join(this.#workspace, "current.json"), "utf8")); }
+    try { raw = JSON.parse(await this.#readAuthorityFile(join(this.#workspace, "current.json"))); }
     catch { throw new Error("RELEASE_CONTROLLER_POINTER_INVALID"); }
     const pointer = ReleaseControllerCurrentPointerSchema.safeParse(raw);
     if (!pointer.success || pointer.data.pointerSha256 !== await digest(withoutDigest(pointer.data, "pointerSha256"))) throw new Error("RELEASE_CONTROLLER_POINTER_INVALID");
@@ -953,9 +1004,10 @@ export class ReleaseCertificationController {
   }
 
   async #commitStateTransition(priorStateSha256: string, next: ReleaseControllerState): Promise<ReleaseControllerState> {
+    await this.#ensureDurableWorkspace();
     const base = { version: 1 as const, priorStateSha256, nextStateSha256: next.stateSha256 };
     const transition: StateTransition = { ...base, transitionSha256: await digest(base) };
-    const path = join(this.#workspace, "state-transitions", `${priorStateSha256}.json`);
+    const path = await this.#authorityPath(join(this.#workspace, "state-transitions", `${priorStateSha256}.json`), true);
     const outcome = await createSynced(path, `${canonicalJson(transition)}\n`, DURABLE_WORKSPACE_FILESYSTEM_ROOT, this.#syncDirectory);
     if (outcome === "created") return next;
     const existing = await this.#readStateTransition(priorStateSha256);
@@ -965,7 +1017,7 @@ export class ReleaseCertificationController {
 
   async #readStateTransition(priorStateSha256: string): Promise<StateTransition | undefined> {
     let raw: unknown;
-    try { raw = JSON.parse(await readFile(join(this.#workspace, "state-transitions", `${priorStateSha256}.json`), "utf8")); }
+    try { raw = JSON.parse(await this.#readAuthorityFile(join(this.#workspace, "state-transitions", `${priorStateSha256}.json`))); }
     catch (error) {
       if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
       throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
@@ -976,17 +1028,18 @@ export class ReleaseCertificationController {
   }
 
   async #claimDispatch(state: ReleaseControllerState, record: CurrentProviderOperationRecord): Promise<boolean> {
+    await this.#ensureDurableWorkspace();
     const base = {
       version: 1 as const, stateSha256: state.stateSha256, recordSha256: record.recordSha256,
       operation: record.operation, reservedCostMicros: record.reservedCostMicros,
       accountScopeSha256: record.accountScopeSha256, projectScopeSha256: record.projectScopeSha256,
     };
     const claim: DispatchClaim = { ...base, dispatchClaimSha256: await digest(base) };
-    const path = join(this.#workspace, "provider-dispatch-claims", `${record.operation.operationId}.json`);
+    const path = await this.#authorityPath(join(this.#workspace, "provider-dispatch-claims", `${record.operation.operationId}.json`), true);
     const outcome = await createSynced(path, `${canonicalJson(claim)}\n`, DURABLE_WORKSPACE_FILESYSTEM_ROOT, this.#syncDirectory);
     if (outcome === "created") return true;
     let raw: unknown;
-    try { raw = JSON.parse(await readFile(path, "utf8")); }
+    try { raw = JSON.parse(await this.#readAuthorityFile(join(this.#workspace, "provider-dispatch-claims", `${record.operation.operationId}.json`))); }
     catch { throw new Error("RELEASE_CONTROLLER_DISPATCH_CLAIM_INVALID"); }
     const parsed = z.object({ version: z.literal(1), stateSha256: DigestSchema, recordSha256: DigestSchema, operation: ReleaseProviderOperationSchema, reservedCostMicros: z.number().int().nonnegative(), accountScopeSha256: DigestSchema, projectScopeSha256: DigestSchema, dispatchClaimSha256: DigestSchema }).strict().safeParse(raw);
     if (!parsed.success || parsed.data.dispatchClaimSha256 !== await digest(withoutDigest(parsed.data, "dispatchClaimSha256"))
@@ -1001,7 +1054,7 @@ export class ReleaseCertificationController {
 
   async #readLegacyOperation(operationId: string): Promise<ProviderOperationRecord> {
     let raw: unknown;
-    try { raw = JSON.parse(await readFile(join(this.#workspace, "provider-operations", `${operationId}.json`), "utf8")); }
+    try { raw = JSON.parse(await this.#readAuthorityFile(join(this.#workspace, "provider-operations", `${operationId}.json`))); }
     catch { throw new Error("RELEASE_CONTROLLER_OPERATION_INVALID"); }
     const schema = z.union([
       z.object({ version: z.literal(1), operation: ReleaseProviderOperationSchema, status: z.enum(["pending", "unknown", "completed"]), actualCostMicros: z.number().int().nonnegative(), resourceIdentitySha256: DigestSchema.nullable() }).strict(),
@@ -1022,7 +1075,7 @@ export class ReleaseCertificationController {
 
   async #readOperationRecord(recordSha256: string): Promise<CurrentProviderOperationRecord> {
     let raw: unknown;
-    try { raw = JSON.parse(await readFile(join(this.#workspace, "provider-operation-records", `${recordSha256}.json`), "utf8")); }
+    try { raw = JSON.parse(await this.#readAuthorityFile(join(this.#workspace, "provider-operation-records", `${recordSha256}.json`))); }
     catch { throw new Error("RELEASE_CONTROLLER_OPERATION_INVALID"); }
     const record = await this.#readRecordValue(raw);
     if (record.recordSha256 !== recordSha256) throw new Error("RELEASE_CONTROLLER_OPERATION_INVALID");
@@ -1115,7 +1168,7 @@ export class ReleaseCertificationController {
 
   async #readTopology(topologySha256: string): Promise<ReleaseProvisioningResult["topology"]> {
     let raw: unknown;
-    try { raw = JSON.parse(await readFile(join(this.#workspace, "topologies", `${topologySha256}.json`), "utf8")); }
+    try { raw = JSON.parse(await this.#readAuthorityFile(join(this.#workspace, "topologies", `${topologySha256}.json`))); }
     catch { throw new Error("RELEASE_CONTROLLER_TOPOLOGY_INVALID"); }
     const topology = ReleaseTopologyObservationSchema.safeParse(raw);
     if (!topology.success || !topology.data.deployment || topology.data.topologySha256 !== topologySha256) throw new Error("RELEASE_CONTROLLER_TOPOLOGY_INVALID");
@@ -1128,7 +1181,7 @@ export class ReleaseCertificationController {
     if (seen.has(stateSha256)) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
     seen.add(stateSha256);
     let raw: unknown;
-    try { raw = JSON.parse(await readFile(join(this.#workspace, "states", `${stateSha256}.json`), "utf8")); }
+    try { raw = JSON.parse(await this.#readAuthorityFile(join(this.#workspace, "states", `${stateSha256}.json`))); }
     catch { throw new Error("RELEASE_CONTROLLER_STATE_INVALID"); }
     const state = ReleaseControllerStateSchema.safeParse(raw);
     if (!state.success || state.data.stateSha256 !== stateSha256 || state.data.stateSha256 !== await digest(withoutDigest(state.data, "stateSha256"))) throw new Error("RELEASE_CONTROLLER_STATE_INVALID");
@@ -1159,7 +1212,7 @@ export class ReleaseCertificationController {
 
   async #readRequest(authorizationRequestSha256: string): Promise<ReleaseAuthorizationRequest> {
     let raw: unknown;
-    try { raw = JSON.parse(await readFile(join(this.#workspace, "authorization-requests", `${authorizationRequestSha256}.json`), "utf8")); }
+    try { raw = JSON.parse(await this.#readAuthorityFile(join(this.#workspace, "authorization-requests", `${authorizationRequestSha256}.json`))); }
     catch { throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID"); }
     try {
       const request = await validateAuthorizationRequest(raw);

@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import { ReleaseCertificationController } from "../../src/release/controller";
@@ -10,6 +9,12 @@ import { createAuthorizationReceipt } from "../../src/release/authorization";
 const candidatePath = join(import.meta.dir, "..", "..", "toolchains/candidates/initial.json");
 const digest = (letter: string) => letter.repeat(64);
 
+async function createWorkspace(prefix: string): Promise<string> {
+  const root = join(import.meta.dir, "..", "..", ".runtime", "release-certification", "native-discovery-v1", "production-readiness-tests");
+  await mkdir(root, { recursive: true });
+  return mkdtemp(join(root, prefix));
+}
+
 function fixtureCatalog(): LiveCostCatalogPort {
   return { listPriceFacts: async () => RELEASE_COST_FAMILIES.map((provider, index) => ({
     provider, sourceId: `${provider}-loopback`, sourceDocumentSha256: digest((index % 16).toString(16)), quoteSha256: digest(((index + 1) % 16).toString(16)),
@@ -18,7 +23,7 @@ function fixtureCatalog(): LiveCostCatalogPort {
 }
 
 test("the pre-approval controller path performs only sixteen fake discovery and price reads", async () => {
-  const workspace = await mkdtemp(join(tmpdir(), "napplet-cvm-release-readiness-"));
+  const workspace = await createWorkspace("napplet-cvm-release-readiness-");
   let discoveryCalls = 0;
   let priceCalls = 0;
   let effects = 0;
@@ -37,7 +42,7 @@ test("the pre-approval controller path performs only sixteen fake discovery and 
 });
 
 test("a structured deny-effects fixture receipt can enter receipt_valid without execution", async () => {
-  const workspace = await mkdtemp(join(tmpdir(), "napplet-cvm-release-receipt-"));
+  const workspace = await createWorkspace("napplet-cvm-release-receipt-");
   try {
     const controller = new ReleaseCertificationController({ candidatePath, workspace, now: () => 1_000, costCatalog: fixtureCatalog() });
     const pending = await controller.dryRun();

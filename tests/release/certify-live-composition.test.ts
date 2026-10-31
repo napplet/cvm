@@ -4,11 +4,16 @@ import type { OperatorFundingReadiness } from "../../src/release/deployment/oper
 import { createLocalOperatorFundingSetup } from "../../src/release/deployment/local-setup";
 import { ReleaseCertificationController } from "../../src/release/controller";
 import { RELEASE_COST_FAMILIES } from "../../src/release/costs/live-estimator";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 const digest = (letter: string) => letter.repeat(64);
+
+async function createWorkspace(prefix: string): Promise<string> {
+  const root = join(import.meta.dir, "..", "..", ".runtime", "release-certification", "native-discovery-v1", "certify-live-composition-tests");
+  await mkdir(root, { recursive: true });
+  return mkdtemp(join(root, prefix));
+}
 
 test("Cashu-only local setup completes and closes its session without NWC or secret persistence", async () => {
   let session: Parameters<import("../../src/release/deployment/local-setup").LocalFundingLoopbackPort["listen"]>[0];
@@ -76,7 +81,7 @@ test("local funding setup binds a one-time loopback session and keeps both walle
 });
 
 test("a current request binds both opaque rail records and supersedes when funding readiness drifts", async () => {
-  const workspace = await mkdtemp(join(tmpdir(), "napplet-cvm-request-composition-"));
+  const workspace = await createWorkspace("napplet-cvm-request-composition-");
   const candidatePath = join(import.meta.dir, "..", "..", "toolchains", "candidates", "initial.json");
   const catalog = { listPriceFacts: async () => RELEASE_COST_FAMILIES.map((provider, index) => ({
     provider, sourceId: `${provider}-official`, sourceDocumentSha256: digest((index % 16).toString(16)), quoteSha256: digest(((index + 1) % 16).toString(16)),

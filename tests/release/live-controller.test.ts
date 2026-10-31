@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -14,6 +14,12 @@ import { observeUploadedCollectorRegistryImage } from "../../src/release/collect
 const repositoryRoot = join(import.meta.dir, "..", "..");
 const candidatePath = join(repositoryRoot, "toolchains/candidates/initial.json");
 const digest = (value: string) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
+
+async function createWorkspace(prefix: string): Promise<string> {
+  const root = join(repositoryRoot, ".runtime", "release-certification", "native-discovery-v1", "live-controller-tests");
+  await mkdir(root, { recursive: true });
+  return mkdtemp(join(root, prefix));
+}
 
 // Local controller contract fixture; never used as release evidence.
 async function observedCollector() {
@@ -45,7 +51,7 @@ test("authorized tracer keeps every versioned live boundary", () => {
 });
 
 test("authorized tracer rejects absent or mismatched receipt before a native effect", async () => {
-  const root = await mkdtemp(join(tmpdir(), "napplet-cvm-live-controller-"));
+  const root = await createWorkspace("napplet-cvm-live-controller-");
   try {
     const initial = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000 });
     let effects = 0;
@@ -75,7 +81,7 @@ test("authorized tracer rejects absent or mismatched receipt before a native eff
 });
 
 test("all protected-suite records are retained and block finalization when real evidence is unavailable", async () => {
-  const root = await mkdtemp(join(tmpdir(), "napplet-cvm-live-controller-"));
+  const root = await createWorkspace("napplet-cvm-live-controller-");
   try {
     const collectorImage = await observedCollector();
     const dry = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000, collectorImage });

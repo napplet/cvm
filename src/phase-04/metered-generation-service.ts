@@ -545,7 +545,13 @@ export class MeteredGenerationService {
     const status = completed ? "completed" as const : "failed" as const;
     let settlement: Readonly<{ amount: string; providerReceiptReference: string }>;
     try { settlement = this.options.settlement ? await this.options.settlement.finalize({ accountId, intent, receipt: observation.receipt, pricedAmount: priced.total }) : { amount: priced.total, providerReceiptReference: observation.receipt.provenance.protectedEvidenceReference }; }
-    catch {
+    catch (error) {
+      // A durable receipt/binding mismatch is not an acknowledgement loss.
+      // Preserve it for the private coordinator instead of manufacturing a
+      // usage-unknown record that could mask an assembly or pricing defect.
+      if (error instanceof Error && ["PRODUCTION_VERTEX_SETTLEMENT_BINDING_REQUIRED", "PRODUCTION_PRICED_SETTLEMENT_BINDING_DENIED",
+        "PRODUCTION_VERTEX_SETTLEMENT_RECEIPT_MISMATCH", "PRODUCTION_VERTEX_SETTLEMENT_PRICE_MISMATCH",
+        "PRODUCTION_VERTEX_SETTLEMENT_CAP_EXCEEDED"].includes(error.message)) throw error;
       await this.options.store.transact(accountId, transaction => transaction.recordUsageUnknown({ operationId, providerRequestId, protectedEvidenceReference: observation.receipt.provenance.protectedEvidenceReference, reason: "uncertain_acceptance" }));
       return SessionActionResultSchema.parse({ status: "usage_unknown", code: "USAGE_UNKNOWN", accountId, sessionId, nextAction: "billing_reconciliation", operationId });
     }

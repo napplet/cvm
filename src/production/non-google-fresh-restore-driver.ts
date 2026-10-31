@@ -75,6 +75,13 @@ export class NonGoogleFreshRestoreDriver {
       return Object.freeze({ backupSha256: Digest.parse(backupSha256), sourceSystemIdentifier, freshSystemIdentifier });
     } finally { await rm(workspace, { recursive: true, force: true }); }
   }
+  async captureCustomBackup(): Promise<Uint8Array> {
+    if (process.env.NAPPLET_TRUSTED_RESTORER_IMAGE !== this.coolify.reference.restorerImage) throw new Error("NON_GOOGLE_TRUSTED_RESTORER_IMAGE_REQUIRED");
+    const sourceUrl = await this.#secret(this.reference.sourceDatabaseUrlPath);
+    const workspace = await mkdtemp(join(tmpdir(), "napplet-pg-dump-")); const archive = join(workspace, "source.dump");
+    try { await this.#mustRun(["pg_dump", "--format=custom", "--no-owner", "--no-privileges", "--file", archive, "--dbname", sourceUrl], {}); return new Uint8Array(await readFile(archive)); }
+    finally { await rm(workspace, { recursive: true, force: true }); }
+  }
 
   /** Cleanup is exact-resource only. Absence is confirmed by subsequent GETs;
    * a 404 is the sole terminal observation accepted by the native driver. */

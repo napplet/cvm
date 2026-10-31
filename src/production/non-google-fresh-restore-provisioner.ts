@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { z } from "zod";
 import { CoreControlPayloadSchemas, CoreFreshInstanceSchema } from "../release/deployment/production-core-suite-protocol";
 import type { NonGoogleCoreBinding } from "./non-google-native-runtime";
@@ -11,6 +10,7 @@ import { ProductionRetainedSubjectPreparer } from "./retained-subject-preparer";
 import type { PostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
 import { createProductionDurabilitySubjectRegistry } from "./durability-registry";
 import { PostgresRestorerPullStore } from "./non-google-restorer-pull-protocol";
+import { createHash } from "node:crypto";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 type Prepared = Readonly<{ version: 2; sourceInstanceId: string; binding: NonGoogleCoreBinding; scope: Readonly<{ checkpointId: string; sessionId: string; ownerId: string; sourceAuthorityReference: string }>; state: "prepared" }>;
@@ -34,15 +34,16 @@ export class NonGoogleFreshRestoreProvisioner {
         const preparer = new ProductionRetainedSubjectPreparer({ pool, objectStore, journal: this.input.postgresJournal, kekPath: "/non-google-unused-legacy-kek", crypto });
         await preparer.prepare(this.input.scope);
         const subjects = await createProductionDurabilitySubjectRegistry(pool).inventory(this.input.scope);
-        const checkpoint = subjects.find(subject => subject.kind === "checkpoint");
-        if (!checkpoint) throw new Error("NON_GOOGLE_RESTORE_CHECKPOINT_SUBJECT_REQUIRED");
-        const archiveBytes = await objectStore.readExact(checkpoint.object);
-        if (!archiveBytes) throw new Error("NON_GOOGLE_RESTORE_CHECKPOINT_ARCHIVE_REQUIRED");
-        await new PostgresRestorerPullStore(this.input.journal, objectStore).claimJob({
-          originalId: this.#prepare(), candidateSha256: this.input.binding.candidateSha256, topologySha256: this.input.binding.topologySha256,
-          roleCostBoundSha256: z.string().regex(/^[a-f0-9]{64}$/u).parse(this.input.roleCostBoundSha256), capabilitySha256: z.string().regex(/^[a-f0-9]{64}$/u).parse(this.input.restorerCapabilitySha256),
-          archive: { ...checkpoint.object, byteCount: archiveBytes.byteLength }, expiresAtMs: Date.parse(checkpoint.retentionUntil),
-        });
+        if (subjects.length !== 7) throw new Error("NON_GOOGLE_RESTORE_SUBJECT_INVENTORY_REQUIRED");
+        const backup = await this.input.driver.captureCustomBackup();
+        try {
+          const checkpointId = `restore-backup:${this.input.binding.candidateSha256.slice(0, 24)}`;
+          const sealed = await crypto.seal({ checkpointId, plaintext: backup, additionalData: new TextEncoder().encode(JSON.stringify({ scope: this.input.scope, binding: this.input.binding })), binding: { accountId: "restore", sessionId: this.input.scope.sessionId, actionId: this.input.scope.checkpointId, operationId: this.#prepare(), retentionUntil: subjects[0]!.retentionUntil } });
+          const stored = await crypto.readSealed(checkpointId);
+          if (!stored || stored.keyReference !== sealed.keyReference) throw new Error("NON_GOOGLE_RESTORE_BACKUP_CUSTODY_REQUIRED");
+          const reference = await objectStore.createImmutable({ key: `restore-backups/${checkpointId}/${stored.ciphertextSha256}`, bytes: stored.ciphertext, originalOperationIdentity: createHash("sha256").update(this.#prepare()).digest("hex") });
+          await new PostgresRestorerPullStore(this.input.journal, objectStore).claimJob({ originalId: this.#prepare(), candidateSha256: this.input.binding.candidateSha256, topologySha256: this.input.binding.topologySha256, roleCostBoundSha256: z.string().regex(/^[a-f0-9]{64}$/u).parse(this.input.roleCostBoundSha256), capabilitySha256: z.string().regex(/^[a-f0-9]{64}$/u).parse(this.input.restorerCapabilitySha256), archive: { ...reference, byteCount: stored.ciphertext.byteLength }, expiresAtMs: Date.parse(subjects[0]!.retentionUntil) });
+        } finally { backup.fill(0); }
         const original = await client.query<Record<string, unknown>>("SELECT system_identifier::text AS source_instance_id FROM pg_control_system()", []);
         if (original.rows.length !== 1) throw new Error("NON_GOOGLE_RESTORE_SOURCE_ORIGINAL_REQUIRED");
         const sourceInstanceId = z.string().min(1).max(256).parse(original.rows[0]!.source_instance_id);

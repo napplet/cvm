@@ -217,6 +217,7 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     const recoveredCrypto = new MountedKekCheckpointCrypto({ pool: recoveredPool, kekPath: "/fixture/kek", readFile: async () => kek, now: () => now });
     if (!source || !migration) throw new Error("RETAINED_SUBJECT_FRESH_DATABASE_REQUIRED");
     const sourcePool = sqlPool(source), migrationPool = sqlPool(migration);
+    const restoreJournal = new PostgresOperationJournal(sourcePool, { namespace: "retained-subjects-restore", scopeSha256: hex("restore-scope") });
     const retainedKeys = new Map<string, string>();
     for (const subject of recoveredInventory) if (subject.kind !== "checkpoint") {
       const stored = await recoveredCrypto.readSealed(retainedSubjectCustodyId({ checkpointId, kind: subject.kind, sourceIdentity: subject.sourceIdentity }));
@@ -260,7 +261,7 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
       async cleanup() { return { state: "absent" as const }; },
       async observeCleanup() { return { state: "absent" as const }; },
     };
-    const restore = new ProductionRestoreCertification({ sourceInstanceId: "source-retained", scope, sourcePool, migrationSource: new ProductionMigrationSource({ pool: sourcePool, source: { sourceIdentity: "source-retained", serviceIdentity: hex("service"), sourceRevision: hex("revision"), schemaVersions: migrations, migrationDigests: Object.fromEntries(migrations.map(path => [path, hex(path)])), writers: [], records: [], objects: [], externalOperations: [] } }), migrationCipher: new MigrationArchiveCipher(new Uint8Array(32).fill(23)), backupStore: objects, journal, provisioner: { async create() { return freshInstance; }, async attach() { return freshInstance; }, async observeCleanup() { return { state: "absent" as const }; } }, candidateSha256: hex("candidate"), topologySha256: hex("topology") });
+    const restore = new ProductionRestoreCertification({ sourceInstanceId: "source-retained", scope, sourcePool, migrationSource: new ProductionMigrationSource({ pool: sourcePool, source: { sourceIdentity: "source-retained", serviceIdentity: hex("service"), sourceRevision: hex("revision"), schemaVersions: migrations, migrationDigests: Object.fromEntries(migrations.map(path => [path, hex(path)])), writers: [], records: [], objects: [], externalOperations: [] } }), migrationCipher: new MigrationArchiveCipher(new Uint8Array(32).fill(23)), backupStore: objects, journal: restoreJournal, provisioner: { async create() { return freshInstance; }, async attach() { return freshInstance; }, async observeCleanup() { return { state: "absent" as const }; } }, candidateSha256: hex("candidate"), topologySha256: hex("topology") });
     const fresh = CoreFreshInstanceSchema.parse(await restore.restore({ operationId: "restore:retained", action: "restore.create", payload: {} }));
     for (const subject of recoveredInventory) {
       const descriptor = CoreRestoreDescriptorSchema.parse(await restore.restore({ operationId: `restore:describe:${subject.kind}`, action: "restore.subject", payload: { freshInstanceId: fresh.freshInstanceId, subject, action: "describe" } }));

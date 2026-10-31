@@ -81,7 +81,16 @@ export class ProductionRetainedSubjectPreparer {
       const operationId = `retained-delete:${sha(canonicalJson({ checkpointId: scope.checkpointId, kind: subject.kind, sourceIdentity: subject.sourceIdentity })).slice(0, 48)}`;
       const intent = Object.freeze({ schemaVersion: "retained-subject-delete-v1", state: "pending", checkpointId: scope.checkpointId, kind: subject.kind, sourceIdentity: subject.sourceIdentity, object: subject.object, keyReference: stored.keyReference });
       const claimed = await this.input.journal.claim(operationId, sha(canonicalJson(intent)), intent);
-      if (!claimed.claimed) continue;
+      if (!claimed.claimed) {
+        // A lost provider acknowledgement leaves the immutable delete intent
+        // as the only dispatch authority. Re-querying exact generation
+        // absence is sufficient to finish the locally-custodied key erasure;
+        // it must never authorize another object delete.
+        if (await this.input.objectStore.readExact(subject.object)) continue;
+        await this.#crypto.destroy(stored.keyReference);
+        if (!await this.#crypto.isDestroyed(stored.keyReference)) throw new Error("RETAINED_SUBJECT_ERASURE_KEY_REQUIRED");
+        continue;
+      }
       const exact = await this.input.objectStore.readExact(subject.object);
       if (!exact || sha(exact) !== subject.object.checksum) throw new Error("RETAINED_SUBJECT_ERASURE_OBJECT_REQUIRED");
       await registry.markDeletion({ checkpointId: scope.checkpointId, kind: subject.kind, objectGeneration: subject.object.generation, objectChecksum: subject.object.checksum, state: "tombstoned" });

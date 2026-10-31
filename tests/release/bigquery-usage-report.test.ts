@@ -196,3 +196,43 @@ test("a report response is stopped at its byte ceiling rather than buffered with
   expect(canceled).toBeTrue();
   expect(pulls).toBe(2);
 });
+
+test("a stalled response body times out and cancels its stream without redispatch", async () => {
+  const value = await grant();
+  const queryJobId = `usage_${value.reportRequestSha256.slice(0, 48)}`;
+  let canceled = false;
+  let requests = 0;
+  const accountScopeSha256 = await googleAccountScopeSha256({ projectId: "project-12345", quotaProjectId: "quota-project-1", principal: "release@example.com" });
+  const collector = createBigQueryUsageReportCollector({ projectId: "project-12345", quotaProjectId: "quota-project-1", principal: "release@example.com", now: () => 10,
+    journal: createMemoryBigQueryUsageReportJournal([{ reportRequestSha256: value.reportRequestSha256, dryRunJobId: `usage_dry_${value.reportRequestSha256.slice(0, 48)}`, queryJobId, state: "query_submitted" }]),
+    tokenSource: { async getAccessToken() { return { token: "token", expiresAtMs: 70_001, projectId: "project-12345", quotaProjectId: "quota-project-1", principal: "release@example.com", scopes: GOOGLE_CONTROL_PLANE_SCOPES, accountScopeSha256 }; } },
+    fetch: async (_url, init) => {
+      requests++;
+      expect(init.method).toBe("GET");
+      return new Response(new ReadableStream<Uint8Array>({ cancel() { canceled = true; } }), { headers: { "content-type": "application/json" } });
+    },
+  });
+  await expect(collector.recover(value)).rejects.toThrow("BIGQUERY_USAGE_REPORT_TIMEOUT");
+  expect(canceled).toBeTrue();
+  expect(requests).toBe(1);
+}, 10_000);
+
+test("report authority expiring while consuming results prevents artifact writes", async () => {
+  const value = await grant();
+  const queryJobId = `usage_${value.reportRequestSha256.slice(0, 48)}`;
+  let clock = 10;
+  let writes = 0;
+  const accountScopeSha256 = await googleAccountScopeSha256({ projectId: "project-12345", quotaProjectId: "quota-project-1", principal: "release@example.com" });
+  const collector = createBigQueryUsageReportCollector({ projectId: "project-12345", quotaProjectId: "quota-project-1", principal: "release@example.com", now: () => clock,
+    journal: createMemoryBigQueryUsageReportJournal([{ reportRequestSha256: value.reportRequestSha256, dryRunJobId: `usage_dry_${value.reportRequestSha256.slice(0, 48)}`, queryJobId, state: "query_submitted" }]),
+    artifacts: { async createImmutable() { writes++; throw new Error("EXPIRED_AUTHORITY_REACHED_ARTIFACTS"); }, async readExact() { return undefined; } },
+    tokenSource: { async getAccessToken() { return { token: "token", expiresAtMs: 70_001, projectId: "project-12345", quotaProjectId: "quota-project-1", principal: "release@example.com", scopes: GOOGLE_CONTROL_PLANE_SCOPES, accountScopeSha256 }; } },
+    fetch: async () => new Response(new ReadableStream<Uint8Array>({ pull(controller) {
+      clock = value.expiresAtMs;
+      controller.enqueue(new TextEncoder().encode(JSON.stringify({ jobComplete: true, jobReference: { jobId: queryJobId, location: "US" }, totalBytesProcessed: "10", rows: [{ f: [{ v: "1.000000" }, { v: "0.000000" }] }] })));
+      controller.close();
+    } }, { highWaterMark: 0 }), { headers: { "content-type": "application/json" } }),
+  });
+  await expect(collector.recover(value)).rejects.toThrow("BILLING_OBSERVATION_GRANT_DENIED");
+  expect(writes).toBe(0);
+});

@@ -5,6 +5,40 @@ import { googleAccountScopeSha256, type GoogleTokenSource } from "./google-auth"
 export type BigQueryFetch = (url: string, init: RequestInit) => Promise<Response>;
 type BigQueryJsonResponse = Readonly<{ payload: unknown; raw: Uint8Array }>;
 
+function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(new Error("BIGQUERY_USAGE_REPORT_TIMEOUT"));
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => { signal.removeEventListener("abort", abort); reject(new Error("BIGQUERY_USAGE_REPORT_TIMEOUT")); };
+    signal.addEventListener("abort", abort, { once: true });
+    work.then(value => { signal.removeEventListener("abort", abort); resolve(value); }, error => { signal.removeEventListener("abort", abort); reject(error); });
+  });
+}
+
+async function boundedReportBytes(response: Response, signal: AbortSignal): Promise<Uint8Array> {
+  if (!response.body) throw new Error("BIGQUERY_USAGE_REPORT_RESPONSE_INVALID");
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  let complete = false;
+  try {
+    for (;;) {
+      const part = await untilAborted(reader.read(), signal);
+      if (part.done) { complete = true; break; }
+      size += part.value.byteLength;
+      if (size > 1_000_000) throw new Error("BIGQUERY_USAGE_REPORT_RESPONSE_INVALID");
+      chunks.push(part.value);
+    }
+    if (size === 0) throw new Error("BIGQUERY_USAGE_REPORT_RESPONSE_INVALID");
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    return bytes;
+  } finally {
+    if (!complete) void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+}
+
 const JobIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,1024}$/u);
 const BytesSchema = z.string().regex(/^[0-9]{1,18}$/u);
 const ProjectIdSchema = z.string().regex(/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/u);
@@ -90,16 +124,29 @@ export function createBigQueryUsageReportCollector(input: Readonly<{ projectId: 
   const principal = z.string().regex(/^[A-Za-z0-9@._:/-]{3,255}$/u).parse(input.principal);
   const fetcher = input.fetch ?? fetch;
   const now = input.now ?? Date.now;
-  async function request(path: string, method: "GET" | "POST", payload?: unknown, allowMissing = false): Promise<BigQueryJsonResponse | undefined> {
+  async function request(grant: BillingObservationGrant, path: string, method: "GET" | "POST", payload?: unknown, allowMissing = false): Promise<BigQueryJsonResponse | undefined> {
+    reportOnlyGrantAllows(grant, "observe_usage_report", now());
     const token = await input.tokenSource.getAccessToken();
     const scope = await googleAccountScopeSha256({ projectId, quotaProjectId, principal, scopes: token.scopes });
     if (token.projectId !== projectId || token.quotaProjectId !== quotaProjectId || token.principal !== principal || token.accountScopeSha256 !== scope || token.expiresAtMs - 60_000 <= now()) throw new Error("BIGQUERY_USAGE_REPORT_ADC_SCOPE_INVALID");
-    const response = await fetcher(`https://bigquery.googleapis.com${path}`, { method, redirect: "error", headers: { authorization: `Bearer ${token.token}`, "x-goog-user-project": quotaProjectId, accept: "application/json", ...(payload === undefined ? {} : { "content-type": "application/json" }) }, ...(payload === undefined ? {} : { body: JSON.stringify(payload) }) });
-    if (allowMissing && response.status === 404) return undefined;
-    if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) throw new Error("BIGQUERY_USAGE_REPORT_TRANSPORT_UNAVAILABLE");
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.byteLength === 0 || bytes.byteLength > 1_000_000) throw new Error("BIGQUERY_USAGE_REPORT_RESPONSE_INVALID");
-    try { return Object.freeze({ payload: JSON.parse(new TextDecoder().decode(bytes)), raw: bytes }); } catch { throw new Error("BIGQUERY_USAGE_REPORT_RESPONSE_INVALID"); }
+    reportOnlyGrantAllows(grant, "observe_usage_report", now());
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5_000);
+    let response: Response | undefined;
+    let consumed = false;
+    try {
+      response = await untilAborted(fetcher(`https://bigquery.googleapis.com${path}`, { method, redirect: "error", signal: controller.signal, headers: { authorization: `Bearer ${token.token}`, "x-goog-user-project": quotaProjectId, accept: "application/json", ...(payload === undefined ? {} : { "content-type": "application/json" }) }, ...(payload === undefined ? {} : { body: JSON.stringify(payload) }) }), controller.signal);
+      if (allowMissing && response.status === 404) return undefined;
+      if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) throw new Error("BIGQUERY_USAGE_REPORT_TRANSPORT_UNAVAILABLE");
+      const bytes = await boundedReportBytes(response, controller.signal);
+      consumed = true;
+      reportOnlyGrantAllows(grant, "observe_usage_report", now());
+      try { return Object.freeze({ payload: JSON.parse(new TextDecoder().decode(bytes)), raw: bytes }); } catch { throw new Error("BIGQUERY_USAGE_REPORT_RESPONSE_INVALID"); }
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
+      if (!consumed) void response?.body?.cancel().catch(() => undefined);
+    }
   }
   async function claimRecord(inputRecord: BigQueryUsageReportJournalRecord): Promise<BigQueryUsageReportJournalRecord> {
     const claimed = await input.journal.claim(inputRecord);
@@ -137,7 +184,7 @@ export function createBigQueryUsageReportCollector(input: Readonly<{ projectId: 
     const unknown = { status: "unknown" as const, providerJobId: queryJobId, reportRequestSha256: grant.reportRequestSha256 };
     if (record.state === "query_complete") return completedCapture(grant, record);
     if (record.state !== "query_dispatch_intent" && record.state !== "query_submitted") return Object.freeze(unknown);
-    const observed = await request(`/bigquery/v2/projects/${projectId}/queries/${queryJobId}?location=${encodeURIComponent(grant.location)}`, "GET", undefined, true);
+    const observed = await request(grant, `/bigquery/v2/projects/${projectId}/queries/${queryJobId}?location=${encodeURIComponent(grant.location)}&timeoutMs=1000`, "GET", undefined, true);
     if (!observed) return Object.freeze(unknown);
     const results = QueryResultSchema.parse(observed.payload);
     if (results.jobReference.jobId !== queryJobId || results.jobReference.location !== grant.location
@@ -157,6 +204,7 @@ export function createBigQueryUsageReportCollector(input: Readonly<{ projectId: 
     const creditsMicros = decimalUsdToMicros(row[1]!.v);
     if (!input.artifacts) return Object.freeze({ ...unknown, grossMeteredMicros, creditsMicros });
     const sha256 = Buffer.from(await crypto.subtle.digest("SHA-256", new Uint8Array(observed.raw))).toString("hex");
+    reportOnlyGrantAllows(grant, "observe_usage_report", now());
     const artifact = await input.artifacts.createImmutable({ key: `authoritative-usage/${grant.reportRequestSha256}/${queryJobId}.json`, bytes: observed.raw, sha256 });
     if (artifact.sha256 !== sha256) throw new Error("BIGQUERY_USAGE_REPORT_ARTIFACT_INVALID");
     const envelope = await createAuthoritativeUsageReportEnvelope({ version: 1, grantSha256: grant.grantSha256, reportRequestSha256: grant.reportRequestSha256, providerJobId: queryJobId, rawArtifact: artifact, coverage: "unknown", currency: "USD", grossMeteredMicros, creditsMicros, adjustmentsMicros: null, netInvoiceMicros: null, observedAtMs: now(), rawReportBytes: observed.raw });
@@ -191,7 +239,7 @@ export function createBigQueryUsageReportCollector(input: Readonly<{ projectId: 
         const intent = await advance({ reportRequestSha256: grant.reportRequestSha256, expected: "claimed", state: "dry_run_dispatch_intent" });
         record = intent.record;
         if (intent.advanced) {
-        const response = await request(`/bigquery/v2/projects/${projectId}/jobs`, "POST", queryPayload(grant, dryRunJobId, true));
+        const response = await request(grant, `/bigquery/v2/projects/${projectId}/jobs`, "POST", queryPayload(grant, dryRunJobId, true));
         if (!response) throw new Error("BIGQUERY_USAGE_REPORT_TRANSPORT_UNAVAILABLE");
         const dry = JobInsertSchema.parse(response.payload);
         if (dry.jobReference.jobId !== dryRunJobId || dry.jobReference.location !== grant.location || (dry.jobReference.projectId !== undefined && dry.jobReference.projectId !== grant.projectId)) throw new Error("BIGQUERY_USAGE_REPORT_JOB_BINDING_INVALID");
@@ -215,7 +263,7 @@ export function createBigQueryUsageReportCollector(input: Readonly<{ projectId: 
         const intent = await advance({ reportRequestSha256: grant.reportRequestSha256, expected: "dry_run_complete", state: "query_dispatch_intent" });
         record = intent.record;
         if (intent.advanced) {
-        const submitted = await request(`/bigquery/v2/projects/${projectId}/jobs`, "POST", queryPayload(grant, queryJobId, false));
+        const submitted = await request(grant, `/bigquery/v2/projects/${projectId}/jobs`, "POST", queryPayload(grant, queryJobId, false));
         if (!submitted) throw new Error("BIGQUERY_USAGE_REPORT_TRANSPORT_UNAVAILABLE");
         const submittedJob = JobInsertSchema.parse(submitted.payload);
         if (submittedJob.jobReference.jobId !== queryJobId || submittedJob.jobReference.location !== grant.location || (submittedJob.jobReference.projectId !== undefined && submittedJob.jobReference.projectId !== grant.projectId)) throw new Error("BIGQUERY_USAGE_REPORT_JOB_BINDING_INVALID");

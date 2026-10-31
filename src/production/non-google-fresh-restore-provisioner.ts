@@ -11,14 +11,14 @@ import { ProductionRetainedSubjectPreparer } from "./retained-subject-preparer";
 import type { PostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
-type Prepared = Readonly<{ version: 2; sourceInstanceId: string; binding: NonGoogleCoreBinding; state: "prepared" }>;
+type Prepared = Readonly<{ version: 2; sourceInstanceId: string; binding: NonGoogleCoreBinding; scope: Readonly<{ checkpointId: string; sessionId: string; ownerId: string; sourceAuthorityReference: string }>; state: "prepared" }>;
 type Fresh = Readonly<{ version: 2; databaseUuid: string; applicationUuid: string; backupSha256: string; sourceSystemIdentifier: string; freshSystemIdentifier: string; state: "created" }>;
 
 /** Native fresh-resource implementation. It has no caller-provided archive,
  * subject, reattach, cleanup, or resource callback. Seven-subject recovery is
  * permitted only when the restricted original-record query below is complete. */
 export class NonGoogleFreshRestoreProvisioner {
-  constructor(private readonly input: Readonly<{ binding: NonGoogleCoreBinding; journal: NonGoogleCoreJournal; postgresJournal: PostgresOperationJournal; driver: NonGoogleFreshRestoreDriver; postgres: NonGooglePostgresDriver; scope: Readonly<{ checkpointId: string; sessionId: string; ownerId: string }>; custodyRoots: readonly string[] }>) { Object.freeze(this); }
+  constructor(private readonly input: Readonly<{ binding: NonGoogleCoreBinding; journal: NonGoogleCoreJournal; postgresJournal: PostgresOperationJournal; driver: NonGoogleFreshRestoreDriver; postgres: NonGooglePostgresDriver; scope: Readonly<{ checkpointId: string; sessionId: string; ownerId: string; sourceAuthorityReference: string }>; custodyRoots: readonly string[] }>) { Object.freeze(this); }
   #base() { return `restore:${this.input.binding.candidateSha256}:${this.input.binding.topologySha256}`; }
   #prepare() { return `${this.#base()}:prepare`; }
   #fresh() { return `${this.#base()}:fresh`; }
@@ -34,7 +34,8 @@ export class NonGoogleFreshRestoreProvisioner {
         const original = await client.query<Record<string, unknown>>("SELECT system_identifier::text AS source_instance_id FROM pg_control_system()", []);
         if (original.rows.length !== 1) throw new Error("NON_GOOGLE_RESTORE_SOURCE_ORIGINAL_REQUIRED");
         const sourceInstanceId = z.string().min(1).max(256).parse(original.rows[0]!.source_instance_id);
-        const value: Prepared = Object.freeze({ version: 2, sourceInstanceId, binding: this.input.binding, state: "prepared" });
+        const scope = Object.freeze({ checkpointId: this.input.scope.checkpointId, sessionId: this.input.scope.sessionId, ownerId: this.input.scope.ownerId, sourceAuthorityReference: z.string().min(1).max(256).parse(this.input.scope.sourceAuthorityReference) });
+        const value: Prepared = Object.freeze({ version: 2, sourceInstanceId, binding: this.input.binding, scope, state: "prepared" });
         await this.input.journal.claim(this.#prepare(), hash(value), value);
         return Object.freeze({ status: "prepared" as const });
       } finally { client.release(); }

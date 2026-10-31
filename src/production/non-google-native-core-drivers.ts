@@ -25,7 +25,7 @@ export class NonGoogleNativeCoreDriverSet {
     coolify: NonGoogleCoolifyDriver;
     signoz: NonGoogleSigNozDriver;
     restore: NonGoogleFreshRestoreDriver;
-    restoreScope: Readonly<{ checkpointId: string; sessionId: string; ownerId: string }>;
+    restoreScope: Readonly<{ checkpointId: string; sessionId: string; ownerId: string; sourceAuthorityReference: string }>;
     custodyRoots: readonly string[];
   }>) {
     assertPostgresOperationJournal(input.journal);
@@ -35,7 +35,7 @@ export class NonGoogleNativeCoreDriverSet {
     this.candidateSha256 = Digest.parse(input.candidateSha256);
     this.topologySha256 = Digest.parse(input.topologySha256);
     this.roleCostBoundSha256 = Digest.parse(input.roleCostBoundSha256);
-    this.restoreScope = Object.freeze({ checkpointId: z.string().min(1).parse(input.restoreScope.checkpointId), sessionId: z.string().min(1).parse(input.restoreScope.sessionId), ownerId: Digest.parse(input.restoreScope.ownerId) });
+    this.restoreScope = Object.freeze({ checkpointId: z.string().min(1).parse(input.restoreScope.checkpointId), sessionId: z.string().min(1).parse(input.restoreScope.sessionId), ownerId: Digest.parse(input.restoreScope.ownerId), sourceAuthorityReference: z.string().min(1).max(256).parse(input.restoreScope.sourceAuthorityReference) });
     this.custodyRoots = Object.freeze([...input.custodyRoots]);
     if (this.custodyRoots.length === 0) throw new Error("NON_GOOGLE_NATIVE_CUSTODY_ROOT_REQUIRED");
     this.journal = input.journal; this.capacity = input.capacity; this.postgres = input.postgres; this.coolify = input.coolify; this.signoz = input.signoz; this.restore = input.restore;
@@ -47,7 +47,7 @@ export class NonGoogleNativeCoreDriverSet {
   readonly coolify: NonGoogleCoolifyDriver;
   readonly signoz: NonGoogleSigNozDriver;
   readonly restore: NonGoogleFreshRestoreDriver;
-  readonly restoreScope: Readonly<{ checkpointId: string; sessionId: string; ownerId: string }>;
+  readonly restoreScope: Readonly<{ checkpointId: string; sessionId: string; ownerId: string; sourceAuthorityReference: string }>;
   readonly custodyRoots: readonly string[];
 }
 export function assertNonGoogleNativeCoreDriverSet(value: unknown): asserts value is NonGoogleNativeCoreDriverSet {

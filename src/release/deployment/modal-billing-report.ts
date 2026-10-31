@@ -1,0 +1,300 @@
+import { createHash } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { z } from "zod";
+import { canonicalJson } from "../../promotion/schema";
+
+/** Public, reviewed Modal distribution identity. The worker image does not
+ * install it until a separately authorized image-construction workflow can
+ * verify these exact bytes without authenticating to Modal. */
+export const MODAL_1_6_3_VERSION = "1.6.3";
+export const MODAL_1_6_3_SDIST_SHA256 = "f6c1c59172274357e260a6f3d24254dddb472a6d4202cabce87452c127a1779c";
+export const MODAL_1_6_3_WHEEL_SHA256 = "31e8952c8908740f3fbc666191fec78ff5fadecb7a48a29d40aed90b39531ffe";
+
+const Digest = z.string().regex(/^[a-f0-9]{64}$/iu).transform(value => value.toLowerCase());
+const Identifier = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u);
+const Environment = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/u);
+const Timestamp = z.string().datetime({ offset: true });
+const Cost = z.string().regex(/^(?:0|[1-9][0-9]{0,17})(?:\.[0-9]{1,6})?$/u);
+const TagValue = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9_.:/=-]*$/u);
+const RequiredTags = z.record(z.string().regex(/^[a-z][a-z0-9_]{1,63}$/u), TagValue).refine(value => Object.keys(value).length >= 1 && Object.keys(value).length <= 8);
+
+const GrantInputSchema = z.object({
+  version: z.literal(1), authorizationRequestSha256: Digest, authorizationReceiptSha256: Digest, candidateSha256: Digest,
+  operationRecordSha256: Digest, accountScopeSha256: Digest, environmentScopeSha256: Digest, resourceIdentitySha256: Digest,
+  currencyPolicySha256: Digest, credentialReferenceSha256: Digest, cliExecutableSha256: Digest,
+  environmentName: Environment, expectedObjectId: Identifier, intervalStartMs: z.number().int().positive(), intervalEndMs: z.number().int().positive(),
+  requiredTags: RequiredTags, maximumStdoutBytes: z.number().int().min(1).max(1_048_576), maximumStderrBytes: z.number().int().min(1).max(262_144),
+  timeoutMs: z.number().int().min(1).max(30_000), maximumAttempts: z.number().int().min(1).max(8), expiresAtMs: z.number().int().positive(),
+}).strict().superRefine((value, context) => {
+  if (value.intervalEndMs <= value.intervalStartMs || value.intervalStartMs % 3_600_000 !== 0 || value.intervalEndMs % 3_600_000 !== 0) context.addIssue({ code: "custom", message: "MODAL_BILLING_GRANT_INTERVAL_INVALID" });
+});
+const GrantSchema = GrantInputSchema.extend({ grantSha256: Digest }).strict();
+export type ModalBillingObservationGrant = Readonly<z.infer<typeof GrantSchema>>;
+
+const ReportRowSchema = z.object({
+  object_id: Identifier, description: z.string().min(1).max(1_024), environment: Environment, interval_start: Timestamp,
+  resource: z.string().min(1).max(256), cost: Cost, tags: z.string().min(2).max(8_192),
+}).strict();
+export type ModalBillingReportRow = Readonly<z.infer<typeof ReportRowSchema>>;
+
+export type ModalBillingArtifactReference = Readonly<{ uri: string; generation: string; sha256: string }>;
+export type ModalBillingArtifactStore = Readonly<{
+  createImmutable(input: Readonly<{ key: string; bytes: Uint8Array; sha256: string }>): Promise<ModalBillingArtifactReference>;
+  readExact(reference: ModalBillingArtifactReference): Promise<Uint8Array | undefined>;
+}>;
+export type ModalBillingCredentialResolver = Readonly<{
+  /** Implementations resolve only a preapproved secret reference at dispatch.
+   * The collector never accepts credentials in grants, config, logs, or argv. */
+  resolve(reference: string): Promise<Readonly<{ tokenId: string; tokenSecret: string }>>;
+}>;
+
+type ReportDisposition = "passed" | "non_zero_exit" | "timeout" | "output_overflow";
+export type ModalBillingChildResult = Readonly<{
+  disposition: ReportDisposition; exitCode: number | null; argv: readonly string[]; stdout: Uint8Array; stderr: Uint8Array;
+}>;
+
+const sha256 = (value: string | Uint8Array | ArrayBuffer) => createHash("sha256").update(value instanceof ArrayBuffer ? new Uint8Array(value) : value).digest("hex");
+const equal = (left: unknown, right: unknown) => canonicalJson(left) === canonicalJson(right);
+function reportRequestSha256(grant: z.infer<typeof GrantInputSchema>): string {
+  return sha256(canonicalJson({
+    version: grant.version, authorizationRequestSha256: grant.authorizationRequestSha256, authorizationReceiptSha256: grant.authorizationReceiptSha256,
+    candidateSha256: grant.candidateSha256, operationRecordSha256: grant.operationRecordSha256, accountScopeSha256: grant.accountScopeSha256,
+    environmentScopeSha256: grant.environmentScopeSha256, resourceIdentitySha256: grant.resourceIdentitySha256, currencyPolicySha256: grant.currencyPolicySha256,
+    credentialReferenceSha256: grant.credentialReferenceSha256, cliExecutableSha256: grant.cliExecutableSha256, environmentName: grant.environmentName,
+    expectedObjectId: grant.expectedObjectId, intervalStartMs: grant.intervalStartMs, intervalEndMs: grant.intervalEndMs, requiredTags: grant.requiredTags,
+    maximumStdoutBytes: grant.maximumStdoutBytes, maximumStderrBytes: grant.maximumStderrBytes, timeoutMs: grant.timeoutMs,
+    maximumAttempts: grant.maximumAttempts, expiresAtMs: grant.expiresAtMs,
+  }));
+}
+
+export function createModalBillingObservationGrant(input: z.input<typeof GrantInputSchema>): ModalBillingObservationGrant {
+  const grant = GrantInputSchema.parse(input);
+  return Object.freeze({ ...grant, grantSha256: reportRequestSha256(grant) });
+}
+
+export function verifyModalBillingObservationGrant(input: unknown): ModalBillingObservationGrant {
+  const grant = GrantSchema.parse(input);
+  if (grant.grantSha256 !== reportRequestSha256(grant)) throw new Error("MODAL_BILLING_GRANT_DIGEST_INVALID");
+  return Object.freeze(grant);
+}
+
+function duplicateKeyCheck(text: string): void {
+  let offset = 0;
+  const whitespace = () => { while (/\s/u.test(text[offset] ?? "")) offset++; };
+  const string = (): string => {
+    if (text[offset] !== "\"") throw new Error("MODAL_BILLING_REPORT_JSON_INVALID");
+    const start = offset++;
+    let escaped = false;
+    while (offset < text.length) {
+      const next = text[offset++]!;
+      if (escaped) { escaped = false; continue; }
+      if (next === "\\") { escaped = true; continue; }
+      if (next === "\"") {
+        try { return JSON.parse(text.slice(start, offset)); }
+        catch { throw new Error("MODAL_BILLING_REPORT_JSON_INVALID"); }
+      }
+      if (next.charCodeAt(0) < 0x20) throw new Error("MODAL_BILLING_REPORT_JSON_INVALID");
+    }
+    throw new Error("MODAL_BILLING_REPORT_JSON_INVALID");
+  };
+  const value = (): void => {
+    whitespace(); const next = text[offset];
+    if (next === "{") { object(); return; }
+    if (next === "[") { array(); return; }
+    if (next === "\"") { string(); return; }
+    const literal = /^(?:true|false|null|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)/u.exec(text.slice(offset));
+    if (!literal) throw new Error("MODAL_BILLING_REPORT_JSON_INVALID");
+    offset += literal[0].length;
+  };
+  const array = (): void => {
+    offset++; whitespace(); if (text[offset] === "]") { offset++; return; }
+    while (true) { value(); whitespace(); if (text[offset] === "]") { offset++; return; } if (text[offset++] !== ",") throw new Error("MODAL_BILLING_REPORT_JSON_INVALID"); whitespace(); }
+  };
+  const object = (): void => {
+    offset++; whitespace(); const keys = new Set<string>(); if (text[offset] === "}") { offset++; return; }
+    while (true) {
+      const key = string(); if (keys.has(key)) throw new Error("MODAL_BILLING_REPORT_DUPLICATE_KEY"); keys.add(key);
+      whitespace(); if (text[offset++] !== ":") throw new Error("MODAL_BILLING_REPORT_JSON_INVALID"); value(); whitespace();
+      if (text[offset] === "}") { offset++; return; } if (text[offset++] !== ",") throw new Error("MODAL_BILLING_REPORT_JSON_INVALID"); whitespace();
+    }
+  };
+  value(); whitespace(); if (offset !== text.length) throw new Error("MODAL_BILLING_REPORT_JSON_INVALID");
+}
+
+function decode(bytesValue: Uint8Array): string {
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(bytesValue); }
+  catch { throw new Error("MODAL_BILLING_REPORT_UTF8_INVALID"); }
+}
+
+function tagTable(value: string): Readonly<Record<string, string>> {
+  duplicateKeyCheck(value);
+  let parsed: unknown;
+  try { parsed = JSON.parse(value); } catch { throw new Error("MODAL_BILLING_REPORT_TAGS_INVALID"); }
+  return RequiredTags.parse(parsed);
+}
+
+export function parseModalBillingReport(raw: Uint8Array): readonly ModalBillingReportRow[] {
+  const text = decode(raw); duplicateKeyCheck(text);
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); } catch { throw new Error("MODAL_BILLING_REPORT_JSON_INVALID"); }
+  let rows: z.infer<typeof ReportRowSchema>[];
+  try { rows = z.array(ReportRowSchema).min(1).max(10_000).parse(parsed); }
+  catch { throw new Error("MODAL_BILLING_REPORT_SCHEMA_INVALID"); }
+  try { for (const row of rows) tagTable(row.tags); }
+  catch { throw new Error("MODAL_BILLING_REPORT_SCHEMA_INVALID"); }
+  return Object.freeze(rows.map(row => Object.freeze({ ...row })));
+}
+
+function validRows(rows: readonly ModalBillingReportRow[], grant: ModalBillingObservationGrant): boolean {
+  const tags = grant.requiredTags;
+  let expectedHours = 0;
+  for (let cursor = grant.intervalStartMs; cursor < grant.intervalEndMs; cursor += 3_600_000) expectedHours++;
+  const intervals = new Set<number>();
+  for (const row of rows) {
+    const at = Date.parse(row.interval_start);
+    if (!Number.isSafeInteger(at) || at < grant.intervalStartMs || at >= grant.intervalEndMs || at % 3_600_000 !== 0 || row.object_id !== grant.expectedObjectId || row.environment !== grant.environmentName) return false;
+    const observed = tagTable(row.tags);
+    if (!equal(observed, tags)) return false;
+    intervals.add(at);
+  }
+  return intervals.size === expectedHours;
+}
+
+function nonnegativeMicros(rows: readonly ModalBillingReportRow[]): bigint {
+  return rows.reduce((total, row) => {
+    const [whole, fractional = ""] = row.cost.split(".");
+    const micros = BigInt(whole!) * 1_000_000n + BigInt((fractional + "000000").slice(0, 6));
+    return total + micros;
+  }, 0n);
+}
+
+async function bounded(stream: ReadableStream<Uint8Array>, limit: number, terminate: () => void): Promise<Readonly<{ bytes: Uint8Array; overflowed: boolean }>> {
+  const reader = stream.getReader(); const chunks: Uint8Array[] = []; let length = 0; let overflowed = false;
+  try {
+    while (true) {
+      const next = await reader.read(); if (next.done) break;
+      const remaining = limit - length;
+      if (next.value.byteLength > remaining) { if (remaining > 0) chunks.push(next.value.slice(0, remaining)); length = limit; overflowed = true; terminate(); await reader.cancel(); break; }
+      chunks.push(next.value); length += next.value.byteLength;
+    }
+  } finally { reader.releaseLock(); }
+  const result = new Uint8Array(length); let index = 0;
+  for (const chunk of chunks) { result.set(chunk, index); index += chunk.byteLength; }
+  return Object.freeze({ bytes: result, overflowed });
+}
+
+/** Executes exactly the published `modal environment billing report` command.
+ * It starts no shell and inherits no profile, proxy, cloud, or Modal settings. */
+export async function runPinnedModalBillingReport(input: Readonly<{
+  executable: string; executableSha256: string; environmentName: string; intervalStartMs: number; intervalEndMs: number; tagNames: readonly string[];
+  maximumStdoutBytes: number; maximumStderrBytes: number; timeoutMs: number; credential: Readonly<{ tokenId: string; tokenSecret: string }>;
+}>): Promise<ModalBillingChildResult> {
+  if (!input.executable.startsWith("/") || !Digest.safeParse(input.executableSha256).success || !Environment.safeParse(input.environmentName).success || input.intervalEndMs <= input.intervalStartMs || input.intervalStartMs % 3_600_000 !== 0 || input.intervalEndMs % 3_600_000 !== 0 || input.tagNames.length < 1 || input.tagNames.length > 8 || !input.tagNames.every(name => /^[a-z][a-z0-9_]{1,63}$/u.test(name)) || [...input.tagNames].sort().join(",") !== [...input.tagNames].join(",") || !Number.isSafeInteger(input.maximumStdoutBytes) || input.maximumStdoutBytes < 1 || !Number.isSafeInteger(input.maximumStderrBytes) || input.maximumStderrBytes < 1 || !Number.isSafeInteger(input.timeoutMs) || input.timeoutMs < 1 || input.timeoutMs > 30_000 || !input.credential.tokenId || !input.credential.tokenSecret) throw new Error("MODAL_BILLING_CHILD_INPUT_INVALID");
+  const executableBytes = new Uint8Array(await Bun.file(input.executable).arrayBuffer());
+  if (sha256(executableBytes) !== input.executableSha256.toLowerCase()) throw new Error("MODAL_BILLING_EXECUTABLE_DIGEST_INVALID");
+  const home = await mkdtemp(join(tmpdir(), "napplet-cvm-modal-billing-"));
+  const argv = Object.freeze([input.executable, "environment", "billing", "report", input.environmentName, "--start", new Date(input.intervalStartMs).toISOString(), "--end", new Date(input.intervalEndMs).toISOString(), "--resolution", "h", "--tag-names", input.tagNames.join(","), "--show-resources", "--json"]);
+  try {
+    const child = Bun.spawn([...argv], { cwd: home, stdin: "ignore", stdout: "pipe", stderr: "pipe", env: {
+      PATH: dirname(input.executable), HOME: home, MODAL_CONFIG_PATH: join(home, "modal.toml"), MODAL_LOGLEVEL: "WARNING", MODAL_TOKEN_ID: input.credential.tokenId, MODAL_TOKEN_SECRET: input.credential.tokenSecret,
+    } });
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; child.kill(); }, input.timeoutMs);
+    const [exitCode, stdout, stderr] = await Promise.all([child.exited, bounded(child.stdout, input.maximumStdoutBytes, () => child.kill()), bounded(child.stderr, input.maximumStderrBytes, () => child.kill())]).finally(() => clearTimeout(timer));
+    return Object.freeze({ disposition: timedOut ? "timeout" : stdout.overflowed || stderr.overflowed ? "output_overflow" : exitCode === 0 ? "passed" : "non_zero_exit", exitCode, argv, stdout: stdout.bytes, stderr: stderr.bytes });
+  } finally { await rm(home, { recursive: true, force: true }); }
+}
+
+type HeldReason = "attempt_limit" | "credential_unavailable" | "credential_echo" | "child_failure" | "report_invalid" | "scope_mismatch" | "finality_unproven" | "artifact_unavailable";
+/** stderr may contain credentials or configuration supplied to the CLI. It is
+ * never persisted as a raw artifact: only its bounded byte count and digest
+ * are retained for correlation, neither of which can reconstruct its bytes. */
+type Attempt = Readonly<{ attempt: number; atMs: number; disposition: ReportDisposition | "credential_unavailable" | "credential_echo" | "artifact_unavailable"; stdout?: ModalBillingArtifactReference; stderrByteLength?: number; stderrSha256?: string; reason: HeldReason }>;
+export type ModalBillingReportJournalRecord = Readonly<{ schemaVersion: "modal-billing-report-journal-v1"; grantSha256: string; reportRequestSha256: string; attempts: readonly Attempt[]; result?: ModalBillingReportCapture }>;
+export type ModalBillingReportCapture = Readonly<{ status: "held"; reason: HeldReason; grantSha256: string; reportRequestSha256: string; observedMicros?: string }>;
+export type ModalBillingReportJournal = Readonly<{
+  claim(input: ModalBillingReportJournalRecord): Promise<Readonly<{ claimed: boolean; revision: number; record: ModalBillingReportJournalRecord }>>;
+  read(reportRequestSha256: string): Promise<Readonly<{ revision: number; record: ModalBillingReportJournalRecord }> | undefined>;
+  compareAndSet(input: Readonly<{ reportRequestSha256: string; expectedRevision: number; record: ModalBillingReportJournalRecord }>): Promise<Readonly<{ revision: number; record: ModalBillingReportJournalRecord }> | undefined>;
+}>;
+
+/** Test-only in-memory journal; production binds the same CAS contract to the
+ * operation journal in a mounted composition adapter. */
+export function createMemoryModalBillingReportJournal(): ModalBillingReportJournal {
+  const records = new Map<string, Readonly<{ revision: number; record: ModalBillingReportJournalRecord }>>();
+  return Object.freeze({
+    async claim(record) { const previous = records.get(record.reportRequestSha256); if (previous) { if (!equal(previous.record, { ...previous.record, attempts: previous.record.attempts, result: previous.record.result }) || previous.record.grantSha256 !== record.grantSha256) throw new Error("MODAL_BILLING_JOURNAL_CONFLICT"); return { claimed: false, ...previous }; } const saved = Object.freeze({ revision: 1, record: Object.freeze(record) }); records.set(record.reportRequestSha256, saved); return { claimed: true, ...saved }; },
+    async read(request) { return records.get(request); },
+    async compareAndSet(input) { const current = records.get(input.reportRequestSha256); if (!current || current.revision !== input.expectedRevision || current.record.grantSha256 !== input.record.grantSha256) return undefined; const saved = Object.freeze({ revision: current.revision + 1, record: Object.freeze(input.record) }); records.set(input.reportRequestSha256, saved); return saved; },
+  });
+}
+
+function held(grant: ModalBillingObservationGrant, reason: HeldReason, observedMicros?: string): ModalBillingReportCapture {
+  return Object.freeze({ status: "held", reason, grantSha256: grant.grantSha256, reportRequestSha256: reportRequestSha256(grant), ...(observedMicros === undefined ? {} : { observedMicros }) });
+}
+
+async function append(journal: ModalBillingReportJournal, current: Readonly<{ revision: number; record: ModalBillingReportJournalRecord }>, attempt: Attempt, result: ModalBillingReportCapture): Promise<ModalBillingReportCapture> {
+  const next = Object.freeze({ ...current.record, attempts: Object.freeze([...current.record.attempts, attempt]), result });
+  const saved = await journal.compareAndSet({ reportRequestSha256: current.record.reportRequestSha256, expectedRevision: current.revision, record: next });
+  if (!saved) throw new Error("MODAL_BILLING_JOURNAL_CONFLICT");
+  return saved.record.result ?? result;
+}
+
+/** Provider reports are evidence only. A successful parse does not establish
+ * eligibility, completeness, currency authority, coverage, finality, zero
+ * spend, or a customer invoice, so this collector always returns `held`. */
+export function createModalBillingReportCollector(input: Readonly<{
+  executable: string; executableSha256: string; credentialReference: string; credentialReferenceSha256: string; credentialResolver: ModalBillingCredentialResolver;
+  journal: ModalBillingReportJournal; artifacts: ModalBillingArtifactStore; now?: () => number;
+}>) {
+  if (!input.executable.startsWith("/") || !Digest.safeParse(input.executableSha256).success || !Digest.safeParse(input.credentialReferenceSha256).success || !/^secret\/[A-Za-z0-9][A-Za-z0-9_.:/-]{1,255}$/u.test(input.credentialReference)) throw new Error("MODAL_BILLING_COLLECTOR_CONFIGURATION_INVALID");
+  const now = input.now ?? Date.now;
+  const verify = (raw: unknown) => {
+    const grant = verifyModalBillingObservationGrant(raw);
+    if (grant.cliExecutableSha256 !== input.executableSha256.toLowerCase() || grant.credentialReferenceSha256 !== input.credentialReferenceSha256.toLowerCase()) throw new Error("MODAL_BILLING_COLLECTOR_SCOPE_INVALID");
+    if (now() >= grant.expiresAtMs) throw new Error("MODAL_BILLING_GRANT_EXPIRED");
+    return grant;
+  };
+  const initial = (grant: ModalBillingObservationGrant): ModalBillingReportJournalRecord => Object.freeze({ schemaVersion: "modal-billing-report-journal-v1", grantSha256: grant.grantSha256, reportRequestSha256: reportRequestSha256(grant), attempts: Object.freeze([]) });
+  return Object.freeze({
+    async recover(raw: unknown): Promise<ModalBillingReportCapture> {
+      const grant = verify(raw); const current = await input.journal.read(reportRequestSha256(grant));
+      if (!current || current.record.grantSha256 !== grant.grantSha256) return held(grant, "artifact_unavailable");
+      return current.record.result ?? held(grant, "artifact_unavailable");
+    },
+    async capture(raw: unknown): Promise<ModalBillingReportCapture> {
+      const grant = verify(raw); const requested = initial(grant); const claimed = await input.journal.claim(requested);
+      let current = { revision: claimed.revision, record: claimed.record };
+      if (current.record.grantSha256 !== grant.grantSha256 || current.record.reportRequestSha256 !== requested.reportRequestSha256) throw new Error("MODAL_BILLING_JOURNAL_CONFLICT");
+      if (current.record.result?.reason === "finality_unproven" || current.record.attempts.length >= grant.maximumAttempts) return current.record.result ?? held(grant, "attempt_limit");
+      const attempt = current.record.attempts.length + 1;
+      let credential: Readonly<{ tokenId: string; tokenSecret: string }>;
+      try { credential = await input.credentialResolver.resolve(input.credentialReference); }
+      catch { return append(input.journal, current, Object.freeze({ attempt, atMs: now(), disposition: "credential_unavailable", reason: "credential_unavailable" }), held(grant, "credential_unavailable")); }
+      let child: ModalBillingChildResult;
+      try { child = await runPinnedModalBillingReport({ executable: input.executable, executableSha256: input.executableSha256, environmentName: grant.environmentName, intervalStartMs: grant.intervalStartMs, intervalEndMs: grant.intervalEndMs, tagNames: Object.keys(grant.requiredTags).sort(), maximumStdoutBytes: grant.maximumStdoutBytes, maximumStderrBytes: grant.maximumStderrBytes, timeoutMs: grant.timeoutMs, credential }); }
+      catch { return append(input.journal, current, Object.freeze({ attempt, atMs: now(), disposition: "non_zero_exit", reason: "child_failure" }), held(grant, "child_failure")); }
+      const stderrByteLength = child.stderr.byteLength;
+      const stderrSha256 = sha256(child.stderr);
+      const stdoutText = new TextDecoder().decode(child.stdout);
+      const stderrText = new TextDecoder().decode(child.stderr);
+      if (stdoutText.includes(credential.tokenId) || stdoutText.includes(credential.tokenSecret) || stderrText.includes(credential.tokenId) || stderrText.includes(credential.tokenSecret)) {
+        return append(input.journal, current, Object.freeze({ attempt, atMs: now(), disposition: "credential_echo", stderrByteLength, stderrSha256, reason: "credential_echo" }), held(grant, "credential_echo"));
+      }
+      let stdout: ModalBillingArtifactReference | undefined;
+      try {
+        const base = `modal-billing/${requested.reportRequestSha256}/${attempt}`;
+        stdout = await input.artifacts.createImmutable({ key: `${base}/stdout`, bytes: child.stdout, sha256: sha256(child.stdout) });
+      } catch { return append(input.journal, current, Object.freeze({ attempt, atMs: now(), disposition: "artifact_unavailable", stderrByteLength, stderrSha256, reason: "artifact_unavailable" }), held(grant, "artifact_unavailable")); }
+      if (child.disposition !== "passed") return append(input.journal, current, Object.freeze({ attempt, atMs: now(), disposition: child.disposition, stdout, stderrByteLength, stderrSha256, reason: "child_failure" }), held(grant, "child_failure"));
+      try {
+        const rows = parseModalBillingReport(child.stdout);
+        if (!validRows(rows, grant)) return append(input.journal, current, Object.freeze({ attempt, atMs: now(), disposition: child.disposition, stdout, stderrByteLength, stderrSha256, reason: "scope_mismatch" }), held(grant, "scope_mismatch"));
+        const observedMicros = nonnegativeMicros(rows).toString();
+        return append(input.journal, current, Object.freeze({ attempt, atMs: now(), disposition: child.disposition, stdout, stderrByteLength, stderrSha256, reason: "finality_unproven" }), held(grant, "finality_unproven", observedMicros));
+      } catch { return append(input.journal, current, Object.freeze({ attempt, atMs: now(), disposition: child.disposition, stdout, stderrByteLength, stderrSha256, reason: "report_invalid" }), held(grant, "report_invalid")); }
+    },
+  });
+}

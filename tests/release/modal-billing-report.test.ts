@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { describe, expect, test } from "bun:test";
 import {
-  MODAL_1_6_3_WHEEL_SHA256,
   createMemoryModalBillingReportJournal,
   createModalBillingReportCollector,
   createModalBillingObservationGrant,
@@ -22,9 +21,10 @@ const mismatchedReport = JSON.stringify([{ object_id: "unbound-object", descript
 async function fixture(script: string) {
   const directory = await mkdtemp(join(tmpdir(), "modal-billing-fixture-"));
   const executable = join(directory, "modal-fixture");
-  await writeFile(executable, script, { mode: 0o700 });
+  const source = script.replace("#!/usr/bin/env bun\n", `#!${process.execPath}\n`);
+  await writeFile(executable, source, { mode: 0o700 });
   await chmod(executable, 0o700);
-  return { directory, executable, sha256: digest(await Bun.file(executable).arrayBuffer()) };
+  return { directory, executable, sha256: digest(new Uint8Array(await Bun.file(executable).arrayBuffer())) };
 }
 
 function grant(executableSha256: string) {
@@ -87,7 +87,7 @@ process.stdout.write(${JSON.stringify(mismatchedReport)});
       const result = await collector.capture(grant(executable.sha256));
       expect(result.status).toBe("held");
       expect(result.reason).toBe("scope_mismatch");
-      expect(raw.size).toBe(2);
+      expect(raw.size).toBe(1);
     } finally { await rm(executable.directory, { recursive: true, force: true }); }
   });
 
@@ -102,13 +102,31 @@ process.stdout.write(${JSON.stringify(report)});
     };
     try {
       const collector = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve() { return { tokenId: "fixture-id", tokenSecret: "fixture-secret" }; } }, journal: createMemoryModalBillingReportJournal(), artifacts, now: () => Date.now() });
-      const first = await collector.capture(grant(executable.sha256));
-      const recovery = await collector.recover(grant(executable.sha256));
+      const approved = grant(executable.sha256);
+      const first = await collector.capture(approved);
+      const recovery = await collector.recover(approved);
       expect(first.status).toBe("held");
       expect(first.reason).toBe("finality_unproven");
       expect(recovery).toEqual(first);
-      expect(writes).toHaveLength(2);
-      expect(writes.every(key => key.includes(MODAL_1_6_3_WHEEL_SHA256.slice(0, 12)) === false)).toBe(true);
+      expect(writes).toHaveLength(1);
+    } finally { await rm(executable.directory, { recursive: true, force: true }); }
+  });
+
+  test("quarantines credential echoes and never retains raw stderr", async () => {
+    const executable = await fixture(`#!/usr/bin/env bun
+process.stderr.write(process.env.MODAL_TOKEN_ID + ":" + process.env.MODAL_TOKEN_SECRET);
+process.stdout.write(${JSON.stringify(report)});
+`);
+    const stored: Uint8Array[] = [];
+    const artifacts = {
+      async createImmutable(input: { key: string; bytes: Uint8Array; sha256: string }) { stored.push(new Uint8Array(input.bytes)); return { uri: `memory://${input.key}`, generation: "1", sha256: input.sha256 }; },
+      async readExact() { return undefined; },
+    };
+    try {
+      const collector = createModalBillingReportCollector({ executable: executable.executable, executableSha256: executable.sha256, credentialReference: "secret/modal-report", credentialReferenceSha256: hex("credential-reference"), credentialResolver: { async resolve() { return { tokenId: "fixture-id", tokenSecret: "fixture-secret" }; } }, journal: createMemoryModalBillingReportJournal(), artifacts, now: () => Date.now() });
+      const result = await collector.capture(grant(executable.sha256));
+      expect(result).toMatchObject({ status: "held", reason: "credential_echo" });
+      expect(stored).toHaveLength(0);
     } finally { await rm(executable.directory, { recursive: true, force: true }); }
   });
 });

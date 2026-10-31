@@ -42,6 +42,10 @@ export async function createMountedVertexMaterial(input: Readonly<{ config: Prod
   if (await sha256(sourceBytes) !== parsed.price.sourceDocumentSha256) throw new Error("PRODUCTION_VERTEX_PRICE_SOURCE_DIGEST_INVALID");
   const quote = {
     sourceUrl: parsed.price.sourceUrl, sourceDocumentSha256: parsed.price.sourceDocumentSha256,
+    // Retain the already-validated snapshot hash for the actual Vertex
+    // deployment client; omitting it makes normal composition structurally
+    // incomplete after its mounted-price validation succeeds.
+    quoteSha256: parsed.price.quoteSha256,
     observedAtMs: parsed.price.observedAtMs, freshUntilMs: parsed.price.freshUntilMs,
     effectiveFromMs: parsed.price.effectiveFromMs, effectiveUntilMs: parsed.price.effectiveUntilMs,
     inputMicrosPerMillion: parsed.price.inputMicrosPerMillion,

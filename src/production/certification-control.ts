@@ -16,7 +16,7 @@ export const ProductionControlKindSchema = z.enum(["cohort.prepare", "cohort.obs
 export type ProductionControlKind = z.infer<typeof ProductionControlKindSchema>;
 const EdgeKindSchema = z.enum(Object.keys(CertificationEdgePayloadSchemas) as [CertificationEdgeKind, ...CertificationEdgeKind[]]);
 const AnyKindSchema = z.union([ProductionControlKindSchema, EdgeKindSchema]);
-const CommandSchema = z.object({ operationId: Id, kind: AnyKindSchema, payload: z.unknown(), candidateSha256: Digest, topologySha256: Digest, authorizationRequestSha256: Digest, requestSha256: Digest }).strict();
+const CommandSchema = z.object({ operationId: Id, kind: AnyKindSchema, payload: z.unknown(), candidateSha256: Digest, topologySha256: Digest, authorizationRequestSha256: Digest, roleCostBoundSha256: Digest.optional(), requestSha256: Digest }).strict();
 const StoredSchema = z.object({ operationId: Id, kind: AnyKindSchema, requestSha256: Digest, state: z.enum(["pending", "completed", "unknown", "failed"]), result: z.unknown().optional() }).strict();
 const StoredInternalSchema = StoredSchema.extend({ payload: z.unknown().optional() });
 export type ProductionControlObservation = z.infer<typeof StoredSchema>;
@@ -43,6 +43,10 @@ async function sha256(value: unknown): Promise<string> {
   return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function unresolvedModelObservation(value: unknown): boolean {
+  return !!value && typeof value === "object" && (value as { status?: unknown }).status === "unknown";
+}
+
 export class ProductionCertificationControl {
   constructor(private readonly input: Readonly<{ candidateSha256: string; topologySha256: string; authorizationRequestSha256: string; authorizationRequest: unknown; authorizationReceipt: unknown; journal: PostgresOperationJournal; services: ProductionCertificationServices; edge?: ProductionCertificationEdgeService; now?: () => number }>) {
     Digest.parse(input.candidateSha256); Digest.parse(input.topologySha256); Digest.parse(input.authorizationRequestSha256); assertPostgresOperationJournal(input.journal);
@@ -62,7 +66,13 @@ export class ProductionCertificationControl {
     const claim = await this.input.journal.claimBounded(command.operationId, identity, pending, PRODUCTION_CERTIFICATION_OPERATION_LIMIT); const prior = StoredInternalSchema.parse(claim.record.value);
     if (!claim.claimed) return this.#public(prior);
     try {
-      const result = await this.#run(command); const terminal = StoredInternalSchema.parse({ ...pending, state: "completed", result });
+      const result = await this.#run(command);
+      /* A Responses GET can be transiently unavailable after a durable response
+       * ID exists. Keep that original operation reconcilable rather than
+       * persisting an unknown observation as a completed receipt. */
+      const terminal = StoredInternalSchema.parse(command.kind === "edge.payment.model" && unresolvedModelObservation(result)
+        ? { ...pending, state: "unknown" }
+        : { ...pending, state: "completed", result });
       return this.#public(StoredInternalSchema.parse((await this.input.journal.compareAndSet(command.operationId, identity, claim.record.revision, terminal))?.value ?? pending));
     } catch {
       const terminal = StoredInternalSchema.parse({ ...pending, state: "unknown" });
@@ -77,10 +87,11 @@ export class ProductionCertificationControl {
     if ((current.state !== "pending" && current.state !== "unknown") || current.payload === undefined) return this.#public(current);
     let reconciled: unknown;
     if (current.kind in CertificationEdgePayloadSchemas) {
-      if (!this.input.edge || !["edge.publication.source", "edge.publication.submit", "edge.publication.reconcile", "edge.publication.direct.source", "edge.publication.direct.submit", "edge.publication.direct.reconcile"].includes(current.kind)) return this.#public(current);
+      if (!this.input.edge || !["edge.payment.model", "edge.publication.source", "edge.publication.submit", "edge.publication.reconcile", "edge.publication.direct.source", "edge.publication.direct.submit", "edge.publication.direct.reconcile"].includes(current.kind)) return this.#public(current);
       try { reconciled = await this.input.edge.reconcile({ operationId: current.operationId, kind: current.kind, payload: current.payload }); }
       catch { return this.#public(current); }
     } else reconciled = await this.input.services.reconcile({ operationId: current.operationId, kind: current.kind as ProductionControlKind, payload: current.payload });
+    if (current.kind === "edge.payment.model" && unresolvedModelObservation(reconciled)) return this.#public(current);
     const terminal = StoredInternalSchema.parse({ ...current, state: "completed", result: reconciled });
     const saved = await this.input.journal.compareAndSet(current.operationId, current.requestSha256, record.revision, terminal);
     const latest = saved ? StoredInternalSchema.parse(saved.value) : StoredInternalSchema.parse((await this.input.journal.read<unknown>(current.operationId))?.value);

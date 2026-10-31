@@ -61,7 +61,7 @@ import { PostgresOperationJournal } from "../release/deployment/postgres-operati
 import { createPostgresGoogleOperationJournal } from "../release/deployment/postgres-provider-journals";
 import { createMountedBigQueryUsageReporter } from "./mounted-authoritative-billing";
 import { openProductionPostgresPool } from "./postgres";
-import { createMountedNonGoogleEdgeClient } from "./non-google-edge-material";
+import { assertMountedNonGoogleEdgePrecredential, createMountedNonGoogleEdgeClient } from "./non-google-edge-material";
 
 /** Immutable JSON-only controller facts. Runtime ports are constructed below
  * from these facts and the already-opened production authorities. */
@@ -431,6 +431,11 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
     || input.generation.config.candidateSha256 !== input.config.candidateSha256
     || input.generation.config.topologySha256 !== input.config.topologySha256
     || input.resolved.workerCandidate.id !== input.config.candidateSha256) throw new Error("PRODUCTION_MOUNTED_SESSION_BINDING_REQUIRED");
+  /* A successor record is not a request to fall through to the historical
+   * graph. Validate and reject it before touching a secret, relay, provider,
+   * SDK, database, worker, signer, or client. Plan 70 replaces this hold only
+   * after its controller issuer validates disjoint v3/v4 authority. */
+  if (input.resolved.nonGoogleEdge !== undefined) await assertMountedNonGoogleEdgePrecredential(input.resolved.nonGoogleEdge);
   /* Evaluate the sealed Modal record before opening any mounted secret,
    * relay, provider, or worker authority.  The currently-unimplemented
    * authority verifier always disables this optional collector. */

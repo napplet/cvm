@@ -128,12 +128,18 @@ export class ProductionCertificationEdgeService {
   }
 
   /** Original control recovery never re-enters execute(), NIP-46, CLI upload
-   * or event publication. Only the three known publication kinds have a
-   * read-only recovery path; other edge suites retain their refusal. */
+   * or event publication. Model recovery is the one non-publication exception:
+   * it invokes the Responses client's original-ID GET-only reconciliation and
+   * can never dispatch a replacement response. */
   async reconcile(raw: unknown): Promise<unknown> {
     const command = z.object({ operationId: OperationIdSchema, kind: EdgeKindSchema, payload: z.unknown() }).strict().parse(raw);
     const payload = CertificationEdgePayloadSchemas[command.kind].parse(command.payload) as Record<string, unknown>;
     if (payload.candidateId !== this.#broker.candidateSha256) throw new Error("CERTIFICATION_EDGE_CANDIDATE_MISMATCH");
+    if (command.kind === "edge.payment.model") {
+      const openAi = this.#broker.clients.edge.openAiResponses;
+      if (!openAi) throw new Error("CERTIFICATION_EDGE_OPENAI_SUCCESSOR_HELD");
+      return openAi.client.reconcileOriginal({ operationId: command.operationId });
+    }
     if (command.kind === "edge.publication.direct.source") return this.#direct(CertificationEdgePayloadSchemas[command.kind].parse(payload).reference).source();
     if (command.kind === "edge.publication.direct.submit") { const value = CertificationEdgePayloadSchemas[command.kind].parse(payload); return this.#direct(value.source.original).observeSubmit(value.source); }
     if (command.kind === "edge.publication.direct.reconcile") { const value = CertificationEdgePayloadSchemas[command.kind].parse(payload); return this.#direct(value.submitted.original).reconcile(value.submitted); }

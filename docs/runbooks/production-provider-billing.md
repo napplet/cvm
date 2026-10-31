@@ -48,6 +48,19 @@ defines CPU as physical cores (two vCPUs each) and billing as the greater of
 requested or actual resources. Provider receipts and the broader resource,
 region, and surcharge reconciliation remain required before finalization.
 
+### Actual-cost evidence is deliberately unavailable
+
+The current generic provider port has no authenticated provider-report
+transport. It therefore rejects every supplied `costObservation`, including a
+syntactically valid zero-cost report and any caller-claimed raw-report digest.
+New operations retain `billingStatus: unknown` and their full approved
+reservation; completion of the original resource is not billing completion.
+Persisted report-shaped JSON is likewise not finalization evidence. A future
+provider-specific implementation must bind immutable provider-returned report
+bytes (or a verifiable signed receipt) to the authenticated account and
+original operation before actual cost can be observed. No local "trusted"
+injection or self-report configuration substitutes for that transport.
+
 ## Request identity and receipt recovery
 
 The adapter writes the immutable operation ID, request digest, model, global

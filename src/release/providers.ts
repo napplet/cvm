@@ -153,12 +153,12 @@ function observationFor(input: Readonly<{ result: z.infer<typeof NativeMutationS
   const observation = input.result.costObservation;
   if (input.result.actualCostMicros !== undefined && !observation) throw new Error("RELEASE_PROVIDER_COST_OBSERVATION_REQUIRED");
   if (!observation) return undefined;
-  if (!input.resourceIdentitySha256 || observation.provider !== input.operation.provider || observation.operationId !== input.operation.operationId
-    || observation.candidateSha256 !== input.operation.candidateSha256 || observation.authorizationRequestSha256 !== input.operation.authorizationRequestSha256
-    || observation.resourceIdentitySha256 !== input.resourceIdentitySha256 || observation.actualCostMicros !== input.result.actualCostMicros) {
-    throw new Error("RELEASE_PROVIDER_COST_OBSERVATION_INVALID");
-  }
-  return observation;
+  /* Native provider ports can describe resource progress, but they do not yet
+   * have an authenticated billing-report transport. A port-generated object
+   * (including a digest it claims is for raw provider bytes) is not evidence
+   * of provider usage. Keep the reservation held until a future dedicated
+   * adapter persists and verifies provider-returned report material. */
+  throw new Error("RELEASE_PROVIDER_COST_REPORT_TRANSPORT_UNAVAILABLE");
 }
 
 /** Closed, project-owned adapter composition. Native clients are injected by the protected

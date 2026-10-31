@@ -821,23 +821,11 @@ export class ReleaseCertificationController {
     if (result.actualCostMicros === undefined && result.costObservation === undefined) {
       return { billingStatus: record.billingStatus, actualCostMicros: record.actualCostMicros, costObservation: record.costObservation, costObservationSha256: record.costObservationSha256 };
     }
-    const observation = result.costObservation;
-    if (result.actualCostMicros === undefined || !observation || !result.resourceIdentitySha256
-      || result.actualCostMicros !== observation.actualCostMicros
-      || observation.provider !== record.operation.provider
-      || observation.operationId !== record.operation.operationId
-      || observation.candidateSha256 !== record.operation.candidateSha256
-      || observation.authorizationRequestSha256 !== record.operation.authorizationRequestSha256
-      || observation.resourceIdentitySha256 !== result.resourceIdentitySha256
-      || observation.accountScopeSha256 !== record.accountScopeSha256
-      || observation.projectScopeSha256 !== record.projectScopeSha256
-      || observation.intervalEndMs <= observation.intervalStartMs
-      || observation.observedAtMs < observation.intervalEndMs
-      || observation.actualCostMicros > record.reservedCostMicros
-    ) {
-      throw new Error("RELEASE_CONTROLLER_PROVIDER_COST_OBSERVATION_INVALID");
-    }
-    return { billingStatus: "observed", actualCostMicros: result.actualCostMicros, costObservation: observation, costObservationSha256: await digest(observation) };
+    /* No generic registry result can establish actual billing. An authenticated
+     * provider-report adapter must first persist and verify provider-returned
+     * material; until then the controller never self-hashes a port claim into
+     * settled cost. */
+    throw new Error("RELEASE_CONTROLLER_PROVIDER_COST_REPORT_TRANSPORT_UNAVAILABLE");
   }
 
   async #readTopology(topologySha256: string): Promise<ReleaseProvisioningResult["topology"]> {

@@ -285,7 +285,7 @@ test("raw provider amounts cannot settle a held reservation", async () => {
   expect(first).toEqual(expect.objectContaining({ version: 2, billingStatus: "unknown", actualCostMicros: null, costObservationSha256: null }));
 });
 
-test("mismatched provider report identity cannot settle a held reservation", async () => {
+test("a syntactically valid generic provider report cannot settle a held reservation", async () => {
   const root = await workspace();
   const collectorImage = await observedCollector();
   const dryRun = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000, collectorImage });
@@ -310,7 +310,7 @@ test("mismatched provider report identity cannot settle a held reservation", asy
   });
   const receipt = await createAuthorizationReceipt(dryRun.authorizationRequest);
 
-  await expect(new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000, collectorImage }).provision({ receipt, registry })).rejects.toThrow("RELEASE_PROVIDER_COST_OBSERVATION_INVALID");
+  await expect(new ReleaseCertificationController({ candidatePath, workspace: root, now: () => 1_000, collectorImage }).provision({ receipt, registry })).rejects.toThrow("RELEASE_PROVIDER_COST_REPORT_TRANSPORT_UNAVAILABLE");
   const records = await readdir(join(root, "provider-operations"));
   const first = JSON.parse(await readFile(join(root, "provider-operations", records[0]!), "utf8"));
   expect(first).toEqual(expect.objectContaining({ version: 2, billingStatus: "unknown", actualCostMicros: null, costObservationSha256: null }));

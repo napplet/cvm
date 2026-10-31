@@ -35,13 +35,13 @@ test("BigQuery reporting uses deterministic jobs.insert ids and only recovers th
   expect(calls[1]!.body).toContain('"dryRun":false');
 });
 
-test("a crash after report-dispatch intent does not redispatch the deterministic job", async () => {
+test("a lost jobs.insert acknowledgement observes the deterministic original job without redispatch", async () => {
   const journal = createMemoryBigQueryUsageReportJournal();
   const value = await grant();
   await journal.claim({ reportRequestSha256: value.reportRequestSha256, dryRunJobId: `usage_dry_${value.reportRequestSha256.slice(0, 48)}`, queryJobId: `usage_${value.reportRequestSha256.slice(0, 48)}`, state: "query_dispatch_intent", dryRunBytes: "1" });
-  let calls = 0;
+  const calls: Array<Readonly<{ url: string; method: string }>> = [];
   const accountScopeSha256 = await googleAccountScopeSha256({ projectId: "project-12345", quotaProjectId: "quota-project-1", principal: "release@example.com", scopes: GOOGLE_CONTROL_PLANE_SCOPES });
-  const collector = createBigQueryUsageReportCollector({ projectId: "project-12345", quotaProjectId: "quota-project-1", principal: "release@example.com", now: () => 10, journal, tokenSource: { async getAccessToken() { return { token: "token", expiresAtMs: 70_001, projectId: "project-12345", quotaProjectId: "quota-project-1", principal: "release@example.com", scopes: GOOGLE_CONTROL_PLANE_SCOPES, accountScopeSha256 }; } }, fetch: async () => { calls++; throw new Error("must not query or post before the explicitly held recovery path"); } });
+  const collector = createBigQueryUsageReportCollector({ projectId: "project-12345", quotaProjectId: "quota-project-1", principal: "release@example.com", now: () => 10, journal, tokenSource: { async getAccessToken() { return { token: "token", expiresAtMs: 70_001, projectId: "project-12345", quotaProjectId: "quota-project-1", principal: "release@example.com", scopes: GOOGLE_CONTROL_PLANE_SCOPES, accountScopeSha256 }; } }, fetch: async (url, init) => { calls.push({ url, method: init.method ?? "GET" }); return new Response(JSON.stringify({ jobComplete: false, jobReference: { jobId: `usage_${value.reportRequestSha256.slice(0, 48)}`, location: "US" } }), { headers: { "content-type": "application/json" } }); } });
   await expect(collector.capture(value)).resolves.toEqual(expect.objectContaining({ status: "unknown", providerJobId: expect.stringContaining("usage_") }));
-  expect(calls).toBe(0);
+  expect(calls).toEqual([{ url: expect.stringContaining(`/queries/usage_${value.reportRequestSha256.slice(0, 48)}`), method: "GET" }]);
 });

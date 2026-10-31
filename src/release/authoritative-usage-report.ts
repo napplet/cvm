@@ -73,6 +73,12 @@ async function sha256(value: unknown): Promise<string> {
   return Buffer.from(await crypto.subtle.digest("SHA-256", bytes)).toString("hex");
 }
 
+async function sha256Bytes(value: Uint8Array): Promise<string> {
+  const copied = new Uint8Array(value.byteLength);
+  copied.set(value);
+  return Buffer.from(await crypto.subtle.digest("SHA-256", copied)).toString("hex");
+}
+
 /** A grant is controller-created immutable authority, never a caller supplied
  * report configuration.  Its two digests deliberately bind both the limited
  * query permission and the one deterministic provider report job. */
@@ -119,11 +125,20 @@ export async function verifyBillingObservationGrant(value: unknown): Promise<Bil
   return grant;
 }
 
-export async function createAuthoritativeUsageReportEnvelope(input: Omit<AuthoritativeUsageReportEnvelope, "rawReportSha256"> & Readonly<{ rawReport: unknown }>): Promise<AuthoritativeUsageReportEnvelope> {
-  const { rawReport, ...base } = input;
-  const rawReportSha256 = await sha256(rawReport);
+export async function createAuthoritativeUsageReportEnvelope(input: Omit<AuthoritativeUsageReportEnvelope, "rawReportSha256"> & Readonly<{ rawReportBytes: Uint8Array }>): Promise<AuthoritativeUsageReportEnvelope> {
+  const { rawReportBytes, ...base } = input;
+  const rawReportSha256 = await sha256Bytes(rawReportBytes);
   if (base.rawArtifact.sha256 !== rawReportSha256) throw new Error("AUTHORITATIVE_USAGE_ARTIFACT_DIGEST_INVALID");
   return AuthoritativeUsageReportEnvelopeSchema.parse({ ...base, rawReportSha256 });
+}
+
+/** Object stores bind bytes, not a re-serialized JSON value. A parsed report
+ * is trustworthy only when these exact immutable bytes are still present. */
+export async function verifyAuthoritativeUsageReportArtifact(envelopeInput: unknown, rawReportBytes: Uint8Array): Promise<AuthoritativeUsageReportEnvelope> {
+  const envelope = AuthoritativeUsageReportEnvelopeSchema.parse(envelopeInput);
+  const actual = await sha256Bytes(rawReportBytes);
+  if (actual !== envelope.rawReportSha256 || actual !== envelope.rawArtifact.sha256) throw new Error("AUTHORITATIVE_USAGE_ARTIFACT_INVALID");
+  return envelope;
 }
 
 /** BigQuery NUMERIC values remain strings until this bounded conversion. A

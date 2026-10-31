@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createBillingObservationGrant, decimalUsdToMicros, reportOnlyGrantAllows, verifyBillingObservationGrant } from "../../src/release/authoritative-usage-report";
+import { createAuthoritativeUsageReportEnvelope, createBillingObservationGrant, decimalUsdToMicros, reportOnlyGrantAllows, verifyAuthoritativeUsageReportArtifact, verifyBillingObservationGrant } from "../../src/release/authoritative-usage-report";
 
 const digest = (letter: string) => letter.repeat(64);
 const grantInput = {
@@ -18,6 +18,14 @@ test("report-only grants bind one original scope and never authorize resource mu
 test("caller-forged grant digests are rejected before report transport", async () => {
   const grant = await createBillingObservationGrant(grantInput);
   await expect(verifyBillingObservationGrant({ ...grant, reportRequestSha256: digest("0") })).rejects.toThrow("BILLING_OBSERVATION_GRANT_INVALID");
+});
+
+test("captured report bytes must still match the immutable artifact digest", async () => {
+  const bytes = new TextEncoder().encode('{"report":"original"}');
+  const sha256 = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+  const envelope = await createAuthoritativeUsageReportEnvelope({ version: 1, grantSha256: digest("a"), reportRequestSha256: digest("b"), providerJobId: "usage_original", rawArtifact: { uri: "gs://billing-test/reports/original.json", generation: "1", sha256 }, coverage: "unknown", currency: "USD", grossMeteredMicros: null, creditsMicros: null, adjustmentsMicros: null, netInvoiceMicros: null, observedAtMs: 1, rawReportBytes: bytes });
+  await expect(verifyAuthoritativeUsageReportArtifact(envelope, bytes)).resolves.toEqual(envelope);
+  await expect(verifyAuthoritativeUsageReportArtifact(envelope, new TextEncoder().encode('{"report":"forged"}'))).rejects.toThrow("AUTHORITATIVE_USAGE_ARTIFACT_INVALID");
 });
 
 test("authoritative USD decimal conversion rejects non-micro and unsafe values", () => {

@@ -30,6 +30,7 @@ import { validateCertificationObservation } from "../certification/evidence";
 import type { CertificationObservation } from "../certification/contracts";
 import { createLiveCostEstimator, RELEASE_COST_FAMILIES, type LiveCostCatalogPort } from "./costs/live-estimator";
 import { validateOperatorFundingReadiness, type OperatorFundingReadiness } from "./deployment/operator-funding";
+import { AuthoritativeUsageReportEnvelopeSchema, verifyAuthoritativeUsageReportArtifact, verifyBillingObservationGrant } from "./authoritative-usage-report";
 
 export const RELEASE_WORKSPACE_ENV = "NAPPLET_CVM_RELEASE_WORKSPACE";
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
@@ -97,6 +98,10 @@ export type AuthorizedLiveExecutionInput = Readonly<{
    * canonical suite records are present. The controller owns the records and
    * delegates the sole evaluator/promotion/cleanup sequence to finalization. */
   finalization?: Omit<ReleaseFinalizationInput, "workspace" | "candidateId" | "topologySha256" | "authorizationReceiptSha256" | "protectedRecords">;
+  /** Mounted, project-owned query-only billing capability. It has no provider
+   * plan/apply/cleanup methods and remains optional while reporting sources
+   * are unavailable; absence holds finalization rather than fabricating cost. */
+  billingReports?: AuthoritativeUsageReportPort;
 }>;
 export type AuthorizedLiveExecutionResult = ReleaseProvisioningResult & Readonly<{
   materialized: MaterializedCertifier;
@@ -112,6 +117,22 @@ export type ReleaseExecutionSession = Readonly<{
     uploadAndObserve(input: Readonly<{ authorizationRequest: ReleaseAuthorizationRequest; collector: PreparedCollectorImage }>): Promise<ObservedCollectorRegistryImage>;
   }>;
   prepareAuthorizedExecution(input: Readonly<{ authorizationRequest: ReleaseAuthorizationRequest }>): Promise<Omit<AuthorizedLiveExecutionInput, "registry">>;
+}>;
+
+export type AuthoritativeUsageReportPort = Readonly<{
+  /** The mounted implementation derives any raw resource selector from its
+   * original authenticated native journal. Callers cannot provide a resource,
+   * cost, report digest, or provider URL. */
+  capture(input: Readonly<{
+    operation: ReleaseProviderOperation;
+    operationRecordSha256: string;
+    candidateSha256: string;
+    authorizationRequestSha256: string;
+    authorizationReceiptSha256: string;
+    accountScopeSha256: string;
+    projectScopeSha256: string;
+  }>): Promise<Readonly<{ grant: unknown; envelope?: unknown }>>;
+  readArtifact(input: Readonly<{ uri: string; generation: string; sha256: string }>): Promise<Uint8Array | undefined>;
 }>;
 
 type LegacyProviderOperationRecord = Readonly<{
@@ -921,6 +942,64 @@ export class ReleaseCertificationController {
     return { state, authorizationRequest: request, topology };
   }
 
+  /** Captures query-only provider billing evidence after resources have been
+   * durably observed. This method cannot finalize, promote, clean up, mutate
+   * a provider resource, or settle a cost; it only preserves verifiable raw
+   * evidence for a later complete/finality policy. */
+  async reconcileAuthoritativeUsage(input: Readonly<{ receipt: unknown; reporter: AuthoritativeUsageReportPort }>): Promise<Readonly<{ state: ReleaseControllerState; captures: number; held: true }>> {
+    await this.#ensureDurableWorkspace();
+    const current = await this.#loadCurrent();
+    if (!current.state.authorizationRequestSha256 || !current.state.authorizationReceiptSha256) throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID");
+    const request = await this.#readRequest(current.state.authorizationRequestSha256);
+    let receipt: ReleaseAuthorizationReceipt;
+    try { receipt = await validateAuthorizationReceipt({ request, receipt: input.receipt, nowMs: this.#now() }); }
+    catch { throw new Error("RELEASE_CONTROLLER_AUTHORIZATION_INVALID"); }
+    if (receipt.authorizationReceiptSha256 !== current.state.authorizationReceiptSha256 || !current.state.providerOperationRecordSha256s || current.state.providerOperationRecordSha256s.length !== current.state.providerOperationIds.length) throw new Error("RELEASE_CONTROLLER_OPERATION_LEGACY_UNTRUSTED");
+    let captures = 0;
+    for (const [index, operationId] of current.state.providerOperationIds.entries()) {
+      const recordSha256 = current.state.providerOperationRecordSha256s[index]!;
+      const record = await this.#readOperationRecord(recordSha256);
+      if (record.operation.operationId !== operationId || record.status !== "completed" || !record.resourceIdentitySha256) continue;
+      const captured = await input.reporter.capture({
+        operation: record.operation,
+        operationRecordSha256: recordSha256,
+        candidateSha256: current.state.candidate.candidateSha256,
+        authorizationRequestSha256: request.authorizationRequestSha256,
+        authorizationReceiptSha256: receipt.authorizationReceiptSha256,
+        accountScopeSha256: record.accountScopeSha256,
+        projectScopeSha256: record.projectScopeSha256,
+      });
+      if (captured.envelope === undefined) continue;
+      let grant;
+      let envelope;
+      try {
+        grant = await verifyBillingObservationGrant(captured.grant);
+        envelope = AuthoritativeUsageReportEnvelopeSchema.parse(captured.envelope);
+        if (grant.originalScope.provider !== record.operation.provider
+          || grant.originalScope.operationId !== record.operation.operationId
+          || grant.originalScope.operationRecordSha256 !== recordSha256
+          || grant.originalScope.authorizationRequestSha256 !== request.authorizationRequestSha256
+          || grant.originalScope.authorizationReceiptSha256 !== receipt.authorizationReceiptSha256
+          || grant.originalScope.candidateSha256 !== current.state.candidate.candidateSha256
+          || grant.originalScope.resourceIdentitySha256 !== record.resourceIdentitySha256
+          || grant.originalScope.accountScopeSha256 !== record.accountScopeSha256
+          || grant.originalScope.projectScopeSha256 !== record.projectScopeSha256
+          || envelope.grantSha256 !== grant.grantSha256
+          || envelope.reportRequestSha256 !== grant.reportRequestSha256) throw new Error("binding");
+        const bytes = await input.reporter.readArtifact(envelope.rawArtifact);
+        if (!bytes) throw new Error("artifact");
+        await verifyAuthoritativeUsageReportArtifact(envelope, bytes);
+      } catch {
+        throw new Error("RELEASE_CONTROLLER_BILLING_CAPTURE_INVALID");
+      }
+      const captureBase = { version: 1 as const, grant, envelope };
+      const captureSha256 = await digest(captureBase);
+      await this.#createOrVerify(join(this.#workspace, "billing-report-captures", `${captureSha256}.json`), `${canonicalJson({ ...captureBase, captureSha256 })}\n`, "RELEASE_CONTROLLER_BILLING_CAPTURE_COLLISION");
+      captures += 1;
+    }
+    return Object.freeze({ state: current.state, captures, held: true as const });
+  }
+
   /**
    * The only same-run live path.  It accepts project-owned native handles and
    * real protected ports, but never creates a client, reads credentials, or
@@ -1011,6 +1090,7 @@ export class ReleaseCertificationController {
       await this.#advanceLive(state, "blocked", receipt.authorizationReceiptSha256, state.providerOperationIds, provisioned.topology.topologySha256, "EVIDENCE_INVALID");
       throw new Error("RELEASE_CONTROLLER_FINALIZATION_INPUT_REQUIRED");
     }
+    if (input.billingReports) await this.reconcileAuthoritativeUsage({ receipt, reporter: input.billingReports });
     try {
       await this.#assertCostsObserved(state, request, receipt.maximumAuthorizedCostMicros);
     } catch (error) {

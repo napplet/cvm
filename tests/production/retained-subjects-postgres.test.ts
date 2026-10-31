@@ -180,7 +180,7 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
     const fundingDatabase = new PostgresFundingDatabase(pool, { realm: "production-real" });
     const funding = new FundingService(fundingDatabase.funding);
     const credited = await funding.execute({ principal: { pubkey: fixture.ownerId }, kind: "credit_settlement", idempotencyKey: "retained-fixture-credit", policyVersion: "fixture", protocolVersion: "fixture", payload: { settlement: { topUpId: "retained-fixture", rail: "lightning", unit: "sat", amount: "10", externalReference: "fixture:external", settlementReference: "fixture:settlement", verifiedAt: new Date(now).toISOString() } } });
-    const accountId = credited.accountId, sessionId = "session:retained", actionId = "action:retained", artifactId = `artifact:${digest(fixture.artifact)}`, checkpointId = "checkpoint:retained";
+    const accountId = credited.accountId, sessionId = `session:${digest(canonicalJson({ accountId, key: "retained-reattach" })).slice(0, 24)}`, actionId = "action:retained", artifactId = `artifact:${digest(fixture.artifact)}`, checkpointId = "checkpoint:retained";
     // Isolated pricing source records are registered through the same catalog
     // used by V2 preparation. They are not a quote, provider, or release claim.
     const originalPricing = await resumePricingMaterial(now, "retained-profile", "500");

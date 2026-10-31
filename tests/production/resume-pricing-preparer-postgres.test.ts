@@ -631,13 +631,15 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     const capacity: ReadyCapacityPort = {
       async reserveNow(value) {
         reserves++;
-        const reference = `capacity:${hash(value)}`, expiresAt = new Date(Date.now() + (actualWorkerImage ? 1_200_000 : 60_000)).toISOString();
+        const capacityBinding = `${value.intentReference}:${value.expectedSessionBindingDigest}`;
+        const capacityDigest = createHash("sha256").update(capacityBinding).digest("hex");
+        const reference = `capacity:${capacityDigest}`, expiresAt = new Date(Date.now() + (actualWorkerImage ? 1_200_000 : 60_000)).toISOString();
         const ready: CapacityReservation = { status: "available", reference, expiresAt, usable: true,
           ready: { intentReference: value.intentReference, leaseReference: reference, sessionBindingDigest: value.expectedSessionBindingDigest,
             imageDigest: `sha256:${"a".repeat(64)}`, readinessProbeDigest: `sha256:${"b".repeat(64)}`, readyMonotonicMs: 100 } };
         readyWorkers.set(value.intentReference, ready);
         await capacityJournal.claim(`capacity-intent:${createHash("sha256").update(value.intentReference).digest("hex")}`, hash(value),
-          { ...value, reference, workerOperationId: `capacity-${hash(value).slice(0, 40)}`, provider: fixtureProvider, deadlineEpochMs: Date.parse(expiresAt) });
+          { ...value, reference, workerOperationId: `capacity-${capacityDigest.slice(0, 40)}`, provider: fixtureProvider, deadlineEpochMs: Date.parse(expiresAt) });
         throw new Error("WORKER_RESERVE_ACK_LOST");
       },
       async observe(value) {

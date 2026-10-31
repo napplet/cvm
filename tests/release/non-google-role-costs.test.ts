@@ -4,9 +4,12 @@ import { createHash } from "node:crypto";
 import {
   assertSuccessorGraphPreapprovalHeld,
   createHeldSuccessorWorkerCostFact,
+  createOpenAiResponsesRateSnapshot,
   createSuccessorRoleCostBound,
   type SuccessorRoleCostFact,
 } from "../../src/release/costs/non-google-cost-bound";
+import { OPENAI_RESPONSES_PRICING_URL } from "../../src/release/costs/official-sources";
+import { createNonGoogleModelCostCatalog } from "../../src/release/costs/production-catalog";
 import { assertNonGooglePreapprovalHeld } from "../../src/release/preapproval-materializer";
 import { prepareNonGoogleSuccessorInventory } from "../../src/release/providers";
 import { NonGoogleAuthorizationReceiptV4Schema } from "../../src/release/contracts";
@@ -15,6 +18,15 @@ const hex = (character: string) => character.repeat(64);
 const candidateSha256 = hex("a");
 const topologySha256 = hex("b");
 const nowMs = 1_000_000;
+
+const openAiCards = `<div class="flex flex-col gap-2 md:flex-row"><div class="flex flex-1 flex-col gap-1 rounded-lg border border-solid border-default bg-surface-secondary px-3 py-4"><div>Input</div><div class="text-2xl font-semibold">$2.00</div></div><div class="flex flex-1 flex-col gap-1 rounded-lg border border-solid border-default bg-surface-secondary px-3 py-4"><div>Cached input</div><div class="text-2xl font-semibold">$0.50</div></div><div class="flex flex-1 flex-col gap-1 rounded-lg border border-solid border-default bg-surface-secondary px-3 py-4"><div>Output</div><div class="text-2xl font-semibold">$8.00</div></div></div>`;
+const openAiModelView = (body: string) => `<astro-island component-export="ModelView" component-url="/_astro/ModelView.react.abc.js" props="{&quot;modelName&quot;:[0,&quot;gpt-4.1&quot;]}">${body}</astro-island>`;
+const openAiPrimaryCards = `<div class="relative"><div class="relative mx-4 flex flex-col gap-4 overflow-hidden px-4 pt-8 pb-10 sm:mx-8 md:mx-auto md:w-full md:max-w-6xl md:px-12 xl:px-4"><div></div><div class="flex flex-col gap-8"><div></div><div></div><div></div><div></div><div class="flex flex-col gap-4 lg:flex-row"><div></div><div class="flex flex-1 flex-col gap-4"><div></div><div class="flex flex-col gap-4"><div></div>${openAiCards}</div></div></div></div></div></div>`;
+const openAiSource = new TextEncoder().encode(`<!doctype html><html><body>${openAiModelView(`${openAiPrimaryCards}<code class="text-xs">gpt-4.1-2025-04-14</code>`)}</body></html>`);
+const openAiDocument = Object.freeze({ sourceUrl: OPENAI_RESPONSES_PRICING_URL, bytes: openAiSource, observedAtMs: nowMs - 1, freshUntilMs: nowMs + 60_000 });
+const openAiRate = () => createOpenAiResponsesRateSnapshot({ document: openAiDocument, model: "gpt-4.1-2025-04-14" });
+const modelCatalog = (rate: Awaited<ReturnType<typeof openAiRate>>) => createNonGoogleModelCostCatalog({ rates: { async readOpenAiResponsesRate() { return rate; } }, now: () => nowMs });
+const modelUsageIntent = Object.freeze({ maximumInputTokens: 1_000, maximumOutputTokens: 200, maximumChargeMicros: 10_000_000 });
 
 const inventory = () => prepareNonGoogleSuccessorInventory({
   candidateSha256,
@@ -33,7 +45,7 @@ const inventory = () => prepareNonGoogleSuccessorInventory({
       effectId: "worker.start",
       costComponentId: "worker.modal-seconds",
       suite: "admission",
-      constructor: { modulePath: "src/release/native/modal.ts", exportName: "createModalNativePort", purpose: "worker-sandbox", namespace: "modal:sandbox" },
+      constructor: { modulePath: "src/release/native/modal.ts", exportName: "createModalLiveWorkerProvider", purpose: "worker-sandbox", namespace: "modal:sandbox" },
       construction: "unconstructed",
     },
     {
@@ -42,27 +54,27 @@ const inventory = () => prepareNonGoogleSuccessorInventory({
       costComponentId: "object.postgres-storage",
       suite: "restore",
       constructor: { modulePath: "src/continuity/postgres-bytea-object-store.ts", exportName: "PostgresByteaObjectStoreAdapter", purpose: "immutable-objects", namespace: "postgres:objects" },
-      construction: "native",
+      construction: "unconstructed",
     },
-    { roleId: "telemetry.otlp", effectId: "telemetry.record", costComponentId: "telemetry.otlp", suite: "telemetry", constructor: { modulePath: "src/telemetry/redaction.ts", exportName: "redactTelemetry", purpose: "telemetry", namespace: "otlp:collector" }, construction: "unconstructed" },
-    { roleId: "chaos.fault-harness", effectId: "chaos.exercise", costComponentId: "chaos.harness", suite: "chaos", constructor: { modulePath: "src/resilience/fault-harness.ts", exportName: "validateTopologyClaim", purpose: "chaos", namespace: "fault:harness" }, construction: "unconstructed" },
-    { roleId: "security.host", effectId: "security.inspect", costComponentId: "security.host", suite: "security-host", constructor: { modulePath: "src/certification/live/security-host.ts", exportName: "runSecurityHost", purpose: "security-host", namespace: "security:host" }, construction: "unconstructed" },
-    { roleId: "supply.chain", effectId: "supply.verify", costComponentId: "supply.chain", suite: "supply-chain", constructor: { modulePath: "src/certification/supply-chain.ts", exportName: "productionRunner", purpose: "supply-chain", namespace: "supply:chain" }, construction: "unconstructed" },
-    { roleId: "publication.napplet", effectId: "publication.verify", costComponentId: "publication.transport", suite: "publication", constructor: { modulePath: "src/publication/contracts.ts", exportName: "NappletDeploymentPort", purpose: "publication", namespace: "napplet:publication" }, construction: "unconstructed" },
-    { roleId: "worker.fly", effectId: "worker.reclaim", costComponentId: "worker.fly-seconds", suite: "admission", constructor: { modulePath: "src/release/native/fly.ts", exportName: "createFlyNativePort", purpose: "worker-sandbox", namespace: "fly:machines" }, construction: "unconstructed" },
+    { roleId: "telemetry.otlp", effectId: "telemetry.record", costComponentId: "telemetry.otlp", suite: "telemetry", constructor: { modulePath: "src/telemetry/redaction.ts", exportName: "redactLifecycleObservation", purpose: "telemetry", namespace: "otlp:collector" }, construction: "unconstructed" },
+    { roleId: "chaos.fault-harness", effectId: "chaos.exercise", costComponentId: "chaos.harness", suite: "chaos", constructor: { modulePath: "src/resilience/fault-harness.ts", exportName: "runFaultScenario", purpose: "chaos", namespace: "fault:harness" }, construction: "unconstructed" },
+    { roleId: "security.host", effectId: "security.inspect", costComponentId: "security.host", suite: "security-host", constructor: { modulePath: "src/certification/live/security-host.ts", exportName: "runLiveSecurityHostCertification", purpose: "security-host", namespace: "security:host" }, construction: "unconstructed" },
+    { roleId: "supply.chain", effectId: "supply.verify", costComponentId: "supply.chain", suite: "supply-chain", constructor: { modulePath: "src/certification/supply-chain.ts", exportName: "verifySupplyChainCertification", purpose: "supply-chain", namespace: "supply:chain" }, construction: "unconstructed" },
+    { roleId: "publication.napplet", effectId: "publication.verify", costComponentId: "publication.transport", suite: "publication", constructor: { modulePath: "src/publication/contracts.ts", exportName: "PublicationEffectIntentSchema", purpose: "publication", namespace: "napplet:publication" }, construction: "unconstructed" },
+    { roleId: "worker.fly", effectId: "worker.reclaim", costComponentId: "worker.fly-seconds", suite: "admission", constructor: { modulePath: "src/release/native/fly.ts", exportName: "createFlyLiveWorkerProvider", purpose: "worker-sandbox", namespace: "fly:machines" }, construction: "unconstructed" },
   ],
 });
 
-const evidence = (artifactReference: string, sourceUrl: string) => ({
+const evidence = (artifactReference: string, sourceUrl: string, sourceDocumentSha256 = createHash("sha256").update(artifactReference).digest("hex")) => ({
   artifactReference,
   sourceKind: sourceUrl.startsWith("https://developers.openai.com/") ? "official_openai_model" as const : "unknown" as const,
   sourceUrl,
-  sourceArtifactSha256: createHash("sha256").update(artifactReference).digest("hex"),
-  sourceDocumentSha256: createHash("sha256").update(artifactReference).digest("hex"),
+  sourceArtifactSha256: sourceDocumentSha256,
+  sourceDocumentSha256,
   observedAtMs: nowMs - 1,
   freshUntilMs: nowMs + 60_000,
   currency: "USD" as const,
-  fx: { kind: "native_usd" as const, sourceDocumentSha256: createHash("sha256").update(artifactReference).digest("hex"), numerator: 1 as const, denominator: 1 as const },
+  fx: { kind: "native_usd" as const, sourceDocumentSha256, numerator: 1 as const, denominator: 1 as const },
   unit: "operation",
   precision: 6,
   scope: "candidate-scoped successor role/effect fixture",
@@ -74,11 +86,11 @@ const evidenceResolver = (facts: readonly SuccessorRoleCostFact[]) => ({
   async read(reference: string) {
     const fact = facts.find((candidate) => candidate.evidence.artifactReference === reference);
     if (!fact) throw new Error("FIXTURE_EVIDENCE_MISSING");
-    return { sourceUrl: fact.evidence.sourceUrl, bytes: new TextEncoder().encode(reference) };
+    return { sourceUrl: fact.evidence.sourceUrl, bytes: fact.roleId === "model.openai-responses" ? openAiSource : new TextEncoder().encode(reference) };
   },
 });
 
-test("successor graph refuses legacy identities, duplicate effects, and a label-shaped constructor", async () => {
+test("successor graph rejects forged constructor provenance and accepts only the product-owned registry", async () => {
   await expect(prepareNonGoogleSuccessorInventory({
     candidateSha256, topologySha256,
     roles: [{ roleId: "cloud_run", effectId: "worker.start", costComponentId: "worker.modal-seconds", suite: "admission", constructor: { modulePath: "src/release/native/modal.ts", exportName: "createModalNativePort", purpose: "worker", namespace: "modal:sandbox" }, construction: "native" }],
@@ -86,6 +98,18 @@ test("successor graph refuses legacy identities, duplicate effects, and a label-
   await expect(prepareNonGoogleSuccessorInventory({
     candidateSha256, topologySha256,
     roles: [{ roleId: "worker.modal", effectId: "worker.start", costComponentId: "worker.modal-seconds", suite: "admission", constructor: { modulePath: "operator-provided", exportName: "port", purpose: "worker", namespace: "modal:sandbox" }, construction: "native" }],
+  })).rejects.toThrow("SUCCESSOR_GRAPH_CONSTRUCTOR_PROVENANCE_REQUIRED");
+  await expect(prepareNonGoogleSuccessorInventory({
+    candidateSha256, topologySha256,
+    roles: [{ roleId: "worker.modal", effectId: "worker.start", costComponentId: "worker.modal-seconds", suite: "admission", constructor: { modulePath: "src/not-a-real-constructor.ts", exportName: "createModalLiveWorkerProvider", purpose: "worker-sandbox", namespace: "modal:sandbox" }, construction: "unconstructed" }],
+  })).rejects.toThrow("SUCCESSOR_GRAPH_CONSTRUCTOR_PROVENANCE_REQUIRED");
+  await expect(prepareNonGoogleSuccessorInventory({
+    candidateSha256, topologySha256,
+    roles: [{ roleId: "worker.modal", effectId: "worker.start", costComponentId: "worker.modal-seconds", suite: "admission", constructor: { modulePath: "src/release/native/modal.ts", exportName: "createFlyLiveWorkerProvider", purpose: "worker-sandbox", namespace: "modal:sandbox" }, construction: "unconstructed" }],
+  })).rejects.toThrow("SUCCESSOR_GRAPH_CONSTRUCTOR_PROVENANCE_REQUIRED");
+  await expect(prepareNonGoogleSuccessorInventory({
+    candidateSha256, topologySha256,
+    roles: [{ roleId: "worker.modal", effectId: "worker.reclaim", costComponentId: "worker.modal-seconds", suite: "admission", constructor: { modulePath: "src/release/native/modal.ts", exportName: "createModalLiveWorkerProvider", purpose: "worker-sandbox", namespace: "modal:sandbox" }, construction: "unconstructed" }],
   })).rejects.toThrow("SUCCESSOR_GRAPH_CONSTRUCTOR_PROVENANCE_REQUIRED");
   await expect(prepareNonGoogleSuccessorInventory({
     candidateSha256, topologySha256,
@@ -98,27 +122,45 @@ test("successor graph refuses legacy identities, duplicate effects, and a label-
 
 test("every successor effect needs its own bound fact and non-model roles cannot reuse an OpenAI rate", async () => {
   const graph = await inventory();
+  const rate = await openAiRate();
   const baseFacts: readonly SuccessorRoleCostFact[] = graph.roles.map((role) => ({
     roleId: role.roleId, effectId: role.effectId, costComponentId: role.costComponentId, constructorSha256: role.constructorSha256,
     disposition: role.roleId === "model.openai-responses" ? "authoritative_native_usage" : "unknown_held",
     status: role.roleId === "model.openai-responses" ? "available" : "held",
     provider: role.roleId === "model.openai-responses" ? "openai_responses" : role.roleId,
     ...(role.roleId === "model.openai-responses" ? {} : { holdReason: "role-specific source and selected native backend remain unverified" }),
-    evidence: evidence(`evidence:${role.roleId.replace(/\./gu, "-")}`, role.roleId === "model.openai-responses" ? "https://developers.openai.com/api/docs/models/gpt-4.1" : "https://napplet-cvm.invalid/held"),
+    ...(role.roleId === "model.openai-responses" ? { rate, usageIntent: modelUsageIntent } : {}),
+    evidence: role.roleId === "model.openai-responses"
+      ? evidence(`evidence:${role.roleId.replace(/\./gu, "-")}`, OPENAI_RESPONSES_PRICING_URL, rate.sourceDocumentSha256)
+      : evidence(`evidence:${role.roleId.replace(/\./gu, "-")}`, "https://napplet-cvm.invalid/held"),
   }));
   const facts: readonly SuccessorRoleCostFact[] = [
-    { roleId: "model.openai-responses", effectId: "model.generate", costComponentId: "model.api-usage", constructorSha256: graph.roles[0]!.constructorSha256, disposition: "authoritative_native_usage", status: "available", provider: "openai_responses", evidence: evidence("evidence:openai", "https://developers.openai.com/api/docs/models/gpt-4.1") },
+    { roleId: "model.openai-responses", effectId: "model.generate", costComponentId: "model.api-usage", constructorSha256: graph.roles[0]!.constructorSha256, disposition: "authoritative_native_usage", status: "available", provider: "openai_responses", rate, usageIntent: modelUsageIntent, evidence: evidence("evidence:openai", OPENAI_RESPONSES_PRICING_URL, rate.sourceDocumentSha256) },
     { roleId: "worker.modal", effectId: "worker.start", costComponentId: "worker.modal-seconds", constructorSha256: graph.roles[1]!.constructorSha256, disposition: "unknown_held", status: "held", provider: "modal", holdReason: "worker placement and official candidate quote remain unselected", evidence: evidence("evidence:modal-held", "https://modal.com/pricing") },
     { roleId: "object.postgres-bytea", effectId: "object.seal", costComponentId: "object.postgres-storage", constructorSha256: graph.roles[2]!.constructorSha256, disposition: "unknown_held", status: "held", provider: "postgres", holdReason: "selected authority and backup scope remain unverified", evidence: evidence("evidence:postgres-held", "https://napplet-cvm.invalid/held/postgres") },
     ...baseFacts.slice(3),
   ];
-  const bound = await createSuccessorRoleCostBound({ graph, facts });
+  const bound = await createSuccessorRoleCostBound({ graph, facts, modelCatalog: modelCatalog(rate) });
   expect(bound.heldRoleIds).toContain("worker.modal");
   expect(bound.heldRoleIds).toContain("object.postgres-bytea");
   await expect(assertSuccessorGraphPreapprovalHeld({ graph, bound, nowMs, evidence: evidenceResolver(facts) })).rejects.toThrow("SUCCESSOR_GRAPH_BACKEND_UNCONSTRUCTED");
-  await expect(createSuccessorRoleCostBound({ graph, facts: facts.slice(0, 2) })).rejects.toThrow("SUCCESSOR_GRAPH_COST_COVERAGE_REQUIRED");
-  await expect(createSuccessorRoleCostBound({ graph, facts: facts.map((fact) => fact.roleId === "worker.modal" ? { ...fact, provider: "openai_responses", disposition: "authoritative_native_usage" as const, status: "available" as const, holdReason: undefined } : fact) })).rejects.toThrow("SUCCESSOR_GRAPH_MODEL_RATE_REUSE_REJECTED");
-  await expect(createSuccessorRoleCostBound({ graph, facts: facts.map((fact) => fact.roleId === "worker.modal" ? { ...fact, disposition: "documented_scoped_zero" as const, status: "available" as const, holdReason: undefined } : fact) })).rejects.toThrow("SUCCESSOR_GRAPH_NONMODEL_AVAILABILITY_UNIMPLEMENTED");
+  await expect(createSuccessorRoleCostBound({ graph, facts: facts.slice(0, 2), modelCatalog: modelCatalog(rate) })).rejects.toThrow("SUCCESSOR_GRAPH_COST_COVERAGE_REQUIRED");
+  await expect(createSuccessorRoleCostBound({ graph, facts: facts.map((fact) => fact.roleId === "worker.modal" ? { ...fact, provider: "openai_responses", disposition: "authoritative_native_usage" as const, status: "available" as const, holdReason: undefined } : fact), modelCatalog: modelCatalog(rate) })).rejects.toThrow("SUCCESSOR_GRAPH_MODEL_RATE_REUSE_REJECTED");
+  await expect(createSuccessorRoleCostBound({ graph, facts: facts.map((fact) => fact.roleId === "worker.modal" ? { ...fact, disposition: "documented_scoped_zero" as const, status: "available" as const, holdReason: undefined } : fact), modelCatalog: modelCatalog(rate) })).rejects.toThrow("SUCCESSOR_GRAPH_NONMODEL_AVAILABILITY_UNIMPLEMENTED");
+  await expect(createSuccessorRoleCostBound({ graph, facts: facts.map((fact) => {
+    if (fact.roleId !== "model.openai-responses") return fact;
+    const { rate: _rate, ...withoutRate } = fact;
+    return withoutRate;
+  }), modelCatalog: modelCatalog(rate) })).rejects.toThrow("SUCCESSOR_GRAPH_MODEL_RATE_REQUIRED");
+  await expect(createSuccessorRoleCostBound({ graph, facts: facts.map((fact) => fact.roleId === "model.openai-responses"
+    ? { ...fact, evidence: { ...fact.evidence, sourceKind: "unknown", sourceUrl: "https://example.invalid/fake" } }
+    : fact), modelCatalog: modelCatalog(rate) })).rejects.toThrow("SUCCESSOR_GRAPH_MODEL_RATE_EVIDENCE_UNBOUND");
+  await expect(createSuccessorRoleCostBound({ graph, facts: facts.map((fact) => fact.roleId === "model.openai-responses"
+    ? { ...fact, rate: { ...rate, model: "gpt-4.1-2025-05-14" } }
+    : fact), modelCatalog: modelCatalog(rate) })).rejects.toThrow("SUCCESSOR_GRAPH_MODEL_RATE_UNBOUND");
+  await expect(createSuccessorRoleCostBound({ graph, facts: facts.map((fact) => fact.roleId === "model.openai-responses"
+    ? { ...fact, rate: { ...rate, quoteSha256: hex("f") } }
+    : fact), modelCatalog: modelCatalog(rate) })).rejects.toThrow("SUCCESSOR_GRAPH_MODEL_RATE_UNBOUND");
 });
 
 test("Modal and Fly have separate bounded official-source producers that remain held without selected placement", async () => {
@@ -148,6 +190,7 @@ test("Modal and Fly have separate bounded official-source producers that remain 
 
 test("held costs and missing native suite backends are typed zero-effect preapproval holds", async () => {
   const graph = await inventory();
+  const rate = await openAiRate();
   const facts: readonly SuccessorRoleCostFact[] = graph.roles.map((role) => ({
     roleId: role.roleId,
     effectId: role.effectId,
@@ -157,9 +200,12 @@ test("held costs and missing native suite backends are typed zero-effect preappr
     status: role.roleId === "model.openai-responses" ? "available" : "held",
     provider: role.roleId === "model.openai-responses" ? "openai_responses" : role.roleId,
     ...(role.roleId === "model.openai-responses" ? {} : { holdReason: "later native backend and its own cost evidence are required" }),
-    evidence: evidence(`evidence:${role.roleId.replace(/\./gu, "-")}`, role.roleId === "model.openai-responses" ? "https://developers.openai.com/api/docs/models/gpt-4.1" : "https://napplet-cvm.invalid/held"),
+    ...(role.roleId === "model.openai-responses" ? { rate, usageIntent: modelUsageIntent } : {}),
+    evidence: role.roleId === "model.openai-responses"
+      ? evidence(`evidence:${role.roleId.replace(/\./gu, "-")}`, OPENAI_RESPONSES_PRICING_URL, rate.sourceDocumentSha256)
+      : evidence(`evidence:${role.roleId.replace(/\./gu, "-")}`, "https://napplet-cvm.invalid/held"),
   }));
-  const bound = await createSuccessorRoleCostBound({ graph, facts });
+  const bound = await createSuccessorRoleCostBound({ graph, facts, modelCatalog: modelCatalog(rate) });
   await expect(assertSuccessorGraphPreapprovalHeld({ graph, bound, nowMs, evidence: evidenceResolver(facts) })).rejects.toThrow("SUCCESSOR_GRAPH_BACKEND_UNCONSTRUCTED");
   const request = {
     kind: "release-authorization-request-v3",

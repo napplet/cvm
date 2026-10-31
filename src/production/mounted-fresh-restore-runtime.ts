@@ -92,7 +92,7 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
       });
       const retainedSubjectCrypto = new MountedKekCheckpointCrypto({ pool: recovered.pool, kekPath: input.secrets.path("checkpoint.kekReference"), now });
       const retainedSubjects = new ProductionRetainedSubjectPreparer({
-        pool: recovered.pool, objectStore: input.artifactStore, checkpoint,
+        pool: recovered.pool, objectStore: input.artifactStore,
         kekPath: input.secrets.path("checkpoint.kekReference"), now,
       });
       const capacityJournal = serviceJournals.capacity;

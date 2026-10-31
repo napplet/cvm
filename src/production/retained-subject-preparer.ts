@@ -6,7 +6,6 @@ import { canonicalJson } from "../promotion/schema";
 import { bindAccountingRealmPool, createAccountingRealm } from "../funding/accounting-realm";
 import { DurabilitySubjectSchema } from "../resilience/fault-harness";
 import { MountedKekCheckpointCrypto } from "./checkpoint-crypto";
-import { ProductionCheckpointCoordinator } from "./checkpoint-coordinator";
 import { createProductionDurabilitySubjectRegistry, type ProductionDurabilitySubject } from "./durability-registry";
 import { retainedSubjectCustodyId, sealRetainedSubject } from "./retained-subject-archive";
 
@@ -31,7 +30,6 @@ export class ProductionRetainedSubjectPreparer {
   constructor(private readonly input: Readonly<{
     pool: PostgresSqlPool;
     objectStore: ObjectStorePort;
-    checkpoint: ProductionCheckpointCoordinator;
     kekPath: string;
     readKekFile?: (path: string) => Promise<Uint8Array | string>;
     now?: () => number;

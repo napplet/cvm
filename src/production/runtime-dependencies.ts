@@ -60,7 +60,7 @@ export async function materializeProductionRuntimeDependencies(input: Readonly<{
     now: input.now,
   });
   const retainedSubjects = new ProductionRetainedSubjectPreparer({
-    pool: input.pool, objectStore: artifactStore, checkpoint: checkpointCoordinator,
+    pool: input.pool, objectStore: artifactStore,
     kekPath: input.secrets.path("checkpoint.kekReference"), now: input.now,
   });
   const [worker, vertexMaterial] = await Promise.all([

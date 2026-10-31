@@ -61,7 +61,7 @@ function parseNative(bytes: Uint8Array): z.infer<typeof ProviderResponseSchema> 
 function generatedResult(response: z.infer<typeof ProviderResponseSchema>): string | undefined { const result = response.output.flatMap((message) => message.content).map((content) => content.text).join(""); if (response.status === "completed" && (!result || result.length > 1_000_000)) return undefined; return result || undefined; }
 async function receiptFor(entry: JournalEntry, raw: Uint8Array, completedAtMs: number): Promise<OpenAiResponsesProviderReceipt | undefined> {
   const response = parseNative(raw);
-  if (response.model !== entry.model) return undefined;
+  if (response.model !== entry.model || (entry.responseId !== undefined && response.id !== entry.responseId)) return undefined;
   const usage: OpenAiResponsesUsage = { inputTokens: response.usage.input_tokens, cachedInputTokens: response.usage.input_tokens_details?.cached_tokens ?? 0, cacheWriteTokens: response.usage.input_tokens_details?.cache_write_tokens ?? 0, outputTokens: response.usage.output_tokens, reasoningTokens: response.usage.output_tokens_details?.reasoning_tokens ?? 0 };
   try { assertOpenAiUsageWithinApprovedMaximum({ usage, maximumInputTokens: entry.request.maximumInputTokens, maximumOutputTokens: entry.request.maximumOutputTokens }); } catch { return undefined; }
   const priced = priceOpenAiResponsesUsage({ rate: entry.rate, usage });
@@ -72,7 +72,18 @@ async function receiptFor(entry: JournalEntry, raw: Uint8Array, completedAtMs: n
 }
 function unknown(operationId: string, reason: "response_id_unknown" | "receipt_invalid" | "response_pending") { return freeze({ status: "unknown" as const, operationId, reason, originalOperationOnly: true as const }); }
 function pending(operationId: string) { return freeze({ status: "pending" as const, operationId, originalOperationOnly: true as const }); }
-function stored(entry: JournalEntry) { return entry.completedReceipt === undefined ? undefined : parseOpenAiResponsesProviderReceipt(entry.completedReceipt); }
+function receiptMatchesEntry(entry: JournalEntry, receipt: OpenAiResponsesProviderReceipt): boolean {
+  return receipt.operationId === entry.operationId
+    && receipt.requestSha256 === entry.requestSha256
+    && receipt.model === entry.model
+    && receipt.rateQuoteSha256 === entry.rate.quoteSha256
+    && (entry.responseId === undefined || receipt.responseId === entry.responseId);
+}
+function stored(entry: JournalEntry): OpenAiResponsesProviderReceipt | undefined {
+  if (entry.completedReceipt === undefined) return undefined;
+  const receipt = parseOpenAiResponsesProviderReceipt(entry.completedReceipt);
+  return receipt && receiptMatchesEntry(entry, receipt) ? receipt : undefined;
+}
 
 export function createOpenAiResponsesClient(input: Readonly<{ candidateSha256: string; credentialReference: string; model: string; rate: OpenAiResponsesRateSnapshot; maximumChargeMicros: number; journal: OpenAiResponsesOperationJournal; port: OpenAiResponsesPort; now?: () => number }>) {
   const candidateSha256 = DigestSchema.parse(input.candidateSha256);
@@ -83,7 +94,10 @@ export function createOpenAiResponsesClient(input: Readonly<{ candidateSha256: s
   const now = input.now ?? Date.now;
   async function persistCompletion(entry: JournalEntry, receipt: OpenAiResponsesProviderReceipt) { const next = OpenAiResponsesJournalEntrySchema.parse({ ...entry, responseId: receipt.responseId, completedReceipt: receipt }); await input.journal.write(next); return receipt; }
   async function observe(entry: JournalEntry) {
-    const receipt = stored(entry); if (receipt) return receipt;
+    if (entry.completedReceipt !== undefined) {
+      const receipt = stored(entry);
+      return receipt ?? unknown(entry.operationId, "receipt_invalid");
+    }
     if (!entry.responseId) return unknown(entry.operationId, "response_id_unknown");
     let raw: Uint8Array;
     try { raw = (await input.port.get(entry.responseId)).bytes; } catch { return unknown(entry.operationId, "response_pending"); }

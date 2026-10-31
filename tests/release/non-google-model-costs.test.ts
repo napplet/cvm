@@ -106,6 +106,7 @@ test("Responses client writes the exact original before one bounded POST, hashes
   };
   let posts = 0;
   let gets = 0;
+  let retrievedResponseId = "resp_123";
   const port = createOpenAiResponsesHttpPort({
     authorization: async () => "Bearer fixture-only-secret",
     fetch: async (url, init) => {
@@ -116,7 +117,7 @@ test("Responses client writes the exact original before one bounded POST, hashes
         return new Response(JSON.stringify({ id: "resp_123", model: "gpt-4.1-2025-04-14", status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "{\"files\":[]}" }] }], usage: { input_tokens: 100, input_tokens_details: { cached_tokens: 10, cache_write_tokens: 0 }, output_tokens: 20, output_tokens_details: { reasoning_tokens: 7 } } }), { status: 200, headers: { "content-type": "application/json" } });
       }
       gets += 1;
-      return new Response(JSON.stringify({ id: "resp_123", model: "gpt-4.1-2025-04-14", status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "{\"files\":[]}" }] }], usage: { input_tokens: 100, input_tokens_details: { cached_tokens: 10, cache_write_tokens: 0 }, output_tokens: 20, output_tokens_details: { reasoning_tokens: 7 } } }), { status: 200 });
+      return new Response(JSON.stringify({ id: retrievedResponseId, model: "gpt-4.1-2025-04-14", status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "{\"files\":[]}" }] }], usage: { input_tokens: 100, input_tokens_details: { cached_tokens: 10, cache_write_tokens: 0 }, output_tokens: 20, output_tokens_details: { reasoning_tokens: 7 } } }), { status: 200 });
     },
   });
   const client = createOpenAiResponsesClient({ candidateSha256: hex("a"), credentialReference: "openai:api-key:production-reference", model: "gpt-4.1-2025-04-14", rate: await rate(), maximumChargeMicros: 10_000_000, journal, port, now: () => now });
@@ -128,6 +129,14 @@ test("Responses client writes the exact original before one bounded POST, hashes
   expect(await client.reconcileOriginal({ operationId: "operation:openai-1" })).toEqual(result);
   expect(posts).toBe(1);
   expect(gets).toBe(0);
+  const original = entries.get("operation:openai-1") as Record<string, unknown>;
+  entries.set("operation:openai-1", { ...original, completedReceipt: { ...(original.completedReceipt as Record<string, unknown>), rateQuoteSha256: hex("f") } });
+  expect(await client.reconcileOriginal({ operationId: "operation:openai-1" })).toMatchObject({ status: "unknown", reason: "receipt_invalid" });
+  expect(gets).toBe(0);
+  entries.set("operation:openai-1", { ...original, completedReceipt: undefined });
+  retrievedResponseId = "resp_other";
+  expect(await client.reconcileOriginal({ operationId: "operation:openai-1" })).toMatchObject({ status: "unknown", reason: "receipt_invalid" });
+  expect(gets).toBe(1);
 });
 
 test("missing response identity remains held and is never resent", async () => {

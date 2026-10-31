@@ -495,11 +495,12 @@ integration("canonical SQL prepares, clones, reattaches, and erases all seven re
     expect(mountedFences).toBe(1); expect(mountedRestores).toBe(1); expect(mountedObservations).toBe(1);
     // Lost delete ACK is reconciled only by the fresh controller observing the
     // original intent; retry completes all six retained copies and checkpoint.
+    const deletesBeforeAllSevenExpiry = deleteCalls;
     now += retentionMs;
     await expect(restore.restore({ operationId: "restore:expiry", action: "restore.expiry", payload: { freshInstanceId: fresh.freshInstanceId } })).rejects.toThrow("DELETE_ACK_LOST");
     await expect(restore.restore({ operationId: "restore:expiry", action: "restore.expiry", payload: { freshInstanceId: fresh.freshInstanceId } })).resolves.toEqual({ expired: true, deleted: true });
     await expect(restore.reconcile({ operationId: "restore:expiry", kind: "restore.expiry", payload: { freshInstanceId: fresh.freshInstanceId } })).resolves.toEqual({ expired: true, deleted: true });
-    expect(deleteCalls).toBe(7);
+    expect(deleteCalls).toBe(deletesBeforeAllSevenExpiry + 7);
     expect(await effects.readExact(checkpointSubject.object)).toBeUndefined();
     expect(await recoveredCrypto.isDestroyed(sealedCheckpoint.envelope.crypto.keyReference)).toBe(true);
     expect(await recoveredCheckpoint.observeDestroyed({ checkpointId, accountId, sessionId })).toBe(true);

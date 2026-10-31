@@ -59,7 +59,9 @@ import { NonGooglePostgresDriver } from "../../src/production/non-google-postgre
 import { NonGoogleCoolifyDriver } from "../../src/production/non-google-coolify-driver";
 import { NonGoogleSigNozDriver } from "../../src/production/non-google-signoz-driver";
 import { NonGoogleFreshRestoreDriver, type NativeCommandRunner } from "../../src/production/non-google-fresh-restore-driver";
+import { PostgresRestorerPullStore } from "../../src/production/non-google-restorer-pull-protocol";
 import { NonGoogleNativeCoreDriverSet } from "../../src/production/non-google-native-core-drivers";
+import { NonGoogleCoreJournal } from "../../src/production/non-google-native-runtime";
 import { createNonGoogleNativeCoreServices } from "../../src/production/non-google-core-services";
 import { createNativeProductionCoreSuiteAdapters } from "../../src/release/deployment/production-core-suite-adapters";
 import { createProductionReadyCapacity } from "../../src/production/worker-capacity";
@@ -895,8 +897,11 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
           expect(prepared?.value).toMatchObject({ state: "prepared", scope: nativeScope }); expect(job?.value).toMatchObject({ originalId: prepareId });
           const backupCrypto = new PerObjectFileCheckpointCrypto({ pool: nativePool, custody, now: () => nativeNow }), stored = await backupCrypto.readSealed(`restore-backup:${candidateSha256.slice(0, 24)}`);
           if (!stored || !job) throw new Error("NATIVE_RESTORE_BACKUP_ORIGINAL_REQUIRED");
-          const jobValue = job.value as { archive: { key: string; generation: number; checksum: string } };
-          const ciphertext = await bytea.readExact(jobValue.archive); if (!ciphertext) throw new Error("NATIVE_RESTORE_BACKUP_OBJECT_REQUIRED");
+          const jobValue = job.value as { archive: { key: string; generation: number; checksum: string; byteCount: number } };
+          // Exercise the private restorer's durable journal/object path instead
+          // of treating the object adapter as a test-only side channel.
+          const ciphertext = await new PostgresRestorerPullStore(NonGoogleCoreJournal.fromPostgres(nativeJournal), bytea).readArchive({ ...jobValue.archive, start: 0, end: jobValue.archive.byteCount - 1 });
+          if (!ciphertext) throw new Error("NATIVE_RESTORE_BACKUP_OBJECT_REQUIRED");
           const plaintext = await backupCrypto.open({ keyReference: stored.keyReference, nonce: stored.nonce, ciphertext, additionalData: new TextEncoder().encode(JSON.stringify({ scope: nativeScope, binding: { candidateSha256, topologySha256 } })) });
           expect(new TextDecoder().decode(plaintext.slice(0, 5))).toBe("PGDMP"); expect(jobValue.archive.key).not.toBe(nativeSealed.envelope.object.key);
           plaintext.fill(0); ciphertext.fill(0);

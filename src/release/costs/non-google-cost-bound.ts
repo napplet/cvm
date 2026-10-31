@@ -113,55 +113,102 @@ function micros(value: string): number {
   if (parsed < 1n || parsed > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("OPENAI_PRICE_SOURCE_PRECISION_REJECTED");
   return Number(parsed);
 }
-function decodeHtml(value: string): string { return value.replace(/&(amp|lt|gt|quot|#39);/giu, (_all, entity: string) => ({ amp: "&", lt: "<", gt: ">", quot: "\"", "#39": "'" })[entity.toLowerCase()] ?? ""); }
-function escapeRegex(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"); }
-/** Extract only an explicit model container.  The public model page renders one
- * ModelView astro-island; retained fixtures use an article/section carrying a
- * closed data-openai-model identity.  A navigation/comparison code cannot form
- * a container and therefore cannot donate pricing cards to another model. */
-function enclosedModelContainers(html: string, model: string): readonly string[] {
-  const containers: string[] = [];
-  const exactCode = new RegExp(`<code[^>]*>\\s*${escapeRegex(model)}\\s*<\\/code>`, "u");
-  for (const tag of ["article", "section"] as const) {
-    const opening = new RegExp(`<${tag}\\b[^>]*\\bdata-openai-model=(?:"${escapeRegex(model)}"|'${escapeRegex(model)}')[^>]*>`, "giu");
-    for (const match of html.matchAll(opening)) {
-      const start = match.index! + match[0].length;
-      const end = html.indexOf(`</${tag}>`, start);
-      if (end < 0) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
-      const body = html.slice(start, end);
-      if (exactCode.test(body)) containers.push(body);
-    }
-  }
-  const island = /<astro-island\b([^>]*)>/giu;
-  for (const match of html.matchAll(island)) {
-    if (!/component-url=(?:"[^"]*ModelView[^"]*"|'[^']*ModelView[^']*')/iu.test(match[1]!)) continue;
-    const start = match.index! + match[0].length;
-    const end = html.indexOf("</astro-island>", start);
-    if (end < 0) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
-    const body = html.slice(start, end);
-    if (exactCode.test(body)) containers.push(body);
-  }
-  return containers;
+const MAX_OPENAI_MODEL_NODES = 12_000;
+const MAX_OPENAI_MODEL_DEPTH = 128;
+const MAX_OPENAI_MODEL_TEXT_BYTES = 2 * 1024 * 1024;
+const HtmlVoidElements = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
+type OpenAiModelElement = {
+  readonly parent?: OpenAiModelElement;
+  readonly children: OpenAiModelElement[];
+  readonly directText: string[];
+  readonly tagName: string;
+  readonly modelIdentity?: string;
+  readonly modelView: boolean;
+};
+type OpenAiPriceCard = Readonly<{ label: "Input" | "Cached input" | "Output"; value: string }>;
+
+function openAiModelText(element: OpenAiModelElement, cache: Map<OpenAiModelElement, string>): string {
+  const cached = cache.get(element);
+  if (cached !== undefined) return cached;
+  const text = `${element.directText.join("")} ${element.children.map(child => openAiModelText(child, cache)).join(" ")}`.replace(/\s+/gu, " ").trim();
+  cache.set(element, text);
+  return text;
 }
-/** Parse only the three adjacent token-price cards emitted by the fixed,
- * retained OpenAI model document.  The exact pinned snapshot must be present;
- * a page redesign, a different model page, or an ambiguous extra card holds. */
-function parseOfficialHtml(bytes: Uint8Array, model: string) {
+function openAiModelDescendant(element: OpenAiModelElement, ancestor: OpenAiModelElement): boolean {
+  for (let current: OpenAiModelElement | undefined = element.parent; current; current = current.parent) if (current === ancestor) return true;
+  return false;
+}
+function openAiModelContainer(element: OpenAiModelElement): boolean {
+  return element.modelView || ((element.tagName === "article" || element.tagName === "section") && element.modelIdentity !== undefined);
+}
+function openAiPriceCard(element: OpenAiModelElement, text: Map<OpenAiModelElement, string>): OpenAiPriceCard | undefined {
+  if (element.children.length !== 2) return undefined;
+  const label = openAiModelText(element.children[0]!, text);
+  const value = /^\$([0-9]+(?:\.[0-9]{1,6})?)$/u.exec(openAiModelText(element.children[1]!, text))?.[1];
+  if ((label !== "Input" && label !== "Cached input" && label !== "Output") || value === undefined) return undefined;
+  return { label, value };
+}
+function openAiPriceGroup(element: OpenAiModelElement, text: Map<OpenAiModelElement, string>): readonly [OpenAiPriceCard, OpenAiPriceCard, OpenAiPriceCard] | undefined {
+  if (element.children.length !== 3) return undefined;
+  const cards = element.children.map(child => openAiPriceCard(child, text));
+  if (cards.some(card => card === undefined)) return undefined;
+  const [input, cached, output] = cards as [OpenAiPriceCard, OpenAiPriceCard, OpenAiPriceCard];
+  return input.label === "Input" && cached.label === "Cached input" && output.label === "Output" ? [input, cached, output] : undefined;
+}
+/** Parse the actual ModelView tree rather than scanning for an early closing
+ * tag. A model can only receive rates from its one balanced container and its
+ * one direct three-card group; any nested model container holds the quote. */
+async function parseOfficialHtml(bytes: Uint8Array, model: string) {
   const html = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   if (!/^\s*<!doctype html|^\s*<html\b/iu.test(html) || /\u0000/u.test(html)) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
-  const containers = enclosedModelContainers(html, model);
-  if (containers.length === 0) throw new Error("OPENAI_PRICE_SOURCE_MODEL_HELD");
-  if (containers.length !== 1) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
-  const card = /<div>Input<\/div>\s*<div[^>]*>\$([0-9]+(?:\.[0-9]{1,6})?)<\/div>\s*<\/div>\s*<div[^>]*>\s*<div>Cached input<\/div>\s*<div[^>]*>\$([0-9]+(?:\.[0-9]{1,6})?)<\/div>\s*<\/div>\s*<div[^>]*>\s*<div>Output<\/div>\s*<div[^>]*>\$([0-9]+(?:\.[0-9]{1,6})?)<\/div>/gu;
-  const matches = [...containers[0]!.matchAll(card)];
-  if (matches.length !== 1) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
-  const [input, cached, output] = matches[0]!.slice(1).map((value) => decodeHtml(value));
-  return { currency: "USD" as const, inputMicrosPerMillion: micros(input!), cachedInputMicrosPerMillion: micros(cached!), outputMicrosPerMillion: micros(output!) };
+  const stack: OpenAiModelElement[] = [];
+  const elements: OpenAiModelElement[] = [];
+  const encoder = new TextEncoder();
+  let textBytes = 0;
+  try {
+    const parsed = new HTMLRewriter().on("*", {
+      element(element) {
+        const parent = stack.at(-1);
+        const tagName = element.tagName.toLowerCase();
+        const current: OpenAiModelElement = {
+          ...(parent ? { parent } : {}), children: [], directText: [], tagName,
+          ...(element.getAttribute("data-openai-model") === null ? {} : { modelIdentity: element.getAttribute("data-openai-model")! }),
+          modelView: tagName === "astro-island" && (element.getAttribute("component-url")?.includes("ModelView") ?? false),
+        };
+        if (parent) parent.children.push(current);
+        elements.push(current);
+        if (elements.length > MAX_OPENAI_MODEL_NODES || stack.length >= MAX_OPENAI_MODEL_DEPTH) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
+        if (!HtmlVoidElements.has(tagName)) {
+          stack.push(current);
+          element.onEndTag(() => { if (stack.pop() !== current) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT"); });
+        }
+      },
+      text(chunk) {
+        const current = stack.at(-1);
+        if (!current || !chunk.text) return;
+        textBytes += encoder.encode(chunk.text).byteLength;
+        if (textBytes > MAX_OPENAI_MODEL_TEXT_BYTES) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
+        current.directText.push(chunk.text);
+      },
+    }).transform(new Response(html));
+    await parsed.text();
+  } catch { throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT"); }
+  if (stack.length !== 0) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
+  const text = new Map<OpenAiModelElement, string>();
+  const candidates = elements.filter(element => openAiModelContainer(element) && elements.some(code => code.tagName === "code" && openAiModelText(code, text) === model && openAiModelDescendant(code, element)));
+  if (candidates.length === 0) throw new Error("OPENAI_PRICE_SOURCE_MODEL_HELD");
+  if (candidates.length !== 1) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
+  const container = candidates[0]!;
+  if (elements.some(element => element !== container && openAiModelContainer(element) && openAiModelDescendant(element, container))) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
+  const groups = elements.filter(element => openAiModelDescendant(element, container) && openAiPriceGroup(element, text) !== undefined);
+  if (groups.length !== 1) throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT");
+  const [input, cached, output] = openAiPriceGroup(groups[0]!, text)!;
+  return { currency: "USD" as const, inputMicrosPerMillion: micros(input.value), cachedInputMicrosPerMillion: micros(cached.value), outputMicrosPerMillion: micros(output.value) };
 }
-function parseCapturedPrices(document: OpenAiResponsesPricingDocument, model: string) {
+async function parseCapturedPrices(document: OpenAiResponsesPricingDocument, model: string) {
   const parsed = CapturedPricingDocumentSchema.parse(document);
   const selectedModel = ModelSchema.parse(model);
-  try { return { document: parsed, ...parseOfficialHtml(parsed.bytes, selectedModel) }; }
+  try { return { document: parsed, ...await parseOfficialHtml(parsed.bytes, selectedModel) }; }
   catch (error) { if (error instanceof Error && /OPENAI_PRICE_SOURCE_(?:MODEL_HELD|PARSER_DRIFT|PRECISION_REJECTED)/u.test(error.message)) throw error; throw new Error("OPENAI_PRICE_SOURCE_PARSER_DRIFT"); }
 }
 
@@ -169,7 +216,7 @@ function parseCapturedPrices(document: OpenAiResponsesPricingDocument, model: st
  * deliberately closed: an OpenAI document shape change holds the candidate
  * instead of accepting caller-selected rates. */
 export async function createOpenAiResponsesRateSnapshot(input: Readonly<{ document: OpenAiResponsesPricingDocument; model: string }>): Promise<OpenAiResponsesRateSnapshot> {
-  const parsed = parseCapturedPrices(input.document, input.model);
+  const parsed = await parseCapturedPrices(input.document, input.model);
   if (parsed.document.freshUntilMs <= parsed.document.observedAtMs) throw new Error("OPENAI_PRICE_SOURCE_STALE");
   const sourceDocumentSha256 = await sha256(parsed.document.bytes);
   const quoteSha256 = await hashCanonical({ version: 2, sourceUrl: parsed.document.sourceUrl, sourceDocumentSha256, observedAtMs: parsed.document.observedAtMs, freshUntilMs: parsed.document.freshUntilMs, model: input.model, currency: parsed.currency, inputMicrosPerMillion: parsed.inputMicrosPerMillion, cachedInputMicrosPerMillion: parsed.cachedInputMicrosPerMillion, outputMicrosPerMillion: parsed.outputMicrosPerMillion });

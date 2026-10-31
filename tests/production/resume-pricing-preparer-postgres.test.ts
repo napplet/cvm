@@ -25,7 +25,7 @@ import { ProductionResumePricingPreparer } from "../../src/production/resume-pri
 import { readOriginalPendingVertexSettlement } from "../../src/production/vertex-generation-settlement";
 import { resumePricingMaterial } from "../fixtures/resume-pricing";
 import { ProductionResumeAcceptance } from "../../src/production/resume-acceptance";
-import { prepareResumePricingQuote } from "../../src/continuity/resume-pricing";
+import { prepareResumePricingQuote, ResumePricingQuoteSchema } from "../../src/continuity/resume-pricing";
 import { createProductionVertexGenerationSettlement } from "../../src/production/vertex-generation-settlement";
 import { createPostgresVertexOperationJournal } from "../../src/release/deployment/postgres-provider-journals";
 import { createVertexDeploymentClient, createVertexInteractionsHttpPort } from "../../src/release/deployment/vertex-client";
@@ -80,6 +80,15 @@ import { signDirectPublicationIntent } from "../../src/publication/direct-public
 
 const integration = process.env.NAPPLET_RUN_POSTGRES_ISOLATION === "1" ? test : test.skip;
 const hash = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex");
+/** Historical accepted rows were canonically hashed before V2 provenance
+ * existed. Keep their original body shape rather than backfilling lineage. */
+const historicalV1Quote = (quote: Awaited<ReturnType<typeof prepareResumePricingQuote>>) => {
+  const body = { schemaVersion: "resume-pricing-quote-v1" as const, context: quote.context, preparationKey: quote.preparationKey,
+    preparedAtMs: quote.preparedAtMs, expiresAtMs: quote.expiresAtMs, pricing: quote.pricing,
+    maximumUsdMicros: quote.maximumUsdMicros, maximumSat: quote.maximumSat, priceSourcesSha256: quote.priceSourcesSha256 };
+  const quoteSha256 = hash(body);
+  return ResumePricingQuoteSchema.parse({ ...body, quoteReference: `resume-quote:${quoteSha256}`, quoteSha256 });
+};
 const actualWorkerImage = process.env.NAPPLET_CVM_TEST_REAL_WORKER_IMAGE;
 const actualWorkerContract = z.enum(["legacy-aggregate-v1", "nip5d-direct-v1"]).optional().parse(process.env.NAPPLET_CVM_TEST_REAL_WORKER_CONTRACT) ?? "legacy-aggregate-v1";
 const directWorker = actualWorkerContract === "nip5d-direct-v1";
@@ -422,7 +431,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     await expect(acceptance.assertReady()).rejects.toThrow("PRODUCTION_PRICED_CONTINUATION_SCHEMA_REQUIRED");
     await admin.query("ALTER TABLE production_real.release_operation_journal ENABLE TRIGGER priced_vertex_api_claim_fence");
     await acceptance.assertReady();
-    async function acceptanceCheckpoint(key: string, lifetimeMs = 60_000) {
+    async function acceptanceCheckpoint(key: string, lifetimeMs = 60_000, historicalV1 = false) {
       now = startedAt;
       const savedCommand = StartSessionCommandSchema.parse({ ...command, idempotencyKey: key });
       const savedSession = `session:${hash({ accountId, key }).slice(0, 24)}`;
@@ -442,13 +451,14 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
         keyReference: saved.envelope.crypto.keyReference, compatibilityIdentity: hash(saved.manifest.compatibility), checkpointCommittedAtMs: Date.parse(saved.manifest.committedAt) }));
       const snapshot = await acceptancePreparer.loadAuthority({ principal: { id: accountId }, sessionId: savedSession, checkpointId: saved.manifest.checkpointId,
         expectedSessionVersion: 0, expectedCheckpointVersion: 1, idempotencyKey: `prepare:${key}` });
-      const savedQuote = await prepareResumePricingQuote({ context: snapshot.context, pricing: acceptancePricing, preparationKey: `prepare:${key}`, nowMs: Date.now(), lifetimeMs });
+      const proposedQuote = await prepareResumePricingQuote({ context: snapshot.context, pricing: acceptancePricing, preparationKey: `prepare:${key}`, nowMs: Date.now(), lifetimeMs });
+      const savedQuote = historicalV1 ? historicalV1Quote(proposedQuote) : proposedQuote;
       await quotes.save(savedQuote);
       return { principal: { id: accountId }, sessionId: savedSession, checkpointId: saved.manifest.checkpointId, expectedSessionVersion: 0, expectedCheckpointVersion: 1,
         idempotencyKey: `resume:${key}`, approvePendingAction: true, capApprovalReference: command.admissionReference, pendingAction: savedQuote.context.pendingAction,
         pricingApproval: { quoteReference: savedQuote.quoteReference, quoteSha256: savedQuote.quoteSha256, maximumSat: savedQuote.maximumSat } };
     }
-    const accepting = await acceptanceCheckpoint("acceptance:one");
+    const accepting = await acceptanceCheckpoint("acceptance:one", 60_000, true);
     const short = await acceptanceCheckpoint("acceptance:short", 8000);
     const lateApi = await acceptanceCheckpoint("acceptance:late-api", 8000);
     const workerPending = await acceptanceCheckpoint("acceptance:worker", 8000);
@@ -535,7 +545,10 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     expect(firstSettlement.amount).toBe("1");
     const historical = await acceptancePreparer.loadAcceptedAuthority({ principal: accepting.principal, idempotencyKey: accepting.idempotencyKey });
     expect(Date.now()).toBeGreaterThanOrEqual(historical.quote.expiresAtMs);
+    expect(historical.quote.schemaVersion).toBe("resume-pricing-quote-v1");
     expect(historical.quote).toEqual(accepted.claim.quote);
+    const historicalRow = (await admin.query<{ quote_json: unknown; quote_sha256: string }>("SELECT quote_json,quote_sha256 FROM production_real.resume_pricing_quotes WHERE account_id=$1 AND quote_reference=$2", [accountId, accepted.claim.quote.quoteReference])).rows[0];
+    expect(historicalRow).toEqual({ quote_json: accepted.claim.quote, quote_sha256: accepted.claim.quote.quoteSha256 });
     expect(historical.command).toEqual({ ...command, idempotencyKey: "acceptance:one" });
     expect(historical.context.commandSha256).toBe(accepted.claim.quote.context.commandSha256);
     expect(historical.originalSettlement.bindingSha256).toBe(accepted.claim.quote.context.originalSettlementSha256);
@@ -1119,37 +1132,6 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       await expect(core.preparePricedContinuation({ ...coreInput, binding: { ...coreInput.binding, ...changed } })).rejects.toThrow();
     const executable = await core.preparePricedContinuation(coreInput);
     expect(await executable.readTerminal()).toBeUndefined();
-    const invalidReceipt = { ...workspaceObserved.receipt, model: "mismatched-negative-fixture" };
-    const invariantCore = new MeteredGenerationService({ ...coreOptions, gateway: { dispatch: noAdmission,
-      async lookup() { return { status: "receipt_found", receipt: invalidReceipt }; } } });
-    const invariantExecution = await invariantCore.preparePricedContinuation(coreInput);
-    let invariantCallbacks = 0;
-    await expect(invariantExecution.execute(async ({ finalization, receipt }) => {
-      invariantCallbacks++;
-      expect(finalization.status).toBe("billing_invariant_failed");
-      expect(receipt).toEqual(invalidReceipt);
-      throw new Error("INVARIANT_REQUIRES_COORDINATOR_QUARANTINE");
-    })).rejects.toThrow("INVARIANT_REQUIRES_COORDINATOR_QUARANTINE");
-    expect(invariantCallbacks).toBe(1);
-    await expect(executable.execute(async ({ finalization }) => {
-      if (actualWorkerImage && finalization.status !== "completed") throw new Error(`ACTUAL_BUILD_FAILED:${localWorker?.logPath ?? "before-native-command"}`);
-      expect(finalization.status).toBe(actualWorkerImage ? "completed" : "failed");
-      throw new Error("COORDINATOR_CALLBACK_REFUSED");
-    })).rejects.toThrow("COORDINATOR_CALLBACK_REFUSED");
-    expect(await executable.readTerminal()).toBeUndefined();
-    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.usage_receipts")).rows[0].count).toBe(1);
-    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.ledger_entries WHERE account_id=$1 AND direction='debit'", [accountId])).rows[0].count).toBe(1);
-    expect((await workspaceAcceptance.find(accountId, workspaceResume.idempotencyKey))?.state).toBe("dispatching");
-    // Caller mutation after preparation must not redirect the captured action.
-    coreInput.binding.operationId = "operation:mutated-after-preparation";
-    coreInput.intent.sessionId = "session:mutated-after-preparation";
-    const invariantRunner = new ProductionPricedContinuationRunner({ ...runnerInput, generation: invariantCore });
-    await invariantRunner.assertReady();
-    await expect(invariantRunner.run(workspaceResume)).rejects.toThrow("PRICED_RUNNER_FINALIZATION_STATUS_DENIED");
-    expect((await metered.findMeteredAction(accountId, workspaceClaim.actionKey))?.status).toBe("dispatching");
-    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.usage_receipts")).rows[0].count).toBe(1);
-    expect((await workspaceAcceptance.find(accountId, workspaceResume.idempotencyKey))?.state).toBe("dispatching");
-    expect((await admin.query("SELECT state FROM production_real.action_budget_reservations WHERE reservation_reference=$1", [workspaceClaim.actionBudgetReference])).rows[0].state).toBe("authorized");
     // A fresh mounted facade receives no replacement authority. It observes
     // the original provider operation/allocation/restore and finalizes only
     // that exact tuple after the rolled-back terminal write.

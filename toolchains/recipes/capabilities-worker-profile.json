@@ -13,7 +13,7 @@
     },
     {
       "path": "infra/toolchain/production-job.ts",
-      "sha256": "b0495c9bd377f91bb97b231ce7b50577b61cb25f9e3a96d2a5abc881237ff36f"
+      "sha256": "a055c65a41d06fe09090e75002d5a865099fdd7236af088020a9e3c0cc9529f2"
     },
     {
       "path": "infra/toolchain/production-worker.ts",

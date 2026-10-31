@@ -40,7 +40,8 @@ integration("restricted SQL retains immutable owned resume quotes across concurr
     const store = new ProductionResumePricingQuotes(sqlPool(native));
     await expect(store.assertReady()).rejects.toThrow();
     const migration = await Bun.file("migrations/phase-07/009_production_resume_pricing_quotes.sql").text();
-    await admin.query(migration); await admin.query(migration);
+    const v2Migration = await Bun.file("migrations/phase-07/017_production_resume_pricing_quote_v2.sql").text();
+    await admin.query(migration); await admin.query(migration); await admin.query(v2Migration); await admin.query(v2Migration);
     await store.assertReady();
     await admin.query("GRANT UPDATE ON production_real.resume_pricing_quotes TO napplet_production_real");
     await expect(store.assertReady()).rejects.toThrow("PRODUCTION_RESUME_QUOTE_SCHEMA_REQUIRED");

@@ -1,7 +1,7 @@
 import { canonicalJson } from "../../promotion/schema";
 import { z } from "zod";
 import { OPENAI_RESPONSES_PRICING_URL, type OpenAiResponsesPricingDocument } from "./official-sources";
-import type { OfficialPricingSourcePort } from "./production-catalog";
+import type { NonGoogleModelCostCatalogPort, OfficialPricingSourcePort } from "./production-catalog";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/iu).transform((value) => value.toLowerCase());
 const PositiveMicrosSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
@@ -134,6 +134,20 @@ const SuccessorRoleSchema = z.object({
 type SuccessorRole = z.infer<typeof SuccessorRoleSchema>;
 export type SuccessorGraphRole = SuccessorRole;
 
+/** Closed, product-owned provenance. `unconstructed` references only an
+ * existing checkpoint seam and is never authority to construct that backend. */
+const PRODUCT_SUCCESSOR_ROLE_REGISTRY = Object.freeze([
+  { roleId: "model.openai-responses", effectId: "model.generate", costComponentId: "model.api-usage", suite: "contextvm-payment-model", constructor: { modulePath: "src/release/deployment/openai-responses-client.ts", exportName: "createOpenAiResponsesClient", purpose: "openai-responses", namespace: "openai:responses" }, construction: "native" },
+  { roleId: "worker.modal", effectId: "worker.start", costComponentId: "worker.modal-seconds", suite: "admission", constructor: { modulePath: "src/release/native/modal.ts", exportName: "createModalLiveWorkerProvider", purpose: "worker-sandbox", namespace: "modal:sandbox" }, construction: "unconstructed" },
+  { roleId: "object.postgres-bytea", effectId: "object.seal", costComponentId: "object.postgres-storage", suite: "restore", constructor: { modulePath: "src/continuity/postgres-bytea-object-store.ts", exportName: "PostgresByteaObjectStoreAdapter", purpose: "immutable-objects", namespace: "postgres:objects" }, construction: "unconstructed" },
+  { roleId: "telemetry.otlp", effectId: "telemetry.record", costComponentId: "telemetry.otlp", suite: "telemetry", constructor: { modulePath: "src/telemetry/redaction.ts", exportName: "redactLifecycleObservation", purpose: "telemetry", namespace: "otlp:collector" }, construction: "unconstructed" },
+  { roleId: "chaos.fault-harness", effectId: "chaos.exercise", costComponentId: "chaos.harness", suite: "chaos", constructor: { modulePath: "src/resilience/fault-harness.ts", exportName: "runFaultScenario", purpose: "chaos", namespace: "fault:harness" }, construction: "unconstructed" },
+  { roleId: "security.host", effectId: "security.inspect", costComponentId: "security.host", suite: "security-host", constructor: { modulePath: "src/certification/live/security-host.ts", exportName: "runLiveSecurityHostCertification", purpose: "security-host", namespace: "security:host" }, construction: "unconstructed" },
+  { roleId: "supply.chain", effectId: "supply.verify", costComponentId: "supply.chain", suite: "supply-chain", constructor: { modulePath: "src/certification/supply-chain.ts", exportName: "verifySupplyChainCertification", purpose: "supply-chain", namespace: "supply:chain" }, construction: "unconstructed" },
+  { roleId: "publication.napplet", effectId: "publication.verify", costComponentId: "publication.transport", suite: "publication", constructor: { modulePath: "src/publication/contracts.ts", exportName: "PublicationEffectIntentSchema", purpose: "publication", namespace: "napplet:publication" }, construction: "unconstructed" },
+  { roleId: "worker.fly", effectId: "worker.reclaim", costComponentId: "worker.fly-seconds", suite: "admission", constructor: { modulePath: "src/release/native/fly.ts", exportName: "createFlyLiveWorkerProvider", purpose: "worker-sandbox", namespace: "fly:machines" }, construction: "unconstructed" },
+] as const satisfies readonly SuccessorRole[]);
+
 export type SuccessorGraphInventory = Readonly<{
   graphRevision: "non-google-v1";
   candidateSha256: string;
@@ -149,6 +163,11 @@ const SuccessorCostDispositionSchema = z.enum([
   "explicit_approved_shared_standing",
   "unknown_held",
 ]);
+const SuccessorNativeModelUsageIntentSchema = z.object({
+  maximumInputTokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  maximumOutputTokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  maximumChargeMicros: PositiveMicrosSchema,
+}).strict();
 const SuccessorRoleCostFactSchema = z.object({
   roleId: RoleIdentifierSchema,
   effectId: EffectIdentifierSchema,
@@ -158,11 +177,20 @@ const SuccessorRoleCostFactSchema = z.object({
   status: z.enum(["available", "held"]),
   provider: z.string().regex(/^[a-z][a-z0-9_.-]{2,127}$/u),
   holdReason: z.string().min(8).max(1024).optional(),
+  rate: OpenAiResponsesRateSnapshotSchema.optional(),
+  usageIntent: SuccessorNativeModelUsageIntentSchema.optional(),
   evidence: CostEvidenceSchema,
 }).strict().superRefine((value, context) => {
   if ((value.status === "held") !== (value.disposition === "unknown_held")) context.addIssue({ code: "custom", message: "SUCCESSOR_GRAPH_COST_STATUS_INVALID" });
   if (value.status === "held" && value.holdReason === undefined) context.addIssue({ code: "custom", message: "SUCCESSOR_GRAPH_COST_HOLD_REASON_REQUIRED" });
   if (value.status === "available" && value.holdReason !== undefined) context.addIssue({ code: "custom", message: "SUCCESSOR_GRAPH_COST_HOLD_REASON_INVALID" });
+  const isModel = value.roleId === "model.openai-responses";
+  if (isModel && (value.rate === undefined || value.usageIntent === undefined)) context.addIssue({ code: "custom", message: "SUCCESSOR_GRAPH_MODEL_RATE_REQUIRED" });
+  if (!isModel && (value.rate !== undefined || value.usageIntent !== undefined)) context.addIssue({ code: "custom", message: "SUCCESSOR_GRAPH_MODEL_RATE_REUSE_REJECTED" });
+  if (isModel && (value.evidence.sourceKind !== "official_openai_model" || value.evidence.sourceUrl !== OPENAI_RESPONSES_PRICING_URL || value.rate === undefined
+    || value.rate.sourceUrl !== value.evidence.sourceUrl || value.rate.sourceArtifactSha256 !== value.evidence.sourceArtifactSha256
+    || value.rate.sourceDocumentSha256 !== value.evidence.sourceDocumentSha256 || value.rate.observedAtMs !== value.evidence.observedAtMs
+    || value.rate.freshUntilMs !== value.evidence.freshUntilMs)) context.addIssue({ code: "custom", message: "SUCCESSOR_GRAPH_MODEL_RATE_EVIDENCE_UNBOUND" });
 });
 export type SuccessorRoleCostFact = z.infer<typeof SuccessorRoleCostFactSchema>;
 
@@ -219,8 +247,10 @@ export async function createSuccessorGraphInventory(input: Readonly<{
   if (new Set(roles.map((role) => role.costComponentId)).size !== roles.length) throw new Error("SUCCESSOR_GRAPH_COST_COMPONENT_DUPLICATE");
   for (const role of roles) {
     if (LEGACY_SUCCESSOR_ROLE_IDS.has(role.roleId)) throw new Error("SUCCESSOR_GRAPH_LEGACY_ROLE_REJECTED");
-    if (!/^src\/[a-z0-9_./-]+\.ts$/u.test(role.constructor.modulePath) || role.constructor.modulePath === "src/release/providers.ts" || role.constructor.exportName === "port") throw new Error("SUCCESSOR_GRAPH_CONSTRUCTOR_PROVENANCE_REQUIRED");
+    const approved = PRODUCT_SUCCESSOR_ROLE_REGISTRY.find((entry) => entry.roleId === role.roleId);
+    if (!approved || canonicalJson(role) !== canonicalJson(approved)) throw new Error("SUCCESSOR_GRAPH_CONSTRUCTOR_PROVENANCE_REQUIRED");
   }
+  if (roles.length !== PRODUCT_SUCCESSOR_ROLE_REGISTRY.length) throw new Error("SUCCESSOR_GRAPH_ROLE_COVERAGE_REQUIRED");
   const boundRoles = await Promise.all(roles.map(async (role) => Object.freeze({
     ...role,
     constructorSha256: await hashCanonical({
@@ -292,6 +322,7 @@ export async function createHeldSuccessorWorkerCostFact(input: Readonly<{
 export async function createSuccessorRoleCostBound(input: Readonly<{
   graph: SuccessorGraphInventory;
   facts: readonly SuccessorRoleCostFact[];
+  modelCatalog: NonGoogleModelCostCatalogPort;
 }>): Promise<SuccessorRoleCostBound> {
   const graph = input.graph;
   if (GraphRevisionSchema.parse(graph.graphRevision) !== "non-google-v1") throw new Error("SUCCESSOR_GRAPH_REVISION_INVALID");
@@ -304,6 +335,14 @@ export async function createSuccessorRoleCostBound(input: Readonly<{
     if (fact.evidence.candidateSha256 !== graph.candidateSha256 || fact.evidence.topologySha256 !== graph.topologySha256) throw new Error("SUCCESSOR_GRAPH_COST_SCOPE_INVALID");
     if (fact.provider === "openai_responses" && role.roleId !== "model.openai-responses") throw new Error("SUCCESSOR_GRAPH_MODEL_RATE_REUSE_REJECTED");
     if (role.roleId === "model.openai-responses" && (fact.provider !== "openai_responses" || fact.disposition !== "authoritative_native_usage")) throw new Error("SUCCESSOR_GRAPH_MODEL_RATE_REUSE_REJECTED");
+    if (role.roleId === "model.openai-responses") {
+      const rate = OpenAiResponsesRateSnapshotSchema.parse(fact.rate);
+      const usageIntent = SuccessorNativeModelUsageIntentSchema.parse(fact.usageIntent);
+      const trustedRate = OpenAiResponsesRateSnapshotSchema.parse(await input.modelCatalog.readModelRate());
+      if (canonicalJson(rate) !== canonicalJson(trustedRate)) throw new Error("SUCCESSOR_GRAPH_MODEL_RATE_UNBOUND");
+      const maximum = priceOpenAiResponsesUsage({ rate, usage: { inputTokens: usageIntent.maximumInputTokens, cachedInputTokens: 0, cacheWriteTokens: 0, outputTokens: usageIntent.maximumOutputTokens, reasoningTokens: 0 } });
+      if (maximum.status !== "priced" || maximum.costMicros > usageIntent.maximumChargeMicros) throw new Error("SUCCESSOR_GRAPH_MODEL_MAXIMUM_INVALID");
+    }
     /* Plan 67 can capture a non-model source but not turn it into a price or
      * a free resource. Plans 68–70 must add the matching native usage or
      * approved-standing consumer before any non-model role can be available. */

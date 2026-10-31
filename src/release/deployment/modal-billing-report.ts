@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
@@ -53,7 +53,7 @@ export type ModalBillingCredentialResolver = Readonly<{
 type ReportDisposition = "passed" | "non_zero_exit" | "timeout" | "output_overflow";
 export type ModalBillingChildResult = Readonly<{
   disposition: ReportDisposition; exitCode: number | null; terminationSignal?: "SIGTERM" | "SIGKILL"; argv: readonly string[]; stdout: Uint8Array; stderr: Uint8Array;
-  startedAtMs: number; finishedAtMs: number;
+  startedAtMs: number; finishedAtMs: number; interpreterSha256?: string;
 }>;
 
 const sha256 = (value: string | Uint8Array | ArrayBuffer) => createHash("sha256").update(value instanceof ArrayBuffer ? new Uint8Array(value) : value).digest("hex");
@@ -190,6 +190,37 @@ async function bounded(stream: ReadableStream<Uint8Array>, limit: number, stoppe
   return Object.freeze({ bytes: result, overflowed });
 }
 
+/** The optional control image's pip-generated entrypoint has this exact
+ * shebang. The interpreter and its closure are bound by the candidate image;
+ * neither PATH nor a caller-selected interpreter can redirect this launch. */
+export const MODAL_BILLING_PYTHON = "/opt/napplet-cvm-modal/venv/bin/python";
+
+async function assertImmutableRootPath(path: string): Promise<void> {
+  for (let current = path;; current = dirname(current)) {
+    const metadata = await lstat(current);
+    if (metadata.uid !== 0 || (!metadata.isSymbolicLink() && (metadata.mode & 0o022) !== 0)) throw new Error("MODAL_BILLING_INTERPRETER_MUTABLE");
+    if (current === "/") return;
+  }
+}
+
+/** Input bytes must already match the controller-approved executable hash and
+ * have been written to the caller's private copy. Read a canonical Python
+ * script as data through the immutable image interpreter: no exec permission
+ * on the disposable filesystem is needed. Other verified executable formats
+ * retain their original direct-exec behavior. No report/credential authority
+ * is created by constructing this argv prefix. */
+export async function pinnedModalBillingLaunch(input: Readonly<{ verifiedBytes: Uint8Array; privateExecutable: string }>): Promise<Readonly<{ argvPrefix: readonly string[]; interpreterSha256?: string }>> {
+  if (!input.privateExecutable.startsWith("/")) throw new Error("MODAL_BILLING_PRIVATE_EXECUTABLE_INVALID");
+  const shebang = new TextDecoder().decode(input.verifiedBytes.subarray(0, MODAL_BILLING_PYTHON.length + 3));
+  if (shebang !== `#!${MODAL_BILLING_PYTHON}\n`) return Object.freeze({ argvPrefix: Object.freeze([input.privateExecutable]) });
+  await assertImmutableRootPath(MODAL_BILLING_PYTHON);
+  const resolved = await realpath(MODAL_BILLING_PYTHON);
+  if (resolved !== "/usr/local/bin/python3.14") throw new Error("MODAL_BILLING_INTERPRETER_IDENTITY_INVALID");
+  await assertImmutableRootPath(resolved);
+  const interpreterSha256 = sha256(await Bun.file(resolved).arrayBuffer());
+  return Object.freeze({ argvPrefix: Object.freeze([MODAL_BILLING_PYTHON, "-I", input.privateExecutable]), interpreterSha256 });
+}
+
 /** Executes exactly the published `modal environment billing report` command.
  * It starts no shell and inherits no profile, proxy, cloud, or Modal settings. */
 export async function runPinnedModalBillingReport(input: Readonly<{
@@ -208,8 +239,9 @@ export async function runPinnedModalBillingReport(input: Readonly<{
      * either of the dispatch credentials. */
     await writeFile(verifiedExecutable, executableBytes, { mode: 0o700 });
     await chmod(verifiedExecutable, 0o700);
+    const launch = await pinnedModalBillingLaunch({ verifiedBytes: executableBytes, privateExecutable: verifiedExecutable });
     const startedAtMs = Date.now();
-    const child = Bun.spawn([verifiedExecutable, ...argv.slice(1)], { cwd: home, stdin: "ignore", stdout: "pipe", stderr: "pipe", detached: true, env: {
+    const child = Bun.spawn([...launch.argvPrefix, ...argv.slice(1)], { cwd: home, stdin: "ignore", stdout: "pipe", stderr: "pipe", detached: true, env: {
       PATH: dirname(verifiedExecutable), HOME: home, MODAL_CONFIG_PATH: join(home, "modal.toml"), MODAL_LOGLEVEL: "WARNING", MODAL_TOKEN_ID: input.credential.tokenId, MODAL_TOKEN_SECRET: input.credential.tokenSecret,
     } });
     let timedOut = false, signal: "SIGTERM" | "SIGKILL" | undefined, stop!: () => void;
@@ -231,7 +263,7 @@ export async function runPinnedModalBillingReport(input: Readonly<{
     const exit = Promise.race([child.exited, stopped.then(() => null)]);
     const [exitCode, stdout, stderr] = await Promise.all([exit, bounded(child.stdout, input.maximumStdoutBytes, stopped, terminate), bounded(child.stderr, input.maximumStderrBytes, stopped, terminate)]).finally(() => clearTimeout(timer));
     if (stopping) await stopping;
-    return Object.freeze({ disposition: timedOut ? "timeout" : stdout.overflowed || stderr.overflowed ? "output_overflow" : exitCode === 0 ? "passed" : "non_zero_exit", exitCode, ...(signal ? { terminationSignal: signal } : {}), argv, stdout: stdout.bytes, stderr: stderr.bytes, startedAtMs, finishedAtMs: Date.now() });
+    return Object.freeze({ disposition: timedOut ? "timeout" : stdout.overflowed || stderr.overflowed ? "output_overflow" : exitCode === 0 ? "passed" : "non_zero_exit", exitCode, ...(signal ? { terminationSignal: signal } : {}), argv, stdout: stdout.bytes, stderr: stderr.bytes, startedAtMs, finishedAtMs: Date.now(), ...(launch.interpreterSha256 ? { interpreterSha256: launch.interpreterSha256 } : {}) });
   } finally { await rm(home, { recursive: true, force: true }); }
 }
 
@@ -245,7 +277,7 @@ const AttemptSchema = z.object({
   attempt: z.number().int().min(1).max(8), state: z.enum(["dispatch_intent", "completed"]), atMs: z.number().int().positive(),
   startedAtMs: z.number().int().positive().optional(), finishedAtMs: z.number().int().positive().optional(),
   disposition: z.enum(["passed", "non_zero_exit", "timeout", "output_overflow", "credential_unavailable", "credential_echo", "artifact_unavailable", "grant_expired", "dispatch_unknown"]).optional(),
-  argvSha256: Digest, executableSha256: Digest, stdout: ArtifactReferenceSchema.optional(), stdoutSha256: Digest.optional(), stderrByteLength: z.number().int().nonnegative().optional(), stderrSha256: Digest.optional(), exitCode: z.number().int().nullable().optional(), terminationSignal: z.enum(["SIGTERM", "SIGKILL"]).optional(), envelopeSha256: Digest.optional(), rowIdentitiesSha256: Digest.optional(), coverage: z.literal("unknown").optional(), reason: HeldReasonSchema.optional(),
+  argvSha256: Digest, executableSha256: Digest, interpreterSha256: Digest.optional(), stdout: ArtifactReferenceSchema.optional(), stdoutSha256: Digest.optional(), stderrByteLength: z.number().int().nonnegative().optional(), stderrSha256: Digest.optional(), exitCode: z.number().int().nullable().optional(), terminationSignal: z.enum(["SIGTERM", "SIGKILL"]).optional(), envelopeSha256: Digest.optional(), rowIdentitiesSha256: Digest.optional(), coverage: z.literal("unknown").optional(), reason: HeldReasonSchema.optional(),
 }).strict();
 export const ModalBillingReportCaptureSchema = z.object({ status: z.literal("held"), reason: HeldReasonSchema, grantSha256: Digest, reportRequestSha256: Digest, observedMicros: z.string().regex(/^[0-9]+$/u).optional() }).strict();
 export const ModalBillingReportJournalRecordSchema = z.object({ schemaVersion: z.literal("modal-billing-report-journal-v2"), grantSha256: Digest, reportRequestSha256: Digest, attempts: z.array(AttemptSchema).max(8), result: ModalBillingReportCaptureSchema.optional() }).strict().superRefine((value, context) => {
@@ -392,23 +424,24 @@ export function createModalBillingReportCollector(input: Readonly<{
       let child: ModalBillingChildResult;
       try { child = await runPinnedModalBillingReport({ executable: input.executable, executableSha256: input.executableSha256, environmentName: grant.environmentName, intervalStartMs: grant.intervalStartMs, intervalEndMs: grant.intervalEndMs, tagNames: Object.keys(grant.requiredTags).sort(), maximumStdoutBytes: grant.maximumStdoutBytes, maximumStderrBytes: grant.maximumStderrBytes, timeoutMs: grant.timeoutMs, credential }); }
       catch { return complete(current, grant, { disposition: "dispatch_unknown", reason: "child_failure" }, held(grant, "child_failure")); }
+      const interpreterAudit = child.interpreterSha256 ? { interpreterSha256: child.interpreterSha256 } : {};
       const stderrByteLength = child.stderr.byteLength;
       const stderrSha256 = sha256(child.stderr);
       const stdoutText = new TextDecoder().decode(child.stdout);
       const stderrText = new TextDecoder().decode(child.stderr);
       if (stdoutText.includes(credential.tokenId) || stdoutText.includes(credential.tokenSecret) || stderrText.includes(credential.tokenId) || stderrText.includes(credential.tokenSecret)) {
-        return complete(current, grant, { disposition: "credential_echo", stderrByteLength, stderrSha256, exitCode: child.exitCode, ...(child.terminationSignal ? { terminationSignal: child.terminationSignal } : {}), startedAtMs: child.startedAtMs, reason: "credential_echo" }, held(grant, "credential_echo"));
+        return complete(current, grant, { ...interpreterAudit, disposition: "credential_echo", stderrByteLength, stderrSha256, exitCode: child.exitCode, ...(child.terminationSignal ? { terminationSignal: child.terminationSignal } : {}), startedAtMs: child.startedAtMs, reason: "credential_echo" }, held(grant, "credential_echo"));
       }
-      if (!active(grant)) return complete(current, grant, { disposition: "grant_expired", stderrByteLength, stderrSha256, exitCode: child.exitCode, startedAtMs: child.startedAtMs, reason: "grant_expired" }, held(grant, "grant_expired"));
+      if (!active(grant)) return complete(current, grant, { ...interpreterAudit, disposition: "grant_expired", stderrByteLength, stderrSha256, exitCode: child.exitCode, startedAtMs: child.startedAtMs, reason: "grant_expired" }, held(grant, "grant_expired"));
       let stdout: ModalBillingArtifactReference | undefined;
       const rawSha256 = sha256(child.stdout); const key = `modal-billing/${requested.reportRequestSha256}/${attempt}/stdout`;
       try {
         stdout = await input.artifacts.createImmutable({ key, bytes: child.stdout, sha256: rawSha256 });
         if (!await validArtifact(stdout, key, rawSha256)) throw new Error("MODAL_BILLING_ARTIFACT_BINDING_INVALID");
-      } catch { return complete(current, grant, { disposition: "artifact_unavailable", stderrByteLength, stderrSha256, exitCode: child.exitCode, startedAtMs: child.startedAtMs, reason: "artifact_unavailable" }, held(grant, "artifact_unavailable")); }
-      if (child.disposition !== "passed") return complete(current, grant, { disposition: child.disposition, stdout, stdoutSha256: rawSha256, stderrByteLength, stderrSha256, exitCode: child.exitCode, ...(child.terminationSignal ? { terminationSignal: child.terminationSignal } : {}), startedAtMs: child.startedAtMs, reason: "child_failure" }, held(grant, "child_failure"));
+      } catch { return complete(current, grant, { ...interpreterAudit, disposition: "artifact_unavailable", stderrByteLength, stderrSha256, exitCode: child.exitCode, startedAtMs: child.startedAtMs, reason: "artifact_unavailable" }, held(grant, "artifact_unavailable")); }
+      if (child.disposition !== "passed") return complete(current, grant, { ...interpreterAudit, disposition: child.disposition, stdout, stdoutSha256: rawSha256, stderrByteLength, stderrSha256, exitCode: child.exitCode, ...(child.terminationSignal ? { terminationSignal: child.terminationSignal } : {}), startedAtMs: child.startedAtMs, reason: "child_failure" }, held(grant, "child_failure"));
       const derived = derive(child.stdout, grant);
-      return complete(current, grant, { disposition: child.disposition, stdout, stdoutSha256: rawSha256, stderrByteLength, stderrSha256, exitCode: child.exitCode, startedAtMs: child.startedAtMs, ...(derived.reason === "report_invalid" ? {} : { envelopeSha256: derived.envelopeSha256, rowIdentitiesSha256: derived.rowIdentitiesSha256, coverage: derived.coverage }), reason: derived.reason }, held(grant, derived.reason, derived.reason === "finality_unproven" ? derived.observedMicros : undefined));
+      return complete(current, grant, { ...interpreterAudit, disposition: child.disposition, stdout, stdoutSha256: rawSha256, stderrByteLength, stderrSha256, exitCode: child.exitCode, startedAtMs: child.startedAtMs, ...(derived.reason === "report_invalid" ? {} : { envelopeSha256: derived.envelopeSha256, rowIdentitiesSha256: derived.rowIdentitiesSha256, coverage: derived.coverage }), reason: derived.reason }, held(grant, derived.reason, derived.reason === "finality_unproven" ? derived.observedMicros : undefined));
     },
   });
 }

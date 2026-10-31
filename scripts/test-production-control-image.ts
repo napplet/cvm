@@ -68,8 +68,20 @@ try {
   // Match the report runner's private-copy and closed-env execution mechanics.
   const copied = home + "/modal-verified";
   await writeFile(copied, original, { mode: 0o700 });
-  const version = await runOffline([copied, "--version"]);
+  const launch = await pinnedModalBillingLaunch({ verifiedBytes: new Uint8Array(original), privateExecutable: copied });
+  if (!launch.interpreterSha256 || launch.argvPrefix[0] !== MODAL_BILLING_PYTHON) throw new Error("MODAL_IMAGE_INTERPRETER_LAUNCH_MISSING");
+  const version = await runOffline([...launch.argvPrefix, "--version"]);
   if (version !== "modal client version: 1.6.3") throw new Error("MODAL_IMAGE_VERSION_INVALID");
+  // Exercise the actual bounded report runner on the same noexec mount with a
+  // local Python fixture. It only emits argv/env facts; it has no network code.
+  const fixtureSource = "#!" + MODAL_BILLING_PYTHON + "\nimport json,os,sys\nprint(json.dumps(dict(argv=sys.argv[1:],isolated=bool(sys.flags.isolated),credential=bool(os.environ.get('MODAL_TOKEN_ID')) and bool(os.environ.get('MODAL_TOKEN_SECRET')),closed=not any(k in os.environ for k in ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','GOOGLE_APPLICATION_CREDENTIALS','PYTHONPATH']))))\n";
+  const fixture = home + "/runner-fixture";
+  await writeFile(fixture, fixtureSource, { mode: 0o700 });
+  const runner = await runPinnedModalBillingReport({ executable: fixture, executableSha256: new Bun.CryptoHasher("sha256").update(fixtureSource).digest("hex"), environmentName: "offline-fixture", intervalStartMs: Date.parse("2026-10-30T10:00:00Z"), intervalEndMs: Date.parse("2026-10-30T11:00:00Z"), tagNames: ["cvm_operation"], maximumStdoutBytes: 8192, maximumStderrBytes: 2048, timeoutMs: 1000, credential: { tokenId: "offline-fixture-id", tokenSecret: "offline-fixture-secret" } });
+  if (runner.disposition !== "passed" || runner.interpreterSha256 !== launch.interpreterSha256) throw new Error("MODAL_IMAGE_REAL_RUNNER_FAILED");
+  const runnerFacts = JSON.parse(new TextDecoder().decode(runner.stdout));
+  if (!runnerFacts.isolated || !runnerFacts.credential || !runnerFacts.closed || JSON.stringify(runnerFacts.argv) !== JSON.stringify(runner.argv.slice(1))) throw new Error("MODAL_IMAGE_REAL_RUNNER_BOUNDARY_INVALID");
+  await rm(fixture);
   const python = modalRoot + "/venv/bin/python";
   const packages = JSON.parse(await runOffline([python, "-I", "-c", "import importlib.metadata as m,json,platform; print(json.dumps(dict(version=platform.python_version(),machine=platform.machine(),packages={d.metadata['Name'].lower().replace('_','-'):d.version for d in m.distributions()})))"]));
   if (packages.version !== "3.14.8" || packages.machine !== "x86_64") throw new Error("MODAL_IMAGE_PYTHON_INVALID");
@@ -78,7 +90,7 @@ try {
   if (Object.keys(actualPackages).length !== Object.keys(expectedPackages).length || Object.entries(expectedPackages).some(([name, version]) => actualPackages[name] !== version)) throw new Error("MODAL_IMAGE_PACKAGE_CLOSURE_MISMATCH");
   if (await runOffline([python, "-I", "-m", "pip", "check"]) !== "No broken requirements found.") throw new Error("MODAL_IMAGE_PACKAGE_REQUIREMENTS_INVALID");
   if ((await readdir(home)).some(name => name !== "modal-verified")) throw new Error("MODAL_IMAGE_UNEXPECTED_PROFILE_WRITE");
-  modalEvidence = { executableSha256, version, python: packages.version, architecture: packages.machine, packageCount: Object.keys(actualPackages).length, lockSha256: ${JSON.stringify(modalLockSha256)}, network: "none", credentials: "absent" };
+  modalEvidence = { executableSha256, interpreterSha256: launch.interpreterSha256, actualRunner: "passed-local-fixture", version, python: packages.version, architecture: packages.machine, packageCount: Object.keys(actualPackages).length, lockSha256: ${JSON.stringify(modalLockSha256)}, network: "none", credentials: "absent" };
 } finally { await rm(home, { recursive: true, force: true }); }
 ` : "";
 
@@ -86,6 +98,7 @@ const probe = `
 import { readFile, stat, lstat, realpath, readdir, mkdtemp, writeFile, rm } from "node:fs/promises";
 import { loadPinnedCliNetworkHelpers } from "./src/production/pinned-cli-network.ts";
 import { loadPinnedDirectCliNetworkHelpers } from "./src/production/pinned-direct-cli-network.ts";
+import { MODAL_BILLING_PYTHON, pinnedModalBillingLaunch, runPinnedModalBillingReport } from "./src/release/deployment/modal-billing-report.ts";
 if (process.getuid?.() !== 65532) throw new Error("CONTROL_IMAGE_UID_INVALID");
 for (const path of ["src", "scripts", "vendor", "node_modules"]) {
   const metadata = await stat(path);
@@ -103,7 +116,7 @@ console.log(JSON.stringify({ hashes, uid: process.getuid(), helpers: true, ${mod
 const probeName = `cvm-control-probe-${crypto.randomUUID()}`, bootName = `cvm-control-boot-${crypto.randomUUID()}`;
 const names = [probeName, bootName];
 let modalEvidence: unknown;
-const restrictions = ["--rm", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--tmpfs", "/tmp/napplet-cvm:rw,nosuid,nodev,size=64m,uid=65532,gid=65532,mode=700"];
+const restrictions = ["--rm", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--tmpfs", "/tmp/napplet-cvm:rw,noexec,nosuid,nodev,size=64m,uid=65532,gid=65532,mode=700"];
 try {
   const inspected = await command(["image", "inspect", "--format", "{{.Id}}", image]);
   if (inspected.code || inspected.stdout.trim() !== image) throw new Error("CONTROL_IMAGE_IDENTITY_MISMATCH");

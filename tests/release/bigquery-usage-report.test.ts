@@ -84,3 +84,39 @@ test("recovery without a durable report job performs no token request or POST", 
   expect(tokens).toBe(0);
   expect(requests).toBe(0);
 });
+
+test("GET-only recovery captures the original completed job and reuses its immutable bytes after restart", async () => {
+  const value = await grant();
+  const queryJobId = `usage_${value.reportRequestSha256.slice(0, 48)}`;
+  const journal = createMemoryBigQueryUsageReportJournal([{
+    reportRequestSha256: value.reportRequestSha256, dryRunJobId: `usage_dry_${value.reportRequestSha256.slice(0, 48)}`,
+    queryJobId, state: "query_dispatch_intent", dryRunBytes: "10",
+  }]);
+  const store = artifacts();
+  const calls: string[] = [];
+  const accountScopeSha256 = await googleAccountScopeSha256({ projectId: "project-12345", quotaProjectId: "quota-project-1", principal: "release@example.com" });
+  const raw = JSON.stringify({
+    kind: "bigquery#getQueryResultsResponse", jobComplete: true,
+    jobReference: { projectId: "project-12345", jobId: queryJobId, location: "US" },
+    schema: { fields: [{ name: "gross_cost", type: "STRING" }, { name: "credits", type: "STRING" }] },
+    totalRows: "1", totalBytesProcessed: "10", cacheHit: false,
+    rows: [{ f: [{ v: "1.000000" }, { v: "-0.100000" }] }],
+  });
+  const options = {
+    projectId: "project-12345", quotaProjectId: "quota-project-1", principal: "release@example.com", journal, artifacts: store, now: () => 10,
+    tokenSource: { async getAccessToken() { return { token: "token", expiresAtMs: 70_001, projectId: "project-12345", quotaProjectId: "quota-project-1", principal: "release@example.com", scopes: GOOGLE_CONTROL_PLANE_SCOPES, accountScopeSha256 }; } },
+    fetch: async (url: string, init: RequestInit) => {
+      calls.push(init.method ?? "GET");
+      expect(url).toContain(`/queries/${queryJobId}`);
+      return new Response(raw, { headers: { "content-type": "application/json" } });
+    },
+  };
+  const result = await createBigQueryUsageReportCollector(options).recover(value);
+  expect(result.envelope).toBeDefined();
+  expect(result.envelope?.providerJobId).toBe(queryJobId);
+  expect(result.envelope?.coverage).toBe("unknown");
+  if (!result.envelope) throw new Error("RECOVERY_CAPTURE_REQUIRED");
+  expect(await store.readExact(result.envelope.rawArtifact)).toEqual(new TextEncoder().encode(raw));
+  expect(await createBigQueryUsageReportCollector({ ...options, now: () => 20 }).recover(value)).toEqual(result);
+  expect(calls).toEqual(["GET"]);
+});

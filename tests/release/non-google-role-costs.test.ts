@@ -118,6 +118,7 @@ test("every successor effect needs its own bound fact and non-model roles cannot
   await expect(assertSuccessorGraphPreapprovalHeld({ graph, bound, nowMs, evidence: evidenceResolver(facts) })).rejects.toThrow("SUCCESSOR_GRAPH_BACKEND_UNCONSTRUCTED");
   await expect(createSuccessorRoleCostBound({ graph, facts: facts.slice(0, 2) })).rejects.toThrow("SUCCESSOR_GRAPH_COST_COVERAGE_REQUIRED");
   await expect(createSuccessorRoleCostBound({ graph, facts: facts.map((fact) => fact.roleId === "worker.modal" ? { ...fact, provider: "openai_responses", disposition: "authoritative_native_usage" as const, status: "available" as const, holdReason: undefined } : fact) })).rejects.toThrow("SUCCESSOR_GRAPH_MODEL_RATE_REUSE_REJECTED");
+  await expect(createSuccessorRoleCostBound({ graph, facts: facts.map((fact) => fact.roleId === "worker.modal" ? { ...fact, disposition: "documented_scoped_zero" as const, status: "available" as const, holdReason: undefined } : fact) })).rejects.toThrow("SUCCESSOR_GRAPH_NONMODEL_AVAILABILITY_UNIMPLEMENTED");
 });
 
 test("Modal and Fly have separate bounded official-source producers that remain held without selected placement", async () => {

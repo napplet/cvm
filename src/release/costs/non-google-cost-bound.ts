@@ -304,6 +304,10 @@ export async function createSuccessorRoleCostBound(input: Readonly<{
     if (fact.evidence.candidateSha256 !== graph.candidateSha256 || fact.evidence.topologySha256 !== graph.topologySha256) throw new Error("SUCCESSOR_GRAPH_COST_SCOPE_INVALID");
     if (fact.provider === "openai_responses" && role.roleId !== "model.openai-responses") throw new Error("SUCCESSOR_GRAPH_MODEL_RATE_REUSE_REJECTED");
     if (role.roleId === "model.openai-responses" && (fact.provider !== "openai_responses" || fact.disposition !== "authoritative_native_usage")) throw new Error("SUCCESSOR_GRAPH_MODEL_RATE_REUSE_REJECTED");
+    /* Plan 67 can capture a non-model source but not turn it into a price or
+     * a free resource. Plans 68–70 must add the matching native usage or
+     * approved-standing consumer before any non-model role can be available. */
+    if (role.roleId !== "model.openai-responses" && fact.status === "available") throw new Error("SUCCESSOR_GRAPH_NONMODEL_AVAILABILITY_UNIMPLEMENTED");
   }
   const heldRoleIds = facts.filter((fact) => fact.status === "held").map((fact) => fact.roleId);
   const boundSha256 = await hashCanonical({

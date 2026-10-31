@@ -985,6 +985,11 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       requestJournal: nativeRequestJournal, capacityJournal, artifactStore: nativeObjects, workers: workerClients, jobRouter: mountedRouter,
       gateway, pricing: refreshedPricing });
     await mountedService.runner.assertReady();
+    // The normal mounted facade reads the original quote from SQL; it never
+    // accepts caller-supplied pricing or provider authority.
+    expect(await mountedService.prepare({ principal: { id: accountId }, sessionId: workspaceCommand.sessionId,
+      checkpointId: workspaceSealed.manifest.checkpointId, expectedSessionVersion: 1, expectedCheckpointVersion: 1,
+      idempotencyKey: "prepare:workspace-native" })).toMatchObject({ status: "quoted", quoteReference: workspaceQuote.quoteReference });
     const runnerInput = { pool, acceptance: refreshedAcceptance, preparer: refreshedPreparer, workers: workerAuthority,
       restores: workspaceRestores(), generation: core, finalizer, cleanup: cleanup() };
     let failFirstRunnerTerminalWrite = true;
@@ -1186,6 +1191,10 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.ledger_entries WHERE account_id=$1 AND direction='debit'", [accountId])).rows[0].count).toBe(2);
     expect(await nativeWorkerRecords.read(workerOperationId)).toMatchObject({ resourceId: "fixture-workspace-machine", requestSha256: "c".repeat(64), state: "terminated" });
     expect(await new ProductionPricedContinuationRunner(runnerInput).run(workspaceResume)).toEqual(coreTerminal);
+    // A fresh public facade instance performs the terminal query/replay only:
+    // it traverses the mounted runner but cannot redispatch the original model
+    // or worker operation after its exact cleanup has completed.
+    expect(await mountedService.resume(workspaceResume)).toEqual(coreTerminal);
     expect(modelPosts).toBe(3); expect(nativeRestores).toBe(1); expect(reserves).toBe(2);
     if (directWorker) {
       if (coreTerminal.status !== "completed" || !coreTerminal.artifactId) throw new Error("OWNED_DIRECT_ARTIFACT_REQUIRED");

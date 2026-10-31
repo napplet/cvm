@@ -138,7 +138,7 @@ integration("declared per-object custody survives a fresh snapshot before expiry
     const failingDestroy = new PerObjectFileCheckpointCrypto({ pool: raw, custody: new FailOnceEraseCustody({ roots }), now: () => now });
     await expect(failingDestroy.destroy(boundary.keyReference)).rejects.toThrow("SIMULATED_FILESYSTEM_ERASE_FAILURE");
     expect((await admin.query("SELECT state FROM production_real.checkpoint_object_key_custody WHERE checkpoint_id=$1", [boundaryCheckpoint])).rows).toEqual([{ state: "erasing" }]);
-    expect(await reconciled.open({ ...boundary, additionalData: new TextEncoder().encode("erase-aad") })).rejects.toThrow("CHECKPOINT_RESTORE_DENIED");
+    await expect(reconciled.open({ ...boundary, additionalData: new TextEncoder().encode("erase-aad") })).rejects.toThrow("CHECKPOINT_RESTORE_DENIED");
     await reconciled.destroy(boundary.keyReference);
     expect(await reconciled.isDestroyed(boundary.keyReference)).toBe(true);
 

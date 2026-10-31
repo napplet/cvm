@@ -199,7 +199,12 @@ DECLARE header production_real.immutable_object_generations%ROWTYPE;
 BEGIN
   SELECT * INTO header FROM production_real.immutable_object_generations WHERE object_key=input_key AND generation=input_generation FOR UPDATE;
   IF NOT FOUND OR header.checksum<>input_checksum OR NOT isfinite(input_delete_after) OR NOT isfinite(input_now) THEN RAISE EXCEPTION 'OBJECT_EXACT_GENERATION_REQUIRED'; END IF;
-  IF header.state='tombstoned' THEN RETURN true; END IF;
+  IF header.state='tombstoned' THEN
+    IF EXISTS(SELECT 1 FROM production_real.immutable_object_generations WHERE object_key=input_key AND generation>input_generation) THEN
+      RAISE EXCEPTION 'OBJECT_EXACT_GENERATION_REQUIRED';
+    END IF;
+    RETURN true;
+  END IF;
   IF header.state<>'sealed' AND header.state<>'deleting' THEN RAISE EXCEPTION 'OBJECT_DELETE_HELD'; END IF;
   IF header.state='deleting' THEN RETURN false; END IF;
   IF input_delete_after > input_now THEN

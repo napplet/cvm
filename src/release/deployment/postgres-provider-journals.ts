@@ -5,6 +5,7 @@ import type { WorkerOperationJournal, WorkerOperationRecord } from "./worker-cli
 import { initialVertexRecoveryState, VertexRecoveryBindingSchema, VertexRecoveryStateSchema, type VertexRecoveryBinding } from "./vertex-recovery-scan";
 import type { VertexOperationJournal } from "./vertex-client";
 import type { BigQueryUsageReportJournal, BigQueryUsageReportJournalRecord } from "./bigquery-usage-report";
+import { ModalBillingReportJournalRecordSchema, type ModalBillingReportJournal, type ModalBillingReportJournalRecord } from "./modal-billing-report";
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -97,6 +98,40 @@ export function createPostgresBigQueryUsageReportJournal(journal: PostgresOperat
         if (input.envelope !== undefined && current.envelope !== undefined && canonical(current.envelope) !== canonical(input.envelope)) throw new Error("BIGQUERY_USAGE_REPORT_JOURNAL_CONFLICT");
         return clean({ ...current, state: input.state, ...(input.dryRunBytes === undefined ? {} : { dryRunBytes: input.dryRunBytes }), ...(input.envelope === undefined ? {} : { envelope: input.envelope }) });
       });
+    },
+  });
+}
+
+/** CAS-backed capture journal for the public Modal billing CLI.  It has a
+ * dedicated namespace at composition time so a report retry cannot collide
+ * with worker lifecycle or BigQuery report records. */
+export function createPostgresModalBillingReportJournal(journal: PostgresOperationJournal): ModalBillingReportJournal {
+  assertPostgresOperationJournal(journal);
+  const operation = (request: string) => `modal-billing-report:${request}`;
+  const identityFor = (record: ModalBillingReportJournalRecord) => identity({ schemaVersion: record.schemaVersion, grantSha256: record.grantSha256, reportRequestSha256: record.reportRequestSha256 });
+  const parse = (value: unknown) => ModalBillingReportJournalRecordSchema.parse(value);
+  return Object.freeze({
+    async claim(input) {
+      const requested = parse(input);
+      const saved = await journal.claim(operation(requested.reportRequestSha256), identityFor(requested), requested);
+      const record = parse(saved.record.value);
+      if (record.grantSha256 !== requested.grantSha256 || record.reportRequestSha256 !== requested.reportRequestSha256 || identityFor(record) !== identityFor(requested)) throw new Error("MODAL_BILLING_JOURNAL_CONFLICT");
+      return Object.freeze({ claimed: saved.claimed, revision: saved.record.revision, record });
+    },
+    async read(request) {
+      const saved = await journal.read<ModalBillingReportJournalRecord>(operation(request));
+      if (!saved) return undefined;
+      const record = parse(saved.value);
+      if (record.reportRequestSha256 !== request) throw new Error("MODAL_BILLING_JOURNAL_CONFLICT");
+      return Object.freeze({ revision: saved.revision, record });
+    },
+    async compareAndSet(input) {
+      const requested = parse(input.record);
+      if (requested.reportRequestSha256 !== input.reportRequestSha256) throw new Error("MODAL_BILLING_JOURNAL_CONFLICT");
+      const saved = await journal.compareAndSet(operation(input.reportRequestSha256), identityFor(requested), input.expectedRevision, requested);
+      if (!saved) return undefined;
+      const record = parse(saved.value);
+      return Object.freeze({ revision: saved.revision, record });
     },
   });
 }

@@ -7,6 +7,7 @@ import type { ProductionConfig } from "./config";
 import type { MountedProductionSecretMaterial } from "./secret-material";
 import { assertMountedSourceBuildPlan, materializeMountedSourceBuildPlan } from "./source-build-plan";
 import { MountedBigQueryUsageReportConfigurationSchema } from "./mounted-authoritative-billing";
+import { MountedModalBillingConfigurationSchema } from "./mounted-modal-billing";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/iu).transform(value => value.toLowerCase());
 const Reference = z.string().regex(/^[a-z][a-z0-9:._/-]{2,255}$/iu);
@@ -125,6 +126,9 @@ const RecordSchema = z.object({
     owner_relay: Json, attestation_relay: Json,
   }).strict(),
   googleControls: z.object({ cloudRun: Json, cloudSql: Json, collector: Json, authoritativeUsage: MountedBigQueryUsageReportConfigurationSchema.optional() }).strict(),
+  /** Optional sealed selection. It is parsed during normal composition but
+   * remains disabled until an external authority verifier is implemented. */
+  modalBilling: MountedModalBillingConfigurationSchema.optional(),
   edge: z.object({
     compatibleHost: z.object({ hostUrl: Url, hostSha256: Digest, chromiumExecutable: z.string().startsWith("/").max(4_096) }).strict(),
     directPublicationReference: DirectPublicationReferenceSchema.optional(),

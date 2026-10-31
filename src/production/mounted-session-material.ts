@@ -33,6 +33,7 @@ import type { ProductionConcreteClients } from "../release/deployment/production
 import type { ProductionGenerationRuntime } from "./generation-runtime";
 import type { ProductionConfig } from "./config";
 import { createMountedGoogleControls, type MountedGoogleControlConfiguration } from "./mounted-google-controls";
+import { selectMountedModalBilling } from "./mounted-modal-billing";
 import { createMountedProductionEdgeMaterial } from "./mounted-edge-material";
 import { createHash } from "node:crypto";
 import { createMountedWorkerReadinessCommands } from "./mounted-worker-clients";
@@ -429,6 +430,11 @@ export async function createMountedProductionSessionMaterial(input: Readonly<{
     || input.generation.config.candidateSha256 !== input.config.candidateSha256
     || input.generation.config.topologySha256 !== input.config.topologySha256
     || input.resolved.workerCandidate.id !== input.config.candidateSha256) throw new Error("PRODUCTION_MOUNTED_SESSION_BINDING_REQUIRED");
+  /* Evaluate the sealed Modal record before opening any mounted secret,
+   * relay, provider, or worker authority.  The currently-unimplemented
+   * authority verifier always disables this optional collector. */
+  const mountedModalBilling = await selectMountedModalBilling({ configuration: input.resolved.modalBilling });
+  if (mountedModalBilling.status !== "disabled") throw new Error("PRODUCTION_MODAL_BILLING_SELECTION_INVALID");
   const { dependencies } = input.generation;
   const now = input.now;
   const authorization = input.generation.authorization;

@@ -23,7 +23,7 @@ async function fixture(handler: (url: string, init: RequestInit) => Response | P
 }
 
 const cloudRunRequest = (operationId: string) => ({ operationId, projectId, region: "europe-west1", serviceName: "napplet-cvm-api", imageReference: `us-docker.pkg.dev/${projectId}/control/control@sha256:${digest("a")}`, serviceAccountReference: "svc@napplet-cvm-run-1.iam.gserviceaccount.com", environmentReferenceSha256: digest("b"), secretReferences: [{ name: "DATABASE_URL", secret: "control-database-url", version: "1" }], minimumInstances: 3 as const, ingress: "internal-and-cloud-load-balancing" as const, concurrency: 80, admissionRefusal: "capacity_unavailable" as const });
-const cloudRunService = (operationId: string, overrides: Record<string, unknown> = {}) => ({ name: `projects/${projectId}/locations/europe-west1/services/napplet-cvm-api`, uid: "service-uid-1", createTime: "2026-01-01T00:00:00Z", generation: "3", observedGeneration: "3", reconciling: false, terminalCondition: { state: "CONDITION_SUCCEEDED" }, conditions: [{ type: "ConfigurationsReady", state: "CONDITION_SUCCEEDED" }, { type: "RoutesReady", state: "CONDITION_SUCCEEDED" }], labels: { "napplet-cvm-operation": operationId }, ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER", template: { scaling: { minInstanceCount: 3 }, maxInstanceRequestConcurrency: 80, serviceAccount: "svc@napplet-cvm-run-1.iam.gserviceaccount.com", containers: [{ image: `us-docker.pkg.dev/${projectId}/control/control@sha256:${digest("a")}`, env: [{ name: "GOOGLE_CLOUD_PROJECT", value: projectId }, { name: "NAPPLET_CVM_ENVIRONMENT_SHA256", value: digest("b") }, { name: "DATABASE_URL", valueSource: { secretKeyRef: { secret: "control-database-url", version: "1" } } }] }] }, ...overrides });
+const cloudRunService = (operationId: string, overrides: Record<string, unknown> = {}) => ({ name: `projects/${projectId}/locations/europe-west1/services/napplet-cvm-api`, uid: "service-uid-1", createTime: "2026-01-01T00:00:00Z", generation: "3", observedGeneration: "3", reconciling: false, terminalCondition: { state: "CONDITION_SUCCEEDED" }, conditions: [{ type: "ConfigurationsReady", state: "CONDITION_SUCCEEDED" }, { type: "RoutesReady", state: "CONDITION_SUCCEEDED" }], labels: { "napplet-cvm-operation": operationId }, ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER", scaling: { minInstanceCount: 3, maxInstanceCount: 3, scalingMode: "AUTOMATIC" }, template: { scaling: { minInstanceCount: 3, maxInstanceCount: 3 }, maxInstanceRequestConcurrency: 80, serviceAccount: "svc@napplet-cvm-run-1.iam.gserviceaccount.com", containers: [{ image: `us-docker.pkg.dev/${projectId}/control/control@sha256:${digest("a")}`, resources: { limits: { cpu: "1", memory: "512Mi" }, cpuIdle: false, startupCpuBoost: false }, env: [{ name: "GOOGLE_CLOUD_PROJECT", value: projectId }, { name: "NAPPLET_CVM_ENVIRONMENT_SHA256", value: digest("b") }, { name: "DATABASE_URL", valueSource: { secretKeyRef: { secret: "control-database-url", version: "1" } } }] }] }, ...overrides });
 const sqlRequest = (operationId: string) => ({ operationId, instanceId: "napplet-cvm-sql-1", region: "europe-west1", databaseVersion: "POSTGRES_17" as const, availabilityType: "REGIONAL" as const, tier: "db-custom-2-7680", privateNetwork: `projects/${projectId}/global/networks/production`, requireSsl: true as const, serializablePolicy: true as const });
 
 test("ADC binds project, quota project, scope digest and expiry without exposing a token", async () => {
@@ -178,7 +178,58 @@ test("Cloud Run observes deterministic resource then uses official create servic
   expect(await journal.read("deploy-1")).toMatchObject({ state: "dispatched", operationName: `projects/${projectId}/locations/europe-west1/operations/deploy-1` });
   expect(calls.map((call) => call.url)).toEqual([`https://run.googleapis.com/v2/projects/${projectId}/locations/europe-west1/services/napplet-cvm-api`, `https://run.googleapis.com/v2/projects/${projectId}/locations/europe-west1/services?serviceId=napplet-cvm-api`]);
   expect(calls[1]!.url).not.toContain("requestId=");
-  expect(JSON.parse(calls[1]!.body)).toMatchObject({ ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER", template: { scaling: { minInstanceCount: 3 } } });
+  expect(JSON.parse(calls[1]!.body)).toMatchObject({ ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER", scaling: { minInstanceCount: 3, maxInstanceCount: 3, scalingMode: "AUTOMATIC" }, template: { scaling: { minInstanceCount: 3, maxInstanceCount: 3 }, containers: [{ resources: { limits: { cpu: "1", memory: "512Mi" }, cpuIdle: false, startupCpuBoost: false } }] } });
+});
+
+test("Cloud Run never adopts a same-owner lookalike with missing or changed resource bounds", async () => {
+  const base = cloudRunService("bounded-lookalike");
+  const container = base.template.containers[0]!;
+  const variations = [
+    { ...base, scaling: { minInstanceCount: 3 } },
+    { ...base, scaling: { ...base.scaling, maxInstanceCount: 30 } },
+    { ...base, scaling: { ...base.scaling, scalingMode: "MANUAL", manualInstanceCount: 30 } },
+    { ...base, template: { ...base.template, scaling: { minInstanceCount: 3, maxInstanceCount: 30 } } },
+    ...[
+      undefined,
+      { ...container.resources, limits: { cpu: "2", memory: "512Mi" } },
+      { ...container.resources, limits: { cpu: "1", memory: "512Mi", "nvidia.com/gpu": "1" } },
+      { ...container.resources, limits: { cpu: "1", memory: "1Gi" } },
+      { ...container.resources, cpuIdle: true },
+      { ...container.resources, startupCpuBoost: true },
+    ].map(resources => ({ ...base, template: { ...base.template, containers: [{ ...container, resources }] } })),
+  ];
+  for (const observed of variations) {
+    let created = false;
+    const { client, calls, journal } = await fixture((url, init) => {
+      if (init.method === "POST") { created = true; return json({ name: `projects/${projectId}/locations/europe-west1/operations/bounded-lookalike` }); }
+      if (url.includes("/operations/")) return json({ done: true });
+      return created ? json(observed) : json({ error: { code: 404 } }, 404);
+    });
+    const request = cloudRunRequest("bounded-lookalike");
+    await expect(client.cloudRun.deploy(request)).resolves.toEqual({ status: "pending" });
+    await expect(client.cloudRun.observe(request)).resolves.toEqual({ status: "unknown" });
+    expect((await journal.read(request.operationId))?.state).toBe("dispatched");
+    expect((await journal.read(request.operationId))?.owned).not.toBe(true);
+    expect(calls.filter(call => call.method === "POST")).toHaveLength(1);
+  }
+});
+
+test("Cloud Run accepts protobuf-omitted false resource flags only with the explicit bounded limits", async () => {
+  const service = cloudRunService("default-false");
+  const observed = { ...service, template: { ...service.template, containers: [{ ...service.template.containers[0], resources: { limits: { cpu: "1", memory: "512Mi" } } }] } };
+  const { client } = await fixture(() => json(observed));
+  await expect(client.cloudRun.deploy(cloudRunRequest("default-false"))).resolves.toEqual({ status: "completed" });
+});
+
+test("a legacy immutable Cloud Run intent cannot be reminted with the new resource profile", async () => {
+  const journal = createMemoryGoogleOperationJournal();
+  const resource = `projects/${projectId}/locations/europe-west1/services/napplet-cvm-api`;
+  await journal.claim({ operationId: "legacy-profile", requestSha256: digest("c"), contentSha256: digest("c"), owned: false, resource });
+  const original = await journal.read("legacy-profile");
+  const { client, calls } = await fixture(() => { throw new Error("LEGACY_INTENT_MUST_NOT_DISPATCH"); }, {}, journal);
+  await expect(client.cloudRun.deploy(cloudRunRequest("legacy-profile"))).resolves.toEqual({ status: "blocked" });
+  expect(calls).toHaveLength(0);
+  expect(await journal.read("legacy-profile")).toEqual(original);
 });
 
 test("Cloud Run pins an explicitly mounted collector port in create and observation", async () => {
@@ -211,7 +262,7 @@ test("Cloud Run cleanup requires recorded ownership and sends the observed etag"
 
 test("Cloud Run LRO observation requires terminal ready configuration before completing the journal", async () => {
   const imageReference = `us-docker.pkg.dev/${projectId}/control/control@sha256:${digest("9")}`;
-  const service = { name: `projects/${projectId}/locations/europe-west1/services/napplet-cvm-api`, uid: "uid-observe", createTime: "2026-01-01T00:00:00Z", generation: "3", observedGeneration: "3", reconciling: false, terminalCondition: { state: "CONDITION_SUCCEEDED" }, conditions: [{ type: "ConfigurationsReady", state: "CONDITION_SUCCEEDED" }], labels: { "napplet-cvm-operation": "deploy-observe" }, ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER", template: { scaling: { minInstanceCount: 3 }, maxInstanceRequestConcurrency: 80, serviceAccount: "svc@napplet-cvm-run-1.iam.gserviceaccount.com", containers: [{ image: imageReference, env: [{ name: "GOOGLE_CLOUD_PROJECT", value: projectId }, { name: "NAPPLET_CVM_ENVIRONMENT_SHA256", value: digest("8") }, { name: "DATABASE_URL", valueSource: { secretKeyRef: { secret: "control-database-url", version: "1" } } }] }] } };
+  const service = { name: `projects/${projectId}/locations/europe-west1/services/napplet-cvm-api`, uid: "uid-observe", createTime: "2026-01-01T00:00:00Z", generation: "3", observedGeneration: "3", reconciling: false, terminalCondition: { state: "CONDITION_SUCCEEDED" }, conditions: [{ type: "ConfigurationsReady", state: "CONDITION_SUCCEEDED" }], labels: { "napplet-cvm-operation": "deploy-observe" }, ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER", scaling: { minInstanceCount: 3, maxInstanceCount: 3, scalingMode: "AUTOMATIC" }, template: { scaling: { minInstanceCount: 3, maxInstanceCount: 3 }, maxInstanceRequestConcurrency: 80, serviceAccount: "svc@napplet-cvm-run-1.iam.gserviceaccount.com", containers: [{ image: imageReference, resources: { limits: { cpu: "1", memory: "512Mi" }, cpuIdle: false, startupCpuBoost: false }, env: [{ name: "GOOGLE_CLOUD_PROJECT", value: projectId }, { name: "NAPPLET_CVM_ENVIRONMENT_SHA256", value: digest("8") }, { name: "DATABASE_URL", valueSource: { secretKeyRef: { secret: "control-database-url", version: "1" } } }] }] } };
   let resourceGets = 0;
   const { client, journal } = await fixture((url, init) => {
     if (init.method === "POST") return json({ name: `projects/${projectId}/locations/europe-west1/operations/ready-1` });

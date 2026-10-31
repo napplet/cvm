@@ -1205,7 +1205,9 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     expect((await workspaceAcceptance.find(accountId, workspaceResume.idempotencyKey))?.state).toBe("completed");
     expect((await admin.query("SELECT count(*)::int AS count FROM production_real.funding_outbox WHERE event_kind='priced_continuation_terminal'")).rows[0].count).toBe(2);
     expect(modelPosts).toBe(3); expect(nativeRestores).toBe(1); expect(reserves).toBe(2);
-    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.billing_line_items WHERE source_identity=$1 AND kind='reconciliation' AND amount_sat=0", [`reconciliation:${workspaceClaim.operationId}`])).rows[0].count).toBe(1);
+    // The known original receipt reached the fresh facade, so this path must
+    // not manufacture an ambiguity/reconciliation entry merely to recover.
+    expect((await admin.query("SELECT count(*)::int AS count FROM production_real.billing_line_items WHERE source_identity=$1 AND kind='reconciliation' AND amount_sat=0", [`reconciliation:${workspaceClaim.operationId}`])).rows[0].count).toBe(0);
     // Terminal consent/result replay must survive actual command/key/object
     // erasure. The runner must not decrypt or revisit a provider after expiry.
     const completedRetentionDeadline = Date.parse(workspaceSealed.manifest.retentionUntil);

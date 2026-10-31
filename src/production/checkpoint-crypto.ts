@@ -33,6 +33,13 @@ type StoredRecord = Readonly<{
   state: "active" | "destroyed";
 }>;
 
+/** Extended server-only surface used by the checkpoint coordinator. The public
+ * envelope still sees only CheckpointCryptoPort; this adds no key export. */
+export interface ProductionCheckpointCrypto extends CheckpointCryptoPort {
+  readSealed(checkpointId: string): Promise<Readonly<{ keyReference: string; nonce: Uint8Array; ciphertext: Uint8Array; ciphertextSha256: string; aadSha256: string; retentionUntil: string }> | undefined>;
+  isDestroyed(keyReference: string): Promise<boolean>;
+}
+
 const sha256 = (value: Uint8Array | string) => createHash("sha256").update(value).digest("hex");
 const bytes = (value: unknown): Uint8Array | undefined => {
   if (value instanceof Uint8Array) return new Uint8Array(value);
@@ -78,7 +85,7 @@ export async function loadMountedCheckpointKek(input: Readonly<{ kekPath: string
  * KEK itself. The encrypted archive is retained with the key record so an
  * ambiguous GCS create can be reconciled using its original nonce/ciphertext.
  */
-export class MountedKekCheckpointCrypto implements CheckpointCryptoPort {
+export class MountedKekCheckpointCrypto implements ProductionCheckpointCrypto {
   readonly #pool: PostgresSqlPool;
   readonly #kek: Promise<CryptoKey>;
   readonly #now: () => number;

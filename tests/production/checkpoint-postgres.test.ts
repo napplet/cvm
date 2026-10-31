@@ -88,6 +88,7 @@ integration("restricted SQL checkpoints encrypt, retain originals after lost upl
     };
     const objects = new GcsObjectStoreAdapter({ config: { bucket: "test-checkpoint-bucket", projectId: "test-checkpoint-project" }, client: disk });
     const objectPort: ObjectStorePort = {
+      reconciliationMode: objects.reconciliationMode,
       async createImmutable(value) { creates++; if (failBeforeCreate) { failBeforeCreate = false; throw new Error("UPLOAD_OUTCOME_UNKNOWN"); } const result = await objects.createImmutable(value); if (loseAck) { loseAck = false; throw new Error("OBJECT_ACK_LOST"); } return result; },
       readExact: value => { if (failReads) throw new Error("GCS_READ_UNAVAILABLE"); return objects.readExact(value); }, observeExactByKey: value => objects.observeExactByKey(value), async scheduleExactDeletion(value, deadline) { deletes++; await objects.scheduleExactDeletion(value, deadline); if (loseDeleteAck) { loseDeleteAck = false; throw new Error("DELETE_ACK_LOST"); } },
     };

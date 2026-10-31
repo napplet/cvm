@@ -23,6 +23,8 @@ export type NonGooglePrivateControlObservation = z.infer<typeof Status>;
 
 const capabilities = new WeakSet<object>();
 const clients = new WeakSet<object>();
+const capabilityClocks = new WeakMap<object, () => number>();
+const capabilityExpirations = new WeakMap<object, number>();
 
 function origin(value: string): string {
   const url = new URL(value);
@@ -55,18 +57,31 @@ export type NonGooglePrivateControlCapability = Readonly<{
 /** Controller-owned private channel material. It is deliberately separate
  * from successor authorization: possession only authenticates the private
  * channel and cannot itself permit spend or provider effects. */
-export function createNonGooglePrivateControlCapability(input: Readonly<{ keyId: string; secret: Uint8Array; expiresAtMs: number }>): NonGooglePrivateControlCapability {
+export function createNonGooglePrivateControlCapability(input: Readonly<{ keyId: string; secret: Uint8Array; expiresAtMs: number; now?: () => number }>): NonGooglePrivateControlCapability {
   const keyId = KeyId.parse(input.keyId);
-  if (!(input.secret instanceof Uint8Array) || input.secret.byteLength < 32 || input.secret.byteLength > 4096 || !Number.isSafeInteger(input.expiresAtMs) || input.expiresAtMs <= Date.now()) throw new Error("NON_GOOGLE_PRIVATE_CONTROL_CAPABILITY_INVALID");
+  const now = input.now ?? Date.now;
+  if (!(input.secret instanceof Uint8Array) || input.secret.byteLength < 32 || input.secret.byteLength > 4096 || !Number.isSafeInteger(input.expiresAtMs) || input.expiresAtMs <= now()) throw new Error("NON_GOOGLE_PRIVATE_CONTROL_CAPABILITY_INVALID");
   const secret = new Uint8Array(input.secret);
   const capability = Object.freeze({ keyId, expiresAtMs: input.expiresAtMs, async sign(value: Readonly<{ method: "GET" | "POST"; path: string; bodySha256: string; requestSha256: string; timestampMs: number; nonce: string; candidateSha256: string; topologySha256: string; roleCostBoundSha256: string }>) {
+    assertNonGooglePrivateControlCapabilityLive(capability);
     if (value.path !== CONTROL_PATH && !new RegExp(`^${CONTROL_PATH}/[a-z][a-z0-9:_-]{2,127}$`, "u").test(value.path)) throw new Error("NON_GOOGLE_PRIVATE_CONTROL_ROUTE_DENIED");
     const material = canonicalJson({ keyId, ...value });
     const signature = await crypto.subtle.sign("HMAC", await crypto.subtle.importKey("raw", secret, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]), new TextEncoder().encode(material));
     return b64url(new Uint8Array(signature));
   } });
   capabilities.add(capability);
+  capabilityClocks.set(capability, now);
+  capabilityExpirations.set(capability, input.expiresAtMs);
   return capability;
+}
+
+/** The capability owns the clock shared by signing, client dispatch, and the
+ * handler. Expiry is inclusive, so it gates all successor work at now >= exp. */
+export function assertNonGooglePrivateControlCapabilityLive(value: unknown): asserts value is NonGooglePrivateControlCapability {
+  if (!value || typeof value !== "object" || !capabilities.has(value)) throw new Error("NON_GOOGLE_PRIVATE_CONTROL_CAPABILITY_REQUIRED");
+  const clock = capabilityClocks.get(value);
+  const expiresAtMs = capabilityExpirations.get(value);
+  if (!clock || expiresAtMs === undefined || expiresAtMs <= clock()) throw new Error("NON_GOOGLE_PRIVATE_CONTROL_CAPABILITY_EXPIRED");
 }
 
 async function body(response: Response): Promise<unknown> {
@@ -95,12 +110,12 @@ export class NonGooglePrivateControlClient {
   readonly #now: () => number;
   constructor(input: Readonly<{ serviceUrl: string; candidateSha256: string; topologySha256: string; roleCostBoundSha256: string; authorizationRequestSha256: string; capability: NonGooglePrivateControlCapability; authority: NonGoogleInvocationAuthority; journal: PostgresOperationJournal; fetch?: (url: string, init: RequestInit) => Promise<Response>; now?: () => number }>) {
     this.#origin = origin(input.serviceUrl); const now = input.now ?? Date.now; assertNonGoogleInvocationAuthority(input.authority); assertPostgresOperationJournal(input.journal);
-    if (!capabilities.has(input.capability)) throw new Error("NON_GOOGLE_PRIVATE_CONTROL_CAPABILITY_REQUIRED");
+    assertNonGooglePrivateControlCapabilityLive(input.capability);
     const candidateSha256 = Digest.parse(input.candidateSha256); const topologySha256 = Digest.parse(input.topologySha256); const roleCostBoundSha256 = Digest.parse(input.roleCostBoundSha256); const authorizationRequestSha256 = Digest.parse(input.authorizationRequestSha256);
-    if (input.capability.expiresAtMs <= now()) throw new Error("NON_GOOGLE_PRIVATE_CONTROL_BINDING_REQUIRED");
     this.binding = Object.freeze({ candidateSha256, topologySha256, roleCostBoundSha256, authorizationRequestSha256 }); this.#capability = input.capability; this.#authority = input.authority; this.#journal = input.journal; this.#fetch = input.fetch ?? ((url, init) => fetch(url, init)); this.#now = now; clients.add(this); Object.freeze(this);
   }
   async #request(method: "GET" | "POST", path: string, requestSha256: string, command?: EdgeCommand): Promise<NonGooglePrivateControlObservation> {
+    assertNonGooglePrivateControlCapabilityLive(this.#capability);
     const now = this.#now();
     const bodyText = command === undefined ? undefined : canonicalJson(command); if (bodyText !== undefined && Buffer.byteLength(bodyText) > MAX_BYTES) throw new Error("NON_GOOGLE_PRIVATE_CONTROL_REQUEST_TOO_LARGE");
     const timestampMs = now; const nonce = crypto.randomUUID().replaceAll("-", ""); const bodySha256 = await sha256(bodyText ?? "");
@@ -112,6 +127,7 @@ export class NonGooglePrivateControlClient {
     } finally { clearTimeout(timer); controller.abort(); }
   }
   async execute(input: Readonly<{ operationId: string; kind: CertificationEdgeKind; payload: unknown }>): Promise<NonGooglePrivateControlObservation> {
+    assertNonGooglePrivateControlCapabilityLive(this.#capability);
     const operationId = Id.parse(input.operationId); const kind = EdgeKind.parse(input.kind); const payload = CertificationEdgePayloadSchemas[kind].parse(input.payload);
     const unsigned = { operationId, kind, payload, candidateSha256: this.binding.candidateSha256, topologySha256: this.binding.topologySha256, roleCostBoundSha256: this.binding.roleCostBoundSha256 }; const requestSha256 = await sha256(canonicalJson(unsigned));
     let dispatchError: unknown;
@@ -131,6 +147,7 @@ export class NonGooglePrivateControlClient {
     return observed;
   }
   async observe(input: Readonly<{ operationId: string; kind: CertificationEdgeKind; requestSha256: string }>): Promise<NonGooglePrivateControlObservation> {
+    assertNonGooglePrivateControlCapabilityLive(this.#capability);
     const operationId = Id.parse(input.operationId); const kind = EdgeKind.parse(input.kind); const requestSha256 = Digest.parse(input.requestSha256);
     this.#authority.assertOriginalObservation({ scope: scopeFor(kind), effect: kind, candidateSha256: this.binding.candidateSha256, topologySha256: this.binding.topologySha256, roleCostBoundSha256: this.binding.roleCostBoundSha256, requestSha256: this.binding.authorizationRequestSha256, originalRecorded: true, operationId, operationSha256: requestSha256 });
     const observed = await this.#request("GET", `${CONTROL_PATH}/${encodeURIComponent(operationId)}`, requestSha256);
@@ -157,6 +174,8 @@ export function createNonGooglePrivateControlHandler(input: Readonly<{ capabilit
     const url = new URL(request.url); const method = request.method;
     const operationId = url.pathname.startsWith(`${CONTROL_PATH}/`) ? decodeURIComponent(url.pathname.slice(CONTROL_PATH.length + 1)) : undefined;
     if ((method !== "POST" || url.pathname !== CONTROL_PATH) && (method !== "GET" || operationId === undefined || !Id.safeParse(operationId).success)) return new Response(JSON.stringify({ error: "NOT_FOUND" }), { status: 404, headers: { "content-type": "application/json" } });
+    try { assertNonGooglePrivateControlCapabilityLive(input.capability); }
+    catch { return new Response(JSON.stringify({ error: "UNAUTHORIZED" }), { status: 401, headers: { "content-type": "application/json" } }); }
     const timestamp = Timestamp.safeParse(request.headers.get("x-napplet-private-control-timestamp")); const nonce = Nonce.safeParse(request.headers.get("x-napplet-private-control-nonce")); const keyId = KeyId.safeParse(request.headers.get("x-napplet-private-control-key-id")); const sentHash = Digest.safeParse(request.headers.get("x-napplet-private-control-body-sha256")); const requestSha256 = Digest.safeParse(request.headers.get("x-napplet-private-control-request-sha256")); const candidateSha256 = Digest.safeParse(request.headers.get("x-napplet-private-control-candidate-sha256")); const topologySha256 = Digest.safeParse(request.headers.get("x-napplet-private-control-topology-sha256")); const roleCostBoundSha256 = Digest.safeParse(request.headers.get("x-napplet-private-control-role-cost-bound-sha256")); const signature = Signature.safeParse(request.headers.get("x-napplet-private-control-signature"));
     if (!timestamp.success || !nonce.success || !keyId.success || !sentHash.success || !requestSha256.success || !candidateSha256.success || !topologySha256.success || !roleCostBoundSha256.success || !signature.success || keyId.data !== input.capability.keyId || Math.abs(now() - Number(timestamp.data)) > MAX_SKEW_MS) return new Response(JSON.stringify({ error: "UNAUTHORIZED" }), { status: 401, headers: { "content-type": "application/json" } });
     let raw: string;

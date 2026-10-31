@@ -9,7 +9,8 @@ import {
   type ProductionLiveProtectedCertificationPorts,
 } from "../../certification/live/production-ports";
 import { assertPostgresOperationJournal, type PostgresOperationJournal } from "./postgres-operation-journal";
-import { createLegacyProductionEdgeSuiteAdapters, type ProductionEdgeSuiteAdapters } from "./production-edge-suite-adapters";
+import type { ProductionEdgeSuiteAdapters } from "./production-edge-suite-adapters";
+import { createLegacyProductionEdgeSuiteAdapters } from "./legacy-production-edge-suite-adapters";
 import { assertProductionCoreControlClient, type ProductionCoreControlClient } from "./production-core-control";
 import type { createGoogleDeploymentClients } from "./google-clients";
 import type { createWorkerDeploymentClients } from "./worker-clients";

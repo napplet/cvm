@@ -4,9 +4,8 @@ import type { LiveContextVmPaymentModelObservationPort } from "../../certificati
 import type { LivePublicationObservationPort } from "../../certification/live/publication";
 import type { LiveSecurityHostObservationPort } from "../../certification/live/security-host";
 import type { LiveSupplyChainObservationPort } from "../../certification/live/supply-chain";
-import { CoreControlKindSchema, ProductionCoreControlClient } from "./production-core-control";
 import { assertNonGooglePrivateControlClient } from "./non-google-private-control";
-import type { CertificationEdgeKind } from "../../production/certification-edge";
+import { CertificationEdgeKindSchema, type CertificationEdgeKind } from "../../production/certification-edge-protocol";
 
 const DIGEST = /^[a-f0-9]{64}$/iu;
 const OPERATION = /^[a-z][a-z0-9_-]{2,127}$/u;
@@ -36,13 +35,13 @@ function operation(value: string): string {
 /** Executes an exact, receipt-bound private operation. The control client
  * persists original identity before POST, revalidates authorization before
  * auth/network, and on repeat uses GET for that original operation only. */
-type EdgeControl = Readonly<{
+export type FixedProductionEdgeControl = Readonly<{
   binding: Readonly<{ candidateSha256: string }>;
   execute(input: Readonly<{ operationId: string; kind: CertificationEdgeKind; payload: unknown }>): Promise<Readonly<{ state: string; result?: unknown }>>;
 }>;
 
-async function execute(control: EdgeControl, kind: CertificationEdgeKind, operationId: string, payload: unknown): Promise<unknown> {
-  const observed = await control.execute({ operationId: operation(operationId), kind: CoreControlKindSchema.parse(kind) as CertificationEdgeKind, payload });
+async function execute(control: FixedProductionEdgeControl, kind: CertificationEdgeKind, operationId: string, payload: unknown): Promise<unknown> {
+  const observed = await control.execute({ operationId: operation(operationId), kind: CertificationEdgeKindSchema.parse(kind), payload });
   if (observed.state !== "completed" || observed.result === undefined) throw new Error("PRODUCTION_EDGE_OPERATION_NOT_COMPLETE");
   return observed.result;
 }
@@ -53,9 +52,9 @@ async function execute(control: EdgeControl, kind: CertificationEdgeKind, operat
  * deployed control implementation owns the actual sealed-worker/Chromium,
  * source-build/SBOM/provenance, signed ContextVM/CEP-8/OpenAI Responses, and promoted
  * CLI/NIP-46/upload/relay operations. Construction is no-effect; every call
- * is receipt/candidate/topology bound by ProductionCoreControlClient.
+ * is receipt/candidate/topology bound by the branded control client.
  */
-function createAdapters(input: Readonly<{ candidateId: unknown; control: EdgeControl; artifactContract?: "nip5d-direct-v1"; directPublicationReference?: z.infer<typeof DirectPublicationReferenceSchema> }>): ProductionEdgeSuiteAdapters {
+export function createFixedProductionEdgeSuiteAdapters(input: Readonly<{ candidateId: unknown; control: FixedProductionEdgeControl; artifactContract?: "nip5d-direct-v1"; directPublicationReference?: z.infer<typeof DirectPublicationReferenceSchema> }>): ProductionEdgeSuiteAdapters {
   const candidateId = candidate(input.candidateId);
   const control = input.control;
   if (control.binding.candidateSha256 !== candidateId) throw new Error("PRODUCTION_EDGE_CANDIDATE_MISMATCH");
@@ -116,17 +115,10 @@ function createAdapters(input: Readonly<{ candidateId: unknown; control: EdgeCon
   return Object.freeze({ "security-host": securityHost, "supply-chain": supplyChain, "ContextVM-payment-model": paymentModel, publication });
 }
 
-/** The historical Cloud Run/ADC path is retained only to read or recover the
- * legacy graph. It is intentionally not selectable by successor adapters. */
-export function createLegacyProductionEdgeSuiteAdapters(input: Readonly<{ candidateId: unknown; control: unknown; artifactContract?: "nip5d-direct-v1"; directPublicationReference?: z.infer<typeof DirectPublicationReferenceSchema> }>): ProductionEdgeSuiteAdapters {
-  if (!(input.control instanceof ProductionCoreControlClient)) throw new Error("PRODUCTION_EDGE_CONTROL_CLIENT_REQUIRED");
-  return createAdapters({ ...input, control: input.control });
-}
-
 /** Successor-only edge adapters require the private homelab/Coolify transport.
  * A Cloud Run client, descriptor, callback, or self-declared native object is
  * rejected before any operation is constructed. */
 export function createProductionEdgeSuiteAdapters(input: Readonly<{ candidateId: unknown; control: unknown; artifactContract?: "nip5d-direct-v1"; directPublicationReference?: z.infer<typeof DirectPublicationReferenceSchema> }>): ProductionEdgeSuiteAdapters {
   assertNonGooglePrivateControlClient(input.control);
-  return createAdapters({ ...input, control: input.control });
+  return createFixedProductionEdgeSuiteAdapters({ ...input, control: input.control });
 }

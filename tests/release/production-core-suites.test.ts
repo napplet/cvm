@@ -59,6 +59,7 @@ test("each non-workspace retained subject uses distinct server custody while pre
     },
     async destroy() {},
     async readSealed(id: string) { const value = entries.get(id); return value && { keyReference: value.keyReference, nonce: new Uint8Array(value.nonce), ciphertext: new Uint8Array(value.ciphertext), ciphertextSha256: value.ciphertextSha256, aadSha256: value.aadSha256, retentionUntil: value.retentionUntil }; },
+    async isDestroyed(keyReference: string) { return ![...entries.values()].some(value => value.keyReference === keyReference); },
   };
   const objects = new DeterministicObjectStore();
   for (const kind of DURABILITY_SUBJECT_KINDS.filter(kind => kind !== "checkpoint")) {

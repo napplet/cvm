@@ -33,8 +33,8 @@ export type MountedFreshRestoreRuntime = Readonly<{
     objectStore: ObjectStorePort;
     startAfterRestore(): Promise<void>;
     openRetainedArchive(input: Readonly<{ subject: z.infer<typeof DurabilitySubjectSchema>; expected: Expected }>): Promise<ProductionRetainedArchive>;
-    reattachOriginal(input: Readonly<{ sourceIdentity: string; archive: Uint8Array; expected: Expected }>): Promise<Readonly<{ status: "reattached" | "replayed" | "reconciliation_pending"; workerId?: string }>>;
-    observeReattach(input: Readonly<{ sourceIdentity: string; archiveSha256: string; expected: Expected }>): Promise<Readonly<{ status: "reattached" | "replayed" | "reconciliation_pending"; workerId?: string }>>;
+    reattachOriginal(input: Readonly<{ subject: z.infer<typeof DurabilitySubjectSchema>; sourceIdentity: string; archive: Uint8Array; expected: Expected }>): Promise<Readonly<{ status: "reattached" | "replayed" | "reconciliation_pending"; workerId?: string }>>;
+    observeReattach(input: Readonly<{ subject: z.infer<typeof DurabilitySubjectSchema>; sourceIdentity: string; archiveSha256: string; expected: Expected }>): Promise<Readonly<{ status: "reattached" | "replayed" | "reconciliation_pending"; workerId?: string }>>;
     exerciseExpiryDeletion(scope: ProductionRestoreScope): Promise<Readonly<{ expired: true; deleted: true }>>;
     observeExpiryDeletion(scope: ProductionRestoreScope): Promise<Readonly<{ expired: true; deleted: true }>>;
     observeTopology(): Promise<unknown>;

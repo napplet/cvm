@@ -15,6 +15,7 @@ const bytes = (value: unknown) => new TextEncoder().encode(canonicalJson(value))
  * identities separate from source and workspace identities. */
 export type RetainedSubjectCrypto = CheckpointCryptoPort & Readonly<{
   readSealed(checkpointId: string): Promise<Readonly<{ keyReference: string; nonce: Uint8Array; ciphertext: Uint8Array; ciphertextSha256: string; aadSha256: string; retentionUntil: string }> | undefined>;
+  isDestroyed(keyReference: string): Promise<boolean>;
 }>;
 
 export type RetainedSubjectSource = Readonly<{
@@ -57,7 +58,14 @@ export async function sealRetainedSubject(input: Readonly<{
   const sealed = await input.crypto.seal({ checkpointId: custodyId, plaintext: new Uint8Array(source.bytes), additionalData: associatedData, binding: { accountId, sessionId, actionId, operationId: `durability-archive:${custodyId}`, retentionUntil } });
   const stored = await input.crypto.readSealed(custodyId);
   if (!stored || stored.keyReference !== sealed.keyReference || stored.ciphertextSha256 !== sha(sealed.ciphertext) || stored.aadSha256 !== sha(associatedData) || stored.retentionUntil !== retentionUntil) throw new Error("RETAINED_SUBJECT_CUSTODY_READBACK_REQUIRED");
-  const object = await input.objectStore.createImmutable({ key: `durability-subjects/${custodyId}/${stored.ciphertextSha256}`, bytes: new Uint8Array(stored.ciphertext) });
+  /* `seal` has committed the original operation id, nonce, ciphertext and
+   * checksum in checkpoint_crypto_records before this provider dispatch.  Its
+   * deterministic key is therefore a durable create intent, not a retry
+   * invention.  On a lost acknowledgement we observe that original key first;
+   * a replacement create is never issued. */
+  const key = `durability-subjects/${custodyId}/${stored.ciphertextSha256}`;
+  const observed = await input.objectStore.observeExactByKey({ key, checksum: stored.ciphertextSha256 });
+  const object = observed ?? await input.objectStore.createImmutable({ key, bytes: new Uint8Array(stored.ciphertext) });
   if (object.checksum !== stored.ciphertextSha256) throw new Error("RETAINED_SUBJECT_OBJECT_BINDING_REQUIRED");
   return DurabilitySubjectSchema.parse({ kind: source.kind, sourceIdentity: source.sourceIdentity, object, payloadSha256, ownerId, retentionUntil, deletionState: "retained" });
 }

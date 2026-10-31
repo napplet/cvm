@@ -55,8 +55,8 @@ export class ProductionRetainedSubjectPreparer {
     await registry.inventory(scope);
   }
 
-  /** Exact expiry/erasure of every registered subject. Unknown deletion
-   * outcomes remain pending: no second object/key dispatch is attempted. */
+  /** Starts exact expiry/erasure of every run-owned retained copy.  This never
+   * touches the original artifact, Nostr event, receipt, or audit record. */
   async destroyExpired(raw: RetainedSubjectScope): Promise<void> {
     const scope = this.#scope(raw), registry = createProductionDurabilitySubjectRegistry(this.#pool);
     const subjects = await registry.inventory(scope);
@@ -72,8 +72,29 @@ export class ProductionRetainedSubjectPreparer {
       if (!exact || sha(exact) !== subject.object.checksum) throw new Error("RETAINED_SUBJECT_ERASURE_OBJECT_REQUIRED");
       await this.input.objectStore.scheduleExactDeletion(subject.object, subject.retentionUntil);
       await this.#crypto.destroy(stored.keyReference);
+      if (!await this.#crypto.isDestroyed(stored.keyReference)) throw new Error("RETAINED_SUBJECT_ERASURE_KEY_REQUIRED");
+      /* Scheduling is not deletion.  Preserve a durable tombstone until a
+       * query-only later observation proves this exact generation absent. */
+      await registry.markDeletion({ checkpointId: scope.checkpointId, kind: subject.kind, objectGeneration: subject.object.generation, objectChecksum: subject.object.checksum, state: "tombstoned" });
+    }
+  }
+
+  /** Query-only completion of a prior exact deletion intent.  It must never
+   * redispatch delete/destroy for an uncertain or lost acknowledgement. */
+  async observeExpired(raw: RetainedSubjectScope): Promise<boolean> {
+    const scope = this.#scope(raw), registry = createProductionDurabilitySubjectRegistry(this.#pool);
+    const subjects = await registry.inventory(scope);
+    let complete = true;
+    for (const subject of subjects) {
+      if (subject.kind === "checkpoint") continue;
+      if (subject.deletionState === "deleted") continue;
+      if (subject.deletionState !== "tombstoned") { complete = false; continue; }
+      const custodyId = retainedSubjectCustodyId({ checkpointId: scope.checkpointId, kind: subject.kind, sourceIdentity: subject.sourceIdentity });
+      const stored = await this.#crypto.readSealed(custodyId);
+      if (!stored || !await this.#crypto.isDestroyed(stored.keyReference) || await this.input.objectStore.readExact(subject.object)) { complete = false; continue; }
       await registry.markDeletion({ checkpointId: scope.checkpointId, kind: subject.kind, objectGeneration: subject.object.generation, objectChecksum: subject.object.checksum, state: "deleted" });
     }
+    return complete;
   }
 
   #scope(raw: RetainedSubjectScope): RetainedSubjectScope {
@@ -108,7 +129,7 @@ export class ProductionRetainedSubjectPreparer {
       );
       if (artifactRows.rows.length !== 1) throw new Error("RETAINED_SUBJECT_ARTIFACT_ORIGINAL_REQUIRED");
       const artifact = z.object({ evidence: z.object({ checksum: Digest, scannerReportSha256: Digest, conformanceReportSha256: Digest, result: z.object({ artifact: z.object({ artifactId: z.string().min(1), sessionId: Identity, actionId: Identity, expectedVersion: z.number().int().nonnegative() }).passthrough() }).passthrough() }).passthrough(), reference: z.object({ key: z.string().min(1), generation: z.number().int().positive(), checksum: Digest }).strict() }).passthrough().parse(typeof artifactRows.rows[0]!.value_json === "string" ? JSON.parse(String(artifactRows.rows[0]!.value_json)) : artifactRows.rows[0]!.value_json);
-      if (artifact.evidence.result.artifact.expectedVersion !== binding.expectedVersion || artifact.reference.checksum !== artifact.evidence.checksum) throw new Error("RETAINED_SUBJECT_ARTIFACT_BINDING_REQUIRED");
+      if (artifact.evidence.result.artifact.artifactId !== binding.artifactId || artifact.evidence.result.artifact.sessionId !== scope.sessionId || artifact.evidence.result.artifact.actionId !== binding.actionId || artifact.evidence.result.artifact.expectedVersion !== binding.expectedVersion || artifact.reference.checksum !== artifact.evidence.checksum) throw new Error("RETAINED_SUBJECT_ARTIFACT_BINDING_REQUIRED");
       const artifactBytes = await this.input.objectStore.readExact(artifact.reference);
       if (!artifactBytes || sha(artifactBytes) !== artifact.reference.checksum) throw new Error("RETAINED_SUBJECT_ARTIFACT_OBJECT_REQUIRED");
       const receiptRows = await client.query<Record<string, unknown>>(
@@ -128,9 +149,17 @@ export class ProductionRetainedSubjectPreparer {
       if (publicationRows.rows.length !== 1) throw new Error("RETAINED_SUBJECT_COMPLETED_OWNER_PUBLICATION_REQUIRED");
       const publication = publicationRows.rows[0]!;
       const identity = (kind: string, value: unknown) => `${kind}:${sha(canonicalJson(value))}`;
-      const validation = { scannerReportSha256: artifact.evidence.scannerReportSha256, conformanceReportSha256: artifact.evidence.conformanceReportSha256, artifactId: binding.artifactId, actionId: binding.actionId, expectedVersion: binding.expectedVersion };
       const promotion = promotionRows.rows[0]!;
       const receipt = receiptRows.rows[0]!;
+      const ownerEvent = z.object({ id: Digest }).passthrough().parse(typeof publication.owner_event === "string" ? JSON.parse(publication.owner_event) : publication.owner_event);
+      const ownerEventId = Digest.parse(publication.owner_event_id);
+      const attestationEventId = z.string().min(1).max(256).parse(publication.attestation_event_id);
+      if (ownerEvent.id !== ownerEventId || attestationEventId === ownerEventId) throw new Error("RETAINED_SUBJECT_PUBLICATION_IDENTITY_REQUIRED");
+      /* These are original, immutable record bytes, not convenient digest
+       * projections.  The source identities bind the exact original rows to
+       * owner/session/action/artifact/version fences already selected above. */
+      const validation = Object.freeze({ artifact, promotion });
+      const attestation = Object.freeze({ intentId: publication.intent_id, ownerEventId, attestationEventId, observation: publication.attestation_observation });
       return Object.freeze([
         { kind: "sealed_artifact", sourceIdentity: identity("artifact", artifact.reference), bytes: new Uint8Array(artifactBytes) },
         { kind: "validation_evidence", sourceIdentity: identity("validation", validation), bytes: jsonBytes(validation) },
@@ -138,8 +167,8 @@ export class ProductionRetainedSubjectPreparer {
         // This is the finalized artifact validation/promotion record, never a
         // post-suite release promotion or final release evaluator result.
         { kind: "promotion_evidence", sourceIdentity: identity("artifact-promotion", promotion), bytes: jsonBytes(promotion) },
-        { kind: "owner_event", sourceIdentity: identity("owner-event", publication.owner_event), bytes: jsonBytes(publication.owner_event) },
-        { kind: "attestation", sourceIdentity: identity("attestation", publication.attestation_observation), bytes: jsonBytes({ intentId: publication.intent_id, attestationEventId: publication.attestation_event_id, observation: publication.attestation_observation }) },
+        { kind: "owner_event", sourceIdentity: identity("owner-event", ownerEvent), bytes: jsonBytes(ownerEvent) },
+        { kind: "attestation", sourceIdentity: identity("attestation", attestation), bytes: jsonBytes(attestation) },
       ] as const);
     } finally { client.release(); }
   }

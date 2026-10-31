@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createMountedProductionWorkerJobRouter } from "./mounted-worker-profiles";
 import { z } from "zod";
 import type { GcsObjectStoreAdapter } from "../continuity/object-store";
@@ -24,6 +25,7 @@ type Expected = z.infer<typeof RestoreDrillInputSchema>["expected"];
 type Google = ReturnType<typeof createGoogleDeploymentClients>;
 const Identity = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]*$/u);
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
+const sha = (value: Uint8Array | string) => createHash("sha256").update(value).digest("hex");
 
 type OpenedPool = Awaited<ReturnType<typeof openFreshRestorePostgresPool>>;
 type RuntimeBinding = Readonly<{ freshInstanceId: string; databaseInstanceId: string; migrationDatabaseInstanceId: string; applicationInstanceId: string; providerOperationId: string }>;
@@ -60,8 +62,8 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
       pool: PostgresSqlPool; migrationTargetPool: PostgresSqlPool; objectStore: GcsObjectStoreAdapter;
       startAfterRestore(): Promise<void>;
       openRetainedArchive(value: Readonly<{ subject: z.infer<typeof DurabilitySubjectSchema>; expected: Expected }>): Promise<ProductionRetainedArchive>;
-      reattachOriginal(value: Readonly<{ sourceIdentity: string; archive: Uint8Array; expected: Expected }>): Promise<Readonly<{ status: "reattached" | "replayed" | "reconciliation_pending"; workerId?: string }>>;
-      observeReattach(value: Readonly<{ sourceIdentity: string; archiveSha256: string; expected: Expected }>): Promise<Readonly<{ status: "reattached" | "replayed" | "reconciliation_pending"; workerId?: string }>>;
+      reattachOriginal(value: Readonly<{ subject: z.infer<typeof DurabilitySubjectSchema>; sourceIdentity: string; archive: Uint8Array; expected: Expected }>): Promise<Readonly<{ status: "reattached" | "replayed" | "reconciliation_pending"; workerId?: string }>>;
+      observeReattach(value: Readonly<{ subject: z.infer<typeof DurabilitySubjectSchema>; sourceIdentity: string; archiveSha256: string; expected: Expected }>): Promise<Readonly<{ status: "reattached" | "replayed" | "reconciliation_pending"; workerId?: string }>>;
       exerciseExpiryDeletion(scope: ProductionRestoreScope): Promise<Readonly<{ expired: true; deleted: true }>>;
       observeExpiryDeletion(scope: ProductionRestoreScope): Promise<Readonly<{ expired: true; deleted: true }>>;
       observeTopology(): Promise<unknown>;
@@ -139,6 +141,14 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
           return Object.freeze({ ...value.expected, archive });
         },
         async reattachOriginal(value) {
+          if (value.subject.kind !== "checkpoint") {
+            /* These six subjects never allocate, fence, or restore a worker.
+             * Opening has already cryptographically bound the archive; the
+             * exact recovered registry/original lookup is the reattachment. */
+            await retainedSubjectBinding(recovered.pool, value.subject, value.expected);
+            if (sha(value.archive) !== value.subject.payloadSha256) throw new Error("MOUNTED_FRESH_RESTORE_SUBJECT_PAYLOAD_REQUIRED");
+            return Object.freeze({ status: "reattached" as const });
+          }
           const facts = await checkpointFacts(value.expected);
           if (!facts.leaseToken || !facts.actionId || !facts.allocationIntentReference || !Number.isInteger(facts.expectedSessionVersion) || facts.expectedSessionVersion < 0) throw new Error("MOUNTED_FRESH_RESTORE_RESUME_BINDING_REQUIRED");
           const archive = new Uint8Array(new ArrayBuffer(value.archive.byteLength)); archive.set(value.archive);
@@ -151,6 +161,10 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
           return result.status === "restored" ? Object.freeze({ status: "reattached" as const, workerId: result.workspaceId }) : Object.freeze({ status: "reconciliation_pending" as const });
         },
         async observeReattach(value) {
+          if (value.subject.kind !== "checkpoint") {
+            await retainedSubjectBinding(recovered.pool, value.subject, value.expected);
+            return Object.freeze({ status: "reattached" as const });
+          }
           const facts = await checkpointFacts(value.expected);
           if (facts.manifest.archiveSha256 !== value.archiveSha256 || !value.sourceIdentity) throw new Error("MOUNTED_FRESH_RESTORE_REATTACH_BINDING_REQUIRED");
           if (!facts.leaseToken || !facts.actionId || !facts.allocationIntentReference || !Number.isInteger(facts.expectedSessionVersion) || facts.expectedSessionVersion < 0) throw new Error("MOUNTED_FRESH_RESTORE_RESUME_BINDING_REQUIRED");
@@ -164,6 +178,7 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
           // the workspace key. Each deletion is exact-generation/key-bound;
           // a missing or uncertain original blocks rather than being replaced.
           await retainedSubjects.destroyExpired(scope);
+          if (!await retainedSubjects.observeExpired(scope)) throw new Error("MOUNTED_FRESH_RESTORE_RETAINED_ERASURE_PENDING");
           await checkpoint.destroyExpired({ checkpointId: facts.manifest.checkpointId, accountId: facts.accountId, sessionId: facts.manifest.sessionId });
           if (!await checkpoint.observeDestroyed({ checkpointId: facts.manifest.checkpointId, accountId: facts.accountId, sessionId: facts.manifest.sessionId })) throw new Error("MOUNTED_FRESH_RESTORE_EXPIRY_UNCONFIRMED");
           return Object.freeze({ expired: true as const, deleted: true as const });
@@ -172,7 +187,7 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
           const client = await recovered.pool.connect();
           try {
             const row = (await client.query<Record<string, unknown>>("SELECT account_id,state FROM production_real.checkpoint_envelopes WHERE checkpoint_id=$1 AND session_id=$2", [scope.checkpointId, scope.sessionId])).rows[0];
-            if (!row || row.state !== "destroyed" || !await checkpoint.observeDestroyed({ checkpointId: scope.checkpointId, accountId: String(row.account_id), sessionId: scope.sessionId })) throw new Error("MOUNTED_FRESH_RESTORE_EXPIRY_UNCONFIRMED");
+            if (!row || row.state !== "destroyed" || !await retainedSubjects.observeExpired(scope) || !await checkpoint.observeDestroyed({ checkpointId: scope.checkpointId, accountId: String(row.account_id), sessionId: scope.sessionId })) throw new Error("MOUNTED_FRESH_RESTORE_EXPIRY_UNCONFIRMED");
             return Object.freeze({ expired: true as const, deleted: true as const });
           } finally { client.release(); }
         },

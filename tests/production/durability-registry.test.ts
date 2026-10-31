@@ -48,7 +48,7 @@ test("durability inventory is keyed by its original checkpoint, not a latest act
   await expect(registry.markDeletion({ checkpointId: "checkpoint-original", kind: "checkpoint", objectGeneration: 1, objectChecksum: digest, state: "tombstoned" })).rejects.toThrow("PRODUCTION_DURABILITY_DELETE_BINDING_REQUIRED");
 });
 
-test("restore exposes receipt-bound preparation separately from its read-only seven-subject inventory", async () => {
+test("restore derives durable preparation from the complete immutable registry after restart", async () => {
   const subjects: Record<string, unknown>[] = [];
   const pool = scriptedSqlPool(async (text, values = []) => {
     if (text.includes("session_user::text AS session_user")) return { rows: [{ current_user: "napplet_runtime", session_user: "napplet_runtime", current_is_superuser: false, session_is_superuser: false }] };
@@ -77,7 +77,9 @@ test("restore exposes receipt-bound preparation separately from its read-only se
     candidateSha256: digest, topologySha256: digest,
     retainedSubjects: { async prepare(actual) { prepared++; expect(actual).toEqual(scope); } },
   });
-  await expect(restore.restore({ operationId: "prepared-inventory", action: "restore.inventory", payload: {} })).rejects.toThrow("PRODUCTION_RETAINED_SUBJECT_PREPARATION_REQUIRED");
+  /* A new controller has no process-local preparation Set. The complete
+   * original registry is the durable receipt and is observable read-only. */
+  await expect(restore.restore({ operationId: "prepared-inventory", action: "restore.inventory", payload: {} })).resolves.toHaveLength(7);
   expect(prepared).toBe(0);
   await expect(restore.restore({ operationId: "prepared-effect", action: "restore.prepare", payload: {} })).resolves.toEqual({ status: "prepared" });
   const inventory = await restore.restore({ operationId: "prepared-inventory-after-effect", action: "restore.inventory", payload: {} });

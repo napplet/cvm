@@ -51,7 +51,7 @@ import { loadProductionConfig } from "../../src/production/config";
 import { listProductionRetentionCandidates } from "../../src/production/checkpoint-retention";
 import { ContinuationDeadlineReconciler } from "../../src/continuity/deadline-reconciler";
 import { ProductionPricedContinuationCleanup } from "../../src/production/priced-continuation-cleanup";
-import { createProductionReadyCapacity } from "../../src/production/worker-capacity";
+import { createProductionReadyCapacity, type ProductionReadyCapacityPort } from "../../src/production/worker-capacity";
 import { openLocalProductionWorker } from "../fixtures/local-production-worker";
 import { ProductionWorkerJobRouter } from "../../src/production/worker-job-router";
 import { verifyProductionConformanceReceipt } from "../../src/worker-adapters/conformance-receipt";
@@ -980,6 +980,16 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
     const mountedRouter = new ProductionWorkerJobRouter({ workerJournal: nativeWorkerJournal, jobJournal: nativeJobJournal,
       executables: [{ image: `registry.example/worker@sha256:${"a".repeat(64)}`, toolchainSha256: mountedToolchain, clients: workerClients,
         modalAppName: "resume-workspace-fixture", flyAppName: "resume-workspace-fixture" }] });
+    // The mounted facade must reconcile the exact original capacity record,
+    // not a second production-capacity instance with no knowledge of this
+    // fixture's retained worker. The extra methods are strict outer-provider
+    // observations only; the worker/claim/journal authority remains real SQL.
+    const mountedCapacity: ProductionReadyCapacityPort = {
+      ...capacity,
+      async prewarm() { throw new Error("MOUNTED_FACADE_PREWARM_NOT_EXPECTED"); },
+      async inspect() { return undefined; },
+      async observeRelease() { return { status: nativeDeletes > 0 ? "terminated" as const : "pending" as const }; },
+    };
     let failFirstMountedTerminalWrite = true;
     const mountedFailurePool = sqlPool(runtime, undefined, undefined, () => {
       const value = failFirstMountedTerminalWrite;
@@ -987,7 +997,7 @@ integration("owned encrypted resume authenticates pricing, fences spending and r
       return value;
     });
     const mountedService = await ProductionPricedContinuationService.create({ pool: mountedFailurePool, config: mountedPricedConfig(mountedToolchain, workspaceCommand.policyVersion), generation: core,
-      capacity: cleanupCapacity, checkpoint, vertexJournal, workerJournal: nativeWorkerJournal, jobJournal: nativeJobJournal,
+      capacity: mountedCapacity, checkpoint, vertexJournal, workerJournal: nativeWorkerJournal, jobJournal: nativeJobJournal,
       requestJournal: nativeRequestJournal, capacityJournal, artifactStore: nativeObjects, workers: workerClients, jobRouter: mountedRouter,
       gateway, pricing: refreshedPricing });
     await mountedService.runner.assertReady();

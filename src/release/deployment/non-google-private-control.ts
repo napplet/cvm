@@ -120,7 +120,7 @@ export class NonGooglePrivateControlClient {
     const prior = await this.#journal.read(operationId);
     if (prior) {
       if (prior.identitySha256 !== requestSha256) throw new Error("NON_GOOGLE_PRIVATE_CONTROL_ORIGINAL_CONFLICT");
-      this.#authority.assertOriginalObservation({ scope: scopeFor(kind), effect: kind, candidateSha256: this.binding.candidateSha256, topologySha256: this.binding.topologySha256, roleCostBoundSha256: this.binding.roleCostBoundSha256, requestSha256: this.binding.authorizationRequestSha256, originalRecorded: true });
+      this.#authority.assertOriginalObservation({ scope: scopeFor(kind), effect: kind, candidateSha256: this.binding.candidateSha256, topologySha256: this.binding.topologySha256, roleCostBoundSha256: this.binding.roleCostBoundSha256, requestSha256: this.binding.authorizationRequestSha256, originalRecorded: true, operationId, operationSha256: requestSha256 });
       return this.observe({ operationId, kind, requestSha256 });
     }
     if (dispatchError) throw dispatchError;
@@ -132,7 +132,7 @@ export class NonGooglePrivateControlClient {
   }
   async observe(input: Readonly<{ operationId: string; kind: CertificationEdgeKind; requestSha256: string }>): Promise<NonGooglePrivateControlObservation> {
     const operationId = Id.parse(input.operationId); const kind = EdgeKind.parse(input.kind); const requestSha256 = Digest.parse(input.requestSha256);
-    this.#authority.assertOriginalObservation({ scope: scopeFor(kind), effect: kind, candidateSha256: this.binding.candidateSha256, topologySha256: this.binding.topologySha256, roleCostBoundSha256: this.binding.roleCostBoundSha256, requestSha256: this.binding.authorizationRequestSha256, originalRecorded: true });
+    this.#authority.assertOriginalObservation({ scope: scopeFor(kind), effect: kind, candidateSha256: this.binding.candidateSha256, topologySha256: this.binding.topologySha256, roleCostBoundSha256: this.binding.roleCostBoundSha256, requestSha256: this.binding.authorizationRequestSha256, originalRecorded: true, operationId, operationSha256: requestSha256 });
     const observed = await this.#request("GET", `${CONTROL_PATH}/${encodeURIComponent(operationId)}`, requestSha256);
     if (observed.operationId !== operationId || observed.kind !== kind || observed.requestSha256 !== requestSha256) throw new Error("NON_GOOGLE_PRIVATE_CONTROL_OPERATION_MISMATCH");
     return observed;

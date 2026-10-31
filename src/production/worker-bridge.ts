@@ -68,7 +68,11 @@ export class ProductionWorkerOwnershipResolver {
       })
       : CheckpointFenceRequestSchema.parse(value);
     const resumeClaim = restoration?.resumeClaim;
-    const request = WorkerRunRequestSchema.parse({ ...checkpoint, capabilityGrant: "phase-04-coordinator-grant" });
+    const request = WorkerRunRequestSchema.parse({
+      sessionId: checkpoint.sessionId, actionId: checkpoint.actionId,
+      expectedVersion: checkpoint.expectedVersion, policyVersion: checkpoint.policyVersion,
+      capabilityGrant: "phase-04-coordinator-grant", workspaceId: checkpoint.workspaceId,
+    });
     if (request.policyVersion !== this.input.policyVersion || request.workspaceId !== `workspace:${request.sessionId}`) throw new Error("PRODUCTION_CHECKPOINT_WORKER_BINDING_INVALID");
     const client = await this.input.pool.connect();
     try {

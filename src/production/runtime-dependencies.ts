@@ -25,6 +25,7 @@ import { ProductionCheckpointCoordinator } from "./checkpoint-coordinator";
 import { assertProductionCheckpointSchema } from "./checkpoint-schema";
 import { assertProductionPendingCheckpointSchema } from "./initial-pending-checkpoint";
 import { assertProductionSessionCapSchema } from "./session-cap-schema";
+import { ProductionRetainedSubjectPreparer } from "./retained-subject-preparer";
 
 /** Coordinator-only actual provider graph. It owns only durable project
  * transports; generated workers see the bounded bridge, never ADC or rails. */
@@ -58,6 +59,10 @@ export async function materializeProductionRuntimeDependencies(input: Readonly<{
     kekPath: input.secrets.path("checkpoint.kekReference"),
     now: input.now,
   });
+  const retainedSubjects = new ProductionRetainedSubjectPreparer({
+    pool: input.pool, objectStore: artifactStore, checkpoint: checkpointCoordinator,
+    kekPath: input.secrets.path("checkpoint.kekReference"), now: input.now,
+  });
   const [worker, vertexMaterial] = await Promise.all([
     createMountedProductionWorkerClients({ config: input.config, secrets: input.secrets, journal: createPostgresWorkerOperationJournal(workerJournal) }),
     createMountedVertexMaterial({ config: input.config, secrets: input.secrets, now: input.now }),
@@ -82,5 +87,5 @@ export async function materializeProductionRuntimeDependencies(input: Readonly<{
   const directPreviewAssets = await createProductionDirectPreviewAssets();
   const directPublicationIntents = new ProductionDirectPublicationIntents({ artifacts: ownedDirectArtifacts, journal: requestJournal,
     publication: { server: input.config.publication.uploadServer }, relays: input.config.publication.relays, now: input.now });
-  return Object.freeze({ pool: input.pool, journal, serviceJournals, googleControlJournal, googleIntentJournal, workerJournal, jobJournal, requestJournal, vertexJournal, checkpointJournal, checkpointCoordinator, tokenSource, gcs, artifactStore, workers: worker.clients, jobRouter, ownedDirectArtifacts, directPreviewAssets, directPublicationIntents, workerCertification: worker.certification, flyRegion: worker.flyRegion, capacity, certificationCapacities, vertexMaterial, vertex, proposals, gateway, settlement, retainedPricing, resolver, workerBridge });
+  return Object.freeze({ pool: input.pool, journal, serviceJournals, googleControlJournal, googleIntentJournal, workerJournal, jobJournal, requestJournal, vertexJournal, checkpointJournal, checkpointCoordinator, retainedSubjects, tokenSource, gcs, artifactStore, workers: worker.clients, jobRouter, ownedDirectArtifacts, directPreviewAssets, directPublicationIntents, workerCertification: worker.certification, flyRegion: worker.flyRegion, capacity, certificationCapacities, vertexMaterial, vertex, proposals, gateway, settlement, retainedPricing, resolver, workerBridge });
 }

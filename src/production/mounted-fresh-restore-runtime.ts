@@ -18,6 +18,7 @@ import { ProductionWorkerBridge } from "./worker-bridge";
 import { ProductionWorkerOwnershipResolver } from "./worker-bridge";
 import { MountedKekCheckpointCrypto } from "./checkpoint-crypto";
 import { openRetainedSubject } from "./retained-subject-archive";
+import { ProductionRetainedSubjectPreparer } from "./retained-subject-preparer";
 
 type Expected = z.infer<typeof RestoreDrillInputSchema>["expected"];
 type Google = ReturnType<typeof createGoogleDeploymentClients>;
@@ -88,6 +89,10 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
         now,
       });
       const retainedSubjectCrypto = new MountedKekCheckpointCrypto({ pool: recovered.pool, kekPath: input.secrets.path("checkpoint.kekReference"), now });
+      const retainedSubjects = new ProductionRetainedSubjectPreparer({
+        pool: recovered.pool, objectStore: input.artifactStore, checkpoint,
+        kekPath: input.secrets.path("checkpoint.kekReference"), now,
+      });
       const capacityJournal = serviceJournals.capacity;
       const worker = new ProductionWorkerBridge({
         resolver: new ProductionWorkerOwnershipResolver({ pool: recovered.pool, policyVersion: input.config.worker.policyVersion, capacityJournal }),
@@ -155,6 +160,10 @@ export function createMountedFreshRestoreRuntime(input: Readonly<{
         async exerciseExpiryDeletion(scope) {
           const facts = await checkpointFacts({ ownerId: scope.ownerId, sessionId: scope.sessionId, pendingActionReference: "expiry", sessionVersion: 0, artifactVersion: 0, leaseToken: "expiry", compatibility: { policyVersion: "expiry", modelIdentity: "expiry", nappletSdkIdentity: "expiry", toolchainIdentity: "expiry" } });
           if (Date.parse((await checkpointManifestRetention(recovered.pool, facts.manifest.checkpointId))) > now()) throw new Error("MOUNTED_FRESH_RESTORE_EXPIRY_NOT_DUE");
+          // Erase the six independently-custodied originals before destroying
+          // the workspace key. Each deletion is exact-generation/key-bound;
+          // a missing or uncertain original blocks rather than being replaced.
+          await retainedSubjects.destroyExpired(scope);
           await checkpoint.destroyExpired({ checkpointId: facts.manifest.checkpointId, accountId: facts.accountId, sessionId: facts.manifest.sessionId });
           if (!await checkpoint.observeDestroyed({ checkpointId: facts.manifest.checkpointId, accountId: facts.accountId, sessionId: facts.manifest.sessionId })) throw new Error("MOUNTED_FRESH_RESTORE_EXPIRY_UNCONFIRMED");
           return Object.freeze({ expired: true as const, deleted: true as const });

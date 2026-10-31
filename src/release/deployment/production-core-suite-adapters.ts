@@ -69,7 +69,12 @@ export function createProductionCoreSuiteAdapters(input: Input): ProductionCoreS
   });
   const durability: ProductionCoreSuiteAdapters["durability"] = Object.freeze({
     evidenceClass: "real" as const,
-    async inventory() { return validateDurabilityInventory(await control("restore.inventory", {})); },
+    async inventory() {
+      // The archive/registry materialization is a separately journaled,
+      // receipt-bound control effect. `restore.inventory` below only reads it.
+      await control("restore.prepare", {});
+      return validateDurabilityInventory(await control("restore.inventory", {}));
+    },
     loseLocalState: () => control("restore.lose-local", {}),
     async createFreshInstance() {
       const fresh = CoreFreshInstanceSchema.parse(await control("restore.create", {}));

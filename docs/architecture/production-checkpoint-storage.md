@@ -67,3 +67,32 @@ days of elapsed operation. It does not prove live GCS/Cloud SQL/isolated-worker
 restore, physical erasure from old backups/WAL, KEK lifecycle, the complete
 post-grace resumed action, or any protected release suite. Backup/WAL expiry and
 restored-service deadline enforcement remain required live retention evidence.
+
+## Retained-subject recovery boundary
+
+The restore inventory is a read-only view. Before it can be read, the mounted
+production graph performs an explicit receipt-bound preparation of the selected
+checkpoint and its exact owner, session, action, and artifact version. The
+preparer reads committed production records only: the checkpoint envelope,
+verified artifact object and validation record, settled usage receipt, finalized
+artifact promotion record, and a completed user-owned publication's owner event
+and attestation observation. It seals the six non-workspace records under
+distinct server-derived custody identities and records all seven exact object
+generations in the append-only durability registry. The source identity stays
+the identity of the original record; it is never replaced by the derived key ID.
+
+Only `checkpoint` may restore a worker workspace. The other six kinds decrypt
+their exact retained bytes and reattach or observe their original record; a
+missing or ambiguous record is reconciliation-pending, not an opportunity to
+call a model, signer, relay, worker, wallet, or publication provider. Artifact
+promotion evidence is the verified artifact's original validation/promotion
+record, not a post-suite release-promotion result. Owner and attestation inputs
+are accepted only from an already completed user-owned publication.
+
+At expiry, the fresh recovery runtime deletes each non-workspace ciphertext by
+its exact generation and destroys its corresponding server custody key before
+the checkpoint workspace is destroyed. Any missing binding or uncertain delete
+blocks instead of producing replacement material. This remains a protected-live
+operation: the opt-in fresh-PostgreSQL durability CI checks only the production
+SQL/crypto/fresh-instance mechanism and does not certify GCS, Cloud SQL, or a
+release suite.

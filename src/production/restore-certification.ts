@@ -11,6 +11,7 @@ import { MigrationArchiveCipher, ProductionMigrationSource, writeEncryptedMigrat
 import type { PostgresOperationJournal } from "../release/deployment/postgres-operation-journal";
 import type { ProductionCertificationServices } from "../release/deployment/production-core-suite-protocol";
 import { CoreControlPayloadSchemas, CoreFreshInstanceSchema, CoreRestoreChunkSchema, CoreRestoreDescriptorSchema, CORE_RESTORE_CHUNK_BYTES } from "../release/deployment/production-core-suite-protocol";
+import type { ProductionRetainedSubjectPreparer } from "./retained-subject-preparer";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const Identity = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]*$/u);
@@ -82,6 +83,7 @@ export class ProductionRestoreCertification implements Pick<ProductionCertificat
   readonly #sourcePool: PostgresSqlPool;
   readonly #runs = new Map<string, FreshRun>();
   readonly #local = new Map<string, readonly z.infer<typeof DurabilitySubjectSchema>[]>();
+  readonly #preparedScopes = new Set<string>();
   constructor(private readonly input: Readonly<{
     sourceInstanceId: string;
     scope: ProductionRestoreScope;
@@ -93,6 +95,9 @@ export class ProductionRestoreCertification implements Pick<ProductionCertificat
     provisioner: ProductionFreshRestoreProvisioner;
     candidateSha256: string;
     topologySha256: string;
+    /** Receipt-bound preparation is explicit and runs before the first
+     * inventory read. It is absent only in narrow unit fixtures. */
+    retainedSubjects?: Pick<ProductionRetainedSubjectPreparer, "prepare">;
     now?: () => number;
   }>) {
     Identity.parse(input.sourceInstanceId); Identity.parse(input.scope.checkpointId); Identity.parse(input.scope.sessionId); Identity.parse(input.scope.ownerId);
@@ -104,6 +109,7 @@ export class ProductionRestoreCertification implements Pick<ProductionCertificat
 
   async restore(input: Parameters<ProductionCertificationServices["restore"]>[0]): Promise<unknown> {
     switch (input.action) {
+      case "restore.prepare": CoreControlPayloadSchemas["restore.prepare"].parse(input.payload); return this.#prepare();
       case "restore.inventory": CoreControlPayloadSchemas["restore.inventory"].parse(input.payload); return this.#inventory(this.#sourcePool, this.input.scope);
       case "restore.lose-local": CoreControlPayloadSchemas["restore.lose-local"].parse(input.payload); this.#local.clear(); return Object.freeze({ status: "lost" as const });
       case "restore.create": CoreControlPayloadSchemas["restore.create"].parse(input.payload); return this.#create(input.operationId);
@@ -119,6 +125,9 @@ export class ProductionRestoreCertification implements Pick<ProductionCertificat
   async reconcile(input: Readonly<{ operationId: string; kind: string; payload: unknown }>): Promise<unknown> {
     if (!input.kind.startsWith("restore.")) throw new Error("PRODUCTION_RESTORE_RECONCILIATION_UNAVAILABLE");
     switch (input.kind) {
+      // An uncertain preparation result is observed only through its immutable
+      // registry. Reconciliation never seals a replacement archive.
+      case "restore.prepare": CoreControlPayloadSchemas["restore.prepare"].parse(input.payload); return this.#inventory(this.#sourcePool, this.input.scope);
       case "restore.create": {
         CoreControlPayloadSchemas["restore.create"].parse(input.payload);
         const run = this.#runs.get(input.operationId) ?? await this.#attach(input.operationId);
@@ -145,9 +154,17 @@ export class ProductionRestoreCertification implements Pick<ProductionCertificat
   }
 
   async #inventory(pool: PostgresSqlPool, scope: ProductionRestoreScope) {
+    if (pool === this.#sourcePool && this.input.retainedSubjects && !this.#preparedScopes.has(scope.checkpointId)) throw new Error("PRODUCTION_RETAINED_SUBJECT_PREPARATION_REQUIRED");
     const subjects = await createProductionDurabilitySubjectRegistry(pool).inventory(scope);
     this.#local.set(scope.checkpointId, subjects);
     return subjects;
+  }
+
+  async #prepare() {
+    if (!this.input.retainedSubjects) throw new Error("PRODUCTION_RETAINED_SUBJECT_PREPARER_REQUIRED");
+    await this.input.retainedSubjects.prepare(this.input.scope);
+    this.#preparedScopes.add(this.input.scope.checkpointId);
+    return Object.freeze({ status: "prepared" as const });
   }
 
   async #create(operationId: string) {

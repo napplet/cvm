@@ -12,7 +12,7 @@ import { CORE_RESTORE_CHUNK_BYTES, CORE_RESTORE_MAX_BYTES } from "../release/dep
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const Id = z.string().regex(/^[a-z][a-z0-9:_-]{2,127}$/u);
-export const ProductionControlKindSchema = z.enum(["cohort.prepare", "cohort.observe", "telemetry.emit", "telemetry.window", "fault.inject", "fault.observe", "restore.inventory", "restore.lose-local", "restore.create", "restore.subject", "restore.expiry", "restore.topology", "restore.cleanup"]);
+export const ProductionControlKindSchema = z.enum(["cohort.prepare", "cohort.observe", "telemetry.emit", "telemetry.window", "fault.inject", "fault.observe", "restore.prepare", "restore.inventory", "restore.lose-local", "restore.create", "restore.subject", "restore.expiry", "restore.topology", "restore.cleanup"]);
 export type ProductionControlKind = z.infer<typeof ProductionControlKindSchema>;
 const EdgeKindSchema = z.enum(Object.keys(CertificationEdgePayloadSchemas) as [CertificationEdgeKind, ...CertificationEdgeKind[]]);
 const AnyKindSchema = z.union([ProductionControlKindSchema, EdgeKindSchema]);
@@ -98,7 +98,7 @@ export class ProductionCertificationControl {
       case "telemetry.window": return this.input.services.telemetryWindow({ operationId: command.operationId, binding: payload?.binding });
       case "fault.inject": return this.input.services.injectFault({ operationId: command.operationId, schedule: payload?.schedule });
       case "fault.observe": return this.input.services.observeFault({ operationId: z.string().min(1).parse(payload?.operationId), sessionId: z.string().min(1).parse(payload?.sessionId) });
-      default: return this.input.services.restore({ operationId: command.operationId, action: z.enum(["restore.topology", "restore.inventory", "restore.lose-local", "restore.create", "restore.subject", "restore.cleanup", "restore.expiry"]).parse(command.kind), payload: command.payload });
+      default: return this.input.services.restore({ operationId: command.operationId, action: z.enum(["restore.prepare", "restore.topology", "restore.inventory", "restore.lose-local", "restore.create", "restore.subject", "restore.cleanup", "restore.expiry"]).parse(command.kind), payload: command.payload });
     }
   }
   async #authorize(readOnly = false): Promise<void> {

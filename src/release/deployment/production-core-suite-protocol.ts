@@ -19,6 +19,9 @@ export const CoreControlPayloadSchemas = Object.freeze({
   "telemetry.window": z.object({ binding: z.object({ candidateId: Digest, topologySha256: Digest, datasetSha256: Digest, profileSha256: Digest, collectorDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/u), configSha256: Digest }).strict() }).strict(),
   "fault.inject": z.object({ schedule: z.unknown().refine(value => D122_FAULT_MATRIX.some(item => canonicalJson(item) === canonicalJson(value)), "locked fault schedule required") }).strict(),
   "fault.observe": z.object({ operationId: Identity, sessionId: Identity }).strict(),
+  /** Receipt-bound preparation is a named control effect. Inventory remains a
+   * read-only query and cannot create a retained archive. */
+  "restore.prepare": z.object({}).strict(),
   "restore.inventory": z.object({}).strict(),
   "restore.lose-local": z.object({}).strict(),
   "restore.create": z.object({}).strict(),

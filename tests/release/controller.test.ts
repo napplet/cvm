@@ -522,3 +522,27 @@ test("two controllers claim one pending operation and the loser only observes it
   expect(resumed.state.status).toBe("topology_ready");
   expect(modalApplies).toBe(1);
 });
+
+test("metadata-sync failure prevents a durable dispatch claim from reaching apply", async () => {
+  const root = await workspace();
+  const collectorImage = await observedCollector();
+  const dryRun = await runReleaseCertification({ candidatePath, workspace: root, dryRun: true, now: () => 1_000, collectorImage });
+  let applies = 0;
+  const registry = createReleaseProviderRegistry({
+    now: () => 1_000,
+    ports: Object.fromEntries(RELEASE_PROVIDER_IDS.map((provider) => [provider, {
+      discoverCapabilities: async () => ({ capability: "available" as const }), discoverAuthentication: async () => ({ authentication: "authorized" as const }),
+      plan: async () => ({ status: "planned" as const, estimatedCostMicros: 1 }),
+      apply: async (input: { operationId: string }) => { applies += 1; return { status: "applied" as const, resourceIdentity: `${provider}:${input.operationId}` }; },
+      observe: async (input: { operationId: string }) => ({ status: "completed" as const, resourceIdentity: `${provider}:${input.operationId}` }), cleanup: async () => ({ status: "cleaned" as const }),
+    }])) as never,
+  });
+  const receipt = await createAuthorizationReceipt(dryRun.authorizationRequest);
+  await expect(new ReleaseCertificationController({
+    candidatePath, workspace: root, now: () => 1_000, collectorImage,
+    syncDirectory: async (path) => {
+      if (path.includes("provider-dispatch-claims")) throw new Error("METADATA_SYNC_FAILED");
+    },
+  }).provision({ receipt, registry })).rejects.toThrow("METADATA_SYNC_FAILED");
+  expect(applies).toBe(0);
+});

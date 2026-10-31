@@ -54,6 +54,9 @@ type ControllerOptions = Readonly<{
   /** Local preapproval may supply only a prepared OCI layout. Provider work is
    * refused until the same layout has a post-upload registry observation. */
   collectorImage?: PreparedCollectorImage | ObservedCollectorRegistryImage;
+  /** Internal fault-injection seam for filesystem durability tests. Product
+   * construction never supplies it; production uses real directory fsync. */
+  syncDirectory?: (path: string) => Promise<void>;
   now?: () => number;
 }>;
 export type ReleaseCertificationResult = Readonly<{
@@ -311,13 +314,36 @@ async function createOrVerify(path: string, content: string, collision: string):
 /** A durable create-only record is the CAS primitive for an effect claim or
  * state edge. `wx` admits one winner; the explicit sync places the claim
  * before any provider call. An interrupted/partial record is fail-closed. */
-async function createSynced(path: string, content: string): Promise<"created" | "exists"> {
+async function syncDirectory(path: string): Promise<void> {
+  const handle = await open(path, "r");
+  try { await handle.sync(); } finally { await handle.close(); }
+}
+
+async function syncDirectoryChain(path: string, anchor: string, synchronizer: (path: string) => Promise<void>): Promise<void> {
+  let current = resolve(path);
+  const stableAnchor = resolve(anchor);
+  while (true) {
+    await synchronizer(current);
+    if (current === stableAnchor) return;
+    const parent = dirname(current);
+    if (parent === current) throw new Error("RELEASE_CONTROLLER_DURABILITY_ANCHOR_INVALID");
+    current = parent;
+  }
+}
+
+async function createSynced(path: string, content: string, anchor: string, synchronizer: (path: string) => Promise<void>): Promise<"created" | "exists"> {
   await mkdir(dirname(path), { recursive: true });
   let handle;
   try {
     handle = await open(path, "wx");
     await handle.writeFile(content, "utf8");
     await handle.sync();
+    await handle.close();
+    handle = undefined;
+    /* The file inode alone is insufficient after a host crash: publish its
+     * directory entry (and each newly possible ancestor) to the workspace's
+     * established anchor before callers may dispatch a provider effect. */
+    await syncDirectoryChain(dirname(path), anchor, synchronizer);
     return "created";
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "EEXIST") return "exists";
@@ -366,6 +392,7 @@ export class ReleaseCertificationController {
   readonly #requireCurrentPriceCatalog: boolean;
   readonly #operatorFundingReadiness: OperatorFundingReadiness | undefined;
   readonly #collectorImage: PreparedCollectorImage | ObservedCollectorRegistryImage | undefined;
+  readonly #syncDirectory: (path: string) => Promise<void>;
   readonly #now: () => number;
 
   constructor(options: ControllerOptions) {
@@ -377,6 +404,7 @@ export class ReleaseCertificationController {
     this.#requireCurrentPriceCatalog = options.requireCurrentPriceCatalog ?? false;
     this.#operatorFundingReadiness = options.operatorFundingReadiness;
     this.#collectorImage = options.collectorImage;
+    this.#syncDirectory = options.syncDirectory ?? syncDirectory;
     this.#now = options.now ?? Date.now;
   }
 
@@ -841,7 +869,7 @@ export class ReleaseCertificationController {
     const base = { version: 1 as const, priorStateSha256, nextStateSha256: next.stateSha256 };
     const transition: StateTransition = { ...base, transitionSha256: await digest(base) };
     const path = join(this.#workspace, "state-transitions", `${priorStateSha256}.json`);
-    const outcome = await createSynced(path, `${canonicalJson(transition)}\n`);
+    const outcome = await createSynced(path, `${canonicalJson(transition)}\n`, this.#workspace, this.#syncDirectory);
     if (outcome === "created") return next;
     const existing = await this.#readStateTransition(priorStateSha256);
     if (!existing || existing.nextStateSha256 !== next.stateSha256) throw new Error("RELEASE_CONTROLLER_STATE_RACE");
@@ -868,7 +896,7 @@ export class ReleaseCertificationController {
     };
     const claim: DispatchClaim = { ...base, dispatchClaimSha256: await digest(base) };
     const path = join(this.#workspace, "provider-dispatch-claims", `${record.operation.operationId}.json`);
-    const outcome = await createSynced(path, `${canonicalJson(claim)}\n`);
+    const outcome = await createSynced(path, `${canonicalJson(claim)}\n`, this.#workspace, this.#syncDirectory);
     if (outcome === "created") return true;
     let raw: unknown;
     try { raw = JSON.parse(await readFile(path, "utf8")); }

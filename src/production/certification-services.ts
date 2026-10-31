@@ -13,6 +13,7 @@ import { ProductionUnusedAdmissionRelease } from "./unused-admission";
 import type { ProductionCertificationServices } from "../release/deployment/production-core-suite-protocol";
 import { ProductionRestoreCertification, assertProductionRestoreCertification } from "./restore-certification";
 import { ProductionChaosCertificationService, assertProductionChaosCertification } from "./chaos-certification";
+import { NonGoogleTelemetryCertification } from "./non-google-telemetry-certification";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -45,6 +46,7 @@ export class ProductionNativeCoreCertificationServices implements ProductionCert
     admission: ProductionCertificationCoreServices;
     chaos: ProductionChaosCertificationService;
     restore: ProductionRestoreCertification;
+    telemetry?: NonGoogleTelemetryCertification;
   }>) {
     assertProductionAdmissionObserver(input.admission);
     assertProductionChaosCertification(input.chaos);
@@ -57,10 +59,7 @@ export class ProductionNativeCoreCertificationServices implements ProductionCert
       case "cohort.prepare": return this.input.admission.prepareCohort({ operationId: input.operationId, ...CoreControlPayloadSchemas[input.kind].parse(input.payload) });
       case "cohort.observe": return this.input.admission.observeCohort({ operationId: input.operationId, ...CoreControlPayloadSchemas[input.kind].parse(input.payload) });
       case "fault.inject": return this.input.chaos.injectFault({ operationId: input.operationId, ...CoreControlPayloadSchemas[input.kind].parse(input.payload) });
-      case "fault.observe": {
-        const observation = CoreControlPayloadSchemas[input.kind].parse(input.payload);
-        return this.input.chaos.observeFault({ ...observation, operationId: input.operationId });
-      }
+      case "fault.observe": return this.input.chaos.observeFault(CoreControlPayloadSchemas[input.kind].parse(input.payload));
       case "restore.prepare":
       case "restore.inventory":
       case "restore.lose-local":
@@ -69,14 +68,14 @@ export class ProductionNativeCoreCertificationServices implements ProductionCert
       case "restore.expiry":
       case "restore.topology":
       case "restore.cleanup": return this.input.restore.restore({ operationId: input.operationId, action: input.kind, payload: CoreControlPayloadSchemas[input.kind].parse(input.payload) });
-      case "telemetry.emit":
-      case "telemetry.window": throw new Error("PRODUCTION_TELEMETRY_NATIVE_OBSERVATION_HELD");
+      case "telemetry.emit": return this.emitTelemetry({ operationId: input.operationId, ...CoreControlPayloadSchemas[input.kind].parse(input.payload) });
+      case "telemetry.window": return this.telemetryWindow({ operationId: input.operationId, ...CoreControlPayloadSchemas[input.kind].parse(input.payload) });
     }
   }
   async prepareCohort(input: Parameters<ProductionCertificationServices["prepareCohort"]>[0]) { return this.input.admission.prepareCohort(input); }
   async observeCohort(input: Parameters<ProductionCertificationServices["observeCohort"]>[0]) { return this.input.admission.observeCohort(input); }
-  async emitTelemetry(_input: Parameters<ProductionCertificationServices["emitTelemetry"]>[0]) { throw new Error("PRODUCTION_TELEMETRY_NATIVE_OBSERVATION_HELD"); }
-  async telemetryWindow(_input: Parameters<ProductionCertificationServices["telemetryWindow"]>[0]) { throw new Error("PRODUCTION_TELEMETRY_NATIVE_OBSERVATION_HELD"); }
+  async emitTelemetry(input: Parameters<ProductionCertificationServices["emitTelemetry"]>[0]) { return this.input.telemetry?.emit(input) ?? Object.freeze({ status: "held" as const, reason: "SUCCESSOR_AUTHORITY_HELD" as const }); }
+  async telemetryWindow(input: Parameters<ProductionCertificationServices["telemetryWindow"]>[0]) { return this.input.telemetry?.query(input) ?? Object.freeze({ status: "held" as const, reason: "COLLECTOR_OBSERVATION_HELD" as const }); }
   async injectFault(input: Parameters<ProductionCertificationServices["injectFault"]>[0]) { return this.input.chaos.injectFault(input); }
   async observeFault(input: Parameters<ProductionCertificationServices["observeFault"]>[0]) { return this.input.chaos.observeFault(input); }
   async restore(input: Parameters<ProductionCertificationServices["restore"]>[0]) { return this.input.restore.restore(input); }
@@ -84,7 +83,8 @@ export class ProductionNativeCoreCertificationServices implements ProductionCert
     if (input.kind.startsWith("cohort.")) return this.input.admission.reconcile(input);
     if (input.kind.startsWith("fault.")) return this.input.chaos.reconcile(input);
     if (input.kind.startsWith("restore.")) return this.input.restore.reconcile(input);
-    if (input.kind.startsWith("telemetry.")) throw new Error("PRODUCTION_TELEMETRY_NATIVE_OBSERVATION_HELD");
+    if (input.kind === "telemetry.window") return this.telemetryWindow({ operationId: input.operationId, ...CoreControlPayloadSchemas[input.kind].parse(input.payload) });
+    if (input.kind === "telemetry.emit") return Object.freeze({ status: "held" as const, reason: "COLLECTOR_OBSERVATION_HELD" as const });
     throw new Error("PRODUCTION_CORE_NATIVE_KIND_INVALID");
   }
 }

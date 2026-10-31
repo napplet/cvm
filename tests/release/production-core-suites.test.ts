@@ -29,18 +29,25 @@ test("tracer: native core construction refuses a wrapper-only control path befor
   expect(calls).toBe(0);
 });
 
-test("tracer: private non-Google core factory constructs all four native backends without creating an authority", () => {
+test("tracer: private non-Google core factory constructs and dispatches all four native backends without creating an authority", async () => {
   const core = createNonGoogleNativeCoreServices({
     candidateSha256: hash,
     topologySha256: "b".repeat(64),
     successorAuthority: { state: "held" },
   });
   expect(core.provenance).toEqual(expect.objectContaining({
+    admission: expect.objectContaining({ module: "src/production/non-google-admission-certification.ts" }),
     telemetry: expect.objectContaining({ module: "src/production/non-google-telemetry-certification.ts" }),
     chaos: expect.objectContaining({ module: "src/production/non-google-chaos-certification.ts" }),
     restore: expect.objectContaining({ module: "src/production/non-google-fresh-restore-provisioner.ts" }),
   }));
-  expect(core.dispatch({ operationId: "core:held:telemetry", kind: "telemetry.emit", payload: { observation: { version: "admission-lifecycle-v1", correlationDigest: `sha256:${hash}`, stage: "generation", monotonicMs: 1 } } })).resolves.toMatchObject({ status: "held" });
+  const scheduled = createWorkerBenchmarkSchedule(IDENTICAL_WORKER_COHORT_PROFILE)[0]!;
+  const sample = { id: scheduled.id, cohort: scheduled.cohort };
+  await expect(core.dispatch({ operationId: "core:held:admission", kind: "cohort.prepare", payload: { candidateId: hash, provider: "modal", sample } })).resolves.toMatchObject({ status: "held" });
+  await expect(core.dispatch({ operationId: "core:held:telemetry", kind: "telemetry.emit", payload: { observation: { version: "admission-lifecycle-v1", correlationDigest: `sha256:${hash}`, stage: "generation", monotonicMs: 1 } } })).resolves.toMatchObject({ status: "held" });
+  await expect(core.dispatch({ operationId: "core:held:chaos", kind: "fault.inject", payload: { schedule: D122_FAULT_MATRIX[0] } })).resolves.toMatchObject({ status: "held" });
+  await expect(core.dispatch({ operationId: "core:held:restore", kind: "restore.create", payload: {} })).resolves.toMatchObject({ status: "held" });
+  await expect(core.dispatch({ operationId: "core:held:chaos", kind: "fault.observe", payload: { operationId: "synthetic", sessionId: "synthetic" } })).rejects.toThrow("NON_GOOGLE_CHAOS_ORIGINAL_DENIED");
 });
 
 test("private cohort and fault controls accept only the locked schedules", () => {

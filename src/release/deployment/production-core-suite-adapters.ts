@@ -154,8 +154,7 @@ export function createNativeProductionCoreSuiteAdapters(input: NativeInput): Pro
   if (!input.contextvm) throw new Error("PRODUCTION_CORE_NATIVE_CONTEXTVM_REQUIRED");
   return createCoreSuiteAdapters({ candidate, contextvm: input.contextvm, async control(kind, payload) {
     const operationId = `core:${candidate.provider}:${kind.replaceAll(".", "-")}:${digest(payload)}`;
-    try { return await input.services.execute({ operationId, kind, payload }); }
-    catch { return input.services.reconcile({ operationId, kind, payload }); }
+    return input.services.execute({ operationId, kind, payload });
   } });
 }
 

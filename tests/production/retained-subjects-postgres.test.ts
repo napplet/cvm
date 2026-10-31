@@ -253,10 +253,14 @@ async function proveRetainedSubjectsPostgres(continuationKind: "legacy" | "price
       const v2Preparer = new ProductionResumePricingPreparer({ pool, store: fundingStore, quotes: resumeQuotes, checkpoint, vertexJournal, currentPricing: originalPricing,
         compatibility: { policyVersion: pauseIntent.policyVersion, acceptedToolchains: [pauseIntent.toolchainId] }, now: () => now });
       const v2Acceptance = new ProductionResumeAcceptance({ pool, quotes: resumeQuotes, preparer: v2Preparer, now: () => now });
-      await expect(v2Preparer.loadAuthority({ principal: { id: accountId }, sessionId, checkpointId, expectedSessionVersion: 0,
-        expectedCheckpointVersion: 1, idempotencyKey: "prepare:retained-mounted" })).resolves.toMatchObject({
-        context: { accountId, sessionId, checkpointId, originalOperationId, originalCommandMaximum: retainedCommand.maximum },
-      });
+      let v2Authority: Awaited<ReturnType<typeof v2Preparer.loadAuthority>>;
+      try {
+        v2Authority = await v2Preparer.loadAuthority({ principal: { id: accountId }, sessionId, checkpointId, expectedSessionVersion: 0,
+          expectedCheckpointVersion: 1, idempotencyKey: "prepare:retained-mounted" });
+      } catch (error) {
+        throw new Error(`RETAINED_V2_AUTHORITY_REQUIRED:${error instanceof Error ? error.message : "UNKNOWN"}`);
+      }
+      expect(v2Authority).toMatchObject({ context: { accountId, sessionId, checkpointId, originalOperationId, originalCommandMaximum: retainedCommand.maximum } });
       const preparedV2 = await v2Preparer.prepare({ principal: { id: accountId }, sessionId, checkpointId, expectedSessionVersion: 0, expectedCheckpointVersion: 1, idempotencyKey: "prepare:retained-mounted" });
       if (preparedV2.status !== "quoted") throw new Error(`RETAINED_V2_QUOTE_REQUIRED:${preparedV2.code}`);
       const v2Resume = { principal: { id: accountId }, sessionId, checkpointId, expectedSessionVersion: 0, expectedCheckpointVersion: 1, idempotencyKey: "resume:retained-mounted", approvePendingAction: true,
